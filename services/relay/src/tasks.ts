@@ -4553,7 +4553,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
                   // code: a client tells "pay P2P" from "deposit" by it. A
                   // bare HTTPException serialized with no code, and clients
                   // fell back to the deposit remedy. The routing catch
-                  // rethrows RelayError → surfaces as 402.
+                  // rethrows this code → surfaces as 402.
                   throw new TaskError(
                     "TASK_P2P_PROOF_REQUIRED",
                     "Paid federated delegation requires a 3-leg P2P payment_proof (submit with target_agent + payment_proof). Deposit-funded cross-operator settlement is closed. See off-ramp-as-user-action.md.",
@@ -4650,8 +4650,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
           }
         }
       } catch (err) {
-        // Re-throw intentional errors (e.g. 402 TASK_P2P_PROOF_REQUIRED)
-        if (err instanceof RelayError || err instanceof HTTPException) throw err;
+        // Re-throw intentional HTTP errors and the paid-federated P2P
+        // refusal above (402 TASK_P2P_PROOF_REQUIRED); any other failure in
+        // scoring falls through to broadcast, as before.
+        if (err instanceof HTTPException) throw err;
+        if (err instanceof TaskError && err.code === "TASK_P2P_PROOF_REQUIRED") throw err;
         // Scoring failed — fall through to broadcast
       }
     }

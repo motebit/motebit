@@ -263,13 +263,19 @@ interface DiscoveredListing {
   pricing?: Array<{ capability?: string; unit_cost?: number }> | null;
 }
 
-/** True when a 402 body is the relay's "pay P2P" refusal. */
-function isP2pProofRefusal(bodyText: string): boolean {
+/**
+ * True when a 402's remedy is to pay P2P: the relay's `TASK_P2P_PROOF_REQUIRED`,
+ * or a codeless 402 (the x402 challenge) on a submission to another agent — a
+ * deposit only moves that one to the P2P refusal (`describeDelegateSubmit402`).
+ */
+function isP2pRefusal(bodyText: string, worker: "self" | "other"): boolean {
+  let code: unknown;
   try {
-    return (JSON.parse(bodyText) as { code?: unknown }).code === "TASK_P2P_PROOF_REQUIRED";
+    code = (JSON.parse(bodyText) as { code?: unknown }).code;
   } catch {
-    return false;
+    code = undefined;
   }
+  return code === "TASK_P2P_PROOF_REQUIRED" || (typeof code !== "string" && worker === "other");
 }
 
 /** The capabilities a worker charges for, else the ones it lists. */
@@ -1899,17 +1905,22 @@ export async function handleSlashCommand(
           // The shared 402 reading — never the raw body. `/delegate` parses no
           // flags, so a P2P remedy names the full shell command — with the
           // target's capability, read from discovery (a GET, never a retry).
-          const p2p = isP2pProofRefusal(err.body ?? "");
+          const worker = targetMotebitId === repl.motebitId ? "self" : "other";
+          const p2p = isP2pRefusal(err.body ?? "", worker);
           if (p2p && targetListing == null) {
             targetListing = await lookupListing(config, repl, syncUrl!, targetMotebitId);
           }
-          const remedy = describeDelegateSubmit402(err.body ?? "", {
-            repl: {
-              prompt: delegatePrompt,
-              target: targetMotebitId,
-              capabilities: listingCapabilities(targetListing),
+          const remedy = describeDelegateSubmit402(
+            err.body ?? "",
+            {
+              repl: {
+                prompt: delegatePrompt,
+                target: targetMotebitId,
+                capabilities: listingCapabilities(targetListing),
+              },
             },
-          });
+            worker,
+          );
           for (const line of remedy) console.log(line);
         } else if (err instanceof RelayClientError && err.kind === "http") {
           console.log(`Task submission failed (${err.status}): ${err.body ?? ""}`);

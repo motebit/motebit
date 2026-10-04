@@ -340,13 +340,25 @@ const P2P_SETTLES_LINE =
   "Paid delegation to another agent settles P2P: the relay does not take deposit-funded payment for it.";
 
 /**
+ * Who the submission's worker is, as far as the caller knows: `self` (the
+ * target is the delegator's own id), `other` (another agent), or `unknown`
+ * (`--plan` routes each step by capability, so the relay picks the worker).
+ */
+export type DelegateSubmitWorker = "self" | "other" | "unknown";
+
+/**
  * The remedy for a 402 on task submission — the one reading every delegate
  * path routes its 402 through. The relay answers 402 for different refusals
- * (`{ error, code, status }`, services/relay/src/errors.ts), and only one of
- * them is cleared by a deposit:
- *   - `INSUFFICIENT_FUNDS`, or a codeless 402 (the x402 challenge, a
- *     facilitator outage, a non-JSON body: the spendable balance is below the
- *     price) — `motebit fund`.
+ * (`{ error, code, status }`, services/relay/src/errors.ts), and a deposit
+ * clears only some of them:
+ *   - `INSUFFICIENT_FUNDS` — `motebit fund`.
+ *   - a codeless 402 (the x402 challenge, a facilitator outage, a non-JSON
+ *     body) — the relay's x402 middleware, which runs before the task
+ *     handler whenever the spendable balance is below the price, whoever the
+ *     worker is. A deposit clears it only for self-delegation: to another
+ *     agent, a funded submission reaches the Arc 3.5 gate and is refused
+ *     `TASK_P2P_PROOF_REQUIRED`. So `self` — `motebit fund`; `other` —
+ *     `--sovereign`; `unknown` — both, each with when it applies.
  *   - `TASK_P2P_PROOF_REQUIRED` — paid delegation to another agent, local or
  *     on a federated peer, must settle P2P (off-ramp-as-user-action.md
  *     § Arc 3.5), so `motebit fund` can never clear it — `--sovereign`.
@@ -355,7 +367,8 @@ const P2P_SETTLES_LINE =
  */
 export function describeDelegateSubmit402(
   bodyText: string,
-  path: DelegateSubmitPath = "direct",
+  path: DelegateSubmitPath,
+  worker: DelegateSubmitWorker,
 ): string[] {
   let code: unknown;
   let error: unknown;
@@ -364,7 +377,8 @@ export function describeDelegateSubmit402(
   } catch {
     code = undefined;
   }
-  if (code === "TASK_P2P_PROOF_REQUIRED") {
+  const codeless = typeof code !== "string";
+  if (code === "TASK_P2P_PROOF_REQUIRED" || (codeless && worker === "other")) {
     if (typeof path === "object") {
       const { prompt, target, capabilities = [] } = path.repl;
       const known = capabilities.length === 1 ? capabilities[0] : undefined;
@@ -397,6 +411,16 @@ export function describeDelegateSubmit402(
   if (typeof code === "string" && code !== "INSUFFICIENT_FUNDS") {
     const words = typeof error === "string" ? error : bodyText;
     return [`The relay refused payment (${code}): ${sanitizeRelayText(words).slice(0, 300)}`];
+  }
+  if (codeless && worker === "unknown") {
+    const p2p =
+      path === "plan"
+        ? "`delegate --plan` cannot pay P2P yet (#887), so send the paid step on its own with `motebit delegate --sovereign`."
+        : "send it with `motebit delegate --sovereign`.";
+    return [
+      "Your relay balance is below this task's price. `motebit fund <amount>` clears this only if the relay routes the task to yourself.",
+      `${P2P_SETTLES_LINE} If it goes to another agent, ${p2p}`,
+    ];
   }
   return ["Insufficient balance. Run `motebit fund <amount>` to deposit."];
 }
@@ -649,7 +673,10 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       }),
     });
     if (submitRes.status === 402) {
-      for (const line of describeDelegateSubmit402(await submitRes.text())) console.error(line);
+      const worker = targetMotebitId === motebitId ? "self" : "other";
+      for (const line of describeDelegateSubmit402(await submitRes.text(), "direct", worker)) {
+        console.error(line);
+      }
       process.exit(1);
     }
     if (!submitRes.ok) {
@@ -902,7 +929,7 @@ export function createHttpPollingDelegationAdapter(
     );
 
     if (resp.status === 402) {
-      const remedy = describeDelegateSubmit402(await resp.text(), "plan").join(" ");
+      const remedy = describeDelegateSubmit402(await resp.text(), "plan", "unknown").join(" ");
       const err: StepAttemptError = new Error(`${remedy} (HTTP 402)`);
       err.conclusive = true; // refused before admission
       throw err;
