@@ -121,4 +121,27 @@ describe("check-deps layer enforcement", () => {
 
     expect(out).toContain("All architectural checks passed");
   });
+
+  it("catches a bare side-effect import of a subpath-only package's root", async () => {
+    // `import "@motebit/render-engine";` has no `from` clause, so a scanner
+    // that keys on `from` never sees it — yet it loads the renderer root
+    // (three.js) into the runtime exactly like a named import does.
+    const file = resolve(ROOT, "packages/runtime/src/tool-policy.ts");
+    const out = await withRepoFileReplaced(
+      file,
+      (original) => `${original}\nimport "@motebit/render-engine";\n`,
+      () => {
+        const r = spawnSync("npx", ["tsx", SCRIPT], {
+          cwd: ROOT,
+          encoding: "utf8",
+          env: cleanEnv(),
+        });
+        return `${r.stdout}\n${r.stderr}`;
+      },
+    );
+
+    expect(out).toContain("subpath-only");
+    expect(out).toContain('imports "@motebit/render-engine"');
+    expect(out).not.toContain("All architectural checks passed");
+  });
 });
