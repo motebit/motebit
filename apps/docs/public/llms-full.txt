@@ -43,7 +43,7 @@ Daemon running. motebit_id: 3f9c1a7e... Goals: 0. Policy: max_risk_auto=R1_DRAFT
 
 - **CLI** (`npm install -g motebit`) — interactive REPL, daemon, and MCP server. The most complete surface.
 - **Web** ([motebit.com](https://motebit.com)) — the creature and chat in the browser, no install.
-- **Desktop** (Tauri) — the creature in a small transparent window, with chat and voice input. A preview, built from source today: the last published build (v0.1.0, March 2026) predates current identity and money behaviour. See [Get Your Agent](/docs/get-your-agent#desktop-preview).
+- **Desktop** (Tauri) — the creature in a small transparent window, with chat and voice input. A preview — see [Get Your Agent](/docs/get-your-agent#desktop-preview).
 - **Mobile** (React Native + Expo) — the same identity, memory, and governance runtime. Built from source today; not in the App Store or Play Store, and on-device testing is not yet complete.
 - **Spatial** — an AR-glasses companion prototype.
 
@@ -153,7 +153,7 @@ The scaffold starts in direct mode — no LLM needed, tools execute deterministi
 
 The desktop app (Tauri) shows your motebit as a liquescent droplet in a small transparent window — it breathes, glows when thinking, takes voice input, and remembers your conversations.
 
-The desktop app is a preview. The last published desktop build, `desktop-v0.1.0` (March 2026), predates the current identity and money behaviour — sovereign-by-default identity minting, the identity binding ladder, the machine roster, and the money-path fixes all landed after it — so do not use it for a new identity. There is no auto-updater.
+The published desktop build is an earlier preview that predates the current runtime (identities it creates are not [sovereign](/docs/developer/verify-a-receipt#valid-is-not-the-same-as-identity-proven)). For the current experience, use the web app or the CLI; developers can build desktop from source.
 
 The current route is to build from source (Node ≥ 22, pnpm 9.15, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your platform):
 
@@ -5763,7 +5763,7 @@ Source: https://docs.motebit.com/docs/apps/desktop
 
 The desktop app is a Tauri app (Rust backend + webview) with a Three.js liquescent droplet, chat interface, and full identity/crypto/operator mode support.
 
-It is a preview: the last published desktop build (v0.1.0, March 2026) predates current identity and money behaviour, so build from source as below. For a shipped path today, use the web app at [motebit.com](https://motebit.com) or the CLI (`npm install -g motebit`).
+It is a preview — see [Get Your Agent](/docs/get-your-agent#desktop-preview) for the state of the published build; build from source as below.
 
 ## Running the desktop app
 
