@@ -185,6 +185,7 @@ pnpm --filter @motebit/runtime test   # Test single package
 - Dependency overrides upper-bounded (`>=4.59.0 <5.0.0`).
 - Inline trivial utilities (< 10 lines, no crypto/state/IO) at layer boundaries rather than cross-layer import.
 - Event appending uses `appendWithClock()` for atomic `version_clock`.
+- PR descriptions: `## Why` / `## Evidence` / `## Review` / `## Deferred`, and no attribution text in the body (no "Generated with" footer, no emoji, no prose co-author line). The repo squashes with the PR body as the commit message, so attribution lives only in the commits' `Co-Authored-By:` trailer, which GitHub carries onto the squash commit.
 
 ## UI
 
