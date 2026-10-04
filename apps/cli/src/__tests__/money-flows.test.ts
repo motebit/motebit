@@ -426,20 +426,33 @@ describe("handleDelegate", () => {
     expect(firstUrl).not.toContain("candidates");
   });
 
-  it("detects HTTP 402 as insufficient balance", async () => {
+  it("a codeless 402 for a discovered other worker points at --sovereign, never `motebit fund`", async () => {
     // Discovery
     mockFetch.mockReturnValueOnce(
       mockFetchResponse({
         candidates: [{ motebit_id: "worker-1", composite: 0.85, selected: true }],
       }),
     );
-    // Task submission — 402
+    // Task submission — codeless 402 (the x402 challenge): a deposit would only
+    // move it to TASK_P2P_PROOF_REQUIRED, since worker-1 is another agent.
     mockFetch.mockReturnValueOnce(mockFetchText("", 402));
 
     await expect(
       handleDelegate(makeConfig({ positionals: ["delegate", "test prompt"] })),
     ).rejects.toThrow("process.exit(1)");
-    expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining("Insufficient balance"));
+    expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining("--sovereign"));
+    expect(mockConsoleError).not.toHaveBeenCalledWith(expect.stringContaining("motebit fund"));
+  });
+
+  it("a codeless 402 on self-delegation is insufficient balance", async () => {
+    mockFetch.mockReturnValueOnce(mockFetchText("", 402));
+
+    await expect(
+      handleDelegate(
+        makeConfig({ positionals: ["delegate", "test prompt"], target: "test-mote-id" }),
+      ),
+    ).rejects.toThrow("process.exit(1)");
+    expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining("motebit fund"));
   });
 
   it("exits when no agents found for capability", async () => {
