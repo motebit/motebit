@@ -5,7 +5,7 @@
 import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
-import { toCents, isWithdrawableRail } from "@motebit/protocol";
+import { toCents, isWithdrawableRail, parsePositiveMicro } from "@motebit/protocol";
 import type {
   AccountBalanceResult,
   AccountWithdrawResult,
@@ -32,7 +32,6 @@ import {
   reconcileLedger,
   processStripeCheckout,
   storeSettlementProof,
-  toMicro,
   fromMicro,
 } from "./accounts.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
@@ -45,6 +44,10 @@ import {
 import type { WithdrawalRequest } from "@motebit/virtual-accounts";
 
 const logger = createLogger({ service: "budget" });
+
+/** 400 message for a client dollar amount that converts to less than 1 micro-unit. */
+const AMOUNT_BELOW_MINIMUM =
+  "amount must be a finite number of at least 0.000001 USD (1 micro-unit)";
 
 export {
   RECONCILE_MIN_AGE_MS,
@@ -357,13 +360,14 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       destination?: string;
       idempotency_key?: string;
     }>();
-    if (typeof body.amount !== "number" || body.amount <= 0) {
-      const errBody = JSON.stringify({ error: "amount must be a positive number", status: 400 });
+    // Validate the CONVERTED value: a positive dollar amount below one micro
+    // (1e-7 USD) rounds to 0 and once recorded $0 withdrawals.
+    const amountMicro = parsePositiveMicro(body.amount);
+    if (amountMicro === null) {
+      const errBody = JSON.stringify({ error: AMOUNT_BELOW_MINIMUM, status: 400 });
       completeIdempotency(moteDb.db, idempotencyKeyHeader, motebitId, 400, errBody);
-      throw new HTTPException(400, { message: "amount must be a positive number" });
+      throw new HTTPException(400, { message: AMOUNT_BELOW_MINIMUM });
     }
-
-    const amountMicro = toMicro(body.amount);
     // Pass the header key as the withdrawal-level idempotency key too (backward compat)
     const idempotencyKey = body.idempotency_key ?? idempotencyKeyHeader;
     const result = requestWithdrawal(
@@ -1409,8 +1413,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     requireFirstPerson(c, motebitId, "checkout");
     const correlationId = c.get("correlationId" as never) as string;
     const body = await c.req.json<{ amount: number; return_url?: string }>();
-    if (typeof body.amount !== "number" || body.amount <= 0)
-      throw new HTTPException(400, { message: "amount must be a positive number (in dollars)" });
+    if (parsePositiveMicro(body.amount) === null)
+      throw new HTTPException(400, { message: `${AMOUNT_BELOW_MINIMUM} (in dollars)` });
     if (body.amount < 0.5)
       throw new HTTPException(400, { message: "Minimum deposit amount is $0.50" });
 

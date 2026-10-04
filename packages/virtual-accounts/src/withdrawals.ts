@@ -8,7 +8,7 @@
 
 import type { AccountStore } from "./store.js";
 import type { WithdrawalOpenStatus, WithdrawalRequest } from "./types.js";
-import { fromMicro } from "./money.js";
+import { assertPositiveMicro, fromMicro } from "./money.js";
 
 /** Structured logger contract. Consumer injects a platform logger. */
 export interface WithdrawalsLogger {
@@ -85,6 +85,9 @@ export function requestWithdrawal(
   store: AccountStore,
   args: RequestWithdrawalArgs,
 ): WithdrawalRequest | null | { existing: WithdrawalRequest } {
+  // Before the idempotency lookup: an invalid amount is a caller bug, never
+  // something a replay could legitimize.
+  assertPositiveMicro(args.amountMicro, "requestWithdrawal");
   const logger = args.logger ?? NOOP_LOGGER;
   const destination = args.destination ?? "pending";
 

@@ -2555,6 +2555,9 @@ export function isMemorySource(value: unknown): value is MemorySource;
 // @public
 export function isMerkleTreeVersion(value: unknown): value is MerkleTreeVersion;
 
+// @public
+export function isPositiveMicro(micro: unknown): micro is number;
+
 // @public (undocumented)
 export function isProjectionClass(s: string): s is ProjectionClass;
 
@@ -2924,6 +2927,9 @@ export interface MigrationToken {
 }
 
 // @public
+export const MIN_POSITIVE_MICRO = 1;
+
+// @public
 export type ModelLab = "anthropic" | "openai" | "google" | "meta" | "mistral" | "microsoft" | "alibaba";
 
 // @public (undocumented)
@@ -3008,6 +3014,9 @@ export interface P2pPaymentProof {
 
 // @public
 export const PAIR_AUDIENCE: TokenAudience;
+
+// @public
+export function parsePositiveMicro(dollars: unknown): number | null;
 
 // @public
 export interface PaymentProof {

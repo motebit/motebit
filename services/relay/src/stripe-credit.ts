@@ -8,7 +8,7 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
-import { toMicro } from "@motebit/virtual-accounts";
+import { parsePositiveMicro } from "@motebit/protocol";
 import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
 import { createLogger } from "./logger.js";
 
@@ -30,7 +30,10 @@ export function processStripeCheckout(
   amount: number,
   paymentIntent?: string,
 ): boolean {
-  if (amount <= 0) return false;
+  // Validate the converted value: a sub-micro or non-finite amount would
+  // write a 0-micro (or corrupt) deposit row.
+  const amountMicro = parsePositiveMicro(amount);
+  if (amountMicro === null) return false;
 
   const store = sqliteAccountStoreFor(db);
 
@@ -42,7 +45,7 @@ export function processStripeCheckout(
     if (store.hasDepositWithReference(motebitId, sessionId)) return false;
     store.credit(
       motebitId,
-      toMicro(amount),
+      amountMicro,
       "deposit",
       sessionId,
       paymentIntent ? `Stripe Checkout: ${paymentIntent}` : `Stripe Checkout: ${sessionId}`,

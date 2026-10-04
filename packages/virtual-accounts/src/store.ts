@@ -12,6 +12,7 @@
  * `@motebit/persistence` DatabaseDriver.
  */
 
+import { assertPositiveMicro } from "./money.js";
 import type {
   AccountTransaction,
   NewWithdrawal,
@@ -175,6 +176,8 @@ export interface AccountStore {
    * `null` on insufficient funds (nothing written), else the new record and
    * the balance after. The caller owns the withdrawable-hold policy check;
    * the store honors the raw balance invariant (`balance >= amount`).
+   * Throws a `RangeError` (`assertPositiveMicro`) unless `amount` is a
+   * positive safe integer of micro-units — before anything is read or written.
    */
   debitAndRecordWithdrawal(
     w: NewWithdrawal,
@@ -621,6 +624,7 @@ export class InMemoryAccountStore implements AccountStore {
     w: NewWithdrawal,
     description: string,
   ): { record: WithdrawalRequest; newBalance: number } | { existing: WithdrawalRequest } | null {
+    assertPositiveMicro(w.amount, "debitAndRecordWithdrawal");
     // In-memory: the event loop serializes, so the key check, the debit and
     // the withdrawal row happen on one continuous tick.
     if (w.idempotency_key != null) {
