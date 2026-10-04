@@ -1165,12 +1165,12 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-model-picker-canonical",
     proves:
-      "an allowlist exemption is per (file, exact token), never per line — appending a stale picker <option> to a line that carries an allowlisted Cloud id still fires (#654 cold review C4: the line-substring allowlist passed this)",
+      "an allowlist exemption is per (file, exact token), never per line — appending a stale picker id to a line that carries an allowlisted test-fixture id still fires (#654 cold review C4: the line-substring allowlist passed this)",
     perturb: () =>
-      mutateFile("apps/web/index.html", (src) =>
+      mutateFile("apps/cli/src/__tests__/bare-command-routing.test.ts", (src) =>
         src.replace(
-          '<option value="claude-haiku-4-5-20251001">Claude Haiku</option>',
-          '<option value="claude-haiku-4-5-20251001">Claude Haiku</option><option value="claude-opus-4-7">Opus 4.7</option>',
+          'detectShellInvocation("motebit --model=claude-opus-5")).toContain(TEACH);',
+          'detectShellInvocation("motebit --model=claude-opus-5")).toContain(TEACH); const STALE = "claude-opus-4-7";',
         ),
       ),
   },
