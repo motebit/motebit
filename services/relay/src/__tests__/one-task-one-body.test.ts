@@ -17,7 +17,7 @@
  * own verified device id, posting its result with its own `task:result`
  * token — the shape every surface has.
  */
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import type { AddressInfo } from "node:net";
 import { serve } from "@hono/node-server";
 import type { Hono } from "hono";
@@ -39,6 +39,27 @@ import {
   createTestRelay,
   jsonAuthWithIdempotency,
 } from "./test-helpers.js";
+
+/**
+ * The race seam (cold review of 9347c7f, F1): the relay verifies a result's
+ * receipt signature inside `answerTask` — AFTER the result route's claim
+ * check and BEFORE the answer write. A test may park the next verification
+ * there (`verifyGate.next`) to land a claim at exactly that point,
+ * deterministically. Pass-through when unset.
+ */
+const verifyGate = vi.hoisted(() => ({ next: null as (() => Promise<void>) | null }));
+vi.mock("@motebit/encryption", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("@motebit/encryption")>();
+  return {
+    ...orig,
+    verifyExecutionReceipt: async (...args: Parameters<typeof orig.verifyExecutionReceipt>) => {
+      const park = verifyGate.next;
+      verifyGate.next = null;
+      if (park != null) await park();
+      return orig.verifyExecutionReceipt(...args);
+    },
+  };
+});
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -457,5 +478,89 @@ describe("a granted claim is never re-dispatched — a lost claimer leaves the t
     expect(a.resultStatuses).toEqual([200]);
     expect(b.executions).toBe(0);
     expect(await answerOf(id, t.task_id)).toBe(`done by ${a.deviceId}`);
+  });
+});
+
+/**
+ * A body that claims only when told to — a raw socket of the identity, so the
+ * test chooses the exact moment its `task_claim` lands.
+ */
+async function rawClaimer(id: Identity, deviceId: string) {
+  const { relay, port, motebitId, kp } = id;
+  const before = relay.connections.get(motebitId)?.length ?? 0;
+  const token = (
+    await mintAudienceToken({ mid: motebitId, did: deviceId, aud: "sync" }, kp.privateKey)
+  ).token;
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${port}/ws/sync/${motebitId}?token=${token}&device_id=${deviceId}`,
+  );
+  ws.on("error", () => {});
+  const verdicts = new Map<string, (type: string) => void>();
+  ws.on("message", (raw: Buffer) => {
+    try {
+      const f = JSON.parse(raw.toString()) as { type?: string; task_id?: string };
+      if ((f.type === "task_claimed" || f.type === "task_claim_rejected") && f.task_id) {
+        verdicts.get(f.task_id)?.(f.type);
+      }
+    } catch {
+      /* not a frame */
+    }
+  });
+  cleanups.push(async () => void ws.terminate());
+  await waitFor(() => (relay.connections.get(motebitId)?.length ?? 0) > before);
+  return {
+    claim(taskId: string): Promise<string> {
+      const verdict = new Promise<string>((r) => verdicts.set(taskId, r));
+      ws.send(JSON.stringify({ type: "task_claim", task_id: taskId, lease: true }));
+      return verdict;
+    },
+  };
+}
+
+/**
+ * F1 (cold review of 9347c7f): a non-claimer's result racing a claim. B posts
+ * a result for a Pending task while device A claims it; A executes on its
+ * grant, so "A granted AND B's result accepted" is two executions. The claim
+ * lands at each point of B's POST — before the route's claim check, between
+ * that check and the answer write (parked deterministically at the signature
+ * verification inside `answerTask`), after the write — under a device token
+ * and under the master token. Exactly one of the two may win.
+ */
+describe("a non-claimer's result racing a claim — exactly one of them wins", () => {
+  const cells = (["device", "master"] as const).flatMap((bearer) =>
+    (["before_check", "between_check_and_write", "after_write"] as const).map(
+      (when) => [bearer, when] as const,
+    ),
+  );
+  it.each(cells)("%s-token answer, claim lands %s", async (bearer, when) => {
+    const id = await identityWithDevices(2);
+    const t = await submit(id); // nothing connected: Pending
+    const a = await rawClaimer(id, id.devices[0]!);
+    const b = new Body(id, id.devices[1]!);
+
+    let claimed: string | null = null;
+    if (when === "before_check") claimed = await a.claim(t.task_id);
+    if (when === "between_check_and_write") {
+      verifyGate.next = async () => {
+        claimed = await a.claim(t.task_id);
+      };
+    }
+    await b.answer(t, { bearer });
+    verifyGate.next = null;
+    if (when === "after_write") claimed = await a.claim(t.task_id);
+
+    const poll = await pollOf(id, t.task_id);
+    if (when === "after_write") {
+      // The answer was taken first: the task is answered, never claimable.
+      expect(b.resultStatuses).toEqual([200]);
+      expect(claimed).toBe("task_claim_rejected");
+      expect(poll.result).toBe(`done by ${b.deviceId}`);
+    } else {
+      // A holds the grant: B's answer is refused, the entry holds no answer.
+      expect(claimed).toBe("task_claimed");
+      expect(b.resultStatuses).toEqual([409]);
+      expect(poll.result).toBeNull();
+      expect(settlementRows(id, t.task_id)).toBe(0);
+    }
   });
 });
