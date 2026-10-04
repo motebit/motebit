@@ -31,7 +31,7 @@
  *     reported `not_evaluated` structurally (the dimension record has no
  *     code path that writes `pass` for them), so unknown semantics can never
  *     read as satisfied. `valid` is computed over the evaluated dimensions
- *     only — that is the claim ceiling stated in the README, not APS
+ *     only — that is the claim ceiling stated in INTEROP.md, not APS
  *     compatibility.
  */
 import { readFileSync } from "node:fs";
@@ -43,8 +43,9 @@ import {
   hexToBytes,
   sha256,
   bytesToHex,
+  generateKeypair,
 } from "../../packages/crypto/src/signing.js";
-import { ed25519Verify } from "../../packages/crypto/src/suite-dispatch.js";
+import { ed25519Sign, ed25519Verify } from "../../packages/crypto/src/suite-dispatch.js";
 
 // The pins live in the interop record, not here: the record is what Motebit
 // states publicly, so the test reads it and the two cannot drift apart.
@@ -393,5 +394,217 @@ describe("APS authority-delegation vector — Motebit consumer", () => {
     expect(Object.keys((await evaluateApsChain(vector, [])).dimensions).sort()).toEqual(
       [...EVALUATED, ...NOT_EVALUATED].sort(),
     );
+  });
+});
+
+// ── Synthetic chains: one validly-signed negative per check ─────────────────
+//
+// The vendored vector's negative cases all die at the signature or at
+// UNANCHORED_ROOT first, so they cannot show that the narrowing, window,
+// linkage and key-binding checks bite. These chains are built with the SAME
+// §4.1 construction (domain-tagged JCS id + signature) under TEST keys
+// generated here, with the synthetic root declared as the trust anchor, so
+// every record is cryptographically valid and exactly one check is violated.
+
+const SYN_ROOT = "aps:agent:synthetic-root";
+const SYN_PARENT = "aps:agent:synthetic-parent";
+const SYN_CHILD = "aps:agent:synthetic-child";
+const SYN_OTHER = "aps:agent:synthetic-other";
+
+interface SynKeys {
+  root: { publicKey: Uint8Array; privateKey: Uint8Array };
+  parent: { publicKey: Uint8Array; privateKey: Uint8Array };
+  other: { publicKey: Uint8Array; privateKey: Uint8Array };
+}
+
+let synKeys: Promise<SynKeys> | undefined;
+function getSynKeys(): Promise<SynKeys> {
+  synKeys ??= (async () => ({
+    root: await generateKeypair(),
+    parent: await generateKeypair(),
+    other: await generateKeypair(),
+  }))();
+  return synKeys;
+}
+
+type Unsigned = Omit<ApsRecord, "delegation_id" | "signature">;
+
+async function signApsRecord(unsigned: Unsigned, privateKey: Uint8Array): Promise<ApsRecord> {
+  const delegation_id = await computeDelegationId({
+    ...unsigned,
+    delegation_id: "",
+    signature: "",
+  });
+  const sig = await ed25519Sign(
+    domainSeparated(SIG_TAG, { ...unsigned, delegation_id }),
+    privateKey,
+  );
+  return { ...unsigned, delegation_id, signature: bytesToHex(sig) };
+}
+
+function synAuthority(
+  grants: string[],
+  remaining: number,
+  not_before: string,
+  not_after: string,
+): ApsRecord["authority"] {
+  return {
+    scope: { profile: "aps-hierarchical-v1", grants },
+    depth: { remaining },
+    time: { not_before, not_after },
+  };
+}
+
+interface ChildSpec {
+  grants?: string[];
+  remaining?: number;
+  not_before?: string;
+  not_after?: string;
+  /** Override the child's parent_delegation_id (default: the root's id). */
+  parentId?: string;
+  /** Sign with the unrelated key and name it as the verification method. */
+  signedByOther?: boolean;
+}
+
+/** Root: net:http:* · depth 4 · [2026-01-01, 2027-01-01). Child narrows it unless `spec` says otherwise. */
+async function buildSyntheticChain(
+  spec: ChildSpec = {},
+  evaluated_at = "2026-06-01T00:00:00.000Z",
+): Promise<Pick<ApsVector, "evaluated_at" | "trust_anchors" | "chain">> {
+  const k = await getSynKeys();
+  const root = await signApsRecord(
+    {
+      record_type: "aps:authority-delegation:v1",
+      version: "1.0",
+      parent_delegation_id: null,
+      issuer: SYN_ROOT,
+      subject: SYN_PARENT,
+      verification_method: `${SYN_ROOT}#key-1`,
+      issued_at: "2026-01-01T00:00:00.000Z",
+      nonce: "000000000000000000000000000000a1",
+      authority: synAuthority(
+        ["net:http:*"],
+        4,
+        "2026-01-01T00:00:00.000Z",
+        "2027-01-01T00:00:00.000Z",
+      ),
+    },
+    k.root.privateKey,
+  );
+  const child = await signApsRecord(
+    {
+      record_type: "aps:authority-delegation:v1",
+      version: "1.0",
+      parent_delegation_id: spec.parentId ?? root.delegation_id,
+      issuer: SYN_PARENT,
+      subject: SYN_CHILD,
+      verification_method: spec.signedByOther ? `${SYN_OTHER}#key-1` : `${SYN_PARENT}#key-1`,
+      issued_at: "2026-02-01T00:00:00.000Z",
+      nonce: "000000000000000000000000000000a2",
+      authority: synAuthority(
+        spec.grants ?? ["net:http:get"],
+        spec.remaining ?? 2,
+        spec.not_before ?? "2026-02-01T00:00:00.000Z",
+        spec.not_after ?? "2026-12-01T00:00:00.000Z",
+      ),
+    },
+    spec.signedByOther ? k.other.privateKey : k.parent.privateKey,
+  );
+  return {
+    evaluated_at,
+    trust_anchors: {
+      roots: [{ issuer: SYN_ROOT, subject: SYN_PARENT }],
+      verification_keys: {
+        [`${SYN_ROOT}#key-1`]: bytesToHex(k.root.publicKey),
+        [`${SYN_PARENT}#key-1`]: bytesToHex(k.parent.publicKey),
+        [`${SYN_OTHER}#key-1`]: bytesToHex(k.other.publicKey),
+      },
+    },
+    chain: [root, child],
+  };
+}
+
+describe("(9) synthetic validly-signed chains — each check bites on its own", () => {
+  it("the narrowing synthetic chain is valid (every record signed, root anchored)", async () => {
+    const chain = await buildSyntheticChain();
+    for (const rec of chain.chain) {
+      expect(await computeDelegationId(rec)).toBe(rec.delegation_id);
+      expect(await verifyRecordSignature(rec, chain.trust_anchors.verification_keys)).toBe(true);
+    }
+    const r = await evaluateApsChain(chain, []);
+    expect(r.failures).toEqual([]);
+    expect(r.valid).toBe(true);
+  });
+
+  const negatives: [string, ChildSpec, string | undefined, Failure][] = [
+    [
+      "widened scope ⇒ SCOPE_WIDENED",
+      { grants: ["net:https:get"] },
+      undefined,
+      { dimension: "scope", code: "SCOPE_WIDENED", index: 1 },
+    ],
+    [
+      "equal depth ⇒ DEPTH_NOT_DECREASING",
+      { remaining: 4 },
+      undefined,
+      { dimension: "depth", code: "DEPTH_NOT_DECREASING", index: 1 },
+    ],
+    [
+      "greater depth ⇒ DEPTH_NOT_DECREASING",
+      { remaining: 5 },
+      undefined,
+      { dimension: "depth", code: "DEPTH_NOT_DECREASING", index: 1 },
+    ],
+    [
+      "window wider than the parent's ⇒ WINDOW_WIDENED",
+      { not_after: "2027-06-01T00:00:00.000Z" },
+      undefined,
+      { dimension: "time", code: "WINDOW_WIDENED", index: 1 },
+    ],
+    [
+      "window inside the parent's but excluding evaluated_at ⇒ OUTSIDE_WINDOW",
+      { not_before: "2026-07-01T00:00:00.000Z" },
+      undefined,
+      { dimension: "time", code: "OUTSIDE_WINDOW", index: 1 },
+    ],
+    [
+      "evaluated_at == not_after (exclusive bound) ⇒ OUTSIDE_WINDOW",
+      { not_after: "2026-06-01T00:00:00.000Z" },
+      "2026-06-01T00:00:00.000Z",
+      { dimension: "time", code: "OUTSIDE_WINDOW", index: 1 },
+    ],
+    [
+      "wrong parent_delegation_id under an anchored root ⇒ BROKEN_LINK",
+      { parentId: "sha256:" + "0".repeat(64) },
+      undefined,
+      { dimension: "linkage", code: "BROKEN_LINK", index: 1 },
+    ],
+    [
+      "child signed by a key that is not the issuer's ⇒ KEY_NOT_ISSUERS",
+      { signedByOther: true },
+      undefined,
+      { dimension: "signature", code: "KEY_NOT_ISSUERS", index: 1 },
+    ],
+  ];
+  for (const [name, spec, evaluatedAt, expected] of negatives) {
+    it(name, async () => {
+      const chain = await buildSyntheticChain(spec, evaluatedAt);
+      // Precondition: the violation is not cryptographic — every record verifies.
+      for (const rec of chain.chain) {
+        expect(await computeDelegationId(rec)).toBe(rec.delegation_id);
+        expect(await verifyRecordSignature(rec, chain.trust_anchors.verification_keys)).toBe(true);
+      }
+      const r = await evaluateApsChain(chain, []);
+      expect(r.valid).toBe(false);
+      expect(r.failures).toEqual([expected]);
+    });
+  }
+
+  it("evaluated_at == not_before (inclusive bound) is inside the window", async () => {
+    const chain = await buildSyntheticChain(
+      { not_before: "2026-06-01T00:00:00.000Z" },
+      "2026-06-01T00:00:00.000Z",
+    );
+    expect((await evaluateApsChain(chain, [])).valid).toBe(true);
   });
 });
