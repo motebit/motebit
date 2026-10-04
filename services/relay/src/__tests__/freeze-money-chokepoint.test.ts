@@ -62,6 +62,7 @@ import type {
   WithdrawalResult,
 } from "@motebit/sdk";
 import { OperatorSolanaTransfer, type SolanaRpcAdapter } from "@motebit/wallet-solana";
+import { durableFromSendUsdc } from "./durable-payout-fake.js";
 import { computeGrossAmount } from "@motebit/market";
 import { PLATFORM_FEE_RATE } from "@motebit/protocol";
 import {
@@ -760,6 +761,12 @@ describe("freeze at the money chokepoint — every door, frozen at the await bef
       sendUsdcBatch: vi.fn().mockResolvedValue([]),
       getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
       isReachable: vi.fn().mockResolvedValue(true),
+      // Path 0 is a durable-nonce payout (#990): `sendUsdc` is driven through it.
+      honorsBroadcastHooks: true,
+      ...durableFromSendUsdc(
+        sendUsdc,
+        "5VfYdxYhWnD8X7K2YgHmBpDXJqJ1JmZj7rL2KkXg8sM3QfvN9P1bZw6cM5J8nT4rA7uW9eR6yU2dE1pV3hG4oS9k",
+      ),
     };
     const relay = await createTestRelay({
       enableDeviceAuth: false,
@@ -1379,6 +1386,14 @@ describe("freeze — the background writers a pass can carry past the freeze", (
     let releaseAvail!: () => void;
     const availGate = new Promise<void>((r) => (releaseAvail = r));
     const sendUsdc = vi.fn().mockResolvedValue({ signature: "sig", slot: 1, confirmed: true });
+    const durable = durableFromSendUsdc(sendUsdc, "sig");
+    // The await before the claim is the durable-nonce lane read (#990).
+    const prepareNonceLane = vi.fn<NonNullable<SolanaRpcAdapter["prepareNonceLane"]>>(
+      async (opts) => {
+        await availGate;
+        return durable.prepareNonceLane!(opts);
+      },
+    );
     const adapter: SolanaRpcAdapter = {
       ownAddress: "RelayTreasuryAddressBase58",
       getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
@@ -1387,10 +1402,10 @@ describe("freeze — the background writers a pass can carry past the freeze", (
       sendUsdc,
       sendUsdcBatch: vi.fn().mockResolvedValue([]),
       getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
-      isReachable: vi.fn().mockImplementation(async () => {
-        await availGate;
-        return true;
-      }),
+      isReachable: vi.fn().mockResolvedValue(true),
+      honorsBroadcastHooks: true,
+      ...durable,
+      prepareNonceLane,
     };
     const relay = await createTestRelay({
       enableDeviceAuth: false,
@@ -1409,7 +1424,7 @@ describe("freeze — the background writers a pass can carry past the freeze", (
         headers,
         body: payload,
       });
-      await vi.waitFor(() => expect(adapter.isReachable).toHaveBeenCalled());
+      await vi.waitFor(() => expect(prepareNonceLane).toHaveBeenCalled());
       await freeze(relay);
       releaseAvail();
       const res = await pending;
@@ -1457,6 +1472,9 @@ describe("freeze — the background writers a pass can carry past the freeze", (
       sendUsdcBatch: vi.fn().mockResolvedValue([]),
       getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
       isReachable: vi.fn().mockResolvedValue(true),
+      // The payout lands and FINALIZES with an error (#990): proven unpaid.
+      honorsBroadcastHooks: true,
+      ...durableFromSendUsdc(sendUsdc, "sigLandedFailed"),
     };
     const relay = await createTestRelay({
       enableDeviceAuth: false,

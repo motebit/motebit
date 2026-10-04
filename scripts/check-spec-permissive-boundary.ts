@@ -63,6 +63,12 @@ const PERMISSIVE_PACKAGES = ["packages/protocol/src", "packages/crypto/src", "pa
 const WAIVED_CALLABLES: Record<string, string> = {
   // External / standard library identifiers
   getTransaction: "Solana RPC method name (@solana/web3.js), not a repo symbol",
+  createWithSeed:
+    "Solana System Program address derivation (@solana/web3.js PublicKey.createWithSeed), not a repo symbol",
+  allocateWithSeed:
+    "Solana System Program instruction (@solana/web3.js SystemProgram.allocate with seed), not a repo symbol",
+  nonceInitialize:
+    "Solana System Program durable-nonce instruction (@solana/web3.js SystemProgram.nonceInitialize), not a repo symbol",
   verifyAsync: "@noble/ed25519 primitive — suite-dispatch is the only caller",
 
   // Documented reference-implementation pointers (spec clearly marks as convention, not law)
