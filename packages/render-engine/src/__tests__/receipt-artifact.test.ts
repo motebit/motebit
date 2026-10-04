@@ -138,13 +138,24 @@ describe("buildReceiptArtifact — verify outcomes", () => {
     );
   });
 
-  it("flips to is-failed + failed label when verified true but status=failed", async () => {
-    verifyReceiptChainMock.mockResolvedValue({ verified: true });
+  it("flips to is-failed + failed label when the bound chain verifies but status=failed", async () => {
+    verifyReceiptChainMock.mockResolvedValue({ verified: true, keySource: "external" });
     const el = buildReceiptArtifact(makeReceipt({ status: "failed" }), () => {});
     await flushMicrotasks();
     expect(el.classList.contains("is-failed")).toBe(true);
     expect(el.querySelector(".receipt-verify-label")?.textContent).toBe(
       "verified · completed: failed",
+    );
+  });
+
+  it("status=failed on an unanchored chain never claims identity (is-failed-unanchored)", async () => {
+    verifyReceiptChainMock.mockResolvedValue({ verified: true, keySource: "embedded" });
+    const el = buildReceiptArtifact(makeReceipt({ status: "failed" }), () => {});
+    await flushMicrotasks();
+    expect(el.classList.contains("is-failed")).toBe(false);
+    expect(el.classList.contains("is-failed-unanchored")).toBe(true);
+    expect(el.querySelector(".receipt-verify-label")?.textContent).toBe(
+      "signature verified · identity not anchored · completed: failed",
     );
   });
 

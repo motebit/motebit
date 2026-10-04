@@ -127,6 +127,11 @@ export type { SyncStatus } from "./sync-controller";
 import { MobileMcpManager } from "./mcp-manager";
 import { MobilePairingManager } from "./pairing-manager";
 import { MobilePushTokenManager } from "./push-token-manager";
+import {
+  canExecuteDelegatedTask,
+  mobileServingAllowed,
+  MOBILE_SERVING_UNAVAILABLE,
+} from "./serving-gate";
 
 // Color presets + approval presets — canonical source in @motebit/sdk.
 // Re-exported so any existing `import { COLOR_PRESETS } from "./mobile-app"`
@@ -2364,6 +2369,9 @@ export class MobileApp {
   }
 
   startServing(): Promise<{ ok: boolean; error?: string }> {
+    if (!mobileServingAllowed()) {
+      return Promise.resolve({ ok: false, error: MOBILE_SERVING_UNAVAILABLE });
+    }
     return this.sync.startServing();
   }
 
@@ -2614,6 +2622,10 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
   const app = _backgroundApp;
   const runtime = app?.getRuntime();
   if (!app || !runtime || !app.motebitId) return;
+  // The single execution gate (serving-gate.ts). Mobile is non-executing
+  // today: a push wake must not open a socket, claim, or run a delegated
+  // task — previously this path ran `handleAgentTask` with `/serve` off.
+  if (!canExecuteDelegatedTask(app.isServing())) return;
 
   const syncUrl = await app.getSyncUrl();
   if (!syncUrl) return;
@@ -2669,6 +2681,15 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
       if (msg.type !== "task_request" || msg.task == null) return;
 
       const task = msg.task;
+
+      // Re-check the gate at the claim point (serving may have been stopped
+      // while the socket was opening).
+      if (!canExecuteDelegatedTask(app.isServing())) {
+        ws.close();
+        clearTimeout(timer);
+        done();
+        return;
+      }
 
       // Claim the task
       ws.send(JSON.stringify({ type: "task_claim", task_id: task.task_id }));

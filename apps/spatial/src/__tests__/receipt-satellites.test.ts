@@ -51,16 +51,27 @@ describe("hueForVerifyState", () => {
     const verified = hueForVerifyState("verified");
     const integrityOnly = hueForVerifyState("integrity-only");
     const taskFailed = hueForVerifyState("task-failed");
+    const taskFailedUnanchored = hueForVerifyState("task-failed-unanchored");
     const failed = hueForVerifyState("failed");
-    const all = [pending, verified, integrityOnly, taskFailed, failed];
-    expect(new Set(all).size).toBe(5);
+    const all = [pending, verified, integrityOnly, taskFailed, taskFailedUnanchored, failed];
+    expect(new Set(all).size).toBe(6);
     // integrity-only must NOT share the green "bound" hue — the whole point is
     // that a self-asserted-key receipt reads differently from an anchored one.
     expect(integrityOnly).not.toBe(verified);
+    // Same for a failed task: the orb's hue is its only signal, so an
+    // unanchored failure must not wear the bound-failure hue.
+    expect(taskFailedUnanchored).not.toBe(taskFailed);
   });
 
   it("keeps every hue inside [0, 360)", () => {
-    for (const s of ["pending", "verified", "integrity-only", "task-failed", "failed"] as const) {
+    for (const s of [
+      "pending",
+      "verified",
+      "integrity-only",
+      "task-failed",
+      "task-failed-unanchored",
+      "failed",
+    ] as const) {
       const h = hueForVerifyState(s);
       expect(h).toBeGreaterThanOrEqual(0);
       expect(h).toBeLessThan(360);
