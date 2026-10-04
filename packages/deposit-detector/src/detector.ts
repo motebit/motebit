@@ -68,11 +68,17 @@ export async function detectDeposits(config: DetectDepositsConfig): Promise<numb
     logger,
   } = config;
 
-  // Step 1 — current block. RPC failure collapses to 0 credits.
+  // Step 1 — current block. RPC failure collapses to 0 credits — LOGGED, so
+  // a cycle that fails every tick (crediting stalled) is never silent.
   let currentBlock: bigint;
   try {
     currentBlock = await rpc.getBlockNumber();
-  } catch {
+  } catch (err) {
+    logger?.warn("deposit.cycle_failed", {
+      chain,
+      stage: "eth_blockNumber",
+      error: err instanceof Error ? err.message : String(err),
+    });
     return 0;
   }
 
@@ -114,7 +120,14 @@ export async function detectDeposits(config: DetectDepositsConfig): Promise<numb
       contractAddress,
       topic0: transferTopic,
     });
-  } catch {
+  } catch (err) {
+    logger?.warn("deposit.cycle_failed", {
+      chain,
+      stage: "eth_getLogs",
+      fromBlock: fromBlock.toString(),
+      toBlock: toBlock.toString(),
+      error: err instanceof Error ? err.message : String(err),
+    });
     return 0;
   }
 

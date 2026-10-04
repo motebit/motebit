@@ -31,8 +31,14 @@
  */
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
-import { paymentNoticeCopy } from "@motebit/runtime";
+import {
+  paymentNoticeCopy,
+  paidResultsOwedByRuns,
+  goalRunWindows,
+  goalAwaitingResultMessage,
+} from "@motebit/runtime";
 import type { PlanChunk, PlanEngine } from "@motebit/planner";
+import { isDelegationUndetermined } from "@motebit/planner";
 import { PlanStatus } from "@motebit/sdk";
 import type { ExpoGoalStore } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
@@ -40,7 +46,12 @@ import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 export interface GoalCompleteEvent {
   goalId: string;
   prompt: string;
-  status: "completed" | "failed";
+  /**
+   * `awaiting_result` (#890): the run stopped on a paid delegation whose
+   * outcome is unknown. Not a failure; the goal does not re-fire into a
+   * second payment and the owner checks `/result`.
+   */
+  status: "completed" | "failed" | "awaiting_result";
   summary: string | null;
   error: string | null;
 }
@@ -82,7 +93,22 @@ export class MobileGoalScheduler {
     planId?: string;
   } | null = null;
 
+  /**
+   * The run in flight: its outcome id and start (#890). The start row is
+   * written before anything can be paid; the final outcome replaces it, so a
+   * run that pays and dies still owns a window the paid-intent hold sees.
+   * Kept across an approval pause — the resume finishes the same run.
+   */
+  private _run: { id: string; startedAt: number } | null = null;
+
   constructor(private deps: GoalSchedulerDeps) {}
+
+  /** The current run's outcome row identity; a fresh one when none is open. */
+  private takeRun(now: number): { id: string; startedAt: number } {
+    const run = this._run ?? { id: crypto.randomUUID(), startedAt: now };
+    this._run = null;
+    return run;
+  }
 
   getGoalStore(): ExpoGoalStore | null {
     return this.deps.getStorage()?.goalStore ?? null;
@@ -266,12 +292,45 @@ export class MobileGoalScheduler {
           }
         }
 
+        // A payment the goal's last run made whose result never arrived
+        // holds the goal (#890): a re-fire could hire a different worker
+        // for the same work and pay twice. Lifts only when the result is
+        // retrieved or dismissed (`/result`).
+        if (this.paidResultsOwed(goal.goal_id, runtime)) continue;
+
+        // The run's start, durably, before it can pay (#890). No start
+        // record, no run — failing closed costs one tick.
+        const runId = crypto.randomUUID();
+        try {
+          goalStore.insertOutcome({
+            outcome_id: runId,
+            goal_id: goal.goal_id,
+            motebit_id: this.deps.getMotebitId(),
+            ran_at: now,
+            status: "running",
+            summary: null,
+            tool_calls_made: 0,
+            memories_formed: 0,
+            error_message: null,
+            tokens_used: null,
+            response_full: null,
+            signed_manifest: null,
+          });
+        } catch {
+          continue;
+        }
+        this._run = { id: runId, startedAt: now };
+
         this._goalExecuting = true;
         this._currentGoalId = goal.goal_id;
         this._goalStatusCallback?.(true);
 
         try {
-          const outcomes = goalStore.getRecentOutcomes(goal.goal_id, 3);
+          // Past runs only — this run's own start row is not history.
+          const outcomes = goalStore
+            .getRecentOutcomes(goal.goal_id, 4)
+            .filter((o) => o.status !== "running" && o.outcome_id !== runId)
+            .slice(0, 3);
           const loopDeps = runtime.getLoopDeps();
           const planEngine = this.deps.getPlanEngine();
 
@@ -300,7 +359,11 @@ export class MobileGoalScheduler {
           }
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          this.finishGoalFailure(goal, msg, now);
+          // A delegated step whose paid outcome is unknown (#890): not a
+          // failure — no failure count, and the next fire resumes the held
+          // plan on the goal's own cadence.
+          if (isDelegationUndetermined(err)) this.finishGoalAwaitingResult(goal, msg, now);
+          else this.finishGoalFailure(goal, msg, now);
         } finally {
           if (!this._pendingGoalApproval) {
             this._goalExecuting = false;
@@ -338,7 +401,11 @@ export class MobileGoalScheduler {
     const planStore = this.deps.getStorage()!.planStore;
     const registry = runtime.getToolRegistry();
 
-    // Check for existing active plan (resume interrupted plan)
+    // Check for existing active plan (resume interrupted plan). A plan
+    // holding a delegated step with an unknown paid outcome is the goal's
+    // latest active plan, so it is resumed here, which settles the step from
+    // the relay's receipt or holds it again; `createPlan` refuses a new one
+    // (#890).
     let plan = planStore.getPlanForGoal(goal.goal_id);
     let planStream: AsyncGenerator<PlanChunk>;
 
@@ -413,6 +480,14 @@ export class MobileGoalScheduler {
         case "plan_completed":
         case "plan_failed":
           break;
+        case "plan_undetermined":
+          // Not a failure (#890) — the catch records it as awaiting its result.
+          throw Object.assign(new Error(chunk.reason), { undetermined: true });
+        case "plan_busy":
+          // Another driver holds the plan right now (#890) — not a failure.
+          throw Object.assign(new Error("the plan is being settled by another run"), {
+            undetermined: true,
+          });
       }
     }
 
@@ -527,7 +602,8 @@ export class MobileGoalScheduler {
     // (null on every degradation path) means the card's
     // receipt-summary row simply omits the "signed" indicator when
     // signing isn't possible; no placeholder signatures.
-    const outcomeId = crypto.randomUUID();
+    const run = this.takeRun(now);
+    const outcomeId = run.id;
     const signedManifestJson =
       responseFull != null
         ? await this.signArtifactManifestJson(responseFull, goal.goal_id, outcomeId)
@@ -537,7 +613,7 @@ export class MobileGoalScheduler {
       outcome_id: outcomeId,
       goal_id: goal.goal_id,
       motebit_id: motebitId,
-      ran_at: now,
+      ran_at: run.startedAt,
       status: "completed",
       summary,
       tool_calls_made: 0,
@@ -578,6 +654,82 @@ export class MobileGoalScheduler {
     });
   }
 
+  /**
+   * True when a payment made since this goal's last run started is still
+   * owed its result (#890). Mobile runs carry no wall-clock bound, so the
+   * window stays open: a later unrelated hire can over-hold, never
+   * under-hold. A ledger that cannot answer holds.
+   */
+  private paidResultsOwed(goalId: string, runtime: MotebitRuntime): boolean {
+    const goalStore = this.deps.getStorage()?.goalStore;
+    try {
+      // Every recent run, finished or not — each wrote its start row
+      // before it could pay. Mobile runs carry no wall clock, so a run's
+      // window ends where the goal's next run began; the latest stays open.
+      const runs = goalStore?.getRecentOutcomes(goalId, 20) ?? [];
+      if (runs.length === 0) return false;
+      const owed = paidResultsOwedByRuns(
+        runtime.outstandingPaidResults(),
+        goalRunWindows(runs.map((r) => ({ startedAt: r.ran_at, endedAt: null }))),
+      );
+      if (owed.length === 0) return false;
+      const line = goalAwaitingResultMessage(owed);
+      if (this._heldLogged !== `${goalId}:${line}`) {
+        this._heldLogged = `${goalId}:${line}`;
+        // eslint-disable-next-line no-console
+        console.warn(`[goal] ${goalId.slice(0, 8)} held — ${line}`);
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  /** The last "held — awaiting result" line logged, so a hold logs once (#890). */
+  private _heldLogged: string | null = null;
+
+  /**
+   * Close a run that stopped on an unknown paid outcome (#890): `partial`,
+   * never a failure — no failure count, no auto-pause, a `once` goal stays
+   * active. The next fire resumes the held plan on the goal's cadence.
+   */
+  private finishGoalAwaitingResult(
+    goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
+    reason: string,
+    now: number,
+  ): void {
+    const goalStore = this.deps.getStorage()?.goalStore;
+    if (!goalStore) return;
+    const note = `awaiting result — ${reason}`;
+    const run = this.takeRun(now);
+    try {
+      goalStore.insertOutcome({
+        outcome_id: run.id,
+        goal_id: goal.goal_id,
+        motebit_id: this.deps.getMotebitId(),
+        ran_at: run.startedAt,
+        status: "partial",
+        summary: note.slice(0, 500),
+        tool_calls_made: 0,
+        memories_formed: 0,
+        error_message: null,
+        tokens_used: null,
+        response_full: null,
+        signed_manifest: null,
+      });
+      goalStore.updateLastRun(goal.goal_id, now);
+    } catch {
+      /* non-fatal */
+    }
+    this._goalCompleteCallback?.({
+      goalId: goal.goal_id,
+      prompt: goal.prompt,
+      status: "awaiting_result",
+      summary: note,
+      error: null,
+    });
+  }
+
   private finishGoalFailure(
     goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
     error: string,
@@ -586,13 +738,14 @@ export class MobileGoalScheduler {
     const goalStore = this.deps.getStorage()?.goalStore;
     if (!goalStore) return;
     const motebitId = this.deps.getMotebitId();
+    const run = this.takeRun(now);
 
     try {
       goalStore.insertOutcome({
-        outcome_id: crypto.randomUUID(),
+        outcome_id: run.id,
         goal_id: goal.goal_id,
         motebit_id: motebitId,
-        ran_at: now,
+        ran_at: run.startedAt,
         status: "failed",
         summary: null,
         tool_calls_made: 0,

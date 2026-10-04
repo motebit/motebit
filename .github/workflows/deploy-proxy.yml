@@ -11,10 +11,16 @@ on:
       # the advisory triage merge redeployed only the relay.
       - "pnpm-lock.yaml"
       - "package.json"
-      # No `packages/**` trigger: proxy has zero @motebit/* dependencies
-      # (only @noble/ed25519, next, react, @vercel/kv), so monorepo package
-      # changes cannot affect its build. If this service ever imports a
-      # workspace package, add `- "packages/**"` here.
+      # Root build config the build reads: the workspace list, the task
+      # graph and the tsconfig every workspace package extends. Held by
+      # scripts/check-vercel-ignore-build.ts (paths ⊇ the project's build
+      # inputs).
+      - "pnpm-workspace.yaml"
+      - "turbo.json"
+      - "tsconfig.base.json"
+      # proxy depends on workspace packages (@motebit/crypto, policy,
+      # protocol, sdk and their closure), so package changes redeploy it.
+      - "packages/**"
   workflow_dispatch:
 
 concurrency:
@@ -25,6 +31,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # workflow_dispatch can run on any ref; only main deploys production.
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

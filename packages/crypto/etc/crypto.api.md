@@ -831,6 +831,12 @@ export interface IdentityLogInclusionProof {
 // @public
 export function identityLogLeaf(motebitId: string, currentKeyHex: string, treeHashVersion?: MerkleTreeVersion): Promise<string>;
 
+// @public
+export function identityVerifyOutcome(result: VerifyResult): {
+    valid: boolean;
+    error?: string;
+};
+
 // @public (undocumented)
 export interface IdentityVerifyResult extends BaseResult {
     // (undocumented)
@@ -1057,6 +1063,42 @@ export interface MotebitIdentityFile {
 }
 
 // @public
+export interface PairingIdentityBindingResult {
+    accepted: boolean;
+    code?: PairingIdentityRefusalCode;
+    identityBinding: Extract<IdentityBindingVerdict, "sovereign" | "unverified" | "invalid">;
+    lineage?: KeySuccessionRecord[];
+    reason?: string;
+    relayCheck?: PairingRelayCheck;
+}
+
+// @public
+export type PairingIdentityRefusalCode =
+/** Not a canonical motebit_id: a lowercase UUIDv7, UUIDv8 or UUIDv4, or a `did:key`. */
+"malformed_id"
+/** The transferred key is not a 32-byte hex public key. */
+| "malformed_key"
+/** A self-certifying id no verified lineage connects to the transferred key. */
+| "no_verified_lineage"
+/**
+* The only lineage to the transferred key runs through a guardian-recovery
+* link, and no guardian key is pinned on the pairing device to check it.
+*/
+| "guardian_recovery_unverifiable"
+/**
+* The relay's served chain, verified, proves the transferred key is not the
+* identity's current key: a verified record rotates it away (superseded), or
+* a key on its lineage has two verified successors (equivocation).
+*/
+| "identity_fork";
+
+// @public
+export type PairingRelayCheck = "no_conflict" | "unreachable" | "not_checked";
+
+// @public
+export type PairingSuccessionSource = readonly unknown[] | (() => Promise<readonly unknown[]>);
+
+// @public
 export function parse(content: string): {
     frontmatter: MotebitIdentityFile;
     signature: string;
@@ -1127,6 +1169,16 @@ export interface ReceiptVerifyResult extends BaseResult {
     // (undocumented)
     type: "receipt";
 }
+
+// @public
+export type RelayFeeRateVerification = {
+    ok: true;
+    declaredFeeRate: number | undefined;
+    metadata: RelayMetadata;
+} | {
+    ok: false;
+    reason: string;
+};
 
 export { RepairInstruction }
 
@@ -2126,6 +2178,13 @@ export interface VerifyOptions {
 }
 
 // @public
+export function verifyPairingIdentityBinding(motebitId: string, transferredPublicKeyHex: string, options?: {
+    successionSources?: readonly PairingSuccessionSource[];
+    relaySuccession?: () => Promise<readonly unknown[]>;
+    guardianKey?: string;
+}): Promise<PairingIdentityBindingResult>;
+
+// @public
 export function verifyReceipt(receipt: ExecutionReceipt, options?: VerifyOptions): Promise<ReceiptVerifyResult>;
 
 // @public
@@ -2140,6 +2199,11 @@ export function verifyReceiptSequence(chain: ReceiptChainEntry[]): Promise<{
 
 // @public
 export function verifyReceiptVerdict(receipt: SignableReceipt): Promise<VerificationVerdict>;
+
+// @public
+export function verifyRelayFeeRate(metadata: unknown, trustedPublicKeyHex: string, opts?: {
+    expectedRelayId?: string;
+}): Promise<RelayFeeRateVerification>;
 
 // @public
 export function verifyRelayMetadata(metadata: RelayMetadata, publicKey: Uint8Array): Promise<boolean>;

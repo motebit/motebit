@@ -180,4 +180,21 @@ describe("PairingClient", () => {
       expect(mockFetch).toHaveBeenCalledWith("https://relay.example.com/pairing/pid-1/status");
     });
   });
+  describe("getSuccessionChain", () => {
+    it("GETs the public succession route for the id and returns its chain", async () => {
+      const chain = [{ old_public_key: "aa", new_public_key: "bb", timestamp: 1 }];
+      mockFetch.mockResolvedValue(mockResponse(200, { motebit_id: "m/1", chain }));
+      await expect(client.getSuccessionChain("m/1")).resolves.toEqual(chain);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://relay.example.com/api/v1/agents/m%2F1/succession",
+      );
+    });
+
+    it("throws on a non-OK response or a body with no chain array", async () => {
+      mockFetch.mockResolvedValue(mockResponse(404, { error: "nope" }));
+      await expect(client.getSuccessionChain("m")).rejects.toThrow();
+      mockFetch.mockResolvedValue(mockResponse(200, { chain: "x" }));
+      await expect(client.getSuccessionChain("m")).rejects.toThrow(/chain/);
+    });
+  });
 });

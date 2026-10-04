@@ -191,6 +191,15 @@ export {
   // sovereign commitment to this seed's key, or a legacy mint?) without
   // reaching into the Layer-0 floor (check-app-primitives).
   deriveSovereignMotebitId,
+  // The two identity checks every surface shares: pairing binds the
+  // relay-supplied motebit_id to the transferred key; an identity file is
+  // intact only when its succession chain verifies too.
+  verifyPairingIdentityBinding,
+  type PairingIdentityBindingResult,
+  type PairingIdentityRefusalCode,
+  type PairingSuccessionSource,
+  type PairingRelayCheck,
+  identityVerifyOutcome,
   // The machine roster (spec/machine-roster-v1.md): the signers, the
   // entry ids, the one reduction, and the key chain a consumer reduces
   // under. Re-exported so surface-kit's roster controller (part C, C2)
@@ -531,10 +540,12 @@ export {
   deriveKeyTransferKey,
   buildKeyTransferPayload,
   decryptKeyTransfer,
+  openPairingKeyTransfer,
+  verifiedIdentityLineage,
   checkPreTransferBalance,
   formatWalletWarning,
 } from "./x25519.js";
-export type { X25519Keypair, PreTransferWalletCheck } from "./x25519.js";
+export type { X25519Keypair, PreTransferWalletCheck, OpenedPairingKeyTransfer } from "./x25519.js";
 
 // ── Content-artifact verification (re-export from @motebit/crypto) ──
 // The Sovereign Ledger's local-row verification path: surfaces verify a

@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSyn
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanEnv } from "../lib/differential-tree.js";
 
 import {
   BREAK_SUM,
@@ -149,6 +150,7 @@ describe("tamper-runner lifecycle", () => {
     expect(leftovers(fx!)).toEqual([join(liveBase, "slot-0"), liveBase]);
     execFileSync("git", ["worktree", "remove", "--force", join(liveBase, "slot-0")], {
       cwd: fx!.repo,
+      env: cleanEnv(),
     });
     rmSync(liveBase, { recursive: true, force: true });
   });
@@ -195,6 +197,7 @@ describe("tamper-runner lifecycle", () => {
     for (const base of [otherHost, otherNs]) {
       execFileSync("git", ["worktree", "remove", "--force", join(base, "slot-0")], {
         cwd: fx!.repo,
+        env: cleanEnv(),
       });
       rmSync(base, { recursive: true, force: true });
     }

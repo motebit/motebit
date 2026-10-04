@@ -24,7 +24,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 
 ## Getting Started
 
-- [Get Your Agent](https://docs.motebit.com/docs/get-your-agent): Download the desktop app, create an identity, and meet your motebit.
+- [Get Your Agent](https://docs.motebit.com/docs/get-your-agent): Open the web app, install the CLI from npm, or scaffold a service agent. The desktop app is a preview built from source.
 - [Configuration](https://docs.motebit.com/docs/apps/configuration): Config files, environment variables, models, and MCP servers.
 
 ## Apps

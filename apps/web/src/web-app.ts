@@ -94,7 +94,7 @@ import {
   hexToBytes,
   generateX25519Keypair,
   buildKeyTransferPayload,
-  decryptKeyTransfer,
+  openPairingKeyTransfer,
   checkPreTransferBalance,
   formatWalletWarning,
 } from "@motebit/encryption";
@@ -153,7 +153,10 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 import { rotateWebKey } from "./key-rotation";
 import {
   createWebMachineRoster,
+  ownSuccessionRecords,
   rosterAfterRotationCommit,
+  rosterAfterPairing,
+  rosterAfterRestore,
   type RosterLocks,
   type WebMachineRoster,
 } from "./machine-roster.js";
@@ -1674,10 +1677,10 @@ export class UnbootedWebApp {
   }
 
   async verifyMotebitMd(content: string): Promise<{ valid: boolean; error?: string }> {
-    const { verify: verifyIdentity } = await import("@motebit/identity-file");
-    const result = await verifyIdentity(content, { expectedType: "identity" });
-    const error = result.errors?.[0]?.message;
-    return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+    // Intact = signature AND succession chain (the shared fold).
+    const { verify: verifyIdentity, identityVerifyOutcome } =
+      await import("@motebit/identity-file");
+    return identityVerifyOutcome(await verifyIdentity(content, { expectedType: "identity" }));
   }
 
   // Parse + verify a motebit.md and return the flat metadata the Restore
@@ -1769,6 +1772,14 @@ export class UnbootedWebApp {
     } catch {
       return { ok: false, reason: "config_write_failed" };
     }
+    // The browser keeps no identity file: the motebit.md's verified chain
+    // joins the roster replica, so this browser can be Device A for an
+    // offline-rotated identity. Best-effort; never fails the restore.
+    await rosterAfterRestore({
+      motebitId: request.metadata.motebitId,
+      publicKeyHex: request.metadata.publicKey,
+      content: request.originalContent,
+    });
     return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
   }
 
@@ -4412,6 +4423,9 @@ export class UnbootedWebApp {
             this._publicKeyHex,
             hexToBytes(session.claiming_x25519_pubkey),
             session.pairing_code,
+            // This browser's own chain, so Device B can bind a rotated
+            // sovereign id even when the relay has none (an offline rotation).
+            { successionRecords: await ownSuccessionRecords({ motebitId: this._motebitId }) },
           );
         } finally {
           secureErase(privKeyBytes);
@@ -4452,8 +4466,11 @@ export class UnbootedWebApp {
   }
 
   /**
-   * Complete pairing on Device B. If key transfer payload + ephemeral key are provided,
-   * decrypts the identity seed and replaces the device's private key.
+   * Complete pairing on Device B. The key transfer is required: it is
+   * decrypted and the relay-supplied motebitId is checked to bind to the
+   * transferred key before anything changes; the seed then replaces the
+   * device's private key. Throws ("Pairing refused…") with nothing changed
+   * when the transfer is missing, undecryptable, or does not bind.
    */
   async completePairing(
     { motebitId, deviceId }: { motebitId: string; deviceId: string },
@@ -4465,56 +4482,79 @@ export class UnbootedWebApp {
       pairingId: string;
     },
   ): Promise<string | undefined> {
-    // Update in-memory identity state
-    this._motebitId = motebitId;
-    this._deviceId = deviceId;
-    // The Machines section belonged to the previous identity (F4).
-    this._machineRoster?.dispose();
-    this._machineRoster = null;
     let walletWarning: string | undefined;
+    let identitySeed: Uint8Array | undefined;
 
-    if (keyTransferOpts) {
-      const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl, pairingId } = keyTransferOpts;
+    try {
+      // The shared acceptance path (@motebit/encryption): the transfer is
+      // required, must decrypt to the key it names, and the relay-supplied
+      // motebit_id must bind to that key — through the succession chain
+      // Device A sealed inside the transfer, else the relay's public chain
+      // (verified here; withheld or forged, it only refuses). Refused ⇒
+      // throws before anything — in memory or at rest — changes.
+      if (!keyTransferOpts) {
+        throw new Error("Pairing refused: the approval carried no identity key transfer");
+      }
+      const { syncUrl } = keyTransferOpts;
+      const opened = await openPairingKeyTransfer({
+        motebitId,
+        keyTransfer: keyTransferOpts.keyTransfer,
+        ephemeralPrivateKey: keyTransferOpts.ephemeralPrivateKey,
+        pairingCode: keyTransferOpts.pairingCode,
+        fetchSuccessionChain: () =>
+          new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(motebitId),
+      });
+      identitySeed = opened.identitySeed;
+
+      // Only now — the binding check passed: the verified lineage joins the
+      // roster replica, the one place this browser can carry it from when it
+      // approves the next device. Re-verified inside; never fails the pairing.
+      await rosterAfterPairing({
+        motebitId,
+        publicKeyHex: opened.publicKeyHex,
+        records: opened.succession,
+      });
+
+      // Update in-memory identity state
+      this._motebitId = motebitId;
+      this._deviceId = deviceId;
+      // The Machines section belonged to the previous identity (F4).
+      this._machineRoster?.dispose();
+      this._machineRoster = null;
+
+      const { pairingId } = keyTransferOpts;
       try {
-        const identitySeed = await decryptKeyTransfer(
-          keyTransfer,
-          ephemeralPrivateKey,
-          pairingCode,
-        );
-        try {
-          // Safety check: refuse key transfer if old wallet has funds
-          const oldPrivKeyHex = await this.keyStore.loadPrivateKey();
-          if (oldPrivKeyHex) {
-            const oldSeedBytes = hexToBytes(oldPrivKeyHex);
-            try {
-              const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
-              if (walletCheck.hasAnyValue) {
-                walletWarning = formatWalletWarning(walletCheck);
-              }
-            } finally {
-              secureErase(oldSeedBytes);
+        // Safety check: refuse key transfer if old wallet has funds
+        const oldPrivKeyHex = await this.keyStore.loadPrivateKey();
+        if (oldPrivKeyHex) {
+          const oldSeedBytes = hexToBytes(oldPrivKeyHex);
+          try {
+            const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
+            if (walletCheck.hasAnyValue) {
+              walletWarning = formatWalletWarning(walletCheck);
             }
+          } finally {
+            secureErase(oldSeedBytes);
           }
+        }
 
-          if (!walletWarning) {
-            const newPrivHex = bytesToHex(identitySeed);
-            await this.keyStore.storePrivateKey(newPrivHex);
+        if (!walletWarning) {
+          const newPrivHex = bytesToHex(identitySeed);
+          await this.keyStore.storePrivateKey(newPrivHex);
 
-            // The new public key is identity_pubkey_check (verified during decryption)
-            this._publicKeyHex = keyTransfer.identity_pubkey_check;
+          // The new public key is identity_pubkey_check (verified during decryption)
+          this._publicKeyHex = opened.publicKeyHex;
 
-            // Update relay device registration
-            const client = new PairingClient({ relayUrl: syncUrl });
-            await client.updateDeviceKey(pairingId, this._publicKeyHex);
-          }
-        } finally {
-          secureErase(identitySeed);
+          // Update relay device registration
+          const client = new PairingClient({ relayUrl: syncUrl });
+          await client.updateDeviceKey(pairingId, this._publicKeyHex);
         }
       } catch {
         // Key transfer failed — device keeps its own keypair, wallet warning stays undefined
-      } finally {
-        secureErase(ephemeralPrivateKey);
       }
+    } finally {
+      if (identitySeed !== undefined) secureErase(identitySeed);
+      if (keyTransferOpts) secureErase(keyTransferOpts.ephemeralPrivateKey);
     }
     return walletWarning;
   }

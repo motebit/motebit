@@ -822,18 +822,18 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-readme",
     proves:
-      "flags a README 'What you see:' block claim that disagrees with create-motebit / the CLI relay resolver source-of-truth (here: the relay URL ↔ DEFAULT_SYNC_URL pin)",
+      "flags a README 'What you see:' block claim that disagrees with create-motebit / the CLI source-of-truth (here: the relay-registration line's tool count ↔ the scaffold's tools)",
     perturb: () =>
-      // Replace the README's `Registered with relay:` value with an obviously
-      // invalid URL. The gate's claim-4 assertion compares this line against
-      // the exported `DEFAULT_SYNC_URL` in apps/cli/src/subcommands/_helpers.ts — under the
-      // perturbation, the two disagree and the gate fires. Distinctive
-      // `.invalid` TLD makes the perturbation trivially safe to grep-and-
-      // revert if cleanup ever fails.
+      // Rewrite the README's `Discovery: registered with relay (<n> tools)`
+      // count to one the scaffold cannot produce. The gate's claim-4
+      // assertion compares <n> with the number of tools create-motebit's
+      // agent template writes (and the line with its emitter in
+      // apps/cli/src/relay-registration.ts) — under the perturbation the
+      // count disagrees and the gate fires.
       mutateFile("README.md", (src) =>
         src.replace(
-          /^Registered with relay:\s+\S+/m,
-          "Registered with relay: https://probe-only-wrong-relay.invalid",
+          /^Discovery: registered with relay \(\d+ tools\)/m,
+          "Discovery: registered with relay (999 tools)",
         ),
       ),
   },
@@ -2873,6 +2873,55 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      'flags a raw allocation-money ledger write outside the escrow chokepoint — the C1/P2 class: the retry-exhaustion refund reverted to `creditAccount(…, "allocation_release", …)` beside `moveAllocationMoney`, the shape that read a stale held and paid a fallback payee (R1).',
+    perturb: () =>
+      mutateFile("services/relay/src/index.ts", (src) => {
+        const anchor = 'kind: "retry_exhaustion_refund",';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: services/relay/src/index.ts no longer refunds an exhausted forward through moveAllocationMoney — retarget the probe",
+          );
+        }
+        return src.replace(
+          "export function refundExhaustedForward(",
+          'export function __probeRawRefund(db: MotebitDatabase["db"]): void {\n  creditAccount(db, "x", 1, "allocation_release", "a", "probe");\n}\n\nexport function refundExhaustedForward(',
+        );
+      }),
+  },
+  {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      "flags a raw SQL write to an allocation-money table outside the chokepoint — the C1 class: a federated forward INSERTed straight into relay_federation_settlements (recorded with no lifecycle, counted as moved forever) (R2).",
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}raw-forward.ts`,
+        `// Probe-only file: a forward recorded outside the escrow chokepoint.
+// If check-allocation-money-chokepoint is working, it refuses this file.
+import type { DatabaseDriver } from "@motebit/persistence";
+export function probeForward(db: DatabaseDriver): void {
+  db.prepare("INSERT INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash) VALUES ('s', 't', 'u', 1, 0, 1, 0, 0, '')").run();
+}
+`,
+      ),
+  },
+  {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      "flags a chokepoint kind the conservation harness does not drive — the harness can never be narrower than the code: dropping `sweep_refund` from the harness's KIND_ACTIONS leaves a kind used in source with no action of the alphabet (R4).",
+    perturb: () =>
+      mutateFile("services/relay/src/__tests__/dispute-conservation-harness.test.ts", (src) => {
+        const anchor = '  sweep_refund: ["sweep"],\n';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: the harness's KIND_ACTIONS no longer maps sweep_refund — retarget the probe",
+          );
+        }
+        return src.replace(anchor, "");
+      }),
+  },
+  {
     script: "check-master-token-carve-outs",
     proves:
       'flags a prefix carve-out in the relay\'s /api/v1/* master-token catch-all — the #855 class. Reinstates `c.req.path.startsWith("/api/v1/credentials/verify")` beside the table lookup (the carve-out that let `POST /api/v1/credentials/verify/reputation` reach the reputation route without the master token); the gate names the path read outside `isMasterTokenCarveOut`.',
@@ -3023,6 +3072,24 @@ export async function probeFetch(): Promise<unknown> {
           );
         }
         return src.replace(call, "plugins: [],");
+      }),
+  },
+  {
+    script: "check-vercel-ignore-build",
+    proves:
+      "flags a vercel.json ignoreCommand that does not route through scripts/vercel-ignore-build.sh — the #1012 shape (an inline `git diff --quiet … || exit 1` that skipped the production deploy of 42ce27f). Probe restores that inline command in services/proxy/vercel.json; byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile("services/proxy/vercel.json", (src) => {
+        const re = /"ignoreCommand": "[^"]*"/;
+        if (!re.test(src) || !src.includes("vercel-ignore-build.sh")) {
+          throw new Error(
+            "probe vacuous: services/proxy/vercel.json no longer routes its ignoreCommand through scripts/vercel-ignore-build.sh — retarget the probe",
+          );
+        }
+        return src.replace(
+          re,
+          '"ignoreCommand": "git diff --quiet ${VERCEL_GIT_PREVIOUS_SHA:-HEAD^} $VERCEL_GIT_COMMIT_SHA -- services/proxy/ pnpm-lock.yaml package.json 2>/dev/null || exit 1"',
+        );
       }),
   },
 ];

@@ -25,6 +25,7 @@
 
 import { MemoryType } from "@motebit/sdk";
 import type { MobileApp } from "./mobile-app";
+import { mobileServingAllowed, MOBILE_SERVING_UNAVAILABLE } from "./serving-gate";
 
 interface ChatMessage {
   id: string;
@@ -489,6 +490,10 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
         if (a.isServing()) {
           a.stopServing();
           addSystemMessage("Stopped serving");
+        } else if (!mobileServingAllowed()) {
+          // Mobile is non-executing today (serving-gate.ts); say so honestly
+          // instead of attempting registration.
+          addSystemMessage(MOBILE_SERVING_UNAVAILABLE);
         } else {
           const result = await a.startServing();
           if (result.ok) {
@@ -764,7 +769,7 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
           "/gradient — intelligence gradient\n" +
           "/agents — list known agents\n" +
           "/discover — discover agents on relay\n" +
-          "/serve — toggle accepting delegations\n" +
+          "/serve — accept delegations (not available on mobile yet)\n" +
           "/goals — browse goals\n" +
           "/plan <goal> — decompose into steps\n" +
           "/balance — show account balance\n" +

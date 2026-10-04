@@ -4,6 +4,7 @@
  * Centralizes the common setup patterns (auth headers, relay factory, agent factory)
  * so that a single change to createSyncRelay's API propagates once, not 25+ times.
  */
+import { moveAllocationMoney, openAllocation } from "../allocation-escrow.js";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay, SyncRelayConfig } from "../index.js";
 import { deriveSolanaAddress, SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
@@ -12,14 +13,10 @@ import type { AgentTask } from "@motebit/sdk";
 import { AgentTaskStatus, asMotebitId, asAllocationId, asGoalId } from "@motebit/sdk";
 import { allocateBudget, computeGrossAmount } from "@motebit/market";
 import { TaskQueue } from "../task-queue.js";
+import { recordTaskRoute } from "../task-routing.js";
 import type { P2pPaymentChain } from "../p2p-payer.js";
-import {
-  creditAccount,
-  debitSpendableAccount,
-  getSpendableBalance,
-  toMicro,
-  fromMicro,
-} from "../accounts.js";
+import { fakeFacilitatorClient } from "./x402-fake-facilitator.js";
+import { creditAccount, getSpendableBalance, toMicro, fromMicro } from "../accounts.js";
 
 // === Fake payment chain (#918) ===
 
@@ -98,6 +95,58 @@ export const X402_TEST_CONFIG = {
   testnet: true,
 } as const;
 
+/** The global `fetch` as the relay suite's network guard installed it (setup runs first). */
+const GUARDED_FETCH = globalThis.fetch;
+const LOOPBACK_HOST = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/;
+
+/**
+ * The in-process peer network a test relay reaches its peer relays through
+ * (`SyncRelayConfig.federationPeerFetch`). A peer at a reserved `.invalid`
+ * host (RFC 6761 §6.4: never resolves) — the registry-row peer a test seeds
+ * to name a federated route it never answers on — is unreachable, whatever
+ * else the test stubbed. A test that stubbed `fetch` otherwise owns its peer
+ * mesh (`vi.stubGlobal("fetch", …)` routing peer URLs into in-process apps).
+ * Without a stub, a loopback peer (a real in-process server) goes to the
+ * global `fetch` and any other peer (`http://peer-….test`) is unreachable.
+ * Unreachable rejects the way a failed fetch does, in-process, without a
+ * socket. The network guard is untouched and still refuses any real dial.
+ */
+export const inProcessPeerFetch: typeof fetch = (input, init) => {
+  const url = input instanceof Request ? input.url : String(input);
+  const host = new URL(url).hostname;
+  const reachable =
+    !host.endsWith(".invalid") && (globalThis.fetch !== GUARDED_FETCH || LOOPBACK_HOST.test(host));
+  if (reachable) return globalThis.fetch(input, init);
+  return Promise.reject(new TypeError(`fetch failed (peer ${url} unreachable in test)`));
+};
+
+/**
+ * The network-touching boot services, replaced for tests: x402 talks to the
+ * in-process facilitator (its `initialize()` otherwise fetches x402.org), and
+ * the deposit detector — whose boot tick otherwise scans a public Base RPC —
+ * is off, and peer relays are the in-process peer network
+ * (`inProcessPeerFetch`). `createTestRelay` applies it; a test that calls
+ * `createSyncRelay({...})` directly spreads it in. The relay suite's network
+ * guard (`network-guard.setup.ts`) fails any test that reaches past it.
+ */
+export const TEST_RELAY_NETWORK = {
+  x402FacilitatorClient: fakeFacilitatorClient,
+  depositDetectorRpc: null,
+  federationPeerFetch: inProcessPeerFetch,
+} as const satisfies Partial<SyncRelayConfig>;
+
+/**
+ * A facilitator that is never reachable — for tests that pin what the relay
+ * does when the x402 facilitator is down (a payout that never settles). Every
+ * call rejects the way a failed fetch does, in-process, without a socket.
+ */
+export const UNREACHABLE_FACILITATOR_CLIENT: unknown = {
+  getSupported: () =>
+    Promise.reject(new TypeError("fetch failed (facilitator unreachable in test)")),
+  verify: () => Promise.reject(new TypeError("fetch failed (facilitator unreachable in test)")),
+  settle: () => Promise.reject(new TypeError("fetch failed (facilitator unreachable in test)")),
+};
+
 // === Relay factory ===
 
 /**
@@ -119,6 +168,12 @@ export async function createTestRelay(overrides?: Partial<SyncRelayConfig>): Pro
     // (#907 round 2): tests that exercise it inject a fake reader and call
     // `reconcilePendingX402Settlements` directly.
     x402ChainReader: null,
+    // A test relay never reaches the network: x402 talks to the in-process
+    // facilitator (its `initialize()` otherwise fetched x402.org and, unable
+    // to, warned after the file's worker had closed — the relay suite's
+    // `EnvironmentTeardownError` flake), and the deposit detector, whose boot
+    // tick otherwise scans the public Base Sepolia RPC, is off.
+    ...TEST_RELAY_NETWORK,
     // Tests use mock WebSocket connections that never disconnect, so the
     // production 5s drain grace would be paid in full on every `close()`
     // (afterEach) — ~5s/test, making the suite slow and timer-bound (the
@@ -317,6 +372,8 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
     status: AgentTaskStatus.Pending,
   };
 
+  // Admission records the path agent as the task's executor (#890 r6).
+  recordTaskRoute(db, taskId, task.motebit_id);
   new TaskQueue(db).set(taskId, {
     task,
     expiresAt: now + 10 * 60 * 1000, // TASK_TTL_MS
@@ -358,21 +415,32 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
   }
   allocation.amount_locked = Math.round(allocation.amount_locked);
 
-  const afterHold = debitSpendableAccount(
-    db,
-    args.delegatorId,
-    allocation.amount_locked,
-    "allocation_hold",
-    `x402-${taskId}`,
-    `Hold for task ${taskId} to ${args.workerId}`,
-  );
-  // Mirror: a null debit is a refusal — never seed a hold the ledger did not take (#901).
-  if (afterHold === null) {
-    throw new Error("seedX402PaidTask: allocation hold debit refused — spendable balance short");
+  // Mirror: the submission path's exact calls — the allocation row, then the
+  // hold through the escrow chokepoint (allocation-escrow.ts). A refused hold
+  // is a refusal — never seed a hold the ledger did not take (#901).
+  db.exec("BEGIN");
+  try {
+    openAllocation(db, {
+      allocationId: `x402-${taskId}`,
+      taskId,
+      worker: args.workerId,
+      amountLocked: allocation.amount_locked,
+      createdAt: now,
+    });
+    moveAllocationMoney(db, {
+      kind: "hold",
+      allocationId: `x402-${taskId}`,
+      amount: allocation.amount_locked,
+      party: args.delegatorId,
+      description: `Hold for task ${taskId} to ${args.workerId}`,
+    });
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw new Error("seedX402PaidTask: allocation hold refused — spendable balance short", {
+      cause: err,
+    });
   }
-  db.prepare(
-    "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
-  ).run(`x402-${taskId}`, taskId, args.workerId, allocation.amount_locked, now);
 
   return taskId;
 }
@@ -427,6 +495,8 @@ export function seedP2pSubTask(relay: SyncRelay, args: SeedP2pSubTaskArgs): stri
     status: AgentTaskStatus.Pending,
   };
 
+  // Admission records the path agent as the task's executor (#890 r6).
+  recordTaskRoute(db, taskId, task.motebit_id);
   new TaskQueue(db).set(taskId, {
     task,
     expiresAt: now + 10 * 60 * 1000, // TASK_TTL_MS

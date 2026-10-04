@@ -8,7 +8,13 @@
  * gate-code branch sits before the generic 402 branch; this locks that order.
  */
 import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from "vitest";
-import { deriveSovereignMotebitId } from "@motebit/crypto";
+import {
+  bytesToHex,
+  canonicalJson,
+  deriveSovereignMotebitId,
+  getPublicKeyBySuite,
+  signBySuite,
+} from "@motebit/crypto";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 import {
   base58Encode,
@@ -270,9 +276,73 @@ describe("submitP2pDelegation", () => {
 
 // ── resolveAndSubmitP2pDelegation — discover → price → pay → submit ───────
 
-const PINNED_BYTES = new Uint8Array(32).fill(7);
-const PINNED_HEX = Array.from(PINNED_BYTES, (b) => b.toString(16).padStart(2, "0")).join("");
+// Real Ed25519 keys (fixed seeds): the client reads the fee rate from relay
+// metadata SIGNED by the pinned key (and, federated, by the peer key the
+// pinned origin vouches for), so both relays must be able to sign.
+const METADATA_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
+const PINNED_PRIV = new Uint8Array(32).fill(7);
+const PINNED_BYTES = await getPublicKeyBySuite(PINNED_PRIV, METADATA_SUITE);
+const PINNED_HEX = bytesToHex(PINNED_BYTES);
 const EXPECTED_TREASURY = base58Encode(PINNED_BYTES);
+const PEER_RELAY_ID = "peer-relay";
+const PEER_URL = "https://peer.test";
+const PEER_PRIV = new Uint8Array(32).fill(9);
+const PEER_KEY_BYTES = await getPublicKeyBySuite(PEER_PRIV, METADATA_SUITE);
+const PEER_KEY_HEX = bytesToHex(PEER_KEY_BYTES);
+
+/**
+ * Drive a fake-timer test to completion. Verifying the relay's signed
+ * metadata awaits real (non-timer) async crypto, which a single
+ * `advanceTimersByTimeAsync` does not wait for — so alternate a REAL event-loop
+ * turn with a fake-clock advance until the promise settles.
+ */
+const realSetTimeout = globalThis.setTimeout;
+async function settleWithFakeTimers<T>(promise: Promise<T>): Promise<T> {
+  let settled = false;
+  void promise.then(
+    () => (settled = true),
+    () => (settled = true),
+  );
+  // Unbounded by iterations (the test timeout bounds it), so a loaded
+  // machine where the crypto takes many event-loop turns still settles.
+  while (!settled) {
+    await new Promise((r) => realSetTimeout(r, 2));
+    await vi.advanceTimersByTimeAsync(500);
+  }
+  return promise;
+}
+
+/** Signed RelayMetadata (discovery-v1 §3). No `fee_rate` ⇒ the 0.05 default. */
+async function signedRelayMetadata(
+  privateKey: Uint8Array,
+  publicKeyHex: string,
+  relayId: string,
+  endpoint: string,
+  peers: Array<{ relay_id: string; endpoint_url: string }> = [],
+) {
+  const body = {
+    protocol_version: "1.0",
+    relay_id: relayId,
+    public_key: publicKeyHex,
+    endpoint_url: endpoint,
+    federation_peers: peers,
+    suite: METADATA_SUITE,
+  };
+  const sig = await signBySuite(
+    METADATA_SUITE,
+    new TextEncoder().encode(canonicalJson(body)),
+    privateKey,
+  );
+  return { ...body, signature: bytesToHex(sig) };
+}
+const ORIGIN_METADATA = await signedRelayMetadata(
+  PINNED_PRIV,
+  PINNED_HEX,
+  "origin-relay",
+  "https://relay.test",
+  [{ relay_id: PEER_RELAY_ID, endpoint_url: PEER_URL }],
+);
+const PEER_METADATA = await signedRelayMetadata(PEER_PRIV, PEER_KEY_HEX, PEER_RELAY_ID, PEER_URL);
 
 function routedFetch(handlers: {
   discover?: () => Response;
@@ -282,6 +352,9 @@ function routedFetch(handlers: {
   poll?: () => Response;
 }) {
   return vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "https://relay.test/.well-known/motebit.json")
+      return jsonResponse(200, ORIGIN_METADATA);
+    if (url === `${PEER_URL}/.well-known/motebit.json`) return jsonResponse(200, PEER_METADATA);
     if (url.includes("/api/v1/agents/discover")) return handlers.discover!();
     // Pre-flight eligibility (single-op LOCAL branch). Default eligible so the
     // existing pricing/broadcast tests aren't blocked; override to test denial.
@@ -424,9 +497,7 @@ describe("resolveAndSubmitP2pDelegation", () => {
       }),
     );
 
-    const promise = resolveAndSubmitP2pDelegation(params);
-    await vi.advanceTimersByTimeAsync(5000);
-    const result = await promise;
+    const result = await settleWithFakeTimers(resolveAndSubmitP2pDelegation(params));
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -455,11 +526,9 @@ describe("resolveAndSubmitP2pDelegation", () => {
 
     // Hire 1: payment settles, result delivery fails — the #433 shape.
     vi.useFakeTimers();
-    const first = resolveAndSubmitP2pDelegation(
-      resolveParams({ timeoutMs: 1, paidIntentLedger: ledger }),
+    const firstResult = await settleWithFakeTimers(
+      resolveAndSubmitP2pDelegation(resolveParams({ timeoutMs: 1, paidIntentLedger: ledger })),
     );
-    await vi.advanceTimersByTimeAsync(5000);
-    const firstResult = await first;
     vi.useRealTimers();
     expect(firstResult.ok).toBe(false);
     expect(ledger.outstandingCount).toBe(1);
@@ -970,8 +1039,6 @@ describe("resolveAndSubmitP2pDelegation", () => {
   // A 32-byte peer relay key the origin surfaced in discovery. The executor (B)
   // treasury the client must pay is `base58Encode` of these bytes — identical to
   // the `deriveSolanaAddress` the origin recomputes when validating the forward.
-  const PEER_KEY_BYTES = new Uint8Array(32).fill(9);
-  const PEER_KEY_HEX = Array.from(PEER_KEY_BYTES, (b) => b.toString(16).padStart(2, "0")).join("");
   const EXPECTED_B_TREASURY = base58Encode(PEER_KEY_BYTES);
 
   // A SOVEREIGN + DERIVED federated worker — the only kind the payer can bind
@@ -1021,6 +1088,7 @@ describe("resolveAndSubmitP2pDelegation", () => {
             public_key: WORKER_KEY_HEX,
             settlement_address: WORKER_DERIVED_ADDR,
             settlement_modes: "p2p",
+            source_relay: PEER_RELAY_ID,
             source_relay_public_key: PEER_KEY_HEX,
             pricing: [{ capability: "web_search", unit_cost: 1 }],
           },
@@ -1065,6 +1133,7 @@ describe("resolveAndSubmitP2pDelegation", () => {
             public_key: WORKER_KEY_HEX,
             settlement_address: WORKER_DERIVED_ADDR,
             settlement_modes: "p2p",
+            source_relay: PEER_RELAY_ID,
             source_relay_public_key: PEER_KEY_HEX,
             pricing: [{ capability: "web_search", unit_cost: 1 }],
           },
@@ -1087,6 +1156,7 @@ describe("resolveAndSubmitP2pDelegation", () => {
             public_key: WORKER_KEY_HEX,
             settlement_address: WORKER_DERIVED_ADDR,
             settlement_modes: "p2p",
+            source_relay: PEER_RELAY_ID,
             source_relay_public_key: PEER_KEY_HEX,
             pricing: null,
           },
@@ -1156,6 +1226,8 @@ describe("selectAndRunDelegation", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "https://relay.test/.well-known/motebit.json")
+          return jsonResponse(200, ORIGIN_METADATA);
         if (url.includes("/api/v1/agents/discover")) {
           discovered = true;
           return jsonResponse(200, {

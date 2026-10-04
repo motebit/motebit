@@ -14,7 +14,7 @@ This specification pins the **wire format** of every computer-use observation an
 
 **Design principles:**
 
-- **Every observation is a signed receipt.** A screenshot, a cursor-position read, an accessibility tree snapshot — each emits a `ToolInvocationReceipt` (`spec/execution-ledger-v1.md` §4) the same way a `read_url` call does. The audit trail for computer use is structurally identical to every other tool.
+- **Every observation is a signed receipt.** A screenshot, a cursor-position read, an accessibility tree snapshot — each emits a `ToolInvocationReceipt` (the type in `@motebit/protocol`, signed and verified by `signToolInvocationReceipt` / `verifyToolInvocationReceipt` in `@motebit/crypto`; no spec section defines it yet) the same way a `read_url` call does. The audit trail for computer use is structurally identical to every other tool.
 - **Every action is governance-gated.** Before any click or keystroke reaches the OS, the motebit's policy layer (`@motebit/policy-invariants`) classifies the target region's sensitivity and decides: execute, require approval, or deny. Medical/financial UI regions never reach the model unredacted; high-risk actions never fire without user consent.
 - **The user can reclaim the floor at any moment.** Physical keyboard/mouse input from the user preempts motebit actions with mechanically testable semantics (see §3.3). No modal "motebit is busy" state that traps the cursor.
 - **Sensitivity runs before AI.** Screen pixels that cross the governance layer are classified and, where indicated, redacted _before_ being passed to any external AI provider. The raw capture stays on-device; the AI sees a masked projection.

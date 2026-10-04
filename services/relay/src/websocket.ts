@@ -16,6 +16,7 @@ import type { IdentityManager } from "@motebit/core-identity";
 import type { DatabaseDriver, MotebitDatabase } from "@motebit/persistence";
 import type { EventLogEntry, SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import { AgentTaskStatus, asMotebitId } from "@motebit/sdk";
+import { secretEquals } from "./secret-compare.js";
 import type { FixedWindowLimiter } from "./rate-limiter.js";
 import { upsertSyncConversation, upsertSyncMessage } from "./data-sync.js";
 import { floorSyncConversation, floorSyncMessage } from "./data-sync-redaction.js";
@@ -505,7 +506,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
       ): Promise<boolean> {
         if (enableDeviceAuth) {
           // Master token bypass
-          if (apiToken != null && apiToken !== "" && token === apiToken) {
+          if (secretEquals(token, apiToken)) {
             logger.info("auth.master_token_ws", { motebitId: mid });
             deps.recordAuthEvent?.({ kind: "master_token_ws", path: `/ws/sync/${mid}` });
             return true;
@@ -578,7 +579,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           return true;
         }
         // No device auth — check apiToken (shared secret)
-        if (apiToken != null && apiToken !== "" && token !== apiToken) {
+        if (apiToken != null && apiToken !== "" && !secretEquals(token, apiToken)) {
           if (sendAuthResult) {
             ws.send(JSON.stringify({ type: "auth_result", ok: false, error: "Unauthorized" }));
           }

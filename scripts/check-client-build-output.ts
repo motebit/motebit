@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * check-client-build-output — the SECOND NET of invariant #168 (the primary
+ * check-client-build-output — the SECOND NET of invariant #170 (the primary
  * control is the per-var `PUBLIC_BUILD_ENV` allowlist guard), run on what a
  * client build actually emitted (cold review R3: three rounds found a pre-build or
  * static check judging something other than what ships).

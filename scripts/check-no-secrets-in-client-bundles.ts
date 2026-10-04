@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * check-no-secrets-in-client-bundles — invariant #168. Deny by default.
+ * check-no-secrets-in-client-bundles — invariant #170. Deny by default.
  *
  * Law: a provider credential never reaches a browser, by construction.
  *
@@ -52,7 +52,7 @@
  * `--require-dist <a,b>` fails when those apps have no dist (CI runs this after
  * `pnpm build` so arm (b) can never be vacuous there); `--json` prints findings.
  *
- * Canonical law: scripts/lib/client-bundle-secrets.ts. See docs/drift-defenses.md #168.
+ * Canonical law: scripts/lib/client-bundle-secrets.ts. See docs/drift-defenses.md #170.
  */
 
 import {
@@ -551,7 +551,7 @@ async function main(): Promise<void> {
           "(pnpm --filter @motebit/web build). Rotate any real key that was published.",
         sites,
         doctrine:
-          "docs/drift-defenses.md #168; CLAUDE.md fail-closed privacy; docs/doctrine/security-boundaries.md",
+          "docs/drift-defenses.md #170; CLAUDE.md fail-closed privacy; docs/doctrine/security-boundaries.md",
       }),
     );
     process.exit(1);

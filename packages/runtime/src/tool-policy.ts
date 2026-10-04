@@ -31,7 +31,7 @@
  * tool_result mode, dissolve on completion) — the safe floor.
  */
 
-import type { SlabItemKind, EmbodimentMode } from "@motebit/render-engine";
+import type { SlabItemKind, EmbodimentMode } from "@motebit/render-engine/spec";
 
 /** Lifecycle end-state for a tool's slab item when active work finishes. */
 export type ToolEndState = "dissolve" | "rest" | "detach";

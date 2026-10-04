@@ -20,6 +20,13 @@ import type { TokenAudience } from "@motebit/sdk";
 import type { MotebitRuntime as MotebitRuntimeInstance } from "@motebit/runtime";
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "@motebit/planner";
+import {
+  planStepIdempotencyKey,
+  stepRotation,
+  receiptBoundTo,
+  taskNamedBy409,
+  admittedAs,
+} from "@motebit/planner";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
@@ -275,6 +282,16 @@ async function handleDelegatePlan(
         case "plan_failed":
           console.error(`\nPlan failed: ${chunk.reason}`);
           break;
+
+        // #890: not a failure — the task may still complete. Running the
+        // same goal again resumes this plan; it never delegates it twice.
+        case "plan_undetermined":
+          console.error(`\nAwaiting result: ${chunk.reason}`);
+          break;
+
+        case "plan_busy":
+          console.error("\nThis plan is being run elsewhere right now — try again shortly.");
+          break;
       }
     }
   } finally {
@@ -294,6 +311,141 @@ async function handleDelegatePlan(
 // ---------------------------------------------------------------------------
 // motebit delegate "<prompt>" — delegate a task to a worker agent
 // ---------------------------------------------------------------------------
+
+/**
+ * The CLI paths that submit a task: `delegate`, `delegate --plan`, and the
+ * REPL's `/delegate` (which carries what was typed, so its remedy can name
+ * the full shell command — `/delegate` parses no flags).
+ */
+/**
+ * `capabilities` is what the REPL learned the pinned target lists on the relay
+ * (priced first): `motebit delegate` defaults `--capability` to `web_search`
+ * and the sovereign resolver discovers by capability before narrowing to the
+ * pin, so the printed command must name the target's own capability.
+ */
+export type DelegateSubmitPath =
+  | "direct"
+  | "plan"
+  | { repl: { prompt: string; target: string; capabilities?: readonly string[] } };
+
+/**
+ * Single-quote `text` for a POSIX shell: nothing inside is expanded (a `!`
+ * inside double quotes is history expansion in an interactive shell).
+ */
+function shellQuote(text: string): string {
+  return `'${text.replace(/'/g, "'\\''")}'`;
+}
+
+const P2P_SETTLES_LINE =
+  "Paid delegation to another agent settles P2P: the relay does not take deposit-funded payment for it.";
+
+/**
+ * Who the submission's worker is, as far as the caller knows: `self` (the
+ * target is the delegator's own id), `other` (another agent), or `unknown`
+ * (`--plan` routes each step by capability, so the relay picks the worker).
+ */
+export type DelegateSubmitWorker = "self" | "other" | "unknown";
+
+/**
+ * The remedy for a 402 on task submission — the one reading every delegate
+ * path routes its 402 through. The relay answers 402 for different refusals
+ * (`{ error, code, status }`, services/relay/src/errors.ts), and a deposit
+ * clears only some of them:
+ *   - `INSUFFICIENT_FUNDS` — `motebit fund`.
+ *   - a codeless 402 (the x402 challenge, a facilitator outage, a non-JSON
+ *     body) — the relay's x402 middleware, which runs before the task
+ *     handler whenever the spendable balance is below the price, whoever the
+ *     worker is. A deposit clears it only for self-delegation: to another
+ *     agent, a funded submission reaches the Arc 3.5 gate and is refused
+ *     `TASK_P2P_PROOF_REQUIRED`. So `self` — `motebit fund`; `other` —
+ *     `--sovereign`; `unknown` — both, each with when it applies.
+ *   - `TASK_P2P_PROOF_REQUIRED` — paid delegation to another agent, local or
+ *     on a federated peer, must settle P2P (off-ramp-as-user-action.md
+ *     § Arc 3.5), so `motebit fund` can never clear it — `--sovereign`.
+ *   - any other code (an x402 settlement refusal, an outcome to reconcile, a
+ *     code this client does not know) — the relay's own words, never `fund`.
+ */
+export function describeDelegateSubmit402(
+  bodyText: string,
+  path: DelegateSubmitPath,
+  worker: DelegateSubmitWorker,
+): string[] {
+  let code: unknown;
+  let error: unknown;
+  try {
+    ({ code, error } = JSON.parse(bodyText) as { code?: unknown; error?: unknown });
+  } catch {
+    code = undefined;
+  }
+  const codeless = typeof code !== "string";
+  if (code === "TASK_P2P_PROOF_REQUIRED" || (codeless && worker === "other")) {
+    if (typeof path === "object") {
+      const { prompt, target, capabilities = [] } = path.repl;
+      const known = capabilities.length === 1 ? capabilities[0] : undefined;
+      const command = `motebit delegate --sovereign ${shellQuote(prompt)} --target ${target} --capability ${known ?? "<capability>"}`;
+      const lines = [
+        P2P_SETTLES_LINE,
+        `\`/delegate\` cannot pay P2P: exit the REPL and run \`${command}\` to pay the worker directly from your Solana wallet.`,
+      ];
+      if (known == null) {
+        const listed =
+          capabilities.length > 1
+            ? ` (it lists: ${capabilities.join(", ")})`
+            : " (see `/discover`)";
+        lines.push(
+          `Replace \`<capability>\` with the capability the worker lists${listed}: without it \`motebit delegate\` assumes web_search, which a worker that does not list it refuses.`,
+        );
+      }
+      return lines;
+    }
+    return path === "plan"
+      ? [
+          P2P_SETTLES_LINE,
+          "`delegate --plan` cannot pay P2P yet (#887): send the paid step on its own with `motebit delegate --sovereign`.",
+        ]
+      : [
+          P2P_SETTLES_LINE,
+          "Re-run with `--sovereign` to pay the worker directly from your Solana wallet.",
+        ];
+  }
+  if (typeof code === "string" && code !== "INSUFFICIENT_FUNDS") {
+    const words = typeof error === "string" ? error : bodyText;
+    return [`The relay refused payment (${code}): ${sanitizeRelayText(words).slice(0, 300)}`];
+  }
+  if (codeless && worker === "unknown") {
+    const p2p =
+      path === "plan"
+        ? "`delegate --plan` cannot pay P2P yet (#887), so send the paid step on its own with `motebit delegate --sovereign`."
+        : "send it with `motebit delegate --sovereign`.";
+    return [
+      "Your relay balance is below this task's price. `motebit fund <amount>` clears this only if the relay routes the task to yourself.",
+      `${P2P_SETTLES_LINE} If it goes to another agent, ${p2p}`,
+    ];
+  }
+  return ["Insufficient balance. Run `motebit fund <amount>` to deposit."];
+}
+
+/**
+ * The remedy for a 402 on `delegate --sovereign`, read from the runtime's
+ * `DelegationError`. That path pays from the Solana wallet and never draws
+ * on a relay deposit, so a deposit is never the remedy, whatever the code.
+ * Empty for any other status.
+ */
+export function describeSovereignDelegationRefusal(error: {
+  code: string;
+  message: string;
+  status?: number;
+}): string[] {
+  if (error.status !== 402) return [];
+  if (error.code === "payment_proof_required") {
+    return [
+      "The relay found no usable P2P payment proof on this submission. `--sovereign` pays from your Solana wallet, so a relay deposit cannot clear this.",
+    ];
+  }
+  return [
+    "`--sovereign` pays from your Solana wallet, not a relay deposit, so depositing cannot clear this 402.",
+  ];
+}
 
 export async function handleDelegate(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
@@ -435,6 +587,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
           "Hint: a pair with no trust history needs `--pay-new-agents` (cold-start acknowledgment).",
         );
       }
+      for (const line of describeSovereignDelegationRefusal(result.error)) console.error(line);
       process.exit(1);
     }
 
@@ -520,7 +673,10 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       }),
     });
     if (submitRes.status === 402) {
-      console.error("Insufficient balance. Run `motebit fund <amount>` to deposit.");
+      const worker = targetMotebitId === motebitId ? "self" : "other";
+      for (const line of describeDelegateSubmit402(await submitRes.text(), "direct", worker)) {
+        console.error(line);
+      }
       process.exit(1);
     }
     if (!submitRes.ok) {
@@ -632,6 +788,12 @@ interface StepAttemptError extends Error {
    * instead of admitting — and charging for — a second one (#816).
    */
   deliveryUncertain?: boolean;
+  /**
+   * Positive evidence nothing more is owed under the current key — a signed
+   * failed receipt, or a refusal before admission. The only errors that
+   * rotate the step to a new key (#890 r4).
+   */
+  conclusive?: boolean;
 }
 
 /**
@@ -697,6 +859,11 @@ export function createHttpPollingDelegationAdapter(
       } catch (err: unknown) {
         throw unconfirmed("Relay task submission unconfirmed: no response", err);
       }
+      if (resp.ok) return resp;
+      // A response that names a task — any status (#888; #890 r5): the key
+      // admitted it. Adopt and poll it; never read it as a refusal.
+      const named = await taskNamedBy409(resp);
+      if (named != null) return admittedAs(named);
       if (resp.status !== 409) return resp;
       if (waited >= budgetMs) {
         throw new DelegationUndeterminedError(
@@ -761,10 +928,23 @@ export function createHttpPollingDelegationAdapter(
       step.description,
     );
 
-    if (resp.status === 402) throw new Error("Insufficient balance (HTTP 402)");
+    if (resp.status === 402) {
+      const remedy = describeDelegateSubmit402(await resp.text(), "plan", "unknown").join(" ");
+      const err: StepAttemptError = new Error(`${remedy} (HTTP 402)`);
+      err.conclusive = true; // refused before admission
+      throw err;
+    }
     if (!resp.ok) {
       const text = await resp.text();
-      throw new Error(`Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`);
+      // 5xx: the relay may have admitted before failing — not a refusal.
+      if (resp.status >= 500) {
+        throw unconfirmed(`Relay task submission unconfirmed (${resp.status})`);
+      }
+      const err: StepAttemptError = new Error(
+        `Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`,
+      );
+      err.conclusive = true; // refused before admission
+      throw err;
     }
 
     let taskResp: { task_id: string; routing_choice?: { selected_agent?: string } | null };
@@ -778,11 +958,23 @@ export function createHttpPollingDelegationAdapter(
     onTaskSubmitted?.(taskId);
 
     const settle = (receipt: ExecutionReceipt): DelegatedStepResult => {
+      // A receipt about another task answers nothing about this one (#890 r5).
+      if (!receiptBoundTo(receipt, taskId)) {
+        throw unconfirmed(`A receipt for another task arrived for ${taskId}`);
+      }
       if (receipt.status !== "completed") {
+        // Evidence only from the worker the relay routed this task to.
+        const routed = taskResp.routing_choice?.selected_agent;
+        if (routed != null && routed !== "" && receipt.motebit_id !== routed) {
+          throw unconfirmed(
+            `A failed receipt for ${taskId} is signed by ${receipt.motebit_id}, not the routed worker ${routed}`,
+          );
+        }
         const err: StepAttemptError = new Error(
           `Delegated step ${receipt.status}: ${receipt.result}`,
         );
         err.failedAgentId = receipt.motebit_id;
+        err.conclusive = true; // a signed failed receipt
         throw err;
       }
       return {
@@ -796,13 +988,13 @@ export function createHttpPollingDelegationAdapter(
     const outcome = (answer: ExecutionReceipt | "gone" | null): DelegatedStepResult | null => {
       if (answer === null) return null;
       if (answer === "gone") {
-        // Terminal for THIS task: retry as a new task, never replay its id.
-        const err: StepAttemptError = new Error(
-          `Delegated task ${taskId} expired at the relay without a result`,
+        // The relay no longer knows this task (#890 r4): absence, never
+        // evidence — it may have been admitted, paid and done. Hold the step
+        // on this task and key; never rotate to a new one.
+        throw new DelegationUndeterminedError(
+          step.description,
+          new Error(`Delegated task ${taskId} is no longer known to the relay (404)`),
         );
-        const agent = taskResp.routing_choice?.selected_agent;
-        if (agent != null && agent !== "") err.failedAgentId = agent;
-        throw err;
       }
       return settle(answer);
     };
@@ -822,14 +1014,21 @@ export function createHttpPollingDelegationAdapter(
   };
 
   return {
+    // Every submission carries the step's derived key (#890).
+    resubmitsIdempotently: true,
     async delegateStep(
       step: PlanStep,
       timeoutMs: number,
       onTaskSubmitted?: (taskId: string) => void,
+      _excludeAgents?: string[],
+      onRotate?: (rotation: number) => void,
     ): Promise<DelegatedStepResult> {
       const excludeAgents: string[] = [];
       let lastError: StepAttemptError | undefined;
-      let idempotencyKey = crypto.randomUUID();
+      // Derived from the step, never random (#890) — see planStepIdempotencyKey —
+      // and starting from the step's CURRENT rotation (#890 r4).
+      let rotation = stepRotation(step);
+      let idempotencyKey = planStepIdempotencyKey(step, rotation);
       let attempts = 0;
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -858,14 +1057,19 @@ export function createHttpPollingDelegationAdapter(
           ) {
             break;
           }
-          // Only a delivery-uncertain retry keeps the key; anything else is a new task.
-          if (lastError.deliveryUncertain !== true) idempotencyKey = crypto.randomUUID();
+          // Rotate ONLY on positive evidence nothing more is owed under the
+          // current key (#890 r4); the step forgets the old task first.
+          if (lastError.conclusive === true) {
+            rotation++;
+            idempotencyKey = planStepIdempotencyKey(step, rotation);
+            onRotate?.(rotation);
+          }
           if (attempt < maxRetries) opts.onRetry?.(step, attempt + 2, maxRetries + 1);
         }
       }
       // Out of attempts while the relay never said the task ended: it may
       // have been admitted and may still complete — not a failure either.
-      if (lastError?.deliveryUncertain === true) {
+      if (lastError?.conclusive !== true) {
         throw new DelegationUndeterminedError(step.description, lastError);
       }
       throw new Error(

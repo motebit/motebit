@@ -124,28 +124,48 @@ export class PlanExecutionManager {
     const planningConfig = taskRouter?.resolve("planning") ?? undefined;
     const reflectionConfig = taskRouter?.resolve("plan_reflection") ?? undefined;
 
-    const { plan } = await this.deps.planEngine.createPlan(
-      goalId,
-      this.deps.motebitId,
-      {
-        goalPrompt,
-        availableTools,
-        localCapabilities: localCapabilities.length > 0 ? localCapabilities : undefined,
-      },
-      loopDeps,
-      planningConfig,
-    );
+    // A goal whose delegated step has an unknown paid outcome is RESUMED,
+    // never re-planned: resuming settles the held step from the relay's
+    // signed receipt or holds it again, where a new plan would delegate —
+    // and pay for — the same work a second time (#890).
+    const held = this.deps.planEngine.findUnresolvedDelegation(goalId, this.deps.motebitId);
+    const plan =
+      held != null
+        ? held.plan
+        : (
+            await this.deps.planEngine.createPlan(
+              goalId,
+              this.deps.motebitId,
+              {
+                goalPrompt,
+                availableTools,
+                localCapabilities: localCapabilities.length > 0 ? localCapabilities : undefined,
+              },
+              loopDeps,
+              planningConfig,
+            )
+          ).plan;
 
     const executionStartedAt = Date.now();
     let finalStatus: GoalExecutionManifest["status"] = "active";
 
-    for await (const chunk of this.deps.planEngine.executePlan(
-      plan.plan_id,
-      loopDeps,
-      undefined,
-      runId,
-      reflectionConfig,
-    )) {
+    const stream =
+      held != null
+        ? this.deps.planEngine.resumePlan(
+            plan.plan_id,
+            loopDeps,
+            undefined,
+            runId,
+            reflectionConfig,
+          )
+        : this.deps.planEngine.executePlan(
+            plan.plan_id,
+            loopDeps,
+            undefined,
+            runId,
+            reflectionConfig,
+          );
+    for await (const chunk of stream) {
       this._logPlanChunkEvent(chunk, goalId);
       if (chunk.type === "plan_completed") finalStatus = "completed";
       else if (chunk.type === "plan_failed") finalStatus = "failed";

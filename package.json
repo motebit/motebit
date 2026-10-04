@@ -115,6 +115,7 @@
     "check-ha-not-a-gate": "npx tsx scripts/check-ha-not-a-gate.ts",
     "check-agent-route-auth": "npx tsx scripts/check-agent-route-auth.ts",
     "check-master-token-carve-outs": "npx tsx scripts/check-master-token-carve-outs.ts",
+    "check-allocation-money-chokepoint": "npx tsx scripts/check-allocation-money-chokepoint.ts",
     "check-creature-canon": "npx tsx scripts/check-creature-canon.ts",
     "check-audience-canonical": "npx tsx scripts/check-audience-canonical.ts",
     "check-artifact-type-canonical": "npx tsx scripts/check-artifact-type-canonical.ts",
@@ -198,6 +199,7 @@
     "check-worker-no-master-token": "npx tsx scripts/check-worker-no-master-token.ts",
     "check-mobile-expo-alignment": "npx tsx scripts/check-mobile-expo-alignment.ts",
     "check-no-secrets-in-client-bundles": "npx tsx scripts/check-no-secrets-in-client-bundles.ts",
+    "check-vercel-ignore-build": "npx tsx scripts/check-vercel-ignore-build.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",
@@ -214,6 +216,7 @@
     "@changesets/cli": "^2.31.1",
     "@microsoft/api-extractor": "^7.58.12",
     "@motebit/runtime": "workspace:*",
+    "@motebit/semiring": "workspace:*",
     "@motebit/verifier": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "@solana/spl-token": "^0.4.15",
@@ -221,6 +224,7 @@
     "@typescript-eslint/eslint-plugin": "^8.67.0",
     "@typescript-eslint/parser": "^8.67.0",
     "@vitest/coverage-v8": "^4.1.10",
+    "ajv": "^8.20.0",
     "eslint": "^8.57.1",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import": "^2.32.0",
@@ -233,7 +237,6 @@
     "turbo": "^2.10.9",
     "typescript": "^5.9.0",
     "vitest": "^4.1.10",
-    "@motebit/semiring": "workspace:*",
     "yaml": "^2.9.0"
   },
   "pnpm": {
@@ -281,7 +284,8 @@
         "CVE-2025-3194",
         "CVE-2025-71329",
         "CVE-2025-71330",
-        "CVE-2026-85393"
+        "CVE-2026-85393",
+        "CVE-2026-93687"
       ]
     }
   },
@@ -290,6 +294,6 @@
   },
   "packageManager": "pnpm@9.15.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

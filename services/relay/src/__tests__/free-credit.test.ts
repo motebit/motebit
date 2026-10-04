@@ -4,7 +4,7 @@
  * behavior, and that the grant flows through the proxy-token endpoint so a fresh
  * motebit's token carries a usable balance.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { grantFreeCreditIfEligible, type FreeCreditConfig } from "../free-credit.js";
@@ -20,7 +20,18 @@ import {
 import { generateKeypair, bytesToHex } from "@motebit/crypto";
 // eslint-disable-next-line no-restricted-imports -- test mints its own bearer token
 import { createSignedToken } from "@motebit/encryption";
-import { seedBalance } from "./test-helpers.js";
+import { seedBalance, TEST_RELAY_NETWORK } from "./test-helpers.js";
+
+// Minting a proxy token requires the debit secret (subscriptions.ts): a token
+// whose debits could never land is never issued.
+const PREV_PROXY_SECRET = process.env.RELAY_PROXY_SECRET;
+beforeAll(() => {
+  process.env.RELAY_PROXY_SECRET ??= "test-relay-proxy-secret";
+});
+afterAll(() => {
+  if (PREV_PROXY_SECRET === undefined) delete process.env.RELAY_PROXY_SECRET;
+  else process.env.RELAY_PROXY_SECRET = PREV_PROXY_SECRET;
+});
 
 const API_TOKEN = "test-token";
 
@@ -67,6 +78,7 @@ const CFG: FreeCreditConfig = {
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    ...TEST_RELAY_NETWORK,
     allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,
@@ -154,6 +166,43 @@ describe("grantFreeCreditIfEligible", () => {
     expect(grantFreeCreditIfEligible(db, "d3", ip, { config: CFG, nowMs: nextDay }).granted).toBe(
       true,
     );
+  });
+
+  // A failure that is NOT the emergency freeze is `reason: "error"`, never
+  // `"frozen"` (which promises a deferred grant), and the credit + per-IP bump
+  // roll back together. The counter write is failed after the credit already
+  // ran inside the transaction, so a half-committed grant would show here.
+  it.each([
+    ["an Error", new Error("disk I/O error")],
+    ["a non-Error value", "disk I/O error"],
+  ])("a non-freeze failure (%s) is an error, and records nothing", (_label, thrown) => {
+    const failing = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "prepare") {
+          return (sql: string) => {
+            // eslint-disable-next-line @typescript-eslint/only-throw-error -- exercises the non-Error arm
+            if (sql.includes("INSERT INTO relay_free_grants")) throw thrown;
+            return target.prepare(sql);
+          };
+        }
+        const value: unknown = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    expect(
+      grantFreeCreditIfEligible(failing, "m-err", "5.5.5.5", { config: CFG, nowMs: NOW }),
+    ).toEqual({ granted: false, reason: "error" });
+    expect(getAccountBalance(db, "m-err")?.balance ?? 0).toBe(0);
+    expect(
+      db.prepare("SELECT count FROM relay_free_grants WHERE ip = ?").get("5.5.5.5"),
+    ).toBeUndefined();
+
+    // Not consumed: the same motebit is granted once the failure clears.
+    expect(grantFreeCreditIfEligible(db, "m-err", "5.5.5.5", { config: CFG, nowMs: NOW })).toEqual({
+      granted: true,
+      amountMicro: toMicro(0.1),
+    });
   });
 });
 

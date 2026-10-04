@@ -36,6 +36,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanEnv } from "../lib/differential-tree.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -44,10 +45,14 @@ const HOOK_SRC = readFileSync(join(ROOT, ".husky/pre-push"), "utf8");
 /**
  * The shim: logs argv (one line per call) and fails when argv matches
  * $SHIM_FAIL (an ERE). `pnpm ls -r … --parseable` answers with $SHIM_LS_REACH
- * lines, one per package reached, as the real pnpm does.
+ * lines, one per package reached, as the real pnpm does. With $SHIM_ENV_LOG
+ * set, each call also logs the GIT_* variable NAMES it inherited (`GIT:` = none).
  */
 const SHIM = `#!/bin/sh
 printf '%s\\n' "$*" >> "$SHIM_LOG"
+if [ -n "$SHIM_ENV_LOG" ]; then
+  printf 'GIT:%s\\n' "$(env | grep -o '^GIT_[A-Za-z0-9_]*=' | tr -d '=' | sort | tr '\\n' ' ')" >> "$SHIM_ENV_LOG"
+fi
 case "$*" in
   "ls -r --depth -1 --parseable "*)
     # pnpm's dependents walk: one line per package reached (changed + dependents).
@@ -68,13 +73,12 @@ function git(cwd: string, ...args: string[]): string {
   const r = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
-    env: {
-      ...process.env,
+    env: cleanEnv(process.env, {
       GIT_AUTHOR_NAME: "t",
       GIT_AUTHOR_EMAIL: "t@t",
       GIT_COMMITTER_NAME: "t",
       GIT_COMMITTER_EMAIL: "t@t",
-    },
+    }),
   });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
   return r.stdout;
@@ -156,7 +160,15 @@ function runHook(repo: string, env: Record<string, string> = {}): Run {
   for (const [k, v] of Object.entries(process.env)) {
     // The hook exits at once under $CI — CI's gate-effectiveness job runs this
     // file with CI=true, so strip it (and any operator knobs) for the child.
-    if (v == null || k === "CI" || k.startsWith("MOTEBIT_PREPUSH") || k === "SKIP_COVERAGE") {
+    // GIT_* too: an inherited GIT_DIR would point the hook's git at another
+    // repository (a test that wants one passes it in `env`).
+    if (
+      v == null ||
+      k === "CI" ||
+      k.startsWith("MOTEBIT_PREPUSH") ||
+      k === "SKIP_COVERAGE" ||
+      k.startsWith("GIT_")
+    ) {
       continue;
     }
     childEnv[k] = v;
@@ -190,6 +202,40 @@ beforeAll(() => {
 
 afterAll(() => {
   rmSync(base, { recursive: true, force: true });
+});
+
+describe("pre-push hook — pushed from a LINKED worktree (#835, 2026-10-02)", () => {
+  // Git exports GIT_DIR=<repo>/.git/worktrees/<name> (+ GIT_PREFIX,
+  // GIT_EXEC_PATH, GIT_EDITOR) into a linked worktree's hooks. Inherited by
+  // `pnpm test:gates`, it pointed fixture git commands at the REAL repository
+  // (core.bare = true, `fixture` commits on the pushing branch). The hook
+  // unsets every GIT_* first; its own git still finds the repo from cwd.
+  it("no phase inherits a GIT_* variable, and the scope is the worktree's own diff", () => {
+    const repo = repoWith(LEAF_CHANGE);
+    const wt = `${repo}-wt`;
+    git(repo, "worktree", "add", "-q", "-b", "feature-wt", wt);
+    const gitDir = git(wt, "rev-parse", "--absolute-git-dir").trim();
+    expect(gitDir).toBe(join(repo, ".git", "worktrees", `${repo.split("/").pop()}-wt`));
+    const envLog = `${wt}-env.log`;
+    const r = runHook(wt, {
+      GIT_DIR: gitDir,
+      GIT_PREFIX: "",
+      GIT_EXEC_PATH: git(repo, "--exec-path").trim(),
+      GIT_EDITOR: ":",
+      SHIM_ENV_LOG: envLog,
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.calls).toEqual([
+      "build",
+      "check",
+      TYPECHECK_LINT,
+      TEST_CHANGED,
+      REACH_LEAF,
+      "exec prettier --check --no-error-on-unmatched-pattern -- packages/leaf/src/index.ts",
+    ]);
+    const seen = readFileSync(envLog, "utf8").split("\n").filter(Boolean);
+    expect(seen).toEqual(r.calls.map(() => "GIT:"));
+  });
 });
 
 describe("pre-push hook — single leaf-package change", () => {
@@ -581,6 +627,17 @@ const SCENARIOS: Record<string, (hook: string) => Scenario> = {
       detail: show(r),
     };
   },
+  /** examples/interop/ is a gate input (the APS vector + pins) — same trigger as CI. */
+  "examples/interop/ triggers the gate self-tests": (hook) => {
+    const r = runHook(repoWith({ "examples/interop/aps/INTEROP.md": "x\n" }, { hook }));
+    return {
+      ok:
+        r.status === 0 &&
+        r.calls.includes("test:gates") &&
+        r.calls.includes("check-gates-effective"),
+      detail: show(r),
+    };
+  },
   /** A failing phase aborts the push with a non-zero code. */
   "a failing gate blocks": (hook) => {
     const r = runHook(repoWith(LEAF_CHANGE, { hook }), { SHIM_FAIL: "^check$" });
@@ -621,9 +678,15 @@ const HOOK_MUTANTS: { name: string; from: string | RegExp; to: string; killedBy:
   },
   {
     name: "coverage-graduation.json dropped from the gate-input trigger",
-    from: "changed_files scripts/ coverage-graduation.json",
-    to: "changed_files scripts/",
+    from: "changed_files scripts/ coverage-graduation.json examples/interop/",
+    to: "changed_files scripts/ examples/interop/",
     killedBy: "coverage-graduation.json triggers the gate self-tests",
+  },
+  {
+    name: "examples/interop/ dropped from the gate-input trigger",
+    from: "changed_files scripts/ coverage-graduation.json examples/interop/",
+    to: "changed_files scripts/ coverage-graduation.json",
+    killedBy: "examples/interop/ triggers the gate self-tests",
   },
   {
     name: "core.quotePath=false dropped (C1)",
@@ -744,7 +807,7 @@ describe("pre-push hook — scoped-path allowlist", () => {
     const files = spawnSync(
       "git",
       ["-c", "core.quotePath=false", "ls-files", "--", "packages", "apps", "services"],
-      { cwd: ROOT, encoding: "utf8" },
+      { cwd: ROOT, encoding: "utf8", env: cleanEnv() },
     )
       .stdout.split("\n")
       .filter((f) => f && !/\.(md|mdx|txt|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|wasm)$/.test(f));

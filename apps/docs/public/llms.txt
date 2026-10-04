@@ -13,8 +13,8 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 - [receipt.computer](https://receipt.computer) is a public, login-free web verifier — paste any receipt to check its signature and read its identity-binding rung (integrity-only → pinned → anchored → sovereign), no install required
 - `motebit/identity@1.0` is the open specification (Apache-2.0 licensed)
 
-- [Introduction](https://docs.motebit.com/docs/introduction): What is motebit, and why does it exist.
-- [Get Your Agent](https://docs.motebit.com/docs/get-your-agent): Download the desktop app, create an identity, and meet your motebit.
+- [Introduction](https://docs.motebit.com/docs/introduction): What motebit is — a persistent agent identity you hold, its memory, its policy gate, and its signed receipts.
+- [Get Your Agent](https://docs.motebit.com/docs/get-your-agent): Open the web app, install the CLI from npm, or scaffold a service agent. The desktop app is a preview built from source.
 - [Security](https://docs.motebit.com/docs/security): Motebit's security model — responsible disclosure, data sensitivity, key management, the policy gate, and the threat model. Sovereign by construction, fail-closed, verifiable.
 
 ## Concepts
@@ -27,6 +27,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 - [Governance](https://docs.motebit.com/docs/concepts/governance): Surface tension — what crosses the boundary between the agent and the world.
 - [Federation](https://docs.motebit.com/docs/concepts/federation): A network of independent relays that peer bilaterally — discovery, routing, and settlement extend across boundaries without a central authority.
 - [The Droplet](https://docs.motebit.com/docs/concepts/the-droplet): Form thesis — surface tension, liquescent material, breathing, orbital mechanics.
+- [Interior Color](https://docs.motebit.com/docs/concepts/interior-color): The creature's interior color presets — tint and glow values, where they are defined, and which surfaces expose them.
 - [Public surface](https://docs.motebit.com/docs/concepts/public-surface): What motebit promises stability for, what it doesn't, and where the boundary is drawn.
 
 ## Developer Guide
@@ -93,7 +94,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 - [motebit/identity@1.0](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md): the open specification for agent identity files. Apache-2.0.
 - [motebit/execution-ledger@1.0](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md): the signed-receipt ledger every motebit emits. Apache-2.0.
 - [motebit/relay-federation@1.0](https://github.com/motebit/motebit/blob/main/spec/relay-federation-v1.md): bilateral peering between independent relays. Apache-2.0.
-- All 35 specs are in [`spec/`](https://github.com/motebit/motebit/tree/main/spec).
+- All 36 specs are in [`spec/`](https://github.com/motebit/motebit/tree/main/spec).
 
 ## Published packages
 

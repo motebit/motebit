@@ -206,6 +206,31 @@ describe("MobileSyncController.startServing / stopServing", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("startServing refuses even when fully connected — mobile serving gate is off", async () => {
+    const fetchSpy = vi.fn(() => Promise.resolve(new Response("{}", { status: 200 })));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const ctrl = new MobileSyncController(
+        makeDeps({
+          getRuntime: () =>
+            ({ getToolRegistry: () => ({ list: () => [] }) }) as unknown as ReturnType<
+              SyncControllerDeps["getRuntime"]
+            >,
+        }),
+      );
+      const internals = ctrl as unknown as { _servingSyncUrl: string; _servingAuthToken: string };
+      internals._servingSyncUrl = "https://relay.test";
+      internals._servingAuthToken = "tok";
+      const res = await ctrl.startServing();
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain("not available");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(ctrl.isServing()).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("stopServing is a no-op", () => {
     const ctrl = new MobileSyncController(makeDeps());
     ctrl.stopServing();

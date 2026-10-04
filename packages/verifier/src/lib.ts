@@ -24,6 +24,7 @@
 // (Node), preserving the existing API and behavior exactly.
 
 import {
+  identityVerifyOutcome,
   verify,
   verifySkillBundle,
   verifySovereignBinding,
@@ -319,6 +320,24 @@ export async function verifyArtifact(
         ? await verifySovereignBinding(result.toolInvocation.motebit_id, pk)
         : false;
     return { ...result, sovereign };
+  }
+  // An identity file is intact only when its signature AND its succession
+  // chain verify — the one rule every identity-verify path shares
+  // (`identityVerifyOutcome`). `valid` from `verify` covers the signature
+  // alone, so a file re-signed by a key its chain never reaches would read
+  // VALID here while `motebit verify` reads it broken.
+  if (result.valid && result.type === "identity") {
+    const outcome = identityVerifyOutcome(result);
+    if (!outcome.valid) {
+      return {
+        ...result,
+        valid: false,
+        errors: [
+          ...(result.errors ?? []),
+          { message: outcome.error ?? "succession chain invalid" },
+        ],
+      };
+    }
   }
   return result;
 }

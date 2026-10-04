@@ -46,6 +46,8 @@ const before = (id: string, line: string) => hook(id, BUILD, `${line}\n${BUILD}`
 const CHECK = 'run_phase "gates (pnpm check)" pnpm check\n';
 const COV = "        run: pnpm exec turbo run test:coverage --concurrency=4\n";
 const TEST_STEP = "      - name: Test with coverage\n";
+const SCRUB = "unset $(env | sed -n 's/^\\(GIT_[A-Za-z0-9_]*\\)=.*/\\1/p')";
+const SCRUB_LINE = `  ${SCRUB} # git-env-scrub\n`;
 
 const m = (id: string, what: string, apply: (i: Inputs) => Inputs): Edit => ({ id, what, apply });
 
@@ -226,6 +228,20 @@ export const MUTANTS: Edit[] = [
     "S26",
     "ci: push filtered to another branch",
     ci("S26", "  push:\n    branches: [main]\n", "  push:\n    branches: [release]\n"),
+  ),
+  m(
+    "S43",
+    "ci: merge_group trigger removed (the queue's required checks never report)",
+    ci("S43", "  merge_group:\n    types: [checks_requested]\n", ""),
+  ),
+  m(
+    "S44",
+    "ci: merge_group narrowed to another activity type",
+    ci(
+      "S44",
+      "  merge_group:\n    types: [checks_requested]\n",
+      "  merge_group:\n    types: [destroyed]\n",
+    ),
   ),
   m(
     "S27",
@@ -459,6 +475,30 @@ export const MUTANTS: Edit[] = [
     "ci: self-tests job no longer runs on push",
     ci("G9", "  gate-self-tests:\n", "  gate-self-tests-old:\n"),
   ),
+  // --- the GIT_* scrub (2026-10-02, second #835-class incident) -------------
+  m("E1", "hook: the GIT_* scrub removed", hook("E1", SCRUB_LINE, "")),
+  m("E2", "hook: the scrub moved after the build phase", (i) =>
+    hook("E2b", BUILD, `${BUILD}${SCRUB_LINE}`)(hook("E2a", SCRUB_LINE, "")(i)),
+  ),
+  m("E3", "hook: the scrub runs in a subshell", hook("E3", SCRUB_LINE, `  ( ${SCRUB} )\n`)),
+  m(
+    "E4",
+    "hook: the scrub behind a condition",
+    hook("E4", SCRUB_LINE, `  if [ -n "$MOTEBIT_SCRUB" ]; then ${SCRUB}; fi\n`),
+  ),
+  m("E5", "hook: the scrub narrowed to GIT_DIR", hook("E5", SCRUB_LINE, "  unset GIT_DIR\n")),
+  m("E6", "hook: the scrub's pattern narrowed", hook("E6", "GIT_[A-Za-z0-9_]*", "GIT_DIR")),
+  m("E7", "hook: the scrub backgrounded", hook("E7", SCRUB_LINE, `  ${SCRUB} &\n`)),
+  m(
+    "E8",
+    "hook: a phase before the tag guard (outside the scrubbed body)",
+    hook("E8", "\nif git symbolic-ref", '\nrun_phase "build" pnpm build\nif git symbolic-ref'),
+  ),
+  m(
+    "E9",
+    "hook: the scrub after another command in the body",
+    hook("E9", SCRUB_LINE, `  _scope_ok=1\n${SCRUB_LINE}`),
+  ),
 ];
 
 export const CONTROLS: Edit[] = [
@@ -503,4 +543,9 @@ export const CONTROLS: Edit[] = [
     ),
   ),
   m("K10", "root: an unrelated script added", script("hello", "echo hello")),
+  m(
+    "K11",
+    "hook: the scrub's comment reworded",
+    hook("K11", "No inherited GIT_* past this line", "Scrub the inherited git environment"),
+  ),
 ];

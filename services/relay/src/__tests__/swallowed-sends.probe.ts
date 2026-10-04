@@ -26,6 +26,7 @@ import type { AddressInfo } from "node:net";
 import { serve } from "@hono/node-server";
 import type { Hono } from "hono";
 import WebSocket from "ws";
+import { TaskQueue } from "../task-queue.js";
 import {
   generateKeypair,
   bytesToHex,
@@ -45,7 +46,6 @@ import {
   jsonAuthWithIdempotency,
 } from "./test-helpers.js";
 import { createFederationCallbacks } from "../federation-callbacks.js";
-import type { TaskQueueEntry } from "../tasks.js";
 import { toMicro } from "../accounts.js";
 
 type Kind = "open" | "mixed" | "closed";
@@ -313,7 +313,7 @@ it("fan-out, reports delivery: federation onTaskForwarded", async () => {
       identityManager: {} as never,
       relayIdentity: s.relay.relayIdentity as never,
       connections: s.relay.connections,
-      taskQueue: new Map<string, TaskQueueEntry>(),
+      taskQueue: new TaskQueue(s.relay.moteDb.db),
       issueCredentials: false,
       maxTaskQueueSize: 100,
       maxTasksPerSubmitter: 100,

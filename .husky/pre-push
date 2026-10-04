@@ -4,6 +4,19 @@
 # Skip on tag pushes (changesets pushes 4 tags in parallel → lock conflicts)
 if git symbolic-ref -q HEAD >/dev/null 2>&1; then
 
+  # --- No inherited GIT_* past this line ------------------------------------
+  # In a LINKED worktree git exports GIT_DIR=<repo>/.git/worktrees/<name>
+  # (plus GIT_PREFIX, GIT_EXEC_PATH, GIT_EDITOR) into this hook. Every phase
+  # below inherits the environment, and a fixture `git` in `pnpm test:gates`
+  # acts on GIT_DIR whatever its cwd: 2026-09-27 (#835) and 2026-10-02 it set
+  # core.bare = true in the shared .git/config and committed `fixture` /
+  # `base` onto the pushing branch. So every GIT_* is unset first; this
+  # hook's own git finds the repository from cwd (the worktree root), as it
+  # does in a main checkout, where git exports no GIT_DIR at all. Pinned by
+  # check-prepush-subset; proven by pre-push-hook.test.ts ("LINKED
+  # worktree") and scripts/__tests__/git-env-isolation.harness.ts --hook.
+  unset $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p') # git-env-scrub
+
   # --- What this hook is (and is not) --------------------------------------
   # A FAST gate by SCOPE, not the authority. CI (`.github/workflows/ci.yml`,
   # plus the merge queue) is the authority and runs everything unfiltered;
@@ -177,7 +190,7 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # The gates' own tests (scripts/__tests__) and check-gates-effective (which
   # PERTURBS every gate — the most expensive gate step) change verdict only
   # when gate code or a gate input changes. Same trigger set as CI's
-  # `changes` job (scripts/ or coverage-graduation.json); CI's
+  # `changes` job (scripts/, coverage-graduation.json or examples/interop/); CI's
   # `gate-effectiveness` job runs both on every push to main regardless.
   #
   # test:gates was unconditional (2026-09-24) because of #694: a literal
@@ -186,7 +199,7 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # while cheap (<15s); measured 2026-09-30 at 16–17s on a 4-vCPU box, so it
   # is scoped with the rest. The #694 class is now caught by CI's push-to-main
   # run (and by any PR touching scripts/), not by an unrelated local push.
-  _scripts_changed=$(changed_files scripts/ coverage-graduation.json)
+  _scripts_changed=$(changed_files scripts/ coverage-graduation.json examples/interop/)
   if [ -n "$_scripts_changed" ]; then
     run_phase "gate self-tests (scripts/ changed)" pnpm test:gates
     run_phase "gate-effectiveness (scripts/ changed)" pnpm check-gates-effective

@@ -25,13 +25,23 @@
  * that declares itself MANUAL (`payoutMode: "manual"`, Stripe) sends
  * nothing, so its fire is an ordinary `pending` withdrawal (`firedRecordFor`).
  *
- * Failure posture:
- *   - Rail call throws → pending row becomes `failed`, balance stays
- *     debited, operator resolves via admin endpoint. The debit is the
- *     audit trail that funds were claimed for this sweep.
- *   - Stale `firing` rows (no terminal state after STALE_FIRING_MS) are
- *     logged but NOT automatically retried; the rail side-effect may
- *     have partially completed.
+ * Failure posture — the money rule: refund ONLY what provably never left.
+ *   - Proven not sent (the rail threw `PayoutNotSentError`, or the rail is
+ *     MANUAL and its `withdraw()` sends nothing) → the row goes `refund_owed`
+ *     and is refunded through the ledger in ONE transaction with its
+ *     `refund_owed → refunded` compare-and-set, so a refund happens at most
+ *     once. A refund the emergency freeze refuses stays `refund_owed` and is
+ *     retried by the first tick after unfreeze.
+ *   - Outcome unknown (any other throw, a per-item batch failure — its
+ *     reason is telemetry, never a proof —, a send the process died in) →
+ *     NO refund. The row goes `unknown` and a `processing` relay_withdrawals
+ *     row is recorded with the payout's horizon, so the operator's #921
+ *     reconcile door settles it (paid ⇒ completed; not_paid ⇒ refunded once).
+ *   - A `firing` row is recovered as outcome-unknown (or refunded, for a
+ *     manual rail) only when no send for it can be running: claimed in an
+ *     earlier process life, or stale and not in flight in this process.
+ *   - Rows parked `failed` by a relay that predates this rule are left for
+ *     the operator: some of them may have been paid.
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -49,7 +59,8 @@ import { computeWithdrawableAvailable } from "@motebit/virtual-accounts";
 import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
 import { createLogger } from "./logger.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
-import { isManualPayoutRail, payoutValidityMsOf } from "@motebit/settlement-rails";
+import { isManualPayoutRail, isPayoutNotSent, payoutValidityMsOf } from "@motebit/settlement-rails";
+import { isEmergencyFrozenAbort } from "./freeze.js";
 import { UNDECLARED_PAYOUT_HORIZON_MS } from "./payout-horizon.js";
 
 const logger = createLogger({ service: "batch-withdrawals" });
@@ -57,8 +68,18 @@ const logger = createLogger({ service: "batch-withdrawals" });
 /** Default loop interval: 10 minutes. */
 const DEFAULT_LOOP_INTERVAL_MS = 10 * 60 * 1000;
 
-/** Stale `firing` rows older than this are anomalies — logged, not retried. */
+/**
+ * A `firing` row claimed in THIS process life and not in flight here is
+ * recovered once it is older than this (an exception escaped between the
+ * claim and the outcome's write). Never re-sent.
+ */
 const STALE_FIRING_MS = 2 * 60 * 1000;
+
+/** When this process started: a `firing` row claimed before it has no send running. */
+const PROCESS_STARTED_AT = Date.now();
+
+/** Queue rows whose send is running in this process (claim → outcome written). */
+const firingHere = new Set<string>();
 
 export interface BatchWithdrawalConfig {
   /** How often to evaluate pending queues (ms). Default: 600_000. */
@@ -232,20 +253,169 @@ function claimForFiring(db: DatabaseDriver, pendingIds: string[], now: number): 
   return claimed;
 }
 
-function markFired(db: DatabaseDriver, pendingId: string, withdrawalId: string, now: number): void {
-  db.prepare(
-    `UPDATE relay_pending_withdrawals
-     SET status = 'fired', withdrawal_id = ?, last_attempt_at = ?
-     WHERE pending_id = ?`,
-  ).run(withdrawalId, now, pendingId);
+/**
+ * A rail's failure, classified by the money rule: `not_sent` only on proof
+ * that nothing left (a `PayoutNotSentError`, or a MANUAL rail, whose
+ * `withdraw()` sends nothing); everything else may have left.
+ */
+function failureOutcome(rail: object | undefined, err: unknown): "not_sent" | "unknown" {
+  if (rail !== undefined && isManualPayoutRail(rail)) return "not_sent";
+  return isPayoutNotSent(err) ? "not_sent" : "unknown";
 }
 
-function markFailed(db: DatabaseDriver, pendingId: string, reason: string, now: number): void {
-  db.prepare(
-    `UPDATE relay_pending_withdrawals
-     SET status = 'failed', last_error = ?, last_attempt_at = ?
-     WHERE pending_id = ?`,
-  ).run(reason, now, pendingId);
+/**
+ * Refund one `refund_owed` row: the `refund_owed → refunded` compare-and-set
+ * and the ledger credit (referenced by the pending_id) commit together or not
+ * at all, so of any number of callers exactly one refunds. A freeze refusal
+ * rolls both back and leaves the row owed. Returns true when THIS call refunded.
+ */
+function settleOwedRefund(db: DatabaseDriver, pendingId: string, now: number): boolean {
+  try {
+    return sqliteAccountStoreFor(db).refundPendingWithdrawal(pendingId, now);
+  } catch (err) {
+    if (!isEmergencyFrozenAbort(err)) throw err;
+    logger.warn("pending_withdrawal.refund_frozen", {
+      pendingId,
+      note: "the emergency freeze refused the refund; the row stays refund_owed and is refunded after unfreeze",
+    });
+    return false;
+  }
+}
+
+/**
+ * The payout provably never left: park the row `refund_owed` (FROM `firing`
+ * only), then refund it.
+ */
+function refundNotSent(db: DatabaseDriver, row: PendingRow, reason: string, now: number): void {
+  const info = db
+    .prepare(
+      `UPDATE relay_pending_withdrawals
+       SET status = 'refund_owed', last_error = ?, last_attempt_at = ?
+       WHERE pending_id = ? AND status = 'firing'`,
+    )
+    .run(reason, now, row.pending_id);
+  if (info.changes === 0) {
+    logger.error("pending_withdrawal.outcome_lost", {
+      pendingId: row.pending_id,
+      outcome: "not_sent",
+      note: "the row is no longer firing; its not-sent outcome was not recorded — reconcile by hand",
+    });
+    return;
+  }
+  const refunded = settleOwedRefund(db, row.pending_id, now);
+  logger.warn("pending_withdrawal.not_sent", {
+    pendingId: row.pending_id,
+    motebitId: row.motebit_id,
+    amountMicro: row.amount_micro,
+    refunded,
+    reason,
+  });
+}
+
+/**
+ * The payout may have left: never refund. The row goes `unknown` (FROM
+ * `firing` only) and, in the same transaction, a `processing` withdrawal is
+ * recorded with the payout's horizon — the #921 reconcile door settles it.
+ */
+function holdUnknown(
+  db: DatabaseDriver,
+  rail: object | undefined,
+  row: PendingRow,
+  reason: string,
+  now: number,
+): void {
+  const withdrawalId = db.transaction(() => {
+    const info = db
+      .prepare(
+        `UPDATE relay_pending_withdrawals
+         SET status = 'unknown', last_error = ?, last_attempt_at = ?
+         WHERE pending_id = ? AND status = 'firing'`,
+      )
+      .run(reason, now, row.pending_id);
+    if (info.changes === 0) return null;
+    const id = recordFiredWithdrawal(
+      db,
+      row,
+      {
+        status: "processing",
+        payoutReference: null,
+        payoutValidUntil:
+          now + ((rail && payoutValidityMsOf(rail)) ?? UNDECLARED_PAYOUT_HORIZON_MS),
+      },
+      now,
+      `unresolved payout: batched withdrawal ${row.pending_id} failed (${reason}); the transfer may have been submitted — reconcile on chain before completing or failing`,
+    );
+    db.prepare("UPDATE relay_pending_withdrawals SET withdrawal_id = ? WHERE pending_id = ?").run(
+      id,
+      row.pending_id,
+    );
+    return id;
+  });
+  if (withdrawalId === null) {
+    logger.error("pending_withdrawal.outcome_lost", {
+      pendingId: row.pending_id,
+      outcome: "unknown",
+      note: "the row is no longer firing; its unknown outcome was not recorded — reconcile by hand",
+    });
+    return;
+  }
+  logger.warn("pending_withdrawal.outcome_unknown", {
+    pendingId: row.pending_id,
+    motebitId: row.motebit_id,
+    amountMicro: row.amount_micro,
+    withdrawalId,
+    reason,
+  });
+}
+
+/** Record a failure by the money rule. */
+function markFailed(
+  db: DatabaseDriver,
+  rail: object | undefined,
+  row: PendingRow,
+  err: unknown,
+  now: number,
+): void {
+  const reason = err instanceof Error ? err.message : String(err);
+  if (failureOutcome(rail, err) === "not_sent") refundNotSent(db, row, reason, now);
+  else holdUnknown(db, rail, row, reason, now);
+}
+
+/**
+ * Record a fired payout: the `firing → fired` compare-and-set and its
+ * relay_withdrawals row commit together.
+ */
+function markFired(
+  db: DatabaseDriver,
+  row: PendingRow,
+  fired: FiredRecord,
+  now: number,
+): string | null {
+  const withdrawalId = db.transaction(() => {
+    const info = db
+      .prepare(
+        `UPDATE relay_pending_withdrawals
+         SET status = 'fired', last_attempt_at = ?
+         WHERE pending_id = ? AND status = 'firing'`,
+      )
+      .run(now, row.pending_id);
+    if (info.changes === 0) return null;
+    const id = recordFiredWithdrawal(db, row, fired, now);
+    db.prepare("UPDATE relay_pending_withdrawals SET withdrawal_id = ? WHERE pending_id = ?").run(
+      id,
+      row.pending_id,
+    );
+    return id;
+  });
+  if (withdrawalId === null) {
+    logger.error("pending_withdrawal.outcome_lost", {
+      pendingId: row.pending_id,
+      outcome: "fired",
+      payoutReference: fired.payoutReference,
+      note: "the payout fired but the row is no longer firing; reconcile the ledger against the rail",
+    });
+  }
+  return withdrawalId;
 }
 
 /**
@@ -295,14 +465,15 @@ function recordFiredWithdrawal(
   row: PendingRow,
   fired: FiredRecord,
   now: number,
+  failureReason: string | null = null,
 ): string {
   const withdrawalId = crypto.randomUUID();
   db.prepare(
     `INSERT INTO relay_withdrawals
        (withdrawal_id, motebit_id, amount, currency, destination, status,
         idempotency_key, payout_reference, requested_at, completed_at, claimed_at,
-        payout_valid_until)
-     VALUES (?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        payout_valid_until, failure_reason)
+     VALUES (?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     withdrawalId,
     row.motebit_id,
@@ -315,6 +486,7 @@ function recordFiredWithdrawal(
     fired.status === "completed" ? now : null,
     fired.status === "pending" ? null : now,
     fired.payoutValidUntil,
+    failureReason,
   );
   return withdrawalId;
 }
@@ -372,25 +544,31 @@ export async function evaluateAndFireRail(
     return;
   }
 
-  const now = Date.now();
-  const claimed = claimForFiring(
-    db,
-    rows.map((r) => r.pending_id),
-    now,
-  );
-  if (claimed.length === 0) return;
-
   logger.info("batch.firing", {
     rail: rail.name,
-    count: claimed.length,
-    aggregatedMicro: claimed.reduce((sum, r) => sum + r.amount_micro, 0),
+    count: rows.length,
+    aggregatedMicro: aggregated,
     mode: isBatchableRail(rail) ? "batch" : "serial",
   });
 
   if (isBatchableRail(rail)) {
-    await fireBatch(db, rail, claimed);
+    const claimed = claimForFiring(
+      db,
+      rows.map((r) => r.pending_id),
+      Date.now(),
+    );
+    if (claimed.length === 0) return;
+    for (const row of claimed) firingHere.add(row.pending_id);
+    try {
+      await fireBatch(db, rail, claimed);
+    } finally {
+      for (const row of claimed) firingHere.delete(row.pending_id);
+    }
   } else {
-    await fireSerial(db, rail, claimed);
+    // Serial: each row is claimed immediately before its own send, so an
+    // emergency freeze that lands during one send refuses the next claim (a
+    // guarded write) and every later row stays `pending` for after unfreeze.
+    await fireSerial(db, rail, rows, { claimEach: true });
   }
 }
 
@@ -431,22 +609,39 @@ async function fireBatch(
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     const now = Date.now();
-    for (const row of rows) markFailed(db, row.pending_id, reason, now);
-    logger.error("batch.fire_failed", { rail: rail.name, count: rows.length, error: reason });
+    for (const row of rows) markFailed(db, rail, row, err, now);
+    logger.error("batch.fire_failed", {
+      rail: rail.name,
+      count: rows.length,
+      outcome: failureOutcome(rail, err),
+      error: reason,
+    });
     return;
   }
 
   const now = Date.now();
+  const answered = new Set<string>();
   for (const { item, result: perItem } of result.fired) {
     const row = byKey.get(item.idempotency_key);
-    if (!row) continue;
-    const withdrawalId = recordFiredWithdrawal(db, row, firedRecordFor(rail, perItem, now), now);
-    markFired(db, row.pending_id, withdrawalId, now);
+    if (!row || answered.has(row.pending_id)) continue;
+    answered.add(row.pending_id);
+    markFired(db, row, firedRecordFor(rail, perItem, now), now);
   }
   for (const { item, reason } of result.failed) {
     const row = byKey.get(item.idempotency_key);
-    if (!row) continue;
-    markFailed(db, row.pending_id, reason, now);
+    if (!row || answered.has(row.pending_id)) continue;
+    answered.add(row.pending_id);
+    // A per-item failure is a telemetry string, never a proof that nothing
+    // left — outcome unknown unless the rail is manual.
+    markFailed(db, rail, row, new Error(reason), now);
+  }
+  const unanswered = rows.filter((r) => !answered.has(r.pending_id));
+  if (unanswered.length > 0) {
+    // Left `firing`: recovered as outcome-unknown once stale (never re-sent).
+    logger.error("batch.items_unanswered", {
+      rail: rail.name,
+      pendingIds: unanswered.map((r) => r.pending_id),
+    });
   }
   logger.info("batch.fire_complete", {
     rail: rail.name,
@@ -458,66 +653,130 @@ async function fireBatch(
 async function fireSerial(
   db: DatabaseDriver,
   rail: WithdrawableGuestRail,
-  rows: PendingRow[],
+  candidates: PendingRow[],
+  opts: { claimEach: boolean } = { claimEach: false },
 ): Promise<void> {
   let fired = 0;
   let failed = 0;
-  for (const row of rows) {
+  for (const candidate of candidates) {
+    // A refused claim (emergency freeze) throws out of the pass: nothing more
+    // is sent, the remaining rows are left as they were.
+    const row = opts.claimEach
+      ? claimForFiring(db, [candidate.pending_id], Date.now())[0]
+      : candidate;
+    if (row == null) continue;
     const idempotencyKey = row.idempotency_key ?? `pending-${row.pending_id}`;
+    firingHere.add(row.pending_id);
     try {
-      // GuestRail.withdraw takes the amount in whole units (dollars/USDC,
-      // not micros). The pending ledger stores micros; convert at the
-      // boundary. Batch-capable rails take micros directly via
-      // BatchWithdrawalItem.amount_micro — this conversion is only for
-      // the serial-fallback path.
-      const result = await rail.withdraw(
-        row.motebit_id,
-        fromMicro(row.amount_micro),
-        "USDC",
-        row.destination,
-        idempotencyKey,
-      );
+      let result: WithdrawalResult;
+      try {
+        // GuestRail.withdraw takes the amount in whole units (dollars/USDC,
+        // not micros). The pending ledger stores micros; convert at the
+        // boundary. Batch-capable rails take micros directly via
+        // BatchWithdrawalItem.amount_micro — this conversion is only for
+        // the serial-fallback path.
+        result = await rail.withdraw(
+          row.motebit_id,
+          fromMicro(row.amount_micro),
+          "USDC",
+          row.destination,
+          idempotencyKey,
+        );
+      } catch (err) {
+        markFailed(db, rail, row, err, Date.now());
+        failed++;
+        logger.warn("batch.serial_item_failed", {
+          rail: rail.name,
+          pendingId: row.pending_id,
+          motebitId: row.motebit_id,
+          amountMicro: row.amount_micro,
+          outcome: failureOutcome(rail, err),
+          error: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
       const now = Date.now();
-      const withdrawalId = recordFiredWithdrawal(db, row, firedRecordFor(rail, result, now), now);
-      markFired(db, row.pending_id, withdrawalId, now);
+      markFired(db, row, firedRecordFor(rail, result, now), now);
       fired++;
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      markFailed(db, row.pending_id, reason, Date.now());
-      failed++;
-      logger.warn("batch.serial_item_failed", {
-        rail: rail.name,
-        pendingId: row.pending_id,
-        motebitId: row.motebit_id,
-        amountMicro: row.amount_micro,
-        error: reason,
-      });
+    } finally {
+      firingHere.delete(row.pending_id);
     }
   }
   logger.info("batch.fire_complete", { rail: rail.name, mode: "serial", fired, failed });
 }
 
-/** Log any `firing` rows that have exceeded STALE_FIRING_MS. */
-function logStaleFiring(db: DatabaseDriver): void {
-  const cutoff = Date.now() - STALE_FIRING_MS;
-  const stale = db
+/**
+ * Recover `firing` rows no send can still be running for — claimed in an
+ * earlier process life, or stale and not in flight here — by the money rule:
+ * a manual rail sent nothing (refund); any other may have sent (hold for the
+ * #921 reconcile). Never re-sent.
+ */
+function recoverFiring(
+  db: DatabaseDriver,
+  rails: ReadonlyArray<GuestRail>,
+  now: number,
+  processStartedAt: number,
+): void {
+  const rows = db
     .prepare(
-      `SELECT pending_id, motebit_id, rail, last_attempt_at FROM relay_pending_withdrawals
-       WHERE status = 'firing' AND last_attempt_at IS NOT NULL AND last_attempt_at < ?`,
+      `SELECT pending_id, motebit_id, amount_micro, destination, rail, source,
+              enqueued_at, status, idempotency_key, last_attempt_at
+       FROM relay_pending_withdrawals WHERE status = 'firing'`,
     )
-    .all(cutoff) as Array<{
-    pending_id: string;
-    motebit_id: string;
-    rail: string;
-    last_attempt_at: number;
-  }>;
-  for (const row of stale) {
-    logger.warn("batch.stale_firing", {
+    .all() as Array<PendingRow & { last_attempt_at: number | null }>;
+  for (const row of rows) {
+    const claimedAt = row.last_attempt_at ?? 0;
+    const earlierLife = claimedAt < processStartedAt;
+    if (!earlierLife && (firingHere.has(row.pending_id) || now - claimedAt < STALE_FIRING_MS)) {
+      continue;
+    }
+    const rail = rails.find((r) => r.name === row.rail);
+    logger.warn("batch.firing_recovered", {
       pendingId: row.pending_id,
       motebitId: row.motebit_id,
       rail: row.rail,
-      ageMs: Date.now() - row.last_attempt_at,
+      ageMs: now - claimedAt,
+      earlierLife,
     });
+    markFailed(
+      db,
+      rail,
+      row,
+      new Error(
+        earlierLife
+          ? "the process died while this payout was being sent"
+          : "the send's outcome was never recorded",
+      ),
+      now,
+    );
+  }
+}
+
+/** Refund every `refund_owed` row (a refund the freeze refused, or a crash before it). */
+function settleOwedRefunds(db: DatabaseDriver, now: number): void {
+  const owed = db
+    .prepare("SELECT pending_id FROM relay_pending_withdrawals WHERE status = 'refund_owed'")
+    .all() as Array<{ pending_id: string }>;
+  for (const { pending_id } of owed) settleOwedRefund(db, pending_id, now);
+}
+
+/**
+ * One pass of the batch-withdrawal loop: recover `firing` rows no send is
+ * running for, refund what is owed, then evaluate and fire each rail.
+ * Exported for tests; `opts.processStartedAt` simulates a restart.
+ */
+export async function runBatchWithdrawalTick(
+  db: DatabaseDriver,
+  rails: ReadonlyArray<GuestRail>,
+  config: BatchWithdrawalConfig,
+  opts: { processStartedAt?: number } = {},
+): Promise<void> {
+  const withdrawableRails = rails.filter(isWithdrawableRail);
+  const now = Date.now();
+  recoverFiring(db, withdrawableRails, now, opts.processStartedAt ?? PROCESS_STARTED_AT);
+  settleOwedRefunds(db, now);
+  for (const rail of withdrawableRails) {
+    await evaluateAndFireRail(db, rail, config);
   }
 }
 
@@ -553,10 +812,7 @@ export function startBatchWithdrawalLoop(
     intervalMs,
     async () => {
       try {
-        logStaleFiring(db);
-        for (const rail of withdrawableRails) {
-          await evaluateAndFireRail(db, rail, config);
-        }
+        await runBatchWithdrawalTick(db, withdrawableRails, config);
       } catch (err) {
         logger.error("batch_withdrawals.tick_error", {
           error: err instanceof Error ? err.message : String(err),

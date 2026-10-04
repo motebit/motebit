@@ -99,6 +99,7 @@ import {
   governanceToPolicyConfig,
   validateRestoreRequest,
   verify as verifyIdentityFile,
+  identityVerifyOutcome,
   type ImportIdentityResult,
   type RestoreIdentityRequest,
   type RestoreIdentityResult,
@@ -112,6 +113,9 @@ import { SecureStoreAdapter } from "./adapters/secure-store";
 import { rotateMobileKey } from "./key-rotation";
 import {
   createMobileMachineRoster,
+  ownSuccessionRecords,
+  rosterAfterPairing,
+  rosterAfterRestore,
   rosterAfterRotationCommit,
   type MobileMachineRoster,
 } from "./machine-roster";
@@ -127,6 +131,11 @@ export type { SyncStatus } from "./sync-controller";
 import { MobileMcpManager } from "./mcp-manager";
 import { MobilePairingManager } from "./pairing-manager";
 import { MobilePushTokenManager } from "./push-token-manager";
+import {
+  canExecuteDelegatedTask,
+  mobileServingAllowed,
+  MOBILE_SERVING_UNAVAILABLE,
+} from "./serving-gate";
 
 // Color presets + approval presets — canonical source in @motebit/sdk.
 // Re-exported so any existing `import { COLOR_PRESETS } from "./mobile-app"`
@@ -696,6 +705,13 @@ export class MobileApp {
       this.publicKey = pubKeyHex;
     },
     setSyncUrl: (url) => this.setSyncUrl(url),
+    loadOwnSuccessionRecords: async () =>
+      ownSuccessionRecords({
+        motebitId: this.motebitId,
+        identityFile: await AsyncStorage.getItem(IDENTITY_FILE_KEY),
+        heldPublicKeyHex: this.publicKey,
+      }),
+    persistSuccession: (input) => rosterAfterPairing(input),
   });
 
   // Push token lifecycle — class extracted to ./push-token-manager.ts.
@@ -2364,6 +2380,9 @@ export class MobileApp {
   }
 
   startServing(): Promise<{ ok: boolean; error?: string }> {
+    if (!mobileServingAllowed()) {
+      return Promise.resolve({ ok: false, error: MOBILE_SERVING_UNAVAILABLE });
+    }
     return this.sync.startServing();
   }
 
@@ -2472,7 +2491,8 @@ export class MobileApp {
   }
 
   /**
-   * Verify a motebit.md identity file's Ed25519 signature.
+   * Verify a motebit.md identity file: its Ed25519 signature AND its
+   * succession chain.
    *
    * Mirrors `WebApp.verifyMotebitMd` and
    * `IdentityManager.verifyIdentityFile`. Browser-and-native-safe:
@@ -2481,9 +2501,8 @@ export class MobileApp {
    * implementation.
    */
   async verifyMotebitMd(content: string): Promise<{ valid: boolean; error?: string }> {
-    const result = await verifyIdentityFile(content, { expectedType: "identity" });
-    const error = result.errors?.[0]?.message;
-    return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+    // Intact = signature AND succession chain (the shared fold).
+    return identityVerifyOutcome(await verifyIdentityFile(content, { expectedType: "identity" }));
   }
 
   /**
@@ -2522,9 +2541,8 @@ export class MobileApp {
    *
    * Note: mobile does not have desktop's `_identity_file` config slot —
    * governance lives on the runtime config that's regenerated from the
-   * in-memory metadata on next bootstrap, so `originalContent` is
-   * unused on this surface (still accepted for cross-surface contract
-   * uniformity).
+   * in-memory metadata on next bootstrap. `originalContent` contributes
+   * only its verified succession chain, to the roster replica.
    */
   async restoreIdentity(request: RestoreIdentityRequest): Promise<RestoreIdentityResult> {
     const failureReason = await validateRestoreRequest(request);
@@ -2582,6 +2600,14 @@ export class MobileApp {
     } catch {
       return { ok: false, reason: "config_write_failed" };
     }
+    // The motebit.md's verified chain joins the roster replica (bootstrap
+    // regenerates the stored file without it), so this phone can be Device A
+    // for an offline-rotated identity. Best-effort; never fails the restore.
+    await rosterAfterRestore({
+      motebitId: request.metadata.motebitId,
+      publicKeyHex: request.metadata.publicKey,
+      content: request.originalContent,
+    });
     return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
   }
 }
@@ -2614,6 +2640,10 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
   const app = _backgroundApp;
   const runtime = app?.getRuntime();
   if (!app || !runtime || !app.motebitId) return;
+  // The single execution gate (serving-gate.ts). Mobile is non-executing
+  // today: a push wake must not open a socket, claim, or run a delegated
+  // task — previously this path ran `handleAgentTask` with `/serve` off.
+  if (!canExecuteDelegatedTask(app.isServing())) return;
 
   const syncUrl = await app.getSyncUrl();
   if (!syncUrl) return;
@@ -2669,6 +2699,15 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
       if (msg.type !== "task_request" || msg.task == null) return;
 
       const task = msg.task;
+
+      // Re-check the gate at the claim point (serving may have been stopped
+      // while the socket was opening).
+      if (!canExecuteDelegatedTask(app.isServing())) {
+        ws.close();
+        clearTimeout(timer);
+        done();
+        return;
+      }
 
       // Claim the task
       ws.send(JSON.stringify({ type: "task_claim", task_id: task.task_id }));

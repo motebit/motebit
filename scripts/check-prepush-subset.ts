@@ -33,7 +33,8 @@
  *     defined exactly once, at top level; no other function may be defined.
  * The CI side, read with a real YAML parser:
  *   - the workflow runs on `push` to `main` with no path/branch filter and no
- *     `defaults`; its `env` is exactly the pinned turbo-cache block;
+ *     `defaults`, and on `merge_group` (checks_requested) so the merge queue's
+ *     required checks report; its `env` is exactly the pinned turbo-cache block;
  *   - for each task key the hook runs, a step whose `run` EXACTLY equals the
  *     allowlisted CI form, with only `name`/`run` keys, in an allowlisted job
  *     whose `if:`/`needs:` chain is exactly the pinned one (and whose needs
@@ -78,7 +79,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { failWithRepair } from "./lib/gate-report.js";
-import { ShParseError, parseSh, walk, type Word } from "./lib/posix-sh.js";
+import { ShParseError, parseSh, walk, type Program, type Word } from "./lib/posix-sh.js";
 
 const ROOT = process.cwd();
 const HOOK = ".husky/pre-push";
@@ -128,15 +129,80 @@ export const RUN_PHASE_FORMS: Record<string, Key[]> = {
 /** Commands that cannot run another command and have no effect but output/status. */
 const PURE = new Set(["[", "test", "printf", "echo", "skip_phase"]);
 
+/**
+ * The env scrub: the FIRST command of the hook body, before any phase. In a
+ * linked worktree git exports GIT_DIR=<repo>/.git/worktrees/<name> (+
+ * GIT_PREFIX, GIT_EXEC_PATH, GIT_EDITOR) into the hook; a phase that inherits
+ * it — a fixture `git` in `pnpm test:gates` — acts on the REAL repository
+ * whatever its cwd (2026-09-27 #835, 2026-10-02: core.bare = true and
+ * `fixture` commits on the pushing branch). Its PLACEMENT is pinned by
+ * envScrubViolations, not only its text: a scrub moved after a phase, into a
+ * branch, a subshell or a `$( )` is a scrub that does not cover every phase.
+ */
+export const ENV_SCRUB = "unset $(env | sed -n 's/^\\(GIT_[A-Za-z0-9_]*\\)=.*/\\1/p')";
 /** Every other command line allowed outside a pinned function, exactly. */
 const EXACT_COMMANDS = new Set([
   "git symbolic-ref -q HEAD",
+  // The GIT_* scrub (ENV_SCRUB) and the two commands of its `$( )`; where it
+  // must stand is envScrubViolations' job.
+  ENV_SCRUB,
+  "env",
+  "sed -n 's/^\\(GIT_[A-Za-z0-9_]*\\)=.*/\\1/p'",
   "git merge-base origin/main HEAD",
   "date +%s",
   "wc -l",
   "tr -d ' '",
   "head -n 1",
 ]);
+
+/** The hook's top level: the $CI short-circuit, then `if <tag guard>; then <body> fi`. */
+const TOP_GUARDS = ['[ -n "$CI" ] && exit 0'];
+const TAG_GUARD = "git symbolic-ref -q HEAD >/dev/null 2>&1";
+
+export function envScrubViolations(prog: Program): string[] {
+  const where = `${HOOK}: the GIT_* scrub`;
+  const fix = `the hook must be \`${TOP_GUARDS.join("")}\` then \`if ${TAG_GUARD}; then\` whose FIRST command is \`${ENV_SCRUB}\` (no else/elif)`;
+  const items = prog.items;
+  if (items.length !== TOP_GUARDS.length + 1) {
+    return [
+      `${where}: the top level has ${items.length} item(s), not the CI guard + the tag-guarded body — ${fix}`,
+    ];
+  }
+  for (const [i, g] of TOP_GUARDS.entries()) {
+    if (ws(items[i]!.canon) !== g) {
+      return [`${where}: top-level item ${i + 1} is \`${ws(items[i]!.canon)}\` — ${fix}`];
+    }
+  }
+  const body = items[TOP_GUARDS.length]!;
+  const cmd =
+    body.pipelines.length === 1 && body.pipelines[0]!.cmds.length === 1
+      ? body.pipelines[0]!.cmds[0]!
+      : null;
+  if (cmd?.type !== "if" || body.background || body.pipelines[0]!.bang) {
+    return [`${where}: the hook body is not a plain top-level \`if\` — ${fix}`];
+  }
+  if (
+    cmd.bodies.length !== 2 ||
+    ws(cmd.bodies[0]!.items.map((i) => i.canon).join(" ; ")) !== TAG_GUARD
+  ) {
+    return [`${where}: the body's \`if\` is not exactly \`if ${TAG_GUARD}; then … fi\` — ${fix}`];
+  }
+  const first = cmd.bodies[1]!.items[0];
+  if (
+    first == null ||
+    first.background ||
+    first.pipelines.length !== 1 ||
+    first.pipelines[0]!.bang ||
+    first.pipelines[0]!.cmds.length !== 1 ||
+    first.pipelines[0]!.cmds[0]!.type !== "simple" ||
+    ws(first.canon) !== ENV_SCRUB
+  ) {
+    return [
+      `${where} is not the first command of the hook body (found \`${first ? ws(first.canon) : "(nothing)"}\`) — every phase would inherit a linked worktree's GIT_DIR; ${fix}`,
+    ];
+  }
+  return [];
+}
 
 /** `exit` is allowed only as the $CI short-circuit. */
 const EXIT_AND_OR = new Set(['[ -n "$CI" ] && exit 0']);
@@ -181,7 +247,7 @@ export const ASSIGNMENTS: Record<string, string[]> = {
     ),
   ],
   _deps_changed: ["$(changed_files pnpm-lock.yaml)"],
-  _scripts_changed: ["$(changed_files scripts/ coverage-graduation.json)"],
+  _scripts_changed: ["$(changed_files scripts/ coverage-graduation.json examples/interop/)"],
   _concurrency: ["${MOTEBIT_PREPUSH_CONCURRENCY:-2}"],
   _full_task: ["test:coverage", "test"],
   _test_filters: [`$(printf '%s\\n' "$_changed_pkg_dirs" | sed 's#^#--filter=./#')`],
@@ -322,7 +388,7 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
       run: "pnpm check",
     },
     {
-      // Read-only scan of the bundles the Build step emitted (#168); it
+      // Read-only scan of the bundles the Build step emitted (#170); it
       // writes nothing, so it cannot change what a later counterpart tests.
       name: "No provider credentials in built client bundles",
       run: "pnpm check-no-secrets-in-client-bundles --require-dist web,verify",
@@ -520,7 +586,7 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
     {
       id: "filter",
       name: "Detect scripts/ and services/relay/ changes vs base",
-      run: 'scripts=false\nrelay=false\nif [ "${{ github.event_name }}" = "pull_request" ]; then\n  changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")\n  # Probes read repo data outside scripts/ (coverage-graduation.json\n  # is the live example: #589 moved a date there, the probe keyed on\n  # that literal went vacuous, and gate-effectiveness never ran on\n  # the PR because scripts/ was untouched — main went red on push).\n  # A change to a gate INPUT must trigger the same proof as a change\n  # to the gate.\n  if echo "$changed" | grep -qE \'^scripts/|^coverage-graduation\\.json$\'; then\n    scripts=true\n  fi\n  # activation-effectiveness must fire on a relay refactor (the exact\n  # regression it guards: a source change making a booted suite go\n  # vacuous), not only on gate edits.\n  if echo "$changed" | grep -qE \'^services/relay/\'; then\n    relay=true\n  fi\nfi\necho "scripts=$scripts" >> "$GITHUB_OUTPUT"\necho "relay=$relay" >> "$GITHUB_OUTPUT"\necho "scripts/ touched vs \'${{ github.base_ref }}\': $scripts; services/relay/ touched: $relay"\n',
+      run: 'scripts=false\nrelay=false\n# The diff base: the PR\'s base branch, or — in the merge queue — the\n# group\'s parent commit (main, or the queue entry ahead of it), so\n# the group\'s own changes decide, exactly as the PR\'s did.\nbase=""\nif [ "${{ github.event_name }}" = "pull_request" ]; then\n  base="origin/${{ github.base_ref }}"\nelif [ "${{ github.event_name }}" = "merge_group" ]; then\n  base="${{ github.event.merge_group.base_sha }}"\nfi\nif [ -n "$base" ]; then\n  changed=$(git diff --name-only "$base...HEAD")\n  # Probes read repo data outside scripts/ (coverage-graduation.json\n  # is the live example: #589 moved a date there, the probe keyed on\n  # that literal went vacuous, and gate-effectiveness never ran on\n  # the PR because scripts/ was untouched — main went red on push).\n  # A change to a gate INPUT must trigger the same proof as a change\n  # to the gate.\n  # examples/interop/ is a gate input too: the APS vector and the pins\n  # in INTEROP.md are read by scripts/__tests__/interop-aps-vector.test.ts.\n  if echo "$changed" | grep -qE \'^scripts/|^coverage-graduation\\.json$|^examples/interop/\'; then\n    scripts=true\n  fi\n  # activation-effectiveness must fire on a relay refactor (the exact\n  # regression it guards: a source change making a booted suite go\n  # vacuous), not only on gate edits.\n  if echo "$changed" | grep -qE \'^services/relay/\'; then\n    relay=true\n  fi\nfi\necho "scripts=$scripts" >> "$GITHUB_OUTPUT"\necho "relay=$relay" >> "$GITHUB_OUTPUT"\necho "scripts/ touched vs \'$base\': $scripts; services/relay/ touched: $relay"\n',
     },
   ],
 };
@@ -593,6 +659,7 @@ export function evaluateHook(hook: string): {
       phases: 0,
     };
   }
+  violations.push(...envScrubViolations(prog));
   let commands = 0;
   let phases = 0;
   const defined = new Map<string, number>();
@@ -775,6 +842,14 @@ export function evaluateCi(
   if (JSON.stringify(on?.push) !== JSON.stringify({ branches: ["main"] })) {
     violations.push(
       `${CI} \`on.push\` must be exactly \`{ branches: [main] }\` (every push to main, no paths/branches filter); got ${JSON.stringify(on?.push)}`,
+    );
+  }
+  // The merge queue is the other half of "CI is the authority": its required
+  // checks report only if the workflow runs on `merge_group`, or the queue
+  // waits forever (docs/ops/merge-queue.md).
+  if (JSON.stringify(on?.merge_group) !== JSON.stringify({ types: ["checks_requested"] })) {
+    violations.push(
+      `${CI} \`on.merge_group\` must be exactly \`{ types: [checks_requested] }\` (the merge queue's required checks run on it — see docs/ops/merge-queue.md); got ${JSON.stringify(on?.merge_group)}`,
     );
   }
   if (JSON.stringify(wf.env ?? null) !== JSON.stringify(WORKFLOW_ENV)) {
@@ -1147,7 +1222,7 @@ function main(): void {
     });
   }
   console.log(
-    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)) → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned.`,
+    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned.`,
   );
 }
 

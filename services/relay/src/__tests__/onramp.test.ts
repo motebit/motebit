@@ -17,7 +17,7 @@
  *    status codes.
  */
 
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { MockOnrampAdapter, type OnrampSessionRequest } from "../onramp.js";
 import { JSON_AUTH, createTestRelay } from "./test-helpers.js";
 
@@ -57,6 +57,26 @@ describe("MockOnrampAdapter", () => {
 // ── Endpoint tests ───────────────────────────────────────────────────
 
 describe("POST /api/v1/onramp/session", () => {
+  // The session route checks the destination's SOL gas over Solana RPC
+  // (`hasGas` in onramp.ts — `SOLANA_RPC_URL`, else the public mainnet RPC).
+  // Answer that read in-process with a funded balance: the relay suite never
+  // reaches the network (`network-guard.setup.ts`).
+  beforeEach(() => {
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (new URL(url).hostname === "api.mainnet-beta.solana.com") {
+        return Promise.resolve(
+          Response.json({ jsonrpc: "2.0", id: 1, result: { context: { slot: 1 }, value: 1e9 } }),
+        );
+      }
+      return realFetch(input, init);
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("returns 503 when no onramp adapter is configured", async () => {
     const relay = await createTestRelay();
     try {
