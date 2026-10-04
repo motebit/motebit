@@ -34,6 +34,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanEnv } from "../lib/differential-tree.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const argv = process.argv.slice(2);
@@ -41,23 +42,25 @@ const viaHook = argv.includes("--hook");
 const dash = argv.indexOf("--");
 const vitestArgs = dash >= 0 ? argv.slice(dash + 1) : [];
 
+/** The sentinel's fixed git identity/config, applied on top of `cleanEnv`. */
+const SENTINEL_GIT: Record<string, string> = {
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_AUTHOR_NAME: "sentinel",
+  GIT_AUTHOR_EMAIL: "sentinel@example.invalid",
+  GIT_COMMITTER_NAME: "sentinel",
+  GIT_COMMITTER_EMAIL: "sentinel@example.invalid",
+};
 /** This process's own environment with every GIT_* removed — the harness's git never leaks either. */
 function scrubbed(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
-  return {
-    ...env,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_AUTHOR_NAME: "sentinel",
-    GIT_AUTHOR_EMAIL: "sentinel@example.invalid",
-    GIT_COMMITTER_NAME: "sentinel",
-    GIT_COMMITTER_EMAIL: "sentinel@example.invalid",
-    ...extra,
-  };
+  return cleanEnv(process.env, { ...SENTINEL_GIT, ...extra });
 }
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", args, { cwd, env: scrubbed(), encoding: "utf8" }).trim();
+  execFileSync("git", args, {
+    cwd,
+    env: cleanEnv(process.env, SENTINEL_GIT),
+    encoding: "utf8",
+  }).trim();
 
 // ── The sentinel ─────────────────────────────────────────────────────────
 const tmp = mkdtempSync(join(tmpdir(), "motebit-git-sentinel-"));

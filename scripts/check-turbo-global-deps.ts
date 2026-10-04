@@ -47,6 +47,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, matchesGlob, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { cleanEnv } from "./lib/differential-tree.js";
 import { failWithRepair } from "./lib/gate-report.js";
 import { parseDoctrineChain, SPEC_COUNT_INPUTS } from "./generate-llms-txt.js";
 
@@ -105,6 +106,7 @@ function isComparisonOperand(src: string, start: number, end: number): boolean {
 function gitFiles(root: string, ...paths: string[]): string[] {
   return execFileSync("git", ["-c", "core.quotePath=false", "ls-files", "--", ...paths], {
     cwd: root,
+    env: cleanEnv(),
     encoding: "utf8",
   })
     .split("\n")

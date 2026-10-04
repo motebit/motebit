@@ -111,6 +111,7 @@ import {
   readGit,
   readPackage,
   runPretest,
+  cleanEnv,
   treeEnv,
   workspaceRoots,
 } from "./lib/differential-tree.js";
@@ -207,10 +208,14 @@ async function runProbe(
     if (shim == null) throw new Error(`no vitest in ${host}'s or the root node_modules/.bin`);
     execFileSync(shim, ["run", PROBE_NAME], {
       cwd: pkgDir,
-      env: treeEnv(treeDir, binPath(treeDir, host), {
-        PROBE_OUT: obsFile,
-        DIFFERENTIAL_SIDE: label,
-      }),
+      // treeEnv is already scrubbed; the outer cleanEnv states it at the spawn
+      // (check-fixture-git-env reads one file at a time).
+      env: cleanEnv(
+        treeEnv(treeDir, binPath(treeDir, host), {
+          PROBE_OUT: obsFile,
+          DIFFERENTIAL_SIDE: label,
+        }),
+      ),
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 64 * 1024 * 1024,
     });

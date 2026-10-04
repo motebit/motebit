@@ -29,6 +29,7 @@ import {
   CI_JOB_STEPS,
   type TestCacheInputs,
 } from "../check-prepush-subset.js";
+import { cleanEnv } from "../lib/differential-tree.js";
 import { parseSh, walk } from "../lib/posix-sh.js";
 import { MUTANTS, CONTROLS } from "./prepush-subset-mutants.js";
 
@@ -117,14 +118,8 @@ describe("test tasks are never cached (turbo --dry=json, per package)", () => {
     '{"extends":["//"],"tasks":{"test:coverage":{"dependsOn":[],"cache":true,"inputs":["package.json"]}}}';
   let base: string;
   let wt: string;
-  const gitEnv = () => {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env))
-      if (v != null && !k.startsWith("GIT_")) env[k] = v;
-    return env;
-  };
   const git = (cwd: string, ...args: string[]) =>
-    execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv() });
+    execFileSync("git", args, { cwd, encoding: "utf8", env: cleanEnv() });
 
   beforeAll(() => {
     base = mkdtempSync(join(tmpdir(), "prepush-test-cache-"));
@@ -227,12 +222,7 @@ describe("test tasks are never cached (turbo --dry=json, per package)", () => {
  */
 describe("the dry-run read has no output-size ceiling", () => {
   const BIG = 3 * 1024 * 1024;
-  const env = (): Record<string, string> => {
-    const e: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env))
-      if (v != null && !k.startsWith("GIT_")) e[k] = v;
-    return e;
-  };
+  const env = () => cleanEnv();
 
   it("runToFile returns > 1 MiB of stdout intact", () => {
     const out = runToFile(
@@ -258,7 +248,7 @@ describe("the dry-run read has no output-size ceiling", () => {
   it("readTestCacheInputs parses a > 1 MiB dry run (stub turbo)", () => {
     const root = mkdtempSync(join(tmpdir(), "prepush-big-dry-"));
     try {
-      execFileSync("git", ["init", "-q"], { cwd: root, env: env() });
+      execFileSync("git", ["init", "-q"], { cwd: root, env: cleanEnv() });
       const bin = join(root, "node_modules", ".bin");
       mkdirSync(bin, { recursive: true });
       const payload = join(root, "dry.js");
