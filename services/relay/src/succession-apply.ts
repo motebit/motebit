@@ -35,7 +35,12 @@
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { KeySuccessionRecord } from "@motebit/encryption";
 import { bytesToHex, hexToBytes } from "@motebit/encryption";
-import { deriveSolanaAddress } from "@motebit/wallet-solana";
+import { createLogger } from "./logger.js";
+import {
+  openObligationsToKey,
+  solanaAddressOfKey,
+  type OpenObligation,
+} from "./rotation-obligations.js";
 import {
   chainHeadOf,
   holderKeyOf,
@@ -298,18 +303,25 @@ export function departureFrom(db: DatabaseDriver, motebitId: string, key: string
  * module holds no sockets — and a REQUIRED argument of `applySuccession`, so
  * no door can apply a succession without saying what it closes (#767).
  */
-/** The Solana address an Ed25519 key (hex) derives to, or null when it is not a 32-byte key. */
-function solanaAddressOfKey(publicKeyHex: string): string | null {
-  if (!/^[0-9a-fA-F]{64}$/.test(publicKeyHex)) return null;
-  return deriveSolanaAddress(hexToBytes(publicKeyHex.toLowerCase()));
-}
-
 export type RetireKeyConnections = (motebitId: string, retiredKey: string) => void;
 
 export interface SuccessionApplied {
   /** Whether the chain grew. False for a retry of the link already at its head. */
   applied: boolean;
+  /**
+   * What the relay still owed the RETIRED key's derived address when this
+   * link was applied (`openObligationsToKey`): pending / processing
+   * withdrawals to it, P2P tasks admitted to it and not yet verified. Never
+   * rewritten here — a destination is its owner's, not the relay's — so it
+   * is returned (each door passes it on) and logged. The client preflight
+   * refuses over the same list before it ever submits; this is the record
+   * for a door it did not cover (an acknowledged rotation, a guardian
+   * recovery, an older client).
+   */
+  open_obligations: OpenObligation[];
 }
+
+const logger = createLogger({ service: "succession-apply" });
 
 /**
  * Everything a recorded rotation changes, in ONE transaction. Written as
@@ -349,6 +361,9 @@ export function applySuccession(
     const reuse = successionReuse(db, motebitId, record);
     if (reuse !== null) throw new SuccessionRefused(reuse);
     const atHead = successionAtHead(db, motebitId, record);
+    // Read BEFORE any write, so it reports what the retired key was owed.
+    const open_obligations =
+      openObligationsToKey(db, motebitId, record.old_public_key)?.obligations ?? [];
 
     // The old key stops being a credential HERE. A device row's `public_key`
     // is what an owner token is verified against, and it is resolved BEFORE
@@ -438,7 +453,7 @@ export function applySuccession(
     // and a retry must not append the same link twice: the chain is served
     // in timestamp order, and two identical links make a history a verifier
     // cannot walk. Everything above still ran — that is the point.
-    if (atHead) return { applied: false };
+    if (atHead) return { applied: false, open_obligations };
     db.prepare(
       `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
@@ -452,8 +467,20 @@ export function applySuccession(
       record.recovery ? 1 : 0,
       record.guardian_signature ?? null,
     );
-    return { applied: true };
+    return { applied: true, open_obligations };
   });
+  if (result.open_obligations.length > 0) {
+    logger.warn("succession.open_obligations_to_retired_key", {
+      motebitId,
+      retiredKey: record.old_public_key,
+      retiredAddress: solanaAddressOfKey(record.old_public_key),
+      obligations: result.open_obligations.map((o) =>
+        o.kind === "withdrawal"
+          ? `withdrawal:${o.withdrawal_id}:${o.status}`
+          : `p2p_task:${o.task_id}:${o.stage}`,
+      ),
+    });
+  }
   // A link from a key to itself (in any spelling) retires nothing.
   if (record.old_public_key.toLowerCase() !== record.new_public_key.toLowerCase()) {
     retireConnections(motebitId, record.old_public_key);

@@ -7987,7 +7987,8 @@
         >
           Generate a new Ed25519 keypair with a signed succession record. Your motebit_id stays the
           same. Your machines will need to be enrolled again under the new key. Your wallet address
-          is this key: move any funds off it first — rotation refuses while it holds any.
+          is this key: move any funds off it, and let withdrawals or P2P payments to it finish,
+          first — rotation refuses while it holds or is owed any, unless you confirm.
         </p>
         <input
           type="text"

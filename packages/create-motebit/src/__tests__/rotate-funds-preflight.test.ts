@@ -1,5 +1,5 @@
 /**
- * Rotation never strands funds — `npx create-motebit rotate`'s `rotateKey`.
+ * Rotation refuses while the old address holds value (unless acknowledged) — `npx create-motebit rotate`'s `rotateKey`.
  *
  * Same table as surface-kit's and the CLI's harnesses: {empty, SOL only,
  * USDC only, another SPL token, balance read failing} × {no acknowledgment,

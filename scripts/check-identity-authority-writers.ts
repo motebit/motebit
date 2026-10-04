@@ -280,7 +280,7 @@ const WRITERS: readonly Writer[] = [
     table: "agent_registry",
     count: 2,
     principal:
-      "the identity itself (or its guardian for a recovery) — the registry key moves only FROM the key the verified link retires, or into an empty master-token slot; and, in the same transaction, a `settlement_address` moves only when it is the RETIRED key's derived Solana address, to the new key's (a custom address is never touched — rotation never strands a pay-to destination)",
+      "the identity itself (or its guardian for a recovery) — the registry key moves only FROM the key the verified link retires, or into an empty master-token slot; and, in the same transaction, a `settlement_address` moves only when it is the RETIRED key's derived Solana address, to the new key's (a custom address is never touched; an open obligation already admitted to the retired address — a withdrawal destination, a P2P task's admitted pay-to — is never rewritten, only reported in `open_obligations`)",
   },
   {
     file: R + "succession-apply.ts",
@@ -296,7 +296,7 @@ const WRITERS: readonly Writer[] = [
     table: "relay_service_listings",
     count: 1,
     principal:
-      "the identity itself (or its guardian for a recovery) — the same verified succession moves a listing `pay_to_address` only when it is the RETIRED key's derived Solana address, to the new key's, in the same transaction; a custom address is never touched (rotation never strands a pay-to destination)",
+      "the identity itself (or its guardian for a recovery) — the same verified succession moves a listing `pay_to_address` only when it is the RETIRED key's derived Solana address, to the new key's, in the same transaction; a custom address is never touched (only a derived-bound destination moves with the key)",
   },
   {
     file: R + "migration.ts",

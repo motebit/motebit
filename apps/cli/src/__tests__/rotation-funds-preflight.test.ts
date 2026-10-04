@@ -1,12 +1,15 @@
 /**
- * Rotation never strands funds — the CLI's `performRotation` (what
+ * Rotation refuses while the old address holds value (unless acknowledged) — the CLI's `performRotation` (what
  * `motebit rotate` runs) against a REAL in-process relay.
  *
  * Same table as surface-kit's harness: {empty, SOL only, USDC only, another
- * SPL token, balance read failing} × {no acknowledgment, `--abandon-funds`}.
- * A refusal must land before a key is minted, a write-ahead is written, the
- * relay is contacted, or the config (which erases the retired key on a
- * recorded rotation) is touched.
+ * SPL token, balance read failing; the relay holding a pending withdrawal, a
+ * processing withdrawal or an admitted unverified P2P task to the old
+ * address} × {no acknowledgment, `--abandon-funds`}. A refusal must land
+ * before a key is minted, a write-ahead is written, the rotation is
+ * submitted, or the config (which erases the retired key on a recorded
+ * rotation) is touched; the only relay contact is the authenticated
+ * obligations READ, served by the real relay route.
  */
 import { mkdtempSync, readdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,6 +53,8 @@ interface Holdings {
 const SCENARIOS: {
   name: string;
   holdings: Holdings | Error;
+  /** Seeds an open relay obligation to the old derived address (a real relay row). */
+  seed?: (r: SyncRelay, mid: string, oldAddress: string) => void;
   refusal: null | { state: "funds-at-risk" | "funds-unknown"; mentions: RegExp[] };
 }[] = [
   { name: "empty", holdings: { solLamports: 0n, tokens: [] }, refusal: null },
@@ -76,17 +81,68 @@ const SCENARIOS: {
     holdings: new Error("fetch failed: ECONNREFUSED"),
     refusal: { state: "funds-unknown", mentions: [/could not be read/, /ECONNREFUSED/] },
   },
+  {
+    name: "a PENDING relay withdrawal to the old address",
+    holdings: { solLamports: 0n, tokens: [] },
+    seed: (r, mid, addr) => withdrawalRow(r, mid, "wd-pending", "pending", addr),
+    refusal: { state: "funds-at-risk", mentions: [/withdrawal wd-pending/, /pending/, /cancel/] },
+  },
+  {
+    name: "a PROCESSING (or freeze-held) relay withdrawal to the old address",
+    holdings: { solLamports: 0n, tokens: [] },
+    seed: (r, mid, addr) => withdrawalRow(r, mid, "wd-processing", "processing", addr),
+    refusal: {
+      state: "funds-at-risk",
+      mentions: [/withdrawal wd-processing/, /processing/, /complete/],
+    },
+  },
+  {
+    name: "an admitted, not-yet-verified P2P task paying the old address",
+    holdings: { solLamports: 0n, tokens: [] },
+    seed: (r, mid, addr) => {
+      const now = Date.now();
+      r.moteDb.db
+        .prepare(
+          "INSERT INTO relay_task_queue (task_id, submitter_id, worker_id, status, prompt, created_at, expires_at, task_json) VALUES (?, ?, NULL, 'pending', 'p', ?, ?, ?)",
+        )
+        .run(
+          "task-p2p-old",
+          "delegator",
+          now,
+          now + 60_000,
+          JSON.stringify({
+            task: { task_id: "task-p2p-old", motebit_id: mid, prompt: "p", status: "pending" },
+            settlement_mode: "p2p",
+            target_agent: mid,
+            p2p_payment_proof: { to_address: addr, amount_micro: 1_000_000 },
+            p2p_admission: { worker_leg: "local", worker_address: addr },
+          }),
+        );
+    },
+    refusal: { state: "funds-at-risk", mentions: [/task task-p2p-old/, /settle/] },
+  },
 ];
+
+function withdrawalRow(r: SyncRelay, mid: string, id: string, status: string, dest: string) {
+  r.moteDb.db
+    .prepare(
+      "INSERT INTO relay_withdrawals (withdrawal_id, motebit_id, amount, currency, destination, status, requested_at) VALUES (?, ?, 2000000, 'USD', ?, ?, ?)",
+    )
+    .run(id, mid, dest, status, Date.now());
+}
 
 let relay: SyncRelay;
 let dir: string;
 let config: FullConfig;
+/** Relay calls other than the obligations READ (which every rotation makes first). */
 let relayCalls: number;
+let obligationReads: number;
 let configWrites: number;
 
 const viaRelay: typeof fetch = async (input, init) => {
-  relayCalls++;
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (url.includes("/rotation-obligations")) obligationReads++;
+  else relayCalls++;
   return relay.app.request(url, init);
 };
 
@@ -136,6 +192,7 @@ async function registered(): Promise<{ mid: string; a: KeyPair; identityPath: st
   handle.stop();
   expect(handle.registered).toBe(true);
   relayCalls = 0;
+  obligationReads = 0;
   configWrites = 0;
   return { mid, a, identityPath };
 }
@@ -184,6 +241,7 @@ describe("rotation funds preflight — CLI performRotation", () => {
   for (const s of SCENARIOS) {
     it(`${s.name}: ${s.refusal ? "refuses before any side effect" : "proceeds"}`, async () => {
       const { mid, a, identityPath } = await registered();
+      s.seed?.(relay, mid, base58btcEncode(a.publicKey));
       const fileBefore = readFileSync(identityPath, "utf-8");
       const configBefore = JSON.stringify(config);
       const readAddresses: string[] = [];
@@ -196,10 +254,12 @@ describe("rotation funds preflight — CLI performRotation", () => {
         return;
       }
       expect(o).toMatchObject({ kind: "stopped", state: s.refusal.state });
-      // Nothing moved anywhere: the relay was never contacted, no write-ahead
+      // Nothing moved anywhere: the relay was only READ (its obligations, once,
+      // under the retiring key's own token — the real route), no write-ahead
       // exists, the config (and with it the retired key) and the identity
       // file are untouched, and the relay still holds the old key.
       expect(relayCalls).toBe(0);
+      expect(obligationReads).toBe(1);
       expect(readdirSync(dir).filter((f) => f.startsWith("pending-rotation"))).toEqual([]);
       expect(configWrites).toBe(0);
       expect(JSON.stringify(config)).toBe(configBefore);
@@ -216,6 +276,7 @@ describe("rotation funds preflight — CLI performRotation", () => {
     if (s.refusal != null) {
       it(`${s.name}: --abandon-funds rotates (emergency rotation stays possible)`, async () => {
         const { mid, a, identityPath } = await registered();
+        s.seed?.(relay, mid, base58btcEncode(a.publicKey));
         const o = await performRotation(deps(identityPath, s.holdings, [], { abandonFunds: true }));
         expect(o.kind).toBe("rotated");
         expect(relayKey(mid)).not.toBe(hex(a));

@@ -35,7 +35,7 @@ async function tab() {
   return { a, stored, keyStore, pending: () => pending };
 }
 
-describe("rotateWebKey — rotation never strands funds", () => {
+describe("rotateWebKey — rotation refuses while the old address holds value", () => {
   it("an unreadable wallet refuses (fail-closed) before the keystore is written", async () => {
     const t = await tab();
     const err = await rotateWebKey({

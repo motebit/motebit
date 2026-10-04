@@ -65,8 +65,15 @@ export {
 } from "./encrypted-conversation-adapter.js";
 export type { EncryptedConversationAdapterConfig } from "./encrypted-conversation-adapter.js";
 export { PairingClient } from "./pairing-client.js";
-export { readSuccessionState, submitSuccessionToRelay } from "./succession-client.js";
+export {
+  readRotationObligations,
+  readSuccessionState,
+  submitSuccessionToRelay,
+} from "./succession-client.js";
 export type {
+  ReadRotationObligationsRequest,
+  RelayRotationObligation,
+  RotationObligationsRead,
   ReadSuccessionStateRequest,
   RelaySuccessionState,
   SubmitSuccessionRequest,

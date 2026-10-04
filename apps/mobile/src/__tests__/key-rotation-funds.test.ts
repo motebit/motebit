@@ -39,7 +39,7 @@ const deps = (keyring: Awaited<ReturnType<typeof phone>>["keyring"]) => ({
   onCommitted: () => undefined,
 });
 
-describe("rotateMobileKey — rotation never strands funds", () => {
+describe("rotateMobileKey — rotation refuses while the old address holds value", () => {
   it("a funded wallet refuses before SecureStore is written, naming the address and the amount", async () => {
     const p = await phone();
     const err = await rotateMobileKey({

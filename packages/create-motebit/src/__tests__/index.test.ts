@@ -25,7 +25,7 @@ const CRYPTO_PKG = JSON.parse(
 const CRYPTO_VERSION = CRYPTO_PKG.version as string;
 
 // `rotate` reads the retiring key's Solana wallet before it mints (rotation
-// never strands funds). The subprocess must never reach a real RPC, so a fake
+// refuses while it holds value, unless acknowledged). The subprocess must never reach a real RPC, so a fake
 // one runs as its own process (execFileSync blocks this one): `/empty` holds
 // nothing, `/funded` holds 1.5 SOL, `/down` answers 500.
 const FAKE_RPC_SCRIPT = `

@@ -1,6 +1,6 @@
 /**
- * A rotation never silently strands an obligation the relay holds to the
- * retired key's address.
+ * An obligation the relay holds to the retired key's address is reported,
+ * never rewritten, when a rotation retires that key.
  *
  * Moving a derived `settlement_address` with the key (succession-settlement-
  * address.test.ts) covers FUTURE payments. Obligations already admitted were
@@ -147,7 +147,13 @@ async function rotate(mid: string, a: KeyPair) {
   const b = await generateKeypair();
   const record = await signKeySuccession(a.privateKey, b.privateKey, b.publicKey, a.publicKey);
   const result = applySuccession(relay.moteDb.db, mid, record, () => {});
-  return { b, result: result as typeof result & { open_obligations?: Record<string, unknown>[] } };
+  return {
+    b,
+    result: {
+      applied: result.applied,
+      open_obligations: result.open_obligations as unknown as Record<string, unknown>[],
+    },
+  };
 }
 
 const CASES: {

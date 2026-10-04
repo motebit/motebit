@@ -485,8 +485,10 @@ Commands:
   register [--sync-url <url>]  Register this identity with the relay (enables discovery)
   rotate [--reason "..."]   Rotate Ed25519 keypair with cryptographic succession chain
                             Your wallet address IS this key: rotation refuses while
-                            the old address holds SOL or tokens (move them first),
-                            or pass --abandon-funds to leave them at the retired key
+                            the old address holds SOL or tokens, or the relay holds
+                            an open withdrawal / P2P payment to it (move or settle
+                            them first), or pass --abandon-funds to leave them at
+                            the retired key
   machines [--json]         The machines this motebit runs unattended work on (reduced here, never by the relay)
   machines retire <device_id>  Sign a retirement for a machine's line (undo: machines enroll)
   machines enroll <device_id> [--force]  Rejoin a retired line, or enrol an id explicitly

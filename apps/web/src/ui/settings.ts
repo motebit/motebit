@@ -610,8 +610,8 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       "Rotate your Ed25519 keypair? The old key signs a succession record transferring trust to the new key.\n\n" +
         // machine-roster-surfaces-v1 N3 — the C-1 cost, stated.
         "Your machines will need to be enrolled again under the new key.\n\n" +
-        // I0 — the wallet IS the key; rotation refuses while it holds funds.
-        "Your wallet address is this key: move any funds off it first — rotation refuses while it holds any.",
+        // I0 — the wallet IS the key; rotation refuses while it holds or is owed funds.
+        "Your wallet address is this key: move any funds off it, and let withdrawals or P2P payments to it finish, first — rotation refuses while it holds or is owed any, unless you confirm.",
     );
     if (!confirmed) return;
     const rotate = (acknowledgeFundsAtRisk: boolean): Promise<void> =>

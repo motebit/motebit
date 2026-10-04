@@ -21,6 +21,7 @@ export {
   performKeyRotation,
   rotateOrThrow,
   rotationFundsStop,
+  rotationObligationsRefusal,
   parseHeldRotation,
   KeyRotationError,
 } from "./key-rotation.js";

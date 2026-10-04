@@ -1,5 +1,6 @@
 /**
- * Rotation never strands funds — the harness at the shared seam.
+ * Rotation refuses while the old address holds value or the relay holds an
+ * open obligation to it, unless acknowledged — the harness at the shared seam.
  *
  * A motebit's Solana address IS its current Ed25519 identity key, and every
  * surface erases or overwrites the retired key once the relay records the
@@ -43,7 +44,7 @@ interface Holdings {
 }
 
 /** What the relay reports it still owes the old address (its obligations route). */
-type Obligations = Record<string, unknown>[] | Error;
+type Obligations = Record<string, unknown>[] | Error | { status: number };
 
 type Scenario = {
   name: string;
@@ -213,6 +214,7 @@ function device(
         });
         const o = opts.obligations ?? [];
         if (o instanceof Error) return new Response(o.message, { status: 503 });
+        if (!Array.isArray(o)) return new Response("", { status: o.status });
         return new Response(
           JSON.stringify({
             address: oldAddress,
@@ -366,5 +368,55 @@ describe("rotation funds preflight — surface-kit (desktop / web / mobile)", ()
     const o = await performKeyRotation({ ...ports, syncUrl: null });
     expect(o.kind).toBe("rotated");
     expect(trace.obligationReads).toEqual([]);
+  });
+  it("the relay refusing the retiring key's bearer for the read while it would accept a rotation from it: refused (unknown), nothing moves", async () => {
+    const a = await generateKeypair();
+    const { ports, trace } = device(
+      a,
+      { solLamports: 0n, tokens: [] },
+      { obligations: { status: 401 } },
+    );
+    const o = await performKeyRotation(ports);
+    expect(o).toMatchObject({ kind: "stopped", state: "funds-unknown" });
+    expect((o as { message: string }).message).toMatch(/obligations/);
+    expect(trace.events).not.toContain("write-ahead");
+    expect(trace.events).not.toContain("relay-post");
+    expect(trace.events).not.toContain("commit");
+  });
+
+  it("a resume the relay already recorded (it no longer takes the retired key's bearer) is finished, not refused", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const { signKeySuccession } = await import("@motebit/encryption");
+    const record = await signKeySuccession(a.privateKey, b.privateKey, b.publicKey, a.publicKey);
+    const held: HeldRotation = {
+      motebit_id: MID,
+      old_public_key: bytesToHex(a.publicKey),
+      new_public_key: bytesToHex(b.publicKey),
+      record,
+      new_private_key_hex: bytesToHex(b.privateKey),
+      written_at: 1,
+    };
+    const { ports, trace } = device(
+      a,
+      { solLamports: 0n, tokens: [] },
+      { held, relayHolds: bytesToHex(b.publicKey), obligations: { status: 401 } },
+    );
+    const o = await performKeyRotation(ports);
+    expect(o).toMatchObject({ kind: "rotated", relay: "already-held" });
+    expect(trace.events).toContain("commit");
+  });
+
+  it("the relay unreachable for the read: stops as unreachable before anything moves", async () => {
+    const a = await generateKeypair();
+    const { ports, trace } = device(a, { solLamports: 0n, tokens: [] });
+    const o = await performKeyRotation({
+      ...ports,
+      fetchImpl: (async () => {
+        throw new Error("ECONNREFUSED");
+      }) as unknown as typeof fetch,
+    });
+    expect(o).toMatchObject({ kind: "stopped", state: "unreachable" });
+    expect(trace.events).toEqual([]);
   });
 });

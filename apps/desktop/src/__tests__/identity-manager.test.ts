@@ -193,6 +193,9 @@ vi.mock("@motebit/sync-engine", () => {
   return {
     PairingClient,
     readSuccessionState: vi.fn(async () => mockCtrl.relayState),
+    // I0's obligations read (driven by surface-kit's preflight harness): the
+    // relay owes the retiring address nothing here.
+    readRotationObligations: vi.fn(async () => ({ ok: true, address: "addr", obligations: [] })),
     submitSuccessionToRelay: vi.fn(async (req: unknown) => {
       mockCtrl.submissions.push(req);
       return mockCtrl.submitResult;

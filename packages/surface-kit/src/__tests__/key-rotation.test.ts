@@ -98,6 +98,13 @@ function device(
       },
       fetchImpl: (async (input: string, init?: RequestInit) => {
         if (relay === null || relay.down) throw new Error("ECONNREFUSED");
+        // I0's obligations read is driven by rotation-funds-preflight.test.ts;
+        // here the relay owes the retiring address nothing.
+        if (input.includes("/rotation-obligations")) {
+          return new Response(JSON.stringify({ address: "addr", obligations: [] }), {
+            status: 200,
+          });
+        }
         if ((init?.method ?? "GET") === "POST") {
           fake.posts++;
           const r = relay.onPost?.(JSON.parse(init!.body as string));
