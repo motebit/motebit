@@ -88,8 +88,33 @@ export function cleanEnv(
   extra: Record<string, string> = {},
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(base)) if (!k.startsWith("GIT_")) env[k] = v;
+  for (const [k, v] of Object.entries(base)) if (!isScrubbedGitEnvKey(k)) env[k] = v;
   return { ...env, ...extra };
+}
+
+/**
+ * THE scrub list, as a rule: every `GIT_*` variable. It covers every variable
+ * that redirects repository discovery or writes — GIT_DIR, GIT_WORK_TREE,
+ * GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES,
+ * GIT_COMMON_DIR, GIT_NAMESPACE, GIT_PREFIX, GIT_CONFIG, GIT_CONFIG_GLOBAL,
+ * GIT_CONFIG_SYSTEM, GIT_CONFIG_COUNT / _KEY_n / _VALUE_n,
+ * GIT_CONFIG_PARAMETERS, GIT_QUARANTINE_PATH — and any variable git adds
+ * later, which an enumerated list would miss. One rule for every scrub:
+ * `cleanEnv` (a copy) and `scrubGitEnvInPlace` (the vitest setup's in-place
+ * form) both read it; `check-fixture-git-env` holds the setup to it.
+ */
+export function isScrubbedGitEnvKey(key: string): boolean {
+  return key.startsWith("GIT_");
+}
+
+/**
+ * Delete every `isScrubbedGitEnvKey` variable from `env` IN PLACE — for a
+ * process whose every later child must inherit the scrub whatever its spawn
+ * syntax (scripts/lib/vitest-scrub-git-env.ts runs it on the worker's
+ * `process.env` before any test module loads).
+ */
+export function scrubGitEnvInPlace(env: NodeJS.ProcessEnv): void {
+  for (const k of Object.keys(env)) if (isScrubbedGitEnvKey(k)) delete env[k];
 }
 
 /** The only git subcommands this module and the script may run. None writes to a repository. */

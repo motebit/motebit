@@ -1095,7 +1095,9 @@ export function evaluateTestCache(inp: TestCacheInputs): string[] {
  * default 1 MiB pipe `maxBuffer` (ENOBUFS, so the gate failed closed on a
  * healthy repo). stdout and stderr go to files, never an in-memory pipe, so
  * there is no buffer to outgrow. Throws with the exit status and stderr on
- * failure.
+ * failure. The child runs with `cleanEnv(env)`: a generic wrapper scrubs every
+ * GIT_* itself (check-fixture-git-env), so no caller — `process.env` from a
+ * hook included — can aim its command at another repository.
  */
 export function runToFile(
   cmd: string,
@@ -1111,7 +1113,7 @@ export function runToFile(
     const errFd = openSync(errPath, "w");
     let r: ReturnType<typeof spawnSync>;
     try {
-      r = spawnSync(cmd, args, { cwd, env, stdio: ["ignore", outFd, errFd] });
+      r = spawnSync(cmd, args, { cwd, env: cleanEnv(env), stdio: ["ignore", outFd, errFd] });
     } finally {
       closeSync(outFd);
       closeSync(errFd);

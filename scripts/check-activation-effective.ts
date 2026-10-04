@@ -38,6 +38,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, unlinkSync } from
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { cleanEnv } from "./lib/differential-tree.js";
 import { failWithRepair } from "./lib/gate-report.js";
 import { acquireGateLock } from "./lib/probe-lock.js";
 
@@ -252,8 +253,9 @@ function replaceOnce(src: string, needle: string, replacement: string): string {
   return src.slice(0, idx) + replacement + src.slice(idx + needle.length);
 }
 
+/** A generic wrapper (it runs `git` too): every GIT_* scrubbed, so only `cwd` decides the repo. */
 function run(cmd: string, args: string[]): { code: number; out: string } {
-  const r = spawnSync(cmd, args, { cwd: ROOT, encoding: "utf-8", stdio: "pipe" });
+  const r = spawnSync(cmd, args, { cwd: ROOT, env: cleanEnv(), encoding: "utf-8", stdio: "pipe" });
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
 }
 

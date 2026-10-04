@@ -371,6 +371,21 @@ describe("check-fixture-git-env is deny-by-default (the R3 review shapes)", () =
     ]);
   });
 
+  it("`cwd: ROOT` is the repo only when ROOT resolves to this file's repo root, never by name alone", () => {
+    const file = join(ROOT, "scripts", "probe.ts");
+    const target = (decl: string) =>
+      analyzeTs(build([decl, 'S("git", ["status"], { cwd: ROOT });']), file).map((s) => s.target);
+    expect(target('const ROOT = resolve(__dirname, "..");')).toEqual(["repo"]);
+    expect(target('const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");')).toEqual([
+      "repo",
+    ]);
+    expect(target('const ROOT = realpathSync(resolve(__dirname, ".."));')).toEqual(["repo"]);
+    expect(target('const ROOT = resolve(__dirname, "..", "..");')).toEqual(["fixture"]); // wrong depth
+    expect(target("const ROOT = process.cwd();")).toEqual(["fixture"]);
+    expect(target("const ROOT = tmp;")).toEqual(["fixture"]);
+    expect(target('let ROOT = resolve(__dirname, "..");')).toEqual(["fixture"]);
+  });
+
   it("a generic spawn wrapper must scrub itself, or be called only with non-git commands", () => {
     const src = build([
       "function run(cmd, args, cwd) { return S(cmd, args, { cwd }); }", // 2: R3 shape, called with git

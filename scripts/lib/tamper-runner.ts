@@ -311,16 +311,16 @@ export function resolveConcurrency(opts: {
 }
 
 /**
- * `process.env` with EVERY `GIT_*` removed — the same rule as `cleanEnv` in
+ * `base` (default `process.env`) with EVERY `GIT_*` removed — the same rule as `cleanEnv` in
  * ./differential-tree.ts, inlined because this module is loaded by plain
  * `node` (the drivers), which does not map a `.js` specifier to `.ts`. A git
  * hook in a linked worktree exports GIT_DIR=<repo>/.git/worktrees/<name>; a
  * fixture or slot git that inherits it acts on THAT repository whatever its
  * cwd (#835, 2026-10-02). Every git and slot child gets this environment.
  */
-function cleanEnv(): NodeJS.ProcessEnv {
+function cleanEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
+  for (const [k, v] of Object.entries(base)) if (!k.startsWith("GIT_")) env[k] = v;
   return env;
 }
 
@@ -998,7 +998,14 @@ function run(
   env: NodeJS.ProcessEnv,
 ): Promise<Exec> {
   return new Promise((resolveRun) => {
-    const child = spawn(cmd, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    // `cmd` is a registry entry's command (it may be git): the wrapper scrubs
+    // every GIT_* itself whatever env the caller built (check-fixture-git-env).
+    const child = spawn(cmd, args, {
+      cwd,
+      env: cleanEnv(env),
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     running.children.add(child);
     if (child.pid != null) running.onSpawn?.(child.pid);
     const chunks: Buffer[] = [];
