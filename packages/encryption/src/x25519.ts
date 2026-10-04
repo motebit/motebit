@@ -19,6 +19,7 @@ import {
   hexToBytes,
   base58btcEncode,
   verifyPairingIdentityBinding,
+  type PairingRelayCheck,
 } from "./index.js";
 
 // Re-use @noble/ed25519 for pubkey derivation in verification step
@@ -206,6 +207,12 @@ export interface OpenedPairingKeyTransfer {
   publicKeyHex: string;
   /** How the relay-supplied motebit_id binds to that key. */
   identityBinding: "sovereign" | "unverified";
+  /**
+   * Whether the relay's served chain was checked for a fork of that key's
+   * lineage. `unreachable` is a weaker acceptance than `no_conflict`: a fork
+   * signed by a superseded-key holder cannot have been seen.
+   */
+  relayCheck: PairingRelayCheck;
 }
 
 /**
@@ -219,7 +226,11 @@ export interface OpenedPairingKeyTransfer {
  *  3. the relay-supplied `motebitId` must bind to that key
  *     ({@link verifyPairingIdentityBinding}): the succession records Device A
  *     sealed inside the transfer are tried first, the relay's public
- *     `GET /succession` (`fetchSuccessionChain`) only when they do not bind.
+ *     `GET /succession` (`fetchSuccessionChain`) only when they do not bind;
+ *  4. for a self-certifying id, the relay's chain is ALWAYS fetched as well
+ *     and checked against the lineage — a verified record that supersedes the
+ *     transferred key or forks its lineage refuses ("identity fork detected").
+ *     An unreachable relay accepts, reported as `relayCheck: "unreachable"`.
  *
  * Throws `Error("Pairing refused: …")` — the seed erased, nothing returned —
  * on any failure. The caller still owns (and must erase) `ephemeralPrivateKey`.
@@ -229,7 +240,7 @@ export async function openPairingKeyTransfer(input: {
   keyTransfer: KeyTransferPayload | null | undefined;
   ephemeralPrivateKey: Uint8Array;
   pairingCode: string;
-  /** The relay's public succession chain for `motebitId`; consulted only as a fallback. */
+  /** The relay's public succession chain for `motebitId`: the fallback source and the fork check. */
   fetchSuccessionChain?: () => Promise<readonly unknown[]>;
   /** A guardian public key pinned on THIS device — never one the pairing supplied. */
   guardianKey?: string;
@@ -247,17 +258,20 @@ export async function openPairingKeyTransfer(input: {
   }
   const publicKeyHex = input.keyTransfer.identity_pubkey_check.toLowerCase();
   const binding = await verifyPairingIdentityBinding(input.motebitId, publicKeyHex, {
-    successionSources: [
-      opened.succession,
-      ...(input.fetchSuccessionChain ? [input.fetchSuccessionChain] : []),
-    ],
+    successionSources: [opened.succession],
+    ...(input.fetchSuccessionChain ? { relaySuccession: input.fetchSuccessionChain } : {}),
     ...(input.guardianKey !== undefined ? { guardianKey: input.guardianKey } : {}),
   });
   if (!binding.accepted || binding.identityBinding === "invalid") {
     secureErase(opened.seed);
     throw new Error(`Pairing refused: ${binding.reason ?? "the motebit_id does not bind"}`);
   }
-  return { identitySeed: opened.seed, publicKeyHex, identityBinding: binding.identityBinding };
+  return {
+    identitySeed: opened.seed,
+    publicKeyHex,
+    identityBinding: binding.identityBinding,
+    relayCheck: binding.relayCheck ?? "not_checked",
+  };
 }
 
 // === Pre-transfer wallet safety check ===

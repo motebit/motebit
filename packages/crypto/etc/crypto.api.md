@@ -1068,11 +1068,12 @@ export interface PairingIdentityBindingResult {
     code?: PairingIdentityRefusalCode;
     identityBinding: Extract<IdentityBindingVerdict, "sovereign" | "unverified" | "invalid">;
     reason?: string;
+    relayCheck?: PairingRelayCheck;
 }
 
 // @public
 export type PairingIdentityRefusalCode =
-/** Not a canonical motebit_id: a lowercase UUIDv7 or UUIDv8, or a `did:key`. */
+/** Not a canonical motebit_id: a lowercase UUIDv7, UUIDv8 or UUIDv4, or a `did:key`. */
 "malformed_id"
 /** The transferred key is not a 32-byte hex public key. */
 | "malformed_key"
@@ -1082,7 +1083,16 @@ export type PairingIdentityRefusalCode =
 * The only lineage to the transferred key runs through a guardian-recovery
 * link, and no guardian key is pinned on the pairing device to check it.
 */
-| "guardian_recovery_unverifiable";
+| "guardian_recovery_unverifiable"
+/**
+* The relay's served chain, verified, proves the transferred key is not the
+* identity's current key: a verified record rotates it away (superseded), or
+* a key on its lineage has two verified successors (equivocation).
+*/
+| "identity_fork";
+
+// @public
+export type PairingRelayCheck = "no_conflict" | "unreachable" | "not_checked";
 
 // @public
 export type PairingSuccessionSource = readonly unknown[] | (() => Promise<readonly unknown[]>);
@@ -2159,6 +2169,7 @@ export interface VerifyOptions {
 // @public
 export function verifyPairingIdentityBinding(motebitId: string, transferredPublicKeyHex: string, options?: {
     successionSources?: readonly PairingSuccessionSource[];
+    relaySuccession?: () => Promise<readonly unknown[]>;
     guardianKey?: string;
 }): Promise<PairingIdentityBindingResult>;
 

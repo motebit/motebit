@@ -1392,7 +1392,7 @@ export function identityVerifyOutcome(result: VerifyResult): { valid: boolean; e
 
 /** Why {@link verifyPairingIdentityBinding} refused. */
 export type PairingIdentityRefusalCode =
-  /** Not a canonical motebit_id: a lowercase UUIDv7 or UUIDv8, or a `did:key`. */
+  /** Not a canonical motebit_id: a lowercase UUIDv7, UUIDv8 or UUIDv4, or a `did:key`. */
   | "malformed_id"
   /** The transferred key is not a 32-byte hex public key. */
   | "malformed_key"
@@ -1402,7 +1402,23 @@ export type PairingIdentityRefusalCode =
    * The only lineage to the transferred key runs through a guardian-recovery
    * link, and no guardian key is pinned on the pairing device to check it.
    */
-  | "guardian_recovery_unverifiable";
+  | "guardian_recovery_unverifiable"
+  /**
+   * The relay's served chain, verified, proves the transferred key is not the
+   * identity's current key: a verified record rotates it away (superseded), or
+   * a key on its lineage has two verified successors (equivocation).
+   */
+  | "identity_fork";
+
+/**
+ * Whether the relay's served chain was checked for a fork of the transferred
+ * key's lineage. `no_conflict` — fetched, and no verified record in it
+ * conflicts (it equals, or is a prefix of, the lineage; records that do not
+ * verify prove nothing and are ignored); `unreachable` — the fetch failed, so
+ * a fork a superseded-key holder signed cannot have been seen;
+ * `not_checked` — no relay was given, or the id commits to no key.
+ */
+export type PairingRelayCheck = "no_conflict" | "unreachable" | "not_checked";
 
 /** Outcome of {@link verifyPairingIdentityBinding}. */
 export interface PairingIdentityBindingResult {
@@ -1410,6 +1426,8 @@ export interface PairingIdentityBindingResult {
   accepted: boolean;
   /** `sovereign` — the id commits to the key; `unverified` — the id commits to no key; `invalid` — refused. */
   identityBinding: Extract<IdentityBindingVerdict, "sovereign" | "unverified" | "invalid">;
+  /** Set when accepted: whether the relay's chain was checked for a fork. */
+  relayCheck?: PairingRelayCheck;
   /** Set when refused. */
   code?: PairingIdentityRefusalCode;
   /** Set when refused: a sentence a surface can show. */
@@ -1426,7 +1444,11 @@ export type PairingSuccessionSource = readonly unknown[] | (() => Promise<readon
 // The canonical motebit_id spellings — exactly what the minting code paths
 // emit (spec/identity-v1.md §3.1.1). Anything else (case-folded, braced,
 // `urn:uuid:`-prefixed, hyphenless, padded) is refused, never normalized: the
-// device would persist a spelling no relay or peer names it by.
+// device would persist a spelling no relay or peer names it by. UUIDv4 is what
+// desktop/mobile seed-only restore minted (`crypto.randomUUID()`) from
+// 2026-05-15 until 2026-05-22; the relay admits those ids, so they are legacy
+// ids exactly like v7 — committing to no key.
+const CANONICAL_UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const CANONICAL_UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const CANONICAL_UUID_V8 = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const CANONICAL_DID_KEY = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
@@ -1463,14 +1485,56 @@ async function pairingLineage(
   }
 }
 
+// Does any VERIFIED record among `records` contradict `held` being the current
+// key of the lineage `lineageRecords` roots? The roster walk over their union
+// answers it: a verified successor of `held` (superseded), two verified
+// predecessors of it, a verified branch off a key on the lineage, or a walk
+// that no longer roots — each needs a signature by a key on the lineage, so a
+// source can prove a fork but never manufacture one.
+async function pairingForkEvidence(
+  motebitId: string,
+  held: string,
+  lineageRecords: readonly unknown[],
+  relayRecords: readonly unknown[],
+  guardianKey: string | undefined,
+): Promise<string | null> {
+  try {
+    const walk = await resolveRosterKeyChain({
+      motebitId,
+      held,
+      records: [...lineageRecords, ...relayRecords],
+      ...(guardianKey !== undefined ? { guardianKey } : {}),
+    });
+    if (!walk.ok) {
+      if (walk.reason === "held_key_superseded") {
+        return `the transferred key ${held} was rotated away (superseded) by a verified succession record`;
+      }
+      if (walk.reason === "fork_at_held") {
+        return `the transferred key ${held} has two verified predecessors`;
+      }
+      return `the relay's verified succession records contradict the transferred key's lineage (${walk.reason})`;
+    }
+    const branch = walk.branches[0];
+    if (branch !== undefined) {
+      return `key ${branch.at} has two verified successors (${branch.to} is not on the transferred key's lineage)`;
+    }
+    if (walk.ancestry.kind !== "rooted") {
+      return `the relay's verified succession records contradict the transferred key's lineage (${walk.ancestry.kind} at ${walk.ancestry.key})`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * May a pairing device adopt `motebitId` together with the identity key the
  * pairing transferred (`transferredPublicKeyHex`)? The relay supplies the id;
  * the key arrives in the key transfer. The binding ladder decides, offline,
  * with no operator trust:
  *
- *  - `motebitId` is not a canonical spelling (lowercase UUIDv7 / UUIDv8, or a
- *    `did:key`) → refused (`malformed_id`);
+ *  - `motebitId` is not a canonical spelling (lowercase UUIDv7 / UUIDv8 /
+ *    UUIDv4, or a `did:key`) → refused (`malformed_id`);
  *  - the id is the self-certifying commitment to the key → accepted (`sovereign`);
  *  - the id is a UUIDv8 / `did:key` and the key is its CURRENT key after
  *    rotation → accepted (`sovereign`) only when the succession records
@@ -1488,8 +1552,16 @@ async function pairingLineage(
  *    from the device itself, never from the pairing: a source-supplied one
  *    would let that source forge the lineage.
  *  - any other self-certifying id → refused (`no_verified_lineage`);
- *  - a legacy UUIDv7 commits to no key → accepted at `unverified`, the rung it
- *    reads at everywhere else; no source is consulted.
+ *  - once a self-certifying id binds, `options.relaySuccession` (the relay's
+ *    served chain) is ALWAYS fetched — it is also the last fallback source —
+ *    and checked against the lineage: a verified record in it that rotates the
+ *    transferred key away, or gives a key on the lineage a second successor,
+ *    → refused (`identity_fork`, "identity fork detected"). A relay chain that
+ *    equals or is a prefix of the lineage (a rotation not yet uploaded) is no
+ *    conflict. Unreachable → accepted, reported `relayCheck: "unreachable"`:
+ *    a superseded-key holder's fork is undetectable while the relay is.
+ *  - a legacy UUIDv7 or UUIDv4 commits to no key → accepted at `unverified`,
+ *    the rung it reads at everywhere else; no source is consulted.
  *
  * Never throws.
  */
@@ -1498,6 +1570,11 @@ export async function verifyPairingIdentityBinding(
   transferredPublicKeyHex: string,
   options?: {
     successionSources?: readonly PairingSuccessionSource[];
+    /**
+     * The relay's served chain. Fetched once: the last fallback source, and
+     * always the fork check once the id binds (see above).
+     */
+    relaySuccession?: () => Promise<readonly unknown[]>;
     /** A guardian public key pinned on THIS device (never one the pairing supplied). */
     guardianKey?: string;
   },
@@ -1512,11 +1589,11 @@ export async function verifyPairingIdentityBinding(
     reason,
   });
   const id = typeof motebitId === "string" ? motebitId : "";
-  const legacy = CANONICAL_UUID_V7.test(id);
+  const legacy = CANONICAL_UUID_V7.test(id) || CANONICAL_UUID_V4.test(id);
   if (!legacy && !CANONICAL_UUID_V8.test(id) && !CANONICAL_DID_KEY.test(id)) {
     return refuse(
       "malformed_id",
-      `motebit_id ${JSON.stringify(id)} is not a canonical motebit_id (a lowercase UUIDv7 or UUIDv8, or a did:key)`,
+      `motebit_id ${JSON.stringify(id)} is not a canonical motebit_id (a lowercase UUIDv7, UUIDv8 or UUIDv4, or a did:key)`,
     );
   }
   if (
@@ -1526,25 +1603,64 @@ export async function verifyPairingIdentityBinding(
     return refuse("malformed_key", "the transferred identity key is not a 32-byte public key");
   }
   const held = transferredPublicKeyHex.toLowerCase();
-  if (legacy) return { accepted: true, identityBinding: "unverified" };
-  if (await verifySovereignBinding(id, held))
-    return { accepted: true, identityBinding: "sovereign" };
+  if (legacy) return { accepted: true, identityBinding: "unverified", relayCheck: "not_checked" };
 
   const guardianKey = options?.guardianKey?.toLowerCase();
+  // The relay's chain, fetched at most once. Bounded like every source: it is
+  // untrusted, and a legitimate chain is a handful of links.
+  const relayLoader = options?.relaySuccession;
+  let relayFetch: Promise<unknown[] | null> | undefined;
+  const relayRecords = (): Promise<unknown[] | null> =>
+    (relayFetch ??= (async () => {
+      try {
+        const got = await relayLoader!();
+        return Array.isArray(got) ? (got as unknown[]).slice(0, MAX_PAIRING_RECORDS) : null;
+      } catch {
+        return null;
+      }
+    })());
+
+  // Bind: the id commits to the key itself, or a verified lineage connects them.
   const records: unknown[] = [];
+  let bound = await verifySovereignBinding(id, held);
   let guardianOnly = false;
-  for (const source of options?.successionSources ?? []) {
-    try {
-      const got = typeof source === "function" ? await source() : source;
-      // Bounded: a source is untrusted, and a legitimate chain is a handful
-      // of links — never let one make this device verify without limit.
-      if (Array.isArray(got)) records.push(...(got as unknown[]).slice(0, MAX_PAIRING_RECORDS));
-    } catch {
-      continue; // a source that fails contributes nothing
+  if (!bound) {
+    const sources: PairingSuccessionSource[] = [...(options?.successionSources ?? [])];
+    if (relayLoader) sources.push(async () => (await relayRecords()) ?? []);
+    for (const source of sources) {
+      try {
+        const got = typeof source === "function" ? await source() : source;
+        // Bounded: a source is untrusted, and a legitimate chain is a handful
+        // of links — never let one make this device verify without limit.
+        if (Array.isArray(got)) records.push(...(got as unknown[]).slice(0, MAX_PAIRING_RECORDS));
+      } catch {
+        continue; // a source that fails contributes nothing
+      }
+      const lineage = await pairingLineage(id, held, records, guardianKey);
+      if (lineage === "rooted") {
+        bound = true;
+        break;
+      }
+      if (lineage === "guardian") guardianOnly = true;
     }
-    const lineage = await pairingLineage(id, held, records, guardianKey);
-    if (lineage === "rooted") return { accepted: true, identityBinding: "sovereign" };
-    if (lineage === "guardian") guardianOnly = true;
+  }
+  if (bound) {
+    // The fork check: the relay's served chain is ALWAYS fetched when a relay
+    // is given; the lineage's own records are checked even when it is not.
+    const served = relayLoader ? await relayRecords() : null;
+    const fork = await pairingForkEvidence(id, held, records, served ?? [], guardianKey);
+    if (fork !== null) {
+      return refuse(
+        "identity_fork",
+        `identity fork detected for motebit_id ${id}: ${fork}. This key is not the identity's current key — pair from a device that holds the current key`,
+      );
+    }
+    const relayCheck: PairingRelayCheck = !relayLoader
+      ? "not_checked"
+      : served === null
+        ? "unreachable"
+        : "no_conflict";
+    return { accepted: true, identityBinding: "sovereign", relayCheck };
   }
   if (guardianOnly) {
     return refuse(

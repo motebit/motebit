@@ -198,6 +198,7 @@ export {
   type PairingIdentityBindingResult,
   type PairingIdentityRefusalCode,
   type PairingSuccessionSource,
+  type PairingRelayCheck,
   identityVerifyOutcome,
   // The machine roster (spec/machine-roster-v1.md): the signers, the
   // entry ids, the one reduction, and the key chain a consumer reduces
