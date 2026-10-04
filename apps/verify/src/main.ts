@@ -37,7 +37,13 @@ const resultContainer = $("result-container");
 const emptyState = resultContainer.firstElementChild;
 
 const RELAY_URL = import.meta.env.VITE_RELAY_URL ?? "https://relay.motebit.com";
-const SOLANA_RPC = import.meta.env.VITE_SOLANA_RPC_URL;
+// Solana RPC for the anchor/revocation cross-checks: motebit's server-side
+// passthrough, which holds the provider key. A provider URL is never a browser
+// value (incident 2026-09-30); VITE_SOLANA_RPC_URL is a local-dev override only.
+const SOLANA_RPC =
+  import.meta.env.VITE_SOLANA_RPC_URL != null && import.meta.env.VITE_SOLANA_RPC_URL !== ""
+    ? import.meta.env.VITE_SOLANA_RPC_URL
+    : "https://api.motebit.com/v1/solana-rpc";
 
 type Source = "sample" | "tampered-sample" | "minted" | "link" | "pasted";
 const SOURCE_TEXT: Record<Source, string> = {

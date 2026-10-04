@@ -61,6 +61,9 @@ const MOTEBIT_OWNED_HOSTS: ReadonlySet<string> = new Set([
   "www.motebit.com",
   "relay.motebit.com",
   "motebit-embed.fly.dev",
+  // apps/verify, served by the operator's Vercel project receipt-computer; the
+  // proxy names it only as a CORS origin for /v1/solana-rpc (never contacted).
+  "receipt.computer",
 ]);
 
 /**

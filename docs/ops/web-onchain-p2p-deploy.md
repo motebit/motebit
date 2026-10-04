@@ -9,33 +9,63 @@ the browser needs a real Solana RPC, and the deployed bundle drifts behind `main
 
 1. **Browser RPC.** `api.mainnet-beta.solana.com` **403s browser origins** — it
    can neither read the balance nor broadcast the payment tx. The web surface
-   needs a CORS-capable provider. Without it the balance shows "—/Couldn't
-   refresh" (after the false-zero fix) and any onchain send errors.
+   calls motebit's server-side passthrough `https://api.motebit.com/v1/solana-rpc`
+   (`services/proxy`, `src/solana-rpc.ts`), which holds the provider key as the
+   server secret `SOLANA_RPC_UPSTREAM_URL`. Unset ⇒ the passthrough answers 503
+   and the balance shows "—/Couldn't refresh" (never a false $0).
 2. **Stale bundle.** A deployed web build behind `main` calls dead relay paths
    (e.g. `/agent/:id/budget` → 404) and lacks the current P2P client. Redeploy.
 
-## Vercel env (Project → Settings → Environment Variables)
+## Env
 
-| Var                      | Value                                                                                                                                            | Why                                                                                |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `VITE_SOLANA_RPC_URL`    | a browser-capable mainnet RPC, e.g. `https://mainnet.helius-rpc.com/?api-key=…` (Helius/Triton/QuickNode free tier — they allow browser origins) | balance read + P2P broadcast from the browser                                      |
-| `VITE_MOTEBIT_RELAY_URL` | `https://relay.motebit.com`                                                                                                                      | canonical relay env (replaces the deprecated `VITE_PROXY_URL`; remove the old one) |
+| Where                                                                | Var                            | Value                                                                                           |
+| -------------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------- |
+| proxy (Vercel, `services/proxy`)                                     | `SOLANA_RPC_UPSTREAM_URL`      | the provider mainnet URL **with its key** — a server secret, never `VITE_*`                     |
+| proxy (**required in production**)                                   | `KV_REST_API_URL` + token      | Vercel KV — the shared rate-limit store. Unset with `VERCEL_ENV=production` ⇒ 503 (fail closed) |
+| proxy (optional)                                                     | `SOLANA_RPC_GLOBAL_PER_MINUTE` | global upstream budget, forwarded requests/min across ALL clients (default 3000)                |
+| proxy (optional)                                                     | `SOLANA_RPC_ALLOWED_ORIGINS`   | extra https origins (comma list) beyond the defaults below                                      |
+| web (Vercel project `motebit-web`)                                   | `VITE_PROXY_URL`               | a motebit origin (`https://…motebit.com`) — deprecated alias of `VITE_MOTEBIT_RELAY_URL`        |
+| web (Vercel project `motebit-web`)                                   | `VITE_BROWSER_SANDBOX_URL`     | the `services/browser-sandbox` origin (`*.motebit.com` or `motebit-browser-sandbox.fly.dev`)    |
+| web (Vercel project `motebit-web`)                                   | `VITE_STRIPE_PUBLISHABLE_KEY`  | a Stripe **publishable** key (`pk_live_…`) — public by design                                   |
+| verify (Vercel project `receipt-computer`, https://receipt.computer) | —                              | sets **no** `VITE_*` var; defaults to the passthrough                                           |
 
+The proxy's default browser origins are `https://motebit.com`, `https://www.motebit.com`,
+`https://receipt.computer` (apps/verify) and the localhost dev ports.
+
+**The passthrough spends provider credit, so its limits are the drain bound.**
+`Origin` is spoofable off-browser, so the origin allowlist is not a spend
+control. Three limits apply, all in Vercel KV: per client (IPv4 address / IPv6
+/64, 120/min), per IPv6 /48 (600/min — one /48 is 65,536 /64s), and a GLOBAL
+upstream budget (`SOLANA_RPC_GLOBAL_PER_MINUTE`, default 3000 forwarded
+requests/min across every client). **KV is required in production:** with
+`VERCEL_ENV=production` and no `KV_REST_API_URL` the route answers 503 rather
+than fall back to a per-isolate memory limiter (N isolates = N budgets, no global
+cap). A KV error also fails closed (429). Size the global budget to the provider
+plan: budget × 60 × 24 × 30 is the monthly worst case.
+Scope `SOLANA_RPC_UPSTREAM_URL` to **Production only** on the `motebit-proxy`
+Vercel project: a Preview deploy without KV runs on per-isolate limits only (no
+global cap), so it must never hold the provider key.
+
+**The web + verify builds are deny-by-default on public env.** Vite inlines every
+`VITE_*` value into public JS — incident 2026-09-30: a Helius `?api-key=` shipped
+in `motebit.com/assets/main-*.js`, the credits were drained and the provider
+halted every key on the account. `apps/web` and `apps/verify` `vite.config.ts`
+run a guard plugin that judges the env Vite itself resolved (process env plus
+the app's own `.env*` files, whatever directory the build is run from) and
+refuses the build when it carries ANY var not named in `PUBLIC_BUILD_ENV` (`scripts/lib/client-bundle-secrets.ts`),
+or a named one whose value fails its validator: URL vars must be `https:` to a
+host in that var's allowlist (motebit.com / \*.motebit.com / the named Fly
+origin / receipt.computer for verify; `http:` only for localhost), with no
+userinfo, query, fragment or key-shaped path segment; the Stripe var must be
+`pk_live_`/`pk_test_`. So a provider URL — with its key in a query OR a path
+(Alchemy `/v2/<key>`, QuickNode `/<hex>/`, Triton `/<uuid>`) — cannot be built
+into a browser surface under any name. Adding a var to Vercel means adding it
+to `PUBLIC_BUILD_ENV` first (a reviewed edit with a validator and a why), or the
+next deploy fails loudly. Vercel's auto-exposed `VITE_VERCEL_*` system vars are
+dropped before Vite reads them (no source reads them). **Never set
+`VITE_SOLANA_RPC_URL` in a deployed project** — it is a local-dev override only.
+`check-no-secrets-in-client-bundles` (#170) also scans the built bundles.
 Redeploy after changing env (Vercel doesn't rebuild on env change alone).
-
-### RPC key security
-
-`VITE_*` vars ship in the client bundle, so the RPC key is publicly extractable.
-The provider is commodity: it never touches keys or funds (it only relays signed
-bytes and reads public chain data) and it is swappable behind `SolanaRpcAdapter`,
-so the only exposure is quota abuse. Two mitigations:
-
-- **Now:** in the Helius dashboard, restrict the key by allowed origin/domain
-  (`motebit.com`). Rotate if abused (free tier — low stakes).
-- **Later:** proxy RPC through our own relay (which already holds a server-side
-  `SOLANA_RPC_URL`) so no key ships in the browser. Display reads proxy cleanly;
-  the broadcast can move to a relay forward-signed-bytes endpoint (the relay
-  forwards an already-signed tx — still sovereign; the relay never holds the key).
 
 ## Deploy
 
