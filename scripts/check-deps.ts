@@ -588,8 +588,11 @@ function extractImports(
 
     const isTypeImport = singleLineTypeImport || inTypeImportBlock;
 
-    // Match: import ... from "@motebit/...", require("@motebit/..."), import("@motebit/...")
+    // Match: import ... from "@motebit/...", a bare side-effect
+    // `import "@motebit/..."` (no `from`, still loads the module),
+    // require("@motebit/..."), import("@motebit/...")
     const patterns = [
+      /^\s*import\s+['"](@motebit\/[^'"]+)['"]/g,
       /from\s+['"](@motebit\/[^'"]+)['"]/g,
       /from\s+['"](create-motebit)['"]/g,
       /require\(\s*['"](@motebit\/[^'"]+)['"]\s*\)/g,
