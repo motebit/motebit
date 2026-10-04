@@ -358,6 +358,8 @@ export type {
 // What a serving surface may offer another principal (#874): derived from
 // `ToolDefinition.localOnly`, never from a per-surface name list.
 export { isServedTool, servedToolNames } from "./serve-exposure.js";
+export { TaskClaimCoordinator, TASK_CLAIM_GRANT_TIMEOUT_MS } from "./task-claim.js";
+export type { TaskClaimCoordinatorOptions, TaskClaimEvent, TaskClaimFrame } from "./task-claim.js";
 // Sovereign pay-forward (§9.1) is off until a worker's admission mode is
 // discoverable (#887) — one gate, read by the runtime and the CLI.
 export {

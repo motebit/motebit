@@ -165,6 +165,14 @@ export function renderTaskRetrieval(
       "The worker's signed result is below. Report it to the user; nothing was paid to fetch it.",
     pending:
       "The task is still running. Retrieve again later — never re-delegate it; that pays a second time.",
+    undetermined:
+      "The relay handed this task to an executor that was then lost: the work MAY have run, may " +
+      "still be running, or never started — nobody knows yet. Do NOT re-delegate it; that is a " +
+      "second hire for work that may already be done. Retrieve again later (the executor's late " +
+      "signed result still resolves it) and tell the user the outcome is undetermined.",
+    expired:
+      "No executor ever took this task before it expired: it did NOT run and never will. Tell the " +
+      "user; a new delegation would be a separate hire.",
     failed:
       "The relay marked the task failed without a signed result. Tell the user; do not re-delegate on your own.",
     not_found:
@@ -206,6 +214,9 @@ export function renderTaskRetrieval(
     out.result = r.receipt.result ?? "";
   } else if (r.status === "pending") {
     out.task_status = r.taskStatus;
+  } else if (r.status === "undetermined" || r.status === "expired") {
+    out.reason = r.reason;
+    out.detail = r.detail;
   } else if ("message" in r) {
     out.detail = r.message;
   }
@@ -492,6 +503,40 @@ export class InteractiveDelegationManager {
                 `confirm whether money left it. Nothing was submitted. Do NOT delegate this task ` +
                 `again — if the payment landed, a second delegation pays twice. Tell the user to ` +
                 `check the wallet's history (${result.error.message}).`,
+            };
+          }
+          // One task, one body: the relay's own verdict on the hire. Typed
+          // truth, never flattened into a timeout or a delivery failure.
+          const verdict = result.error.relayVerdict;
+          const paidLine = settled
+            ? `You have ALREADY PAID ${(settled.paidMicro / 1_000_000).toFixed(4)} USDC (+ ` +
+              `${(settled.feeMicro / 1_000_000).toFixed(4)} fee) onchain, tx ${settled.txHash}. `
+            : "";
+          if (result.error.code === "undetermined" && verdict != null) {
+            return {
+              ok: false,
+              error:
+                `TASK_UNDETERMINED — the relay handed task ${verdict.taskId} to an executor that ` +
+                `was then lost (${verdict.reason}). The work MAY have run, may still be running, ` +
+                `or never started; the relay does not know and will not give it to anyone else. ` +
+                paidLine +
+                `Do NOT delegate this task again — that is a second hire for work that may ` +
+                `already be done. The executor's late signed result still resolves it: fetch it ` +
+                `later with retrieve_task_result (task_id ${verdict.taskId}; free, read-only). ` +
+                `Tell the user the outcome is undetermined, and let them decide.`,
+            };
+          }
+          if (result.error.code === "task_expired" && verdict != null) {
+            return {
+              ok: false,
+              error:
+                `TASK_EXPIRED — no executor ever took task ${verdict.taskId} before it expired ` +
+                `(${verdict.reason}): it did NOT run and never will. ` +
+                (settled
+                  ? paidLine +
+                    `Do NOT delegate again on your own — a new delegation pays a SECOND time. ` +
+                    `Tell the user the work was paid for and never ran, and let them decide.`
+                  : `Nothing ran. A new delegation would be a separate hire; tell the user.`),
             };
           }
           if (settled) {

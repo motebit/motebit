@@ -1951,14 +1951,15 @@ describe("#890 r8 the answer has ONE writer", () => {
             );
           if (!receiptWrite && !statusWrite && !settleWrite && !bracketWrite && !sqlWrite) return;
           // Allowed: the durable queue hydrating a stored row, and the socket
-          // claim's Pending ⇄ Claimed transition (never a terminal status).
+          // claim's Pending ⇄ Claimed transition (never a terminal status),
+          // which lives only in task-claim.ts (the claim and its lease).
           if (
             e.name === "task-queue.ts" &&
             /entry\.receipt = JSON\.parse\(row\.receipt\)/.test(code)
           )
             return;
           if (
-            e.name === "websocket.ts" &&
+            e.name === "task-claim.ts" &&
             /\.task\.status = AgentTaskStatus\.(Claimed|Pending);/.test(code)
           )
             return;

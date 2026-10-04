@@ -677,7 +677,7 @@ const WRITERS: readonly Writer[] = [
     count: 4,
     principal:
       LOOP +
-      ": stale-allocation release and settlement retry — each retires the allocation (`released`) or, with no single hold payer to refund, marks it `review_reason = 'unroutable_refund'` (a status/marker, never an identity column)",
+      ": stale-allocation release and settlement retry — each retires the allocation (`released`) or marks it for the operator, `review_reason` = `'unroutable_refund'` (no single hold payer to refund) or `'undetermined'` (its task is granted and unanswered — one task, one body; never refunded as stale) (a status/marker, never an identity column)",
   },
   {
     file: R + "index.ts",

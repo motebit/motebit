@@ -11,6 +11,7 @@ import {
   verifyAgentCommandEnvelope,
   servedToolNames,
   TurnPrincipal,
+  TaskClaimCoordinator,
 } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -457,6 +458,14 @@ export class UnbootedWebApp {
   private _serving = false;
   private _servingSyncUrl: string | null = null;
   private _activeTaskCount = 0;
+  /**
+   * One task, one body: the relay hands a task to every serving body of
+   * this identity and grants exactly one claim — run only on the grant.
+   * Frames go out on whichever socket is current (token refresh swaps it).
+   */
+  private readonly _taskClaims = new TaskClaimCoordinator({
+    send: (frame) => this._wsAdapter?.sendRaw(frame),
+  });
   private _localEventStore: StorageAdapters["eventStore"] | null = null;
   /**
    * Held so `restoreIdentity` can pre-write the restored
@@ -3940,6 +3949,7 @@ export class UnbootedWebApp {
     // replacement adapter (#816).
     const onRelayFrame: CustomMessageCallback = (msg) => {
       for (const listener of [...delegationListeners]) listener(msg);
+      if (this._taskClaims.handleFrame(msg)) return;
       // Handle remote command requests (forwarded by relay)
       if (msg.type === "command_request" && this.runtime) {
         // Fail-closed remote ingress: only a signed-request-envelope@1.0
@@ -3996,10 +4006,10 @@ export class UnbootedWebApp {
       const task = msg.task as AgentTask;
       const runtime = this.runtime;
 
-      this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-      this._activeTaskCount++;
-
-      void (async () => {
+      // Claim the task; execute only on the relay's grant — another body of
+      // this identity may hold it.
+      this._taskClaims.offer(task.task_id, async () => {
+        this._activeTaskCount++;
         try {
           const privateKeyHex = await this.keyStore.loadPrivateKey();
           if (!privateKeyHex) return;
@@ -4041,7 +4051,7 @@ export class UnbootedWebApp {
         } finally {
           this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
         }
-      })();
+      });
     };
     this._wsUnsubOnCustom = wsAdapter.onCustomMessage(onRelayFrame);
 
@@ -4346,6 +4356,7 @@ export class UnbootedWebApp {
   }
 
   stopSync(): void {
+    this._taskClaims.dispose();
     this._serving = false;
     this.stopRegistrationRetry();
     if (this._wsTokenRefreshTimer != null) {

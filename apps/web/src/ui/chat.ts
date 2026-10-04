@@ -707,6 +707,11 @@ function failureCopy(code: string, retryAfterSeconds?: number): string {
       return "The review didn't complete in time — the agent may be busy or offline.";
     case "agent_failed":
       return "The agent failed mid-task. Logged for the operator.";
+    case "undetermined":
+      // One task, one body: the relay handed it to an executor that was lost.
+      return "The agent that took this task stopped answering — it may have run. Not retrying; check back for its result.";
+    case "task_expired":
+      return "No agent took the task before it expired — it did not run.";
     case "malformed_receipt":
       return "Agent returned a malformed receipt. Logged for the operator.";
     default:

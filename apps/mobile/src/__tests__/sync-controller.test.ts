@@ -13,7 +13,11 @@ const hoisted = vi.hoisted(() => ({
 const selfTestSpy = hoisted.selfTestSpy;
 const executeCommandSpy = hoisted.executeCommandSpy;
 
-vi.mock("@motebit/runtime", () => ({
+vi.mock("@motebit/runtime", async () => ({
+  // The real claim protocol — the serving path routes every task frame through it.
+  TaskClaimCoordinator: (
+    await vi.importActual<typeof import("@motebit/runtime")>("@motebit/runtime")
+  ).TaskClaimCoordinator,
   executeCommand: hoisted.executeCommandSpy,
   cmdSelfTest: hoisted.selfTestSpy,
   RelayDelegationAdapter: vi.fn().mockImplementation(function () {
