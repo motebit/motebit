@@ -37,7 +37,7 @@ import {
   signExecutionReceipt,
   hash as sha256,
 } from "@motebit/encryption";
-import { verify, governanceToPolicyConfig } from "@motebit/identity-file";
+import { verify, identityVerifyOutcome, governanceToPolicyConfig } from "@motebit/identity-file";
 import { McpServerAdapter, assertOwnerPrincipal } from "@motebit/mcp-server";
 import { MemoryClass } from "@motebit/policy";
 import type {
@@ -124,9 +124,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
   // Verify signature
   const verifyResult = await verify(identityContent, { expectedType: "identity" });
-  if (verifyResult.type !== "identity" || !verifyResult.valid || !verifyResult.identity) {
-    console.error(`Error: invalid identity file signature.`);
-    const msg = verifyResult.errors?.[0]?.message;
+  const verifyOutcome = identityVerifyOutcome(verifyResult);
+  if (verifyResult.type !== "identity" || !verifyOutcome.valid || !verifyResult.identity) {
+    console.error(`Error: identity file is not intact (signature or succession chain).`);
+    const msg = verifyOutcome.error;
     if (msg) console.error(`  ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
@@ -1032,9 +1033,10 @@ export async function handleServe(config: CliConfig): Promise<void> {
     }
 
     const verifyResult = await verify(identityContent, { expectedType: "identity" });
-    if (verifyResult.type !== "identity" || !verifyResult.valid || !verifyResult.identity) {
-      console.error(`Error: invalid identity file signature.`);
-      const msg = verifyResult.errors?.[0]?.message;
+    const verifyOutcome = identityVerifyOutcome(verifyResult);
+    if (verifyResult.type !== "identity" || !verifyOutcome.valid || !verifyResult.identity) {
+      console.error(`Error: identity file is not intact (signature or succession chain).`);
+      const msg = verifyOutcome.error;
       if (msg) console.error(`  ${sanitizeRelayText(msg)}`);
       process.exit(1);
     }

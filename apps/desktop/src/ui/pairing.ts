@@ -201,22 +201,32 @@ export function initPairing(ctx: DesktopContext): PairingAPI {
                 clearInterval(pairingPollTimer);
                 pairingPollTimer = null;
               }
-              const walletWarning = await ctx.app.completePairing(
-                invoke,
-                {
-                  motebitId: status.motebit_id,
-                  deviceId: status.device_id,
-                },
-                status.key_transfer
-                  ? {
-                      keyTransfer: status.key_transfer,
-                      ephemeralPrivateKey,
-                      pairingCode: code.toUpperCase(),
-                      syncUrl,
-                      pairingId,
-                    }
-                  : undefined,
-              );
+              // A refusal (the relay's motebit_id does not bind to the
+              // transferred key) is terminal and shown, never a poll retry.
+              let walletWarning: string | undefined;
+              try {
+                walletWarning = await ctx.app.completePairing(
+                  invoke,
+                  {
+                    motebitId: status.motebit_id,
+                    deviceId: status.device_id,
+                  },
+                  status.key_transfer
+                    ? {
+                        keyTransfer: status.key_transfer,
+                        ephemeralPrivateKey,
+                        pairingCode: code.toUpperCase(),
+                        syncUrl,
+                        pairingId,
+                      }
+                    : undefined,
+                );
+              } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                pairingStatus.textContent = `Error: ${msg}`;
+                pairingInputRow.style.display = "block";
+                return;
+              }
               void ctx.app.startSync(invoke, syncUrl).catch(() => {});
               close();
               if (walletWarning) {

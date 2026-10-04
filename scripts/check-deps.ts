@@ -395,6 +395,8 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "deriveSovereignMotebitId",
     "verifySovereignBinding",
     "verifyMigratingKeyBinding",
+    "verifyPairingIdentityBinding",
+    "identityVerifyOutcome",
     "signGuardianRevocation",
     "verifyGuardianRevocation",
     "signCollaborativeReceipt",
