@@ -29,6 +29,11 @@ import { InvokeCapabilityManager } from "../invoke-capability.js";
 import type { StreamingProvider, AgenticChunk } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ExecutionReceipt } from "@motebit/sdk";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
+import {
+  SIGNING_PINNED_HEX,
+  isRelayMetadataUrl,
+  relayMetadataResponse,
+} from "./helpers/signed-relay-metadata.js";
 
 // Intercept runTurnStreaming to assert the deterministic path bypasses it.
 const mockRunTurnStreaming = vi.fn();
@@ -124,6 +129,7 @@ describe("invokeCapability — surface determinism", () => {
     mockFetchHandler = async () => new Response("not found", { status: 404 });
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (isRelayMetadataUrl(url)) return relayMetadataResponse();
       if (url.includes("mock-relay.test")) return mockFetchHandler(url, init);
       return originalFetch(input, init);
     }) as typeof fetch;
@@ -501,6 +507,7 @@ describe("invokeCapability — P2P path selection", () => {
     routed = async () => new Response("not found", { status: 404 });
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (isRelayMetadataUrl(url)) return relayMetadataResponse();
       if (url.includes("mock-relay.test")) return routed(url, init);
       return originalFetch(input, init);
     }) as typeof fetch;
@@ -509,7 +516,7 @@ describe("invokeCapability — P2P path selection", () => {
     globalThis.fetch = originalFetch;
   });
 
-  const PINNED_HEX = "07".repeat(32);
+  const PINNED_HEX = SIGNING_PINNED_HEX;
   const jsonResp = (status: number, body: unknown): Response =>
     new Response(JSON.stringify(body), {
       status,

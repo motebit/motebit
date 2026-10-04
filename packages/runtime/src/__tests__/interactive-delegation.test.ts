@@ -12,6 +12,11 @@ import { TrustMode, BatteryMode, AgentTaskStatus, AgentTrustLevel } from "@moteb
 import type { AgentServiceListing, P2pPaymentProof, ToolRegistry } from "@motebit/sdk";
 import { generateKeypair } from "@motebit/encryption";
 import type { ServiceListingStoreAdapter } from "../index";
+import {
+  SIGNING_PINNED_HEX,
+  isRelayMetadataUrl,
+  relayMetadataResponse,
+} from "./helpers/signed-relay-metadata.js";
 
 // === Mock ai-core: intercept runTurnStreaming to simulate AI calling delegate_to_agent ===
 
@@ -155,6 +160,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     mockFetchHandler = async () => new Response("not found", { status: 404 });
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (isRelayMetadataUrl(url)) return relayMetadataResponse();
       // Only intercept relay calls
       if (url.includes("mock-relay.test")) {
         return mockFetchHandler(url, init);
@@ -413,7 +419,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     runtime.enableInteractiveDelegation({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
-      relayPublicKey: "07".repeat(32),
+      relayPublicKey: SIGNING_PINNED_HEX,
       buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
     });
@@ -492,7 +498,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     runtime.enableInteractiveDelegation({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
-      relayPublicKey: "07".repeat(32),
+      relayPublicKey: SIGNING_PINNED_HEX,
       buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
     });

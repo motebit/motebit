@@ -29,6 +29,7 @@ export type {
   SovereignSendConfirmation,
   SovereignPaidEntry,
   SovereignPaidLedger,
+  SovereignWorkerSelector,
 } from "./sovereign-delegation-adapter.js";
 export { reflectOnPlan, parseReflectionResponse } from "./reflect.js";
 export {
