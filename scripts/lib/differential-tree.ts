@@ -68,13 +68,29 @@ import {
 } from "node:fs";
 import { cpus } from "node:os";
 import { dirname, join } from "node:path";
-import { fixtureGitEnv } from "./fixture-git-env.js";
 
 // ── Environment and git: scrubbed, explicit, read-only ────────────────
-//
-// Every child process this module or the script starts (git, builds, tar,
-// vitest) gets `fixtureGitEnv()` (scripts/lib/fixture-git-env.ts): no GIT_*
-// a hook exported can aim it at another repository.
+
+/**
+ * `base` with EVERY `GIT_*` variable removed, then `extra` applied. A git
+ * hook exports GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE (and, in a linked
+ * worktree, a GIT_DIR that points into the shared repository); any child that
+ * inherits them — git itself, or a build script that runs git — acts on THAT
+ * repository whatever its `cwd`. Every child process this module or the
+ * script starts gets this environment.
+ *
+ * The canonical fixture-git scrub for `scripts/`: `check-fixture-git-env`
+ * fails on a git spawn aimed away from the repo root that does not pass it
+ * (shell twin: `fixture_git_env_scrub` in ./fixture-git-env.sh).
+ */
+export function cleanEnv(
+  base: NodeJS.ProcessEnv = process.env,
+  extra: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(base)) if (!k.startsWith("GIT_")) env[k] = v;
+  return { ...env, ...extra };
+}
 
 /** The only git subcommands this module and the script may run. None writes to a repository. */
 export const READ_ONLY_GIT = new Set(["rev-parse", "archive", "ls-files"]);
@@ -88,7 +104,7 @@ export function readGit(cwd: string, args: string[]): string {
   }
   return execFileSync("git", args, {
     cwd,
-    env: fixtureGitEnv(),
+    env: cleanEnv(),
     encoding: "utf-8",
     maxBuffer: 256 * 1024 * 1024,
   });
@@ -510,7 +526,7 @@ export function treeEnv(
   extraPath: string[],
   extra: Record<string, string> = {},
 ): NodeJS.ProcessEnv {
-  return fixtureGitEnv(process.env, {
+  return cleanEnv(process.env, {
     PATH: [...extraPath, process.env.PATH ?? ""].join(":"),
     NODE_PATH: join(treeDir, "node_modules", ".pnpm", "node_modules"),
     ...extra,
@@ -753,7 +769,7 @@ export async function buildTrees(opts: BuildTreesOptions): Promise<Trees> {
   // 1. The whole base ref.
   const tar = join(workDir, "base.tar");
   readGit(baseRepo, ["archive", `--output=${tar}`, base]);
-  execFileSync("tar", ["-xf", tar, "-C", baseTree], { env: fixtureGitEnv() });
+  execFileSync("tar", ["-xf", tar, "-C", baseTree], { env: cleanEnv() });
   rmSync(tar, { force: true });
 
   const roots = workspaceRoots(root);

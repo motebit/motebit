@@ -342,6 +342,46 @@ describe("MobileApp.bootstrap", () => {
 });
 
 // ---------------------------------------------------------------------------
+// #962 C2 — MobileApp's syncConfigured, read from the runtime initAI builds
+// (the runtime's own answer, as compaction reads it): the persisted relay URL,
+// read at compaction time; a read that fails counts as configured.
+// ---------------------------------------------------------------------------
+
+describe("#962 — MobileApp's syncConfigured", () => {
+  let app: MobileApp;
+
+  beforeEach(() => {
+    secureStoreData.clear();
+    asyncStoreData.clear();
+    app = new MobileApp();
+  });
+
+  afterEach(() => {
+    app.stop();
+  });
+
+  it("no relay URL persisted: not configured", async () => {
+    await app.initAI({ provider: "local-server" });
+    expect(await app.getRuntime()!.isSyncConfigured()).toBe(false);
+  });
+
+  it("a persisted relay URL, set after construction, is read at compaction time: configured", async () => {
+    await app.initAI({ provider: "local-server" });
+    await app.setSyncUrl("https://relay.zz962m.test");
+    expect(await app.getRuntime()!.isSyncConfigured()).toBe(true);
+    await app.setSyncUrl("");
+    expect(await app.getRuntime()!.isSyncConfigured()).toBe(false);
+  });
+
+  it("a relay URL that cannot be read counts as configured (fail closed)", async () => {
+    await app.initAI({ provider: "local-server" });
+    const AsyncStorage = (await import("@react-native-async-storage/async-storage")).default;
+    vi.mocked(AsyncStorage.getItem).mockRejectedValueOnce(new Error("storage unavailable"));
+    expect(await app.getRuntime()!.isSyncConfigured()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // MobileApp.initAI
 // ---------------------------------------------------------------------------
 
@@ -674,6 +714,55 @@ describe("MobileApp.identity", () => {
     const parsed = JSON.parse(exported);
     expect(parsed.motebit_id).toBe("mobile-local");
     expect(parsed.exported_at).toBeTruthy();
+  });
+  it("verifyMotebitMd: a valid signature over an invalid succession chain is not intact", async () => {
+    // Pre-generated (this suite stubs @motebit/encryption, so it cannot sign):
+    // a motebit.md validly signed by its current key, whose one succession link
+    // carries forged (all-zero) signatures — the chain never reaches that key.
+    const forged = [
+      "---",
+      'spec: "motebit/identity@1.0"',
+      'motebit_id: "019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb"',
+      'created_at: "2026-01-15T00:00:00.000Z"',
+      'owner_id: "owner"',
+      "identity:",
+      '  algorithm: "Ed25519"',
+      '  public_key: "fe6f3a57e46193242ed0c260cc8d8728a7f29dcb82b3f90e07cdeaea298f99a0"',
+      "governance:",
+      '  trust_mode: "guarded"',
+      '  max_risk_auto: "R1_DRAFT"',
+      '  require_approval_above: "R1_DRAFT"',
+      '  deny_above: "R4_MONEY"',
+      "  operator_mode: false",
+      "privacy:",
+      '  default_sensitivity: "personal"',
+      "  retention_days:",
+      "    none: 365",
+      "    personal: 90",
+      "    medical: 30",
+      "    financial: 30",
+      "    secret: 7",
+      "  fail_closed: true",
+      "memory:",
+      "  half_life_days: 7",
+      "  confidence_threshold: 0.3",
+      "  per_turn_limit: 5",
+      "devices: []",
+      "succession:",
+      '  - old_public_key: "994ea5575436a6d23700b5e768c825a41a8fd542fe8fbefd23de103e63d4bcf5"',
+      '    new_public_key: "fe6f3a57e46193242ed0c260cc8d8728a7f29dcb82b3f90e07cdeaea298f99a0"',
+      "    timestamp: 1768435200000",
+      '    old_key_signature: "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"',
+      '    new_key_signature: "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"',
+      '    suite: "motebit-jcs-ed25519-hex-v1"',
+      "---",
+      "<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:28dc8a5c6dd17ba441835c70a11a55bf12f9743747cf4bef6b14268c5cf8b17420cd74196d317c4366bb42355d2324fea88686a20a63d166bf4b44aa3dee600e -->",
+      "",
+    ].join("\n");
+    const app = new MobileApp();
+    const r = await app.verifyMotebitMd(forged);
+    expect(r.valid).toBe(false);
+    expect(r.error).toMatch(/succession/i);
   });
 });
 

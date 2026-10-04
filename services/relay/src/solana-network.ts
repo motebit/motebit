@@ -46,6 +46,12 @@ export interface CreateRelaySolanaNetworkOptions {
   timeoutMs?: number;
   /** Genesis reader seam. Default: `getGenesisHash` on `rpcUrl`. */
   readGenesisHash?: SolanaGenesisHashReader;
+  /**
+   * The relay's shutdown. A read still pending when it aborts (the warm-up
+   * `close()` stopped waiting for) settles silently: a relay that has shut
+   * down logs no network transition. The read itself is not cancellable.
+   */
+  shutdownSignal?: AbortSignal;
 }
 
 /** Build the relay's shared resolver. Reads nothing; logs every state change. */
@@ -61,7 +67,10 @@ export function createRelaySolanaNetwork(
     {
       ...(declared !== undefined ? { expected: declared } : {}),
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-      onChange: (state) => logTransition(state, declared),
+      onChange: (state) => {
+        if (options.shutdownSignal?.aborted === true) return;
+        logTransition(state, declared);
+      },
     },
   );
 }

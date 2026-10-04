@@ -103,6 +103,8 @@ export interface CliConfig {
   prune?: boolean;
   /** `motebit init` — overwrite an existing motebit.yaml. */
   force?: boolean;
+  /** `motebit sync retire` / `clear-intent` — act without the confirmation prompt. */
+  yes?: boolean;
   /** `motebit logs` — follow mode, polls for new outcomes. */
   tail?: boolean;
   /** `motebit logs` — max number of outcomes to show. */
@@ -178,6 +180,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "dry-run": { type: "boolean", default: false },
       prune: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      yes: { type: "boolean", default: false },
       tail: { type: "boolean", default: false },
       limit: { type: "string" },
       waive: { type: "boolean", default: false },
@@ -321,6 +324,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     dryRun: values["dry-run"],
     prune: values.prune,
     force: values.force,
+    yes: values.yes,
     tail: values.tail,
     limit: values.limit != null ? parseInt(values.limit, 10) : undefined,
     eventType: values["event-type"],
@@ -475,6 +479,10 @@ Commands:
   machines [--json]         The machines this motebit runs unattended work on (reduced here, never by the relay)
   machines retire <device_id>  Sign a retirement for a machine's line (undo: machines enroll)
   machines enroll <device_id> [--force]  Rejoin a retired line, or enrol an id explicitly
+  status                    Identity, relay and compaction floor; a relay pinning it is named
+  sync status [--json]      Each relay stream behind the compaction floor: acked cursor, last ack, events held back
+  sync retire <relay-url> [--force] [--yes]  Stop a relay you no longer use from holding compaction back
+  sync clear-intent [--force] [--yes]  Clear the record that this identity syncs (confirm first)
   migrate-keyring [--force] Re-encrypt a plaintext ~/.motebit/dev-keyring.json
                             under a passphrase (recovery path when
                             cli_encrypted_key was lost from config but

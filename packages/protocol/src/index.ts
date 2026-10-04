@@ -2198,6 +2198,22 @@ export interface KeyTransferPayload {
   tag: string;
   /** Device A's Ed25519 identity public key for post-decryption verification (64-char hex). */
   identity_pubkey_check: string;
+  /**
+   * Optional (additive; absent on payloads from earlier clients, which carry
+   * no chain). Device A's own key-succession records — a JSON array of
+   * `KeySuccessionRecord` — AES-256-GCM-encrypted under the same derived
+   * transfer key as the seed, with its own nonce and tag (hex). Lets Device B
+   * bind a rotated self-certifying `motebit_id` to `identity_pubkey_check`
+   * when the relay has no chain (a rotation made with no relay configured).
+   * The records are self-verifying: Device B verifies every link, so a
+   * missing, undecryptable or forged chain only refuses, never accepts. The
+   * three fields are present together or not at all.
+   */
+  encrypted_succession?: string;
+  /** AES-256-GCM nonce for `encrypted_succession`, 12 bytes (24-char hex). */
+  succession_nonce?: string;
+  /** AES-256-GCM auth tag for `encrypted_succession`, 16 bytes (32-char hex). */
+  succession_tag?: string;
 }
 
 /**
@@ -2822,8 +2838,8 @@ export interface SovereignRail extends SettlementRail {
   /**
    * Settlement asset this rail clears in. Closed union — see
    * `SettlementAsset` in `./settlement-asset.ts`. Sub-phase A: USDC
-   * only at land; second-asset promotion lifts the registry to the
-   * 8th registered registry per `registry-pattern-canonical.md`.
+   * only at land; second-asset promotion lifts the registry to a
+   * registered registry per `registry-pattern-canonical.md`.
    */
   readonly asset: SettlementAsset;
   /** Agent's own address on this chain. Equals the motebit identity public key for Ed25519-native chains. */
@@ -4022,7 +4038,7 @@ export { ALL_ACCRUAL_KINDS, isAccrualKind, ACCRUAL_KIND_MARKERS } from "./accrua
 // ── Settlement Asset (protocol-level) ───────────────────────────
 // The closed vocabulary of stablecoin assets the protocol clears
 // settlement in. Sub-phase A: closed union with bespoke coverage;
-// promotes to the 8th registered registry per
+// promotes to a registered registry per
 // `docs/doctrine/registry-pattern-canonical.md` when a second asset
 // (PYUSD, USDP, etc.) arrives as a real consumer (sub-phase B).
 

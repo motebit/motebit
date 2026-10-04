@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The merge queue (docs/ops/merge-queue.md). Every required check (check,
+  # format, e2e, sibling-audit, changeset) must REPORT on this event or the
+  # queue waits forever — and must run for real: the queue exists to test the
+  # COMBINED commit (main + the queued PRs), which no PR run ever saw.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -241,15 +247,26 @@ jobs:
         run: |
           scripts=false
           relay=false
+          # The diff base: the PR's base branch, or — in the merge queue — the
+          # group's parent commit (main, or the queue entry ahead of it), so
+          # the group's own changes decide, exactly as the PR's did.
+          base=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+            base="origin/${{ github.base_ref }}"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            base="${{ github.event.merge_group.base_sha }}"
+          fi
+          if [ -n "$base" ]; then
+            changed=$(git diff --name-only "$base...HEAD")
             # Probes read repo data outside scripts/ (coverage-graduation.json
             # is the live example: #589 moved a date there, the probe keyed on
             # that literal went vacuous, and gate-effectiveness never ran on
             # the PR because scripts/ was untouched — main went red on push).
             # A change to a gate INPUT must trigger the same proof as a change
             # to the gate.
-            if echo "$changed" | grep -qE '^scripts/|^coverage-graduation\.json$'; then
+            # examples/interop/ is a gate input too: the APS vector and the pins
+            # in INTEROP.md are read by scripts/__tests__/interop-aps-vector.test.ts.
+            if echo "$changed" | grep -qE '^scripts/|^coverage-graduation\.json$|^examples/interop/'; then
               scripts=true
             fi
             # activation-effectiveness must fire on a relay refactor (the exact
@@ -261,21 +278,41 @@ jobs:
           fi
           echo "scripts=$scripts" >> "$GITHUB_OUTPUT"
           echo "relay=$relay" >> "$GITHUB_OUTPUT"
-          echo "scripts/ touched vs '${{ github.base_ref }}': $scripts; services/relay/ touched: $relay"
+          echo "scripts/ touched vs '$base': $scripts; services/relay/ touched: $relay"
 
-  gate-effectiveness:
+  gate-effectiveness-shard:
     # Probe every drift-defense gate with a known-violating fixture to prove
     # each one actually fires. Scoped to scripts/* changes + pushes to main
     # so the expense (every gate runs under a perturbation) isn't paid on
     # unrelated PRs — but any change to a gate or the gate list triggers it.
     # Trigger uses the `changes` job's real diff detection, not a text match
     # on PR metadata (#115).
+    #
+    # SHARDED (2026-10-02). One serial job outgrew its 10-min wall: setup ~0.5
+    # + install ~0.2 + build ~2.1 min, then ~181 probes — and GitHub CANCELLED
+    # the job rather than failing it (main 8427e59, #1017, #1008), so nothing
+    # proved the gates bite. Each shard runs on its own runner and checkout, so
+    # the probes (which rewrite real files) cannot cross-talk between shards.
+    # `--shard i/N` assigns probes by a stable hash of the gate name; the
+    # partition (union = every probe, disjoint) is re-proven by every shard and
+    # by the `gate-effectiveness` job below from the uploaded manifests. Each
+    # shard builds for itself: cheaper in wall-clock than a build job + dist
+    # artifact hand-off, and the probes see exactly what `pnpm build` makes.
+    # Budget: 15 min; a shard measured ~5 min (setup+install+build ~3 +
+    # probes ~1.5) — under 60%. check-gates-effective prints a ::warning:: when
+    # a shard's probe run passes 75% of SHARD_PROBE_BUDGET_SECONDS (6 min).
+    # Adding a shard = one matrix entry here + the pinned strategy in
+    # scripts/check-prepush-subset.ts (which proves the list is 1/N..N/N).
     needs: changes
     if: |
       github.event_name == 'push' ||
       needs.changes.outputs.scripts == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/4", "2/4", "3/4", "4/4"]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -298,16 +335,120 @@ jobs:
         # the wrong reason.
         run: pnpm build
 
-      - name: Prove every gate in GATES actually fires
-        run: pnpm check-gates-effective
+      - name: Prove every gate in this shard actually fires
+        run: pnpm check-gates-effective --shard ${{ matrix.shard }} --manifest /tmp/gate-shard.json
+
+      - name: Upload the shard manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gate-shard-${{ strategy.job-index }}
+          path: /tmp/gate-shard.json
+          if-no-files-found: error
+          retention-days: 1
+
+  gate-self-tests:
+    # The gate-script unit tests (fixture round-trips that assert each gate
+    # both bites on violations AND stays silent on correct code) are not a
+    # workspace package, so `turbo run test` skips them. Run them here, in a
+    # scripts/-scoped job beside the probe shards — without this they never
+    # execute in CI, and a check that never runs can't protect you.
+    # Its own job (it ran after the probes in one 10-min job, and was never
+    # reached once that job was cancelled). Measured 2026-10-02: ~4.8 min on
+    # 4 cores, the wall set by scripts/__tests__/tamper-runner.causation.test.ts
+    # (~4.4 min); with setup + install + build (~3 min) ~8 min = 40% of 20.
+    needs: changes
+    if: |
+      github.event_name == 'push' ||
+      needs.changes.outputs.scripts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
 
       - name: Run gate self-tests (scripts/__tests__)
-        # The gate-script unit tests (fixture round-trips that assert each gate
-        # both bites on violations AND stays silent on correct code) are not a
-        # workspace package, so `turbo run test` skips them. Run them here, in
-        # the same scripts/-scoped job — without this they never execute in CI,
-        # and a check that never runs can't protect you.
         run: pnpm test:gates
+
+  gate-effectiveness:
+    # The verdict of the gate proof, under the job name it always had. A
+    # cancelled, skipped or failed shard (or self-test job) must never read as
+    # success: `if: always()` makes this job run whatever they concluded, and
+    # it passes only when (a) the proof was not required (a PR that touches no
+    # gate input, with `changes` itself green) or (b) every shard and the
+    # self-tests SUCCEEDED and the shard manifests prove that all probes ran,
+    # each exactly once (`check-gates-effective --verify-shards`).
+    needs: [changes, gate-effectiveness-shard, gate-self-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - id: decide
+        name: Fail closed unless every shard and the self-tests completed
+        env:
+          EVENT: ${{ github.event_name }}
+          SCRIPTS: ${{ needs.changes.outputs.scripts }}
+          CHANGES: ${{ needs.changes.result }}
+          SHARDS: ${{ needs.gate-effectiveness-shard.result }}
+          SELF_TESTS: ${{ needs.gate-self-tests.result }}
+        run: |
+          echo "changes=$CHANGES shards=$SHARDS self-tests=$SELF_TESTS (event=$EVENT scripts=$SCRIPTS)"
+          if [ "$CHANGES" != "success" ]; then
+            echo "::error::the changes job concluded '$CHANGES' — whether the gate proof was required is unknown, so it is not proven"
+            exit 1
+          fi
+          if [ "$EVENT" != "push" ] && [ "$SCRIPTS" != "true" ]; then
+            if [ "$SHARDS" = "skipped" ] && [ "$SELF_TESTS" = "skipped" ]; then
+              echo "No gate input changed on this PR: the gate proof is not required."
+              echo "required=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if [ "$SHARDS" != "success" ] || [ "$SELF_TESTS" != "success" ]; then
+            echo "::error::gate-effectiveness shards '$SHARDS', self-tests '$SELF_TESTS' — a cancelled, skipped or failed proof is not a proof"
+            exit 1
+          fi
+          echo "required=true" >> "$GITHUB_OUTPUT"
+
+      - if: steps.decide.outputs.required == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - if: steps.decide.outputs.required == 'true'
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - if: steps.decide.outputs.required == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - if: steps.decide.outputs.required == 'true'
+        name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - if: steps.decide.outputs.required == 'true'
+        name: Download the shard manifests
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          pattern: gate-shard-*
+          path: /tmp/gate-shards
+
+      - if: steps.decide.outputs.required == 'true'
+        name: Prove the shards ran every probe exactly once
+        run: pnpm check-gates-effective --verify-shards /tmp/gate-shards
 
   activation-effectiveness:
     # Prove every booted-*-activation suite still DISCRIMINATES: reintroduce a
@@ -350,7 +491,9 @@ jobs:
         run: pnpm check-activation-effective
 
   sibling-audit:
-    if: github.event_name == 'pull_request'
+    # A required check: runs on the PR and again in the merge queue, where the
+    # diff base is the group's parent commit (main, or the entry ahead of it).
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -370,7 +513,11 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Sibling boundary audit
-        run: git diff --name-only origin/main...HEAD | npx tsx scripts/check-sibling-boundaries.ts
+        env:
+          DIFF_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}
+        run: |
+          set -o pipefail
+          git diff --name-only "$DIFF_BASE...HEAD" | npx tsx scripts/check-sibling-boundaries.ts
 
   python-conformance:
     # Smoke-test that the Python reference implementation of
@@ -595,7 +742,9 @@ jobs:
           retention-days: 7
 
   changeset:
-    if: github.event_name == 'pull_request'
+    # A required check: runs on the PR and again in the merge queue (diff base
+    # = the group's parent commit), never skipped there.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -618,4 +767,6 @@ jobs:
         # Fails (exit 1) only when a non-private package's `src/` changed without
         # a changeset — docs/test/service/CI-only PRs pass. Derives the published
         # set from package.json (no hardcoded list). See the script header.
+        env:
+          CHANGESET_BASE_REF: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}
         run: npx tsx scripts/check-changeset-required.ts

@@ -481,6 +481,14 @@ export class SqliteEventStore implements EventStoreAdapter {
     return row?.seq ?? null;
   }
 
+  /** Cursor keys starting with `prefix` (#962: compaction reads every relay stream's push cursor). */
+  async listSyncSeqCursorKeys(prefix: string): Promise<string[]> {
+    const rows = this.db
+      .prepare("SELECT cursor_key FROM sync_seq_cursors WHERE substr(cursor_key, 1, length(?)) = ?")
+      .all(prefix, prefix) as Array<{ cursor_key: string }>;
+    return rows.map((r) => r.cursor_key);
+  }
+
   /** Record the pull cursor for `key`; called only after the pulled events were appended. */
   async setSyncSeqCursor(key: string, seq: number): Promise<void> {
     this.db

@@ -4,18 +4,54 @@
 # Skip on tag pushes (changesets pushes 4 tags in parallel → lock conflicts)
 if git symbolic-ref -q HEAD >/dev/null 2>&1; then
 
+  # --- No inherited GIT_* past this line ------------------------------------
+  # In a LINKED worktree git exports GIT_DIR=<repo>/.git/worktrees/<name>
+  # (plus GIT_PREFIX, GIT_EXEC_PATH, GIT_EDITOR) into this hook. Every phase
+  # below inherits the environment, and a fixture `git` in `pnpm test:gates`
+  # acts on GIT_DIR whatever its cwd: 2026-09-27 (#835) and 2026-10-02 it set
+  # core.bare = true in the shared .git/config and committed `fixture` /
+  # `base` onto the pushing branch. So every GIT_* is unset first; this
+  # hook's own git finds the repository from cwd (the worktree root), as it
+  # does in a main checkout, where git exports no GIT_DIR at all. Pinned by
+  # check-prepush-subset; proven by pre-push-hook.test.ts ("LINKED
+  # worktree") and scripts/__tests__/git-env-isolation.harness.ts --hook.
+  unset $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p') # git-env-scrub
+
+  # --- What this hook is (and is not) --------------------------------------
+  # A FAST gate by SCOPE, not the authority. CI (`.github/workflows/ci.yml`,
+  # plus the merge queue) is the authority and runs everything unfiltered;
+  # this hook only catches the cheap, common breakage of THIS push before a
+  # 30-minute CI round-trip. Target: ≤3 min for a single-package change.
+  #
+  # The rule is pre-push ⊆ CI: every phase below has a CI counterpart that
+  # runs at least as wide (same command, no narrower filter, on every push to
+  # main). `check-prepush-subset` enforces it — a phase added here with no CI
+  # counterpart fails `pnpm check`. The reverse is deliberately NOT true:
+  # CI-only today are dependents' tests, coverage thresholds, lint:pack,
+  # check-activation-effective, e2e and the conformance jobs.
+  #
+  # History (2026-09-30): until this change the hook ran typecheck + lint +
+  # test:coverage over every package the push could affect (`...[origin/
+  # main]`). That closed the 2026-06 coverage hole (three vitest-4 pushes
+  # shipped red on coverage), but a low-level change pulled in a ~70-package
+  # closure and ran for 30+ minutes at the concurrency=2 flake floor. Test-
+  # result caching was tried and PARKED (trustworthy only by leaving relay/
+  # runtime uncached; warm full run still 9.5 min). So the scope moved: tests
+  # (no coverage) run on the CHANGED packages only; dependents' tests and
+  # coverage thresholds are CI's. MOTEBIT_PREPUSH_FULL=1 restores the old
+  # gauntlet for a change you want to prove locally (see below).
+
   # --- Legibility ---------------------------------------------------------
-  # This gauntlet runs for minutes. Run silently, it is indistinguishable
-  # from a hung process — on 2026-07-25 an agent misread the silent run as a
-  # network stall and killed legitimate pushes mid-gauntlet, wasting ~30min.
-  # So every phase announces itself and reports its own wall-time, with a
-  # total at the end. Executable legibility (docs/doctrine/agentic-era-
-  # engineering.md) applied to the tooling itself. `run_phase` runs its
-  # command in an `if` (a tested context, so the `sh -e` errexit the husky
-  # wrapper sets is handled explicitly here): success prints ✓ + timing,
-  # failure prints ✗ + the code and aborts the push with that code — the same
-  # fail-closed behavior as before, now legible. Set MOTEBIT_PREPUSH_QUIET=1
-  # to mute the banners (timings still print on failure).
+  # Run silently, a multi-minute gauntlet is indistinguishable from a hung
+  # process — on 2026-07-25 an agent misread the silent run as a network
+  # stall and killed legitimate pushes mid-gauntlet, wasting ~30min. So every
+  # phase announces itself and reports its own wall-time, with a total at the
+  # end. Executable legibility (docs/doctrine/agentic-era-engineering.md)
+  # applied to the tooling itself. `run_phase` runs its command in an `if` (a
+  # tested context, so the `sh -e` errexit the husky wrapper sets is handled
+  # explicitly here): success prints ✓ + timing, failure prints ✗ + the code
+  # and aborts the push with that code. Set MOTEBIT_PREPUSH_QUIET=1 to mute
+  # the banners (timings still print on failure).
   _gauntlet_t0=$(date +%s)
   run_phase() {
     _label=$1
@@ -36,100 +72,228 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
       exit "$_rc"
     fi
   }
+  skip_phase() {
+    [ -z "$MOTEBIT_PREPUSH_QUIET" ] && printf '\n▷ pre-push: %s — SKIPPED (%s)\n' "$1" "$2" >&2
+    return 0
+  }
 
-  # Full build is required before drift defenses: check-api-surface shells out
-  # to api-extractor, which reads protocol/crypto/sdk .d.ts from dist/. Turbo
-  # caches aggressively, so the second push after a build is near-instant.
+  # --- The diff this push is scoped to -------------------------------------
+  # Every scoping decision below FAILS CLOSED: if the diff cannot be computed
+  # (origin/main absent, shallow clone without a merge base, …) the step runs
+  # at full width instead of being skipped. `__DIFF_ERR__` is the sentinel.
+  #
+  # `changed_files` = committed changes vs the merge base with origin/main,
+  # plus uncommitted edits and untracked files — the tree turbo's
+  # `[origin/main]` filter and prettier actually see.
+  #
+  # Path shape (2026-10-01): `core.quotePath=false` because git otherwise
+  # prints a non-ASCII path C-quoted ("packages/x/na\303\257ve.ts"), which
+  # matched no package dir and no prettier extension — that file's tests and
+  # formatting were silently skipped. `--no-renames` because a rename lists
+  # only its DESTINATION, so moving a file from package A to B tested B and
+  # never A (the package that lost it). A path git STILL quotes (a `"`, `\`,
+  # tab or newline in the name) cannot be scoped from this text at all, so it
+  # fails closed like an uncomputable diff.
+  changed_files() {
+    _cf=$({ git -c core.quotePath=false diff --no-renames --name-only origin/main...HEAD -- "$@" &&
+      git -c core.quotePath=false diff --no-renames --name-only HEAD -- "$@" &&
+      git -c core.quotePath=false ls-files --others --exclude-standard -- "$@"; } 2>/dev/null) || {
+      echo __DIFF_ERR__
+      return 0
+    }
+    if printf '%s\n' "$_cf" | grep -q '^"'; then
+      echo __DIFF_ERR__
+      return 0
+    fi
+    printf '%s\n' "$_cf" | sed '/^$/d' | sort -u
+  }
+  _scope_ok=1
+  git merge-base origin/main HEAD >/dev/null 2>&1 || _scope_ok=
+  _all_changed=$(changed_files)
+  [ "$_all_changed" = __DIFF_ERR__ ] && _scope_ok=
+  if [ -n "$_scope_ok" ]; then
+    _filter_affected='--filter=...[origin/main]'
+  else
+    # No merge base → no trustworthy package scope. Run over the whole graph.
+    printf '\n⚠ pre-push: cannot compute the diff vs origin/main — running every scoped step UNFILTERED (fail closed)\n' >&2
+    _filter_affected=
+  fi
+
+  # The workspace packages this push CHANGES, as `packages/foo`-style dirs,
+  # derived from the diff — NOT from turbo's `[origin/main]`. Turbo maps a
+  # change to any package in the ROOT package.json's workspace-dependency
+  # closure (runtime, crypto, protocol, sdk, policy, semiring, …) to "every
+  # package changed": 74 of 74 for a one-line packages/runtime edit
+  # (measured 2026-09-30), which would turn "tests of the changed packages"
+  # into the whole suite for most core edits. The workspace roots are read
+  # from pnpm-workspace.yaml, so a new root is seen without editing this.
+  # Unknown roots → `_pkg_scope_ok` stays empty → tests run unfiltered.
+  #
+  # Deny by default (2026-10-01 cold review, A3): pnpm-workspace.yaml must be
+  # ONLY `packages:`, `- root/*` entries, comments and blank lines. Any other
+  # line — a glob the sed below cannot map (`examples/*/*`, `!**/test/**`),
+  # another key, a flow list — means the package set is not what this hook
+  # thinks it is, so `_ws_unmapped` is non-empty and tests run unfiltered.
+  _pkg_scope_ok=
+  _changed_pkg_dirs=
+  _unscoped_paths=
+  _ws_roots=$(sed -E -n 's#^[[:space:]]*-[[:space:]]*["'\'']?([A-Za-z0-9_.-]+)/\*["'\'']?[[:space:]]*$#\1#p' \
+    pnpm-workspace.yaml 2>/dev/null | paste -sd'|' -)
+  _ws_unmapped=$(grep -vE '^[[:space:]]*(#.*)?$|^packages:[[:space:]]*$|^[[:space:]]*-[[:space:]]*["'\'']?[A-Za-z0-9_.-]+/\*["'\'']?[[:space:]]*$' \
+    pnpm-workspace.yaml 2>/dev/null || true)
+  if [ -n "$_scope_ok" ] && [ -n "$_ws_roots" ] && [ -z "$_ws_unmapped" ]; then
+    _pkg_scope_ok=1
+    _changed_pkg_dirs=$(printf '%s\n' "$_all_changed" | sed -E -n "s#^(($_ws_roots)/[^/]+)/.*#\\1#p" |
+      sort -u | while IFS= read -r _d; do if [ -f "$_d/package.json" ]; then printf '%s\n' "$_d"; fi; done)
+    # Deny by default (2026-10-01 cold review, A1): a changed path OUTSIDE
+    # every workspace package — spec/ conformance data a package test reads,
+    # vitest.shared.ts, the root package.json, pnpm-workspace.yaml, the
+    # lockfile, a turbo globalDependency, any other root file, a dir under a
+    # workspace root with no package.json (a deleted package) — can move ANY
+    # package's test verdict, so it widens the test phase to every package.
+    # The ONLY paths that stay scoped are the explicit allowlist below, each
+    # with a reason pinned by a test (pre-push-hook.test.ts, "scoped-path
+    # allowlist"): docs/**/*.md and .changeset/*.md — markdown no workspace
+    # package's build or test reads (prettier still checks them).
+    _unscoped_paths=$(printf '%s\n' "$_all_changed" | grep -vE '^(docs/.+\.md|\.changeset/[^/]+\.md)$' |
+      while IFS= read -r _p; do
+        _pd=$(printf '%s\n' "$_p" | sed -E -n "s#^(($_ws_roots)/[^/]+)/.*#\\1#p")
+        if [ -n "$_p" ] && { [ -z "$_pd" ] || [ ! -f "$_pd/package.json" ]; }; then printf '%s\n' "$_p"; fi
+      done)
+  fi
+
+  # Full build is required before the drift gates: check-api-surface shells
+  # out to api-extractor (protocol/crypto/sdk .d.ts from dist/) and
+  # check-dist-smoke boots the built CLI binaries. Build outputs ARE turbo-
+  # cached (unlike tests), so this rebuilds only the changed packages and
+  # their dependents.
   run_phase "build" pnpm build
 
-  # Hard gates — must match .github/workflows/ci.yml → jobs.check and
-  # jobs.gate-effectiveness. If this list diverges from CI's, the local loop
-  # stops catching what CI catches, which is the exact drift shape the gate
-  # system is designed to prevent.
-  # `pnpm audit` (v9.15) hits npm's legacy /security/audits endpoint, which
-  # npm intermittently 410/500/429-s as it pushes clients to the bulk advisory
-  # endpoint. The real fix is pnpm PR #10652 (switches to the quick endpoint
-  # with fallback) — merged 2026-02-19, only in v11.0.0-alpha, not backported.
-  # `--ignore-registry-errors` is the documented, intended workaround: audit
-  # still runs and reports findings, only the exit code tolerates registry-
-  # side errors.
-  #
-  # That slow endpoint also makes audit the SLOWEST phase (~127s, measured
-  # 2026-07-25 — more than gates + format combined) — yet its result changes
-  # only when DEPENDENCIES change. So run it locally only when this push
-  # touches pnpm-lock.yaml (the canonical dependency-change signal); otherwise
-  # CI's audit step (ci.yml, on every pull_request to main) is the backstop.
-  # Diff-scoping, NOT removal — a dependency-changing push still audits before
-  # it can ship a vuln. Fails SAFE: audits if the diff can't be computed. Same
-  # shape as the gate-effectiveness scoping below.
-  _deps_changed=$(git diff --name-only origin/main...HEAD -- pnpm-lock.yaml 2>/dev/null || echo __DIFF_ERR__)
+  # `pnpm audit` only when this push touches pnpm-lock.yaml — its result
+  # changes only when dependencies change, and the legacy audit endpoint makes
+  # it the slowest phase (~127s, 2026-07-25). The command is CI's exact one
+  # (ci.yml → check → Audit: prod deps, high) so a local block means a CI
+  # block. `--ignore-registry-errors`: pnpm 9.15 hits npm's flaky legacy
+  # /security/audits endpoint (fix is pnpm PR #10652, v11 only); audit still
+  # reports findings, only registry-side errors are tolerated.
+  _deps_changed=$(changed_files pnpm-lock.yaml)
   if [ -n "$_deps_changed" ]; then
-    run_phase "audit (pnpm-lock.yaml changed)" pnpm audit --audit-level=critical --ignore-registry-errors
+    run_phase "audit (pnpm-lock.yaml changed)" pnpm audit --prod --audit-level=high --ignore-registry-errors
   else
-    [ -z "$MOTEBIT_PREPUSH_QUIET" ] &&
-      printf '\n▷ pre-push: audit — SKIPPED (no pnpm-lock.yaml changes; CI runs it)\n' >&2
+    skip_phase "audit" "no pnpm-lock.yaml changes; CI runs it"
   fi
 
+  # Hard gates — the same `pnpm check` CI's `check` job runs. Whole-repo on
+  # purpose: most gates are cross-file invariants a diff cannot scope.
   run_phase "gates (pnpm check)" pnpm check
 
-  # The gates' own tests (scripts/__tests__). ~8s. Until 2026-09-24 only CI's
-  # gate-effectiveness job ran them, so a self-test broken by the calendar
-  # (#694: a literal fixture date expired at UTC midnight) was CI-only by
-  # construction and reached main red. Not diff-scoped like the probe below:
-  # the #694 class is not a scripts/ change, it is a day passing.
-  run_phase "gate self-tests (scripts/__tests__)" pnpm test:gates
-
-  # check-gates-effective PERTURBS every gate (re-runs each gate under an
-  # injected failure to prove it bites) — the most expensive step, and its
-  # result changes ONLY when GATE CODE changes. So run it locally only when
-  # this push touches scripts/ (the gate + probe + report surface); otherwise
-  # CI's dedicated `gate-effectiveness` job is the backstop. This is diff-
-  # scoping, NOT removal — a gate-editing push still proves effectiveness
-  # locally, before it can ship a vacuous gate. The detection fails SAFE: if
-  # the diff can't be computed (e.g. origin/main absent), it runs the check.
-  _scripts_changed=$(git diff --name-only origin/main...HEAD -- scripts/ 2>/dev/null || echo __DIFF_ERR__)
+  # The gates' own tests (scripts/__tests__) and check-gates-effective (which
+  # PERTURBS every gate — the most expensive gate step) change verdict only
+  # when gate code or a gate input changes. Same trigger set as CI's
+  # `changes` job (scripts/, coverage-graduation.json or examples/interop/); CI's
+  # `gate-effectiveness` job runs both on every push to main regardless.
+  #
+  # test:gates was unconditional (2026-09-24) because of #694: a literal
+  # fixture date expired at UTC midnight — not a scripts/ change, a day
+  # passing — so diff-scoping makes that class CI-only. It was kept only
+  # while cheap (<15s); measured 2026-09-30 at 16–17s on a 4-vCPU box, so it
+  # is scoped with the rest. The #694 class is now caught by CI's push-to-main
+  # run (and by any PR touching scripts/), not by an unrelated local push.
+  _scripts_changed=$(changed_files scripts/ coverage-graduation.json examples/interop/)
   if [ -n "$_scripts_changed" ]; then
+    run_phase "gate self-tests (scripts/ changed)" pnpm test:gates
     run_phase "gate-effectiveness (scripts/ changed)" pnpm check-gates-effective
   else
-    [ -z "$MOTEBIT_PREPUSH_QUIET" ] &&
-      printf '\n▷ pre-push: gate-effectiveness — SKIPPED (no scripts/ changes; CI runs it)\n' >&2
+    skip_phase "gate self-tests + gate-effectiveness" "no scripts/ changes; CI runs them"
   fi
 
-  # Typecheck/lint/test scoped to affected packages — cheaper than full run;
-  # CI's check job runs these unfiltered across the whole graph.
-  #
-  # `--concurrency` caps turbo's parallel task count. Without a cap, a change
-  # low in the dependency graph (crypto, render-engine, runtime) pulls in a
-  # ~30-package transitive closure and turbo runs ~10 tasks at once, each
-  # spawning its own vitest worker pool. On a 16GB machine this oversubscribes
-  # CPU + memory: vitest workers get starved, hooks/tests cross their default
-  # timeouts, and behaviorally correct tests false-fail under contention. The
-  # empirical lower bound for reliability on an M1 Pro 16GB is 2 (concurrency
-  # 6 flaked @motebit/web#test twice in a row, session 2026-05-07). It is now
-  # env-driven — the default stays the safe floor, but a more capable host
-  # sets MOTEBIT_PREPUSH_CONCURRENCY (e.g. 6 or 8) without editing this shared
-  # hook. CI skips this hook entirely (the `$CI` check above) and runs at its
-  # own full parallelism regardless.
+  # `--concurrency` caps turbo's parallel task count. Each test task spawns its
+  # own vitest pool; uncapped, a 16GB machine oversubscribes and correct tests
+  # false-fail on timeouts. The empirical reliability floor on an M1 Pro 16GB
+  # is 2 (concurrency 6 flaked @motebit/web#test twice, 2026-05-07). A bigger
+  # host sets MOTEBIT_PREPUSH_CONCURRENCY without editing this shared hook.
   _concurrency=${MOTEBIT_PREPUSH_CONCURRENCY:-2}
 
-  # `test:coverage`, not `test`: CI's `check` job runs `test:coverage` (tests +
-  # coverage-threshold enforcement). Running plain `test` here let three pushes
-  # (vitest-4 upgrade arc, 2026-06) ship with CI red on coverage — the gate hole
-  # this closes. test:coverage is a superset (runs the tests AND checks thresholds),
-  # so it replaces `test` rather than adding a redundant second vitest pass. Set
-  # SKIP_COVERAGE=1 to fall back to plain `test` for fast local iteration (prints a
-  # warning; CI still enforces coverage regardless).
-  if [ -n "$SKIP_COVERAGE" ]; then
-    echo "⚠ SKIP_COVERAGE set — running 'test' without coverage thresholds (CI still enforces them)"
-    run_phase "typecheck+lint+test (affected, concurrency=$_concurrency)" \
-      pnpm turbo run typecheck lint test --filter="...[origin/main]" --concurrency="$_concurrency"
+  if [ -n "$MOTEBIT_PREPUSH_FULL" ]; then
+    # The old gauntlet: typecheck + lint + test:coverage over every package
+    # the push can affect (changed + dependents), coverage thresholds
+    # included. For a low-level package change an agent wants proven locally
+    # before spending a CI round. SKIP_COVERAGE=1 drops to plain `test`.
+    _full_task=test:coverage
+    [ -n "$SKIP_COVERAGE" ] && _full_task=test
+    run_phase "FULL typecheck+lint+$_full_task (changed + dependents, concurrency=$_concurrency)" \
+      pnpm turbo run typecheck lint "$_full_task" $_filter_affected --concurrency="$_concurrency"
   else
-    run_phase "typecheck+lint+test:coverage (affected, concurrency=$_concurrency)" \
-      pnpm turbo run typecheck lint test:coverage --filter="...[origin/main]" --concurrency="$_concurrency"
+    # Typecheck + lint the changed packages AND their dependents: a type
+    # change that breaks a consumer is the most common cross-package break,
+    # and both tasks are turbo-cached, so untouched dependents are cache hits.
+    run_phase "typecheck+lint (changed + dependents, concurrency=$_concurrency)" \
+      pnpm turbo run typecheck lint $_filter_affected --concurrency="$_concurrency"
+
+    # Tests of the CHANGED packages only, plain `test` (no coverage). Tests
+    # are never cached, so running dependents' suites is what made a low-
+    # level push take 30+ min. Dependents' tests and coverage thresholds run
+    # in CI (`check` → `turbo run test:coverage`, unfiltered).
+    if [ -z "$_pkg_scope_ok" ]; then
+      run_phase "test (ALL packages — package scope unknown, fail closed; concurrency=$_concurrency)" \
+        pnpm turbo run test --concurrency="$_concurrency"
+    elif [ -n "$_unscoped_paths" ]; then
+      run_phase "test (ALL packages — $(printf '%s\n' "$_unscoped_paths" | wc -l | tr -d ' ') changed path(s) outside every package, e.g. $(printf '%s\n' "$_unscoped_paths" | head -n 1); concurrency=$_concurrency)" \
+        pnpm turbo run test --concurrency="$_concurrency"
+    elif [ -z "$_changed_pkg_dirs" ]; then
+      skip_phase "test" "no workspace package changed; CI runs every suite"
+    else
+      _test_filters=$(printf '%s\n' "$_changed_pkg_dirs" | sed 's#^#--filter=./#')
+      run_phase "test ($(printf '%s\n' "$_changed_pkg_dirs" | wc -l | tr -d ' ') changed package(s), concurrency=$_concurrency)" \
+        pnpm turbo run test $_test_filters --concurrency="$_concurrency"
+
+      # Say so when the trade-off is large: >10 dependents whose suites are
+      # CI-only for this push. pnpm's graph, not turbo's (see above).
+      if [ -z "$MOTEBIT_PREPUSH_QUIET" ]; then
+        _n_changed=$(printf '%s\n' "$_changed_pkg_dirs" | wc -l | tr -d ' ')
+        _n_reach=$(pnpm ls -r --depth -1 --parseable \
+          $(printf '%s\n' "$_changed_pkg_dirs" | sed 's#.*#--filter=...{./&}#') 2>/dev/null | wc -l | tr -d ' ')
+        if [ $((_n_reach - _n_changed)) -gt 10 ]; then
+          printf '\nℹ pre-push: this push reaches %s dependent package(s) whose tests + coverage run only in CI.\n  To run them locally first: MOTEBIT_PREPUSH_FULL=1 git push\n' \
+            "$((_n_reach - _n_changed))" >&2
+        fi
+      fi
+    fi
   fi
 
-  run_phase "format:check" pnpm format:check
+  # Formatting of the files this push changes — same prettier, same
+  # extension set as `pnpm format:check` (CI's `format` job, whole repo).
+  # Whole-repo instead when the diff is unknown or prettier's own config /
+  # version may have changed (then every file's verdict can move). Config is
+  # matched ANYWHERE in the tree, not only at the root (2026-10-01 cold
+  # review, A2: packages/x/.prettierrc.json {semi:false} passed the hook
+  # while CI's format:check failed): .prettierrc*, prettier.config.*,
+  # .prettierignore, .editorconfig, .gitignore (prettier 3 honours both
+  # ignore files), every package.json / package.yaml (a "prettier" key is
+  # config — any manifest counts, deny by default) and the lockfile (version).
+  # Paths go after `--` (final cold review): a changed `-x.md` was otherwise
+  # parsed as prettier OPTIONS, prettier exited 0 and CI's format:check failed.
+  _fmt_exts='ts|tsx|js|jsx|json|md'
+  _fmt_config_changed=$(printf '%s\n' "$_all_changed" |
+    grep -E '(^|/)(\.prettierrc[^/]*|prettier\.config\.[^/]*|\.prettierignore|\.editorconfig|\.gitignore|package\.json|package\.yaml|pnpm-lock\.yaml)$' || true)
+  _fmt_files=$(printf '%s\n' "$_all_changed" | grep -E "\.($_fmt_exts)\$" || true)
+  format_changed() {
+    printf '%s\n' "$_fmt_files" | while IFS= read -r _f; do if [ -f "$_f" ]; then printf '%s\n' "$_f"; fi; done |
+      tr '\n' '\0' | xargs -0 -r pnpm exec prettier --check --no-error-on-unmatched-pattern --
+  }
+  if [ "$_all_changed" = __DIFF_ERR__ ] || [ -n "$_fmt_config_changed" ]; then
+    run_phase "format:check (whole repo — diff unknown or prettier config/deps changed)" pnpm format:check
+  elif [ -n "$_fmt_files" ]; then
+    run_phase "format:check (changed files)" format_changed
+  else
+    skip_phase "format:check" "no changed $_fmt_exts files; CI runs it"
+  fi
 
-  [ -z "$MOTEBIT_PREPUSH_QUIET" ] &&
+  # An `if`, never `[ … ] && printf`: as the hook's LAST command, a false test
+  # is the hook's exit status — MOTEBIT_PREPUSH_QUIET=1 used to abort every
+  # push with code 1 and no message. Same for the `while` filters above: a
+  # loop's status is its last body command's, and `$(…)` under `sh -e` exits.
+  if [ -z "$MOTEBIT_PREPUSH_QUIET" ]; then
     printf '\n✓ pre-push gauntlet passed in %ss — pushing\n' "$(($(date +%s) - _gauntlet_t0))" >&2
+  fi
 fi

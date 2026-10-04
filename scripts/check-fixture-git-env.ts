@@ -1,13 +1,18 @@
 /**
  * check-fixture-git-env — every git spawn under `scripts/` that targets
  * anything other than the repo root (a temp dir, a fixture, a copied tree)
- * runs with `fixtureGitEnv()` (`scripts/lib/fixture-git-env.ts`).
+ * runs with `cleanEnv()` (`scripts/lib/differential-tree.ts` — the scrub #1028
+ * made canonical for the gate self-tests).
  *
  * Why: a git hook exports GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE (from a
  * linked worktree, a GIT_DIR into the SHARED repository) to every process it
  * spawns, and git honours them over `cwd`. A fixture's `git init` under a
  * pre-push hook wrote `core.worktree=<fixture>` into the real `.git/config`
- * and a fixture `git commit` landed on a real branch (#835; again 2026-10-01).
+ * and a fixture `git commit` landed on a real branch (#835; again 2026-10-01
+ * and 2026-10-02). #1028 scrubs at the ENTRY points (`.husky/pre-push`, the
+ * vitest setup `scripts/lib/vitest-scrub-git-env.ts`); this gate holds the
+ * per-spawn layer, which also covers a script run outside both (a bare
+ * `npx tsx scripts/…` or a shell script from a hook).
  * The harness `scripts/__tests__/fixture-git-env.test.ts` proves today's
  * helpers are scrubbed against a decoy; this gate keeps a NEW spawn from
  * skipping the helper.
@@ -17,15 +22,19 @@
  *     whose command is `"git"` (or a shell string starting `git `) targets the
  *     REAL repo only when its `cwd` is `ROOT` / `REPO_ROOT` (or absent — the
  *     process cwd) and its arguments carry no `-C` / `--git-dir` /
- *     `--work-tree`. Any other target must pass `env: fixtureGitEnv(…)`, or an
- *     `env` variable the same file assigns from `fixtureGitEnv(`.
+ *     `--work-tree`. Any other target must pass `env: cleanEnv(…)`, or an
+ *     `env` variable the same file assigns from `cleanEnv(`.
  *   - Shell: a `git clone` / `git init` / `git -C` / `--git-dir` /
  *     `--work-tree` line must come after a `fixture_git_env_scrub` call
  *     (`scripts/lib/fixture-git-env.sh`).
  *
  * Aperture: direct spawns whose command is a git literal. A wrapper taking the
  * command as a parameter (`run(cmd, …)`) is examined at its own spawn, not at
- * its callers — route a fixture wrapper's env through `fixtureGitEnv` itself.
+ * its callers — route a fixture wrapper's env through `cleanEnv` itself.
+ *
+ * `cleanEnv` is recognised by name: `scripts/lib/tamper-runner.ts` keeps an
+ * inlined copy (plain `node` loads it and cannot resolve the `.ts` import);
+ * every `cleanEnv` under `scripts/` removes every `GIT_*`.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -77,11 +86,16 @@ function optionValue(opts: string, key: string): string | null {
   return null;
 }
 
-/** True when the last assignment to `ident` in `before` is a `fixtureGitEnv(` call. */
+/** True for an env expression that is a `cleanEnv(` call. */
+function isScrubExpr(text: string): boolean {
+  return text.startsWith("cleanEnv(");
+}
+
+/** True when the last assignment to `ident` in `before` is a scrubbed env expression. */
 function lastAssignment(before: string, ident: string): boolean {
   const all = [...before.matchAll(new RegExp(`\\b${ident}\\s*=(?![=>])\\s*`, "g"))];
   const last = all.at(-1);
-  return last !== undefined && before.startsWith("fixtureGitEnv(", last.index + last[0].length);
+  return last !== undefined && isScrubExpr(before.slice(last.index + last[0].length));
 }
 
 /** Every git spawn in a TS/JS source, classified. */
@@ -104,7 +118,7 @@ export function analyzeTs(src: string): GitSpawn[] {
     const env = optionValue(opts, "env");
     const scrubbed =
       env !== null &&
-      (env.startsWith("fixtureGitEnv(") ||
+      (isScrubExpr(env) ||
         (/^[A-Za-z_$][\w$]*$/.test(env) && lastAssignment(src.slice(0, m.index), env)));
     out.push({
       line: src.slice(0, m.index).split("\n").length,
@@ -163,13 +177,13 @@ function main(): void {
   }
   console.log(
     "▸ check-fixture-git-env — every git spawn under scripts/ aimed away from the repo root runs " +
-      "with fixtureGitEnv(), so a hook's GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE cannot redirect " +
+      "with cleanEnv(), so a hook's GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE cannot redirect " +
       "it into the real repository.",
   );
   if (sites.length === 0) {
     console.log(
       `✓ check-fixture-git-env: ${files.length} file(s) scanned, ${repo + fixture} git spawn(s) — ` +
-        `${repo} target the repo root, ${fixture} target a fixture and all ${fixture} use fixtureGitEnv.`,
+        `${repo} target the repo root, ${fixture} target a fixture and all ${fixture} use cleanEnv.`,
     );
     return;
   }
@@ -177,9 +191,10 @@ function main(): void {
     formatRepair({
       invariant: `check-fixture-git-env: ${sites.length} git spawn(s) target a non-repo directory with the caller's GIT_* environment (scanned ${files.length} file(s))`,
       sites,
-      canonical: "scripts/lib/fixture-git-env.ts (shell: scripts/lib/fixture-git-env.sh)",
+      canonical:
+        "cleanEnv in scripts/lib/differential-tree.ts (shell: scripts/lib/fixture-git-env.sh)",
       fix:
-        'pass `env: fixtureGitEnv()` (import { fixtureGitEnv } from "./lib/fixture-git-env.js"; add your own ' +
+        'pass `env: cleanEnv()` (import { cleanEnv } from "./lib/differential-tree.js"; add your own ' +
         "extras as its second argument) to the spawn, or in a shell script source scripts/lib/fixture-git-env.sh " +
         "and call fixture_git_env_scrub before the first git command. If the spawn really targets the repo " +
         "root, set its cwd to ROOT and drop -C / --git-dir / --work-tree.",

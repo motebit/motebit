@@ -36,8 +36,12 @@ import {
 } from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { McpClientAdapter } from "@motebit/mcp-client";
-import type { McpServerConfig } from "@motebit/mcp-client";
 import { loadConfig, canonicalizeResults } from "./helpers.js";
+import {
+  recordSubDelegateOutcome,
+  subDelegateCircuitState,
+  subDelegateClientConfig,
+} from "./sub-delegate.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,70 +65,6 @@ function log(msg: string): void {
  * is reinvented — see CLAUDE.md "Protocol primitives belong in
  * packages, never inline in services" for the doctrine.
  */
-// #459: sub-delegation failure circuit. During the 2026-07-29 incident this
-// path retried a down read-url atom as fast as each handler turn completed —
-// no backoff, no ceiling — creating a fresh relay task per attempt and
-// feeding the settlement-amplification storm. The circuit is deliberately
-// simple: consecutive failures open a cooldown during which subDelegate
-// returns null IMMEDIATELY (before the relay-task POST, so no task is
-// created either); one success closes it. Exported for tests; `nowFn`
-// injectable so the cooldown is deterministic under test.
-export const SUB_DELEGATE_MAX_CONSECUTIVE_FAILURES = 3;
-export const SUB_DELEGATE_COOLDOWN_MS = 60_000;
-let subDelegateConsecutiveFailures = 0;
-let subDelegateCooldownUntil = 0;
-
-export function subDelegateCircuitState(): { failures: number; cooldownUntil: number } {
-  return { failures: subDelegateConsecutiveFailures, cooldownUntil: subDelegateCooldownUntil };
-}
-
-export function resetSubDelegateCircuitForTest(): void {
-  subDelegateConsecutiveFailures = 0;
-  subDelegateCooldownUntil = 0;
-}
-
-/** Record one sub-delegation outcome; opens the cooldown at the ceiling. */
-export function recordSubDelegateOutcome(ok: boolean, nowMs: number): void {
-  if (ok) {
-    subDelegateConsecutiveFailures = 0;
-    subDelegateCooldownUntil = 0;
-    return;
-  }
-  subDelegateConsecutiveFailures++;
-  if (subDelegateConsecutiveFailures >= SUB_DELEGATE_MAX_CONSECUTIVE_FAILURES) {
-    subDelegateCooldownUntil = nowMs + SUB_DELEGATE_COOLDOWN_MS;
-    log(
-      `sub-delegation circuit OPEN — ${subDelegateConsecutiveFailures} consecutive failures; cooling down ${SUB_DELEGATE_COOLDOWN_MS / 1000}s`,
-    );
-  }
-}
-
-/**
- * The read-url hop's MCP client config. Caller tokens are bound to the atom
- * the RELAY named (`motebitId`), not to whatever the endpoint's /health
- * claims (#957); without a relay-named target the client falls back to
- * /health on first contact.
- */
-export function subDelegateClientConfig(args: {
-  mcpUrl: string;
-  callerMotebitId: string;
-  callerDeviceId: string;
-  callerPrivateKey: Uint8Array;
-  targetMotebitId?: string;
-}): McpServerConfig {
-  return {
-    name: "read-url",
-    transport: "http",
-    url: args.mcpUrl,
-    motebit: true,
-    motebitType: "service",
-    ...(args.targetMotebitId != null ? { motebitId: args.targetMotebitId } : {}),
-    callerMotebitId: args.callerMotebitId,
-    callerDeviceId: args.callerDeviceId,
-    callerPrivateKey: args.callerPrivateKey,
-  };
-}
-
 async function subDelegate(
   mcpUrl: string,
   prompt: string,
@@ -140,7 +80,7 @@ async function subDelegate(
 ): Promise<ExecutionReceipt | null> {
   // Circuit check FIRST — during cooldown, no relay task is created and the
   // down peer is left alone (#459).
-  if (Date.now() < subDelegateCooldownUntil) {
+  if (Date.now() < subDelegateCircuitState().cooldownUntil) {
     log("sub-delegation skipped — circuit cooling down after consecutive failures");
     return null;
   }

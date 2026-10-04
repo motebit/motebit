@@ -24,6 +24,7 @@ import { loadFullConfig } from "../config.js";
 import { loadActiveSigningKey } from "../identity.js";
 import { cliRosterPorts, remedyText } from "../machine-roster.js";
 import { requireMotebitId, resolveRelayUrl } from "./_helpers.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 const USAGE =
   "Usage: motebit machines [--json] | motebit machines retire <device_id> | motebit machines enroll <device_id> [--force]";
@@ -263,7 +264,7 @@ export async function handleMachines(config: CliConfig): Promise<void> {
   try {
     key = (await loadActiveSigningKey(full, { promptLabel: "Passphrase: " })).privateKey;
   } catch (err) {
-    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`Error: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`);
     process.exit(1);
   }
   const roster = new MachineRoster(

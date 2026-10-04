@@ -17,12 +17,27 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { CHILD_REFUSAL_MARKER, deleteProxyEnv } from "./network-guard-core.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = resolve(HERE, "..", "server.ts");
 const DIST_ENTRY = resolve(HERE, "..", "..", "dist", "server.js");
 export const BOOT_TIMEOUT_MS = 60_000;
+/**
+ * Preloaded into every spawned entry (NODE_OPTIONS `--import`): the child
+ * relay is under the same deny-by-default network guard as the vitest
+ * worker. Each refused dial is one {@link CHILD_REFUSAL_MARKER} line on the
+ * child's stderr — `BootedEntry.egressRefusals()` reads them back.
+ */
+const CHILD_NETWORK_GUARD = pathToFileURL(resolve(HERE, "network-guard.preload.mjs")).href;
+
+/** `NODE_OPTIONS` for a spawned entry: the caller's, plus the network guard preload. */
+export function guardedNodeOptions(base: string | undefined): string {
+  return [base, `--import=${CHILD_NETWORK_GUARD}`]
+    .filter((v) => v !== undefined && v !== "")
+    .join(" ");
+}
 
 export interface EntryTier {
   /** Which rung of the booted-artifact ladder this is. */
@@ -59,6 +74,15 @@ export interface BootedEntry {
   baseUrl: string;
   /** Everything the entry has logged so far (stdout + stderr, JSON lines). */
   log(): string;
+  /** The non-loopback dials the child's network guard refused so far (one target each). */
+  egressRefusals(): string[];
+}
+
+function refusalsIn(log: string): string[] {
+  return log
+    .split("\n")
+    .filter((l) => l.startsWith(CHILD_REFUSAL_MARKER))
+    .map((l) => l.slice(CHILD_REFUSAL_MARKER.length).trim());
 }
 
 /** Spawn a real deployed entry and resolve when it reports listening. */
@@ -80,6 +104,11 @@ export function bootRealEntry(
     delete env.MOTEBIT_ENABLE_DEVICE_AUTH;
     delete env.MOTEBIT_FEDERATION_AUTO_ACCEPT;
     delete env.MOTEBIT_DB_PATH; // ":memory:" default
+    // No proxy reaches the child, even one an override names (the preload
+    // deletes them again inside the child).
+    deleteProxyEnv(env);
+    // Always last: no override drops the guard.
+    env.NODE_OPTIONS = guardedNodeOptions(env.NODE_OPTIONS);
     let bootLog = "";
     const child = spawn(tier.command, tier.args, {
       env,
@@ -103,6 +132,7 @@ export function bootRealEntry(
               child,
               baseUrl: `http://127.0.0.1:${parsed.port}`,
               log: () => bootLog,
+              egressRefusals: () => refusalsIn(bootLog),
             });
             return;
           }
@@ -143,6 +173,8 @@ export interface FakeSolanaRpc {
   callsOf(method: string): number;
   /** `sendTransaction` requests that arrived before any genesis read was answered. */
   writesBeforeGenesis(): number;
+  /** `Date.now()` when a getGenesisHash answer was first written; null while none has been. */
+  genesisAnsweredAt(): number | null;
   close(): Promise<void>;
 }
 
@@ -150,6 +182,8 @@ export interface FakeSolanaRpcOptions {
   genesisHash?: string | null;
   genesisFailures?: number;
   genesisHang?: boolean;
+  /** Answer getGenesisHash only after this many ms (a slow, not hung, RPC). */
+  genesisDelayMs?: number;
 }
 
 export async function startFakeSolanaRpc(
@@ -165,6 +199,7 @@ export async function startFakeSolanaRpc(
   let genesisFailuresLeft = options.genesisFailures ?? 0;
   const ok = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, result });
   let genesisAnswered = false;
+  let genesisAnsweredAt: number | null = null;
   let earlyWrites = 0;
   const amount = (a: string) => ({
     amount: a,
@@ -189,8 +224,22 @@ export async function startFakeSolanaRpc(
         return;
       }
       if (msg.method === "sendTransaction" && !genesisAnswered) earlyWrites++;
+      if (
+        msg.method === "getGenesisHash" &&
+        genesisHash !== null &&
+        options.genesisDelayMs !== undefined
+      ) {
+        setTimeout(() => {
+          genesisAnswered = true;
+          genesisAnsweredAt ??= Date.now();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(ok(msg.id, genesisHash)));
+        }, options.genesisDelayMs);
+        return;
+      }
       if (msg.method === "getGenesisHash" && genesisHash !== null) {
         genesisAnswered = true;
+        genesisAnsweredAt ??= Date.now();
         body = ok(msg.id, genesisHash);
       } else if (msg.method === "getLatestBlockhash") {
         body = ok(msg.id, {
@@ -291,6 +340,7 @@ export async function startFakeSolanaRpc(
     getTransactionCalls: () => calls,
     callsOf: (method) => perMethod.get(method) ?? 0,
     writesBeforeGenesis: () => earlyWrites,
+    genesisAnsweredAt: () => genesisAnsweredAt,
     close: () =>
       new Promise<void>((r) => {
         server.closeAllConnections();

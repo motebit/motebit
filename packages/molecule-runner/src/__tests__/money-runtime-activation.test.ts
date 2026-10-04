@@ -86,11 +86,31 @@ function moneyConfig(): MoleculeConfig {
     syncUrl: RELAY_URL,
     moneyExecution: {
       solanaRpcUrl: SOLANA_RPC,
-      relayPublicKeyHex: "07".repeat(32),
+      relayPublicKeyHex: SIGNING_PINNED_HEX,
       spendCeiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: 1_000_000 },
     },
   };
 }
+
+/**
+ * The pinned relay's key and its SIGNED discovery metadata. A paid hire reads
+ * the relay's fee rate from `/.well-known/motebit.json` signed by the pinned
+ * key (spec/discovery-v1.md §3), so the fake relay serves it. Ed25519 is
+ * deterministic: these literals come from the fixed seed
+ * `new Uint8Array(32).fill(7)` (the fixture in
+ * packages/runtime/src/__tests__/helpers/signed-relay-metadata.ts). No
+ * `fee_rate` ⇒ the 0.05 reference default.
+ */
+const SIGNING_PINNED_HEX = "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c";
+const SIGNED_RELAY_METADATA = {
+  protocol_version: "1.0",
+  relay_id: "test-relay",
+  public_key: SIGNING_PINNED_HEX,
+  endpoint_url: "https://relay.test",
+  suite: "motebit-jcs-ed25519-hex-v1",
+  signature:
+    "caee9335accca4025e16e85777179db08dc77034b8de0ef024763a7d4905aaecd371829876064a228b9ad2c040fdbffaf648c373cec948fecef981b83591570e",
+};
 
 /** Typed URL extraction from a fetch-mock call arg (no default stringify). */
 function reqUrl(input: string | URL | Request): string {
@@ -110,6 +130,7 @@ function stubRelayAndRpcFetch() {
     "fetch",
     vi.fn(async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/.well-known/motebit.json")) return jsonResponse(SIGNED_RELAY_METADATA);
       if (url.startsWith(SOLANA_RPC)) {
         // The REAL sovereign rail the builder constructed reaches here on the
         // payment leg. Refusing it proves the transcript minted BEFORE
@@ -418,6 +439,7 @@ describe("defaultCreateMoneyRuntime — money-without-authority fails CLOSED at 
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
         const url = reqUrl(input);
+        if (url.endsWith("/.well-known/motebit.json")) return jsonResponse(SIGNED_RELAY_METADATA);
         if (url.includes("/api/v1/agents/discover"))
           return jsonResponse({
             agents: [

@@ -3,6 +3,7 @@ import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 import { createRelayConfigTable, loadFreezeState, persistFreeze } from "../freeze.js";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
+import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 // === Unit tests for freeze persistence functions ===
 
@@ -90,6 +91,7 @@ describe("freeze persistence (integration)", () => {
 
     // First relay: activate freeze
     relay = await createSyncRelay({
+      ...TEST_RELAY_NETWORK,
       allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
@@ -112,6 +114,7 @@ describe("freeze persistence (integration)", () => {
 
     // Second relay: same DB, freeze should be restored from DB
     relay = await createSyncRelay({
+      ...TEST_RELAY_NETWORK,
       allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
@@ -157,6 +160,7 @@ describe("freeze persistence (integration)", () => {
 
     // First relay: freeze then unfreeze
     relay = await createSyncRelay({
+      ...TEST_RELAY_NETWORK,
       allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
@@ -182,6 +186,7 @@ describe("freeze persistence (integration)", () => {
 
     // Second relay: should start unfrozen
     relay = await createSyncRelay({
+      ...TEST_RELAY_NETWORK,
       allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
@@ -209,6 +214,7 @@ describe("freeze persistence (integration)", () => {
 
     // First relay: start with config override
     relay = await createSyncRelay({
+      ...TEST_RELAY_NETWORK,
       allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
@@ -226,6 +232,7 @@ describe("freeze persistence (integration)", () => {
 
     // Second relay: no config override, but DB should have persisted freeze
     relay = await createSyncRelay({
+      ...TEST_RELAY_NETWORK,
       allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,

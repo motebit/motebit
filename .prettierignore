@@ -67,3 +67,11 @@ apps/*/playwright-report
 # is its sole formatter, so prettier must not re-normalize it (else regeneration
 # produces a cosmetic diff). The conformance test parses it, so whitespace is moot.
 spec/conformance/verification-verdict/corpus.json
+
+# Deterministic generator output — byte-compared by apps/verify/src/__tests__/sample.test.ts
+apps/verify/src/sample-receipt.json
+
+# Vendored third-party fixture pinned by SHA-256 (see examples/interop/aps/NOTICE.md);
+# scripts/__tests__/interop-aps-vector.test.ts asserts the exact bytes, so prettier
+# must never re-normalize it.
+examples/interop/aps/*.CANDIDATE.json

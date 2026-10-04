@@ -53,13 +53,22 @@ import type {
 } from "@motebit/sync-engine";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
+import { registerDeviceWithRelay } from "@motebit/core-identity";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import type { SecureStoreAdapter } from "./adapters/secure-store";
+import {
+  canExecuteDelegatedTask,
+  mobileServingAllowed,
+  MOBILE_SERVING_UNAVAILABLE,
+} from "./serving-gate";
 
 export type SyncStatus = SyncEngineStatus;
 
 const SYNC_URL_KEY = "@motebit/sync_url";
 const SYNC_INTERVAL_MS = 30_000;
+/** Registration retry backoff (#962): 1 s, doubling, capped at 60 s. */
+export const REGISTRATION_RETRY_BASE_MS = 1_000;
+export const REGISTRATION_RETRY_MAX_MS = 60_000;
 
 export interface SyncControllerDeps {
   getRuntime: () => MotebitRuntime | null;
@@ -87,6 +96,17 @@ export class MobileSyncController {
   private _wsAdapter: WebSocketEventStoreAdapter | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _syncEncKey: Uint8Array | null = null;
+  /**
+   * Has the relay accepted this device's key this session (#962)? Until it
+   * has, every signed token is refused, nothing is pushed, and the status
+   * reads "error" — never "idle".
+   */
+  private _registered = false;
+  private _registrationError: string | null = null;
+  private _registrationTimer: ReturnType<typeof setTimeout> | null = null;
+  private _registrationDelay = REGISTRATION_RETRY_BASE_MS;
+  /** Bumped by stopSync: a registration of an ended session touches nothing. */
+  private _session = 0;
 
   // Serving state
   private _serving = false;
@@ -176,6 +196,9 @@ export class MobileSyncController {
   }
 
   async startServing(): Promise<{ ok: boolean; error?: string }> {
+    // Mobile is non-executing today (serving-gate.ts) — refuse before any
+    // registration, so the relay never routes a delegation to this device.
+    if (!mobileServingAllowed()) return { ok: false, error: MOBILE_SERVING_UNAVAILABLE };
     const runtime = this.deps.getRuntime();
     if (!runtime || !this._servingSyncUrl || !this._servingAuthToken) {
       return { ok: false, error: "Sync not connected" };
@@ -275,6 +298,64 @@ export class MobileSyncController {
     }
   }
 
+  /**
+   * Register this device's key with the relay through the signed,
+   * self-attesting registration (#962). Mobile had no registration at all: a
+   * phone the relay did not know had every token refused, pushed nothing,
+   * and its relay-floored compaction held the log growing — while the status
+   * read "idle". Idempotent on the relay side.
+   */
+  private async registerDevice(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    let privKeyBytes: Uint8Array;
+    try {
+      privKeyBytes = await this.deps.getPrivKeyBytes();
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    try {
+      const res = await registerDeviceWithRelay({
+        motebitId: this.deps.getMotebitId(),
+        deviceId: this.deps.getDeviceId(),
+        publicKey: this.deps.getPublicKey(),
+        privateKey: privKeyBytes,
+        syncUrl: url,
+        deviceName: "Mobile",
+      });
+      return res.ok ? { ok: true } : { ok: false, error: `${res.code}: ${res.message}` };
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      secureErase(privKeyBytes);
+    }
+  }
+
+  /**
+   * One registration attempt for session `session`; on a refusal the status
+   * goes to "error" and the next attempt is scheduled on backoff (1 s
+   * doubling to 60 s, unref'd) until the relay accepts or sync stops.
+   */
+  private async attemptRegistration(url: string, session: number): Promise<void> {
+    const result = await this.registerDevice(url);
+    if (session !== this._session) return;
+    if (result.ok) {
+      this._registered = true;
+      this._registrationError = null;
+      return;
+    }
+    this._registrationError = result.error;
+    // eslint-disable-next-line no-console -- the status carries no message; the log says why
+    console.warn(`[sync] relay did not accept this device: ${result.error}`);
+    this._syncStatus = "error";
+    this._syncStatusCallback?.("error", this._lastSyncTime);
+    const delay = this._registrationDelay;
+    this._registrationDelay = Math.min(delay * 2, REGISTRATION_RETRY_MAX_MS);
+    this._registrationTimer = setTimeout(() => {
+      this._registrationTimer = null;
+      void this.attemptRegistration(url, session);
+    }, delay);
+    (this._registrationTimer as { unref?: () => void }).unref?.();
+  }
+
   async startSync(syncUrl?: string): Promise<void> {
     const url = syncUrl != null && syncUrl !== "" ? syncUrl : await this.getSyncUrl();
     const storage = this.deps.getStorage();
@@ -282,6 +363,13 @@ export class MobileSyncController {
 
     await this.setSyncUrl(url);
     const motebitId = this.deps.getMotebitId();
+
+    // Registration is attempted BEFORE the socket connects and before the
+    // first push (#962); a refusal keeps retrying on backoff below.
+    const session = ++this._session;
+    this._registered = false;
+    this._registrationDelay = REGISTRATION_RETRY_BASE_MS;
+    await this.attemptRegistration(url, session);
 
     // Derive encryption key once for the sync session, then erase raw key bytes
     const privKeyBytes = await this.deps.getPrivKeyBytes();
@@ -300,8 +388,10 @@ export class MobileSyncController {
       { sync_interval_ms: SYNC_INTERVAL_MS },
     );
 
-    this._syncStatus = "idle";
-    this._syncStatusCallback?.("idle", this._lastSyncTime);
+    if (this._registered) {
+      this._syncStatus = "idle";
+      this._syncStatusCallback?.("idle", this._lastSyncTime);
+    }
 
     // Run the sync loop via our own timer (to refresh tokens per cycle)
     this.syncTimer = setInterval(() => {
@@ -373,6 +463,12 @@ export class MobileSyncController {
   }
 
   stopSync(): void {
+    this._session++;
+    if (this._registrationTimer) {
+      clearTimeout(this._registrationTimer);
+      this._registrationTimer = null;
+    }
+    this._registered = false;
     this.deps.stopPushLifecycle();
     if (this.syncTimer) {
       clearInterval(this.syncTimer);
@@ -418,6 +514,14 @@ export class MobileSyncController {
     const tempEventSync = new SyncEngine(storage.eventStore, motebitId);
     tempEventSync.connectRemote(this.e2eHttpEventStore(url, motebitId, encKey));
     const eventResult = await tempEventSync.sync();
+    // `sync()` never rejects: a refused or failed push is recorded, not
+    // thrown. /sync must never toast "Synced" over it (#962).
+    const eventError = tempEventSync.getLastError();
+    if (eventError) {
+      this._syncStatus = "error";
+      this._syncStatusCallback?.("error", this._lastSyncTime);
+      throw new Error(`event sync failed: ${eventError.message}`, { cause: eventError });
+    }
 
     // Conversation sync (encrypted — relay stores opaque ciphertext)
     const convHttpAdapter = new HttpConversationSyncAdapter({
@@ -604,7 +708,10 @@ export class MobileSyncController {
             return;
           }
 
-          if (msg.type !== "task_request" || msg.task == null || !this._serving) return;
+          if (msg.type !== "task_request" || msg.task == null) return;
+          // The single execution gate (serving-gate.ts): off by default, and
+          // `/serve` cannot turn it on.
+          if (!canExecuteDelegatedTask(this._serving)) return;
           if (!rt) return;
 
           const task = msg.task as AgentTask;
@@ -687,6 +794,10 @@ export class MobileSyncController {
       );
 
       await this.syncEngine.sync();
+      // `sync()` never rejects: a refused or failed push is recorded in
+      // `getLastError()`. It ends this cycle in "error", never "idle" (#962).
+      const eventError = this.syncEngine.getLastError();
+      if (eventError) throw eventError;
       await this.conversationSyncEngine.sync();
 
       // Plan sync — push/pull plans for cross-device visibility
@@ -708,6 +819,12 @@ export class MobileSyncController {
         }
       }
 
+      // The relay has not accepted this device: nothing it sent was taken.
+      if (!this._registered) {
+        throw new Error(
+          `relay has not accepted this device${this._registrationError ? `: ${this._registrationError}` : ""}`,
+        );
+      }
       this._lastSyncTime = Date.now();
       this._syncStatus = "idle";
       this._syncStatusCallback?.("idle", this._lastSyncTime);

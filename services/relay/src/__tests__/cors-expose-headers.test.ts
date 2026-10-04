@@ -14,6 +14,7 @@ import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { CORS_EXPOSED_RESPONSE_HEADERS } from "../middleware.js";
 import { RateLimitError } from "../errors.js";
+import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 const ORIGIN = "https://motebit.com";
 const ROSTER = "/api/v1/agents/019a0000-0000-7000-8000-000000000001/roster";
@@ -30,6 +31,7 @@ describe("CORS: headers a browser client reads are exposed", () => {
 
   beforeEach(async () => {
     relay = await createSyncRelay({
+      ...TEST_RELAY_NETWORK,
       allowPrivateEndpoints: true,
       apiToken: "test-token",
       x402: {

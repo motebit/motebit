@@ -45,6 +45,7 @@
 import type { DatabaseDriver } from "@motebit/persistence";
 import { creditAccount } from "./accounts.js";
 import { createLogger } from "./logger.js";
+import { isEmergencyFrozenAbort } from "./freeze.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 const logger = createLogger({ service: "x402-settlements" });
@@ -478,13 +479,10 @@ export function creditX402Settlement(
     from: "pending" | "pending_or_failed";
   },
 ): boolean {
-  db.exec("BEGIN");
-  try {
+  // The status compare-and-set and the credit are ONE transaction.
+  return db.transaction(() => {
     const rec = findX402Settlement(db, payer, nonce);
-    if (rec == null) {
-      db.exec("ROLLBACK");
-      return false;
-    }
+    if (rec == null) return false;
     if (!Number.isSafeInteger(rec.amount_micro) || rec.amount_micro <= 0) {
       throw new Error(`x402 credit: refusing a non-positive amount (${rec.amount_micro})`);
     }
@@ -494,10 +492,7 @@ export function creditX402Settlement(
         `UPDATE relay_x402_settlements SET status = 'credited', tx_hash = COALESCE(?, tx_hash), credit_log_index = ?, failure_reason = NULL, resolved_at = ? WHERE payer = ? AND nonce = ? AND status IN ${statuses}`,
       )
       .run(args.txHash, args.creditLogIndex ?? null, Date.now(), rec.payer, rec.nonce);
-    if (info.changes !== 1) {
-      db.exec("ROLLBACK");
-      return false;
-    }
+    if (info.changes !== 1) return false;
     creditAccount(
       db,
       rec.delegator_id,
@@ -506,12 +501,8 @@ export function creditX402Settlement(
       `x402-${rec.task_id}`,
       args.description,
     );
-    db.exec("COMMIT");
     return true;
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
+  });
 }
 
 // ── Reconciliation: proof of execution, never the state bit ───────────────
@@ -1407,6 +1398,11 @@ export async function reconcileX402Settlement(
     });
     return "expired";
   } catch (err) {
+    // The operator's resolve is a request: a freeze that landed during its
+    // chain read and refused the credit is a 503 EMERGENCY_FROZEN, never a
+    // 200 reading "read_error" (the record stays pending either way; the
+    // loop does not run while frozen and credits it after unfreeze).
+    if (operator && isEmergencyFrozenAbort(err)) throw err;
     logger.error("x402.reconcile.read_failed", {
       payer: rec.payer,
       nonce: rec.nonce,

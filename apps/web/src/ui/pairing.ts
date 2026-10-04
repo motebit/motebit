@@ -9,7 +9,7 @@
  * Both flows poll the relay every 2 seconds until resolved or cancelled.
  */
 import type { WebContext } from "../types";
-import { loadSyncUrl, DEFAULT_RELAY_URL, normalizeRelayUrl } from "../storage";
+import { loadSyncUrl, saveSyncUrl, DEFAULT_RELAY_URL, normalizeRelayUrl } from "../storage";
 
 const POLL_INTERVAL_MS = 2000;
 // Consecutive poll failures before we tell the user the connection dropped.
@@ -255,19 +255,33 @@ export function startClaimDevice(ctx: WebContext): void {
                   pollTimer = null;
                 }
                 setStatus("Approved! Starting sync...");
-                // Decrypt and install identity key if key transfer is available
-                const walletWarning = await ctx.app.completePairing(
-                  { motebitId: result.motebit_id, deviceId: result.device_id },
-                  result.key_transfer
-                    ? {
-                        keyTransfer: result.key_transfer,
-                        ephemeralPrivateKey,
-                        pairingCode: code.toUpperCase(),
-                        syncUrl: url,
-                        pairingId,
-                      }
-                    : undefined,
-                );
+                // Decrypt and install identity key if key transfer is available.
+                // A refusal (the relay's motebit_id does not bind to the
+                // transferred key) is terminal and shown, never a poll retry.
+                let walletWarning: string | undefined;
+                try {
+                  walletWarning = await ctx.app.completePairing(
+                    { motebitId: result.motebit_id, deviceId: result.device_id },
+                    result.key_transfer
+                      ? {
+                          keyTransfer: result.key_transfer,
+                          ephemeralPrivateKey,
+                          pairingCode: code.toUpperCase(),
+                          syncUrl: url,
+                          pairingId,
+                        }
+                      : undefined,
+                  );
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  setStatus(`Failed: ${msg}`);
+                  submitBtn.disabled = false;
+                  codeInput.disabled = false;
+                  return;
+                }
+                // #962: the paired relay is saved before sync starts, so a
+                // reload knows it may hold unacknowledged pushes.
+                saveSyncUrl(url);
                 try {
                   await ctx.app.startSync(url);
                 } catch {

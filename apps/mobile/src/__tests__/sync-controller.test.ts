@@ -7,6 +7,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const hoisted = vi.hoisted(() => ({
   selfTestSpy: vi.fn(() => Promise.resolve({ summary: "ok", data: { status: "passed" } })),
   executeCommandSpy: vi.fn(() => Promise.resolve({ summary: "done" })),
+  registerResult: { ok: true, created: false, registered_at: 1 } as unknown,
+  lastError: null as Error | null,
 }));
 const selfTestSpy = hoisted.selfTestSpy;
 const executeCommandSpy = hoisted.executeCommandSpy;
@@ -32,6 +34,7 @@ vi.mock("@motebit/sync-engine", () => {
         conversations_pulled: 4,
       }),
     );
+    getLastError = vi.fn(() => hoisted.lastError);
   }
 
   class WebSocketEventStoreAdapter {
@@ -68,6 +71,10 @@ vi.mock("@motebit/sync-engine", () => {
     decryptEventPayload: vi.fn((e: unknown) => Promise.resolve(e)),
   };
 });
+
+vi.mock("@motebit/core-identity", () => ({
+  registerDeviceWithRelay: vi.fn(() => Promise.resolve(hoisted.registerResult)),
+}));
 
 vi.mock("@motebit/encryption", () => ({
   deriveSyncEncryptionKey: vi.fn(() => Promise.resolve(new Uint8Array(32))),
@@ -199,6 +206,31 @@ describe("MobileSyncController.startServing / stopServing", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("startServing refuses even when fully connected — mobile serving gate is off", async () => {
+    const fetchSpy = vi.fn(() => Promise.resolve(new Response("{}", { status: 200 })));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const ctrl = new MobileSyncController(
+        makeDeps({
+          getRuntime: () =>
+            ({ getToolRegistry: () => ({ list: () => [] }) }) as unknown as ReturnType<
+              SyncControllerDeps["getRuntime"]
+            >,
+        }),
+      );
+      const internals = ctrl as unknown as { _servingSyncUrl: string; _servingAuthToken: string };
+      internals._servingSyncUrl = "https://relay.test";
+      internals._servingAuthToken = "tok";
+      const res = await ctrl.startServing();
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain("not available");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(ctrl.isServing()).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("stopServing is a no-op", () => {
     const ctrl = new MobileSyncController(makeDeps());
     ctrl.stopServing();
@@ -240,6 +272,21 @@ describe("MobileSyncController.startSync", () => {
     ctrl.stopSync();
   });
 
+  it("a relay that does not accept the device's registration reads as error, never idle (#962)", async () => {
+    hoisted.registerResult = { ok: false, code: "network_unreachable", message: "down" };
+    try {
+      const ctrl = new MobileSyncController(makeDeps());
+      const statusUpdates: string[] = [];
+      ctrl.onSyncStatus((s) => statusUpdates.push(s));
+      await ctrl.startSync("https://relay.test");
+      expect(ctrl.syncStatus).toBe("error");
+      expect(statusUpdates).not.toContain("idle");
+      ctrl.stopSync();
+    } finally {
+      hoisted.registerResult = { ok: true, created: false, registered_at: 1 };
+    }
+  });
+
   it("stopSync transitions to offline", async () => {
     const ctrl = new MobileSyncController(makeDeps());
     await ctrl.startSync("https://relay.test");
@@ -270,6 +317,18 @@ describe("MobileSyncController.syncNow", () => {
     expect(result.events_pulled).toBe(2);
     expect(result.conversations_pushed).toBe(3);
     expect(result.conversations_pulled).toBe(4);
+  });
+
+  it("a push the relay refused throws — /sync never toasts 'Synced' over it (#962)", async () => {
+    hoisted.lastError = new Error("sync push: 403 Device not authorized");
+    try {
+      const ctrl = new MobileSyncController(makeDeps());
+      await ctrl.setSyncUrl("https://relay.test");
+      await expect(ctrl.syncNow()).rejects.toThrow(/403/);
+      expect(ctrl.syncStatus).toBe("error");
+    } finally {
+      hoisted.lastError = null;
+    }
   });
 });
 

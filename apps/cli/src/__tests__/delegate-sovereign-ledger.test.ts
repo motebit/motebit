@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { createMotebitDatabase } from "@motebit/persistence";
 import type { P2pPaymentProof } from "@motebit/sdk";
 import type { CliConfig } from "../args.js";
+import { isRelayMetadataUrl, relayMetadataResponse } from "./helpers/signed-relay-metadata.js";
 
 const ME = "019df0f4-084e-7910-90a8-3492ced8fb8f";
 const WORKER = "worker-researcher";
@@ -23,7 +24,11 @@ const state = vi.hoisted(() => ({ dbPath: "" }));
 
 vi.mock("../config.js", async (orig) => ({
   ...(await orig<typeof import("../config.js")>()),
-  loadFullConfig: () => ({ motebit_id: ME, relay_public_key: "07".repeat(32) }),
+  loadFullConfig: () => ({
+    motebit_id: ME,
+    relay_public_key:
+      "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c" /* SIGNING_PINNED_HEX (helpers/signed-relay-metadata) */,
+  }),
 }));
 vi.mock("../identity.js", async (orig) => ({
   ...(await orig<typeof import("../identity.js")>()),
@@ -67,6 +72,7 @@ describe("motebit delegate --sovereign records into the durable ledger (#874)", 
     }) as never);
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (isRelayMetadataUrl(url)) return relayMetadataResponse();
       const method = init?.method ?? "GET";
       const path = new URL(url).pathname;
       if (path === "/api/v1/agents/discover") {

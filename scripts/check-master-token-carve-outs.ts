@@ -61,8 +61,8 @@
  *        - reach `next` only through the guard, as an argument of the listed
  *          authenticator, or — in the authenticator — as `await next();` at
  *          the end of its body or inside the master-token branch whose
- *          condition is exactly `apiToken != null && apiToken !== "" &&
- *          token === apiToken`;
+ *          condition is exactly `secretEquals(token, apiToken)` (the
+ *          constant-time comparator, fail-closed on an unset token);
  *        - contain no nested function other than the arrow callbacks passed
  *          to `verifySignedTokenForDevice`.
  *   R7 every route registration in the relay has a literal path, and any
@@ -118,7 +118,7 @@ interface TableSpec {
   };
 }
 
-const MASTER_BRANCH = 'apiToken != null && apiToken !== "" && token === apiToken';
+const MASTER_BRANCH = "secretEquals(token, apiToken)";
 
 const DOORS: readonly TableSpec[] = [
   {
@@ -127,7 +127,7 @@ const DOORS: readonly TableSpec[] = [
     matcher: "isMasterTokenCarveOut",
     scope: "/api/v1/",
     door: "/api/v1/*",
-    handlerCalls: ["bearerAuth", "mw", "c.req.header", "recordMasterTokenOnce"],
+    handlerCalls: ["bearerAuth", "mw", "c.req.header", "recordMasterTokenOnce", "secretEquals"],
     handlerPassesContext: ["mw", "recordMasterTokenOnce"],
   },
   {
@@ -153,6 +153,7 @@ const DOORS: readonly TableSpec[] = [
         "logger.warn",
         "recordAuthEvent",
         "HTTPException",
+        "secretEquals",
       ],
       passesContext: ["recordRefusalBeforeVerify", "recordMasterTokenOnce"],
       masterBranch: MASTER_BRANCH,

@@ -16,6 +16,7 @@ import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
 import { loadActiveSigningKey, IdentityKeyError } from "../identity.js";
 import { requireMotebitId, NO_IDENTITY_MESSAGE } from "./_helpers.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 const DEFAULT_SYNC_URL = "https://relay.motebit.com";
 
@@ -58,11 +59,11 @@ export async function handleRegister(config: CliConfig): Promise<void> {
   } catch (err) {
     if (err instanceof IdentityKeyError) {
       console.warn(
-        `Warning: registration proceeds unsigned (${err.kind}: ${err.message}).\n  → ${err.remedy}`,
+        `Warning: registration proceeds unsigned (${err.kind}: ${sanitizeRelayText(err.message)}).\n  → ${err.remedy}`,
       );
     } else {
       console.warn(
-        `Warning: could not decrypt private key — registration proceeds unsigned (${err instanceof Error ? err.message : String(err)})`,
+        `Warning: could not decrypt private key — registration proceeds unsigned (${sanitizeRelayText(err instanceof Error ? err.message : String(err))})`,
       );
     }
   }
@@ -83,7 +84,7 @@ export async function handleRegister(config: CliConfig): Promise<void> {
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Error: could not reach relay at ${syncUrl}: ${msg}`);
+    console.error(`Error: could not reach relay at ${syncUrl}: ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
 
@@ -195,7 +196,7 @@ export async function pinRelayKey(
   } catch (err) {
     console.warn(
       `Warning: could not fetch the relay transparency declaration ` +
-        `(${err instanceof Error ? err.message : String(err)}) — relay key not pinned; ` +
+        `(${sanitizeRelayText(err instanceof Error ? err.message : String(err))}) — relay key not pinned; ` +
         `re-run \`motebit register\` online to enable P2P delegation.`,
     );
   }

@@ -1498,3 +1498,42 @@ describe("synthesizeSeedRestoreMetadata", () => {
     expect(() => new Date(meta.bornAt).toISOString()).not.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// importIdentityFile — a broken succession chain is not an importable identity
+// ---------------------------------------------------------------------------
+
+describe("importIdentityFile — succession chain", () => {
+  it("refuses a file whose signature is valid but whose succession chain is not", async () => {
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+    const original = await generate(
+      {
+        motebitId: DEFAULTS.motebitId,
+        ownerId: DEFAULTS.ownerId,
+        publicKeyHex: toHex(oldKp.publicKey),
+      },
+      oldKp.privateKey,
+    );
+    // The new key signs the file, but the succession link carries forged
+    // signatures — the chain never legitimately reaches the new key.
+    const forged = await rotate({
+      existingContent: original,
+      newPublicKey: newKp.publicKey,
+      newPrivateKey: newKp.privateKey,
+      successionRecord: {
+        old_public_key: toHex(oldKp.publicKey),
+        new_public_key: toHex(newKp.publicKey),
+        timestamp: Date.now(),
+        old_key_signature: "00".repeat(64),
+        new_key_signature: "00".repeat(64),
+      },
+    });
+    const sig = await canonicalVerify(forged, { expectedType: "identity" });
+    expect(sig.valid).toBe(true); // the signature alone passes…
+
+    const imported = await importIdentityFile(forged);
+    expect(imported.valid).toBe(false); // …but the identity is not intact
+    if (!imported.valid) expect(imported.reason).toMatch(/succession/i);
+  });
+});

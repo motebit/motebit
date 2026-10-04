@@ -10,7 +10,7 @@
  * and a `commit` landed a "fixture" commit on a real branch.
  *
  * Harness: build a DECOY repository, aim GIT_DIR / GIT_WORK_TREE /
- * GIT_INDEX_FILE (plus GIT_CONFIG_* and a GIT_ASKPASS) at it exactly as a hook
+ * GIT_INDEX_FILE (plus GIT_CONFIG_*) at it exactly as a hook
  * would, run every inventoried fixture helper in that environment, and assert
  * the decoy is byte-for-byte unchanged (`.git/config`, HEAD, index, every ref,
  * the object count, and its work tree) — and that each helper's git resolved
@@ -19,6 +19,13 @@
  * The fixture helpers of `scripts/__tests__/differential-vs-main.test.ts`
  * (`fxGit` / `fxRun`) carry their own decoy test in that file; the shared
  * scrub they route through is the one asserted here.
+ *
+ * Relation to #1028: the vitest setup (`scripts/lib/vitest-scrub-git-env.ts`)
+ * deletes every GIT_* from this worker before the file loads, so the leak is
+ * RE-INTRODUCED per case (`withLeakedEnv`) — that is what proves the per-spawn
+ * layer (`cleanEnv`, held by `check-fixture-git-env`) on its own, for a helper
+ * run outside vitest and the hook. The shell script is spawned with the leak
+ * in its env directly, the way a hook would run it.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -37,8 +44,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readGit, runPretest } from "../lib/differential-tree.js";
-import { fixtureGitEnv } from "../lib/fixture-git-env.js";
+import { cleanEnv, readGit, runPretest } from "../lib/differential-tree.js";
 import { analyzeSh, analyzeTs } from "../check-fixture-git-env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -48,7 +54,7 @@ function git(cwd: string, args: string[]): string {
   const r = spawnSync(
     "git",
     ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "commit.gpgsign=false", ...args],
-    { cwd, env: fixtureGitEnv(), encoding: "utf8" },
+    { cwd, env: cleanEnv(), encoding: "utf8" },
   );
   if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed in ${cwd}:\n${r.stderr}`);
   return r.stdout.trim();
@@ -208,7 +214,7 @@ describe("fixture helpers under a leaked GIT_* environment (decoy repository)", 
     const pin = initRepo(spec, "tool/build.sh", "#!/bin/sh\nexit 7\n");
     const r = spawnSync("bash", [join(ROOT, "scripts", "verify-pdf-text-v1-reproduction.sh")], {
       cwd: jail,
-      env: { ...fixtureGitEnv(), ...leaked, SPEC_REPO: spec, SPEC_SHA: pin },
+      env: { ...cleanEnv(), ...leaked, SPEC_REPO: spec, SPEC_SHA: pin },
       encoding: "utf8",
       timeout: 60_000,
     });
@@ -225,19 +231,19 @@ describe("fixture helpers under a leaked GIT_* environment (decoy repository)", 
 });
 
 describe("check-fixture-git-env classification", () => {
-  it("repo-root git spawns need no scrub; anything else needs fixtureGitEnv", () => {
+  it("repo-root git spawns need no scrub; anything else needs cleanEnv", () => {
     // Built at runtime so this file's own source carries no unscrubbed spawn for the gate to see.
     const src = [
       'S("git", ["status"], { cwd: ROOT });',
       'X(`git diff ${x}`, { cwd: ROOT, encoding: "utf-8" });',
       'S("git", ["-C", dir, "status"], { cwd: ROOT });',
       'S("git", ["init"], { cwd: tmp });',
-      'S("git", ["init"], { cwd: tmp, env: fixtureGitEnv() });',
-      "const env = fixtureGitEnv(process.env, {});",
+      'S("git", ["init"], { cwd: tmp, env: cleanEnv() });',
+      "const env = cleanEnv(process.env, {});",
       'S("git", args, { cwd, env, encoding: "utf8" });',
       'S("git", args, { cwd, env: process.env });',
       'S("node", ["x"], { cwd: tmp });',
-      "let e2 = fixtureGitEnv();",
+      "let e2 = cleanEnv();",
       "e2 = process.env;",
       'S("git", args, { cwd, env: e2 });',
     ]

@@ -235,12 +235,21 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
   function onGoalComplete(event: GoalCompleteEvent): void {
     // Show brief completion summary on the progress card before fading
     if (progressCard && progressStepEl) {
-      const statusLabel = event.status === "completed" ? "Completed" : "Failed";
+      const statusLabel =
+        event.status === "completed"
+          ? "Completed"
+          : event.status === "awaiting_result"
+            ? "Awaiting result"
+            : "Failed";
       const summary =
         event.summary != null && event.summary !== "" ? `: ${event.summary.slice(0, 80)}` : "";
       progressStepEl.textContent = `${statusLabel}${summary}`;
       progressStepEl.style.color =
-        event.status === "completed" ? "rgba(34, 197, 94, 0.8)" : "rgba(248, 113, 113, 0.8)";
+        event.status === "completed"
+          ? "rgba(34, 197, 94, 0.8)"
+          : event.status === "awaiting_result"
+            ? "rgba(250, 204, 21, 0.8)"
+            : "rgba(248, 113, 113, 0.8)";
     }
 
     // Fade the card after a short delay

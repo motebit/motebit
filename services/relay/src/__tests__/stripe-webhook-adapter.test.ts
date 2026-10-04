@@ -200,6 +200,7 @@ describe("StripeSubscriptionEventAdapter", () => {
         data: {
           object: {
             id: "in_test_001",
+            billing_reason: "subscription_cycle",
             // Stripe 2025-03-31.basil: subscription moved under parent.
             parent: { subscription_details: { subscription: "sub_active_123" } },
           },
@@ -210,7 +211,22 @@ describe("StripeSubscriptionEventAdapter", () => {
         kind: "invoice_paid",
         subscription_id: "sub_active_123",
         invoice_id: "in_test_001",
+        billing_reason: "subscription_cycle",
       });
+    });
+
+    it("carries an absent billing_reason as null (the relay credits no period for it)", async () => {
+      mock.webhooks.constructEvent.mockReturnValueOnce({
+        type: "invoice.paid",
+        data: {
+          object: {
+            id: "in_test_003",
+            parent: { subscription_details: { subscription: "sub_active_123" } },
+          },
+        },
+      });
+      const event = await adapter.verifyAndParse("body", "sig");
+      expect(event).toMatchObject({ kind: "invoice_paid", billing_reason: null });
     });
 
     it("extracts subscription id from expanded nested object", async () => {

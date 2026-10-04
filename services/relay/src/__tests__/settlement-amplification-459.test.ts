@@ -151,9 +151,15 @@ describe("#459 — settlement-amplification relay fixes", () => {
     const submit = await relay.app.request(`/agent/${target.motebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ prompt: "search for something" }),
+      // Routed by capability to the listed worker (#890 r6: only a worker the
+      // relay handed the task to may answer it).
+      body: JSON.stringify({
+        prompt: "search for something",
+        submitted_by: target.motebitId,
+        required_capabilities: ["web_search"],
+      }),
     });
-    expect(submit.status).toBe(201);
+    expect(submit.status, await submit.clone().text()).toBe(201);
     const { task_id: taskId } = (await submit.json()) as { task_id: string };
 
     // The LISTED worker signs and delivers the receipt (the incident shape:

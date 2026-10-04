@@ -112,7 +112,7 @@ Fields:
 
 - `goal_id` (string, required) — UUID v4 of the goal; stable across yaml revisions.
 - `prompt` (string, optional) — Natural-language goal text. REQUIRED on initial creation; MAY be absent on revision when only scheduling metadata changed.
-- `interval_ms` (integer, optional) — Scheduling cadence in milliseconds. Absent for one-shot goals.
+- `interval_ms` (integer, optional) — Scheduling cadence in milliseconds. MAY be absent (e.g. on a revision); MAY be present on a `"once"` goal, where it does not make the goal repeat.
 - `mode` (string, optional) — `"recurring"` or `"once"`. Future variants reserved.
 - `wall_clock_ms` (integer, optional) — Wall-clock anchor for the first run (Unix milliseconds).
 - `project_id` (string, optional) — User-facing project grouping. Opaque to the protocol.

@@ -13,6 +13,7 @@ import type { TokenAudience } from "@motebit/sdk";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, type FullConfig } from "../config.js";
 import { loadActiveSigningKey } from "../identity.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 /**
  * Canonical empty-state message for any CLI surface that requires an
@@ -172,7 +173,7 @@ export async function getRelayAuthHeaders(
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(
-        `Warning: could not mint signed auth token (${msg}). Request will proceed unauthenticated.`,
+        `Warning: could not mint signed auth token (${sanitizeRelayText(msg)}). Request will proceed unauthenticated.`,
       );
     }
   }
