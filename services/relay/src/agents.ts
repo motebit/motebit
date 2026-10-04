@@ -5,6 +5,7 @@
 import type { Hono, Context } from "hono";
 import { relayRouteAudience, type TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
+import { secretEquals } from "./secret-compare.js";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import { routeTableMatcher, type MasterTokenCarveOut } from "./middleware.js";
 import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
@@ -16,7 +17,8 @@ import type { OutboundUrlOptions } from "@motebit/sdk";
 import type { AgentTrustRecord, ExecutionReceipt, HardwareAttestationClaim } from "@motebit/sdk";
 import { scoreAttestation } from "@motebit/market";
 import type { ConnectedDevice } from "./index.js";
-import type { RelayIdentity } from "./federation.js";
+import type { PeerFetch, RelayIdentity } from "./federation.js";
+import { defaultPeerFetch } from "./federation.js";
 import { insertRevocationEvent, signDiscoverBody } from "./federation.js";
 import {
   applySuccession,
@@ -408,6 +410,8 @@ export interface AgentsDeps {
   taskRouter: TaskRouter;
   /** Outbound URL law for persisted agent endpoints (`buildOutboundPolicy`). */
   outboundPolicy?: OutboundUrlOptions;
+  /** The peer transport (`PeerFetch`); omitted, the global `fetch`. */
+  peerFetch?: PeerFetch;
   apiToken?: string;
   /** Platform fee rate for the P2P eligibility pre-flight's expected-fee hint. Defaults to PLATFORM_FEE_RATE. */
   platformFeeRate?: number;
@@ -603,7 +607,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     // Master token bypass (operator) — recorded: a master-token presentation
     // on an agent route is exactly the shape the retirement arc closed, so it
     // must be visible if it ever comes back.
-    if (apiToken != null && apiToken !== "" && token === apiToken) {
+    if (secretEquals(token, apiToken)) {
       recordMasterTokenOnce(c, recordAuthEvent, {
         method: c.req.method,
         path: c.req.path,
@@ -733,7 +737,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     }
     const token = authHeader.slice(7);
 
-    if (apiToken != null && apiToken !== "" && token === apiToken) {
+    if (secretEquals(token, apiToken)) {
       recordMasterTokenOnce(c, recordAuthEvent, {
         method,
         path,
@@ -804,6 +808,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     federationQueryCache,
     parseTokenPayloadUnsafe,
   } = deps;
+  const peerFetch = deps.peerFetch ?? defaultPeerFetch;
   // Fee rate for the P2P eligibility pre-flight's expected-fee hint — the SAME
   // rate the submission gate uses, so the hint cannot disagree with what the
   // relay will accept.
@@ -1885,7 +1890,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
           },
           relayIdentity,
         );
-        const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
+        const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/discover`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
           body: JSON.stringify(discoverBody),

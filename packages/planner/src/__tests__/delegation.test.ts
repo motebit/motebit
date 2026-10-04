@@ -660,13 +660,13 @@ describe("RelayDelegationAdapter retry with failover", () => {
     vi.unstubAllGlobals();
   });
 
-  it("does not retry on submission failure (non-retryable)", async () => {
+  it("does not retry on a submission refusal (non-retryable)", async () => {
     let fetchCount = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(async () => {
         fetchCount++;
-        return new Response("Internal Server Error", { status: 500 });
+        return new Response("Bad Request", { status: 400 });
       }),
     );
 
@@ -684,6 +684,28 @@ describe("RelayDelegationAdapter retry with failover", () => {
     // Should NOT retry — submission failures are not retryable
     expect(fetchCount).toBe(1);
 
+    vi.unstubAllGlobals();
+  });
+
+  it("#890 r4: a 5xx on submission is not a refusal — same key again, then undetermined", async () => {
+    const keys: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+        keys.push((init?.headers as Record<string, string>)["Idempotency-Key"]!);
+        return new Response("Internal Server Error", { status: 500 });
+      }),
+    );
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      sendRaw: vi.fn(),
+      onCustomMessage: () => () => {},
+      maxDelegationRetries: 2,
+    });
+    await expect(adapter.delegateStep(makeStep(), 5000)).rejects.toThrow(/Submission unconfirmed/);
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(1);
     vi.unstubAllGlobals();
   });
 

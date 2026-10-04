@@ -311,7 +311,9 @@ describe("relay_receipts archive invariants", () => {
       .prepare(
         "SELECT motebit_id, task_id, parent_task_id, depth FROM relay_receipts WHERE task_id IN (?, ?) ORDER BY depth ASC",
       )
-      .all(taskAB, taskBC) as Array<{
+      // A nested child is archived under its own namespaced key, never the
+      // top-level key its signer's own receipt for the task lives under (#890 r6).
+      .all(taskAB, `${taskBC}#nested:${taskAB}`) as Array<{
       motebit_id: string;
       task_id: string;
       parent_task_id: string | null;
@@ -327,7 +329,7 @@ describe("relay_receipts archive invariants", () => {
     });
     expect(rows[1]).toMatchObject({
       motebit_id: agentC.motebitId,
-      task_id: taskBC,
+      task_id: `${taskBC}#nested:${taskAB}`,
       parent_task_id: taskAB,
       depth: 1,
     });

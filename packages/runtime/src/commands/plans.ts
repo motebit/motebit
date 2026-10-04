@@ -27,6 +27,7 @@ export interface PlanEvent {
     | "step_delegated"
     | "plan_completed"
     | "plan_failed"
+    | "plan_undetermined"
     | "plan_retrying"
     | "reflection"
     | "approval_request";
@@ -35,7 +36,11 @@ export interface PlanEvent {
 }
 
 export interface PlanSnapshot {
-  status: "idle" | "running" | "completed" | "failed";
+  /**
+   * `awaiting_result` (#890): stopped on a delegated step whose paid
+   * outcome is unknown — not a failure; the owner checks `/result`.
+   */
+  status: "idle" | "running" | "completed" | "failed" | "awaiting_result";
 
   /** Current plan title. Updates on plan_retrying. */
   title: string;
@@ -116,6 +121,12 @@ export class PlanExecutionVM {
         this._currentStep = null;
         this._failureReason = chunk.reason;
         this.pushEvent("plan_failed", chunk.reason);
+        break;
+
+      case "plan_undetermined":
+        this._status = "awaiting_result";
+        this._currentStep = null;
+        this.pushEvent("plan_undetermined", chunk.reason);
         break;
 
       case "plan_retrying":

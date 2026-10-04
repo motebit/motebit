@@ -76,6 +76,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^4.1.10
         version: 4.1.10(vitest@4.1.10)
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
       eslint:
         specifier: ^8.57.1
         version: 8.57.1
@@ -112,6 +115,9 @@ importers:
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@26.2.0)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@26.2.0)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
 
   apps/cli:
     dependencies:
@@ -295,7 +301,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@22.20.1)(esbuild@0.27.3)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+        version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
 
   apps/desktop:
     dependencies:
@@ -408,6 +414,12 @@ importers:
         specifier: ^0.185.1
         version: 0.185.1
     devDependencies:
+      '@hono/node-server':
+        specifier: '>=1.19.10 <2.0.0'
+        version: 1.19.17(hono@4.13.7)
+      '@motebit/relay':
+        specifier: workspace:*
+        version: link:../../services/relay
       '@noble/curves':
         specifier: ^2.3.0
         version: 2.3.0
@@ -747,9 +759,15 @@ importers:
         specifier: ^4.7.0
         version: 4.7.0
     devDependencies:
+      '@hono/node-server':
+        specifier: '>=1.19.10 <2.0.0'
+        version: 1.19.17(hono@4.13.7)
       '@motebit/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
+      '@motebit/relay':
+        specifier: workspace:*
+        version: link:../../services/relay
       '@noble/curves':
         specifier: ^2.3.0
         version: 2.3.0
@@ -875,9 +893,18 @@ importers:
         specifier: ^0.185.1
         version: 0.185.1
     devDependencies:
+      '@hono/node-server':
+        specifier: '>=1.19.10 <2.0.0'
+        version: 1.19.17(hono@4.13.7)
+      '@motebit/relay':
+        specifier: workspace:*
+        version: link:../../services/relay
       '@types/three':
         specifier: ^0.185.4
         version: 0.185.4
+      fake-indexeddb:
+        specifier: ^6.0.0
+        version: 6.2.5
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1019,6 +1046,12 @@ importers:
         specifier: ^0.185.1
         version: 0.185.1
     devDependencies:
+      '@hono/node-server':
+        specifier: '>=1.19.10 <2.0.0'
+        version: 1.19.17(hono@4.13.7)
+      '@motebit/relay':
+        specifier: workspace:*
+        version: link:../../services/relay
       '@noble/ed25519':
         specifier: ~3.1.0
         version: 3.1.0
@@ -1229,7 +1262,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+        version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@22.20.1)(esbuild@0.27.3)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
 
   packages/crypto-android-keystore:
     dependencies:
@@ -1932,12 +1965,21 @@ importers:
         specifier: workspace:*
         version: link:../sync-engine
     devDependencies:
+      '@motebit/browser-persistence':
+        specifier: workspace:*
+        version: link:../browser-persistence
+      '@motebit/persistence':
+        specifier: workspace:*
+        version: link:../persistence
       '@motebit/wallet-solana':
         specifier: workspace:*
         version: link:../wallet-solana
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
+      fake-indexeddb:
+        specifier: ^6.0.0
+        version: 6.2.5
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -10524,6 +10566,7 @@ packages:
 
   react-native-quick-crypto@0.7.17:
     resolution: {integrity: sha512-cJzp6oA/dM1lujt+Rwtn46Mgcs3w9F/0oQvNz1jcADc/AXktveAOUTzzKrDMxyg6YPziCYnoqMDzHBo6OLSU1g==}
+    deprecated: 'Security: secret keys are truncated at the first NUL byte, producing low-entropy derived keys. Upgrade to >=1.0.0. See GHSA-wrf3-fwx3-8jrv'
 
   react-native-safe-area-context@5.6.2:
     resolution: {integrity: sha512-4XGqMNj5qjUTYywJqpdWZ9IG8jgkS3h06sfVjfw5yZQZfWnRFXczi0GnYyFyCc2EBps/qFmoCH8fez//WumdVg==}
@@ -15197,12 +15240,12 @@ snapshots:
       '@noble/hashes': 1.8.0
       apg-js: 4.4.0
 
-  '@signinwithethereum/siwe@4.2.0(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(viem@2.55.19(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.4.3))':
+  '@signinwithethereum/siwe@4.2.0(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(viem@2.55.19(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76))':
     dependencies:
       '@signinwithethereum/siwe-parser': 4.2.0
     optionalDependencies:
       ethers: 6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)
-      viem: 2.55.19(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.4.3)
+      viem: 2.55.19(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
 
   '@sinclair/typebox@0.27.12': {}
 
@@ -16415,7 +16458,7 @@ snapshots:
     dependencies:
       '@noble/curves': 1.9.7
       '@scure/base': 1.2.6
-      '@signinwithethereum/siwe': 4.2.0(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(viem@2.55.19(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.4.3))
+      '@signinwithethereum/siwe': 4.2.0(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(viem@2.55.19(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76))
       '@x402/core': 2.22.0
       ajv: 8.20.0
       jose: 5.10.0

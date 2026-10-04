@@ -29,6 +29,7 @@ import { loadActiveSigningKey } from "../identity.js";
 import { secureErase } from "@motebit/encryption";
 import { getDbPath } from "../runtime-factory.js";
 import { requireMotebitId, getRelayUrl } from "./_helpers.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 /**
  * The scope travels structurally, never inside the free-text reason.
@@ -83,7 +84,7 @@ async function logHaltEvent(
     // and no record of who asked or who gave the permission back, and
     // nothing anywhere says so. The runtime's twin warns; so does this.
     console.error(
-      `Warning: the halt is recorded and in force, but its audit event could not be written: ${err instanceof Error ? err.message : String(err)}`,
+      `Warning: the halt is recorded and in force, but its audit event could not be written: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
     );
   }
 }
@@ -265,7 +266,9 @@ export async function handleHalt(config: CliConfig): Promise<void> {
       // from the top-level catch — a stack-trace register on the one
       // command where the person most needs a plain sentence about
       // whether anything stopped. `cmdHalt` already converts this.
-      console.error(`Nothing was halted: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(
+        `Nothing was halted: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+      );
       process.exitCode = 1;
       return;
     }

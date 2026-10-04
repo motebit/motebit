@@ -14,7 +14,8 @@ import type {
 import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
-import { persistFreeze } from "./freeze.js";
+import { isEmergencyFrozenAbort, persistFreeze } from "./freeze.js";
+import { EmergencyFrozenError } from "./errors.js";
 import {
   getAccountBalance,
   getAccountBalanceDetailed,
@@ -346,6 +347,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       });
     }
 
+    // This request claimed the key. If the emergency freeze refuses its money
+    // write, the error boundary reopens the key so the same-key retry after
+    // unfreeze withdraws once (every other failure keeps today's behavior).
+    c.set("idempotencyClaimOnFreeze" as never, { key: idempotencyKeyHeader, motebitId } as never);
+
     const body = await c.req.json<{
       amount: number;
       destination?: string;
@@ -434,6 +440,17 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // earlier broadcast can land) fails the withdrawal and refunds,
     // atomically — see the outcome rule below.
     let autoSettled = false;
+    // The payout claim is a guarded write: a freeze that landed after the
+    // debit (during a path's pre-claim await) refuses it, so nothing is sent
+    // and the withdrawal stands `pending` with its amount held. That is a
+    // refusal, answered 503 — never a 200 that reads as a payout in progress.
+    let frozenAtClaim = false;
+    // A payout that provably moved nothing (Path 0 outcome 2) whose refund a
+    // freeze landing during the send refused: the withdrawal stays
+    // `processing` with the proven outcome recorded, the amount held, and the
+    // request is answered 503 — the refund is the operator's reconcile
+    // (`not_paid`) after unfreeze, never a 200 that reads as settled.
+    let frozenAtRefund = false;
     const isSolanaDest =
       result.destination !== "pending" && SOLANA_DEST_RE.test(result.destination);
     const isWalletDest = result.destination !== "pending" && EVM_DEST_RE.test(result.destination);
@@ -598,13 +615,42 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
           } else if (sendResult.confirmed === false && sendResult.earlierBroadcastsDead === true) {
             // Outcome 2 — landed and failed, and no earlier broadcast can
             // land: provably nothing moved.
-            const refunded = failWithdrawal(
-              moteDb.db,
-              result.withdrawal_id,
-              `solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} but failed on-chain (confirmed:false), and no earlier broadcast of this payout can land; no USDC moved, amount returned to balance`,
-              "processing",
-            );
-            if (refunded) {
+            let refunded: boolean;
+            try {
+              refunded = failWithdrawal(
+                moteDb.db,
+                result.withdrawal_id,
+                `solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} but failed on-chain (confirmed:false), and no earlier broadcast of this payout can land; no USDC moved, amount returned to balance`,
+                "processing",
+              );
+            } catch (refundErr) {
+              if (!isEmergencyFrozenAbort(refundErr)) throw refundErr;
+              // The freeze (landed during the send) refused the refund: the
+              // fail + refund rolled back together. Record the PROVEN outcome
+              // (never "may have landed") and answer 503, never 200.
+              frozenAtRefund = true;
+              const noted = noteWithdrawalPayoutUnresolved(
+                moteDb.db,
+                result.withdrawal_id,
+                `refund refused by emergency freeze: solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} and failed on-chain (confirmed:false), and no earlier broadcast of this payout can land — no USDC moved; after the freeze lifts, reconcile as not_paid to refund`,
+              );
+              if (!noted) {
+                settleLost("solana", "landed_failed_frozen", {
+                  txSignature: sendResult.signature,
+                  slot: sendResult.slot,
+                });
+              }
+              refunded = false;
+            }
+            if (frozenAtRefund) {
+              logger.warn("withdrawal.solana.landed_failed_refund_frozen", {
+                correlationId,
+                motebitId,
+                withdrawalId: result.withdrawal_id,
+                txSignature: sendResult.signature,
+                slot: sendResult.slot,
+              });
+            } else if (refunded) {
               logger.warn("withdrawal.solana.landed_failed", {
                 correlationId,
                 motebitId,
@@ -653,6 +699,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         // `processing`; never refund here. An unclaimed one (isAvailable
         // threw) was never sent and stays `pending`.
         const error = err instanceof Error ? err.message : String(err);
+        if (!claimed && isEmergencyFrozenAbort(err)) frozenAtClaim = true;
         if (claimed) {
           const noted = noteWithdrawalPayoutUnresolved(
             moteDb.db,
@@ -764,6 +811,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
           }
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
+          if (!claimed && isEmergencyFrozenAbort(err)) frozenAtClaim = true;
           if (claimed) {
             const noted = noteWithdrawalPayoutUnresolved(
               moteDb.db,
@@ -813,6 +861,16 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // Re-read on EVERY outcome, not only auto-settle: a landed-and-failed
     // send (#920) moves the row to `failed` with a reason, and the response
     // must say so rather than echo the stale `pending` record.
+    if (frozenAtClaim && !autoSettled) {
+      throw new EmergencyFrozenError(
+        `Relay is in emergency freeze mode: withdrawal ${result.withdrawal_id} is recorded and its amount held, but no payout was sent. It stays pending; retry with the same Idempotency-Key after the freeze lifts — never a new key.`,
+      );
+    }
+    if (frozenAtRefund) {
+      throw new EmergencyFrozenError(
+        `Relay is in emergency freeze mode: withdrawal ${result.withdrawal_id}'s payout landed and failed on-chain (no USDC moved), but its refund was refused by the freeze. It stays processing with that outcome recorded and its amount held; after the freeze lifts the operator's reconcile refunds it.`,
+      );
+    }
     const finalRecord = getWithdrawalById(moteDb.db, result.withdrawal_id) ?? result;
     const responseBody = {
       motebit_id: motebitId,

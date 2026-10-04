@@ -85,7 +85,10 @@ AgentRevocationRecord {
 }
 ```
 
-The signed payload is every field except `hash`, `suite`, `signature`. The
+The signed payload is every field except `hash`, `suite`, `signature`. Because
+`suite` is NOT signature-covered, verifiers MUST pin it to
+`motebit-jcs-ed25519-hex-v1` (reject `unsupported_suite` otherwise) and MUST
+NOT dispatch verification on the declared value. The
 `AgentRevocationRecord` type in `@motebit/protocol` is the binding
 machine-readable form.
 
@@ -133,7 +136,10 @@ A third party verifies the feed offline against the relay's pinned key
 
 1. Fetch `GET /api/v1/agents/revocations`.
 2. `verifyAgentRevocationFeed(feed, pinnedRelayKeyHex)` — recompute the feed
-   digest, check the envelope signature under the declared suite, then verify
+   digest, check the envelope `suite` equals the pinned
+   `motebit-jcs-ed25519-hex-v1` (the feed `suite`, like the record `suite`, is
+   outside the signed payload, so it is pinned, never dispatched on), check the
+   envelope signature under that suite, then verify
    every contained record (`verifyAgentRevocationRecord`) against the same key.
 3. Current discoverability of any `motebit_id` is the latest record for it; the
    full feed is the auditable history.

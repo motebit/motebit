@@ -19,6 +19,9 @@ const ORIGIN = "http://localhost:3000";
 let logLines: string[];
 beforeEach(() => {
   process.env.RELAY_PUBLIC_KEY = "test-pubkey";
+  // Billing must be configured for motebit-cloud to serve at all (billing.ts).
+  process.env.RELAY_API_URL = "https://relay.test";
+  process.env.RELAY_PROXY_SECRET = "test-relay-proxy-secret";
   logLines = [];
   vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
     logLines.push(args.map(String).join(" "));
@@ -27,6 +30,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  delete process.env.RELAY_API_URL;
+  delete process.env.RELAY_PROXY_SECRET;
 });
 
 /** All proxy.* failure events emitted this turn (excludes proxy.usage). */
@@ -204,11 +209,57 @@ describe("spend controls — the token snapshot is not the bound", () => {
     store = memorySpendStore();
     setSpendStoreForTests(store);
     process.env.ANTHROPIC_API_KEY = "sk-server-test";
+    // The rate key is `proxy:rpm:<mid>:<minute>` with the minute taken from
+    // the wall clock at admission. Assertions that rebuild that key from a
+    // second clock read fail whenever a minute boundary falls between the
+    // two reads, so the clock is frozen mid-minute (Date only; real timers).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-01T12:00:30.000Z"));
   });
   afterEach(() => {
+    vi.useRealTimers();
     setSpendStoreForTests(undefined);
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.RELAY_PROXY_SECRET;
   });
+
+  /**
+   * Upstream SSE body whose chunks and close the test drives explicitly, plus
+   * a relay `/debit` stub that resolves `debitCalled` on its first call and
+   * holds its response until `finishDebit()`. With a relay secret set, the
+   * debit call is the pump's own completion signal: accounting precedes it.
+   */
+  function controlledUpstream() {
+    const enc = new TextEncoder();
+    let upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        upstream = c;
+      },
+    });
+    let onDebit!: () => void;
+    const debitCalled = new Promise<void>((r) => (onDebit = r));
+    let finishDebit!: () => void;
+    const debitResponse = new Promise<Response>(
+      (r) => (finishDebit = () => r(new Response("{}", { status: 200 }))),
+    );
+    process.env.RELAY_PROXY_SECRET = "relay-secret-test";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/debit")) {
+          onDebit();
+          return debitResponse;
+        }
+        return new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }),
+    );
+    const sse = (event: unknown) => enc.encode(`data: ${JSON.stringify(event)}\n\n`);
+    return { upstream, sse, debitCalled, finishDebit };
+  }
 
   it("refuses with 402 before any provider call once this token's recorded spend reaches its balance", async () => {
     vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor({ bal: 5_000 }));
@@ -257,25 +308,81 @@ describe("spend controls — the token snapshot is not the bound", () => {
 
   it("records the metered cost against the token and releases the slot after a streamed response", async () => {
     vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor());
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (String(url).includes("/debit")) return new Response("{}", { status: 200 });
-        return new Response(sseBody(1_000, 500), {
-          status: 200,
-          headers: { "Content-Type": "text/event-stream" },
-        });
-      }),
-    );
+    const { upstream, sse, debitCalled, finishDebit } = controlledUpstream();
     const res = await post(PROXY, BODY);
     expect(res.status).toBe(200);
-    await res.text(); // drain the pump so the finally runs
-    await new Promise((r) => setTimeout(r, 20));
-    const spent = store.map.get("proxy:spent:jti-1") ?? 0;
-    expect(spent).toBeGreaterThan(0);
-    expect(spent).toBe(validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 500, 0, 0));
+    expect(store.map.get("proxy:active:mote-1")).toBe(1);
+
+    upstream.enqueue(sse({ type: "message_start", message: { usage: { input_tokens: 1_000 } } }));
+    upstream.enqueue(sse({ type: "message_delta", usage: { output_tokens: 500 } }));
+    upstream.enqueue(sse({ type: "message_stop" }));
+    upstream.close();
+    // The client reads concurrently: its EOF follows the debit (billing.ts's
+    // fee lands before the stream ends), so it cannot be awaited first.
+    const eof = res.text();
+    await debitCalled; // the pump reached the debit: accounting has completed
+
+    const cost = validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 500, 0, 0);
+    expect(cost).toBeGreaterThan(0);
+    expect(store.map.get("proxy:spent:jti-1")).toBe(cost);
     expect(store.map.get("proxy:active:mote-1")).toBe(0);
     expect(store.map.get(`proxy:rpm:mote-1:${Math.floor(Date.now() / 60_000)}`)).toBe(1);
+    finishDebit();
+    await eof;
+  });
+
+  it("frees the slot and records spend before the relay debit settles, not after its retries", async () => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor());
+    const { upstream, sse, debitCalled, finishDebit } = controlledUpstream();
+    const res = await post(PROXY, BODY);
+
+    upstream.enqueue(sse({ type: "message_start", message: { usage: { input_tokens: 1_000 } } }));
+    upstream.enqueue(sse({ type: "message_delta", usage: { output_tokens: 20 } }));
+    upstream.close();
+    let eofReached = false;
+    const eof = res.text().then((t) => {
+      eofReached = true;
+      return t;
+    });
+    await debitCalled;
+    await new Promise((r) => setTimeout(r, 10));
+
+    // The debit response is still outstanding (a slow relay, or a retry in
+    // backoff), yet the identity's next request must already see this spend
+    // and a free slot.
+    expect(store.map.get("proxy:active:mote-1")).toBe(0);
+    expect(store.map.get("proxy:spent:jti-1")).toBe(
+      validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 20, 0, 0),
+    );
+    // ...and the client's EOF waits on the debit: the fee is sent before the
+    // stream ends, never left to post-response work the platform may drop.
+    expect(eofReached).toBe(false);
+    finishDebit();
+    await eof;
+    expect(eofReached).toBe(true);
+  });
+
+  it("releases the slot and records the FULL metered spend when the client aborts mid-stream", async () => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor());
+    const { upstream, sse, debitCalled, finishDebit } = controlledUpstream();
+    const res = await post(PROXY, BODY);
+    const client = res.body!.getReader();
+
+    upstream.enqueue(sse({ type: "message_start", message: { usage: { input_tokens: 1_000 } } }));
+    expect((await client.read()).done).toBe(false);
+    await client.cancel(); // the user closed the tab / pressed stop
+    // The pump learns of the abort on its next write, then keeps draining
+    // upstream: the output usage Anthropic reports last is still billed.
+    upstream.enqueue(sse({ type: "content_block_delta" }));
+    upstream.enqueue(sse({ type: "message_delta", usage: { output_tokens: 500 } }));
+    upstream.close();
+    await debitCalled;
+
+    expect(store.map.get("proxy:active:mote-1")).toBe(0);
+    expect(store.map.get("proxy:spent:jti-1")).toBe(
+      validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 500, 0, 0),
+    );
+    finishDebit();
   });
 
   it("releases the slot when the upstream answers non-2xx before any stream", async () => {

@@ -91,14 +91,40 @@ interface ModelEntry {
   input: number;
   /** Output price (USD per million tokens). */
   output: number;
+  /**
+   * Context-length pricing tier: when the turn's PROMPT (uncached + cached +
+   * cache-write tokens, as the provider reports them) exceeds
+   * `abovePromptTokens`, the provider bills the WHOLE turn — every input
+   * bucket and the output — at these rates instead. Absent ⇒ one rate.
+   */
+  longContext?: { abovePromptTokens: number; input: number; output: number };
+  /**
+   * The largest prompt this row's rates are KNOWN to price exactly. Set when
+   * the model's context-length tiers are not confirmed in our pricing notes:
+   * a prompt that could exceed it is refused before anything spends
+   * (`exceedsPricedPromptCeiling`), never billed at a guessed rate. Absent ⇒
+   * every reachable prompt is priced (flat within the provider's own window,
+   * or tiered via `longContext`).
+   */
+  maxPricedPromptTokens?: number;
 }
+
+/**
+ * The lowest context-length tier boundary any provider we route to is known
+ * to use (Google, Anthropic: >200k prompt tokens). A row whose own tiers are
+ * unconfirmed is refused above it — never above a boundary we would be guessing.
+ */
+const UNCONFIRMED_TIER_CEILING = 200_000;
 
 /** Model → entry mapping. Three tiers per vertically-integrated lab+host
  *  pair (Anthropic, OpenAI, Google); Groq adds 2 open-source rows where
  *  host !== lab — the structural proof that the axes are decoupled. */
 const MODEL_CONFIG: Record<string, ModelEntry> = {
   // Anthropic — opus (strongest), sonnet (default), haiku (fast). Vertically
-  // integrated: host === lab (Anthropic trains AND hosts Claude).
+  // integrated: host === lab (Anthropic trains AND hosts Claude). Anthropic's
+  // long-context (>200k) rates apply only behind the 1M-context beta header,
+  // which `provider-request.ts` never sends: the provider's own 200k window
+  // refuses (unbilled) any larger prompt, so the flat rate is exact.
   "claude-opus-4-6": {
     host: "anthropic",
     lab: "anthropic",
@@ -123,13 +149,23 @@ const MODEL_CONFIG: Record<string, ModelEntry> = {
   // OpenAI — gpt-5.4 (strongest), gpt-5.4-mini (mid), gpt-5.4-nano (fast).
   // Vertically integrated for hosted models; OpenAI also appears as `lab`
   // for gpt-oss-120b below (open-source) running on Groq.
-  "gpt-5.4": { host: "openai", lab: "openai", jurisdiction: "US", input: 2.5, output: 15.0 },
+  // Context-length tiers are not confirmed in our pricing notes for any
+  // OpenAI-hosted row → refused above UNCONFIRMED_TIER_CEILING.
+  "gpt-5.4": {
+    host: "openai",
+    lab: "openai",
+    jurisdiction: "US",
+    input: 2.5,
+    output: 15.0,
+    maxPricedPromptTokens: UNCONFIRMED_TIER_CEILING,
+  },
   "gpt-5.4-mini": {
     host: "openai",
     lab: "openai",
     jurisdiction: "US",
     input: 0.75,
     output: 4.5,
+    maxPricedPromptTokens: UNCONFIRMED_TIER_CEILING,
   },
   "gpt-5.4-nano": {
     host: "openai",
@@ -137,15 +173,19 @@ const MODEL_CONFIG: Record<string, ModelEntry> = {
     jurisdiction: "US",
     input: 0.2,
     output: 1.25,
+    maxPricedPromptTokens: UNCONFIRMED_TIER_CEILING,
   },
   // Google — 2.5 pro (strongest), 2.5 flash (default), 2.5 flash-lite (fast).
-  // Pro has tiered pricing (>200k: $2.50/$15). Using ≤200k rate; acceptable margin risk.
+  // Pro is tiered: a prompt above 200k tokens bills the whole turn at
+  // $2.50/$15 per M. Flash / Flash-Lite tiers are not confirmed in our pricing
+  // notes → refused above UNCONFIRMED_TIER_CEILING.
   "gemini-2.5-pro": {
     host: "google",
     lab: "google",
     jurisdiction: "US",
     input: 1.25,
     output: 10.0,
+    longContext: { abovePromptTokens: 200_000, input: 2.5, output: 15.0 },
   },
   "gemini-2.5-flash": {
     host: "google",
@@ -153,6 +193,7 @@ const MODEL_CONFIG: Record<string, ModelEntry> = {
     jurisdiction: "US",
     input: 0.3,
     output: 2.5,
+    maxPricedPromptTokens: UNCONFIRMED_TIER_CEILING,
   },
   "gemini-2.5-flash-lite": {
     host: "google",
@@ -160,8 +201,9 @@ const MODEL_CONFIG: Record<string, ModelEntry> = {
     jurisdiction: "US",
     input: 0.1,
     output: 0.4,
+    maxPricedPromptTokens: UNCONFIRMED_TIER_CEILING,
   },
-  // Groq — open-source weights on LPU hardware. host !== lab for both:
+  // Groq — open-source weights on LPU hardware (tiers unconfirmed → ceiling). host !== lab for both:
   // Meta trained Llama; OpenAI released gpt-oss-120b as open weights;
   // Groq runs them. Speed advantage (~500 tok/s on 70B vs ~50-80 on
   // standard GPU clouds) compounds across motebit's tool-call-heavy loops.
@@ -171,6 +213,7 @@ const MODEL_CONFIG: Record<string, ModelEntry> = {
     jurisdiction: "US",
     input: 0.59,
     output: 0.79,
+    maxPricedPromptTokens: UNCONFIRMED_TIER_CEILING,
   },
   "openai/gpt-oss-120b": {
     host: "groq",
@@ -178,6 +221,7 @@ const MODEL_CONFIG: Record<string, ModelEntry> = {
     jurisdiction: "US",
     input: 0.15,
     output: 0.75,
+    maxPricedPromptTokens: UNCONFIRMED_TIER_CEILING,
   },
 };
 
@@ -314,6 +358,26 @@ export function getSupportedModels(): string[] {
   return Object.keys(MODEL_CONFIG);
 }
 
+/**
+ * The largest prompt (in tokens) whose cost this model's table row is known to
+ * price exactly, or null when every reachable prompt is priced. See
+ * `ModelEntry.maxPricedPromptTokens`.
+ */
+export function maxPricedPromptTokens(model: string): number | null {
+  return MODEL_CONFIG[model]?.maxPricedPromptTokens ?? null;
+}
+
+/**
+ * True iff a prompt bounded ABOVE by `promptTokenBound` could exceed the
+ * model's priced ceiling — refuse before anything spends. The bound must be a
+ * sound upper bound (e.g. the provider request's UTF-8 byte length plus
+ * headroom: byte-level BPE emits at most one token per byte).
+ */
+export function exceedsPricedPromptCeiling(model: string, promptTokenBound: number): boolean {
+  const ceiling = maxPricedPromptTokens(model);
+  return ceiling != null && promptTokenBound > ceiling;
+}
+
 const MARGIN = 0.2; // 20% markup
 const MICRO = 1_000_000;
 
@@ -322,8 +386,10 @@ const MICRO = 1_000_000;
  *  Anthropic usage fields are disjoint buckets (not overlapping):
  *    input_tokens          = non-cached tokens (after last cache breakpoint)
  *    cache_read_input_tokens    = cached tokens read from cache (0.1x price)
- *    cache_creation_input_tokens = tokens written to cache (1.25x price)
- *    total_input = input_tokens + cache_read + cache_creation
+ *    cache_creation_input_tokens = tokens written to cache, priced by TTL:
+ *      5-minute writes 1.25x (`cacheCreationTokens`),
+ *      1-hour writes 2x (`cacheCreation1hTokens`) — the highest input rate
+ *    total_input = input_tokens + cache_read + cache_creation (5m + 1h)
  */
 export function calculateCostMicro(
   model: string,
@@ -331,21 +397,31 @@ export function calculateCostMicro(
   outputTokens: number,
   cacheReadTokens = 0,
   cacheCreationTokens = 0,
+  cacheCreation1hTokens = 0,
 ): number {
   const config = MODEL_CONFIG[model];
   if (config == null) return 0;
   // Cache-read discount is provider-specific: Anthropic reads cached input at
   // 0.1x (90% off), OpenAI at 0.5x (50% off). Cache CREATION is an Anthropic-only
-  // surcharge (1.25x) — OpenAI auto-caches with no creation charge, so its callers
-  // pass cacheCreationTokens=0. `extractUsage` normalizes inputTokens to the
+  // surcharge (1.25x for a 5-minute TTL, 2x for 1-hour) — OpenAI auto-caches
+  // with no creation charge, so its callers pass both creation counts as 0. `extractUsage` normalizes inputTokens to the
   // UNCACHED portion for every provider, so these terms are additive (no
   // double-count). See usage.ts.
   const cacheReadMultiplier = config.host === "openai" ? 0.5 : 0.1;
+  // Context-length tier: keyed on the REPORTED prompt — every input bucket —
+  // and applied to the whole turn, as the provider bills it.
+  const promptTokens = inputTokens + cacheReadTokens + cacheCreationTokens + cacheCreation1hTokens;
+  const tier = config.longContext;
+  const rates =
+    tier != null && promptTokens > tier.abovePromptTokens
+      ? tier
+      : { input: config.input, output: config.output };
   const rawCost =
-    (inputTokens / 1_000_000) * config.input +
-    (cacheReadTokens / 1_000_000) * config.input * cacheReadMultiplier +
-    (cacheCreationTokens / 1_000_000) * config.input * 1.25 +
-    (outputTokens / 1_000_000) * config.output;
+    (inputTokens / 1_000_000) * rates.input +
+    (cacheReadTokens / 1_000_000) * rates.input * cacheReadMultiplier +
+    (cacheCreationTokens / 1_000_000) * rates.input * 1.25 +
+    (cacheCreation1hTokens / 1_000_000) * rates.input * 2 +
+    (outputTokens / 1_000_000) * rates.output;
   return Math.ceil(rawCost * (1 + MARGIN) * MICRO);
 }
 
@@ -433,7 +509,9 @@ export async function parseProxyToken(
     );
     if (!valid) return null;
 
-    const payload = JSON.parse(new TextDecoder().decode(payloadBytes)) as ProxyTokenPayload;
+    const decoded: unknown = JSON.parse(new TextDecoder().decode(payloadBytes));
+    const payload = asProxyTokenPayload(decoded);
+    if (payload === null) return null;
 
     // Check expiry
     if (payload.exp <= Date.now()) return null;
@@ -442,6 +520,50 @@ export async function parseProxyToken(
   } catch {
     return null;
   }
+}
+
+/**
+ * The exact claim set the relay's `issueProxyToken`
+ * (`services/relay/src/subscriptions.ts`) signs — no more, no less.
+ */
+const PROXY_TOKEN_KEYS: readonly string[] = ["bal", "exp", "iat", "jti", "mid", "models"];
+
+/**
+ * Domain separation for relay signatures. The relay signs many artifacts with
+ * one identity key — audience-bound bearer tokens (`mintAudienceToken`:
+ * browser-sandbox, task:dispatch, mcp:call), canonical-JSON records
+ * (transparency declaration, revocations, …) — so a valid relay signature
+ * proves only "the relay signed these bytes", never "these bytes are a proxy
+ * token". The proxy token carries no type claim on the wire, so the type is
+ * proven structurally: the payload must be EXACTLY the proxy-token claim set
+ * with exactly its types. Any foreign claim (`aud`, `suite`, `sub`, `spec`, …),
+ * any missing claim, or any mistyped claim → reject, fail-closed. Without this
+ * an audience token or a public relay record reached the provider with
+ * `bal`/`exp` undefined (every comparison false ⇒ admitted).
+ */
+export function asProxyTokenPayload(v: unknown): ProxyTokenPayload | null {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const keys = Object.keys(o).sort();
+  if (keys.length !== PROXY_TOKEN_KEYS.length) return null;
+  for (let i = 0; i < keys.length; i++) if (keys[i] !== PROXY_TOKEN_KEYS[i]) return null;
+
+  const { mid, bal, models, jti, iat, exp } = o;
+  if (typeof mid !== "string" || mid === "") return null;
+  if (typeof jti !== "string" || jti === "") return null;
+  if (!Number.isSafeInteger(bal) || (bal as number) < 0) return null;
+  if (!Number.isSafeInteger(iat)) return null;
+  if (!Number.isSafeInteger(exp)) return null;
+  if (!Array.isArray(models) || !models.every((m) => typeof m === "string")) return null;
+
+  return {
+    mid,
+    bal: bal as number,
+    models,
+    jti,
+    iat: iat as number,
+    exp: exp as number,
+  };
 }
 
 // --- Request Validation ---

@@ -9,20 +9,40 @@
   <a href="https://docs.motebit.com"><img src="https://img.shields.io/badge/docs-docs.motebit.com-0369a1" alt="Documentation"></a>
   <a href="https://www.npmjs.com/package/motebit"><img src="https://img.shields.io/npm/v/motebit?label=motebit" alt="motebit"></a>
   <a href="https://www.npmjs.com/package/create-motebit"><img src="https://img.shields.io/npm/v/create-motebit?label=create-motebit" alt="create-motebit"></a>
-  <a href="https://github.com/motebit/motebit/pkgs/container/relay"><img src="https://img.shields.io/badge/ghcr.io%2Fmotebit%2Frelay-1.0.1-blue?logo=docker&logoColor=white" alt="ghcr.io/motebit/relay"></a>
+  <a href="https://github.com/motebit/motebit/pkgs/container/relay"><img src="https://img.shields.io/badge/ghcr.io%2Fmotebit%2Frelay-1.1.0-blue?logo=docker&logoColor=white" alt="ghcr.io/motebit/relay"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License: BSL 1.1"></a>
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/protocol-Apache--2.0-green" alt="Protocol: Apache-2.0"></a>
 </p>
 
-**Motebit is an open protocol for sovereign AI agents — and a reference runtime you can run today.**
+**Motebit is an open protocol for sovereign AI agents — and a reference runtime you can run today.** A motebit is a droplet of intelligence under surface tension: identity forms the boundary, intelligence fills the interior, governance maintains the surface that prevents diffusion.
+
+### Verify a receipt in 2 minutes
+
+Every unit of work a motebit does ends in a signed receipt. Check one yourself — no account, no relay:
+
+```bash
+curl -sO https://raw.githubusercontent.com/motebit/motebit/main/packages/verify/examples/sample-receipt.json
+npx @motebit/verify sample-receipt.json
+# VALID (receipt)
+#   task:    69755e82-5c11-47f4-9768-c9fc275f6c93
+#   motebit: 93d0bd7c-d233-845e-946d-60aff1dcfb69
+#   signer:  did:key:z6MknTDuE9nStgifh9bzrGNC8AcsxKSoyikuanL4z8jNN6gm
+#   binding: sovereign · motebit_id commits to the key (offline, no operator)
+```
+
+Or open **[receipt.computer](https://receipt.computer)** (it loads a signed sample) and paste any receipt. Two separate checks are reported: **integrity** (the signature is valid over the bytes — provable from the receipt alone) and **binding** (that key belongs to that `motebit_id` — a ladder: `integrity-only → pinned → anchored → sovereign`). A valid signature alone is integrity-only; a sovereign receipt proves its binding offline because the `motebit_id` is the commitment to the signing key. See [identity-binding verification](docs/doctrine/identity-binding-verification.md).
+
+### License in three lines
+
+- **Apache-2.0 floor** — the 36 specs and the protocol, crypto, SDK, verifier, platform-attestation, and scaffold packages: use them for anything.
+- **BSL-1.1 runtime** — the `motebit` CLI/runtime, engines, apps, and services: source-available, free for personal / research / internal use; each version converts to Apache-2.0 four years after release.
+- **[LICENSING.md](LICENSING.md) is the truth** — this summary is not.
+
+## Why
 
 Persistent cryptographic identity that survives across devices, providers, and time. Trust accumulated through signed execution receipts. Governance enforced at the agent's boundary. Verifiable proof of what got done.
 
-MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how they pay. Motebit says who the agent is, what it's done, and what it's allowed to do.
-
-The intelligence is pluggable. The identity is the asset.
-
-A motebit is a droplet of intelligence under surface tension — body passive, interior active. Identity forms the boundary, intelligence fills the interior, governance maintains the surface that prevents diffusion. A liquescent droplet that breathes: the runtime gives it a body, the protocol defines its physics. [Read the thesis.](https://docs.motebit.com/docs/introduction)
+MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how they pay. Motebit says who the agent is, what it's done, and what it's allowed to do. The intelligence is pluggable; the identity is the asset. The derivation from droplet physics onward lives in [DOCTRINE.md](DOCTRINE.md) and [the thesis](https://docs.motebit.com/docs/introduction).
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
@@ -58,9 +78,9 @@ motebit relay up
 For multi-tenant operators who want the relay as a verifiable binary instead of an `npm install`: pull the signed multi-arch container, verify the signature, and run it.
 
 ```bash
-docker pull ghcr.io/motebit/relay:1.0.1
+docker pull ghcr.io/motebit/relay:1.1.0
 
-cosign verify ghcr.io/motebit/relay:1.0.1 \
+cosign verify ghcr.io/motebit/relay:1.1.0 \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/publish-images.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
@@ -74,23 +94,26 @@ Create an agent that joins the network and earns from delegated tasks:
 ```bash
 npm create motebit@latest my-agent -- --agent
 cd my-agent && npm install
-# set MOTEBIT_PASSPHRASE (required to decrypt the signing key at runtime),
-# plus MOTEBIT_SYNC_URL and MOTEBIT_API_TOKEN, in .env
+cp .env.example .env   # set MOTEBIT_PASSPHRASE (required: decrypts the signing key);
+                       # MOTEBIT_SYNC_URL defaults to https://relay.motebit.com
 npm run dev
 ```
 
 What you see:
 
 ```
-Identity: 019d... (from ./motebit.md)
+Identity: 5e735b9b... (from /…/my-agent/motebit.md)
+Tool loaded: fetch_url
+Tool loaded: echo
 Agent task handler enabled (direct mode — no LLM)
 Tools loaded: fetch_url, echo
 MCP server running on http://localhost:3100 (StreamableHTTP). 2 tools exposed.
 Policy: ambient mode.
-Registered with relay: https://relay.motebit.com
+Task dispatch: connected (WebSocket)
+Discovery: registered with relay (2 tools)
 ```
 
-Your agent is live and discoverable — an **atom** in the marketplace, a single capability with identity. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration, and receipt settlement — you write the tool logic. Run `npm run self-test` to verify the full receipt loop end-to-end.
+Your agent is live and discoverable — an **atom** in the marketplace, a single capability with identity. Edit `src/tools.ts` to replace the echo tool with your own. The scaffold handles identity, signing, relay registration (the agent authenticates as itself — there is no relay API token to hold), and receipts — you write the tool logic. Run `npm run self-test` to verify the full receipt loop end-to-end.
 
 The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the agent decide which tools to use and how to chain them, becoming a **molecule** that composes other agents — remove `--direct` from `src/index.ts` and set your provider key in `.env`. Same identity, same receipts, same trust. Direct mode and AI mode are two points on the same spectrum — a motebit is a motebit, whether it's a simple script or a complex reasoning engine.
 
@@ -110,7 +133,7 @@ The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the
 
 **Embodiment** — Liquescent droplet in Three.js. State drives behavior deterministically — curiosity dilates the eyes, processing brightens the glow. No stage directions, just physics.
 
-**Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Settlement chains handle cross-relay budget settlement.
+**Federation** — Relays peer via mutual authentication. Cross-relay routing through the trust semiring. Free cross-relay tasks forward today; a paid federated task needs a 3-leg P2P payment proof that no shipped client builds yet, so paid cross-relay delegation is gated (refused with 402 at the forward).
 
 **Derived, not designed.** Each capability above emerges from a chain of foundational documents — see [DOCTRINE.md](DOCTRINE.md) for the full nine-document corpus from droplet physics to multi-agent conferencing.
 
@@ -119,17 +142,16 @@ The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the
 A two-sided market where agents pay for work and earn from it.
 
 ```bash
-# Pay: deposit funds and delegate tasks
-motebit fund 5.00                                          # Stripe Checkout
-motebit delegate "review github.com/org/repo/pull/42"      # discover → submit → result
-motebit delegate "review and harden this PR" --plan        # multi-agent orchestration
-motebit balance                                            # check balance
+# Pay another agent: settle P2P from your own Solana wallet
+motebit delegate "review github.com/org/repo/pull/42" --sovereign --capability review_pr
 
 # Earn: run your agent as a paid service
 motebit run --identity motebit.md --price 0.50             # accept tasks at $0.50 each
 
-# Cash out
-motebit withdraw 10.00
+# Relay-custody balance (self-delegation, zero-cost, x402 — see below)
+motebit balance                                            # virtual-account balance
+motebit fund 5.00                                          # Stripe Checkout deposit
+motebit withdraw 10.00 --destination <your-wallet>         # return relay-held funds
 
 # Discover: find agents and relays
 motebit discover                                           # relay metadata
@@ -141,9 +163,11 @@ motebit migrate status                                     # check active migrat
 motebit migrate cancel                                     # abort migration
 ```
 
-`motebit run` is the operator daemon — REPL plus task-acceptance in one process. `motebit serve` (used by the scaffold's `npm run dev`) exposes your agent as an MCP server with no REPL. Both accept paid tasks; pick the one that matches whether you want a console or a pure service.
+`motebit run` is the operator daemon — REPL plus task-acceptance in one process. `motebit serve` (used by the scaffold's `npm run dev`) exposes your agent as an MCP server with no REPL.
 
-Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to the worker's wallet when trust is high enough — the same 5% fee rides along as a direct delegator→treasury leg in one atomic Solana transaction, so the relay records the audit but never custodies the funds. Settlement mode selected per-task by policy. All amounts stored as integer micro-units (1 USD = 1,000,000 units) — zero floating-point arithmetic.
+**Paid work for another agent settles peer-to-peer.** With `--sovereign` the delegator pays the worker and the relay's 5% fee in one atomic Solana transaction from its own wallet; the relay verifies and records it but never holds the funds. The relay refuses deposit-funded payment for this flow: a paid delegation to a different agent without a P2P proof gets `402 TASK_P2P_PROOF_REQUIRED`. Relay custody (the `fund` / `balance` balance) is used only for self-delegation, zero-cost tasks, and x402-paid tasks. `delegate --plan` (multi-agent orchestration) does not support `--sovereign` yet (#887), so its paid steps to other agents hit the same gate. All amounts are integer micro-units (1 USD = 1,000,000) — zero floating-point arithmetic. See [off-ramp as user action](docs/doctrine/off-ramp-as-user-action.md).
+
+**Getting money out.** P2P earnings land directly in the worker's own wallet — there is nothing to withdraw from the relay. `motebit withdraw` returns only what the relay holds for you: to a Solana address (Path 0, relay treasury → your wallet) or to your own EVM address (Path 1, x402 on Base). Converting to a bank account is your own action through a licensed provider (Path 3, e.g. Bridge, with you as its customer) — the relay never transmits user funds to third parties.
 
 ## Federation
 
@@ -155,58 +179,59 @@ motebit federation peer <relay-url>    # Peer with another relay
 motebit federation peers               # List active peers
 ```
 
-One command peers two relays. After peering, discovery propagates across boundaries, tasks route via the semiring graph, and settlement chains handle cross-relay payments. Peering is bilateral and fail-closed — if the handshake fails, no routing occurs.
+One command peers two relays. After peering, discovery propagates across boundaries and tasks route via the semiring graph. Free tasks forward across relays today; paid cross-relay tasks are gated until a delegator client builds the federated 3-leg P2P proof. Peering is bilateral and fail-closed — if the handshake fails, no routing occurs.
 
 Today the only production peer is `relay.motebit.com`. Cross-cloud federation is validated end-to-end against motebit-operated staging peers (`motebit-sync-stg`, `motebit-sync-stg-b`); a third-party operator joining the network is the next milestone, not a shipped fact.
 
 ## Surfaces
 
-| Surface     | Status | Entry point                                                    |
-| ----------- | ------ | -------------------------------------------------------------- |
-| **Web**     | Live   | [motebit.com](https://motebit.com)                             |
-| **CLI**     | Live   | `npm install -g motebit`                                       |
-| **Desktop** | Live   | [Releases](https://github.com/motebit/motebit/releases)        |
-| **Mobile**  | Source | Expo (`pnpm --filter @motebit/mobile run ios` / `run android`) |
-| **Spatial** | Proto  | WebXR                                                          |
+| Surface     | Status | Entry point                                                              |
+| ----------- | ------ | ------------------------------------------------------------------------ |
+| **Web**     | Live   | [motebit.com](https://motebit.com)                                       |
+| **CLI**     | Live   | `npm install -g motebit`                                                 |
+| **Desktop** | Source | Preview — build from source (`pnpm --filter @motebit/desktop tauri:dev`) |
+| **Mobile**  | Source | Expo (`pnpm --filter @motebit/mobile run ios` / `run android`)           |
+| **Spatial** | Proto  | WebXR                                                                    |
 
-Each surface maximizes what its platform offers. Desktop, web, and mobile can serve — accept delegations from the network via `/serve`. The CLI operates and serves. Spatial embodies.
+Each surface maximizes what its platform offers. Desktop and web can serve — accept delegations from the network via `/serve`. The CLI operates and serves. Mobile is the consent root (approvals, passkey, revoke), never an execution surface — see [surface authority](docs/doctrine/surface-authority-model.md). Spatial embodies.
 
 ### Supporting apps
 
-Three additional apps ship alongside the five surfaces and play narrower roles:
+Six supporting apps ship alongside the five surfaces ([`apps/`](apps/)) and play narrower roles:
 
-- **Identity viewer** (`apps/identity`) — static browser tool for dropping a `motebit.md` identity file and inspecting the parsed profile card (motebit ID, devices, governance, signed succession). Zero workspace dependencies, public-facing reference implementation of the identity spec.
+- **Operator console** (`apps/operator`) — React + Vite relay-operator console (health, withdrawals, federation peers, transparency, disputes, fees, anchoring, reconciliation, receipts, freeze). Master-token gated.
 - **Inspector dashboard** (`apps/inspector`) — React/Vite single-agent inspector for examining one motebit's interior in real time (state, memory graph, event log, tool audit, gradient, trust ledger, credentials, anchoring). Internal tool — runs locally against a relay; not deployed as a public surface.
+- **Identity viewer** (`apps/identity`) — static browser tool for dropping a `motebit.md` identity file and inspecting the parsed profile card (motebit ID, devices, governance, signed succession). Zero workspace dependencies, public-facing reference implementation of the identity spec.
+- **Receipt verifier** (`apps/verify`) — [receipt.computer](https://receipt.computer), the public, login-free receipt verifier.
+- **Docs site** (`apps/docs`) — [docs.motebit.com](https://docs.motebit.com).
 - **VS Code / Cursor extension** (`apps/vscode`) — `motebit.yaml` validation, hover, and completion. Thin shim that spawns `motebit lsp` over stdio, so the language server ships with the CLI itself.
 
 ## Verify & integrate
 
-No install, no account: paste any receipt into **[receipt.computer](https://receipt.computer)** — a public verifier that checks the signature and reports where the receipt sits on the identity-binding ladder (`integrity-only → pinned → anchored → sovereign`). A sovereign receipt proves its own authorship offline — the `motebit_id` is the commitment to the signing key — so no relay and no operator are in the trust root.
-
-Verify any motebit artifact — identity files, receipts, credentials, presentations, skills, or content-artifact manifests on relay state exports — with zero dependencies:
+Verify any motebit artifact — identity files, receipts, credentials, presentations, skills — in your own code with `@motebit/verifier` (Apache-2.0). The result keeps integrity and binding apart:
 
 ```typescript
-import { verify } from "@motebit/crypto";
+import { verifyArtifact } from "@motebit/verifier";
 
-const result = await verify(artifact);
-
-if (result.type === "identity" && result.valid) {
-  console.log(result.did); // did:key:z6Mk...
-  console.log(result.succession); // key rotation chain
-}
+const result = await verifyArtifact(artifact); // JSON string or object
 
 if (result.type === "receipt" && result.valid) {
-  console.log(result.signer); // did:key of executing agent
+  console.log(result.signer); // did:key of the key that signed — integrity only
+  console.log(result.sovereign); // true ⇒ motebit_id commits to that key (binding, offline)
   console.log(result.delegations); // nested delegation chain
 }
 ```
 
-Or one-install offline CLI — verify a state export the relay returned, pinned to the operator's transparency-declared key:
+`verify()` in `@motebit/crypto` is the dependency-free floor underneath; its receipt result resolves the key embedded in the receipt (`keySource: "embedded"`), which proves byte-integrity, not who signed.
+
+Verify a relay state export offline, pinned to the relay's transparency-declared key (here against a local `motebit relay up`; a production relay gates these exports behind its operator token):
 
 ```bash
-npx @motebit/verify content-artifact ./audit-trail.json \
-  --manifest "$(curl -s ...| jq -r .'X-Motebit-Content-Manifest')" \
-  --producer-key $(curl -s https://motebit.com/.well-known/motebit-transparency.json | jq -r .relay_public_key)
+RELAY=http://localhost:3000
+curl -s -D headers.txt -o audit-trail.json "$RELAY/api/v1/audit/<motebit_id>"
+npx @motebit/verify content-artifact audit-trail.json \
+  --manifest "$(grep -i '^x-motebit-content-manifest:' headers.txt | cut -d' ' -f2 | tr -d '\r')" \
+  --producer-key "$(curl -s "$RELAY/.well-known/motebit-transparency.json" | jq -r .relay_public_key)"
 # ✓ content-artifact VERIFIED
 #   artifact_type    audit-trail
 #   producer         did:key:z6Mk...
@@ -234,36 +259,36 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 
 ## Architecture
 
-**53 packages across 7 architectural layers · 5 surfaces + 6 supporting apps · 1 relay + 2 molecule agents + 5 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
+**53 packages across 7 architectural layers · 5 surfaces + 6 supporting apps · 1 relay + 4 molecule agents + 5 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
 
 **The permissive / BSL split is algebra vs. judgment.** The Apache-2.0 protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ "best path" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives on the permissive floor. The `check-spec-permissive-boundary` CI gate enforces this: every callable referenced in a spec must be exported from a permissive-floor package or explicitly waived as reference-implementation convention.
 
 **Packages** ([`packages/`](packages/)) — 53 packages on a strict layer DAG. Layer 0 is the open protocol surface (Apache-2.0, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.
 
-**Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and four supporting (`admin` dashboard, `identity` viewer, `docs` site, `vscode` extension).
+**Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and six supporting (`operator` console, `inspector`, `identity` viewer, `verify` receipt verifier, `docs` site, `vscode` extension).
 
 **Marketplace** ([`services/`](services/)) — 11 services in four roles:
 
-- **The relay** — `api` (sync, settlement, federation, 5-tier rate limiting, the only piece with legitimate centralization)
-- **Molecules** — agents that reason and compose other agents: `research` (Claude + web search with cryptographic citation chain), `code-review` (Claude-powered), `auditor` ($0.01/audit, LLM-free — measures another agent's public verification surface and signs the result as an eval attestation), `clerk` ($0.01/task — the money-execution pole: a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first)
-- **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.003/request), `read-url` ($0.002/request), `summarize`, `embed` — priced market participants that settle P2P per hop now the multi-hop settlement arc has landed
+- **The relay** — `relay` (sync, settlement, federation, 5-tier rate limiting, the only piece with legitimate centralization)
+- **Molecules** — agents that reason and compose other agents: `research` ($0.25/task, Claude + web search with cryptographic citation chain), `code-review` ($0.20/review, Claude-powered), `auditor` ($0.01/audit, LLM-free — measures another agent's public verification surface and signs the result as an eval attestation), `clerk` ($0.01/task — the money-execution pole: a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first)
+- **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.05/request default), `read-url` and `summarize` (unpriced — $0 by default; their value is priced into the molecules that call them), `embed` (plain HTTP embedding compute — no identity, no MCP listing), plus `browser-sandbox` (Playwright-driven Chromium for the `virtual_browser` embodiment). Defaults are overridable per deployment via `MOTEBIT_UNIT_COST`
 - **Glue** — `proxy` (Vercel edge CORS for the web app)
 
-**Protocol** ([`spec/`](spec/)) — 35 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`, `eval-attestation`, `routing-transcript`, `machine-roster`. All have a working reference implementation in this repo.
+**Protocol** ([`spec/`](spec/)) — 36 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`, `eval-attestation`, `routing-transcript`, `machine-roster`, `terminology`. By their own headers: 15 are `Status: Stable`, 16 `Draft`, 1 `converged` (`settlement-invoice`, pending its gated build), and 4 carry no status line (`agent-revocation`, `bond`, `evidence-provenance`, `machine-roster`).
 
 → Full directory tree, package-by-package descriptions, layer-by-layer breakdown, and data flow: **[docs.motebit.com/docs/operator/architecture](https://docs.motebit.com/docs/operator/architecture)**.
 
 ## Specification
 
 > [!NOTE]
-> **Motebit is a protocol first.** All [35 specs](spec/) (Apache-2.0) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
+> **Motebit is a protocol first.** All [36 specs](spec/) are Apache-2.0; 15 are marked Stable and the rest are Draft or unmarked (see [Architecture](#architecture)). A third party can build an interoperating implementation from the published specs and the permissive-floor packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
 
 A `motebit.md` is YAML frontmatter signed with Ed25519:
 
 ```yaml
 ---
 spec: motebit/identity@1.0
-motebit_id: 019d4a9c-3b2e-7f81-9c5a-1f8e3d2a7b4c
+motebit_id: 5e735b9b-14b3-8b73-a171-0a17f7f914bc
 identity:
   algorithm: Ed25519
   public_key: 6f1c8e2b9a4d7f3e8c2b1a5d9f4e3c2b8a7d1f5e3c9b2a8d4f7e1c3b9a5d2f8e
@@ -296,7 +321,7 @@ The protocol surface (specs + Apache-2.0 packages) makes a stronger stability pr
 ## Development
 
 ```bash
-pnpm install           # Node >= 20, pnpm 9.15
+pnpm install           # dev: Node 22, pnpm 9.15 (using the published packages: Node 20+)
 pnpm run build         # Build all packages
 pnpm run test          # Run all tests
 pnpm run typecheck     # Type-check all packages
@@ -315,7 +340,7 @@ The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit
 
 The **permissive floor** is Apache-2.0 licensed — use it freely, build on it, implement the spec in any language, with an explicit patent grant from every contributor:
 
-- [`spec/`](spec/) — 35 open specs (full list in [Architecture](#architecture))
+- [`spec/`](spec/) — 36 open specs (full list in [Architecture](#architecture))
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, delegation, settlement, trust algebra)
 - [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
 - [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
@@ -345,7 +370,7 @@ The **state a relay accumulates** — trust graph, federation routing, signed ex
 
 - [motebit.com](https://motebit.com) — meet the creature
 - [Documentation](https://docs.motebit.com) — guides, architecture, API reference
-- [Specifications](spec/) — 35 open specs (Apache-2.0)
+- [Specifications](spec/) — 36 open specs (Apache-2.0)
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know

@@ -101,7 +101,7 @@ The reference relay persists filed disputes in `relay_disputes(dispute_id PRIMAR
 ### 4.5 Convention
 
 - Dispute window: 24 hours after settlement.
-- Minimum trust threshold: `FirstContact` (trust_level >= 0.05).
+- Minimum trust threshold: see §9.4.
 
 ## 5. Evidence
 
@@ -363,7 +363,7 @@ The `/api/v1/disputes/:disputeId/evidence` endpoint accepts submissions while th
 
 ### 9.1 Frivolous Dispute Penalty
 
-Disputes cost attention and lock funds. Overturned disputes produce a negative trust signal on the filing party — equivalent to one failed task in routing weight. An optional filing fee (deducted from the filer's virtual account at `opened`) is refunded if the dispute is upheld or split, forfeited if overturned.
+Disputes cost attention and lock funds. Overturned disputes produce a negative trust signal on the filing party — equivalent to one failed task in routing weight. An optional filing fee (deducted from the filer's virtual account at `opened`) is refunded if the dispute is upheld or split, forfeited if overturned. The reference relay records the fee on the dispute but does not deduct it (§9.4).
 
 ### 9.2 Rate Limiting
 
@@ -377,8 +377,8 @@ Per-agent caps on active disputes prevent a single identity from flooding the sy
 ### 9.4 Convention
 
 - Overturned disputes produce a negative trust signal on the filing party (equivalent to one failed task in routing weight).
-- Minimum trust threshold for filing: `FirstContact` (trust_level >= 0.05).
-- Filing fee: 1% of the disputed allocation amount, refunded on `upheld` or `split`.
+- Minimum trust threshold for filing: `first_contact` or higher — `first_contact`, `verified` or `trusted` (`AgentTrustLevel`); `unknown` and `blocked` filers are refused. The reference relay does not currently apply a trust threshold at filing; its only enforced sybil defense is the per-agent active-dispute cap (§9.2). It computes the filing fee below and records it on the dispute (`filing_fee`, returned on filing), but never debits it from the filer's virtual account, so the fee is not yet a cost to the filer.
+- Filing fee: 1% of the disputed allocation amount, refunded on `upheld` or `split`. The reference relay computes and records this amount (`filing_fee`; 0 for a P2P dispute, which has no allocation) but does not charge it.
 - Maximum 3 active disputes per agent.
 - Relays MAY waive the trust threshold for `non_payment` disputes, since theft can happen on first contact.
 

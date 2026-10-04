@@ -15,7 +15,7 @@
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/protocol";
-import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
+import type { P2pPaymentProof, RelayMetadata, SovereignP2pPaymentRequest } from "@motebit/protocol";
 import {
   base58Encode,
   hexToBytes32,
@@ -24,7 +24,7 @@ import {
   computeFederatedFeeSplit,
   PLATFORM_FEE_RATE,
 } from "@motebit/protocol";
-import { verifySovereignBinding } from "@motebit/crypto";
+import { verifyRelayFeeRate, verifySovereignBinding } from "@motebit/crypto";
 import {
   type PaidIntentLedger,
   isPaymentWithoutTaskId,
@@ -191,12 +191,38 @@ export type DelegationErrorCode =
    * verify. No funds move. docs/doctrine/settlement-authority-binding.md.
    */
   | "worker_settlement_unbound"
+  /**
+   * Pre-flight, BEFORE broadcast. A relay's platform fee rate — an input to the
+   * irreversible payment — could not be taken from discovery metadata signed by
+   * the key this client trusts for that relay (the PINNED key for the origin;
+   * the peer key the pinned origin vouches for, for a federated executor): the
+   * metadata was unreachable, signed by another key, or declared a `fee_rate`
+   * that is not a number in [0, 1). No funds move. spec/discovery-v1.md §3.2.
+   */
+  | "relay_fee_rate_unverified"
   /** Pre-flight. HTTP 400 — malformed submission. Code bug, surface loudly. */
   | "malformed_request"
   /** In-flight. Polling exceeded `timeoutMs` without a receipt. */
   | "timeout"
   /** In-flight. Relay reported the agent failed mid-task. */
   | "agent_failed"
+  /**
+   * In-flight (one task, one body). The relay GRANTED the task to an
+   * executor and that executor was lost, or never answered (`undetermined`
+   * on the task read, reason in `relayVerdict`). The work MAY have run, may
+   * still be running, or never started — the relay itself does not know,
+   * and never hands the task to anyone else. Not a failure and not a
+   * timeout: the caller must NOT hire again for this work (a second paid
+   * hire for the same intent); the executor's late signed result still
+   * resolves the task, so re-read `relayVerdict.taskId` later.
+   */
+  | "undetermined"
+  /**
+   * In-flight (one task, one body). The task outlived its TTL with nothing
+   * ever granted it (`expired` on the task read, reason `never_claimed`):
+   * no executor took it, so it did NOT run and never will. Conclusive.
+   */
+  | "task_expired"
   /** Result-time. Receipt body missing required fields. */
   | "malformed_receipt"
   /** Unclassified. Used when the relay returns an unexpected shape. */
@@ -269,6 +295,11 @@ export interface DelegationError {
   ledgerWriteFailed?: true;
   /** #885: the human-readable statement of the two fields above. */
   notice?: string;
+  /**
+   * Set ONLY on `undetermined` / `task_expired`: the relay's own verdict on
+   * the task, as its read reported it.
+   */
+  relayVerdict?: { taskId: string; reason: string; detail: string };
 }
 
 /**
@@ -580,9 +611,22 @@ type TaskQueryOutcome =
   | { kind: "receipt"; receipt: ExecutionReceipt }
   | { kind: "failed" }
   | { kind: "pending"; taskStatus: string }
+  | { kind: "undetermined"; reason: string; detail: string }
+  | { kind: "expired"; reason: string; detail: string }
   | { kind: "http_error"; status: number; body: string }
   | { kind: "aborted" }
   | { kind: "network_error"; message: string };
+
+/** The relay's `undetermined` / `expired` verdict object, read defensively. */
+function relayVerdictOf(v: { reason?: unknown; detail?: unknown }): {
+  reason: string;
+  detail: string;
+} {
+  return {
+    reason: typeof v.reason === "string" ? v.reason : "unknown",
+    detail: typeof v.detail === "string" ? v.detail : "",
+  };
+}
 
 async function queryTaskOnce(args: {
   syncUrl: string;
@@ -602,12 +646,22 @@ async function queryTaskOnce(args: {
     const data = (await resp.json()) as {
       task: { status: string };
       receipt: ExecutionReceipt | null;
+      undetermined?: { reason?: unknown; detail?: unknown } | null;
+      expired?: { reason?: unknown; detail?: unknown } | null;
     };
     // Agent-failed status arrives either as receipt.status === "failed" (with
     // a signed receipt — preferred) or as task.status === "failed" without
     // one. Both are terminal for a single invocation — no retry.
     if (data.receipt != null) return { kind: "receipt", receipt: data.receipt };
     if (data.task.status === "failed") return { kind: "failed" };
+    // One task, one body: the relay's own verdicts on a task with no
+    // receipt — granted and its executor lost (`undetermined`: it may have
+    // run), or never granted before its TTL (`expired`: it did not run).
+    // Neither is "pending".
+    if (data.undetermined != null) {
+      return { kind: "undetermined", ...relayVerdictOf(data.undetermined) };
+    }
+    if (data.expired != null) return { kind: "expired", ...relayVerdictOf(data.expired) };
     return { kind: "pending", taskStatus: data.task.status };
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "AbortError") return { kind: "aborted" };
@@ -673,6 +727,25 @@ async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResul
         };
       case "aborted":
         return { ok: false, error: { code: "timeout", message: "Aborted mid-poll" } };
+      case "undetermined":
+        // The relay's verdict, not a timeout: stop polling now.
+        return {
+          ok: false,
+          error: {
+            code: "undetermined",
+            message: `Task ${args.taskId} is undetermined at the relay (${outcome.reason}): ${outcome.detail}`,
+            relayVerdict: { taskId: args.taskId, reason: outcome.reason, detail: outcome.detail },
+          },
+        };
+      case "expired":
+        return {
+          ok: false,
+          error: {
+            code: "task_expired",
+            message: `Task ${args.taskId} expired at the relay without ever being claimed (${outcome.reason}): ${outcome.detail}`,
+            relayVerdict: { taskId: args.taskId, reason: outcome.reason, detail: outcome.detail },
+          },
+        };
       case "http_error":
         args.logger.warn("delegation poll failed", {
           taskId: args.taskId,
@@ -703,6 +776,11 @@ async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResul
  * - `delivered` — the worker's signed receipt is held by the relay (its own
  *   `status` may still be `failed`: a signed failure is a delivered result).
  * - `pending` — the task exists and has no receipt yet; ask again later.
+ * - `undetermined` — the relay granted the task and its executor was lost
+ *   or never answered: the work MAY have run. Never hire again for it; the
+ *   executor's late signed result still resolves it (ask again later).
+ * - `expired` — the task outlived its TTL with nothing ever granted it: it
+ *   did not run and never will.
  * - `failed` — the relay marked the task failed without a signed receipt.
  * - `not_found` — HTTP 404: the relay no longer holds the task (reaped
  *   after its retention window) or the id is wrong. NOT proof the result
@@ -723,6 +801,8 @@ export type TaskRetrieval =
   | { status: "not_admitted"; taskId: string }
   | { status: "delivered"; taskId: string; receipt: ExecutionReceipt }
   | { status: "pending"; taskId: string; taskStatus: string }
+  | { status: "undetermined"; taskId: string; reason: string; detail: string }
+  | { status: "expired"; taskId: string; reason: string; detail: string }
   | { status: "failed"; taskId: string }
   | { status: "not_found"; taskId: string; message: string }
   | { status: "auth_error"; taskId: string; httpStatus?: number; message: string }
@@ -816,6 +896,10 @@ export async function retrieveDelegationResult(
       return { status: "failed", taskId };
     case "pending":
       return { status: "pending", taskId, taskStatus: outcome.taskStatus };
+    case "undetermined":
+      return { status: "undetermined", taskId, reason: outcome.reason, detail: outcome.detail };
+    case "expired":
+      return { status: "expired", taskId, reason: outcome.reason, detail: outcome.detail };
     case "http_error": {
       const message = classifyRelayError(outcome.status, outcome.body).message;
       if (outcome.status === 404) return { status: "not_found", taskId, message };
@@ -1483,6 +1567,63 @@ export interface ResolveAndSubmitP2pDelegationParams {
 }
 
 /**
+ * A relay's declared platform fee rate, read from its SIGNED discovery metadata
+ * (`/.well-known/motebit.json`, spec/discovery-v1.md §3) and trusted only when
+ * that metadata is signed by `expectedKeyHex` — the key this client already
+ * trusts for the relay (the pinned key for the origin; the peer key the pinned
+ * origin vouches for, for a federated executor). Never trusted from an unsigned
+ * or unpinned read: the rate prices an irreversible payment, so it has the
+ * treasury's trust root.
+ *
+ * - `fee_rate` absent → the protocol reference default `PLATFORM_FEE_RATE`
+ *   (the field is optional in §3.2).
+ * - `fee_rate` present but not a finite number in [0, 1) → refuse.
+ * - Unreachable, unparseable, a different `public_key`, a different
+ *   `relay_id` than expected, or a signature that does not verify under
+ *   `expectedKeyHex` → refuse.
+ *
+ * Every refusal is `relay_fee_rate_unverified`, before any money moves.
+ */
+export async function fetchSignedRelayFeeRate(args: {
+  relayUrl: string;
+  expectedKeyHex: string;
+  expectedRelayId?: string;
+  signal?: AbortSignal;
+}): Promise<
+  { ok: true; feeRate: number; metadata: RelayMetadata } | { ok: false; error: DelegationError }
+> {
+  const refuse = (why: string) =>
+    fail("relay_fee_rate_unverified", `Relay fee rate at ${args.relayUrl}: ${why}`);
+  let document: unknown;
+  try {
+    const resp = await fetch(`${args.relayUrl}/.well-known/motebit.json`, {
+      headers: { Accept: "application/json" },
+      signal: args.signal,
+    });
+    if (!resp.ok) return refuse(`signed metadata unavailable (HTTP ${resp.status})`);
+    document = await resp.json();
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return fail("timeout", "Aborted while reading relay metadata");
+    }
+    return refuse(
+      `signed metadata unavailable (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  const verified = await verifyRelayFeeRate(
+    document,
+    args.expectedKeyHex,
+    args.expectedRelayId != null ? { expectedRelayId: args.expectedRelayId } : undefined,
+  );
+  if (!verified.ok) return refuse(verified.reason);
+  return {
+    ok: true,
+    feeRate: verified.declaredFeeRate ?? PLATFORM_FEE_RATE,
+    metadata: verified.metadata,
+  };
+}
+
+/**
  * Resolve a paid direct delegation end to end: discover a payable worker,
  * derive the relay treasury from the PINNED key, price the task, broadcast the
  * delegator's atomic onchain payment, and submit the pinned task with the proof.
@@ -1506,9 +1647,14 @@ export interface ResolveAndSubmitP2pDelegationParams {
  *     a MITM. The executor (B) treasury is derived from the peer key the PINNED
  *     origin relay vouches for in its discovery response, the same key it
  *     validates the forward against.
- *   - The fee rate is the protocol-canonical `PLATFORM_FEE_RATE`, the same rate
- *     the relay validator enforces; a relay running a non-canonical rate fails
- *     CLOSED (the proof is rejected) rather than silently mispaying.
+ *   - The fee rate is the one the relay DECLARES as `fee_rate` in its signed
+ *     discovery metadata (spec/market-v1.md §5.1 — relays MAY set their own
+ *     rate), trusted exactly like the treasury: only from metadata signed by
+ *     the PINNED key (origin) or by the peer key the pinned origin vouches for
+ *     (federated executor — each hop applies its own rate, relay-federation-v1
+ *     §7.1). An absent field is the reference `PLATFORM_FEE_RATE`; unverifiable
+ *     metadata or a malformed rate refuses before any payment
+ *     (`relay_fee_rate_unverified`). See {@link fetchSignedRelayFeeRate}.
  *   - The payment is broadcast exactly once, then handed to `submitP2pDelegation`
  *     which never re-broadcasts on retry (no double-pay).
  *
@@ -1586,6 +1732,7 @@ export async function resolveP2pPaymentRequest(
     motebit_id: string;
     settlement_address: string;
     sourceRelayPublicKey?: string;
+    sourceRelayId?: string;
     pricing: Array<{ capability?: string; unit_cost?: number }> | null;
   };
   try {
@@ -1607,6 +1754,8 @@ export async function resolveP2pPaymentRequest(
         settlement_address?: string | null;
         settlement_modes?: string | string[] | null;
         source_relay_public_key?: string | null;
+        /** The hosting relay's relay_id — for a federated candidate, the peer. */
+        source_relay?: string | null;
         pricing?: Array<{ capability?: string; unit_cost?: number }> | null;
         /** Relay-verified commitment bond (backing RPC-confirmed) — an
          * exploration-PRIORITY signal for the selector, never a gate. */
@@ -1693,6 +1842,7 @@ export async function resolveP2pPaymentRequest(
       ...(candidate.source_relay_public_key != null
         ? { sourceRelayPublicKey: candidate.source_relay_public_key }
         : {}),
+      ...(candidate.source_relay != null ? { sourceRelayId: candidate.source_relay } : {}),
       pricing: candidate.pricing ?? null,
     };
   } catch (err: unknown) {
@@ -1729,8 +1879,35 @@ export async function resolveP2pPaymentRequest(
     if (priced?.unit_cost == null || priced.unit_cost <= 0) {
       return fail("worker_not_payable", `Remote worker has no positive price for "${capability}".`);
     }
+    // Each hop's rate from THAT hop's signed metadata (relay-federation-v1
+    // §7.1): the origin's under the PINNED key; the executor's under the peer
+    // key the pinned origin vouches for, at the endpoint the pinned origin
+    // lists for that peer in its own signed `federation_peers`.
+    const origin = await fetchSignedRelayFeeRate({
+      relayUrl: syncUrl,
+      expectedKeyHex: params.relayPublicKeyHex,
+      ...(params.signal != null ? { signal: params.signal } : {}),
+    });
+    if (!origin.ok) return origin;
+    const peerEntry =
+      worker.sourceRelayId != null
+        ? (origin.metadata.federation_peers ?? []).find((p) => p.relay_id === worker.sourceRelayId)
+        : undefined;
+    if (peerEntry == null || typeof peerEntry.endpoint_url !== "string") {
+      return fail(
+        "relay_fee_rate_unverified",
+        `The executor relay hosting "${worker.motebit_id}" is not a peer in the origin relay's signed metadata; its fee rate cannot be verified.`,
+      );
+    }
+    const executor = await fetchSignedRelayFeeRate({
+      relayUrl: peerEntry.endpoint_url.replace(/\/+$/, ""),
+      expectedKeyHex: worker.sourceRelayPublicKey,
+      expectedRelayId: peerEntry.relay_id,
+      ...(params.signal != null ? { signal: params.signal } : {}),
+    });
+    if (!executor.ok) return executor;
     const budgetMicro = toMicro(priced.unit_cost);
-    const split = computeFederatedFeeSplit(budgetMicro, PLATFORM_FEE_RATE);
+    const split = computeFederatedFeeSplit(budgetMicro, origin.feeRate, executor.feeRate);
     paymentRequest = {
       workerAddress: worker.settlement_address,
       amountMicro: split.workerNetMicro,
@@ -1805,7 +1982,7 @@ export async function resolveP2pPaymentRequest(
 
     // Prefer the relay's canonical amounts from the pre-flight — pay EXACTLY
     // what the submission gate validates, with no client-side unit math. The
-    // separate listing read (3b) is the fallback for an older relay that didn't
+    // separate listing read (3c) is the fallback for an older relay that didn't
     // return them.
     if (preflightAmountMicro != null && preflightAmountMicro > 0 && preflightFeeMicro != null) {
       return {
@@ -1821,7 +1998,17 @@ export async function resolveP2pPaymentRequest(
       };
     }
 
-    // 3b. Price from the worker's listing (market:listing-audience read).
+    // 3b. The relay's declared fee rate, from metadata signed by the PINNED
+    //     key — before the listing read, so an unverifiable rate refuses
+    //     before anything is priced.
+    const declared = await fetchSignedRelayFeeRate({
+      relayUrl: syncUrl,
+      expectedKeyHex: params.relayPublicKeyHex,
+      ...(params.signal != null ? { signal: params.signal } : {}),
+    });
+    if (!declared.ok) return declared;
+
+    // 3c. Price from the worker's listing (market:listing-audience read).
     let unitCost: number;
     try {
       const listingToken = await params.authToken("market:listing");
@@ -1855,13 +2042,13 @@ export async function resolveP2pPaymentRequest(
       return fail("network_unreachable", err instanceof Error ? err.message : String(err));
     }
     // Worker net = unit_cost; fee = computeP2pFeeMicro (the SAME primitive the
-    // relay validator uses, at the canonical rate). Pinned treasury.
+    // relay validator uses, at the relay's signed declared rate). Pinned treasury.
     const amountMicro = toMicro(unitCost);
     paymentRequest = {
       workerAddress: worker.settlement_address,
       amountMicro,
       treasuryAddress,
-      feeAmountMicro: computeP2pFeeMicro(amountMicro, PLATFORM_FEE_RATE),
+      feeAmountMicro: computeP2pFeeMicro(amountMicro, declared.feeRate),
     };
   }
 

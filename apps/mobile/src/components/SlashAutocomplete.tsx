@@ -25,7 +25,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "tools", description: "List registered tools" },
   { name: "agents", description: "Trusted agents" },
   { name: "discover", description: "Discover agents on relay" },
-  { name: "serve", description: "Toggle accepting delegations" },
+  { name: "serve", description: "Accept delegations (not available on mobile yet)" },
   { name: "goals", description: "Browse goals" },
   { name: "capabilities", description: "Browse skills and tool-server connections" },
   { name: "plan", description: "Break down a complex goal" },

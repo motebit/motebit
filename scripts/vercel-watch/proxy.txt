@@ -1,0 +1,13 @@
+# Watched paths for services/proxy's Vercel Ignored Build Step (scripts/vercel-ignore-build.sh --watch).
+# One repo-root-relative path per line. Held by scripts/check-vercel-ignore-build.ts: exactly the
+# project's transitive workspace closure + the root build config it reads — nothing else.
+services/proxy
+packages/crypto
+packages/policy
+packages/protocol
+packages/sdk
+pnpm-lock.yaml
+package.json
+pnpm-workspace.yaml
+turbo.json
+tsconfig.base.json

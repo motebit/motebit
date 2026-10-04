@@ -11,6 +11,7 @@ import {
   verifyAgentCommandEnvelope,
   servedToolNames,
   TurnPrincipal,
+  TaskClaimCoordinator,
 } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -89,7 +90,7 @@ import {
   hexToBytes,
   generateX25519Keypair,
   buildKeyTransferPayload,
-  decryptKeyTransfer,
+  openPairingKeyTransfer,
   checkPreTransferBalance,
   formatWalletWarning,
 } from "@motebit/encryption";
@@ -137,6 +138,8 @@ import {
   loadColdStartOptIn,
   loadProviderConfig,
   loadSyncUrl,
+  saveSyncUrl,
+  isSyncUrlConfigured,
   DEFAULT_RELAY_URL,
   isAnnounced,
   markAnnounced,
@@ -146,7 +149,10 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 import { rotateWebKey } from "./key-rotation";
 import {
   createWebMachineRoster,
+  ownSuccessionRecords,
   rosterAfterRotationCommit,
+  rosterAfterPairing,
+  rosterAfterRestore,
   type RosterLocks,
   type WebMachineRoster,
 } from "./machine-roster.js";
@@ -439,9 +445,27 @@ export class UnbootedWebApp {
   private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _wsUnsubOnCustom: (() => void) | null = null;
+  /**
+   * #962: the background retry of a device self-registration the relay has
+   * not accepted yet (see {@link startSync}). While it runs the relay cannot
+   * verify this device's tokens, so nothing is pushed and compaction holds:
+   * the sync status reads "error" until it is accepted.
+   */
+  private _registrationRetry: {
+    timer: ReturnType<typeof setTimeout> | null;
+    stopped: boolean;
+  } | null = null;
   private _serving = false;
   private _servingSyncUrl: string | null = null;
   private _activeTaskCount = 0;
+  /**
+   * One task, one body: the relay hands a task to every serving body of
+   * this identity and grants exactly one claim — run only on the grant.
+   * Frames go out on whichever socket is current (token refresh swaps it).
+   */
+  private readonly _taskClaims = new TaskClaimCoordinator({
+    send: (frame) => this._wsAdapter?.sendRaw(frame),
+  });
   private _localEventStore: StorageAdapters["eventStore"] | null = null;
   /**
    * Held so `restoreIdentity` can pre-write the restored
@@ -724,6 +748,10 @@ export class UnbootedWebApp {
       {
         motebitId: this._motebitId,
         tickRateHz: 2,
+        // #962: a saved relay holds compaction at its acked push cursor, even
+        // before this page connects sync. Read at compaction time; storage
+        // that cannot be read counts as configured (fail closed).
+        syncConfigured: () => isSyncUrlConfigured(),
         policy: {
           operatorMode: false,
           maxRiskLevel: preset.maxRiskLevel,
@@ -1651,10 +1679,10 @@ export class UnbootedWebApp {
   }
 
   async verifyMotebitMd(content: string): Promise<{ valid: boolean; error?: string }> {
-    const { verify: verifyIdentity } = await import("@motebit/identity-file");
-    const result = await verifyIdentity(content, { expectedType: "identity" });
-    const error = result.errors?.[0]?.message;
-    return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+    // Intact = signature AND succession chain (the shared fold).
+    const { verify: verifyIdentity, identityVerifyOutcome } =
+      await import("@motebit/identity-file");
+    return identityVerifyOutcome(await verifyIdentity(content, { expectedType: "identity" }));
   }
 
   // Parse + verify a motebit.md and return the flat metadata the Restore
@@ -1746,6 +1774,14 @@ export class UnbootedWebApp {
     } catch {
       return { ok: false, reason: "config_write_failed" };
     }
+    // The browser keeps no identity file: the motebit.md's verified chain
+    // joins the roster replica, so this browser can be Device A for an
+    // offline-rotated identity. Best-effort; never fails the restore.
+    await rosterAfterRestore({
+      motebitId: request.metadata.motebitId,
+      publicKeyHex: request.metadata.publicKey,
+      content: request.originalContent,
+    });
     return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
   }
 
@@ -3543,7 +3579,14 @@ export class UnbootedWebApp {
     };
   }
 
-  private setSyncStatus(status: WebSyncStatus): void {
+  private setSyncStatus(requested: WebSyncStatus): void {
+    // #962: a device the relay has not accepted cannot push — whatever the
+    // socket or engine report, the page shows the failure until it is.
+    const status: WebSyncStatus =
+      this._registrationRetry != null &&
+      (requested === "connecting" || requested === "connected" || requested === "syncing")
+        ? "error"
+        : requested;
     const changed = this._syncStatus !== status;
     this._syncStatus = status;
     // S4 — the roster is read (and, from the presenting tab, presented)
@@ -3609,8 +3652,102 @@ export class UnbootedWebApp {
     }
   }
 
+  /**
+   * One signed device self-registration with the relay (#962). True when the
+   * relay accepted it. Never throws; a refusal is logged — the sync status
+   * carries it to the page (see {@link retryRegistration}).
+   */
+  private async registerDeviceOnce(relayUrl: string, privateKey?: Uint8Array): Promise<boolean> {
+    let key = privateKey;
+    let owned = false;
+    if (key == null) {
+      const hex = await this.keyStore.loadPrivateKey().catch(() => null);
+      if (hex == null || hex === "") return false;
+      key = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < hex.length; i += 2) key[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+      owned = true;
+    }
+    try {
+      const reg = await registerDeviceWithRelay({
+        motebitId: this._motebitId,
+        deviceId: this._deviceId,
+        publicKey: this._publicKeyHex,
+        privateKey: key,
+        syncUrl: relayUrl,
+        deviceName: "web",
+      });
+      if (!reg.ok) {
+        // eslint-disable-next-line no-console -- the status says it failed; the log says why
+        console.warn("[motebit] device self-registration failed:", reg.code, reg.message);
+      }
+      return reg.ok;
+    } catch (err: unknown) {
+      // eslint-disable-next-line no-console -- the status says it failed; the log says why
+      console.warn(
+        "[motebit] device self-registration threw:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    } finally {
+      if (owned) secureErase(key);
+    }
+  }
+
+  /**
+   * Retry the device self-registration in the background until the relay
+   * accepts it (#962): 1s, doubling to 60s; unref'd timers; ended by
+   * `stopSync` or the next `startSync`. While it runs the sync status reads
+   * "error". Once accepted, a socket waiting out its reconnect backoff
+   * reconnects now — its token is verifiable from here on.
+   */
+  private retryRegistration(relayUrl: string): void {
+    this.stopRegistrationRetry();
+    const loop: { timer: ReturnType<typeof setTimeout> | null; stopped: boolean } = {
+      timer: null,
+      stopped: false,
+    };
+    this._registrationRetry = loop;
+    this.setSyncStatus("error");
+    let delay = 1_000;
+    const schedule = (): void => {
+      const t = setTimeout(() => {
+        loop.timer = null;
+        void (async () => {
+          if (loop.stopped) return;
+          const ok = await this.registerDeviceOnce(relayUrl);
+          if (loop.stopped) return;
+          if (!ok) {
+            delay = Math.min(delay * 2, 60_000);
+            schedule();
+            return;
+          }
+          this._registrationRetry = null;
+          const ws = this._wsAdapter;
+          if (ws != null && !ws.isConnected) ws.connect();
+          this.setSyncStatus("connecting");
+        })();
+      }, delay);
+      (t as { unref?: () => void }).unref?.();
+      loop.timer = t;
+    };
+    schedule();
+  }
+
+  private stopRegistrationRetry(): void {
+    const loop = this._registrationRetry;
+    if (loop == null) return;
+    loop.stopped = true;
+    if (loop.timer != null) clearTimeout(loop.timer);
+    this._registrationRetry = null;
+  }
+
   async startSync(relayUrl: string): Promise<void> {
     if (!this.runtime) throw new Error("Runtime not initialized");
+    // #962: the relay this page syncs with is saved BEFORE anything is
+    // pushed, whoever started sync (pairing did not save it). Compaction's
+    // `syncConfigured` reads the saved URL, so a reload never forgets a relay
+    // that may hold unacknowledged pushes.
+    if (relayUrl !== "") saveSyncUrl(relayUrl);
 
     this.setSyncStatus("connecting");
 
@@ -3633,32 +3770,13 @@ export class UnbootedWebApp {
     // page loads re-register, the relay short-circuits on matching public_key.
     // Spec: spec/device-self-registration-v1.md.
     //
-    // Failures here degrade honestly via setSyncStatus("error") + a console
-    // warning; the surface-determinism path's own `sync_not_enabled` /
-    // `auth_expired` codes will surface a user-facing remediation if the
-    // user later attempts a deterministic invocation.
-    try {
-      const reg = await registerDeviceWithRelay({
-        motebitId: this._motebitId,
-        deviceId: this._deviceId,
-        publicKey: this._publicKeyHex,
-        privateKey: privKeyBytes,
-        syncUrl: relayUrl,
-        deviceName: "web",
-      });
-      if (!reg.ok) {
-        // Log once — the user-visible failure surfaces through the chip-tap
-        // path's `sync_not_enabled` copy if/when they try to invoke.
-        // eslint-disable-next-line no-console -- honest-degrade diagnostic; user-facing remediation arrives via the deterministic-invocation path
-        console.warn("[motebit] device self-registration failed:", reg.code, reg.message);
-      }
-    } catch (err: unknown) {
-      // eslint-disable-next-line no-console -- honest-degrade diagnostic; user-facing remediation arrives via the deterministic-invocation path
-      console.warn(
-        "[motebit] device self-registration threw:",
-        err instanceof Error ? err.message : String(err),
-      );
-    }
+    // #962: the first attempt runs before the socket connects. One the relay
+    // does not accept (unreachable, refused) is retried in the background
+    // until it is — a one-shot attempt left a device whose relay was down at
+    // startup unknown to it for good: every push refused, compaction held
+    // forever, silently. Until accepted, the sync status reads "error".
+    this.stopRegistrationRetry();
+    const registered = await this.registerDeviceOnce(relayUrl, privKeyBytes);
 
     // First network action → announce to the intake ledger, silently. Enabling
     // sync is the motebit's first relay presence; that's the calm, consent-free
@@ -3831,6 +3949,7 @@ export class UnbootedWebApp {
     // replacement adapter (#816).
     const onRelayFrame: CustomMessageCallback = (msg) => {
       for (const listener of [...delegationListeners]) listener(msg);
+      if (this._taskClaims.handleFrame(msg)) return;
       // Handle remote command requests (forwarded by relay)
       if (msg.type === "command_request" && this.runtime) {
         // Fail-closed remote ingress: only a signed-request-envelope@1.0
@@ -3887,10 +4006,10 @@ export class UnbootedWebApp {
       const task = msg.task as AgentTask;
       const runtime = this.runtime;
 
-      this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-      this._activeTaskCount++;
-
-      void (async () => {
+      // Claim the task; execute only on the relay's grant — another body of
+      // this identity may hold it.
+      this._taskClaims.offer(task.task_id, async () => {
+        this._activeTaskCount++;
         try {
           const privateKeyHex = await this.keyStore.loadPrivateKey();
           if (!privateKeyHex) return;
@@ -3932,7 +4051,7 @@ export class UnbootedWebApp {
         } finally {
           this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
         }
-      })();
+      });
     };
     this._wsUnsubOnCustom = wsAdapter.onCustomMessage(onRelayFrame);
 
@@ -3955,6 +4074,7 @@ export class UnbootedWebApp {
     this._wsUnsubOnEvent = wsAdapter.onEvent(onInboundEvent);
 
     this.runtime.connectSync(encryptedWs);
+    if (!registered) this.retryRegistration(relayUrl);
     wsAdapter.connect();
 
     // Subscribe to SyncEngine status changes
@@ -4236,7 +4356,9 @@ export class UnbootedWebApp {
   }
 
   stopSync(): void {
+    this._taskClaims.dispose();
     this._serving = false;
+    this.stopRegistrationRetry();
     if (this._wsTokenRefreshTimer != null) {
       clearInterval(this._wsTokenRefreshTimer);
       this._wsTokenRefreshTimer = null;
@@ -4305,6 +4427,9 @@ export class UnbootedWebApp {
             this._publicKeyHex,
             hexToBytes(session.claiming_x25519_pubkey),
             session.pairing_code,
+            // This browser's own chain, so Device B can bind a rotated
+            // sovereign id even when the relay has none (an offline rotation).
+            { successionRecords: await ownSuccessionRecords({ motebitId: this._motebitId }) },
           );
         } finally {
           secureErase(privKeyBytes);
@@ -4345,8 +4470,11 @@ export class UnbootedWebApp {
   }
 
   /**
-   * Complete pairing on Device B. If key transfer payload + ephemeral key are provided,
-   * decrypts the identity seed and replaces the device's private key.
+   * Complete pairing on Device B. The key transfer is required: it is
+   * decrypted and the relay-supplied motebitId is checked to bind to the
+   * transferred key before anything changes; the seed then replaces the
+   * device's private key. Throws ("Pairing refused…") with nothing changed
+   * when the transfer is missing, undecryptable, or does not bind.
    */
   async completePairing(
     { motebitId, deviceId }: { motebitId: string; deviceId: string },
@@ -4358,56 +4486,79 @@ export class UnbootedWebApp {
       pairingId: string;
     },
   ): Promise<string | undefined> {
-    // Update in-memory identity state
-    this._motebitId = motebitId;
-    this._deviceId = deviceId;
-    // The Machines section belonged to the previous identity (F4).
-    this._machineRoster?.dispose();
-    this._machineRoster = null;
     let walletWarning: string | undefined;
+    let identitySeed: Uint8Array | undefined;
 
-    if (keyTransferOpts) {
-      const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl, pairingId } = keyTransferOpts;
+    try {
+      // The shared acceptance path (@motebit/encryption): the transfer is
+      // required, must decrypt to the key it names, and the relay-supplied
+      // motebit_id must bind to that key — through the succession chain
+      // Device A sealed inside the transfer, else the relay's public chain
+      // (verified here; withheld or forged, it only refuses). Refused ⇒
+      // throws before anything — in memory or at rest — changes.
+      if (!keyTransferOpts) {
+        throw new Error("Pairing refused: the approval carried no identity key transfer");
+      }
+      const { syncUrl } = keyTransferOpts;
+      const opened = await openPairingKeyTransfer({
+        motebitId,
+        keyTransfer: keyTransferOpts.keyTransfer,
+        ephemeralPrivateKey: keyTransferOpts.ephemeralPrivateKey,
+        pairingCode: keyTransferOpts.pairingCode,
+        fetchSuccessionChain: () =>
+          new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(motebitId),
+      });
+      identitySeed = opened.identitySeed;
+
+      // Only now — the binding check passed: the verified lineage joins the
+      // roster replica, the one place this browser can carry it from when it
+      // approves the next device. Re-verified inside; never fails the pairing.
+      await rosterAfterPairing({
+        motebitId,
+        publicKeyHex: opened.publicKeyHex,
+        records: opened.succession,
+      });
+
+      // Update in-memory identity state
+      this._motebitId = motebitId;
+      this._deviceId = deviceId;
+      // The Machines section belonged to the previous identity (F4).
+      this._machineRoster?.dispose();
+      this._machineRoster = null;
+
+      const { pairingId } = keyTransferOpts;
       try {
-        const identitySeed = await decryptKeyTransfer(
-          keyTransfer,
-          ephemeralPrivateKey,
-          pairingCode,
-        );
-        try {
-          // Safety check: refuse key transfer if old wallet has funds
-          const oldPrivKeyHex = await this.keyStore.loadPrivateKey();
-          if (oldPrivKeyHex) {
-            const oldSeedBytes = hexToBytes(oldPrivKeyHex);
-            try {
-              const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
-              if (walletCheck.hasAnyValue) {
-                walletWarning = formatWalletWarning(walletCheck);
-              }
-            } finally {
-              secureErase(oldSeedBytes);
+        // Safety check: refuse key transfer if old wallet has funds
+        const oldPrivKeyHex = await this.keyStore.loadPrivateKey();
+        if (oldPrivKeyHex) {
+          const oldSeedBytes = hexToBytes(oldPrivKeyHex);
+          try {
+            const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
+            if (walletCheck.hasAnyValue) {
+              walletWarning = formatWalletWarning(walletCheck);
             }
+          } finally {
+            secureErase(oldSeedBytes);
           }
+        }
 
-          if (!walletWarning) {
-            const newPrivHex = bytesToHex(identitySeed);
-            await this.keyStore.storePrivateKey(newPrivHex);
+        if (!walletWarning) {
+          const newPrivHex = bytesToHex(identitySeed);
+          await this.keyStore.storePrivateKey(newPrivHex);
 
-            // The new public key is identity_pubkey_check (verified during decryption)
-            this._publicKeyHex = keyTransfer.identity_pubkey_check;
+          // The new public key is identity_pubkey_check (verified during decryption)
+          this._publicKeyHex = opened.publicKeyHex;
 
-            // Update relay device registration
-            const client = new PairingClient({ relayUrl: syncUrl });
-            await client.updateDeviceKey(pairingId, this._publicKeyHex);
-          }
-        } finally {
-          secureErase(identitySeed);
+          // Update relay device registration
+          const client = new PairingClient({ relayUrl: syncUrl });
+          await client.updateDeviceKey(pairingId, this._publicKeyHex);
         }
       } catch {
         // Key transfer failed — device keeps its own keypair, wallet warning stays undefined
-      } finally {
-        secureErase(ephemeralPrivateKey);
       }
+    } finally {
+      if (identitySeed !== undefined) secureErase(identitySeed);
+      if (keyTransferOpts) secureErase(keyTransferOpts.ephemeralPrivateKey);
     }
     return walletWarning;
   }

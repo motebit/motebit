@@ -68,7 +68,7 @@ Each axis carries a code-anchored constant, a decay form (exponential / cliff / 
 
 **Default constant.** `τ_A_capacity = 10,000` entries (not a time, a count).
 
-**Doctrinal binding.** Audit persistence is **capacity-bound** today — the in-memory `AuditLogger` (PolicyGate's actual sink) holds the last N entries regardless of age. This is the most aggressive dissolution axis: a busy motebit can churn through 10,000 entries in days. The hash-chained `AuditChainStore` primitive (see [`audit_chain_signing_endgame`](../../.claude/projects/-Users-daniel-src-motebit/memory/audit_chain_signing_endgame.md) project memory) would replace capacity-FIFO with durable hash-chained persistence + Merkle anchoring; that's the endgame this axis points at.
+**Doctrinal binding.** Audit persistence is **capacity-bound** today — the in-memory `AuditLogger` (PolicyGate's actual sink) holds the last N entries regardless of age. This is the most aggressive dissolution axis: a busy motebit can churn through 10,000 entries in days. The hash-chained `AuditChainStore` primitive (see `audit_chain_signing_endgame` project memory) would replace capacity-FIFO with durable hash-chained persistence + Merkle anchoring; that's the endgame this axis points at.
 
 ## The three dissolution shapes
 

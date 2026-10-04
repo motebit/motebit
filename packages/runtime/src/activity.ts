@@ -91,6 +91,7 @@ export function derivePlanActivity(chunk: PlanChunk): ActivityLabel | undefined 
       return "planning";
     case "plan_completed":
     case "plan_failed":
+    case "plan_undetermined":
       return null;
     case "approval_request":
       return `approval: ${chunk.step.description}`;

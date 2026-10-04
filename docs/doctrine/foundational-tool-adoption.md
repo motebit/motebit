@@ -24,7 +24,7 @@ When a foundational tool ships a major version, the adoption checklist is not "d
 
 Premature adoption that breaks a defensive gate is reverted, not patched around. The gate is the product's claim of integrity; a half-working gate is a lie the same way a stale doctrine citation is.
 
-**Verify in a worktree before pushing — _every_ defensive gate, not just typecheck/lint/test.** Both worked examples below shipped because the local pre-push hook ran a subset of what CI enforces. When bumping a foundational tool, run the full set against the new version: typecheck, lint, test, **`test:coverage`**, the drift gates (`pnpm check`), gate-effectiveness, and format. The pre-push hook is now aligned with CI's coverage check (`.husky/pre-push` runs `test:coverage`, not bare `test`) so this specific hole stays closed.
+**Verify in a worktree before pushing — _every_ defensive gate, not just typecheck/lint/test.** Both worked examples below shipped because the local pre-push hook ran a subset of what CI enforces. When bumping a foundational tool, run the full set against the new version: typecheck, lint, test, **`test:coverage`**, the drift gates (`pnpm check`), gate-effectiveness, and format. The pre-push hook will not do this for you: since 2026-09-30 it is deliberately a fast subset of CI (typecheck + lint over the changed packages and their dependents, plain tests of the changed packages only, no coverage thresholds), and `check-prepush-subset` holds it to pre-push ⊆ CI — CI is the authority. A foundational-tool bump touches every package, so push it with MOTEBIT_PREPUSH_FULL=1 (the old whole-closure typecheck + lint + test:coverage gauntlet) after running the full set above.
 
 ## Worked examples
 

@@ -37,6 +37,7 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { classifyEventPayload } from "./event-payload.js";
+import { RELAY_TEXT_MAX, sanitizeRelayText } from "./relay-text.js";
 
 /** One event of a seq page: the entry in its TRANSPORT form, and its relay seq. */
 export interface SeqPullEntry {
@@ -118,6 +119,12 @@ export interface SyncSeqCursorStore {
   recordSkippedSyncEvent?(key: string, skipped: SkippedSyncEvent): Promise<void>;
   /** Every undecryptable skip ever recorded for `key`, including rows since pruned. */
   countSkippedSyncEvents?(key: string): Promise<number>;
+  /**
+   * Every cursor key this store holds that starts with `prefix` (#962): how
+   * compaction finds each relay stream's push cursor, including the streams
+   * of an earlier process that has not connected sync yet.
+   */
+  listSyncSeqCursorKeys?(prefix: string): Promise<string[]>;
 }
 
 /**
@@ -152,9 +159,12 @@ function hasHeldEventIdLookup(x: unknown): x is HeldEventIdLookup {
 export function warnSkippedSyncEvent(s: SkippedSyncEvent): void {
   // eslint-disable-next-line no-console -- the runtime's pluggable-logger default (CLAUDE.md conventions); callers pass onSkippedEvent to route it
   console.warn(
-    `sync: moved past event ${s.event_id} (seq ${s.seq ?? "n/a"}) without applying it: ${s.reason}${
-      s.detail ? ` — ${s.detail}` : ""
-    }`,
+    sanitizeRelayText(
+      `sync: moved past event ${s.event_id} (seq ${s.seq ?? "n/a"}) without applying it: ${s.reason}${
+        s.detail ? ` — ${s.detail}` : ""
+      }`,
+      RELAY_TEXT_MAX * 2,
+    ),
   );
 }
 
@@ -168,6 +178,9 @@ export class InMemorySyncSeqCursorStore implements SyncSeqCursorStore {
   setSyncSeqCursor(key: string, seq: number): Promise<void> {
     this.cursors.set(key, seq);
     return Promise.resolve();
+  }
+  listSyncSeqCursorKeys(prefix: string): Promise<string[]> {
+    return Promise.resolve([...this.cursors.keys()].filter((k) => k.startsWith(prefix)));
   }
   private totals = new Map<string, number>();
   recordSkippedSyncEvent(key: string, skipped: SkippedSyncEvent): Promise<void> {

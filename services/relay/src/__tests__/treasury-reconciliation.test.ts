@@ -17,6 +17,7 @@ import {
   startTreasuryReconciliationLoop,
   type EvmRpcAdapter,
 } from "../treasury-reconciliation.js";
+import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 const TREASURY = "0xee51c5a65c6Fa81c9CC85505884290e90C09D285";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -32,6 +33,7 @@ beforeEach(async () => {
   // conditional (only-runs-on-mainnet) is tested separately via
   // treasury-reconciliation-e2e.test.ts.
   relay = await createSyncRelay({
+    ...TEST_RELAY_NETWORK,
     allowPrivateEndpoints: true,
     apiToken: "test-token",
     enableDeviceAuth: true,

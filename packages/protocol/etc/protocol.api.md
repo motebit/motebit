@@ -912,7 +912,7 @@ export interface CollaborativeReceipt {
 export function composeTrustChain(scores: number[]): number;
 
 // @public
-export function computeFederatedFeeSplit(budgetMicro: number, feeRate: number): FederatedFeeSplit;
+export function computeFederatedFeeSplit(budgetMicro: number, feeRate: number, executorFeeRate?: number): FederatedFeeSplit;
 
 // @public
 export function computeP2pFeeMicro(netCostMicro: number, feeRate: number): number;
@@ -2646,8 +2646,11 @@ export interface KeySuccessionRecord {
 // @public
 export interface KeyTransferPayload {
     encrypted_seed: string;
+    encrypted_succession?: string;
     identity_pubkey_check: string;
     nonce: string;
+    succession_nonce?: string;
+    succession_tag?: string;
     tag: string;
     x25519_pubkey: string;
 }

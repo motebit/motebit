@@ -56,8 +56,8 @@
  *     state containing those types and nothing more.
  */
 
-import type { EmbodimentMode, SlabItemKind, SlabItemPhase } from "@motebit/render-engine";
-import { defaultEmbodimentMode, EMBODIMENT_MODE_CONTRACTS } from "@motebit/render-engine";
+import type { EmbodimentMode, SlabItemKind, SlabItemPhase } from "@motebit/render-engine/spec";
+import { defaultEmbodimentMode, EMBODIMENT_MODE_CONTRACTS } from "@motebit/render-engine/spec";
 import type { SensitivityLevel } from "@motebit/sdk";
 
 /**

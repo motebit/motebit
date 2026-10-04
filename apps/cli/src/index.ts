@@ -29,16 +29,11 @@ import {
   resolveUnlockPassphrase,
   encryptPrivateKey,
   decryptPrivateKey,
-  bootstrapIdentity,
   fromHex,
   refuseIdentityWithoutKey,
 } from "./identity.js";
-import {
-  getDbPath,
-  buildToolRegistry,
-  createRuntime,
-  openMotebitDatabase,
-} from "./runtime-factory.js";
+import { getDbPath, buildToolRegistry, createRuntime, syncFailureLine } from "./runtime-factory.js";
+import { bootstrapReplIdentity, replStartupSync, type CliEventPush } from "./cli-event-push.js";
 import { connectConfigMcpServers, runtimeMcpServersForRepl } from "./mcp-config-wiring.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { consumeStream } from "./stream.js";
@@ -145,11 +140,14 @@ import {
   handleSkillsUntrust,
   handleSkillsPublish,
   handleSkillsRunScript,
+  handleStatus,
+  handleSync,
 } from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { resolveRelayUrl } from "./subcommands/_helpers.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
 import { VoiceController } from "./voice.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 // --- Re-exports for tests and external consumers ---
 export {
@@ -174,7 +172,7 @@ async function main(): Promise<void> {
     config = parseCliArgs();
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`Error: ${message}`);
+    console.error(`Error: ${sanitizeRelayText(message)}`);
     printHelp();
     process.exit(1);
   }
@@ -493,6 +491,16 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (subcommand === "sync") {
+    await handleSync(config);
+    return;
+  }
+
+  if (subcommand === "status") {
+    await handleStatus(config);
+    return;
+  }
+
   if (subcommand === "skills") {
     const skillsCmd = config.positionals[1];
     if (skillsCmd === "install") {
@@ -703,9 +711,11 @@ async function main(): Promise<void> {
 
   // Bootstrap identity — need DB first for identity storage
   const dbPath = getDbPath(config.dbPath);
-  const tempDb = await openMotebitDatabase(dbPath);
-  const { motebitId, isFirstLaunch } = await bootstrapIdentity(tempDb, fullConfig, passphrase);
-  tempDb.close();
+  const { motebitId, isFirstLaunch } = await bootstrapReplIdentity({
+    dbPath,
+    fullConfig,
+    passphrase,
+  });
 
   if (isFirstLaunch) {
     console.log();
@@ -752,7 +762,7 @@ async function main(): Promise<void> {
   } catch (err: unknown) {
     destroyTerminal();
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Runtime-host election failed: ${msg}`);
+    console.error(`Runtime-host election failed: ${sanitizeRelayText(msg)}`);
     // #512 — bind failures and attach failures have different causes and
     // different repairs; the old one-size advice ("incompatible build")
     // sent the 2026-07-31 socket-path bug hunting in the wrong direction.
@@ -816,6 +826,8 @@ async function main(): Promise<void> {
     personalityConfig,
     syncEncKey,
     solanaWallet,
+    // #962: the event remote mints its `sync` device token from these.
+    { deviceId, privateKey: () => privateKeyBytes },
   );
   runtimeRef.current = runtime;
   // The interactive terminal holds this machine's ledger, so `/runs`
@@ -865,7 +877,7 @@ async function main(): Promise<void> {
       persistMotebitPublicKeys(mcpAdapters, fullConfig);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn(`MCP connection failed: ${message}`);
+      console.warn(`MCP connection failed: ${sanitizeRelayText(message)}`);
     }
   }
 
@@ -879,46 +891,22 @@ async function main(): Promise<void> {
 
   // Enable interactive delegation if relay + signing keys are available
   const syncUrl = resolveRelayUrl(config, reloadedConfig);
+  let replPush: CliEventPush | undefined;
   // Initial sync — default relay is always available
   {
-    try {
-      console.log(dim("Syncing..."));
-      const result = await runtime.sync.sync();
-      console.log(dim(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`));
-      if (result.conflicts.length > 0) {
-        console.log(`  [${result.conflicts.length} conflicts detected]`);
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(`Sync failed (continuing offline): ${message}`);
-    }
-
-    // Register device with relay BEFORE enabling delegation.
-    // Signed device tokens require the device's public key in the relay's
-    // identity manager. Without this, verifySignedTokenForDevice rejects
-    // poll requests with "Device not authorized".
-    if (syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key) {
-      try {
-        const resp = await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            motebit_id: motebitId,
-            device_id: deviceId,
-            public_key: reloadedConfig.device_public_key,
-          }),
-        });
-        if (!resp.ok && resp.status !== 200 && resp.status !== 201) {
-          const body = await resp.text();
-          // 409 = already registered with same key, that's fine
-          if (resp.status !== 409) {
-            console.warn(`Device registration: ${resp.status} ${body}`);
-          }
-        }
-      } catch {
-        // Best-effort — relay may be unreachable
-      }
-    }
+    // Register the device, then the first push, then the periodic push — in
+    // that order (#962; `replStartupSync` is the wiring under test).
+    replPush = await replStartupSync({
+      runtime,
+      syncUrl,
+      motebitId,
+      eventStore: moteDb.eventStore,
+      ...(syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key
+        ? { device: { deviceId, publicKeyHex: reloadedConfig.device_public_key } }
+        : {}),
+      log: (line) => console.log(dim(line)),
+      warn: (line) => console.warn(line),
+    });
 
     // Enable delegation with audience-scoped device tokens (submit vs query).
     // Falls back to raw API token only when device keys are unavailable.
@@ -1010,12 +998,15 @@ async function main(): Promise<void> {
     destroyTerminal();
     // Release the runtime-host socket first so a successor can elect.
     await runtimeHostServer.close().catch(() => {});
+    replPush?.stop();
     runtime.stop();
     // Disconnect MCP servers
     await Promise.allSettled(mcpAdapters.map((a) => a.disconnect()));
     try {
       const result = await runtime.sync.sync();
-      console.log(`Synced on exit: pushed ${result.pushed}, pulled ${result.pulled}`);
+      const failed = syncFailureLine(runtime.sync);
+      if (failed) console.warn(failed);
+      else console.log(`Synced on exit: pushed ${result.pushed}, pulled ${result.pulled}`);
     } catch {
       console.warn("Sync on exit failed (changes saved locally)");
     }
@@ -1100,7 +1091,7 @@ async function main(): Promise<void> {
     } catch (err: unknown) {
       // Activation is best-effort — if it fails, user still gets the prompt
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(dim(`  [activation failed: ${msg}]`));
+      console.error(dim(`  [activation failed: ${sanitizeRelayText(msg)}]`));
     }
     console.log();
   }
@@ -1247,7 +1238,7 @@ async function main(): Promise<void> {
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`\n  ${errorColor("[error: " + message + "]")}\n`);
+      console.error(`\n  ${errorColor("[error: " + sanitizeRelayText(message) + "]")}\n`);
     }
 
     prompt();
@@ -1265,7 +1256,7 @@ main().catch((err: unknown) => {
     err instanceof ConfigIdentityChangedError ||
     err instanceof IdentityBootstrapRefusedError
   ) {
-    console.error(`Error: ${err.message}`);
+    console.error(`Error: ${sanitizeRelayText(err.message)}`);
     process.exit(1);
   }
   console.error("Fatal error:", err);

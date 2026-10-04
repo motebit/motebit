@@ -21,9 +21,20 @@
  * marked entry. v4 retired the marks: the exhaustive differential
  * (`presentation-matrix.probe.ts`) found every mark lost to main in some cell —
  * a device held back while the forward ran, and gone by the time it failed,
- * left a task main completes. This file now pins main's counts at each of
+ * left a task main completes. This file pinned main's counts at each of
  * these shapes, and the swallowed-send cells (held for recovery, never
  * forwarded).
+ *
+ * Round 3 of one task, one body (`one-execution-matrix.probe.ts`): main's
+ * "2" cells broke THE LAW (one task executes at most once across all its
+ * presenters). The relay's MCP forward and the submitter's chosen
+ * presentation are now GRANTS (`task-claim.ts`), taken before the forward's
+ * first request / at admission, and recovery presents only a Pending task —
+ * so the mid-flight reconnect is no longer handed the task beside them. The
+ * strand v2/v3 had is closed differently: a forward that never sent
+ * `tools/call` RELEASES its grant and presents the task to the bodies
+ * connected now; one that sent it and got no receipt is UNDETERMINED
+ * (visible on the poll), never re-presented.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer } from "node:http";
@@ -149,6 +160,18 @@ interface Outcome {
   bystanderFrames: number;
   /** POSTs the "failing" endpoint received (0: the relay never forwarded to it). */
   endpointPosts: number;
+  /** The poll's `undetermined.reason`, when the task is undetermined. */
+  undetermined: string | null;
+}
+
+/** The delegator's poll of the scenario's task. */
+async function pollTask(relay: SyncRelay, owner: string, taskId: string) {
+  const r = await relay.app.request(`/agent/${owner}/task/${taskId}`, { headers: JSON_AUTH });
+  return (await r.json()) as {
+    task: { status: string };
+    receipt: unknown;
+    undetermined?: { reason: string };
+  };
 }
 
 async function scenario(
@@ -490,7 +513,9 @@ async function scenario(
       .prepare(`SELECT COUNT(*) AS n FROM relay_settlements WHERE task_id = ?`)
       .get(j.task_id) as { n: number }
   ).n;
+  const poll = await pollTask(relay, worker, j.task_id).catch(() => null);
   return {
+    undetermined: poll?.undetermined?.reason ?? null,
     submitterToken: typeof j.dispatch_token === "string",
     mcpExecutions: mcpExec,
     wsExecutions: wsExec,
@@ -513,12 +538,10 @@ function trust(relay: SyncRelay, from: string, to: string): void {
 
 const T = 20_000;
 
-// #811 v4: reconnect recovery is never held back. v2/v3 marked an entry while
-// an MCP forward (or a chosen submitter) presented it and recovery skipped it:
-// one execution where main had two — but a strand where the forward failed and
-// the held-back device had left, a task main completes
-// (presentation-matrix.probe.ts). These pin main's counts.
-describe("an MCP forward and a mid-flight reconnect — main's behaviour", () => {
+// Round 3 (one-execution-matrix.probe.ts): the MCP forward takes the grant
+// before its first request, so a mid-flight reconnect is never handed the
+// task beside it — one execution where main had two.
+describe("an MCP forward and a mid-flight reconnect — one execution", () => {
   it(
     "caps.closed ⇒ held for reconnect, as main: no MCP forward, the reconnect executes it once",
     async () => {
@@ -529,28 +552,28 @@ describe("an MCP forward and a mid-flight reconnect — main's behaviour", () =>
   );
 
   it(
-    "caps.none ⇒ MCP and the reconnect both run it (2, as main)",
+    "caps.none ⇒ the MCP forward holds the grant; the reconnect is not handed it ⇒ 1 (main: 2)",
     async () => {
       const o = await scenario("none", "caps");
-      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 1, total: 2, settlementRows: 1 });
+      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 0, total: 1, settlementRows: 1 });
     },
     T,
   );
 
   it(
-    "other.none — MCP to another agent, the URL worker reconnects ⇒ 2, as main",
+    "other.none — MCP to another agent holds the grant; the URL worker reconnects ⇒ 1 (main: 2)",
     async () => {
       const o = await scenario("none", "other");
-      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 1, total: 2, settlementRows: 1 });
+      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 0, total: 1, settlementRows: 1 });
     },
     T,
   );
 
   it(
-    "other.closed — Phase 1 ranks the OTHER agent and forwards to it; the URL worker reconnects ⇒ 2, as main",
+    "other.closed — Phase 1 ranks the OTHER agent and forwards to it (the grant); the URL worker reconnects ⇒ 1 (main: 2)",
     async () => {
       const o = await scenario("closed", "other");
-      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 1, total: 2, settlementRows: 1 });
+      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 0, total: 1, settlementRows: 1 });
     },
     T,
   );
@@ -598,10 +621,10 @@ describe("pinned and ranked dispatch — a closed-only socket is held, as main",
   );
 
   it(
-    "rankedSelf.none ⇒ the MCP forward (main's door) and the mid-flight reconnect ⇒ 2, as main",
+    "rankedSelf.none ⇒ the MCP forward (main's door) holds the grant; the mid-flight reconnect is not handed it ⇒ 1 (main: 2)",
     async () => {
       const o = await scenario("none", "rankedSelf");
-      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 1, total: 2, settlementRows: 1 });
+      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 0, total: 1, settlementRows: 1 });
     },
     T,
   );
@@ -655,23 +678,23 @@ describe("recovery stays the presenter where main made it one", () => {
   );
 });
 
-describe("a submitter that CHOSE to present — main's behaviour", () => {
+describe("a submitter that CHOSE to present — the token is the grant", () => {
   it(
-    "chosen.none ⇒ the submitter's presentation and the reconnect both run it (2, as main)",
+    "chosen.none ⇒ the task is queued granted to the submitter; the reconnect is not handed it ⇒ 1 (main: 2)",
     async () => {
       const o = await scenario("none", "chosen");
       expect(o).toMatchObject({
         submitterToken: true,
         mcpExecutions: 1,
-        wsExecutions: 1,
-        total: 2,
+        wsExecutions: 0,
+        total: 1,
       });
     },
     T,
   );
 });
 
-describe("a failing forward — the reconnect runs the task, as main", () => {
+describe("a failing forward — released when nothing could have run it, undetermined when it might have", () => {
   it(
     "failing.none with a bystander socket open all along ⇒ only the reconnecting device gets it",
     async () => {
@@ -691,15 +714,35 @@ describe("a failing forward — the reconnect runs the task, as main", () => {
   );
 
   // The #849 review: v2 kept a mark once `tools/call` was sent, so these
-  // tasks sat `pending` until their TTL with zero executions — where main
-  // executes and settles them through reconnect recovery.
-  for (const fail of ["reset", "refused", "error200"] as const) {
+  // tasks sat `pending` until their TTL with zero executions. Round 3: a
+  // `tools/call` whose connection was REFUSED never reached the worker, so
+  // the grant is released and the reconnected device runs it (as main). A
+  // `tools/call` that was sent — reset unanswered, or answered with an
+  // unsigned error — may have run: the task is UNDETERMINED on the poll,
+  // never re-presented (main re-ran it through recovery: a possible second
+  // execution).
+  it(
+    "failing.none — refused at tools/call (nothing sent) ⇒ released; the reconnected device runs it once, settled",
+    async () => {
+      const o = await scenario("none", "failing", { fail: "refused" });
+      expect(o.endpointPosts).toBeGreaterThanOrEqual(2); // it did reach the endpoint
+      expect(o).toMatchObject({ mcpExecutions: 0, wsExecutions: 1, total: 1, settlementRows: 1 });
+    },
+    T,
+  );
+  for (const fail of ["reset", "error200"] as const) {
     it(
-      `failing.none — ${fail} at tools/call, the device reconnected mid-forward ⇒ 1 execution, settled (as main)`,
+      `failing.none — ${fail} at tools/call (sent) ⇒ undetermined (forward_unanswered), never re-presented`,
       async () => {
         const o = await scenario("none", "failing", { fail });
-        expect(o.endpointPosts).toBeGreaterThanOrEqual(2); // it did reach the endpoint
-        expect(o).toMatchObject({ mcpExecutions: 0, wsExecutions: 1, total: 1, settlementRows: 1 });
+        expect(o.endpointPosts).toBeGreaterThanOrEqual(3); // tools/call reached the endpoint
+        expect(o).toMatchObject({
+          mcpExecutions: 0,
+          wsExecutions: 0,
+          total: 0,
+          settlementRows: 0,
+          undetermined: "forward_unanswered",
+        });
       },
       T,
     );

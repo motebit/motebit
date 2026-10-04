@@ -33,6 +33,7 @@ import {
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
   servedToolNames,
+  TaskClaimCoordinator,
 } from "@motebit/runtime";
 import { DeviceCapability } from "@motebit/sdk";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
@@ -115,8 +116,30 @@ export class SyncController {
    */
   private _servingToken: ((audience: TokenAudience) => Promise<string>) | null = null;
   private _activeTaskCount = 0;
+  /**
+   * One task, one body: the relay hands a task to every serving body of
+   * this identity and grants exactly one claim — run only on the grant.
+   * Frames go out on whichever socket is current (token refresh swaps it).
+   */
+  private readonly _taskClaims = new TaskClaimCoordinator({
+    send: (frame) => this._wsAdapter?.sendRaw(frame),
+  });
+
+  /** Work bound to this sync session (a registration retry), ended by `stopSync`. */
+  private _onStop = new Set<() => void>();
 
   constructor(private deps: SyncControllerDeps) {}
+
+  /**
+   * Run `stop` when sync stops (`stopSync`). Returns an unsubscribe for work
+   * that ended on its own.
+   */
+  onStop(stop: () => void): () => void {
+    this._onStop.add(stop);
+    return () => {
+      this._onStop.delete(stop);
+    };
+  }
 
   /** Subscribe to sync status changes. Immediately emits the current status. */
   onSyncStatus(callback: (event: SyncStatusEvent) => void): void {
@@ -467,6 +490,7 @@ export class SyncController {
     // One named handler, so a token refresh attaches the same one to the
     // replacement adapter (#816).
     const onRelayFrame: CustomMessageCallback = (msg) => {
+      if (this._taskClaims.handleFrame(msg)) return;
       const rt = this.deps.getRuntime();
       // Handle remote command requests (forwarded by relay)
       if (msg.type === "command_request" && rt) {
@@ -527,12 +551,11 @@ export class SyncController {
       const privateKey = this._servingPrivateKey;
       const authToken = this._servingAuthToken;
 
-      // Claim the task
-      this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-      this._activeTaskCount++;
-
-      // Execute — creature glow will rise from processing state
-      void (async () => {
+      // Claim the task; execute only on the relay's grant — another body of
+      // this identity may hold it.
+      this._taskClaims.offer(task.task_id, async () => {
+        this._activeTaskCount++;
+        // Execute — creature glow will rise from processing state
         try {
           let receipt: ExecutionReceipt | undefined;
           for await (const chunk of rt.handleAgentTask(
@@ -578,7 +601,7 @@ export class SyncController {
         } finally {
           this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
         }
-      })();
+      });
     };
     if (this._wsUnsubOnCustom) this._wsUnsubOnCustom();
     this._wsUnsubOnCustom = wsAdapter.onCustomMessage(onRelayFrame);
@@ -817,6 +840,10 @@ export class SyncController {
 
   /** Stop background event sync. */
   stopSync(): void {
+    this._taskClaims.dispose();
+    const hooks = [...this._onStop];
+    this._onStop.clear();
+    for (const stop of hooks) stop();
     if (this._wsTokenRefreshTimer) {
       clearInterval(this._wsTokenRefreshTimer);
       this._wsTokenRefreshTimer = null;

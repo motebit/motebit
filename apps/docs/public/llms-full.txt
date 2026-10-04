@@ -12,31 +12,48 @@ For the short index see [llms.txt](https://docs.motebit.com/llms.txt). For the s
 # Introduction
 Source: https://docs.motebit.com/docs/introduction
 
-> What is motebit, and why does it exist.
+> What motebit is — a persistent agent identity you hold, its memory, its policy gate, and its signed receipts.
 
-A motebit is a small liquescent sphere, alive, suspended in air. It breathes because droplets oscillate. It glows when it thinks. It remembers what you've told it, forgets gracefully over time, and asks before it acts. It lives on your device — not in someone else's cloud.
+Motebit is an agent runtime built around an identity you hold:
 
-Every AI today owns the intelligence and rents you a session. When the session ends, the memory resets, the context vanishes, the relationship starts over. Motebit inverts that. The intelligence is a commodity — you can swap the LLM underneath at any time. What you own is the agent itself: its identity, its accumulated memory, its trust, its governance.
+- **Identity** — an Ed25519 keypair generated on your device; the private key stays there. A new `motebit_id` is derived from the SHA-256 of its genesis public key, so the binding checks offline.
+- **Memory** — a local memory graph owned by that identity, not by a model provider or a session.
+- **Policy-gated actions** — every tool call has a risk level (`R0_READ` … `R4_MONEY`) and is allowed, held for your approval, or denied. Stored data has a sensitivity level; `medical`, `financial`, and `secret` data is never sent to an external AI provider.
+- **Signed receipts** — work produces an `ExecutionReceipt` signed by the identity key, verifiable offline by anyone with the public key. No server, no account.
+- **Pluggable LLM** — Anthropic, OpenAI, Google, or a local server such as Ollama. Changing it leaves identity, memory, and policy as they were.
 
-## What makes it yours
+## Quickstart
 
-**It knows who it is.** Your motebit has a cryptographic identity — an Ed25519 keypair that proves it's yours across devices, sessions, and providers. Not a session cookie. A persistent entity.
+```bash
+$ npm create motebit@latest my-agent
+# Prompts for an AI provider, a trust mode, and a passphrase that encrypts the private key.
+  Generating Ed25519 keypair...
+  Signing identity file...
+  + Created ./my-agent
 
-**It remembers.** Conversations become semantic memories that compound over time. Important things stick. Trivial things decay. The agent gets more useful the longer it runs — and that accumulated knowledge belongs to you.
+$ cd my-agent
+$ export ANTHROPIC_API_KEY=sk-ant-...   # motebit run exits without a provider key
+$ npx motebit run --identity ./motebit.md
+Daemon running. motebit_id: 3f9c1a7e... Goals: 0. Policy: max_risk_auto=R1_DRAFT, deny_above=R4_MONEY
+```
 
-**It asks before it acts.** A governance layer controls what your agent can do. Read-only tasks happen automatically. Anything that writes, executes, or spends money requires your approval. You set the thresholds.
+`./my-agent` holds a signed `motebit.md` identity file and a `verify.js` that checks its signature; the encrypted private key is written to `~/.motebit/config.json`, not into the project. The policy line is the default **Guarded** trust mode: reading and drafting run automatically; writes, execution, and money wait for approval. If you chose Ollama, run the daemon with `--provider ollama` — `motebit run` picks up the scaffold's Ollama choice, but without the flag it keeps the Anthropic default model name, which Ollama does not serve. `motebit run` is the daemon: it executes scheduled goals and queues approvals. See [Get Your Agent](/docs/get-your-agent) for the other install paths, and the [Developer Quickstart](/docs/developer/quickstart) to sign and verify a receipt in one file without a relay.
 
-**It connects to everything.** Through MCP (Model Context Protocol), your motebit can reach any tool ecosystem — file systems, APIs, databases, services — while its policy layer gates what crosses the boundary.
+## What it runs on
 
-**It proves what it's done.** Every action can be signed into a verifiable receipt — an `ExecutionReceipt` anyone can check offline, without trusting motebit or contacting a server. Identity, memory, and governance are claims; receipts are the proof. [Verify one yourself](/docs/developer/quickstart) — two packages, ~25 lines, no account.
+- **CLI** (`npm install -g motebit`) — interactive REPL, daemon, and MCP server. The most complete surface.
+- **Web** ([motebit.com](https://motebit.com)) — the creature and chat in the browser, no install.
+- **Desktop** (Tauri) — the creature in a small transparent window, with chat and voice input. A preview — see [Get Your Agent](/docs/get-your-agent#desktop-preview).
+- **Mobile** (React Native + Expo) — the same identity, memory, and governance runtime. Built from source today; not in the App Store or Play Store, and on-device testing is not yet complete.
+- **Spatial** — an AR-glasses companion prototype.
 
-## Where it lives
+The runtime connects to tools through MCP (Model Context Protocol); the policy gate governs every call that crosses that boundary.
 
-Your motebit lives on your desktop — a liquescent droplet hovering over your screen, responding to your voice, glowing when it processes, breathing at 0.3 Hz. It runs on your phone with full parity — the same identity, memory, and governance. It also runs as a command-line agent for developers.
+## Why it exists
 
-Eventually, it floats in your field of view.
+Most AI products own the intelligence and rent you a session: when the session ends, the context resets. Motebit inverts that. The model is replaceable; what persists is the agent itself — its identity, its accumulated memory, its trust relationships, its governance.
 
-The body changes. The identity persists.
+The visual form follows from the same idea. A motebit renders as a liquescent droplet: surface tension is the boundary, the interior holds memory, trust, and identity, and the body is the same on every surface. [The Droplet](/docs/concepts/the-droplet) derives the form from droplet physics.
 
 ## How these docs are organized
 
@@ -64,7 +81,7 @@ For the boundary between motebit's published packages and its workspace-internal
   <Card
     title="Get Your Agent"
     href="/docs/get-your-agent"
-    description="Download the desktop app or create an identity from the command line."
+    description="Create an identity from the command line, scaffold a service agent, or install the full CLI."
   />
   <Card
     title="The Droplet"
@@ -83,58 +100,25 @@ For the boundary between motebit's published packages and its workspace-internal
 # Get Your Agent
 Source: https://docs.motebit.com/docs/get-your-agent
 
-> Download the desktop app, create an identity, and meet your motebit.
+> Open the web app, install the CLI from npm, or scaffold a service agent. The desktop app is a preview built from source.
 
-Three install paths share one identity: a signed identity file you can verify and share, a service agent that runs as a worker, and the full operator console with REPL, daemon, and MCP server. Pick by what you want to ship.
+One identity, several ways in. The current, shipped paths are the web app at [motebit.com](https://motebit.com) and the `motebit` CLI from npm. Pick by what you want to do.
 
-## Three paths
+## Where to start
 
-| Path | Command | What you get |
-|------|---------|-------------|
+| Path | How | What you get |
+|------|-----|-------------|
+| **Web** | Open [motebit.com](https://motebit.com) | The creature and chat in your browser — no install. Your identity is created and kept in this browser |
+| **Full agent (CLI)** | `npm install -g motebit` then `motebit` | Interactive REPL with identity, memory, tools, operator mode, daemon, and MCP server |
 | **Identity only** | `npm create motebit` | Signed `motebit.md` identity file — create, verify, share |
 | **Service agent** | `npm create motebit my-agent -- --agent` | Runnable agent project with tools, identity, MCP server — `npm run dev` to join the network |
-| **Full agent** | `npm install -g motebit` then `motebit` | Interactive REPL with identity, memory, tools, operator mode |
+| **Desktop (preview)** | Build from source | The Tauri app — see [Desktop (preview)](#desktop-preview) below |
 
-The identity-only path is lightweight — no runtime, no database, just a cryptographically signed file. The service agent path scaffolds a complete project with `src/tools.ts`, identity, and scripts wired to `motebit serve --direct` — a few commands from install to your first paid task. The full agent gives you the complete operator console with streaming chat, MCP tool connections, goal scheduling, and everything described below.
+The identity-only path is lightweight — no runtime, no database, just a cryptographically signed file. The service agent path scaffolds a complete project with `src/tools.ts`, identity, and an entrypoint that runs `motebit serve --direct` — a few commands from install to a registered service agent. The full agent gives you the complete operator console with streaming chat, MCP tool connections, goal scheduling, and everything described below.
 
-## Desktop app
+## Web app
 
-The desktop app is the primary way to interact with your motebit. A liquescent droplet floats on your screen — it breathes, glows when thinking, responds to your voice, and remembers your conversations.
-
-Desktop releases are available from the [GitHub releases page](https://github.com/motebit/motebit/releases).
-
-### First launch
-
-1. **Identity** — The app generates an Ed25519 keypair and stores the private key in the owner-only (`0600` on Unix; Windows is best-effort) `~/.motebit/dev-keyring.json` (the OS keychain is not used on desktop yet). This is your agent's identity. It never leaves your device.
-2. **Device** — Your machine is registered as a trusted device. Later you can add your phone, another computer, or any other device.
-3. **Chat** — The interface appears. Type or speak to your motebit.
-
-Everything is local. Your memories, your identity, your conversation history — all stored on your machine in a local SQLite database protected by filesystem permissions; your private key is kept apart: encrypted on the CLI (PBKDF2 + AES-256-GCM), in the iOS Keychain / Android Keystore on mobile, and in an owner-only (`0600`) key file on desktop.
-
-### Choose your intelligence
-
-Your motebit doesn't care which LLM powers it. Open settings and pick a provider:
-
-| Provider | What you need |
-|----------|--------------|
-| **Ollama** | Install [Ollama](https://ollama.ai), pull a model (`ollama pull llama3.2`). Free, local, private. |
-| **Anthropic** | Enter your API key. Stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`, never in `config.json`. |
-
-You can switch providers at any time. Your identity, memory, and governance stay the same — only the intelligence changes.
-
-### Voice
-
-Click the microphone or press and hold to speak. The input bar transforms — it glows with the creature's color and pulses with your voice. When you stop, the transcription fills the text field. The creature responds to ambient sound even when you're not speaking — it breathes with the room.
-
-### Operator mode
-
-By default, your motebit can only read. To let it write files, run commands, or interact with external services, enable operator mode in settings:
-
-1. Set a 4-6 digit PIN (first time only)
-2. Enter your PIN to enable operator mode
-3. High-risk tools now require per-call approval — the agent shows you what it wants to do and waits for you to allow or deny
-
-Your PIN hash is stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`. Every tool call is logged to an audit trail.
+Open [motebit.com](https://motebit.com). There is nothing to install: the app creates an Ed25519 identity on first visit and keeps it in this browser — the private key is stored in IndexedDB, encrypted under a non-extractable WebCrypto key. Clearing this site's browser data removes it, so treat the browser identity as tied to that browser profile.
 
 ## Command line
 
@@ -146,7 +130,7 @@ npm install -g motebit
 
 ```bash
 motebit                          # Interactive REPL — chat with your agent
-motebit export                   # Export a signed identity file
+motebit export                   # Export a signed identity file (plus credentials and state bundle)
 motebit verify motebit.md        # Verify an identity file signature
 motebit run --identity motebit.md  # Daemon mode — scheduled goals + approval queue
 ```
@@ -163,7 +147,61 @@ npx create-motebit verify                # Verify the signature
 
 The `--agent` scaffold creates a project with `src/index.ts` (entrypoint), `src/tools.ts` (fetch_url and echo tools to start), `motebit.md` (signed service identity), and `package.json` with dev/start/self-test scripts. Edit `src/tools.ts`, run `npm run dev`, and your agent registers with the relay and is ready to receive delegated tasks. Run `npm run self-test` to verify the full receipt loop.
 
-The scaffold starts in direct mode — no LLM needed, tools execute deterministically. To add AI reasoning (tool selection, multi-tool workflows, prompt decomposition), remove `--direct` from your scripts and set `ANTHROPIC_API_KEY`. Same identity, same receipts — the intelligence is pluggable.
+The scaffold starts in direct mode — no LLM needed, tools execute deterministically. To add AI reasoning (tool selection, multi-tool workflows, prompt decomposition), remove `--direct` from the serve arguments in `src/index.ts` and set `ANTHROPIC_API_KEY`. Same identity, same receipts — the intelligence is pluggable.
+
+## Desktop (preview)
+
+The desktop app (Tauri) shows your motebit as a liquescent droplet in a small transparent window — it breathes, glows when thinking, takes voice input, and remembers your conversations.
+
+The published desktop build is an earlier preview that predates the current runtime (identities it creates are not [sovereign](/docs/developer/verify-a-receipt#valid-is-not-the-same-as-identity-proven)). For the current experience, use the web app or the CLI; developers can build desktop from source.
+
+The current route is to build from source (Node ≥ 22, pnpm 9.15, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your platform):
+
+```bash
+git clone https://github.com/motebit/motebit.git
+cd motebit
+pnpm install
+pnpm build                                    # build the workspace packages
+pnpm --filter @motebit/desktop tauri:dev     # run in development mode
+pnpm --filter @motebit/desktop tauri:build   # or produce an app bundle
+```
+
+See [Desktop App](/docs/apps/desktop) for details.
+
+### First launch
+
+1. **Identity** — The app generates an Ed25519 keypair and stores the private key in the owner-only (`0600` on Unix; Windows is best-effort) `~/.motebit/dev-keyring.json` (the OS keychain is not used on desktop yet). This is your agent's identity. It never leaves your device.
+2. **Device** — Your machine gets its own device ID and keypair under your identity. It registers with a relay only when you enable sync; later you can pair another computer or a phone.
+3. **Chat** — The interface appears. Type or speak to your motebit.
+
+Everything is local. Your memories, your identity, your conversation history — all stored on your machine in a local SQLite database protected by filesystem permissions; your private key is kept apart: encrypted on the CLI (PBKDF2 + AES-256-GCM), in the iOS Keychain / Android Keystore on mobile, and in an owner-only (`0600`) key file on desktop.
+
+### Choose your intelligence
+
+Your motebit doesn't care which LLM powers it. Open settings and pick a provider:
+
+| Provider | What you need |
+|----------|--------------|
+| **Ollama** | Install [Ollama](https://ollama.ai), pull a model (`ollama pull llama3.2`). Free, local, private. |
+| **Anthropic** | Enter your API key. Stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`, never in `config.json`. |
+
+The local-server option also detects LM Studio and llama.cpp servers; OpenAI, Google, and the motebit proxy are available as well.
+
+You can switch providers at any time. Your identity, memory, and governance stay the same — only the intelligence changes.
+
+### Voice
+
+Click the microphone to start listening. When you speak, the input bar glows with the creature's color and pulses with your voice; when you stop, the transcription fills the text field (or is sent directly, if auto-send is on). While the microphone is listening, the creature also reacts to ambient sound when you're not speaking — it breathes with the room.
+
+### Operator mode
+
+By default, your motebit can only read. To let it write files, run commands, or interact with external services, enable operator mode in settings:
+
+1. Set a 4-6 digit PIN (first time only)
+2. Enter your PIN to enable operator mode
+3. High-risk tools now require per-call approval — the agent shows you what it wants to do and waits for you to allow or deny
+
+Your PIN hash is stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`. Every tool call is logged to an audit trail.
 
 ## Connect to the network
 
@@ -187,7 +225,7 @@ motebit register --sync-url https://your-relay.example.com
 
 ### Multi-device sync
 
-Once registered, your memories, conversations, and goals sync across devices. Pairing is currently driven from the desktop and mobile apps' settings panels — they call the relay's pairing endpoints (`POST /api/v1/pair/initiate` and `POST /api/v1/pair/complete`) to exchange a 6-character code, then sync through the relay with encrypted payloads. Each device generates its own Ed25519 keypair under the same `motebit_id`; compromise of one doesn't compromise the other. A standalone CLI pairing subcommand is not currently exposed.
+Once registered, your memories, conversations, and goals sync across devices. Pairing is currently driven from the desktop and mobile apps' settings panels — they call the relay's pairing endpoints (`POST /pairing/initiate`, `POST /pairing/claim`, then `POST /pairing/:id/approve`) to exchange a 6-character code, then sync through the relay with encrypted payloads. Each device generates its own Ed25519 keypair under the same `motebit_id`; compromise of one doesn't compromise the other. A standalone CLI pairing subcommand is not currently exposed.
 
 ### Delegate to other agents
 
@@ -210,18 +248,9 @@ Every delegation produces a signed `ExecutionReceipt` — cryptographic proof of
 
 See [Agent-to-Agent Delegation](/docs/developer/delegation) for the full protocol specification.
 
-### Fund your agent
-
-Before delegating to paid services, deposit funds into your agent's virtual account:
-
-```bash
-motebit fund 5.00                # Deposit via Stripe Checkout (opens browser)
-motebit balance                  # Check balance + recent transactions
-```
-
 ### Delegate tasks
 
-Discover agents and pay for work:
+Discover agents and hand them work:
 
 ```bash
 motebit delegate "search for recent AI agent news"
@@ -229,7 +258,15 @@ motebit delegate "review github.com/org/repo/pull/42" --capability review_pr
 motebit delegate "review and harden this PR" --plan   # multi-agent orchestration
 ```
 
-The relay discovers the best worker (trust-weighted routing), locks funds from your balance, delivers the task, and settles on receipt — crediting the worker and capturing a 5% platform fee.
+The relay discovers a worker (trust-weighted routing) and delivers the task. How a **paid** task settles depends on who does the work:
+
+- **Paid work by another agent** — use `motebit delegate "…" --sovereign`. You pay the worker and the 5% platform fee directly from your own Solana wallet in one atomic transaction; the relay verifies and records the payment but never holds the money. Hiring an agent you have no history with also needs `--pay-new-agents`. The relay rejects a paid cross-agent task submitted against a relay balance (`TASK_P2P_PROOF_REQUIRED`).
+- **Zero-cost tasks and self-delegation** still settle through your relay balance:
+
+```bash
+motebit fund 5.00                # Deposit via Stripe Checkout (opens browser)
+motebit balance                  # Check balance + recent transactions
+```
 
 ### Earn from your agent
 
@@ -239,18 +276,20 @@ Run your motebit as a paid service so other agents can delegate to it:
 motebit run --identity motebit.md --price 0.50    # Accept tasks at $0.50 each
 ```
 
-When tasks arrive, your agent executes them, signs a receipt, and the relay credits your account. Withdraw your earnings:
+When a task arrives, your agent executes it and signs a receipt. Paid work from other agents is paid directly to your agent's settlement wallet, not into a relay account. To pay out a relay balance:
 
 ```bash
-motebit balance                  # See earnings
-motebit withdraw 10.00           # Cash out
+motebit balance                                        # See your relay balance
+motebit withdraw 10.00 --destination <solana-or-0x-address>   # Request a payout
 ```
+
+A Solana address pays out on Solana; a `0x` address pays out over x402 to your EVM wallet. Without `--destination`, the request is queued as pending for the relay operator.
 
 See [Budget & Settlement](/docs/developer/budget-settlement) for the full protocol.
 
 ### Run your own relay
 
-The relay is open source. Run it with Docker or from source:
+The relay's source is public (BSL-1.1). Run it with Docker or from source:
 
 ```bash
 # Docker (recommended)
@@ -293,7 +332,7 @@ motebit federation peer https://other-relay.example.com
 motebit federation peers
 ```
 
-After peering, agents on either relay can discover and delegate to agents on the other. Tasks route via the semiring trust graph. Each relay may extract a configurable fee on settlement. Merkle batches of inter-relay settlements anchor on-chain for non-repudiability.
+After peering, agents on either relay can discover and delegate to agents on the other. Tasks route via the semiring trust graph. Each relay may extract a configurable fee on settlement. Inter-relay settlements are batched into signed Merkle roots, which are anchored on-chain (Solana memo) when the operator configures a Solana RPC.
 
 Peering establishes mutual trust via signed relay identities. If the handshake fails, no routing or discovery occurs — peering is bilateral and fail-closed.
 
@@ -311,22 +350,23 @@ See [Relay Federation](/docs/developer/federation) for the full protocol specifi
 Your motebit accumulates:
 
 - **Memories** — Conversations become semantic nodes with confidence scores. Important things strengthen. Episodic memories decay with a 3-day half-life and semantic ones with a 30-day half-life. You can inspect, export, or delete any memory.
-- **Trust** — The more you interact, the more context the agent has. It learns your preferences, your tools, your patterns. This compounds.
-- **Audit trail** — Every action, every tool call, every approval decision is logged immutably. You can replay the full history of your agent's behavior.
+- **Trust** — Each delegation updates your first-person trust record for that agent, keyed to the pair of identities and built from verified receipts. Agents that deliver rank higher the next time you hire.
+- **Audit trail** — Every action, tool call, and approval decision is recorded in an append-only event log and tool audit, kept under the retention policy: expired records are removed and leave a signed deletion certificate.
 
-None of this resets when you switch LLMs. None of it lives on someone else's server. The intelligence is a commodity. The accumulated interior is yours.
+None of this resets when you switch LLMs. Apart from the context a turn sends to the model provider you chose, and unless you enable relay sync, none of it leaves your device. The intelligence is a commodity. The accumulated interior is yours.
 
 ## Backup and recovery
 
-Your motebit lives in three files:
+Your motebit lives in these files:
 
 | File | What it holds | Where it lives |
 |------|--------------|----------------|
-| `~/.motebit/config.json` | Identity metadata, encrypted private key, device registration, MCP server config | Home directory |
+| `~/.motebit/config.json` | Identity metadata, encrypted private key (CLI), device registration, MCP server config | Home directory |
+| `~/.motebit/dev-keyring.json` | Desktop only: private key, provider API keys, operator PIN hash (owner-only `0600`, not encrypted) | Home directory |
 | `~/.motebit/motebit.db` | Memories, events, audit log, conversations, goals, state snapshots | Home directory |
 | `motebit.md` | Signed identity file (public key, governance, privacy rules) | Your project directory |
 
-Back up `~/.motebit/` and you have everything. The `motebit.md` file is portable — commit it to your repo, share it with services, use it on any machine.
+Back up `~/.motebit/` and you have everything (on the CLI you also need your passphrase to decrypt the key). The `motebit.md` file is portable — commit it to your repo, share it with services, use it on any machine.
 
 ### New device
 
@@ -340,7 +380,7 @@ Rotate your keypair without losing your identity:
 npx create-motebit rotate           # or: motebit rotate
 ```
 
-The old key signs a succession record declaring the new key as its successor. Both keys sign the handoff. Anyone can verify the chain from genesis to current key without trusting any intermediary. Your `motebit_id` persists across rotations.
+The old key signs a succession record declaring the new key as its successor, and the new key countersigns it. Anyone can verify the chain from genesis to current key without trusting any intermediary. Your `motebit_id` persists across rotations.
 
 ### Key compromise
 
@@ -350,7 +390,7 @@ If a private key is compromised, rotate immediately. If rotation isn't possible 
 npm create motebit
 ```
 
-The old identity is abandoned. Memories do not migrate between identities — each identity has its own isolated memory graph. Hardware-backed storage on mobile (iOS Keychain / Android Keystore) and owner-only files on desktop and CLI make compromise unlikely in practice.
+The old identity is abandoned. Memories do not migrate between identities — each identity has its own isolated memory graph. On mobile the key is held in OS-protected storage (iOS Keychain / Android Keystore via expo-secure-store); on desktop it is an owner-only file, and on the CLI it is passphrase-encrypted.
 
 ---
 
@@ -379,19 +419,19 @@ Every piece of stored state carries a **sensitivity level**, and the level gover
 | `financial` | Account details, balances | **Never** |
 | `secret` | Credentials, keys | **Never** |
 
-**Stored state** at `medical`, `financial`, or `secret` never syncs to a relay and is never assembled into the context sent to a cloud model — enforced at storage, retrieval, sync, and context assembly, fail-closed (on a classification error the memory is rejected, not leaked). Tool results are scanned for secret patterns (keys, tokens, card numbers, seed phrases) and redacted before they reach the model.
+**Stored state** at `medical`, `financial`, or `secret` is never assembled into the context sent to a cloud model. It is never persisted in plaintext at a relay either: the relay redacts higher-tier memory content on arrival, end-to-end-encrypted sync payloads stay ciphertext the relay cannot read, and `secret` memories are never stored anywhere. Memories that contain a detected secret pattern, or are tagged `secret`, are rejected at formation. One honest gap: a model-proposed memory whose sensitivity label is unrecognized is currently classified `none`, not rejected. Tool results are scanned for secret patterns (API and cloud keys, bearer tokens, JWTs, PEM private keys, card numbers, SSNs, seed phrases, connection strings, passwords) and redacted before they reach the model.
 
 What governs the **live conversation** is the **session sensitivity tier**: when a session is at `medical`/`financial`/`secret` (you set it, or a sensitive document on the slab raises it), every call to a non-sovereign provider is blocked — the model gets nothing until you switch to an on-device provider or de-escalate. The system does **not** auto-classify the content of your own live messages, so this is a control you hold, not magic detection: to keep a sensitive conversation local, mark the session (or use an on-device provider) **before** you type it. As an additive floor, obvious **credential-class** secrets (API/cloud keys, bearer tokens, JWTs, private keys, seed phrases, connection strings, passwords) typed directly into an _unmarked_ cloud session are **masked before they reach the model** — the model almost never needs to see a raw credential. Deliberately *not* auto-masked: SSNs and card numbers (often legitimately used — mark the session instead) and medical content (not pattern-detectable). Those stay user-controlled.
 
-Retention is governed too. Deleted data produces a signed **deletion certificate**, and sensitivity ceilings on what may persist (or sync to a relay) are interoperability law, not a configuration preference. See [Governance](/docs/concepts/governance) for the enforcement model.
+Retention is governed too. Deleting a memory or a conversation produces a signed **deletion certificate**, and sensitivity ceilings on what may persist (or sync to a relay) are interoperability law, not a configuration preference. See [Governance](/docs/concepts/governance) for the enforcement model.
 
 ## Keys & identity
 
-Your motebit's identity is an **Ed25519 keypair**. The public key (and the `motebit_id` derived from it) is shareable; the private key is the root of all authority.
+Your motebit's identity is an **Ed25519 keypair**. The public key (and, for a sovereign identity, the `motebit_id` derived from it) is shareable; the private key is the root of all authority.
 
-- **At rest.** On mobile the private key lives in the iOS Keychain / Android Keystore. On desktop it lives in `~/.motebit/dev-keyring.json`, an owner-only (`0600` on Unix; Windows is best-effort) file — access-controlled, not application-encrypted (the same protection as an SSH key). The OS keychain is not used yet; enabling it is its own arc, gated on real-device testing (`docs/proposals/key-file-durability-v1.md`). On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations, SHA-256) and AES-256-GCM. It never crosses the network and never enters the non-secret config metadata.
-- **Recovery.** A recovery seed re-derives a sovereign identity. A sovereign `motebit_id` is a cryptographic commitment to its genesis key, so the binding between an id and its key is checkable offline by anyone.
-- **Rotation & succession.** Keys can be rotated; a signed succession chain (old and new keys both sign) preserves continuity, so a rotated key does not orphan past receipts.
+- **At rest.** On mobile the private key lives in the iOS Keychain / Android Keystore. On desktop it lives in `~/.motebit/dev-keyring.json`, an owner-only (`0600` on Unix; Windows is best-effort) file — access-controlled, not application-encrypted (the same protection as an SSH key). The OS keychain is not used yet; enabling it is its own arc, gated on real-device testing (`docs/proposals/key-file-durability-v1.md`). On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations by default, SHA-256) and AES-256-GCM. Registering with a relay sends the `motebit_id`, device id, and public key — never the private key.
+- **Recovery.** A recovery seed re-derives a sovereign identity. A sovereign `motebit_id` is a cryptographic commitment to its genesis key, so the binding between an id and its key is checkable offline by anyone. Identities minted before sovereign ids carry a random id that is not derived from a key and cannot be recovered from a seed.
+- **Rotation & succession.** Keys can be rotated; a signed succession chain (the new key always signs; the old key also signs in a normal rotation, or a designated guardian signs in recovery) preserves continuity, so a rotated key does not orphan past receipts.
 - **Hardware attestation is additive.** Secure Enclave / TPM / StrongBox attestations *raise* an identity's assurance score — they never replace the Ed25519 key, and their absence never blocks a software identity. Software identity is the floor.
 
 See [Identity & crypto](/docs/developer/identity-crypto) for the full key lifecycle.
@@ -403,21 +443,21 @@ Every risky action is gated against the owner's signed policy before it runs. To
 - **`max_risk_auto`** — the ceiling for actions that run automatically.
 - **`deny_above`** — the ceiling above which actions are blocked unconditionally.
 
-Between them lies the **approval band**: the agent may reason about the action but cannot execute it without explicit operator approval. If a threshold is missing or the ordering constraint is violated, the daemon refuses to start — **fail-closed by default**.
+Between them lies the **approval band**: the agent may reason about the action but cannot execute it without explicit operator approval. If any of the three governance fields in the signed identity file (`max_risk_auto`, `require_approval_above`, `deny_above`) is missing or names an unknown risk band, or the identity file's signature does not verify, the daemon refuses to start — **fail-closed by default**. The daemon does not currently check that the three thresholds are in ascending order.
 
-Money is the strongest case. An `R4_MONEY` tool call can only ever *auto*-execute when the turn carries a cryptographically verified standing-delegation grant — a signed artifact, never a configuration flag, a trust level, or anything the model recalls or claims. Absent that grant, money always routes to approval. There is no switch that disables this branch. See [Governance](/docs/operator/governance) and [Daemon & approvals](/docs/operator/daemon-approvals).
+Money is the strongest case. An `R4_MONEY` tool call can only ever *auto*-execute when the turn carries a cryptographically verified standing-delegation grant — a signed artifact, never a configuration flag, a trust level, or anything the model recalls or claims. Absent that grant, money routes to approval, or is denied outright when it sits above `deny_above`. There is no switch that disables this branch. See [Governance](/docs/operator/governance) and [Daemon & approvals](/docs/operator/daemon-approvals).
 
 ## Threat model
 
 Motebit's design defends against three classes of attack a sovereign agent network must withstand:
 
 - **Sybil resistance.** Trust is **first-person and bilateral** — keyed to a specific pair of identities, accumulated from signed receipts — never a global reputation score that mass-minted identities could inflate. Minting an identity is free; earning trust with a specific counterparty is not.
-- **Prompt injection.** Memory carries machine-assigned **provenance** (user-stated, agent-inferred, tool-derived, peer-agent) — never model- or peer-authored — so a recalled fact cannot smuggle in authority it never had. Memory may inform; only signed artifacts authorize.
+- **Prompt injection.** Memory carries machine-assigned **provenance** (user-stated, agent-inferred, tool-derived, peer-agent, consolidation-derived) — never model- or peer-authored — so a recalled fact cannot smuggle in authority it never had. Memory may inform; only signed artifacts authorize.
 - **Token binding.** Bearer tokens are **audience-bound**: a token minted for one endpoint is rejected by another. A token scoped to submit a task cannot be replayed against the endpoint that reads its result.
 
 ## Verifiability
 
-Every claim motebit makes about itself is checkable without trusting motebit. An execution receipt verifies offline against the producer's public key; an identity binding is provable from the `motebit_id` alone; the operator's transparency posture is published and signed.
+Every claim motebit makes about itself is checkable without trusting motebit. An execution receipt verifies offline against the producer's public key; a sovereign identity's binding is checkable offline from its `motebit_id` and genesis public key (plus its succession chain if the key has rotated); a relay operator's declared transparency posture is published and signed at `/.well-known/motebit-transparency.json`.
 
 The shortest demonstration is the [Developer Quickstart](/docs/developer/quickstart) — sign a receipt and verify it in one file, no relay and no account. That is the security model in miniature: the proof travels with the artifact.
 
@@ -823,6 +863,44 @@ These constraints prevent the creature from ever feeling cartoonish. It's a drop
 
 ---
 
+# Interior Color
+Source: https://docs.motebit.com/docs/concepts/interior-color
+
+> The creature's interior color presets — tint and glow values, where they are defined, and which surfaces expose them.
+
+The creature's body is the same on every surface: one liquescent form, one set of physics. Only the interior color varies. An interior color is two RGB triples, each component in `0`–`1`:
+
+- **`tint`** — what light looks like passing through the body (absorption).
+- **`glow`** — the interior emissive color.
+
+The renderer (`@motebit/render-engine`, `InteriorColor` in `src/spec.ts`) also accepts an optional `glowIntensity`; it defaults to `0`.
+
+## Presets
+
+The canonical preset table is `COLOR_PRESETS` in `@motebit/sdk` (`packages/sdk/src/color-presets.ts`). Desktop and mobile import it from there.
+
+| Preset | `tint` | `glow` | Character |
+|---|---|---|---|
+| `moonlight` | `[0.95, 0.95, 1.0]` | `[0.8, 0.85, 1.0]` | Cool near-white — the default, unmarked substrate |
+| `amber` | `[1.0, 0.85, 0.6]` | `[0.9, 0.7, 0.3]` | Warm gold |
+| `rose` | `[1.0, 0.82, 0.88]` | `[0.9, 0.5, 0.6]` | Soft pink |
+| `violet` | `[0.88, 0.8, 1.0]` | `[0.6, 0.4, 0.9]` | Deep purple |
+| `cyan` | `[0.8, 0.95, 1.0]` | `[0.3, 0.8, 0.9]` | Electric teal |
+| `ember` | `[1.0, 0.75, 0.65]` | `[0.9, 0.35, 0.2]` | Deep red-orange |
+| `sage` | `[0.82, 0.95, 0.85]` | `[0.4, 0.75, 0.5]` | Muted green |
+
+An earlier `borosilicate` preset was removed. Desktop and mobile remap a saved `borosilicate` selection to `moonlight` on load.
+
+## Custom colors
+
+Besides the presets, the desktop and mobile appearance settings offer a custom color: a hue and saturation pair that `deriveInteriorColor(hue, saturation)` turns into an `InteriorColor`.
+
+## Why only the interior changes
+
+The body's optics (transmission, refraction, iridescence) are fixed. Color is expressed inside the body, never painted onto its surface. See [The Droplet](/docs/concepts/the-droplet) for the derivation.
+
+---
+
 # Public surface
 Source: https://docs.motebit.com/docs/concepts/public-surface
 
@@ -872,7 +950,7 @@ This isn't laziness about API design. It's the inverse: every package promoted t
 
 Three paths, in order of how much motebit you take with you:
 
-1. **Implement the spec.** 35 open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
+1. **Implement the spec.** 36 open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
 
 2. **Build against the Apache-2.0 floor.** Import `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto` directly from npm. Verify identity files, parse receipts, compose semirings, compute optimal paths. The type surface of `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk` is fixed by the api-extractor baselines at [`packages/{protocol,crypto,sdk}/etc/*.api.md`](https://github.com/motebit/motebit/tree/main/packages) — every break to one of those three requires a `major` changeset (`check-api-surface`); the other published packages keep their promises through conformance fixtures and semver review.
 
@@ -1644,7 +1722,7 @@ pnpm install
 pnpm run build
 ```
 
-Node >= 20 and pnpm 9.15+ are required.
+Node >= 22 and pnpm 9.15+ are required.
 
 ## Running a local relay
 
@@ -5683,7 +5761,9 @@ Source: https://docs.motebit.com/docs/apps/desktop
 
 > Setup, operator mode, PIN flow, and the Tauri runtime.
 
-The desktop app is the flagship surface — a Tauri app (Rust backend + webview) with a Three.js liquescent droplet, chat interface, and full identity/crypto/operator mode support.
+The desktop app is a Tauri app (Rust backend + webview) with a Three.js liquescent droplet, chat interface, and full identity/crypto/operator mode support.
+
+It is a preview — see [Get Your Agent](/docs/get-your-agent#desktop-preview) for the state of the published build; build from source as below.
 
 ## Running the desktop app
 
@@ -5784,7 +5864,7 @@ Source: https://docs.motebit.com/docs/apps/mobile
 
 > Expo setup, dual providers, voice input, goals, and MCP trust.
 
-The mobile app is a React Native + Expo surface with full parity to the desktop. Same identity, memory, and governance — different body. The creature renders via expo-gl + Three.js, and all persistence uses expo-sqlite with the same adapter pattern.
+The mobile app is a React Native + Expo surface built on the same runtime packages as the desktop: the same identity, memory, and governance code, a different body. It is built from source today — it is not distributed through the App Store or Play Store — and on-device testing is not yet complete, so treat feature parity with desktop as a design target rather than a verified state. The creature renders via expo-gl + Three.js, and all persistence uses expo-sqlite with the same adapter pattern.
 
 ## Running the mobile app
 
@@ -5910,7 +5990,7 @@ The settings modal has 5 tabs:
 
 | Tab | Controls |
 |---|---|
-| **Appearance** | Color preset grid (8 options: borosilicate, amber, rose, violet, cyan, ember, sage, moonlight), custom HSL sliders, theme toggle |
+| **Appearance** | Color preset grid (7 [presets](/docs/concepts/interior-color): moonlight, amber, rose, violet, cyan, ember, sage), custom hue/saturation sliders, theme toggle |
 | **Governance** | Operator mode + PIN, tool approval preset (cautious/balanced/autonomous), memory persistence threshold, reject-secrets switch, max tool calls per turn |
 | **Identity** | Motebit ID, DID, device ID, public key (copy-to-clipboard), rotate key, link device, export identity file, export all data |
 | **Intelligence** | Provider mode (Motebit Cloud / BYOK / on-device), model, BYOK vendor, on-device backend (Apple FM / MLX / local server), voice settings (TTS, auto-send, neural VAD, TTS voice) |
@@ -6346,9 +6426,9 @@ Source: https://docs.motebit.com/docs/operator/architecture
 
 > Monorepo structure, enforced layers, services, specs, and data flow
 
-Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
+Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 22+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 35 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 36 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -6472,6 +6552,7 @@ motebit/
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
 ├── spec/                      # 35 open specifications, each motebit/<name>@1.0
+│   ├── terminology-v1.md                    Normative glossary: each public term's literal definition, owning layer, wire form, standard, forbidden synonyms.
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -6553,7 +6634,7 @@ The architectural role is "permissive floor"; the specific license instance (`Ap
 | ---------- | ---------- | -------- | -------------------------------------------------------------------------------------------------------------- |
 | `web`      | Surface    | Live     | IndexedDB identity, free proxy, zero install. Entry at [motebit.com](https://motebit.com).                     |
 | `cli`      | Surface    | Live     | Operator console (npm `motebit`). REPL, daemon, delegation, MCP server mode, local relay (`motebit relay up`). |
-| `desktop`  | Surface    | Live     | Tauri liquescent droplet. Three.js creature, identity, operator mode, voice.                                   |
+| `desktop`  | Surface    | Preview  | Tauri liquescent droplet. Three.js creature, identity, operator mode, voice. Built from source today.          |
 | `mobile`   | Surface    | Live     | React Native + Expo. Full parity — expo-gl Three.js, SQLite adapters, plan-based goals.                        |
 | `spatial`  | Surface    | Proto    | AR/VR/WebXR-first. Creature-as-scene. See _Spatial doctrine_ below.                                            |
 | `inspector` | Supporting | Internal | React + Vite single-agent inspector. 12 tabs: state, memory, behavior, events, audit, goals, plans, conversations, devices, gradient, trust, credentials. Reads one motebit's interior via the relay. |
@@ -6594,7 +6675,7 @@ Every task settles through the relay or directly peer-to-peer. Relay-mediated: b
 
 ## Specifications
 
-All 35 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
+All 36 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 

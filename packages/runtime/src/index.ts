@@ -358,6 +358,8 @@ export type {
 // What a serving surface may offer another principal (#874): derived from
 // `ToolDefinition.localOnly`, never from a per-surface name list.
 export { isServedTool, servedToolNames } from "./serve-exposure.js";
+export { TaskClaimCoordinator, TASK_CLAIM_GRANT_TIMEOUT_MS } from "./task-claim.js";
+export type { TaskClaimCoordinatorOptions, TaskClaimEvent, TaskClaimFrame } from "./task-claim.js";
 // Sovereign pay-forward (§9.1) is off until a worker's admission mode is
 // discoverable (#887) — one gate, read by the runtime and the CLI.
 export {
@@ -373,6 +375,14 @@ export {
   type UnretrievedPayment,
   type PaidIntentVerdict,
 } from "./paid-intent-ledger.js";
+// #890: a goal whose last run left a paid outcome unknown does not re-fire.
+export {
+  paidResultsOwedByRun,
+  paidResultsOwedByRuns,
+  goalRunWindows,
+  goalAwaitingResultMessage,
+  type GoalRunWindow,
+} from "./goal-run-hold.js";
 // The deterministic surface-affordance entry point (chip tap / button →
 // invokeCapability). Exported so an integration test can drive the REAL entry
 // point against a live relay — the layer above selectAndRunDelegation, where

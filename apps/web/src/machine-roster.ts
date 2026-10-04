@@ -30,6 +30,8 @@ import {
   presentationDue,
   replicaDigest,
   rotationLinkReplica,
+  persistIdentityFileLineage,
+  persistVerifiedLineage,
   type MachineRosterPorts,
   type MachineRosterSection,
   type PresentationRecord,
@@ -312,5 +314,45 @@ export async function rosterAfterRotationCommit(opts: {
     );
   } catch {
     // See above.
+  }
+}
+
+/**
+ * After pairing (Device B) / a motebit.md restore: the VERIFIED lineage to the
+ * held key joins the replica — what this device seals when it approves the
+ * next one (an offline rotation is on no relay). The surface-kit helpers
+ * re-verify, merge idempotently and never throw.
+ */
+export const rosterAfterPairing = (o: {
+  motebitId: string;
+  publicKeyHex: string;
+  records: readonly KeySuccessionRecord[];
+  db?: () => Promise<IDBDatabase>;
+}): Promise<number> =>
+  persistVerifiedLineage(async (r) => saveReplica(await (o.db ?? defaultDb)(), r), o);
+export const rosterAfterRestore = (o: {
+  motebitId: string;
+  publicKeyHex: string;
+  content: string | null | undefined;
+  db?: () => Promise<IDBDatabase>;
+}): Promise<number> =>
+  persistIdentityFileLineage(async (r) => saveReplica(await (o.db ?? defaultDb)(), r), o);
+
+/**
+ * This browser's own key-succession records — the roster replica's verified
+ * links — for the key transfer when it approves a pairing (Device A). A
+ * rotation made with no relay configured uploads nothing, so these are what
+ * let Device B bind a rotated sovereign id. Best-effort; Device B verifies
+ * every record. Never throws.
+ */
+export async function ownSuccessionRecords(opts: {
+  motebitId: string;
+  db?: () => Promise<IDBDatabase>;
+}): Promise<KeySuccessionRecord[]> {
+  try {
+    const replica = await loadReplica(await (opts.db ?? defaultDb)(), opts.motebitId);
+    return replica.kind === "value" ? [...replica.replica.succession] : [];
+  } catch {
+    return [];
   }
 }

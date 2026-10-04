@@ -769,7 +769,7 @@ The reference implementations do not persist delegation tokens — they are shor
 **Verification:**
 
 1. If `suite !== "motebit-jcs-ed25519-b64-v1"`, reject fail-closed. No legacy-no-suite path.
-2. If `expires_at < current_time_ms`, the token is expired. Reject. If `not_before` is present and `current_time_ms < not_before`, the token is not yet active. Reject. (Both time checks are skipped under historical chain verification.)
+2. If `expires_at < current_time_ms`, the token is expired. Reject. (A token is still valid at `current_time_ms == expires_at`.) If `not_before` is present and `current_time_ms < not_before`, the token is not yet active. Reject. (Both time checks are skipped under historical chain verification.)
 3. Decode `delegator_public_key` from hex to a 32-byte Ed25519 public key.
 4. Extract `signature` from the token. Decode from base64url to 64 bytes.
 5. Reconstruct canonical JSON from all fields except `signature`.

@@ -34,7 +34,11 @@ vi.mock("@motebit/sync-engine", async () => {
   return { ...a, HttpEventStoreAdapter, WebSocketEventStoreAdapter };
 });
 
-vi.mock("@motebit/runtime", () => ({
+vi.mock("@motebit/runtime", async () => ({
+  // The real claim protocol — the serving path routes every task frame through it.
+  TaskClaimCoordinator: (
+    await vi.importActual<typeof import("@motebit/runtime")>("@motebit/runtime")
+  ).TaskClaimCoordinator,
   executeRemoteCommand: vi.fn(),
   cmdSelfTest: vi.fn(),
   servedToolNames: vi.fn(() => []),

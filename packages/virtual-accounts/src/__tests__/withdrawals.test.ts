@@ -111,6 +111,32 @@ describe("requestWithdrawal", () => {
     expect(store.getOrCreateAccount(ALICE).balance).toBe(9_000_000);
   });
 
+  it("the atomic store op re-checks the key: a prior the early read missed is returned, not re-debited", () => {
+    const store = seededStore(10_000_000);
+    const first = requestWithdrawal(store, {
+      motebitId: ALICE,
+      amountMicro: 1_000_000,
+      idempotencyKey: "user-req-2",
+      newId: () => "w-first",
+    });
+    if (!first || "existing" in first) throw new Error("expected fresh");
+
+    // The early (non-atomic) read misses once — a concurrent writer committed
+    // between it and the store op. The store op's own check must catch it.
+    const real = store.getWithdrawalByIdempotencyKey.bind(store);
+    let misses = 1;
+    store.getWithdrawalByIdempotencyKey = (m, k) => (misses-- > 0 ? null : real(m, k));
+    const replay = requestWithdrawal(store, {
+      motebitId: ALICE,
+      amountMicro: 1_000_000,
+      idempotencyKey: "user-req-2",
+      newId: () => "w-second",
+    });
+    if (!replay || !("existing" in replay)) throw new Error("expected idempotent replay");
+    expect(replay.existing.withdrawal_id).toBe("w-first");
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(9_000_000);
+  });
+
   it("destination defaults to 'pending' when unspecified", () => {
     const store = seededStore(1_000_000);
     const r = requestWithdrawal(store, { motebitId: ALICE, amountMicro: 100_000 });

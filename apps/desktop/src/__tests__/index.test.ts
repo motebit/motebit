@@ -1421,7 +1421,7 @@ describe("DesktopApp.goalTick (via startGoalScheduler)", () => {
 
     // Should have attempted the goal, failed, and recorded the failure
     const failInserts = db.executions.filter(
-      (e) => e.sql.includes("INSERT INTO goal_outcomes") && e.sql.includes("failed"),
+      (e) => e.sql.includes("INTO goal_outcomes") && e.sql.includes("'failed'"),
     );
     expect(failInserts.length).toBeGreaterThanOrEqual(1);
 

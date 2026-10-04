@@ -93,6 +93,7 @@ describe("computeP2pFeeMicro", () => {
   it("throws when feeRate is out of [0, 1)", () => {
     expect(() => computeP2pFeeMicro(1_000_000, 1)).toThrow();
     expect(() => computeP2pFeeMicro(1_000_000, -0.1)).toThrow();
+    expect(() => computeP2pFeeMicro(1_000_000, Number.NaN)).toThrow();
   });
 });
 
@@ -132,6 +133,30 @@ describe("computeFederatedFeeSplit", () => {
   it("throws when feeRate is out of [0, 1)", () => {
     expect(() => computeFederatedFeeSplit(1_000_000, 1)).toThrow();
     expect(() => computeFederatedFeeSplit(1_000_000, -0.1)).toThrow();
+    expect(() => computeFederatedFeeSplit(1_000_000, Number.NaN)).toThrow();
+  });
+
+  it("applies each relay's OWN rate (spec §7.1): origin 3%, executor 2%", () => {
+    const split = computeFederatedFeeSplit(1_000_000, 0.03, 0.02);
+    expect(split.originFeeMicro).toBe(30_000);
+    expect(split.executorFeeMicro).toBe(19_400); // 2% of the 970_000 forwarded
+    expect(split.workerNetMicro).toBe(950_600);
+    for (const budget of [1, 999, 7_777_777, 333_333]) {
+      const s = computeFederatedFeeSplit(budget, 0.03, 0.02);
+      expect(s.originFeeMicro + s.executorFeeMicro + s.workerNetMicro).toBe(budget);
+    }
+  });
+
+  it("an omitted executor rate equals the origin rate (the equal-rates case)", () => {
+    expect(computeFederatedFeeSplit(1_000_000, 0.04)).toEqual(
+      computeFederatedFeeSplit(1_000_000, 0.04, 0.04),
+    );
+  });
+
+  it("throws when executorFeeRate is out of [0, 1)", () => {
+    expect(() => computeFederatedFeeSplit(1_000_000, 0.05, 1)).toThrow(/executorFeeRate/);
+    expect(() => computeFederatedFeeSplit(1_000_000, 0.05, -0.01)).toThrow(/executorFeeRate/);
+    expect(() => computeFederatedFeeSplit(1_000_000, 0.05, Number.NaN)).toThrow(/executorFeeRate/);
   });
 });
 

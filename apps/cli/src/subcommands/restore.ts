@@ -70,6 +70,7 @@ import {
   pendingRotationPath,
 } from "../pending-rotation.js";
 import { bold, dim, error as errorColor, success, warn } from "./../colors.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 const IDENTITY_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 
@@ -182,7 +183,9 @@ export async function handleRestore(config: CliConfig): Promise<void> {
     try {
       mdContent = fs.readFileSync(mdPath, "utf-8");
     } catch (err: unknown) {
-      console.error(`Cannot read ${mdPath}: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(
+        `Cannot read ${mdPath}: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+      );
       process.exit(1);
     }
   }
@@ -379,7 +382,7 @@ export async function handleRestore(config: CliConfig): Promise<void> {
       kept = setAsidePendingRotation();
     } catch (err) {
       console.error(
-        `  A key rotation write-ahead (${pendingRotationPath()}) could not be kept aside: ${err instanceof Error ? err.message : String(err)}. Nothing changed.`,
+        `  A key rotation write-ahead (${pendingRotationPath()}) could not be kept aside: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}. Nothing changed.`,
       );
       process.exit(1);
     }
@@ -413,7 +416,7 @@ export async function handleRestore(config: CliConfig): Promise<void> {
     preservedAs = saveFullConfig(next, { identityChange: "preserve-replaced" });
   } catch (err) {
     console.error(
-      `  The config could not be written without losing what it holds: ${err instanceof Error ? err.message : String(err)}. The config was not changed.`,
+      `  The config could not be written without losing what it holds: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}. The config was not changed.`,
     );
     process.exit(1);
   }

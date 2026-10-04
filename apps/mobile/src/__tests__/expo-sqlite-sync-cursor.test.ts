@@ -15,6 +15,7 @@ vi.mock("expo-sqlite", () => ({ openDatabaseSync: vi.fn() }));
 
 import { ExpoSqliteEventStore, SKIPPED_SYNC_EVENTS_KEPT } from "../adapters/expo-sqlite.js";
 import { MOBILE_MIGRATIONS } from "../adapters/expo-sqlite-migrations.js";
+import { pushCompactionFloor } from "@motebit/sync-engine";
 
 interface BetterDb {
   exec(sql: string): void;
@@ -69,6 +70,37 @@ describe("ExpoSqliteEventStore sync-cursor surface (#868)", () => {
     });
     const ids = [...Array.from({ length: 700 }, (_, i) => `absent-${i}`), "held"];
     expect([...(await store.getHeldEventIds(ids))]).toEqual(["held"]);
+  });
+
+  it("lists exactly its push: cursor keys, and the #962 floor reads them", async () => {
+    const { handle } = expoDb();
+    const store = new ExpoSqliteEventStore(handle as never);
+    expect(await store.listSyncSeqCursorKeys("push:")).toEqual([]);
+    // No stream persisted, sync configured: compact nothing.
+    expect(await pushCompactionFloor(store, 100, { syncConfigured: true })).toBe(0);
+
+    await store.setSyncSeqCursor("push:relay:a%_#m", 7);
+    await store.setSyncSeqCursor("push:e2e:raw:https://r#m", 3);
+    await store.setSyncSeqCursor("push:raw:https://r#m", 9);
+    // Not push cursors: a pull cursor, near-miss prefixes, the wrong case.
+    for (const k of ["e2e:raw:https://r#m", "pushy", "push", "PUSH:x", "xpush:relay:a"]) {
+      await store.setSyncSeqCursor(k, 0);
+    }
+    expect((await store.listSyncSeqCursorKeys("push:")).sort()).toEqual([
+      "push:e2e:raw:https://r#m",
+      "push:raw:https://r#m",
+      "push:relay:a%_#m",
+    ]);
+    // The prefix is literal: LIKE metacharacters in it match only themselves.
+    expect(await store.listSyncSeqCursorKeys("push:relay:a%")).toEqual(["push:relay:a%_#m"]);
+    expect(await store.listSyncSeqCursorKeys("push:relay:a_")).toEqual([]);
+    expect(await store.listSyncSeqCursorKeys("push:relay:%")).toEqual([]);
+    // The floor over them: MAX within a relay stream (raw 9 beats e2e 3 on
+    // https://r#m), MIN across streams (a%_#m at 7).
+    expect(await pushCompactionFloor(store, 100, { syncConfigured: true })).toBe(7);
+    expect(await pushCompactionFloor(store, 5, { syncConfigured: true })).toBe(5);
+    // A later process over the same database reads the same streams.
+    expect(await pushCompactionFloor(new ExpoSqliteEventStore(handle as never), 100)).toBe(7);
   });
 
   it("keeps the seq cursor", async () => {
