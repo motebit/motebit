@@ -589,21 +589,16 @@ describe("runSlashCommand /discover", () => {
 });
 
 describe("runSlashCommand /serve", () => {
-  it("starts serving when off", async () => {
+  // Mobile is non-executing today (serving-gate.ts): /serve must refuse
+  // honestly and never register this device as a worker. The gate-ON
+  // scaffolding behaviour lives in slash-commands-serve-enabled.test.ts.
+  it("refuses to start serving while the mobile serving gate is off", async () => {
     const deps = makeDeps();
     runSlashCommand("serve", "", deps);
     await new Promise((r) => setTimeout(r, 0));
-    expect(deps._app.startServing).toHaveBeenCalled();
-    expect(deps._messages[0]).toContain("Serving");
-  });
-
-  it("reports start error", async () => {
-    const deps = makeDeps({
-      startServing: vi.fn(() => Promise.resolve({ ok: false, error: "no sync" })),
-    });
-    runSlashCommand("serve", "", deps);
-    await new Promise((r) => setTimeout(r, 0));
-    expect(deps._messages[0]).toContain("Could not start serving");
+    expect(deps._app.startServing).not.toHaveBeenCalled();
+    expect(deps._messages[0]).toContain("not available");
+    expect(deps._messages.join("\n")).not.toContain("accepting delegations");
   });
 
   it("stops serving when on", async () => {
