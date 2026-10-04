@@ -51,6 +51,9 @@ function makeReceipt(overrides?: Partial<ExecutionReceipt>): ExecutionReceipt {
 function makeConfig(overrides?: Partial<SovereignDelegationConfig>): SovereignDelegationConfig {
   return {
     discoveryUrl: "https://relay.test",
+    // Stand-in first-person selector: takes the first offered candidate so
+    // these tests keep exercising pay/execute/receipt, not ranking.
+    selectWorker: (candidates) => candidates[0]?.motebit_id ?? null,
     motebitId: "agent-alice",
     deviceId: "device-alice",
     signingKeys: {

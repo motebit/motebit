@@ -313,25 +313,138 @@ async function handleDelegatePlan(
 // ---------------------------------------------------------------------------
 
 /**
- * The remedy for a 402 on task submission. The relay answers 402 both for an
- * empty virtual account and for the Arc 3.5 gate `TASK_P2P_PROOF_REQUIRED`:
- * paid delegation to another agent must settle P2P, so depositing with
- * `motebit fund` can never clear it (off-ramp-as-user-action.md § Arc 3.5).
+ * The CLI paths that submit a task: `delegate`, `delegate --plan`, and the
+ * REPL's `/delegate` (which carries what was typed, so its remedy can name
+ * the full shell command — `/delegate` parses no flags).
  */
-export function describeDelegateSubmit402(bodyText: string): string[] {
+/**
+ * `capabilities` is what the REPL learned the pinned target lists on the relay
+ * (priced first): `motebit delegate` defaults `--capability` to `web_search`
+ * and the sovereign resolver discovers by capability before narrowing to the
+ * pin, so the printed command must name the target's own capability.
+ */
+export type DelegateSubmitPath =
+  | "direct"
+  | "plan"
+  | { repl: { prompt: string; target: string; capabilities?: readonly string[] } };
+
+/**
+ * Single-quote `text` for a POSIX shell: nothing inside is expanded (a `!`
+ * inside double quotes is history expansion in an interactive shell).
+ */
+function shellQuote(text: string): string {
+  return `'${text.replace(/'/g, "'\\''")}'`;
+}
+
+const P2P_SETTLES_LINE =
+  "Paid delegation to another agent settles P2P: the relay does not take deposit-funded payment for it.";
+
+/**
+ * Who the submission's worker is, as far as the caller knows: `self` (the
+ * target is the delegator's own id), `other` (another agent), or `unknown`
+ * (`--plan` routes each step by capability, so the relay picks the worker).
+ */
+export type DelegateSubmitWorker = "self" | "other" | "unknown";
+
+/**
+ * The remedy for a 402 on task submission — the one reading every delegate
+ * path routes its 402 through. The relay answers 402 for different refusals
+ * (`{ error, code, status }`, services/relay/src/errors.ts), and a deposit
+ * clears only some of them:
+ *   - `INSUFFICIENT_FUNDS` — `motebit fund`.
+ *   - a codeless 402 (the x402 challenge, a facilitator outage, a non-JSON
+ *     body) — the relay's x402 middleware, which runs before the task
+ *     handler whenever the spendable balance is below the price, whoever the
+ *     worker is. A deposit clears it only for self-delegation: to another
+ *     agent, a funded submission reaches the Arc 3.5 gate and is refused
+ *     `TASK_P2P_PROOF_REQUIRED`. So `self` — `motebit fund`; `other` —
+ *     `--sovereign`; `unknown` — both, each with when it applies.
+ *   - `TASK_P2P_PROOF_REQUIRED` — paid delegation to another agent, local or
+ *     on a federated peer, must settle P2P (off-ramp-as-user-action.md
+ *     § Arc 3.5), so `motebit fund` can never clear it — `--sovereign`.
+ *   - any other code (an x402 settlement refusal, an outcome to reconcile, a
+ *     code this client does not know) — the relay's own words, never `fund`.
+ */
+export function describeDelegateSubmit402(
+  bodyText: string,
+  path: DelegateSubmitPath,
+  worker: DelegateSubmitWorker,
+): string[] {
   let code: unknown;
+  let error: unknown;
   try {
-    code = (JSON.parse(bodyText) as { code?: unknown }).code;
+    ({ code, error } = JSON.parse(bodyText) as { code?: unknown; error?: unknown });
   } catch {
     code = undefined;
   }
-  if (code === "TASK_P2P_PROOF_REQUIRED") {
+  const codeless = typeof code !== "string";
+  if (code === "TASK_P2P_PROOF_REQUIRED" || (codeless && worker === "other")) {
+    if (typeof path === "object") {
+      const { prompt, target, capabilities = [] } = path.repl;
+      const known = capabilities.length === 1 ? capabilities[0] : undefined;
+      const command = `motebit delegate --sovereign ${shellQuote(prompt)} --target ${target} --capability ${known ?? "<capability>"}`;
+      const lines = [
+        P2P_SETTLES_LINE,
+        `\`/delegate\` cannot pay P2P: exit the REPL and run \`${command}\` to pay the worker directly from your Solana wallet.`,
+      ];
+      if (known == null) {
+        const listed =
+          capabilities.length > 1
+            ? ` (it lists: ${capabilities.join(", ")})`
+            : " (see `/discover`)";
+        lines.push(
+          `Replace \`<capability>\` with the capability the worker lists${listed}: without it \`motebit delegate\` assumes web_search, which a worker that does not list it refuses.`,
+        );
+      }
+      return lines;
+    }
+    return path === "plan"
+      ? [
+          P2P_SETTLES_LINE,
+          "`delegate --plan` cannot pay P2P yet (#887): send the paid step on its own with `motebit delegate --sovereign`.",
+        ]
+      : [
+          P2P_SETTLES_LINE,
+          "Re-run with `--sovereign` to pay the worker directly from your Solana wallet.",
+        ];
+  }
+  if (typeof code === "string" && code !== "INSUFFICIENT_FUNDS") {
+    const words = typeof error === "string" ? error : bodyText;
+    return [`The relay refused payment (${code}): ${sanitizeRelayText(words).slice(0, 300)}`];
+  }
+  if (codeless && worker === "unknown") {
+    const p2p =
+      path === "plan"
+        ? "`delegate --plan` cannot pay P2P yet (#887), so send the paid step on its own with `motebit delegate --sovereign`."
+        : "send it with `motebit delegate --sovereign`.";
     return [
-      "Paid delegation to another agent settles P2P: the relay does not take deposit-funded payment for it.",
-      "Re-run with `--sovereign` to pay the worker directly from your Solana wallet.",
+      "Your relay balance is below this task's price. `motebit fund <amount>` clears this only if the relay routes the task to yourself.",
+      `${P2P_SETTLES_LINE} If it goes to another agent, ${p2p}`,
     ];
   }
   return ["Insufficient balance. Run `motebit fund <amount>` to deposit."];
+}
+
+/**
+ * The remedy for a 402 on `delegate --sovereign`, read from the runtime's
+ * `DelegationError`. That path pays from the Solana wallet and never draws
+ * on a relay deposit, so a deposit is never the remedy, whatever the code.
+ * Empty for any other status.
+ */
+export function describeSovereignDelegationRefusal(error: {
+  code: string;
+  message: string;
+  status?: number;
+}): string[] {
+  if (error.status !== 402) return [];
+  if (error.code === "payment_proof_required") {
+    return [
+      "The relay found no usable P2P payment proof on this submission. `--sovereign` pays from your Solana wallet, so a relay deposit cannot clear this.",
+    ];
+  }
+  return [
+    "`--sovereign` pays from your Solana wallet, not a relay deposit, so depositing cannot clear this 402.",
+  ];
 }
 
 export async function handleDelegate(config: CliConfig): Promise<void> {
@@ -474,6 +587,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
           "Hint: a pair with no trust history needs `--pay-new-agents` (cold-start acknowledgment).",
         );
       }
+      for (const line of describeSovereignDelegationRefusal(result.error)) console.error(line);
       process.exit(1);
     }
 
@@ -559,7 +673,10 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       }),
     });
     if (submitRes.status === 402) {
-      for (const line of describeDelegateSubmit402(await submitRes.text())) console.error(line);
+      const worker = targetMotebitId === motebitId ? "self" : "other";
+      for (const line of describeDelegateSubmit402(await submitRes.text(), "direct", worker)) {
+        console.error(line);
+      }
       process.exit(1);
     }
     if (!submitRes.ok) {
@@ -812,7 +929,8 @@ export function createHttpPollingDelegationAdapter(
     );
 
     if (resp.status === 402) {
-      const err: StepAttemptError = new Error("Insufficient balance (HTTP 402)");
+      const remedy = describeDelegateSubmit402(await resp.text(), "plan", "unknown").join(" ");
+      const err: StepAttemptError = new Error(`${remedy} (HTTP 402)`);
       err.conclusive = true; // refused before admission
       throw err;
     }

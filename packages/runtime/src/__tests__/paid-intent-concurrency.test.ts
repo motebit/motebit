@@ -21,6 +21,12 @@ import {
   selectAndRunDelegation,
 } from "../index";
 import { FOREIGN_CALL, executeWithCall } from "./helpers/foreign-call";
+import {
+  SIGNING_PINNED_HEX,
+  advanceAfterRealAsync,
+  isRelayMetadataUrl,
+  relayMetadataResponse,
+} from "./helpers/signed-relay-metadata.js";
 
 const RELAY = "https://mock-relay.test";
 const ME = "alice-001";
@@ -46,6 +52,7 @@ function stub(deliverable: Set<string>, failPolls = false): { submits: () => num
   let submits = 0;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (isRelayMetadataUrl(url)) return relayMetadataResponse();
     const method = init?.method ?? "GET";
     const pricing = CAPS.map((capability) => ({ capability, unit_cost: 0.25 }));
     if (url.includes("/api/v1/agents/discover")) {
@@ -110,7 +117,7 @@ function hire(
     authToken: async () => "t",
     prompt: "research X",
     requiredCapabilities: [cap],
-    relayPublicKey: "07".repeat(32),
+    relayPublicKey: SIGNING_PINNED_HEX,
     buildP2pPayment: pay,
     acknowledgeNoHistoryRisk: true,
     paidIntentLedger: ledger,
@@ -133,12 +140,12 @@ describe("in flight is not unretrieved (#874 round 2)", () => {
     const ledger = new PaidIntentLedger();
     const pay = vi.fn(async () => mkProof());
     const a = hire(ledger, pay);
-    await vi.advanceTimersByTimeAsync(2500); // A is in flight, polled once
+    await advanceAfterRealAsync(2500); // A is in flight, polled once
     const b = hire(ledger, pay);
-    await vi.advanceTimersByTimeAsync(2500);
+    await advanceAfterRealAsync(2500);
     deliverable.add("task-1");
     deliverable.add("task-2");
-    await vi.advanceTimersByTimeAsync(6000);
+    await advanceAfterRealAsync(6000);
     const [ra, rb] = await Promise.all([a, b]);
     expect(ra.ok).toBe(true);
     expect(rb.ok).toBe(true);
@@ -157,10 +164,10 @@ describe("in flight is not unretrieved (#874 round 2)", () => {
     const hires = [];
     for (const cap of CAPS) {
       hires.push(hire(ledger, pay, cap));
-      await vi.advanceTimersByTimeAsync(2500);
+      await advanceAfterRealAsync(2500);
     }
     for (let i = 1; i <= 3; i++) deliverable.add(`task-${i}`);
-    await vi.advanceTimersByTimeAsync(6000);
+    await advanceAfterRealAsync(6000);
     const rs = await Promise.all(hires);
     expect(rs.map((r) => r.ok)).toEqual([true, true, true]);
     expect(pay).toHaveBeenCalledTimes(3);
@@ -176,7 +183,7 @@ describe("in flight is not unretrieved (#874 round 2)", () => {
     // Two hires on different capabilities whose polls FAIL → two unretrieved.
     for (const cap of ["web_search", "summarize"]) {
       const p = hire(ledger, pay, cap, undefined, 4_000);
-      await vi.advanceTimersByTimeAsync(10_000);
+      await advanceAfterRealAsync(10_000);
       const r = await p;
       expect(r.ok).toBe(false);
     }
@@ -184,7 +191,7 @@ describe("in flight is not unretrieved (#874 round 2)", () => {
     // The third hire is refused, and the message is true: they did settle
     // without delivering.
     const third = hire(ledger, pay, "translate");
-    await vi.advanceTimersByTimeAsync(1000);
+    await advanceAfterRealAsync(1000);
     const r3 = await third;
     expect(r3.ok).toBe(false);
     if (!r3.ok) {
@@ -244,7 +251,7 @@ describe("a ledger write never aborts a paid flow (#874 round 2)", () => {
     const ledger = new PaidIntentLedger(new ThrowingStore({ record: true }), ME);
     const pay = vi.fn(async () => mkProof());
     const p = hire(ledger, pay, "web_search", { warn: (m, c) => warns.push([m, c]) });
-    await vi.advanceTimersByTimeAsync(5000);
+    await advanceAfterRealAsync(5000);
     const r = await p;
     expect(r.ok).toBe(true);
     expect(relay.submits()).toBe(1);
@@ -269,7 +276,7 @@ describe("a ledger write never aborts a paid flow (#874 round 2)", () => {
     const ledger = new PaidIntentLedger(new ThrowingStore({ record: true }), ME);
     const pay = vi.fn(async () => mkProof());
     const p = hire(ledger, pay, "web_search", undefined, 4_000);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await advanceAfterRealAsync(10_000);
     const r = await p;
     expect(r.ok).toBe(false);
     if (!r.ok) {
@@ -286,7 +293,7 @@ describe("a ledger write never aborts a paid flow (#874 round 2)", () => {
       new PaidIntentLedger(store, ME),
       vi.fn(async () => mkProof()),
     );
-    await vi.advanceTimersByTimeAsync(5000);
+    await advanceAfterRealAsync(5000);
     expect((await p).ok).toBe(true);
     vi.useRealTimers();
 
@@ -329,7 +336,7 @@ describe("inside another principal's task, the owner's prior payment is not disc
     runtime.enableInteractiveDelegation({
       syncUrl: RELAY,
       authToken: async () => "t",
-      relayPublicKey: "07".repeat(32),
+      relayPublicKey: SIGNING_PINNED_HEX,
       buildP2pPayment: pay,
       acknowledgeNoHistoryRisk: true,
     });

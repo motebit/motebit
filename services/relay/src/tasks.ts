@@ -3655,7 +3655,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       // the succession-verified binding (Inc 2/3); prod has no external peers,
       // so that deferral is latent.
       const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
-      const { verifySovereignBinding } = await import("@motebit/crypto");
+      const { verifySovereignBinding, verifyRelayFeeRate } = await import("@motebit/crypto");
       const boundOk =
         fc._public_key != null &&
         isDerivedSettlementBinding(workerAddr, fc._public_key) &&
@@ -3672,19 +3672,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         });
       }
 
-      // Fee-from-budget split (spec relay-federation-v1 §7.1): the listed
-      // unit_cost IS the chain budget. A takes 5% of the budget, forwards
-      // the remainder; B takes 5% of that; the worker nets the rest.
-      // $1.00 → A $0.05 / B $0.0475 / worker $0.9025. The canonical
-      // `computeFederatedFeeSplit` (@motebit/protocol) is shared with the
-      // delegator client that builds the proof so the two cannot drift.
-      const budgetMicro = toMicro(fedPrice.unit_cost);
-      const {
-        originFeeMicro: aFeeMicro,
-        executorFeeMicro: bFeeMicro,
-        workerNetMicro,
-      } = computeFederatedFeeSplit(budgetMicro, platformFeeRate);
-
       // Resolve treasuries: A = our identity-derived Solana address; B = the
       // hosting peer's relay-identity-derived address (relay_peers.public_key).
       const aTreasury = deriveSolanaAddress(relayIdentity.publicKey);
@@ -3698,6 +3685,54 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
           message: "Cannot resolve executor relay treasury (peer public key missing)",
         });
       }
+
+      // The executor relay's OWN fee rate (relay-federation-v1 §7.1: each
+      // relay applies its own rate), from ITS signed discovery metadata,
+      // trusted only under the peer key this relay holds for it — the same
+      // trust root as B's treasury. The delegator client reads it the same
+      // way (`fetchSignedRelayFeeRate`, @motebit/runtime), so the B leg it
+      // builds and the B leg checked here cannot disagree. Unverifiable ⇒
+      // refused before admission (nothing is admitted, the key is freed).
+      let executorFeeRate: number;
+      {
+        let peerMetadata: unknown;
+        try {
+          const resp = await fetch(`${peerEndpoint}/.well-known/motebit.json`, {
+            headers: { Accept: "application/json" },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          peerMetadata = await resp.json();
+        } catch (err: unknown) {
+          throw new HTTPException(502, {
+            message: `Cannot verify the executor relay's fee rate (signed metadata unavailable: ${err instanceof Error ? err.message : String(err)})`,
+          });
+        }
+        const verified = await verifyRelayFeeRate(peerMetadata, peerRow.public_key, {
+          expectedRelayId: peerRow.peer_relay_id,
+        });
+        if (!verified.ok) {
+          throw new HTTPException(502, {
+            message: `Cannot verify the executor relay's fee rate (${verified.reason})`,
+          });
+        }
+        // Absent `fee_rate` ⇒ the protocol reference default (discovery-v1 §3.2).
+        executorFeeRate = verified.declaredFeeRate ?? SDK_DEFAULT_PLATFORM_FEE_RATE;
+      }
+
+      // Fee-from-budget split (spec relay-federation-v1 §7.1): the listed
+      // unit_cost IS the chain budget. A takes its rate of the budget,
+      // forwards the remainder; B takes ITS rate of that; the worker nets
+      // the rest. At 5%/5%: $1.00 → A $0.05 / B $0.0475 / worker $0.9025.
+      // The canonical `computeFederatedFeeSplit` (@motebit/protocol) is
+      // shared with the delegator client that builds the proof so the two
+      // cannot drift.
+      const budgetMicro = toMicro(fedPrice.unit_cost);
+      const {
+        originFeeMicro: aFeeMicro,
+        executorFeeMicro: bFeeMicro,
+        workerNetMicro,
+      } = computeFederatedFeeSplit(budgetMicro, platformFeeRate, executorFeeRate);
       const bTreasury = deriveSolanaAddress(hexToBytes(peerRow.public_key));
 
       // Validate all three legs of the delegator's atomic tx against the
@@ -4643,12 +4678,17 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
                   (requiredCaps as readonly string[]).includes(p.capability),
                 );
                 if (fedPrice != null && fedPrice.unit_cost > 0) {
-                  // The routing catch rethrows HTTPException (see "Re-throw
-                  // intentional HTTP errors" below) → surfaces as 402.
-                  throw new HTTPException(402, {
-                    message:
-                      "Paid federated delegation requires a 3-leg P2P payment_proof (submit with target_agent + payment_proof). Deposit-funded cross-operator settlement is closed. See off-ramp-as-user-action.md.",
-                  });
+                  // The same refusal as the Arc 3.5 gate (paid delegation to
+                  // another agent without a P2P proof), so the same stable
+                  // code: a client tells "pay P2P" from "deposit" by it. A
+                  // bare HTTPException serialized with no code, and clients
+                  // fell back to the deposit remedy. The routing catch
+                  // rethrows this code → surfaces as 402.
+                  throw new TaskError(
+                    "TASK_P2P_PROOF_REQUIRED",
+                    "Paid federated delegation requires a 3-leg P2P payment_proof (submit with target_agent + payment_proof). Deposit-funded cross-operator settlement is closed. See off-ramp-as-user-action.md.",
+                    402,
+                  );
                 }
 
                 try {
@@ -4740,8 +4780,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
           }
         }
       } catch (err) {
-        // Re-throw intentional HTTP errors (e.g. 402 insufficient budget)
+        // Re-throw intentional HTTP errors and the paid-federated P2P
+        // refusal above (402 TASK_P2P_PROOF_REQUIRED); any other failure in
+        // scoring falls through to broadcast, as before.
         if (err instanceof HTTPException) throw err;
+        if (err instanceof TaskError && err.code === "TASK_P2P_PROOF_REQUIRED") throw err;
         // Scoring failed — fall through to broadcast
       }
     }

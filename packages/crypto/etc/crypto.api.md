@@ -1128,6 +1128,16 @@ export interface ReceiptVerifyResult extends BaseResult {
     type: "receipt";
 }
 
+// @public
+export type RelayFeeRateVerification = {
+    ok: true;
+    declaredFeeRate: number | undefined;
+    metadata: RelayMetadata;
+} | {
+    ok: false;
+    reason: string;
+};
+
 export { RepairInstruction }
 
 // @public (undocumented)
@@ -2140,6 +2150,11 @@ export function verifyReceiptSequence(chain: ReceiptChainEntry[]): Promise<{
 
 // @public
 export function verifyReceiptVerdict(receipt: SignableReceipt): Promise<VerificationVerdict>;
+
+// @public
+export function verifyRelayFeeRate(metadata: unknown, trustedPublicKeyHex: string, opts?: {
+    expectedRelayId?: string;
+}): Promise<RelayFeeRateVerification>;
 
 // @public
 export function verifyRelayMetadata(metadata: RelayMetadata, publicKey: Uint8Array): Promise<boolean>;

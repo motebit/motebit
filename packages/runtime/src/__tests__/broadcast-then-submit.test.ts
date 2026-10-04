@@ -46,12 +46,18 @@ import {
   retrieveDelegationResult,
   selectAndRunDelegation,
 } from "../index";
+import {
+  SIGNING_PINNED_HEX,
+  advanceAfterRealAsync,
+  isRelayMetadataUrl,
+  relayMetadataResponse,
+} from "./helpers/signed-relay-metadata.js";
 
 const RELAY = "https://mock-relay.test";
 const ME = "alice-885";
 const WORKER = "bob-worker-885";
 const WORKER_ADDR = "BobWorkerAddr1111111111111111111111111111111";
-const PINNED_HEX = "07".repeat(32);
+const PINNED_HEX = SIGNING_PINNED_HEX;
 const OWN = "Delegator1111111111111111111111111111111111";
 
 const json = (status: number, body: unknown): Response =>
@@ -81,6 +87,7 @@ function relay(script: SubmitAnswer[] = ["201"]): RelayStub {
   let n = 0;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (isRelayMetadataUrl(url)) return relayMetadataResponse();
     const method = init?.method ?? "GET";
     if (url.includes("/api/v1/agents/discover")) {
       return json(200, {
@@ -688,7 +695,7 @@ describe("#885 — broadcast, then the submit fails", () => {
       paidIntentLedger: new PaidIntentLedger(new InMemoryPaidIntentStore(), ME),
       logger: { warn: () => {} },
     });
-    await vi.advanceTimersByTimeAsync(20_000);
+    await advanceAfterRealAsync(20_000);
     const res = await p;
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.code).toBe("payment_admission_unconfirmed");
@@ -894,7 +901,7 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
         chunks.push(c as { type: string });
       }
     })();
-    await vi.advanceTimersByTimeAsync(10_000);
+    await advanceAfterRealAsync(10_000);
     await run;
     expect(chunks.find((c) => c.type === "invoke_error")).toBeUndefined();
     expect(chain.sigs).toHaveLength(1);
@@ -915,7 +922,7 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
       prompt: "research X",
       required_capabilities: ["web_search"],
     });
-    await vi.advanceTimersByTimeAsync(10_000);
+    await advanceAfterRealAsync(10_000);
     const result = await pending;
     expect(result.ok).toBe(true);
     expect(chain.sigs).toHaveLength(1);
@@ -939,7 +946,7 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
         chunks.push(c as { type: string; notice?: string });
       }
     })();
-    await vi.advanceTimersByTimeAsync(10_000);
+    await advanceAfterRealAsync(10_000);
     await run;
     const notice = chunks.find((c) => c.type === "payment_notice");
     expect(notice?.notice).toContain(`tx ${chain.sigs[0]}`);
@@ -959,7 +966,7 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
       prompt: "research X",
       required_capabilities: ["web_search"],
     });
-    await vi.advanceTimersByTimeAsync(10_000);
+    await advanceAfterRealAsync(10_000);
     await pending;
     const notices = (
       runtime as unknown as {

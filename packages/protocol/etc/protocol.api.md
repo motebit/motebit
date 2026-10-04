@@ -912,7 +912,7 @@ export interface CollaborativeReceipt {
 export function composeTrustChain(scores: number[]): number;
 
 // @public
-export function computeFederatedFeeSplit(budgetMicro: number, feeRate: number): FederatedFeeSplit;
+export function computeFederatedFeeSplit(budgetMicro: number, feeRate: number, executorFeeRate?: number): FederatedFeeSplit;
 
 // @public
 export function computeP2pFeeMicro(netCostMicro: number, feeRate: number): number;
