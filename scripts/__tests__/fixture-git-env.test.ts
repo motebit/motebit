@@ -39,6 +39,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -492,5 +493,113 @@ describe("check-fixture-git-env holds the structural layer (the vitest setup scr
       edit(r, "scripts/lib/vitest-scrub-git-env.ts", /^scrubGitEnvInPlace\(process\.env\);$/m, ""),
     );
     expect(checkStructural(root).join("\n")).toMatch(/GIT_DIR/);
+  });
+});
+
+describe("check-fixture-git-env: a spawn's cleanEnv is the canonical one, or an allowlisted copy that passes its canary", () => {
+  // The gate, run as a CLI over a jail repository: it scans the jail's own
+  // scripts/ (its ROOT is its own directory's parent), so a plant there is a
+  // plant in "the repository" without touching this one.
+  const FILES = [
+    "package.json",
+    "vitest.config.mts",
+    "scripts/check-fixture-git-env.ts",
+    "scripts/lib/differential-tree.ts",
+    "scripts/lib/gate-report.ts",
+    "scripts/lib/vitest-scrub-git-env.ts",
+    "scripts/lib/tamper-runner.ts",
+  ];
+  const TSX = join(ROOT, "node_modules", ".bin", "tsx");
+  let jail: string;
+  beforeAll(() => {
+    jail = realpathSync(mkdtempSync(join(tmpdir(), "fixture-git-env-provenance-")));
+  });
+  afterAll(() => {
+    rmSync(jail, { recursive: true, force: true });
+  });
+  function tree(name: string, mutate: (root: string) => void = () => {}): string {
+    const root = join(jail, name);
+    for (const f of FILES) {
+      mkdirSync(join(root, dirname(f)), { recursive: true });
+      copyFileSync(join(ROOT, f), join(root, f));
+    }
+    symlinkSync(join(ROOT, "node_modules"), join(root, "node_modules"));
+    mutate(root);
+    return root;
+  }
+  function gate(root: string): { status: number | null; out: string } {
+    const r = spawnSync(TSX, [join(root, "scripts", "check-fixture-git-env.ts")], {
+      cwd: root,
+      env: cleanEnv(),
+      encoding: "utf8",
+      timeout: 120_000,
+    });
+    return { status: r.status, out: `${r.stdout}\n${r.stderr}` };
+  }
+  // Built at runtime so this file's own source carries no unscrubbed spawn for the gate to see.
+  const plant = (cleanEnvDecl: string) =>
+    [
+      'import { spawnSync } from "node:child_process";',
+      cleanEnvDecl,
+      [
+        "spawn",
+        'Sync("git", ["commit", "-qm", "x"], { cwd: "/tmp/fixture", env: cleanEnv() });',
+      ].join(""),
+      "",
+    ].join("\n");
+  const DELETES_TWO =
+    "function cleanEnv(): NodeJS.ProcessEnv { const e = { ...process.env }; delete e.GIT_DIR; delete e.GIT_WORK_TREE; return e; }";
+  const COPIES_ALL = "function cleanEnv(): NodeJS.ProcessEnv { return { ...process.env }; }";
+
+  it("a local cleanEnv is not the canonical scrub (unit: the spawn reads unscrubbed)", () => {
+    const file = join(ROOT, "scripts", "planted.ts");
+    for (const decl of [DELETES_TWO, COPIES_ALL]) {
+      const sites = analyzeTs(plant(decl), file);
+      expect(sites.map((s) => [s.target, s.scrubbed])).toEqual([["fixture", false]]);
+    }
+  });
+
+  it("the jail as copied passes", () => {
+    const r = gate(tree("as-is"));
+    expect(r.out).toMatch(/✓ check-fixture-git-env/);
+    expect(r.status).toBe(0);
+  });
+
+  it("RED: a non-test script declaring its own cleanEnv that deletes only GIT_DIR / GIT_WORK_TREE", () => {
+    const r = gate(
+      tree("deletes-two", (root) =>
+        writeFileSync(join(root, "scripts", "planted-deletes-two.ts"), plant(DELETES_TWO)),
+      ),
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/scripts\/planted-deletes-two\.ts/);
+  });
+
+  it("RED: a non-test script declaring a cleanEnv that returns a copy of process.env", () => {
+    const r = gate(
+      tree("copies-all", (root) =>
+        writeFileSync(join(root, "scripts", "planted-copies-all.ts"), plant(COPIES_ALL)),
+      ),
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/scripts\/planted-copies-all\.ts/);
+  });
+
+  it("RED: tamper-runner's inlined cleanEnv weakened to keep GIT_INDEX_FILE", () => {
+    const r = gate(
+      tree("weak-tamper-runner", (root) => {
+        const p = join(root, "scripts", "lib", "tamper-runner.ts");
+        const src = readFileSync(p, "utf8");
+        const from = 'if (!k.startsWith("GIT_")) env[k] = v;';
+        if (!src.includes(from)) throw new Error("tamper-runner cleanEnv body moved");
+        writeFileSync(
+          p,
+          src.replace(from, 'if (!k.startsWith("GIT_") || k === "GIT_INDEX_FILE") env[k] = v;'),
+        );
+      }),
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/tamper-runner/);
+    expect(r.out).toMatch(/GIT_INDEX_FILE/);
   });
 });
