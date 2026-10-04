@@ -33,6 +33,7 @@ import {
 import { TaskClaimCoordinator } from "@motebit/runtime";
 import type { SyncRelay } from "../index.js";
 import {
+  API_TOKEN,
   JSON_AUTH,
   createAgent,
   createTestRelay,
@@ -188,11 +189,14 @@ class Body {
     await this.answer(task);
   }
 
-  async answer(task: { task_id: string; prompt: string }): Promise<void> {
+  async answer(
+    task: { task_id: string; prompt: string },
+    opts: { bearer?: "device" | "master"; tamper?: boolean } = {},
+  ): Promise<void> {
     const { relay, motebitId, kp } = this.id;
     const enc = new TextEncoder();
     const result = `done by ${this.deviceId}`;
-    const receipt = await signExecutionReceipt(
+    const signed = await signExecutionReceipt(
       {
         task_id: task.task_id,
         relay_task_id: task.task_id,
@@ -209,12 +213,17 @@ class Body {
       },
       kp.privateKey,
     );
-    const token = (
-      await mintAudienceToken(
-        { mid: motebitId, did: this.deviceId, aud: "task:result" },
-        kp.privateKey,
-      )
-    ).token;
+    // A receipt altered after signing (its signed device_id no longer verifies).
+    const receipt = opts.tamper ? { ...signed, result_hash: "00".repeat(32) } : signed;
+    const token =
+      opts.bearer === "master"
+        ? API_TOKEN
+        : (
+            await mintAudienceToken(
+              { mid: motebitId, did: this.deviceId, aud: "task:result" },
+              kp.privateKey,
+            )
+          ).token;
     const res = await relay.app.request(`/agent/${motebitId}/task/${task.task_id}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -386,6 +395,51 @@ describe("a granted claim is never re-dispatched — a lost claimer leaves the t
     await b.answer(t); // while the task is undetermined
     expect(b.resultStatuses).toEqual([409, 409]);
     expect((await pollOf(id, t.task_id)).result).toBeNull();
+  });
+
+  // F1 (cold review of 5e5b36a): the CLI daemon and desktop send the master
+  // token first when one is configured, so the presentation names no device.
+  // The receipt's SIGNED device_id is then who answers: a non-claimer's is
+  // refused; the claimer's own is accepted.
+  it("a master-token result signed by a non-claimer device is refused; the claimer's is accepted", async () => {
+    const id = await identityWithDevices(2);
+    const a = new Body(id, id.devices[0]!, { neverAnswer: true });
+    await a.open();
+    const t = await submit(id);
+    expect(await waitFor(() => a.executions === 1)).toBe(true);
+    await sleep(50);
+
+    const b = new Body(id, id.devices[1]!);
+    await b.answer(t, { bearer: "master" }); // while A holds the claim
+    expect(b.resultStatuses).toEqual([409]);
+    expect((await pollOf(id, t.task_id)).result).toBeNull();
+
+    await a.answer(t, { bearer: "master" });
+    expect(a.resultStatuses).toEqual([200]);
+    expect(await answerOf(id, t.task_id)).toBe(`done by ${a.deviceId}`);
+  });
+
+  it("a master-token result whose signature does not verify is refused before the claim is compared", async () => {
+    const id = await identityWithDevices(2);
+    const a = new Body(id, id.devices[0]!, { neverAnswer: true });
+    await a.open();
+    const t = await submit(id);
+    expect(await waitFor(() => a.executions === 1)).toBe(true);
+    await sleep(50);
+
+    // The claimer's own device id, but the signature is broken: never taken.
+    await a.answer(t, { bearer: "master", tamper: true });
+    expect(a.resultStatuses).toEqual([403]);
+    expect((await pollOf(id, t.task_id)).result).toBeNull();
+  });
+
+  it("a master-token result to a task never claimed over WS keeps today's behaviour", async () => {
+    const id = await identityWithDevices(2);
+    const t = await submit(id); // no body connected: nothing claims it
+    const b = new Body(id, id.devices[1]!);
+    await b.answer(t, { bearer: "master" });
+    expect(b.resultStatuses).toEqual([200]);
+    expect(await answerOf(id, t.task_id)).toBe(`done by ${b.deviceId}`);
   });
 
   it("a claimer that keeps renewing is never marked undetermined, and no second body runs it", async () => {

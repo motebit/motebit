@@ -245,6 +245,38 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     expect(failures).toEqual([]);
   });
 
+  it("N2: the relay reports the task EXPIRED (never claimed) — conclusive not-run: a new key, a new task, the step completes", async () => {
+    const { adapter } = makeAdapter();
+    relay.setTaskState((taskId) =>
+      taskId === "task-1"
+        ? json({
+            task: { status: "pending" },
+            receipt: null,
+            expired: {
+              reason: "never_claimed",
+              detail: "No body claimed this task before its TTL",
+              since: 1,
+            },
+          })
+        : json({
+            task: { status: "completed" },
+            receipt: receipt(taskId, "completed", `worker-${taskId}`),
+          }),
+    );
+    const p = adapter.delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(TIMEOUT + 1); // task-1: no frame; the relay says expired
+    await vi.advanceTimersByTimeAsync(TIMEOUT + 1); // task-2: no frame; the relay has its receipt
+    const result = await p;
+    expect(result.task_id).toBe("task-2");
+    // Ended task-1 on its first poll (no timeout loop on a task that never ran).
+    expect(relay.queries[0]).toBe("task-1");
+    expect(relay.queries.filter((q) => q === "task-1")).toHaveLength(1);
+    expect(relay.keys).toHaveLength(2);
+    expect(new Set(relay.keys).size).toBe(2);
+    expect(relay.admittedCount()).toBe(2);
+  });
+
   it("#890 r4: a frame without a receipt is not evidence — the key is kept", async () => {
     const { adapter, push } = makeAdapter();
     const p = adapter.delegateStep(step, TIMEOUT);
