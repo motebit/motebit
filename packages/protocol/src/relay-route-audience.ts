@@ -110,6 +110,9 @@ export const RELAY_ROUTE_AUDIENCES: readonly RelayRouteAudience[] = Object.freez
 
   { method: "GET", path: `${A}/balance`, audience: "account:balance" },
   { method: "GET", path: `${A}/settlements`, audience: "account:balance" },
+  // What a key rotation would leave owed to the retiring key's derived
+  // address — read-only own financial state, the balance class.
+  { method: "GET", path: `${A}/rotation-obligations`, audience: "account:balance" },
   { method: "POST", path: `${A}/withdraw`, audience: "account:withdraw" },
   { method: "GET", path: `${A}/withdrawals`, audience: "account:withdrawals" },
   { method: "POST", path: `${A}/checkout`, audience: "account:checkout" },

@@ -2200,6 +2200,15 @@ export async function signKeySuccession(
  * Sign a guardian recovery succession record (§3.8.3).
  * The guardian key signs instead of the compromised old key.
  * Reason MUST include "guardian_recovery".
+ *
+ * Funds: the identity key IS the motebit's Solana address. A recovery moves
+ * the identity to `newPublicKey`, but anything held at the OLD key's address
+ * stays there and can be moved only by whoever holds the old key — the
+ * guardian cannot sign for it, and no recovery can. A caller that still has
+ * the old key should move those funds before recovering; one that does not
+ * should tell the owner they are reachable only with the old key. (A relay
+ * moves a settlement address derived from the old key to the new key's, so
+ * new earnings stop landing there.)
  */
 export async function signGuardianRecoverySuccession(
   guardianPrivateKey: Uint8Array,

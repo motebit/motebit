@@ -288,6 +288,7 @@ const FORMER_FAMILY_AUDIENCE: ReadonlyArray<readonly [string, TokenAudience]> = 
   ["receipts", "receipts:read"],
   ["balance", "account:balance"],
   ["settlements", "account:balance"],
+  ["rotation-obligations", "account:balance"],
   ["withdrawals", "account:withdrawals"],
   ["withdraw", "account:withdraw"],
   ["checkout", "account:checkout"],

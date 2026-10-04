@@ -917,6 +917,7 @@ describe("the rotation commit's roster step", () => {
       invoke,
       motebitId: MID,
       deviceId: "desk-device",
+      readWalletHoldings: async () => ({ solLamports: 0n, tokens: [] }),
       onCommitted: async (_pub, record) => {
         seen.push({
           slot: await invoke<string | null>("keyring_get", { key: "device_private_key" }),
@@ -940,6 +941,7 @@ describe("the rotation commit's roster step", () => {
     im.motebitId = MID;
     im.deviceId = "desk-device";
     im.publicKey = hex(a);
+    im.walletHoldingsReader = async () => ({ solLamports: 0n, tokens: [] });
     const out = await im.rotateKey(invoke);
     const links = disk.replica()?.succession ?? [];
     expect(links).toHaveLength(1);

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   readFileSync,
   writeFileSync,
@@ -24,6 +24,39 @@ const CRYPTO_PKG = JSON.parse(
 );
 const CRYPTO_VERSION = CRYPTO_PKG.version as string;
 
+// `rotate` reads the retiring key's Solana wallet before it mints (rotation
+// refuses while it holds value, unless acknowledged). The subprocess must never reach a real RPC, so a fake
+// one runs as its own process (execFileSync blocks this one): `/empty` holds
+// nothing, `/funded` holds 1.5 SOL, `/down` answers 500.
+const FAKE_RPC_SCRIPT = `
+const http = require("node:http");
+const holdings = { "/empty": 0, "/funded": 1500000000 };
+const server = http.createServer((req, res) => {
+  let body = "";
+  req.on("data", (c) => (body += c));
+  req.on("end", () => {
+    if (!(req.url in holdings)) { res.writeHead(500); res.end(); return; }
+    const reqs = JSON.parse(body);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(reqs.map((r) => ({ jsonrpc: "2.0", id: r.id,
+      result: { value: r.method === "getBalance" ? holdings[req.url] : [] } }))));
+  });
+});
+server.listen(0, "127.0.0.1", () => console.log(server.address().port));
+`;
+let fakeRpc: ChildProcess | null = null;
+let fakeRpcUrl = "http://127.0.0.1:1";
+beforeAll(async () => {
+  fakeRpc = spawn("node", ["-e", FAKE_RPC_SCRIPT], { stdio: ["ignore", "pipe", "inherit"] });
+  const port = await new Promise<string>((resolve) =>
+    fakeRpc!.stdout!.once("data", (d: Buffer) => resolve(d.toString().trim())),
+  );
+  fakeRpcUrl = `http://127.0.0.1:${port}`;
+});
+afterAll(() => {
+  fakeRpc?.kill();
+});
+
 function run(
   args: string[],
   cwd?: string,
@@ -34,7 +67,7 @@ function run(
     const stdout = execFileSync("node", [BIN, ...args], {
       encoding: "utf-8",
       cwd,
-      env: { ...process.env, NO_COLOR: "1", ...env },
+      env: { ...process.env, NO_COLOR: "1", SOLANA_RPC_URL: `${fakeRpcUrl}/empty`, ...env },
       ...(stdin !== undefined ? { input: stdin } : {}),
       timeout: 60_000,
     });
@@ -732,6 +765,36 @@ describe("create-motebit", () => {
     expect(stdout).toContain("in flight");
     expect(readFileSync(join(configDir, "config.json"), "utf-8")).toBe(before);
     expect(readFileSync(join(configDir, "pending-rotation.json"), "utf-8")).toBe(A_ROTATION);
+  });
+
+  it("rotate REFUSES while the old key's wallet holds value, names it, and changes nothing", () => {
+    const identityPath = scaffoldForRotate("rotate-funded");
+    const before = readFileSync(join(configDir, "config.json"), "utf-8");
+    const beforeId = readFileSync(identityPath, "utf-8");
+    const { stdout, exitCode } = rotate(identityPath, { SOLANA_RPC_URL: `${fakeRpcUrl}/funded` });
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("1.5 SOL");
+    expect(stdout).toContain("--abandon-funds");
+    expect(stdout).toContain("Nothing was changed");
+    expect(readFileSync(join(configDir, "config.json"), "utf-8")).toBe(before);
+    expect(readFileSync(identityPath, "utf-8")).toBe(beforeId);
+  });
+
+  it("rotate REFUSES when the wallet cannot be read (fail-closed); --abandon-funds rotates anyway", () => {
+    const identityPath = scaffoldForRotate("rotate-rpc-down");
+    const before = readFileSync(join(configDir, "config.json"), "utf-8");
+    const refused = rotate(identityPath, { SOLANA_RPC_URL: `${fakeRpcUrl}/down` });
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stdout).toContain("could not be read");
+    expect(readFileSync(join(configDir, "config.json"), "utf-8")).toBe(before);
+    const forced = run(["rotate", identityPath, "--yes", "--abandon-funds"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-rotate",
+      MOTEBIT_CONFIG_DIR: configDir,
+      MOTEBIT_SYNC_URL: "",
+      SOLANA_RPC_URL: `${fakeRpcUrl}/down`,
+    });
+    expect(forced.exitCode).toBe(0);
+    expect(forced.stdout).toContain("Key rotated successfully");
   });
 
   it("item 19: rotate REFUSES while an earlier rotate's new key is stranded in rotation-next-*", () => {

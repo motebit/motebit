@@ -20,11 +20,14 @@ export type {
 export {
   performKeyRotation,
   rotateOrThrow,
+  rotationFundsStop,
+  rotationObligationsRefusal,
   parseHeldRotation,
   KeyRotationError,
 } from "./key-rotation.js";
 export type {
   HeldRotation,
+  KeyRotationFundsState,
   KeyRotationNote,
   KeyRotationOutcome,
   KeyRotationPorts,

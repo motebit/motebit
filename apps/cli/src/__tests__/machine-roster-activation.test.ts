@@ -43,6 +43,9 @@ import { describeEnroll, formatRosterView } from "../subcommands/machines.js";
 import { rosterCaptureBeforeRotate, rosterHookAfterRotate } from "../machine-roster-rotation.js";
 import { loadReplica, saveReplica } from "../machine-roster-file.js";
 
+/** I0 (the funds preflight) is driven by rotation-funds-preflight.test.ts; here the wallet is empty. */
+const EMPTY_WALLET = async () => ({ solLamports: 0n, tokens: [] });
+
 const PASS = "correct horse";
 const SYNC_URL = "http://relay.test";
 const MASTER = "test-token";
@@ -287,6 +290,7 @@ describe("the rotation hook after a real rotation (R21, option b)", () => {
       },
       passphrase: PASS,
       syncUrl: SYNC_URL,
+      readWalletHoldings: EMPTY_WALLET,
       fetchImpl: viaRelay,
     });
     expect(o.kind).toBe("rotated");
@@ -385,6 +389,7 @@ describe("F1 (#783 decisive round): a retired host that loses its replica never 
         },
         passphrase: PASS,
         syncUrl: SYNC_URL,
+        readWalletHoldings: EMPTY_WALLET,
         fetchImpl: viaRelay,
       });
       expect(o.kind).toBe("rotated");
@@ -496,6 +501,7 @@ describe("#785 decisive round: an old-key line presented between the link and a 
       },
       passphrase: PASS,
       syncUrl: SYNC_URL,
+      readWalletHoldings: EMPTY_WALLET,
       fetchImpl,
     });
     const capture = () =>
@@ -596,6 +602,7 @@ describe("#786 round 1", () => {
     },
     passphrase: PASS,
     syncUrl: SYNC_URL,
+    readWalletHoldings: EMPTY_WALLET,
     fetchImpl,
   });
   const captureNow = (f: Fixture) =>
@@ -760,6 +767,7 @@ describe("BUILD 5 (c) — the hook says when an active capture was not carried",
       },
       passphrase: PASS,
       syncUrl: SYNC_URL,
+      readWalletHoldings: EMPTY_WALLET,
       fetchImpl: viaRelay,
     });
     if (o.kind !== "rotated") throw new Error("expected rotated");

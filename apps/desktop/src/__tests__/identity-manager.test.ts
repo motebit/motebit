@@ -89,6 +89,11 @@ vi.mock("@motebit/encryption", async (importOriginal) => ({
   getPublicKeyBySuite: (await importOriginal<typeof import("@motebit/encryption")>())
     .getPublicKeyBySuite,
   hexToBytes: (await importOriginal<typeof import("@motebit/encryption")>()).hexToBytes,
+  // I0 (the rotation funds preflight) stays real: the verdict and its refusal text.
+  checkRotationFunds: (await importOriginal<typeof import("@motebit/encryption")>())
+    .checkRotationFunds,
+  rotationFundsRefusal: (await importOriginal<typeof import("@motebit/encryption")>())
+    .rotationFundsRefusal,
   mintAudienceToken: vi.fn(async () => ({ token: "signed-token", payload: {} })),
   hexPublicKeyToDidKey: vi.fn((hex: string) => `did:key:${hex.slice(0, 8)}`),
   secureErase: vi.fn(),
@@ -145,6 +150,9 @@ vi.mock("@motebit/encryption", async (importOriginal) => ({
     hasAnyValue: mockCtrl.walletHasValue,
   })),
   formatWalletWarning: vi.fn(() => "wallet has funds — skipping key transfer"),
+  // I0's production reader — never reached in these tests (a real RPC); each
+  // rotation test injects `walletHoldingsReader`, and this stub answers empty.
+  createSolanaHoldingsReader: vi.fn(() => async () => ({ solLamports: 0n, tokens: [] })),
 }));
 
 vi.mock("@motebit/identity-file", async (importOriginal) => ({
@@ -185,6 +193,9 @@ vi.mock("@motebit/sync-engine", () => {
   return {
     PairingClient,
     readSuccessionState: vi.fn(async () => mockCtrl.relayState),
+    // I0's obligations read (driven by surface-kit's preflight harness): the
+    // relay owes the retiring address nothing here.
+    readRotationObligations: vi.fn(async () => ({ ok: true, address: "addr", obligations: [] })),
     submitSuccessionToRelay: vi.fn(async (req: unknown) => {
       mockCtrl.submissions.push(req);
       return mockCtrl.submitResult;
@@ -918,6 +929,21 @@ describe("IdentityManager.rotateKey", () => {
     const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
     expect(cfg.__keyring_device_private_key).toBe(SEED);
     expect(cfg.__keyring_pending_rotation).toBeUndefined();
+  });
+  it("I0: the wallet this key controls holds value ⇒ REJECTS naming it before anything moves; the acknowledged retry rotates", async () => {
+    const { mgr, invoke } = manager({ sync_url: "https://relay" });
+    mgr.walletHoldingsReader = async () => ({ solLamports: 2_000_000_000n, tokens: [] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect(mgr.rotateKey(invoke as any)).rejects.toThrow(/holds 2 SOL/);
+    expect(mockCtrl.submissions).toHaveLength(0);
+    const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
+    expect(cfg.__keyring_device_private_key).toBe(SEED);
+    expect(cfg.__keyring_pending_rotation).toBeUndefined();
+    expect(mgr.publicKey).toBe(PUB);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await mgr.rotateKey(invoke as any, undefined, { acknowledgeFundsAtRisk: true });
+    expect(mockCtrl.submissions).toHaveLength(1);
+    expect(mgr.publicKey).toBe(mockCtrl.rotateResult.newPublicKeyHex);
   });
   it("lost answer ⇒ REJECTS as held; the write-ahead stays in the keyring for the next run", async () => {
     mockCtrl.submitResult = { ok: false, kind: "unknown", reason: "socket hang up" };

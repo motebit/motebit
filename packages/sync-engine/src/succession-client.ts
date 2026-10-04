@@ -226,3 +226,141 @@ export async function submitSuccessionToRelay(
   }
   return { ok: true, applied: parsed.applied !== false };
 }
+
+// ── reading what a rotation would leave owed to the retiring key ──────────
+
+/**
+ * One open obligation the relay holds to the retiring key's derived Solana
+ * address (`GET /api/v1/agents/:id/rotation-obligations`). The relay never
+ * rewrites these destinations on rotation — a destination is its owner's —
+ * so a rotation over them leaves them paying a key the surfaces then erase.
+ * Amounts are integer micro-units (1 USD = 1,000,000).
+ */
+export type RelayRotationObligation =
+  | {
+      kind: "withdrawal";
+      withdrawal_id: string;
+      /** `pending` or `processing` (a freeze holds either in place). */
+      status: string;
+      amount_micro: number;
+      destination: string;
+    }
+  | {
+      kind: "p2p_task";
+      task_id: string;
+      /** `admitted`: not yet settled; `settled_unverified`: settled, worker leg not yet verified on-chain. */
+      stage: string;
+      amount_micro: number | null;
+      address: string;
+    };
+
+export interface ReadRotationObligationsRequest {
+  syncUrl: string;
+  motebitId: string;
+  /** The bearer's `did`: the device id, else the identity's own did:key (never empty). */
+  deviceId: string;
+  /** The private key the rotation would retire — the key the relay verifies now. */
+  signingKey: Uint8Array;
+  /** Its public key (hex): the relay reports obligations to the address it derives. */
+  fromPublicKey: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
+
+export type RotationObligationsRead =
+  | { ok: true; address: string; obligations: RelayRotationObligation[] }
+  /**
+   * The relay does not accept the retiring key's bearer (401/403): this key
+   * is not one a rotation could be submitted from (a rotation already
+   * recorded, an identity the relay does not hold). Not a verdict on
+   * obligations — the succession read classifies the relay next.
+   */
+  | { ok: false; kind: "not-current"; reason: string }
+  /** The relay could not be reached at all. */
+  | { ok: false; kind: "unreachable"; reason: string }
+  /** An answer that was not a usable one (a 5xx, an older relay's 404, not a relay's body). Nothing is known. */
+  | { ok: false; kind: "unknown"; reason: string };
+
+/**
+ * Ask the relay what it still owes the retiring key's derived address:
+ * pending / processing withdrawals to it and P2P tasks admitted to it and
+ * not yet verified. Authenticated as the identity (`account:balance`, the
+ * own-financial-state read), signed by the key being retired. Failures are
+ * RETURNED, never thrown; a caller fails closed on `unreachable` / `unknown`.
+ */
+export async function readRotationObligations(
+  req: ReadRotationObligationsRequest,
+): Promise<RotationObligationsRead> {
+  const base = req.syncUrl.replace(/\/+$/, "");
+  const doFetch = req.fetchImpl ?? fetch;
+  let token: string;
+  try {
+    ({ token } = await mintAudienceToken(
+      { mid: req.motebitId, did: req.deviceId, aud: "account:balance" },
+      req.signingKey,
+    ));
+  } catch (err) {
+    return { ok: false, kind: "unknown", reason: err instanceof Error ? err.message : String(err) };
+  }
+  let res: Response;
+  try {
+    res = await doFetch(
+      `${base}/api/v1/agents/${req.motebitId}/rotation-obligations?from=${req.fromPublicKey}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(req.timeoutMs ?? 10_000),
+      },
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      kind: "unreachable",
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (res.status === 401 || res.status === 403) {
+    return {
+      ok: false,
+      kind: "not-current",
+      reason: `relay answered ${res.status} to the obligations read`,
+    };
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      kind: "unknown",
+      reason:
+        res.status === 404
+          ? "relay answered 404 to the obligations read (this relay does not report open obligations — upgrade the relay)"
+          : `relay answered ${res.status} to the obligations read`,
+    };
+  }
+  const parsed = (await res.json().catch(() => null)) as {
+    address?: unknown;
+    obligations?: unknown;
+  } | null;
+  if (
+    parsed == null ||
+    typeof parsed.address !== "string" ||
+    !Array.isArray(parsed.obligations) ||
+    !parsed.obligations.every(
+      (o) =>
+        o != null &&
+        typeof o === "object" &&
+        ((o as { kind?: unknown }).kind === "withdrawal" ||
+          (o as { kind?: unknown }).kind === "p2p_task"),
+    )
+  ) {
+    return {
+      ok: false,
+      kind: "unknown",
+      reason: "the obligations response did not come from a motebit relay",
+    };
+  }
+  return {
+    ok: true,
+    address: parsed.address,
+    obligations: parsed.obligations as RelayRotationObligation[],
+  };
+}

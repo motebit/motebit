@@ -92,6 +92,7 @@ import {
   buildKeyTransferPayload,
   openPairingKeyTransfer,
   checkPreTransferBalance,
+  createSolanaHoldingsReader,
   formatWalletWarning,
 } from "@motebit/encryption";
 import type { KeyTransferPayload } from "@motebit/sdk";
@@ -2361,7 +2362,10 @@ export class UnbootedWebApp {
    * record (old + new keys both sign), update encrypted IndexedDB keystore,
    * and submit to relay if syncing.
    */
-  async rotateKey(reason?: string): Promise<{ newPublicKey: string }> {
+  async rotateKey(
+    reason?: string,
+    opts: { acknowledgeFundsAtRisk?: boolean } = {},
+  ): Promise<{ newPublicKey: string }> {
     // The state machine lives in @motebit/surface-kit (#709): it reads the
     // relay first, writes the new key ahead, submits signed by the RETIRING
     // key, and moves local state only after the relay confirms. A stop or a
@@ -2378,6 +2382,15 @@ export class UnbootedWebApp {
       // re-enrolment — a browser is never a host (S2).
       afterCommit: ({ record }) =>
         rosterAfterRotationCommit({ motebitId: this._motebitId, record }),
+      // I0: the identity key IS the wallet; read it before anything moves.
+      // A browser-incapable RPC fails the read, which refuses (fail-closed)
+      // until the owner confirms the stated risk.
+      readWalletHoldings: createSolanaHoldingsReader({
+        rpcUrl:
+          (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_SOLANA_RPC_URL ??
+          "https://api.mainnet-beta.solana.com",
+      }),
+      ...(opts.acknowledgeFundsAtRisk === true ? { acknowledgeFundsAtRisk: true } : {}),
       ...(reason !== undefined ? { reason } : {}),
     });
   }

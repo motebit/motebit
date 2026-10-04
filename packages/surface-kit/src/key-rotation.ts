@@ -36,17 +36,47 @@
  *                            file if the surface keeps one)
  *   - `syncUrl`            — `null` when no relay is configured: rotate
  *                            locally and SAY so, never guess
+ *   - `readWalletHoldings` — what the retiring key's Solana address holds
+ *                            (REQUIRED; the rail is the surface's, so this
+ *                            module stays rail-agnostic)
+ *
+ * A third invariant runs before both:
+ *
+ *   I0 — a rotation refuses while the retiring key's address holds value, or
+ *        the relay holds an open obligation to it, unless the owner
+ *        explicitly acknowledged it (`acknowledgeFundsAtRisk`). The identity
+ *        key IS the wallet, and a recorded rotation erases or overwrites the
+ *        retired key on most surfaces; so before anything is minted, written
+ *        ahead, submitted or committed: (a) the address's on-chain holdings
+ *        are read (SOL and SPL token balances), and (b) the relay is asked,
+ *        under an authenticated read, what it still owes that address —
+ *        pending / processing withdrawals to it and P2P tasks admitted to it
+ *        and not yet verified (`readRotationObligations`). The relay never
+ *        rewrites those destinations, so each is named with its remedy. A
+ *        read that fails stops the rotation too. NOT covered (deferred): a
+ *        deposit or sweep landing between the read and the erase; token-
+ *        account rent and stake / nonce authorities held by the key; an
+ *        automatic sweep to the new key.
  */
 import { rotateIdentityKeys } from "@motebit/core-identity";
 import {
+  base58btcEncode,
   bytesToHex,
+  checkRotationFunds,
   getPublicKeyBySuite,
   hexPublicKeyToDidKey,
   hexToBytes,
+  rotationFundsRefusal,
   secureErase,
 } from "@motebit/encryption";
+import type { WalletHoldingsReader } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/sdk";
-import { readSuccessionState, submitSuccessionToRelay } from "@motebit/sync-engine";
+import {
+  readRotationObligations,
+  readSuccessionState,
+  submitSuccessionToRelay,
+} from "@motebit/sync-engine";
+import type { RelayRotationObligation } from "@motebit/sync-engine";
 
 const IDENTITY_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 
@@ -119,6 +149,22 @@ export interface KeyRotationPorts {
      */
     relay: "recorded" | "already-held" | "none";
   }): Promise<void>;
+  /**
+   * I0: reads what the retiring key's Solana address holds. MUST throw when
+   * it cannot answer (a failed read stops the rotation unless acknowledged).
+   * Required, so no surface can adopt the kit without saying how it reads
+   * the wallet the rotation would retire.
+   */
+  readWalletHoldings: WalletHoldingsReader;
+  /**
+   * The owner explicitly accepted that value at (or an unreadable balance
+   * of) the retiring key's address stays there. Never a default: a surface
+   * sets it only after showing the owner the refusal's amounts and getting
+   * a yes. Keeps an emergency (compromised-key) rotation possible.
+   */
+  acknowledgeFundsAtRisk?: boolean;
+  /** How this surface's owner gives that acknowledgment, named in the refusal ("--abandon-funds", "the confirmation"). */
+  fundsAcknowledgment?: string;
   reason?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -161,6 +207,9 @@ export function parseHeldRotation(
   }
 }
 
+/** I0 stops: the retiring key's address holds value / could not be read; nothing was changed. */
+export type KeyRotationFundsState = "funds-at-risk" | "funds-unknown";
+
 export type KeyRotationOutcome =
   | {
       kind: "rotated";
@@ -185,9 +234,18 @@ export type KeyRotationOutcome =
         /** The write-ahead's private key does not derive to the key it names. */
         | "held-corrupt"
         /** Published key and held key disagree with no write-ahead bridging them. */
-        | "inconsistent";
+        | "inconsistent"
+        | KeyRotationFundsState;
       message: string;
       relayKey?: string;
+      /** I0 stops only: what the retiring key's address holds or is owed, so a surface can state it in its confirm. */
+      funds?: {
+        address: string;
+        summary?: string;
+        reason?: string;
+        /** Open relay obligations to the address (withdrawals, admitted P2P tasks). */
+        obligations?: RelayRotationObligation[];
+      };
       notes: KeyRotationNote[];
     };
 
@@ -201,6 +259,61 @@ export class KeyRotationError extends Error {
     );
     this.name = "KeyRotationError";
   }
+}
+
+/**
+ * I0 for a settings screen: the funds stop inside a rotation error, or null.
+ * A surface shows `message` (it names the address and the amounts) in a
+ * confirm, and re-runs with `acknowledgeFundsAtRisk: true` only on a yes.
+ */
+export function rotationFundsStop(err: unknown): {
+  message: string;
+  address: string;
+  summary?: string;
+  reason?: string;
+  obligations?: RelayRotationObligation[];
+} | null {
+  if (!(err instanceof KeyRotationError)) return null;
+  const o = err.outcome;
+  if (o.kind !== "stopped" || (o.state !== "funds-at-risk" && o.state !== "funds-unknown")) {
+    return null;
+  }
+  if (o.funds == null) return null;
+  return { message: o.message, ...o.funds };
+}
+
+/** Integer micro-units as a decimal USD string, without floats. */
+function microToUsd(micro: number): string {
+  const m = BigInt(Math.trunc(micro));
+  const whole = m / 1_000_000n;
+  const frac = (m % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+  return frac === "" ? `${whole} USD` : `${whole}.${frac} USD`;
+}
+
+/**
+ * I0's refusal for open relay obligations to the retiring key's address:
+ * each one named, with its remedy. The relay never rewrites these
+ * destinations, so the remedy is always the owner's: let it finish (or
+ * cancel it) BEFORE rotating — or acknowledge it stays with the retired key.
+ */
+export function rotationObligationsRefusal(
+  address: string,
+  obligations: readonly RelayRotationObligation[],
+  fundsAcknowledgment: string,
+): string {
+  const lines = obligations.map((o) =>
+    o.kind === "withdrawal"
+      ? `withdrawal ${o.withdrawal_id} (${o.status}, ${microToUsd(o.amount_micro)}) pays ${address} — ` +
+        (o.status === "pending"
+          ? "cancel it, or wait for it to complete, before rotating"
+          : "wait for it to complete (or for the operator to fail it) before rotating")
+      : `P2P task ${o.task_id} (${o.stage === "admitted" ? "admitted, not yet settled" : "settled, payment not yet verified"}` +
+        `${o.amount_micro != null ? `, ${microToUsd(o.amount_micro)}` : ""}) pays ${address} — let it settle and verify before rotating`,
+  );
+  return (
+    `rotation refused before anything changed: the relay holds ${obligations.length} open obligation${obligations.length === 1 ? "" : "s"} to this identity's address ${address}, which the rotation would retire (the relay never moves an obligation's destination): ` +
+    `${lines.join("; ")}. Or rotate anyway with ${fundsAcknowledgment}, acknowledging that what they pay lands at the retired key's address.`
+  );
 }
 
 export async function performKeyRotation(ports: KeyRotationPorts): Promise<KeyRotationOutcome> {
@@ -249,6 +362,84 @@ async function rotateWithin(
   allocated.push(oldPrivateKey);
   const oldPublicKey = await getPublicKeyBySuite(oldPrivateKey, IDENTITY_SUITE);
   const oldPublicKeyHex = bytesToHex(oldPublicKey);
+
+  // 0b. I0 — the wallet this rotation would retire, read BEFORE anything
+  //     moves: no mint, no write-ahead, no submission, no commit. Covers
+  //     the resume paths too: finishing a rotation the relay already holds
+  //     still erases the retired key on commit, so value at its address
+  //     stops that as well (the old key keeps working on-chain meanwhile).
+  //     The relay's open obligations to the same address are read here too
+  //     (a READ, authenticated by the retiring key), so one refusal — and
+  //     one acknowledgment — names everything at stake.
+  // Set (to the relay's answer) when the relay would not take the retiring
+  // key's bearer for the obligations read: decided at S0 below, where it must.
+  let obligationsUnread: string | null = null;
+  if (ports.acknowledgeFundsAtRisk !== true) {
+    const verdict = await checkRotationFunds({
+      publicKey: oldPublicKey,
+      readHoldings: ports.readWalletHoldings,
+    });
+    const owed =
+      ports.syncUrl == null || ports.syncUrl === ""
+        ? null
+        : await readRotationObligations({
+            syncUrl: ports.syncUrl,
+            motebitId: ports.motebitId,
+            deviceId:
+              ports.deviceId !== "" ? ports.deviceId : hexPublicKeyToDidKey(oldPublicKeyHex),
+            signingKey: oldPrivateKey,
+            fromPublicKey: oldPublicKeyHex,
+            ...(ports.fetchImpl ? { fetchImpl: ports.fetchImpl } : {}),
+          });
+    const obligations = owed?.ok === true ? owed.obligations : [];
+    // `not-current`: the relay does not take this key's bearer — a rotation
+    // it already recorded (resume), or an identity it does not hold. The
+    // succession read classifies which; S0 refuses if it is neither.
+    if (owed != null && !owed.ok && owed.kind === "not-current") obligationsUnread = owed.reason;
+    // The relay cannot be reached at all: the same stop as an unreachable
+    // succession read (S6) — unless the chain read already found value,
+    // which is said first.
+    if (owed != null && !owed.ok && owed.kind === "unreachable" && verdict.kind === "clear") {
+      return stopped(
+        "unreachable",
+        `the relay could not be read (${owed.reason}); nothing was changed — retry when it is reachable`,
+      );
+    }
+    const unknownReasons = [
+      ...(verdict.kind === "unknown" ? [verdict.reason] : []),
+      ...(owed != null && !owed.ok && (owed.kind === "unknown" || owed.kind === "unreachable")
+        ? [`the relay's open obligations could not be read: ${owed.reason}`]
+        : []),
+    ];
+    if (verdict.kind === "holds-value" || obligations.length > 0 || unknownReasons.length > 0) {
+      const fundsAcknowledgment = ports.fundsAcknowledgment ?? "an explicit acknowledgment";
+      const parts: string[] = [];
+      if (verdict.kind !== "clear") parts.push(rotationFundsRefusal(verdict, fundsAcknowledgment));
+      if (obligations.length > 0) {
+        parts.push(rotationObligationsRefusal(verdict.address, obligations, fundsAcknowledgment));
+      }
+      if (owed != null && !owed.ok && (owed.kind === "unknown" || owed.kind === "unreachable")) {
+        parts.push(
+          `rotation refused before anything changed: the relay's open obligations to ${verdict.address} could not be read (${owed.reason}). ` +
+            `Rotating retires this key; a withdrawal or P2P payment the relay still owes ${verdict.address} would then pay only the retired key. ` +
+            `Retry when the relay answers (move or settle anything it owes there first), or rotate with ${fundsAcknowledgment}, acknowledging that anything owed there stays at the retired key's address.`,
+        );
+      }
+      const atRisk = verdict.kind === "holds-value" || obligations.length > 0;
+      return {
+        kind: "stopped",
+        state: atRisk ? "funds-at-risk" : "funds-unknown",
+        message: parts.join("\n"),
+        funds: {
+          address: verdict.address,
+          ...(verdict.kind === "holds-value" ? { summary: verdict.summary } : {}),
+          ...(unknownReasons.length > 0 ? { reason: unknownReasons.join("; ") } : {}),
+          ...(obligations.length > 0 ? { obligations } : {}),
+        },
+        notes,
+      };
+    }
+  }
 
   // 1. What this device holds IN FLIGHT — read without conflating "nothing"
   //    with "something I cannot read".
@@ -455,7 +646,24 @@ async function rotateWithin(
       );
     }
     case "current": {
-      // S0. Write-ahead FIRST (I2), then submit signed by the RETIRING key,
+      // S0. The relay departs from this key, yet would not take its bearer
+      // for the obligations read: nothing is known about what it owes the
+      // address, so this refuses like a failed read (I0) — before anything moves.
+      if (obligationsUnread !== null) {
+        return {
+          kind: "stopped",
+          state: "funds-unknown",
+          message:
+            `rotation refused before anything changed: the relay's open obligations to this key's address could not be read (${obligationsUnread}). ` +
+            `Retry (move or settle anything the relay owes that address first), or rotate with ${ports.fundsAcknowledgment ?? "an explicit acknowledgment"}, acknowledging that anything owed there stays at the retired key's address.`,
+          funds: {
+            address: base58btcEncode(oldPublicKey),
+            reason: `the relay's open obligations could not be read: ${obligationsUnread}`,
+          },
+          notes,
+        };
+      }
+      // Write-ahead FIRST (I2), then submit signed by the RETIRING key,
       // then commit.
       const minted = await mintFresh();
       const newPrivateKeyHex = bytesToHex(minted.newPrivateKey);

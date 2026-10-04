@@ -197,6 +197,182 @@ async function decryptPrivateKey(enc: EncryptedKey, passphrase: string): Promise
 }
 
 // ---------------------------------------------------------------------------
+// Rotation funds preflight (inlined sibling of @motebit/encryption's
+// `checkRotationFunds` / `rotationFundsRefusal` — zero monorepo deps)
+// ---------------------------------------------------------------------------
+//
+// A motebit's Solana address IS its identity key. Rotating retires that key,
+// so value at its address would be left behind a key nobody uses again. The
+// preflight reads the address BEFORE the new key is minted and refuses while
+// it holds value — or while it cannot be read (fail-closed) — unless the
+// owner passed --abandon-funds. An automatic sweep is deliberately not done.
+
+export interface WalletTokenHolding {
+  mint: string;
+  amount: bigint;
+  decimals: number;
+}
+export interface WalletHoldings {
+  solLamports: bigint;
+  tokens: WalletTokenHolding[];
+}
+/** MUST throw when it cannot answer — a reader that answers "empty" on failure is fail-open. */
+export type WalletHoldingsReader = (address: string) => Promise<WalletHoldings>;
+
+const DEFAULT_SOLANA_RPC = "https://api.mainnet-beta.solana.com";
+const SPL_TOKEN_PROGRAMS = [
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  "TokenzQdBNbLqP5VEhdkAS6EHFLe7ZYgc6UiBV4L3tcz",
+];
+const KNOWN_TOKEN_SYMBOLS: Readonly<Record<string, string>> = {
+  EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: "USDC",
+  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU": "USDC (devnet)",
+};
+
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+/** The Solana address of an Ed25519 public key: its 32 bytes, base58. */
+export function solanaAddressOf(publicKey: Uint8Array): string {
+  let n = 0n;
+  for (const b of publicKey) n = (n << 8n) | BigInt(b);
+  let out = "";
+  while (n > 0n) {
+    out = B58[Number(n % 58n)] + out;
+    n /= 58n;
+  }
+  for (const b of publicKey) {
+    if (b !== 0) break;
+    out = "1" + out;
+  }
+  return out;
+}
+
+/** One batched JSON-RPC call: SOL plus token accounts under both SPL programs. Throws on any failure. */
+export function createSolanaHoldingsReader(
+  rpcUrl: string = DEFAULT_SOLANA_RPC,
+): WalletHoldingsReader {
+  return async (address) => {
+    const res = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", id: 1, method: "getBalance", params: [address] },
+        ...SPL_TOKEN_PROGRAMS.map((programId, i) => ({
+          jsonrpc: "2.0",
+          id: i + 2,
+          method: "getTokenAccountsByOwner",
+          params: [address, { programId }, { encoding: "jsonParsed" }],
+        })),
+      ]),
+    });
+    if (!res.ok) throw new Error(`Solana RPC answered HTTP ${res.status}`);
+    const body: unknown = await res.json();
+    if (!Array.isArray(body)) throw new Error("Solana RPC answered a non-batch body");
+    const resultOf = (id: number): { value?: unknown } => {
+      const e = (body as { id?: unknown; result?: unknown; error?: { message?: string } }[]).find(
+        (x) => x?.id === id,
+      );
+      if (e?.error != null) throw new Error(`Solana RPC error: ${e.error.message ?? "unknown"}`);
+      if (e == null || e.result == null)
+        throw new Error(`Solana RPC answered no result for request ${id}`);
+      return e.result;
+    };
+    const bal = resultOf(1).value;
+    if (typeof bal !== "number" || !Number.isFinite(bal) || bal < 0) {
+      throw new Error("Solana RPC answered a malformed balance");
+    }
+    const tokens: WalletTokenHolding[] = [];
+    for (let id = 2; id < 2 + SPL_TOKEN_PROGRAMS.length; id++) {
+      const value = resultOf(id).value;
+      if (!Array.isArray(value)) throw new Error("Solana RPC answered malformed token accounts");
+      for (const acct of value as {
+        account?: {
+          data?: {
+            parsed?: {
+              info?: { mint?: string; tokenAmount?: { amount?: string; decimals?: number } };
+            };
+          };
+        };
+      }[]) {
+        const info = acct.account?.data?.parsed?.info;
+        const amount = info?.tokenAmount?.amount;
+        if (typeof info?.mint !== "string" || typeof amount !== "string" || !/^\d+$/.test(amount)) {
+          throw new Error("Solana RPC answered a token account it did not parse");
+        }
+        tokens.push({
+          mint: info.mint,
+          amount: BigInt(amount),
+          decimals: info.tokenAmount?.decimals ?? 0,
+        });
+      }
+    }
+    return { solLamports: BigInt(bal), tokens };
+  };
+}
+
+function formatUnits(amount: bigint, decimals: number): string {
+  if (decimals <= 0) return amount.toString();
+  const s = amount.toString().padStart(decimals + 1, "0");
+  const whole = s.slice(0, s.length - decimals);
+  const frac = s.slice(s.length - decimals).replace(/0+$/, "");
+  return frac === "" ? whole : `${whole}.${frac}`;
+}
+
+function describeWalletHoldings(h: WalletHoldings): string {
+  const parts: string[] = [];
+  if (h.solLamports > 0n) parts.push(`${formatUnits(h.solLamports, 9)} SOL`);
+  for (const t of h.tokens) {
+    if (t.amount <= 0n) continue;
+    const symbol = KNOWN_TOKEN_SYMBOLS[t.mint];
+    parts.push(
+      symbol != null
+        ? `${formatUnits(t.amount, t.decimals)} ${symbol}`
+        : `${formatUnits(t.amount, t.decimals)} of token ${t.mint}`,
+    );
+  }
+  return parts.join(", ");
+}
+
+/** The rotation was refused because the retiring key's wallet holds value or could not be read. */
+export class RotationFundsRefused extends Error {
+  constructor(
+    message: string,
+    readonly address: string,
+  ) {
+    super(message);
+    this.name = "RotationFundsRefused";
+  }
+}
+
+/** Throws `RotationFundsRefused` unless the address is empty. */
+async function preflightRotationFunds(
+  publicKey: Uint8Array,
+  read: WalletHoldingsReader,
+): Promise<void> {
+  const address = solanaAddressOf(publicKey);
+  const consequence = `Rotating retires this key; anything left at ${address} can then be moved only with the retired key.`;
+  let holdings: WalletHoldings;
+  try {
+    holdings = await read(address);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new RotationFundsRefused(
+      `rotation refused before anything changed: the balance of this identity's wallet ${address} could not be read (${reason}). ${consequence} ` +
+        `Either retry when the Solana RPC is reachable (and move any funds off ${address} first); ` +
+        `or, if this key must be retired now (e.g. it is compromised), rotate with --abandon-funds, acknowledging any funds there stay at the retired key's address.`,
+      address,
+    );
+  }
+  const summary = describeWalletHoldings(holdings);
+  if (summary === "") return;
+  throw new RotationFundsRefused(
+    `rotation refused before anything changed: this identity's wallet ${address} holds ${summary}. ${consequence} ` +
+      `Either move the funds off ${address} first (to a wallet you control), then rotate; ` +
+      `or rotate anyway with --abandon-funds, acknowledging the funds stay at the retired key's address.`,
+    address,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Identity file manipulation
 // ---------------------------------------------------------------------------
 
@@ -218,6 +394,10 @@ export async function rotateKey(opts: {
   oldPassphrase: string;
   newPassphrase: string;
   reason?: string;
+  /** Reads the retiring key's wallet before the new key is minted (throws when it cannot answer). */
+  readWalletHoldings: WalletHoldingsReader;
+  /** `--abandon-funds`: rotate even though that wallet holds value or cannot be read. */
+  abandonFunds?: boolean;
 }): Promise<{
   identityFileContent: string;
   newPublicKeyHex: string;
@@ -247,6 +427,11 @@ export async function rotateKey(opts: {
   const derivedPubKeyHex = toHex(derivedPubKey);
   if (derivedPubKeyHex !== oldPublicKeyHex) {
     throw new Error("Decrypted private key does not match public key in identity file");
+  }
+
+  // 3b. The wallet this rotation would retire, read BEFORE the new key exists.
+  if (opts.abandonFunds !== true) {
+    await preflightRotationFunds(derivedPubKey, opts.readWalletHoldings);
   }
 
   // 4. Generate new Ed25519 keypair
