@@ -13,7 +13,8 @@ import type { KeySuccessionRecord } from "@motebit/sdk";
 
 export type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
-export interface DesktopRotationDeps {
+type FundsPorts = Pick<KeyRotationPorts, "readWalletHoldings" | "acknowledgeFundsAtRisk">; // I0
+export interface DesktopRotationDeps extends FundsPorts {
   invoke: InvokeFn;
   motebitId: string;
   deviceId: string;
@@ -67,6 +68,8 @@ export async function rotateDesktopKey(
       await updateConfig(deps.invoke, patch, { _identity_file: existing ?? null });
       await deps.onCommitted(publicKeyHex, record);
     },
+    readWalletHoldings: deps.readWalletHoldings,
+    acknowledgeFundsAtRisk: deps.acknowledgeFundsAtRisk === true,
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
   });

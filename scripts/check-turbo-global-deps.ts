@@ -67,6 +67,9 @@ export const SCRIPT_DATA_READS: Record<string, (root: string) => string[]> = {
     ...SPEC_COUNT_INPUTS,
     // apps/docs/content/** is inside @motebit/docs — already hashed by turbo.
   ],
+  // Reads only a governed app's own `.env*` files and its build output
+  // (`dist/`, `.next/`, `public/`) — every one inside the app's package.
+  "scripts/lib/client-bundle-secrets.ts": () => [],
 };
 
 export interface Discovery {

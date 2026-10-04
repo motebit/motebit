@@ -1,3 +1,4 @@
+import { rotationFundsStop } from "@motebit/surface-kit";
 import type { DesktopAIConfig } from "../index";
 import { getMcpServersConfig } from "./mcp-connections";
 import type { DesktopContext } from "../types";
@@ -971,10 +972,14 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   const rotateKeyError = document.getElementById("rotate-key-error") as HTMLDivElement;
   const rotateKeyResult = document.getElementById("rotate-key-result") as HTMLDivElement;
   const rotateKeyConfirm = document.getElementById("rotate-key-confirm") as HTMLButtonElement;
+  /** Armed only after the funds refusal was shown (I0's explicit acknowledgment). */
+  let rotateKeyFundsAcknowledged = false;
 
   function showRotateKeyDialog(): void {
     rotateKeyReason.value = "";
     rotateKeyError.textContent = "";
+    rotateKeyError.style.display = "none";
+    rotateKeyFundsAcknowledged = false;
     rotateKeyResult.style.display = "none";
     rotateKeyResult.textContent = "";
     rotateKeyConfirm.disabled = false;
@@ -989,13 +994,17 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   async function handleRotateKeyConfirm(): Promise<void> {
     rotateKeyError.textContent = "";
+    rotateKeyError.style.display = "none";
     rotateKeyConfirm.disabled = true;
     rotateKeyConfirm.textContent = "Rotating\u2026";
 
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const reason = rotateKeyReason.value.trim() || undefined;
-      const result = await ctx.app.rotateKey(invoke, reason);
+      // Set only by a second click AFTER the funds refusal (with its amounts)
+      // was shown — the explicit acknowledgment, never a default.
+      const acknowledgeFundsAtRisk = rotateKeyFundsAcknowledged;
+      const result = await ctx.app.rotateKey(invoke, reason, { acknowledgeFundsAtRisk });
 
       // Show result briefly, then close and update identity display
       rotateKeyResult.style.display = "block";
@@ -1011,8 +1020,19 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         closeRotateKeyDialog();
       }, 2000);
     } catch (err: unknown) {
-      rotateKeyError.textContent = err instanceof Error ? err.message : String(err);
+      rotateKeyError.style.display = "block";
       rotateKeyConfirm.disabled = false;
+      const funds = rotationFundsStop(err);
+      if (funds != null) {
+        // The wallet this key controls holds value (or could not be read):
+        // say so with the amounts, and arm the explicit acknowledgment.
+        rotateKeyError.textContent = funds.message;
+        rotateKeyFundsAcknowledged = true;
+        rotateKeyConfirm.textContent = "Rotate anyway \u2014 leave the funds";
+        return;
+      }
+      rotateKeyError.textContent = err instanceof Error ? err.message : String(err);
+      rotateKeyFundsAcknowledged = false;
       rotateKeyConfirm.textContent = "Rotate";
     }
   }

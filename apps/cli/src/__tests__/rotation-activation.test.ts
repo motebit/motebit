@@ -39,6 +39,9 @@ import {
   type RotationOutcome,
 } from "../rotation.js";
 
+/** I0 (the funds preflight) is driven by rotation-funds-preflight.test.ts; here the wallet is empty. */
+const EMPTY_WALLET = async () => ({ solLamports: 0n, tokens: [] });
+
 const PASS = "correct horse";
 const SYNC_URL = "http://relay.test";
 const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
@@ -148,6 +151,7 @@ function deps(f: Fixture, over: Partial<RotationDeps> = {}): RotationDeps {
     },
     passphrase: PASS,
     syncUrl: SYNC_URL,
+    readWalletHoldings: EMPTY_WALLET,
     fetchImpl: viaRelay,
     ...over,
   };

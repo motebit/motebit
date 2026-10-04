@@ -4,7 +4,7 @@
  * supplies Expo's plumbing: SecureStore for the key and the write-ahead,
  * AsyncStorage for the identity file that is re-signed on commit.
  */
-import { parseHeldRotation, rotateOrThrow } from "@motebit/surface-kit";
+import { parseHeldRotation, rotateOrThrow, type KeyRotationPorts } from "@motebit/surface-kit";
 import { parse as parseIdentityFile, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { hexToBytes } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/sdk";
@@ -15,7 +15,9 @@ interface SecureStore {
   delete(key: string): Promise<void>;
 }
 
-export interface MobileRotationDeps {
+/** I0: the wallet reader, and the owner's confirmed acknowledgment (never a default). */
+type FundsPorts = Pick<KeyRotationPorts, "readWalletHoldings" | "acknowledgeFundsAtRisk">;
+export interface MobileRotationDeps extends FundsPorts {
   keyring: SecureStore;
   motebitId: string;
   deviceId: string;
@@ -91,6 +93,8 @@ export async function rotateMobileKey(deps: MobileRotationDeps): Promise<{ newPu
         // See afterCommit: never fails the rotation.
       }
     },
+    readWalletHoldings: deps.readWalletHoldings,
+    acknowledgeFundsAtRisk: deps.acknowledgeFundsAtRisk === true,
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
   });

@@ -199,6 +199,7 @@
     "check-audience-route-parity": "npx tsx scripts/check-audience-route-parity.ts",
     "check-worker-no-master-token": "npx tsx scripts/check-worker-no-master-token.ts",
     "check-mobile-expo-alignment": "npx tsx scripts/check-mobile-expo-alignment.ts",
+    "check-no-secrets-in-client-bundles": "npx tsx scripts/check-no-secrets-in-client-bundles.ts",
     "check-vercel-ignore-build": "npx tsx scripts/check-vercel-ignore-build.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",

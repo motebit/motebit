@@ -24,6 +24,7 @@ import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
 import { mountMachines } from "./machines-section";
 import { DEFAULT_GOOGLE_MODEL, DEFAULT_PROXY_MODEL, isLocalServerUrl } from "@motebit/sdk";
+import { rotationFundsStop } from "@motebit/surface-kit";
 import { renderCloudModelPicker, selectStoredCloudModel, selectStoredModel } from "./cloud-model";
 import { renderAnthropicPicker } from "./anthropic-picker";
 
@@ -617,19 +618,28 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     const confirmed = confirm(
       "Rotate your Ed25519 keypair? The old key signs a succession record transferring trust to the new key.\n\n" +
         // machine-roster-surfaces-v1 N3 — the C-1 cost, stated.
-        "Your machines will need to be enrolled again under the new key.",
+        "Your machines will need to be enrolled again under the new key.\n\n" +
+        // I0 — the wallet IS the key; rotation refuses while it holds or is owed funds.
+        "Your wallet address is this key: move any funds off it, and let withdrawals or P2P payments to it finish, first — rotation refuses while it holds or is owed any, unless you confirm.",
     );
     if (!confirmed) return;
-    void ctx.app
-      .rotateKey("manual rotation")
-      .then(() => {
+    const rotate = (acknowledgeFundsAtRisk: boolean): Promise<void> =>
+      ctx.app.rotateKey("manual rotation", { acknowledgeFundsAtRisk }).then(() => {
         populateIdentityFields();
         ctx.showToast("Key rotated successfully");
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        ctx.showToast(`Key rotation failed: ${msg}`);
       });
+    const failed = (err: unknown): void => {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.showToast(`Key rotation failed: ${msg}`);
+    };
+    void rotate(false).catch((err: unknown) => {
+      const funds = rotationFundsStop(err);
+      if (funds == null) return failed(err);
+      // I0: the amounts are stated; only an explicit second yes rotates
+      // with the funds left at the retired key's address.
+      if (!confirm(`${funds.message}\n\nRotate anyway and leave the funds there?`)) return;
+      void rotate(true).catch(failed);
+    });
   });
 
   // Capabilities panel — opens via custom event the capabilities-panel

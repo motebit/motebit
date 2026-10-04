@@ -422,6 +422,11 @@ export const MASTER_TOKEN_CARVE_OUTS: ReadonlyArray<MasterTokenCarveOut> = [
   { method: "POST", path: "/api/v1/agents/:motebitId/rotate-key", auth: AGENT_ROUTE_AUTH },
   {
     method: "GET",
+    path: "/api/v1/agents/:motebitId/rotation-obligations",
+    auth: AGENT_ROUTE_AUTH,
+  },
+  {
+    method: "GET",
     path: "/api/v1/agents/:motebitId/routing-explanation",
     auth: AGENT_ROUTE_AUTH,
   },
@@ -681,6 +686,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/devices/register-self", rl(authLimiter));
   app.use("/api/v1/agents/:motebitId/rotate-key", rl(writeLimiter));
   app.use("/api/v1/agents/:motebitId/succession", rl(readLimiter));
+  app.use("/api/v1/agents/:motebitId/rotation-obligations", rl(readLimiter));
 
   // Credential submission: write-rate (peers push collected credentials for relay indexing)
   app.use("/api/v1/agents/:motebitId/credentials/submit", rl(writeLimiter));
@@ -1317,6 +1323,13 @@ export function registerAuthMiddleware(
   // expanding the audience registry. The handler in state-export.ts enforces
   // own-id (path == caller).
   app.use("/api/v1/agents/*/settlements", async (c, next) => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+    return dualAuth(c, next, ACCOUNT_BALANCE_AUDIENCE);
+  });
+  // What a rotation would leave owed to the retiring key's derived address
+  // (key-rotation.ts). Read-only own financial state — same class as
+  // balance / settlements, so the same `account:balance` audience.
+  app.use("/api/v1/agents/*/rotation-obligations", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
     return dualAuth(c, next, ACCOUNT_BALANCE_AUDIENCE);
   });

@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "next dev -p 3001",
     "prebuild": "npx tsx ../../scripts/generate-llms-txt.ts",
-    "build": "next build",
+    "build": "next build && npx tsx ../../scripts/check-client-build-output.ts docs",
     "start": "next start -p 3001",
     "regenerate-llms": "npx tsx ../../scripts/generate-llms-txt.ts",
     "typecheck": "fumadocs-mdx && tsc --project tsconfig.typecheck.json --noEmit",

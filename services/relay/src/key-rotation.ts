@@ -25,6 +25,7 @@ import {
 import { readSuccessionChain } from "./identity-transparency.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { openObligationsToKey, type OpenObligation } from "./rotation-obligations.js";
 import type { AuthEvent } from "./auth-events.js";
 import type { CloseIdentityConnections, CloseTokenConnections } from "./connection-ports.js";
 import { admitKey, identityGuardianFor, identityKey, verificationKeyFor } from "./identity-keys.js";
@@ -336,8 +337,14 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // later rotation lands here too: recovery skips the caller check, so an
     // unrecorded refusal would be a free probe.
     let applied: boolean;
+    let openObligations: OpenObligation[];
     try {
-      ({ applied } = applySuccession(moteDb.db, motebitId, body, retireKeyConnections));
+      ({ applied, open_obligations: openObligations } = applySuccession(
+        moteDb.db,
+        motebitId,
+        body,
+        retireKeyConnections,
+      ));
     } catch (err) {
       if (err instanceof SuccessionRefused) throw refuse(409, err.reason, err.message);
       throw err;
@@ -365,7 +372,44 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       recovery: body.recovery === true,
       applied,
     });
-    return c.json({ ok: true, motebit_id: motebitId, applied });
+    // Open obligations to the retired key's address are RETURNED, never
+    // rewritten (rotation-obligations.ts): the client preflight refused over
+    // them unless its owner acknowledged them, and this is the record of
+    // what that acknowledgment left pointing at the retired key.
+    return c.json({
+      ok: true,
+      motebit_id: motebitId,
+      applied,
+      open_obligations: openObligations,
+    });
+  });
+
+  // --- Open obligations to the current key's derived address ---
+  // What a rotation departing from `from` would leave pointing at a key its
+  // owner's surfaces then erase: pending / processing withdrawals to that
+  // key's derived Solana address and P2P tasks admitted to it and not yet
+  // verified. The client preflight (`performKeyRotation`) reads this before
+  // it mints anything and refuses over any of it unless acknowledged.
+  // Read-only own financial state — the `account:balance` audience, like
+  // `/balance` and `/settlements` — and first-person: a device token reads
+  // only its own identity.
+  /** @internal */
+  app.get("/api/v1/agents/:motebitId/rotation-obligations", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId != null && callerMotebitId !== "" && callerMotebitId !== motebitId) {
+      throw new HTTPException(403, {
+        message: "rotation obligations are first-person: a device token reads only its own",
+      });
+    }
+    const from = c.req.query("from") ?? "";
+    const open = openObligationsToKey(moteDb.db, motebitId, from);
+    if (open === null) {
+      throw new HTTPException(400, {
+        message: "'from' must be the 64-hex-character key the rotation would depart from",
+      });
+    }
+    return c.json({ motebit_id: motebitId, address: open.address, obligations: open.obligations });
   });
 
   // --- Key succession chain query ---
