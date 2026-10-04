@@ -61,13 +61,14 @@ import {
   bytesToHex,
   generateX25519Keypair,
   buildKeyTransferPayload,
-  decryptKeyTransfer,
+  openPairingKeyTransfer,
   checkPreTransferBalance,
   createSolanaHoldingsReader,
   formatWalletWarning,
 } from "@motebit/encryption";
-import type { KeyTransferPayload } from "@motebit/sdk";
+import type { KeySuccessionRecord, KeyTransferPayload } from "@motebit/sdk";
 import type { WalletHoldingsReader } from "@motebit/encryption";
+import { identityFileRecords, persistVerifiedLineage } from "@motebit/surface-kit";
 import { APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
@@ -75,13 +76,14 @@ import {
   parse as parseIdentityFile,
   validateRestoreRequest,
   verify as verifyIdentity,
+  identityVerifyOutcome,
   type ImportIdentityResult,
   type RestoreIdentityRequest,
   type RestoreIdentityResult,
 } from "@motebit/identity-file";
 import { rotateDesktopKey } from "./key-rotation";
 import { rosterAfterRotationCommit } from "./machine-roster";
-import { tauriRosterIO } from "./machine-roster-store";
+import { loadReplica, saveReplica, tauriRosterIO } from "./machine-roster-store";
 import { updateConfig } from "./config-update";
 import type { BootstrapResult } from "./index.js";
 import { createTauriStorage } from "./index.js";
@@ -405,11 +407,9 @@ export class IdentityManager {
     }
   }
 
-  /** Verify a motebit.md identity file's Ed25519 signature. */
+  /** Verify a motebit.md identity file: its signature AND its succession chain. */
   async verifyIdentityFile(content: string): Promise<{ valid: boolean; error?: string }> {
-    const result = await verifyIdentity(content, { expectedType: "identity" });
-    const error = result.errors?.[0]?.message;
-    return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+    return identityVerifyOutcome(await verifyIdentity(content, { expectedType: "identity" }));
   }
 
   // Parse + verify a motebit.md and return the flat metadata the Restore
@@ -629,6 +629,7 @@ export class IdentityManager {
           keypair.publicKey,
           hexToBytes(session.claiming_x25519_pubkey),
           session.pairing_code,
+          { successionRecords: await this.ownSuccessionRecords(invoke, keypair.publicKey) },
         );
       } finally {
         secureErase(privKeyBytes);
@@ -637,6 +638,37 @@ export class IdentityManager {
 
     const result = await client.approve(pairingId, token, keyTransfer);
     return { deviceId: result.deviceId };
+  }
+
+  /**
+   * This device's own key-succession records, sent inside the key transfer so
+   * Device B can bind a rotated sovereign id even when the relay has no chain
+   * (a rotation made with no relay configured uploads nothing). Sources: the
+   * identity file — only when bound to this id and the key this device holds —
+   * and the roster replica's verified links. Best-effort: Device B verifies
+   * every record, and none at all falls back to the relay's chain.
+   */
+  private async ownSuccessionRecords(
+    invoke: InvokeFn,
+    heldPublicKeyHex: string,
+  ): Promise<KeySuccessionRecord[]> {
+    const records: KeySuccessionRecord[] = [];
+    try {
+      const config = JSON.parse(await invoke<string>("read_config")) as Record<string, unknown>;
+      const file = config["_identity_file"];
+      if (typeof file === "string") {
+        records.push(...(await identityFileRecords(this.motebitId, file, heldPublicKeyHex)));
+      }
+    } catch {
+      // No readable identity file: the replica and the relay remain.
+    }
+    try {
+      const replica = await loadReplica(tauriRosterIO(invoke), this.motebitId);
+      if (replica.kind === "value") records.push(...replica.replica.succession);
+    } catch {
+      // No readable replica: see above.
+    }
+    return records;
   }
 
   /** Deny a claimed pairing session. */
@@ -686,14 +718,16 @@ export class IdentityManager {
    * so every downstream consumer (sync, identity-file, goals, …) picks
    * up the new identity without needing to restart.
    *
-   * If key transfer payload + ephemeral key + pairing code are provided,
-   * decrypts the identity seed and replaces the device's private key —
-   * both devices then derive the same Solana address.
+   * The key transfer is required: it is decrypted and the relay-supplied
+   * motebitId is checked to bind to the transferred key before anything is
+   * written; the seed then replaces the device's private key — both devices
+   * derive the same Solana address.
    */
   /**
-   * @returns A wallet warning string if key transfer was skipped due to
-   * existing funds at the old address, or undefined if wallet was unified
-   * (or no key transfer was attempted).
+   * @returns A wallet warning string if key installation was skipped due to
+   * existing funds at the old address, or undefined if wallet was unified.
+   * Throws ("Pairing refused…") with nothing written when the transfer is
+   * missing, undecryptable, or does not bind to the motebitId.
    */
   async completePairing(
     invoke: InvokeFn,
@@ -714,58 +748,82 @@ export class IdentityManager {
     };
     let adoptedPublicKey: string | undefined;
 
-    // Decrypt and install the identity key if key transfer is available
-    if (keyTransferOpts) {
-      const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl, pairingId } = keyTransferOpts;
+    // The shared acceptance path (@motebit/encryption): the transfer is
+    // required, must decrypt to the key it names, and the relay-supplied
+    // motebit_id must bind to that key — through the succession chain Device A
+    // sealed inside the transfer, else the relay's public chain (verified here;
+    // withheld or forged, it only refuses). Refused ⇒ throws before anything
+    // is written.
+    if (!keyTransferOpts) {
+      throw new Error("Pairing refused: the approval carried no identity key transfer");
+    }
+    const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl, pairingId } = keyTransferOpts;
+    let identitySeed: Uint8Array | undefined;
+    let lineage: { publicKeyHex: string; records: KeySuccessionRecord[] } | undefined;
+    try {
+      const opened = await openPairingKeyTransfer({
+        motebitId: result.motebitId,
+        keyTransfer,
+        ephemeralPrivateKey,
+        pairingCode,
+        fetchSuccessionChain: () =>
+          new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(result.motebitId),
+      });
+      identitySeed = opened.identitySeed;
+      lineage = { publicKeyHex: opened.publicKeyHex, records: opened.succession };
       try {
-        const identitySeed = await decryptKeyTransfer(
-          keyTransfer,
-          ephemeralPrivateKey,
-          pairingCode,
-        );
-        try {
-          // Safety check: refuse key transfer if old wallet has funds
-          const oldPrivKeyHex = await invoke<string>("keyring_get", { key: "device_private_key" });
-          if (oldPrivKeyHex) {
-            const oldSeedBytes = hexToBytes(oldPrivKeyHex);
-            try {
-              const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
-              if (walletCheck.hasAnyValue) {
-                walletWarning = formatWalletWarning(walletCheck);
-              }
-            } finally {
-              secureErase(oldSeedBytes);
+        // Safety check: refuse key transfer if old wallet has funds
+        const oldPrivKeyHex = await invoke<string>("keyring_get", {
+          key: "device_private_key",
+        });
+        if (oldPrivKeyHex) {
+          const oldSeedBytes = hexToBytes(oldPrivKeyHex);
+          try {
+            const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
+            if (walletCheck.hasAnyValue) {
+              walletWarning = formatWalletWarning(walletCheck);
             }
+          } finally {
+            secureErase(oldSeedBytes);
           }
+        }
 
-          if (!walletWarning) {
-            // The adopted key replaces this device's key through the
-            // identity-switch write-ahead below (the replaced key is kept).
-            // The new public key is identity_pubkey_check (verified during decryption).
-            const newPubHex = keyTransfer.identity_pubkey_check;
-            sw.private_key_hex = bytesToHex(identitySeed);
-            sw.device_public_key = newPubHex;
-            adoptedPublicKey = newPubHex;
+        if (!walletWarning) {
+          // The adopted key replaces this device's key through the
+          // identity-switch write-ahead below (the replaced key is kept).
+          // The new public key is identity_pubkey_check (verified during decryption).
+          const newPubHex = opened.publicKeyHex;
+          sw.private_key_hex = bytesToHex(identitySeed);
+          sw.device_public_key = newPubHex;
+          adoptedPublicKey = newPubHex;
 
-            // Update the relay's device registration with the new public key
-            const client = new PairingClient({ relayUrl: syncUrl });
-            await client.updateDeviceKey(pairingId, newPubHex);
-          }
-        } finally {
-          secureErase(identitySeed);
+          // Update the relay's device registration with the new public key
+          const client = new PairingClient({ relayUrl: syncUrl });
+          await client.updateDeviceKey(pairingId, newPubHex);
         }
       } catch (err) {
         // eslint-disable-next-line no-console -- operator diagnostic: recoverable key-transfer degradation
         console.warn("Key transfer failed, device keeps its own keypair:", err);
-      } finally {
-        secureErase(ephemeralPrivateKey);
       }
+    } finally {
+      if (identitySeed !== undefined) secureErase(identitySeed);
+      secureErase(ephemeralPrivateKey);
     }
 
     // One switch: the old identity's rotation write-ahead is set aside, the
     // replaced key and binding are kept, and a crash is finished at launch.
     this.beforeIdentitySwitch?.("pair");
     await switchIdentity(invoke, sw);
+    // Only after the binding check passed and the identity is switched: the
+    // verified lineage joins the roster replica, so this desktop can carry it
+    // when it approves the next device (an offline rotation is on no relay).
+    // Re-verified inside; best-effort, never fails the pairing.
+    if (lineage !== undefined) {
+      await persistVerifiedLineage((replica) => saveReplica(tauriRosterIO(invoke), replica), {
+        motebitId: result.motebitId,
+        ...lineage,
+      });
+    }
 
     if (adoptedPublicKey !== undefined) this.publicKey = adoptedPublicKey;
     this.motebitId = result.motebitId;

@@ -190,7 +190,7 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # The gates' own tests (scripts/__tests__) and check-gates-effective (which
   # PERTURBS every gate — the most expensive gate step) change verdict only
   # when gate code or a gate input changes. Same trigger set as CI's
-  # `changes` job (scripts/ or coverage-graduation.json); CI's
+  # `changes` job (scripts/, coverage-graduation.json or examples/interop/); CI's
   # `gate-effectiveness` job runs both on every push to main regardless.
   #
   # test:gates was unconditional (2026-09-24) because of #694: a literal
@@ -199,7 +199,7 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # while cheap (<15s); measured 2026-09-30 at 16–17s on a 4-vCPU box, so it
   # is scoped with the rest. The #694 class is now caught by CI's push-to-main
   # run (and by any PR touching scripts/), not by an unrelated local push.
-  _scripts_changed=$(changed_files scripts/ coverage-graduation.json)
+  _scripts_changed=$(changed_files scripts/ coverage-graduation.json examples/interop/)
   if [ -n "$_scripts_changed" ]; then
     run_phase "gate self-tests (scripts/ changed)" pnpm test:gates
     run_phase "gate-effectiveness (scripts/ changed)" pnpm check-gates-effective

@@ -7,7 +7,7 @@
  *   npx create-motebit verify [path] # Verify an existing motebit.md
  */
 
-import { verify } from "@motebit/crypto";
+import { verify, identityVerifyOutcome } from "@motebit/crypto";
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import {
   CONFIG_BACKUP_INFIX,
@@ -1238,8 +1238,10 @@ async function verifyCmd(filePath: string): Promise<void> {
   }
 
   const result = await verify(content, { expectedType: "identity" });
+  // Intact = signature AND succession chain (the shared fold).
+  const intact = identityVerifyOutcome(result);
 
-  if (result.type === "identity" && result.valid) {
+  if (result.type === "identity" && intact.valid) {
     const id = result.identity!;
     console.log(`  ${green("+")} Signature ${green("valid")}`);
     console.log();
@@ -1268,9 +1270,9 @@ async function verifyCmd(filePath: string): Promise<void> {
     console.log();
     process.exit(0);
   } else {
-    console.log(`  ${red("!")} Signature ${red("invalid")}`);
+    console.log(`  ${red("!")} ${result.valid ? "Identity" : "Signature"} ${red("invalid")}`);
 
-    const errorMessage = result.errors?.[0]?.message;
+    const errorMessage = intact.error;
     if (errorMessage) {
       console.log(`    ${dim(errorMessage)}`);
     }
@@ -1304,8 +1306,10 @@ async function rotateCmd(
   }
 
   const verifyResult = await verify(content, { expectedType: "identity" });
-  if (!verifyResult.valid) {
-    const errorMessage = verifyResult.errors?.[0]?.message ?? "unknown error";
+  // Intact = signature AND succession chain; never extend a broken chain.
+  const verifyIntact = identityVerifyOutcome(verifyResult);
+  if (!verifyIntact.valid) {
+    const errorMessage = verifyIntact.error ?? "unknown error";
     console.log(`  ${red("!")} Identity file is invalid: ${errorMessage}`);
     console.log();
     process.exit(1);
@@ -1410,9 +1414,11 @@ async function rotateCmd(
   }
 
   // 5. Verify the rotated file BEFORE anything on disk changes.
-  const reVerify = await verify(result.identityFileContent, { expectedType: "identity" });
+  const reVerify = identityVerifyOutcome(
+    await verify(result.identityFileContent, { expectedType: "identity" }),
+  );
   if (!reVerify.valid) {
-    const errorMessage = reVerify.errors?.[0]?.message ?? "unknown error";
+    const errorMessage = reVerify.error ?? "unknown error";
     console.log(`  ${red("!")} Rotated identity failed verification: ${errorMessage}`);
     console.log(`    Nothing was changed.`);
     console.log();

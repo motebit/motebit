@@ -61,7 +61,7 @@ import type {
   UserActionAttestation,
 } from "@motebit/sdk";
 import { resolveDropTarget } from "@motebit/sdk";
-import { EMBODIMENT_MODE_CONTRACTS } from "@motebit/render-engine";
+import { EMBODIMENT_MODE_CONTRACTS } from "@motebit/render-engine/spec";
 
 /**
  * Thrown by the runtime's sensitivity gate when an AI call would

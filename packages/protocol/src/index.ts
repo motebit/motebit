@@ -2198,6 +2198,22 @@ export interface KeyTransferPayload {
   tag: string;
   /** Device A's Ed25519 identity public key for post-decryption verification (64-char hex). */
   identity_pubkey_check: string;
+  /**
+   * Optional (additive; absent on payloads from earlier clients, which carry
+   * no chain). Device A's own key-succession records — a JSON array of
+   * `KeySuccessionRecord` — AES-256-GCM-encrypted under the same derived
+   * transfer key as the seed, with its own nonce and tag (hex). Lets Device B
+   * bind a rotated self-certifying `motebit_id` to `identity_pubkey_check`
+   * when the relay has no chain (a rotation made with no relay configured).
+   * The records are self-verifying: Device B verifies every link, so a
+   * missing, undecryptable or forged chain only refuses, never accepts. The
+   * three fields are present together or not at all.
+   */
+  encrypted_succession?: string;
+  /** AES-256-GCM nonce for `encrypted_succession`, 12 bytes (24-char hex). */
+  succession_nonce?: string;
+  /** AES-256-GCM auth tag for `encrypted_succession`, 16 bytes (32-char hex). */
+  succession_tag?: string;
 }
 
 /**

@@ -1,0 +1,142 @@
+{
+  "_comment": "CANDIDATE. TEST ONLY keys. A neutral APS Case A vector: an authority delegation chain, a revocation state, an evaluation instant, and the expected APS decision. Runnable by any verifier of the APS authority-delegation v1 profile. It needs neither OpenShell nor the APS OpenShell reference enforcement middleware, and it says nothing about either.",
+  "status": "CANDIDATE",
+  "vector_id": "aps-authority-delegation-case-a-ancestor-revoked",
+  "profile": "aps:authority-delegation:v1",
+  "evaluated_at": "2026-06-01T00:00:00.000Z",
+  "trust_anchors": {
+    "roots": [
+      {
+        "issuer": "aps:agent:test-root-principal",
+        "subject": "aps:agent:test-parent-agent"
+      }
+    ],
+    "verification_keys": {
+      "aps:agent:test-root-principal#key-1": "93f9a92a6b6c6acac9af97d726ce42e67bb57d411eb0ded6e13bcc7fb74b6282",
+      "aps:agent:test-parent-agent#key-1": "82dbb867b6aa94a90d26784d6f4d6bba0f836dc7198ad418e0176e754d9f250a"
+    }
+  },
+  "chain": [
+    {
+      "record_type": "aps:authority-delegation:v1",
+      "version": "1.0",
+      "parent_delegation_id": null,
+      "issuer": "aps:agent:test-root-principal",
+      "subject": "aps:agent:test-parent-agent",
+      "verification_method": "aps:agent:test-root-principal#key-1",
+      "issued_at": "2026-01-01T00:00:00.000Z",
+      "nonce": "00000000000000000000000000000001",
+      "authority": {
+        "scope": {
+          "profile": "aps-hierarchical-v1",
+          "grants": [
+            "net:http:*"
+          ]
+        },
+        "spend": {
+          "mode": "bounded",
+          "unit": "iso4217:USD:minor",
+          "per_action": "1000",
+          "cumulative": "100000"
+        },
+        "depth": {
+          "remaining": 4
+        },
+        "time": {
+          "not_before": "2026-01-01T00:00:00.000Z",
+          "not_after": "2027-01-01T00:00:00.000Z"
+        },
+        "reputation": {
+          "profile": "aps-score-0-100-v1",
+          "ceiling": 90
+        },
+        "values": {
+          "profile": "aps-values-identifiers-v1",
+          "required": []
+        },
+        "reversibility": {
+          "profile": "aps-tci-v1",
+          "ceiling": "compensable"
+        }
+      },
+      "delegation_id": "sha256:960847f4885a05807ec445088e811562aaab97e426e95bb4fa3a0a25cb91ac22",
+      "signature": "f667344d89fd3d74ba58e1b7d2a1df0fe9413a75c85ab52ee58c3a06944ceadd0e4ba0da4eda358bdcf6ed0a24768473576e0b7bf5f435c838260a6241bf4005"
+    },
+    {
+      "record_type": "aps:authority-delegation:v1",
+      "version": "1.0",
+      "parent_delegation_id": "sha256:960847f4885a05807ec445088e811562aaab97e426e95bb4fa3a0a25cb91ac22",
+      "issuer": "aps:agent:test-parent-agent",
+      "subject": "aps:agent:test-child-agent",
+      "verification_method": "aps:agent:test-parent-agent#key-1",
+      "issued_at": "2026-02-01T00:00:00.000Z",
+      "nonce": "00000000000000000000000000000002",
+      "authority": {
+        "scope": {
+          "profile": "aps-hierarchical-v1",
+          "grants": [
+            "net:http:get"
+          ]
+        },
+        "spend": {
+          "mode": "bounded",
+          "unit": "iso4217:USD:minor",
+          "per_action": "1000",
+          "cumulative": "100000"
+        },
+        "depth": {
+          "remaining": 2
+        },
+        "time": {
+          "not_before": "2026-02-01T00:00:00.000Z",
+          "not_after": "2026-12-01T00:00:00.000Z"
+        },
+        "reputation": {
+          "profile": "aps-score-0-100-v1",
+          "ceiling": 70
+        },
+        "values": {
+          "profile": "aps-values-identifiers-v1",
+          "required": []
+        },
+        "reversibility": {
+          "profile": "aps-tci-v1",
+          "ceiling": "tentative"
+        }
+      },
+      "delegation_id": "sha256:a7f18d906f96b818bbea0740167d1a205180b8084d4c6ac0b4ab0f8a37113e92",
+      "signature": "9d82caa1e892b2c45b24944c1af5adeca057a0b08835e5362ae4bc46c08fc16bfe8a38599d331d329d9f6905ec2d636a4e9a8beb4a4c3fc66c262d79b6276a0c"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "ancestor-active",
+      "description": "No member is revoked. The root-to-leaf chain is admissible at evaluated_at.",
+      "revocation_state": {
+        "revoked_delegation_ids": []
+      },
+      "expected": {
+        "state": "valid",
+        "valid": true,
+        "failure_codes": []
+      }
+    },
+    {
+      "case_id": "ancestor-revoked",
+      "description": "The root principal's grant to the parent agent (chain index 0) is revoked. The child record itself is untouched and still verifies on its own terms.",
+      "revocation_state": {
+        "revoked_delegation_ids": [
+          "sha256:960847f4885a05807ec445088e811562aaab97e426e95bb4fa3a0a25cb91ac22"
+        ]
+      },
+      "expected": {
+        "state": "invalid",
+        "valid": false,
+        "failure_codes": [
+          "REVOKED"
+        ],
+        "failure_index": 0
+      }
+    }
+  ]
+}

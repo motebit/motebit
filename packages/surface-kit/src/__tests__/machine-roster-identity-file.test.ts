@@ -51,6 +51,31 @@ function flipSignatureByte(file: string): string {
 }
 
 describe("identityFileRecords / boundIdentityFile (#800)", () => {
+  it("a file whose signature verifies but whose succession chain does not contributes nothing", async () => {
+    // Signed by the held key, naming this motebit — but the link is forged: the
+    // chain never legitimately reaches the held key, so the file is not intact.
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const file = await generate(
+      { motebitId: MID, ownerId: "owner", publicKeyHex: hex(a) },
+      a.privateKey,
+    );
+    const forged = await rotateIdentityFile({
+      existingContent: file,
+      newPublicKey: b.publicKey,
+      newPrivateKey: b.privateKey,
+      successionRecord: {
+        old_public_key: hex(a),
+        new_public_key: hex(b),
+        timestamp: Date.now(),
+        old_key_signature: "00".repeat(64),
+        new_key_signature: "00".repeat(64),
+      },
+    });
+    expect(await boundIdentityFile(MID, forged, hex(b))).toBeNull();
+    expect(await identityFileRecords(MID, forged, hex(b))).toEqual([]);
+  });
+
   it("a file that verifies, names this motebit and is signed by the held key contributes its records and guardian", async () => {
     const { b, g, rotated } = await rotatedFile();
     const recs = await identityFileRecords(MID, rotated, hex(b));
