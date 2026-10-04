@@ -185,13 +185,13 @@ Today the only production peer is `relay.motebit.com`. Cross-cloud federation is
 
 ## Surfaces
 
-| Surface     | Status | Entry point                                                    |
-| ----------- | ------ | -------------------------------------------------------------- |
-| **Web**     | Live   | [motebit.com](https://motebit.com)                             |
-| **CLI**     | Live   | `npm install -g motebit`                                       |
-| **Desktop** | Live   | [Releases](https://github.com/motebit/motebit/releases)        |
-| **Mobile**  | Source | Expo (`pnpm --filter @motebit/mobile run ios` / `run android`) |
-| **Spatial** | Proto  | WebXR                                                          |
+| Surface     | Status | Entry point                                                              |
+| ----------- | ------ | ------------------------------------------------------------------------ |
+| **Web**     | Live   | [motebit.com](https://motebit.com)                                       |
+| **CLI**     | Live   | `npm install -g motebit`                                                 |
+| **Desktop** | Source | Preview — build from source (`pnpm --filter @motebit/desktop tauri:dev`) |
+| **Mobile**  | Source | Expo (`pnpm --filter @motebit/mobile run ios` / `run android`)           |
+| **Spatial** | Proto  | WebXR                                                                    |
 
 Each surface maximizes what its platform offers. Desktop and web can serve — accept delegations from the network via `/serve`. The CLI operates and serves. Mobile is the consent root (approvals, passkey, revoke), never an execution surface — see [surface authority](docs/doctrine/surface-authority-model.md). Spatial embodies.
 
