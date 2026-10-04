@@ -2,6 +2,7 @@
 
 import { parseArgs } from "node:util";
 import {
+  defaultModelForProvider as sdkDefaultModelForProvider,
   DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_DEEPSEEK_MODEL,
   DEFAULT_GOOGLE_MODEL,
@@ -602,18 +603,18 @@ Options:
 
 Providers:
   anthropic               Uses Anthropic API (requires ANTHROPIC_API_KEY)
-                          Default model: claude-sonnet-4-6
+                          Default model: ${DEFAULT_ANTHROPIC_MODEL}
   openai                  Uses OpenAI API (requires OPENAI_API_KEY)
-                          Default model: gpt-5.4-mini
+                          Default model: ${DEFAULT_OPENAI_MODEL}
   google                  Uses Google API (requires GOOGLE_API_KEY)
-                          Default model: gemini-2.5-flash
+                          Default model: ${DEFAULT_GOOGLE_MODEL}
   groq                    Uses Groq API (requires GROQ_API_KEY)
-                          Default model: llama-3.3-70b-versatile
+                          Default model: ${DEFAULT_GROQ_MODEL}
   deepseek                Uses DeepSeek API (requires DEEPSEEK_API_KEY)
-                          Default model: deepseek-chat
+                          Default model: ${DEFAULT_DEEPSEEK_MODEL}
   local-server            Uses a local inference server — Ollama, LM Studio,
                           llama.cpp, Jan, vLLM, or any OpenAI-compatible
-                          endpoint (no API key needed). Default model: llama3.2.
+                          endpoint (no API key needed). Default model: ${DEFAULT_LOCAL_SERVER_MODEL}.
                           Alias: --provider ollama
   proxy                   Motebit Cloud (subscription via the relay)
 
@@ -640,24 +641,17 @@ export function printVersion(): void {
  * explicit model survives config resolution. Extracted from the parse path
  * (2026-07-31 live find): a persisted `default_provider` used to flip the
  * provider AFTER parse-time defaulting, leaving the OLD provider's default
- * on `config.model` — bare `motebit` rendered `local-server ·
- * claude-sonnet-4-6`, the exact illegal pairing the #471 admission exists
+ * on `config.model` — bare `motebit` rendered `local-server · <the old
+ * Anthropic default>`, the exact illegal pairing the #471 admission exists
  * to prevent, minted by the fallback path itself. Any code that changes
  * the provider after parse must re-derive the model through this function
  * whenever the model wasn't explicit.
  */
 export function defaultModelForProvider(provider: CliProvider): string {
-  return provider === "local-server"
-    ? DEFAULT_LOCAL_SERVER_MODEL
-    : provider === "openai"
-      ? DEFAULT_OPENAI_MODEL
-      : provider === "google"
-        ? DEFAULT_GOOGLE_MODEL
-        : provider === "groq"
-          ? DEFAULT_GROQ_MODEL
-          : provider === "deepseek"
-            ? DEFAULT_DEEPSEEK_MODEL
-            : DEFAULT_ANTHROPIC_MODEL;
+  // One derivation for every surface (#654 cold review): the local ternary
+  // chain fell through to DEFAULT_ANTHROPIC_MODEL, so `--provider proxy`
+  // sent the BYOK default to Motebit Cloud, which refuses it.
+  return sdkDefaultModelForProvider(provider);
 }
 
 export function printBanner(opts: {

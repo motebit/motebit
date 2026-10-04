@@ -535,7 +535,9 @@
 
         <div class="form-group">
           <label for="model-input">Model (optional)</label>
-          <input type="text" id="model-input" placeholder="Default" />
+          <input type="text" id="model-input" placeholder="Default" list="model-suggestions" autocomplete="off" />
+          <!-- Filled from @motebit/sdk ANTHROPIC_PICKER for BYOK Anthropic (app.ts). -->
+          <datalist id="model-suggestions"></datalist>
         </div>
 
         <div class="form-group">

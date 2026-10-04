@@ -11,7 +11,13 @@
  * admissible — registry lag must never brick a switch.
  */
 
-import { DEFAULT_LOCAL_SERVER_MODEL, modelVendorHint, providerAcceptsModel } from "@motebit/sdk";
+import {
+  DEFAULT_LOCAL_SERVER_MODEL,
+  DEFAULT_PROXY_MODEL,
+  modelVendorHint,
+  motebitCloudAdmission,
+  providerAcceptsModel,
+} from "@motebit/sdk";
 
 /** Vendors whose models are served by a hosted API, never a local server. */
 const HOSTED_VENDORS = new Set(["anthropic", "openai", "google", "deepseek"]);
@@ -41,6 +47,23 @@ export function admitModelForProvider(provider: string, model: string): ModelAdm
         (flag != null
           ? `Restart with --provider ${flag}, or pick a local model (e.g. /model ${DEFAULT_LOCAL_SERVER_MODEL}).`
           : `Pick a local model instead (e.g. /model ${DEFAULT_LOCAL_SERVER_MODEL}).`),
+    };
+  }
+
+  // Motebit Cloud answers by ITS rule, not a guess (#654 cold review R2):
+  // `motebitCloudAdmission` is the exact function the proxy route runs —
+  // alias step included — so the CLI refuses only what the proxy refuses
+  // (class aliases and legacy dated ids resolve and are served) and never
+  // lets through what it 451s (the BYOK default riding a
+  // persisted default_model onto `proxy`).
+  if (provider === "proxy") {
+    if (motebitCloudAdmission(model).admitted) return { admissible: true };
+    const flag = VENDOR_PROVIDER_FLAG[hint];
+    return {
+      admissible: false,
+      teach:
+        `${model} is not served by Motebit Cloud. Drop --model to use ${DEFAULT_PROXY_MODEL}` +
+        (flag != null ? `, or restart with --provider ${flag} and your own key.` : "."),
     };
   }
 

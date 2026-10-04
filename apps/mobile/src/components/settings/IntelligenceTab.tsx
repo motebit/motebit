@@ -12,7 +12,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, Switch, Platform, Alert } from "react-native";
-import type { VoiceConfig } from "@motebit/sdk";
+import { pickerOptionsWithStored, type VoiceConfig } from "@motebit/sdk";
 import { useTheme } from "../../theme";
 import {
   TTS_VOICE_OPTIONS,
@@ -430,6 +430,31 @@ export function IntelligenceTab({
           </View>
 
           <Text style={styles.sectionTitle}>Model</Text>
+          {activeByokVendor === "anthropic" && (
+            // Curated tiers from the sdk picker (#654). The text field below
+            // still takes any id (Fable 5.1, a pinned older model); a stored
+            // non-picker id is shown as its own checked row — never migrated.
+            <View style={styles.radioGroup} accessibilityRole="radiogroup">
+              {pickerOptionsWithStored(model).map((row) => {
+                const checked = row.selected;
+                return (
+                  <TouchableOpacity
+                    key={row.id}
+                    style={[styles.radioItem, checked && styles.radioActive]}
+                    onPress={() => onChangeModel(row.id)}
+                    activeOpacity={0.7}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked }}
+                    accessibilityLabel={row.label}
+                  >
+                    <Text style={[styles.radioText, checked && styles.radioTextActive]}>
+                      {row.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
           <TextInput
             style={styles.textField}
             value={model}

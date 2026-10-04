@@ -1055,6 +1055,144 @@ export async function probeLeak(): Promise<boolean> {
         `# Probe README\n\nSet \`default_model: "claude-sonnet-4-5-20250929"\` to pin the previous default.\n`,
       ),
   },
+  // check-model-picker-canonical — one probe per evasion row the #654 cold
+  // review found exiting 0 against the first (context-pattern) version. Each
+  // is a fixture the deny-by-default token scan must see. Ids assembled from
+  // pieces that never spell "claude" beside a quote are out of the scan's
+  // reach by design and are proven by the per-surface settings tests.
+  ...(
+    [
+      [
+        "concatenation across lines",
+        "apps/web/src/ui/__P__concat.ts",
+        'export const M =\n  "claude-" +\n  "sonnet-5";\n',
+      ],
+      [
+        "template literal",
+        "apps/web/src/ui/__P__tpl.ts",
+        "export const m = (t: string) => `claude-${t}`;\n",
+      ],
+      [
+        "array.join",
+        "apps/web/src/ui/__P__join.ts",
+        'export const M = ["claude", "sonnet", "5"].join("-");\n',
+      ],
+      [
+        "UPPERCASE id",
+        "apps/web/src/ui/__P__upper.ts",
+        'export const M = "CLAUDE-SONNET-5".toLowerCase();\n',
+      ],
+      [
+        "legacy id shape",
+        "apps/web/src/ui/__P__legacy.ts",
+        'export const M = "claude-3-5-sonnet-20241022";\n',
+      ],
+      [
+        "unquoted HTML attribute",
+        "apps/web/src/ui/__P__attr.html",
+        "<option value=claude-sonnet-5>Sonnet</option>\n",
+      ],
+      ["HTML text content", "apps/web/src/ui/__P__text.html", "<option>claude-sonnet-5</option>\n"],
+      [
+        "apps/*/public/*.html",
+        "apps/web/public/__P__.html",
+        '<option value="claude-opus-4-7">Opus</option>\n',
+      ],
+      [".mjs under src", "apps/web/src/ui/__P__.mjs", 'export const M = "claude-opus-4-7";\n'],
+      [".json under src", "apps/web/src/ui/__P__.json", '{ "model": "claude-opus-4-7" }\n'],
+      [".ts at an app root", "apps/web/__P__root.ts", 'export const M = "claude-opus-4-7";\n'],
+      [".mdx docs", "apps/docs/content/docs/__P__.mdx", "Pick `claude-opus-4-7` for depth.\n"],
+      [
+        'id after " // " in a string',
+        "apps/web/src/ui/__P__slash.ts",
+        'export const M = "see // claude-opus-4-7";\n',
+      ],
+      // #654 cold review R2 item 5: encodings that spell the id without the
+      // bytes sitting on one physical line.
+      [
+        "string continuation (line ending in a backslash)",
+        "apps/web/src/ui/__P__cont.ts",
+        'export const M = "claude-\\\nsonnet-5";\n',
+      ],
+      ["\\u escape", "apps/web/src/ui/__P__uesc.ts", 'export const M = "\\u0063laude-sonnet-5";\n'],
+      ["\\x escape", "apps/web/src/ui/__P__xesc.ts", 'export const M = "\\x63laude-opus-4-7";\n'],
+      [
+        "HTML numeric entity",
+        "apps/web/src/ui/__P__ent.html",
+        '<option value="&#99;laude-opus-4-7">Opus</option>\n',
+      ],
+      // #654 cold review R3: zero-padded escapes and `;`-free numeric refs.
+      [
+        "zero-padded \\u{} escape",
+        "apps/web/src/ui/__P__upad.ts",
+        'export const M = "\\u{0000063}laude-sonnet-5";\n',
+      ],
+      [
+        "zero-padded decimal entity",
+        "apps/web/src/ui/__P__dpad.html",
+        '<option value="&#0000000099;laude-sonnet-5">S</option>\n',
+      ],
+      [
+        "zero-padded hex entity",
+        "apps/web/src/ui/__P__xpad.html",
+        '<option value="&#x00000063;laude-sonnet-5">S</option>\n',
+      ],
+      [
+        "decimal entity without ;",
+        "apps/web/src/ui/__P__nosemi.html",
+        '<option value="&#99laude-sonnet-5">S</option>\n',
+      ],
+      [
+        "hyphen entity without ;",
+        "apps/web/src/ui/__P__hyph.html",
+        '<option value="claude&#45sonnet-5">S</option>\n',
+      ],
+      // #654 lane split: identity escapes (a backslash before a char with no
+      // escape meaning — node and tsc --strict read `\-` as `-`) and legacy
+      // octal escapes (sloppy-mode .js / inline <script>).
+      [
+        "identity escape",
+        "apps/web/src/ui/__P__ident.ts",
+        'export const M = "claude\\-opus-5-5";\n',
+      ],
+      ["legacy octal escape", "apps/web/src/ui/__P__octal.js", 'var M = "\\143laude-opus-5-5";\n'],
+    ] as const
+  ).map(([row, file, body]): Probe => ({
+    script: "check-model-picker-canonical",
+    proves: `flags a hand-copied Claude model id smuggled past the first version via ${row} (#654 cold review C4 evasion row) — deny-by-default token scan over every apps/ file`,
+    perturb: () => writeFixture(file.replace("__P__", PROBE_PREFIX), body),
+  })),
+  {
+    script: "check-model-picker-canonical",
+    proves:
+      "an allowlist exemption is per (file, exact token), never per line — appending a stale picker id to a line that carries an allowlisted test-fixture id still fires (#654 cold review C4: the line-substring allowlist passed this)",
+    perturb: () =>
+      mutateFile("apps/cli/src/__tests__/bare-command-routing.test.ts", (src) =>
+        src.replace(
+          'detectShellInvocation("motebit --model=claude-opus-5")).toContain(TEACH);',
+          'detectShellInvocation("motebit --model=claude-opus-5")).toContain(TEACH); const STALE = "claude-opus-4-7";',
+        ),
+      ),
+  },
+  {
+    script: "check-model-picker-canonical",
+    proves:
+      "docs picker arm: the docs pages + llms*.txt follow ANTHROPIC_PICKER — moving the strongest row to `claude-fable-5-1` while the docs still name `claude-opus-5-5` fires (#654 cold review of 27814cf: this mutation left every gate green while the allowlist claimed the docs were kept in sync)",
+    perturb: () =>
+      mutateFile("packages/sdk/src/models.ts", (src) =>
+        src.replace('{ id: "claude-opus-5-5", label', '{ id: "claude-fable-5-1", label'),
+      ),
+  },
+  {
+    script: "check-model-picker-canonical",
+    proves:
+      "flags a hand-copied Anthropic model option list in app surface source — the exact #654 incident where web's BYOK <select> offered Opus 4.7 / Sonnet 4.6 after Opus 5.5 / Sonnet 5 shipped, because the list was typed into index.html instead of rendered from @motebit/sdk ANTHROPIC_PICKER",
+    perturb: () =>
+      writeFixture(
+        `apps/web/src/ui/${PROBE_PREFIX}picker.ts`,
+        `export const OPTIONS = \`<option value="claude-opus-4-7">Claude Opus 4.7 — most capable</option>\n<option value="claude-sonnet-4-6" selected>Claude Sonnet 4.6 — recommended</option>\`;\n`,
+      ),
+  },
   {
     script: "check-public-fee-claims",
     proves:

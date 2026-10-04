@@ -13,6 +13,7 @@
  * snapshot drifts from what the provider serves. Never construct an id. */
 export const ANTHROPIC_MODELS = [
   "claude-fable-5-1",
+  "claude-opus-5-5",
   "claude-fable-5",
   "claude-opus-5",
   "claude-opus-4-8",
@@ -171,7 +172,6 @@ export const OLLAMA_SUGGESTED_MODELS = LOCAL_SERVER_SUGGESTED_MODELS;
 
 /** Models available through the Motebit proxy (all cloud providers). */
 export const PROXY_MODELS = [
-  "claude-opus-4-7",
   "claude-sonnet-4-6",
   "claude-haiku-4-5-20251001",
   "gpt-5.4",
@@ -184,8 +184,8 @@ export const PROXY_MODELS = [
 
 // === Default Models ===
 
-/** Default Anthropic model. */
-export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
+/** Default Anthropic model — the picker's `recommended` row (#654). */
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 
 /** Default OpenAI model. */
 export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
@@ -231,6 +231,264 @@ export const DEFAULT_LOCAL_SERVER_MODEL = DEFAULT_OLLAMA_MODEL;
 export const DEFAULT_PROXY_MODEL = "claude-sonnet-4-6";
 
 /**
+ * The model ids Motebit Cloud (`services/proxy`) admits on the metered
+ * proxy-token path — the exact set its `isModelAllowedInMotebitCloud`
+ * accepts (a `MODEL_CONFIG` row in an allowed jurisdiction). Born #654 cold
+ * review: a surface that fell through to `DEFAULT_ANTHROPIC_MODEL` on the
+ * Cloud path sent `claude-sonnet-5`, which the proxy refuses (451) — the
+ * BYOK default and the Cloud catalog are different lanes. The proxy CONSUMES
+ * this list (its admission requires membership) and its tests pin the list
+ * to `MODEL_CONFIG` both ways, so the surfaces and the proxy share one set.
+ *
+ * Distinct from {@link PROXY_MODELS} (the Cloud PICKER's display list, which
+ * is a UI concern). Changing this list is a Cloud catalog change.
+ */
+export const MOTEBIT_CLOUD_ACCEPTED_MODELS = [
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "llama-3.3-70b-versatile",
+  "openai/gpt-oss-120b",
+] as const;
+
+/** The Cloud router sentinel: the proxy classifies the turn and picks a model. */
+export const MOTEBIT_CLOUD_AUTO_MODEL = "auto";
+
+/**
+ * Legacy and class-level model aliases Motebit Cloud resolves to a current
+ * accepted id. Frontends send whatever model string they were built with;
+ * the proxy resolves it here, so when a model version ships, updating the
+ * right-hand side upgrades every deployed client without a redeploy.
+ *
+ * Lifted from `services/proxy` (#654 cold review R2): a client pre-flight
+ * that checked only {@link MOTEBIT_CLOUD_ACCEPTED_MODELS} skipped this step
+ * and refused `claude-opus`, `gpt-4o`, a stored `claude-opus-4-20250115` —
+ * ids the proxy serves. The table lives here so the proxy and every client
+ * run {@link motebitCloudAdmission}, one function, never a copy.
+ */
+export const MOTEBIT_CLOUD_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  // Class aliases — "give me the best Sonnet" without caring about the version
+  "claude-sonnet": "claude-sonnet-4-6",
+  "claude-opus": "claude-opus-4-6",
+  "claude-haiku": "claude-haiku-4-5-20251001",
+
+  // Legacy dated versions → current
+  "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+  "claude-opus-4-20250115": "claude-opus-4-6",
+  "claude-3-5-sonnet-20241022": "claude-sonnet-4-6",
+  "claude-3-5-haiku-20241022": "claude-haiku-4-5-20251001",
+  "claude-3-opus-20240229": "claude-opus-4-6",
+
+  // OpenAI aliases
+  "gpt-5": "gpt-5.4",
+  "gpt-4o": "gpt-5.4-mini",
+  "gpt-4o-mini": "gpt-5.4-nano",
+  "gpt-4o-2024-11-20": "gpt-5.4-mini",
+  "gpt-4o-mini-2024-07-18": "gpt-5.4-nano",
+
+  // Google aliases
+  "gemini-pro": "gemini-2.5-pro",
+  "gemini-flash": "gemini-2.5-flash",
+  "gemini-flash-lite": "gemini-2.5-flash-lite",
+  "gemini-1.5-pro": "gemini-2.5-pro",
+  "gemini-1.5-flash": "gemini-2.5-flash",
+};
+
+/**
+ * The model list a relay-minted proxy token carries once the account has
+ * REAL funding (a deposit, settlement earnings — anything that is not the
+ * welcome credit). The relay MINTS from this list and the proxy refuses (400)
+ * any id outside the token's list, so it is the second half of Cloud
+ * admission (#654 cold review R3): an id in
+ * {@link MOTEBIT_CLOUD_ACCEPTED_MODELS} but not here (the Groq rows) is never
+ * served to a paying account. Every id here must be accepted.
+ */
+export const MOTEBIT_CLOUD_DEPOSIT_MODELS = [
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+] as const;
+
+/**
+ * The model list a token carries while the account holds ONLY the welcome
+ * credit. The frontier tier is excluded: a $0.10 free identity naming Opus at
+ * 16k output tokens in parallel is the overspend shape the 2026-09-12 audit
+ * named. A subset of {@link MOTEBIT_CLOUD_DEPOSIT_MODELS}.
+ */
+export const MOTEBIT_CLOUD_FREE_CREDIT_MODELS = [
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+] as const;
+
+/** How an account is funded — the relay picks the token's model list by it. */
+export type MotebitCloudFundingTier = "deposit" | "free-credit";
+
+/** The list the relay mints into a proxy token, per funding tier. */
+export const MOTEBIT_CLOUD_TOKEN_MODELS: Readonly<
+  Record<MotebitCloudFundingTier, readonly string[]>
+> = {
+  deposit: MOTEBIT_CLOUD_DEPOSIT_MODELS,
+  "free-credit": MOTEBIT_CLOUD_FREE_CREDIT_MODELS,
+};
+
+/** Why {@link motebitCloudAdmission} refused: the proxy's 400 vs its 451. */
+export type MotebitCloudRefusal = "token_model" | "not_in_catalog";
+
+/** The verdict of {@link motebitCloudAdmission}. */
+export interface MotebitCloudAdmission {
+  /** Would Motebit Cloud's metered (proxy-token) path admit the id as sent? */
+  readonly admitted: boolean;
+  /** The id the proxy routes after alias resolution (`""` for a non-string). */
+  readonly resolved: string;
+  /** Set when refused: outside the token's list (400) or the catalog (451). */
+  readonly refusal?: MotebitCloudRefusal;
+}
+
+/** The two tables an admission is computed over. */
+export interface MotebitCloudCatalog {
+  readonly aliases: Readonly<Record<string, string>>;
+  readonly accepted: readonly string[];
+}
+
+/** The shipped catalog. */
+export const MOTEBIT_CLOUD_CATALOG: MotebitCloudCatalog = {
+  aliases: MOTEBIT_CLOUD_MODEL_ALIASES,
+  accepted: MOTEBIT_CLOUD_ACCEPTED_MODELS,
+};
+
+/** Which token the admission is asked about. */
+export interface MotebitCloudAdmissionOptions {
+  /**
+   * The model list the token carries. The proxy passes the presented token's
+   * list; an empty list means "no per-token list" (the catalog alone
+   * decides), exactly as the route treats it. Overrides `tier`.
+   */
+  readonly tokenModels?: readonly string[];
+  /**
+   * A client that does not hold the token names the funding tier instead;
+   * default `"deposit"` — the ceiling the relay mints for a paying account.
+   */
+  readonly tier?: MotebitCloudFundingTier;
+  /** Test seam: prove the catalog checks are load-bearing. */
+  readonly catalog?: MotebitCloudCatalog;
+}
+
+/**
+ * Motebit Cloud's model admission — THE rule. `services/proxy` calls it on
+ * every request with the presented token's model list (it holds no private
+ * copy) and every client pre-flight or stored-setting sanitizer calls it with
+ * the funding tier, so a client can never refuse or rewrite a model the proxy
+ * would serve, nor admit one it would refuse (#654 cold review R2, R3). The
+ * relay mints the token's list from {@link MOTEBIT_CLOUD_TOKEN_MODELS}, so
+ * the relay, the proxy and every client read one table. Pure, no I/O.
+ *
+ *   - a non-string or empty id → refused;
+ *   - `"auto"` → admitted (the proxy routes it server-side);
+ *   - otherwise the id is alias-resolved, then refused with `token_model`
+ *     when a non-empty token list does not name the resolved id (the route's
+ *     400), else with `not_in_catalog` when the accepted set does not (its
+ *     451). Exact match: no trimming, no case folding — the proxy does
+ *     neither.
+ */
+export function motebitCloudAdmission(
+  model: unknown,
+  options: MotebitCloudAdmissionOptions = {},
+): MotebitCloudAdmission {
+  const catalog = options.catalog ?? MOTEBIT_CLOUD_CATALOG;
+  const tokenModels = options.tokenModels ?? MOTEBIT_CLOUD_TOKEN_MODELS[options.tier ?? "deposit"];
+  if (typeof model !== "string" || model.length === 0) {
+    return { admitted: false, resolved: "", refusal: "not_in_catalog" };
+  }
+  if (model === MOTEBIT_CLOUD_AUTO_MODEL) return { admitted: true, resolved: model };
+  const resolved = Object.prototype.hasOwnProperty.call(catalog.aliases, model)
+    ? (catalog.aliases[model] as string)
+    : model;
+  if (tokenModels.length > 0 && !tokenModels.includes(resolved)) {
+    return { admitted: false, resolved, refusal: "token_model" };
+  }
+  if (!catalog.accepted.includes(resolved)) {
+    return { admitted: false, resolved, refusal: "not_in_catalog" };
+  }
+  return { admitted: true, resolved };
+}
+
+/** Would Motebit Cloud admit `model` as sent, for a paying (deposit-funded) account? */
+export function motebitCloudAdmitsModel(model: string): boolean {
+  return motebitCloudAdmission(model).admitted;
+}
+
+/**
+ * The Motebit Cloud picker's rows: {@link PROXY_MODELS} filtered by
+ * {@link motebitCloudAdmission} for `tier` (default `"deposit"`). Every
+ * surface renders its Cloud `<select>` from this one function (#654 cold
+ * review) — never a hand-copied list. The `"auto"` row is the surface's own.
+ */
+export function motebitCloudPickerModels(
+  tier: MotebitCloudFundingTier = "deposit",
+): readonly string[] {
+  return PROXY_MODELS.filter((m) => motebitCloudAdmission(m, { tier }).admitted);
+}
+
+/** Every provider a surface can switch to, under any of its spellings. */
+export type ModelDefaultProvider =
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "groq"
+  | "deepseek"
+  | "local-server"
+  | "ollama"
+  | "proxy"
+  | "motebit-cloud";
+
+/**
+ * The model a surface uses when the provider changes (or is first chosen)
+ * and the user named no model. The ONE derivation every surface's
+ * provider-switch / default path calls (#654 cold review): each surface used
+ * to hand-roll a ternary chain whose fall-through arm was
+ * `DEFAULT_ANTHROPIC_MODEL`, so a provider the chain forgot — `proxy` —
+ * silently got the BYOK Anthropic default, which Motebit Cloud refuses.
+ * Exhaustive by construction: a new provider is a compile error here, never
+ * a silent fall-through.
+ */
+export function defaultModelForProvider(provider: ModelDefaultProvider): string {
+  switch (provider) {
+    case "anthropic":
+      return DEFAULT_ANTHROPIC_MODEL;
+    case "openai":
+      return DEFAULT_OPENAI_MODEL;
+    case "google":
+      return DEFAULT_GOOGLE_MODEL;
+    case "groq":
+      return DEFAULT_GROQ_MODEL;
+    case "deepseek":
+      return DEFAULT_DEEPSEEK_MODEL;
+    case "local-server":
+    case "ollama":
+      return DEFAULT_LOCAL_SERVER_MODEL;
+    case "proxy":
+    case "motebit-cloud":
+      return DEFAULT_PROXY_MODEL;
+  }
+}
+
+/**
  * Review-by dates for the DEFAULT_*_MODEL constants — defaults as
  * perishable inventory with a printed expiry. Model half-life is months
  * now; a default frozen at authoring time ships an old brain in a new
@@ -242,7 +500,7 @@ export const DEFAULT_PROXY_MODEL = "claude-sonnet-4-6";
  * the date with or without a model change. The gate never bumps a model.
  */
 export const MODEL_DEFAULT_REVIEW_BY: Record<string, string> = {
-  anthropic: "2026-10-31",
+  anthropic: "2026-12-31",
   openai: "2026-10-31",
   google: "2026-10-31",
   deepseek: "2026-10-31",
@@ -250,6 +508,75 @@ export const MODEL_DEFAULT_REVIEW_BY: Record<string, string> = {
   "local-server": "2026-10-31",
   proxy: "2026-10-31",
 };
+
+// === Anthropic picker (#654) ===
+//
+// The curated rows every surface's Anthropic model picker renders. Born
+// because each surface had hand-copied its own option list, and they drifted
+// independently (web offered Opus 4.7 / Sonnet 4.6 after Opus 5.5 / Sonnet 5
+// shipped; desktop dumped all of ANTHROPIC_MODELS; the CLI's `/model haiku`
+// alias named an id the registry does not carry). One table here, rendered
+// everywhere; `check-model-picker-canonical` refuses a hand-copied list.
+//
+// Three tiers, one row each. Every other ANTHROPIC_MODELS id (Fable 5.1
+// included) stays selectable by typing its id — the picker is curation, not
+// an allowlist. A stored non-picker id is shown and kept selected, never
+// migrated (`pickerOptionsWithStored`): changing the default must not
+// silently change a model the user chose.
+
+/** A picker tier — strongest, recommended default, fastest. */
+export type AnthropicPickerTier = "strongest" | "default" | "fast";
+
+export interface AnthropicPickerOption {
+  readonly id: AnthropicModel;
+  readonly label: string;
+  readonly tier: AnthropicPickerTier;
+}
+
+/** Rows in display order. The `default` row's id IS `DEFAULT_ANTHROPIC_MODEL`
+ *  (asserted in tests). */
+export const ANTHROPIC_PICKER: readonly AnthropicPickerOption[] = [
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5 — most capable", tier: "strongest" },
+  { id: DEFAULT_ANTHROPIC_MODEL, label: "Claude Sonnet 5 — recommended", tier: "default" },
+  { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 — fastest", tier: "fast" },
+] as const;
+
+/** The picker's model id for a tier. */
+export function pickerModelForTier(tier: AnthropicPickerTier): AnthropicModel {
+  const row = ANTHROPIC_PICKER.find((o) => o.tier === tier);
+  // Unreachable by construction (one row per tier); fail loud, not silent.
+  if (row == null) throw new Error(`ANTHROPIC_PICKER has no row for tier "${tier}"`);
+  return row.id;
+}
+
+/** A rendered picker row: `selected` marks the one to pre-select. */
+export interface PickerRenderOption {
+  readonly id: string;
+  readonly label: string;
+  readonly selected: boolean;
+}
+
+/**
+ * The rows a surface renders, given the user's stored model (if any).
+ *
+ *   - no stored model → the picker rows, the default row selected;
+ *   - a stored picker id → that row selected;
+ *   - a stored NON-picker id (e.g. `claude-sonnet-4-6` from before #654, or a
+ *     typed `claude-fable-5-1`) → prepended as its own row and selected. Never
+ *     migrated to the new default: the user's choice outranks the curation.
+ */
+export function pickerOptionsWithStored(stored?: string | null): PickerRenderOption[] {
+  const s = stored?.trim() ?? "";
+  const inPicker = s !== "" && ANTHROPIC_PICKER.some((o) => o.id === s);
+  const selectedId = s === "" ? DEFAULT_ANTHROPIC_MODEL : s;
+  const rows: PickerRenderOption[] = ANTHROPIC_PICKER.map((o) => ({
+    id: o.id,
+    label: o.label,
+    selected: o.id === selectedId,
+  }));
+  if (s !== "" && !inPicker) rows.unshift({ id: s, label: s, selected: true });
+  return rows;
+}
 
 // === Type Helpers ===
 
@@ -310,16 +637,22 @@ export function modelVendorHint(
 /**
  * Pre-flight admission: may `model` be served by `provider`?
  * Permissive where honesty demands it — `local-server` runs whatever the
- * user's server hosts, the proxy routes multiple vendors, and an
- * `"unknown"` vendor hint never blocks (the registry lags new releases).
+ * user's server hosts, and an `"unknown"` vendor hint never blocks a BYOK
+ * vendor (the registry lags new releases). Motebit Cloud (`proxy`) is the
+ * exception: its catalog ships with this package, so it answers exactly
+ * {@link motebitCloudAdmission}.
  * It answers `false` only for a KNOWN cross-vendor mismatch — exactly
  * the class that fails opaquely at the API otherwise.
  */
 export function providerAcceptsModel(provider: string, model: string): boolean {
   if (provider === "local-server" || provider === "ollama") return true;
+  // Motebit Cloud is a fixed catalog with an alias step, so it answers by
+  // its own rule, not a vendor-family guess (#654 cold review R2): the guess
+  // both over-admitted (`claude-sonnet-5`, which Cloud refuses) and
+  // under-admitted (`llama-3.3-70b-versatile`, which Cloud serves).
+  if (provider === "proxy" || provider === "motebit-cloud") return motebitCloudAdmitsModel(model);
   const hint = modelVendorHint(model);
   if (hint === "unknown") return true;
-  if (provider === "proxy") return hint === "anthropic" || hint === "openai" || hint === "google";
   if (provider === "groq") return hint === "groq" || hint === "local"; // groq serves open models
   return hint === provider;
 }

@@ -388,8 +388,14 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-docs-default-models",
     defends:
-      'every default-context Claude model literal in any README.md / CLAUDE.md / docs MDX page (`"default_model": "X"` JSON, `--model X` CLI flag, `Default model: X` / `Examples: ... \\`X\\`` prose) matches the canonical default extracted from the `defaultModel` ternary in apps/cli/src/args.ts; defends against the stale-model-literal class that drifted four places after the 2026-04 sonnet-4-5 → sonnet-4-6 bump (invariant #56, full history in docs/drift-defenses.md)',
+      'every default-context Claude model literal in any README.md / CLAUDE.md / docs MDX page (`"default_model": "X"` JSON, `--model X` CLI flag, `Default model: X` / `Examples: ... \\`X\\`` prose) matches the canonical DEFAULT_ANTHROPIC_MODEL in packages/sdk/src/models.ts; defends against the stale-model-literal class that drifted four places after the 2026-04 sonnet-4-5 → sonnet-4-6 bump (invariant #56, full history in docs/drift-defenses.md)',
     script: "check-docs-default-models",
+  },
+  {
+    name: "check-model-picker-canonical",
+    defends:
+      "every surface's Anthropic model picker, default and alias renders from @motebit/sdk (ANTHROPIC_PICKER / pickerModelForTier / DEFAULT_ANTHROPIC_MODEL in packages/sdk/src/models.ts) — deny-by-default on quoted Claude model-id literals in app surface source outside tests, comments and an argued file+text+why allowlist; defends the #654 class where eight hand-copied picker/default/alias sites staled after Opus 5.5 / Sonnet 5 shipped (invariant #171, full history in docs/drift-defenses.md)",
+    script: "check-model-picker-canonical",
   },
   {
     name: "check-public-fee-claims",

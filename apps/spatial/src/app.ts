@@ -17,6 +17,8 @@
 import "./buffer-polyfill";
 import { SpatialApp, COLOR_PRESETS, deriveInteriorColor } from "./spatial-app";
 import type { SpatialAIConfig } from "./spatial-app";
+import { ANTHROPIC_PICKER, defaultModelForProvider } from "@motebit/sdk";
+import { modelFieldValueForLane } from "./model-field";
 import type { UnifiedProviderConfig, OnDeviceBackend } from "@motebit/sdk";
 import { DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
@@ -57,6 +59,7 @@ const localServerEndpointGroup = document.getElementById(
 const byokVendorRadios = document.querySelectorAll<HTMLInputElement>('input[name="byok-vendor"]');
 const apiKeyInput = document.getElementById("api-key-input") as HTMLInputElement;
 const modelInput = document.getElementById("model-input") as HTMLInputElement;
+const modelSuggestions = document.getElementById("model-suggestions") as HTMLDataListElement | null;
 const voiceToggle = document.getElementById("voice-toggle") as HTMLInputElement;
 const settingsSave = document.getElementById("settings-save") as HTMLButtonElement;
 const settingsSkip = document.getElementById("settings-skip") as HTMLButtonElement;
@@ -679,6 +682,10 @@ function setVendorRadio(vendor: SpatialByokVendor): void {
  * sub-pick. Also adjusts the api-key input placeholder for the selected
  * BYOK vendor.
  */
+/** The `mode:vendor` lane the model field was last shown under; `null`
+ *  until the first render (boot), which never clears the stored model. */
+let modelFieldLane: string | null = null;
+
 function updateProviderUI(): void {
   const mode = getSelectedMode();
   onDeviceSection.style.display = mode === "on-device" ? "" : "none";
@@ -694,6 +701,41 @@ function updateProviderUI(): void {
   const vendor = getSelectedVendor();
   apiKeyInput.placeholder =
     vendor === "openai" ? "sk-..." : vendor === "google" ? "AIza..." : "sk-ant-...";
+
+  // One model field serves every mode, so a flip must not carry an id the
+  // new lane refuses (#654 cold review): the BYOK default picked under BYOK
+  // and then saved under Motebit Cloud is a 451 on the first turn. An id the
+  // new provider can't take is cleared — empty means "the provider's
+  // default", which the placeholder names from the sdk's one derivation.
+  // Only a user FLIP of mode or vendor clears: never boot, never a re-pick
+  // of the same lane. The verdict guesses the vendor from the id's name
+  // (`gemma-*` reads as local), so a boot-time sanitize cleared a saved
+  // BYOK Google Gemma and the next Save persisted the downgrade.
+  const lane = `${mode}:${vendor}`;
+  const flipped = modelFieldLane !== null && modelFieldLane !== lane;
+  modelFieldLane = lane;
+  if (mode === "motebit-cloud" || mode === "byok") {
+    const provider = mode === "motebit-cloud" ? "proxy" : vendor;
+    const typed = modelInput.value.trim();
+    if (flipped && modelFieldValueForLane(mode, vendor, typed) !== typed) modelInput.value = "";
+    modelInput.placeholder = `Default (${defaultModelForProvider(provider)})`;
+  } else {
+    modelInput.placeholder = "Default";
+  }
+
+  // Anthropic suggestions are the sdk picker rows (#654) — suggestions only;
+  // the field still accepts any id, and an empty field means the default.
+  if (modelSuggestions) {
+    modelSuggestions.innerHTML = "";
+    if (mode === "byok" && vendor === "anthropic") {
+      for (const row of ANTHROPIC_PICKER) {
+        const opt = document.createElement("option");
+        opt.value = row.id;
+        opt.label = row.label;
+        modelSuggestions.appendChild(opt);
+      }
+    }
+  }
 }
 
 modeRadios.forEach((r) => r.addEventListener("change", updateProviderUI));

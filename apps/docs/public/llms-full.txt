@@ -5801,7 +5801,7 @@ Open settings (gear icon, top right) to configure your LLM provider:
 | **Ollama** (default) | Install [Ollama](https://ollama.ai), pull a model (`ollama pull qwen3`), and select "Ollama" in settings |
 | **Anthropic** | Enter your API key in settings. Key is stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`, never in `config.json`. |
 
-Set the model name in the **Model** field. Examples: `llama3.2`, `claude-sonnet-4-6`.
+Set the model name in the **Model** field. Examples: `qwen3`, `claude-sonnet-5`. For Anthropic the field suggests three tiers — Claude Opus 5.5 (most capable), Claude Sonnet 5 (recommended, the default when the field is empty) and Claude Haiku 4.5 (fastest); any other Claude id, such as `claude-fable-5-1`, can be typed. A model you already chose is kept as-is when the default changes.
 
 ## Operator mode
 
@@ -6028,7 +6028,7 @@ Or with options:
 ```bash
 pnpm --filter motebit start -- \
   --provider anthropic \
-  --model claude-sonnet-4-6 \
+  --model claude-sonnet-5 \
   --operator
 ```
 
@@ -6332,7 +6332,7 @@ Location: `~/.motebit/config.json`
   "motebit_id": "01926a3b-...",
   "device_id": "d-abcdef12",
   "default_provider": "anthropic",
-  "default_model": "claude-sonnet-4-6",
+  "default_model": "claude-sonnet-5",
   "sync_url": "https://relay.example.com",
   "mcp_servers": [
     {
@@ -6407,7 +6407,9 @@ Ollama runs on `http://localhost:11434` by default.
 
 ### Anthropic
 
-Set your API key via the desktop settings panel (stored in `~/.motebit/dev-keyring.json`) or environment variable. Set `default_provider: "anthropic"` and `default_model: "claude-sonnet-4-6"`.
+Set your API key via the desktop settings panel (stored in `~/.motebit/dev-keyring.json`) or environment variable. Set `default_provider: "anthropic"` and `default_model: "claude-sonnet-5"`.
+
+Every surface's Anthropic model picker offers the same three tiers: Claude Opus 5.5 (`claude-opus-5-5`, most capable), Claude Sonnet 5 (`claude-sonnet-5`, recommended and the default) and Claude Haiku 4.5 (`claude-haiku-4-5-20251001`, fastest). Other Claude ids, such as `claude-fable-5-1`, are accepted by id. A stored model is never rewritten when the default changes.
 
 ### Custom endpoints
 

@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { WebApp, COLOR_PRESETS } from "../web-app.js";
 import type { StreamChunk } from "@motebit/runtime";
+import { DEFAULT_ANTHROPIC_MODEL, pickerModelForTier } from "@motebit/sdk";
 
 // Stub ThreeJSAdapter — WebApp creates one internally (requires canvas)
 vi.mock("@motebit/render-engine", () => {
@@ -390,7 +391,7 @@ describe("BYOK auto-routing — integration", () => {
     } as never);
 
     // Connect Anthropic BYOK with autoRoute. The dispatcher's
-    // Anthropic catalog includes claude-sonnet-4-6 (the canonical
+    // Anthropic catalog includes the picker's default tier (the BYOK
     // policy's "chat" preference); a chat-shaped message should
     // route to it.
     app.connectProvider({
@@ -422,17 +423,17 @@ describe("BYOK auto-routing — integration", () => {
     }
 
     // The doctrine-stated payoff: dispatcher.dispatch ran, decision
-    // was `route` (catalog has claude-sonnet-4-6 for the chat
+    // was `route` (catalog has the default tier for the chat
     // preference), provider.setModel got the pick.
-    expect(setModelSpy).toHaveBeenCalledWith("claude-sonnet-4-6");
+    expect(setModelSpy).toHaveBeenCalledWith(DEFAULT_ANTHROPIC_MODEL);
 
     app.stop();
   });
 
-  it("routes code-shape messages to gpt-5.4's fallback (claude-opus-4-7) on Anthropic catalog", async () => {
-    // REFERENCE_ROUTING_POLICY.code = "gpt-5.4"; Anthropic catalog
+  it("routes code-shape messages to gpt-5.4's fallback (the strongest picker tier) on Anthropic catalog", async () => {
+    // REFERENCE_BYOK_ROUTING_POLICY.code = "gpt-5.4"; Anthropic catalog
     // doesn't have it → dispatcher returns `fallback` with backup =
-    // claude-opus-4-7 (first catalog entry, tier-strong-to-fast).
+    // the strongest picker tier (first catalog entry, tier-strong-to-fast).
     // The intercept's `fallback` arm calls setModel(backup).
     const app = new WebApp();
     await app.init(null as unknown as HTMLCanvasElement);
@@ -463,7 +464,7 @@ describe("BYOK auto-routing — integration", () => {
       /* Expected — runtime mock doesn't fully wire. */
     }
 
-    expect(setModelSpy).toHaveBeenCalledWith("claude-opus-4-7");
+    expect(setModelSpy).toHaveBeenCalledWith(pickerModelForTier("strongest"));
 
     app.stop();
   });
