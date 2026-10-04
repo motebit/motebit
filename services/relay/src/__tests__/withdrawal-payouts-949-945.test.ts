@@ -33,7 +33,6 @@ import { creditAccount } from "../accounts.js";
 import {
   enqueuePendingWithdrawal,
   evaluateAndFireRail,
-  recoverStaleFiring,
   runBatchWithdrawalTick,
   startBatchWithdrawalLoop,
   type BatchWithdrawalConfig,
@@ -495,9 +494,12 @@ describe("batch settle doors (#945)", () => {
       Date.now() - 10 * 60 * 1000,
       id,
     );
-    expect(
-      recoverStaleFiring(d, [rail as unknown as Parameters<typeof recoverStaleFiring>[1][0]]),
-    ).toBe(0);
+    // This process started before the claim (#1034: a claim from an earlier
+    // process life has no send running and is recovered at once).
+    await runBatchWithdrawalTick(d, [], FIRE_NOW, {
+      processStartedAt: Date.now() - 60 * 60 * 1000,
+    });
+    expect(queueRow(d, id).status).toBe("firing");
     expect(withdrawalCount(d, "zz945-slow")).toBe(0);
     release();
     await firing;
@@ -513,9 +515,10 @@ describe("batch settle doors (#945)", () => {
       "UPDATE relay_pending_withdrawals SET status = 'firing', last_attempt_at = ? WHERE pending_id = ?",
     ).run(firedAt, id);
     const before = Date.now();
-    expect(recoverStaleFiring(d, [])).toBe(1);
+    await runBatchWithdrawalTick(d, [], FIRE_NOW);
     const q = queueRow(d, id);
-    expect(q.status).toBe("failed");
+    // #1034's money rule: the payout may have left — held `unknown`, never refunded.
+    expect(q.status).toBe("unknown");
     const w = d
       .prepare(
         "SELECT status, claimed_at, payout_valid_until, failure_reason FROM relay_withdrawals WHERE withdrawal_id = ?",
@@ -533,7 +536,8 @@ describe("batch settle doors (#945)", () => {
     expect(w.payout_valid_until).toBeGreaterThanOrEqual(before + UNDECLARED_PAYOUT_HORIZON_MS);
     expect(w.failure_reason).toMatch(/unresolved payout/);
     // A second recovery finds nothing.
-    expect(recoverStaleFiring(d, [])).toBe(0);
+    await runBatchWithdrawalTick(d, [], FIRE_NOW);
+    expect(withdrawalCount(d, "zz945-orphan")).toBe(1);
   });
 
   it("runBatchWithdrawalTick skips non-withdrawable rails and recovers before it fires", async () => {
@@ -556,7 +560,7 @@ describe("batch settle doors (#945)", () => {
       FIRE_NOW,
     );
     expect(rail.withdraw).not.toHaveBeenCalled(); // recovered, never re-fired
-    expect(queueRow(d, id).status).toBe("failed");
+    expect(queueRow(d, id).status).toBe("unknown");
     expect(withdrawalCount(d, "zz945-tick")).toBe(1);
   });
 

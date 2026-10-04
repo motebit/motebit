@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { SovereignDelegationAdapter } from "../sovereign-delegation-adapter.js";
+import { isDelegationUndetermined } from "../delegation-adapter.js";
 import type {
   SovereignDelegationConfig,
   SovereignPaidEntry,
@@ -245,6 +246,9 @@ function adapterWith(
 ): SovereignDelegationAdapter {
   return new SovereignDelegationAdapter({
     discoveryUrl: "https://relay.test",
+    // Stand-in first-person selector: takes the first offered candidate so
+    // these tests keep exercising pay/execute/receipt, not ranking.
+    selectWorker: (candidates) => candidates[0]?.motebit_id ?? null,
     motebitId: "delegator",
     deviceId: "dev",
     signingKeys: { privateKey: new Uint8Array(32), publicKey: new Uint8Array(32) },
@@ -316,9 +320,12 @@ describe("#887 payment — a thrown send is confirmed onchain before it counts a
     stubNetwork({ [B.id]: { kind: "receipt", receipt: receipt(B.id) } }, world);
     const { rail, landed } = makeWallet(["lost", "ok"], verdict);
 
-    await expect(adapterWith(rail, { now: () => 0 }).delegateStep(step(), 5_000)).rejects.toThrow(
-      /Payment status unknown/,
-    );
+    const err = await adapterWith(rail, { now: () => 0 })
+      .delegateStep(step(), 5_000)
+      .catch((e: unknown) => e);
+    expect(String(err)).toMatch(/Payment status unknown/);
+    // #890: money may have moved — the plan engine must hold, not fail.
+    expect(isDelegationUndetermined(err)).toBe(true);
     expect(rail.send).toHaveBeenCalledTimes(1);
     expect(landed).toHaveLength(1);
     expect(world.toolCalls).toEqual([]);
@@ -385,6 +392,8 @@ describe("#887 execution — paid, then no verifiable result ⇒ stop, never pay
 
       expect(err).toBeInstanceOf(Error);
       expect(err.message).toMatch(/^Paid, result not retrieved \(tx sig-1, worker worker-a\)/);
+      // #890: paid, outcome unknown — the plan engine must hold, not fail.
+      expect(isDelegationUndetermined(err)).toBe(true);
       expect(landed).toHaveLength(1);
       expect(world.toolCalls).toEqual([A.id]);
       expect(events).toEqual(["in_flight:sig-1", "unretrieved:sig-1"]);
@@ -512,10 +521,13 @@ describe("#887 ledger — recorded before presenting, consulted before paying", 
       prior: { taskId: "sovereign:worker-a:old", txHash: "old", capability: "web_search" },
     });
 
-    await expect(
-      adapterWith(rail, { paidLedger: ledger }).delegateStep(step(), 5_000),
-    ).rejects.toThrow(/Refused before payment.*tx old/);
+    const err = await adapterWith(rail, { paidLedger: ledger })
+      .delegateStep(step(), 5_000)
+      .catch((e: unknown) => e);
+    expect(String(err)).toMatch(/Refused before payment.*tx old/);
     expect(rail.send).not.toHaveBeenCalled();
+    // Nothing moved: a refusal is a conclusive outcome, not an unknown one.
+    expect(isDelegationUndetermined(err)).toBe(false);
   });
 
   it("a ledger that cannot be read refuses before paying", async () => {

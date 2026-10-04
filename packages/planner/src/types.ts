@@ -6,6 +6,22 @@ export type { PlanStoreAdapter } from "@motebit/sdk";
 export class InMemoryPlanStore implements PlanStoreAdapter {
   private plans = new Map<string, Plan>();
   private steps = new Map<string, PlanStep>();
+  private leases = new Map<string, { holder: string; expiresAt: number }>();
+
+  /**
+   * Cross-driver plan lease, compare-and-set (#890; `PlanLeaseStore`). Free,
+   * expired, or already ours ⇒ taken (or renewed); otherwise refused.
+   */
+  acquirePlanLease(planId: string, holder: string, now: number, ttlMs: number): boolean {
+    const cur = this.leases.get(planId);
+    if (cur != null && cur.holder !== holder && cur.expiresAt > now) return false;
+    this.leases.set(planId, { holder, expiresAt: now + ttlMs });
+    return true;
+  }
+
+  releasePlanLease(planId: string, holder: string): void {
+    if (this.leases.get(planId)?.holder === holder) this.leases.delete(planId);
+  }
 
   savePlan(plan: Plan): void {
     this.plans.set(plan.plan_id, { ...plan });
@@ -17,10 +33,16 @@ export class InMemoryPlanStore implements PlanStoreAdapter {
   }
 
   getPlanForGoal(goalId: string): Plan | null {
+    // The goal's MOST RECENT plan, as the SQLite stores answer it
+    // (`ORDER BY created_at DESC`). Returning the first one inserted made a
+    // runner resume — or re-plan past — a stale plan, and hid a newer plan
+    // holding a delegated step with an unknown paid outcome (#890).
+    let latest: Plan | null = null;
     for (const plan of this.plans.values()) {
-      if (plan.goal_id === goalId) return { ...plan };
+      if (plan.goal_id !== goalId) continue;
+      if (latest == null || plan.created_at >= latest.created_at) latest = plan;
     }
-    return null;
+    return latest != null ? { ...latest } : null;
   }
 
   updatePlan(planId: string, updates: Partial<Plan>): void {

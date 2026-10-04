@@ -5,6 +5,7 @@
  * - Device A (existing): initiate → show code → poll → approve/deny
  * - Device B (new): claim with code → poll status → complete pairing
  */
+import { sanitizeRelayText } from "./relay-text.js";
 
 export interface PairingClientConfig {
   relayUrl: string;
@@ -53,7 +54,7 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
-      throw new Error(err.error ?? `Pairing initiate failed: ${res.status}`);
+      throw new Error(sanitizeRelayText(err.error ?? `Pairing initiate failed: ${res.status}`));
     }
     const body = (await res.json()) as {
       pairing_id: string;
@@ -91,7 +92,7 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
-      throw new Error(err.error ?? `Pairing claim failed: ${res.status}`);
+      throw new Error(sanitizeRelayText(err.error ?? `Pairing claim failed: ${res.status}`));
     }
     const result = (await res.json()) as { pairing_id: string; motebit_id: string };
     return { pairingId: result.pairing_id, motebitId: result.motebit_id };
@@ -106,7 +107,9 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
-      throw new Error(err.error ?? `Failed to get pairing session: ${res.status}`);
+      throw new Error(
+        sanitizeRelayText(err.error ?? `Failed to get pairing session: ${res.status}`),
+      );
     }
     const data = (await res.json()) as Record<string, unknown>;
     return data as unknown as PairingSession;
@@ -134,7 +137,7 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
-      throw new Error(err.error ?? `Pairing approve failed: ${res.status}`);
+      throw new Error(sanitizeRelayText(err.error ?? `Pairing approve failed: ${res.status}`));
     }
     const result = (await res.json()) as {
       device_id: string;
@@ -153,7 +156,7 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
-      throw new Error(err.error ?? `Pairing deny failed: ${res.status}`);
+      throw new Error(sanitizeRelayText(err.error ?? `Pairing deny failed: ${res.status}`));
     }
   }
 
@@ -164,7 +167,7 @@ export class PairingClient {
     const res = await fetch(`${this.relayUrl}/pairing/${pairingId}/status`);
     if (!res.ok) {
       const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
-      throw new Error(err.error ?? `Pairing status poll failed: ${res.status}`);
+      throw new Error(sanitizeRelayText(err.error ?? `Pairing status poll failed: ${res.status}`));
     }
     return res.json() as Promise<PairingStatus>;
   }
@@ -182,7 +185,27 @@ export class PairingClient {
     });
     if (!res.ok) {
       const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
-      throw new Error(err.error ?? `Device key update failed: ${res.status}`);
+      throw new Error(sanitizeRelayText(err.error ?? `Device key update failed: ${res.status}`));
     }
+  }
+  /**
+   * Device B: fetch the identity's key-succession chain from the relay's public
+   * succession route. The chain is self-verifying — the caller verifies it
+   * (`verifyPairingIdentityBinding`); this method only transports it, so a
+   * relay that withholds or forges it can only cause a refusal.
+   */
+  async getSuccessionChain(
+    motebitId: string,
+  ): Promise<import("@motebit/protocol").KeySuccessionRecord[]> {
+    const res = await fetch(
+      `${this.relayUrl}/api/v1/agents/${encodeURIComponent(motebitId)}/succession`,
+    );
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
+      throw new Error(sanitizeRelayText(err.error ?? `Succession fetch failed: ${res.status}`));
+    }
+    const { chain } = (await res.json()) as { chain?: unknown };
+    if (!Array.isArray(chain)) throw new Error("Succession response carries no chain");
+    return chain as import("@motebit/protocol").KeySuccessionRecord[];
   }
 }

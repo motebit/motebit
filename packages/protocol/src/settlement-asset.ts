@@ -10,7 +10,7 @@
  *   > "settlement is asset-pluggable. USDC is the bootstrap stablecoin.
  *   > A `SettlementAsset` closed union (`"USDC"` only at land) with a
  *   > bespoke coverage test should ship as sub-phase A of this arc — a
- *   > typed vocabulary consumers can reference, promoted to the 8th
+ *   > typed vocabulary consumers can reference, promoted to a
  *   > registered registry per `registry-pattern-canonical.md` when a
  *   > second asset (PYUSD, USDP, etc.) arrives as a real consumer
  *   > (sub-phase B)."
@@ -59,7 +59,7 @@
  * Single member at land — USDC is the bootstrap stablecoin. Additions
  * are intentional protocol-level work (sub-phase B): new union member +
  * `ALL_SETTLEMENT_ASSETS` entry + sibling-rail support + registry-
- * pattern-canonical promotion to the 8th registered registry.
+ * pattern-canonical promotion to a registered registry.
  *
  * Why a closed union, not `string`: a third-party motebit implementation
  * receiving a `SovereignRail.asset` value of `"USDT"` or `"DAI"` from a

@@ -1,6 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+
+// Minting a proxy token requires the debit secret (subscriptions.ts): a token
+// whose debits could never land is never issued.
+const PREV_PROXY_SECRET = process.env.RELAY_PROXY_SECRET;
+beforeAll(() => {
+  process.env.RELAY_PROXY_SECRET ??= "test-relay-proxy-secret";
+});
+afterAll(() => {
+  if (PREV_PROXY_SECRET === undefined) delete process.env.RELAY_PROXY_SECRET;
+  else process.env.RELAY_PROXY_SECRET = PREV_PROXY_SECRET;
+});
 
 function decodeTokenPayload(token: string) {
   const payloadB64 = token.split(".")[0]!;
@@ -48,6 +59,21 @@ describe("POST /api/v1/agents/:motebitId/proxy-token", () => {
     };
     expect(body.token).toBeDefined();
     expect(body.models).toEqual([]);
+  });
+
+  it("refuses to mint (503) when RELAY_PROXY_SECRET is unset — its debits could never land", async () => {
+    const motebitId = await createIdentity();
+    const saved = process.env.RELAY_PROXY_SECRET;
+    delete process.env.RELAY_PROXY_SECRET;
+    try {
+      const res = await relay.app.request(`/api/v1/agents/${motebitId}/proxy-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      });
+      expect(res.status).toBe(503);
+    } finally {
+      process.env.RELAY_PROXY_SECRET = saved;
+    }
   });
 
   it("token format is base64url.base64url (one dot)", async () => {

@@ -14,7 +14,8 @@ import type {
 import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
-import { persistFreeze } from "./freeze.js";
+import { isEmergencyFrozenAbort, persistFreeze } from "./freeze.js";
+import { EmergencyFrozenError } from "./errors.js";
 import {
   getAccountBalance,
   getAccountBalanceDetailed,
@@ -344,24 +345,47 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
     }
   };
 
-  /** Refund a processing withdrawal the chain proves unpaid. */
+  /**
+   * Refund a processing withdrawal the chain proves unpaid. A refund the
+   * emergency freeze refuses rolls back (fail + refund are one transaction):
+   * the PROVEN outcome is noted on the row, which stays `processing` with its
+   * amount held, and `"frozen"` is returned — the send path answers 503, and
+   * the loop (or the operator's `not_paid` reconcile) refunds after unfreeze.
+   */
   const refundFromChain = (
     w: WithdrawalRequest,
     by: "no_broadcast" | "payout_failed" | "killed",
     correlationId: string | null,
-  ): void => {
+  ): "frozen" | undefined => {
     const why = {
       no_broadcast: "no transaction of this payout was ever broadcast",
       payout_failed: "the payout landed and failed on chain (finalized): no USDC moved",
       killed:
         "the kill transaction consumed the payout's durable nonce (finalized): the payout can never land",
     }[by];
-    const ok = failWithdrawal(
-      moteDb.db,
-      w.withdrawal_id,
-      `solana payout not paid — ${why}; amount returned to balance`,
-      "processing",
-    );
+    let ok: boolean;
+    try {
+      ok = failWithdrawal(
+        moteDb.db,
+        w.withdrawal_id,
+        `solana payout not paid — ${why}; amount returned to balance`,
+        "processing",
+      );
+    } catch (err) {
+      if (!isEmergencyFrozenAbort(err)) throw err;
+      noteWithdrawalPayoutUnresolved(
+        moteDb.db,
+        w.withdrawal_id,
+        `refund refused by emergency freeze: solana payout not paid — ${why}; after the freeze lifts it is refunded from the same finalized facts (or reconcile as not_paid)`,
+      );
+      logger.warn("withdrawal.solana.refund_frozen", {
+        correlationId,
+        motebitId: w.motebit_id,
+        withdrawalId: w.withdrawal_id,
+        by,
+      });
+      return "frozen";
+    }
     if (ok) {
       logger.warn("withdrawal.solana.refunded_from_chain", {
         correlationId,
@@ -377,6 +401,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         status: getWithdrawalById(moteDb.db, w.withdrawal_id)?.status ?? null,
       });
     }
+    return undefined;
   };
 
   /**
@@ -387,9 +412,9 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
   const resolveWithdrawal = async (
     withdrawalId: string,
     opts: { inline: boolean; correlationId: string | null },
-  ): Promise<void> => {
+  ): Promise<"frozen" | undefined> => {
     const transfer = operatorSolanaTransfer;
-    if (!transfer) return;
+    if (!transfer) return undefined;
     const w = getWithdrawalById(moteDb.db, withdrawalId);
     if (!w || w.status !== "processing") {
       if (opts.inline) {
@@ -406,10 +431,10 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
           note: "the withdrawal left `processing` while its payout was out; reconcile the ledger against the chain",
         });
       }
-      return;
+      return undefined;
     }
-    if (!isChainRecordedClaim(moteDb.db, withdrawalId)) return;
-    if (!opts.inline && payoutsInFlight.has(withdrawalId)) return;
+    if (!isChainRecordedClaim(moteDb.db, withdrawalId)) return undefined;
+    if (!opts.inline && payoutsInFlight.has(withdrawalId)) return undefined;
     const verdict = await readChainVerdict(moteDb.db, withdrawalId, transfer);
     if (verdict.kind === "paid") {
       if (verdict.landed.length > 1) {
@@ -420,11 +445,10 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         });
       }
       await completeFromChain(w, verdict.signature, opts.correlationId);
-      return;
+      return undefined;
     }
     if (verdict.kind === "not_paid") {
-      refundFromChain(w, verdict.by, opts.correlationId);
-      return;
+      return refundFromChain(w, verdict.by, opts.correlationId);
     }
     if (opts.inline) {
       noteWithdrawalPayoutUnresolved(
@@ -432,7 +456,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         withdrawalId,
         `payout ${verdict.signature} not finalized yet (${verdict.reason}); the relay decides it from finalized chain state — a finalized payout completes it, a finalized kill of its durable nonce refunds it (#990)`,
       );
-      return;
+      return undefined;
     }
     const claimedAt = w.claimed_at ?? w.requested_at;
     if (verdict.killable && Date.now() - claimedAt >= killAfterMs) {
@@ -452,6 +476,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         kill: kill.status,
       });
     }
+    return undefined;
   };
 
   /**
@@ -460,13 +485,20 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
    * stays `pending`), claim (`pending → processing` + the chain marker, one
    * transaction), reserve N. Then sign, record, broadcast, wait bounded for
    * finality, and decide what the chain already shows.
+   *
+   * The emergency freeze is reported, never thrown: `"frozen_at_claim"` — the
+   * claim (a guarded write) was refused, nothing was sent, the withdrawal
+   * stands `pending` with its amount held; `"frozen_at_refund"` — the chain
+   * proved the payout unpaid but the refund was refused, the withdrawal stays
+   * `processing` with that outcome noted. The route answers either with 503.
    */
   const firePathZero = async (
     withdrawalId: string,
     correlationId: string | null,
-  ): Promise<void> => {
+  ): Promise<"frozen_at_claim" | "frozen_at_refund" | undefined> => {
     const transfer = operatorSolanaTransfer;
     if (!transfer || transfer.recordsBroadcasts !== true) return;
+    let frozenAtClaim = false;
     const claimed = await (async () => {
       const w = getWithdrawalById(moteDb.db, withdrawalId);
       if (!w || w.status !== "pending") {
@@ -517,12 +549,22 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         return null;
       }
       const claimedAt = Date.now();
-      const won = moteDb.db.transaction(() => {
-        const ok = claimWithdrawalForPayout(moteDb.db, withdrawalId, claimedAt, null);
-        if (ok) markChainRecordedClaim(moteDb.db, withdrawalId, "solana", claimedAt);
-        dequeuePayout(moteDb.db, withdrawalId);
-        return ok;
-      });
+      let won: boolean;
+      try {
+        won = moteDb.db.transaction(() => {
+          const ok = claimWithdrawalForPayout(moteDb.db, withdrawalId, claimedAt, null);
+          if (ok) markChainRecordedClaim(moteDb.db, withdrawalId, "solana", claimedAt);
+          dequeuePayout(moteDb.db, withdrawalId);
+          return ok;
+        });
+      } catch (err) {
+        if (!isEmergencyFrozenAbort(err)) throw err;
+        // The freeze landed after the debit (during the lane read): the
+        // claim rolled back, nothing is sent, the withdrawal stays pending.
+        frozenAtClaim = true;
+        logger.warn("withdrawal.solana.claim_frozen", { correlationId, withdrawalId });
+        return null;
+      }
       if (!won) {
         logger.error("withdrawal.payout_claim_lost", {
           correlationId,
@@ -544,7 +586,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         },
       };
     })();
-    if (!claimed) return;
+    if (!claimed) return frozenAtClaim ? "frozen_at_claim" : undefined;
+    let frozenAtRefund = false;
     try {
       try {
         const sent = await transfer.sendPayout(
@@ -574,7 +617,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
       } finally {
         reservedNonces.delete(claimed.lane.nonceValue);
       }
-      await resolveWithdrawal(withdrawalId, { inline: true, correlationId });
+      frozenAtRefund =
+        (await resolveWithdrawal(withdrawalId, { inline: true, correlationId })) === "frozen";
     } catch (err) {
       logger.error("withdrawal.solana.resolve_failed", {
         correlationId,
@@ -584,6 +628,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
     } finally {
       releasePayout(withdrawalId);
     }
+    return frozenAtRefund ? "frozen_at_refund" : undefined;
   };
 
   const resolvePayoutsOnce = async (): Promise<void> => {
@@ -724,6 +769,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
       });
     }
 
+    // This request claimed the key. If the emergency freeze refuses its money
+    // write, the error boundary reopens the key so the same-key retry after
+    // unfreeze withdraws once (every other failure keeps today's behavior).
+    c.set("idempotencyClaimOnFreeze" as never, { key: idempotencyKeyHeader, motebitId } as never);
+
     const body = await c.req.json<{
       amount: number;
       destination?: string;
@@ -819,8 +869,14 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         note: "no payout sent: the Solana transfer cannot make a durable-nonce payout decidable from finalized chain state; the withdrawal stays pending",
       });
     }
+    // The emergency freeze (#1030) refuses the payout's claim or its refund
+    // as a guarded write; either is answered 503 below, never a 200.
+    let frozenAtClaim = false;
+    let frozenAtRefund = false;
     if (isSolanaDest && operatorSolanaTransfer && pathZeroReady) {
-      await firePathZero(result.withdrawal_id, correlationId);
+      const fired = await firePathZero(result.withdrawal_id, correlationId);
+      frozenAtClaim = fired === "frozen_at_claim";
+      frozenAtRefund = fired === "frozen_at_refund";
     }
 
     // Path 2 deleted in Arc 1 Commit 2 of the off-ramp arc.
@@ -857,6 +913,16 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
     // Re-read on EVERY outcome, not only auto-settle: a landed-and-failed
     // send (#920) moves the row to `failed` with a reason, and the response
     // must say so rather than echo the stale `pending` record.
+    if (frozenAtClaim) {
+      throw new EmergencyFrozenError(
+        `Relay is in emergency freeze mode: withdrawal ${result.withdrawal_id} is recorded and its amount held, but no payout was sent. It stays pending; retry with the same Idempotency-Key after the freeze lifts — never a new key.`,
+      );
+    }
+    if (frozenAtRefund) {
+      throw new EmergencyFrozenError(
+        `Relay is in emergency freeze mode: withdrawal ${result.withdrawal_id}'s payout is proven unpaid on chain (no USDC moved), but its refund was refused by the freeze. It stays processing with that outcome recorded and its amount held; after the freeze lifts it is refunded from the same finalized facts (or by the operator's not_paid reconcile).`,
+      );
+    }
     const finalRecord = getWithdrawalById(moteDb.db, result.withdrawal_id) ?? result;
     const responseBody = {
       motebit_id: motebitId,

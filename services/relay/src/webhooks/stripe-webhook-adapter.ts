@@ -82,6 +82,15 @@ export type SubscriptionEvent =
       subscription_id: string;
       /** Stripe invoice id — used for idempotency on renewals. */
       invoice_id: string;
+      /**
+       * Why Stripe issued the invoice (`Invoice.billing_reason`), verbatim:
+       * `subscription_create` is the first period's invoice (the same period
+       * the checkout's initial credit pays for), `subscription_cycle` a new
+       * billing period, anything else (`subscription_update` prorations,
+       * `manual`, `subscription_threshold`, …) no new period. `null` when
+       * Stripe did not say.
+       */
+      billing_reason: string | null;
     }
   | {
       kind: "subscription_deleted";
@@ -205,6 +214,7 @@ export class StripeSubscriptionEventAdapter implements SubscriptionEventAdapter 
           kind: "invoice_paid",
           subscription_id: subscriptionId,
           invoice_id: invoiceId,
+          billing_reason: invoice.billing_reason ?? null,
         };
       }
 

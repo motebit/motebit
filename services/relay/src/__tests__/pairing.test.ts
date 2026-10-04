@@ -495,6 +495,11 @@ describe("Pairing Protocol", () => {
       nonce: "d".repeat(24),
       tag: "e".repeat(32),
       identity_pubkey_check: deviceA.publicKeyHex,
+      // The additive succession fields (Device A's own chain, sealed): the
+      // relay stores the transfer opaquely, so they reach Device B intact.
+      encrypted_succession: "f".repeat(80),
+      succession_nonce: "1".repeat(24),
+      succession_tag: "2".repeat(32),
     };
     const approveRes = await relay.app.request(`/pairing/${pairing_id}/approve`, {
       method: "POST",
@@ -516,6 +521,9 @@ describe("Pairing Protocol", () => {
     expect(status.key_transfer).toBeDefined();
     expect(status.key_transfer!.x25519_pubkey).toBe("a".repeat(64));
     expect(status.key_transfer!.identity_pubkey_check).toBe(deviceA.publicKeyHex);
+    expect(status.key_transfer!.encrypted_succession).toBe("f".repeat(80));
+    expect(status.key_transfer!.succession_nonce).toBe("1".repeat(24));
+    expect(status.key_transfer!.succession_tag).toBe("2".repeat(32));
   });
 
   it("POST /pairing/:id/update-key updates device public key", async () => {

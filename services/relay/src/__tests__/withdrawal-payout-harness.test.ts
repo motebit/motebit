@@ -10,7 +10,8 @@
  *   BATCH — every withdrawable rail kind (manual, sent-undeclared,
  *   sent-declared) × every fire outcome (confirmed, unconfirmed, throws,
  *   the process died mid-fire) × a retried loop tick, then the operator's
- *   settle door.
+ *   settle door — or, for a manual rail's failure (provably nothing sent,
+ *   #1034), the queue row's own refund, exactly once.
  *
  *   PATH 1 (x402 to a 0x address) — a withdrawal the relay accepts must be
  *   one a facilitator can actually execute.
@@ -244,8 +245,16 @@ describe("harness: batch — rail kind × fire mode × fire outcome × retried t
       .prepare("SELECT status, withdrawal_id FROM relay_pending_withdrawals WHERE pending_id = ?")
       .get(pendingId) as { status: string; withdrawal_id: string | null };
     const rows = rowsOf(relay, mid);
+    // #1034's money rule: a manual rail's failure provably sent nothing, so
+    // the queue row itself is refunded (once) — it needs no settle door.
+    const refundedAtQueue = q.status === "refunded";
     if (q.status === "pending") {
       violations.push("the queue row never fired");
+    } else if (refundedAtQueue) {
+      if (kind !== "manual" || outcome === "confirmed" || outcome === "unconfirmed") {
+        violations.push(`a ${kind} rail's ${outcome} fire was refunded: the payout may have left`);
+      }
+      if (rows.length !== 0) violations.push("a refunded queue row also has a settle door");
     } else if (
       q.withdrawal_id == null ||
       rows.length !== 1 ||
@@ -261,8 +270,8 @@ describe("harness: batch — rail kind × fire mode × fire outcome × retried t
     if (rows.length === 1 && rows[0]!.status !== expected) {
       violations.push(`recorded ${rows[0]!.status}, expected ${expected}`);
     }
-    if (balance(relay, mid) !== FUNDED - W_MICRO)
-      violations.push("balance not debited exactly once");
+    if (balance(relay, mid) !== (refundedAtQueue ? FUNDED : FUNDED - W_MICRO))
+      violations.push("balance not debited exactly once (or refunded exactly once)");
     const queue = await adminQueueIds(relay);
     for (const w of rows) {
       if (OPEN.has(w.status) && !queue.has(w.withdrawal_id)) {
@@ -288,7 +297,7 @@ describe("harness: batch — rail kind × fire mode × fire outcome × retried t
       if (OPEN.has(w.status)) violations.push(`the settle door did not settle a ${w.status} row`);
     }
     const completed = after.filter((w) => w.status === "completed").length;
-    if (completed + refunded !== 1) {
+    if (completed + refunded + (refundedAtQueue ? 1 : 0) !== 1) {
       violations.push(`completed=${completed} refunds=${refunded}: funds stranded or out twice`);
     }
     expect(violations).toEqual([]);

@@ -24,11 +24,14 @@ describe("resultLabels", () => {
     expect(l.headline).toContain("pinned");
   });
 
-  it("sovereign is the strongest rung — offline, no operator, tone bound", () => {
+  it("sovereign is a math binding, offline, no operator — and never reads as trust", () => {
     const l = resultLabels(ok({ binding: "sovereign" }));
     expect(l.tone).toBe("bound");
     expect(l.headline.toLowerCase()).toContain("sovereign");
-    expect(l.detail.toLowerCase()).toContain("no operator to trust");
+    expect(l.detail.toLowerCase()).toContain("no relay or operator");
+    expect(l.detail).toContain("not trust");
+    expect(l.detail).toContain("minted a second ago");
+    expect(l.detail).not.toContain("strongest binding");
   });
 
   it("anchored claims the strongest binding — on-chain, non-equivocable, tone bound", () => {

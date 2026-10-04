@@ -223,6 +223,7 @@ const REGISTERED_REGISTRIES: ReadonlyArray<RegisteredRegistry> = [
     doctrinePaths: ["docs/doctrine/registry-pattern-canonical.md"],
   },
   {
+    name: "EvalKind",
     // Eleventh registered registry — the EvalAttestation measurement-family
     // discriminator (docs/doctrine/evals-as-attestations.md, promoted
     // 2026-07-08). Union + array + guard share eval-attestation.ts; the

@@ -278,9 +278,9 @@ const WRITERS: readonly Writer[] = [
     file: R + "succession-apply.ts",
     verb: "UPDATE",
     table: "agent_registry",
-    count: 1,
+    count: 2,
     principal:
-      "the identity itself (or its guardian for a recovery) — the registry key moves only FROM the key the verified link retires, or into an empty master-token slot",
+      "the identity itself (or its guardian for a recovery) — the registry key moves only FROM the key the verified link retires, or into an empty master-token slot; and, in the same transaction, a `settlement_address` moves only when it is the RETIRED key's derived Solana address, to the new key's (a custom address is never touched; an open obligation already admitted to the retired address — a withdrawal destination, a P2P task's admitted pay-to — is never rewritten, only reported in `open_obligations`)",
   },
   {
     file: R + "succession-apply.ts",
@@ -289,6 +289,14 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       "the identity itself — the same verified succession retires pending pairing sessions that would carry the retired key",
+  },
+  {
+    file: R + "succession-apply.ts",
+    verb: "UPDATE",
+    table: "relay_service_listings",
+    count: 1,
+    principal:
+      "the identity itself (or its guardian for a recovery) — the same verified succession moves a listing `pay_to_address` only when it is the RETIRED key's derived Solana address, to the new key's, in the same transaction; a custom address is never touched (only a derived-bound destination moves with the key)",
   },
   {
     file: R + "migration.ts",
@@ -540,11 +548,22 @@ const WRITERS: readonly Writer[] = [
       "`enqueuePendingWithdrawal` — /withdraw under `requireFirstPerson`, or the relay's sweep loop for an identity's own configured threshold",
   },
   {
+    file: R + "account-store-sqlite.ts",
+    verb: "UPDATE",
+    table: "relay_pending_withdrawals",
+    count: 1,
+    principal:
+      LOOP +
+      ": `refundPendingWithdrawal` — the batch-withdrawal refund of a payout that provably never left: the `refund_owed → refunded` CAS committed with its ledger credit, at most once",
+  },
+  {
     file: R + "batch-withdrawals.ts",
     verb: "UPDATE",
     table: "relay_pending_withdrawals",
-    count: 3,
-    principal: LOOP + ": the batch-withdrawal fire path",
+    count: 6,
+    principal:
+      LOOP +
+      ": the batch-withdrawal fire path — the claim (`pending → firing` CAS), and each outcome FROM `firing` only: `fired` (with its withdrawal row, one transaction), `unknown` (the payout may have left: a `processing` withdrawal row in the same transaction, never a refund), `refund_owed` (proven not sent: `PayoutNotSentError` or a manual rail; refunded by the account store's `refundPendingWithdrawal`)",
   },
   {
     file: R + "batch-withdrawals.ts",
@@ -553,7 +572,7 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       LOOP +
-      ": the batch-withdrawal fire path, for a queue row it claimed (`pending → firing` CAS) before calling the rail; a fired payout the rail has not confirmed is recorded `processing` (claimed_at = fire time, payout_valid_until = the rail's declared validity or a 24h floor), never `pending`, so only the operator's reconcile settles it — except a rail that declares itself manual (`payoutMode: manual`, Stripe), whose fire sends nothing and is recorded `pending` for the ordinary admin complete/fail (#921); a rail throw, a batch-reported failure, or a `firing` row a dead process left (recovered by the loop, never re-fired) is recorded the same way — `processing` for a sent-mode rail, `pending` for a manual one — in one transaction with the queue row's `firing` CAS, so no debited row is left without a settle door (#945)",
+      ": the batch-withdrawal fire path, for a queue row it claimed (`pending → firing` CAS) before calling the rail; a fired payout the rail has not confirmed is recorded `processing` (claimed_at = fire time, payout_valid_until = the rail's declared validity or a 24h floor), never `pending`, so only the operator's reconcile settles it — except a rail that declares itself manual (`payoutMode: manual`, Stripe), whose fire sends nothing and is recorded `pending` for the ordinary admin complete/fail (#921); a failure whose outcome is unknown (any throw but `PayoutNotSentError` on a non-manual rail, a per-item batch failure, a send the process died in) is recorded the same `processing` way with an unresolved-payout note, never refunded",
   },
   {
     file: R + "deposit-detector.ts",
@@ -579,12 +598,55 @@ const WRITERS: readonly Writer[] = [
       "Stripe-rooted writers (webhook signature; session-status' server-side session read) and `setSubscriptionStatus(db, owner: BoundIdentity, …)`, the only writer the owner routes (cancel, resubscribe) use — `bindCaller` proves the caller is the identity or the operator (#846; the routes had no authentication at all)",
   },
   {
-    file: R + "tasks.ts",
+    file: R + "allocation-escrow.ts",
     verb: "INSERT",
     table: "relay_allocations",
     count: 1,
     principal:
-      "task submission — the budget is locked from `submittedBy = callerMotebitId` (dualAuth task:submit) or the operator's body value; written only after the hold's debit succeeded (#901 removed the unfunded best-effort insert)",
+      "task submission (`openAllocation`, called by the submission path only) — the budget is locked from `submittedBy = callerMotebitId` (dualAuth task:submit) or the operator's body value, in the admission transaction with its hold (#901: no unfunded row commits)",
+  },
+  {
+    file: R + "allocation-escrow.ts",
+    verb: "UPDATE",
+    table: "relay_allocations",
+    count: 1,
+    principal:
+      MIGRATION +
+      " (v55: `review_reason`, the operator-visible flag on an allocation a legacy row could not be attributed to cleanly — a marker, never an identity column)",
+  },
+  {
+    file: R + "allocation-escrow.ts",
+    verb: "INSERT",
+    table: "relay_settlements",
+    count: 2,
+    principal:
+      "the escrow chokepoint's `settlement_fee` (a relay-custody settlement of a verified receipt, payee = the receipt signer in the signed body, refused above what the allocation holds) and `recordP2pSettlementAudit` (a verified P2P payment proof; payee = the admitted `target_agent` the proof paid, `p2pPayeeOf`, never the path agent — #959). Known residual: the relay-mode row's column is still the path agent while its signed body names the credited receipt signer",
+  },
+  {
+    file: R + "allocation-escrow.ts",
+    verb: "INSERT",
+    table: "relay_federation_settlements",
+    count: 2,
+    principal:
+      "(1) the escrow chokepoint's `federated_forward` — this relay's own settlement forward of a task a federation peer returned a signed result for, from the allocation's held escrow; (2) `recordInboundFederatedSettlement` — a federation peer's signed settlement forward for a task this relay executed (no local escrow)",
+  },
+  {
+    file: R + "allocation-escrow.ts",
+    verb: "UPDATE",
+    table: "relay_federation_settlements",
+    count: 4,
+    principal:
+      LOOP +
+      ": a forward's lifecycle — `delivered` on the peer's acknowledgement (settlement retry loop), `failed` on retry exhaustion (in the refund's transaction) — and the v55 migration's stamp/status backfill; never the identity columns",
+  },
+  {
+    file: R + "allocation-escrow.ts",
+    verb: "UPDATE",
+    table: "relay_transactions",
+    count: 3,
+    principal:
+      MIGRATION +
+      " (v55: stamps existing settlement credits and dispute rows with the allocation they moved — `allocation_id` / `allocation_kind` only, never the account)",
   },
   {
     file: R + "tasks.ts",
@@ -593,14 +655,6 @@ const WRITERS: readonly Writer[] = [
     count: 2,
     principal:
       "settlement of a receipt whose token was verified for the path worker and whose signature verified",
-  },
-  {
-    file: R + "tasks.ts",
-    verb: "INSERT",
-    table: "relay_settlements",
-    count: 4,
-    principal:
-      "settlement of a verified receipt, or a verified P2P payment proof. A P2P row's payee is the admitted `target_agent` the proof paid (`p2pPayeeOf`, column = signed body), never the path agent, and a P2P receipt from any other signer records nothing (#959). Known residual: the relay-mode row's column is still the path agent while its signed body names the credited receipt signer",
   },
   {
     file: R + "tasks.ts",
@@ -628,8 +682,10 @@ const WRITERS: readonly Writer[] = [
     file: R + "index.ts",
     verb: "UPDATE",
     table: "relay_allocations",
-    count: 2,
-    principal: LOOP + ": stale-allocation release and settlement retry",
+    count: 4,
+    principal:
+      LOOP +
+      ": stale-allocation release and settlement retry — each retires the allocation (`released`) or marks it for the operator, `review_reason` = `'unroutable_refund'` (no single hold payer to refund) or `'undetermined'` (its task is granted and unanswered — one task, one body; never refunded as stale) (a status/marker, never an identity column)",
   },
   {
     file: R + "index.ts",
@@ -674,20 +730,6 @@ const WRITERS: readonly Writer[] = [
     table: "relay_federation_settlements",
     count: 1,
     principal: LOOP + ": federation settlement anchoring",
-  },
-  {
-    file: R + "federation-callbacks.ts",
-    verb: "INSERT",
-    table: "relay_settlements",
-    count: 1,
-    principal: "a federation peer — a signed /federation/v1 result for a task this relay forwarded",
-  },
-  {
-    file: R + "federation-callbacks.ts",
-    verb: "INSERT",
-    table: "relay_federation_settlements",
-    count: 2,
-    principal: "a federation peer — signed settlement forward for a task routed through this relay",
   },
   {
     file: R + "federation-callbacks.ts",
@@ -755,9 +797,9 @@ const WRITERS: readonly Writer[] = [
     file: R + "migration.ts",
     verb: "UPDATE",
     table: "relay_migrations",
-    count: 3,
+    count: 4,
     principal:
-      "`updateMigrationState(db, owner: BoundIdentity, …)`, scoped WHERE motebit_id = owner: /migrate (signature), attestation, export, cancel, depart (each `bindCaller` — #846: any identity's token cancelled, exported or departed B)",
+      "`updateMigrationState(db, owner: BoundIdentity, …)` and `commitDeparture(db, owner: BoundIdentity, …)` (depart's waiver record + `departed` transition, one transaction with the waiver debit), each scoped WHERE motebit_id = unwrapBound(owner): /migrate (signature), attestation, export, cancel, depart (each `bindCaller` — #846: any identity's token cancelled, exported or departed B)",
   },
   {
     file: R + "migration.ts",
@@ -970,10 +1012,11 @@ const WRITERS: readonly Writer[] = [
   },
   {
     file: R + "task-queue.ts",
-    verb: "REPLACE",
+    verb: "INSERT",
     table: "relay_task_queue",
     count: 1,
-    principal: "the durable mirror of an in-memory task entry the task routes already authorized",
+    principal:
+      "the durable mirror of an in-memory task entry the task routes already authorized — inserted once, unanswered (#890 r9: a live row is written by the version-checked UPDATE, never replaced)",
   },
   {
     file: R + "task-queue.ts",
@@ -1010,22 +1053,32 @@ const WRITERS: readonly Writer[] = [
     table: "relay_disputes",
     count: 1,
     principal:
-      "the filer — a DisputeRequest signed by `filed_by`'s registered key. KNOWN GAP (#846 v2 audit): nothing checks `filed_by` is a party to the task (§4.4) — reported, not fixed here",
+      "the filer — a DisputeRequest signed by `filed_by`'s registered key, and `filed_by` must be the allocation's worker or delegator (read from the settlement row / allocation_hold payer, never the body) with the other party as respondent (§4.4); guarded to one non-expired dispute per task",
   },
   {
     file: R + "disputes.ts",
     verb: "UPDATE",
     table: "relay_allocations",
-    count: 1,
-    principal: "the same filing (flips the allocation to `disputed`) — same gap",
+    count: 2,
+    principal:
+      "(1) the same filing (flips a `locked`/`settled` allocation to `disputed`, guarded on the status it read); (2) the fund action that resolves the dispute — reached only from the operator's verdict finalized (lazy window expiry or round-2 appeal), closing `disputed` → `settled`/`released` once, behind the write-once `relay_dispute_fund_actions` claim",
   },
   {
     file: R + "disputes.ts",
     verb: "UPDATE",
     table: "relay_disputes",
-    count: 6,
+    count: 7,
     principal:
-      "state transitions: the filing above; `/resolve` — the OPERATOR's act, master token only (#846 v2: it took any caller's verdict); appeal (a party's signature); lazy finalize (time-driven)",
+      "state transitions: `/resolve` — the OPERATOR's act, master token only (#846 v2: it took any caller's verdict); appeal (a party's signature; guarded on the `resolved` state it read); lazy finalize and opened-expiry (time-driven). The filing's own `evidence` state is now set by its guarded INSERT. `fund_refusal` (`recordFundRefusal`): written only by the fund action of a verdict already being finalized (same reach as lazy finalize / round-2 appeal) — a marker on that dispute, never an identity column. The seventh: a refused round-2 verdict's retry (`tryFinalizePersistedRound2`) — the same transition the round-2 appeal makes, reached only from a dispute READ of an `appealed` dispute whose signed round-2 resolution the appeal persisted",
+  },
+  {
+    file: R + "dispute-fund-ledger.ts",
+    verb: "UPDATE",
+    table: "relay_disputes",
+    count: 1,
+    principal:
+      MIGRATION +
+      " (v50: flag `fund_refusal = 'task_mismatch'` on disputes whose task is not their allocation's — a marker column, never an identity column)",
   },
   {
     file: R + "disputes.ts",
@@ -1183,7 +1236,7 @@ const REFILE_ALLOWED: ReadonlyArray<{ file: string; table: string; reason: strin
     file: R + "task-queue.ts",
     table: "relay_task_queue",
     reason:
-      "the durable mirror re-writes `worker_id = task.motebit_id`, the task's own fixed target (the same value its INSERT wrote), never another identity",
+      "the durable mirror re-writes `worker_id = task.motebit_id` and `submitter_id = submitted_by`, the task's own fixed target and submitter (the values its INSERT wrote — the pre-#890-r9 INSERT OR REPLACE re-wrote the same two), never another identity",
   },
 ];
 
@@ -1276,6 +1329,7 @@ const WRITER_HELPERS: ReadonlyArray<{ file: string; fn: string; param: string }>
   { file: R + "event-seq.ts", fn: "readEventsAfterSeq", param: "owner" },
   { file: R + "subscriptions.ts", fn: "setSubscriptionStatus", param: "owner" },
   { file: R + "migration.ts", fn: "updateMigrationState", param: "owner" },
+  { file: R + "migration.ts", fn: "commitDeparture", param: "owner" },
   { file: R + "key-rotation.ts", fn: "insertApproval", param: "owner" },
   { file: R + "credentials.ts", fn: "insertSubmittedCredential", param: "owner" },
   { file: R + "delegation-revocations.ts", fn: "insertDelegationRevocation", param: "owner" },

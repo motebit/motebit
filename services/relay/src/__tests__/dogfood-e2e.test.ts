@@ -37,7 +37,7 @@ import {
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
-import { buildP2pPaymentProof, HONEST_PAYMENT_CHAIN } from "./test-helpers.js";
+import { buildP2pPaymentProof, HONEST_PAYMENT_CHAIN, TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 // Arc 3.5: paid A→B delegation settles P2P. B declares this settlement address
 // and A submits a matching payment_proof.
@@ -128,6 +128,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      ...TEST_RELAY_NETWORK,
       p2pPaymentChain: HONEST_PAYMENT_CHAIN,
       allowPrivateEndpoints: true,
       dbPath: ":memory:",
@@ -980,6 +981,7 @@ describe("x402 Payment Gate", () => {
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      ...TEST_RELAY_NETWORK,
       p2pPaymentChain: HONEST_PAYMENT_CHAIN,
       allowPrivateEndpoints: true,
       dbPath: ":memory:",

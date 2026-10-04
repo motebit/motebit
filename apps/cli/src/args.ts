@@ -103,6 +103,8 @@ export interface CliConfig {
   prune?: boolean;
   /** `motebit init` — overwrite an existing motebit.yaml. */
   force?: boolean;
+  /** `motebit sync retire` / `clear-intent` — act without the confirmation prompt. */
+  yes?: boolean;
   /** `motebit logs` — follow mode, polls for new outcomes. */
   tail?: boolean;
   /** `motebit logs` — max number of outcomes to show. */
@@ -111,6 +113,12 @@ export interface CliConfig {
   eventType?: string;
   /** `motebit migrate` — forfeit remaining relay balance instead of withdrawing. */
   waive?: boolean;
+  /**
+   * `motebit rotate` — rotate even though the retiring key's wallet holds
+   * value (or its balance cannot be read): the funds stay at the retired
+   * key's address. Never a default; the emergency (compromised-key) door.
+   */
+  abandonFunds?: boolean;
   /** `motebit relay up` — HTTP port the relay binds to (default 3000). */
   port?: string;
   /** `motebit relay up` — x402 payout address (enables the x402 settlement rail). */
@@ -173,11 +181,13 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       all: { type: "boolean", default: false },
       "solana-rpc-url": { type: "string" },
       "address-only": { type: "boolean", default: false },
+      "abandon-funds": { type: "boolean", default: false },
       voice: { type: "boolean", default: false },
       file: { type: "string", short: "f" },
       "dry-run": { type: "boolean", default: false },
       prune: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      yes: { type: "boolean", default: false },
       tail: { type: "boolean", default: false },
       limit: { type: "string" },
       waive: { type: "boolean", default: false },
@@ -316,11 +326,13 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     all: values.all,
     solanaRpcUrl: values["solana-rpc-url"],
     walletAddressOnly: values["address-only"],
+    abandonFunds: values["abandon-funds"],
     voice: values.voice,
     file: values.file,
     dryRun: values["dry-run"],
     prune: values.prune,
     force: values.force,
+    yes: values.yes,
     tail: values.tail,
     limit: values.limit != null ? parseInt(values.limit, 10) : undefined,
     eventType: values["event-type"],
@@ -472,9 +484,18 @@ Commands:
                             (+ time window for tokens). [--json]
   register [--sync-url <url>]  Register this identity with the relay (enables discovery)
   rotate [--reason "..."]   Rotate Ed25519 keypair with cryptographic succession chain
+                            Your wallet address IS this key: rotation refuses while
+                            the old address holds SOL or tokens, or the relay holds
+                            an open withdrawal / P2P payment to it (move or settle
+                            them first), or pass --abandon-funds to leave them at
+                            the retired key
   machines [--json]         The machines this motebit runs unattended work on (reduced here, never by the relay)
   machines retire <device_id>  Sign a retirement for a machine's line (undo: machines enroll)
   machines enroll <device_id> [--force]  Rejoin a retired line, or enrol an id explicitly
+  status                    Identity, relay and compaction floor; a relay pinning it is named
+  sync status [--json]      Each relay stream behind the compaction floor: acked cursor, last ack, events held back
+  sync retire <relay-url> [--force] [--yes]  Stop a relay you no longer use from holding compaction back
+  sync clear-intent [--force] [--yes]  Clear the record that this identity syncs (confirm first)
   migrate-keyring [--force] Re-encrypt a plaintext ~/.motebit/dev-keyring.json
                             under a passphrase (recovery path when
                             cli_encrypted_key was lost from config but

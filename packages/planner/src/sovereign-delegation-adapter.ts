@@ -7,7 +7,9 @@
  * and receipts all happen peer-to-peer.
  *
  * Flow:
- *   1. DISCOVER — GET relay /api/v1/market/candidates (free, read-only)
+ *   1. DISCOVER — GET relay /api/v1/market/candidates (free, read-only), then
+ *      RANK with the delegator's own first-person selector (the relay's order
+ *      is only the input set — first-person-worker-routing.md)
  *   2. PAY — SolanaWalletRail.send(pay_to_address, cost) → tx_hash
  *   3. EXECUTE — MCP tools/call → motebit_task (direct to agent endpoint)
  *   4. RECEIPT — Verify receipt via embedded public key, return DelegatedStepResult
@@ -89,9 +91,30 @@ export interface SovereignPaidLedger {
   resolve(taskId: string): boolean;
 }
 
+/**
+ * First-person worker selector (docs/doctrine/first-person-worker-routing.md).
+ * Given the discovered, admissible candidates, returns the `motebit_id` to
+ * hire — ranked by the DELEGATOR's own trust ledger — or null to hire nobody.
+ * Structurally the runtime's `WorkerSelector`, plus the capability being hired
+ * (this package sits below the runtime in the layer DAG, so the shape is
+ * restated here, not imported).
+ */
+export type SovereignWorkerSelector = (
+  candidates: ReadonlyArray<{ motebit_id: string; unitCost?: number; bonded?: boolean }>,
+  context: { capability: string },
+) => Promise<string | null> | string | null;
+
 export interface SovereignDelegationConfig {
   /** Relay URL for discovery only (no settlement flows through relay). */
   discoveryUrl: string;
+  /**
+   * REQUIRED first-person ranker. The relay's `/market/candidates` order is
+   * the RELAY's ranking (a global score), never the delegator's; it is used
+   * only as the input set. There is no default: an adapter that could fall
+   * back to the relay's order would hand the irreversible payment to a
+   * global score.
+   */
+  selectWorker: SovereignWorkerSelector;
   /** Static auth token or async factory for relay discovery calls. */
   authToken?: string | ((audience?: TokenAudience) => Promise<string>);
   /** Local motebit ID. */
@@ -193,7 +216,14 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
    */
   private readonly paidSignatures: string[] = [];
 
-  constructor(private config: SovereignDelegationConfig) {}
+  constructor(private config: SovereignDelegationConfig) {
+    // The type makes the selector required; this guards untyped callers too.
+    if (typeof (config as Partial<SovereignDelegationConfig>).selectWorker !== "function") {
+      throw new Error(
+        "SovereignDelegationAdapter requires selectWorker: the delegator's first-person ranker (the relay's candidate order is never the choice)",
+      );
+    }
+  }
 
   private now(): number {
     return (this.config.now ?? Date.now)();
@@ -273,7 +303,23 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
       throw new Error("No candidates found for sovereign delegation");
     }
 
-    const candidate = candidates[0]!;
+    // The relay's order is an INPUT SET, never the choice: the delegator's
+    // own selector picks (docs/doctrine/first-person-worker-routing.md).
+    const capabilityForRanking = step.required_capabilities?.[0] ?? "";
+    const chosenId = await this.config.selectWorker(
+      candidates.map((c) => {
+        const unitCost = c.pricing.find((p) => p.per === "task")?.unit_cost;
+        return { motebit_id: c.motebit_id, ...(unitCost != null ? { unitCost } : {}) };
+      }),
+      { capability: capabilityForRanking },
+    );
+    const candidate =
+      chosenId != null ? candidates.find((c) => c.motebit_id === chosenId) : undefined;
+    if (candidate == null) {
+      // "No candidates" is non-retryable in delegateStep: nothing was paid,
+      // and the relay's ranking is never consulted as a fallback.
+      throw new Error("No candidates chosen by the first-person selector for sovereign delegation");
+    }
 
     if (!candidate.endpoint_url) {
       const err = new Error("Candidate has no MCP endpoint URL");
@@ -434,7 +480,7 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
         (payErr as DelegationError).failedAgentId = candidate.motebit_id;
         throw payErr;
       }
-      throw terminal(
+      throw undeterminedTerminal(
         `Payment status unknown (${costMicro} micro to worker ${candidate.motebit_id} at ` +
           `${toAddress}; the send failed with "${sendMsg}" and whether it landed could not be ` +
           `confirmed: ${verdict.reason}). Not retried — check the wallet's history before ` +
@@ -493,7 +539,7 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
    */
   private paidUnretrieved(entry: SovereignPaidEntry, reason: string): DelegationError {
     this.ledgerWrite("record_unretrieved", entry, (l) => l.recordSettledUnretrieved(entry));
-    const err = terminal(
+    const err = undeterminedTerminal(
       `Paid, result not retrieved (tx ${entry.txHash}, worker ${entry.workerMotebitId}): ` +
         `${reason}. Not retried — another attempt would pay again. The payment is recorded ` +
         `as outstanding (task ${entry.taskId}).`,
@@ -748,8 +794,23 @@ interface DelegationError extends Error {
   failedAgentId?: string;
   /** No further attempt may be made — one could pay a second time (#887). */
   terminal?: boolean;
+  /**
+   * Money may have moved and its outcome is unknown (#890) — "payment status
+   * unknown" and "paid, result not retrieved". The plan engine holds the
+   * step instead of failing it, so a scheduler never re-fires the goal into
+   * a second payment. A refusal BEFORE payment is terminal but not
+   * undetermined: nothing moved. See `isDelegationUndetermined`.
+   */
+  undetermined?: boolean;
   /** The payment this step made, when one is known to have moved. */
   paidTxHash?: string;
+}
+
+/** A terminal error for an attempt whose money may have moved: outcome unknown (#890). */
+function undeterminedTerminal(message: string, cause?: unknown): DelegationError {
+  const err = terminal(message, cause);
+  err.undetermined = true;
+  return err;
 }
 
 function terminal(message: string, cause?: unknown): DelegationError {

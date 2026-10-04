@@ -63,7 +63,7 @@ export function fromCents(cents: number): number {
  * @param feeRate platform fee rate in [0, 1) — e.g. 0.05
  */
 export function computeP2pFeeMicro(netCostMicro: number, feeRate: number): number {
-  if (feeRate < 0 || feeRate >= 1) {
+  if (!(feeRate >= 0 && feeRate < 1)) {
     throw new Error(`feeRate must be in [0, 1), got ${feeRate}`);
   }
   return Math.round(netCostMicro / (1 - feeRate)) - netCostMicro;
@@ -97,7 +97,8 @@ export interface SettlementSplitMicro {
  *
  * The fee is the rounded leg and the net is the remainder — the same direction
  * as {@link computeP2pFeeMicro} and {@link computeFederatedFeeSplit}, so all
- * three lanes (relay-custody, P2P, federated) agree on who absorbs the dust.
+ * three fee computations (relay-custody, P2P, federated settlement — not the
+ * settlement lanes of `docs/doctrine/settlement-rails.md`) agree on who absorbs the dust.
  *
  * @param netExact worker net, possibly fractional micro-units
  * @param feeExact platform fee, possibly fractional micro-units
@@ -115,7 +116,7 @@ export function roundSettlementSplitMicro(
 export interface FederatedFeeSplit {
   /** Origin relay (A) fee leg — `round(budget · feeRate)`. */
   originFeeMicro: number;
-  /** Executor relay (B) fee leg — `round((budget − originFee) · feeRate)`. */
+  /** Executor relay (B) fee leg — `round((budget − originFee) · executorFeeRate)`. */
   executorFeeMicro: number;
   /** Worker net leg — the remainder. `budget − originFee − executorFee`. */
   workerNetMicro: number;
@@ -130,21 +131,34 @@ export interface FederatedFeeSplit {
  * $0.9025`. The three legs sum to the budget exactly (no float drift — integer
  * subtraction down the chain).
  *
+ * Each relay applies ITS OWN rate (§7.1): `feeRate` is the origin's, and
+ * `executorFeeRate` the executor's — each declared as `fee_rate` in that
+ * relay's signed discovery metadata. It defaults to `feeRate`, the
+ * equal-rates case.
+ *
  * Interop law on the money path: the origin relay's forward-site validator
  * (`federatedP2pIntent`) and the delegator client that builds the 3-leg proof
  * MUST compute this identically, or the proof is rejected leg-by-leg. Hosted
  * here as the single canonical source consumed by both.
  *
  * @param budgetMicro the remote worker's listed unit_cost, in micro-units
- * @param feeRate platform fee rate in [0, 1) — e.g. 0.05
+ * @param feeRate origin relay's platform fee rate in [0, 1) — e.g. 0.05
+ * @param executorFeeRate executor relay's platform fee rate in [0, 1); defaults to `feeRate`
  */
-export function computeFederatedFeeSplit(budgetMicro: number, feeRate: number): FederatedFeeSplit {
-  if (feeRate < 0 || feeRate >= 1) {
+export function computeFederatedFeeSplit(
+  budgetMicro: number,
+  feeRate: number,
+  executorFeeRate: number = feeRate,
+): FederatedFeeSplit {
+  if (!(feeRate >= 0 && feeRate < 1)) {
     throw new Error(`feeRate must be in [0, 1), got ${feeRate}`);
+  }
+  if (!(executorFeeRate >= 0 && executorFeeRate < 1)) {
+    throw new Error(`executorFeeRate must be in [0, 1), got ${executorFeeRate}`);
   }
   const originFeeMicro = Math.round(budgetMicro * feeRate);
   const forwardedMicro = budgetMicro - originFeeMicro;
-  const executorFeeMicro = Math.round(forwardedMicro * feeRate);
+  const executorFeeMicro = Math.round(forwardedMicro * executorFeeRate);
   const workerNetMicro = forwardedMicro - executorFeeMicro;
   return { originFeeMicro, executorFeeMicro, workerNetMicro };
 }

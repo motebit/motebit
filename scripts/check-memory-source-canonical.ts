@@ -77,9 +77,23 @@ function walkTsFiles(dir: string): string[] {
     return out;
   }
   for (const entry of entries) {
+    // Never descend into node_modules: every caller discards those paths (the
+    // src roots hold none; the `apps` walk filters `node_modules` out), and
+    // following pnpm's workspace symlinks through them cost ~55s of stat per
+    // run — 5 probes x 65s was over half of check-gates-effective's runtime.
+    if (entry === "node_modules") continue;
     const rel = join(dir, entry);
     const full = resolve(ROOT, rel);
-    const st = statSync(full);
+    let st: ReturnType<typeof statSync>;
+    try {
+      st = statSync(full);
+    } catch (err) {
+      // A dangling symlink (e.g. a stale Expo prebuild under the gitignored
+      // apps/mobile/ios/Pods after node_modules changed) has no content to
+      // scan. Any other stat failure still fails the gate.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
+    }
     if (st.isDirectory()) {
       out.push(...walkTsFiles(rel));
     } else if (entry.endsWith(".ts") && !entry.endsWith(".d.ts")) {

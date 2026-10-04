@@ -8,8 +8,13 @@
  * in-process relay (composition-preserves-enforcement).
  */
 import * as fs from "node:fs";
-import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
+import {
+  verify,
+  identityVerifyOutcome,
+  rotate as rotateIdentityFile,
+} from "@motebit/identity-file";
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "@motebit/surface-kit";
+import type { KeyRotationFundsState } from "@motebit/surface-kit";
 import { hexToBytes } from "@motebit/encryption";
 import {
   refuseIfKeyReplacedSince,
@@ -18,7 +23,7 @@ import {
   type IdentityChange,
 } from "./config.js";
 import { currentModeOr, writeFileAtomic } from "./durable-file.js";
-import { decryptPrivateKey, encryptPrivateKey } from "./identity.js";
+import { assertRotatedIdentityIntact, decryptPrivateKey, encryptPrivateKey } from "./identity.js";
 import type { PendingRotation, PendingRotationPort } from "./pending-rotation.js";
 
 export interface RotationDeps {
@@ -34,6 +39,8 @@ export interface RotationDeps {
   passphrase: string;
   reason?: string;
   syncUrl: string;
+  readWalletHoldings: KeyRotationPorts["readWalletHoldings"]; // I0: the retiring key's wallet
+  abandonFunds?: boolean; // `--abandon-funds`: rotate though it holds value / cannot be read
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -75,7 +82,7 @@ export type RotationOutcome =
   | {
       kind: "stopped";
       motebitId: string;
-      state: "unreachable" | "diverged" | "refused" | "held-unopenable";
+      state: "unreachable" | "diverged" | "refused" | "held-unopenable" | KeyRotationFundsState;
       message: string;
       relayKey?: string;
       notes: RotationNote[];
@@ -84,10 +91,10 @@ export type RotationOutcome =
 export async function performRotation(deps: RotationDeps): Promise<RotationOutcome> {
   const existingContent = fs.readFileSync(deps.identityPath, "utf-8");
   const verified = await verify(existingContent, { expectedType: "identity" });
-  if (verified.type !== "identity" || !verified.valid || !verified.identity) {
-    throw new Error(
-      `identity file verification failed: ${verified.errors?.[0]?.message ?? "invalid"}`,
-    );
+  // Intact = signature AND succession chain; never extend a broken chain.
+  const intact = identityVerifyOutcome(verified);
+  if (verified.type !== "identity" || !intact.valid || !verified.identity) {
+    throw new Error(`identity file verification failed: ${intact.error ?? "invalid"}`);
   }
   const identity = verified.identity;
   const motebitId = identity.motebit_id;
@@ -178,16 +185,14 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
           newPrivateKey: hexToBytes(privateKeyHex),
           successionRecord: record,
         });
-        const check = await verify(rotated, { expectedType: "identity" });
-        if (!check.valid) {
-          throw new Error(
-            `rotated identity file failed self-verification; nothing was changed: ${check.errors?.[0]?.message ?? "invalid"}`,
-          );
-        }
+        await assertRotatedIdentityIntact(rotated);
         // Atomic: a torn write would leave the succession's only signed record unparseable.
         writeFileAtomic(deps.identityPath, rotated, currentModeOr(deps.identityPath, 0o644));
       }
     },
+    readWalletHoldings: deps.readWalletHoldings,
+    ...(deps.abandonFunds === true ? { acknowledgeFundsAtRisk: true } : {}),
+    fundsAcknowledgment: "--abandon-funds",
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     ...(deps.now ? { now: deps.now } : {}),

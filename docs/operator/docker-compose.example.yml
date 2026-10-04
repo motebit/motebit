@@ -16,7 +16,7 @@
 
 services:
   motebit-relay:
-    image: ghcr.io/motebit/relay:1.0.1
+    image: ghcr.io/motebit/relay:1.1.0
     container_name: motebit-relay
     restart: unless-stopped
     ports:

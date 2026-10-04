@@ -76,7 +76,12 @@ import { createLogger } from "./logger.js";
 import { parseBoolEnv, parseFloatEnv, parseIntEnv } from "./env.js";
 import { buildOutboundPolicy } from "./outbound-policy.js";
 import { createRelaySchema } from "./schema.js";
-import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
+import {
+  createRelayConfigTable,
+  installFreezeMoneyGuards,
+  loadFreezeState,
+  persistFreeze,
+} from "./freeze.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
 import {
@@ -87,6 +92,7 @@ import {
   registerWebSocketRoutes,
   WS_OPEN,
 } from "./websocket.js";
+import { TaskClaims } from "./task-claim.js";
 import type { RetireKeyConnections } from "./succession-apply.js";
 import type {
   CloseIdentityConnections,
@@ -109,6 +115,7 @@ import {
   registerFederationRoutes,
   startHeartbeatLoop,
   startSettlementRetryLoop,
+  processResultDeliveries,
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { startRevocationHorizonLoop } from "./horizon.js";
@@ -130,7 +137,11 @@ import {
 } from "./credential-anchoring.js";
 import { aggregateFees } from "./fees.js";
 import { aggregateHealthSummary } from "./health-summary.js";
-import { startDepositDetector, USDC_CONTRACTS } from "./deposit-detector.js";
+import {
+  createDepositDetectorTable,
+  startDepositDetector,
+  USDC_CONTRACTS,
+} from "./deposit-detector.js";
 import {
   startTreasuryReconciliationLoop,
   getTreasuryReconciliationStats,
@@ -159,17 +170,17 @@ import {
   type OnrampAdapter,
 } from "./onramp.js";
 import { registerOfframpRoutes, BridgeOfframpAdapter, type OfframpAdapter } from "./offramp.js";
-import { createTaskRouter } from "./task-routing.js";
+import { createTaskRouter, cleanupTaskRoutes } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
 import {
   createAccountTables,
   createWithdrawalTables,
   createProofTable,
   createWalletTable,
-  creditAccount,
-  getAllocationHoldRemaining,
   storeSettlementProof,
 } from "./accounts.js";
+import { allocationEscrowHeld } from "./dispute-fund-ledger.js";
+import { allocationHoldPayer, forwardOf, moveAllocationMoney } from "./allocation-escrow.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import { registerStateExportRoutes } from "./state-export.js";
 import { registerTrustGraphRoutes } from "./trust-graph.js";
@@ -186,9 +197,11 @@ import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { registerHostRosterRoutes } from "./host-roster-routes.js";
 import { observeHostConnection, sweepHostLiveness } from "./host-roster-store.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
-import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
+import { recoverSettlements, SETTLEMENT_RECOVERY_CLOSE_BOUND_MS } from "./settlement-recovery.js";
+import type { SettlementRecoveryDeps, SettlementRecoveryReport } from "./settlement-recovery.js";
+import { registerTaskRoutes, TASK_TTL_MS, workerKeyFor } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
-import { TaskQueue } from "./task-queue.js";
+import { TaskQueue, installSettlementGuards } from "./task-queue.js";
 import {
   registerCommandRoutes,
   handleCommandResponse,
@@ -239,6 +252,7 @@ export interface X402Config {
 export type ShutdownStateGetter = () => boolean;
 
 const staleAllocationLogger = createLogger({ service: "stale-allocations" });
+const retryRefundLogger = createLogger({ service: "settlement-retry-refund" });
 
 /**
  * Release budget allocations that have sat `'locked'` past the horizon with no
@@ -275,6 +289,14 @@ export function releaseStaleAllocations(
   now: number,
   horizonMs: number,
   resolveDelegator: (taskId: string) => string | undefined,
+  /**
+   * Whether the task is granted and unanswered (one task, one body —
+   * `TaskClaims.holdsUnresolvedGrant`): its executor may have run it, so
+   * its hold is never refunded as stale. It is flagged
+   * (`review_reason = 'undetermined'`) and stays locked until the
+   * executor's signed result settles it. Absent: no task is.
+   */
+  holdsUnresolvedGrant?: (taskId: string) => boolean,
 ): number {
   try {
     const cutoff = now - horizonMs;
@@ -290,14 +312,59 @@ export function releaseStaleAllocations(
     }>;
     if (stale.length === 0) return 0;
 
+    // The operator-visible flag (a marker, never an identity column): the
+    // FIRST reason sticks.
+    const flagForReview = (allocationId: string, reason: string): void => {
+      db.prepare(
+        "UPDATE relay_allocations SET review_reason = COALESCE(review_reason, ?) WHERE allocation_id = ?",
+      ).run(reason, allocationId);
+    };
+    let released = 0;
     db.exec("BEGIN");
     try {
       for (const alloc of stale) {
-        const held = getAllocationHoldRemaining(db, alloc.allocation_id);
-        if (held <= 0) {
-          // Nothing was ever debited for this row (or it was already
-          // released). Skip the credit; the status flip below still retires
-          // the row so it stops being reconsidered every tick.
+        if (holdsUnresolvedGrant?.(alloc.task_id) === true) {
+          flagForReview(alloc.allocation_id, "undetermined");
+          continue;
+        }
+        // What the ledger still holds — the one primitive every refund of an
+        // allocation pays out of (allocation-escrow.ts). Holds − releases
+        // alone (F3) missed a federated origin's forward.
+        const held = allocationEscrowHeld(db, alloc.allocation_id);
+        if (held > 0) {
+          // The refund goes to the allocation's HOLD PAYER, read from the
+          // ledger — never the queue's submitter guess, never a fallback to
+          // the allocation's motebit_id (the worker).
+          const payer = allocationHoldPayer(db, alloc.allocation_id);
+          const queued = resolveDelegator(alloc.task_id);
+          if (payer === null) {
+            // No single payer to refund: the allocation stays `locked`,
+            // flagged for the operator (visible), never retired holding money.
+            flagForReview(alloc.allocation_id, "unroutable_refund");
+            staleAllocationLogger.error("stale_allocation.unroutable", {
+              allocationId: alloc.allocation_id,
+              held,
+            });
+            continue;
+          }
+          if (queued !== undefined && queued !== payer) {
+            staleAllocationLogger.warn("stale_allocation.submitter_differs_from_payer", {
+              allocationId: alloc.allocation_id,
+              submitter: queued,
+              payer,
+            });
+          }
+          moveAllocationMoney(db, {
+            kind: "sweep_refund",
+            allocationId: alloc.allocation_id,
+            amount: held,
+            party: payer,
+            description: `Stale allocation release for task ${alloc.task_id}`,
+          });
+        } else {
+          // Nothing was ever debited for this row, it was already released,
+          // or a federated forward consumed it. The status flip below still
+          // retires the row so it stops being reconsidered.
           staleAllocationLogger.warn("stale_allocation.unfunded_skipped", {
             allocationId: alloc.allocation_id,
             taskId: alloc.task_id,
@@ -305,22 +372,15 @@ export function releaseStaleAllocations(
             reason:
               "allocation holds nothing on the ledger — never debited (best-effort path) or already released; release skipped to prevent minting unfunded balance",
           });
-          continue;
         }
-        creditAccount(
-          db,
-          resolveDelegator(alloc.task_id) ?? alloc.motebit_id,
-          held,
-          "allocation_release",
-          alloc.allocation_id,
-          `Stale allocation release for task ${alloc.task_id}`,
-        );
+        released += db
+          .prepare(
+            "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE allocation_id = ? AND status = 'locked'",
+          )
+          .run(now, alloc.allocation_id).changes;
       }
-      db.prepare(
-        "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE status = 'locked' AND created_at < ?",
-      ).run(now, cutoff);
       db.exec("COMMIT");
-      return stale.length;
+      return released;
     } catch (err) {
       db.exec("ROLLBACK");
       staleAllocationLogger.error("stale_allocation.release_failed", {
@@ -330,6 +390,112 @@ export function releaseStaleAllocations(
     }
   } catch {
     return 0; // Best-effort cleanup
+  }
+}
+
+/**
+ * A federated forward whose delivery retries are exhausted (or whose peer is
+ * gone): in ONE transaction, the forward becomes `failed` — its gross returns
+ * to the escrow (`forward_return`) — and what the escrow then holds is
+ * refunded to the allocation's HOLD PAYER (`retry_exhaustion_refund`). C1: the
+ * forward used to count as moved whether or not the peer acknowledged it, so
+ * this refund read 0 and the allocation was retired `released` holding the
+ * delegator's money. P2: the payee is read from the ledger, never the task
+ * queue's submitter with a fallback to the allocation's motebit_id (the
+ * worker). An allocation under dispute keeps its escrow for the dispute's
+ * fund action; one with no single hold payer is flagged for the operator.
+ *
+ * Extracted from the settlement-retry loop so tests drive THIS function.
+ */
+export function refundExhaustedForward(
+  db: MotebitDatabase["db"],
+  retry: { retry_id: string; settlement_id: string; task_id: string },
+): "refunded" | "returned" | "skipped" {
+  const refundId = crypto.randomUUID();
+  db.exec("BEGIN");
+  try {
+    const alloc = db
+      .prepare(
+        "SELECT allocation_id, status, amount_locked FROM relay_allocations WHERE task_id = ?",
+      )
+      .get(retry.task_id) as
+      { allocation_id: string; status: string; amount_locked: number } | undefined;
+    if (!alloc) {
+      db.exec("ROLLBACK");
+      return "skipped";
+    }
+    const fwd = forwardOf(db, retry.settlement_id);
+    let returned = false;
+    if (fwd && fwd.status === "pending" && fwd.allocation_id === alloc.allocation_id) {
+      moveAllocationMoney(db, {
+        kind: "forward_return",
+        allocationId: alloc.allocation_id,
+        amount: fwd.gross_amount,
+        settlementId: retry.settlement_id,
+      });
+      returned = true;
+    }
+    const held = allocationEscrowHeld(db, alloc.allocation_id);
+    if (alloc.status === "disputed" || held <= 0) {
+      db.exec("COMMIT");
+      retryRefundLogger.info("settlement.retry.refund_skipped", {
+        retryId: retry.retry_id,
+        taskId: retry.task_id,
+        allocationId: alloc.allocation_id,
+        forwardReturned: returned,
+        reason:
+          alloc.status === "disputed"
+            ? "allocation under dispute — its fund action distributes the escrow"
+            : "allocation holds nothing on the ledger — never debited or already released",
+      });
+      return returned ? "returned" : "skipped";
+    }
+    const payer = allocationHoldPayer(db, alloc.allocation_id);
+    if (payer === null) {
+      db.prepare(
+        "UPDATE relay_allocations SET review_reason = COALESCE(review_reason, 'unroutable_refund') WHERE allocation_id = ?",
+      ).run(alloc.allocation_id);
+      db.exec("COMMIT");
+      retryRefundLogger.error("settlement.retry.refund_unroutable", {
+        retryId: retry.retry_id,
+        allocationId: alloc.allocation_id,
+        held,
+      });
+      return returned ? "returned" : "skipped";
+    }
+    moveAllocationMoney(db, {
+      kind: "retry_exhaustion_refund",
+      allocationId: alloc.allocation_id,
+      amount: held,
+      party: payer,
+      description: `Retry exhaustion refund for task ${retry.task_id}`,
+    });
+    db.prepare(
+      "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE allocation_id = ? AND status = 'locked'",
+    ).run(Date.now(), alloc.allocation_id);
+    // Audit row: what was actually refunded (the ledger hold), to whom.
+    db.prepare(
+      "INSERT OR IGNORE INTO relay_refund_log (refund_id, retry_id, task_id, allocation_id, delegator_id, amount, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)",
+    ).run(refundId, retry.retry_id, retry.task_id, alloc.allocation_id, payer, held, Date.now());
+    db.exec("COMMIT");
+    retryRefundLogger.info("settlement.retry.refunded", {
+      refundId,
+      taskId: retry.task_id,
+      allocationId: alloc.allocation_id,
+      amount: held,
+      claimed: alloc.amount_locked,
+      delegator: payer,
+    });
+    return "refunded";
+  } catch (err) {
+    db.exec("ROLLBACK");
+    retryRefundLogger.error("settlement.retry.refund_txn_failed", {
+      refundId,
+      retryId: retry.retry_id,
+      taskId: retry.task_id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return "skipped";
   }
 }
 
@@ -356,6 +522,12 @@ export interface SyncRelayConfig {
   /** Max pending tasks per submitter. Default: 1000. */
   maxTasksPerSubmitter?: number;
   /**
+   * How long a serving body's leased task claim holds without a renewal
+   * before the claimer counts as lost and the task as undetermined
+   * (`task-claim.ts`). Default: `TASK_CLAIM_LEASE_MS` (30 s).
+   */
+  taskClaimLeaseMs?: number;
+  /**
    * Graceful-shutdown drain grace in ms — how long `close()` waits for
    * connected clients to disconnect voluntarily before force-closing.
    * Default: 5000 (production). Tests set this low (the test harness uses
@@ -365,6 +537,18 @@ export interface SyncRelayConfig {
    * amplifies contention flakes under parallel `turbo run test`).
    */
   drainGraceMs?: number;
+  /**
+   * The bound on how long `close()` waits for the network I/O boot started
+   * without awaiting (the x402 facilitator initialize, the deposit
+   * detector's boot tick, the Solana network warm-up). Past it that I/O is
+   * aborted (where its client supports it) and abandoned, and the database
+   * closes regardless: a peer that accepts and never answers must not hold
+   * a shutdown past Fly's `kill_timeout` (5 s). Default
+   * {@link SHUTDOWN_STARTUP_WORK_DEADLINE_MS} (2 s). Must be finite, positive
+   * and at most {@link MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS} (30 s, the
+   * entry's force-exit); anything else throws a `RangeError` at construction.
+   */
+  shutdownDeadlineMs?: number;
   /**
    * How long a runtime-side command (`POST /api/v1/agents/:id/command`)
    * waits for the runtime's answer before answering 504. Default 30000.
@@ -501,6 +685,29 @@ export interface SyncRelayConfig {
    */
   x402ChainReader?: import("./x402-settlements.js").X402ChainReader | null;
   /**
+   * The x402 facilitator client both consumers use (the settlement rail and
+   * the task-route middleware). Omitted: `createX402FacilitatorClient` — the
+   * one canonical construction (rule 16), which talks HTTP to the
+   * facilitator. Tests inject the in-process fake (`x402-fake-facilitator.ts`)
+   * so a test relay never reaches the network.
+   */
+  x402FacilitatorClient?: unknown;
+  /**
+   * The EVM RPC the deposit detector scans with. Omitted: JSON-RPC over
+   * `DEFAULT_RPC_URLS[x402.network]`; `null` disables the detector (tests —
+   * its boot tick is otherwise a real request to a public RPC).
+   */
+  depositDetectorRpc?: import("@motebit/evm-rpc").EvmRpcAdapter | null;
+  /**
+   * The transport to peer relays (`PeerFetch` in `federation.ts`): discover
+   * fan-out and re-forward, task forward, result delivery, settlement forward
+   * and its retries, heartbeats. Omitted: the
+   * global `fetch`. Tests inject an in-process peer network
+   * (`TEST_RELAY_NETWORK`) so a peer registered at a fake endpoint is never
+   * dialed.
+   */
+  federationPeerFetch?: import("./federation.js").PeerFetch;
+  /**
    * Cadence (ms) of the supervised re-read of the Solana RPC's genesis hash
    * while the network is unresolved (#954, `solana-network.ts`). Default
    * `SOLANA_NETWORK_CHECK_INTERVAL_MS` (30s).
@@ -554,9 +761,64 @@ export interface SyncRelay {
    * a test can run one deterministically.
    */
   withdrawalPayouts: { resolveOnce(): Promise<void> };
+  /**
+   * Settlement recovery (#890 round 10): the boot pass, and one pass on
+   * demand (the supervised loop runs it every minute). Exposed for testing.
+   */
+  /**
+   * The task TTL pass (one task, one body — task-claim.ts): mark unanswered
+   * tasks past their TTL (never granted ⇒ expired visibly; granted ⇒
+   * undetermined), sweep the queue, release stale allocation holds (never a
+   * granted task's). The supervised `task-cleanup` loop runs it every
+   * minute; exposed so a test can run it at a future `now`.
+   */
+  taskLifecycle: {
+    sweep(now?: number): void;
+  };
+  settlementRecovery: {
+    booted: Promise<SettlementRecoveryReport | null>;
+    sweep(opts?: { graceMs?: number; now?: number }): Promise<SettlementRecoveryReport>;
+  };
 }
 
 // === Factory ===
+
+/**
+ * Default bound on how long `close()` waits for boot's untracked network I/O
+ * (`SyncRelayConfig.shutdownDeadlineMs`). Well inside Fly's 5 s
+ * `kill_timeout`, so the database always closes before the machine is killed.
+ */
+export const SHUTDOWN_STARTUP_WORK_DEADLINE_MS = 2_000;
+/**
+ * The largest `shutdownDeadlineMs` accepted: `server.ts` force-exits at 30 s
+ * (`SHUTDOWN_TIMEOUT_MS`), so a longer bound could never be honoured.
+ */
+export const MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS = 30_000;
+
+/** `shutdownDeadlineMs` or the default; refuses a value no shutdown could honour. */
+function validShutdownDeadlineMs(ms: number | undefined): number {
+  if (ms === undefined) return SHUTDOWN_STARTUP_WORK_DEADLINE_MS;
+  if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS) {
+    throw new RangeError(
+      `shutdownDeadlineMs must be a finite number of milliseconds in ` +
+        `(0, ${MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS}], got ${String(ms)}`,
+    );
+  }
+  return ms;
+}
+/** Of that deadline, the share left for aborted work to settle and log. */
+const SHUTDOWN_ABORT_GRACE_MS = 100;
+
+/** Whether `work` settles within `ms` — the timer never outlives the answer. */
+function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), Math.max(0, ms));
+    void work.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
 
 export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRelay> {
   const {
@@ -580,6 +842,26 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     operatorSolanaTransfer: operatorSolanaTransferOverride,
     platformFeeRate = parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
   } = config;
+
+  // Async work boot starts but does not await (a warm-up read, a first loop
+  // tick, a facilitator handshake). close() waits for all of it — so on a
+  // healthy network no request, log line or database write outlives the
+  // relay that started it — but only up to `shutdownDeadlineMs`: past it,
+  // `shutdownSignal` aborts what can be aborted and the DB closes anyway.
+  const startupWork: Promise<unknown>[] = [];
+  const trackStartupWork = (work: Promise<unknown>): void => {
+    startupWork.push(work);
+  };
+  const shutdownController = new AbortController();
+  const shutdownDeadlineMs = validShutdownDeadlineMs(config.shutdownDeadlineMs);
+  /** `fetch` whose requests the relay's shutdown aborts (on top of the caller's own signal). */
+  const shutdownAwareFetch: typeof globalThis.fetch = (input, init) =>
+    globalThis.fetch(input, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, shutdownController.signal])
+        : shutdownController.signal,
+    });
 
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
   const subscriptionEventAdapter: SubscriptionEventAdapter | null =
@@ -652,9 +934,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // Single canonical adapter — chooses CDP vs default facilitator based on
       // env shape, fail-fast on mainnet misconfiguration. See x402-facilitator.ts.
       const { createX402FacilitatorClient } = await import("./x402-facilitator.js");
-      const facilitatorClient = (await createX402FacilitatorClient(
-        x402Config,
-      )) as ConstructorParameters<typeof X402SettlementRail>[0]["facilitatorClient"];
+      const facilitatorClient = (config.x402FacilitatorClient ??
+        (await createX402FacilitatorClient(x402Config))) as ConstructorParameters<
+        typeof X402SettlementRail
+      >[0]["facilitatorClient"];
       railRegistry.register(
         new X402SettlementRail({
           facilitatorClient,
@@ -767,6 +1050,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Schema: relay-owned tables, migrations, startup cleanup ---
   const { isTokenBlacklisted, isAgentRevoked } = createRelaySchema(moteDb.db);
   createRelayConfigTable(moteDb.db);
+  // The deposit detector's tables are created here (they otherwise appear
+  // only when it starts) so the freeze guards, installed once the task queue
+  // has added its columns (below), cover them.
+  createDepositDetectorTable(moteDb.db);
 
   // Emergency freeze: persistent kill switch. When true, all state-mutating
   // operations (POST/PUT/PATCH/DELETE) return 503. Reads remain available.
@@ -803,6 +1090,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const MAX_TASK_QUEUE_SIZE = 100_000;
   const MAX_TASKS_PER_SUBMITTER = config.maxTasksPerSubmitter ?? 1_000;
   const taskQueue = new TaskQueue(moteDb.db);
+  // The freeze is re-checked where money is written, inside the write's own
+  // transaction (a request or replay past the entry check when the freeze
+  // lands commits nothing). After EVERY schema mutation — schema, migrations
+  // and the task queue's settlement columns — so the guard set is the same on
+  // a first boot as on a restart.
+  installFreezeMoneyGuards(moteDb.db);
 
   // --- Relay Identity: persistent Ed25519 keypair ---
   // One outbound URL policy for every persisted callback the relay will contact.
@@ -814,7 +1107,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   );
 
   // --- Task routing & federation query cache ---
-  const taskRouter = createTaskRouter({ db: moteDb.db, relayIdentity, federationConfig });
+  const peerFetch = config.federationPeerFetch;
+  const taskRouter = createTaskRouter({
+    db: moteDb.db,
+    relayIdentity,
+    federationConfig,
+    ...(peerFetch !== undefined ? { peerFetch } : {}),
+  });
   const { cache: federationQueryCache, pruneInterval: federationQueryPruneInterval } =
     createFederationQueryCache(loopSupervisor);
 
@@ -1027,10 +1326,36 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
   };
+  // --- Task claims: one body per broadcast task; a lapsed lease marks it undetermined, never re-presents ---
+  const taskClaims = new TaskClaims({
+    taskQueue,
+    connections,
+    logger,
+    unansweredPastExpiry: (now) => taskQueue.unansweredPastExpiry(now),
+    ...(config.taskClaimLeaseMs != null ? { leaseMs: config.taskClaimLeaseMs } : {}),
+  });
+  // The task TTL pass (one task, one body — task-claim.ts): an unanswered
+  // task past its TTL is first marked — never-granted ⇒ expired VISIBLY,
+  // granted with no live lease ⇒ UNDETERMINED — and only then may the queue
+  // sweep what is left; a granted, unanswered entry is never deleted, and its
+  // allocation hold is never refunded by the stale sweep (it stays locked
+  // until the executor's signed result settles it).
+  const sweepTaskLifecycle = (now: number): void => {
+    taskClaims.expire(now);
+    taskQueue.cleanup(now);
+    releaseStaleAllocations(
+      moteDb.db,
+      now,
+      STALE_ALLOCATION_HORIZON_MS,
+      (taskId) => taskQueue.get(taskId)?.submitted_by,
+      (taskId) => taskClaims.holdsUnresolvedGrant(taskId),
+    );
+  };
   const taskCleanupInterval = superviseInterval(loopSupervisor, "task-cleanup", 60_000, () => {
     const now = Date.now();
-    // Expire completed/failed tasks and tasks past their TTL
-    taskQueue.cleanup(now);
+    // Mark, then expire, tasks past their TTL, and release stale
+    // allocation holds (sweepTaskLifecycle above).
+    sweepTaskLifecycle(now);
     // Auth-event record: 30-day rolling window (auth-events.ts).
     authEvents.sweep(now);
     // Machine roster liveness, every five minutes: refresh the one
@@ -1095,23 +1420,33 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     } catch {
       // Best-effort cleanup
     }
+    // Clean task routes past their horizon (7 days — beyond every reader's
+    // window; #890 r6, TASK_ROUTE_RETENTION_MS)
+    try {
+      cleanupTaskRoutes(moteDb.db);
+    } catch {
+      // Best-effort cleanup
+    }
     // Reclaim deleted pages (works with auto_vacuum = INCREMENTAL)
     try {
       moteDb.db.pragma("incremental_vacuum(100)");
     } catch {
       // Best-effort — no-op if auto_vacuum mode differs
     }
-    // Release stale budget allocations locked > 1 hour with no settlement.
-    releaseStaleAllocations(
-      moteDb.db,
-      now,
-      STALE_ALLOCATION_HORIZON_MS,
-      (taskId) => taskQueue.get(taskId)?.submitted_by,
-    );
   });
+
+  const taskClaimLeaseInterval = superviseInterval(
+    loopSupervisor,
+    "task-claim-lease",
+    Math.max(50, Math.floor(taskClaims.leaseMs / 4)),
+    () => {
+      taskClaims.sweep(Date.now());
+    },
+  );
 
   // --- WebSocket routes ---
   registerWebSocketRoutes({
+    taskClaims,
     app,
     upgradeWebSocket,
     connections,
@@ -1195,6 +1530,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Federation routes ---
   const federationCallbacks = createFederationCallbacks({
+    ...(peerFetch !== undefined ? { peerFetch } : {}),
     moteDb,
     identityManager,
     relayIdentity,
@@ -1211,6 +1547,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     db: moteDb.db,
     app,
     outboundPolicy,
+    ...(peerFetch !== undefined ? { peerFetch } : {}),
     relayIdentity,
     federationConfig,
     federationQueryCache,
@@ -1270,10 +1607,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const { registerDisputeRoutes, createDisputeTables, startDeferredOrchestrationWorker } =
     await import("./disputes.js");
   createDisputeTables(moteDb.db);
+  // The settlement guards again, now the dispute table exists: a dispute's
+  // resolution credits `settlement_credit` under the dispute id (#890 r9).
+  installSettlementGuards(moteDb.db);
   registerDisputeRoutes({
     db: moteDb.db,
     app,
     relayIdentity,
+    ...(peerFetch !== undefined ? { fetchImpl: peerFetch } : {}),
   });
   // §6.2 deferred orchestrator worker — picks up `in_progress`
   // orchestration rows whose next_attempt_at <= now, drives retries
@@ -1284,6 +1625,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const orchestrationWorkerInterval = startDeferredOrchestrationWorker({
     db: moteDb.db,
     relayIdentity,
+    ...(peerFetch !== undefined ? { fetchImpl: peerFetch } : {}),
     supervisor: loopSupervisor,
   });
   logger.info("dispute_orchestration_worker.started");
@@ -1455,12 +1797,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         ...(config.solanaNetworkTimeoutMs !== undefined
           ? { timeoutMs: config.solanaNetworkTimeoutMs }
           : {}),
+        shutdownSignal: shutdownController.signal,
       })
     : undefined;
   const solanaNetworkInterval = solanaNetwork
     ? startSolanaNetworkLoop(solanaNetwork, loopSupervisor, config.solanaNetworkCheckIntervalMs)
     : undefined;
-  void solanaNetwork?.resolve(); // warm-up; never awaited
+  // Warm-up; never awaited on the boot path. close() waits for it up to the
+  // shutdown deadline; a read still pending then is abandoned (and silent).
+  if (solanaNetwork) trackStartupWork(solanaNetwork.resolve());
   /** A payer chain that answers only once the relay's Solana network resolves. */
   const gatedPaymentChain = (
     chain: import("./p2p-payer.js").P2pPaymentChain | null,
@@ -1786,6 +2131,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerAgentRoutes({
     app,
     outboundPolicy,
+    ...(peerFetch !== undefined ? { peerFetch } : {}),
     moteDb,
     identityManager,
     eventStore,
@@ -1855,6 +2201,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     60_000,
     () => getEmergencyFreeze(),
     loopSupervisor,
+    peerFetch,
   );
 
   // Phase 4b-3 — periodic revocation-events horizon advance. Replaces
@@ -1864,7 +2211,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // override via `federationConfig.revocationHorizonIntervalMs`.
   const revocationHorizonInterval = startRevocationHorizonLoop(
     moteDb.db,
-    { relayIdentity, witnessSolicitationTimeoutMs: federationConfig?.witnessSolicitationTimeoutMs },
+    {
+      relayIdentity,
+      witnessSolicitationTimeoutMs: federationConfig?.witnessSolicitationTimeoutMs,
+      ...(peerFetch !== undefined ? { fetchImpl: peerFetch } : {}),
+    },
     federationConfig?.revocationHorizonIntervalMs,
     () => getEmergencyFreeze(),
     loopSupervisor,
@@ -1875,118 +2226,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     moteDb.db,
     relayIdentity,
     30_000,
+    // C1/P2: forward → failed and the refund to the hold payer, in one
+    // transaction through the escrow chokepoint (refundExhaustedForward).
     (retry) => {
-      const refundId = crypto.randomUUID();
-      try {
-        const taskEntry = taskQueue.get(retry.task_id);
-        moteDb.db.exec("BEGIN");
-        try {
-          // Atomically claim the allocation: UPDATE ... WHERE status = 'locked' ensures
-          // that if settlement already completed (status = 'settled'), this is a no-op.
-          // This prevents the double-spend: settlement credits the worker AND refund credits
-          // the delegator for the same locked funds.
-          const claimResult = moteDb.db
-            .prepare(
-              "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE task_id = ? AND status = 'locked'",
-            )
-            .run(Date.now(), retry.task_id);
-          if (claimResult.changes === 0) {
-            // Allocation was already settled or released — no refund needed
-            moteDb.db.exec("ROLLBACK");
-            logger.info("settlement.retry.refund_skipped", {
-              retryId: retry.retry_id,
-              taskId: retry.task_id,
-              reason: "allocation not in locked state (already settled or released)",
-            });
-            return;
-          }
-          // Allocation claimed — now safe to credit the delegator
-          const alloc = moteDb.db
-            .prepare(
-              "SELECT allocation_id, motebit_id, amount_locked FROM relay_allocations WHERE task_id = ?",
-            )
-            .get(retry.task_id) as
-            { allocation_id: string; motebit_id: string; amount_locked: number } | undefined;
-          if (!alloc) {
-            moteDb.db.exec("ROLLBACK");
-            return;
-          }
-          const delegatorId = taskEntry?.submitted_by ?? alloc.motebit_id;
-          // Refund what the LEDGER holds, never `amount_locked` — the row is a
-          // claim, the ledger is the fact. A never-debited allocation (free
-          // agent, or the priced-but-unpayable listing that used to read as
-          // free) would otherwise mint balance here as `allocation_release`,
-          // which carries no dispute-window or grant hold and is therefore
-          // immediately withdrawable. Same rule as `releaseStaleAllocations`.
-          const heldRemaining = getAllocationHoldRemaining(moteDb.db, alloc.allocation_id);
-          if (heldRemaining <= 0) {
-            moteDb.db.exec("ROLLBACK");
-            logger.warn("settlement.retry.refund_skipped_unfunded", {
-              retryId: retry.retry_id,
-              taskId: retry.task_id,
-              allocationId: alloc.allocation_id,
-              claimed: alloc.amount_locked,
-              reason:
-                "allocation holds nothing on the ledger — never debited or already released; refund skipped to prevent minting unfunded balance",
-            });
-            return;
-          }
-          creditAccount(
-            moteDb.db,
-            delegatorId,
-            heldRemaining,
-            "allocation_release",
-            alloc.allocation_id,
-            `Retry exhaustion refund for task ${retry.task_id}`,
-          );
-          // Persist refund record for audit trail
-          moteDb.db
-            .prepare(
-              "INSERT OR IGNORE INTO relay_refund_log (refund_id, retry_id, task_id, allocation_id, delegator_id, amount, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)",
-            )
-            .run(
-              refundId,
-              retry.retry_id,
-              retry.task_id,
-              alloc.allocation_id,
-              delegatorId,
-              // The audit row records what was actually refunded (the ledger
-              // hold), not what the allocation row claimed — otherwise the
-              // refund log asserts a payout that never happened.
-              heldRemaining,
-              Date.now(),
-            );
-          moteDb.db.exec("COMMIT");
-          logger.info("settlement.retry.refunded", {
-            refundId,
-            taskId: retry.task_id,
-            allocationId: alloc.allocation_id,
-            amount: heldRemaining,
-            claimed: alloc.amount_locked,
-            delegator: delegatorId,
-          });
-        } catch (txnErr) {
-          moteDb.db.exec("ROLLBACK");
-          // Log the failed refund attempt for operator visibility
-          logger.error("settlement.retry.refund_txn_failed", {
-            refundId,
-            retryId: retry.retry_id,
-            taskId: retry.task_id,
-            error: txnErr instanceof Error ? txnErr.message : String(txnErr),
-          });
-        }
-      } catch (err) {
-        logger.error("settlement.retry.refund_error", {
-          refundId,
-          retryId: retry.retry_id,
-          taskId: retry.task_id,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      refundExhaustedForward(moteDb.db, retry);
     },
     () => getEmergencyFreeze(),
     undefined, // retryPolicy — use the default
     loopSupervisor,
+    peerFetch,
   );
 
   // --- Unified chain anchor submitter (Solana Memo by default) ---
@@ -2109,6 +2357,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     db: moteDb.db,
     chain: depositDetectorChain,
     supervisor: loopSupervisor,
+    ...(config.depositDetectorRpc !== undefined ? { rpc: config.depositDetectorRpc } : {}),
+    fetch: shutdownAwareFetch,
+    trackStartup: trackStartupWork,
   });
 
   // --- Treasury reconciliation (compares recorded x402 fees to onchain balance) ---
@@ -2361,9 +2612,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   logger.info("relay.push_wake", { enabled: pushAdapter !== undefined });
 
   // --- Task routes (submission, polling, receipt settlement) ---
-  await registerTaskRoutes({
+  const taskRoutes = await registerTaskRoutes({
+    taskClaims,
     app,
     outboundPolicy,
+    ...(peerFetch !== undefined ? { peerFetch } : {}),
     moteDb,
     identityManager,
     eventStore,
@@ -2376,6 +2629,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     enableDeviceAuth,
     maxTasksPerSubmitter: MAX_TASKS_PER_SUBMITTER,
     x402Config: x402Config,
+    ...(config.x402FacilitatorClient !== undefined
+      ? { x402FacilitatorClient: config.x402FacilitatorClient }
+      : {}),
+    trackStartup: trackStartupWork,
+    shutdownSignal: shutdownController.signal,
     parseTokenPayloadUnsafe,
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
@@ -2395,6 +2653,69 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         ? config.p2pPaymentChain
         : gatedPaymentChain(paymentChainFromEnv()),
   });
+
+  // --- Settlement recovery (#890 round 10): supervised, on boot and every minute ---
+  // A claimed-but-unsettled answer (a crash or a failed step between the
+  // claim and the settle) is replayed through the door its claim was taken
+  // by — the one door routine decides it again; an inbound forward answered
+  // before the claim existed adopts it; owed federation results are
+  // redelivered until the origin acknowledges. One pass at a time, never a
+  // queue: a tick or sweep arriving while a pass is in flight joins it. The
+  // freeze is checked inside the pass (before each replay and delivery);
+  // `close()` aborts the pass's outbox fetch and waits for it, bounded.
+  const recoveryAbort = new AbortController();
+  const recoveryDeps: SettlementRecoveryDeps = {
+    db: moteDb.db,
+    taskQueue,
+    replayLocalAnswer: (taskId, door) => taskRoutes.replayLocalAnswer(taskId, door),
+    replayFederationResult: (v) => federationCallbacks.onTaskResultReceived(v),
+    deliverPendingResults: (now, ctl) =>
+      processResultDeliveries(
+        moteDb.db,
+        relayIdentity,
+        (signer) => workerKeyFor(moteDb.db, signer),
+        now,
+        peerFetch !== undefined ? { ...ctl, peerFetch } : ctl,
+      ),
+    isFrozen: () => getEmergencyFreeze(),
+  };
+  let recoveryInFlight: Promise<SettlementRecoveryReport> | null = null;
+  const runSettlementRecovery = (
+    opts: { graceMs?: number; now?: number } = {},
+  ): Promise<SettlementRecoveryReport> => {
+    // Single-flight, never chain: the pass in flight answers this call too.
+    if (recoveryInFlight != null) return recoveryInFlight;
+    const run = recoverSettlements(recoveryDeps, { ...opts, signal: recoveryAbort.signal });
+    recoveryInFlight = run;
+    void run
+      .finally(() => {
+        if (recoveryInFlight === run) recoveryInFlight = null;
+      })
+      .catch(() => {});
+    return run;
+  };
+  const settlementRecoveryInterval = superviseInterval(
+    loopSupervisor,
+    "settlement-recovery",
+    60_000,
+    () => runSettlementRecovery().then(() => undefined),
+    { isFrozen: () => getEmergencyFreeze() },
+  );
+  // The boot pass: no grace — no door is in flight in a process that just
+  // started. Supervised like a tick (markStart → markOk/markError).
+  loopSupervisor.markStart("settlement-recovery");
+  const settlementRecoveryBooted: Promise<SettlementRecoveryReport | null> = getEmergencyFreeze()
+    ? Promise.resolve(null)
+    : runSettlementRecovery({ graceMs: 0 }).then(
+        (r) => {
+          loopSupervisor.markOk("settlement-recovery");
+          return r;
+        },
+        (err: unknown) => {
+          loopSupervisor.markError("settlement-recovery", err);
+          return null;
+        },
+      );
 
   // --- Helper: count all connected WebSocket clients ---
   function getConnectionCount(): number {
@@ -2471,10 +2792,35 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     // Clean up intervals and database
     clearInterval(taskCleanupInterval);
+    clearInterval(taskClaimLeaseInterval);
     clearInterval(federationQueryPruneInterval);
     clearInterval(heartbeatInterval);
     clearInterval(revocationHorizonInterval);
     clearInterval(settlementRetryInterval);
+    clearInterval(settlementRecoveryInterval);
+    // The pass in flight stops at its next step; its outbox fetch is aborted
+    // (that delivery stays pending). Waited for, but never past the bound — a
+    // pass still awaiting a door afterwards meets a closed database and writes
+    // nothing (each settlement is one transaction).
+    recoveryAbort.abort();
+    if (recoveryInFlight != null) {
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      const outlived = await Promise.race([
+        recoveryInFlight.then(
+          () => false,
+          () => false,
+        ),
+        new Promise<boolean>((r) => {
+          bound = setTimeout(() => r(true), SETTLEMENT_RECOVERY_CLOSE_BOUND_MS);
+        }),
+      ]);
+      clearTimeout(bound);
+      if (outlived) {
+        logger.warn("settlement.recovery_close_bound", {
+          boundMs: SETTLEMENT_RECOVERY_CLOSE_BOUND_MS,
+        });
+      }
+    }
     clearInterval(batchAnchorInterval);
     clearInterval(agentAnchorInterval);
     clearInterval(credentialAnchorInterval);
@@ -2493,7 +2839,46 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (payoutResolutionInterval) clearInterval(payoutResolutionInterval);
     clearInterval(orchestrationWorkerInterval);
     receiptExchangeHub.close();
-    moteDb.close();
+    // Every async init boot started without awaiting (the x402 facilitator
+    // initialize, the deposit detector's boot tick, the Solana network
+    // warm-up) settles before the database closes — bounded: a peer that
+    // never answers is aborted and abandoned at the deadline, and the
+    // database closes unconditionally.
+    try {
+      await settleStartupWork();
+    } finally {
+      shutdownController.abort();
+      moteDb.close();
+    }
+  }
+
+  /**
+   * Wait for boot's untracked I/O, up to `shutdownDeadlineMs` in total: at
+   * `deadline - SHUTDOWN_ABORT_GRACE_MS` abort what is still in flight, then
+   * give the aborted work the grace to settle (and log) before the DB goes.
+   */
+  async function settleStartupWork(): Promise<void> {
+    if (startupWork.length === 0) return;
+    let pending = startupWork.length;
+    const all = Promise.allSettled(
+      startupWork.map((w) =>
+        w.finally(() => {
+          pending--;
+        }),
+      ),
+    );
+    const grace = Math.min(SHUTDOWN_ABORT_GRACE_MS, shutdownDeadlineMs);
+    if (await settlesWithin(all, shutdownDeadlineMs - grace)) return;
+    logger.warn("relay.shutdown.startup_work_aborted", {
+      pending,
+      deadlineMs: shutdownDeadlineMs,
+    });
+    shutdownController.abort();
+    if (await settlesWithin(all, grace)) return;
+    logger.warn("relay.shutdown.startup_work_abandoned", {
+      pending,
+      deadlineMs: shutdownDeadlineMs,
+    });
   }
 
   // Inject WebSocket support into the underlying Node.js server
@@ -2518,6 +2903,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       return draining;
     },
     withdrawalPayouts: { resolveOnce: () => budgetRoutes.resolvePayoutsOnce() },
+    taskLifecycle: {
+      sweep: (now) => sweepTaskLifecycle(now ?? Date.now()),
+    },
+    settlementRecovery: {
+      booted: settlementRecoveryBooted,
+      sweep: (opts) => runSettlementRecovery(opts),
+    },
   };
 }
 

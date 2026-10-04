@@ -32,6 +32,7 @@ import type {
   SettlementSummaryPeer,
   SettlementSummaryUnattributed,
 } from "@motebit/protocol";
+import { GRADIENT_HISTORY_ARTIFACT } from "@motebit/protocol";
 import type { RelayIdentity } from "./federation.js";
 import { getStoredReceiptJson } from "./receipts-store.js";
 
@@ -288,7 +289,7 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
       ...r,
       stats: JSON.parse(r.stats) as Record<string, unknown>,
     }));
-    return emitSignedExport(c, "gradient-history", {
+    return emitSignedExport(c, GRADIENT_HISTORY_ARTIFACT, {
       motebit_id: motebitId,
       current: snapshots[0] ?? null,
       history: snapshots,

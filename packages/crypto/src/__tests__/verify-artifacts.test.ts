@@ -283,6 +283,57 @@ describe("createSignedToken / verifySignedToken", () => {
     const result = await verifySignedToken(token, kp.publicKey);
     expect(result).toBeNull();
   });
+
+  // spec/auth-token-v1.md §3: the six core claims are required and a
+  // verifier MUST reject a token missing any of them. `undefined <= now` is
+  // false, so a signature-valid token with no `exp` used to verify as
+  // never-expiring — the freshness defense silently absent.
+  describe("required core claims (auth-token-v1 §3, fail-closed)", () => {
+    const base = (): Record<string, unknown> => ({
+      mid: "mote-123",
+      did: "device-456",
+      iat: Date.now(),
+      exp: Date.now() + 5 * 60 * 1000,
+      jti: crypto.randomUUID(),
+      aud: "sync",
+    });
+
+    async function verifyWith(payload: Record<string, unknown>) {
+      const kp = await generateKeypair();
+      const token = await createSignedToken(
+        payload as unknown as SignedTokenPayload,
+        kp.privateKey,
+      );
+      return verifySignedToken(token, kp.publicKey);
+    }
+
+    it("accepts the complete claim set (control)", async () => {
+      expect(await verifyWith(base())).not.toBeNull();
+    });
+
+    it.each(["mid", "did", "iat", "exp"])("rejects a token missing `%s`", async (claim) => {
+      const payload = base();
+      delete payload[claim];
+      expect(await verifyWith(payload)).toBeNull();
+    });
+
+    it.each([
+      ["exp", "9999999999999"],
+      ["exp", null],
+      ["exp", Date.now() + 60_000.5],
+      ["exp", Number.POSITIVE_INFINITY],
+      ["iat", "1712959200000"],
+      ["mid", ""],
+      ["mid", 42],
+      ["did", ""],
+      ["jti", 7],
+      ["aud", ["sync"]],
+    ])("rejects a malformed `%s` (%j)", async (claim, value) => {
+      const payload = base();
+      payload[claim] = value;
+      expect(await verifyWith(payload)).toBeNull();
+    });
+  });
 });
 
 describe("mintAudienceToken (the canonical mint seam)", () => {

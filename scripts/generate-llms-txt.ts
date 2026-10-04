@@ -79,12 +79,27 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 - \`motebit/identity@1.0\` is the open specification (Apache-2.0 licensed)
 `;
 
+// Counted from the filesystem (same rule as check-doc-counts' countSpecMd) so
+// the footer cannot drift from spec/ the way the old hardcoded "twenty-one" did.
+// The count reads spec/'s directory listing — a repo-root input of the docs
+// build. SPEC_COUNT_INPUTS is that read as turbo globs; check-turbo-global-deps
+// imports it (so turbo.json globalDependencies must name exactly it) and its
+// test asserts the globs select exactly the files countSpecMd counts.
+export const SPEC_COUNT_INPUTS = ["spec/*.md", "!spec/README.md"] as const;
+
+export function countSpecMd(root: string = REPO_ROOT): number {
+  return readdirSync(join(root, "spec")).filter((f) => f.endsWith(".md") && f !== "README.md")
+    .length;
+}
+
+const SPEC_COUNT = countSpecMd();
+
 const LLMS_FOOTER = `## Open specification
 
 - [motebit/identity@1.0](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md): the open specification for agent identity files. Apache-2.0.
 - [motebit/execution-ledger@1.0](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md): the signed-receipt ledger every motebit emits. Apache-2.0.
 - [motebit/relay-federation@1.0](https://github.com/motebit/motebit/blob/main/spec/relay-federation-v1.md): bilateral peering between independent relays. Apache-2.0.
-- All twenty-one specs are in [\`spec/\`](https://github.com/motebit/motebit/tree/main/spec).
+- All ${SPEC_COUNT} specs are in [\`spec/\`](https://github.com/motebit/motebit/tree/main/spec).
 
 ## Published packages
 
@@ -268,7 +283,7 @@ function resolveSections(rootDir: string, urlPrefix: string): Section[] {
  * Throws loudly if the parse yields zero entries — that's the signal
  * DOCTRINE.md's format changed and the generator needs updating.
  */
-function parseDoctrineChain(): ReadonlyArray<{ filename: string; derives: string }> {
+export function parseDoctrineChain(): ReadonlyArray<{ filename: string; derives: string }> {
   const path = join(REPO_ROOT, DOCTRINE_FILENAME);
   const raw = readFileSync(path, "utf-8");
   const re = /^\d+\.\s+\*\*\[([^\]]+)\]\([^)]+\)\*\*\s+—\s+(.+)$/gm;

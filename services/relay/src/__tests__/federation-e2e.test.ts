@@ -44,10 +44,15 @@ import type { TreasuryReconciliationStore } from "@motebit/treasury-reconciliati
 const RELAY_A_URL = "http://relay-a.test:3000";
 const RELAY_B_URL = "http://relay-b.test:3001";
 
-async function createFederatedRelay(endpointUrl: string, displayName: string): Promise<SyncRelay> {
+async function createFederatedRelay(
+  endpointUrl: string,
+  displayName: string,
+  platformFeeRate?: number,
+): Promise<SyncRelay> {
   return createTestRelay({
     enableDeviceAuth: false,
     federation: { endpointUrl, displayName },
+    ...(platformFeeRate != null ? { platformFeeRate } : {}),
   });
 }
 
@@ -1423,6 +1428,19 @@ describe("Federation E2E", () => {
       );
       const receiptBody = await receiptRes.text();
       expect(receiptRes.status, `Receipt post failed: ${receiptBody}`).toBeLessThan(300);
+
+      // 7. The result returns to Relay A, which accepts it because its
+      // forward recorded Bob through Relay B as the task's executor (#890 r6).
+      await vi.waitFor(
+        async () => {
+          const poll = await relayA.app.request(`/agent/${alice.motebitId}/task/${taskId}`, {
+            headers: AUTH_HEADER,
+          });
+          const polled = (await poll.json()) as { receipt?: { motebit_id: string } | null };
+          expect(polled.receipt?.motebit_id).toBe(bob.motebitId);
+        },
+        { timeout: 3000 },
+      );
     });
 
     it("PHASE 3 P2P: a paid cross-operator task settles P2P — delegator pays all three legs onchain, neither relay custodies or transmits", async () => {
@@ -2122,6 +2140,125 @@ describe("Federation E2E", () => {
       expect(
         batchLegs[0]!.microAmount + batchLegs[1]!.microAmount + batchLegs[2]!.microAmount,
       ).toBe(BigInt(toMicro(1)));
+    });
+
+    it("PHASE 3 P2P: relays running NON-default fee rates — the real client pays each hop its own signed rate and the origin accepts the proof", async () => {
+      // spec/market-v1.md §5.1 (relays MAY set different rates) +
+      // relay-federation-v1 §7.1 (each relay applies its own rate). A charges
+      // 3%, B charges 2%, each declared in its signed /.well-known metadata.
+      // The client reads A's rate from metadata signed by A's PINNED key and
+      // B's from metadata signed by the peer key A vouches for; A's forward
+      // validator reads B's rate the same way (B's signed metadata, verified
+      // against relay_peers.public_key). Before the fix the client hardcoded
+      // 0.05 and A validated B's leg at A's own rate: the proof was rejected
+      // AFTER the irreversible broadcast.
+      await Promise.all([relayA.close(), relayB.close()]);
+      vi.restoreAllMocks();
+      relayA = await createFederatedRelay(RELAY_A_URL, "Relay Alpha", 0.03);
+      relayB = await createFederatedRelay(RELAY_B_URL, "Relay Beta", 0.02);
+      installFetchInterceptor(relayA, relayB);
+
+      const SIG = "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
+      const bob = await registerSovereignWorker(
+        relayB,
+        "bob-rates",
+        ["rates-cap"],
+        [{ capability: "rates-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
+      );
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
+      await establishPeering(relayA, relayB);
+      const alice = await registerAgent(relayA, "alice-rates", ["web-search"]);
+
+      let batchLegs: Array<{ toAddress: string; microAmount: bigint }> = [];
+      const fakeAdapter = {
+        ownAddress: "A1iceSo1anaAddr1111111111111111111111111111",
+        getUsdcBalance: vi.fn().mockResolvedValue(100_000_000n),
+        getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
+        sendUsdc: vi.fn(),
+        sendUsdcBatch: vi.fn(async (legs: Array<{ toAddress: string; microAmount: bigint }>) => {
+          batchLegs = legs;
+          return legs.map(() => ({ ok: true, signature: SIG, slot: 1, confirmed: true }));
+        }),
+        getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
+        isReachable: vi.fn().mockResolvedValue(true),
+      } as unknown as SolanaRpcAdapter;
+      const rail = new SolanaWalletRail(fakeAdapter);
+
+      const result = await resolveAndSubmitP2pDelegation({
+        motebitId: alice.motebitId,
+        syncUrl: RELAY_A_URL,
+        authToken: async () => API_TOKEN,
+        prompt: "federated P2P at non-default rates",
+        capability: "rates-cap",
+        relayPublicKeyHex: relayA.relayIdentity.publicKeyHex,
+        buildP2pPayment: (req) => rail.buildP2pPayment!(req),
+        timeoutMs: 100,
+        logger: { warn: vi.fn() },
+      });
+
+      // The relay accepted the proof and forwarded the task.
+      const forwarded = bobWs.send.mock.calls
+        .map((c: unknown[]) => JSON.parse(c[0] as string) as { type: string })
+        .find((m) => m.type === "task_request");
+      expect(forwarded, "origin must accept the per-hop-rate proof and forward").toBeDefined();
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("timeout");
+
+      // Per-hop legs: A 3% of $1, B 2% of the $0.97 remainder.
+      const budget = toMicro(1);
+      const aFee = Math.round(budget * 0.03);
+      const bFee = Math.round((budget - aFee) * 0.02);
+      expect(batchLegs).toHaveLength(3);
+      expect(batchLegs[0]).toEqual({
+        toAddress: bob.settlementAddress,
+        microAmount: BigInt(budget - aFee - bFee),
+      });
+      expect(batchLegs[1]!.microAmount).toBe(BigInt(aFee));
+      expect(batchLegs[2]!.microAmount).toBe(BigInt(bFee));
+    });
+
+    it("PHASE 3 P2P: the origin refuses a 3-leg proof that pays the executor at the ORIGIN's rate instead of the executor's signed rate", async () => {
+      await Promise.all([relayA.close(), relayB.close()]);
+      vi.restoreAllMocks();
+      relayA = await createFederatedRelay(RELAY_A_URL, "Relay Alpha", 0.03);
+      relayB = await createFederatedRelay(RELAY_B_URL, "Relay Beta", 0.02);
+      installFetchInterceptor(relayA, relayB);
+
+      const bob = await registerSovereignWorker(
+        relayB,
+        "bob-wrong-rate",
+        ["wrong-rate-cap"],
+        [{ capability: "wrong-rate-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
+      );
+      await establishPeering(relayA, relayB);
+      const alice = await registerAgent(relayA, "alice-wrong-rate", ["web-search"]);
+
+      // A single-rate split at A's 3% — B's leg is wrong for B's declared 2%.
+      const wrong = computeFederatedFeeSplit(toMicro(1), 0.03);
+      const res = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({
+          prompt: "wrong executor rate",
+          required_capabilities: ["wrong-rate-cap"],
+          submitted_by: alice.motebitId,
+          target_agent: bob.motebitId,
+          payment_proof: {
+            tx_hash: "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFwrong",
+            chain: "solana",
+            network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            to_address: bob.settlementAddress,
+            amount_micro: wrong.workerNetMicro,
+            fee_to_address: deriveSolanaAddress(hexToBytes(relayA.relayIdentity.publicKeyHex)),
+            fee_amount_micro: wrong.originFeeMicro,
+            b_fee_to_address: deriveSolanaAddress(hexToBytes(relayB.relayIdentity.publicKeyHex)),
+            b_fee_amount_micro: wrong.executorFeeMicro,
+          },
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toMatch(/executor-fee leg amount|worker leg amount/);
     });
 
     it("PHASE 3 P2P: one proof funds one task — refused once admitted (before settle) and after settle", async () => {
@@ -2867,12 +3004,12 @@ describe("Federation E2E", () => {
       url: string,
       body: Record<string, unknown>,
       expectedStatus: number,
-    ): Promise<void> {
+    ): Promise<Record<string, unknown>> {
       const key = crypto.randomUUID();
       const prompt = body["prompt"] as string;
       const first = await submitA(url, key, body);
       expect(first.status, await first.clone().text()).toBe(expectedStatus);
-      const b1 = (await first.json()) as { task_id?: string };
+      const b1 = (await first.json()) as { task_id?: string } & Record<string, unknown>;
       expect(tasksOnA(prompt), "the submission admitted exactly one task").toHaveLength(1);
 
       // The client's fetch failed too; it retries with the SAME key.
@@ -2882,6 +3019,7 @@ describe("Federation E2E", () => {
       expect(retry.status).toBe(expectedStatus);
       expect(b1.task_id, "the failed response names the admitted task").toBe(tasks[0]);
       expect(await retry.json(), "a same-key replay is the same answer").toEqual(b1);
+      return b1;
     }
 
     it("the executor relay rejects the forward (502): one task, replayed, forwarded once", async () => {
@@ -3122,7 +3260,7 @@ describe("Federation E2E", () => {
       ]);
       await establishPeering(relayA, relayB);
       const alice = await registerAgent(relayA, "alice-888-noproof", ["web-search"]);
-      await expectOneTaskPerKey(
+      const refusal = await expectOneTaskPerKey(
         `/agent/${alice.motebitId}/task`,
         {
           prompt: `888 noproof ${crypto.randomUUID()}`,
@@ -3130,6 +3268,10 @@ describe("Federation E2E", () => {
         },
         402,
       );
+      // A typed refusal, not a bare HTTPException: the stable code is how a
+      // client tells "pay P2P" from "deposit" — without it the CLI fell back
+      // to `motebit fund`, which can never clear this refusal.
+      expect(refusal["code"], JSON.stringify(refusal)).toBe("TASK_P2P_PROOF_REQUIRED");
     });
   });
 });

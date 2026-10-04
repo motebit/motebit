@@ -23,19 +23,19 @@ Every piece of stored state carries a **sensitivity level**, and the level gover
 | `financial` | Account details, balances | **Never** |
 | `secret` | Credentials, keys | **Never** |
 
-**Stored state** at `medical`, `financial`, or `secret` never syncs to a relay and is never assembled into the context sent to a cloud model — enforced at storage, retrieval, sync, and context assembly, fail-closed (on a classification error the memory is rejected, not leaked). Tool results are scanned for secret patterns (keys, tokens, card numbers, seed phrases) and redacted before they reach the model.
+**Stored state** at `medical`, `financial`, or `secret` is never assembled into the context sent to a cloud model. It is never persisted in plaintext at a relay either: the relay redacts higher-tier memory content on arrival, end-to-end-encrypted sync payloads stay ciphertext the relay cannot read, and `secret` memories are never stored anywhere. Memories that contain a detected secret pattern, or are tagged `secret`, are rejected at formation. One honest gap: a model-proposed memory whose sensitivity label is unrecognized is currently classified `none`, not rejected. Tool results are scanned for secret patterns (API and cloud keys, bearer tokens, JWTs, PEM private keys, card numbers, SSNs, seed phrases, connection strings, passwords) and redacted before they reach the model.
 
 What governs the **live conversation** is the **session sensitivity tier**: when a session is at `medical`/`financial`/`secret` (you set it, or a sensitive document on the slab raises it), every call to a non-sovereign provider is blocked — the model gets nothing until you switch to an on-device provider or de-escalate. The system does **not** auto-classify the content of your own live messages, so this is a control you hold, not magic detection: to keep a sensitive conversation local, mark the session (or use an on-device provider) **before** you type it. As an additive floor, obvious **credential-class** secrets (API/cloud keys, bearer tokens, JWTs, private keys, seed phrases, connection strings, passwords) typed directly into an _unmarked_ cloud session are **masked before they reach the model** — the model almost never needs to see a raw credential. Deliberately *not* auto-masked: SSNs and card numbers (often legitimately used — mark the session instead) and medical content (not pattern-detectable). Those stay user-controlled.
 
-Retention is governed too. Deleted data produces a signed **deletion certificate**, and sensitivity ceilings on what may persist (or sync to a relay) are interoperability law, not a configuration preference. See [Governance](/docs/concepts/governance) for the enforcement model.
+Retention is governed too. Deleting a memory or a conversation produces a signed **deletion certificate**, and sensitivity ceilings on what may persist (or sync to a relay) are interoperability law, not a configuration preference. See [Governance](/docs/concepts/governance) for the enforcement model.
 
 ## Keys & identity
 
-Your motebit's identity is an **Ed25519 keypair**. The public key (and the `motebit_id` derived from it) is shareable; the private key is the root of all authority.
+Your motebit's identity is an **Ed25519 keypair**. The public key (and, for a sovereign identity, the `motebit_id` derived from it) is shareable; the private key is the root of all authority.
 
-- **At rest.** On mobile the private key lives in the iOS Keychain / Android Keystore. On desktop it lives in `~/.motebit/dev-keyring.json`, an owner-only (`0600` on Unix; Windows is best-effort) file — access-controlled, not application-encrypted (the same protection as an SSH key). The OS keychain is not used yet; enabling it is its own arc, gated on real-device testing (`docs/proposals/key-file-durability-v1.md`). On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations, SHA-256) and AES-256-GCM. It never crosses the network and never enters the non-secret config metadata.
-- **Recovery.** A recovery seed re-derives a sovereign identity. A sovereign `motebit_id` is a cryptographic commitment to its genesis key, so the binding between an id and its key is checkable offline by anyone.
-- **Rotation & succession.** Keys can be rotated; a signed succession chain (old and new keys both sign) preserves continuity, so a rotated key does not orphan past receipts.
+- **At rest.** On mobile the private key lives in the iOS Keychain / Android Keystore. On desktop it lives in `~/.motebit/dev-keyring.json`, an owner-only (`0600` on Unix; Windows is best-effort) file — access-controlled, not application-encrypted (the same protection as an SSH key). The OS keychain is not used yet; enabling it is its own arc, gated on real-device testing (`docs/proposals/key-file-durability-v1.md`). On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations by default, SHA-256) and AES-256-GCM. Registering with a relay sends the `motebit_id`, device id, and public key — never the private key.
+- **Recovery.** A recovery seed re-derives a sovereign identity. A sovereign `motebit_id` is a cryptographic commitment to its genesis key, so the binding between an id and its key is checkable offline by anyone. Identities minted before sovereign ids carry a random id that is not derived from a key and cannot be recovered from a seed.
+- **Rotation & succession.** Keys can be rotated; a signed succession chain (the new key always signs; the old key also signs in a normal rotation, or a designated guardian signs in recovery) preserves continuity, so a rotated key does not orphan past receipts.
 - **Hardware attestation is additive.** Secure Enclave / TPM / StrongBox attestations *raise* an identity's assurance score — they never replace the Ed25519 key, and their absence never blocks a software identity. Software identity is the floor.
 
 See [Identity & crypto](/docs/developer/identity-crypto) for the full key lifecycle.
@@ -47,20 +47,20 @@ Every risky action is gated against the owner's signed policy before it runs. To
 - **`max_risk_auto`** — the ceiling for actions that run automatically.
 - **`deny_above`** — the ceiling above which actions are blocked unconditionally.
 
-Between them lies the **approval band**: the agent may reason about the action but cannot execute it without explicit operator approval. If a threshold is missing or the ordering constraint is violated, the daemon refuses to start — **fail-closed by default**.
+Between them lies the **approval band**: the agent may reason about the action but cannot execute it without explicit operator approval. If any of the three governance fields in the signed identity file (`max_risk_auto`, `require_approval_above`, `deny_above`) is missing or names an unknown risk band, or the identity file's signature does not verify, the daemon refuses to start — **fail-closed by default**. The daemon does not currently check that the three thresholds are in ascending order.
 
-Money is the strongest case. An `R4_MONEY` tool call can only ever *auto*-execute when the turn carries a cryptographically verified standing-delegation grant — a signed artifact, never a configuration flag, a trust level, or anything the model recalls or claims. Absent that grant, money always routes to approval. There is no switch that disables this branch. See [Governance](/docs/operator/governance) and [Daemon & approvals](/docs/operator/daemon-approvals).
+Money is the strongest case. An `R4_MONEY` tool call can only ever *auto*-execute when the turn carries a cryptographically verified standing-delegation grant — a signed artifact, never a configuration flag, a trust level, or anything the model recalls or claims. Absent that grant, money routes to approval, or is denied outright when it sits above `deny_above`. There is no switch that disables this branch. See [Governance](/docs/operator/governance) and [Daemon & approvals](/docs/operator/daemon-approvals).
 
 ## Threat model
 
 Motebit's design defends against three classes of attack a sovereign agent network must withstand:
 
 - **Sybil resistance.** Trust is **first-person and bilateral** — keyed to a specific pair of identities, accumulated from signed receipts — never a global reputation score that mass-minted identities could inflate. Minting an identity is free; earning trust with a specific counterparty is not.
-- **Prompt injection.** Memory carries machine-assigned **provenance** (user-stated, agent-inferred, tool-derived, peer-agent) — never model- or peer-authored — so a recalled fact cannot smuggle in authority it never had. Memory may inform; only signed artifacts authorize.
+- **Prompt injection.** Memory carries machine-assigned **provenance** (user-stated, agent-inferred, tool-derived, peer-agent, consolidation-derived) — never model- or peer-authored — so a recalled fact cannot smuggle in authority it never had. Memory may inform; only signed artifacts authorize.
 - **Token binding.** Bearer tokens are **audience-bound**: a token minted for one endpoint is rejected by another. A token scoped to submit a task cannot be replayed against the endpoint that reads its result.
 
 ## Verifiability
 
-Every claim motebit makes about itself is checkable without trusting motebit. An execution receipt verifies offline against the producer's public key; an identity binding is provable from the `motebit_id` alone; the operator's transparency posture is published and signed.
+Every claim motebit makes about itself is checkable without trusting motebit. An execution receipt verifies offline against the producer's public key; a sovereign identity's binding is checkable offline from its `motebit_id` and genesis public key (plus its succession chain if the key has rotated); a relay operator's declared transparency posture is published and signed at `/.well-known/motebit-transparency.json`.
 
 The shortest demonstration is the [Developer Quickstart](/docs/developer/quickstart) — sign a receipt and verify it in one file, no relay and no account. That is the security model in miniature: the proof travels with the artifact.

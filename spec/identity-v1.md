@@ -28,16 +28,16 @@ The file is valid Markdown. It can be opened in any text editor, rendered by any
 A `motebit.md` file consists of two parts:
 
 1. **YAML frontmatter** between `---` delimiters
-2. **Signature comment** in the format `<!-- motebit:sig:{algorithm}:{signature} -->`
+2. **Signature comment** in the format `<!-- motebit:sig:{suite}:{signature} -->`, where `{suite}` MUST be `motebit-jcs-ed25519-hex-v1` (the only suite identity files are signed under; see `@motebit/protocol` `SUITE_REGISTRY`)
 
 ```
 ---
 {YAML frontmatter}
 ---
-<!-- motebit:sig:Ed25519:{base64url_signature} -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex_signature} -->
 ```
 
-The frontmatter contains the identity specification. The signature covers the frontmatter content — the bytes between the opening `---\n` and the closing `\n---`, exclusive of the delimiters themselves.
+The frontmatter contains the identity specification. The signature covers the frontmatter content — the bytes between the opening `---\n` and the closing `\n---`, exclusive of the delimiters themselves. The `{suite}` token in the comment is NOT covered by the signature; verifiers MUST therefore pin it (accept only `motebit-jcs-ed25519-hex-v1`) rather than dispatch on it. The legacy `motebit:sig:Ed25519:` form is rejected fail-closed.
 
 Additional Markdown content MAY appear after the signature comment. It is not covered by the signature and has no effect on verification. This allows agents or users to add human-readable notes, documentation, or context below the signed identity.
 
@@ -62,9 +62,17 @@ The reference implementations persist identity files on the local filesystem (CL
 | Field        | Type   | Required | Description                                                                                   |
 | ------------ | ------ | -------- | --------------------------------------------------------------------------------------------- |
 | `spec`       | string | yes      | Specification version. MUST be `"motebit/identity@1.0"` for this version.                     |
-| `motebit_id` | string | yes      | Unique agent identifier. SHOULD be a UUID v7 (time-ordered).                                  |
+| `motebit_id` | string | yes      | Unique agent identifier. See §3.1.1 for the forms minted and accepted.                        |
 | `created_at` | string | yes      | ISO 8601 timestamp of identity creation.                                                      |
 | `owner_id`   | string | yes      | Identifier of the entity that owns this agent. Opaque string — format is application-defined. |
+
+#### 3.1.1 — `motebit_id` forms
+
+`motebit_id` is a string; the identity-file verifier does not constrain its format. Three forms are in use:
+
+1. **Sovereign commitment (the default mint).** A UUIDv8 (RFC 9562) derived from the genesis public key: the first 16 bytes of `SHA-256(genesis_public_key)`, with the version nibble set to `8` (`b[6] = 0x80 | (b[6] & 0x0f)`) and the variant set to `10b` (`b[8] = 0x80 | (b[8] & 0x3f)`), rendered as a lowercase hyphenated UUID. Implementations minting a new identity SHOULD use this form. A verifier recomputes it from the genesis key and compares case-insensitively; equality binds the id to the key without an operator (reference: `deriveSovereignMotebitId` / `verifySovereignBinding` in `@motebit/crypto`).
+2. **UUID v7 (legacy form).** Random, time-ordered ids with no binding to a key. Clients minted them before the sovereign commitment, and the reference relay still mints one today: its internal `POST /identity` route creates the id through the identity manager in the BSL `@motebit/core-identity` package, which mints a random UUIDv7. They are valid identifiers but carry version nibble `7`, so they never equal a commitment and never verify as key-bound. The reference desktop and mobile seed-only restore also minted random UUIDv4 ids (`crypto.randomUUID()`, version nibble `4`) from 2026-05-15 until 2026-05-22; those are the same legacy form — no binding to a key, never equal to a commitment.
+3. **`did:key`.** A `did:key` (§10) used directly as the id. The sovereign-binding check accepts it by decoding the key and comparing it to the genesis key. No reference client mints this form, and the reference relay refuses it at the routes that create identities, devices or registrations (`:` is outside the id character set it admits there).
 
 ### 3.2 — `identity`
 
@@ -330,8 +338,8 @@ The signature is computed as follows:
 1. Serialize the identity data as YAML.
 2. Let `frontmatter_bytes` be the UTF-8 encoding of the YAML text (the content between `---\n` and `\n---`, not including the delimiters).
 3. Compute `signature = Ed25519_Sign(frontmatter_bytes, private_key)` where `private_key` is the 64-byte Ed25519 private key (also called "secret key" or "seed + public key" depending on library) corresponding to the `identity.public_key` in the frontmatter.
-4. Encode the 64-byte signature as base64url (RFC 4648 §5, no padding).
-5. Emit the signature as an HTML comment: `<!-- motebit:sig:Ed25519:{base64url_signature} -->`.
+4. Encode the 64-byte signature as lowercase hex (128 characters).
+5. Emit the signature as an HTML comment: `<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex_signature} -->`.
 
 ### 4.2 — Signature Placement
 
@@ -341,7 +349,7 @@ The signature comment MUST appear on the line immediately following the closing 
 ---
 {YAML}
 ---
-<!-- motebit:sig:Ed25519:abc123... -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:a1b2c3... -->
 ```
 
 ### 4.3 — Verification Algorithm
@@ -361,10 +369,12 @@ function verify(content: string) -> { valid: bool, identity: object | null }
   3. Let raw_frontmatter = content[body_start .. position_of("\n---")].
      Parse raw_frontmatter as YAML into an object `identity`.
 
-  4. Find the substring "<!-- motebit:sig:Ed25519:" in content.
-     If not found, return { valid: false, identity: null }.
+  4. Find the substring "<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:" in content.
+     If not found (including a comment naming any other suite, or the legacy
+     "Ed25519:" form), return { valid: false, identity: null }. The suite token
+     is outside the signed bytes, so it is pinned here, never dispatched on.
 
-  5. Extract the base64url string between the prefix and the next " -->".
+  5. Extract the hex string between the prefix and the next " -->".
      Decode it to a 64-byte signature.
      If decoding fails or length != 64, return { valid: false, identity: null }.
 
@@ -433,7 +443,7 @@ devices:
     registered_at: "2026-02-18T00:00:00.000Z"
 ---
 
-<!-- motebit:sig:Ed25519:dGhpcyBpcyBhIHBsYWNlaG9sZGVyIHNpZ25hdHVyZQ -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 -->
 ```
 
 Note: The signature above is illustrative. A real file would contain a valid Ed25519 signature that passes verification against the declared public key.
@@ -484,7 +494,7 @@ succession:
     new_key_signature: "e5f6a1b2...128_hex_chars...representing_new_key_signing_canonical_payload"
 ---
 
-<!-- motebit:sig:Ed25519:dGhpcyBpcyBhIHBsYWNlaG9sZGVyIHNpZ25hdHVyZQ -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 -->
 ```
 
 Note: The `motebit_id` remains unchanged from the original identity. The `identity.public_key` now matches `succession[0].new_public_key`. The file is signed by the new key. The succession record's dual signatures prove the old key authorized the rotation and the new key accepted it. Signatures above are illustrative.
@@ -533,7 +543,7 @@ memory:
 devices: []
 ---
 
-<!-- motebit:sig:Ed25519:dGhpcyBpcyBhIHBsYWNlaG9sZGVyIHNpZ25hdHVyZQ -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 -->
 ```
 
 Note: When `type` is absent, the identity is treated as `"personal"`. The service fields (`service_name`, `service_description`, `service_url`, `capabilities`, `terms_url`) are only meaningful when `type` is `"service"`.

@@ -18,6 +18,8 @@ export type { X402RailConfig, X402FacilitatorClient } from "./x402-rail.js";
 export { BridgeSettlementRail } from "./bridge-rail.js";
 export {
   isManualPayoutRail,
+  isPayoutNotSent,
+  PayoutNotSentError,
   payoutValidityMsOf,
   type PayoutHorizonDeclaration,
 } from "./payout-horizon.js";

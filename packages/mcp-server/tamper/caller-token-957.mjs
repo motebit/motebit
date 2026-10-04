@@ -3,17 +3,17 @@
  * Tamper checks for #957 (MCP caller-token audience, binding, replay, and
  * the replay store's resource bounds).
  *
- * Each entry is (file, text to revert, test expected red): the script
- * removes the fix — one or more exact edits — runs the named test file, and
- * requires it to FAIL; then restores every file. An edit whose text is not
- * found exactly once is a failure too ("could not apply" is never a silent
- * pass). Exit 1 if any tamper stays green or cannot apply.
+ * Each entry is (file, text to revert, test expected red): removing the fix —
+ * one or more exact edits — must turn the named test file RED. The shared
+ * runner (scripts/lib/tamper-runner.ts) runs the entries in parallel, each in
+ * an isolated copy of the tree; an edit whose text is not found exactly once
+ * is a failure too ("could not apply" is never a silent pass). Exit 1 if any
+ * tamper stays green or cannot apply.
  *
- *   node packages/mcp-server/tamper/caller-token-957.mjs
+ *   node packages/mcp-server/tamper/caller-token-957.mjs [--concurrency=N]
  */
-import { readFileSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
+import { runTampers } from "../../../scripts/lib/tamper-runner.ts";
 
 const ROOT = resolve(new URL(".", import.meta.url).pathname, "../../..");
 
@@ -262,7 +262,7 @@ const TAMPERS = [
     test: "src/__tests__/sub-delegate-binding.test.ts",
     edits: [
       {
-        file: "services/web-search/src/index.ts",
+        file: "services/web-search/src/sub-delegate.ts",
         from: "    ...(args.targetMotebitId != null ? { motebitId: args.targetMotebitId } : {}),\n",
         to: "",
       },
@@ -270,40 +270,4 @@ const TAMPERS = [
   },
 ];
 
-let bad = 0;
-for (const t of TAMPERS) {
-  const originals = new Map();
-  let applied = true;
-  for (const e of t.edits) {
-    const path = resolve(ROOT, e.file);
-    const current = originals.has(path) ? readFileSync(path, "utf8") : readFileSync(path, "utf8");
-    if (!originals.has(path)) originals.set(path, current);
-    const count = current.split(e.from).length - 1;
-    if (count !== 1) {
-      console.log(`COULD NOT APPLY  ${t.name}  (${e.file}: text found ${count}×)`);
-      applied = false;
-      break;
-    }
-    writeFileSync(path, current.replace(e.from, e.to));
-  }
-  let red = false;
-  if (applied) {
-    try {
-      execFileSync("pnpm", ["--filter", t.pkg, "exec", "vitest", "run", t.test], {
-        cwd: ROOT,
-        stdio: "ignore",
-      });
-    } catch {
-      red = true;
-    }
-  }
-  for (const [path, text] of originals) writeFileSync(path, text);
-  if (!applied) {
-    bad++;
-    continue;
-  }
-  console.log(`${red ? "RED (ok)       " : "STAYED GREEN   "}  ${t.name}`);
-  if (!red) bad++;
-}
-console.log(bad === 0 ? `all ${TAMPERS.length} tampers went red` : `${bad} tamper(s) failed`);
-process.exit(bad === 0 ? 0 : 1);
+await runTampers(TAMPERS, { root: ROOT });

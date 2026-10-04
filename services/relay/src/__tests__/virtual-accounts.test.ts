@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
-import { seedBalance } from "./test-helpers.js";
+import { seedBalance, TEST_RELAY_NETWORK, UNREACHABLE_FACILITATOR_CLIENT } from "./test-helpers.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import {
   generateKeypair,
@@ -22,6 +22,10 @@ const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    ...TEST_RELAY_NETWORK,
+    // This file pins the relay's behaviour with the facilitator DOWN (a wallet
+    // payout that never settles) — in-process, not by failing a real fetch.
+    x402FacilitatorClient: UNREACHABLE_FACILITATOR_CLIENT,
     allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,
@@ -169,8 +173,7 @@ describe("Virtual Accounts", () => {
   it("balance includes sweep config when agent registered with sweep_threshold + settlement_address", async () => {
     // Sovereign-exit UX depends on surfacing the sweep relationship. The UI
     // reads these fields to render "Auto-sweep above $X → sovereign wallet"
-    // beneath the operating balance. See /Users/daniel/.claude/plans/
-    // polymorphic-greeting-nebula.md.
+    // beneath the operating balance.
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
     // Valid Solana address format (base58, 32-44 chars, no 0/O/I/l). Not a

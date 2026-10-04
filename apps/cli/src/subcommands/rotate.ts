@@ -13,7 +13,7 @@
 import * as readline from "node:readline";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { hexPublicKeyToDidKey } from "@motebit/encryption";
+import { createSolanaHoldingsReader, hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
 import { decryptPrivateKey, resolveUnlockPassphrase } from "../identity.js";
@@ -28,6 +28,8 @@ import {
 } from "../pending-rotation.js";
 import { performRotation, RotationUnlockError, type RotationNote } from "../rotation.js";
 import { resolveRelayUrl } from "./_helpers.js";
+import { DEFAULT_SOLANA_RPC_URL } from "./wallet.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 /**
  * Discover motebit.md by searching cwd, parent directories, and ~/.motebit/identity.md.
@@ -120,6 +122,11 @@ export async function handleRotate(config: CliConfig): Promise<void> {
       passphrase,
       ...(config.reason !== undefined ? { reason: config.reason } : {}),
       syncUrl,
+      // I0: the identity key IS the wallet. Read it before anything moves.
+      readWalletHoldings: createSolanaHoldingsReader({
+        rpcUrl: config.solanaRpcUrl ?? process.env["SOLANA_RPC_URL"] ?? DEFAULT_SOLANA_RPC_URL,
+      }),
+      ...(config.abandonFunds === true ? { abandonFunds: true } : {}),
     });
   } catch (err: unknown) {
     // Classified by TYPE: the unlock step throws its own error, so no
@@ -131,7 +138,7 @@ export async function handleRotate(config: CliConfig): Promise<void> {
         : err instanceof Error
           ? err.message
           : String(err);
-    console.error(`Error: ${msg}.`);
+    console.error(`Error: ${sanitizeRelayText(msg)}.`);
     rl.close();
     process.exit(1);
   }
@@ -141,7 +148,7 @@ export async function handleRotate(config: CliConfig): Promise<void> {
 
   switch (outcome.kind) {
     case "stopped": {
-      console.error(`Error: ${outcome.message}.`);
+      console.error(`Error: ${sanitizeRelayText(outcome.message)}.`);
       process.exit(1);
     }
     // eslint-disable-next-line no-fallthrough -- process.exit never returns

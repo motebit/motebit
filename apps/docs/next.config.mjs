@@ -10,6 +10,15 @@ const config = {
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
   transpilePackages: ["@motebit/render-engine", "@motebit/sdk", "@motebit/policy-invariants"],
+  // docs.motebit.com is documentation only — the product and its story live
+  // at motebit.com. The root is the Introduction, permanently (308).
+  async redirects() {
+    return [
+      { source: "/", destination: "/docs/introduction", permanent: true },
+      { source: "/docs", destination: "/docs/introduction", permanent: true },
+      { source: "/compare", destination: "/docs/concepts/interior-color", permanent: true },
+    ];
+  },
 };
 
 export default withMDX(config);

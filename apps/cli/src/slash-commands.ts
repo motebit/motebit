@@ -14,6 +14,7 @@ import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { renderIdentityCard } from "./subcommands/id.js";
 import { DEFAULT_SOLANA_RPC_URL, WALLET_GUIDANCE_LINES } from "./subcommands/wallet.js";
 import { renderLedgerSummary } from "./subcommands/ledger.js";
+import { describeDelegateSubmit402 } from "./subcommands/delegate.js";
 import { RelayClient, RelayClientError } from "@motebit/relay-client";
 import { executeCommand, isServedTool } from "@motebit/runtime";
 import { narrateEconomicConsequences } from "@motebit/gradient";
@@ -42,8 +43,10 @@ import { green, yellow, red, dim, cyan, command, success, warn } from "./colors.
 import {
   SqliteConversationSyncStoreAdapter,
   SqlitePlanSyncStoreAdapter,
+  syncFailureLine,
 } from "./runtime-factory.js";
 import {
+  sanitizeRelayText,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
   EncryptedConversationSyncAdapter,
@@ -252,6 +255,56 @@ function parseSub(args: string): { sub: string; rest: string } {
 
 type RelayResult<T> =
   { ok: true; data: T; status: number } | { ok: false; status: number; text: string };
+
+/** The fields of a `/api/v1/agents/discover` row the REPL reads. */
+interface DiscoveredListing {
+  motebit_id: string;
+  capabilities?: string[] | null;
+  pricing?: Array<{ capability?: string; unit_cost?: number }> | null;
+}
+
+/**
+ * True when a 402's remedy is to pay P2P: the relay's `TASK_P2P_PROOF_REQUIRED`,
+ * or a codeless 402 (the x402 challenge) on a submission to another agent — a
+ * deposit only moves that one to the P2P refusal (`describeDelegateSubmit402`).
+ */
+function isP2pRefusal(bodyText: string, worker: "self" | "other"): boolean {
+  let code: unknown;
+  try {
+    code = (JSON.parse(bodyText) as { code?: unknown }).code;
+  } catch {
+    code = undefined;
+  }
+  return code === "TASK_P2P_PROOF_REQUIRED" || (typeof code !== "string" && worker === "other");
+}
+
+/** The capabilities a worker charges for, else the ones it lists. */
+function listingCapabilities(listing: DiscoveredListing | undefined): string[] {
+  if (listing == null) return [];
+  const priced = (listing.pricing ?? [])
+    .filter((p) => typeof p.capability === "string" && (p.unit_cost ?? 0) > 0)
+    .map((p) => p.capability!);
+  return [...new Set(priced.length > 0 ? priced : (listing.capabilities ?? []))];
+}
+
+/** Best-effort read of one agent's discovery row; undefined when unknown. */
+async function lookupListing(
+  config: CliConfig,
+  repl: ReplContext,
+  syncUrl: string,
+  motebitId: string,
+): Promise<DiscoveredListing | undefined> {
+  try {
+    const result = await relayFetch<{ agents?: DiscoveredListing[] }>(
+      syncUrl,
+      `/api/v1/agents/discover?motebit_id=${encodeURIComponent(motebitId)}`,
+      { headers: await makeRelayHeaders(config, repl) },
+    );
+    return result.ok ? result.data.agents?.find((a) => a.motebit_id === motebitId) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Fetch from relay with standardized error handling. Strips trailing slashes from baseUrl. */
 async function relayFetch<T>(
@@ -559,7 +612,7 @@ export async function handleSlashCommand(
         );
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`Failed to delete memory: ${message}`);
+        console.error(`Failed to delete memory: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -597,7 +650,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`Summarization failed: ${message}`);
+        console.error(`Summarization failed: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -763,13 +816,17 @@ export async function handleSlashCommand(
       try {
         console.log("Syncing events...");
         const result = await runtime.sync.sync();
+        // sync() never rejects: a refused push is read here, never silent
+        // (#962) — and its text is the relay's, so it prints sanitized (round 6).
+        const failed = syncFailureLine(runtime.sync);
+        if (failed) console.error(failed);
         console.log(`  Events — pushed: ${result.pushed}, pulled: ${result.pulled}`);
         if (result.conflicts.length > 0) {
           console.log(`  Conflicts: ${result.conflicts.length}`);
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`Event sync failed: ${message}`);
+        console.error(`Event sync failed: ${sanitizeRelayText(message)}`);
       }
 
       // Conversation sync
@@ -832,7 +889,7 @@ export async function handleSlashCommand(
             );
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
-            console.error(`Sync failed: ${message}`);
+            console.error(`Sync failed: ${sanitizeRelayText(message)}`);
           }
         } else {
           console.log("  Sync: skipped (no sync URL)");
@@ -874,7 +931,9 @@ export async function handleSlashCommand(
         }
         console.log(success("  Registered with relay."));
       } catch (err: unknown) {
-        console.log(`  Cannot reach relay: ${err instanceof Error ? err.message : String(err)}`);
+        console.log(
+          `  Cannot reach relay: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+        );
         break;
       }
 
@@ -1039,7 +1098,9 @@ export async function handleSlashCommand(
           }
         }
       } catch (err: unknown) {
-        console.log(`  Error starting server: ${err instanceof Error ? err.message : String(err)}`);
+        console.log(
+          `  Error starting server: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+        );
       }
       break;
     }
@@ -1199,7 +1260,7 @@ export async function handleSlashCommand(
           intervalMs = parseInterval(everyMatch[1]!);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.log(`Error: ${msg}`);
+          console.log(`Error: ${sanitizeRelayText(msg)}`);
           break;
         }
         const once = rest.includes("--once");
@@ -1210,7 +1271,7 @@ export async function handleSlashCommand(
             wallClockMs = parseInterval(wallClockMatch[1]!);
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
-            console.log(`Error parsing --wall-clock: ${msg}`);
+            console.log(`Error parsing --wall-clock: ${sanitizeRelayText(msg)}`);
             break;
           }
         }
@@ -1377,7 +1438,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`Reflection failed: ${message}`);
+        console.error(`Reflection failed: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -1468,7 +1529,7 @@ export async function handleSlashCommand(
                   : /manifest|hash|tool/i.test(message)
                     ? "Manifest validation failed."
                     : "Check the URL and ensure the server accepts MCP connections.";
-          console.log(`Failed to connect to "${addName}": ${message}`);
+          console.log(`Failed to connect to "${addName}": ${sanitizeRelayText(message)}`);
           console.log(`  ${hint}`);
           break;
         }
@@ -1490,7 +1551,7 @@ export async function handleSlashCommand(
           } catch {
             /* best effort */
           }
-          console.log(`Tool registration failed for "${addName}": ${message}`);
+          console.log(`Tool registration failed for "${addName}": ${sanitizeRelayText(message)}`);
           break;
         }
         // Track adapter
@@ -1591,7 +1652,7 @@ export async function handleSlashCommand(
           }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
-          console.log(`Discovery error: ${message}`);
+          console.log(`Discovery error: ${sanitizeRelayText(message)}`);
         }
         break;
       }
@@ -1635,7 +1696,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Discovery error: ${message}`);
+        console.log(`Discovery error: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -1785,11 +1846,13 @@ export async function handleSlashCommand(
 
       // Resolve prefix to full motebit ID if needed (UUID is 36 chars)
       let targetMotebitId = rawTargetId;
+      // The target's discovery row, kept so a P2P remedy can name its capability.
+      let targetListing: DiscoveredListing | undefined;
       const UUID_LENGTH = 36;
       if (rawTargetId.length < UUID_LENGTH) {
         try {
           const discoverHeaders = await makeRelayHeaders(config, repl);
-          const discoverResult = await relayFetch<{ agents: Array<{ motebit_id: string }> }>(
+          const discoverResult = await relayFetch<{ agents: DiscoveredListing[] }>(
             syncUrl!,
             `/api/v1/agents/discover`,
             { headers: discoverHeaders },
@@ -1811,10 +1874,11 @@ export async function handleSlashCommand(
             break;
           }
           targetMotebitId = matchedAgent.motebit_id;
+          targetListing = matchedAgent;
           console.log(`Resolved: ${rawTargetId} → ${targetMotebitId.slice(0, 12)}...`);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
-          console.log(`Agent resolution failed: ${message}`);
+          console.log(`Agent resolution failed: ${sanitizeRelayText(message)}`);
           break;
         }
       }
@@ -1837,11 +1901,32 @@ export async function handleSlashCommand(
         taskId = submitResult.task_id;
         console.log(`Task submitted: ${taskId.slice(0, 12)}...`);
       } catch (err: unknown) {
-        if (err instanceof RelayClientError && err.kind === "http") {
+        if (err instanceof RelayClientError && err.kind === "http" && err.status === 402) {
+          // The shared 402 reading — never the raw body. `/delegate` parses no
+          // flags, so a P2P remedy names the full shell command — with the
+          // target's capability, read from discovery (a GET, never a retry).
+          const worker = targetMotebitId === repl.motebitId ? "self" : "other";
+          const p2p = isP2pRefusal(err.body ?? "", worker);
+          if (p2p && targetListing == null) {
+            targetListing = await lookupListing(config, repl, syncUrl!, targetMotebitId);
+          }
+          const remedy = describeDelegateSubmit402(
+            err.body ?? "",
+            {
+              repl: {
+                prompt: delegatePrompt,
+                target: targetMotebitId,
+                capabilities: listingCapabilities(targetListing),
+              },
+            },
+            worker,
+          );
+          for (const line of remedy) console.log(line);
+        } else if (err instanceof RelayClientError && err.kind === "http") {
           console.log(`Task submission failed (${err.status}): ${err.body ?? ""}`);
         } else {
           const message = err instanceof Error ? err.message : String(err);
-          console.log(`Task submission error: ${message}`);
+          console.log(`Task submission error: ${sanitizeRelayText(message)}`);
         }
         break;
       }
@@ -2023,7 +2108,7 @@ export async function handleSlashCommand(
         console.log(`  Use /proposal ${data.proposal_id.slice(0, 8)} to check status.`);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Proposal error: ${message}`);
+        console.log(`Proposal error: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -2074,7 +2159,7 @@ export async function handleSlashCommand(
         console.log("\nUse /proposal <id> to view details or respond.");
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Proposals error: ${message}`);
+        console.log(`Proposals error: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -2155,7 +2240,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Proposal fetch error: ${message}`);
+        console.log(`Proposal fetch error: ${sanitizeRelayText(message)}`);
         break;
       }
 
@@ -2253,7 +2338,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Response error: ${message}`);
+        console.log(`Response error: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -2290,13 +2375,13 @@ export async function handleSlashCommand(
           console.log(`  balance      ${fromMicro(Number(microUsdc)).toFixed(2)} USDC`);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.log(`  balance      (unavailable: ${msg})`);
+          console.log(`  balance      (unavailable: ${sanitizeRelayText(msg)})`);
         }
         console.log();
         for (const line of WALLET_GUIDANCE_LINES) console.log(dim(line));
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.log(`Wallet error: ${msg}`);
+        console.log(`Wallet error: ${sanitizeRelayText(msg)}`);
       }
       break;
     }
@@ -2330,7 +2415,7 @@ export async function handleSlashCommand(
         for (const line of renderLedgerSummary(manifest)) console.log(line);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.log(`Ledger error: ${msg}`);
+        console.log(`Ledger error: ${sanitizeRelayText(msg)}`);
       }
       break;
     }
@@ -2362,7 +2447,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Balance error: ${message}`);
+        console.log(`Balance error: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -2411,7 +2496,7 @@ export async function handleSlashCommand(
           );
         } else {
           const message = err instanceof Error ? err.message : String(err);
-          console.log(`Withdrawal error: ${message}`);
+          console.log(`Withdrawal error: ${sanitizeRelayText(message)}`);
         }
       }
       break;
@@ -2459,7 +2544,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Deposits error: ${message}`);
+        console.log(`Deposits error: ${sanitizeRelayText(message)}`);
       }
       break;
     }

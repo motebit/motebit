@@ -13,11 +13,12 @@
 import { sign as ed25519Sign, bytesToHex, canonicalJson } from "@motebit/encryption";
 export { publicKeyToDidKey, hexPublicKeyToDidKey } from "@motebit/encryption";
 import { RiskLevel } from "@motebit/sdk";
-import { parse, verify, deriveSovereignMotebitId } from "@motebit/crypto";
+import { parse, verify, deriveSovereignMotebitId, identityVerifyOutcome } from "@motebit/crypto";
 import type { MotebitIdentityFile, MotebitIdentityType } from "./schema.js";
 
-// Re-export parse/verify from @motebit/crypto
-export { parse, verify };
+// Re-export parse/verify from @motebit/crypto, with the intact fold every
+// surface reads (signature AND succession chain).
+export { parse, verify, identityVerifyOutcome };
 export type { VerifyResult } from "@motebit/crypto";
 export type { MotebitIdentityFile, MotebitIdentityType } from "./schema.js";
 
@@ -438,9 +439,10 @@ export async function importIdentityFile(content: string): Promise<ImportIdentit
     return { valid: false, reason: `parse failed: ${reason}` };
   }
   const result = await verify(content, { expectedType: "identity" });
-  if (result.type !== "identity" || !result.valid || result.identity === null) {
+  const outcome = identityVerifyOutcome(result);
+  if (result.type !== "identity" || !outcome.valid || result.identity === null) {
     const reason =
-      result.errors?.[0]?.message ??
+      outcome.error ??
       ("error" in result && typeof result.error === "string"
         ? result.error
         : "signature verification failed");

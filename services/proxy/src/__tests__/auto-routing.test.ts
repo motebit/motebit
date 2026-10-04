@@ -9,6 +9,7 @@ import {
   isModelAllowedInMotebitCloud,
   getSupportedModels,
   calculateCostMicro,
+  maxPricedPromptTokens,
   resolveModelAlias,
   CLASSIFIER_MODEL,
   CHEAPEST_MODEL,
@@ -185,6 +186,72 @@ describe("calculateCostMicro", () => {
     // margin = 0.0000012, micro = ceil(1.2) = 2
     expect(calculateCostMicro("claude-haiku-4-5-20251001", 1, 0)).toBe(2);
   });
+});
+
+describe("context-length pricing tiers (priced on the REPORTED prompt size)", () => {
+  // Google bills gemini-2.5-pro's WHOLE turn at $2.50/$15 per M once the prompt
+  // (uncached + cached) exceeds 200k tokens; at or below, $1.25/$10.
+  const at = (input: number, output: number, i: number, o: number) =>
+    Math.ceil(((input * i + output * o) / 1_000_000) * 1.2 * 1_000_000);
+
+  it("gemini-2.5-pro at exactly 200,000 prompt tokens: the ≤200k rate", () => {
+    expect(calculateCostMicro("gemini-2.5-pro", 200_000, 1_000)).toBe(at(200_000, 1_000, 1.25, 10));
+  });
+
+  it("gemini-2.5-pro at 200,001 prompt tokens: the WHOLE turn at the >200k rate", () => {
+    expect(calculateCostMicro("gemini-2.5-pro", 200_001, 1_000)).toBe(at(200_001, 1_000, 2.5, 15));
+  });
+
+  it("gemini-2.5-pro: cached prompt tokens count toward the tier and are priced at it", () => {
+    // 150k uncached + 60k cached = 210k prompt → >200k tier for every bucket.
+    const raw = (150_000 * 2.5 + 60_000 * 2.5 * 0.1 + 1_000 * 15) / 1_000_000;
+    expect(calculateCostMicro("gemini-2.5-pro", 150_000, 1_000, 60_000)).toBe(
+      Math.ceil(raw * 1.2 * 1_000_000),
+    );
+  });
+
+  it("the reviewer's probe: 300k + 1k is never billed below Google's 765,000 micro", () => {
+    expect(calculateCostMicro("gemini-2.5-pro", 300_000, 1_000)).toBe(918_000);
+  });
+
+  it("a tiered model has no refusal ceiling — its every tier is priced", () => {
+    expect(maxPricedPromptTokens("gemini-2.5-pro")).toBeNull();
+  });
+
+  // Every row is audited: either its whole reachable prompt range is priced
+  // (tiered, or bounded by the provider's own window), or prompts above its
+  // lowest possible tier boundary are refused before spend.
+  const AUDIT: Record<string, number | null> = {
+    // Anthropic: the proxy never sends the long-context beta header, so the
+    // provider's own 200k window bounds the prompt — the flat rate is exact.
+    "claude-opus-4-6": null,
+    "claude-sonnet-4-6": null,
+    "claude-haiku-4-5-20251001": null,
+    "gemini-2.5-pro": null,
+    // Tiers not confirmed in the repo's pricing notes → refused above 200k.
+    "gpt-5.4": 200_000,
+    "gpt-5.4-mini": 200_000,
+    "gpt-5.4-nano": 200_000,
+    "gemini-2.5-flash": 200_000,
+    "gemini-2.5-flash-lite": 200_000,
+    "llama-3.3-70b-versatile": 200_000,
+    "openai/gpt-oss-120b": 200_000,
+  };
+  it("every catalog row carries an explicit pricing posture", () => {
+    expect(Object.keys(AUDIT).sort()).toEqual([...getSupportedModels()].sort());
+    for (const [model, ceiling] of Object.entries(AUDIT)) {
+      expect(maxPricedPromptTokens(model), model).toBe(ceiling);
+    }
+  });
+
+  for (const [model, ceiling] of Object.entries(AUDIT)) {
+    if (ceiling == null || model === "gemini-2.5-pro") continue;
+    it(`${model}: one rate up to its ceiling (200k and 200k+1 priced alike per token)`, () => {
+      const a = calculateCostMicro(model, 200_000, 0);
+      const b = calculateCostMicro(model, 200_001, 0);
+      expect(b - a).toBeLessThanOrEqual(Math.ceil(a / 200_000) + 1);
+    });
+  }
 });
 
 describe("constant validity", () => {

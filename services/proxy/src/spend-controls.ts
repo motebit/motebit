@@ -18,9 +18,9 @@
  *      the slot is released in the stream pump's `finally`.
  *
  * Fail-closed on a KV error for the money path (contrast the embed route,
- * which is best-effort and fails open by design). Local dev with no KV
- * configured skips the controls, matching every sibling route; the origin
- * allowlist still gates callers there.
+ * which is best-effort and fails open by design), and fail-closed when a
+ * DEPLOYED proxy (`VERCEL_ENV`/`VERCEL` set) has no KV configured. Only local
+ * dev with no KV skips the controls; the origin allowlist still gates there.
  *
  * The store is injectable so the route's behaviour is unit-testable without
  * Vercel KV; `@vercel/kv` is loaded lazily only when configured.
@@ -52,7 +52,13 @@ export function setSpendStoreForTests(store: SpendStore | null | undefined): voi
 
 async function resolveStore(): Promise<SpendStore | null> {
   if (testStore !== undefined) return testStore;
-  if (!process.env.KV_REST_API_URL) return null;
+  if (!process.env.KV_REST_API_URL) {
+    // A deployed proxy with no shared store has no cross-isolate cap at all
+    // (balance, rate and concurrency would each be per-isolate or absent):
+    // refuse rather than serve unbounded. Only local dev skips the controls.
+    if (isDeployed()) throw new Error("spend store not configured on a deployed proxy");
+    return null;
+  }
   const { kv } = await import("@vercel/kv");
   return {
     incr: (k) => kv.incr(k),
@@ -66,6 +72,11 @@ async function resolveStore(): Promise<SpendStore | null> {
     },
     expire: (k, s) => kv.expire(k, s),
   };
+}
+
+/** True on any Vercel deployment (production or preview). */
+function isDeployed(): boolean {
+  return Boolean(process.env.VERCEL_ENV || process.env.VERCEL);
 }
 
 export type SpendAdmission =
@@ -94,6 +105,14 @@ export async function admitSpend(token: {
   jti: string;
   bal: number;
 }): Promise<SpendAdmission> {
+  // Defense in depth: a balance that is not a non-negative integer can only
+  // come from a token that is not a relay proxy token. Every comparison with
+  // NaN/undefined is false, so `remaining <= 0` would ADMIT it — refuse
+  // before anything is counted or spent, with or without a store.
+  if (!Number.isSafeInteger(token.bal) || token.bal < 0) {
+    return { ok: false, reason: "balance_exhausted", remainingMicro: 0 };
+  }
+
   let store: SpendStore | null;
   try {
     store = await resolveStore();
@@ -111,7 +130,7 @@ export async function admitSpend(token: {
     // 1. Live-ish balance: the snapshot minus what THIS token has already spent.
     const spent = (await store.get(spentKey)) ?? 0;
     const remaining = token.bal - spent;
-    if (remaining <= 0) {
+    if (!(remaining > 0)) {
       return { ok: false, reason: "balance_exhausted", remainingMicro: Math.max(0, remaining) };
     }
 

@@ -2200,6 +2200,15 @@ export async function signKeySuccession(
  * Sign a guardian recovery succession record (§3.8.3).
  * The guardian key signs instead of the compromised old key.
  * Reason MUST include "guardian_recovery".
+ *
+ * Funds: the identity key IS the motebit's Solana address. A recovery moves
+ * the identity to `newPublicKey`, but anything held at the OLD key's address
+ * stays there and can be moved only by whoever holds the old key — the
+ * guardian cannot sign for it, and no recovery can. A caller that still has
+ * the old key should move those funds before recovering; one that does not
+ * should tell the owner they are reachable only with the old key. (A relay
+ * moves a settlement address derived from the old key to the new key's, so
+ * new earnings stop landing there.)
  */
 export async function signGuardianRecoverySuccession(
   guardianPrivateKey: Uint8Array,
@@ -3035,6 +3044,76 @@ export async function verifyRelayMetadata(
   } catch {
     return false;
   }
+}
+
+/** Outcome of {@link verifyRelayFeeRate}. */
+export type RelayFeeRateVerification =
+  | {
+      ok: true;
+      /**
+       * The verified declared `fee_rate`, in [0, 1) — or `undefined` when the
+       * metadata omits the field, in which case the caller applies the
+       * protocol reference default (`PLATFORM_FEE_RATE`, `@motebit/protocol`).
+       */
+      declaredFeeRate: number | undefined;
+      metadata: RelayMetadata;
+    }
+  | { ok: false; reason: string };
+
+/**
+ * A relay's platform fee rate, taken from its signed discovery metadata
+ * (spec/discovery-v1.md §3.2 `fee_rate`; spec/market-v1.md §5.1 — relays MAY
+ * set their own rate) and trusted ONLY when the document is signed by
+ * `trustedPublicKeyHex`, the key the caller already trusts for that relay (a
+ * pinned relay key, or a federation peer key). The rate prices an irreversible
+ * payment, so it never comes from the document's self-asserted key.
+ *
+ * Fail-closed: `ok: false` when the document is not a signed `RelayMetadata`,
+ * names a different `public_key` (or a different `relay_id` than
+ * `expectedRelayId`), its signature does not verify under the trusted key, or
+ * it declares a `fee_rate` that is not a finite number in [0, 1). An ABSENT
+ * `fee_rate` (the field is optional) verifies with `declaredFeeRate:
+ * undefined`; the caller applies the reference `PLATFORM_FEE_RATE`. No I/O: the
+ * caller fetches `/.well-known/motebit.json`.
+ */
+export async function verifyRelayFeeRate(
+  metadata: unknown,
+  trustedPublicKeyHex: string,
+  opts?: { expectedRelayId?: string },
+): Promise<RelayFeeRateVerification> {
+  if (metadata == null || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return { ok: false, reason: "metadata is not a signed RelayMetadata document" };
+  }
+  const doc = metadata as RelayMetadata;
+  if (typeof doc.public_key !== "string" || typeof doc.signature !== "string") {
+    return { ok: false, reason: "metadata is not a signed RelayMetadata document" };
+  }
+  if (doc.public_key.toLowerCase() !== trustedPublicKeyHex.toLowerCase()) {
+    return { ok: false, reason: "metadata names a different relay key than the trusted one" };
+  }
+  if (opts?.expectedRelayId != null && doc.relay_id !== opts.expectedRelayId) {
+    return { ok: false, reason: "metadata names a different relay_id than expected" };
+  }
+  let key: Uint8Array;
+  try {
+    key = hexToBytes(trustedPublicKeyHex);
+  } catch {
+    return { ok: false, reason: "trusted relay key is not hex" };
+  }
+  if (key.length !== 32 || !(await verifyRelayMetadata(doc, key))) {
+    return { ok: false, reason: "metadata signature does not verify under the trusted relay key" };
+  }
+  if (!Object.prototype.hasOwnProperty.call(doc, "fee_rate")) {
+    return { ok: true, declaredFeeRate: undefined, metadata: doc };
+  }
+  const rate: unknown = doc.fee_rate;
+  if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate >= 1) {
+    return {
+      ok: false,
+      reason: `declared fee_rate ${JSON.stringify(rate)} is not a number in [0, 1)`,
+    };
+  }
+  return { ok: true, declaredFeeRate: rate, metadata: doc };
 }
 
 /**

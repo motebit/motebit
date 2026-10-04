@@ -438,7 +438,8 @@ describe("GoalScheduler.runNow", () => {
     const insert = invoke.mock.calls.find(
       ([cmd, a]) =>
         cmd === "db_execute" &&
-        String((a as { sql: string }).sql).includes("INSERT INTO goal_outcomes"),
+        String((a as { sql: string }).sql).includes("INTO goal_outcomes") &&
+        String((a as { sql: string }).sql).includes("'completed'"),
     );
     const params = (insert?.[1] as { params: unknown[] }).params;
     expect(String(params[4])).toMatch(/^Your wallet also sent another payment/); // summary
@@ -632,5 +633,221 @@ describe("GoalScheduler goal-management tools (active context)", () => {
     const result = await handler({ note: "n" });
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/Runtime not initialized/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #890 — an unknown paid outcome never re-fires into a second payment
+// ---------------------------------------------------------------------------
+
+describe("#890: a goal whose last run left a paid outcome unknown", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  const due = {
+    goal_id: "g890",
+    motebit_id: "motebit-1",
+    prompt: "buy the report",
+    interval_ms: 1000,
+    last_run_at: 0,
+    enabled: 1,
+    status: "active",
+    mode: "recurring",
+    parent_goal_id: null,
+    max_retries: 1,
+    consecutive_failures: 0,
+  };
+  const owedEntry = (recordedAt: number) => ({
+    workerMotebitId: "worker-a",
+    capability: "research",
+    taskId: "task-owed",
+    txHash: "tx",
+    paidMicro: 1000,
+    feeMicro: 50,
+    recordedAt,
+  });
+
+  it("PROBE: a run that paid and then died (no final outcome) holds the goal in the next process", async () => {
+    // A stateful goal_outcomes table shared by both "processes".
+    const rows = new Map<string, { ran_at: number; status: string }>();
+    const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+      const { sql, params } = (args ?? {}) as { sql: string; params: unknown[] };
+      if (cmd === "db_query") {
+        if (sql.includes("FROM goals")) return [due];
+        if (sql.includes("FROM goal_outcomes")) {
+          return [...rows.values()].sort((a, b) => b.ran_at - a.ran_at);
+        }
+        return [];
+      }
+      if (cmd === "db_execute" && sql.includes("INTO goal_outcomes")) {
+        rows.set(String(params[0]), { ran_at: Number(params[3]), status: "row" });
+      }
+      return 1;
+    });
+    const owed: unknown[] = [];
+    let turns = 0;
+    const dying = makeRuntime({
+      outstandingPaidResults: () => owed,
+      // eslint-disable-next-line require-yield
+      sendMessageStreaming: vi.fn(async function* () {
+        turns++;
+        owed.push(owedEntry(Date.now())); // the hire paid…
+        await new Promise<void>(() => {}); // …and the process died
+      }),
+    });
+    const first = new GoalScheduler(makeDeps({ getRuntime: () => dying }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    void (first as any).goalTick(invoke);
+    await vi.waitFor(() => expect(turns).toBe(1));
+
+    const next = makeRuntime({ outstandingPaidResults: () => owed });
+    const second = new GoalScheduler(makeDeps({ getRuntime: () => next }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (second as any).goalTick(invoke);
+    expect(next.sendMessageStreaming).not.toHaveBeenCalled();
+  });
+
+  it("is held while a payment made during that run is still owed its result", async () => {
+    const runtime = makeRuntime({ outstandingPaidResults: () => [owedEntry(1_500)] });
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const invoke = makeInvoke({ goals: [due], outcomes: [{ ran_at: 1_000 }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+  });
+
+  it("fires when the owed payment was recorded before the goal's runs", async () => {
+    const runtime = makeRuntime({ outstandingPaidResults: () => [owedEntry(500)] });
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const invoke = makeInvoke({ goals: [due], outcomes: [{ ran_at: 1_000 }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+    expect(runtime.sendMessageStreaming).toHaveBeenCalled();
+  });
+
+  it("r3 finding 3: a run that paid AFTER overrunning its wall clock still holds the goal", async () => {
+    // The abort is cooperative: a hire in flight at the deadline completes,
+    // and the ledger stamps it after the 10-minute mark.
+    const runtime = makeRuntime({
+      outstandingPaidResults: () => [owedEntry(1_000 + 11 * 60 * 1000)],
+    });
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const invoke = makeInvoke({ goals: [due], outcomes: [{ ran_at: 1_000 }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+  });
+
+  it('r3 finding 2: "Run now" honours the owed-payment hold too', async () => {
+    const runtime = makeRuntime({ outstandingPaidResults: () => [owedEntry(1_500)] });
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const invoke = makeInvoke({ goals: [due], outcomes: [{ ran_at: 1_000 }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await s.runNow(invoke as any, "g890");
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+  });
+
+  it("r3: a run whose start cannot be recorded does not run (fail-closed)", async () => {
+    const runtime = makeRuntime({ outstandingPaidResults: () => [] });
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const base = makeInvoke({ goals: [due] });
+    const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "db_execute" && String((args as { sql: string }).sql).includes("'running'")) {
+        throw new Error("database is locked");
+      }
+      return base(cmd, args);
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+  });
+
+  function planDeps(stream: () => AsyncGenerator<unknown>, createThrows?: Error) {
+    const runtime = makeRuntime();
+    const engine = {
+      createPlan: vi.fn(async () => {
+        if (createThrows) throw createThrows;
+        return { plan: { plan_id: "p1", title: "Hire", total_steps: 1 } };
+      }),
+      executePlan: vi.fn(stream),
+      resumePlan: vi.fn(stream),
+    };
+    const store = { getPlanForGoal: vi.fn(() => null) };
+    return {
+      runtime,
+      engine,
+      deps: makeDeps({
+        getRuntime: () => runtime,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        getPlanEngine: () => engine as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        getPlanStore: () => store as any,
+      }),
+    };
+  }
+
+  function sqlOf(invoke: ReturnType<typeof makeInvoke>): string[] {
+    return invoke.mock.calls
+      .filter((c) => c[0] === "db_execute")
+      .map((c) => (c[1] as { sql: string }).sql);
+  }
+
+  it("a plan_undetermined run is recorded `partial`, never counted as a failure or auto-paused", async () => {
+    const { deps } = planDeps(async function* () {
+      yield {
+        type: "plan_undetermined",
+        plan: { plan_id: "p1" },
+        step: { step_id: "s1", description: "remote work" },
+        reason: "Submission unconfirmed — the task may still complete; check /result",
+      };
+    });
+    const completed = vi.fn();
+    const s = new GoalScheduler(deps);
+    s.onGoalComplete(completed);
+    const invoke = makeInvoke({ goals: [due] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+
+    const sql = sqlOf(invoke);
+    expect(sql.some((q) => q.includes("'partial'"))).toBe(true);
+    expect(sql.some((q) => q.includes("consecutive_failures + 1"))).toBe(false);
+    expect(sql.some((q) => q.includes("status = 'paused'"))).toBe(false);
+    expect(completed.mock.calls[0]?.[0]?.status).toBe("awaiting_result");
+  });
+
+  it("r3: a plan_busy run (another driver holds the plan) is not a failure", async () => {
+    const { deps } = planDeps(async function* () {
+      yield { type: "plan_busy", plan: { plan_id: "p1" } };
+    });
+    const completed = vi.fn();
+    const s = new GoalScheduler(deps);
+    s.onGoalComplete(completed);
+    const invoke = makeInvoke({ goals: [due] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+    expect(sqlOf(invoke).some((q) => q.includes("consecutive_failures + 1"))).toBe(false);
+    expect(completed.mock.calls[0]?.[0]?.status).toBe("awaiting_result");
+  });
+
+  it("a plan refused because the goal holds an undetermined step is not a failure either", async () => {
+    const refused = Object.assign(new Error("Submission unconfirmed"), { undetermined: true });
+    // eslint-disable-next-line require-yield
+    const { deps } = planDeps(async function* () {
+      throw new Error("unreachable");
+    }, refused);
+    const completed = vi.fn();
+    const s = new GoalScheduler(deps);
+    s.onGoalComplete(completed);
+    const invoke = makeInvoke({ goals: [due] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+
+    expect(sqlOf(invoke).some((q) => q.includes("consecutive_failures + 1"))).toBe(false);
+    expect(completed.mock.calls[0]?.[0]?.status).toBe("awaiting_result");
   });
 });

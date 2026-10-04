@@ -21,6 +21,7 @@ import {
   SqliteTreasuryReconciliationStore,
 } from "../treasury-reconciliation.js";
 import { SOLANA_DEVNET_CAIP2, SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
+import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 const API_TOKEN = "test-admin-token";
 const TREASURY = "0xee51c5a65c6Fa81c9CC85505884290e90C09D285";
@@ -31,6 +32,7 @@ let relay: SyncRelay;
 
 beforeEach(async () => {
   relay = await createSyncRelay({
+    ...TEST_RELAY_NETWORK,
     allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,

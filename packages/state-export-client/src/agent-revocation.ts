@@ -20,6 +20,7 @@
  */
 
 import { canonicalJson, hexToBytes, sha256, bytesToHex, verifyBySuite } from "@motebit/crypto";
+import { AGENT_REVOCATION_SUITE } from "@motebit/protocol";
 import type { AgentRevocationRecord, AgentRevocationFeed } from "@motebit/protocol";
 
 export type { AgentRevocationRecord, AgentRevocationFeed } from "@motebit/protocol";
@@ -111,10 +112,17 @@ export async function verifyAgentRevocationRecord(
     return { ok: false, reason: "malformed_signature" };
   }
 
+  // `suite` is a post-sign field — NOT in the canonical bytes — so it is
+  // never trusted as the dispatch key. Pin it to the suite revocation
+  // records are produced under; anything else is rejected before dispatch.
+  if (record.suite !== AGENT_REVOCATION_SUITE) {
+    return { ok: false, reason: "unsupported_suite" };
+  }
+
   let valid: boolean;
   try {
     valid = await verifyBySuite(
-      record.suite,
+      AGENT_REVOCATION_SUITE,
       canonical,
       hexToBytes(record.signature),
       hexToBytes(record.relay_public_key),
@@ -171,10 +179,16 @@ export async function verifyAgentRevocationFeed(
     records: feed.records,
   };
   const canonical = new TextEncoder().encode(canonicalJson(payload));
+  // The feed's `suite` sits outside the signed payload — pin it, never
+  // dispatch on the unsigned value.
+  if (feed.suite !== AGENT_REVOCATION_SUITE) {
+    return { ok: false, reason: "unsupported_suite" };
+  }
+
   let valid: boolean;
   try {
     valid = await verifyBySuite(
-      feed.suite,
+      AGENT_REVOCATION_SUITE,
       canonical,
       hexToBytes(feed.signature),
       hexToBytes(feed.relay_public_key),

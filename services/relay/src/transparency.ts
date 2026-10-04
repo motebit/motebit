@@ -114,6 +114,7 @@ export const DECLARATION_CONTENT = {
         "relay_disputes",
         "relay_dispute_evidence",
         "relay_dispute_resolutions",
+        "relay_dispute_fund_actions",
         "relay_peers",
         "relay_federation_settlements",
         "relay_execution_ledgers",
@@ -138,8 +139,8 @@ export const DECLARATION_CONTENT = {
         "every x402 payment the relay settles for a task submission (the EIP-3009 authorization's payer address and nonce, network, token, treasury address, amount, validAfter and validBefore, the Idempotency-Key and path motebit_id it was presented under, the delegator credited, the task id reserved for it, status pending/credited/failed, tx hash, failure reason, the reconciler's block-scan range and cursors (start, fixed end, pass cursor, last visit), expiry-observation and re-check bookkeeping, the latest chain observation, whether an AuthorizationUsed log was seen (with the transaction hash, for the operator), and the chain-time visit cadence (wall-clock and the confirmed chain head's timestamp at each), the consumed Transfer log index, timestamps — no content): written before the facilitator is called, so a settle whose outcome is unknown is reconciled from the chain's EIP-3009 events (proof of execution; a cancelled authorization is never credited) and credited once; one authorization is settled at most once; never deleted (migration v49, #907)",
         "every signed execution receipt the relay verified",
         "full signed execution receipt JSON, byte-identical to the signer's canonical form, archived per (motebit_id, task_id) for independent audit re-verification",
-        "every settlement (relay-mediated and p2p audit)",
-        "every pending aggregated withdrawal intent enqueued by the sweep, with state machine history until fired or failed, linked to the withdrawal record that settles it",
+        "every settlement (relay-mediated and p2p audit), naming the signature of the receipt it settled — a task settles once, only on the receipt its answer is claimed for (#890 round 9)",
+        "every pending aggregated withdrawal intent enqueued by the sweep, with state machine history until fired or failed",
         "every Solana transaction a withdrawal payout signs (withdrawal id, transaction signature, whether it is the payout or the kill of its durable nonce, the nonce account and nonce value it was signed over — or, for a payout an earlier build signed, its last valid block height — when it was recorded, and its FINALIZED chain status once read: succeeded or failed, the slot, when it was read; no content), recorded before the transaction is broadcast, which withdrawals were claimed under that record, and which Solana withdrawals are queued for the treasury's nonce lane (withdrawal id, when queued): whether the payout landed is decided from the finalized statuses of exactly these transactions (#949, #990); never deleted (a queue entry is removed when its withdrawal is claimed or leaves pending)",
         "every credential issued, anchored, or revoked",
         "every operator agent de-listing and reinstatement — the signed, append-only `AgentRevocationRecord` history (motebit_id, reason, actor, note, effective_at) served publicly at GET /api/v1/agents/revocations and verifiable against the relay's pinned key; a de-list removes an agent from Discover only — its identity, key, succession chain, and receipts stay served",
@@ -182,6 +183,18 @@ export const DECLARATION_CONTENT = {
       ],
       retention_window:
         '30-day rolling window, swept every minute by the task-cleanup loop; an operator\'s audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log',
+    },
+    // Who the relay handed each task to (#890 round 6): read by every
+    // receipt door and the receipt archive, swept by age.
+    task_routes: {
+      tables: ["relay_task_routes", "relay_task_answers", "relay_result_deliveries"],
+      observable: [
+        "for every task the relay hands to an executor: the task id, the executor's motebit_id, the peer relay it was forwarded through (empty when local), whether the hand-off was this relay's own admission or a peer's inbound forward, and when — no content, no prompt, no amount; a receipt for the task is accepted only from a recorded executor through its recorded peer, under the task's own origin (migrations v50, v51)",
+        "for every answered task: its answer — the executor's signed receipt (its motebit_id, status, result hash, and the result text the executor signed), the receipt its settlement is claimed for, and when — so the task's poll answers the same after the queue forgets it (#890 round 9)",
+        "for every task a peer forwarded here and this relay's agent answered: that its answer is owed to the origin relay — the task id, the origin relay id, the delivery attempts, the last error, and when it was delivered — so the result is retried until the origin acknowledges it (#890 round 10, migration v53); the answer itself is the archived one above",
+      ],
+      retention_window:
+        "7 days from the hand-off (a route) or the answer (an answer), swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route or an answer; an answer whose settlement is claimed but not yet written is kept while its task is still queued (a queued task with such an answer is held up to 7 days past its expiry), so the next retry or the settlement-recovery sweep settles it; an owed result is kept while it is still owed, and 7 days from its first attempt once delivered, refused or out of attempts",
     },
     // The machine roster (docs/doctrine/machine-roster.md; design:
     // docs/proposals/machine-roster-relay-v1.md D3/D4). Its own category:
@@ -653,6 +666,16 @@ export function renderMarkdown(): string {
   for (const item of c.retention.auth_events.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.auth_events.retention_window}.`);
+  lines.push("");
+
+  lines.push("### Task routes");
+  lines.push("");
+  lines.push(`Tables: ${c.retention.task_routes.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.task_routes.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.task_routes.retention_window}.`);
   lines.push("");
 
   lines.push("### Machine roster");

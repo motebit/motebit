@@ -28,10 +28,16 @@ import { sendToEach } from "./ws-send.js";
 
 /**
  * Whether reconnect recovery hands this entry to a newly registered socket of
- * its motebit: still Pending and no receipt — main's predicate, unchanged.
+ * its motebit: still Pending (never granted — task-claim.ts), no receipt,
+ * and not visibly expired. A granted task (a body's claim, the relay's MCP
+ * forward, the submitter's chosen presentation) is never presented again.
  */
 export function recoverableOnReconnect(entry: TaskQueueEntry): boolean {
-  return entry.task.status === AgentTaskStatus.Pending && !entry.receipt;
+  return (
+    entry.task.status === AgentTaskStatus.Pending &&
+    !entry.receipt &&
+    entry.expired_unclaimed == null
+  );
 }
 
 /**

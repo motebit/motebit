@@ -41,11 +41,19 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { writeFileSync, unlinkSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  writeFileSync,
+  unlinkSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { hasRepairInstruction } from "./lib/gate-report.js";
+import { failWithRepair, hasRepairInstruction } from "./lib/gate-report.js";
 import { acquireGateLock } from "./lib/probe-lock.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -145,7 +153,7 @@ function mutateFile(relativePath: string, mutate: (src: string) => string): () =
   };
 }
 
-const PROBES: ReadonlyArray<Probe> = [
+export const PROBES: ReadonlyArray<Probe> = [
   {
     script: "check-doctrine-cited-constants",
     proves:
@@ -814,18 +822,18 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-readme",
     proves:
-      "flags a README 'What you see:' block claim that disagrees with create-motebit / the CLI relay resolver source-of-truth (here: the relay URL ↔ DEFAULT_SYNC_URL pin)",
+      "flags a README 'What you see:' block claim that disagrees with create-motebit / the CLI source-of-truth (here: the relay-registration line's tool count ↔ the scaffold's tools)",
     perturb: () =>
-      // Replace the README's `Registered with relay:` value with an obviously
-      // invalid URL. The gate's claim-4 assertion compares this line against
-      // the exported `DEFAULT_SYNC_URL` in apps/cli/src/subcommands/_helpers.ts — under the
-      // perturbation, the two disagree and the gate fires. Distinctive
-      // `.invalid` TLD makes the perturbation trivially safe to grep-and-
-      // revert if cleanup ever fails.
+      // Rewrite the README's `Discovery: registered with relay (<n> tools)`
+      // count to one the scaffold cannot produce. The gate's claim-4
+      // assertion compares <n> with the number of tools create-motebit's
+      // agent template writes (and the line with its emitter in
+      // apps/cli/src/relay-registration.ts) — under the perturbation the
+      // count disagrees and the gate fires.
       mutateFile("README.md", (src) =>
         src.replace(
-          /^Registered with relay:\s+\S+/m,
-          "Registered with relay: https://probe-only-wrong-relay.invalid",
+          /^Discovery: registered with relay \(\d+ tools\)/m,
+          "Discovery: registered with relay (999 tools)",
         ),
       ),
   },
@@ -895,6 +903,68 @@ export async function probeLeak(): Promise<boolean> {
           /(\n\s*)"@motebit\/runtime": "workspace:\*",/,
           '$1"@motebit/research": "workspace:*",$1"@motebit/runtime": "workspace:*",',
         ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags a pre-push phase with no CI counterpart — here the hook growing a `turbo run test:e2e` phase this gate cannot map to any CI step, the shape where a push is blocked locally for a reason CI never enforces",
+    perturb: () =>
+      // Insert a phase before the build. The line carries the drain needle so
+      // an interrupted run is recovered from the tracked hook.
+      mutateFile(".husky/pre-push", (src) =>
+        src.replace(
+          '  run_phase "build" pnpm build\n',
+          `  run_phase "${PROBE_PREFIX}injected e2e" pnpm turbo run test:e2e\n  run_phase "build" pnpm build\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags CI's `check` job narrowing `turbo run test:coverage` with a --filter — the change that would make a dependent's failing test (skipped by the fast pre-push by design) CI-invisible too, i.e. untested anywhere",
+    perturb: () =>
+      mutateFile(".github/workflows/ci.yml", (src) =>
+        src.replace(
+          "run: pnpm exec turbo run test:coverage --concurrency=4\n",
+          `run: pnpm exec turbo run test:coverage --concurrency=4 --filter=[origin/main] # ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags a CI counterpart that can no longer fail — `continue-on-error: true` on the `test:coverage` step (a shape the first, regex version of the gate let through): a counterpart step carries only name/run",
+    perturb: () =>
+      mutateFile(".github/workflows/ci.yml", (src) =>
+        src.replace(
+          "run: pnpm exec turbo run test:coverage --concurrency=4\n",
+          `run: pnpm exec turbo run test:coverage --concurrency=4\n        continue-on-error: true # ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags a per-package turbo.json that re-enables caching for `test:coverage` (final cold review: CI's `turbo run test:coverage` then replays a stale pass after a test breaks, while every root-turbo.json check stays green) — resolved by `turbo --dry=json`, not read from the root file",
+    perturb: () =>
+      // A NEW untracked file whose name cannot carry the prefix (turbo reads
+      // only `turbo.json`), so the drain needle rides in its content — the
+      // drain removes an untracked file carrying it.
+      writeFixture(
+        "services/embed/turbo.json",
+        `{"$schema":"https://turbo.build/schema.json#${PROBE_PREFIX}injected","extends":["//"],"tasks":{"test:coverage":{"dependsOn":[],"cache":true,"inputs":["package.json"]}}}\n`,
+      ),
+  },
+  {
+    script: "check-turbo-global-deps",
+    proves:
+      "flags a root file packages read that turbo.json does not declare — here `tsconfig.base.json` dropped from globalDependencies, the shape where an edit to it replays every package's stale cached typecheck",
+    perturb: () =>
+      // Swap the entry for a needle-carrying one on the same line (JSON has no
+      // comments; the drain recovers a tracked file by that needle).
+      mutateFile("turbo.json", (src) =>
+        src.replace('"tsconfig.base.json"', `"${PROBE_PREFIX}injected-dropped-tsconfig.base.json"`),
       ),
   },
   {
@@ -2803,6 +2873,55 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      'flags a raw allocation-money ledger write outside the escrow chokepoint — the C1/P2 class: the retry-exhaustion refund reverted to `creditAccount(…, "allocation_release", …)` beside `moveAllocationMoney`, the shape that read a stale held and paid a fallback payee (R1).',
+    perturb: () =>
+      mutateFile("services/relay/src/index.ts", (src) => {
+        const anchor = 'kind: "retry_exhaustion_refund",';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: services/relay/src/index.ts no longer refunds an exhausted forward through moveAllocationMoney — retarget the probe",
+          );
+        }
+        return src.replace(
+          "export function refundExhaustedForward(",
+          'export function __probeRawRefund(db: MotebitDatabase["db"]): void {\n  creditAccount(db, "x", 1, "allocation_release", "a", "probe");\n}\n\nexport function refundExhaustedForward(',
+        );
+      }),
+  },
+  {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      "flags a raw SQL write to an allocation-money table outside the chokepoint — the C1 class: a federated forward INSERTed straight into relay_federation_settlements (recorded with no lifecycle, counted as moved forever) (R2).",
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}raw-forward.ts`,
+        `// Probe-only file: a forward recorded outside the escrow chokepoint.
+// If check-allocation-money-chokepoint is working, it refuses this file.
+import type { DatabaseDriver } from "@motebit/persistence";
+export function probeForward(db: DatabaseDriver): void {
+  db.prepare("INSERT INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash) VALUES ('s', 't', 'u', 1, 0, 1, 0, 0, '')").run();
+}
+`,
+      ),
+  },
+  {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      "flags a chokepoint kind the conservation harness does not drive — the harness can never be narrower than the code: dropping `sweep_refund` from the harness's KIND_ACTIONS leaves a kind used in source with no action of the alphabet (R4).",
+    perturb: () =>
+      mutateFile("services/relay/src/__tests__/dispute-conservation-harness.test.ts", (src) => {
+        const anchor = '  sweep_refund: ["sweep"],\n';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: the harness's KIND_ACTIONS no longer maps sweep_refund — retarget the probe",
+          );
+        }
+        return src.replace(anchor, "");
+      }),
+  },
+  {
     script: "check-master-token-carve-outs",
     proves:
       'flags a prefix carve-out in the relay\'s /api/v1/* master-token catch-all — the #855 class. Reinstates `c.req.path.startsWith("/api/v1/credentials/verify")` beside the table lookup (the carve-out that let `POST /api/v1/credentials/verify/reputation` reach the reputation route without the master token); the gate names the path read outside `isMasterTokenCarveOut`.',
@@ -2893,6 +3012,24 @@ export async function probeFetch(): Promise<unknown> {
           );
         }
         return src.replace(re, `$1$2.${Number(m[3]) + 1}.$4`);
+      }),
+  },
+  {
+    script: "check-vercel-ignore-build",
+    proves:
+      "flags a vercel.json ignoreCommand that does not route through scripts/vercel-ignore-build.sh — the #1012 shape (an inline `git diff --quiet … || exit 1` that skipped the production deploy of 42ce27f). Probe restores that inline command in services/proxy/vercel.json; byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile("services/proxy/vercel.json", (src) => {
+        const re = /"ignoreCommand": "[^"]*"/;
+        if (!re.test(src) || !src.includes("vercel-ignore-build.sh")) {
+          throw new Error(
+            "probe vacuous: services/proxy/vercel.json no longer routes its ignoreCommand through scripts/vercel-ignore-build.sh — retarget the probe",
+          );
+        }
+        return src.replace(
+          re,
+          '"ignoreCommand": "git diff --quiet ${VERCEL_GIT_PREVIOUS_SHA:-HEAD^} $VERCEL_GIT_COMMIT_SHA -- services/proxy/ pnpm-lock.yaml package.json 2>/dev/null || exit 1"',
+        );
       }),
   },
 ];
@@ -3006,8 +3143,9 @@ function assertProbeCoverage(): void {
  * Two leakage shapes need draining:
  *
  *   1. Orphan fixture files — probes that synthesize new files (their
- *      basename always carries PROBE_PREFIX). git tracks these as
- *      untracked; the prefix in the path is the signature.
+ *      basename carries PROBE_PREFIX, or — when the name is fixed, like a
+ *      package's turbo.json — their content carries the injected needle).
+ *      git lists these as untracked; the prefix / needle is the signature.
  *
  *   2. Mutated baselines — probes that splice a one-line marker comment
  *      into an existing tracked file (e.g. an api-extractor baseline).
@@ -3033,9 +3171,18 @@ function drainStalePerturbations(): void {
     cwd: ROOT,
     encoding: "utf-8",
   });
-  const orphanFixtures = untracked.stdout
-    .split("\n")
-    .filter((line) => line && line.includes(PROBE_PREFIX));
+  const orphanFixtures = untracked.stdout.split("\n").filter((line) => {
+    if (!line) return false;
+    if (line.includes(PROBE_PREFIX)) return true;
+    // A fixture whose NAME is fixed (a package's turbo.json) carries the
+    // needle in its content instead.
+    try {
+      const abs = resolve(ROOT, line);
+      return statSync(abs).size < 65_536 && readFileSync(abs, "utf-8").includes(INJECTED_NEEDLE);
+    } catch {
+      return false;
+    }
+  });
 
   // Mutated baselines — tracked, dirty, containing the injected marker.
   // Parse `git diff HEAD` once and pluck filenames where an added line
@@ -3080,12 +3227,293 @@ function drainStalePerturbations(): void {
   }
 }
 
+// ── Sharding ─────────────────────────────────────────────────────────────
+//
+// CI runs the probes as N matrix shards (`--shard i/N`), each on its own
+// runner with its own checkout — so shards cannot perturb each other's files,
+// which is why sharding (not in-process parallelism over one shared working
+// tree) is how the run is split. Assignment is a stable hash of the probe's
+// GATE script, so every probe of one gate lands in one shard and adding a
+// probe never moves an existing one. The partition is proven here (union =
+// every probe, pairwise disjoint) before any shard runs, in the unit test, and
+// again in CI by `--verify-shards` over the manifests the shards upload.
+
+/** Stable identity of a probe: its gate script + 1-based occurrence. */
+export function probeKeys(probes: ReadonlyArray<{ script: string }>): string[] {
+  const seen = new Map<string, number>();
+  return probes.map((p) => {
+    const n = (seen.get(p.script) ?? 0) + 1;
+    seen.set(p.script, n);
+    return `${p.script}#${n}`;
+  });
+}
+
+/** FNV-1a 32-bit — deterministic across Node versions and platforms. */
+function fnv1a(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+/** The 1-based shard a gate's probes run in, of `of` shards. */
+export function shardOfScript(script: string, of: number): number {
+  return (fnv1a(script) % of) + 1;
+}
+
+export interface ShardSpec {
+  index: number;
+  of: number;
+}
+
+/** Parse `i/N` (1 <= i <= N). Throws on anything else — never a silent full or empty run. */
+export function parseShard(spec: string): ShardSpec {
+  const m = /^(\d+)\/(\d+)$/.exec(spec.trim());
+  const index = m ? Number(m[1]) : NaN;
+  const of = m ? Number(m[2]) : NaN;
+  if (
+    !m ||
+    !Number.isInteger(index) ||
+    !Number.isInteger(of) ||
+    of < 1 ||
+    index < 1 ||
+    index > of
+  ) {
+    throw new Error(`--shard expects i/N with 1 <= i <= N (e.g. 2/4); got ${JSON.stringify(spec)}`);
+  }
+  return { index, of };
+}
+
+/** Probe keys per shard (index 0 = shard 1). */
+export function partitionProbes(probes: ReadonlyArray<{ script: string }>, of: number): string[][] {
+  const keys = probeKeys(probes);
+  const shards: string[][] = Array.from({ length: of }, () => []);
+  probes.forEach((p, i) => shards[shardOfScript(p.script, of) - 1]!.push(keys[i]!));
+  return shards;
+}
+
+/**
+ * The coverage proof: every probe is assigned to exactly one shard. Returns
+ * the problems (empty = the shards are a partition of the full probe set).
+ */
+export function partitionProblems(allKeys: ReadonlyArray<string>, shards: string[][]): string[] {
+  const problems: string[] = [];
+  const owner = new Map<string, number>();
+  shards.forEach((keys, i) => {
+    for (const k of keys) {
+      const prev = owner.get(k);
+      if (prev !== undefined) problems.push(`${k} is in shard ${prev} AND shard ${i + 1}`);
+      else owner.set(k, i + 1);
+    }
+  });
+  const all = new Set(allKeys);
+  if (all.size !== allKeys.length) problems.push(`probe keys are not unique`);
+  for (const k of allKeys) if (!owner.has(k)) problems.push(`${k} is assigned to no shard`);
+  for (const k of owner.keys()) if (!all.has(k)) problems.push(`${k} is not a registered probe`);
+  return problems;
+}
+
+/** Digest of the full probe set, so manifests from different commits never combine. */
+export function probeSetDigest(allKeys: ReadonlyArray<string>): string {
+  return createHash("sha256").update(allKeys.join("\n")).digest("hex").slice(0, 16);
+}
+
+/** What one shard writes with `--manifest`; `--verify-shards` reads them back. */
+export interface ShardManifest {
+  shard: number;
+  of: number;
+  total: number;
+  probeSetDigest: string;
+  /** Every probe this shard ran (or explicitly skipped via skipWhen). */
+  ran: string[];
+  skipped: string[];
+  passed: boolean;
+  probeSeconds: number;
+}
+
+/**
+ * Check the uploaded shard manifests against the full probe set: one manifest
+ * per shard 1..N, all for this probe set, all passed, and the union of what
+ * they ran is exactly every probe, each exactly once. Returns the problems.
+ */
+export function verifyShardManifests(
+  allKeys: ReadonlyArray<string>,
+  manifests: ReadonlyArray<ShardManifest>,
+): string[] {
+  const problems: string[] = [];
+  if (manifests.length === 0) return ["no shard manifests found — no shard reported a run"];
+  const of = manifests[0]!.of;
+  const digest = probeSetDigest(allKeys);
+  const byShard = new Map<number, number>();
+  for (const m of manifests) {
+    if (m.of !== of)
+      problems.push(`shard ${m.shard} reports ${m.of} shards; shard 1 reports ${of}`);
+    byShard.set(m.shard, (byShard.get(m.shard) ?? 0) + 1);
+    if (m.probeSetDigest !== digest || m.total !== allKeys.length)
+      problems.push(
+        `shard ${m.shard}/${m.of} ran a different probe set (digest ${m.probeSetDigest}, ${m.total} probes) than this commit's (${digest}, ${allKeys.length})`,
+      );
+    if (!m.passed) problems.push(`shard ${m.shard}/${m.of} did not pass`);
+  }
+  for (let i = 1; i <= of; i++) {
+    const n = byShard.get(i) ?? 0;
+    if (n !== 1) problems.push(`shard ${i}/${of} reported ${n} manifest(s); exactly 1 is required`);
+  }
+  const shards: string[][] = Array.from({ length: of }, () => []);
+  for (const m of manifests) if (m.shard >= 1 && m.shard <= of) shards[m.shard - 1]!.push(...m.ran);
+  problems.push(...partitionProblems(allKeys, shards));
+  return problems;
+}
+
+/**
+ * Runtime budget for ONE shard's probe run. The CI shard job's
+ * `timeout-minutes` (15) must hold setup + install + build (~3 min measured on
+ * ubuntu-latest, 2026-10-02) plus this; 3 + 6 = 9 min is 60% of 15. A shard
+ * past 75% of this prints a ::warning:: so the slowdown is seen while there is
+ * still headroom — add a shard (or fix the slow gate) before it is cancelled.
+ */
+export const SHARD_PROBE_BUDGET_SECONDS = 360;
+/** A single probe slower than this is named in a ::warning:: (one was 65s). */
+export const SLOW_PROBE_SECONDS = 20;
+
+export function budgetWarnings(
+  probeSeconds: number,
+  timings: ReadonlyArray<{ key: string; seconds: number }>,
+): string[] {
+  const out: string[] = [];
+  if (probeSeconds > 0.75 * SHARD_PROBE_BUDGET_SECONDS) {
+    out.push(
+      `::warning title=gate-effectiveness budget::probe run took ${probeSeconds.toFixed(0)}s, over 75% of the ${SHARD_PROBE_BUDGET_SECONDS}s per-shard budget — add a shard to the gate-effectiveness-shard matrix (and SHARD_COUNT checks) or speed up the slowest gates below before the job is cancelled`,
+    );
+  }
+  for (const t of timings) {
+    if (t.seconds > SLOW_PROBE_SECONDS) {
+      out.push(
+        `::warning title=slow gate probe::${t.key} took ${t.seconds.toFixed(1)}s (> ${SLOW_PROBE_SECONDS}s) — a gate this slow is paid on every probe of it and on every \`pnpm check\`; profile it`,
+      );
+    }
+  }
+  return out;
+}
+
+interface CliArgs {
+  shard?: ShardSpec;
+  manifest?: string;
+  verifyShards?: string;
+}
+
+export function parseCli(argv: ReadonlyArray<string>): CliArgs {
+  const out: CliArgs = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    const value = (): string => {
+      const v = argv[++i];
+      if (v === undefined) throw new Error(`${a} needs a value`);
+      return v;
+    };
+    if (a === "--shard") out.shard = parseShard(value());
+    else if (a === "--manifest") out.manifest = value();
+    else if (a === "--verify-shards") out.verifyShards = value();
+    else
+      throw new Error(
+        `unknown argument ${JSON.stringify(a)} (expected --shard i/N, --manifest <file>, --verify-shards <dir>)`,
+      );
+  }
+  return out;
+}
+
+function readManifests(dir: string): ShardManifest[] {
+  const files: string[] = [];
+  const walk = (d: string): void => {
+    for (const e of readdirSync(d)) {
+      const p = resolve(d, e);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (e.endsWith(".json")) files.push(p);
+    }
+  };
+  walk(resolve(dir));
+  return files.map((f) => JSON.parse(readFileSync(f, "utf-8")) as ShardManifest);
+}
+
+function verifyShardsMain(dir: string): void {
+  assertProbeCoverage();
+  const allKeys = probeKeys(PROBES);
+  let manifests: ShardManifest[] = [];
+  try {
+    manifests = readManifests(dir);
+  } catch (err) {
+    manifests = [];
+    console.error(
+      `could not read shard manifests from ${dir}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const problems = verifyShardManifests(allKeys, manifests);
+  if (problems.length > 0) {
+    failWithRepair({
+      sites: problems,
+      invariant:
+        "the union of the gate-effectiveness shards is the FULL probe set, each probe exactly once, every shard passed",
+      canonical:
+        "PROBES + partitionProbes() in scripts/check-gates-effective.ts; the gate-effectiveness-shard matrix in .github/workflows/ci.yml",
+      fix: "make the matrix list every shard 1/N..N/N (fail-fast: false) with each leg uploading its --manifest; a missing manifest means a shard was cancelled, skipped or never ran — re-run it, never drop it",
+    });
+  }
+  const total = manifests.reduce((n, m) => n + m.ran.length, 0);
+  const of = manifests[0]!.of;
+  process.stderr.write(
+    `✓ ${of} shard manifest(s) cover all ${total} of ${allKeys.length} probes exactly once (probe set ${probeSetDigest(allKeys)}); per-shard probe time: ` +
+      [...manifests]
+        .sort((a, b) => a.shard - b.shard)
+        .map((m) => `${m.shard}/${m.of} ${m.ran.length} probes ${m.probeSeconds.toFixed(0)}s`)
+        .join(", ") +
+      `.\n`,
+  );
+}
+
 function main(): void {
+  let cli: CliArgs;
+  try {
+    cli = parseCli(process.argv.slice(2));
+  } catch (err) {
+    console.error(`check-gates-effective: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(2);
+  }
+  // Read-only: the aggregate CI job checks the shards' manifests.
+  if (cli.verifyShards !== undefined) {
+    verifyShardsMain(cli.verifyShards);
+    return;
+  }
   // Exclusive with `pnpm check` and the other perturbing script: probes rewrite
   // real files for their duration (scripts/lib/probe-lock.ts).
   acquireGateLock(ROOT, "check-gates-effective (mutating probes)");
   drainStalePerturbations();
   assertProbeCoverage();
+
+  // Shard selection. The partition is re-proven on every run (not only in the
+  // unit test), so a shard never silently runs a subset of a broken partition.
+  const allKeys = probeKeys(PROBES);
+  const shard = cli.shard ?? { index: 1, of: 1 };
+  const shards = partitionProbes(PROBES, shard.of);
+  const partition = partitionProblems(allKeys, shards);
+  if (partition.length > 0) {
+    console.error(
+      `\nProbe shard partition is broken:\n` + partition.map((p) => `  - ${p}`).join("\n"),
+    );
+    process.exit(2);
+  }
+  const mine = new Set(shards[shard.index - 1]);
+  const selected = PROBES.map((probe, i) => ({ probe, key: allKeys[i]! })).filter(({ key }) =>
+    mine.has(key),
+  );
+  if (shard.of > 1) {
+    process.stderr.write(
+      `shard ${shard.index}/${shard.of}: ${selected.length} of ${PROBES.length} probes (probe set ${probeSetDigest(allKeys)})\n`,
+    );
+  }
+  const timings: { key: string; seconds: number }[] = [];
+  const runStarted = Date.now();
 
   const results: ProbeResult[] = [];
   // Install one-shot cleanup guards so interrupted runs don't leave probe
@@ -3115,8 +3543,9 @@ function main(): void {
   // misreport the gate as ineffective.
   let concurrentModification: string[] | null = null;
 
-  for (const probe of PROBES) {
+  for (const { probe, key } of selected) {
     process.stderr.write(`\n▸ ${probe.script} — ${probe.proves}\n`);
+    const probeStarted = Date.now();
     // Escape-hatch check. If a gate has a documented escape hatch currently
     // active (e.g. check-api-surface during a release with a pending major
     // changeset), the probe would test the escape rather than the detection.
@@ -3191,6 +3620,7 @@ function main(): void {
       activeCleanup = null;
     }
     results.push({ probe, gateExitCode, ok, repairOk, repairReason, error });
+    timings.push({ key, seconds: (Date.now() - probeStarted) / 1000 });
     if (concurrentModification) break; // tree is unstable — remaining probes are unreliable too
   }
 
@@ -3256,10 +3686,39 @@ function main(): void {
     process.exit(1);
   }
 
-  const provenCount = PROBES.length - skippedCount;
-  const skipNote = skippedCount > 0 ? ` (${skippedCount} skipped — see ⚠ above)` : "";
+  const probeSeconds = (Date.now() - runStarted) / 1000;
+  const slowest = [...timings].sort((a, b) => b.seconds - a.seconds).slice(0, 5);
   process.stderr.write(
-    `\n${provenCount} of ${PROBES.length} gates proven effective — each bites AND emits a repair instruction${skipNote}.\n`,
+    `\nProbe run: ${probeSeconds.toFixed(1)}s for ${selected.length} probe(s); slowest: ` +
+      slowest.map((t) => `${t.key} ${t.seconds.toFixed(1)}s`).join(", ") +
+      `\n`,
+  );
+  for (const w of budgetWarnings(shard.of > 1 ? probeSeconds : 0, timings)) {
+    process.stdout.write(`${w}\n`);
+  }
+
+  if (cli.manifest !== undefined) {
+    const manifest: ShardManifest = {
+      shard: shard.index,
+      of: shard.of,
+      total: PROBES.length,
+      probeSetDigest: probeSetDigest(allKeys),
+      ran: selected.map(({ key }) => key),
+      skipped: selected
+        .filter(({ probe }) => results.find((r) => r.probe === probe)?.skipped)
+        .map(({ key }) => key),
+      passed: true,
+      probeSeconds,
+    };
+    writeFileSync(resolve(cli.manifest), `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+
+  const provenCount = selected.length - skippedCount;
+  const skipNote = skippedCount > 0 ? ` (${skippedCount} skipped — see ⚠ above)` : "";
+  const scope =
+    shard.of > 1 ? ` [shard ${shard.index}/${shard.of} of ${PROBES.length} probes]` : "";
+  process.stderr.write(
+    `\n${provenCount} of ${selected.length} gates proven effective${scope} — each bites AND emits a repair instruction${skipNote}.\n`,
   );
 }
 

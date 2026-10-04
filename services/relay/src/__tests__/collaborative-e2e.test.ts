@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
+import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 describe("Collaborative Plan Proposals E2E", () => {
   let relay: SyncRelay;
@@ -16,6 +17,7 @@ describe("Collaborative Plan Proposals E2E", () => {
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      ...TEST_RELAY_NETWORK,
       allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,

@@ -21,7 +21,7 @@
  * this red. Each case seeds fresh agents on a fresh relay, because some
  * routes (revoke, revoke-tokens, deregister) end the identity they act on.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex, mintAudienceToken } from "@motebit/crypto";
@@ -32,6 +32,17 @@ import {
   type TokenAudience,
 } from "@motebit/protocol";
 import { createTestRelay, createAgent } from "./test-helpers.js";
+
+// Minting a proxy token requires the debit secret (subscriptions.ts): a token
+// whose debits could never land is never issued.
+const PREV_PROXY_SECRET = process.env.RELAY_PROXY_SECRET;
+beforeAll(() => {
+  process.env.RELAY_PROXY_SECRET ??= "test-relay-proxy-secret";
+});
+afterAll(() => {
+  if (PREV_PROXY_SECRET === undefined) delete process.env.RELAY_PROXY_SECRET;
+  else process.env.RELAY_PROXY_SECRET = PREV_PROXY_SECRET;
+});
 
 interface Agent {
   motebitId: string;
@@ -277,6 +288,7 @@ const FORMER_FAMILY_AUDIENCE: ReadonlyArray<readonly [string, TokenAudience]> = 
   ["receipts", "receipts:read"],
   ["balance", "account:balance"],
   ["settlements", "account:balance"],
+  ["rotation-obligations", "account:balance"],
   ["withdrawals", "account:withdrawals"],
   ["withdraw", "account:withdraw"],
   ["checkout", "account:checkout"],
