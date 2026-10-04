@@ -15,7 +15,7 @@
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/protocol";
-import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
+import type { P2pPaymentProof, RelayMetadata, SovereignP2pPaymentRequest } from "@motebit/protocol";
 import {
   base58Encode,
   hexToBytes32,
@@ -24,7 +24,7 @@ import {
   computeFederatedFeeSplit,
   PLATFORM_FEE_RATE,
 } from "@motebit/protocol";
-import { verifySovereignBinding } from "@motebit/crypto";
+import { verifyRelayFeeRate, verifySovereignBinding } from "@motebit/crypto";
 import {
   type PaidIntentLedger,
   isPaymentWithoutTaskId,
@@ -191,6 +191,15 @@ export type DelegationErrorCode =
    * verify. No funds move. docs/doctrine/settlement-authority-binding.md.
    */
   | "worker_settlement_unbound"
+  /**
+   * Pre-flight, BEFORE broadcast. A relay's platform fee rate — an input to the
+   * irreversible payment — could not be taken from discovery metadata signed by
+   * the key this client trusts for that relay (the PINNED key for the origin;
+   * the peer key the pinned origin vouches for, for a federated executor): the
+   * metadata was unreachable, signed by another key, or declared a `fee_rate`
+   * that is not a number in [0, 1). No funds move. spec/discovery-v1.md §3.2.
+   */
+  | "relay_fee_rate_unverified"
   /** Pre-flight. HTTP 400 — malformed submission. Code bug, surface loudly. */
   | "malformed_request"
   /** In-flight. Polling exceeded `timeoutMs` without a receipt. */
@@ -1483,6 +1492,63 @@ export interface ResolveAndSubmitP2pDelegationParams {
 }
 
 /**
+ * A relay's declared platform fee rate, read from its SIGNED discovery metadata
+ * (`/.well-known/motebit.json`, spec/discovery-v1.md §3) and trusted only when
+ * that metadata is signed by `expectedKeyHex` — the key this client already
+ * trusts for the relay (the pinned key for the origin; the peer key the pinned
+ * origin vouches for, for a federated executor). Never trusted from an unsigned
+ * or unpinned read: the rate prices an irreversible payment, so it has the
+ * treasury's trust root.
+ *
+ * - `fee_rate` absent → the protocol reference default `PLATFORM_FEE_RATE`
+ *   (the field is optional in §3.2).
+ * - `fee_rate` present but not a finite number in [0, 1) → refuse.
+ * - Unreachable, unparseable, a different `public_key`, a different
+ *   `relay_id` than expected, or a signature that does not verify under
+ *   `expectedKeyHex` → refuse.
+ *
+ * Every refusal is `relay_fee_rate_unverified`, before any money moves.
+ */
+export async function fetchSignedRelayFeeRate(args: {
+  relayUrl: string;
+  expectedKeyHex: string;
+  expectedRelayId?: string;
+  signal?: AbortSignal;
+}): Promise<
+  { ok: true; feeRate: number; metadata: RelayMetadata } | { ok: false; error: DelegationError }
+> {
+  const refuse = (why: string) =>
+    fail("relay_fee_rate_unverified", `Relay fee rate at ${args.relayUrl}: ${why}`);
+  let document: unknown;
+  try {
+    const resp = await fetch(`${args.relayUrl}/.well-known/motebit.json`, {
+      headers: { Accept: "application/json" },
+      signal: args.signal,
+    });
+    if (!resp.ok) return refuse(`signed metadata unavailable (HTTP ${resp.status})`);
+    document = await resp.json();
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return fail("timeout", "Aborted while reading relay metadata");
+    }
+    return refuse(
+      `signed metadata unavailable (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  const verified = await verifyRelayFeeRate(
+    document,
+    args.expectedKeyHex,
+    args.expectedRelayId != null ? { expectedRelayId: args.expectedRelayId } : undefined,
+  );
+  if (!verified.ok) return refuse(verified.reason);
+  return {
+    ok: true,
+    feeRate: verified.declaredFeeRate ?? PLATFORM_FEE_RATE,
+    metadata: verified.metadata,
+  };
+}
+
+/**
  * Resolve a paid direct delegation end to end: discover a payable worker,
  * derive the relay treasury from the PINNED key, price the task, broadcast the
  * delegator's atomic onchain payment, and submit the pinned task with the proof.
@@ -1506,9 +1572,14 @@ export interface ResolveAndSubmitP2pDelegationParams {
  *     a MITM. The executor (B) treasury is derived from the peer key the PINNED
  *     origin relay vouches for in its discovery response, the same key it
  *     validates the forward against.
- *   - The fee rate is the protocol-canonical `PLATFORM_FEE_RATE`, the same rate
- *     the relay validator enforces; a relay running a non-canonical rate fails
- *     CLOSED (the proof is rejected) rather than silently mispaying.
+ *   - The fee rate is the one the relay DECLARES as `fee_rate` in its signed
+ *     discovery metadata (spec/market-v1.md §5.1 — relays MAY set their own
+ *     rate), trusted exactly like the treasury: only from metadata signed by
+ *     the PINNED key (origin) or by the peer key the pinned origin vouches for
+ *     (federated executor — each hop applies its own rate, relay-federation-v1
+ *     §7.1). An absent field is the reference `PLATFORM_FEE_RATE`; unverifiable
+ *     metadata or a malformed rate refuses before any payment
+ *     (`relay_fee_rate_unverified`). See {@link fetchSignedRelayFeeRate}.
  *   - The payment is broadcast exactly once, then handed to `submitP2pDelegation`
  *     which never re-broadcasts on retry (no double-pay).
  *
@@ -1586,6 +1657,7 @@ export async function resolveP2pPaymentRequest(
     motebit_id: string;
     settlement_address: string;
     sourceRelayPublicKey?: string;
+    sourceRelayId?: string;
     pricing: Array<{ capability?: string; unit_cost?: number }> | null;
   };
   try {
@@ -1607,6 +1679,8 @@ export async function resolveP2pPaymentRequest(
         settlement_address?: string | null;
         settlement_modes?: string | string[] | null;
         source_relay_public_key?: string | null;
+        /** The hosting relay's relay_id — for a federated candidate, the peer. */
+        source_relay?: string | null;
         pricing?: Array<{ capability?: string; unit_cost?: number }> | null;
         /** Relay-verified commitment bond (backing RPC-confirmed) — an
          * exploration-PRIORITY signal for the selector, never a gate. */
@@ -1693,6 +1767,7 @@ export async function resolveP2pPaymentRequest(
       ...(candidate.source_relay_public_key != null
         ? { sourceRelayPublicKey: candidate.source_relay_public_key }
         : {}),
+      ...(candidate.source_relay != null ? { sourceRelayId: candidate.source_relay } : {}),
       pricing: candidate.pricing ?? null,
     };
   } catch (err: unknown) {
@@ -1729,8 +1804,35 @@ export async function resolveP2pPaymentRequest(
     if (priced?.unit_cost == null || priced.unit_cost <= 0) {
       return fail("worker_not_payable", `Remote worker has no positive price for "${capability}".`);
     }
+    // Each hop's rate from THAT hop's signed metadata (relay-federation-v1
+    // §7.1): the origin's under the PINNED key; the executor's under the peer
+    // key the pinned origin vouches for, at the endpoint the pinned origin
+    // lists for that peer in its own signed `federation_peers`.
+    const origin = await fetchSignedRelayFeeRate({
+      relayUrl: syncUrl,
+      expectedKeyHex: params.relayPublicKeyHex,
+      ...(params.signal != null ? { signal: params.signal } : {}),
+    });
+    if (!origin.ok) return origin;
+    const peerEntry =
+      worker.sourceRelayId != null
+        ? (origin.metadata.federation_peers ?? []).find((p) => p.relay_id === worker.sourceRelayId)
+        : undefined;
+    if (peerEntry == null || typeof peerEntry.endpoint_url !== "string") {
+      return fail(
+        "relay_fee_rate_unverified",
+        `The executor relay hosting "${worker.motebit_id}" is not a peer in the origin relay's signed metadata; its fee rate cannot be verified.`,
+      );
+    }
+    const executor = await fetchSignedRelayFeeRate({
+      relayUrl: peerEntry.endpoint_url.replace(/\/+$/, ""),
+      expectedKeyHex: worker.sourceRelayPublicKey,
+      expectedRelayId: peerEntry.relay_id,
+      ...(params.signal != null ? { signal: params.signal } : {}),
+    });
+    if (!executor.ok) return executor;
     const budgetMicro = toMicro(priced.unit_cost);
-    const split = computeFederatedFeeSplit(budgetMicro, PLATFORM_FEE_RATE);
+    const split = computeFederatedFeeSplit(budgetMicro, origin.feeRate, executor.feeRate);
     paymentRequest = {
       workerAddress: worker.settlement_address,
       amountMicro: split.workerNetMicro,
@@ -1805,7 +1907,7 @@ export async function resolveP2pPaymentRequest(
 
     // Prefer the relay's canonical amounts from the pre-flight — pay EXACTLY
     // what the submission gate validates, with no client-side unit math. The
-    // separate listing read (3b) is the fallback for an older relay that didn't
+    // separate listing read (3c) is the fallback for an older relay that didn't
     // return them.
     if (preflightAmountMicro != null && preflightAmountMicro > 0 && preflightFeeMicro != null) {
       return {
@@ -1821,7 +1923,17 @@ export async function resolveP2pPaymentRequest(
       };
     }
 
-    // 3b. Price from the worker's listing (market:listing-audience read).
+    // 3b. The relay's declared fee rate, from metadata signed by the PINNED
+    //     key — before the listing read, so an unverifiable rate refuses
+    //     before anything is priced.
+    const declared = await fetchSignedRelayFeeRate({
+      relayUrl: syncUrl,
+      expectedKeyHex: params.relayPublicKeyHex,
+      ...(params.signal != null ? { signal: params.signal } : {}),
+    });
+    if (!declared.ok) return declared;
+
+    // 3c. Price from the worker's listing (market:listing-audience read).
     let unitCost: number;
     try {
       const listingToken = await params.authToken("market:listing");
@@ -1855,13 +1967,13 @@ export async function resolveP2pPaymentRequest(
       return fail("network_unreachable", err instanceof Error ? err.message : String(err));
     }
     // Worker net = unit_cost; fee = computeP2pFeeMicro (the SAME primitive the
-    // relay validator uses, at the canonical rate). Pinned treasury.
+    // relay validator uses, at the relay's signed declared rate). Pinned treasury.
     const amountMicro = toMicro(unitCost);
     paymentRequest = {
       workerAddress: worker.settlement_address,
       amountMicro,
       treasuryAddress,
-      feeAmountMicro: computeP2pFeeMicro(amountMicro, PLATFORM_FEE_RATE),
+      feeAmountMicro: computeP2pFeeMicro(amountMicro, declared.feeRate),
     };
   }
 

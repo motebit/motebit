@@ -683,6 +683,10 @@ function failureCopy(code: string, retryAfterSeconds?: number): string {
       return "Hiring a specific agent settles peer-to-peer — fund a sovereign wallet in the Sovereign panel to pay directly.";
     case "worker_not_payable":
       return "That agent isn't set up to be paid right now (no price or settlement address).";
+    case "relay_fee_rate_unverified":
+      // Pre-broadcast: the relay's fee rate could not be read from metadata
+      // signed by its trusted key, so the payment was never priced.
+      return "Couldn't verify the relay's published fee — no funds moved. Try again shortly.";
     case "payment_broadcast_failed":
       return "The onchain payment didn't go through — no funds moved. Check your balance and try again.";
     // #885: money may have moved in the next three. Never invite a retry —

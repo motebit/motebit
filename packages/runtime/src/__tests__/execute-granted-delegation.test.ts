@@ -39,11 +39,16 @@ import type {
   P2pPaymentProof,
   AgentTrustRecord,
 } from "@motebit/protocol";
+import {
+  SIGNING_PINNED_HEX,
+  isRelayMetadataUrl,
+  relayMetadataResponse,
+} from "./helpers/signed-relay-metadata.js";
 
 type Kp = { publicKey: Uint8Array; privateKey: Uint8Array };
 const HOUR = 3_600_000;
 const NOW = Date.now();
-const PINNED_HEX = "07".repeat(32);
+const PINNED_HEX = SIGNING_PINNED_HEX;
 const WORKER_ADDR = "BobWorkerAddr1111111111111111111111111111111";
 
 // === Harness ===
@@ -132,6 +137,7 @@ const originalFetch = globalThis.fetch;
 /** Discovery + eligibility + listing for a single-operator P2P worker at $0.05. */
 function relayFetch(unitCost = 0.05) {
   return async (url: string) => {
+    if (isRelayMetadataUrl(url)) return relayMetadataResponse();
     if (url.includes("/api/v1/agents/discover")) {
       return jsonResponse({
         agents: [
@@ -211,6 +217,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   beforeEach(() => {
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (isRelayMetadataUrl(url)) return relayMetadataResponse();
       if (url.includes("mock-relay.test")) return relayFetch()(url);
       return originalFetch(input as string);
     }) as typeof fetch;
@@ -313,6 +320,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
+        if (isRelayMetadataUrl(url)) return relayMetadataResponse();
         if (url.includes("/api/v1/agents/discover"))
           return jsonResponse({
             agents: [
@@ -466,6 +474,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
+        if (isRelayMetadataUrl(url)) return relayMetadataResponse();
         if (url.includes("/api/v1/agents/discover"))
           return jsonResponse({
             agents: [
@@ -566,6 +575,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
+        if (isRelayMetadataUrl(url)) return relayMetadataResponse();
         if (url.includes("/api/v1/agents/discover"))
           return jsonResponse({
             agents: [
@@ -693,6 +703,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
+        if (isRelayMetadataUrl(url)) return relayMetadataResponse();
         if (url.includes("/api/v1/agents/discover"))
           return jsonResponse({
             agents: [
@@ -798,6 +809,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
+        if (isRelayMetadataUrl(url)) return relayMetadataResponse();
         if (url.includes("/api/v1/agents/discover"))
           return jsonResponse({
             agents: [
@@ -996,6 +1008,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
+        if (isRelayMetadataUrl(url)) return relayMetadataResponse();
         if (url.includes("/api/v1/agents/discover"))
           return jsonResponse({
             agents: [
@@ -1168,6 +1181,7 @@ describe("executeGrantedDelegation — lost send, own tx landed (#885)", () => {
     const submitted: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (isRelayMetadataUrl(url)) return relayMetadataResponse();
       if (url.endsWith("/task") && init?.method === "POST") {
         submitted.push(
           (JSON.parse(init.body as string) as { payment_proof: P2pPaymentProof }).payment_proof
@@ -1233,6 +1247,7 @@ describe("executeGrantedDelegation — failure carries the money facts (#885)", 
     const token = await mintTick(grant, operator);
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (isRelayMetadataUrl(url)) return relayMetadataResponse();
       return relayFetch()(url);
     }) as typeof fetch;
 
