@@ -42,10 +42,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { copyFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanEnv, readGit, runPretest } from "../lib/differential-tree.js";
-import { analyzeSh, analyzeTs } from "../check-fixture-git-env.js";
+import { analyzeSh, analyzeTs, checkStructural } from "../check-fixture-git-env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = realpathSync(resolve(__dirname, "..", ".."));
@@ -329,5 +330,152 @@ describe("check-fixture-git-env classification", () => {
     const scrubbed =
       '. lib/fixture-git-env.sh\nfixture_git_env_scrub\nX="$(git -C "$W" rev-parse HEAD)"\n';
     expect(analyzeSh(scrubbed).map((s) => [s.line, s.scrubbed])).toEqual([[3, true]]);
+  });
+});
+
+describe("check-fixture-git-env is deny-by-default (the R3 review shapes)", () => {
+  // Built at runtime so this file's own source carries no unscrubbed spawn for the gate to see.
+  const build = (lines: string[]) =>
+    'import { spawnSync as S, execFileSync as F } from "node:child_process";\n' + lines.join("\n");
+  const rows = (src: string) => analyzeTs(src).map((s) => [s.line, s.kind, s.target, s.scrubbed]);
+
+  it("an options object or args list in a variable is resolved, never assumed to be the repo root", () => {
+    const src = build([
+      "const opts = { cwd: tmp };", // 2
+      'S("git", ["init"], opts);', // 3: R3 — counted 'repo root' at a6b1491
+      'const a1 = ["-C", tmp, "init"];', // 4
+      'S("git", a1);', // 5: args variable carrying -C, no cwd
+      'const ro = { cwd: ROOT, encoding: "utf8" };', // 6
+      'S("git", ["status"], ro);', // 7: resolves to cwd ROOT — the repo
+      'S("git", ["status"]);', // 8: no cwd — the process cwd is not statically the repo root
+      'S("git", args, { cwd: ROOT });', // 9: unresolvable args may carry -C
+      'const g = "git";', // 10
+      'S(g, ["init"], { cwd: tmp });', // 11: the command in a const
+      'S("git", ["init"], { cwd: tmp, env: Object.assign({}, process.env) });', // 12
+      'S("git", ["init"], { ...base, cwd: ROOT });', // 13: a spread may override cwd/env
+      'S("git", ["-c", cfg, "status"], { cwd: ROOT });', // 14: a computed -c value
+      "const sopts = { cwd: tmp, env: cleanEnv() };", // 15
+      'S("git", ["init"], sopts);', // 16: scrubbed through the variable
+    ]);
+    expect(rows(src)).toEqual([
+      [3, "git", "fixture", false],
+      [5, "git", "fixture", false],
+      [7, "git", "repo", false],
+      [8, "git", "fixture", false],
+      [9, "git", "fixture", false],
+      [11, "git", "fixture", false],
+      [12, "git", "fixture", false],
+      [13, "git", "fixture", false],
+      [14, "git", "fixture", false],
+      [16, "git", "fixture", true],
+    ]);
+  });
+
+  it("a generic spawn wrapper must scrub itself, or be called only with non-git commands", () => {
+    const src = build([
+      "function run(cmd, args, cwd) { return S(cmd, args, { cwd }); }", // 2: R3 shape, called with git
+      'run("git", ["init"], tmp);', // 3
+      "export function runToFile(cmd, args, cwd, env) { return S(cmd, args, { cwd, env }); }", // 4: exported — callers unknowable
+      "function scrubbed(cmd, args) { return F(cmd, args, { env: cleanEnv() }); }", // 5
+      'scrubbed("git", ["init"]);', // 6
+      "function pnpmOnly(cmd, args) { return S(cmd, args, { cwd: ROOT }); }", // 7
+      'pnpmOnly("pnpm", ["build"]);', // 8
+      "pnpmOnly(process.execPath, []);", // 9
+      "function escapes(cmd) { return S(cmd, []); }", // 10
+      "[x].map(escapes);", // 11: passed as a value — its callers are unknowable
+      "function forwards(c) { return pnpmOnly(c, []); }", // 12: a computed command into a wrapper
+      "const re = /x/; re.exec(src);", // 13: RegExp#exec is not a spawn
+    ]);
+    expect(rows(src)).toEqual([
+      [2, "wrapper", "fixture", false],
+      [4, "wrapper", "fixture", false],
+      [5, "wrapper", "fixture", true],
+      [7, "wrapper", "fixture", false],
+      [10, "wrapper", "fixture", false],
+    ]);
+  });
+});
+
+describe("check-fixture-git-env holds the structural layer (the vitest setup scrub)", () => {
+  const FILES = [
+    "package.json",
+    "vitest.config.mts",
+    "scripts/lib/vitest-scrub-git-env.ts",
+    "scripts/lib/differential-tree.ts",
+  ];
+  let jail: string;
+  beforeAll(() => {
+    jail = realpathSync(mkdtempSync(join(tmpdir(), "fixture-git-env-structural-")));
+  });
+  afterAll(() => {
+    rmSync(jail, { recursive: true, force: true });
+  });
+  /** A copy of the four files the structural check reads, with `mutate` applied. */
+  function tree(name: string, mutate: (root: string) => void = () => {}): string {
+    const root = join(jail, name);
+    for (const f of FILES) {
+      mkdirSync(join(root, dirname(f)), { recursive: true });
+      copyFileSync(join(ROOT, f), join(root, f));
+    }
+    mutate(root);
+    return root;
+  }
+  const edit = (root: string, f: string, from: string | RegExp, to: string) => {
+    const p = join(root, f);
+    const src = readFileSync(p, "utf8");
+    const next = src.replace(from, to);
+    if (next === src) throw new Error(`mutation did not apply to ${f}: ${String(from)}`);
+    writeFileSync(p, next);
+  };
+
+  it("the repository as it stands passes", () => {
+    expect(checkStructural(ROOT)).toEqual([]);
+    expect(checkStructural(tree("as-is"))).toEqual([]);
+  });
+
+  it("RED when the setup file is removed from the test:gates config", () => {
+    const root = tree("unwired", (r) =>
+      edit(r, "vitest.config.mts", /setupFiles: \[[^\]]*\]/, "setupFiles: []"),
+    );
+    expect(checkStructural(root).join("\n")).toMatch(/setupFiles/);
+  });
+
+  it("RED when test:gates stops using the root config", () => {
+    const root = tree("other-config", (r) =>
+      edit(
+        r,
+        "package.json",
+        '"vitest run --dir scripts/__tests__',
+        '"vitest run --config x.mts --dir scripts/__tests__',
+      ),
+    );
+    expect(checkStructural(root).join("\n")).toMatch(/test:gates/);
+  });
+
+  it("RED when another root config shadows vitest.config.mts", () => {
+    const root = tree("shadowed", (r) =>
+      writeFileSync(join(r, "vitest.config.ts"), "export default {};\n"),
+    );
+    expect(checkStructural(root).join("\n")).toMatch(/vitest\.config\.ts/);
+  });
+
+  it("RED when the setup's list diverges from cleanEnv's (a copy, not the import)", () => {
+    const root = tree("diverged", (r) => {
+      const p = join(r, "scripts/lib/vitest-scrub-git-env.ts");
+      writeFileSync(
+        p,
+        'for (const k of Object.keys(process.env)) if (k === "GIT_DIR") delete process.env[k];\n',
+      );
+    });
+    const problems = checkStructural(root).join("\n");
+    expect(problems).toMatch(/import/);
+    expect(problems).toMatch(/GIT_WORK_TREE/);
+  });
+
+  it("RED when the setup imports the canonical scrub but never applies it", () => {
+    const root = tree("unapplied", (r) =>
+      edit(r, "scripts/lib/vitest-scrub-git-env.ts", /^scrubGitEnvInPlace\(process\.env\);$/m, ""),
+    );
+    expect(checkStructural(root).join("\n")).toMatch(/GIT_DIR/);
   });
 });
