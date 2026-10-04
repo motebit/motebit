@@ -852,7 +852,8 @@ export function scanArtifactForPublicEnvPairs(
 //     (`fragmentNeedlesApply`): every key-shaped run of escape-stable chars
 //     (>= 16, letters + digits) of the value, in the same encodings.
 // Platform metadata (`OUTPUT_SCAN_EXCLUDED_ENV_NAMES`, exact names: commit
-// message/author/ref, deployment id) is never scanned.
+// message/author/ref, deployment id, the deployment's own preview hostnames)
+// is never scanned.
 // Declared limit — NOT caught: hex, reversed, char-code arrays, split or
 // concatenated strings, any other encoding. Each needs code that deliberately
 // transforms the value; for a public var the per-var allowlist guard already
@@ -975,7 +976,16 @@ function isCredentialFreeLocator(v: string): boolean {
  * `NEXT_PUBLIC_` copies of them; GitHub Actions injects the ref/actor names.
  * With Skew Protection on, Vercel sets `NEXT_DEPLOYMENT_ID` /
  * `VERCEL_DEPLOYMENT_ID` (`dpl_…`) and Next inlines it into every page and
- * chunk (`?dpl=`) — a routing id, not a credential. Never scanned.
+ * chunk (`?dpl=`) — a routing id, not a credential; with "automatically
+ * expose" its `NEXT_PUBLIC_` twin carries the same id. On a preview build Next
+ * overrides `metadataBase` with `VERCEL_BRANCH_URL || VERCEL_URL`
+ * (next/dist/lib/metadata/resolvers/resolve-url.js) and writes it into every
+ * og:image / twitter:image — the deployment's own public hostname, served to
+ * every visitor, but its labels (`…-keys-v2-motebit`, `…-k3j9x2abq-…`) fail
+ * the low-entropy locator rule, so they are named here (with their
+ * `NEXT_PUBLIC_` twins). Never scanned. Every entry is a non-secret-shaped
+ * name (`isSecretShapedEnvName` false — asserted); `VERCEL_OIDC_TOKEN` and
+ * `VERCEL_AUTOMATION_BYPASS_SECRET` are never listed and are always scanned.
  */
 export const OUTPUT_SCAN_EXCLUDED_ENV_NAMES: ReadonlySet<string> = new Set([
   "VERCEL_GIT_COMMIT_MESSAGE",
@@ -998,6 +1008,11 @@ export const OUTPUT_SCAN_EXCLUDED_ENV_NAMES: ReadonlySet<string> = new Set([
   "GITHUB_TRIGGERING_ACTOR",
   "NEXT_DEPLOYMENT_ID",
   "VERCEL_DEPLOYMENT_ID",
+  "NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID",
+  "VERCEL_URL",
+  "VERCEL_BRANCH_URL",
+  "NEXT_PUBLIC_VERCEL_URL",
+  "NEXT_PUBLIC_VERCEL_BRANCH_URL",
 ]);
 
 /**

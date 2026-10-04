@@ -1410,7 +1410,7 @@ describe("R5 the second net claims only what it checks: needle policy + platform
       expect(outputScanExclusion(SECRET, new Set(), n), n).toBeNull();
     }
     // The list is small and named; every entry is platform metadata, never a credential name.
-    expect(OUTPUT_SCAN_EXCLUDED_ENV_NAMES.size).toBeLessThanOrEqual(20);
+    expect(OUTPUT_SCAN_EXCLUDED_ENV_NAMES.size).toBeLessThanOrEqual(25);
     for (const n of OUTPUT_SCAN_EXCLUDED_ENV_NAMES) {
       expect(isSecretShapedEnvName(n), n).toBe(false);
     }
@@ -1537,7 +1537,7 @@ describe("R5 the second net claims only what it checks: needle policy + platform
       processEnv: { ...env, STRIPE_SECRET_KEY: SECRET },
     });
     expect(red.findings.join("\n")).toMatch(/carries the value of STRIPE_SECRET_KEY/);
-    expect(red.excluded["platform metadata"]).toBe(3);
+    expect(red.excluded["platform metadata"]).toBe(4); // + VERCEL_URL (preview metadataBase)
   });
 
   it("Skew Protection: a docs/web build whose every file carries the deployment id builds green; a secret beside it is RED", () => {
@@ -1581,7 +1581,7 @@ describe("R5 the second net claims only what it checks: needle policy + platform
       const green = checkBuildOutput(app, { repo: root, processEnv: env });
       expect(green.files, app).toBeGreaterThan(0);
       expect(green.findings, app).toEqual([]);
-      expect(green.excluded["platform metadata"], app).toBe(3);
+      expect(green.excluded["platform metadata"], app).toBe(4); // + VERCEL_URL
       const red = checkBuildOutput(app, {
         repo: root,
         processEnv: { ...env, STRIPE_SECRET_KEY: SECRET },
@@ -1648,4 +1648,142 @@ describe("R5 mutation pins: json-escaped twice, base64url and the latin1 convers
     // The JS string itself (UTF-16 code points) is NOT in the latin1-read file.
     expect(fileText.includes(v)).toBe(false);
   });
+});
+
+describe("R6 a Vercel preview's full system env: the docs build is green, platform secrets stay RED", () => {
+  // PR #1050: the motebit-docs Preview failed on every commit while main passed. Reproduced
+  // locally by `next build` under this env: Next inlined NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID (the
+  // twin of the excluded VERCEL_DEPLOYMENT_ID) as `?dpl=` into every page, and on a preview it
+  // overrides metadataBase with VERCEL_BRANCH_URL || VERCEL_URL in og:image/twitter:image.
+  const SHA = fake("0123456789abcdef", 40, 3);
+  const DPL = `dpl_${fake(AN, 28, 5)}`;
+  const OIDC =
+    "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9." +
+    Buffer.from(
+      '{"iss":"https://oidc.vercel.com/motebit","sub":"owner:motebit:project:motebit-docs"}',
+    ).toString("base64url") +
+    `.${fake(AN, 86, 9)}`;
+  const BYPASS = fake(AN, 32, 13);
+  const RAW: Record<string, string> = {
+    VERCEL_ENV: "preview",
+    VERCEL_TARGET_ENV: "preview",
+    VERCEL_URL: "motebit-docs-k3j9x2abq-motebit.vercel.app",
+    VERCEL_BRANCH_URL: "motebit-docs-git-fix-no-browser-provider-keys-v2-motebit.vercel.app",
+    VERCEL_PROJECT_PRODUCTION_URL: "docs.motebit.com",
+    VERCEL_REGION: "iad1",
+    VERCEL_DEPLOYMENT_ID: DPL,
+    VERCEL_PROJECT_ID: `prj_${fake(AN, 28, 17)}`,
+    VERCEL_SKEW_PROTECTION_ENABLED: "1",
+    VERCEL_GIT_PROVIDER: "github",
+    VERCEL_GIT_REPO_SLUG: "motebit",
+    VERCEL_GIT_REPO_OWNER: "motebit",
+    VERCEL_GIT_REPO_ID: "812345678",
+    VERCEL_GIT_COMMIT_REF: "fix/no-browser-provider-keys-v2",
+    VERCEL_GIT_COMMIT_SHA: SHA,
+    VERCEL_GIT_PREVIOUS_SHA: fake("0123456789abcdef", 40, 4),
+    VERCEL_GIT_COMMIT_MESSAGE: REAL_COMMIT_MESSAGES[0] ?? "",
+    VERCEL_GIT_COMMIT_AUTHOR_LOGIN: "hakimlabs",
+    VERCEL_GIT_COMMIT_AUTHOR_NAME: "hakimlabs",
+    VERCEL_GIT_PULL_REQUEST_ID: "1050",
+  };
+  const VERCEL_ENV: Record<string, string> = {
+    VERCEL: "1",
+    CI: "1",
+    NODE_ENV: "production",
+    NEXT_DEPLOYMENT_ID: DPL,
+    VERCEL_AUTOMATION_BYPASS_SECRET: BYPASS,
+    VERCEL_OIDC_TOKEN: OIDC,
+    ...RAW,
+    // "Automatically expose System Environment Variables": the NEXT_PUBLIC_ twins.
+    ...Object.fromEntries(Object.entries(RAW).map(([k, v]) => [`NEXT_PUBLIC_${k}`, v])),
+  };
+
+  /** The og:image origin Next itself computes for this env (its real resolver, executed). */
+  function nextPreviewOrigin(): string {
+    const req = createRequire(join(ROOT, "apps", "docs", "package.json"));
+    const mod = req("next/dist/lib/metadata/resolvers/resolve-url") as {
+      getSocialImageMetadataBaseFallback: (base: URL | null) => URL;
+    };
+    const saved = { ...process.env };
+    Object.assign(process.env, VERCEL_ENV);
+    try {
+      return String(mod.getSocialImageMetadataBaseFallback(new URL("https://docs.motebit.com")));
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+  }
+
+  function stageNextOutput(name: string, extra = ""): string {
+    const root = join(tmp, name);
+    const origin = nextPreviewOrigin();
+    const page =
+      `<link rel="preload" href="/_next/static/chunks/x.js?dpl=${DPL}"/>` +
+      `<meta property="og:image" content="${origin}opengraph-image.png"/>` +
+      `<meta name="twitter:image" content="${origin}opengraph-image.png"/>` +
+      `self.__next_f.push([1,${JSON.stringify(JSON.stringify({ dpl: DPL }))}]);${extra}`;
+    for (const f of [
+      ".next/server/pages/404.html",
+      ".next/server/app/docs/security.rsc",
+      ".next/static/chunks/main-app.js",
+    ]) {
+      const full = join(root, "apps", "docs", f);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, page);
+    }
+    return root;
+  }
+
+  it("Next's preview og:image origin is the branch URL, which the locator rule alone would scan", () => {
+    expect(nextPreviewOrigin()).toBe(`https://${RAW.VERCEL_BRANCH_URL}/`);
+    // Without the exact-name exclusion each would be scanned (and RED the docs build).
+    for (const n of ["VERCEL_URL", "VERCEL_BRANCH_URL", "VERCEL_DEPLOYMENT_ID"]) {
+      expect(outputScanExclusion(RAW[n] ?? "", new Set()), n).toBeNull();
+    }
+  });
+
+  it("a Next-shaped docs output under the full Vercel preview env is GREEN", () => {
+    const r = checkBuildOutput("docs", {
+      repo: stageNextOutput("r6-green"),
+      processEnv: VERCEL_ENV,
+    });
+    expect(r.files).toBe(3);
+    expect(r.findings).toEqual([]);
+    // Each exclusion was by exact name, never by the value's shape.
+    for (const n of [
+      "NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID",
+      "VERCEL_URL",
+      "VERCEL_BRANCH_URL",
+      "NEXT_PUBLIC_VERCEL_URL",
+      "NEXT_PUBLIC_VERCEL_BRANCH_URL",
+    ]) {
+      expect(outputScanExclusion(RAW[n.replace(/^NEXT_PUBLIC_/, "")] ?? "", new Set(), n), n).toBe(
+        "platform metadata",
+      );
+    }
+  });
+
+  for (const [name, value] of [
+    ["VERCEL_OIDC_TOKEN", OIDC],
+    ["VERCEL_AUTOMATION_BYPASS_SECRET", BYPASS],
+  ] as const) {
+    it(`${name} is never excluded: planted raw or base64 in that output, the scan is RED and redacts`, () => {
+      expect(OUTPUT_SCAN_EXCLUDED_ENV_NAMES.has(name)).toBe(false);
+      expect(isSecretShapedEnvName(name)).toBe(true);
+      for (const [label, planted] of [
+        ["raw", value],
+        ["base64", Buffer.from(value).toString("base64")],
+      ] as const) {
+        const root = stageNextOutput(
+          `r6-red-${name}-${label}`,
+          `const k=${JSON.stringify(planted)};`,
+        );
+        const r = checkBuildOutput("docs", { repo: root, processEnv: VERCEL_ENV });
+        const msg = r.findings.join("\n");
+        expect(msg, label).toMatch(new RegExp(`carries the value of ${name} \\(`));
+        expect(msg, label).not.toMatch(/DEPLOYMENT_ID|BRANCH_URL|VERCEL_URL/);
+        expect(msg, label).not.toContain(value);
+      }
+    });
+  }
 });
