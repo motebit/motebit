@@ -114,6 +114,8 @@ import { rotateMobileKey } from "./key-rotation";
 import {
   createMobileMachineRoster,
   ownSuccessionRecords,
+  rosterAfterPairing,
+  rosterAfterRestore,
   rosterAfterRotationCommit,
   type MobileMachineRoster,
 } from "./machine-roster";
@@ -704,6 +706,7 @@ export class MobileApp {
         identityFile: await AsyncStorage.getItem(IDENTITY_FILE_KEY),
         heldPublicKeyHex: this.publicKey,
       }),
+    persistSuccession: (input) => rosterAfterPairing(input),
   });
 
   // Push token lifecycle — class extracted to ./push-token-manager.ts.
@@ -2530,9 +2533,8 @@ export class MobileApp {
    *
    * Note: mobile does not have desktop's `_identity_file` config slot —
    * governance lives on the runtime config that's regenerated from the
-   * in-memory metadata on next bootstrap, so `originalContent` is
-   * unused on this surface (still accepted for cross-surface contract
-   * uniformity).
+   * in-memory metadata on next bootstrap. `originalContent` contributes
+   * only its verified succession chain, to the roster replica.
    */
   async restoreIdentity(request: RestoreIdentityRequest): Promise<RestoreIdentityResult> {
     const failureReason = await validateRestoreRequest(request);
@@ -2590,6 +2592,14 @@ export class MobileApp {
     } catch {
       return { ok: false, reason: "config_write_failed" };
     }
+    // The motebit.md's verified chain joins the roster replica (bootstrap
+    // regenerates the stored file without it), so this phone can be Device A
+    // for an offline-rotated identity. Best-effort; never fails the restore.
+    await rosterAfterRestore({
+      motebitId: request.metadata.motebitId,
+      publicKeyHex: request.metadata.publicKey,
+      content: request.originalContent,
+    });
     return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
   }
 }

@@ -199,6 +199,7 @@ export type {
 } from "./hardware-attestation.js";
 import { verifyHardwareAttestationClaim } from "./hardware-attestation.js";
 import { resolveRosterKeyChain } from "./roster-key-chain.js";
+import type { KeySuccessionRecord } from "./artifacts.js";
 import type {
   HardwareAttestationVerifiers,
   HardwareAttestationVerifyResult,
@@ -1428,6 +1429,14 @@ export interface PairingIdentityBindingResult {
   identityBinding: Extract<IdentityBindingVerdict, "sovereign" | "unverified" | "invalid">;
   /** Set when accepted: whether the relay's chain was checked for a fork. */
   relayCheck?: PairingRelayCheck;
+  /**
+   * Set when accepted at `sovereign`: the VERIFIED succession links that
+   * connect the genesis key the id commits to to the transferred key, oldest
+   * first — empty when the id commits to that key itself. Only these records
+   * (never the unverified input) are what a pairing device may persist, so it
+   * can carry the lineage when it later approves another device.
+   */
+  lineage?: KeySuccessionRecord[];
   /** Set when refused. */
   code?: PairingIdentityRefusalCode;
   /** Set when refused: a sentence a surface can show. */
@@ -1457,14 +1466,17 @@ const CANONICAL_DID_KEY = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
 const MAX_PAIRING_RECORDS = 256;
 
 // Does a verified lineage connect the genesis key `motebitId` commits to to
-// `held`, using only `records`? `rooted` — yes; `guardian` — only through a
-// guardian-recovery link this device cannot check; `none` — no.
+// `held`, using only `records`? `rooted` — yes (with its links, genesis →
+// held); `guardian` — only through a guardian-recovery link this device cannot
+// check; `none` — no.
 async function pairingLineage(
   motebitId: string,
   held: string,
   records: readonly unknown[],
   guardianKey: string | undefined,
-): Promise<"rooted" | "guardian" | "none"> {
+): Promise<
+  { kind: "rooted"; links: KeySuccessionRecord[] } | { kind: "guardian" } | { kind: "none" }
+> {
   try {
     const walk = await resolveRosterKeyChain({
       motebitId,
@@ -1472,16 +1484,18 @@ async function pairingLineage(
       records,
       ...(guardianKey !== undefined ? { guardianKey } : {}),
     });
-    if (!walk.ok) return "none";
-    if (walk.ancestry.kind === "recovery_limited") return "guardian";
-    if (walk.ancestry.kind !== "rooted" || walk.links.length === 0) return "none";
+    if (!walk.ok) return { kind: "none" };
+    if (walk.ancestry.kind === "recovery_limited") return { kind: "guardian" };
+    if (walk.ancestry.kind !== "rooted" || walk.links.length === 0) return { kind: "none" };
     // The walk proves each link; the succession law also wants the chain
     // continuous and strictly ordered in time (spec/identity-v1.md §3.8).
     const chk = await verifySuccessionChain([...walk.links], held, guardianKey);
-    if (!chk.valid) return "none";
-    return (await verifySovereignBinding(motebitId, walk.chain[0]!)) ? "rooted" : "none";
+    if (!chk.valid) return { kind: "none" };
+    return (await verifySovereignBinding(motebitId, walk.chain[0]!))
+      ? { kind: "rooted", links: [...walk.links] }
+      : { kind: "none" };
   } catch {
-    return "none";
+    return { kind: "none" };
   }
 }
 
@@ -1624,6 +1638,8 @@ export async function verifyPairingIdentityBinding(
   const records: unknown[] = [];
   let bound = await verifySovereignBinding(id, held);
   let guardianOnly = false;
+  // The verified links genesis → held (none when the id commits to `held` itself).
+  let links: KeySuccessionRecord[] = [];
   if (!bound) {
     const sources: PairingSuccessionSource[] = [...(options?.successionSources ?? [])];
     if (relayLoader) sources.push(async () => (await relayRecords()) ?? []);
@@ -1637,11 +1653,12 @@ export async function verifyPairingIdentityBinding(
         continue; // a source that fails contributes nothing
       }
       const lineage = await pairingLineage(id, held, records, guardianKey);
-      if (lineage === "rooted") {
+      if (lineage.kind === "rooted") {
         bound = true;
+        links = lineage.links;
         break;
       }
-      if (lineage === "guardian") guardianOnly = true;
+      if (lineage.kind === "guardian") guardianOnly = true;
     }
   }
   if (bound) {
@@ -1660,7 +1677,7 @@ export async function verifyPairingIdentityBinding(
       : served === null
         ? "unreachable"
         : "no_conflict";
-    return { accepted: true, identityBinding: "sovereign", relayCheck };
+    return { accepted: true, identityBinding: "sovereign", relayCheck, lineage: links };
   }
   if (guardianOnly) {
     return refuse(

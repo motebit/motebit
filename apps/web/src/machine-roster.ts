@@ -30,6 +30,8 @@ import {
   presentationDue,
   replicaDigest,
   rotationLinkReplica,
+  persistIdentityFileLineage,
+  persistVerifiedLineage,
   type MachineRosterPorts,
   type MachineRosterSection,
   type PresentationRecord,
@@ -314,6 +316,27 @@ export async function rosterAfterRotationCommit(opts: {
     // See above.
   }
 }
+
+/**
+ * After pairing (Device B) / a motebit.md restore: the VERIFIED lineage to the
+ * held key joins the replica — what this device seals when it approves the
+ * next one (an offline rotation is on no relay). The surface-kit helpers
+ * re-verify, merge idempotently and never throw.
+ */
+export const rosterAfterPairing = (o: {
+  motebitId: string;
+  publicKeyHex: string;
+  records: readonly KeySuccessionRecord[];
+  db?: () => Promise<IDBDatabase>;
+}): Promise<number> =>
+  persistVerifiedLineage(async (r) => saveReplica(await (o.db ?? defaultDb)(), r), o);
+export const rosterAfterRestore = (o: {
+  motebitId: string;
+  publicKeyHex: string;
+  content: string | null | undefined;
+  db?: () => Promise<IDBDatabase>;
+}): Promise<number> =>
+  persistIdentityFileLineage(async (r) => saveReplica(await (o.db ?? defaultDb)(), r), o);
 
 /**
  * This browser's own key-succession records — the roster replica's verified

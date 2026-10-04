@@ -541,6 +541,7 @@ export {
   buildKeyTransferPayload,
   decryptKeyTransfer,
   openPairingKeyTransfer,
+  verifiedIdentityLineage,
   checkPreTransferBalance,
   formatWalletWarning,
 } from "./x25519.js";

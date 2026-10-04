@@ -65,6 +65,7 @@ import {
   retryAfterMs,
   rosterAfterRotationCommit,
   rosterAfterPairing,
+  rosterAfterRestore,
   ownSuccessionRecords,
 } from "../machine-roster";
 import { MobilePairingManager } from "../pairing-manager";
@@ -965,7 +966,7 @@ describe("completePairing persists the verified chain — this phone can be Devi
       setItem: async () => undefined,
       removeItem: async () => undefined,
     };
-    await expect(rosterAfterPairing({ ...input, kv: bad })).resolves.toBeUndefined();
+    await expect(rosterAfterPairing({ ...input, kv: bad })).resolves.toBe(0);
   });
 
   it("a refused pairing persists nothing", async () => {
@@ -993,5 +994,43 @@ describe("completePairing persists the verified chain — this phone can be Devi
       }),
     ).rejects.toThrow(/Pairing refused/);
     expect((await loadReplica(who.id)).kind).toBe("absent");
+  });
+});
+
+describe("restore from an offline-rotated motebit.md keeps its chain — this phone can be Device A", () => {
+  it("rosterAfterRestore persists the file's verified chain; the phone's records then pair C with no relay chain", async () => {
+    const g = await generateKeypair();
+    const k1 = await generateKeypair();
+    const id = await deriveSovereignMotebitId(hex(g));
+    const record = await signKeySuccession(g.privateKey, k1.privateKey, k1.publicKey, g.publicKey);
+    const file = await rotateIdentityFile({
+      existingContent: await generate(
+        { motebitId: id, ownerId: "owner", publicKeyHex: hex(g) },
+        g.privateKey,
+      ),
+      newPublicKey: k1.publicKey,
+      newPrivateKey: k1.privateKey,
+      successionRecord: record,
+    });
+    await rosterAfterRestore({ motebitId: id, publicKeyHex: hex(k1), content: file });
+    // After the reload, bootstrap regenerates the stored motebit.md without
+    // the chain — the replica is what still carries it.
+    const records = await ownSuccessionRecords({
+      motebitId: id,
+      identityFile: null,
+      heldPublicKeyHex: hex(k1),
+    });
+    expect(records).toEqual([record]);
+    const c = generateX25519Keypair();
+    const opened = await openPairingKeyTransfer({
+      motebitId: id,
+      keyTransfer: await buildKeyTransferPayload(k1.privateKey, hex(k1), c.publicKey, "C0DE42", {
+        successionRecords: records,
+      }),
+      ephemeralPrivateKey: c.privateKey,
+      pairingCode: "C0DE42",
+      fetchSuccessionChain: () => Promise.resolve([]),
+    });
+    expect(opened.identityBinding).toBe("sovereign");
   });
 });

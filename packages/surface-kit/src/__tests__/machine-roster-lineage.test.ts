@@ -18,6 +18,7 @@ import type { KeySuccessionRecord } from "@motebit/sdk";
 import {
   emptyReplica,
   mergeReplicas,
+  persistIdentityFileLineage,
   persistVerifiedLineage,
   type MachineRosterReplica,
 } from "../index.js";
@@ -128,5 +129,44 @@ describe("persistVerifiedLineage", () => {
       records: id.chain,
     });
     expect(s.writes[0]).toEqual({ ...emptyReplica(id.motebitId), succession: id.chain });
+  });
+});
+
+describe("persistIdentityFileLineage (restore from a motebit.md)", () => {
+  it("persists the chain of a file bound to the id and the held key; nothing from any other file", async () => {
+    const { generate, rotate } = await import("@motebit/identity-file");
+    const g = await generateKeypair();
+    const k1 = await generateKeypair();
+    const motebitId = await deriveSovereignMotebitId(hex(g));
+    const record = await signKeySuccession(g.privateKey, k1.privateKey, k1.publicKey, g.publicKey);
+    const file = await rotate({
+      existingContent: await generate(
+        { motebitId, ownerId: "owner", publicKeyHex: hex(g) },
+        g.privateKey,
+      ),
+      newPublicKey: k1.publicKey,
+      newPrivateKey: k1.privateKey,
+      successionRecord: record,
+    });
+    const s = store();
+    // Not the held key / not this id / not a file: nothing.
+    expect(
+      await persistIdentityFileLineage(s.save, { motebitId, publicKeyHex: hex(g), content: file }),
+    ).toBe(0);
+    expect(
+      await persistIdentityFileLineage(s.save, {
+        motebitId: "0190f1a2-0000-7000-8000-00000000abcd",
+        publicKeyHex: hex(k1),
+        content: file,
+      }),
+    ).toBe(0);
+    expect(
+      await persistIdentityFileLineage(s.save, { motebitId, publicKeyHex: hex(k1), content: "x" }),
+    ).toBe(0);
+    expect(s.writes).toEqual([]);
+    expect(
+      await persistIdentityFileLineage(s.save, { motebitId, publicKeyHex: hex(k1), content: file }),
+    ).toBe(1);
+    expect(s.replicas.get(motebitId)?.succession).toEqual([record]);
   });
 });

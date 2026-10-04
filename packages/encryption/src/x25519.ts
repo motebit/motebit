@@ -213,6 +213,16 @@ export interface OpenedPairingKeyTransfer {
    * signed by a superseded-key holder cannot have been seen.
    */
   relayCheck: PairingRelayCheck;
+  /**
+   * The VERIFIED succession links connecting the genesis key the id commits
+   * to to `publicKeyHex`, oldest first — taken from whichever source bound it
+   * (the chain Device A sealed, or the relay's). Empty for a legacy id and for
+   * an id that commits to the key itself. A surface persists exactly these
+   * after acceptance (`persistVerifiedLineage` in `@motebit/surface-kit`), so
+   * this device can carry the lineage when it later approves another device —
+   * an offline rotation is on no relay.
+   */
+  succession: KeySuccessionRecord[];
 }
 
 /**
@@ -271,7 +281,28 @@ export async function openPairingKeyTransfer(input: {
     publicKeyHex,
     identityBinding: binding.identityBinding,
     relayCheck: binding.relayCheck ?? "not_checked",
+    succession: binding.identityBinding === "sovereign" ? (binding.lineage ?? []) : [],
   };
+}
+
+/**
+ * The persistence gate: of `records` (untrusted — any source), the ones that
+ * form a VERIFIED lineage from the genesis key `motebitId` commits to to
+ * `publicKeyHex`, oldest first; `[]` when they do not reach it, when the id
+ * commits to the key itself, or when the id commits to no key (legacy). Every
+ * link is signature-verified and the chain must be continuous and strictly
+ * ordered, so a forged, foreign or off-lineage record is never returned.
+ * Offline; no relay is consulted. Never throws.
+ */
+export async function verifiedIdentityLineage(input: {
+  motebitId: string;
+  publicKeyHex: string;
+  records: readonly unknown[];
+}): Promise<KeySuccessionRecord[]> {
+  const binding = await verifyPairingIdentityBinding(input.motebitId, input.publicKeyHex, {
+    successionSources: [input.records],
+  });
+  return binding.accepted && binding.identityBinding === "sovereign" ? (binding.lineage ?? []) : [];
 }
 
 // === Pre-transfer wallet safety check ===

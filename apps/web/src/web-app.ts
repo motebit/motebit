@@ -150,6 +150,8 @@ import {
   createWebMachineRoster,
   ownSuccessionRecords,
   rosterAfterRotationCommit,
+  rosterAfterPairing,
+  rosterAfterRestore,
   type RosterLocks,
   type WebMachineRoster,
 } from "./machine-roster.js";
@@ -1763,6 +1765,14 @@ export class UnbootedWebApp {
     } catch {
       return { ok: false, reason: "config_write_failed" };
     }
+    // The browser keeps no identity file: the motebit.md's verified chain
+    // joins the roster replica, so this browser can be Device A for an
+    // offline-rotated identity. Best-effort; never fails the restore.
+    await rosterAfterRestore({
+      motebitId: request.metadata.motebitId,
+      publicKeyHex: request.metadata.publicKey,
+      content: request.originalContent,
+    });
     return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
   }
 
@@ -4488,6 +4498,15 @@ export class UnbootedWebApp {
           new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(motebitId),
       });
       identitySeed = opened.identitySeed;
+
+      // Only now — the binding check passed: the verified lineage joins the
+      // roster replica, the one place this browser can carry it from when it
+      // approves the next device. Re-verified inside; never fails the pairing.
+      await rosterAfterPairing({
+        motebitId,
+        publicKeyHex: opened.publicKeyHex,
+        records: opened.succession,
+      });
 
       // Update in-memory identity state
       this._motebitId = motebitId;

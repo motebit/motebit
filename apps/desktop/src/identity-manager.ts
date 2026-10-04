@@ -66,7 +66,7 @@ import {
   formatWalletWarning,
 } from "@motebit/encryption";
 import type { KeySuccessionRecord, KeyTransferPayload } from "@motebit/sdk";
-import { identityFileRecords } from "@motebit/surface-kit";
+import { identityFileRecords, persistVerifiedLineage } from "@motebit/surface-kit";
 import { APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
@@ -81,7 +81,7 @@ import {
 } from "@motebit/identity-file";
 import { rotateDesktopKey } from "./key-rotation";
 import { rosterAfterRotationCommit } from "./machine-roster";
-import { loadReplica, tauriRosterIO } from "./machine-roster-store";
+import { loadReplica, saveReplica, tauriRosterIO } from "./machine-roster-store";
 import { updateConfig } from "./config-update";
 import type { BootstrapResult } from "./index.js";
 import { createTauriStorage } from "./index.js";
@@ -745,6 +745,7 @@ export class IdentityManager {
     }
     const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl, pairingId } = keyTransferOpts;
     let identitySeed: Uint8Array | undefined;
+    let lineage: { publicKeyHex: string; records: KeySuccessionRecord[] } | undefined;
     try {
       const opened = await openPairingKeyTransfer({
         motebitId: result.motebitId,
@@ -755,6 +756,7 @@ export class IdentityManager {
           new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(result.motebitId),
       });
       identitySeed = opened.identitySeed;
+      lineage = { publicKeyHex: opened.publicKeyHex, records: opened.succession };
       try {
         // Safety check: refuse key transfer if old wallet has funds
         const oldPrivKeyHex = await invoke<string>("keyring_get", {
@@ -798,6 +800,16 @@ export class IdentityManager {
     // replaced key and binding are kept, and a crash is finished at launch.
     this.beforeIdentitySwitch?.("pair");
     await switchIdentity(invoke, sw);
+    // Only after the binding check passed and the identity is switched: the
+    // verified lineage joins the roster replica, so this desktop can carry it
+    // when it approves the next device (an offline rotation is on no relay).
+    // Re-verified inside; best-effort, never fails the pairing.
+    if (lineage !== undefined) {
+      await persistVerifiedLineage((replica) => saveReplica(tauriRosterIO(invoke), replica), {
+        motebitId: result.motebitId,
+        ...lineage,
+      });
+    }
 
     if (adoptedPublicKey !== undefined) this.publicKey = adoptedPublicKey;
     this.motebitId = result.motebitId;

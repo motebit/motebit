@@ -90,7 +90,12 @@ vi.mock("@motebit/encryption", async (importOriginal) => {
           ],
         });
         if (!binding.accepted) throw new Error(`Pairing refused: ${binding.reason}`);
-        return { identitySeed, publicKeyHex, identityBinding: binding.identityBinding };
+        return {
+          identitySeed,
+          publicKeyHex,
+          identityBinding: binding.identityBinding,
+          succession: binding.lineage ?? [],
+        };
       },
     ),
     generateX25519Keypair: vi.fn(() => ({

@@ -1067,6 +1067,7 @@ export interface PairingIdentityBindingResult {
     accepted: boolean;
     code?: PairingIdentityRefusalCode;
     identityBinding: Extract<IdentityBindingVerdict, "sovereign" | "unverified" | "invalid">;
+    lineage?: KeySuccessionRecord[];
     reason?: string;
     relayCheck?: PairingRelayCheck;
 }

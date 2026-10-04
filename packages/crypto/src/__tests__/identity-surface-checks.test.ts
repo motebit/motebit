@@ -67,7 +67,12 @@ describe("verifyPairingIdentityBinding", () => {
     const key = bytesToHex((await generateKeypair()).publicKey);
     const id = await deriveSovereignMotebitId(key);
     const r = await verifyPairingIdentityBinding(id, key);
-    expect(r).toEqual({ accepted: true, identityBinding: "sovereign", relayCheck: "not_checked" });
+    expect(r).toEqual({
+      accepted: true,
+      identityBinding: "sovereign",
+      relayCheck: "not_checked",
+      lineage: [],
+    });
   });
 
   it("refuses a self-certifying id that commits to a DIFFERENT key (relay-supplied mismatch)", async () => {
@@ -131,7 +136,12 @@ describe("verifyPairingIdentityBinding — a ROTATED sovereign identity (success
   it("accepts the rotated current key at `sovereign` when a valid chain links the id's genesis to it", async () => {
     const { id, current, chain } = await rotatedIdentity();
     const r = await verifyPairingIdentityBinding(id, current, { successionSources: [chain] });
-    expect(r).toEqual({ accepted: true, identityBinding: "sovereign", relayCheck: "not_checked" });
+    expect(r).toEqual({
+      accepted: true,
+      identityBinding: "sovereign",
+      relayCheck: "not_checked",
+      lineage: chain,
+    });
   });
 
   it("accepts with a lazily-fetched chain, and fetches only when the direct derivation fails", async () => {
@@ -147,6 +157,7 @@ describe("verifyPairingIdentityBinding — a ROTATED sovereign identity (success
       accepted: true,
       identityBinding: "sovereign",
       relayCheck: "not_checked",
+      lineage: chain,
     });
     expect(fetches).toBe(1);
     // Never-rotated key: direct derivation answers; the loader is not consulted.
@@ -234,6 +245,7 @@ describe("verifyPairingIdentityBinding — canonical ids, sources, guardian", ()
       accepted: true,
       identityBinding: "sovereign",
       relayCheck: "not_checked",
+      lineage: [],
     });
   });
 
@@ -327,6 +339,7 @@ describe("verifyPairingIdentityBinding — canonical ids, sources, guardian", ()
       accepted: true,
       identityBinding: "sovereign",
       relayCheck: "not_checked",
+      lineage: [rec],
     });
   });
 
@@ -419,6 +432,7 @@ describe("verifyPairingIdentityBinding — the relay's chain is always the fork 
         accepted: true,
         identityBinding: "sovereign",
         relayCheck: "no_conflict",
+        lineage: [h.r1, h.r2],
       });
     }
     const down = await verifyPairingIdentityBinding(h.id, held, {
@@ -431,6 +445,7 @@ describe("verifyPairingIdentityBinding — the relay's chain is always the fork 
       accepted: true,
       identityBinding: "sovereign",
       relayCheck: "unreachable",
+      lineage: [h.r1, h.r2],
     });
   });
 

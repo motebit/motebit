@@ -56,6 +56,17 @@ export interface PairingManagerDeps {
    * has no chain. Best-effort; absent or failing ⇒ none sent.
    */
   loadOwnSuccessionRecords?: () => Promise<KeySuccessionRecord[]>;
+  /**
+   * Device B: persist the verified lineage the accepted transfer handed back
+   * (`rosterAfterPairing`), so this device carries it when it approves the
+   * next device. Called only after the binding check passed; re-verifies,
+   * never throws.
+   */
+  persistSuccession?: (input: {
+    motebitId: string;
+    publicKeyHex: string;
+    records: KeySuccessionRecord[];
+  }) => Promise<unknown>;
 }
 
 export class MobilePairingManager {
@@ -194,6 +205,13 @@ export class MobilePairingManager {
 
       await keyring.set(KEYRING_KEYS.motebitId, result.motebitId);
       await keyring.set("device_id", result.deviceId);
+      // The verified lineage joins the roster replica (only now — the binding
+      // check passed), so this phone can be Device A for the identity next.
+      await this.deps.persistSuccession?.({
+        motebitId: result.motebitId,
+        publicKeyHex: opened.publicKeyHex,
+        records: opened.succession,
+      });
 
       // Install the transferred identity key
       const { pairingId } = keyTransferOpts;
