@@ -312,6 +312,28 @@ async function handleDelegatePlan(
 // motebit delegate "<prompt>" — delegate a task to a worker agent
 // ---------------------------------------------------------------------------
 
+/**
+ * The remedy for a 402 on task submission. The relay answers 402 both for an
+ * empty virtual account and for the Arc 3.5 gate `TASK_P2P_PROOF_REQUIRED`:
+ * paid delegation to another agent must settle P2P, so depositing with
+ * `motebit fund` can never clear it (off-ramp-as-user-action.md § Arc 3.5).
+ */
+export function describeDelegateSubmit402(bodyText: string): string[] {
+  let code: unknown;
+  try {
+    code = (JSON.parse(bodyText) as { code?: unknown }).code;
+  } catch {
+    code = undefined;
+  }
+  if (code === "TASK_P2P_PROOF_REQUIRED") {
+    return [
+      "Paid delegation to another agent settles P2P: the relay does not take deposit-funded payment for it.",
+      "Re-run with `--sovereign` to pay the worker directly from your Solana wallet.",
+    ];
+  }
+  return ["Insufficient balance. Run `motebit fund <amount>` to deposit."];
+}
+
 export async function handleDelegate(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
 
@@ -537,7 +559,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       }),
     });
     if (submitRes.status === 402) {
-      console.error("Insufficient balance. Run `motebit fund <amount>` to deposit.");
+      for (const line of describeDelegateSubmit402(await submitRes.text())) console.error(line);
       process.exit(1);
     }
     if (!submitRes.ok) {
