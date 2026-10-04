@@ -627,6 +627,17 @@ const SCENARIOS: Record<string, (hook: string) => Scenario> = {
       detail: show(r),
     };
   },
+  /** examples/interop/ is a gate input (the APS vector + pins) — same trigger as CI. */
+  "examples/interop/ triggers the gate self-tests": (hook) => {
+    const r = runHook(repoWith({ "examples/interop/aps/INTEROP.md": "x\n" }, { hook }));
+    return {
+      ok:
+        r.status === 0 &&
+        r.calls.includes("test:gates") &&
+        r.calls.includes("check-gates-effective"),
+      detail: show(r),
+    };
+  },
   /** A failing phase aborts the push with a non-zero code. */
   "a failing gate blocks": (hook) => {
     const r = runHook(repoWith(LEAF_CHANGE, { hook }), { SHIM_FAIL: "^check$" });
@@ -667,9 +678,15 @@ const HOOK_MUTANTS: { name: string; from: string | RegExp; to: string; killedBy:
   },
   {
     name: "coverage-graduation.json dropped from the gate-input trigger",
-    from: "changed_files scripts/ coverage-graduation.json",
-    to: "changed_files scripts/",
+    from: "changed_files scripts/ coverage-graduation.json examples/interop/",
+    to: "changed_files scripts/ examples/interop/",
     killedBy: "coverage-graduation.json triggers the gate self-tests",
+  },
+  {
+    name: "examples/interop/ dropped from the gate-input trigger",
+    from: "changed_files scripts/ coverage-graduation.json examples/interop/",
+    to: "changed_files scripts/ coverage-graduation.json",
+    killedBy: "examples/interop/ triggers the gate self-tests",
   },
   {
     name: "core.quotePath=false dropped (C1)",
