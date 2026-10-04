@@ -46,7 +46,7 @@ export const AccountWithdrawRequestSchema = z
       .min(1)
       .optional()
       .describe(
-        "Solana base58 (Path 0) or EVM 0x-hex (Path 1) payout address; omitted ⇒ manual/pending.",
+        "Solana base58 payout address (Path 0); omitted ⇒ manual/pending. An EVM 0x address is refused before any debit (Path 1 retired, #948).",
       ),
     idempotency_key: z
       .string()

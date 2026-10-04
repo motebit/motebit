@@ -36,6 +36,8 @@ Phase 2 stays deferred — explicitly, not by accident — until one of these tr
 
 Phase 2 is not "the next milestone after phase 1." It's "the milestone after volume, partner, or protocol forces it."
 
+**EVM outbound withdrawals are not a phase-2 trigger on their own (#948).** Path 1 — x402 from the EVM treasury to a user's EVM wallet — needed exactly this signing key and never had it: its withdraw sent the idempotency key where an EIP-3009 signature belongs, so no payout ever settled. It is retired, not repaired ([`off-ramp-as-user-action.md`](off-ramp-as-user-action.md) § "Path 1 retired"), and returns only when real demand appears AND a phase-2 design for outbound EVM signing is accepted here. Solana outbound (Path 0) already signs with the relay's identity-derived key; it is not an EVM treasury key and does not open phase 2 for EVM.
+
 ## What phase 1 ships
 
 Concrete shape, in order:

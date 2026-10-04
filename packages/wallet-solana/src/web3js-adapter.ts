@@ -21,7 +21,10 @@
 import {
   Connection,
   Keypair,
+  NONCE_ACCOUNT_LENGTH,
+  NonceAccount,
   PublicKey,
+  SystemProgram,
   Transaction,
   type TransactionInstruction,
   type Commitment,
@@ -92,6 +95,13 @@ import type {
   BroadcastHooks,
   SignedTransactionRef,
   SignatureOutcome,
+  DurableNonceLane,
+  NonceLaneState,
+  DurableTransactionRef,
+  DurableBroadcastHooks,
+  FinalizedSignatureStatus,
+  DurableSendResult,
+  NonceKillResult,
 } from "./adapter.js";
 import {
   USDC_MINT_MAINNET,
@@ -109,13 +119,37 @@ import {
 const ASSET_NAME_USDC = "USDC";
 
 /**
- * Broadcast attempts before giving up. A Solana transaction is signed over a
- * recent blockhash that expires after ~151 blocks (~60-90s); on a slow or
- * congested cluster (devnet especially) the confirmation can miss that window,
- * surfacing as a `TransactionExpiredBlockheightExceededError` ("... has expired:
- * block height exceeded"). Bounded so a genuinely-down RPC still fails fast.
+ * The seed of the treasury's durable-nonce account (#990): the account is
+ * `PublicKey.createWithSeed(treasury, NONCE_ACCOUNT_SEED, SystemProgram)`,
+ * so its address is derivable from the treasury key alone and no second key
+ * exists. Rent: `NONCE_ACCOUNT_LENGTH` = 80 bytes ⇒ 1 447 680 lamports
+ * (≈ 0.00145 SOL) rent-exempt, paid once by the treasury.
  */
-const BROADCAST_MAX_ATTEMPTS = 3;
+export const NONCE_ACCOUNT_SEED = "motebit-payout-nonce-v1";
+
+/**
+ * The lane's seed with an operator-chosen suffix (#990 round 7) — the escape
+ * hatch when the address at the current seed is squatted beyond recovery
+ * (owned by another program, or a nonce account of another authority): a
+ * new suffix derives a fresh address. `suffix` is 1–8 of `[a-z0-9]`, so the
+ * seed stays within agave's MAX_SEED_LEN (32 bytes). Undecided payouts over
+ * the old lane stay decidable and killable (`readNonceAccount` reads the
+ * payout's own nonce account, #990 round 8).
+ */
+export function nonceSeedFor(suffix?: string): string {
+  if (suffix === undefined || suffix === "") return NONCE_ACCOUNT_SEED;
+  if (!/^[a-z0-9]{1,8}$/.test(suffix)) {
+    throw new Error(`nonce seed suffix must be 1-8 of [a-z0-9], got ${JSON.stringify(suffix)}`);
+  }
+  return `${NONCE_ACCOUNT_SEED}-${suffix}`;
+}
+
+/** Per-call timeout on every RPC read or send in the durable paths (#990). */
+const RPC_TIMEOUT_MS = 10_000;
+
+/** How often, and how long, a durable send waits for its transaction to finalize. */
+const FINALITY_POLL_MS = 2_000;
+const FINALITY_MAX_WAIT_MS = 45_000;
 
 /** One page of recent signatures for `findOutgoingTransfer` (#887). */
 const OUTGOING_LOOKUP_PAGE = 50;
@@ -124,20 +158,13 @@ const OUTGOING_LOOKUP_PAGE = 50;
 const OUTGOING_LOOKUP_SKEW_MS = 30_000;
 
 /**
- * Blocks past `lastValidBlockHeight` before absence counts as expiry (#885).
- * Absorbs commitment skew between the height read and the status read; a few
- * seconds of extra wait against a wrongly-voided payment.
- */
-const EXPIRY_HEIGHT_MARGIN = 10;
-
-/**
  * True for web3.js's `TransactionExpiredBlockheightExceededError`: the
  * confirmation wait saw the block height pass `lastValidBlockHeight` without
  * HEARING that the transaction confirmed. It is NOT proof the transaction did
  * not land (#885 round 3): web3.js checks the status once when it subscribes
  * and then relies on a websocket notification that can be missed. So this is
- * only the trigger to ASK the chain (`getSignatureOutcome`) — a re-sign
- * follows only a definitive `expired` answer (see `signSendConfirm`).
+ * only the trigger to ASK the chain (`getSignatureOutcome`) for a FOUND status —
+ * never a re-sign (#990; see `signSendConfirm`).
  *
  * Deliberately NOT a generic "expired"/"timeout" match: a confirmation TIMEOUT
  * ("was not confirmed in N seconds") means the transaction may still land, so
@@ -165,16 +192,31 @@ export interface Web3JsRpcAdapterConfig {
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
   };
+  /**
+   * How long a durable send (#990) waits for its transaction to be
+   * FINALIZED before handing the outcome back as unknown. Tests inject
+   * `sleep`/`now`.
+   */
+  finality?: {
+    pollMs?: number;
+    maxWaitMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+  };
+  /** Per-call RPC timeout in the durable paths. Default 10 s. */
+  rpcTimeoutMs?: number;
+  /** The nonce lane's seed suffix (`nonceSeedFor`); absent ⇒ `NONCE_ACCOUNT_SEED`. */
+  nonceSeedSuffix?: string;
 }
 
 /**
  * After a blockhash expiry, how often and how long to ask the chain about
  * the transaction just sent (#885 round 4). web3.js raises the expiry as
  * soon as the block height passes `lastValidBlockHeight` (it polls height
- * about once a second), so the first ask lands at lastValid+1 or +2 —
- * inside the `EXPIRY_HEIGHT_MARGIN`, where absence is not yet proof. At
- * ~400ms a block the margin clears in ~4-5s; 30s is a generous cap for a
- * slow cluster before the send is handed back as undecidable.
+ * about once a second), so the first ask lands at lastValid+1 or +2, when the status may not yet be visible. The poll
+ * looks only for a FOUND status (landed / failed); an absent one is never
+ * evidence that it did not land, so the send is then handed back as
+ * undecidable — never re-signed (#990).
  */
 const EXPIRY_CONFIRM_POLL_MS = 1_500;
 const EXPIRY_CONFIRM_MAX_WAIT_MS = 30_000;
@@ -191,6 +233,14 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   private readonly expiryMaxWaitMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
+  private readonly finalityPollMs: number;
+  private readonly finalityMaxWaitMs: number;
+  private readonly finalitySleep: (ms: number) => Promise<void>;
+  private readonly finalityNow: () => number;
+  private readonly rpcTimeoutMs: number;
+  private nonceAddress: PublicKey | null = null;
+  private readonly nonceSeed: string;
+  private creatingNonce: Promise<void> | null = null;
 
   constructor(config: Web3JsRpcAdapterConfig) {
     if (config.identitySeed.length !== 32) {
@@ -211,6 +261,13 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     this.sleep =
       config.expiryConfirm?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.now = config.expiryConfirm?.now ?? Date.now;
+    this.finalityPollMs = config.finality?.pollMs ?? FINALITY_POLL_MS;
+    this.finalityMaxWaitMs = config.finality?.maxWaitMs ?? FINALITY_MAX_WAIT_MS;
+    this.finalitySleep =
+      config.finality?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.finalityNow = config.finality?.now ?? Date.now;
+    this.rpcTimeoutMs = config.rpcTimeoutMs ?? RPC_TIMEOUT_MS;
+    this.nonceSeed = nonceSeedFor(config.nonceSeedSuffix);
     // Keypair.fromSeed is the standard Ed25519 seed → keypair derivation.
     // The resulting public key is identical to the motebit identity
     // public key derived from the same seed via @noble/ed25519.
@@ -333,35 +390,20 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   }
 
   /**
-   * Build a transaction from `instructions`, sign it over a FRESH recent
-   * blockhash, report its signature (`hooks.beforeBroadcast`), broadcast, and
-   * await confirmation.
+   * Build a transaction from `instructions`, sign it over a recent
+   * blockhash, report its signature (`hooks.beforeBroadcast`), broadcast it
+   * ONCE, and await confirmation.
    *
    * On a `TransactionExpiredBlockheightExceededError` it does NOT assume the
-   * transaction failed to land (#885). web3.js raises that error when it
-   * stopped HEARING about the transaction before the block height passed —
-   * it checks the status once when it subscribes and then relies on a
-   * websocket notification that can be lost — so the transaction may well
-   * have landed. Before any re-sign, the adapter asks the chain about the
-   * transaction it just sent (`getSignatureOutcome`):
-   *
-   *   - `landed`  ⇒ that transaction IS the payment; return it. No re-sign.
-   *   - `expired` ⇒ authoritatively not on chain and past its last valid
-   *     height (the slot-anchored rule in `getSignatureOutcome`): it can
-   *     never be included, so a re-sign with a fresh blockhash is the only
-   *     transaction that can move the money — no double-spend.
-   *   - `failed`  ⇒ it was included and errored: a failed Solana transaction
-   *     applies none of its instructions (only the fee is charged), so no
-   *     funds moved. The failure is definitive and usually deterministic
-   *     (a retry would fail the same way), so it is returned as
-   *     `confirmed: false` — exactly what a confirmed-with-error send
-   *     returns — and never retried.
-   *   - `pending` / `rpc_error` ⇒ asked again every ~1.5s for up to 30s
-   *     (`awaitDecisiveOutcome`) — web3.js reports the expiry at
-   *     lastValid+1, inside the absence margin, so the first answer is
-   *     usually `pending`. Still undecidable at the cap ⇒ the original error
-   *     is thrown and the caller's own-signature confirmation decides
-   *     later. Never a re-sign on a maybe.
+   * transaction failed to land (#885): web3.js stops HEARING about a
+   * transaction (it checks once, then relies on a websocket notification
+   * that can be lost), so the transaction may well have landed. It asks the
+   * chain about that transaction (`awaitDecisiveOutcome`): a FOUND status
+   * decides it (`landed` ⇒ confirmed; `failed` ⇒ `confirmed: false`);
+   * anything else ⇒ the original error is thrown, and the caller decides
+   * later from its own recorded signature. It never re-signs (#990): an
+   * absent status is not evidence that a transaction did not land, so no
+   * re-sign is ever provably safe.
    *
    * Any non-expiry error propagates immediately.
    */
@@ -369,102 +411,73 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     instructions: readonly TransactionInstruction[],
     hooks?: BroadcastHooks,
   ): Promise<SendUsdcResult> {
-    // The chain's verdict on every attempt broadcast before the current one.
-    // `earlierBroadcastsDead` is derived from this EVIDENCE, not from the
-    // control flow: true only if each earlier attempt was decisively
-    // `expired` (for the first attempt the list is empty — one broadcast).
-    const earlierVerdicts: SignatureOutcome["status"][] = [];
-    const earlierBroadcastsDead = (): boolean =>
-      earlierVerdicts.every((status) => status === "expired");
-    for (let attempt = 1; ; attempt++) {
-      const tx = new Transaction();
-      for (const ix of instructions) tx.add(ix);
-      const latest = await this.connection.getLatestBlockhash(this.commitment);
-      tx.recentBlockhash = latest.blockhash;
-      tx.feePayer = this.keypair.publicKey;
-      tx.sign(this.keypair);
-      const rawSig = tx.signature;
-      if (rawSig == null) throw new Error("signed transaction has no signature");
-      const signed: SignedTransactionRef = {
-        signature: base58Encode(new Uint8Array(rawSig)),
-        lastValidBlockHeight: latest.lastValidBlockHeight,
-      };
+    const tx = new Transaction();
+    for (const ix of instructions) tx.add(ix);
+    const latest = await this.connection.getLatestBlockhash(this.commitment);
+    tx.recentBlockhash = latest.blockhash;
+    tx.feePayer = this.keypair.publicKey;
+    tx.sign(this.keypair);
+    const rawSig = tx.signature;
+    if (rawSig == null) throw new Error("signed transaction has no signature");
+    const signed: SignedTransactionRef = {
+      signature: base58Encode(new Uint8Array(rawSig)),
+      lastValidBlockHeight: latest.lastValidBlockHeight,
+    };
 
-      // #885: the signature is fixed now, before anything is sent. The payer
-      // records THIS transaction first; if it cannot, nothing is sent.
-      if (hooks?.beforeBroadcast != null) await hooks.beforeBroadcast(signed);
+    // #885: the signature is fixed now, before anything is sent. The payer
+    // records THIS transaction first; if it cannot, nothing is sent.
+    if (hooks?.beforeBroadcast != null) await hooks.beforeBroadcast(signed);
 
-      try {
-        const signature = await this.connection.sendRawTransaction(tx.serialize());
-        const confirmation = await this.connection.confirmTransaction(
-          {
-            signature,
-            blockhash: latest.blockhash,
-            lastValidBlockHeight: latest.lastValidBlockHeight,
-          },
-          this.decisionCommitment,
-        );
-        return {
+    try {
+      const signature = await this.connection.sendRawTransaction(tx.serialize());
+      const confirmation = await this.connection.confirmTransaction(
+        {
           signature,
-          slot: confirmation.context.slot,
-          confirmed: confirmation.value.err === null,
-          earlierBroadcastsDead: earlierBroadcastsDead(),
+          blockhash: latest.blockhash,
+          lastValidBlockHeight: latest.lastValidBlockHeight,
+        },
+        this.decisionCommitment,
+      );
+      return {
+        signature,
+        slot: confirmation.context.slot,
+        confirmed: confirmation.value.err === null,
+        // Exactly one transaction is ever broadcast per send.
+        earlierBroadcastsDead: true,
+      };
+    } catch (err) {
+      if (!isBlockhashExpiry(err)) throw err;
+      const outcome = await this.awaitDecisiveOutcome(signed);
+      if (outcome.status === "landed") {
+        return {
+          signature: signed.signature,
+          slot: outcome.slot,
+          confirmed: true,
+          earlierBroadcastsDead: true,
         };
-      } catch (err) {
-        if (!isBlockhashExpiry(err)) throw err;
-        const outcome = await this.awaitDecisiveOutcome(signed);
-        switch (outcome.status) {
-          case "landed":
-            return {
-              signature: signed.signature,
-              slot: outcome.slot,
-              confirmed: true,
-              earlierBroadcastsDead: earlierBroadcastsDead(),
-            };
-          case "failed":
-            return {
-              signature: signed.signature,
-              slot: 0,
-              confirmed: false,
-              earlierBroadcastsDead: earlierBroadcastsDead(),
-            };
-          case "expired":
-            earlierVerdicts.push(outcome.status);
-            if (attempt < BROADCAST_MAX_ATTEMPTS) continue;
-            throw err;
-          case "pending":
-          case "rpc_error":
-            throw err;
-        }
       }
+      if (outcome.status === "failed") {
+        return {
+          signature: signed.signature,
+          slot: 0,
+          confirmed: false,
+          earlierBroadcastsDead: true,
+        };
+      }
+      throw err;
     }
   }
 
   /**
-   * Ask the chain about `signed` until the answer is decisive (`landed`,
-   * `failed`, `expired`) or `expiryMaxWaitMs` passes (#885 round 4). Right
-   * after web3.js reports an expiry the height is only just past
-   * `lastValidBlockHeight`, so the first answer is usually `pending` (inside
-   * the margin); a few more blocks settle it. This poll is where the
-   * devnet-flake blockhash-expiry retry now lives: an expired first attempt
-   * becomes `expired` here, and only then does `signSendConfirm` re-sign.
-   * Still `pending` (or `rpc_error`) at the cap ⇒ returned as is, and the
-   * caller throws — never a re-sign on a maybe.
+   * Ask the chain about `signed` until a status is FOUND at the decision
+   * commitment (`landed` / `failed`) or `expiryMaxWaitMs` passes (#885).
+   * Anything else at the cap is returned as is, and the caller throws.
    */
   private async awaitDecisiveOutcome(signed: SignedTransactionRef): Promise<SignatureOutcome> {
     const deadline = this.now() + this.expiryMaxWaitMs;
-    // Sticky pending (#885 round 5): once ANY read has seen this signature
-    // in a block, an `expired` answer for it is never accepted — the
-    // expiry rule compares slot NUMBERS, not fork membership, and a
-    // load-balanced RPC can answer from a node on a minority fork. The
-    // transaction then lands (returned) or the cap is reached (thrown).
-    let seen = false;
     for (;;) {
-      let outcome = await this.getSignatureOutcome(signed);
-      if (outcome.status === "pending" && outcome.seen === true) seen = true;
-      if (outcome.status === "expired" && seen) outcome = { status: "pending", seen: true };
+      const outcome = await this.getSignatureOutcome(signed);
       if (outcome.status === "landed" || outcome.status === "failed") return outcome;
-      if (outcome.status === "expired") return outcome;
       if (this.now() + this.expiryPollMs > deadline) return outcome;
       await this.sleep(this.expiryPollMs);
     }
@@ -767,52 +780,400 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
 
   /**
    * What the chain says about ONE signed transaction (#885). Read-only.
-   * Status is looked up with full history search, so a transaction that
-   * landed long ago is still found. Absence becomes authoritative only
-   * once the chain's block height is past the transaction's
-   * `lastValidBlockHeight`: from then on it can never be included.
+   *
+   * Only a FOUND status is evidence: `landed` / `failed` when its
+   * per-status `confirmationStatus` reaches the decision commitment,
+   * `pending` + `seen` when it is in a block below it. An ABSENT status is
+   * never evidence that the transaction did not land — a history lookup
+   * reads a pruned range, a snapshot jump or a swallowed BigTable error as
+   * absent (agave `rpc.rs` `get_signature_statuses`) — so absence is
+   * `pending`, and no adapter reports `expired` (#990).
    */
   async getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome> {
     try {
-      // Height and slot come from ONE read (#885 round 3). The absence of a
-      // signature proves "never landed" only if the node answering the status
-      // query had already seen every slot where it could have landed:
-      //
-      //   1. `epoch.blockHeight > lastValidBlockHeight + margin` ⇒ every block
-      //      the transaction could be in (block height ≤ lastValidBlockHeight)
-      //      is at a slot ≤ `epoch.absoluteSlot`.
-      //   2. The status response's `context.slot ≥ epoch.absoluteSlot` ⇒ the
-      //      answering node has processed all of those slots, and
-      //      `searchTransactionHistory` makes it look through them.
-      //   3. So `value[0] === null` from that response means the transaction
-      //      is in none of them, and never can be.
-      //
-      // A node lagging behind (context.slot < absoluteSlot) proves nothing:
-      // `pending`. The margin absorbs commitment-level skew between the two
-      // reads (a block counted at `processed` by one node, not yet at
-      // `confirmed` by another).
-      const epoch = await this.connection.getEpochInfo(this.decisionCommitment);
       const resp = await this.connection.getSignatureStatuses([tx.signature], {
         searchTransactionHistory: true,
       });
       const status = resp.value[0];
+      if (status == null) return { status: "pending" };
       const settled =
-        status != null &&
-        (status.confirmationStatus === "finalized" ||
-          (this.commitment !== "finalized" && status.confirmationStatus === "confirmed"));
-      if (status != null && settled) {
+        status.confirmationStatus === "finalized" ||
+        (this.commitment !== "finalized" && status.confirmationStatus === "confirmed");
+      if (settled) {
         return status.err == null ? { status: "landed", slot: status.slot } : { status: "failed" };
       }
-      // In a block, not yet at commitment. `seen` makes every later
-      // "absent" read for this signature untrustworthy (sticky pending).
-      if (status != null) return { status: "pending", seen: true };
-      const pastLastValid =
-        epoch.blockHeight != null &&
-        epoch.blockHeight > tx.lastValidBlockHeight + EXPIRY_HEIGHT_MARGIN;
-      const nodeCaughtUp = resp.context.slot >= epoch.absoluteSlot;
-      return pastLastValid && nodeCaughtUp ? { status: "expired" } : { status: "pending" };
+      return { status: "pending", seen: true };
     } catch (err) {
       return { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // ── durable-nonce payouts (#990) ───────────────────────────────────────
+
+  /** `p` bounded by the per-call RPC timeout. */
+  private timed<T>(p: Promise<T>, what: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${what} timed out after ${this.rpcTimeoutMs}ms`)),
+        this.rpcTimeoutMs,
+      );
+    });
+    return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  private async nonceAccount(): Promise<PublicKey> {
+    this.nonceAddress ??= await PublicKey.createWithSeed(
+      this.keypair.publicKey,
+      this.nonceSeed,
+      SystemProgram.programId,
+    );
+    return this.nonceAddress;
+  }
+
+  /**
+   * The nonce lane read at FINALIZED commitment (#990 round 7). The lane's
+   * address is PUBLIC (the treasury key and the seed are both known), so
+   * anyone can fund it before the relay creates it:
+   *
+   *   - `absent` — no account: create it;
+   *   - `takeover` — a system-owned account the treasury can still shape
+   *     (0 bytes: someone funded the address; or 80 bytes Uninitialized):
+   *     take it over;
+   *   - `unavailable` + `squatted` — owned by another program, system-owned
+   *     with other data, or a nonce account of another authority: nothing
+   *     at this seed can be used. Fail closed; the operator rotates the seed.
+   */
+  private async readNonceLane(
+    target?: PublicKey,
+    minContextSlot?: number,
+  ): Promise<
+    | NonceLaneState
+    | { status: "absent" }
+    | { status: "takeover"; lamports: number; dataLen: number }
+  > {
+    const address = target ?? (await this.nonceAccount());
+    // #990 round 8: the context slot is the read's proof of recency; with
+    // minContextSlot a node behind it refuses instead of answering stale
+    // (agave rpc.rs get_account_info → get_bank_with_config).
+    const resp = await this.timed(
+      this.connection.getAccountInfoAndContext(address, {
+        commitment: "finalized",
+        ...(minContextSlot !== undefined ? { minContextSlot } : {}),
+      }),
+      "getAccountInfo(nonce)",
+    );
+    if (minContextSlot !== undefined && resp.context.slot < minContextSlot) {
+      throw new Error(
+        `a node answered from slot ${resp.context.slot}, behind minContextSlot ${minContextSlot}`,
+      );
+    }
+    const observedSlot = resp.context.slot;
+    const info = resp.value;
+    if (info == null) return { status: "absent" };
+    const squatted = (reason: string): NonceLaneState => ({
+      status: "unavailable",
+      reason: `nonce lane ${address.toBase58()} is unusable: ${reason}`,
+      squatted: { address: address.toBase58() },
+    });
+    if (info.owner.toBase58() !== SystemProgram.programId.toBase58()) {
+      return squatted(`owned by program ${info.owner.toBase58()}`);
+    }
+    if (info.data.length === 0) {
+      return { status: "takeover", lamports: info.lamports, dataLen: 0 };
+    }
+    if (info.data.length !== NONCE_ACCOUNT_LENGTH) {
+      return squatted(`a system account holding ${info.data.length} bytes of data`);
+    }
+    // NonceAccount layout: version u32, state u32 (0 Uninitialized, 1 Initialized).
+    if (info.data.readUInt32LE(4) === 0) {
+      return { status: "takeover", lamports: info.lamports, dataLen: NONCE_ACCOUNT_LENGTH };
+    }
+    const nonce = NonceAccount.fromAccountData(info.data);
+    if (nonce.authorizedPubkey.toBase58() !== this.keypair.publicKey.toBase58()) {
+      return squatted(`a nonce account of authority ${nonce.authorizedPubkey.toBase58()}`);
+    }
+    return {
+      status: "ready",
+      account: address.toBase58(),
+      nonceValue: nonce.nonce,
+      observedSlot,
+    };
+  }
+
+  async readNonceAccount(
+    account: string,
+    opts: { minContextSlot?: number } = {},
+  ): Promise<NonceLaneState> {
+    try {
+      const r = await this.readNonceLane(new PublicKey(account), opts.minContextSlot);
+      if (r.status === "ready" || r.status === "unavailable") return r;
+      return { status: "unavailable", reason: `${account} is not an initialized nonce account` };
+    } catch (err) {
+      return { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  private async sendLaneTransaction(ixs: TransactionInstruction[], what: string): Promise<void> {
+    const tx = new Transaction();
+    for (const ix of ixs) tx.add(ix);
+    const latest = await this.timed(
+      this.connection.getLatestBlockhash(this.commitment),
+      "getLatestBlockhash",
+    );
+    tx.recentBlockhash = latest.blockhash;
+    tx.feePayer = this.keypair.publicKey;
+    tx.sign(this.keypair);
+    const signature = await this.timed(
+      this.connection.sendRawTransaction(tx.serialize()),
+      `sendRawTransaction(${what})`,
+    );
+    // A failed attempt is harmless: the next read sees the account as it is.
+    await this.awaitFinalized(signature);
+  }
+
+  /** Create the nonce account (the treasury pays the rent and is its authority). */
+  private async createNonceAccount(): Promise<void> {
+    const address = await this.nonceAccount();
+    const lamports = await this.timed(
+      this.connection.getMinimumBalanceForRentExemption(NONCE_ACCOUNT_LENGTH),
+      "getMinimumBalanceForRentExemption",
+    );
+    await this.sendLaneTransaction(
+      [
+        SystemProgram.createAccountWithSeed({
+          fromPubkey: this.keypair.publicKey,
+          newAccountPubkey: address,
+          basePubkey: this.keypair.publicKey,
+          seed: this.nonceSeed,
+          lamports,
+          space: NONCE_ACCOUNT_LENGTH,
+          programId: SystemProgram.programId,
+        }),
+        SystemProgram.nonceInitialize({
+          noncePubkey: address,
+          authorizedPubkey: this.keypair.publicKey,
+        }),
+      ],
+      "create nonce",
+    );
+  }
+
+  /**
+   * Take over a system-owned account at the lane's address (#990 round 7),
+   * in ONE transaction signed by the treasury — the base key, which is the
+   * signer every with-seed instruction on this address requires (agave
+   * `system_processor.rs` `Address::is_signer`: a seeded address's signer is
+   * its base):
+   *
+   *   1. `allocateWithSeed(space 80, owner System)` (only if 0 bytes) —
+   *      `allocate` requires empty data and a system owner, else
+   *      AccountAlreadyInUse; AllocateWithSeed runs `allocate_and_assign`,
+   *      whose `assign` to the System program on a system-owned account is a
+   *      no-op ("no work to do"), so no separate assignWithSeed is needed;
+   *   2. a transfer from the treasury topping the account up to the
+   *      rent-exempt minimum for 80 bytes, when it holds less (a transfer's
+   *      `to` needs no signature);
+   *   3. `nonceInitialize(authority = treasury)` — accepts an Uninitialized
+   *      80-byte account holding at least the rent-exempt minimum
+   *      (`initialize_nonce_account`; 80 zero bytes deserialize as
+   *      Uninitialized).
+   *
+   * `createAccountWithSeed` cannot be used: `create_account` refuses any
+   * address holding lamports (AccountAlreadyInUse).
+   */
+  private async takeOverNonceAccount(lamports: number, dataLen: number): Promise<void> {
+    const address = await this.nonceAccount();
+    const rent = await this.timed(
+      this.connection.getMinimumBalanceForRentExemption(NONCE_ACCOUNT_LENGTH),
+      "getMinimumBalanceForRentExemption",
+    );
+    const ixs: TransactionInstruction[] = [];
+    if (dataLen === 0) {
+      ixs.push(
+        SystemProgram.allocate({
+          accountPubkey: address,
+          basePubkey: this.keypair.publicKey,
+          seed: this.nonceSeed,
+          space: NONCE_ACCOUNT_LENGTH,
+          programId: SystemProgram.programId,
+        }),
+      );
+    }
+    if (lamports < rent) {
+      ixs.push(
+        SystemProgram.transfer({
+          fromPubkey: this.keypair.publicKey,
+          toPubkey: address,
+          lamports: rent - lamports,
+        }),
+      );
+    }
+    ixs.push(
+      SystemProgram.nonceInitialize({
+        noncePubkey: address,
+        authorizedPubkey: this.keypair.publicKey,
+      }),
+    );
+    await this.sendLaneTransaction(ixs, "take over nonce account");
+  }
+
+  async prepareNonceLane(opts: { minContextSlot?: number } = {}): Promise<NonceLaneState> {
+    try {
+      const first = await this.readNonceLane(undefined, opts.minContextSlot);
+      if (first.status === "ready" || first.status === "unavailable") return first;
+      this.creatingNonce ??= (
+        first.status === "absent"
+          ? this.createNonceAccount()
+          : this.takeOverNonceAccount(first.lamports, first.dataLen)
+      ).finally(() => {
+        this.creatingNonce = null;
+      });
+      await this.creatingNonce;
+      const second = await this.readNonceLane(undefined, opts.minContextSlot);
+      if (second.status === "ready" || second.status === "unavailable") return second;
+      return { status: "unavailable", reason: "the nonce account is not finalized yet" };
+    } catch (err) {
+      return { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Sign a durable-nonce transaction: `nonceAdvance` first, over `lane.nonceValue`. */
+  private signDurable(
+    lane: DurableNonceLane,
+    rest: readonly TransactionInstruction[],
+    kind: DurableTransactionRef["kind"],
+  ): { tx: Transaction; ref: DurableTransactionRef } {
+    const tx = new Transaction().add(
+      SystemProgram.nonceAdvance({
+        noncePubkey: new PublicKey(lane.account),
+        authorizedPubkey: this.keypair.publicKey,
+      }),
+    );
+    for (const ix of rest) tx.add(ix);
+    tx.recentBlockhash = lane.nonceValue;
+    tx.feePayer = this.keypair.publicKey;
+    tx.sign(this.keypair);
+    const rawSig = tx.signature;
+    if (rawSig == null) throw new Error("signed transaction has no signature");
+    return {
+      tx,
+      ref: {
+        signature: base58Encode(new Uint8Array(rawSig)),
+        kind,
+        nonceAccount: lane.account,
+        nonceValue: lane.nonceValue,
+        ...(lane.observedSlot !== undefined ? { nonceObservedSlot: lane.observedSlot } : {}),
+      },
+    };
+  }
+
+  async sendUsdcDurable(
+    args: SendUsdcArgs,
+    lane: DurableNonceLane,
+    hooks?: DurableBroadcastHooks,
+  ): Promise<DurableSendResult> {
+    let recipient: PublicKey;
+    try {
+      recipient = new PublicKey(args.toAddress);
+    } catch (err) {
+      throw new InvalidSolanaAddressError(args.toAddress, err);
+    }
+    const balance = await this.timed(this.getUsdcBalance(), "getUsdcBalance");
+    if (balance < args.microAmount) {
+      throw new InsufficientUsdcBalanceError(balance, args.microAmount);
+    }
+    const sourceAta = await getAssociatedTokenAddress(this.mint, this.keypair.publicKey);
+    const destAta = await getAssociatedTokenAddress(this.mint, recipient);
+    const { tx, ref } = this.signDurable(
+      lane,
+      [
+        // Idempotent create: no read of the destination, never a failure
+        // because the account already exists.
+        createAssociatedTokenAccountIdempotentInstruction(
+          this.keypair.publicKey,
+          destAta,
+          recipient,
+          this.mint,
+        ),
+        createTransferInstruction(sourceAta, destAta, this.keypair.publicKey, args.microAmount),
+      ],
+      "payout",
+    );
+    // Recorded before it is sent; a hook that cannot record stops the send.
+    if (hooks?.beforeBroadcast != null) await hooks.beforeBroadcast(ref);
+    try {
+      await this.timed(this.connection.sendRawTransaction(tx.serialize()), "sendRawTransaction");
+    } catch (err) {
+      // The RPC may or may not have forwarded it: unknown, decided later.
+      return {
+        tx: ref,
+        final: {
+          status: "unknown",
+          reason: "rpc_error",
+          detail: err instanceof Error ? err.message : String(err),
+        },
+      };
+    }
+    return { tx: ref, final: await this.awaitFinalized(ref.signature) };
+  }
+
+  async broadcastNonceKill(
+    lane: DurableNonceLane,
+    hooks?: DurableBroadcastHooks,
+  ): Promise<NonceKillResult> {
+    const { tx, ref } = this.signDurable(lane, [], "kill");
+    if (hooks?.beforeBroadcast != null) await hooks.beforeBroadcast(ref);
+    try {
+      await this.timed(
+        this.connection.sendRawTransaction(tx.serialize()),
+        "sendRawTransaction(kill)",
+      );
+      return { tx: ref, sent: true };
+    } catch (err) {
+      return { tx: ref, sent: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async getFinalizedStatus(signature: string): Promise<FinalizedSignatureStatus> {
+    try {
+      // The status cache first (works on a node without transaction
+      // history), then history for an older one.
+      let resp = await this.timed(
+        this.connection.getSignatureStatuses([signature]),
+        "getSignatureStatuses",
+      );
+      if (resp.value[0] == null) {
+        resp = await this.timed(
+          this.connection.getSignatureStatuses([signature], { searchTransactionHistory: true }),
+          "getSignatureStatuses(history)",
+        );
+      }
+      const status = resp.value[0];
+      if (status == null) return { status: "unknown", reason: "absent" };
+      // Released agave ignores the request's commitment; the per-status
+      // confirmationStatus is the only finality signal (rpc.rs).
+      if (status.confirmationStatus !== "finalized") {
+        return { status: "unknown", reason: "not_finalized" };
+      }
+      return { status: "finalized", ok: status.err == null, slot: status.slot };
+    } catch (err) {
+      return {
+        status: "unknown",
+        reason: "rpc_error",
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /** Poll `signature` until it is FINALIZED or the bounded wait ends. */
+  private async awaitFinalized(signature: string): Promise<FinalizedSignatureStatus> {
+    const deadline = this.finalityNow() + this.finalityMaxWaitMs;
+    for (;;) {
+      const status = await this.getFinalizedStatus(signature);
+      if (status.status === "finalized") return status;
+      if (this.finalityNow() + this.finalityPollMs > deadline) return status;
+      await this.finalitySleep(this.finalityPollMs);
     }
   }
 
