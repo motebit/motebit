@@ -8,7 +8,11 @@
  * in-process relay (composition-preserves-enforcement).
  */
 import * as fs from "node:fs";
-import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
+import {
+  verify,
+  identityVerifyOutcome,
+  rotate as rotateIdentityFile,
+} from "@motebit/identity-file";
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "@motebit/surface-kit";
 import { hexToBytes } from "@motebit/encryption";
 import {
@@ -18,7 +22,7 @@ import {
   type IdentityChange,
 } from "./config.js";
 import { currentModeOr, writeFileAtomic } from "./durable-file.js";
-import { decryptPrivateKey, encryptPrivateKey } from "./identity.js";
+import { assertRotatedIdentityIntact, decryptPrivateKey, encryptPrivateKey } from "./identity.js";
 import type { PendingRotation, PendingRotationPort } from "./pending-rotation.js";
 
 export interface RotationDeps {
@@ -84,10 +88,10 @@ export type RotationOutcome =
 export async function performRotation(deps: RotationDeps): Promise<RotationOutcome> {
   const existingContent = fs.readFileSync(deps.identityPath, "utf-8");
   const verified = await verify(existingContent, { expectedType: "identity" });
-  if (verified.type !== "identity" || !verified.valid || !verified.identity) {
-    throw new Error(
-      `identity file verification failed: ${verified.errors?.[0]?.message ?? "invalid"}`,
-    );
+  // Intact = signature AND succession chain; never extend a broken chain.
+  const intact = identityVerifyOutcome(verified);
+  if (verified.type !== "identity" || !intact.valid || !verified.identity) {
+    throw new Error(`identity file verification failed: ${intact.error ?? "invalid"}`);
   }
   const identity = verified.identity;
   const motebitId = identity.motebit_id;
@@ -178,12 +182,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
           newPrivateKey: hexToBytes(privateKeyHex),
           successionRecord: record,
         });
-        const check = await verify(rotated, { expectedType: "identity" });
-        if (!check.valid) {
-          throw new Error(
-            `rotated identity file failed self-verification; nothing was changed: ${check.errors?.[0]?.message ?? "invalid"}`,
-          );
-        }
+        await assertRotatedIdentityIntact(rotated);
         // Atomic: a torn write would leave the succession's only signed record unparseable.
         writeFileAtomic(deps.identityPath, rotated, currentModeOr(deps.identityPath, 0o644));
       }

@@ -12,7 +12,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { verify } from "@motebit/identity-file";
+import { verify, identityVerifyOutcome } from "@motebit/identity-file";
 import { verifyVerifiableCredential, verifyVerifiablePresentation } from "@motebit/encryption";
 import type { VerifiableCredential, VerifiablePresentation } from "@motebit/encryption";
 import { sanitizeRelayText } from "@motebit/sync-engine";
@@ -128,19 +128,23 @@ async function verifySingleIdentityFile(filePath: string): Promise<void> {
   }
 
   const result = await verify(content, { expectedType: "identity" });
-  if (result.type === "identity" && result.valid && result.identity) {
+  const outcome = identityVerifyOutcome(result);
+  if (result.type === "identity" && outcome.valid && result.identity) {
     const pubKey = result.identity.identity.public_key;
     const fingerprint = pubKey.slice(0, 16) + "...";
     console.log(`Identity:    ${result.identity.motebit_id}`);
     if (result.did) console.log(`DID:         ${result.did}`);
     console.log(`Public key:  ${fingerprint}`);
     console.log(`Signature:   valid`);
+    if (result.succession) console.log(`Succession:  valid (${result.succession.rotations})`);
     process.exit(0);
   } else {
-    console.error(`Signature:   invalid`);
-    const msg = result.errors?.[0]?.message;
-    if (msg) {
-      console.error(`Error:       ${sanitizeRelayText(msg)}`);
+    // A valid signature over a broken succession chain is still not intact.
+    const sigValid = result.type === "identity" && result.valid;
+    console.error(`Signature:   ${sigValid ? "valid" : "invalid"}`);
+    if (sigValid) console.error(`Succession:  invalid`);
+    if (outcome.error) {
+      console.error(`Error:       ${sanitizeRelayText(outcome.error)}`);
     }
     process.exit(1);
   }
@@ -237,13 +241,15 @@ async function verifyBundle(dirPath: string): Promise<void> {
     }
     if (content !== "") {
       const result = await verify(content, { expectedType: "identity" });
-      if (result.type === "identity" && result.valid && result.identity) {
+      // Intact = signature AND succession chain (the shared fold).
+      const intact = identityVerifyOutcome(result);
+      if (result.type === "identity" && intact.valid && result.identity) {
         motebitId = result.identity.motebit_id;
         identityDid = result.did ?? null;
         const idShort = motebitId.length > 12 ? motebitId.slice(0, 12) + "..." : motebitId;
         console.log(`  Identity (motebit.md):     valid — motebit_id: ${idShort}`);
       } else {
-        const msg = result.errors?.[0]?.message ?? "signature verification failed";
+        const msg = intact.error ?? "signature verification failed";
         console.log(`  Identity (motebit.md):     INVALID — ${sanitizeRelayText(msg)}`);
         passed = false;
       }

@@ -228,21 +228,30 @@ export function usePairing(deps: UsePairingDeps): UsePairingResult {
               status.motebit_id !== ""
             ) {
               stopPairingPoll();
-              const walletWarning = await app.completePairing(
-                {
-                  motebitId: status.motebit_id,
-                  deviceId: status.device_id,
-                },
-                syncUrl,
-                status.key_transfer && ephemeralKeyRef.current
-                  ? {
-                      keyTransfer: status.key_transfer,
-                      ephemeralPrivateKey: ephemeralKeyRef.current,
-                      pairingCode: claimCodeRef.current,
-                      pairingId: pid,
-                    }
-                  : undefined,
-              );
+              // A refusal (the relay's motebit_id does not bind to the
+              // transferred key) is terminal and shown, never swallowed.
+              let walletWarning: string | undefined;
+              try {
+                walletWarning = await app.completePairing(
+                  {
+                    motebitId: status.motebit_id,
+                    deviceId: status.device_id,
+                  },
+                  syncUrl,
+                  status.key_transfer && ephemeralKeyRef.current
+                    ? {
+                        keyTransfer: status.key_transfer,
+                        ephemeralPrivateKey: ephemeralKeyRef.current,
+                        pairingCode: claimCodeRef.current,
+                        pairingId: pid,
+                      }
+                    : undefined,
+                );
+              } catch (err: unknown) {
+                ephemeralKeyRef.current = null;
+                setPairingStatusText(err instanceof Error ? err.message : String(err));
+                return;
+              }
               ephemeralKeyRef.current = null;
               closePairingDialog();
               addSystemMessage(walletWarning ?? "Linked to existing motebit");

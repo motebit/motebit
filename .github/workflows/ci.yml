@@ -264,7 +264,9 @@ jobs:
             # the PR because scripts/ was untouched — main went red on push).
             # A change to a gate INPUT must trigger the same proof as a change
             # to the gate.
-            if echo "$changed" | grep -qE '^scripts/|^coverage-graduation\.json$'; then
+            # examples/interop/ is a gate input too: the APS vector and the pins
+            # in INTEROP.md are read by scripts/__tests__/interop-aps-vector.test.ts.
+            if echo "$changed" | grep -qE '^scripts/|^coverage-graduation\.json$|^examples/interop/'; then
               scripts=true
             fi
             # activation-effectiveness must fire on a relay refactor (the exact

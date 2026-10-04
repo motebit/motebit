@@ -99,6 +99,7 @@ import {
   governanceToPolicyConfig,
   validateRestoreRequest,
   verify as verifyIdentityFile,
+  identityVerifyOutcome,
   type ImportIdentityResult,
   type RestoreIdentityRequest,
   type RestoreIdentityResult,
@@ -112,6 +113,9 @@ import { SecureStoreAdapter } from "./adapters/secure-store";
 import { rotateMobileKey } from "./key-rotation";
 import {
   createMobileMachineRoster,
+  ownSuccessionRecords,
+  rosterAfterPairing,
+  rosterAfterRestore,
   rosterAfterRotationCommit,
   type MobileMachineRoster,
 } from "./machine-roster";
@@ -701,6 +705,13 @@ export class MobileApp {
       this.publicKey = pubKeyHex;
     },
     setSyncUrl: (url) => this.setSyncUrl(url),
+    loadOwnSuccessionRecords: async () =>
+      ownSuccessionRecords({
+        motebitId: this.motebitId,
+        identityFile: await AsyncStorage.getItem(IDENTITY_FILE_KEY),
+        heldPublicKeyHex: this.publicKey,
+      }),
+    persistSuccession: (input) => rosterAfterPairing(input),
   });
 
   // Push token lifecycle — class extracted to ./push-token-manager.ts.
@@ -2480,7 +2491,8 @@ export class MobileApp {
   }
 
   /**
-   * Verify a motebit.md identity file's Ed25519 signature.
+   * Verify a motebit.md identity file: its Ed25519 signature AND its
+   * succession chain.
    *
    * Mirrors `WebApp.verifyMotebitMd` and
    * `IdentityManager.verifyIdentityFile`. Browser-and-native-safe:
@@ -2489,9 +2501,8 @@ export class MobileApp {
    * implementation.
    */
   async verifyMotebitMd(content: string): Promise<{ valid: boolean; error?: string }> {
-    const result = await verifyIdentityFile(content, { expectedType: "identity" });
-    const error = result.errors?.[0]?.message;
-    return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+    // Intact = signature AND succession chain (the shared fold).
+    return identityVerifyOutcome(await verifyIdentityFile(content, { expectedType: "identity" }));
   }
 
   /**
@@ -2530,9 +2541,8 @@ export class MobileApp {
    *
    * Note: mobile does not have desktop's `_identity_file` config slot —
    * governance lives on the runtime config that's regenerated from the
-   * in-memory metadata on next bootstrap, so `originalContent` is
-   * unused on this surface (still accepted for cross-surface contract
-   * uniformity).
+   * in-memory metadata on next bootstrap. `originalContent` contributes
+   * only its verified succession chain, to the roster replica.
    */
   async restoreIdentity(request: RestoreIdentityRequest): Promise<RestoreIdentityResult> {
     const failureReason = await validateRestoreRequest(request);
@@ -2590,6 +2600,14 @@ export class MobileApp {
     } catch {
       return { ok: false, reason: "config_write_failed" };
     }
+    // The motebit.md's verified chain joins the roster replica (bootstrap
+    // regenerates the stored file without it), so this phone can be Device A
+    // for an offline-rotated identity. Best-effort; never fails the restore.
+    await rosterAfterRestore({
+      motebitId: request.metadata.motebitId,
+      publicKeyHex: request.metadata.publicKey,
+      content: request.originalContent,
+    });
     return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
   }
 }

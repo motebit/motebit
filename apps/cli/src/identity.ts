@@ -16,6 +16,7 @@ import {
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
+import { verify, identityVerifyOutcome } from "@motebit/identity-file";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { FullConfig } from "./config.js";
 import { saveFullConfig, loadFullConfig } from "./config.js";
@@ -224,6 +225,20 @@ export async function decryptPrivateKey(
   // unlocks in this invocation resolve silently (see block above).
   rememberSessionPassphrase(passphrase);
   return new TextDecoder().decode(decrypted);
+}
+
+/**
+ * The post-rotation self-check: the freshly rotated identity file must verify
+ * — signature AND succession chain — before it replaces the one on disk.
+ * Throws with nothing changed otherwise.
+ */
+export async function assertRotatedIdentityIntact(rotated: string): Promise<void> {
+  const check = identityVerifyOutcome(await verify(rotated, { expectedType: "identity" }));
+  if (!check.valid) {
+    throw new Error(
+      `rotated identity file failed self-verification; nothing was changed: ${check.error ?? "invalid"}`,
+    );
+  }
 }
 
 /**
