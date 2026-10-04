@@ -317,11 +317,23 @@ async function handleDelegatePlan(
  * REPL's `/delegate` (which carries what was typed, so its remedy can name
  * the full shell command — `/delegate` parses no flags).
  */
-export type DelegateSubmitPath = "direct" | "plan" | { repl: { prompt: string; target: string } };
+/**
+ * `capabilities` is what the REPL learned the pinned target lists on the relay
+ * (priced first): `motebit delegate` defaults `--capability` to `web_search`
+ * and the sovereign resolver discovers by capability before narrowing to the
+ * pin, so the printed command must name the target's own capability.
+ */
+export type DelegateSubmitPath =
+  | "direct"
+  | "plan"
+  | { repl: { prompt: string; target: string; capabilities?: readonly string[] } };
 
-/** Double-quote `text` for a POSIX shell. */
+/**
+ * Single-quote `text` for a POSIX shell: nothing inside is expanded (a `!`
+ * inside double quotes is history expansion in an interactive shell).
+ */
 function shellQuote(text: string): string {
-  return `"${text.replace(/[\\"$`]/g, "\\$&")}"`;
+  return `'${text.replace(/'/g, "'\\''")}'`;
 }
 
 const P2P_SETTLES_LINE =
@@ -354,11 +366,23 @@ export function describeDelegateSubmit402(
   }
   if (code === "TASK_P2P_PROOF_REQUIRED") {
     if (typeof path === "object") {
-      const { prompt, target } = path.repl;
-      return [
+      const { prompt, target, capabilities = [] } = path.repl;
+      const known = capabilities.length === 1 ? capabilities[0] : undefined;
+      const command = `motebit delegate --sovereign ${shellQuote(prompt)} --target ${target} --capability ${known ?? "<capability>"}`;
+      const lines = [
         P2P_SETTLES_LINE,
-        `\`/delegate\` cannot pay P2P: exit the REPL and run \`motebit delegate --sovereign ${shellQuote(prompt)} --target ${target}\` to pay the worker directly from your Solana wallet.`,
+        `\`/delegate\` cannot pay P2P: exit the REPL and run \`${command}\` to pay the worker directly from your Solana wallet.`,
       ];
+      if (known == null) {
+        const listed =
+          capabilities.length > 1
+            ? ` (it lists: ${capabilities.join(", ")})`
+            : " (see `/discover`)";
+        lines.push(
+          `Replace \`<capability>\` with the capability the worker lists${listed}: without it \`motebit delegate\` assumes web_search, which a worker that does not list it refuses.`,
+        );
+      }
+      return lines;
     }
     return path === "plan"
       ? [

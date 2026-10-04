@@ -256,6 +256,50 @@ function parseSub(args: string): { sub: string; rest: string } {
 type RelayResult<T> =
   { ok: true; data: T; status: number } | { ok: false; status: number; text: string };
 
+/** The fields of a `/api/v1/agents/discover` row the REPL reads. */
+interface DiscoveredListing {
+  motebit_id: string;
+  capabilities?: string[] | null;
+  pricing?: Array<{ capability?: string; unit_cost?: number }> | null;
+}
+
+/** True when a 402 body is the relay's "pay P2P" refusal. */
+function isP2pProofRefusal(bodyText: string): boolean {
+  try {
+    return (JSON.parse(bodyText) as { code?: unknown }).code === "TASK_P2P_PROOF_REQUIRED";
+  } catch {
+    return false;
+  }
+}
+
+/** The capabilities a worker charges for, else the ones it lists. */
+function listingCapabilities(listing: DiscoveredListing | undefined): string[] {
+  if (listing == null) return [];
+  const priced = (listing.pricing ?? [])
+    .filter((p) => typeof p.capability === "string" && (p.unit_cost ?? 0) > 0)
+    .map((p) => p.capability!);
+  return [...new Set(priced.length > 0 ? priced : (listing.capabilities ?? []))];
+}
+
+/** Best-effort read of one agent's discovery row; undefined when unknown. */
+async function lookupListing(
+  config: CliConfig,
+  repl: ReplContext,
+  syncUrl: string,
+  motebitId: string,
+): Promise<DiscoveredListing | undefined> {
+  try {
+    const result = await relayFetch<{ agents?: DiscoveredListing[] }>(
+      syncUrl,
+      `/api/v1/agents/discover?motebit_id=${encodeURIComponent(motebitId)}`,
+      { headers: await makeRelayHeaders(config, repl) },
+    );
+    return result.ok ? result.data.agents?.find((a) => a.motebit_id === motebitId) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Fetch from relay with standardized error handling. Strips trailing slashes from baseUrl. */
 async function relayFetch<T>(
   baseUrl: string,
@@ -1796,11 +1840,13 @@ export async function handleSlashCommand(
 
       // Resolve prefix to full motebit ID if needed (UUID is 36 chars)
       let targetMotebitId = rawTargetId;
+      // The target's discovery row, kept so a P2P remedy can name its capability.
+      let targetListing: DiscoveredListing | undefined;
       const UUID_LENGTH = 36;
       if (rawTargetId.length < UUID_LENGTH) {
         try {
           const discoverHeaders = await makeRelayHeaders(config, repl);
-          const discoverResult = await relayFetch<{ agents: Array<{ motebit_id: string }> }>(
+          const discoverResult = await relayFetch<{ agents: DiscoveredListing[] }>(
             syncUrl!,
             `/api/v1/agents/discover`,
             { headers: discoverHeaders },
@@ -1822,6 +1868,7 @@ export async function handleSlashCommand(
             break;
           }
           targetMotebitId = matchedAgent.motebit_id;
+          targetListing = matchedAgent;
           console.log(`Resolved: ${rawTargetId} → ${targetMotebitId.slice(0, 12)}...`);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
@@ -1850,9 +1897,18 @@ export async function handleSlashCommand(
       } catch (err: unknown) {
         if (err instanceof RelayClientError && err.kind === "http" && err.status === 402) {
           // The shared 402 reading — never the raw body. `/delegate` parses no
-          // flags, so a P2P remedy names the full shell command.
+          // flags, so a P2P remedy names the full shell command — with the
+          // target's capability, read from discovery (a GET, never a retry).
+          const p2p = isP2pProofRefusal(err.body ?? "");
+          if (p2p && targetListing == null) {
+            targetListing = await lookupListing(config, repl, syncUrl!, targetMotebitId);
+          }
           const remedy = describeDelegateSubmit402(err.body ?? "", {
-            repl: { prompt: delegatePrompt, target: targetMotebitId },
+            repl: {
+              prompt: delegatePrompt,
+              target: targetMotebitId,
+              capabilities: listingCapabilities(targetListing),
+            },
           });
           for (const line of remedy) console.log(line);
         } else if (err instanceof RelayClientError && err.kind === "http") {
