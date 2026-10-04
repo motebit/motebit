@@ -262,6 +262,67 @@ describe("check-fixture-git-env classification", () => {
     ]);
   });
 
+  it("reads the TOP-LEVEL options object; init/clone/--git-dir paths and process.env copies are fixture shapes", () => {
+    // Built at runtime so this file's own source carries no unscrubbed spawn for the gate to see.
+    const src = [
+      // 1-2: a nested object inside cleanEnv(…) must not hide the outer `cwd`.
+      'S("git", args, { cwd, encoding: "utf8", env: cleanEnv(process.env, { GIT_AUTHOR_NAME: "t" }) });',
+      'F("git", args, { cwd, encoding: "utf8", env: cleanEnv(process.env, { GIT_AUTHOR_NAME: "t" }) });',
+      // 3: the reviewer's mutation — Object.assign over process.env is not a scrub.
+      'S("git", args, { cwd, env: Object.assign({}, process.env, { GIT_AUTHOR_NAME: "t" }) });',
+      // 4: the common spread shape.
+      'S("git", args, { cwd: tmp, env: { ...process.env, GIT_AUTHOR_NAME: "t" } });',
+      // 5: a brace inside a template literal in the options must not be read as the options object.
+      'S("git", args, { cwd, env: cleanEnv(process.env, { M: `{${x}}` }) });',
+      // 6-10: init / clone name their target positionally, with no cwd.
+      'S("git", ["init", "-q", dir]);',
+      'S("git", ["init", "-q", "-b", "main", dir], { env: cleanEnv() });',
+      'S("git", ["clone", url, dir]);',
+      "X(`git clone ${url} ${dir}`);",
+      "X(`git init ${dir}`, { env: cleanEnv() });",
+      // 11: init with no path, in the repo root, is the repo.
+      'S("git", ["init", "-q"], { cwd: ROOT });',
+      // 12-13: --git-dir / --work-tree redirect, spaced or `=`-joined.
+      'S("git", ["--git-dir", gd, "log"]);',
+      'S("git", [`--work-tree=${wt}`, "status"]);',
+      // 14: a repo-root spawn may carry a process.env copy.
+      'S("git", ["rev-parse", "HEAD"], { cwd: ROOT, env: { ...process.env } });',
+      // 15: cleanEnv buried inside a spread that re-adds process.env is not a scrub.
+      'S("git", args, { cwd: tmp, env: { ...cleanEnv(), ...process.env } });',
+    ]
+      .join("\n")
+      .replace(/^S\(/gm, "spawnSync(")
+      .replace(/^F\(/gm, "execFileSync(")
+      .replace(/^X\(/gm, "execSync(");
+    expect(analyzeTs(src).map((s) => [s.line, s.target, s.scrubbed])).toEqual([
+      [1, "fixture", true],
+      [2, "fixture", true],
+      [3, "fixture", false],
+      [4, "fixture", false],
+      [5, "fixture", true],
+      [6, "fixture", false],
+      [7, "fixture", true],
+      [8, "fixture", false],
+      [9, "fixture", false],
+      [10, "fixture", true],
+      [11, "repo", false],
+      [12, "fixture", false],
+      [13, "fixture", false],
+      [14, "repo", false],
+      [15, "fixture", false],
+    ]);
+  });
+
+  it("the two scrubbed fixture helpers the old parse miscounted as repo-root read as scrubbed fixtures", () => {
+    for (const [rel, line] of [
+      ["scripts/__tests__/pre-push-hook.test.ts", 73],
+      ["scripts/__tests__/check-turbo-global-deps.test.ts", 35],
+    ] as const) {
+      const site = analyzeTs(readFileSync(join(ROOT, rel), "utf8")).find((s) => s.line === line);
+      expect([rel, site?.target, site?.scrubbed]).toEqual([rel, "fixture", true]);
+    }
+  });
+
   it("shell git into a temp dir must follow fixture_git_env_scrub", () => {
     const unscrubbed = 'git clone "$R" "$W"\n# fixture_git_env_scrub\ngit diff --cached\n';
     expect(analyzeSh(unscrubbed).map((s) => [s.line, s.scrubbed])).toEqual([[1, false]]);
