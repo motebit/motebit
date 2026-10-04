@@ -908,7 +908,7 @@ describe("one task, one body — undetermined and expired are their own outcomes
     runtime.enableInteractiveDelegation({
       syncUrl: RELAY,
       authToken: async () => "t",
-      relayPublicKey: "07".repeat(32),
+      relayPublicKey: SIGNING_PINNED_HEX,
       buildP2pPayment: vi.fn(async () => proof),
       acknowledgeNoHistoryRisk: true,
       timeoutMs: 10_000,
@@ -917,7 +917,7 @@ describe("one task, one body — undetermined and expired are their own outcomes
       prompt: "research X",
       required_capabilities: ["web_search"],
     });
-    await vi.advanceTimersByTimeAsync(10_000);
+    await advanceAfterRealAsync(10_000);
     const r = await hire;
     vi.useRealTimers();
     expect(r.ok).toBe(false);

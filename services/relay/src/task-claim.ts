@@ -35,9 +35,13 @@
  * result POSTed under the master token names no device, so the receipt's
  * SIGNED `device_id` (verified first) is compared instead: a non-claimer's
  * is refused (the CLI daemon and desktop send the master token first when
- * one is configured). The
- * answer itself stays `answerTask`'s (task-answer.ts) — write-once, settled
- * once.
+ * one is configured). The result route refuses early on the entry it read;
+ * the BINDING comparison is `answerTask`'s write step (task-answer.ts step
+ * 5), in the same synchronous turn as the write, against the entry as it is
+ * then — so a claim granted while an answer awaited its signature check
+ * refuses that answer. The other order is `claim`'s: an answered entry is
+ * never claimable, and an answer is written in the turn it is accepted.
+ * The answer itself stays `answerTask`'s — write-once, settled once.
  *
  * EVERY GRANT LIVES HERE, not only a body's claim (round 3,
  * `__tests__/one-execution-matrix.probe.ts`). The relay's own MCP forward
@@ -518,7 +522,8 @@ export function claimBindsSignedAnswerer(entry: TaskQueueEntry): boolean {
  * unverified claim also admits the device its token proved). `did` is the
  * presenting device token's `did`; under the master token it is the
  * receipt's SIGNED `device_id`, read only after its signature verified
- * (the result door). No `did` at all is not refused here.
+ * (the result door, and `answerTask`'s write step against the current
+ * entry). No `did` at all is not refused here.
  */
 export function claimRefusesAnswer(entry: TaskQueueEntry, did: string | undefined): boolean {
   const lease = entry.claim_lease;

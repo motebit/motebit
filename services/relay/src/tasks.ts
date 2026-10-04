@@ -87,7 +87,7 @@ import { getBondBackingAdapter } from "./bond-backing-adapter.js";
 import { getArchivedReceiptForKeyOwner } from "./receipts-store.js";
 import { admitReceipt, verifyAnswerSignature } from "./task-answer.js";
 import type { AnswerDeps, AnswerQueue } from "./task-answer.js";
-import type { AnswerRefusal } from "./task-answer.js";
+import type { AnswerPresenter, AnswerRefusal } from "./task-answer.js";
 import {
   MAX_SETTLEMENT_DEPTH,
   exceedsSettlementDepth,
@@ -886,6 +886,8 @@ export async function handleReceiptIngestion(
     /** The peer transport (`PeerFetch`) the federation result is delivered by. */
     peerFetch?: PeerFetch;
   },
+  /** The result POST's presenter, held to the task's claim at the write (task-answer.ts step 5). */
+  presenter?: AnswerPresenter,
 ): Promise<
   | { verified: true; credential_id: string | null; already_settled?: boolean }
   | { verified: false; reason: string; refusal: AnswerRefusal; answer?: ExecutionReceipt }
@@ -924,6 +926,7 @@ export async function handleReceiptIngestion(
       pubKeyHex = verdict.publicKeyHex;
       return settleLocalAnswer(newlyArchived);
     },
+    presenter,
   );
   if (!admission.took) {
     return {
@@ -5086,7 +5089,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     // One task, one body (task-claim.ts): while a device holds the task's
     // claim — running it, or lost and undetermined — no other device of the
     // identity answers it. The claimer's own late result is accepted: it
-    // resolves the uncertainty.
+    // resolves the uncertainty. This is the EARLY refusal, on the entry as
+    // read here; the binding one is `answerTask`'s write step (it is handed
+    // `presenter` below), which re-reads the claim in the write's own turn —
+    // a claim that lands while this answer is being ingested refuses it too.
     if (claimRefusesAnswer(entry, presentingDid)) return claimedByOther(presentingDid, "token");
 
     const rawBody: unknown = await c.req.json().catch(() => null);
@@ -5184,8 +5190,27 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       "result_post",
       resultRetentionMs(entry),
       ingestionDeps,
+      { did: presentingDid },
     );
     if (!ingestionResult.verified) {
+      if (ingestionResult.refusal === "claimed_by_other") {
+        const current = taskQueue.get(taskId);
+        logger.warn("task.result_claimed_by_other", {
+          correlationId: taskId,
+          motebitId,
+          presentingDid,
+          via: "write",
+          claimedBy: current?.claim_lease?.device_id,
+        });
+        return c.json(
+          {
+            error: "Result not accepted: another device of this identity holds the task's claim",
+            code: "TASK_CLAIMED_BY_OTHER",
+            status: 409,
+          },
+          409,
+        );
+      }
       if (ingestionResult.refusal === "answered") {
         // A settled answer is frozen (#890 round 9): the 409 carries it, so
         // the sender learns the task's answer instead of guessing.
