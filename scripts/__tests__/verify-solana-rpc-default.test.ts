@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const APP = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "apps", "verify");
 const PASSTHROUGH = "https://api.motebit.com/v1/solana-rpc";
-const out = mkdtempSync(join(tmpdir(), "verify-rpc-default-"));
+const out = realpathSync(mkdtempSync(join(tmpdir(), "verify-rpc-default-")));
 afterAll(() => rmSync(out, { recursive: true, force: true }));
 
 function build(extra: Record<string, string>, outDir: string): string {

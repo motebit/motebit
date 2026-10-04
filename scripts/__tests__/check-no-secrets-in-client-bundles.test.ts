@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -74,7 +74,7 @@ function stage(app: "leaky" | "clean"): string {
 }
 
 beforeAll(() => {
-  tmp = mkdtempSync(join(tmpdir(), "client-bundle-secrets-"));
+  tmp = realpathSync(mkdtempSync(join(tmpdir(), "client-bundle-secrets-")));
 });
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 

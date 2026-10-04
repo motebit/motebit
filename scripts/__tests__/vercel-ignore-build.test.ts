@@ -13,7 +13,7 @@
  * Production must build whatever the diff says.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,7 +75,7 @@ function run(env: Record<string, string | undefined>, args: string[] = WATCH_ARG
 }
 
 beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), "vercel-ignore-"));
+  root = realpathSync(mkdtempSync(join(tmpdir(), "vercel-ignore-")));
   git("init", "-q", "-b", "main");
   mkdirSync(join(root, "services/proxy"), { recursive: true });
   writeFileSync(join(root, "services/proxy/index.ts"), "v1\n");

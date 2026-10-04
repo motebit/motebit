@@ -11,6 +11,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -122,7 +123,7 @@ describe("test tasks are never cached (turbo --dry=json, per package)", () => {
     execFileSync("git", args, { cwd, encoding: "utf8", env: cleanEnv() });
 
   beforeAll(() => {
-    base = mkdtempSync(join(tmpdir(), "prepush-test-cache-"));
+    base = realpathSync(mkdtempSync(join(tmpdir(), "prepush-test-cache-")));
     wt = join(base, "wt");
     git(ROOT, "worktree", "add", "-q", "--detach", wt, "HEAD");
     symlinkSync(join(ROOT, "node_modules"), join(wt, "node_modules"));
@@ -246,7 +247,7 @@ describe("the dry-run read has no output-size ceiling", () => {
   });
 
   it("readTestCacheInputs parses a > 1 MiB dry run (stub turbo)", () => {
-    const root = mkdtempSync(join(tmpdir(), "prepush-big-dry-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "prepush-big-dry-")));
     try {
       execFileSync("git", ["init", "-q"], { cwd: root, env: cleanEnv() });
       const bin = join(root, "node_modules", ".bin");

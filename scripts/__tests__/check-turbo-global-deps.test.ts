@@ -16,6 +16,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -62,7 +63,7 @@ describe("discovery (fixture repo)", () => {
     );
 
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), "turbo-global-deps-"));
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "turbo-global-deps-")));
     git(dir, "init", "-q");
     write(dir, "pnpm-workspace.yaml", 'packages:\n  - "packages/*"\n');
     write(dir, "tsconfig.base.json", '{ "extends": "./tsconfig.root-strict.json" }\n');
@@ -220,7 +221,7 @@ describe("execution: each globalDependencies entry moves the turbo task hashes",
   }
 
   beforeAll(() => {
-    const base = mkdtempSync(join(tmpdir(), "turbo-global-deps-wt-"));
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "turbo-global-deps-wt-")));
     wt = join(base, "wt");
     git(ROOT, "worktree", "add", "-q", "--detach", wt, "HEAD");
     symlinkSync(join(ROOT, "node_modules"), join(wt, "node_modules"));
