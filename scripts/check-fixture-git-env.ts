@@ -39,7 +39,7 @@
  *        arguments resolve to a list whose global options and subcommand are
  *        static, with no `-C` / `--git-dir` / `--work-tree` / `--namespace`, no
  *        `clone`, no `init <path>`. ANYTHING ELSE is a fixture and must pass
- *        `env: cleanEnv(…)` (inline, or through a `const` — or a `let` every
+ *        `env: cleanEnv(…)` — the canonical one, by binding (below) — (inline, or through a `const` — or a `let` every
  *        assignment of which is `cleanEnv(…)`); an `Object.assign` / spread copy
  *        of `process.env` is not a scrub;
  *      - a generic spawn wrapper — a spawn whose command is a parameter of the
@@ -54,14 +54,25 @@
  *    `--work-tree` line must follow a `fixture_git_env_scrub` call
  *    (`scripts/lib/fixture-git-env.sh`).
  *
- * `cleanEnv` is recognised by name: `scripts/lib/tamper-runner.ts` keeps an
- * inlined copy (plain `node` loads it and cannot resolve the `.ts` import);
- * every `cleanEnv` under `scripts/` removes every `GIT_*`.
+ * `cleanEnv` is recognised by PROVENANCE, never by name: a spawn's env is
+ * scrubbed only when its `cleanEnv` resolves (TypeScript binder + module
+ * resolution over the import graph) to the export of
+ * `scripts/lib/differential-tree.ts`, or to the top-level `cleanEnv` of a
+ * file in `INLINED_CLEAN_ENV` (today only `scripts/lib/tamper-runner.ts`,
+ * which plain `node` loads and so cannot import the `.ts`). Any other
+ * declaration or call of a `cleanEnv` is RED. And by EXECUTION: the canonical
+ * export and every inlined copy are run as a canary on every redirect
+ * variable plus random `GIT_*` names, and must leave none.
+ *
+ * NOT examined statically: indirect git — `sh -c` or an execSync command
+ * line that runs a program which runs git, `child_process.fork`, execa or any
+ * other spawn library, `pnpm run` / npm scripts. Those are held only
+ * STRUCTURALLY, inside the gate self-tests (layer 1).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { isScrubbedGitEnvKey } from "./lib/differential-tree.js";
@@ -76,6 +87,20 @@ export const SETUP_FILE = "scripts/lib/vitest-scrub-git-env.ts";
 export const GATES_CONFIG = "vitest.config.mts";
 const CANONICAL_MODULE = "./differential-tree.js";
 const CANONICAL_SCRUB = "scrubGitEnvInPlace";
+/** The canonical per-spawn scrub: the `cleanEnv` export of this file. */
+export const CANONICAL_CLEAN_ENV_FILE = "scripts/lib/differential-tree.ts";
+const CLEAN_ENV = "cleanEnv";
+/**
+ * The KNOWN inlined copies of `cleanEnv` (file → the export the canary calls).
+ * A copy exists only where the canonical import cannot: tamper-runner is
+ * loaded by plain `node` (the drivers), which does not map `./x.js` to `.ts`.
+ * Each is EXECUTED by `checkInlinedCleanEnvs`; a `cleanEnv` anywhere else
+ * that is not the canonical export is a violation. The canonical export is
+ * canaried too (an edit to its body is the same failure).
+ */
+export const INLINED_CLEAN_ENV: Readonly<Record<string, string>> = {
+  "scripts/lib/tamper-runner.ts": "cleanEnvCanary",
+};
 
 /**
  * Variables a hook (or a hostile caller) can set to aim git at another
@@ -147,6 +172,8 @@ type Arg = { text: string | null; prefix: string };
 interface Ctx {
   sf: ts.SourceFile;
   checker: ts.TypeChecker;
+  /** The file's absolute path, imports resolve from it (a snippet sits in scripts/). */
+  file: string;
 }
 
 function strip(node: ts.Expression): ts.Expression {
@@ -406,16 +433,82 @@ function property(obj: ts.ObjectLiteralExpression, key: string): ts.Expression |
   return null;
 }
 
+/** The module a specifier names, resolved from `from` by the TypeScript compiler (`.js` → `.ts`). */
+function resolveModule(spec: string, from: string): string | null {
+  const r = ts.resolveModuleName(
+    spec,
+    from,
+    { moduleResolution: ts.ModuleResolutionKind.Bundler, allowJs: true, noEmit: true },
+    ts.sys,
+  ).resolvedModule;
+  return r ? resolve(r.resolvedFileName) : null;
+}
+
+const repoRel = (p: string) => relative(ROOT, p).split("\\").join("/");
+
 /**
- * True when `expr` is `cleanEnv(…)` — directly, through `const`s, or through a
- * `let` whose initializer and every assignment are `cleanEnv(…)`. A spread,
- * `Object.assign` or `process.env` is not a scrub.
+ * Where the function a call's callee names comes from — by binding, never by
+ * name: "canonical" when it resolves (through the import graph) to the
+ * `cleanEnv` export of `scripts/lib/differential-tree.ts` (or is that
+ * declaration); "inlined" when it is the top-level `cleanEnv` of a file in
+ * `INLINED_CLEAN_ENV` (held by its canary, `checkInlinedCleanEnvs`); otherwise
+ * the reason it is neither. `null` when the callee is not a function reference.
+ */
+type Origin =
+  { kind: "canonical" } | { kind: "inlined"; file: string } | { kind: "foreign"; why: string };
+function cleanEnvOrigin(ctx: Ctx, callee: ts.Expression): Origin | null {
+  const c = strip(callee);
+  const canonical = join(ROOT, CANONICAL_CLEAN_ENV_FILE);
+  if (ts.isPropertyAccessExpression(c) && ts.isIdentifier(c.expression)) {
+    // ns.cleanEnv, ns a namespace import of the canonical module.
+    const d = declOf(ctx, c.expression);
+    if (d && ts.isNamespaceImport(d)) {
+      const mod = d.parent.parent.moduleSpecifier;
+      const target = ts.isStringLiteral(mod) ? resolveModule(mod.text, ctx.file) : null;
+      if (target === canonical && c.name.text === CLEAN_ENV) return { kind: "canonical" };
+      return {
+        kind: "foreign",
+        why: `\`${c.getText(ctx.sf)}\` is not the ${CLEAN_ENV} export of ${CANONICAL_CLEAN_ENV_FILE}`,
+      };
+    }
+    return null;
+  }
+  if (!ts.isIdentifier(c)) return null;
+  const d = declOf(ctx, c);
+  if (!d)
+    return { kind: "foreign", why: `\`${c.text}\` is not bound to any import or declaration` };
+  if (ts.isImportSpecifier(d)) {
+    const mod = d.parent.parent.parent.moduleSpecifier;
+    const imported = (d.propertyName ?? d.name).text;
+    const target = ts.isStringLiteral(mod) ? resolveModule(mod.text, ctx.file) : null;
+    if (target === canonical && imported === CLEAN_ENV) return { kind: "canonical" };
+    return {
+      kind: "foreign",
+      why: `\`${c.text}\` is imported from ${ts.isStringLiteral(mod) ? JSON.stringify(mod.text) : "?"}${target ? ` (${repoRel(target)})` : ""}, not the ${CLEAN_ENV} export of ${CANONICAL_CLEAN_ENV_FILE}`,
+    };
+  }
+  const rel = repoRel(resolve(ctx.file));
+  const topLevel = ts.isFunctionDeclaration(d) && d.name?.text === CLEAN_ENV && d.parent === ctx.sf;
+  if (topLevel && rel === CANONICAL_CLEAN_ENV_FILE) return { kind: "canonical" };
+  if (topLevel && rel in INLINED_CLEAN_ENV) return { kind: "inlined", file: rel };
+  return {
+    kind: "foreign",
+    why: `\`${c.text}\` is declared in ${rel} — not the canonical ${CLEAN_ENV} and not a registered inlined copy`,
+  };
+}
+
+/**
+ * True when `expr` is a call of the canonical `cleanEnv` (or a registered,
+ * canaried inlined copy) — directly, through `const`s, or through a `let`
+ * whose initializer and every assignment are such a call. A function merely
+ * NAMED cleanEnv, a spread, `Object.assign` or `process.env` is not a scrub.
  */
 function isScrub(ctx: Ctx, expr: ts.Expression | null, depth = 0): boolean {
   if (!expr || depth > 8) return false;
   const e = strip(expr);
   if (ts.isCallExpression(e)) {
-    return ts.isIdentifier(e.expression) && e.expression.text === "cleanEnv";
+    const o = cleanEnvOrigin(ctx, e.expression);
+    return o !== null && o.kind !== "foreign";
   }
   if (!ts.isIdentifier(e)) return false;
   const sym = symOf(ctx, e);
@@ -577,7 +670,11 @@ function bind(src: string, fileName: string): Ctx {
     { noResolve: true, noLib: true, allowJs: true, noEmit: true, types: [] },
     host,
   );
-  return { sf: program.getSourceFile(name)!, checker: program.getTypeChecker() };
+  return {
+    sf: program.getSourceFile(name)!,
+    checker: program.getTypeChecker(),
+    file: isAbsolute(fileName) ? fileName : join(SCRIPTS, name),
+  };
 }
 
 /**
@@ -679,6 +776,170 @@ export function analyzeTs(src: string, fileName = "x.ts"): GitSpawn[] {
   };
   visit(sf);
   return out.sort((a, b) => a.line - b.line);
+}
+
+export interface ForeignCleanEnv {
+  line: number;
+  why: string;
+}
+
+/**
+ * Every `cleanEnv` in a TS/JS source that is neither the canonical export nor
+ * a registered inlined copy: a declaration (function, variable, parameter,
+ * import) whose name is `cleanEnv`, or a call whose callee is named
+ * `cleanEnv`, that does not resolve by binding to one of them.
+ */
+export function foreignCleanEnvs(src: string, fileName = "x.ts"): ForeignCleanEnv[] {
+  const ctx = bind(src, fileName);
+  const out: ForeignCleanEnv[] = [];
+  const seen = new Set<string>();
+  const add = (node: ts.Node, why: string) => {
+    const line = ctx.sf.getLineAndCharacterOfPosition(node.getStart(ctx.sf)).line + 1;
+    const key = `${line}:${why}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push({ line, why });
+    }
+  };
+  const visit = (n: ts.Node): void => {
+    ts.forEachChild(n, visit);
+    const named =
+      (ts.isFunctionDeclaration(n) ||
+        ts.isVariableDeclaration(n) ||
+        ts.isParameter(n) ||
+        ts.isImportSpecifier(n) ||
+        ts.isBindingElement(n)) &&
+      n.name !== undefined &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === CLEAN_ENV;
+    if (named) {
+      const id = n.name as ts.Identifier;
+      const o = cleanEnvOrigin(ctx, id);
+      if (o?.kind === "foreign") add(n, o.why);
+      return;
+    }
+    if (ts.isCallExpression(n)) {
+      const callee = strip(n.expression);
+      const name = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : null;
+      if (name !== CLEAN_ENV) return;
+      const o = cleanEnvOrigin(ctx, callee);
+      if (o === null || o.kind === "foreign")
+        add(n, o?.why ?? `\`${callee.getText(ctx.sf)}\` is not the canonical ${CLEAN_ENV}`);
+    }
+  };
+  visit(ctx.sf);
+  return out.sort((a, b) => a.line - b.line);
+}
+
+/** Random-suffixed GIT_* names the canary adds, so a copy keyed to a list (not the prefix) fails. */
+function randomGitKeys(): string[] {
+  const r = () => Math.random().toString(36).slice(2, 10).toUpperCase();
+  return ["GIT_", `GIT_${r()}`, `GIT_${r()}_${r()}`, `GIT_CANARY_${r()}`];
+}
+
+/**
+ * EXECUTE every `cleanEnv` the static layer trusts — the canonical export and
+ * each `INLINED_CLEAN_ENV` copy — on an environment carrying every redirect
+ * variable plus random `GIT_*` names, both as its argument and (for its
+ * `process.env` default) as the driver's own environment, and require that no
+ * key `isScrubbedGitEnvKey` matches survives. Also requires each registered
+ * copy to be the file's single top-level `cleanEnv`, exported under its
+ * canary name. Returns the problems (empty = held).
+ */
+export function checkInlinedCleanEnvs(root: string): string[] {
+  const problems: string[] = [];
+  const targets: Array<[string, string]> = [
+    [CANONICAL_CLEAN_ENV_FILE, CLEAN_ENV],
+    ...Object.entries(INLINED_CLEAN_ENV),
+  ];
+  for (const [rel, exportName] of targets) {
+    const path = join(root, rel);
+    if (!existsSync(path)) {
+      problems.push(`${rel} (a registered cleanEnv) is missing — drop it from INLINED_CLEAN_ENV`);
+      continue;
+    }
+    if (exportName !== CLEAN_ENV) {
+      const sf = ts.createSourceFile(
+        path,
+        readFileSync(path, "utf8"),
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      const decls = sf.statements.filter(
+        (st) => ts.isFunctionDeclaration(st) && st.name?.text === CLEAN_ENV,
+      );
+      const exported = sf.statements.some(
+        (st) =>
+          ts.isExportDeclaration(st) &&
+          !st.moduleSpecifier &&
+          st.exportClause &&
+          ts.isNamedExports(st.exportClause) &&
+          st.exportClause.elements.some(
+            (e) => e.propertyName?.text === CLEAN_ENV && e.name.text === exportName,
+          ),
+      );
+      if (decls.length !== 1)
+        problems.push(
+          `${rel} must declare exactly one top-level \`function ${CLEAN_ENV}\` (found ${decls.length})`,
+        );
+      if (!exported)
+        problems.push(
+          `${rel} must \`export { ${CLEAN_ENV} as ${exportName} };\` — the canary executes it`,
+        );
+    }
+    const probe: Record<string, string> = {};
+    for (const k of [...REDIRECT_PROBE, ...randomGitKeys(), ...KEEP_PROBE])
+      probe[k] = "/nonexistent-probe";
+    const dir = mkdtempSync(join(tmpdir(), "check-fixture-git-env-canary-"));
+    try {
+      const driver = join(dir, "driver.mts");
+      writeFileSync(
+        driver,
+        `const probe = ${JSON.stringify(probe)};\n` +
+          `const m = await import(${JSON.stringify(path)});\n` +
+          `const fn = m[${JSON.stringify(exportName)}];\n` +
+          `if (typeof fn !== "function") { process.stdout.write("null"); process.exit(0); }\n` +
+          `const left = (e) => Object.keys(e ?? {}).sort();\n` +
+          `process.stdout.write(JSON.stringify({ arg: left(fn({ ...probe })), dflt: left(fn()) }));\n`,
+      );
+      const r = spawnSync(join(root, "node_modules", ".bin", "tsx"), [driver], {
+        cwd: root,
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...probe },
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+      let left: { arg: string[]; dflt: string[] } | null | undefined;
+      try {
+        left = JSON.parse(r.stdout) as { arg: string[]; dflt: string[] } | null;
+      } catch {
+        problems.push(
+          `canary: executing ${rel}'s ${exportName} failed (exit ${r.status}): ${r.stderr.trim().slice(0, 300)}`,
+        );
+        continue;
+      }
+      if (left === null) {
+        problems.push(`canary: ${rel} does not export a function \`${exportName}\``);
+        continue;
+      }
+      for (const [how, keys] of [
+        ["cleanEnv(env)", left.arg],
+        ["cleanEnv() over process.env", left.dflt],
+      ] as const) {
+        const leaked = keys.filter((k) => isScrubbedGitEnvKey(k));
+        if (leaked.length > 0)
+          problems.push(
+            `canary: ${rel} ${exportName} — ${how} leaves ${leaked.join(", ")} (isScrubbedGitEnvKey removes them)`,
+          );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  return problems;
 }
 
 /** Every fixture-targeting git line in a shell source, classified. */
@@ -883,6 +1144,7 @@ function main(): void {
   const files = walk(SCRIPTS).sort();
   const n = { repo: 0, fixture: 0, wrappers: 0, structural: 0, structuralFiles: 0, shell: 0 };
   const sites: string[] = [];
+  const foreign: string[] = [];
   for (const f of files) {
     const rel = relative(ROOT, f);
     const src = readFileSync(f, "utf8");
@@ -899,6 +1161,7 @@ function main(): void {
       n.structural += spawns.length;
       continue;
     }
+    for (const c of foreignCleanEnvs(src, f)) foreign.push(`${rel}:${c.line}  ${c.why}`);
     for (const s of spawns) {
       if (s.kind === "wrapper") n.wrappers++;
       else if (s.target === "repo") n.repo++;
@@ -908,34 +1171,58 @@ function main(): void {
     }
   }
   const structural = checkStructural(ROOT);
+  const canary = checkInlinedCleanEnvs(ROOT);
   console.log(
     "▸ check-fixture-git-env — no git child started from scripts/ can act on a repository named by an " +
       "inherited GIT_* (a hook's GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE): structurally scrubbed in the " +
-      "gate self-tests, cleanEnv at every other git spawn that does not statically resolve to the repo root.",
+      "gate self-tests; statically, a direct child_process git spawn that does not resolve to the repo root " +
+      "must pass the canonical cleanEnv (or an executed, registered copy).",
   );
-  if (sites.length === 0 && structural.length === 0) {
+  const inlined = Object.keys(INLINED_CLEAN_ENV);
+  if (
+    sites.length === 0 &&
+    structural.length === 0 &&
+    foreign.length === 0 &&
+    canary.length === 0
+  ) {
     console.log(
       `✓ check-fixture-git-env: ${files.length} file(s) scanned under scripts/.\n` +
         `  Structural: ${n.structuralFiles} vitest test file(s) (${n.structural} git/wrapper spawn site(s), any syntax) ` +
         `covered by ${SETUP_FILE} — wired into ${GATES_CONFIG} for test:gates, list imported from ` +
         `isScrubbedGitEnvKey, execution leaves exactly what cleanEnv leaves (${REDIRECT_PROBE.length + KEEP_PROBE.length} probe variable(s)).\n` +
         `  Static (deny-by-default, every other TS/JS file): ${n.repo} git spawn(s) resolve to the repo root; ` +
-        `${n.fixture} do not and all use cleanEnv; ${n.wrappers} generic spawn wrapper(s) scrub or take only non-git commands.\n` +
+        `${n.fixture} do not and all pass a cleanEnv that resolves by binding to ${CANONICAL_CLEAN_ENV_FILE} ` +
+        `or to a registered inlined copy (${inlined.join(", ")}); ${n.wrappers} generic spawn wrapper(s) scrub or take only non-git commands; ` +
+        `no other cleanEnv declared or called.\n` +
+        `  Canary: the canonical cleanEnv and ${inlined.length} inlined cop${inlined.length === 1 ? "y" : "ies"} EXECUTED on ` +
+        `${REDIRECT_PROBE.length} redirect + random GIT_* variable(s) (as argument and as process.env): none survives.\n` +
         `  Shell: ${n.shell} fixture git line(s), all after fixture_git_env_scrub.\n` +
-        `  Not examined: spawns outside scripts/, and child_process calls reached only through a binding the ` +
-        `parser cannot tie to a child_process import (it fails closed on everything it can see).`,
+        `  Not examined statically: spawns outside scripts/; INDIRECT git — a shell line (\`sh -c\`, execSync of a ` +
+        `non-git command line), child_process.fork, execa or another spawn library, \`pnpm run\` / npm scripts or any ` +
+        `program that itself runs git — and child_process calls reached only through a binding the parser cannot tie ` +
+        `to a child_process import. Indirect git is covered only STRUCTURALLY, inside the gate self-tests (${SETUP_FILE}); ` +
+        `a script run outside vitest that reaches git indirectly is not held by this gate.`,
     );
     return;
   }
   process.stderr.write(
     formatRepair({
-      invariant: `check-fixture-git-env: ${sites.length} unscrubbed git spawn/wrapper site(s), ${structural.length} structural-layer problem(s) (scanned ${files.length} file(s))`,
-      sites: [...structural.map((p) => `structural: ${p}`), ...sites],
+      invariant: `check-fixture-git-env: ${sites.length} unscrubbed git spawn/wrapper site(s), ${foreign.length} non-canonical cleanEnv(s), ${canary.length} canary failure(s), ${structural.length} structural-layer problem(s) (scanned ${files.length} file(s))`,
+      sites: [
+        ...structural.map((p) => `structural: ${p}`),
+        ...canary.map((p) => `cleanEnv ${p}`),
+        ...foreign.map((p) => `non-canonical cleanEnv: ${p}`),
+        ...sites,
+      ],
       canonical:
-        "isScrubbedGitEnvKey / cleanEnv / scrubGitEnvInPlace in scripts/lib/differential-tree.ts (structural: scripts/lib/vitest-scrub-git-env.ts via vitest.config.mts; shell: scripts/lib/fixture-git-env.sh)",
+        "isScrubbedGitEnvKey / cleanEnv / scrubGitEnvInPlace in scripts/lib/differential-tree.ts (structural: scripts/lib/vitest-scrub-git-env.ts via vitest.config.mts; shell: scripts/lib/fixture-git-env.sh; inlined copies: INLINED_CLEAN_ENV in scripts/check-fixture-git-env.ts)",
       fix:
         'pass `env: cleanEnv()` (import { cleanEnv } from "./lib/differential-tree.js"; add your own ' +
         "extras as its second argument) to the spawn — a generic wrapper passes `env: cleanEnv(env)` itself. " +
+        "A function merely NAMED cleanEnv is not a scrub: delete a local cleanEnv and import the canonical one; " +
+        "only where that import cannot load (a module plain `node` runs) keep an inlined copy, register it in " +
+        "INLINED_CLEAN_ENV and `export { cleanEnv as <canary name> };` so the canary executes it — a copy that " +
+        "leaves any GIT_* variable is RED. " +
         "A spawn counts as the repo only when its options statically say `cwd: ROOT` (inline or a const) with " +
         "static git arguments and no -C / --git-dir / --work-tree. In a shell script source scripts/lib/fixture-git-env.sh " +
         "and call fixture_git_env_scrub before the first git command. Structural problems: restore " +

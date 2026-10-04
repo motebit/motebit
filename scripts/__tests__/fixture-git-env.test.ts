@@ -47,7 +47,12 @@ import { copyFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanEnv, readGit, runPretest } from "../lib/differential-tree.js";
-import { analyzeSh, analyzeTs, checkStructural } from "../check-fixture-git-env.js";
+import {
+  analyzeSh,
+  analyzeTs,
+  checkStructural,
+  foreignCleanEnvs,
+} from "../check-fixture-git-env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = realpathSync(resolve(__dirname, "..", ".."));
@@ -232,6 +237,12 @@ describe("fixture helpers under a leaked GIT_* environment (decoy repository)", 
   });
 });
 
+/**
+ * The canonical `cleanEnv` import, appended LAST so a snippet's line numbers
+ * do not move: the gate trusts a `cleanEnv` by binding, never by name.
+ */
+const CANONICAL = '\nimport { cleanEnv } from "./lib/differential-tree.js";\n';
+
 describe("check-fixture-git-env classification", () => {
   it("repo-root git spawns need no scrub; anything else needs cleanEnv", () => {
     // Built at runtime so this file's own source carries no unscrubbed spawn for the gate to see.
@@ -252,7 +263,7 @@ describe("check-fixture-git-env classification", () => {
       .join("\n")
       .replace(/^S\(/gm, "spawnSync(")
       .replace(/^X\(/gm, "execSync(");
-    expect(analyzeTs(src).map((s) => [s.line, s.target, s.scrubbed])).toEqual([
+    expect(analyzeTs(src + CANONICAL).map((s) => [s.line, s.target, s.scrubbed])).toEqual([
       [1, "repo", false],
       [2, "repo", false],
       [3, "fixture", false],
@@ -296,7 +307,7 @@ describe("check-fixture-git-env classification", () => {
       .replace(/^S\(/gm, "spawnSync(")
       .replace(/^F\(/gm, "execFileSync(")
       .replace(/^X\(/gm, "execSync(");
-    expect(analyzeTs(src).map((s) => [s.line, s.target, s.scrubbed])).toEqual([
+    expect(analyzeTs(src + CANONICAL).map((s) => [s.line, s.target, s.scrubbed])).toEqual([
       [1, "fixture", true],
       [2, "fixture", true],
       [3, "fixture", false],
@@ -320,7 +331,9 @@ describe("check-fixture-git-env classification", () => {
       ["scripts/__tests__/pre-push-hook.test.ts", 73],
       ["scripts/__tests__/check-turbo-global-deps.test.ts", 35],
     ] as const) {
-      const site = analyzeTs(readFileSync(join(ROOT, rel), "utf8")).find((s) => s.line === line);
+      const site = analyzeTs(readFileSync(join(ROOT, rel), "utf8"), join(ROOT, rel)).find(
+        (s) => s.line === line,
+      );
       expect([rel, site?.target, site?.scrubbed]).toEqual([rel, "fixture", true]);
     }
   });
@@ -337,7 +350,9 @@ describe("check-fixture-git-env classification", () => {
 describe("check-fixture-git-env is deny-by-default (the R3 review shapes)", () => {
   // Built at runtime so this file's own source carries no unscrubbed spawn for the gate to see.
   const build = (lines: string[]) =>
-    'import { spawnSync as S, execFileSync as F } from "node:child_process";\n' + lines.join("\n");
+    'import { spawnSync as S, execFileSync as F } from "node:child_process";\n' +
+    lines.join("\n") +
+    CANONICAL;
   const rows = (src: string) => analyzeTs(src).map((s) => [s.line, s.kind, s.target, s.scrubbed]);
 
   it("an options object or args list in a variable is resolved, never assumed to be the repo root", () => {
@@ -559,6 +574,41 @@ describe("check-fixture-git-env: a spawn's cleanEnv is the canonical one, or an 
     }
   });
 
+  it("provenance, not name: a renamed or namespace import of the canonical export scrubs; anything else named cleanEnv does not", () => {
+    const file = join(ROOT, "scripts", "planted.ts");
+    const spawnLine = (callee: string) =>
+      ["spawn", `Sync("git", ["init"], { cwd: "/tmp/fixture", env: ${callee}() });`].join("");
+    const cases: Array<[string, string, boolean]> = [
+      ['import { cleanEnv } from "./lib/differential-tree.js";', "cleanEnv", true],
+      ['import { cleanEnv as scrub } from "./lib/differential-tree.js";', "scrub", true],
+      ['import * as dt from "./lib/differential-tree.js";', "dt.cleanEnv", true],
+      ['import { cleanEnv } from "./lib/somewhere-else.js";', "cleanEnv", false],
+      ['import { readGit as cleanEnv } from "./lib/differential-tree.js";', "cleanEnv", false],
+      ['import * as dt from "./lib/somewhere-else.js";', "dt.cleanEnv", false],
+      ["const cleanEnv = () => ({});", "cleanEnv", false],
+      ["", "cleanEnv", false], // unbound: a global named cleanEnv is not the canonical one
+    ];
+    for (const [decl, callee, scrubbed] of cases) {
+      const src = ['import { spawnSync } from "node:child_process";', decl, spawnLine(callee)].join(
+        "\n",
+      );
+      expect([decl, analyzeTs(src, file).map((x) => x.scrubbed)]).toEqual([decl, [scrubbed]]);
+      expect([decl, foreignCleanEnvs(src, file).length > 0]).toEqual([decl, !scrubbed]);
+    }
+  });
+
+  it("the canonical file and the registered copy are not foreign; the same declaration elsewhere is", () => {
+    for (const rel of ["scripts/lib/differential-tree.ts", "scripts/lib/tamper-runner.ts"])
+      expect([
+        rel,
+        foreignCleanEnvs(readFileSync(join(ROOT, rel), "utf8"), join(ROOT, rel)),
+      ]).toEqual([rel, []]);
+    const copy = readFileSync(join(ROOT, "scripts/lib/tamper-runner.ts"), "utf8");
+    expect(
+      foreignCleanEnvs(copy, join(ROOT, "scripts", "lib", "copied-runner.ts")).length,
+    ).toBeGreaterThan(0);
+  });
+
   it("the jail as copied passes", () => {
     const r = gate(tree("as-is"));
     expect(r.out).toMatch(/✓ check-fixture-git-env/);
@@ -601,5 +651,49 @@ describe("check-fixture-git-env: a spawn's cleanEnv is the canonical one, or an 
     expect(r.status).toBe(1);
     expect(r.out).toMatch(/tamper-runner/);
     expect(r.out).toMatch(/GIT_INDEX_FILE/);
+  });
+
+  it("RED: a CORRECT cleanEnv copy that is not registered — register + canary, or import the canonical one", () => {
+    const correct =
+      'function cleanEnv(): NodeJS.ProcessEnv { const e: NodeJS.ProcessEnv = {}; for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) e[k] = v; return e; }';
+    const r = gate(
+      tree("unregistered", (root) =>
+        writeFileSync(join(root, "scripts", "planted-unregistered.ts"), plant(correct)),
+      ),
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/scripts\/planted-unregistered\.ts/);
+    expect(r.out).toMatch(/INLINED_CLEAN_ENV/);
+  });
+
+  it("RED: tamper-runner stops exporting its canary (the copy can no longer be executed)", () => {
+    const r = gate(
+      tree("no-canary-export", (root) => {
+        const p = join(root, "scripts", "lib", "tamper-runner.ts");
+        const src = readFileSync(p, "utf8");
+        const from = "export { cleanEnv as cleanEnvCanary };\n";
+        if (!src.includes(from)) throw new Error("tamper-runner canary export moved");
+        writeFileSync(p, src.replace(from, ""));
+      }),
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/cleanEnvCanary/);
+  });
+
+  it("RED: the canonical cleanEnv itself weakened to keep GIT_COMMON_DIR (the canary runs it too)", () => {
+    const r = gate(
+      tree("weak-canonical", (root) => {
+        const p = join(root, "scripts", "lib", "differential-tree.ts");
+        const src = readFileSync(p, "utf8");
+        const from = "if (!isScrubbedGitEnvKey(k)) env[k] = v;";
+        if (!src.includes(from)) throw new Error("canonical cleanEnv body moved");
+        writeFileSync(
+          p,
+          src.replace(from, 'if (!isScrubbedGitEnvKey(k) || k === "GIT_COMMON_DIR") env[k] = v;'),
+        );
+      }),
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/differential-tree[\s\S]*GIT_COMMON_DIR/);
   });
 });

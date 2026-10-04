@@ -317,12 +317,18 @@ export function resolveConcurrency(opts: {
  * hook in a linked worktree exports GIT_DIR=<repo>/.git/worktrees/<name>; a
  * fixture or slot git that inherits it acts on THAT repository whatever its
  * cwd (#835, 2026-10-02). Every git and slot child gets this environment.
+ *
+ * A registered inlined copy (`INLINED_CLEAN_ENV` in scripts/check-fixture-git-env.ts):
+ * the gate EXECUTES it through `cleanEnvCanary` on every redirect variable and
+ * random `GIT_*` names, and fails if any survives. Test-only export; callers
+ * import the canonical `cleanEnv` from ./differential-tree.ts.
  */
 function cleanEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(base)) if (!k.startsWith("GIT_")) env[k] = v;
   return env;
 }
+export { cleanEnv as cleanEnvCanary };
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, {
