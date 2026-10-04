@@ -75,6 +75,16 @@ See LICENSING.md for the full license boundary and the convergence story
 (both license families converge to Apache-2.0 four years after each version's
 first public release).
 
+Third-Party Vendored Fixtures
+
+The following paths hold files copied from third-party projects, used as
+test fixtures. They are NOT Motebit's work and are NOT subject to the
+Business Source License; each is distributed under its own upstream license,
+whose text sits beside it together with a NOTICE.md naming the source,
+commit and license:
+
+  examples/interop/                  third-party interop fixtures under their own licenses (aps/: Apache-2.0, see aps/LICENSE)
+
 Terms
 
 The Licensor hereby grants you the right to copy, modify, create derivative
