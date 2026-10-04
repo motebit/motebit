@@ -114,6 +114,7 @@
     "check-money-identity-path-canonical": "npx tsx scripts/check-money-identity-path-canonical.ts",
     "check-ha-not-a-gate": "npx tsx scripts/check-ha-not-a-gate.ts",
     "check-agent-route-auth": "npx tsx scripts/check-agent-route-auth.ts",
+    "check-fixture-git-env": "npx tsx scripts/check-fixture-git-env.ts",
     "check-master-token-carve-outs": "npx tsx scripts/check-master-token-carve-outs.ts",
     "check-allocation-money-chokepoint": "npx tsx scripts/check-allocation-money-chokepoint.ts",
     "check-creature-canon": "npx tsx scripts/check-creature-canon.ts",
