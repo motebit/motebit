@@ -60,9 +60,14 @@
  * `scripts/lib/differential-tree.ts`, or to the top-level `cleanEnv` of a
  * file in `INLINED_CLEAN_ENV` (today only `scripts/lib/tamper-runner.ts`,
  * which plain `node` loads and so cannot import the `.ts`). Any other
- * declaration or call of a `cleanEnv` is RED. And by EXECUTION: the canonical
- * export and every inlined copy are run as a canary on every redirect
- * variable plus random `GIT_*` names, and must leave none.
+ * declaration or call of a `cleanEnv` is RED. Provenance is checked at the
+ * IMMEDIATE import specifier: a direct import from
+ * `scripts/lib/differential-tree` (named, aliased, or namespace) is accepted;
+ * a `cleanEnv` reached through a RE-EXPORT module is refused (fails closed —
+ * import directly). And by EXECUTION: the canonical export and every inlined
+ * copy are run as a canary on every redirect variable plus random `GIT_*`
+ * names, each carrying a random path-like value drawn per run (so a copy that
+ * special-cases a known probe value cannot pass), and must leave none.
  *
  * NOT examined statically: indirect git — `sh -c` or an execSync command
  * line that runs a program which runs git, `child_process.fork`, execa or any
@@ -70,6 +75,7 @@
  * STRUCTURALLY, inside the gate self-tests (layer 1).
  */
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -446,6 +452,10 @@ function resolveModule(spec: string, from: string): string | null {
 
 const repoRel = (p: string) => relative(ROOT, p).split("\\").join("/");
 
+/** The stated limit of provenance: one hop, the import specifier itself. */
+const REEXPORT_REFUSED =
+  "provenance is checked at the immediate import specifier — re-export chains are refused; import directly from scripts/lib/differential-tree";
+
 /**
  * Where the function a call's callee names comes from — by binding, never by
  * name: "canonical" when it resolves (through the import graph) to the
@@ -468,7 +478,7 @@ function cleanEnvOrigin(ctx: Ctx, callee: ts.Expression): Origin | null {
       if (target === canonical && c.name.text === CLEAN_ENV) return { kind: "canonical" };
       return {
         kind: "foreign",
-        why: `\`${c.getText(ctx.sf)}\` is not the ${CLEAN_ENV} export of ${CANONICAL_CLEAN_ENV_FILE}`,
+        why: `\`${c.getText(ctx.sf)}\` is not the ${CLEAN_ENV} export of ${CANONICAL_CLEAN_ENV_FILE} (${REEXPORT_REFUSED})`,
       };
     }
     return null;
@@ -484,7 +494,7 @@ function cleanEnvOrigin(ctx: Ctx, callee: ts.Expression): Origin | null {
     if (target === canonical && imported === CLEAN_ENV) return { kind: "canonical" };
     return {
       kind: "foreign",
-      why: `\`${c.text}\` is imported from ${ts.isStringLiteral(mod) ? JSON.stringify(mod.text) : "?"}${target ? ` (${repoRel(target)})` : ""}, not the ${CLEAN_ENV} export of ${CANONICAL_CLEAN_ENV_FILE}`,
+      why: `\`${c.text}\` is imported from ${ts.isStringLiteral(mod) ? JSON.stringify(mod.text) : "?"}${target ? ` (${repoRel(target)})` : ""}, not the ${CLEAN_ENV} export of ${CANONICAL_CLEAN_ENV_FILE} (${REEXPORT_REFUSED})`,
     };
   }
   const rel = repoRel(resolve(ctx.file));
@@ -842,6 +852,18 @@ function randomGitKeys(): string[] {
 }
 
 /**
+ * A probe environment over `keys`, each value a random path-like string drawn
+ * per run — never a fixed sentinel, so a scrub that special-cases a known
+ * probe value (keeps the variable unless it equals the probe) cannot pass.
+ */
+function probeEnv(keys: readonly string[]): Record<string, string> {
+  const r = () => randomBytes(6).toString("hex");
+  const probe: Record<string, string> = {};
+  for (const k of keys) probe[k] = `/${r()}/${r()}${Math.random() < 0.5 ? "/.git" : ""}`;
+  return probe;
+}
+
+/**
  * EXECUTE every `cleanEnv` the static layer trusts — the canonical export and
  * each `INLINED_CLEAN_ENV` copy — on an environment carrying every redirect
  * variable plus random `GIT_*` names, both as its argument and (for its
@@ -891,9 +913,7 @@ export function checkInlinedCleanEnvs(root: string): string[] {
           `${rel} must \`export { ${CLEAN_ENV} as ${exportName} };\` — the canary executes it`,
         );
     }
-    const probe: Record<string, string> = {};
-    for (const k of [...REDIRECT_PROBE, ...randomGitKeys(), ...KEEP_PROBE])
-      probe[k] = "/nonexistent-probe";
+    const probe = probeEnv([...REDIRECT_PROBE, ...randomGitKeys(), ...KEEP_PROBE]);
     const dir = mkdtempSync(join(tmpdir(), "check-fixture-git-env-canary-"));
     try {
       const driver = join(dir, "driver.mts");
@@ -1086,8 +1106,7 @@ export function checkStructural(root: string): string[] {
       `${SETUP_FILE} must contain only that import and that call; also found: ${extra.join(" | ")}`,
     );
   // (e) executed on a probe env, it leaves exactly what cleanEnv leaves.
-  const probe: Record<string, string> = {};
-  for (const k of [...REDIRECT_PROBE, ...KEEP_PROBE]) probe[k] = "/nonexistent-probe";
+  const probe = probeEnv([...REDIRECT_PROBE, ...KEEP_PROBE]);
   const expected = Object.keys(probe)
     .filter((k) => !isScrubbedGitEnvKey(k))
     .sort();
@@ -1192,10 +1211,11 @@ function main(): void {
         `isScrubbedGitEnvKey, execution leaves exactly what cleanEnv leaves (${REDIRECT_PROBE.length + KEEP_PROBE.length} probe variable(s)).\n` +
         `  Static (deny-by-default, every other TS/JS file): ${n.repo} git spawn(s) resolve to the repo root; ` +
         `${n.fixture} do not and all pass a cleanEnv that resolves by binding to ${CANONICAL_CLEAN_ENV_FILE} ` +
-        `or to a registered inlined copy (${inlined.join(", ")}); ${n.wrappers} generic spawn wrapper(s) scrub or take only non-git commands; ` +
+        `or to a registered inlined copy (${inlined.join(", ")}) — provenance checked at the immediate import specifier ` +
+        `(direct import from scripts/lib/differential-tree, aliased or namespace import accepted; re-export chains are refused — import directly); ${n.wrappers} generic spawn wrapper(s) scrub or take only non-git commands; ` +
         `no other cleanEnv declared or called.\n` +
         `  Canary: the canonical cleanEnv and ${inlined.length} inlined cop${inlined.length === 1 ? "y" : "ies"} EXECUTED on ` +
-        `${REDIRECT_PROBE.length} redirect + random GIT_* variable(s) (as argument and as process.env): none survives.\n` +
+        `${REDIRECT_PROBE.length} redirect + random GIT_* variable(s), random path-like values drawn per run (as argument and as process.env): none survives.\n` +
         `  Shell: ${n.shell} fixture git line(s), all after fixture_git_env_scrub.\n` +
         `  Not examined statically: spawns outside scripts/; INDIRECT git — a shell line (\`sh -c\`, execSync of a ` +
         `non-git command line), child_process.fork, execa or another spawn library, \`pnpm run\` / npm scripts or any ` +
@@ -1220,6 +1240,8 @@ function main(): void {
         'pass `env: cleanEnv()` (import { cleanEnv } from "./lib/differential-tree.js"; add your own ' +
         "extras as its second argument) to the spawn — a generic wrapper passes `env: cleanEnv(env)` itself. " +
         "A function merely NAMED cleanEnv is not a scrub: delete a local cleanEnv and import the canonical one; " +
+        "provenance is checked at the immediate import specifier, so a cleanEnv imported through a re-export module is " +
+        "refused — import directly from scripts/lib/differential-tree (aliased or namespace import is fine); " +
         "only where that import cannot load (a module plain `node` runs) keep an inlined copy, register it in " +
         "INLINED_CLEAN_ENV and `export { cleanEnv as <canary name> };` so the canary executes it — a copy that " +
         "leaves any GIT_* variable is RED. " +

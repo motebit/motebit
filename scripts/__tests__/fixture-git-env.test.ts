@@ -696,4 +696,45 @@ describe("check-fixture-git-env: a spawn's cleanEnv is the canonical one, or an 
     expect(r.status).toBe(1);
     expect(r.out).toMatch(/differential-tree[\s\S]*GIT_COMMON_DIR/);
   });
+
+  it("RED (stated limit): the canonical cleanEnv imported through a RE-EXPORT module — provenance is one hop, import directly", () => {
+    const r = gate(
+      tree("reexport", (root) => {
+        writeFileSync(
+          join(root, "scripts", "lib", "reexport-clean-env.ts"),
+          'export { cleanEnv } from "./differential-tree.js";\n',
+        );
+        writeFileSync(
+          join(root, "scripts", "planted-reexport.ts"),
+          plant('import { cleanEnv } from "./lib/reexport-clean-env.js";'),
+        );
+      }),
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/scripts\/planted-reexport\.ts/);
+    expect(r.out).toMatch(/scripts\/lib\/reexport-clean-env\.ts/);
+    expect(r.out).toMatch(
+      /provenance is checked at the immediate import specifier — re-export chains are refused; import directly from scripts\/lib\/differential-tree/,
+    );
+  });
+
+  it("RED: a registered copy that keeps GIT_INDEX_FILE unless its value is the old fixed probe string (probe values are random per run)", () => {
+    const r = gate(
+      tree("probe-value-special-case", (root) => {
+        const p = join(root, "scripts", "lib", "tamper-runner.ts");
+        const src = readFileSync(p, "utf8");
+        const from = 'if (!k.startsWith("GIT_")) env[k] = v;';
+        if (!src.includes(from)) throw new Error("tamper-runner cleanEnv body moved");
+        writeFileSync(
+          p,
+          src.replace(
+            from,
+            'if (!k.startsWith("GIT_") || (k === "GIT_INDEX_FILE" && v !== "/nonexistent-probe")) env[k] = v;',
+          ),
+        );
+      }),
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/tamper-runner[\s\S]*GIT_INDEX_FILE/);
+  });
 });
