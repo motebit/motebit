@@ -42,6 +42,7 @@ import {
   x25519SharedSecret,
   deriveKeyTransferKey,
   openPairingKeyTransfer,
+  verifiedIdentityLineage,
 } from "../index.js";
 
 // ── Fixtures ────────────────────────────────────────────────────────────
@@ -897,5 +898,197 @@ describe("pairing identity matrix — fork from a superseded key", () => {
         called: false,
       });
     }
+  });
+});
+
+// ── Table 6: multi-hop — A → B, then B (as Device A) → C ────────────────
+//
+// Device B must be able to approve the NEXT pairing for the identity it just
+// adopted. The relay may hold no chain (an offline rotation uploads nothing),
+// so B's outgoing transfer can carry only what B itself persisted at
+// acceptance. B's persistence is modelled the way every surface does it: the
+// verified lineage `openPairingKeyTransfer` hands back, admitted through
+// `verifiedIdentityLineage` (the gate the surface-kit helper applies), unioned
+// into B's store; B's outgoing transfer is then built from that store.
+
+const MULTI_HOP_KINDS: Kind[] = KINDS.filter((k) => k !== "guardian-recovered");
+
+interface DeviceBState {
+  seed: Uint8Array;
+  publicKeyHex: string;
+  /** What Device B persisted (its roster replica's succession). */
+  store: KeySuccessionRecord[];
+}
+
+const recordKey = (r: KeySuccessionRecord): string =>
+  `${r.old_public_key}>${r.new_public_key}>${r.new_key_signature}`;
+
+/** Device B's persistence step, as the surfaces run it after acceptance. */
+async function persistOnB(
+  store: readonly KeySuccessionRecord[],
+  motebitId: string,
+  opened: { publicKeyHex: string; succession: readonly KeySuccessionRecord[] },
+): Promise<KeySuccessionRecord[]> {
+  const admitted = await verifiedIdentityLineage({
+    motebitId,
+    publicKeyHex: opened.publicKeyHex,
+    records: opened.succession,
+  });
+  const out = new Map<string, KeySuccessionRecord>();
+  for (const r of [...store, ...admitted]) if (!out.has(recordKey(r))) out.set(recordKey(r), r);
+  return [...out.values()];
+}
+
+/** One pairing hop: `from` (holding `seed`) sends `chain`; the new device opens and persists. */
+async function hop(opts: {
+  motebitId: string;
+  seed: Uint8Array;
+  publicKeyHex: string;
+  chain: readonly KeySuccessionRecord[];
+  relay: () => Promise<readonly unknown[]>;
+  priorStore?: KeySuccessionRecord[];
+}): Promise<{ outcome: Outcome; state?: DeviceBState }> {
+  const code = "M2HOP9";
+  const claimer = generateX25519Keypair();
+  const keyTransfer = await buildKeyTransferPayload(
+    opts.seed,
+    opts.publicKeyHex,
+    claimer.publicKey,
+    code,
+    { successionRecords: opts.chain },
+  );
+  let opened: Awaited<ReturnType<typeof openPairingKeyTransfer>>;
+  try {
+    opened = await openPairingKeyTransfer({
+      motebitId: opts.motebitId,
+      keyTransfer,
+      ephemeralPrivateKey: claimer.privateKey,
+      pairingCode: code,
+      fetchSuccessionChain: opts.relay,
+    });
+  } catch (err) {
+    return {
+      outcome: { accepted: false, reason: err instanceof Error ? err.message : String(err) },
+    };
+  }
+  // Persistence runs only after acceptance — and is never mistaken for a refusal.
+  const succession = (opened as { succession?: KeySuccessionRecord[] }).succession ?? [];
+  const store = await persistOnB(opts.priorStore ?? [], opts.motebitId, {
+    publicKeyHex: opened.publicKeyHex,
+    succession,
+  });
+  return {
+    outcome: {
+      accepted: true,
+      binding: opened.identityBinding,
+      relayCheck: opened.relayCheck,
+      seedHex: bytesToHex(opened.identitySeed),
+    },
+    state: {
+      seed: new Uint8Array(opened.identitySeed),
+      publicKeyHex: opened.publicKeyHex,
+      store,
+    },
+  };
+}
+
+describe("pairing identity matrix — multi-hop A → B → C (B approves from what it persisted)", () => {
+  const relayModes = ["honest", "errors"] as const;
+  for (const kind of MULTI_HOP_KINDS) {
+    for (const relayMode of relayModes) {
+      it(`${kind} · relay ${relayMode} · A → B → C`, async () => {
+        const who = await identity(kind);
+        const relay =
+          relayMode === "honest"
+            ? () => Promise.resolve(who.relayChain)
+            : () => Promise.reject(new Error("503"));
+        const want =
+          who.kind === "legacy-v7" || who.kind === "legacy-v4" ? "unverified" : "sovereign";
+
+        // A → B: A seals the chain it holds.
+        const ab = await hop({
+          motebitId: who.motebitId,
+          seed: who.current.privateKey,
+          publicKeyHex: who.current.hex,
+          chain: who.heldChain,
+          relay,
+        });
+        expect({ accepted: ab.outcome.accepted, binding: ab.outcome.binding }).toEqual({
+          accepted: true,
+          binding: want,
+        });
+        const b = ab.state!;
+        // B persisted exactly the verified lineage to the key it now holds.
+        expect(b.store.map(recordKey)).toEqual(
+          want === "sovereign" ? who.heldChain.map(recordKey) : [],
+        );
+
+        // B → C: B (now Device A) seals ONLY what it persisted.
+        const bc = await hop({
+          motebitId: who.motebitId,
+          seed: b.seed,
+          publicKeyHex: b.publicKeyHex,
+          chain: b.store,
+          relay,
+        });
+        expect({
+          accepted: bc.outcome.accepted,
+          binding: bc.outcome.binding,
+          reason: bc.outcome.reason,
+        }).toEqual({ accepted: true, binding: want, reason: undefined });
+        expect(bc.outcome.seedHex).toBe(bytesToHex(who.current.privateKey));
+        // And C can approve a fourth device the same way (the lineage keeps travelling).
+        expect(bc.state!.store.map(recordKey)).toEqual(b.store.map(recordKey));
+      });
+    }
+  }
+
+  it("persisting the same lineage twice is idempotent", async () => {
+    const who = await identity("v8-rotated-twice-offline");
+    const relay = () => Promise.resolve([] as unknown[]);
+    const first = await hop({
+      motebitId: who.motebitId,
+      seed: who.current.privateKey,
+      publicKeyHex: who.current.hex,
+      chain: who.heldChain,
+      relay,
+    });
+    const again = await hop({
+      motebitId: who.motebitId,
+      seed: who.current.privateKey,
+      publicKeyHex: who.current.hex,
+      chain: who.heldChain,
+      relay,
+      priorStore: first.state!.store,
+    });
+    expect(again.state!.store.map(recordKey)).toEqual(who.heldChain.map(recordKey));
+  });
+
+  it("the persistence gate admits no unverified record (forged, foreign, or off-lineage)", async () => {
+    const who = await identity("v8-rotated-once-offline");
+    const foreign = await identity("v8-rotated-twice-online");
+    const forged = await forgeLink(who.heldChain[0]!.old_public_key, await keys());
+    const admitted = await verifiedIdentityLineage({
+      motebitId: who.motebitId,
+      publicKeyHex: who.current.hex,
+      records: [...who.heldChain, forged, ...foreign.relayChain, { not: "a record" }],
+    });
+    expect(admitted.map(recordKey)).toEqual(who.heldChain.map(recordKey));
+    // A chain that does not reach the held key admits nothing at all.
+    expect(
+      await verifiedIdentityLineage({
+        motebitId: who.motebitId,
+        publicKeyHex: (await keys()).hex,
+        records: who.heldChain,
+      }),
+    ).toEqual([]);
+    // A legacy id commits to no key: there is no lineage to persist.
+    expect(
+      await verifiedIdentityLineage({
+        motebitId: uuidV7(),
+        publicKeyHex: who.current.hex,
+        records: who.heldChain,
+      }),
+    ).toEqual([]);
   });
 });

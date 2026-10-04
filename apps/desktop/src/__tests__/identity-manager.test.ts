@@ -137,6 +137,7 @@ vi.mock("@motebit/encryption", async (importOriginal) => ({
         identitySeed: new Uint8Array(32),
         publicKeyHex,
         identityBinding: binding.identityBinding,
+        succession: (binding as { lineage?: unknown[] }).lineage ?? [],
       };
     },
   ),
@@ -218,6 +219,11 @@ const KEY_MATERIAL = ["device_private_key", "pending_rotation", "pending_identit
 function makeInvoke(config: Record<string, unknown> = {}) {
   let cfg: Record<string, unknown> = { ...config };
   let preservedSeq = 0;
+  // The roster replica file (src-tauri/src/roster_replica.rs): read answers
+  // its bytes and a digest; write is a compare-and-swap on that digest.
+  let rosterFile: string | null = null;
+  let rosterSeq = 0;
+  let rosterDigest: string | null = null;
   const kk = (name: string) => `__keyring_${name}`;
   const preserve = (name: string) => {
     const old = cfg[kk(name)];
@@ -265,6 +271,20 @@ function makeInvoke(config: Record<string, unknown> = {}) {
       delete cfg[kk(key)];
       return undefined;
     }
+    if (cmd === "roster_replica_read") {
+      return rosterFile === null
+        ? { kind: "absent" }
+        : { kind: "text", digest: rosterDigest, contents: rosterFile };
+    }
+    if (cmd === "roster_replica_write") {
+      const { expected, contents } = args as { expected: string | null; contents: string };
+      if (expected !== rosterDigest) throw new Error("roster_replica_conflict");
+      rosterFile = contents;
+      rosterDigest = `d${rosterSeq++}`;
+      return undefined;
+    }
+    if (cmd === "roster_lease_acquire") return "lease";
+    if (cmd === "roster_lease_release") return true;
     if (cmd === "db_execute") {
       // No-op stub: tests that assert UPDATE SQL inspect the call
       // arguments via the mock's recorded calls; tests that don't
@@ -1157,6 +1177,77 @@ describe("IdentityManager.completePairing", () => {
     expect(mockCtrl.successionFetches).toEqual([]);
     expect(mgr.motebitId).toBe(id);
     expect(mgr.publicKey).toBe(current);
+  });
+
+  it("persists the verified chain after acceptance, so this desktop can be Device A for the next device (relay holds none)", async () => {
+    const genesis = await generateKeypair();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(genesis.publicKey));
+    mockCtrl.successionChain = [];
+    const chain = [
+      await signKeySuccession(genesis.privateKey, k1.privateKey, k1.publicKey, genesis.publicKey),
+    ];
+    await new Promise((r) => setTimeout(r, 5));
+    chain.push(await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey));
+    mockCtrl.transferSuccession = chain;
+    const current = bytesToHex(k2.publicKey);
+    const mgr = new IdentityManager();
+    const invoke = makeInvoke({ __keyring_device_private_key: "b".repeat(64) });
+    await mgr.completePairing(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      invoke as any,
+      { motebitId: id, deviceId: "new-dev" },
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        keyTransfer: { ...mockCtrl.keyTransferPayload, identity_pubkey_check: current } as any,
+        ephemeralPrivateKey: new Uint8Array(32),
+        pairingCode: "ABC",
+        syncUrl: "https://relay",
+        pairingId: "pid-1",
+      },
+    );
+    expect(mgr.motebitId).toBe(id);
+    const { loadReplica, tauriRosterIO } = await import("../machine-roster-store");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const replica = await loadReplica(tauriRosterIO(invoke as any), id);
+    expect(replica.kind === "value" ? replica.replica.succession : []).toEqual(chain);
+
+    // This desktop now approves the next device: its transfer seals the chain.
+    mockCtrl.claimingX25519 = "11".repeat(32);
+    const { buildKeyTransferPayload } = await import("@motebit/encryption");
+    vi.mocked(buildKeyTransferPayload).mockClear();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await mgr.approvePairing(invoke as any, "https://relay", "pid-9");
+    const call = vi.mocked(buildKeyTransferPayload).mock.calls[0]!;
+    expect(call[4]?.successionRecords ?? []).toEqual(chain);
+  });
+
+  it("writes no succession when the pairing is refused", async () => {
+    const genesis = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(genesis.publicKey));
+    const stranger = await generateKeypair();
+    const mgr = new IdentityManager();
+    const invoke = makeInvoke({ __keyring_device_private_key: "b".repeat(64) });
+    await expect(
+      mgr.completePairing(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        invoke as any,
+        { motebitId: id, deviceId: "new-dev" },
+        {
+          keyTransfer: {
+            ...mockCtrl.keyTransferPayload,
+            identity_pubkey_check: bytesToHex(stranger.publicKey),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
+          ephemeralPrivateKey: new Uint8Array(32),
+          pairingCode: "ABC",
+          syncUrl: "https://relay",
+          pairingId: "pid-1",
+        },
+      ),
+    ).rejects.toThrow(/Pairing refused/);
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === "roster_replica_write")).toEqual([]);
   });
 
   it("refuses a rotated sovereign identity whose served chain is forged — nothing written", async () => {

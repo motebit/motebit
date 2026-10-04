@@ -31,6 +31,9 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 }));
 
 import {
+  buildKeyTransferPayload,
+  generateX25519Keypair,
+  openPairingKeyTransfer,
   bytesToHex,
   deriveSovereignMotebitId,
   generateKeypair,
@@ -61,7 +64,10 @@ import {
   mobileRosterPorts,
   retryAfterMs,
   rosterAfterRotationCommit,
+  rosterAfterPairing,
+  ownSuccessionRecords,
 } from "../machine-roster";
+import { MobilePairingManager } from "../pairing-manager";
 import { rotateMobileKey } from "../key-rotation";
 import { machinesModel } from "../machines-render-model";
 import { machineRosterKey, machineRosterPresentationKey } from "../storage-keys";
@@ -854,5 +860,138 @@ describe("machinesModel — the Settings → Identity → Machines render", () =
     });
     expect(m.head).toEqual([{ text: "no key here", tone: "plain" }]);
     expect(m.lines).toEqual([]);
+  });
+});
+
+// ── Pairing (Device B): the verified chain joins the replica ─────────
+
+describe("completePairing persists the verified chain — this phone can be Device A next", () => {
+  // An identity rotated twice OFFLINE: the relay holds no chain.
+  async function offlineRotated() {
+    const g = await generateKeypair();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const chain = [await signKeySuccession(g.privateKey, k1.privateKey, k1.publicKey, g.publicKey)];
+    await new Promise((r) => setTimeout(r, 5));
+    chain.push(await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey));
+    return { id: await deriveSovereignMotebitId(hex(g)), k2, current: hex(k2), chain };
+  }
+
+  function pairingDeps(persist: boolean) {
+    const data = new Map<string, string>();
+    let publicKey = "aa".repeat(32);
+    return {
+      data,
+      deps: {
+        getKeyring: () =>
+          ({
+            get: async (k: string) => data.get(k) ?? null,
+            set: async (k: string, v: string) => void data.set(k, v),
+            delete: async (k: string) => void data.delete(k),
+          }) as never,
+        getPublicKey: () => publicKey,
+        getPrivKeyHex: async () => data.get("device_private_key") ?? "",
+        createSyncToken: async () => "t",
+        setIdentity: () => undefined,
+        setPublicKey: (k: string) => {
+          publicKey = k;
+        },
+        setSyncUrl: async () => undefined,
+        ...(persist ? { persistSuccession: rosterAfterPairing } : {}),
+      },
+    };
+  }
+
+  it("a real offline-rotated transfer: B persists the chain; B's own records then pair C with no relay chain", async () => {
+    const who = await offlineRotated();
+    const b = generateX25519Keypair();
+    const keyTransfer = await buildKeyTransferPayload(
+      who.k2.privateKey,
+      who.current,
+      b.publicKey,
+      "ABC123",
+      {
+        successionRecords: who.chain,
+      },
+    );
+    const { deps } = pairingDeps(true);
+    const mgr = new MobilePairingManager(deps as never);
+    await mgr.completePairing({ motebitId: who.id, deviceId: "phone-b" }, undefined, {
+      keyTransfer,
+      ephemeralPrivateKey: b.privateKey,
+      pairingCode: "ABC123",
+      pairingId: "pid-1",
+    });
+
+    // What this phone's approvePairing seals for the next device.
+    const records = await ownSuccessionRecords({
+      motebitId: who.id,
+      identityFile: null,
+      heldPublicKeyHex: who.current,
+    });
+    const c = generateX25519Keypair();
+    const next = await buildKeyTransferPayload(
+      who.k2.privateKey,
+      who.current,
+      c.publicKey,
+      "C0DE42",
+      {
+        successionRecords: records,
+      },
+    );
+    const opened = await openPairingKeyTransfer({
+      motebitId: who.id,
+      keyTransfer: next,
+      ephemeralPrivateKey: c.privateKey,
+      pairingCode: "C0DE42",
+      fetchSuccessionChain: () => Promise.resolve([]),
+    });
+    expect(opened.identityBinding).toBe("sovereign");
+    expect(records).toEqual(who.chain);
+  });
+
+  it("rosterAfterPairing admits only the verified lineage, idempotently, and never throws", async () => {
+    const who = await offlineRotated();
+    const forged = { ...who.chain[0]!, old_key_signature: "00".repeat(64) };
+    const input = { motebitId: who.id, publicKeyHex: who.current, records: [forged, ...who.chain] };
+    await rosterAfterPairing(input);
+    await rosterAfterPairing(input);
+    const read = await loadReplica(who.id);
+    expect(read.kind === "value" ? read.replica.succession : []).toEqual(who.chain);
+    const bad: RosterKV = {
+      getItem: async () => {
+        throw new Error("x");
+      },
+      setItem: async () => undefined,
+      removeItem: async () => undefined,
+    };
+    await expect(rosterAfterPairing({ ...input, kv: bad })).resolves.toBeUndefined();
+  });
+
+  it("a refused pairing persists nothing", async () => {
+    const who = await offlineRotated();
+    const stranger = await generateKeypair();
+    const b = generateX25519Keypair();
+    // The relay names who.id, but the transfer is a stranger's key.
+    const keyTransfer = await buildKeyTransferPayload(
+      stranger.privateKey,
+      hex(stranger),
+      b.publicKey,
+      "ABC123",
+      {
+        successionRecords: who.chain,
+      },
+    );
+    const { deps } = pairingDeps(true);
+    const mgr = new MobilePairingManager(deps as never);
+    await expect(
+      mgr.completePairing({ motebitId: who.id, deviceId: "phone-b" }, undefined, {
+        keyTransfer,
+        ephemeralPrivateKey: b.privateKey,
+        pairingCode: "ABC123",
+        pairingId: "pid-1",
+      }),
+    ).rejects.toThrow(/Pairing refused/);
+    expect((await loadReplica(who.id)).kind).toBe("absent");
   });
 });

@@ -1200,3 +1200,141 @@ describe("Identity integrity — succession chain + pairing binding", () => {
     f.app.stop();
   });
 });
+
+describe("Multi-hop pairing — this browser can be Device A for the identity it adopted", () => {
+  // An identity rotated twice OFFLINE (the relay holds no chain): genesis key
+  // g → k1 → k2; the motebit_id is the commitment to g.
+  async function offlineRotated(enc: typeof import("@motebit/encryption")) {
+    const g = await enc.generateKeypair();
+    const k1 = await enc.generateKeypair();
+    const k2 = await enc.generateKeypair();
+    const chain = [
+      await enc.signKeySuccession(g.privateKey, k1.privateKey, k1.publicKey, g.publicKey),
+    ];
+    await new Promise((r) => setTimeout(r, 5));
+    chain.push(
+      await enc.signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey),
+    );
+    return {
+      g,
+      k1,
+      k2,
+      chain,
+      id: await enc.deriveSovereignMotebitId(enc.bytesToHex(g.publicKey)),
+      current: enc.bytesToHex(k2.publicKey),
+    };
+  }
+
+  // Device C opens a transfer this browser built from what it persisted; the
+  // relay serves no chain (the offline rotation was never uploaded).
+  async function deviceCAccepts(
+    enc: typeof import("@motebit/encryption"),
+    motebitId: string,
+    seed: Uint8Array,
+    publicKeyHex: string,
+    records: Awaited<ReturnType<typeof import("../machine-roster.js").ownSuccessionRecords>>,
+  ) {
+    const c = enc.generateX25519Keypair();
+    const keyTransfer = await enc.buildKeyTransferPayload(
+      seed,
+      publicKeyHex,
+      c.publicKey,
+      "C0DE42",
+      {
+        successionRecords: records,
+      },
+    );
+    return enc.openPairingKeyTransfer({
+      motebitId,
+      keyTransfer,
+      ephemeralPrivateKey: c.privateKey,
+      pairingCode: "C0DE42",
+      fetchSuccessionChain: () => Promise.resolve([]),
+    });
+  }
+
+  it("completePairing persists the verified chain; this browser's next transfer carries it and C pairs", async () => {
+    const enc = await import("@motebit/encryption");
+    const { ownSuccessionRecords } = await import("../machine-roster.js");
+    const who = await offlineRotated(enc);
+    const app = new WebApp();
+    await app.bootstrap();
+    const b = enc.generateX25519Keypair();
+    const keyTransfer = await enc.buildKeyTransferPayload(
+      who.k2.privateKey,
+      who.current,
+      b.publicKey,
+      "ABC123",
+      { successionRecords: who.chain },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("/succession")
+          ? new Response(JSON.stringify({ chain: [] }), { status: 200 })
+          : new Response("{}", { status: 200 }),
+      ),
+    );
+    await app.completePairing(
+      { motebitId: who.id, deviceId: "dev-b" },
+      {
+        keyTransfer,
+        ephemeralPrivateKey: b.privateKey,
+        pairingCode: "ABC123",
+        syncUrl: "https://relay.test",
+        pairingId: "pid-1",
+      },
+    );
+    expect(app.motebitId).toBe(who.id);
+
+    // What approvePairing seals for the NEXT device: the verified chain.
+    const records = await ownSuccessionRecords({ motebitId: who.id });
+    const opened = await deviceCAccepts(enc, who.id, who.k2.privateKey, who.current, records);
+    expect(opened.identityBinding).toBe("sovereign");
+    expect(records).toEqual(who.chain);
+    app.stop();
+  });
+
+  it("restoreIdentity from an offline-rotated motebit.md keeps its chain, so this browser can be Device A", async () => {
+    const enc = await import("@motebit/encryption");
+    const idf = await import("@motebit/identity-file");
+    const { ownSuccessionRecords } = await import("../machine-roster.js");
+    const who = await offlineRotated(enc);
+    // The motebit.md the sovereign exported after rotating offline twice.
+    let file = await idf.generate(
+      { motebitId: who.id, ownerId: "owner", publicKeyHex: enc.bytesToHex(who.g.publicKey) },
+      who.g.privateKey,
+    );
+    file = await idf.rotate({
+      existingContent: file,
+      newPublicKey: who.k1.publicKey,
+      newPrivateKey: who.k1.privateKey,
+      successionRecord: who.chain[0]!,
+    });
+    file = await idf.rotate({
+      existingContent: file,
+      newPublicKey: who.k2.publicKey,
+      newPrivateKey: who.k2.privateKey,
+      successionRecord: who.chain[1]!,
+    });
+    const imported = await idf.importIdentityFile(file);
+    expect(imported.valid).toBe(true);
+    if (!imported.valid) return;
+
+    const app = new WebApp();
+    await app.bootstrap();
+    const res = await app.restoreIdentity({
+      privateKeyHex: enc.bytesToHex(who.k2.privateKey),
+      metadata: imported.metadata,
+      originalContent: file,
+      preserveMemories: false,
+    });
+    expect(res.ok).toBe(true);
+
+    const records = await ownSuccessionRecords({ motebitId: who.id });
+    const opened = await deviceCAccepts(enc, who.id, who.k2.privateKey, who.current, records);
+    expect(opened.identityBinding).toBe("sovereign");
+    expect(records).toEqual(who.chain);
+    app.stop();
+  });
+});
