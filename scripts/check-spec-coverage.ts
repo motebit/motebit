@@ -24,9 +24,16 @@
  *        a. every spec appears exactly once, under exactly one of the
  *           `INDEX_CLASSES` headings, and nothing else is listed;
  *        b. every relative link in the README resolves to an existing file;
- *        c. each entry's Status equals the leading word of the spec's own
- *           first `**Status:**` line (`Unstated` when the spec has none) —
- *           the same parse `check-spec-impl-coverage` uses.
+ *        c. each spec's own first `**Status:**` line leads with a word from
+ *           the closed set `STATUSES` (case-sensitive), and its entry shows
+ *           that word — unless the spec is on `PENDING_STATUS_DECISION`, whose
+ *           entry shows `pending decision` instead. A pending spec that gains
+ *           a valid status is a stale entry and fails, so the list only
+ *           shrinks.
+ *
+ * What it does NOT check: whether a spec satisfies the README's admission
+ * rule. That is human judgment; the gate checks only the mechanical facts
+ * above.
  *
  * This is the ninth synchronization invariant defense: specs ↔ protocol types.
  * The other eight are enumerated in CLAUDE.md under "Synchronization invariants".
@@ -62,8 +69,33 @@ const INDEX_CLASSES = [
   "Vocabulary",
 ] as const;
 
-/** An index entry: `- [name](name) · Status: Word · purpose`. */
-const INDEX_ENTRY = /^-\s+\[([^\]]+)\]\(([^)]+)\)\s+·\s+Status:\s+(\S+)\s+·\s+\S/;
+/**
+ * A spec's Status is a compatibility promise to outside implementers, so it is
+ * a closed vocabulary, matched case-sensitively. `converged`, `Final`,
+ * `stable` or a bare date is not a status.
+ */
+const STATUSES = ["Draft", "Stable", "Deprecated"] as const;
+
+/** How the README renders a spec on `PENDING_STATUS_DECISION`. */
+const PENDING_RENDERING = "pending decision";
+
+/**
+ * Specs whose Status is not (yet) in `STATUSES`, each with why. Shrink-only:
+ * choosing a status is a founder decision, so the gate never picks one — it
+ * holds the spec here until the decision lands in the spec itself, and an
+ * entry whose spec now carries a valid status (or names no spec) fails as
+ * stale. Never add to this map to get green.
+ */
+const PENDING_STATUS_DECISION: Record<string, string> = {
+  "agent-revocation-v1.md": "no Status line; maturity is a founder decision",
+  "bond-v1.md": "no Status line; maturity is a founder decision",
+  "evidence-provenance-v1.md": "no Status line; maturity is a founder decision",
+  "machine-roster-v1.md": "no Status line; maturity is a founder decision",
+  "settlement-invoice-v1.md": "converged is not a status; Stable vs Draft is a founder decision",
+};
+
+/** An index entry: `- [name](name) · Status: <Word | pending decision> · purpose`. */
+const INDEX_ENTRY = /^-\s+\[([^\]]+)\]\(([^)]+)\)\s+·\s+Status:\s+(pending decision|\S+)\s+·\s+\S/;
 
 /**
  * Specs exempt from the "at least one `#### Wire format (foundation law)`
@@ -186,10 +218,18 @@ function analyzeSpec(file: string): SpecAnalysis {
   return { file, basename, wireSections, hasWireBlock };
 }
 
-/** Leading word of a spec's first `**Status:**` line, or `Unstated`. */
-function specStatus(file: string): string {
-  const m = readFileSync(file, "utf-8").match(/^\*\*Status:\*\*\s*(\w+)/m);
-  return m ? m[1]! : "Unstated";
+/**
+ * Leading token of a spec's first `**Status:**` line (up to whitespace, so
+ * `Draft (phase-1 …)` is `Draft` but `2026-06-28` stays whole), or `null` when
+ * the spec has no Status line.
+ */
+function specStatus(file: string): string | null {
+  const m = readFileSync(file, "utf-8").match(/^\*\*Status:\*\*[ \t]*(\S*)/m);
+  return m ? m[1]! : null;
+}
+
+function isClosedStatus(word: string | null): boolean {
+  return word !== null && (STATUSES as readonly string[]).includes(word);
 }
 
 function checkIndexAndExemptions(specs: SpecAnalysis[]): string[] {
@@ -209,6 +249,48 @@ function checkIndexAndExemptions(specs: SpecAnalysis[]): string[] {
         canonical: "scripts/check-spec-coverage.ts (NON_WIRE)",
         fix: "remove the stale entry from NON_WIRE — the spec now carries wire bytes (or is gone).",
         sites: stale,
+      }),
+    );
+  }
+
+  const stalePending: string[] = [];
+  for (const name of Object.keys(PENDING_STATUS_DECISION)) {
+    const spec = byName.get(name);
+    if (!spec) stalePending.push(`${name} — no such spec in spec/`);
+    else if (isClosedStatus(specStatus(spec.file)))
+      stalePending.push(`${name} — now carries **Status:** ${specStatus(spec.file)}`);
+  }
+  if (stalePending.length > 0) {
+    failures.push(
+      formatRepair({
+        invariant: `${stalePending.length} stale PENDING_STATUS_DECISION entr${stalePending.length === 1 ? "y" : "ies"} in scripts/check-spec-coverage.ts`,
+        canonical:
+          "scripts/check-spec-coverage.ts (PENDING_STATUS_DECISION) + the spec's own **Status:** line",
+        fix: "the status decision has landed in the spec: remove its PENDING_STATUS_DECISION entry and show the spec's status in its spec/README.md entry.",
+        sites: stalePending,
+      }),
+    );
+  }
+
+  const badStatus: string[] = [];
+  for (const s of specs) {
+    if (s.basename in PENDING_STATUS_DECISION) continue;
+    const own = specStatus(s.file);
+    if (own === null) {
+      badStatus.push(`spec/${s.basename} has no \`**Status:**\` line`);
+    } else if (!isClosedStatus(own)) {
+      badStatus.push(`spec/${s.basename} **Status:** "${own}" is not in the closed status set`);
+    }
+  }
+  if (badStatus.length > 0) {
+    failures.push(
+      formatRepair({
+        invariant: `${badStatus.length} spec(s) outside the closed status set {${STATUSES.join(", ")}} (case-sensitive)`,
+        canonical: "scripts/check-spec-coverage.ts (STATUSES) + the spec's own **Status:** line",
+        fix:
+          `lead the spec's first \`**Status:**\` line with exactly one of ${STATUSES.join(" / ")}. ` +
+          "Choosing a status is a founder decision; if it is not yet made, do not pick one here — raise it with the founder.",
+        sites: badStatus,
       }),
     );
   }
@@ -254,7 +336,7 @@ function checkIndexAndExemptions(specs: SpecAnalysis[]): string[] {
     if (!entry) {
       if (/^-\s+\[[^\]]+\]\([^)/]+\.md\)/.test(line) && currentClass) {
         problems.push(
-          `${where} malformed entry — expected "- [x.md](x.md) · Status: <Word> · <purpose>"`,
+          `${where} malformed entry — expected "- [x.md](x.md) · Status: <Word | ${PENDING_RENDERING}> · <purpose>"`,
         );
       }
       continue;
@@ -272,9 +354,13 @@ function checkIndexAndExemptions(specs: SpecAnalysis[]): string[] {
       continue;
     }
     seen.set(target!, [...(seen.get(target!) ?? []), `${currentClass} (line ${i + 1})`]);
-    const own = specStatus(spec.file);
-    if (status !== own) {
-      problems.push(`${where} ${target} Status "${status}" ≠ the spec's own **Status:** "${own}"`);
+    const expected = target! in PENDING_STATUS_DECISION ? PENDING_RENDERING : specStatus(spec.file);
+    if (status !== expected) {
+      problems.push(
+        target! in PENDING_STATUS_DECISION
+          ? `${where} ${target} is pending a status decision; its entry must read "Status: ${PENDING_RENDERING}", not "Status: ${status}"`
+          : `${where} ${target} Status "${status}" ≠ the spec's own **Status:** "${expected ?? "(none)"}"`,
+      );
     }
   }
 
@@ -295,7 +381,7 @@ function checkIndexAndExemptions(specs: SpecAnalysis[]): string[] {
         canonical: "spec/README.md (index) + each spec's own **Status:** line",
         fix:
           "list every spec exactly once as `- [x.md](x.md) · Status: <Word> · <purpose>` under one INDEX_CLASSES heading, " +
-          "copying <Word> from the spec's first `**Status:**` line (Unstated if it has none), and fix any dead link.",
+          `where <Word> is the spec's own status (one of ${STATUSES.join(" / ")}), or \`${PENDING_RENDERING}\` for a PENDING_STATUS_DECISION spec, and fix any dead link.`,
         sites: problems,
       }),
     );
@@ -338,9 +424,6 @@ function main(): void {
     for (const f of indexFailures) process.stderr.write(f);
     process.exit(1);
   }
-  console.log(
-    `✓ spec/README.md indexes ${specs.length} specs across ${INDEX_CLASSES.length} classes; statuses match; NON_WIRE exemptions: ${Object.keys(NON_WIRE).length}.`,
-  );
 
   if (missing.length > 0) {
     console.log(
@@ -374,9 +457,18 @@ function main(): void {
     if (strict) process.exit(1);
   }
 
-  if (missing.length === 0 && (unstructured.length === 0 || !strict)) {
-    console.log(`✓ All wire-format types in spec/ have matching exports in @motebit/protocol.`);
-  }
+  // The success line claims only what was checked above — never that a spec
+  // satisfies the admission rule (human judgment). The wire-format clause is
+  // printed only when it holds for every spec.
+  const indexed =
+    `every spec (${specs.length}) is indexed once under one class with a matching status from the closed set ` +
+    `{${STATUSES.join(", ")}} (${Object.keys(PENDING_STATUS_DECISION).length} pending a founder decision)`;
+  console.log(
+    unstructured.length === 0
+      ? `✓ ${indexed}, and either declares a wire format or carries a stated reason it is normative without one (NON_WIRE: ${Object.keys(NON_WIRE).length}).`
+      : `✓ ${indexed}.`,
+  );
+  console.log(`✓ All wire-format types in spec/ have matching exports in @motebit/protocol.`);
 }
 
 main();
