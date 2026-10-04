@@ -14,6 +14,7 @@ import {
   defaultModelForVendor,
   motebitCloudAdmission,
   motebitCloudAdmitsModel,
+  motebitCloudPickerModels,
   providerAcceptsModel,
   type ModelDefaultProvider,
 } from "../index.js";
@@ -77,5 +78,15 @@ describe("defaultModelForProvider", () => {
       (m) => !motebitCloudAdmission(m, { tier: "deposit" }).admitted,
     );
     expect(refused).toEqual([]);
+  });
+
+  it("motebitCloudPickerModels is PROXY_MODELS filtered by the admission rule, per tier", () => {
+    for (const tier of ["deposit", "free-credit"] as const) {
+      expect(motebitCloudPickerModels(tier)).toEqual(
+        PROXY_MODELS.filter((m) => motebitCloudAdmission(m, { tier }).admitted),
+      );
+    }
+    expect(motebitCloudPickerModels()).toEqual(motebitCloudPickerModels("deposit"));
+    expect(motebitCloudPickerModels()).toEqual([...PROXY_MODELS]);
   });
 });

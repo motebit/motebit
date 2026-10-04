@@ -693,6 +693,9 @@ export interface MotebitCloudCatalog {
 export type MotebitCloudFundingTier = "deposit" | "free-credit";
 
 // @public
+export function motebitCloudPickerModels(tier?: MotebitCloudFundingTier): readonly string[];
+
+// @public
 export interface MotebitCloudProviderConfig {
     baseUrl?: string;
     // (undocumented)
@@ -885,7 +888,7 @@ export type ProviderVerification =
 | "available";
 
 // @public
-export const PROXY_MODELS: readonly ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+export const PROXY_MODELS: readonly ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
 
 // @public (undocumented)
 export type ProxyModel = (typeof PROXY_MODELS)[number];

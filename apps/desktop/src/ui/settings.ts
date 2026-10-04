@@ -21,8 +21,7 @@ import {
   DEEPSEEK_MODELS,
   GROQ_MODELS,
   LOCAL_SERVER_SUGGESTED_MODELS,
-  PROXY_MODELS,
-  motebitCloudAdmission,
+  motebitCloudPickerModels,
   APPROVAL_PRESET_CONFIGS,
   type ApprovalPreset,
   type GovernanceConfig,
@@ -41,11 +40,8 @@ import { updateConfig } from "../config-update";
 import { mountMachines } from "./machines-section";
 
 // The Cloud picker offers only ids the shared admission function admits
-// (#654): a PROXY_MODELS row a minted token refuses (400) is never offered.
-// Filtered, never hand-edited — the sdk admission rule stays the one source.
-const CLOUD_PICKER_MODELS: readonly string[] = PROXY_MODELS.filter(
-  (m) => motebitCloudAdmission(m).admitted,
-);
+// (#654): one sdk function, shared with web — never a hand-edited list.
+const CLOUD_PICKER_MODELS: readonly string[] = motebitCloudPickerModels();
 
 // === DOM Refs ===
 

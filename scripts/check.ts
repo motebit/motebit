@@ -394,7 +394,7 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-model-picker-canonical",
     defends:
-      "every surface's Anthropic model picker, default and alias renders from @motebit/sdk (ANTHROPIC_PICKER / pickerModelForTier / DEFAULT_ANTHROPIC_MODEL in packages/sdk/src/models.ts) — deny-by-default on quoted Claude model-id literals in app surface source outside tests, comments and an argued file+text+why allowlist; defends the #654 class where eight hand-copied picker/default/alias sites staled after Opus 5.5 / Sonnet 5 shipped (invariant #170, full history in docs/drift-defenses.md)",
+      "every surface's Anthropic model picker, default and alias renders from @motebit/sdk (ANTHROPIC_PICKER / pickerModelForTier / DEFAULT_ANTHROPIC_MODEL in packages/sdk/src/models.ts) — deny-by-default on quoted Claude model-id literals in app surface source outside tests, comments and an argued file+text+why allowlist; defends the #654 class where eight hand-copied picker/default/alias sites staled after Opus 5.5 / Sonnet 5 shipped (invariant #171, full history in docs/drift-defenses.md)",
     script: "check-model-picker-canonical",
   },
   {

@@ -93,8 +93,6 @@ interface AllowEntry {
   readonly why: string;
 }
 
-const CLOUD_LANE =
-  "Motebit Cloud (#cloud-model) selector — its list is the Cloud catalog's concern, out of #654 scope (Cloud/proxy untouched).";
 const TEST_FIXTURE =
   "test fixture: a stored / typed / legacy id the test feeds in to prove it is shown, admitted or refused — the test's subject, not a picker copy.";
 const DOCS_PICKER =
@@ -106,11 +104,6 @@ const LLMS_FULL =
   "generated concatenation of the docs content (the DOCS_PICKER pages above); regenerated with the docs, never hand-edited.";
 
 const ALLOWLIST: readonly AllowEntry[] = [
-  {
-    file: "apps/web/index.html",
-    ids: ["claude-sonnet-4-20250514", "claude-opus-4-20250115", "claude-haiku-4-5-20251001"],
-    why: CLOUD_LANE,
-  },
   {
     file: "apps/cli/schema/motebit-yaml-v1.json",
     ids: ["claude-sonnet-5"],
@@ -449,7 +442,7 @@ function main(): void {
       fix:
         "import the id from @motebit/sdk instead — render picker rows with pickerOptionsWithStored()/ANTHROPIC_PICKER, " +
         "resolve a tier with pickerModelForTier(), a provider default with defaultModelForProvider(). Do not assemble an " +
-        "id from pieces. If the token is genuinely not a picker copy (a test fixture, the Cloud selector, release history), " +
+        "id from pieces. If the token is genuinely not a picker copy (a test fixture, release history), " +
         "add {file, ids: [exact token], why} to ALLOWLIST in scripts/check-model-picker-canonical.ts.",
       sites: findings.map(
         (f) => `${f.file}:${f.line}  [${f.kind}] ${f.token}  — ${f.source.slice(0, 110)}`,

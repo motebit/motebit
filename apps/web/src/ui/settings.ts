@@ -24,7 +24,7 @@ import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
 import { mountMachines } from "./machines-section";
 import { DEFAULT_GOOGLE_MODEL, DEFAULT_PROXY_MODEL, isLocalServerUrl } from "@motebit/sdk";
-import { selectStoredCloudModel, selectStoredModel } from "./cloud-model";
+import { renderCloudModelPicker, selectStoredCloudModel, selectStoredModel } from "./cloud-model";
 import { renderAnthropicPicker } from "./anthropic-picker";
 
 /** Which provider tab the UI is showing. Maps from `UnifiedProviderConfig.mode`. */
@@ -190,6 +190,9 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // The Anthropic <select> ships empty in index.html; fill it with the
   // canonical rows (default selected) before anything reads its value.
   renderAnthropicPicker(anthropicModel);
+  // The Cloud <select> ships only its `auto` row; the models come from the sdk.
+  const cloudModelSelect = document.getElementById("cloud-model") as HTMLSelectElement | null;
+  if (cloudModelSelect) renderCloudModelPicker(cloudModelSelect);
 
   // === Tab Switching (Appearance / Intelligence) ===
 
@@ -1227,14 +1230,15 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       anthropicModel,
       config?.mode === "byok" && config.vendor === "anthropic" ? config.model : undefined,
     );
+    // Re-render so a stored row inserted on an earlier open never lingers.
+    if (cloudModelSelect) renderCloudModelPicker(cloudModelSelect);
     if (config) {
       if (maxTokensSelect) maxTokensSelect.value = String(config.maxTokens ?? 4096);
 
       switch (config.mode) {
         case "motebit-cloud": {
           switchProviderTab("proxy");
-          const cloudModelEl = document.getElementById("cloud-model") as HTMLSelectElement | null;
-          if (cloudModelEl) selectStoredCloudModel(cloudModelEl, config.model);
+          if (cloudModelSelect) selectStoredCloudModel(cloudModelSelect, config.model);
           break;
         }
         case "byok": {

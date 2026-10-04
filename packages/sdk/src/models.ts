@@ -172,7 +172,6 @@ export const OLLAMA_SUGGESTED_MODELS = LOCAL_SERVER_SUGGESTED_MODELS;
 
 /** Models available through the Motebit proxy (all cloud providers). */
 export const PROXY_MODELS = [
-  "claude-opus-4-7",
   "claude-sonnet-4-6",
   "claude-haiku-4-5-20251001",
   "gpt-5.4",
@@ -432,6 +431,18 @@ export function motebitCloudAdmission(
 /** Would Motebit Cloud admit `model` as sent, for a paying (deposit-funded) account? */
 export function motebitCloudAdmitsModel(model: string): boolean {
   return motebitCloudAdmission(model).admitted;
+}
+
+/**
+ * The Motebit Cloud picker's rows: {@link PROXY_MODELS} filtered by
+ * {@link motebitCloudAdmission} for `tier` (default `"deposit"`). Every
+ * surface renders its Cloud `<select>` from this one function (#654 cold
+ * review) — never a hand-copied list. The `"auto"` row is the surface's own.
+ */
+export function motebitCloudPickerModels(
+  tier: MotebitCloudFundingTier = "deposit",
+): readonly string[] {
+  return PROXY_MODELS.filter((m) => motebitCloudAdmission(m, { tier }).admitted);
 }
 
 /** Every provider a surface can switch to, under any of its spellings. */
