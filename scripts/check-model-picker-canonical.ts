@@ -64,14 +64,33 @@
  *     cli      slash-model-tiers.test           runs `/model opus|sonnet|haiku`
  *   NOT execution-covered: any OTHER apps/ code path that constructs a
  *   Claude id dynamically (CLI `--help` / motebit.yaml schema text are
- *   interpolated from sdk constants, docs pages are gated by
- *   check-docs-default-models — neither is executed against the picker).
+ *   interpolated from sdk constants and not executed against the picker).
+ *
+ * Docs picker arm (#654 cold review of 27814cf). The docs NAME the picker
+ * rows in prose, so they cannot import them; the allowlist alone only proved
+ * the tokens still occurred, not that they were still the picker (moving the
+ * strongest row to `claude-fable-5-1` left this gate and
+ * check-docs-default-models green). Over every docs page
+ * (`apps/docs/content/**\/*.md[x]`) and every generated LLM artifact
+ * (`apps/docs/public/llms*.txt`), each Claude token is checked against
+ * `ANTHROPIC_PICKER`, loaded by EXECUTING packages/sdk/src/models.ts (or the
+ * copy named by `--models <path>`, which the self-test mutates):
+ *   LABEL    must equal a row's label head (the text before " — ");
+ *   ID       must equal a row's id, or be a DOCS_TYPED_IDS entry — an id the
+ *            docs name as "typed by id", which must be in ANTHROPIC_MODELS
+ *            and must NOT be a picker row (else the docs call a picker row
+ *            "other");
+ *   FRAGMENT never allowed in docs.
+ * The llms*.txt files are regenerated from the pages by
+ * scripts/generate-llms-txt.ts and held byte-fresh by check-llms-txt-fresh,
+ * and this arm scans them directly too.
  */
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import { formatRepair } from "./lib/gate-report.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -96,12 +115,72 @@ interface AllowEntry {
 const TEST_FIXTURE =
   "test fixture: a stored / typed / legacy id the test feeds in to prove it is shown, admitted or refused — the test's subject, not a picker copy.";
 const DOCS_PICKER =
-  "docs prose naming the current picker rows; kept in sync with @motebit/sdk by check-docs-default-models (#56), its own drift gate.";
+  "docs prose naming the current picker rows; the docs picker arm of THIS gate requires every label token here to equal an ANTHROPIC_PICKER row's label head and every id token to equal an ANTHROPIC_PICKER row id or a DOCS_TYPED_IDS entry (in ANTHROPIC_MODELS, not a picker row) — loaded from @motebit/sdk's models.ts, so a picker change with stale docs is RED.";
 const CHANGELOG = "release history: records what shipped at that version; immutable by design.";
 const GENERATED =
   "generated JSON Schema: the default is interpolated from DEFAULT_ANTHROPIC_MODEL in apps/cli/src/yaml-config.ts and the committed file is regenerated from it.";
 const LLMS_FULL =
-  "generated concatenation of the docs content (the DOCS_PICKER pages above); regenerated with the docs, never hand-edited.";
+  "generated concatenation of the docs content (the DOCS_PICKER pages above), held byte-fresh against them by check-llms-txt-fresh; the docs picker arm of THIS gate checks its tokens against ANTHROPIC_PICKER exactly as for the pages.";
+
+/** Docs pages + generated LLM artifacts the docs picker arm governs. */
+function isDocsSurface(rel: string): boolean {
+  return (
+    (rel.startsWith("apps/docs/content/") && /\.mdx?$/.test(rel)) ||
+    /^apps\/docs\/public\/llms[^/]*\.txt$/.test(rel)
+  );
+}
+
+/**
+ * Non-picker Claude ids the docs name as "typed by id" examples. Each must be
+ * an ANTHROPIC_MODELS id and must NOT be an ANTHROPIC_PICKER row; an entry no
+ * docs surface names is stale (red).
+ */
+const DOCS_TYPED_IDS: readonly string[] = ["claude-fable-5-1"];
+
+interface PickerSource {
+  readonly ids: ReadonlySet<string>;
+  readonly labels: ReadonlySet<string>;
+  readonly models: ReadonlySet<string>;
+  readonly path: string;
+}
+
+async function loadPicker(modelsPath: string): Promise<PickerSource> {
+  const mod = (await import(pathToFileURL(modelsPath).href)) as {
+    ANTHROPIC_PICKER: readonly { id: string; label: string }[];
+    ANTHROPIC_MODELS: readonly string[];
+  };
+  return {
+    ids: new Set(mod.ANTHROPIC_PICKER.map((r) => r.id)),
+    labels: new Set(mod.ANTHROPIC_PICKER.map((r) => r.label.split(" — ")[0]!.trim())),
+    models: new Set(mod.ANTHROPIC_MODELS),
+    path: path.relative(REPO_ROOT, modelsPath).startsWith("..")
+      ? modelsPath
+      : path.relative(REPO_ROOT, modelsPath),
+  };
+}
+
+function modelsPathFromArgs(argv: readonly string[]): string {
+  const i = argv.indexOf("--models");
+  if (i === -1) return path.join(REPO_ROOT, "packages/sdk/src/models.ts");
+  const v = argv[i + 1];
+  if (v == null || v === "") throw new Error("--models requires a path");
+  return path.resolve(v);
+}
+
+/** Why a docs token is not the current picker, or null when it is. */
+function docsVerdict(kind: string, token: string, p: PickerSource): string | null {
+  if (kind === "label") {
+    return p.labels.has(token)
+      ? null
+      : `label is not an ANTHROPIC_PICKER label head (${[...p.labels].join(" | ")})`;
+  }
+  if (kind === "id") {
+    if (p.ids.has(token)) return null;
+    if (DOCS_TYPED_IDS.includes(token)) return null; // validated separately
+    return `id is neither an ANTHROPIC_PICKER id (${[...p.ids].join(" | ")}) nor a DOCS_TYPED_IDS entry`;
+  }
+  return "a runtime-assembled id fragment has no place in docs";
+}
 
 const ALLOWLIST: readonly AllowEntry[] = [
   {
@@ -386,9 +465,14 @@ interface Finding {
   readonly source: string;
 }
 
-function main(): void {
+async function main(): Promise<void> {
+  const picker = await loadPicker(modelsPathFromArgs(process.argv.slice(2)));
   const files = trackedFiles();
   const findings: Finding[] = [];
+  const docsFindings: (Finding & { readonly why: string })[] = [];
+  const docsTypedSeen = new Set<string>();
+  let docsFiles = 0;
+  let docsTokens = 0;
   const seenAllow = new Set<string>(); // `${file}\0${token}`
   const allowed = new Map<string, Set<string>>();
   for (const a of ALLOWLIST) {
@@ -402,11 +486,21 @@ function main(): void {
     const src = readText(rel);
     if (src == null) continue;
     textFiles++;
+    const docs = isDocsSurface(rel);
+    if (docs) docsFiles++;
     for (const { line, at } of logicalLines(src)) {
       for (const { kind, re } of RULES) {
         for (const m of line.matchAll(re)) {
           // A sentence-final "." / "-" is punctuation, not part of the id.
           const token = m[0].replace(/[._-]+$/, "");
+          if (docs) {
+            docsTokens++;
+            if (DOCS_TYPED_IDS.includes(token)) docsTypedSeen.add(token);
+            const why = docsVerdict(kind, token, picker);
+            if (why != null) {
+              docsFindings.push({ file: rel, line: at, token, kind, source: line.trim(), why });
+            }
+          }
           if (allowed.get(rel)?.has(token)) {
             seenAllow.add(`${rel}\0${token}`);
             continue;
@@ -421,12 +515,30 @@ function main(): void {
     a.ids.filter((id) => !seenAllow.has(`${a.file}\0${id}`)).map((id) => ({ file: a.file, id })),
   );
   const pairs = ALLOWLIST.reduce((n, a) => n + a.ids.length, 0);
+  const typedBad = DOCS_TYPED_IDS.flatMap((id) => {
+    if (!picker.models.has(id)) return [`${id}: not in ANTHROPIC_MODELS`];
+    if (picker.ids.has(id))
+      return [
+        `${id}: is now an ANTHROPIC_PICKER row — the docs call it a typed-by-id "other" model`,
+      ];
+    if (!docsTypedSeen.has(id)) return [`${id}: no docs surface names it (stale entry)`];
+    return [];
+  });
 
   console.log(
     `▸ check-model-picker-canonical — aperture: ${textFiles} text file(s) of ${files.length} git-tracked/untracked-unignored path(s) under apps/ (all extensions, case-insensitive, comments included); ${seenAllow.size} of ${pairs} allowlisted (file, token) pair(s) matched. Line continuations joined and \\u/\\x/&#, legacy-octal (\\143) and identity (\\-) escapes decoded before scanning. Scope: guards ACCIDENTAL hand-copied ids; deliberately obfuscated ids (a \\ continuation before CR/U+2028/U+2029, runtime assembly) are out of scope, covered by the per-surface picker tests that render from @motebit/sdk. Dynamically-assembled ids that never spell "claude" beside a quote are NOT seen by this scan; execution tests cover only the five picker/alias consumers — web/desktop/spatial settings-anthropic-picker.test, mobile intelligence-tab-picker.test, CLI slash-model-tiers.test — and no other apps/ code path.`,
   );
 
-  if (findings.length === 0 && stale.length === 0) {
+  console.log(
+    `▸ docs picker arm — ${docsFiles} docs surface(s) (apps/docs/content/**/*.md[x] + apps/docs/public/llms*.txt), ${docsTokens} Claude token(s) checked against ANTHROPIC_PICKER (${picker.ids.size} row(s)) executed from ${picker.path}; ${DOCS_TYPED_IDS.length} DOCS_TYPED_IDS entry(ies).`,
+  );
+
+  if (
+    findings.length === 0 &&
+    stale.length === 0 &&
+    docsFindings.length === 0 &&
+    typedBad.length === 0
+  ) {
     console.log(
       `✓ check-model-picker-canonical: 0 Claude model-id tokens outside the allowlist across ${textFiles} file(s); every Anthropic picker renders from @motebit/sdk ANTHROPIC_PICKER.`,
     );
@@ -450,6 +562,23 @@ function main(): void {
       doctrine: "docs/doctrine/intelligence-pluggability-contract.md; docs/drift-defenses.md",
     });
   }
+  if (docsFindings.length > 0 || typedBad.length > 0) {
+    out += formatRepair({
+      invariant: `${docsFindings.length + typedBad.length} docs picker token(s) disagree with ANTHROPIC_PICKER — the docs present a model as a picker option that the sdk no longer offers (or a picker row as "other").`,
+      canonical: `${picker.path} (ANTHROPIC_PICKER, ANTHROPIC_MODELS)`,
+      fix:
+        'edit the .mdx page(s) under apps/docs/content to name the current ANTHROPIC_PICKER rows (label head before " — ", and id), ' +
+        "then regenerate apps/docs/public/llms*.txt with `npx tsx scripts/generate-llms-txt.ts` (check-llms-txt-fresh holds them fresh); " +
+        "update DOCS_TYPED_IDS in scripts/check-model-picker-canonical.ts only for a non-picker id the docs name as typed-by-id.",
+      sites: [
+        ...docsFindings.map(
+          (f) =>
+            `${f.file}:${f.line}  [${f.kind}] ${f.token}  — ${f.why}  — ${f.source.slice(0, 90)}`,
+        ),
+        ...typedBad.map((t) => `DOCS_TYPED_IDS ${t}`),
+      ],
+    });
+  }
   if (stale.length > 0) {
     out += formatRepair({
       invariant: `${stale.length} stale ALLOWLIST (file, token) pair(s) — the argued exception no longer occurs in that file.`,
@@ -462,4 +591,9 @@ function main(): void {
   process.exit(1);
 }
 
-main();
+main().catch((err: unknown) => {
+  process.stderr.write(
+    `✗ check-model-picker-canonical: ${err instanceof Error ? err.message : String(err)}\n`,
+  );
+  process.exit(1);
+});

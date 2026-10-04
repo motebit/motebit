@@ -1177,6 +1177,15 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-model-picker-canonical",
     proves:
+      "docs picker arm: the docs pages + llms*.txt follow ANTHROPIC_PICKER — moving the strongest row to `claude-fable-5-1` while the docs still name `claude-opus-5-5` fires (#654 cold review of 27814cf: this mutation left every gate green while the allowlist claimed the docs were kept in sync)",
+    perturb: () =>
+      mutateFile("packages/sdk/src/models.ts", (src) =>
+        src.replace('{ id: "claude-opus-5-5", label', '{ id: "claude-fable-5-1", label'),
+      ),
+  },
+  {
+    script: "check-model-picker-canonical",
+    proves:
       "flags a hand-copied Anthropic model option list in app surface source — the exact #654 incident where web's BYOK <select> offered Opus 4.7 / Sonnet 4.6 after Opus 5.5 / Sonnet 5 shipped, because the list was typed into index.html instead of rendered from @motebit/sdk ANTHROPIC_PICKER",
     perturb: () =>
       writeFixture(
