@@ -1,9 +1,18 @@
 /**
  * Every relay 402 the delegate paths can receive × every CLI delegate path.
  * Each cell must name the remedy that actually clears the refusal: `motebit
- * fund` ONLY when the 402 is genuinely insufficient relay balance, `--sovereign`
- * when paid delegation to another agent must settle P2P (locally or across a
- * federated peer), and the relay's own words for a refusal no deposit clears.
+ * fund` ONLY when a deposit can clear it, `--sovereign` when paid delegation to
+ * another agent must settle P2P (locally or across a federated peer), and the
+ * relay's own words for a refusal no deposit clears.
+ *
+ * A codeless 402 (the x402 challenge, a facilitator outage, a non-JSON body)
+ * is the relay's x402 middleware, which runs BEFORE the task handler whenever
+ * the spendable balance is below the price, whoever the worker is. A deposit
+ * clears it only for self-delegation: once spendable >= price, a submission
+ * to ANOTHER agent reaches the Arc 3.5 gate and is refused
+ * `TASK_P2P_PROOF_REQUIRED`, which no deposit clears. So the codeless remedy
+ * depends on the worker — self: `fund`; another agent: `--sovereign`; not
+ * known (`--plan` routes by capability): both, each with when it applies.
  *
  * Paths:
  *   - direct    — `motebit delegate` (the submission's 402 body, via the helper)
@@ -27,7 +36,8 @@ import type { MotebitRuntime } from "@motebit/runtime";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { parseCliArgs, type CliConfig } from "../args.js";
 
-type Remedy = "fund" | "sovereign" | "relay-words";
+/** `either`: the worker is not known, so fund-if-self, else `--sovereign`. */
+type Remedy = "fund" | "sovereign" | "relay-words" | "either";
 
 interface Row {
   label: string;
@@ -37,7 +47,11 @@ interface Row {
   runtimeCode: "payment_proof_required" | "insufficient_balance";
   /** A substring of the relay's words a `relay-words` remedy must carry. */
   words?: string;
+  /** `motebit delegate` to ANOTHER agent (`--target <other>`, or a discovered worker). */
   direct: Remedy;
+  /** `motebit delegate --target <yourself>` — self-delegation. */
+  self: Remedy;
+  /** `--plan`: the relay routes each step by capability, so the worker is unknown. */
   plan: Remedy;
 }
 
@@ -47,6 +61,7 @@ const ROWS: Row[] = [
     body: JSON.stringify({ error: "Insufficient funds", code: "INSUFFICIENT_FUNDS", status: 402 }),
     runtimeCode: "insufficient_balance",
     direct: "fund",
+    self: "fund",
     plan: "fund",
   },
   {
@@ -58,6 +73,7 @@ const ROWS: Row[] = [
     }),
     runtimeCode: "payment_proof_required",
     direct: "sovereign",
+    self: "sovereign",
     plan: "sovereign",
   },
   {
@@ -70,6 +86,7 @@ const ROWS: Row[] = [
     }),
     runtimeCode: "payment_proof_required",
     direct: "sovereign",
+    self: "sovereign",
     plan: "sovereign",
   },
   {
@@ -83,6 +100,7 @@ const ROWS: Row[] = [
     runtimeCode: "insufficient_balance",
     words: "facilitator refused",
     direct: "relay-words",
+    self: "relay-words",
     plan: "relay-words",
   },
   {
@@ -95,6 +113,7 @@ const ROWS: Row[] = [
     runtimeCode: "insufficient_balance",
     words: "Do NOT pay again",
     direct: "relay-words",
+    self: "relay-words",
     plan: "relay-words",
   },
   {
@@ -103,14 +122,16 @@ const ROWS: Row[] = [
     runtimeCode: "insufficient_balance",
     words: "Some future refusal",
     direct: "relay-words",
+    self: "relay-words",
     plan: "relay-words",
   },
   {
     label: "x402 challenge (codeless: spendable balance below the price)",
     body: JSON.stringify({ x402Version: 2, error: "Payment required", accepts: [] }),
     runtimeCode: "insufficient_balance",
-    direct: "fund",
-    plan: "fund",
+    direct: "sovereign",
+    self: "fund",
+    plan: "either",
   },
   {
     label: "facilitator unavailable (codeless payment_required)",
@@ -119,19 +140,29 @@ const ROWS: Row[] = [
       message: "Payment facilitator unavailable — deposit to virtual account or retry later",
     }),
     runtimeCode: "insufficient_balance",
-    direct: "fund",
-    plan: "fund",
+    direct: "sovereign",
+    self: "fund",
+    plan: "either",
   },
   {
     label: "non-JSON 402",
     body: "Payment Required",
     runtimeCode: "insufficient_balance",
-    direct: "fund",
-    plan: "fund",
+    direct: "sovereign",
+    self: "fund",
+    plan: "either",
   },
 ];
 
 function assertRemedy(text: string, remedy: Remedy, row: Row): void {
+  if (remedy === "either") {
+    // Both remedies, each scoped honestly: a deposit clears it only on self.
+    expect(text).toContain("motebit fund");
+    expect(text).toMatch(/only if the relay routes the task to yourself/);
+    expect(text).toMatch(/settles P2P/);
+    expect(text).toContain("motebit delegate --sovereign");
+    return;
+  }
   if (remedy === "fund") {
     expect(text).toContain("motebit fund");
     return;
@@ -148,6 +179,8 @@ function assertRemedy(text: string, remedy: Remedy, row: Row): void {
 type Path = "direct" | "plan" | "repl";
 
 const REPL_TARGET = "00000000-0000-4000-8000-000000000402";
+/** The REPL's own identity: `/delegate` to REPL_TARGET is delegation to another agent. */
+const REPL_SELF = "mote-repl402";
 // `!` would trigger history expansion inside double quotes; `'` must survive single quotes.
 const REPL_PROMPT = `do the "paid" thing, it's urgent!`;
 /** The one capability the pinned REPL target lists and prices — not the `web_search` default. */
@@ -290,7 +323,7 @@ async function planStepError(body: string): Promise<{ message: string; posts: nu
 /** Drive the REPL's `/delegate` against a relay answering the submission with `body` at 402. */
 async function replDelegateOutput(
   body: string,
-  opts: { discoverable?: boolean } = {},
+  opts: { discoverable?: boolean; self?: boolean } = {},
 ): Promise<{ lines: string[]; posts: number }> {
   let posts = 0;
   vi.stubGlobal(
@@ -322,7 +355,8 @@ async function replDelegateOutput(
   vi.spyOn(console, "error").mockImplementation(capture);
   const repl: ReplContext = {
     moteDb: {} as MotebitDatabase,
-    motebitId: "mote-repl402",
+    // `self`: the REPL's own identity IS the target — self-delegation.
+    motebitId: opts.self === true ? REPL_TARGET : REPL_SELF,
     mcpAdapters: [],
   };
   const config = {
@@ -348,9 +382,15 @@ afterEach(() => {
 describe("delegate 402 remedy table (relay code × CLI path)", () => {
   for (const row of ROWS) {
     describe(row.label, () => {
-      it(`direct: ${row.direct}`, () => {
-        const text = describeDelegateSubmit402(row.body).join("\n");
+      it(`direct, another agent: ${row.direct}`, () => {
+        const text = describeDelegateSubmit402(row.body, "direct", "other").join("\n");
         assertRemedy(text, row.direct, row);
+        assertRunnable(text, "direct");
+      });
+
+      it(`direct, self-delegation: ${row.self}`, () => {
+        const text = describeDelegateSubmit402(row.body, "direct", "self").join("\n");
+        assertRemedy(text, row.self, row);
         assertRunnable(text, "direct");
       });
 
@@ -358,7 +398,7 @@ describe("delegate 402 remedy table (relay code × CLI path)", () => {
         const { message, posts } = await planStepError(row.body);
         assertRemedy(message, row.plan, row);
         assertRunnable(message, "plan");
-        if (row.plan === "sovereign") {
+        if (row.plan === "sovereign" || row.plan === "either") {
           // `--plan` cannot pay P2P yet (#887): send the paid step on its own.
           expect(message).toContain("#887");
           expect(message).toContain("motebit delegate --sovereign");
@@ -368,9 +408,11 @@ describe("delegate 402 remedy table (relay code × CLI path)", () => {
 
       it(`repl /delegate: ${row.direct}, a remedy runnable from the REPL`, async () => {
         const { lines, posts } = await replDelegateOutput(row.body);
-        const expected = describeDelegateSubmit402(row.body, {
-          repl: { prompt: REPL_PROMPT, target: REPL_TARGET, capabilities: [REPL_CAPABILITY] },
-        });
+        const expected = describeDelegateSubmit402(
+          row.body,
+          { repl: { prompt: REPL_PROMPT, target: REPL_TARGET, capabilities: [REPL_CAPABILITY] } },
+          "other",
+        );
         expect(lines).toEqual(expect.arrayContaining(expected));
         if (row.direct === "sovereign") {
           // `/delegate` parses no flags: the remedy is the shell command, filled
@@ -380,7 +422,7 @@ describe("delegate 402 remedy table (relay code × CLI path)", () => {
           );
         } else {
           // Off the P2P row, the REPL prints exactly what `motebit delegate` prints.
-          expect(expected).toEqual(describeDelegateSubmit402(row.body));
+          expect(expected).toEqual(describeDelegateSubmit402(row.body, "direct", "other"));
         }
         assertRemedy(lines.join("\n"), row.direct, row);
         assertRunnable(lines.join("\n"), "repl");
@@ -415,6 +457,22 @@ describe("delegate 402 remedy table (relay code × CLI path)", () => {
     expect(text).toMatch(/replace `<capability>` with the capability the worker lists/i);
     expect(text).toContain("web_search");
     expect(posts, "a 402 refusal is not retried").toBe(1);
+  });
+
+  for (const row of ROWS.filter((r) => r.self !== r.direct)) {
+    it(`repl /delegate to yourself, ${row.label}: ${row.self}`, async () => {
+      const { lines, posts } = await replDelegateOutput(row.body, { self: true });
+      assertRemedy(lines.join("\n"), row.self, row);
+      assertRunnable(lines.join("\n"), "repl");
+      expect(posts, "a 402 refusal is not retried").toBe(1);
+    });
+  }
+
+  it("a codeless 402 for a worker not yet known says both remedies, each with when it applies", () => {
+    const codeless = ROWS.find((r) => r.plan === "either")!;
+    const text = describeDelegateSubmit402(codeless.body, "direct", "unknown").join("\n");
+    assertRemedy(text, "either", codeless);
+    assertRunnable(text, "direct");
   });
 
   it("a non-402 sovereign refusal adds no 402 remedy", () => {
