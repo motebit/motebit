@@ -35,6 +35,12 @@
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { KeySuccessionRecord } from "@motebit/encryption";
 import { bytesToHex, hexToBytes } from "@motebit/encryption";
+import { createLogger } from "./logger.js";
+import {
+  openObligationsToKey,
+  solanaAddressOfKey,
+  type OpenObligation,
+} from "./rotation-obligations.js";
 import {
   chainHeadOf,
   holderKeyOf,
@@ -302,7 +308,20 @@ export type RetireKeyConnections = (motebitId: string, retiredKey: string) => vo
 export interface SuccessionApplied {
   /** Whether the chain grew. False for a retry of the link already at its head. */
   applied: boolean;
+  /**
+   * What the relay still owed the RETIRED key's derived address when this
+   * link was applied (`openObligationsToKey`): pending / processing
+   * withdrawals to it, P2P tasks admitted to it and not yet verified. Never
+   * rewritten here — a destination is its owner's, not the relay's — so it
+   * is returned (each door passes it on) and logged. The client preflight
+   * refuses over the same list before it ever submits; this is the record
+   * for a door it did not cover (an acknowledged rotation, a guardian
+   * recovery, an older client).
+   */
+  open_obligations: OpenObligation[];
 }
+
+const logger = createLogger({ service: "succession-apply" });
 
 /**
  * Everything a recorded rotation changes, in ONE transaction. Written as
@@ -342,6 +361,9 @@ export function applySuccession(
     const reuse = successionReuse(db, motebitId, record);
     if (reuse !== null) throw new SuccessionRefused(reuse);
     const atHead = successionAtHead(db, motebitId, record);
+    // Read BEFORE any write, so it reports what the retired key was owed.
+    const open_obligations =
+      openObligationsToKey(db, motebitId, record.old_public_key)?.obligations ?? [];
 
     // The old key stops being a credential HERE. A device row's `public_key`
     // is what an owner token is verified against, and it is resolved BEFORE
@@ -391,6 +413,26 @@ export function applySuccession(
     db.prepare(
       "UPDATE agent_registry SET public_key = ? WHERE motebit_id = ? AND (public_key = ? OR COALESCE(public_key, '') = '')",
     ).run(record.new_public_key, motebitId, record.old_public_key);
+
+    // A pay-to destination follows the key it is derived from. A worker's
+    // settlement address is, by default, its identity key's Solana address;
+    // left on the retired key's, the P2P gate keeps demanding — and payers
+    // keep paying — an address the worker's surfaces have just erased the key
+    // for. Moved in THIS transaction, and only when derived-bound to the key
+    // being retired (`isDerivedSettlementBinding(addr, old_key)`): a custom
+    // address is the agent's own choice of payout wallet, not the key's, and
+    // is left alone (docs/doctrine/settlement-authority-binding.md). The
+    // listing's `pay_to_address` is the same kind of destination.
+    const retiredAddress = solanaAddressOfKey(record.old_public_key);
+    const nextAddress = solanaAddressOfKey(record.new_public_key);
+    if (retiredAddress !== null && nextAddress !== null && retiredAddress !== nextAddress) {
+      db.prepare(
+        "UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ? AND settlement_address = ?",
+      ).run(nextAddress, motebitId, retiredAddress);
+      db.prepare(
+        "UPDATE relay_service_listings SET pay_to_address = ? WHERE motebit_id = ? AND pay_to_address = ?",
+      ).run(nextAddress, motebitId, retiredAddress);
+    }
     // The holder moves ONLY for E-link (§5f): a link departing from the key it
     // HOLDS. Never into an empty slot — an identity with no holder departed by
     // main's rule (registry, chain head or a device row), none of which is
@@ -411,7 +453,7 @@ export function applySuccession(
     // and a retry must not append the same link twice: the chain is served
     // in timestamp order, and two identical links make a history a verifier
     // cannot walk. Everything above still ran — that is the point.
-    if (atHead) return { applied: false };
+    if (atHead) return { applied: false, open_obligations };
     db.prepare(
       `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
@@ -425,8 +467,20 @@ export function applySuccession(
       record.recovery ? 1 : 0,
       record.guardian_signature ?? null,
     );
-    return { applied: true };
+    return { applied: true, open_obligations };
   });
+  if (result.open_obligations.length > 0) {
+    logger.warn("succession.open_obligations_to_retired_key", {
+      motebitId,
+      retiredKey: record.old_public_key,
+      retiredAddress: solanaAddressOfKey(record.old_public_key),
+      obligations: result.open_obligations.map((o) =>
+        o.kind === "withdrawal"
+          ? `withdrawal:${o.withdrawal_id}:${o.status}`
+          : `p2p_task:${o.task_id}:${o.stage}`,
+      ),
+    });
+  }
   // A link from a key to itself (in any spelling) retires nothing.
   if (record.old_public_key.toLowerCase() !== record.new_public_key.toLowerCase()) {
     retireConnections(motebitId, record.old_public_key);

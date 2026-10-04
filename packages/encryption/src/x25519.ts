@@ -448,3 +448,198 @@ export function formatWalletWarning(check: PreTransferWalletCheck): string {
     `has ${parts.join(" and ")}. Send all funds to ${check.newAddress}, then re-link to unify wallets.`
   );
 }
+
+// === Rotation funds preflight (fail-closed) ===
+//
+// The sibling of `checkPreTransferBalance` for KEY ROTATION. A motebit's
+// Solana address IS its current identity key, and a rotation retires that
+// key (surfaces erase or overwrite it once the relay records the rotation),
+// so value at the retired address would become unrecoverable. Unlike the
+// pairing check above — best-effort, a failed read counts as empty — this
+// one is FAIL-CLOSED: a balance that cannot be read is never "nothing there".
+
+/** Token-2022 program — owner of token accounts minted under the newer SPL program. */
+const TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EHFLe7ZYgc6UiBV4L3tcz";
+
+/** USDC mints, named in refusals so the owner reads "12.5 USDC", not a mint address. */
+const KNOWN_TOKEN_SYMBOLS: Readonly<Record<string, string>> = {
+  EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: "USDC",
+  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU": "USDC (devnet)",
+};
+
+/** One SPL token holding, in base units. */
+export interface WalletTokenHolding {
+  mint: string;
+  amount: bigint;
+  decimals: number;
+}
+
+/** Everything an address holds that a rotation could strand. */
+export interface WalletHoldings {
+  solLamports: bigint;
+  tokens: WalletTokenHolding[];
+}
+
+/**
+ * Reads an address's holdings. MUST throw when it cannot answer — a reader
+ * that answers "empty" on failure turns the preflight fail-open.
+ */
+export type WalletHoldingsReader = (address: string) => Promise<WalletHoldings>;
+
+/**
+ * The production reader: one batched Solana JSON-RPC call — native SOL plus
+ * every token account under both SPL token programs. Throws on a transport
+ * failure, a non-2xx, a JSON-RPC error, or a missing/malformed result.
+ */
+export function createSolanaHoldingsReader(
+  opts: { rpcUrl?: string; fetchImpl?: typeof fetch } = {},
+): WalletHoldingsReader {
+  const rpcUrl = opts.rpcUrl ?? DEFAULT_SOLANA_RPC;
+  const doFetch = opts.fetchImpl ?? fetch;
+  return async (address) => {
+    const res = await doFetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", id: 1, method: "getBalance", params: [address] },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "getTokenAccountsByOwner",
+          params: [address, { programId: TOKEN_PROGRAM_ID }, { encoding: "jsonParsed" }],
+        },
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "getTokenAccountsByOwner",
+          params: [address, { programId: TOKEN_2022_PROGRAM_ID }, { encoding: "jsonParsed" }],
+        },
+      ]),
+    });
+    if (!res.ok) throw new Error(`Solana RPC answered HTTP ${res.status}`);
+    const body = (await res.json()) as unknown;
+    if (!Array.isArray(body)) throw new Error("Solana RPC answered a non-batch body");
+    const byId = new Map<number, { result?: unknown; error?: { message?: string } }>();
+    for (const e of body as { id?: unknown; result?: unknown; error?: { message?: string } }[]) {
+      if (typeof e?.id === "number") byId.set(e.id, e);
+    }
+    const resultOf = (id: number): unknown => {
+      const e = byId.get(id);
+      if (e == null) throw new Error(`Solana RPC answered no result for request ${id}`);
+      if (e.error != null) throw new Error(`Solana RPC error: ${e.error.message ?? "unknown"}`);
+      if (e.result == null)
+        throw new Error(`Solana RPC answered an empty result for request ${id}`);
+      return e.result;
+    };
+    const bal = (resultOf(1) as { value?: unknown }).value;
+    if (typeof bal !== "number" || !Number.isFinite(bal) || bal < 0) {
+      throw new Error("Solana RPC answered a malformed balance");
+    }
+    const tokens: WalletTokenHolding[] = [];
+    for (const id of [2, 3]) {
+      const value = (resultOf(id) as { value?: unknown }).value;
+      if (!Array.isArray(value)) throw new Error("Solana RPC answered malformed token accounts");
+      for (const acct of value as {
+        account?: {
+          data?: {
+            parsed?: {
+              info?: { mint?: string; tokenAmount?: { amount?: string; decimals?: number } };
+            };
+          };
+        };
+      }[]) {
+        const info = acct.account?.data?.parsed?.info;
+        const amount = info?.tokenAmount?.amount;
+        if (typeof info?.mint !== "string" || typeof amount !== "string" || !/^\d+$/.test(amount)) {
+          throw new Error("Solana RPC answered a token account it did not parse");
+        }
+        tokens.push({
+          mint: info.mint,
+          amount: BigInt(amount),
+          decimals: info.tokenAmount?.decimals ?? 0,
+        });
+      }
+    }
+    return { solLamports: BigInt(bal), tokens };
+  };
+}
+
+/** Base units → decimal string, no float, trailing zeros trimmed ("1.5", "12.5", "1000"). */
+function formatUnits(amount: bigint, decimals: number): string {
+  if (decimals <= 0) return amount.toString();
+  const s = amount.toString().padStart(decimals + 1, "0");
+  const whole = s.slice(0, s.length - decimals);
+  const frac = s.slice(s.length - decimals).replace(/0+$/, "");
+  return frac === "" ? whole : `${whole}.${frac}`;
+}
+
+/** Human summary of non-zero holdings: "1.5 SOL, 12.5 USDC, 1000 of token <mint>". */
+export function describeWalletHoldings(h: WalletHoldings): string {
+  const parts: string[] = [];
+  if (h.solLamports > 0n) parts.push(`${formatUnits(h.solLamports, 9)} SOL`);
+  for (const t of h.tokens) {
+    if (t.amount <= 0n) continue;
+    const symbol = KNOWN_TOKEN_SYMBOLS[t.mint];
+    parts.push(
+      symbol != null
+        ? `${formatUnits(t.amount, t.decimals)} ${symbol}`
+        : `${formatUnits(t.amount, t.decimals)} of token ${t.mint}`,
+    );
+  }
+  return parts.join(", ");
+}
+
+export type RotationFundsVerdict =
+  /** Nothing at the retired address: the rotation may proceed. */
+  | { kind: "clear"; address: string }
+  /** Value at the retired address: refused unless acknowledged. */
+  | { kind: "holds-value"; address: string; holdings: WalletHoldings; summary: string }
+  /** The balance could not be read: refused unless acknowledged (fail-closed). */
+  | { kind: "unknown"; address: string; reason: string };
+
+/**
+ * The one rotation preflight every rotation entry point calls BEFORE any
+ * side effect. `publicKey` is the key being retired (32 bytes or hex); its
+ * address is the base58 of those bytes. Never throws for a reader failure —
+ * that is the `unknown` verdict.
+ */
+export async function checkRotationFunds(opts: {
+  publicKey: Uint8Array | string;
+  readHoldings: WalletHoldingsReader;
+}): Promise<RotationFundsVerdict> {
+  const bytes = typeof opts.publicKey === "string" ? hexToBytes(opts.publicKey) : opts.publicKey;
+  const address = base58btcEncode(bytes);
+  let holdings: WalletHoldings;
+  try {
+    holdings = await opts.readHoldings(address);
+  } catch (err) {
+    return { kind: "unknown", address, reason: err instanceof Error ? err.message : String(err) };
+  }
+  const summary = describeWalletHoldings(holdings);
+  if (summary === "") return { kind: "clear", address };
+  return { kind: "holds-value", address, holdings, summary };
+}
+
+/**
+ * The refusal an owner reads. `acknowledge` names this surface's explicit
+ * acknowledgment (a CLI flag, a confirm dialog). Says the address, what it
+ * holds (or that it could not be read), and both ways forward.
+ */
+export function rotationFundsRefusal(
+  verdict: Exclude<RotationFundsVerdict, { kind: "clear" }>,
+  acknowledge: string,
+): string {
+  const consequence = `Rotating retires this key; anything left at ${verdict.address} can then be moved only with the retired key, which most surfaces erase once the rotation is recorded.`;
+  if (verdict.kind === "holds-value") {
+    return (
+      `rotation refused before anything changed: this identity's wallet ${verdict.address} holds ${verdict.summary}. ${consequence} ` +
+      `Either move the funds off ${verdict.address} first (to a wallet you control), then rotate; ` +
+      `or rotate anyway with ${acknowledge}, acknowledging the funds stay at the retired key's address.`
+    );
+  }
+  return (
+    `rotation refused before anything changed: the balance of this identity's wallet ${verdict.address} could not be read (${verdict.reason}). ${consequence} ` +
+    `Either retry when the Solana RPC is reachable (and move any funds off ${verdict.address} first); ` +
+    `or, if this key must be retired now (e.g. it is compromised), rotate with ${acknowledge}, acknowledging any funds there stay at the retired key's address.`
+  );
+}

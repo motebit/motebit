@@ -1,0 +1,14 @@
+---
+"motebit": patch
+"create-motebit": patch
+"@motebit/crypto": patch
+"@motebit/protocol": patch
+---
+
+Key rotation refuses while the old address holds value or the relay holds an open obligation to it, unless explicitly acknowledged; a derived settlement address moves with the key. A motebit's Solana address IS its current Ed25519 identity key, and a rotation retires that key — the CLI erases it once the relay records the rotation — so rotating with SOL, USDC or any SPL token at the old address, or with a withdrawal or P2P payment still headed there, was a permanent loss with no warning.
+
+What is enforced: `motebit rotate` reads, before anything is minted, written ahead, submitted or erased, (a) the old address's on-chain SOL and SPL token balances and (b) the relay's open obligations to that address — `pending` / `processing` (including freeze-held) withdrawals whose destination is it, and P2P tasks admitted with it as the worker leg and not yet verified — through a new authenticated read, `GET /api/v1/agents/:motebitId/rotation-obligations?from=<key>` (`account:balance` audience, first-person; `RELAY_ROUTE_AUDIENCES` gains it). It refuses when either shows value, naming the address, each holding and each obligation with its remedy (move the funds off first; cancel or let a withdrawal complete; let a P2P task settle and verify), or `--abandon-funds`. A read that fails refuses too (fail-closed) unless `--abandon-funds` is given, so an emergency rotation of a compromised key stays possible. The relay never rewrites a withdrawal destination or an admitted task's pay-to address (that would be the relay creating destination authority); it only moves a `settlement_address` / listing `pay_to_address` that is derived from the retired key. `npx create-motebit rotate` reads on-chain holdings the same way; it refuses outright for any identity with a relay configured, so it has no relay obligations to read.
+
+Server-side backstop (chosen: record, not refuse): `applySuccession` reads the same obligations before it writes, returns them as `open_obligations` (in the `/rotate-key` response) and logs them (`succession.open_obligations_to_retired_key`) for every door, including an acknowledged rotation, a guardian recovery and the register door. It does not refuse: a signed acknowledgment field on the succession record would be a wire-format change to a signed artifact, out of scope for this round.
+
+Deferred, not covered: the window between the balance / obligations read and the erase (a deposit, sweep or new obligation landing in between); token-account rent and stake / nonce authorities held by the old key are not counted as value; an automatic sweep of the old address to the new one. `@motebit/crypto`'s `signGuardianRecoverySuccession` now documents that a recovery cannot reach funds at the old key's address (they stay recoverable only with the old key).

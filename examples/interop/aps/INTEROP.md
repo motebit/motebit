@@ -44,7 +44,7 @@ vector_sha256: 4918125741234d749e4ab23cb6ec98c12f6b86b951147eca984b04a76bb53d31
     `evaluated_at`) and depth;
   - ancestor revocation: `ancestor-active` is valid; `ancestor-revoked` is invalid with `REVOKED`
     at index 0.
-- **Not evaluated:** spend, reputation, values, reversibility. Reported `not_evaluated`; the
+- **Not evaluated:** spend, reputation, values, reversibility. Motebit's spend ceilings live in its own grant model and are not mapped to APS spend-limit semantics, so spend is not evaluated even where it is unchanged along the chain. Reported `not_evaluated`; the
   evaluator has no path that marks them `pass`. (APS §4.2 orders reversibility
   `tentative < compensable < irreversible`; recorded as the APS profile's rule, not evaluated by
   Motebit.)

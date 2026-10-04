@@ -6,11 +6,13 @@
  * supplies the browser's plumbing: the encrypted IndexedDB keystore for the
  * key and the write-ahead, localStorage for the published public key.
  */
-import { parseHeldRotation, rotateOrThrow } from "@motebit/surface-kit";
+import { parseHeldRotation, rotateOrThrow, type KeyRotationPorts } from "@motebit/surface-kit";
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import type { EncryptedKeyStore } from "./encrypted-keystore";
 
-export interface WebRotationDeps {
+/** I0: the wallet reader, and the owner's confirmed acknowledgment (never a default). */
+type FundsPorts = Pick<KeyRotationPorts, "readWalletHoldings" | "acknowledgeFundsAtRisk">;
+export interface WebRotationDeps extends FundsPorts {
   keyStore: EncryptedKeyStore;
   motebitId: string;
   deviceId: string;
@@ -60,6 +62,8 @@ export async function rotateWebKey(deps: WebRotationDeps): Promise<{ newPublicKe
       // After the key is stored: the link names the key now in the slot.
       await deps.afterCommit?.({ publicKeyHex, record });
     },
+    readWalletHoldings: deps.readWalletHoldings,
+    acknowledgeFundsAtRisk: deps.acknowledgeFundsAtRisk === true,
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
   });

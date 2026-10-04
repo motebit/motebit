@@ -19,7 +19,15 @@
  *   4. the signature verifies under the signer's key (the federation door
  *      alone may fall back to the key the peer forwards);
  *   5. ONE write-once rule, decided and written in the same synchronous turn
- *      against the entry as it is NOW (the durable queue hands out copies):
+ *      against the entry as it is NOW (the durable queue hands out copies).
+ *      A result POST is first held to the task's CLAIM in that same turn
+ *      (`AnswerPresenter`, task-claim.ts `claimRefusesAnswer`): a device
+ *      other than the claimer is refused (`claimed_by_other`) — so a claim
+ *      that lands while the answer is being ingested (between the route's
+ *      early check and this write) still refuses it. The other order is the
+ *      claim's: a claim is never granted on an answered entry, and the
+ *      answer is written in the turn it is accepted. Exactly one wins.
+ *      Then:
  *      an entry with no answer that is not settled takes the receipt; an
  *      answered entry is never re-answered, except that a verified
  *      `completed` replaces a `failed`/`denied` while the answer is
@@ -51,6 +59,7 @@ import { verifyExecutionReceiptDetailed, hexToBytes } from "@motebit/encryption"
 /* eslint-enable no-restricted-imports */
 import { verifySovereignBinding } from "@motebit/crypto";
 import type { TaskQueueEntry } from "./tasks.js";
+import { claimBindsSignedAnswerer, claimRefusesAnswer } from "./task-claim.js";
 import { issueAnswerCapability } from "./task-queue.js";
 import type { AnswerCapability } from "./task-queue.js";
 import { verificationKeyFor } from "./identity-keys.js";
@@ -103,7 +112,42 @@ export type AnswerDoor =
     };
 
 export type AnswerRefusal =
-  "gone" | "not_bound" | "not_payee" | "not_routed" | "no_key" | "bad_signature" | "answered";
+  | "gone"
+  | "not_bound"
+  | "not_payee"
+  | "not_routed"
+  | "no_key"
+  | "bad_signature"
+  | "answered"
+  /** A result POST from a device other than the one holding the task's claim. */
+  | "claimed_by_other";
+
+/**
+ * Who presents a result POST (the door that answers for ONE device of the
+ * identity): `did` is the presenting device token's `did`, absent under the
+ * master token — the receipt's SIGNED `device_id` then names who answers,
+ * read only after step 4 verified it. Held against the task's claim in the
+ * write step (step 5). The other doors present none.
+ */
+export interface AnswerPresenter {
+  did: string | undefined;
+}
+
+/**
+ * The device a result POST answers for, against the entry as it is NOW:
+ * the presenting token's device; under the master token the receipt's
+ * signed `device_id`, when the claim binds a signed answerer
+ * (`claimBindsSignedAnswerer`); otherwise none.
+ */
+function answeringDid(
+  current: TaskQueueEntry,
+  presenter: AnswerPresenter,
+  receipt: ExecutionReceipt,
+): string | undefined {
+  if (presenter.did != null) return presenter.did;
+  if (!claimBindsSignedAnswerer(current)) return undefined;
+  return typeof receipt.device_id === "string" ? receipt.device_id : "";
+}
 
 export type AnswerVerdict =
   | {
@@ -336,6 +380,23 @@ async function verifySignature(
 }
 
 /**
+ * The chokepoint's signature step alone (key resolution + verify, the
+ * local doors' heal included), for a door that must read a SIGNED field
+ * before it may hand the receipt to `answerTask` — the result POST under the
+ * master token reads the signed `device_id` against the task's claim
+ * (task-claim.ts `claimRefusesAnswer`). Never writes the entry; `answerTask`
+ * verifies again before any write.
+ */
+export async function verifyAnswerSignature(
+  deps: AnswerDeps,
+  taskId: string,
+  receipt: ExecutionReceipt,
+  door: AnswerDoor,
+): Promise<{ refusal: AnswerRefusal } | { key: string }> {
+  return verifySignature(deps, taskId, receipt, door);
+}
+
+/**
  * Decide — and, when it takes, write — the answer of `taskId`. See the
  * module comment for the order. `retainMs` extends the entry's life so the
  * answer can be read (the POST door keeps paid results longer).
@@ -346,6 +407,8 @@ export async function answerTask(
   receipt: ExecutionReceipt,
   door: AnswerDoor,
   retainMs: number,
+  /** A result POST's presenter, held to the task's claim in step 5. */
+  presenter?: AnswerPresenter,
 ): Promise<AnswerVerdict> {
   const { db, taskQueue } = deps;
   const entry = taskQueue.get(taskId);
@@ -427,6 +490,23 @@ export async function answerTask(
   //    and every door settles only the entry's own receipt.
   const current = taskQueue.get(taskId);
   if (current == null) return refuse("gone", `task ${taskId} left the queue`);
+  // One task, one body: the claim is read HERE, in the write's own turn —
+  // a claim granted while this answer awaited its signature check refuses it.
+  if (presenter != null) {
+    const did = answeringDid(current, presenter, receipt);
+    if (claimRefusesAnswer(current, did)) {
+      logger.warn("task.answer_refused_claimed_by_other", {
+        correlationId: taskId,
+        answeringDid: did,
+        claimedBy: current.claim_lease?.device_id,
+        door: door.kind,
+      });
+      return refuse(
+        "claimed_by_other",
+        `device ${did ?? "(none)"} does not hold task ${taskId}'s claim; another device of this identity does`,
+      );
+    }
+  }
   // A settlement row names the task but the entry holds no answer (a
   // legacy door paid it without answering it): the entry may take exactly
   // the receipt every row settled — settled in the same write — and nothing
@@ -590,8 +670,10 @@ export async function admitReceipt(
   door: AnswerDoor,
   retainMs: number,
   settle: SettleStep,
+  /** A result POST's presenter (`answerTask` step 5). */
+  presenter?: AnswerPresenter,
 ): Promise<Admission> {
-  const verdict = await answerTask(deps, taskId, receipt, door, retainMs);
+  const verdict = await answerTask(deps, taskId, receipt, door, retainMs, presenter);
   if (!verdict.took) return verdict;
   const entry = verdict.entry;
   const answer = entry.receipt;

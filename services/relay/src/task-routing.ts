@@ -1099,6 +1099,14 @@ export async function mintRelayMcpBearer(
  * Called as fire-and-forget when no WebSocket connection is available.
  * On success, stores the receipt in the task queue for polling.
  */
+/** Whether a fetch failed because its connection was refused (nothing was sent). */
+function connectionRefused(err: unknown): boolean {
+  for (let e: unknown = err, d = 0; e != null && d < 4; e = (e as { cause?: unknown }).cause, d++) {
+    if ((e as { code?: unknown }).code === "ECONNREFUSED") return true;
+  }
+  return false;
+}
+
 export async function forwardTaskViaMcp(
   endpointUrl: string,
   taskId: string,
@@ -1135,6 +1143,15 @@ export async function forwardTaskViaMcp(
    * refused before any socket opens (there is nothing to authenticate with).
    */
   mintBearer?: () => Promise<string>,
+  /**
+   * Called with `"sent"` immediately before the `tools/call` request — the
+   * only request that can run the task — goes out, and with `"refused"`
+   * when that request's connection was refused (ECONNREFUSED: no byte of it
+   * reached the worker). A forward that ends with no `"sent"`, or whose
+   * last report is `"refused"`, provably never ran the task (one task, one
+   * body: `TaskClaims.forwardEnded`); anything after `"sent"` may have.
+   */
+  onCall?: (phase: "sent" | "refused") => void,
 ): Promise<void> {
   // Re-check at CONNECT time, not only at registration: the registry row is
   // months old by the time a task arrives, and this forward carries a bearer.
@@ -1256,9 +1273,11 @@ export async function forwardTaskViaMcp(
     });
 
     // Step 3: Call motebit_task
+    const callHeaders = await authed();
+    onCall?.("sent");
     const taskResp = await fetch(mcpEndpoint, {
       method: "POST",
-      headers: await authed(),
+      headers: callHeaders,
       body: JSON.stringify({
         jsonrpc: "2.0",
         method: "tools/call",
@@ -1273,6 +1292,9 @@ export async function forwardTaskViaMcp(
         },
       }),
       signal: AbortSignal.timeout(120000),
+    }).catch((callErr: unknown) => {
+      if (connectionRefused(callErr)) onCall?.("refused");
+      throw callErr;
     });
 
     if (!taskResp.ok) {

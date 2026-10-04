@@ -18,7 +18,11 @@ import {
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 
-import { readSuccessionState, submitSuccessionToRelay } from "../succession-client.js";
+import {
+  readRotationObligations,
+  readSuccessionState,
+  submitSuccessionToRelay,
+} from "../succession-client.js";
 
 const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
 const MID = "mid-1";
@@ -265,5 +269,80 @@ describe("submitSuccessionToRelay — the forward path", () => {
     });
     expect(res).toMatchObject({ ok: false, kind: "refused" });
     expect(called).toBe(false);
+  });
+});
+
+describe("readRotationObligations — what the relay still owes the retiring key's address", () => {
+  async function read(fetchImpl: typeof fetch, a?: KeyPair) {
+    const kp = a ?? (await generateKeypair());
+    return readRotationObligations({
+      syncUrl: "http://relay/",
+      motebitId: MID,
+      deviceId: "d-1",
+      signingKey: kp.privateKey,
+      fromPublicKey: hex(kp),
+      fetchImpl,
+    });
+  }
+
+  it("asks the obligations route with an account:balance bearer signed by the retiring key", async () => {
+    const a = await generateKeypair();
+    let seen: { url: string; auth: string | null } | null = null;
+    const r = await read(
+      (async (url: string, init?: RequestInit) => {
+        seen = { url, auth: new Headers(init?.headers).get("Authorization") };
+        return new Response(
+          JSON.stringify({
+            address: "Addr",
+            obligations: [
+              {
+                kind: "withdrawal",
+                withdrawal_id: "w",
+                status: "pending",
+                amount_micro: 1,
+                destination: "Addr",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }) as unknown as typeof fetch,
+      a,
+    );
+    expect(r).toMatchObject({ ok: true, address: "Addr", obligations: [{ withdrawal_id: "w" }] });
+    expect(seen!.url).toBe(`http://relay/api/v1/agents/${MID}/rotation-obligations?from=${hex(a)}`);
+    const token = seen!.auth!.slice("Bearer ".length);
+    const claims = await verifySignedToken(token, a.publicKey);
+    expect(claims).toMatchObject({ mid: MID, did: "d-1", aud: "account:balance" });
+  });
+
+  it("401/403 ⇒ not-current; transport ⇒ unreachable; 5xx / 404 / foreign body ⇒ unknown", async () => {
+    expect(await read(relayAnswering({}, 401))).toMatchObject({ ok: false, kind: "not-current" });
+    expect(await read(relayAnswering({}, 403))).toMatchObject({ ok: false, kind: "not-current" });
+    expect(
+      await read((async () => {
+        throw new Error("ECONNREFUSED");
+      }) as unknown as typeof fetch),
+    ).toMatchObject({ ok: false, kind: "unreachable", reason: "ECONNREFUSED" });
+    expect(await read(relayAnswering({}, 503))).toMatchObject({ ok: false, kind: "unknown" });
+    const old = await read(relayAnswering({}, 404));
+    expect(old).toMatchObject({ ok: false, kind: "unknown" });
+    expect((old as { reason: string }).reason).toMatch(/upgrade the relay/);
+    expect(await read(relayAnswering("<html>"))).toMatchObject({ ok: false, kind: "unknown" });
+    expect(
+      await read(relayAnswering({ address: "A", obligations: [{ kind: "mystery" }] })),
+    ).toMatchObject({ ok: false, kind: "unknown" });
+  });
+
+  it("a key that cannot mint a token is unknown, never thrown", async () => {
+    const r = await readRotationObligations({
+      syncUrl: "http://relay",
+      motebitId: MID,
+      deviceId: "d-1",
+      signingKey: new Uint8Array(3),
+      fromPublicKey: "00",
+      fetchImpl: relayAnswering({ address: "A", obligations: [] }),
+    });
+    expect(r).toMatchObject({ ok: false, kind: "unknown" });
   });
 });

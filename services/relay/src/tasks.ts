@@ -85,9 +85,9 @@ import {
 import type { TaskRouter } from "./task-routing.js";
 import { getBondBackingAdapter } from "./bond-backing-adapter.js";
 import { getArchivedReceiptForKeyOwner } from "./receipts-store.js";
-import { admitReceipt } from "./task-answer.js";
-import type { AnswerQueue } from "./task-answer.js";
-import type { AnswerRefusal } from "./task-answer.js";
+import { admitReceipt, verifyAnswerSignature } from "./task-answer.js";
+import type { AnswerDeps, AnswerQueue } from "./task-answer.js";
+import type { AnswerPresenter, AnswerRefusal } from "./task-answer.js";
 import {
   MAX_SETTLEMENT_DEPTH,
   exceedsSettlementDepth,
@@ -96,6 +96,14 @@ import {
 import type { ConnectedDevice } from "./index.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
+import {
+  TaskClaims,
+  claimBindsSignedAnswerer,
+  claimRefusesAnswer,
+  expiredOf,
+  grantToSubmitter,
+  undeterminedOf,
+} from "./task-claim.js";
 import {
   bindIdempotencyClaimToTask,
   bindP2pProofToTask,
@@ -276,6 +284,18 @@ export type TaskQueueEntry = {
    * already ran when this entry exists. Advisory id, never authority.
    */
   grant_id?: string;
+  /**
+   * The claim a serving body holds on this task (`task-claim.ts`): which
+   * device won it, whether its token proved that device, and — for a leased
+   * claim — when it lapses unless renewed.
+   */
+  claim_lease?: import("./task-claim.js").TaskClaimLease;
+  /**
+   * Set when the task outlived its TTL without ever being granted
+   * (`TaskClaims.expire`): it expired VISIBLY — never presented or claimed
+   * again, and the delegator's poll says why until the entry ages out.
+   */
+  expired_unclaimed?: { reason: "never_claimed"; since: number };
 };
 
 // Platform fee rate is no longer a module-level variable. It lives in the
@@ -291,6 +311,11 @@ export interface TasksDeps {
   eventStore: EventStore;
   relayIdentity: RelayIdentity;
   connections: Map<string, ConnectedDevice[]>;
+  /**
+   * Who holds each task's grant (`task-claim.ts`) — the relay passes the one
+   * its lease sweep supervises; hand-built deps get a sweep-less one.
+   */
+  taskClaims?: TaskClaims;
   /**
    * The production queue is `TaskQueue` (SQLite-backed) whose indexed
    * `countBySubmitter` the fairness check uses (#459 — the Map-iteration
@@ -795,6 +820,40 @@ export function workerKeyFor(db: DatabaseDriver, motebitId: string): string | nu
 //
 // Returns { verified: true } on success, { verified: false, reason } on failure.
 // Callers decide how to surface the failure (HTTP 403, log warning, etc.).
+/**
+ * The answer chokepoint's deps for the LOCAL doors (the result POST and the
+ * MCP forward's callback): the receipt verifier and main's registry heal.
+ */
+function localAnswerDeps(deps: {
+  moteDb: MotebitDatabase;
+  identityManager: IdentityManager;
+  taskQueue: Map<string, TaskQueueEntry> & AnswerQueue;
+  reconcileKeyConnections: ReconcileKeyConnections;
+}): AnswerDeps {
+  const { moteDb } = deps;
+  return {
+    db: moteDb.db,
+    identityManager: deps.identityManager,
+    taskQueue: deps.taskQueue,
+    verifyReceipt: (r, keyHex) => verifyExecutionReceipt(r, hexToBytes(keyHex)),
+    // Main's heal (#758 review): the registry is departure's and the
+    // signature readers' INPUT for an identity with no holder. The
+    // chokepoint calls this only for an embedded key that is ALREADY a
+    // registered device of the signer and that the receipt verified under
+    // — never an arbitrary self-signed key (a cross-identity hijack).
+    // Legitimate rotation is the /rotate-key succession route.
+    healRegistryKey: (signer, keyHex) => {
+      moteDb.db
+        .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+        .run(keyHex, signer);
+      // The registry key is the fallback a socket with no device row was
+      // admitted under; a socket the previous value admitted is no longer
+      // admitted and is closed (#776).
+      deps.reconcileKeyConnections(signer);
+    },
+  };
+}
+
 export async function handleReceiptIngestion(
   receipt: ExecutionReceipt,
   taskId: string,
@@ -827,6 +886,8 @@ export async function handleReceiptIngestion(
     /** The peer transport (`PeerFetch`) the federation result is delivered by. */
     peerFetch?: PeerFetch;
   },
+  /** The result POST's presenter, held to the task's claim at the write (task-answer.ts step 5). */
+  presenter?: AnswerPresenter,
 ): Promise<
   | { verified: true; credential_id: string | null; already_settled?: boolean }
   | { verified: false; reason: string; refusal: AnswerRefusal; answer?: ExecutionReceipt }
@@ -854,27 +915,7 @@ export async function handleReceiptIngestion(
   let credential_id: string | null = null;
   let pubKeyHex = "";
   const admission = await admitReceipt(
-    {
-      db: moteDb.db,
-      identityManager,
-      taskQueue,
-      verifyReceipt: (r, keyHex) => verifyExecutionReceipt(r, hexToBytes(keyHex)),
-      // Main's heal (#758 review): the registry is departure's and the
-      // signature readers' INPUT for an identity with no holder. The
-      // chokepoint calls this only for an embedded key that is ALREADY a
-      // registered device of the signer and that the receipt verified under
-      // — never an arbitrary self-signed key (a cross-identity hijack).
-      // Legitimate rotation is the /rotate-key succession route.
-      healRegistryKey: (signer, keyHex) => {
-        moteDb.db
-          .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
-          .run(keyHex, signer);
-        // The registry key is the fallback a socket with no device row was
-        // admitted under; a socket the previous value admitted is no longer
-        // admitted and is closed (#776).
-        deps.reconcileKeyConnections(signer);
-      },
-    },
+    localAnswerDeps(deps),
     taskId,
     receipt,
     { kind: door },
@@ -885,6 +926,7 @@ export async function handleReceiptIngestion(
       pubKeyHex = verdict.publicKeyHex;
       return settleLocalAnswer(newlyArchived);
     },
+    presenter,
   );
   if (!admission.took) {
     return {
@@ -2190,6 +2232,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     p2pPaymentChain,
   } = deps;
   const peerFetch = deps.peerFetch ?? defaultPeerFetch;
+  const taskClaims = deps.taskClaims ?? new TaskClaims({ taskQueue, connections, logger });
 
   // Platform fee rate lives in this function's closure — every handler
   // registered below sees the same rate for its lifetime. No module-level
@@ -4045,7 +4088,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         );
         if (!proofBinding.bound) throw proofAlreadyAdmitted(proofBinding.existing);
       }
-      taskQueue.set(taskId, {
+      const queued: TaskQueueEntry = {
         task,
         expiresAt: now + TASK_TTL_MS,
         submitted_by: submittedBy,
@@ -4059,7 +4102,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         p2p_admission: p2pAdmission,
         target_agent: body.target_agent,
         grant_id: body.grant_id,
-      });
+      };
+      // One task, one body (task-claim.ts): the submitter's chosen
+      // presentation is a GRANT — the dispatch token it is handed below may
+      // run the task — so the task is queued already granted to it, and no
+      // body is ever presented it (reconnect recovery reads Pending only).
+      // A submitter that never presents leaves it undetermined at expiry.
+      if (submitterPresenter) grantToSubmitter(queued, submittedBy);
+      taskQueue.set(taskId, queued);
       moteDb.db.exec("COMMIT");
     } catch (admitErr) {
       moteDb.db.exec("ROLLBACK");
@@ -4107,13 +4157,28 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     const dispatchTokenFor = (workerId: string): Promise<string> =>
       mintTaskDispatchToken(relayIdentity, workerId, taskId, body.prompt);
     // Every relay MCP forward goes through here (fire-and-forget, as on main).
-    // Reconnect recovery is not held back while it runs: holding it stranded
-    // tasks main completes when the forward failed and the held-back device
-    // had left (#811; presentation-matrix.probe.ts). Shared with main: a
-    // device that reconnects mid-forward can run the task beside the forward.
-    const presentViaMcp = async (endpointUrl: string, workerId: string): Promise<void> => {
+    // One task, one body (task-claim.ts): the forward is a GRANT, so it takes
+    // the task's grant BEFORE its first request — a body that reconnects
+    // mid-forward is then never presented it (recovery reads Pending only),
+    // and a body that already claimed it means no forward is sent at all.
+    // When the forward ends without sending `tools/call` (refused, wake or
+    // initialize failed, or the call's own connection refused) the worker
+    // provably never ran it: the grant is
+    // released and the task presented to the bodies connected NOW, so the
+    // ones recovery skipped are not stranded. When `tools/call` was sent and
+    // no receipt was accepted, the task is UNDETERMINED — never re-presented.
+    // Returns whether the forward was sent.
+    const presentViaMcp = async (endpointUrl: string, workerId: string): Promise<boolean> => {
+      if (!taskClaims.grantForward(taskId, workerId)) {
+        logger.info("task.forward_skipped_already_granted", {
+          correlationId: taskId,
+          worker: workerId,
+        });
+        return false;
+      }
       recordTaskRoute(moteDb.db, taskId, workerId);
       const token = await dispatchTokenFor(workerId);
+      let called = false;
       void forwardTaskViaMcp(
         endpointUrl,
         taskId,
@@ -4144,7 +4209,40 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         outboundPolicy,
         // The relay's own transport credential, fresh per request (#981).
         () => mintRelayMcpBearer(relayIdentity, workerId),
-      );
+        (phase) => {
+          called = phase === "sent";
+        },
+      )
+        .catch(() => {
+          // forwardTaskViaMcp logs its own failures; the outcome is below.
+        })
+        .finally(() => {
+          let released: TaskQueueEntry | null;
+          try {
+            released = taskClaims.forwardEnded(taskId, called, Date.now());
+          } catch (endErr: unknown) {
+            // The relay closed under the forward (its database with it): the
+            // grant stays as written — Claimed — and the TTL pass marks it.
+            logger.warn("task.forward_end_unrecorded", {
+              correlationId: taskId,
+              worker: workerId,
+              error: endErr instanceof Error ? endErr.message : String(endErr),
+            });
+            return;
+          }
+          if (released != null) {
+            const reqCaps = released.task.required_capabilities ?? [];
+            routeToSockets(
+              connections.get(released.task.motebit_id),
+              JSON.stringify({ type: "task_request", task: released.task }),
+              (peer) =>
+                reqCaps.length > 0 && peer.capabilities
+                  ? reqCaps.every((cap) => peer.capabilities!.includes(cap))
+                  : true,
+            );
+          }
+        });
+      return true;
     };
     // `routed` means what it meant on main: a presenter exists — an OPEN
     // socket took the frame, a forward was taken, or the task is HELD for
@@ -4772,10 +4870,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     }
     if (submitterPresenter) {
       // Chosen, not incidental: the submitter asked to present. Nothing above
-      // routed (every phase is guarded), so the token below is the ONLY one.
-      // Reconnect recovery still hands the task to a worker socket that
-      // registers, as on main: withholding it strands the task whenever the
-      // submitter never presents (#811; presentation-matrix.probe.ts).
+      // routed (every phase is guarded), so the token below is the ONLY one,
+      // and the task was queued granted to the submitter (task-claim.ts):
+      // reconnect recovery never hands it to a worker socket, which would be
+      // a second presenter beside the token (one-execution-matrix.probe.ts).
+      // A submitter that never presents leaves it undetermined at expiry —
+      // the token may have been used — never silently gone.
       logger.info("task.submitter_presents", {
         correlationId: taskId,
         worker: terms.routedTo,
@@ -4896,7 +4996,17 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       }
     }
 
-    return c.json({ task: entry.task, receipt: entry.receipt ?? null });
+    // One task, one body (task-claim.ts): a claimer lost after its grant
+    // leaves the outcome undetermined — said explicitly, never "pending".
+    // A task that expired before anything was granted it says so too.
+    const undetermined = undeterminedOf(entry);
+    const expired = expiredOf(entry);
+    return c.json({
+      task: entry.task,
+      receipt: entry.receipt ?? null,
+      ...(undetermined != null ? { undetermined } : {}),
+      ...(expired != null ? { expired } : {}),
+    });
   });
 
   // --- POST /agent/:motebitId/task/:taskId/result — device posts signed receipt ---
@@ -4911,6 +5021,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       throw new AuthenticationError("AUTH_MISSING_TOKEN", "Authorization required");
     }
     const token = authHeader.slice(7);
+    // The device that presents this result (a verified device token's
+    // `did`); none under the master token.
+    let presentingDid: string | undefined;
     if (!secretEquals(token, apiToken)) {
       // Verify as device signed token
       if (enableDeviceAuth && token.includes(".")) {
@@ -4933,6 +5046,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         if (!verified) {
           throw new AuthorizationError("AUTHZ_DEVICE_NOT_AUTHORIZED", "Device not authorized");
         }
+        presentingDid = resultClaims?.did;
       } else {
         throw new AuthorizationError("AUTHZ_INVALID_CREDENTIALS", "Invalid authorization");
       }
@@ -4954,12 +5068,61 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       );
     }
 
+    const claimedByOther = (answeringDid: string | undefined, via: "token" | "signed") => {
+      logger.warn("task.result_claimed_by_other", {
+        correlationId: taskId,
+        motebitId,
+        presentingDid: answeringDid,
+        via,
+        claimedBy: entry.claim_lease?.device_id,
+      });
+      return c.json(
+        {
+          error: "Result not accepted: another device of this identity holds the task's claim",
+          code: "TASK_CLAIMED_BY_OTHER",
+          status: 409,
+        },
+        409,
+      );
+    };
+
+    // One task, one body (task-claim.ts): while a device holds the task's
+    // claim — running it, or lost and undetermined — no other device of the
+    // identity answers it. The claimer's own late result is accepted: it
+    // resolves the uncertainty. This is the EARLY refusal, on the entry as
+    // read here; the binding one is `answerTask`'s write step (it is handed
+    // `presenter` below), which re-reads the claim in the write's own turn —
+    // a claim that lands while this answer is being ingested refuses it too.
+    if (claimRefusesAnswer(entry, presentingDid)) return claimedByOther(presentingDid, "token");
+
     const rawBody: unknown = await c.req.json().catch(() => null);
     const parsedReceipt = ExecutionReceiptSchema.safeParse(rawBody);
     if (!parsedReceipt.success) {
       return c.json({ error: parsedReceipt.error.flatten() }, 400);
     }
     const receipt = parsedReceipt.data as unknown as ExecutionReceipt;
+
+    // Under the master token the presentation names no device (the CLI
+    // daemon and desktop send it first when one is configured), so the
+    // receipt's SIGNED device_id names who answers — read only after its
+    // signature verifies, exactly as the chokepoint verifies it. A
+    // master-token answer to a task no body claimed — or claimed under an id
+    // the relay made, which no receipt can carry — is not refused here.
+    if (presentingDid == null && claimBindsSignedAnswerer(entry)) {
+      const sig = await verifyAnswerSignature(localAnswerDeps(ingestionDeps), taskId, receipt, {
+        kind: "result_post",
+      });
+      if ("refusal" in sig) {
+        throw new AuthorizationError(
+          "AUTHZ_INVALID_CREDENTIALS",
+          sig.refusal === "no_key"
+            ? `Receipt verification failed: no public key on file for agent ${receipt.motebit_id}`
+            : "Receipt verification failed: invalid Ed25519 signature",
+        );
+      }
+      const signedDid = typeof receipt.device_id === "string" ? receipt.device_id : "";
+      if (claimRefusesAnswer(entry, signedDid)) return claimedByOther(signedDid, "signed");
+    }
 
     // Reject stale receipts — completed_at must be within 1 hour of submitted_at
     if (receipt.completed_at && entry.task.submitted_at) {
@@ -5027,8 +5190,27 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       "result_post",
       resultRetentionMs(entry),
       ingestionDeps,
+      { did: presentingDid },
     );
     if (!ingestionResult.verified) {
+      if (ingestionResult.refusal === "claimed_by_other") {
+        const current = taskQueue.get(taskId);
+        logger.warn("task.result_claimed_by_other", {
+          correlationId: taskId,
+          motebitId,
+          presentingDid,
+          via: "write",
+          claimedBy: current?.claim_lease?.device_id,
+        });
+        return c.json(
+          {
+            error: "Result not accepted: another device of this identity holds the task's claim",
+            code: "TASK_CLAIMED_BY_OTHER",
+            status: 409,
+          },
+          409,
+        );
+      }
       if (ingestionResult.refusal === "answered") {
         // A settled answer is frozen (#890 round 9): the 409 carries it, so
         // the sender learns the task's answer instead of guessing.

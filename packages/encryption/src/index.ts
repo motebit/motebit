@@ -544,8 +544,20 @@ export {
   verifiedIdentityLineage,
   checkPreTransferBalance,
   formatWalletWarning,
+  createSolanaHoldingsReader,
+  describeWalletHoldings,
+  checkRotationFunds,
+  rotationFundsRefusal,
 } from "./x25519.js";
-export type { X25519Keypair, PreTransferWalletCheck, OpenedPairingKeyTransfer } from "./x25519.js";
+export type {
+  X25519Keypair,
+  PreTransferWalletCheck,
+  WalletHoldings,
+  WalletTokenHolding,
+  WalletHoldingsReader,
+  RotationFundsVerdict,
+  OpenedPairingKeyTransfer,
+} from "./x25519.js";
 
 // ── Content-artifact verification (re-export from @motebit/crypto) ──
 // The Sovereign Ledger's local-row verification path: surfaces verify a

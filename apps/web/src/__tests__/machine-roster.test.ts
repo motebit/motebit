@@ -335,6 +335,7 @@ describe("openRosterDb never hangs; the rotation commit appends its link", () =>
       motebitId: MID,
       deviceId: "tab-device",
       syncUrl: null,
+      readWalletHoldings: async () => ({ solLamports: 0n, tokens: [] }),
       onCommitted: () => undefined,
       afterCommit: async ({ record }) => {
         seen.push({ keysStored: stored.length, record });

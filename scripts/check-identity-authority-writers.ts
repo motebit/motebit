@@ -278,9 +278,9 @@ const WRITERS: readonly Writer[] = [
     file: R + "succession-apply.ts",
     verb: "UPDATE",
     table: "agent_registry",
-    count: 1,
+    count: 2,
     principal:
-      "the identity itself (or its guardian for a recovery) — the registry key moves only FROM the key the verified link retires, or into an empty master-token slot",
+      "the identity itself (or its guardian for a recovery) — the registry key moves only FROM the key the verified link retires, or into an empty master-token slot; and, in the same transaction, a `settlement_address` moves only when it is the RETIRED key's derived Solana address, to the new key's (a custom address is never touched; an open obligation already admitted to the retired address — a withdrawal destination, a P2P task's admitted pay-to — is never rewritten, only reported in `open_obligations`)",
   },
   {
     file: R + "succession-apply.ts",
@@ -289,6 +289,14 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       "the identity itself — the same verified succession retires pending pairing sessions that would carry the retired key",
+  },
+  {
+    file: R + "succession-apply.ts",
+    verb: "UPDATE",
+    table: "relay_service_listings",
+    count: 1,
+    principal:
+      "the identity itself (or its guardian for a recovery) — the same verified succession moves a listing `pay_to_address` only when it is the RETIRED key's derived Solana address, to the new key's, in the same transaction; a custom address is never touched (only a derived-bound destination moves with the key)",
   },
   {
     file: R + "migration.ts",
@@ -677,7 +685,7 @@ const WRITERS: readonly Writer[] = [
     count: 4,
     principal:
       LOOP +
-      ": stale-allocation release and settlement retry — each retires the allocation (`released`) or, with no single hold payer to refund, marks it `review_reason = 'unroutable_refund'` (a status/marker, never an identity column)",
+      ": stale-allocation release and settlement retry — each retires the allocation (`released`) or marks it for the operator, `review_reason` = `'unroutable_refund'` (no single hold payer to refund) or `'undetermined'` (its task is granted and unanswered — one task, one body; never refunded as stale) (a status/marker, never an identity column)",
   },
   {
     file: R + "index.ts",

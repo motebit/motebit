@@ -92,6 +92,7 @@ import {
   registerWebSocketRoutes,
   WS_OPEN,
 } from "./websocket.js";
+import { TaskClaims } from "./task-claim.js";
 import type { RetireKeyConnections } from "./succession-apply.js";
 import type {
   CloseIdentityConnections,
@@ -287,6 +288,14 @@ export function releaseStaleAllocations(
   now: number,
   horizonMs: number,
   resolveDelegator: (taskId: string) => string | undefined,
+  /**
+   * Whether the task is granted and unanswered (one task, one body —
+   * `TaskClaims.holdsUnresolvedGrant`): its executor may have run it, so
+   * its hold is never refunded as stale. It is flagged
+   * (`review_reason = 'undetermined'`) and stays locked until the
+   * executor's signed result settles it. Absent: no task is.
+   */
+  holdsUnresolvedGrant?: (taskId: string) => boolean,
 ): number {
   try {
     const cutoff = now - horizonMs;
@@ -302,10 +311,21 @@ export function releaseStaleAllocations(
     }>;
     if (stale.length === 0) return 0;
 
+    // The operator-visible flag (a marker, never an identity column): the
+    // FIRST reason sticks.
+    const flagForReview = (allocationId: string, reason: string): void => {
+      db.prepare(
+        "UPDATE relay_allocations SET review_reason = COALESCE(review_reason, ?) WHERE allocation_id = ?",
+      ).run(reason, allocationId);
+    };
     let released = 0;
     db.exec("BEGIN");
     try {
       for (const alloc of stale) {
+        if (holdsUnresolvedGrant?.(alloc.task_id) === true) {
+          flagForReview(alloc.allocation_id, "undetermined");
+          continue;
+        }
         // What the ledger still holds — the one primitive every refund of an
         // allocation pays out of (allocation-escrow.ts). Holds − releases
         // alone (F3) missed a federated origin's forward.
@@ -319,9 +339,7 @@ export function releaseStaleAllocations(
           if (payer === null) {
             // No single payer to refund: the allocation stays `locked`,
             // flagged for the operator (visible), never retired holding money.
-            db.prepare(
-              "UPDATE relay_allocations SET review_reason = COALESCE(review_reason, 'unroutable_refund') WHERE allocation_id = ?",
-            ).run(alloc.allocation_id);
+            flagForReview(alloc.allocation_id, "unroutable_refund");
             staleAllocationLogger.error("stale_allocation.unroutable", {
               allocationId: alloc.allocation_id,
               held,
@@ -502,6 +520,12 @@ export interface SyncRelayConfig {
   getShuttingDown?: ShutdownStateGetter;
   /** Max pending tasks per submitter. Default: 1000. */
   maxTasksPerSubmitter?: number;
+  /**
+   * How long a serving body's leased task claim holds without a renewal
+   * before the claimer counts as lost and the task as undetermined
+   * (`task-claim.ts`). Default: `TASK_CLAIM_LEASE_MS` (30 s).
+   */
+  taskClaimLeaseMs?: number;
   /**
    * Graceful-shutdown drain grace in ms — how long `close()` waits for
    * connected clients to disconnect voluntarily before force-closing.
@@ -735,6 +759,16 @@ export interface SyncRelay {
    * Settlement recovery (#890 round 10): the boot pass, and one pass on
    * demand (the supervised loop runs it every minute). Exposed for testing.
    */
+  /**
+   * The task TTL pass (one task, one body — task-claim.ts): mark unanswered
+   * tasks past their TTL (never granted ⇒ expired visibly; granted ⇒
+   * undetermined), sweep the queue, release stale allocation holds (never a
+   * granted task's). The supervised `task-cleanup` loop runs it every
+   * minute; exposed so a test can run it at a future `now`.
+   */
+  taskLifecycle: {
+    sweep(now?: number): void;
+  };
   settlementRecovery: {
     booted: Promise<SettlementRecoveryReport | null>;
     sweep(opts?: { graceMs?: number; now?: number }): Promise<SettlementRecoveryReport>;
@@ -1286,10 +1320,36 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
   };
+  // --- Task claims: one body per broadcast task; a lapsed lease marks it undetermined, never re-presents ---
+  const taskClaims = new TaskClaims({
+    taskQueue,
+    connections,
+    logger,
+    unansweredPastExpiry: (now) => taskQueue.unansweredPastExpiry(now),
+    ...(config.taskClaimLeaseMs != null ? { leaseMs: config.taskClaimLeaseMs } : {}),
+  });
+  // The task TTL pass (one task, one body — task-claim.ts): an unanswered
+  // task past its TTL is first marked — never-granted ⇒ expired VISIBLY,
+  // granted with no live lease ⇒ UNDETERMINED — and only then may the queue
+  // sweep what is left; a granted, unanswered entry is never deleted, and its
+  // allocation hold is never refunded by the stale sweep (it stays locked
+  // until the executor's signed result settles it).
+  const sweepTaskLifecycle = (now: number): void => {
+    taskClaims.expire(now);
+    taskQueue.cleanup(now);
+    releaseStaleAllocations(
+      moteDb.db,
+      now,
+      STALE_ALLOCATION_HORIZON_MS,
+      (taskId) => taskQueue.get(taskId)?.submitted_by,
+      (taskId) => taskClaims.holdsUnresolvedGrant(taskId),
+    );
+  };
   const taskCleanupInterval = superviseInterval(loopSupervisor, "task-cleanup", 60_000, () => {
     const now = Date.now();
-    // Expire completed/failed tasks and tasks past their TTL
-    taskQueue.cleanup(now);
+    // Mark, then expire, tasks past their TTL, and release stale
+    // allocation holds (sweepTaskLifecycle above).
+    sweepTaskLifecycle(now);
     // Auth-event record: 30-day rolling window (auth-events.ts).
     authEvents.sweep(now);
     // Machine roster liveness, every five minutes: refresh the one
@@ -1367,17 +1427,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     } catch {
       // Best-effort — no-op if auto_vacuum mode differs
     }
-    // Release stale budget allocations locked > 1 hour with no settlement.
-    releaseStaleAllocations(
-      moteDb.db,
-      now,
-      STALE_ALLOCATION_HORIZON_MS,
-      (taskId) => taskQueue.get(taskId)?.submitted_by,
-    );
   });
+
+  const taskClaimLeaseInterval = superviseInterval(
+    loopSupervisor,
+    "task-claim-lease",
+    Math.max(50, Math.floor(taskClaims.leaseMs / 4)),
+    () => {
+      taskClaims.sweep(Date.now());
+    },
+  );
 
   // --- WebSocket routes ---
   registerWebSocketRoutes({
+    taskClaims,
     app,
     upgradeWebSocket,
     connections,
@@ -2526,6 +2589,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Task routes (submission, polling, receipt settlement) ---
   const taskRoutes = await registerTaskRoutes({
+    taskClaims,
     app,
     outboundPolicy,
     ...(peerFetch !== undefined ? { peerFetch } : {}),
@@ -2704,6 +2768,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     // Clean up intervals and database
     clearInterval(taskCleanupInterval);
+    clearInterval(taskClaimLeaseInterval);
     clearInterval(federationQueryPruneInterval);
     clearInterval(heartbeatInterval);
     clearInterval(revocationHorizonInterval);
@@ -2811,6 +2876,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     getConnectionCount,
     get isDraining() {
       return draining;
+    },
+    taskLifecycle: {
+      sweep: (now) => sweepTaskLifecycle(now ?? Date.now()),
     },
     settlementRecovery: {
       booted: settlementRecoveryBooted,

@@ -11,6 +11,7 @@ import {
   verifyAgentCommandEnvelope,
   servedToolNames,
   TurnPrincipal,
+  TaskClaimCoordinator,
 } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -42,7 +43,12 @@ import type {
   UserInputEvent,
   UserInputForwardedPayload,
 } from "@motebit/sdk";
-import { DeviceCapability, EventType, BROWSER_SANDBOX_GRANT_AUDIENCE } from "@motebit/sdk";
+import {
+  DeviceCapability,
+  EventType,
+  BROWSER_SANDBOX_GRANT_AUDIENCE,
+  DEFAULT_MOTEBIT_CLOUD_URL,
+} from "@motebit/sdk";
 import type { ByokVendor } from "@motebit/sdk";
 import { dispatchByokRouting, formatRoutingChip } from "@motebit/policy";
 import { ThreeJSAdapter, buildComputerSessionReceiptArtifact } from "@motebit/render-engine";
@@ -91,6 +97,7 @@ import {
   buildKeyTransferPayload,
   openPairingKeyTransfer,
   checkPreTransferBalance,
+  createSolanaHoldingsReader,
   formatWalletWarning,
 } from "@motebit/encryption";
 import type { KeyTransferPayload } from "@motebit/sdk";
@@ -457,6 +464,14 @@ export class UnbootedWebApp {
   private _serving = false;
   private _servingSyncUrl: string | null = null;
   private _activeTaskCount = 0;
+  /**
+   * One task, one body: the relay hands a task to every serving body of
+   * this identity and grants exactly one claim — run only on the grant.
+   * Frames go out on whichever socket is current (token refresh swaps it).
+   */
+  private readonly _taskClaims = new TaskClaimCoordinator({
+    send: (frame) => this._wsAdapter?.sendRaw(frame),
+  });
   private _localEventStore: StorageAdapters["eventStore"] | null = null;
   /**
    * Held so `restoreIdentity` can pre-write the restored
@@ -687,17 +702,19 @@ export class UnbootedWebApp {
       // else. Re-attempting at next bootstrap.
     }
 
-    // Solana RPC endpoint. The public `api.mainnet-beta.solana.com` is a
-    // BROWSER DEAD-END: it 403s cross-origin browser requests, so it can read
-    // neither the sovereign balance nor broadcast the P2P payment tx — every
-    // onchain op from the web surface needs a browser-capable (CORS-enabled)
-    // provider. Set VITE_SOLANA_RPC_URL to a real endpoint (Helius/Triton/
-    // QuickNode — free tiers allow browser origins) in any deployment that
-    // does onchain work. The default is kept only as a last-resort fallback;
-    // when it fails, the balance read surfaces "—"/Couldn't refresh (never a
-    // false $0 — see fetchSolanaBalanceUsdc), and onchain sends error loudly.
+    // Solana RPC endpoint: motebit's server-side passthrough
+    // (services/proxy `/v1/solana-rpc`), which holds the provider key as a
+    // server secret. A provider URL is never a browser value — Vite inlines
+    // every VITE_* var into public JS (incident 2026-09-30: a Helius
+    // `?api-key=` shipped in this bundle). `VITE_SOLANA_RPC_URL` remains a
+    // local-dev override only; the vite build refuses any value whose host is
+    // not a motebit/localhost host, or that carries userinfo, a query or a
+    // key-in-path segment (PUBLIC_BUILD_ENV, scripts/lib/client-bundle-secrets.ts).
     const env = (import.meta as { env?: Record<string, string | undefined> }).env;
-    const solanaRpcUrl = env?.VITE_SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+    const solanaRpcUrl =
+      env?.VITE_SOLANA_RPC_URL != null && env.VITE_SOLANA_RPC_URL !== ""
+        ? env.VITE_SOLANA_RPC_URL
+        : `${DEFAULT_MOTEBIT_CLOUD_URL}/v1/solana-rpc`;
 
     // Proactive interior — defaults ON when inference is free to the user
     // (on-device / BYOK), opt-in on metered motebit-cloud. The default is
@@ -2352,7 +2369,10 @@ export class UnbootedWebApp {
    * record (old + new keys both sign), update encrypted IndexedDB keystore,
    * and submit to relay if syncing.
    */
-  async rotateKey(reason?: string): Promise<{ newPublicKey: string }> {
+  async rotateKey(
+    reason?: string,
+    opts: { acknowledgeFundsAtRisk?: boolean } = {},
+  ): Promise<{ newPublicKey: string }> {
     // The state machine lives in @motebit/surface-kit (#709): it reads the
     // relay first, writes the new key ahead, submits signed by the RETIRING
     // key, and moves local state only after the relay confirms. A stop or a
@@ -2369,6 +2389,15 @@ export class UnbootedWebApp {
       // re-enrolment — a browser is never a host (S2).
       afterCommit: ({ record }) =>
         rosterAfterRotationCommit({ motebitId: this._motebitId, record }),
+      // I0: the identity key IS the wallet; read it before anything moves.
+      // A browser-incapable RPC fails the read, which refuses (fail-closed)
+      // until the owner confirms the stated risk.
+      readWalletHoldings: createSolanaHoldingsReader({
+        rpcUrl:
+          (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_SOLANA_RPC_URL ??
+          "https://api.mainnet-beta.solana.com",
+      }),
+      ...(opts.acknowledgeFundsAtRisk === true ? { acknowledgeFundsAtRisk: true } : {}),
       ...(reason !== undefined ? { reason } : {}),
     });
   }
@@ -3940,6 +3969,7 @@ export class UnbootedWebApp {
     // replacement adapter (#816).
     const onRelayFrame: CustomMessageCallback = (msg) => {
       for (const listener of [...delegationListeners]) listener(msg);
+      if (this._taskClaims.handleFrame(msg)) return;
       // Handle remote command requests (forwarded by relay)
       if (msg.type === "command_request" && this.runtime) {
         // Fail-closed remote ingress: only a signed-request-envelope@1.0
@@ -3996,10 +4026,10 @@ export class UnbootedWebApp {
       const task = msg.task as AgentTask;
       const runtime = this.runtime;
 
-      this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-      this._activeTaskCount++;
-
-      void (async () => {
+      // Claim the task; execute only on the relay's grant — another body of
+      // this identity may hold it.
+      this._taskClaims.offer(task.task_id, async () => {
+        this._activeTaskCount++;
         try {
           const privateKeyHex = await this.keyStore.loadPrivateKey();
           if (!privateKeyHex) return;
@@ -4041,7 +4071,7 @@ export class UnbootedWebApp {
         } finally {
           this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
         }
-      })();
+      });
     };
     this._wsUnsubOnCustom = wsAdapter.onCustomMessage(onRelayFrame);
 
@@ -4346,6 +4376,7 @@ export class UnbootedWebApp {
   }
 
   stopSync(): void {
+    this._taskClaims.dispose();
     this._serving = false;
     this.stopRegistrationRetry();
     if (this._wsTokenRefreshTimer != null) {

@@ -63,9 +63,11 @@ import {
   buildKeyTransferPayload,
   openPairingKeyTransfer,
   checkPreTransferBalance,
+  createSolanaHoldingsReader,
   formatWalletWarning,
 } from "@motebit/encryption";
 import type { KeySuccessionRecord, KeyTransferPayload } from "@motebit/sdk";
+import type { WalletHoldingsReader } from "@motebit/encryption";
 import { identityFileRecords, persistVerifiedLineage } from "@motebit/surface-kit";
 import { APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
 import {
@@ -517,9 +519,16 @@ export class IdentityManager {
    * POST the new public key so the relay's device registration stays
    * current. Failure of the relay update does not fail the rotation.
    */
+  /**
+   * I0's wallet reader; `null` ⇒ the Solana mainnet RPC. A seam for tests
+   * (no test may reach a real RPC), never a way to skip the read.
+   */
+  walletHoldingsReader: WalletHoldingsReader | null = null;
+
   async rotateKey(
     invoke: InvokeFn,
     reason?: string,
+    opts: { acknowledgeFundsAtRisk?: boolean } = {},
   ): Promise<{ oldKeyFingerprint: string; newKeyFingerprint: string; rotationCount: number }> {
     // The state machine lives in @motebit/surface-kit (#709): read the relay
     // first, write the new key ahead, submit signed by the RETIRING key,
@@ -541,6 +550,11 @@ export class IdentityManager {
           io: tauriRosterIO(invoke),
         });
       },
+      // I0: the identity key IS the wallet; read it before anything moves.
+      readWalletHoldings:
+        this.walletHoldingsReader ??
+        createSolanaHoldingsReader({ rpcUrl: "https://api.mainnet-beta.solana.com" }),
+      ...(opts.acknowledgeFundsAtRisk === true ? { acknowledgeFundsAtRisk: true } : {}),
       ...(reason !== undefined ? { reason } : {}),
     });
     // Count rotations from the identity file's succession chain.
