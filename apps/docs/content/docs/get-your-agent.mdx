@@ -1,25 +1,73 @@
 ---
 title: Get Your Agent
-description: Create an identity, scaffold a service agent, install the CLI, or run the desktop app.
+description: Open the web app, install the CLI from npm, or scaffold a service agent. The desktop app is a preview built from source.
 ---
 
-Three install paths share one identity: a signed identity file you can verify and share, a service agent that runs as a worker, and the full operator console with REPL, daemon, and MCP server. Pick by what you want to ship.
+One identity, several ways in. The current, shipped paths are the web app at [motebit.com](https://motebit.com) and the `motebit` CLI from npm. Pick by what you want to do.
 
-## Three paths
+## Where to start
 
-| Path | Command | What you get |
-|------|---------|-------------|
+| Path | How | What you get |
+|------|-----|-------------|
+| **Web** | Open [motebit.com](https://motebit.com) | The creature and chat in your browser — no install. Your identity is created and kept in this browser |
+| **Full agent (CLI)** | `npm install -g motebit` then `motebit` | Interactive REPL with identity, memory, tools, operator mode, daemon, and MCP server |
 | **Identity only** | `npm create motebit` | Signed `motebit.md` identity file — create, verify, share |
 | **Service agent** | `npm create motebit my-agent -- --agent` | Runnable agent project with tools, identity, MCP server — `npm run dev` to join the network |
-| **Full agent** | `npm install -g motebit` then `motebit` | Interactive REPL with identity, memory, tools, operator mode |
+| **Desktop (preview)** | Build from source | The Tauri app — see [Desktop (preview)](#desktop-preview) below |
 
 The identity-only path is lightweight — no runtime, no database, just a cryptographically signed file. The service agent path scaffolds a complete project with `src/tools.ts`, identity, and an entrypoint that runs `motebit serve --direct` — a few commands from install to a registered service agent. The full agent gives you the complete operator console with streaming chat, MCP tool connections, goal scheduling, and everything described below.
 
-## Desktop app
+## Web app
+
+Open [motebit.com](https://motebit.com). There is nothing to install: the app creates an Ed25519 identity on first visit and keeps it in this browser — the private key is stored in IndexedDB, encrypted under a non-extractable WebCrypto key. Clearing this site's browser data removes it, so treat the browser identity as tied to that browser profile.
+
+## Command line
+
+Install the CLI globally — the same agent, no creature, full operator console:
+
+```bash
+npm install -g motebit
+```
+
+```bash
+motebit                          # Interactive REPL — chat with your agent
+motebit export                   # Export a signed identity file (plus credentials and state bundle)
+motebit verify motebit.md        # Verify an identity file signature
+motebit run --identity motebit.md  # Daemon mode — scheduled goals + approval queue
+```
+
+The REPL supports streaming, tool use with per-call approval, MCP server connections, operator mode, and slash commands (`/memories`, `/state`, `/tools`, `/model`, `/sync`).
+
+For standalone identity file creation without the full agent, you can also use:
+
+```bash
+npm create motebit                       # Create a signed identity file
+npm create motebit my-agent -- --agent   # Scaffold a runnable service agent
+npx create-motebit verify                # Verify the signature
+```
+
+The `--agent` scaffold creates a project with `src/index.ts` (entrypoint), `src/tools.ts` (fetch_url and echo tools to start), `motebit.md` (signed service identity), and `package.json` with dev/start/self-test scripts. Edit `src/tools.ts`, run `npm run dev`, and your agent registers with the relay and is ready to receive delegated tasks. Run `npm run self-test` to verify the full receipt loop.
+
+The scaffold starts in direct mode — no LLM needed, tools execute deterministically. To add AI reasoning (tool selection, multi-tool workflows, prompt decomposition), remove `--direct` from the serve arguments in `src/index.ts` and set `ANTHROPIC_API_KEY`. Same identity, same receipts — the intelligence is pluggable.
+
+## Desktop (preview)
 
 The desktop app (Tauri) shows your motebit as a liquescent droplet in a small transparent window — it breathes, glows when thinking, takes voice input, and remembers your conversations.
 
-Desktop builds for macOS, Windows, and Linux are produced by the release workflow and published as pre-release builds on the [GitHub releases page](https://github.com/motebit/motebit/releases). macOS builds are currently unsigned (right-click → Open on first launch), and there is no auto-updater yet.
+The desktop app is a preview. The last published desktop build, `desktop-v0.1.0` (March 2026), predates the current identity and money behaviour — sovereign-by-default identity minting, the identity binding ladder, the machine roster, and the money-path fixes all landed after it — so do not use it for a new identity. There is no auto-updater.
+
+The current route is to build from source (Node ≥ 22, pnpm 9.15, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your platform):
+
+```bash
+git clone https://github.com/motebit/motebit.git
+cd motebit
+pnpm install
+pnpm build                                    # build the workspace packages
+pnpm --filter @motebit/desktop tauri:dev     # run in development mode
+pnpm --filter @motebit/desktop tauri:build   # or produce an app bundle
+```
+
+See [Desktop App](/docs/apps/desktop) for details.
 
 ### First launch
 
@@ -55,35 +103,6 @@ By default, your motebit can only read. To let it write files, run commands, or 
 3. High-risk tools now require per-call approval — the agent shows you what it wants to do and waits for you to allow or deny
 
 Your PIN hash is stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`. Every tool call is logged to an audit trail.
-
-## Command line
-
-Install the CLI globally — the same agent, no creature, full operator console:
-
-```bash
-npm install -g motebit
-```
-
-```bash
-motebit                          # Interactive REPL — chat with your agent
-motebit export                   # Export a signed identity file (plus credentials and state bundle)
-motebit verify motebit.md        # Verify an identity file signature
-motebit run --identity motebit.md  # Daemon mode — scheduled goals + approval queue
-```
-
-The REPL supports streaming, tool use with per-call approval, MCP server connections, operator mode, and slash commands (`/memories`, `/state`, `/tools`, `/model`, `/sync`).
-
-For standalone identity file creation without the full agent, you can also use:
-
-```bash
-npm create motebit                       # Create a signed identity file
-npm create motebit my-agent -- --agent   # Scaffold a runnable service agent
-npx create-motebit verify                # Verify the signature
-```
-
-The `--agent` scaffold creates a project with `src/index.ts` (entrypoint), `src/tools.ts` (fetch_url and echo tools to start), `motebit.md` (signed service identity), and `package.json` with dev/start/self-test scripts. Edit `src/tools.ts`, run `npm run dev`, and your agent registers with the relay and is ready to receive delegated tasks. Run `npm run self-test` to verify the full receipt loop.
-
-The scaffold starts in direct mode — no LLM needed, tools execute deterministically. To add AI reasoning (tool selection, multi-tool workflows, prompt decomposition), remove `--direct` from the serve arguments in `src/index.ts` and set `ANTHROPIC_API_KEY`. Same identity, same receipts — the intelligence is pluggable.
 
 ## Connect to the network
 
