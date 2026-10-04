@@ -444,8 +444,12 @@ describe("model admission — motebitCloudAdmission is the route's rule", () => 
       JSON.stringify({ model: sent, messages: [{ role: "user", content: "hi" }] }),
     );
     await res.text();
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(String(fetchSpy.mock.calls[0]![1]?.body)).toContain(`"${routed}"`);
+    // The provider call is the verdict; the relay billing debit is not.
+    const upstream = (fetchSpy.mock.calls as Array<[unknown, RequestInit | undefined]>).filter(
+      ([u]) => !String(u).startsWith("https://relay.test"),
+    );
+    expect(upstream).toHaveLength(1);
+    expect(upstream[0]![1]?.body as string).toContain(`"${routed}"`);
   });
 
   it.each([

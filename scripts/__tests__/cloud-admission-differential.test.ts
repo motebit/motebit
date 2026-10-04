@@ -223,6 +223,7 @@ interface ProxyVerdict {
 }
 
 const ORIGIN = "http://localhost:3000";
+const RELAY_API_URL = "https://relay.test";
 const PROVIDER_ENV = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_AI_API_KEY", "GROQ_API_KEY"];
 
 async function proxyVerdict(model: string, models: readonly string[]): Promise<ProxyVerdict> {
@@ -261,7 +262,10 @@ async function proxyVerdict(model: string, models: readonly string[]): Promise<P
       // means the request reached a provider; `fetchSpy` is the verdict.
       status = -1;
     }
-    const calls = fetchSpy.mock.calls as unknown as Array<[unknown, RequestInit | undefined]>;
+    // Only provider requests are the verdict; the relay billing debit is not.
+    const calls = (
+      fetchSpy.mock.calls as unknown as Array<[unknown, RequestInit | undefined]>
+    ).filter(([u]) => !String(u).startsWith(RELAY_API_URL));
     return {
       admitted: calls.length > 0,
       upstream: calls.map(([u, init]) => `${String(u)} ${String(init?.body ?? "")}`).join("\n"),
@@ -285,6 +289,10 @@ const freeVerdicts = new Map<string, ProxyVerdict>();
 
 beforeAll(async () => {
   process.env.RELAY_PUBLIC_KEY = "test-pubkey";
+  // Billing must be configured for motebit-cloud to serve at all
+  // (services/proxy/src/billing.ts) — otherwise every id is a 503.
+  process.env.RELAY_API_URL = RELAY_API_URL;
+  process.env.RELAY_PROXY_SECRET = "test-relay-proxy-secret";
   for (const k of PROVIDER_ENV) process.env[k] = `sk-${k}`;
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -300,6 +308,8 @@ beforeAll(async () => {
 afterAll(() => {
   setSpendStoreForTests(undefined);
   for (const k of PROVIDER_ENV) delete process.env[k];
+  delete process.env.RELAY_API_URL;
+  delete process.env.RELAY_PROXY_SECRET;
   vi.restoreAllMocks();
 });
 
