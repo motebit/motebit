@@ -3,22 +3,39 @@
  *
  * Wraps the x402 facilitator behind the GuestRail interface.
  * x402 is pay-per-request: deposits are not interactive flows — they happen
- * at the HTTP boundary via x402 middleware. The rail records completed payments
- * and can initiate withdrawals (stablecoin transfers).
+ * at the HTTP boundary via x402 middleware. The rail records completed
+ * payments (proof attachment) and reports whether the facilitator is up.
+ *
+ * **It does not withdraw (#948).** An x402 payout is an EIP-3009
+ * `transferWithAuthorization` the PAYER signs — here the relay treasury —
+ * which the facilitator then submits. The relay holds no key for its EVM
+ * treasury (`payToAddress` is an address only; treasury-custody doctrine
+ * keeps that key off the relay), so it cannot sign one. The withdraw this
+ * rail used to carry put the withdrawal's idempotency key in the
+ * `signature` field; no facilitator can execute that, so every relay Path 1
+ * payout either failed or was left for an operator. A withdrawal method that
+ * cannot work must not be advertised (paid-failure-recourse's companion
+ * law), so the method is removed at the type level, exactly like Bridge's:
+ * `supportsWithdraw` is false, `withdraw` does not exist, and
+ * `isWithdrawableRail(x402Rail)` is false — no relay path and no batch
+ * fire can hand this rail a payout. The relay refuses 0x withdrawal
+ * destinations before any debit. Re-adding a withdraw requires a real
+ * EIP-3009 signature by a treasury key whose custody the treasury-custody
+ * doctrine has decided.
  *
  * Metabolic principle: absorbs the x402 facilitator as nutrient via a thin
  * client interface. Does not reimplement the protocol.
  */
 
-import { PayoutNotSentError, X402_WITHDRAWAL_VALIDITY_SECONDS } from "./payout-horizon.js";
-import { toMicro } from "@motebit/protocol";
-import type { WithdrawableGuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
+import type { GuestRail, PaymentProof } from "@motebit/sdk";
 import { type RailLogger, NOOP_LOGGER } from "./logger.js";
 
 /**
  * Minimal facilitator client interface.
  * The real HTTPFacilitatorClient from @x402/core satisfies this.
  * Tests inject a mock. The rail absorbs the SDK — does not reimplement it.
+ * (`settle` is the facilitator's own surface; this rail never calls it —
+ * the relay's x402 gate settles a payer's authorization, #907.)
  */
 export interface X402FacilitatorClient {
   readonly url: string;
@@ -48,21 +65,14 @@ export interface X402RailConfig {
   logger?: RailLogger;
 }
 
-export class X402SettlementRail implements WithdrawableGuestRail {
+export class X402SettlementRail implements GuestRail {
   readonly custody = "relay" as const;
   readonly railType = "protocol" as const;
   readonly name = "x402";
   readonly supportsDeposit = false as const;
-  readonly supportsWithdraw = true as const;
+  /** No withdraw (#948): the relay cannot sign an EIP-3009 authorization. */
+  readonly supportsWithdraw = false as const;
   readonly supportsBatch = false as const;
-  /** `withdraw()` hands a signed payload to the facilitator (#921, payout-horizon.ts). */
-  readonly payoutMode = "sent" as const;
-  /**
-   * The authorization `withdraw()` signs is valid for this long: a
-   * facilitator that accepted it and then timed out may still submit it
-   * until then (#921).
-   */
-  readonly payoutValidityMs = X402_WITHDRAWAL_VALIDITY_SECONDS * 1000;
 
   private readonly facilitator: X402FacilitatorClient;
   readonly network: string;
@@ -85,79 +95,6 @@ export class X402SettlementRail implements WithdrawableGuestRail {
     } catch {
       return false;
     }
-  }
-
-  /**
-   * Initiate a stablecoin withdrawal to a destination address.
-   * Constructs a payment payload and settles via the x402 facilitator.
-   */
-  async withdraw(
-    motebitId: string,
-    amount: number,
-    currency: string,
-    destination: string,
-    idempotencyKey: string,
-  ): Promise<WithdrawalResult> {
-    if (amount <= 0) {
-      throw new PayoutNotSentError("Withdrawal amount must be positive");
-    }
-    if (!destination) {
-      throw new PayoutNotSentError("Destination address is required for x402 withdrawal");
-    }
-
-    // Construct x402 payment payload for facilitator settlement.
-    // The facilitator handles the onchain transfer.
-    const paymentPayload = {
-      x402Version: 1,
-      scheme: "exact",
-      network: this.network,
-      payload: {
-        signature: idempotencyKey,
-        authorization: {
-          from: this.payToAddress,
-          to: destination,
-          value: String(toMicro(amount)), // USDC 6 decimals
-          validAfter: 0,
-          validBefore: Math.floor(Date.now() / 1000) + X402_WITHDRAWAL_VALIDITY_SECONDS,
-          nonce: idempotencyKey,
-        },
-      },
-    };
-
-    const paymentRequirements = {
-      scheme: "exact",
-      network: this.network,
-      maxAmountRequired: String(toMicro(amount)),
-      payTo: destination,
-      asset: currency.toUpperCase() === "USDC" ? "USDC" : currency,
-      maxTimeoutSeconds: 60,
-      extra: {},
-    };
-
-    const result = await this.facilitator.settle(paymentPayload, paymentRequirements);
-
-    if (!result.success) {
-      throw new Error(`x402 withdrawal failed: ${result.errorReason ?? "unknown error"}`);
-    }
-
-    this.logger.info("x402.withdrawal.settled", {
-      motebitId,
-      amount,
-      destination,
-      txHash: result.transaction,
-      network: result.network,
-    });
-
-    return {
-      amount,
-      currency,
-      proof: {
-        reference: result.transaction,
-        railType: "protocol",
-        network: result.network,
-        confirmedAt: Date.now(),
-      },
-    };
   }
 
   /**

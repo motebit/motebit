@@ -814,9 +814,12 @@ export function startBatchWithdrawalLoop(
       try {
         await runBatchWithdrawalTick(db, withdrawableRails, config);
       } catch (err) {
+        // Log, then rethrow so the supervisor records the failed tick
+        // (services/relay/CLAUDE.md rule 19).
         logger.error("batch_withdrawals.tick_error", {
           error: err instanceof Error ? err.message : String(err),
         });
+        throw err;
       }
     },
     { isFrozen },

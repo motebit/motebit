@@ -17,34 +17,21 @@
  * verifies the negative case (no fallthrough to Bridge exists, period).
  */
 
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
-import { OperatorSolanaTransfer, type SolanaRpcAdapter } from "@motebit/wallet-solana";
+import type { SolanaRpcAdapter } from "@motebit/wallet-solana";
 
 import type { SyncRelay } from "../index.js";
 import { creditAccount } from "../accounts.js";
 import { AUTH_HEADER, createTestRelay, jsonAuthWithIdempotency } from "./test-helpers.js";
+import { freshChain, makeDurableOperator, type FakeDurableChain } from "./durable-payout-fake.js";
 
-function makeOperator(overrides: Partial<SolanaRpcAdapter> = {}): {
-  operator: OperatorSolanaTransfer;
-  adapter: SolanaRpcAdapter;
-} {
-  const adapter: SolanaRpcAdapter = {
-    ownAddress: "RelayTreasuryAddressBase58",
-    getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
-    getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
-    getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
-    sendUsdc: vi.fn().mockResolvedValue({
-      signature: "tx-sig-base58",
-      slot: 12345,
-      confirmed: true,
-    }),
-    sendUsdcBatch: vi.fn().mockResolvedValue([]),
-    getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
-    isReachable: vi.fn().mockResolvedValue(true),
-    ...overrides,
-  };
-  return { operator: new OperatorSolanaTransfer(adapter), adapter };
+/** A durable-nonce Path 0 transfer (#990) over a fake chain. */
+function makeOperator(
+  overrides: Partial<SolanaRpcAdapter> = {},
+  chain: FakeDurableChain = freshChain(),
+) {
+  return makeDurableOperator(chain, overrides);
 }
 
 async function registerAndFund(relay: SyncRelay, motebitId: string, publicKeyHex: string) {
@@ -131,9 +118,10 @@ describe("Bridge user-withdrawal path — structural deletion", () => {
     // MotebitCustomerId, to: user's_Solana_wallet})` — Motebit becomes
     // the transmitter. After Commit 2, no path exists; withdrawal stays
     // pending. The structural impossibility is the doctrine enforced.
-    const { operator, adapter } = makeOperator({
-      isReachable: vi.fn().mockResolvedValue(false),
-    });
+    const { operator, adapter } = makeOperator(
+      {},
+      freshChain({ lane: { status: "unavailable", reason: "rpc unreachable" } }),
+    );
     relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
 
     const kp = await generateKeypair();
@@ -148,8 +136,8 @@ describe("Bridge user-withdrawal path — structural deletion", () => {
     });
     expect(res.status).toBe(200);
 
-    // Path 0 checked availability and bailed; sendUsdc never invoked
-    expect(adapter.sendUsdc).not.toHaveBeenCalled();
+    // Path 0 found no nonce lane and sent nothing
+    expect(adapter.sendUsdcDurable).not.toHaveBeenCalled();
 
     // No Path 2 exists to catch it — stays pending
     const row = relay.moteDb.db

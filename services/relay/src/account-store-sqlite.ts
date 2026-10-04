@@ -31,6 +31,7 @@ import type {
   WithdrawalRequest,
 } from "@motebit/virtual-accounts";
 import { DISPUTE_WINDOW_MS } from "@motebit/virtual-accounts";
+import { createWithdrawalChainPayoutTables } from "./withdrawal-chain-payouts.js";
 
 /**
  * The FROM state of a settling transition (#921), checked at runtime: it is
@@ -209,6 +210,9 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
       db.exec("UPDATE relay_withdrawals SET pre_claim_review = 1 WHERE status = 'pending'");
     });
   }
+  // #949: the per-payout chain record (the signatures a Path 0 payout signed,
+  // recorded before each broadcast) — withdrawal-chain-payouts.ts.
+  createWithdrawalChainPayoutTables(db);
 }
 
 /** Create agent wallet table. Idempotent. Reserved for sovereign-rail wiring. */

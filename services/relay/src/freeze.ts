@@ -318,6 +318,12 @@ export const FREEZE_EXEMPT_TABLES: Readonly<Record<string, string>> = {
   relay_settlement_payee_corrections: "migration-time attribution corrections; move no money",
   relay_p2p_proof_claims: "admission claims on onchain proofs; the relay moves no P2P money",
   relay_agent_wallets: "settlement address registry; moves no money",
+  relay_withdrawal_chain_claims:
+    "the Path 0 chain-record marker — written in the same transaction as the guarded `pending → processing` payout claim (#990)",
+  relay_withdrawal_payout_attempts:
+    "the Solana transactions a payout signs, recorded before broadcast, and their finalized statuses — evidence of what the chain decided; a payout is signed only after its guarded claim, a kill moves no money, and the refund or completion it decides is guarded (#990)",
+  relay_withdrawal_payout_queue:
+    "the nonce-lane payout queue (withdrawal ids only) — left as it was so the work resumes after unfreeze (#990)",
   relay_subscriptions: "subscription status; its credit leg is guarded",
   relay_execution_ledgers: "goal execution ledgers; not money",
   // The agent-runtime schema `@motebit/persistence` creates in every motebit
