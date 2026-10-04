@@ -6346,8 +6346,10 @@ export class MotebitRuntime {
           : this.firstPersonWorkerSelector({
               capability: params.capability,
               exploreSeed,
-              onTranscript: (t) => {
-                mintedTranscript = t;
+              // Thread the minted transcript onto THIS call's result (egress;
+              // the recent-transcripts buffer alone is not egress).
+              onTranscript: (transcript) => {
+                mintedTranscript = transcript;
               },
             });
 
