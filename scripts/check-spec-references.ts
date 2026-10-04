@@ -61,7 +61,7 @@ function walkFiles(root: string, exclude: Set<string>): string[] {
 
 function collectSpecs(): SpecInfo[] {
   return readdirSync(SPEC_DIR)
-    .filter((f) => f.endsWith(".md"))
+    .filter((f) => f.endsWith(".md") && f !== "README.md") // the index, not a spec
     .map((f) => ({
       file: join(SPEC_DIR, f),
       basename: f,

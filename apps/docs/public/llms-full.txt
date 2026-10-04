@@ -6549,7 +6549,8 @@ motebit/
 │   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 35 open specifications, each motebit/<name>@1.0
+├── spec/                      # 36 open specifications, each motebit/<name>@1.0
+│   ├── README.md                            Admission rule + class index of every spec (enforced by check-spec-coverage).
 │   ├── terminology-v1.md                    Normative glossary: each public term's literal definition, owning layer, wire form, standard, forbidden synonyms.
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
@@ -6589,7 +6590,7 @@ motebit/
 │
 └── scripts/                   # Drift-defense CI gates
     ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.
-    ├── check-spec-coverage.ts               Spec Wire-format types exported from @motebit/protocol.
+    ├── check-spec-coverage.ts               Spec Wire-format types exported from @motebit/protocol; spec/README.md index matches the spec set.
     ├── check-suite-declared.ts              Every signed artifact declares a SuiteId.
     ├── check-suite-dispatch.ts              Primitive calls live only in suite-dispatch.ts.
     ├── check-dist-smoke.ts                  Every published bin executes --help in CI.

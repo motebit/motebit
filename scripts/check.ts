@@ -151,7 +151,7 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-spec-coverage",
     defends:
-      "types named in spec Wire format (foundation law) sections are exported from @motebit/protocol; every spec has adopted the wire-vs-storage split",
+      "types named in spec Wire format (foundation law) sections are exported from @motebit/protocol; every spec has adopted the wire-vs-storage split (or carries a reasoned NON_WIRE exemption); spec/README.md indexes every spec exactly once under one class, with live links and a Status matching the spec's own",
     script: "check-spec-coverage",
     // --strict promotes the grace-period warning (unstructured specs) into a
     // hard fail. Flipped on 2026-04-13 after all twelve specs adopted the
