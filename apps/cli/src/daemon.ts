@@ -12,6 +12,7 @@ import {
   PLANNING_TASK_ROUTER,
   createRelayCapabilitiesFetcher,
   servedToolNames,
+  TaskClaimCoordinator,
 } from "@motebit/runtime";
 import type { MintToken } from "@motebit/runtime";
 import { attachedServePrincipalDeps, servePrincipalDeps } from "./serve-deps.js";
@@ -497,7 +498,22 @@ export async function handleRun(config: CliConfig): Promise<void> {
     // Handle agent task requests and proposal events
     if (privKeyBytes) {
       const privateKey = privKeyBytes;
+      // One task, one body: every serving body of this identity receives the
+      // broadcast; only the one the relay grants runs it (task-claim.ts).
+      const taskClaims = new TaskClaimCoordinator({
+        send: (frame) => wsAdapter!.sendRaw(frame),
+        onEvent: (e) => {
+          if (e.kind === "rejected" && e.reason !== "already_claimed") {
+            console.log(
+              `Agent task ${e.taskId.slice(0, 8)}... not claimed: ${sanitizeRelayText(e.reason)}`,
+            );
+          } else if (e.kind === "grant_timeout") {
+            console.log(`Agent task ${e.taskId.slice(0, 8)}... claim unanswered — dropped`);
+          }
+        },
+      });
       wsAdapter.onCustomMessage((msg) => {
+        if (taskClaims.handleFrame(msg)) return;
         // Proposal fan-out events
         if (msg.type === "proposal") {
           const proposalId = (msg.proposal_id as string | undefined)?.slice(0, 12) ?? "?";
@@ -604,11 +620,9 @@ export async function handleRun(config: CliConfig): Promise<void> {
             `\nAgent task received: ${task.task_id.slice(0, 8)}... prompt: "${task.prompt.slice(0, 80)}"`,
           );
 
-          // Claim the task
-          wsAdapter!.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-
-          // Execute and post receipt
-          void (async () => {
+          // Claim the task; execute and post the receipt only on the
+          // relay's grant (another body of this identity may win it).
+          taskClaims.offer(task.task_id, async () => {
             try {
               let receipt: import("@motebit/sdk").ExecutionReceipt | undefined;
               for await (const chunk of runtime.handleAgentTask(
@@ -661,7 +675,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
                 `Agent task ${task.task_id.slice(0, 8)}... error: ${sanitizeRelayText(errMsg)}`,
               );
             }
-          })();
+          });
         }
       });
 
@@ -1609,7 +1623,21 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
       // Handle task dispatch — same pattern as daemon mode
       const handleTask = deps.handleAgentTask.bind(deps);
+      // One task, one body: only the body the relay grants runs a task.
+      const serveTaskClaims = new TaskClaimCoordinator({
+        send: (frame) => serveWsAdapter!.sendRaw(frame),
+        onEvent: (e) => {
+          if (e.kind === "rejected" && e.reason !== "already_claimed") {
+            log(
+              `Agent task ${e.taskId.slice(0, 8)}... not claimed: ${sanitizeRelayText(e.reason)}`,
+            );
+          } else if (e.kind === "grant_timeout") {
+            log(`Agent task ${e.taskId.slice(0, 8)}... claim unanswered — dropped`);
+          }
+        },
+      });
       serveWsAdapter.onCustomMessage((msg) => {
+        if (serveTaskClaims.handleFrame(msg)) return;
         // Handle remote command requests (forwarded by relay)
         if (msg.type === "command_request" && runtimeRef.current) {
           const cmdMsg = msg as unknown as {
@@ -1668,8 +1696,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
         log(
           `Agent task received: ${task.task_id.slice(0, 8)}... prompt: "${task.prompt.slice(0, 80)}"`,
         );
-        serveWsAdapter!.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-        void (async () => {
+        serveTaskClaims.offer(task.task_id, async () => {
           try {
             let receipt: Record<string, unknown> | undefined;
             for await (const chunk of handleTask(task.prompt, {
@@ -1713,7 +1740,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
             const errMsg = err instanceof Error ? err.message : String(err);
             log(`Agent task ${task.task_id.slice(0, 8)}... error: ${sanitizeRelayText(errMsg)}`);
           }
-        })();
+        });
       });
 
       serveWsAdapter.connect();

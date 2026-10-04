@@ -12,7 +12,7 @@ const mockCtrl = vi.hoisted(() => ({
     onEvent: ReturnType<typeof import("vitest").vi.fn>;
     onCustomMessage: ReturnType<typeof import("vitest").vi.fn>;
     eventHandlers: Array<(raw: unknown) => void>;
-    customHandlers: Array<(msg: { type: string; task?: unknown }) => void>;
+    customHandlers: Array<(msg: { type: string; task?: unknown; [k: string]: unknown }) => void>;
   }>,
   fetchResponse: {
     ok: true,
@@ -39,7 +39,8 @@ vi.mock("@motebit/sync-engine", () => {
     disconnect = vi.fn(() => {});
     sendRaw = vi.fn(() => {});
     eventHandlers: Array<(raw: unknown) => void> = [];
-    customHandlers: Array<(msg: { type: string; task?: unknown }) => void> = [];
+    customHandlers: Array<(msg: { type: string; task?: unknown; [k: string]: unknown }) => void> =
+      [];
 
     onEvent = vi.fn((cb: (raw: unknown) => void) => {
       this.eventHandlers.push(cb);
@@ -526,6 +527,13 @@ describe("SyncController serving bearer (#827)", () => {
     for (const h of ws.customHandlers) {
       h({ type: "task_request", task: { task_id: "t-1", prompt: "p" } });
     }
+    // One task, one body: the claim goes out and nothing runs until the
+    // relay grants it.
+    expect(ws.sendRaw).toHaveBeenCalledWith(
+      JSON.stringify({ type: "task_claim", task_id: "t-1", lease: true }),
+    );
+    expect(runtime.handleAgentTask).not.toHaveBeenCalled();
+    for (const h of ws.customHandlers) h({ type: "task_claimed", task_id: "t-1" });
     await vi.waitFor(() => {
       expect(calls.some((c) => c.url.endsWith("/task/t-1/result"))).toBe(true);
     });
@@ -533,6 +541,30 @@ describe("SyncController serving bearer (#827)", () => {
     ctrl.stopSync();
     return calls;
   }
+
+  it("a claim the relay rejects is never run (another body holds the task)", async () => {
+    globalThis.fetch = vi.fn(async () => mockCtrl.fetchResponse) as never;
+    const runtime = makeRuntime();
+    const ctrl = new SyncController(
+      makeDeps({
+        getRuntime: () => runtime,
+        createSyncToken: async (_pk: string, aud?: string) => `minted:${aud ?? "sync"}`,
+      }),
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ctrl.startSync(vi.fn() as any, "https://relay.test", "device-sync-token");
+    expect((await ctrl.startServing("pk")).ok).toBe(true);
+    const ws = mockCtrl.wsInstances[mockCtrl.wsInstances.length - 1]!;
+    for (const h of ws.customHandlers) {
+      h({ type: "task_request", task: { task_id: "t-2", prompt: "p" } });
+      h({ type: "task_claim_rejected", task_id: "t-2", reason: "already_claimed" });
+    }
+    await new Promise((r) => setTimeout(r, 20));
+    expect(runtime.handleAgentTask).not.toHaveBeenCalled();
+    expect(ctrl.activeTaskCount()).toBe(0);
+    ctrl.stopServing();
+    ctrl.stopSync();
+  });
 
   it("with no master token, register mints admin:query and the result mints task:result", async () => {
     const calls = await serveOneTask();

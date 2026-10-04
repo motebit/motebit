@@ -847,3 +847,98 @@ describe("invokeCapability — the deterministic paid door consults the ledger (
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// 6. One task, one body (cold review of 5e5b36a, N1): the relay's own verdict
+//    on a granted task whose executor was lost is `undetermined` — the work
+//    MAY have run. Never read as pending, never a timeout, never re-hired.
+// ---------------------------------------------------------------------------
+
+const undeterminedPoll = (): Response =>
+  json(200, {
+    task: { status: "claimed" },
+    receipt: null,
+    undetermined: {
+      reason: "claimer_lost",
+      detail: "The body that claimed this task stopped answering",
+      since: 1,
+    },
+  });
+const expiredPoll = (): Response =>
+  json(200, {
+    task: { status: "pending" },
+    receipt: null,
+    expired: {
+      reason: "never_claimed",
+      detail: "No body claimed this task before its TTL",
+      since: 1,
+    },
+  });
+
+describe("one task, one body — undetermined and expired are their own outcomes", () => {
+  it("retrieveDelegationResult is typed undetermined (with the relay's reason), not pending", async () => {
+    stubTaskRead(undeterminedPoll);
+    const r = await retrieveDelegationResult({
+      motebitId: ME,
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      taskId: TASK,
+    });
+    expect(r.status).toBe("undetermined");
+    if (r.status === "undetermined") expect(r.reason).toBe("claimer_lost");
+  });
+
+  it("retrieveDelegationResult is typed expired for a task no executor ever took", async () => {
+    stubTaskRead(expiredPoll);
+    const r = await retrieveDelegationResult({
+      motebitId: ME,
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      taskId: TASK,
+    });
+    expect(r.status).toBe("expired");
+    if (r.status === "expired") expect(r.reason).toBe("never_claimed");
+  });
+
+  it("delegate_to_agent ends on the first undetermined poll and tells the model the work may have run — never re-hire", async () => {
+    const store = new InMemoryPaidIntentStore();
+    const relay = stubRelay(undeterminedPoll);
+    vi.useFakeTimers();
+    const runtime = makeRuntime(store);
+    runtime.enableInteractiveDelegation({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      relayPublicKey: SIGNING_PINNED_HEX,
+      buildP2pPayment: vi.fn(async () => proof),
+      acknowledgeNoHistoryRisk: true,
+      timeoutMs: 10_000,
+    });
+    const hire = runtime.getToolRegistry().execute("delegate_to_agent", {
+      prompt: "research X",
+      required_capabilities: ["web_search"],
+    });
+    await advanceAfterRealAsync(10_000);
+    const r = await hire;
+    vi.useRealTimers();
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("TASK_UNDETERMINED");
+    expect(r.error).toContain("MAY have run");
+    expect(r.error).toContain(TASK);
+    expect(r.error).not.toContain("timeout");
+    // One submit; the poll stopped at the relay's verdict.
+    expect(relay.submits()).toBe(1);
+    expect(relay.methods.filter((m) => m === `GET /agent/${ME}/task/${TASK}`)).toHaveLength(1);
+  });
+
+  it("the retrieve_task_result tool reads undetermined as 'may have run — do not re-delegate'", async () => {
+    stubTaskRead(undeterminedPoll);
+    const runtime = makeRuntime(new InMemoryPaidIntentStore());
+    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    const r = await runtime.getToolRegistry().execute("retrieve_task_result", { task_id: TASK });
+    const out = JSON.parse(String(r.data)) as { status: string; guidance: string; reason?: string };
+    expect(out.status).toBe("undetermined");
+    expect(out.reason).toBe("claimer_lost");
+    expect(out.guidance).toContain("MAY have run");
+    expect(out.guidance).toContain("Do NOT re-delegate");
+  });
+});
