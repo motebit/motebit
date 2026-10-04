@@ -12,6 +12,7 @@ import {
   DEFAULT_ANTHROPIC_MODEL,
   motebitCloudAdmission,
   motebitCloudAdmitsModel,
+  PROXY_MODELS,
   type UnifiedProviderConfig,
 } from "@motebit/sdk";
 
@@ -121,6 +122,18 @@ describe("web Settings — Motebit Cloud save (C2)", () => {
     const saved = setConfig.mock.calls.at(-1)?.[0];
     expect(saved?.mode).toBe("motebit-cloud");
     expect(motebitCloudAdmitsModel(String((saved as { model?: string }).model))).toBe(true);
+  });
+});
+
+// #654 cold review (web Cloud lane): the #cloud-model rows are rendered from
+// the sdk — the same list desktop offers (PROXY_MODELS filtered by the one
+// admission rule) — after the "auto" row. index.html hard-coded stale ids.
+describe("web Settings — Cloud picker rows come from @motebit/sdk", () => {
+  it("fresh Cloud tab: auto, then exactly the sdk Cloud picker list", () => {
+    mount({ mode: "motebit-cloud" });
+    const sel = document.getElementById("cloud-model") as HTMLSelectElement;
+    const expected = PROXY_MODELS.filter((m) => motebitCloudAdmission(m).admitted);
+    expect(Array.from(sel.options).map((o) => o.value)).toEqual(["auto", ...expected]);
   });
 });
 

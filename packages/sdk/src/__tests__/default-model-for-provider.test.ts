@@ -12,6 +12,7 @@ import {
   PROXY_MODELS,
   defaultModelForProvider,
   defaultModelForVendor,
+  motebitCloudAdmission,
   motebitCloudAdmitsModel,
   providerAcceptsModel,
   type ModelDefaultProvider,
@@ -68,9 +69,13 @@ describe("defaultModelForProvider", () => {
     expect(motebitCloudAdmitsModel("")).toBe(false);
   });
 
-  it("names the known Cloud-picker drift: PROXY_MODELS rows the proxy refuses", () => {
-    // Report-only pin (Cloud catalog is out of #654 scope): if this list
-    // changes, the Cloud picker and the proxy were reconciled — update it.
-    expect(PROXY_MODELS.filter((m) => !motebitCloudAdmitsModel(m))).toEqual(["claude-opus-4-7"]);
+  it("PROXY_MODELS lists no id Motebit Cloud refuses for a paying account", () => {
+    // Invariant (#654 cold review): the Cloud picker's display list never
+    // offers a row the proxy refuses for the deposit tier — stale rows are
+    // removed from PROXY_MODELS, never filtered silently forever.
+    const refused = PROXY_MODELS.filter(
+      (m) => !motebitCloudAdmission(m, { tier: "deposit" }).admitted,
+    );
+    expect(refused).toEqual([]);
   });
 });
