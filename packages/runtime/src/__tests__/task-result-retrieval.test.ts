@@ -35,6 +35,12 @@ import {
 import type { PlatformAdapters, StreamChunk } from "../index";
 import { FOREIGN_CALL, executeWithCall } from "./helpers/foreign-call";
 import { RiskLevel, SideEffect } from "@motebit/protocol";
+import {
+  SIGNING_PINNED_HEX,
+  advanceAfterRealAsync,
+  isRelayMetadataUrl,
+  relayMetadataResponse,
+} from "./helpers/signed-relay-metadata.js";
 
 const RELAY = "https://mock-relay.test";
 const ME = "alice-001";
@@ -77,6 +83,7 @@ function stubTaskRead(answer: () => Response | Promise<Response>): Call[] {
   const calls: Call[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (isRelayMetadataUrl(url)) return relayMetadataResponse();
     const method = init?.method ?? "GET";
     const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
     calls.push({ url, method, auth });
@@ -305,6 +312,7 @@ function stubRelay(poll: () => Response): { submits: () => number; methods: stri
   const methods: string[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (isRelayMetadataUrl(url)) return relayMetadataResponse();
     const method = init?.method ?? "GET";
     methods.push(`${method} ${new URL(url).pathname}`);
     if (url.includes("/api/v1/agents/discover")) {
@@ -385,7 +393,7 @@ describe("runtime.retrieveDelegationResult", () => {
     runtime.enableInteractiveDelegation({
       syncUrl: RELAY,
       authToken: async () => "t",
-      relayPublicKey: "07".repeat(32),
+      relayPublicKey: SIGNING_PINNED_HEX,
       buildP2pPayment,
     });
 
@@ -649,7 +657,7 @@ describe("paid, undelivered, restarted (#874 end to end)", () => {
     const cfg = {
       syncUrl: RELAY,
       authToken: async () => "t",
-      relayPublicKey: "07".repeat(32),
+      relayPublicKey: SIGNING_PINNED_HEX,
       buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
       timeoutMs: 1,
@@ -665,7 +673,7 @@ describe("paid, undelivered, restarted (#874 end to end)", () => {
       prompt: "research X",
       required_capabilities: ["web_search"],
     });
-    await vi.advanceTimersByTimeAsync(5000);
+    await advanceAfterRealAsync(5000);
     const first = await hire;
     vi.useRealTimers();
     expect(first.ok).toBe(false);
@@ -728,7 +736,7 @@ describe("paid, then killed mid-poll (#874 review: record at settle time)", () =
       authToken: async () => "t",
       prompt: "research X",
       requiredCapabilities: ["web_search"],
-      relayPublicKey: "07".repeat(32),
+      relayPublicKey: SIGNING_PINNED_HEX,
       buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
       paidIntentLedger: ledger,
@@ -750,7 +758,7 @@ describe("paid, then killed mid-poll (#874 review: record at settle time)", () =
     next.enableInteractiveDelegation({
       syncUrl: RELAY,
       authToken: async () => "t",
-      relayPublicKey: "07".repeat(32),
+      relayPublicKey: SIGNING_PINNED_HEX,
       buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
     });
@@ -779,14 +787,14 @@ describe("paid, then killed mid-poll (#874 review: record at settle time)", () =
       authToken: async () => "t",
       prompt: "research X",
       requiredCapabilities: ["web_search"],
-      relayPublicKey: "07".repeat(32),
+      relayPublicKey: SIGNING_PINNED_HEX,
       buildP2pPayment: vi.fn(async () => proof),
       acknowledgeNoHistoryRisk: true,
       paidIntentLedger: ledger,
       timeoutMs: 10_000,
       logger: { warn: () => {} },
     });
-    await vi.advanceTimersByTimeAsync(5000);
+    await advanceAfterRealAsync(5000);
     const r = await hire;
     expect(r.ok).toBe(true);
     expect(ledger.outstandingCount).toBe(0);
@@ -818,7 +826,7 @@ describe("invokeCapability — the deterministic paid door consults the ledger (
         buildP2pPayment,
         paidIntentLedger: new PaidIntentLedger(store, ME),
       },
-      { syncUrl: RELAY, authToken: async () => "t", relayPublicKey: "07".repeat(32) },
+      { syncUrl: RELAY, authToken: async () => "t", relayPublicKey: SIGNING_PINNED_HEX },
     );
     const chunks = await drain(
       manager.invokeCapability("web_search", "research X", { acknowledgeNoHistoryRisk: true }),

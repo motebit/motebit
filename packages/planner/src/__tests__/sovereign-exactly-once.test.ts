@@ -246,6 +246,9 @@ function adapterWith(
 ): SovereignDelegationAdapter {
   return new SovereignDelegationAdapter({
     discoveryUrl: "https://relay.test",
+    // Stand-in first-person selector: takes the first offered candidate so
+    // these tests keep exercising pay/execute/receipt, not ranking.
+    selectWorker: (candidates) => candidates[0]?.motebit_id ?? null,
     motebitId: "delegator",
     deviceId: "dev",
     signingKeys: { privateKey: new Uint8Array(32), publicKey: new Uint8Array(32) },

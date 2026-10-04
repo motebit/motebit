@@ -26,12 +26,18 @@ import type { CliConfig } from "../args.js";
 import { faultingFetch } from "../fault-injection.js";
 import { buildStorageAdapters } from "../runtime-factory.js";
 import { handleSlashCommand } from "../index.js";
+import {
+  advanceAfterRealAsync,
+  isRelayMetadataUrl,
+  relayMetadataResponse,
+  SIGNING_PINNED_HEX,
+} from "./helpers/signed-relay-metadata.js";
 
 const RELAY = "https://relay.test";
 const ME = "019df0f4-084e-7910-90a8-3492ced8fb8f";
 const WORKER = "worker-researcher";
 const TASK = "ed665235-0341-4086-bd77-72c0d9396fe6";
-const RELAY_KEY = "07".repeat(32);
+const RELAY_KEY = SIGNING_PINNED_HEX;
 
 const proof: P2pPaymentProof = {
   tx_hash: "XaMuKuMCtx",
@@ -67,6 +73,7 @@ function stubRelay(): { fetch: typeof fetch; submits: () => number } {
   let submits = 0;
   const f = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (isRelayMetadataUrl(url)) return relayMetadataResponse();
     const method = init?.method ?? "GET";
     const path = new URL(url).pathname;
     if (path === "/api/v1/agents/discover") {
@@ -137,7 +144,7 @@ describe("paid result lost, restart, /result (#874 on the CLI's SQLite)", () => 
       timeoutMs: 10_000,
       logger: { warn: () => {} },
     });
-    await vi.advanceTimersByTimeAsync(15_000);
+    await advanceAfterRealAsync(15_000);
     const first = await pending;
     vi.useRealTimers();
     expect(first.ok).toBe(false);

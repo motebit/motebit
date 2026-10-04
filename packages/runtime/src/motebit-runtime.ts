@@ -2155,6 +2155,14 @@ export class MotebitRuntime {
 
     const config = {
       discoveryUrl,
+      // First-person routing: the SAME selector the relay-mediated P2P hire
+      // uses (own agent_trust ledger + bond), so the relay's candidate order
+      // is never the choice. No signed tick token exists on this path, so no
+      // exploration seed: the ranking is pure first-person exploit.
+      selectWorker: (
+        candidates: ReadonlyArray<{ motebit_id: string; unitCost?: number; bonded?: boolean }>,
+        context: { capability: string },
+      ) => this.firstPersonWorkerSelector({ capability: context.capability })(candidates),
       motebitId: this.motebitId,
       deviceId,
       signingKeys,
@@ -2204,6 +2212,114 @@ export class MotebitRuntime {
         }
         return adapter.delegateStep(...args);
       },
+    };
+  }
+
+  /**
+   * The first-person worker selector (docs/doctrine/first-person-worker-routing.md):
+   * ranks capability-admissible candidates by THIS motebit's own `agent_trust`
+   * ledger (pairwise trust + capability-scoped reliability) plus any
+   * relay-verified bond, and mints the signed routing-decision transcript for
+   * the choice. Shared by the relay-mediated P2P hire and the sovereign
+   * pay-forward adapter, so neither path ever takes a relay's ranking as the
+   * choice.
+   *
+   * Exploration (exploration-as-market-vitality.md) runs only with an
+   * `exploreSeed` — the signed tick token's signature — because the draw must
+   * be reproducible from a signed artifact, never a hidden `Math.random`.
+   * Without a seed the ranking is pure first-person exploit.
+   */
+  private firstPersonWorkerSelector(opts: {
+    capability: string;
+    exploreSeed?: string;
+    onTranscript?: (transcript: RoutingDecisionTranscript) => void;
+  }): WorkerSelector {
+    return async (candidates) => {
+      const rankable = await Promise.all(
+        candidates.map(async (c) => ({
+          motebit_id: c.motebit_id,
+          trustRecord: await this.getAgentTrust(c.motebit_id),
+          ...(c.unitCost != null ? { unitCost: c.unitCost } : {}),
+          // Relay-verified commitment bond → exploration PRIORITY
+          // (a faster shot, never a quality score — the sybil-swarm
+          // bound of docs/doctrine/exploration-as-market-vitality.md
+          // Inc 2, live on real hops now that discovery surfaces it).
+          ...(c.bonded === true ? { bonded: true } : {}),
+        })),
+      );
+      // Representative stakes = the cheapest admissible option (what a
+      // cost-aware pick leans toward). Explore where a bad pick is cheap.
+      // No signed seed ⇒ no exploration (strength 0, pure exploit).
+      const repCostUsd = Math.min(...rankable.map((r) => r.unitCost ?? 0));
+      const strength = opts.exploreSeed != null ? explorationStrengthForStakes(repCostUsd) : 0;
+      // Scope the reliability posterior to the capability being hired:
+      // competence is a skill, so a worker's `web_search` history does not
+      // inflate its `read_url` estimate. The pairwise trust level (the
+      // relationship) still speaks through the prior.
+      const capability = opts.capability;
+      // The produced-basis emitter runs the REAL ranking and freezes
+      // exactly what it consumed — winner, explored flag, and the
+      // transcript basis in one pass
+      // (docs/doctrine/routing-decision-transcript.md Inc 3).
+      const { winner, basis } = rankWorkersWithBasis(this.motebitId, rankable, {
+        capability,
+        ...(opts.exploreSeed != null ? { explore: { seed: opts.exploreSeed, strength } } : {}),
+      });
+      if (winner != null && basis != null) {
+        // Surface the "why" — the sub-hop routing decision, including
+        // whether exploration overrode the exploit-favorite (the honest
+        // "why the newcomer got tried" signal).
+        this._logger.warn("routing.worker_selected", {
+          selected: winner.motebit_id,
+          capability,
+          candidates: rankable.length,
+          strength: Number(strength.toFixed(3)),
+          explored: basis.explored,
+          quality: Number(winner.route.trust.toFixed(3)),
+          bonded: rankable.find((r) => r.motebit_id === winner.motebit_id)?.bonded === true,
+        });
+        // Mint the signed routing-decision transcript from the frozen
+        // basis (produced-basis: minted by the code path that made the
+        // decision, never reconstructed). Reveals, never authorizes —
+        // minting failure never fails the hire; the transcript is
+        // evidence, not authority.
+        if (this._signingKeys != null) {
+          try {
+            const transcript = await signRoutingTranscript(
+              {
+                spec: "motebit/routing-transcript@1.0",
+                delegator_motebit_id: this.motebitId,
+                delegator_public_key: cryptoBytesToHex(this._signingKeys.publicKey),
+                issued_at: Date.now(),
+                ...basis,
+              },
+              this._signingKeys.privateKey,
+            );
+            this._recentRoutingTranscripts.push(transcript);
+            if (this._recentRoutingTranscripts.length > 50) {
+              this._recentRoutingTranscripts.shift();
+            }
+            opts.onTranscript?.(transcript);
+            this._logger.warn("routing.transcript_minted", {
+              winner: transcript.winner_motebit_id,
+              capability: transcript.capability,
+              candidates: transcript.candidates.length,
+              explored: transcript.explored,
+              // The signature is the transcript's collision-resistant
+              // handle (it covers the JCS-canonical bytes) — the
+              // binding key a consumer joins on. Wire-level digest
+              // binding into the delegation record lands with Inc 4's
+              // consumer (the conformance probe), consumer-forced.
+              transcript_sig: transcript.signature.slice(0, 16),
+            });
+          } catch (err) {
+            this._logger.warn("routing.transcript_mint_failed", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
+      return winner?.motebit_id ?? null;
     };
   }
 
@@ -6227,92 +6343,15 @@ export class MotebitRuntime {
       const selectWorker: WorkerSelector | undefined =
         params.targetWorkerId != null
           ? undefined
-          : async (candidates) => {
-              const rankable = await Promise.all(
-                candidates.map(async (c) => ({
-                  motebit_id: c.motebit_id,
-                  trustRecord: await this.getAgentTrust(c.motebit_id),
-                  ...(c.unitCost != null ? { unitCost: c.unitCost } : {}),
-                  // Relay-verified commitment bond → exploration PRIORITY
-                  // (a faster shot, never a quality score — the sybil-swarm
-                  // bound of docs/doctrine/exploration-as-market-vitality.md
-                  // Inc 2, live on real hops now that discovery surfaces it).
-                  ...(c.bonded === true ? { bonded: true } : {}),
-                })),
-              );
-              // Representative stakes = the cheapest admissible option (what a
-              // cost-aware pick leans toward). Explore where a bad pick is cheap.
-              const repCostUsd = Math.min(...rankable.map((r) => r.unitCost ?? 0));
-              const strength = explorationStrengthForStakes(repCostUsd);
-              // Scope the reliability posterior to the capability being hired:
-              // competence is a skill, so a worker's `web_search` history does not
-              // inflate its `read_url` estimate. The pairwise trust level (the
-              // relationship) still speaks through the prior.
-              const capability = params.capability;
-              // The produced-basis emitter runs the REAL ranking and freezes
-              // exactly what it consumed — winner, explored flag, and the
-              // transcript basis in one pass
-              // (docs/doctrine/routing-decision-transcript.md Inc 3).
-              const { winner, basis } = rankWorkersWithBasis(this.motebitId, rankable, {
-                capability,
-                explore: { seed: exploreSeed, strength },
-              });
-              if (winner != null && basis != null) {
-                // Surface the "why" — the sub-hop routing decision, including
-                // whether exploration overrode the exploit-favorite (the honest
-                // "why the newcomer got tried" signal).
-                this._logger.warn("routing.worker_selected", {
-                  selected: winner.motebit_id,
-                  capability,
-                  candidates: rankable.length,
-                  strength: Number(strength.toFixed(3)),
-                  explored: basis.explored,
-                  quality: Number(winner.route.trust.toFixed(3)),
-                  bonded: rankable.find((r) => r.motebit_id === winner.motebit_id)?.bonded === true,
-                });
-                // Mint the signed routing-decision transcript from the frozen
-                // basis (produced-basis: minted by the code path that made the
-                // decision, never reconstructed). Reveals, never authorizes —
-                // minting failure never fails the hire; the transcript is
-                // evidence, not authority.
-                if (this._signingKeys != null) {
-                  try {
-                    const transcript = await signRoutingTranscript(
-                      {
-                        spec: "motebit/routing-transcript@1.0",
-                        delegator_motebit_id: this.motebitId,
-                        delegator_public_key: cryptoBytesToHex(this._signingKeys.publicKey),
-                        issued_at: Date.now(),
-                        ...basis,
-                      },
-                      this._signingKeys.privateKey,
-                    );
-                    this._recentRoutingTranscripts.push(transcript);
-                    if (this._recentRoutingTranscripts.length > 50) {
-                      this._recentRoutingTranscripts.shift();
-                    }
-                    mintedTranscript = transcript;
-                    this._logger.warn("routing.transcript_minted", {
-                      winner: transcript.winner_motebit_id,
-                      capability: transcript.capability,
-                      candidates: transcript.candidates.length,
-                      explored: transcript.explored,
-                      // The signature is the transcript's collision-resistant
-                      // handle (it covers the JCS-canonical bytes) — the
-                      // binding key a consumer joins on. Wire-level digest
-                      // binding into the delegation record lands with Inc 4's
-                      // consumer (the conformance probe), consumer-forced.
-                      transcript_sig: transcript.signature.slice(0, 16),
-                    });
-                  } catch (err) {
-                    this._logger.warn("routing.transcript_mint_failed", {
-                      error: err instanceof Error ? err.message : String(err),
-                    });
-                  }
-                }
-              }
-              return winner?.motebit_id ?? null;
-            };
+          : this.firstPersonWorkerSelector({
+              capability: params.capability,
+              exploreSeed,
+              // Thread the minted transcript onto THIS call's result (egress;
+              // the recent-transcripts buffer alone is not egress).
+              onTranscript: (transcript) => {
+                mintedTranscript = transcript;
+              },
+            });
 
       // 4a. DRY-RUN: resolve + meter against a THROWAWAY store, then stop
       //     before any broadcast/submit. No wallet needed — nothing broadcasts.
