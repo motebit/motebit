@@ -1929,6 +1929,15 @@
       .artifact-receipt.is-failed .receipt-verify-label {
         color: #d9a560;
       }
+      /* is-failed-unanchored: signatures intact, task failed, but the signer's
+       identity is NOT anchored — hollow dot, no "verified" identity claim. */
+      .artifact-receipt.is-failed-unanchored .receipt-verify-dot {
+        background: transparent;
+        box-shadow: inset 0 0 0 1.5px #d9a560;
+      }
+      .artifact-receipt.is-failed-unanchored .receipt-verify-label {
+        color: #d9a560;
+      }
       /* is-pending: initial state, replaced by one of the above once the chain
        verify completes. Matches the default gray dot with a slow pulse. */
       .artifact-receipt.is-pending .receipt-verify-dot {

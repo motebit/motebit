@@ -57,6 +57,11 @@ import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
 import { registerDeviceWithRelay } from "@motebit/core-identity";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 import type { SecureStoreAdapter } from "./adapters/secure-store";
+import {
+  canExecuteDelegatedTask,
+  mobileServingAllowed,
+  MOBILE_SERVING_UNAVAILABLE,
+} from "./serving-gate";
 
 export type SyncStatus = SyncEngineStatus;
 
@@ -199,6 +204,9 @@ export class MobileSyncController {
   }
 
   async startServing(): Promise<{ ok: boolean; error?: string }> {
+    // Mobile is non-executing today (serving-gate.ts) — refuse before any
+    // registration, so the relay never routes a delegation to this device.
+    if (!mobileServingAllowed()) return { ok: false, error: MOBILE_SERVING_UNAVAILABLE };
     const runtime = this.deps.getRuntime();
     if (!runtime || !this._servingSyncUrl || !this._servingAuthToken) {
       return { ok: false, error: "Sync not connected" };
@@ -710,7 +718,10 @@ export class MobileSyncController {
             return;
           }
 
-          if (msg.type !== "task_request" || msg.task == null || !this._serving) return;
+          if (msg.type !== "task_request" || msg.task == null) return;
+          // The single execution gate (serving-gate.ts): off by default, and
+          // `/serve` cannot turn it on.
+          if (!canExecuteDelegatedTask(this._serving)) return;
           if (!rt) return;
 
           const task = msg.task as AgentTask;
