@@ -13,7 +13,13 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { ALL_TASK_SHAPES, type ByokVendor, type TaskShape } from "@motebit/sdk";
+import {
+  ALL_TASK_SHAPES,
+  DEFAULT_ANTHROPIC_MODEL,
+  pickerModelForTier,
+  type ByokVendor,
+  type TaskShape,
+} from "@motebit/sdk";
 
 import {
   BYOK_MODEL_CATALOG,
@@ -21,7 +27,9 @@ import {
   describeByokRoutingDecision,
   dispatchByokRouting,
   extractTaskShape,
+  REFERENCE_BYOK_ROUTING_POLICY,
 } from "../byok-router.js";
+import { REFERENCE_ROUTING_POLICY } from "../auto-router.js";
 
 const ALL_BYOK_VENDORS: ByokVendor[] = ["anthropic", "openai", "google", "groq", "deepseek"];
 
@@ -56,9 +64,11 @@ describe("BYOK_MODEL_CATALOG", () => {
     // the policy preference isn't available. Anthropic's natural
     // tier-strong-to-fast order is opus / sonnet / haiku.
     const ant = BYOK_MODEL_CATALOG.anthropic;
-    expect(ant[0]?.modelName).toBe("claude-opus-4-7");
-    expect(ant[1]?.modelName).toBe("claude-sonnet-4-6");
-    expect(ant[2]?.modelName).toBe("claude-haiku-4-5-20251001");
+    // The rows are the sdk picker tiers (#654), not a hand-copied list.
+    expect(ant[0]?.modelName).toBe(pickerModelForTier("strongest"));
+    expect(ant[1]?.modelName).toBe(pickerModelForTier("default"));
+    expect(ant[2]?.modelName).toBe(pickerModelForTier("fast"));
+    expect(ant[1]?.modelName).toBe(DEFAULT_ANTHROPIC_MODEL);
     // Prices monotonically decrease tier-strong-to-fast.
     expect(ant[0]!.inputCostPerMillion).toBeGreaterThan(ant[1]!.inputCostPerMillion);
     expect(ant[1]!.inputCostPerMillion).toBeGreaterThan(ant[2]!.inputCostPerMillion);
@@ -199,7 +209,7 @@ describe("extractTaskShape — heuristic signal ordering", () => {
 
 describe("dispatchByokRouting — composed dispatcher", () => {
   it("returns 'route' kind for the policy's preferred Anthropic model on a chat-length message", () => {
-    // REFERENCE_ROUTING_POLICY.chat = "claude-sonnet-4-6"; the
+    // REFERENCE_BYOK_ROUTING_POLICY.chat = the picker's default tier; the
     // Anthropic catalog includes it, so the policy preference wins.
     // Message length is intentionally past the quick threshold so
     // extractTaskShape returns "chat" rather than "quick".
@@ -211,18 +221,18 @@ describe("dispatchByokRouting — composed dispatcher", () => {
     const decision = dispatchByokRouting(chatMessage, "anthropic");
     expect(decision.kind).toBe("route");
     if (decision.kind === "route") {
-      expect(decision.model).toBe("claude-sonnet-4-6");
+      expect(decision.model).toBe(DEFAULT_ANTHROPIC_MODEL);
     }
   });
 
   it("returns 'route' to haiku for sub-80-char (quick) messages", () => {
     // Short messages activate the `quick` task shape;
-    // REFERENCE_ROUTING_POLICY.quick = "claude-haiku-4-5-20251001".
+    // REFERENCE_BYOK_ROUTING_POLICY.quick = the picker's fast tier.
     // Locks the heuristic + policy + dispatcher chain end-to-end.
     const decision = dispatchByokRouting("hello there", "anthropic");
     expect(decision.kind).toBe("route");
     if (decision.kind === "route") {
-      expect(decision.model).toBe("claude-haiku-4-5-20251001");
+      expect(decision.model).toBe(pickerModelForTier("fast"));
     }
   });
 
@@ -235,7 +245,7 @@ describe("dispatchByokRouting — composed dispatcher", () => {
     expect(decision.kind).toBe("fallback");
     if (decision.kind === "fallback") {
       expect(decision.primary).toBe("gpt-5.4");
-      expect(decision.backup).toBe("claude-opus-4-7");
+      expect(decision.backup).toBe(pickerModelForTier("strongest"));
     }
   });
 
@@ -295,5 +305,22 @@ describe("describeByokRoutingDecision — pattern-matches every RoutingDecision.
     }
     const seen: TaskShape[] = [...ALL_TASK_SHAPES];
     expect(seen.length).toBeGreaterThan(0);
+  });
+});
+
+describe("REFERENCE_BYOK_ROUTING_POLICY (#654)", () => {
+  it("routes every Anthropic arm to a picker tier; non-Anthropic arms match the Cloud reference", () => {
+    const pickerIds = new Set([
+      pickerModelForTier("strongest"),
+      pickerModelForTier("default"),
+      pickerModelForTier("fast"),
+    ]);
+    for (const [shape, model] of Object.entries(REFERENCE_BYOK_ROUTING_POLICY)) {
+      if (model.startsWith("claude-")) {
+        expect(pickerIds.has(model as never), `${shape} → ${model}`).toBe(true);
+      } else {
+        expect(model).toBe(REFERENCE_ROUTING_POLICY[shape as TaskShape]);
+      }
+    }
   });
 });

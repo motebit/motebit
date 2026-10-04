@@ -3,7 +3,13 @@
 import { disconnectMcpServer } from "./mcp-config-wiring.js";
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
-import { isTokenAudience, fromMicro, modelVendorHint } from "@motebit/sdk";
+import {
+  isTokenAudience,
+  fromMicro,
+  modelVendorHint,
+  motebitCloudAdmission,
+  pickerModelForTier,
+} from "@motebit/sdk";
 import { discoverModels } from "@motebit/ai-core";
 import {
   admitModelForProvider,
@@ -657,13 +663,14 @@ export async function handleSlashCommand(
 
     case "model": {
       // Known models with short aliases
-      // Anthropic ids are the REAL current aliases (verified against the
-      // models catalog 2026-07-29 — #471 found the previous entries were
-      // fabricated: date-suffixed and "-latest" variants that 404).
+      // Anthropic aliases resolve through the sdk picker tiers (#654) — the
+      // same three models every surface's picker offers, so `/model haiku`
+      // can never name an id the registry doesn't carry (#471 found
+      // fabricated date-suffixed / "-latest" variants that 404).
       const MODEL_ALIASES: Record<string, string> = {
-        opus: "claude-opus-5",
-        sonnet: "claude-sonnet-5",
-        haiku: "claude-haiku-4-5",
+        opus: pickerModelForTier("strongest"),
+        sonnet: pickerModelForTier("default"),
+        haiku: pickerModelForTier("fast"),
         "gpt-5.4": "gpt-5.4",
         "gpt-5.4-mini": "gpt-5.4-mini",
         "gpt-5.4-nano": "gpt-5.4-nano",
@@ -759,9 +766,13 @@ export async function handleSlashCommand(
       const input = args.toLowerCase();
       const resolved = MODEL_ALIASES[input];
       // A live catalog admits full ids the alias table never knew about.
+      // So does Motebit Cloud's own admission (#654 cold review R2): Cloud
+      // has no live catalog adapter, and an id the proxy serves — alias or
+      // not (a class alias, a legacy dated id) — must never be "Unknown" here.
       const isFullId =
         Object.values(MODEL_ALIASES).includes(args) ||
-        (liveIds != null && liveCatalogServes(liveIds, args));
+        (liveIds != null && liveCatalogServes(liveIds, args)) ||
+        (config.provider === "proxy" && motebitCloudAdmission(args).admitted);
       if (!resolved && !isFullId) {
         console.log(`\nUnknown model: ${cyan(args)}\n`);
         showModelList(runtime.currentModel ?? "");

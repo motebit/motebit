@@ -17,6 +17,11 @@
 
 import * as crypto from "node:crypto";
 import { z } from "zod";
+import {
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_LOCAL_SERVER_MODEL,
+  DEFAULT_OPENAI_MODEL,
+} from "@motebit/sdk";
 
 import type { Goal } from "@motebit/persistence";
 
@@ -79,7 +84,9 @@ const ProviderSchema = z
     model: z
       .string()
       .optional()
-      .describe("Model identifier, e.g. `claude-sonnet-4-6`, `gpt-5.4-mini`, `llama3.2`."),
+      .describe(
+        `Model identifier, e.g. \`${DEFAULT_ANTHROPIC_MODEL}\`, \`${DEFAULT_OPENAI_MODEL}\`, \`${DEFAULT_LOCAL_SERVER_MODEL}\`.`,
+      ),
     baseUrl: z
       .string()
       .url()

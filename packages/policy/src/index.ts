@@ -52,6 +52,7 @@ export {
   describeByokRoutingDecision,
   dispatchByokRouting,
   extractTaskShape,
+  REFERENCE_BYOK_ROUTING_POLICY,
 } from "./byok-router.js";
 export {
   ON_DEVICE_MODEL_CATALOG,

@@ -44,7 +44,7 @@
           "enum": ["anthropic", "openai"]
         },
         "model": {
-          "description": "Model identifier, e.g. `claude-sonnet-4-6`, `gpt-5.4-mini`, `llama3.2`.",
+          "description": "Model identifier, e.g. `claude-sonnet-5`, `gpt-5.4-mini`, `qwen3`.",
           "type": "string"
         },
         "baseUrl": {
