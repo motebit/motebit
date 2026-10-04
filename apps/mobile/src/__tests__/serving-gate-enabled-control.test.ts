@@ -242,7 +242,17 @@ async function fireWake(servingOn: boolean): Promise<WakeObservation> {
       });
     }
     send(raw: string): void {
-      sent.push(JSON.parse(raw) as { type?: string });
+      const frame = JSON.parse(raw) as { type?: string; task_id?: string };
+      sent.push(frame);
+      // The relay grants a claim (one task, one body): the phone runs the
+      // task only on this grant, as it does against a real relay.
+      if (frame.type === "task_claim") {
+        queueMicrotask(() =>
+          this.onmessage?.({
+            data: JSON.stringify({ type: "task_claimed", task_id: frame.task_id }),
+          }),
+        );
+      }
     }
     close(): void {
       queueMicrotask(() => this.onclose?.());
