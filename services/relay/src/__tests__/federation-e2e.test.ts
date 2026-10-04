@@ -3004,12 +3004,12 @@ describe("Federation E2E", () => {
       url: string,
       body: Record<string, unknown>,
       expectedStatus: number,
-    ): Promise<void> {
+    ): Promise<Record<string, unknown>> {
       const key = crypto.randomUUID();
       const prompt = body["prompt"] as string;
       const first = await submitA(url, key, body);
       expect(first.status, await first.clone().text()).toBe(expectedStatus);
-      const b1 = (await first.json()) as { task_id?: string };
+      const b1 = (await first.json()) as { task_id?: string } & Record<string, unknown>;
       expect(tasksOnA(prompt), "the submission admitted exactly one task").toHaveLength(1);
 
       // The client's fetch failed too; it retries with the SAME key.
@@ -3019,6 +3019,7 @@ describe("Federation E2E", () => {
       expect(retry.status).toBe(expectedStatus);
       expect(b1.task_id, "the failed response names the admitted task").toBe(tasks[0]);
       expect(await retry.json(), "a same-key replay is the same answer").toEqual(b1);
+      return b1;
     }
 
     it("the executor relay rejects the forward (502): one task, replayed, forwarded once", async () => {
@@ -3259,7 +3260,7 @@ describe("Federation E2E", () => {
       ]);
       await establishPeering(relayA, relayB);
       const alice = await registerAgent(relayA, "alice-888-noproof", ["web-search"]);
-      await expectOneTaskPerKey(
+      const refusal = await expectOneTaskPerKey(
         `/agent/${alice.motebitId}/task`,
         {
           prompt: `888 noproof ${crypto.randomUUID()}`,
@@ -3267,6 +3268,10 @@ describe("Federation E2E", () => {
         },
         402,
       );
+      // A typed refusal, not a bare HTTPException: the stable code is how a
+      // client tells "pay P2P" from "deposit" — without it the CLI fell back
+      // to `motebit fund`, which can never clear this refusal.
+      expect(refusal["code"], JSON.stringify(refusal)).toBe("TASK_P2P_PROOF_REQUIRED");
     });
   });
 });
