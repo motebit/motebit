@@ -148,9 +148,16 @@ function assertRemedy(text: string, remedy: Remedy, row: Row): void {
 type Path = "direct" | "plan" | "repl";
 
 const REPL_TARGET = "00000000-0000-4000-8000-000000000402";
-const REPL_PROMPT = 'do the "paid" thing';
+// `!` would trigger history expansion inside double quotes; `'` must survive single quotes.
+const REPL_PROMPT = `do the "paid" thing, it's urgent!`;
+/** The one capability the pinned REPL target lists and prices — not the `web_search` default. */
+const REPL_CAPABILITY = "code_review";
 
-/** Split a shell command line into argv, honoring double quotes and backslash escapes. */
+/**
+ * Split a shell command line into argv, honoring single quotes (literal, no
+ * escapes), double quotes and backslash escapes. A `!` inside double quotes is
+ * history expansion in an interactive shell, so a remedy must never put one there.
+ */
 function shellSplit(line: string): string[] {
   const out: string[] = [];
   let cur = "";
@@ -158,7 +165,15 @@ function shellSplit(line: string): string[] {
   let quoted = false;
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]!;
-    if (ch === "\\" && i + 1 < line.length) {
+    if (ch === "'" && !quoted) {
+      const end = line.indexOf("'", i + 1);
+      expect(end, `unbalanced single quote in \`${line}\``).toBeGreaterThan(i);
+      cur += line.slice(i + 1, end);
+      i = end;
+      inArg = true;
+    } else if (ch === "!" && quoted) {
+      throw new Error(`\`!\` inside double quotes triggers history expansion: \`${line}\``);
+    } else if (ch === "\\" && i + 1 < line.length) {
       cur += line[++i];
       inArg = true;
     } else if (ch === '"') {
@@ -204,6 +219,11 @@ function assertRunnable(text: string, path: Path): void {
           REPL_PROMPT,
         );
         expect(parsed.target, `\`${frag}\` drops the target`).toBe(REPL_TARGET);
+        // `motebit delegate` defaults to web_search and the sovereign resolver
+        // discovers by capability: a target that does not list it is refused.
+        expect(parsed.capability, `\`${frag}\` drops the target's capability`).toBe(
+          REPL_CAPABILITY,
+        );
       }
     } else if (frag.startsWith("--")) {
       expect(path, `\`${frag}\` is a flag the ${path} path does not parse`).toBe("direct");
@@ -268,13 +288,30 @@ async function planStepError(body: string): Promise<{ message: string; posts: nu
 }
 
 /** Drive the REPL's `/delegate` against a relay answering the submission with `body` at 402. */
-async function replDelegateOutput(body: string): Promise<{ lines: string[]; posts: number }> {
+async function replDelegateOutput(
+  body: string,
+  opts: { discoverable?: boolean } = {},
+): Promise<{ lines: string[]; posts: number }> {
   let posts = 0;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (_url: string, init?: RequestInit) => {
-      if (init?.method === "POST") posts++;
-      return new Response(body, { status: 402 });
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        posts++;
+        return new Response(body, { status: 402 });
+      }
+      if (opts.discoverable !== false && String(url).includes("/api/v1/agents/discover")) {
+        return Response.json({
+          agents: [
+            {
+              motebit_id: REPL_TARGET,
+              capabilities: [REPL_CAPABILITY],
+              pricing: [{ capability: REPL_CAPABILITY, unit_cost: 0.5 }],
+            },
+          ],
+        });
+      }
+      return new Response("not found", { status: 404 });
     }),
   );
   const lines: string[] = [];
@@ -332,13 +369,14 @@ describe("delegate 402 remedy table (relay code × CLI path)", () => {
       it(`repl /delegate: ${row.direct}, a remedy runnable from the REPL`, async () => {
         const { lines, posts } = await replDelegateOutput(row.body);
         const expected = describeDelegateSubmit402(row.body, {
-          repl: { prompt: REPL_PROMPT, target: REPL_TARGET },
+          repl: { prompt: REPL_PROMPT, target: REPL_TARGET, capabilities: [REPL_CAPABILITY] },
         });
         expect(lines).toEqual(expect.arrayContaining(expected));
         if (row.direct === "sovereign") {
-          // `/delegate` parses no flags: the remedy is the shell command, filled in.
+          // `/delegate` parses no flags: the remedy is the shell command, filled
+          // in with the prompt (single-quoted), the target, and its capability.
           expect(lines.join("\n")).toContain(
-            `\`motebit delegate --sovereign "do the \\"paid\\" thing" --target ${REPL_TARGET}\``,
+            `\`motebit delegate --sovereign 'do the "paid" thing, it'\\''s urgent!' --target ${REPL_TARGET} --capability ${REPL_CAPABILITY}\``,
           );
         } else {
           // Off the P2P row, the REPL prints exactly what `motebit delegate` prints.
@@ -368,6 +406,16 @@ describe("delegate 402 remedy table (relay code × CLI path)", () => {
       });
     });
   }
+
+  it("repl /delegate: a P2P remedy whose capability cannot be resolved says to add it", async () => {
+    const p2p = ROWS.find((r) => r.direct === "sovereign")!;
+    const { lines, posts } = await replDelegateOutput(p2p.body, { discoverable: false });
+    const text = lines.join("\n");
+    expect(text).toContain("--capability <capability>");
+    expect(text).toMatch(/replace `<capability>` with the capability the worker lists/i);
+    expect(text).toContain("web_search");
+    expect(posts, "a 402 refusal is not retried").toBe(1);
+  });
 
   it("a non-402 sovereign refusal adds no 402 remedy", () => {
     expect(
