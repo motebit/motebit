@@ -1,7 +1,7 @@
 /**
  * Reciprocal CONSUMER test for the vendored APS authority-delegation vector
  * (`examples/interop/aps/case-a-neutral-vector.CANDIDATE.json`, pinned
- * upstream 2508f6a7, see that directory's NOTICE.md and README.md).
+ * upstream 2508f6a7, see that directory's NOTICE.md and INTEROP.md).
  *
  * The point is an INDEPENDENT implementation: this file imports no APS code.
  * Every byte check runs through Motebit's own primitives:
@@ -46,11 +46,25 @@ import {
 } from "../../packages/crypto/src/signing.js";
 import { ed25519Verify } from "../../packages/crypto/src/suite-dispatch.js";
 
-const VECTOR_PATH = resolve(
-  __dirname,
-  "../../examples/interop/aps/case-a-neutral-vector.CANDIDATE.json",
-);
-const VECTOR_SHA256 = "4918125741234d749e4ab23cb6ec98c12f6b86b951147eca984b04a76bb53d31";
+// The pins live in the interop record, not here: the record is what Motebit
+// states publicly, so the test reads it and the two cannot drift apart.
+const INTEROP_DIR = resolve(__dirname, "../../examples/interop/aps");
+
+function readInteropPins(): Record<string, string> {
+  const record = readFileSync(resolve(INTEROP_DIR, "INTEROP.md"), "utf8");
+  const block = /```interop-pins\n([\s\S]*?)\n```/.exec(record);
+  if (!block) throw new Error("INTEROP.md has no ```interop-pins block");
+  const pins: Record<string, string> = {};
+  for (const line of block[1]!.split("\n")) {
+    const m = /^([a-z0-9_]+):\s*(\S+)\s*$/.exec(line);
+    if (m) pins[m[1]!] = m[2]!;
+  }
+  return pins;
+}
+
+const PINS = readInteropPins();
+const VECTOR_PATH = resolve(INTEROP_DIR, PINS["vector_path"] ?? "");
+const VECTOR_SHA256 = PINS["vector_sha256"] ?? "";
 
 const ID_TAG = "APS-AUTHORITY-DELEGATION-ID-V1";
 const SIG_TAG = "APS-AUTHORITY-DELEGATION-SIGNATURE-V1";
@@ -247,6 +261,12 @@ function clone<T>(v: T): T {
 }
 
 describe("APS authority-delegation vector — Motebit consumer", () => {
+  it("(0) INTEROP.md declares the pins this test verifies", () => {
+    expect(PINS["vector_path"]).toBe("case-a-neutral-vector.CANDIDATE.json");
+    expect(PINS["vector_upstream_commit"]).toMatch(/^[0-9a-f]{7,40}$/);
+    expect(VECTOR_SHA256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("(1) the vendored fixture is byte-identical to the pinned SHA-256", async () => {
     expect(await hash(new Uint8Array(raw))).toBe(VECTOR_SHA256);
   });
