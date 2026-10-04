@@ -35,6 +35,7 @@
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { KeySuccessionRecord } from "@motebit/encryption";
 import { bytesToHex, hexToBytes } from "@motebit/encryption";
+import { deriveSolanaAddress } from "@motebit/wallet-solana";
 import {
   chainHeadOf,
   holderKeyOf,
@@ -297,6 +298,12 @@ export function departureFrom(db: DatabaseDriver, motebitId: string, key: string
  * module holds no sockets — and a REQUIRED argument of `applySuccession`, so
  * no door can apply a succession without saying what it closes (#767).
  */
+/** The Solana address an Ed25519 key (hex) derives to, or null when it is not a 32-byte key. */
+function solanaAddressOfKey(publicKeyHex: string): string | null {
+  if (!/^[0-9a-fA-F]{64}$/.test(publicKeyHex)) return null;
+  return deriveSolanaAddress(hexToBytes(publicKeyHex.toLowerCase()));
+}
+
 export type RetireKeyConnections = (motebitId: string, retiredKey: string) => void;
 
 export interface SuccessionApplied {
@@ -391,6 +398,26 @@ export function applySuccession(
     db.prepare(
       "UPDATE agent_registry SET public_key = ? WHERE motebit_id = ? AND (public_key = ? OR COALESCE(public_key, '') = '')",
     ).run(record.new_public_key, motebitId, record.old_public_key);
+
+    // A pay-to destination follows the key it is derived from. A worker's
+    // settlement address is, by default, its identity key's Solana address;
+    // left on the retired key's, the P2P gate keeps demanding — and payers
+    // keep paying — an address the worker's surfaces have just erased the key
+    // for. Moved in THIS transaction, and only when derived-bound to the key
+    // being retired (`isDerivedSettlementBinding(addr, old_key)`): a custom
+    // address is the agent's own choice of payout wallet, not the key's, and
+    // is left alone (docs/doctrine/settlement-authority-binding.md). The
+    // listing's `pay_to_address` is the same kind of destination.
+    const retiredAddress = solanaAddressOfKey(record.old_public_key);
+    const nextAddress = solanaAddressOfKey(record.new_public_key);
+    if (retiredAddress !== null && nextAddress !== null && retiredAddress !== nextAddress) {
+      db.prepare(
+        "UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ? AND settlement_address = ?",
+      ).run(nextAddress, motebitId, retiredAddress);
+      db.prepare(
+        "UPDATE relay_service_listings SET pay_to_address = ? WHERE motebit_id = ? AND pay_to_address = ?",
+      ).run(nextAddress, motebitId, retiredAddress);
+    }
     // The holder moves ONLY for E-link (§5f): a link departing from the key it
     // HOLDS. Never into an empty slot — an identity with no holder departed by
     // main's rule (registry, chain head or a device row), none of which is

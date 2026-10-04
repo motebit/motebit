@@ -2085,8 +2085,9 @@ export class DesktopApp {
   rotateKey(
     invoke: InvokeFn,
     reason?: string,
+    opts: { acknowledgeFundsAtRisk?: boolean } = {},
   ): Promise<{ oldKeyFingerprint: string; newKeyFingerprint: string; rotationCount: number }> {
-    return this.identity.rotateKey(invoke, reason);
+    return this.identity.rotateKey(invoke, reason, opts);
   }
 
   async exportAllData(): Promise<string> {

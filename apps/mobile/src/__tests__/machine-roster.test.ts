@@ -691,6 +691,7 @@ describe("the rotation commit's roster step", () => {
       deviceId: "phone-device",
       syncUrl: null,
       identityFile: { load: async () => null, save: async () => undefined },
+      readWalletHoldings: async () => ({ solLamports: 0n, tokens: [] }),
       onCommitted: () => undefined,
       afterCommit: async ({ record }) => {
         seen.push({ slotKey: kr.slots.get("device_public_key"), record });
@@ -713,6 +714,7 @@ describe("the rotation commit's roster step", () => {
       deviceId: "phone-device",
       syncUrl: null,
       identityFile: { load: async () => null, save: async () => undefined },
+      readWalletHoldings: async () => ({ solLamports: 0n, tokens: [] }),
       onCommitted: () => undefined,
       afterCommit: async () => {
         throw new Error("storage wedged");

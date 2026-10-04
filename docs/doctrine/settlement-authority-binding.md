@@ -40,6 +40,8 @@ The **federated** leg is different in kind: the worker's address arrives from a 
 
 This subordinates the coordination layer exactly as `memory-never-confers-authority` subordinates the Trusted-caller bypass: the relay keeps coordinating (discovery, pricing, receipts, settlement recording) but cannot _create_ the one thing that decides where money lands.
 
+**A derived-bound destination follows its key across a rotation.** A derived-bound address IS the key, so when a succession retires the key (an ordinary rotation or a guardian recovery), `applySuccession` (`services/relay/src/succession-apply.ts`) moves a `settlement_address` — and a listing `pay_to_address` — equal to the retired key's derived address to the new key's derived address, in the same transaction as the key. A custom (non-derived) address is not the key's and is left alone. Its client-side twin: every rotation entry point reads the retiring key's wallet first and refuses while it holds value or cannot be read, unless the owner explicitly acknowledges (`checkRotationFunds`, `@motebit/encryption`; surface-kit's I0) — a key that controls funds may not become unrecoverable on a rotation's say-so. An automatic sweep of the old address is deferred.
+
 ## Increments
 
 - **Inc 0 (this doc)** — the invariant, the two-rung ladder, the transport-not-create rule.

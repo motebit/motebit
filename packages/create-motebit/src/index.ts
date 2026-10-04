@@ -25,7 +25,7 @@ import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { generateIdentity, regenerateIdentityFile, decryptPrivateKey } from "./generate.js";
 import type { TrustMode, EncryptedKey, ServiceIdentityOptions } from "./generate.js";
-import { rotateKey } from "./rotate.js";
+import { createSolanaHoldingsReader, rotateKey, RotationFundsRefused } from "./rotate.js";
 import { commitRotation, finishRotationCommand, RotationCommitError } from "./rotate-commit.js";
 import { createRL, input, password, select } from "./prompts.js";
 
@@ -1288,6 +1288,7 @@ async function rotateCmd(
   filePath: string,
   nonInteractive: boolean,
   reason?: string,
+  abandonFunds = false,
 ): Promise<void> {
   console.log();
 
@@ -1383,8 +1384,18 @@ async function rotateCmd(
       oldPassphrase,
       newPassphrase,
       reason,
+      // The identity key IS the wallet: read it before the new key is minted.
+      readWalletHoldings: createSolanaHoldingsReader(process.env["SOLANA_RPC_URL"] || undefined),
+      abandonFunds,
     });
   } catch (err: unknown) {
+    if (err instanceof RotationFundsRefused) {
+      console.log(`  ${red("!")} ${err.message}`);
+      console.log(`    Nothing was changed.`);
+      console.log();
+      process.exit(1);
+      return;
+    }
     const msg = err instanceof Error ? err.message : String(err);
     const hint =
       msg.includes("operation-specific") ||
@@ -1561,6 +1572,9 @@ function printHelp(): void {
     --force               Replace an existing identity in MOTEBIT_CONFIG_DIR (use with --yes;
                           interactive mode prompts instead)
     --reason "..."        Reason for key rotation (used with rotate)
+    --abandon-funds       Rotate even though the old key's wallet holds SOL or tokens
+                          (or its balance cannot be read); the funds stay at the
+                          retired key's address. Without it, rotate refuses.
     -v, --version         Print version
     -h, --help            Print this help
 
@@ -1625,7 +1639,7 @@ async function main(): Promise<void> {
     const reasonIdx = args.indexOf("--reason");
     const reason =
       reasonIdx !== -1 && reasonIdx + 1 < args.length ? args[reasonIdx + 1] : undefined;
-    await rotateCmd(filePath, nonInteractive, reason);
+    await rotateCmd(filePath, nonInteractive, reason, args.includes("--abandon-funds"));
     return;
   }
 

@@ -278,9 +278,9 @@ const WRITERS: readonly Writer[] = [
     file: R + "succession-apply.ts",
     verb: "UPDATE",
     table: "agent_registry",
-    count: 1,
+    count: 2,
     principal:
-      "the identity itself (or its guardian for a recovery) — the registry key moves only FROM the key the verified link retires, or into an empty master-token slot",
+      "the identity itself (or its guardian for a recovery) — the registry key moves only FROM the key the verified link retires, or into an empty master-token slot; and, in the same transaction, a `settlement_address` moves only when it is the RETIRED key's derived Solana address, to the new key's (a custom address is never touched — rotation never strands a pay-to destination)",
   },
   {
     file: R + "succession-apply.ts",
@@ -289,6 +289,14 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       "the identity itself — the same verified succession retires pending pairing sessions that would carry the retired key",
+  },
+  {
+    file: R + "succession-apply.ts",
+    verb: "UPDATE",
+    table: "relay_service_listings",
+    count: 1,
+    principal:
+      "the identity itself (or its guardian for a recovery) — the same verified succession moves a listing `pay_to_address` only when it is the RETIRED key's derived Solana address, to the new key's, in the same transaction; a custom address is never touched (rotation never strands a pay-to destination)",
   },
   {
     file: R + "migration.ts",

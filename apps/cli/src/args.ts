@@ -113,6 +113,12 @@ export interface CliConfig {
   eventType?: string;
   /** `motebit migrate` — forfeit remaining relay balance instead of withdrawing. */
   waive?: boolean;
+  /**
+   * `motebit rotate` — rotate even though the retiring key's wallet holds
+   * value (or its balance cannot be read): the funds stay at the retired
+   * key's address. Never a default; the emergency (compromised-key) door.
+   */
+  abandonFunds?: boolean;
   /** `motebit relay up` — HTTP port the relay binds to (default 3000). */
   port?: string;
   /** `motebit relay up` — x402 payout address (enables the x402 settlement rail). */
@@ -175,6 +181,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       all: { type: "boolean", default: false },
       "solana-rpc-url": { type: "string" },
       "address-only": { type: "boolean", default: false },
+      "abandon-funds": { type: "boolean", default: false },
       voice: { type: "boolean", default: false },
       file: { type: "string", short: "f" },
       "dry-run": { type: "boolean", default: false },
@@ -319,6 +326,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     all: values.all,
     solanaRpcUrl: values["solana-rpc-url"],
     walletAddressOnly: values["address-only"],
+    abandonFunds: values["abandon-funds"],
     voice: values.voice,
     file: values.file,
     dryRun: values["dry-run"],
@@ -476,6 +484,9 @@ Commands:
                             (+ time window for tokens). [--json]
   register [--sync-url <url>]  Register this identity with the relay (enables discovery)
   rotate [--reason "..."]   Rotate Ed25519 keypair with cryptographic succession chain
+                            Your wallet address IS this key: rotation refuses while
+                            the old address holds SOL or tokens (move them first),
+                            or pass --abandon-funds to leave them at the retired key
   machines [--json]         The machines this motebit runs unattended work on (reduced here, never by the relay)
   machines retire <device_id>  Sign a retirement for a machine's line (undo: machines enroll)
   machines enroll <device_id> [--force]  Rejoin a retired line, or enrol an id explicitly

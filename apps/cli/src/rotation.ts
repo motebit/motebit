@@ -10,6 +10,7 @@
 import * as fs from "node:fs";
 import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "@motebit/surface-kit";
+import type { KeyRotationFundsState } from "@motebit/surface-kit";
 import { hexToBytes } from "@motebit/encryption";
 import {
   refuseIfKeyReplacedSince,
@@ -34,6 +35,8 @@ export interface RotationDeps {
   passphrase: string;
   reason?: string;
   syncUrl: string;
+  readWalletHoldings: KeyRotationPorts["readWalletHoldings"]; // I0: the retiring key's wallet
+  abandonFunds?: boolean; // `--abandon-funds`: rotate though it holds value / cannot be read
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -75,7 +78,7 @@ export type RotationOutcome =
   | {
       kind: "stopped";
       motebitId: string;
-      state: "unreachable" | "diverged" | "refused" | "held-unopenable";
+      state: "unreachable" | "diverged" | "refused" | "held-unopenable" | KeyRotationFundsState;
       message: string;
       relayKey?: string;
       notes: RotationNote[];
@@ -188,6 +191,9 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
         writeFileAtomic(deps.identityPath, rotated, currentModeOr(deps.identityPath, 0o644));
       }
     },
+    readWalletHoldings: deps.readWalletHoldings,
+    ...(deps.abandonFunds === true ? { acknowledgeFundsAtRisk: true } : {}),
+    fundsAcknowledgment: "--abandon-funds",
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     ...(deps.now ? { now: deps.now } : {}),

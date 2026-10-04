@@ -54,7 +54,12 @@ import {
   type AppearanceConfig,
   type DeletionCertificate,
 } from "@motebit/sdk";
-import { mintAudienceToken, secureErase, signAgentCommandEnvelope } from "@motebit/encryption";
+import {
+  createSolanaHoldingsReader,
+  mintAudienceToken,
+  secureErase,
+  signAgentCommandEnvelope,
+} from "@motebit/encryption";
 
 /** The runtime's answer to a remote command (mirrors `@motebit/runtime`). */
 export interface CommandResult {
@@ -1861,7 +1866,10 @@ export class MobileApp {
    * record (old + new keys both sign), update identity file, store new private
    * key in expo-secure-store, and submit to relay if configured.
    */
-  async rotateKey(reason?: string): Promise<{ newPublicKey: string }> {
+  async rotateKey(
+    reason?: string,
+    opts: { acknowledgeFundsAtRisk?: boolean } = {},
+  ): Promise<{ newPublicKey: string }> {
     // The state machine lives in @motebit/surface-kit (#709): read the relay
     // first, write the new key ahead, submit signed by the RETIRING key,
     // commit only after the relay confirms. A stop rejects with the honest
@@ -1884,6 +1892,11 @@ export class MobileApp {
       // F7: the link joins the roster replica. No capture and no
       // re-enrolment — a phone is never a host (S2).
       afterCommit: ({ record }) => rosterAfterRotationCommit({ motebitId, record }),
+      // I0: the identity key IS the wallet; read it before anything moves.
+      readWalletHoldings: createSolanaHoldingsReader({
+        rpcUrl: "https://api.mainnet-beta.solana.com",
+      }),
+      ...(opts.acknowledgeFundsAtRisk === true ? { acknowledgeFundsAtRisk: true } : {}),
       ...(reason !== undefined ? { reason } : {}),
     });
   }

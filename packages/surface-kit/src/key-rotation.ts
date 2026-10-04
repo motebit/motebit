@@ -36,15 +36,31 @@
  *                            file if the surface keeps one)
  *   - `syncUrl`            — `null` when no relay is configured: rotate
  *                            locally and SAY so, never guess
+ *   - `readWalletHoldings` — what the retiring key's Solana address holds
+ *                            (REQUIRED; the rail is the surface's, so this
+ *                            module stays rail-agnostic)
+ *
+ * A third invariant runs before both:
+ *
+ *   I0 — a rotation never strands funds. The identity key IS the wallet, and
+ *        a recorded rotation erases or overwrites the retired key on most
+ *        surfaces; so before anything is minted, written ahead, sent or
+ *        committed, the retiring key's address is read, and value there — or
+ *        a read that fails — stops the rotation unless the owner explicitly
+ *        acknowledged it (`acknowledgeFundsAtRisk`). An automatic sweep to
+ *        the new key is deliberately NOT done here (deferred).
  */
 import { rotateIdentityKeys } from "@motebit/core-identity";
 import {
   bytesToHex,
+  checkRotationFunds,
   getPublicKeyBySuite,
   hexPublicKeyToDidKey,
   hexToBytes,
+  rotationFundsRefusal,
   secureErase,
 } from "@motebit/encryption";
+import type { WalletHoldingsReader } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import { readSuccessionState, submitSuccessionToRelay } from "@motebit/sync-engine";
 
@@ -119,6 +135,22 @@ export interface KeyRotationPorts {
      */
     relay: "recorded" | "already-held" | "none";
   }): Promise<void>;
+  /**
+   * I0: reads what the retiring key's Solana address holds. MUST throw when
+   * it cannot answer (a failed read stops the rotation unless acknowledged).
+   * Required, so no surface can adopt the kit without saying how it reads
+   * the wallet the rotation would retire.
+   */
+  readWalletHoldings: WalletHoldingsReader;
+  /**
+   * The owner explicitly accepted that value at (or an unreadable balance
+   * of) the retiring key's address stays there. Never a default: a surface
+   * sets it only after showing the owner the refusal's amounts and getting
+   * a yes. Keeps an emergency (compromised-key) rotation possible.
+   */
+  acknowledgeFundsAtRisk?: boolean;
+  /** How this surface's owner gives that acknowledgment, named in the refusal ("--abandon-funds", "the confirmation"). */
+  fundsAcknowledgment?: string;
   reason?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -161,6 +193,9 @@ export function parseHeldRotation(
   }
 }
 
+/** I0 stops: the retiring key's address holds value / could not be read; nothing was changed. */
+export type KeyRotationFundsState = "funds-at-risk" | "funds-unknown";
+
 export type KeyRotationOutcome =
   | {
       kind: "rotated";
@@ -185,9 +220,12 @@ export type KeyRotationOutcome =
         /** The write-ahead's private key does not derive to the key it names. */
         | "held-corrupt"
         /** Published key and held key disagree with no write-ahead bridging them. */
-        | "inconsistent";
+        | "inconsistent"
+        | KeyRotationFundsState;
       message: string;
       relayKey?: string;
+      /** I0 stops only: what the retiring key's address holds, so a surface can state the amounts in its confirm. */
+      funds?: { address: string; summary?: string; reason?: string };
       notes: KeyRotationNote[];
     };
 
@@ -201,6 +239,23 @@ export class KeyRotationError extends Error {
     );
     this.name = "KeyRotationError";
   }
+}
+
+/**
+ * I0 for a settings screen: the funds stop inside a rotation error, or null.
+ * A surface shows `message` (it names the address and the amounts) in a
+ * confirm, and re-runs with `acknowledgeFundsAtRisk: true` only on a yes.
+ */
+export function rotationFundsStop(
+  err: unknown,
+): { message: string; address: string; summary?: string; reason?: string } | null {
+  if (!(err instanceof KeyRotationError)) return null;
+  const o = err.outcome;
+  if (o.kind !== "stopped" || (o.state !== "funds-at-risk" && o.state !== "funds-unknown")) {
+    return null;
+  }
+  if (o.funds == null) return null;
+  return { message: o.message, ...o.funds };
 }
 
 export async function performKeyRotation(ports: KeyRotationPorts): Promise<KeyRotationOutcome> {
@@ -249,6 +304,33 @@ async function rotateWithin(
   allocated.push(oldPrivateKey);
   const oldPublicKey = await getPublicKeyBySuite(oldPrivateKey, IDENTITY_SUITE);
   const oldPublicKeyHex = bytesToHex(oldPublicKey);
+
+  // 0b. I0 — the wallet this rotation would retire, read BEFORE anything
+  //     moves: no mint, no write-ahead, no relay contact, no commit. Covers
+  //     the resume paths too: finishing a rotation the relay already holds
+  //     still erases the retired key on commit, so value at its address
+  //     stops that as well (the old key keeps working on-chain meanwhile).
+  if (ports.acknowledgeFundsAtRisk !== true) {
+    const verdict = await checkRotationFunds({
+      publicKey: oldPublicKey,
+      readHoldings: ports.readWalletHoldings,
+    });
+    if (verdict.kind !== "clear") {
+      return {
+        kind: "stopped",
+        state: verdict.kind === "holds-value" ? "funds-at-risk" : "funds-unknown",
+        message: rotationFundsRefusal(
+          verdict,
+          ports.fundsAcknowledgment ?? "an explicit acknowledgment",
+        ),
+        funds:
+          verdict.kind === "holds-value"
+            ? { address: verdict.address, summary: verdict.summary }
+            : { address: verdict.address, reason: verdict.reason },
+        notes,
+      };
+    }
+  }
 
   // 1. What this device holds IN FLIGHT — read without conflating "nothing"
   //    with "something I cannot read".

@@ -65,6 +65,7 @@ import {
   useSettingsStyles,
   type Tab,
 } from "./settings";
+import { rotationFundsStop } from "@motebit/surface-kit";
 
 // Re-export deriveInteriorColor so App.tsx keeps working — the live
 // preview path imports it from this file and we don't want to touch
@@ -476,7 +477,9 @@ export function SettingsModal({
                   "Rotate Key",
                   "Generate a new keypair with a signed succession record? The old key will sign over authority to the new key.\n\n" +
                     // machine-roster-surfaces-v1 N3 — the C-1 cost, stated.
-                    "Your machines will need to be enrolled again under the new key.",
+                    "Your machines will need to be enrolled again under the new key.\n\n" +
+                    // I0 — the wallet IS the key; rotation refuses while it holds funds.
+                    "Your wallet address is this key: move any funds off it first — rotation refuses while it holds any.",
                   [
                     { text: "Cancel", style: "cancel" },
                     {
@@ -484,13 +487,39 @@ export function SettingsModal({
                       style: "destructive",
                       onPress: () => {
                         void (async () => {
-                          try {
-                            const result = await app.rotateKey("manual rotation from mobile");
+                          const rotate = async (acknowledgeFundsAtRisk: boolean) => {
+                            const result = await app.rotateKey("manual rotation from mobile", {
+                              acknowledgeFundsAtRisk,
+                            });
                             Alert.alert(
                               "Key Rotated",
                               `New public key: ${result.newPublicKey.slice(0, 16)}...`,
                             );
+                          };
+                          try {
+                            await rotate(false);
                           } catch (err: unknown) {
+                            const funds = rotationFundsStop(err);
+                            if (funds != null) {
+                              // I0: the amounts are stated; only an explicit
+                              // second yes rotates with the funds left behind.
+                              Alert.alert("Wallet Holds Funds", funds.message, [
+                                { text: "Cancel", style: "cancel" },
+                                {
+                                  text: "Rotate Anyway",
+                                  style: "destructive",
+                                  onPress: () => {
+                                    void rotate(true).catch((e: unknown) => {
+                                      Alert.alert(
+                                        "Key Rotation Failed",
+                                        e instanceof Error ? e.message : String(e),
+                                      );
+                                    });
+                                  },
+                                },
+                              ]);
+                              return;
+                            }
                             const msg = err instanceof Error ? err.message : String(err);
                             Alert.alert("Key Rotation Failed", msg);
                           }

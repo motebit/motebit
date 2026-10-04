@@ -74,6 +74,8 @@ function device(
       syncUrl: relay === null ? null : "http://relay",
       loadPrivateKeyHex: async () => priv,
       publishedPublicKeyHex: async () => pub,
+      // I0 is driven by rotation-funds-preflight.test.ts; here the wallet is empty.
+      readWalletHoldings: async () => ({ solLamports: 0n, tokens: [] }),
       writeAhead: {
         load: async () => held,
         save: async (h) => {
