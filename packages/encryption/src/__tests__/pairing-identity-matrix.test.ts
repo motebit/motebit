@@ -16,10 +16,15 @@
  * plus an attack table (the relay names an id the transferred key is not) and
  * a malformed-id table.
  *
- * Expected, in one sentence: every legitimately held identity pairs (binding
- * level reported honestly), every forged / foreign / unrelated key is refused
- * with no seed handed back, and a malformed id is refused — only a canonical
- * lowercase UUIDv7 is accepted at `unverified`; a UUIDv8 or `did:key` must bind.
+ * plus a fork table: the relay's served chain extends / equals / is a prefix of
+ * / conflicts with / is unreachable vs the chain the transfer carries.
+ *
+ * Expected, in one sentence: every legitimately held, CURRENT identity key
+ * pairs (binding level reported honestly), every forged / foreign / unrelated
+ * or superseded key is refused with no seed handed back, a fork the relay's
+ * verified chain proves is refused, and a malformed id is refused — only a
+ * canonical lowercase UUIDv7 or UUIDv4 (the ids seed-only restore minted
+ * 2026-05-15..22) is accepted at `unverified`; a UUIDv8 or `did:key` must bind.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KeySuccessionRecord, KeyTransferPayload } from "@motebit/protocol";
@@ -62,6 +67,11 @@ function uuidV7(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
+/** What desktop/mobile seed-only restore minted from 4d19695e until 6c0c710c. */
+function uuidV4(): string {
+  return crypto.randomUUID();
+}
+
 // Strict temporal order is part of the succession law; rotations minted in
 // one tick would share a timestamp, so the clock advances per mint.
 let clock = 1_800_000_000_000;
@@ -90,6 +100,7 @@ async function forgeLink(fromHex: string, to: Keys): Promise<KeySuccessionRecord
 
 type Kind =
   | "legacy-v7"
+  | "legacy-v4"
   | "v8-never-rotated"
   | "v8-rotated-once-online"
   | "v8-rotated-twice-online"
@@ -119,6 +130,8 @@ async function identity(kind: Kind): Promise<Identity> {
   switch (kind) {
     case "legacy-v7":
       return { kind, motebitId: uuidV7(), current: g, heldChain: [], relayChain: [] };
+    case "legacy-v4":
+      return { kind, motebitId: uuidV4(), current: g, heldChain: [], relayChain: [] };
     case "v8-never-rotated":
       return { kind, motebitId: v8, current: g, heldChain: [], relayChain: [] };
     case "v8-rotated-once-online": {
@@ -218,6 +231,8 @@ async function deviceA(
 interface Outcome {
   accepted: boolean;
   binding?: string;
+  /** Whether the relay's served chain was checked for a fork. */
+  relayCheck?: string;
   reason?: string;
   seedHex?: string;
 }
@@ -233,7 +248,7 @@ async function deviceB(input: {
   keyTransfer: KeyTransferPayload;
   ephemeralPrivateKey: Uint8Array;
   pairingCode: string;
-  relay: () => Promise<readonly unknown[]>;
+  relay?: () => Promise<readonly unknown[]>;
   guardianKey?: string;
 }): Promise<Outcome> {
   try {
@@ -242,12 +257,13 @@ async function deviceB(input: {
       keyTransfer: input.keyTransfer,
       ephemeralPrivateKey: input.ephemeralPrivateKey,
       pairingCode: input.pairingCode,
-      fetchSuccessionChain: input.relay,
+      ...(input.relay !== undefined ? { fetchSuccessionChain: input.relay } : {}),
       ...(input.guardianKey !== undefined ? { guardianKey: input.guardianKey } : {}),
     });
     return {
       accepted: true,
       binding: opened.identityBinding,
+      relayCheck: (opened as { relayCheck?: string }).relayCheck,
       seedHex: bytesToHex(opened.identitySeed),
     };
   } catch (err) {
@@ -259,7 +275,7 @@ async function pair(opts: {
   motebitId: string;
   holder: Keys;
   chainInTransfer: readonly KeySuccessionRecord[] | undefined;
-  relay: () => Promise<readonly unknown[]>;
+  relay?: () => Promise<readonly unknown[]>;
   guardianKey?: string;
 }): Promise<Outcome> {
   const code = "K7Q2ZP";
@@ -270,7 +286,7 @@ async function pair(opts: {
     keyTransfer,
     ephemeralPrivateKey: b.privateKey,
     pairingCode: code,
-    relay: opts.relay,
+    ...(opts.relay !== undefined ? { relay: opts.relay } : {}),
     ...(opts.guardianKey !== undefined ? { guardianKey: opts.guardianKey } : {}),
   });
 }
@@ -279,6 +295,7 @@ async function pair(opts: {
 
 const KINDS: Kind[] = [
   "legacy-v7",
+  "legacy-v4",
   "v8-never-rotated",
   "v8-rotated-once-online",
   "v8-rotated-twice-online",
@@ -310,7 +327,9 @@ function expectedFor(
         : /does not bind/,
     };
   }
-  if (who.kind === "legacy-v7") return { accepted: true, binding: "unverified" };
+  if (who.kind === "legacy-v7" || who.kind === "legacy-v4") {
+    return { accepted: true, binding: "unverified" };
+  }
   if (who.heldChain.length === 0) return { accepted: true, binding: "sovereign" };
   // A rotated self-certifying identity binds through a verified chain: the
   // one Device A carried in the transfer, else the relay's (when it is whole).
@@ -386,25 +405,6 @@ describe("pairing identity matrix — legitimate identities", () => {
     });
     expect(out.accepted).toBe(false);
   });
-
-  it("a stale Device A whose key was rotated on elsewhere: its own verified chain roots the key it holds → accepted", async () => {
-    // The relay is a fallback only, never consulted once the transfer roots
-    // the key — so a later rotation the relay knows of does not refuse here.
-    // Not a forgery (the key is one this identity verifiably held); the
-    // roster, not pairing, reports a superseded key (held_key_superseded).
-    const g = await keys();
-    const k1 = await keys();
-    const k2 = await keys();
-    const r1 = await rotate(g, k1);
-    const r2 = await rotate(k1, k2);
-    const out = await pair({
-      motebitId: await deriveSovereignMotebitId(g.hex),
-      holder: k1,
-      chainInTransfer: [r1],
-      relay: () => Promise.resolve([r1, r2]),
-    });
-    expect(out.binding).toBe("sovereign");
-  });
 });
 
 // ── Table 2: the relay names an id the transferred key is not ───────────
@@ -472,19 +472,24 @@ describe("pairing identity matrix — forged / foreign / unrelated keys", () => 
     }
   }
 
-  it("legacy UUIDv7: the relay can name one for any key — accepted only at `unverified` (stated residual)", async () => {
-    const attacker = await keys();
-    const out = await pair({
-      motebitId: uuidV7(),
-      holder: attacker,
-      chainInTransfer: undefined,
-      relay: () => Promise.resolve([]),
+  for (const [label, mint] of [
+    ["UUIDv7", uuidV7],
+    ["UUIDv4", uuidV4],
+  ] as const) {
+    it(`legacy ${label}: the relay can name one for any key — accepted only at \`unverified\` (stated residual)`, async () => {
+      const attacker = await keys();
+      const out = await pair({
+        motebitId: mint(),
+        holder: attacker,
+        chainInTransfer: undefined,
+        relay: () => Promise.resolve([]),
+      });
+      expect({ accepted: out.accepted, binding: out.binding }).toEqual({
+        accepted: true,
+        binding: "unverified",
+      });
     });
-    expect({ accepted: out.accepted, binding: out.binding }).toEqual({
-      accepted: true,
-      binding: "unverified",
-    });
-  });
+  }
 });
 
 // ── Table 3: malformed ids ──────────────────────────────────────────────
@@ -509,7 +514,17 @@ describe("pairing identity matrix — malformed ids are refused", () => {
     ["hyphenless UUIDv7", (id) => id.replace(/-/g, ""), "legacy-v7"],
     ["UUIDv7 trailing space", (id) => `${id} `, "legacy-v7"],
     ["urn:uuid: UUIDv7", (id) => `urn:uuid:${id}`, "legacy-v7"],
-    ["UUIDv4 (not a minted form)", () => "3f1c2a9e-5b7d-4e21-9c0a-6d8e2f4b1a37", "legacy-v7"],
+    ["uppercase UUIDv4", (id) => id.toUpperCase(), "legacy-v4"],
+    ["hyphenless UUIDv4", (id) => id.replace(/-/g, ""), "legacy-v4"],
+    ["UUIDv4 trailing space", (id) => `${id} `, "legacy-v4"],
+    ["braced UUIDv4", (id) => `{${id}}`, "legacy-v4"],
+    [
+      "UUIDv4 with a non-RFC variant nibble",
+      (id) => `${id.slice(0, 19)}c${id.slice(20)}`,
+      "legacy-v4",
+    ],
+    ["UUIDv1 (never minted)", () => "3f1c2a9e-5b7d-1e21-9c0a-6d8e2f4b1a37", "legacy-v7"],
+    ["UUIDv6 (never minted)", () => "3f1c2a9e-5b7d-6e21-9c0a-6d8e2f4b1a37", "legacy-v7"],
     ["free text", () => "agent-alice", "legacy-v7"],
   ];
   for (const [label, mangle, kind] of variants) {
@@ -560,7 +575,7 @@ describe("pairing identity matrix — the transfer itself", () => {
       motebitId: who.motebitId,
       holder: who.current,
       chainInTransfer: undefined,
-      relay: () => Promise.reject(new Error("must not be needed")),
+      relay: () => Promise.reject(new Error("503")),
     });
     expect(out.binding).toBe("sovereign");
   });
@@ -657,5 +672,230 @@ describe("openPairingKeyTransfer — edges", () => {
     expect(Object.keys(kt).sort()).toEqual(
       ["encrypted_seed", "identity_pubkey_check", "nonce", "tag", "x25519_pubkey"].sort(),
     );
+  });
+});
+
+// ── Table 6: the relay's served chain vs the transfer's ─────────────────
+
+// The real history K0 → K1 → K2 is on the relay. Each cell is one device
+// holding one key, what its transfer carries, and what the relay serves.
+describe("pairing identity matrix — fork from a superseded key", () => {
+  type Relation = "extends" | "equals" | "prefix" | "conflicts" | "unreachable";
+  interface Cell {
+    label: string;
+    relation: Relation;
+    idKind: "v8" | "did:key";
+    build: (h: History) => Promise<{
+      holder: Keys;
+      transfer: KeySuccessionRecord[] | undefined;
+      relay: (() => Promise<readonly unknown[]>) | undefined;
+    }>;
+    want: { accepted: true; relayCheck: string } | { accepted: false };
+  }
+  interface History {
+    k0: Keys;
+    k1: Keys;
+    k2: Keys;
+    r1: KeySuccessionRecord;
+    r2: KeySuccessionRecord;
+  }
+  async function history(): Promise<History> {
+    const k0 = await keys();
+    const k1 = await keys();
+    const k2 = await keys();
+    return { k0, k1, k2, r1: await rotate(k0, k1), r2: await rotate(k1, k2) };
+  }
+  const serve = (records: readonly unknown[]) => () => Promise.resolve(records);
+  const down = () => Promise.reject(new Error("ECONNREFUSED"));
+
+  const cells: Cell[] = [];
+  for (const idKind of ["v8", "did:key"] as const) {
+    cells.push(
+      {
+        label: "relay extends: K1 holder, transfer [K0→K1], relay [K0→K1, K1→K2]",
+        relation: "extends",
+        idKind,
+        build: async (h) => ({ holder: h.k1, transfer: [h.r1], relay: serve([h.r1, h.r2]) }),
+        want: { accepted: false },
+      },
+      {
+        label: "relay extends: K0 holder (genesis), no chain, relay [K0→K1, K1→K2]",
+        relation: "extends",
+        idKind,
+        build: async (h) => ({ holder: h.k0, transfer: undefined, relay: serve([h.r1, h.r2]) }),
+        want: { accepted: false },
+      },
+      {
+        label: "relay equals: K2 holder, transfer [K0→K1, K1→K2], relay the same",
+        relation: "equals",
+        idKind,
+        build: async (h) => ({ holder: h.k2, transfer: [h.r1, h.r2], relay: serve([h.r1, h.r2]) }),
+        want: { accepted: true, relayCheck: "no_conflict" },
+      },
+      {
+        label: "relay prefix: K2 holder, transfer [K0→K1, K1→K2], relay [K0→K1] (offline rotation)",
+        relation: "prefix",
+        idKind,
+        build: async (h) => ({ holder: h.k2, transfer: [h.r1, h.r2], relay: serve([h.r1]) }),
+        want: { accepted: true, relayCheck: "no_conflict" },
+      },
+      {
+        label: "relay prefix: K2 holder, transfer [K0→K1, K1→K2], relay [] (nothing uploaded)",
+        relation: "prefix",
+        idKind,
+        build: async (h) => ({ holder: h.k2, transfer: [h.r1, h.r2], relay: serve([]) }),
+        want: { accepted: true, relayCheck: "no_conflict" },
+      },
+      {
+        label: "relay conflicts: K0 holder signs K0→Kx, relay [K0→K1, K1→K2]",
+        relation: "conflicts",
+        idKind,
+        build: async (h) => {
+          const kx = await keys();
+          return { holder: kx, transfer: [await rotate(h.k0, kx)], relay: serve([h.r1, h.r2]) };
+        },
+        want: { accepted: false },
+      },
+      {
+        label: "relay conflicts: K0 holder signs K0→Kx, relay serves only [K0→K1]",
+        relation: "conflicts",
+        idKind,
+        build: async (h) => {
+          const kx = await keys();
+          return { holder: kx, transfer: [await rotate(h.k0, kx)], relay: serve([h.r1]) };
+        },
+        want: { accepted: false },
+      },
+      {
+        label: "relay conflicts: K1 holder signs K1→Kx, relay [K0→K1, K1→K2]",
+        relation: "conflicts",
+        idKind,
+        build: async (h) => {
+          const kx = await keys();
+          return {
+            holder: kx,
+            transfer: [h.r1, await rotate(h.k1, kx)],
+            relay: serve([h.r1, h.r2]),
+          };
+        },
+        want: { accepted: false },
+      },
+      {
+        label: "relay conflicts: the transfer itself carries both successors of K0",
+        relation: "conflicts",
+        idKind,
+        build: async (h) => {
+          const kx = await keys();
+          return { holder: kx, transfer: [h.r1, await rotate(h.k0, kx)], relay: serve([]) };
+        },
+        want: { accepted: false },
+      },
+      {
+        label: "relay serves a FORGED K0→Ky (not signed by K0): no proven fork",
+        relation: "prefix",
+        idKind,
+        build: async (h) => ({
+          holder: h.k2,
+          transfer: [h.r1, h.r2],
+          relay: serve([await forgeLink(h.k0.hex, await keys())]),
+        }),
+        want: { accepted: true, relayCheck: "no_conflict" },
+      },
+      {
+        label: "relay unreachable: K0 holder's fork K0→Kx binds on the transfer (stated residual)",
+        relation: "unreachable",
+        idKind,
+        build: async (h) => {
+          const kx = await keys();
+          return { holder: kx, transfer: [await rotate(h.k0, kx)], relay: down };
+        },
+        want: { accepted: true, relayCheck: "unreachable" },
+      },
+      {
+        label: "no relay configured: binds on the transfer, the fork check not run",
+        relation: "unreachable",
+        idKind,
+        build: async (h) => ({ holder: h.k2, transfer: [h.r1, h.r2], relay: undefined }),
+        want: { accepted: true, relayCheck: "not_checked" },
+      },
+    );
+  }
+
+  for (const cell of cells) {
+    it(`${cell.idKind} · ${cell.relation} · ${cell.label}`, async () => {
+      const h = await history();
+      const motebitId =
+        cell.idKind === "v8"
+          ? await deriveSovereignMotebitId(h.k0.hex)
+          : hexPublicKeyToDidKey(h.k0.hex);
+      const { holder, transfer, relay } = await cell.build(h);
+      let relayCalls = 0;
+      const out = await pair({
+        motebitId,
+        holder,
+        chainInTransfer: transfer,
+        ...(relay !== undefined
+          ? {
+              relay: () => {
+                relayCalls++;
+                return relay();
+              },
+            }
+          : {}),
+      });
+      // Reachable or not, a configured relay is always asked.
+      if (relay !== undefined) expect(relayCalls).toBeGreaterThanOrEqual(1);
+      if (cell.want.accepted) {
+        expect({
+          accepted: out.accepted,
+          binding: out.binding,
+          relayCheck: out.relayCheck,
+        }).toEqual({
+          accepted: true,
+          binding: "sovereign",
+          relayCheck: cell.want.relayCheck,
+        });
+        expect(out.seedHex).toBe(bytesToHex(holder.privateKey));
+      } else {
+        expect(out.accepted).toBe(false);
+        expect(out.seedHex).toBeUndefined();
+        expect(out.reason).toMatch(/^Pairing refused: identity fork detected/);
+      }
+    });
+  }
+
+  it("a never-rotated identity with an unreachable relay still pairs, reported `unreachable`", async () => {
+    const who = await identity("v8-never-rotated");
+    const out = await pair({
+      motebitId: who.motebitId,
+      holder: who.current,
+      chainInTransfer: undefined,
+      relay: down,
+    });
+    expect({ binding: out.binding, relayCheck: out.relayCheck }).toEqual({
+      binding: "sovereign",
+      relayCheck: "unreachable",
+    });
+  });
+
+  it("a legacy id is never checked against the relay (it commits to no key)", async () => {
+    for (const motebitId of [uuidV7(), uuidV4()]) {
+      const holder = await keys();
+      let called = false;
+      const out = await pair({
+        motebitId,
+        holder,
+        chainInTransfer: undefined,
+        relay: () => {
+          called = true;
+          return Promise.resolve([]);
+        },
+      });
+      expect({ binding: out.binding, relayCheck: out.relayCheck, called }).toEqual({
+        binding: "unverified",
+        relayCheck: "not_checked",
+        called: false,
+      });
+    }
   });
 });
