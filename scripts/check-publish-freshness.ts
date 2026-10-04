@@ -44,6 +44,7 @@ import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { cleanEnv } from "./lib/differential-tree.js";
 import {
   parsePendingHours,
   runPublishFreshness,
@@ -58,6 +59,8 @@ function git(args: string[]): string | null {
   try {
     return execFileSync("git", args, {
       cwd: ROOT,
+      // `args` is computed: only a scrubbed env proves it is ROOT's repository.
+      env: cleanEnv(),
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();

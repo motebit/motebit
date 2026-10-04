@@ -2962,6 +2962,38 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-fixture-git-env",
+    proves:
+      "flags a git spawn aimed at a fixture directory that inherits the caller's GIT_* environment — the #835 / 2026-10-01 class where a pre-push hook's GIT_DIR made a fixture `git init` write `core.worktree` into the real .git/config. Probe drops `cleanEnv()` from differential-tree's `readGit` (whose `cwd` is a caller-supplied tree), the same mutation that turns the decoy harness red; byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile("scripts/lib/differential-tree.ts", (src) => {
+        const anchor = '    env: cleanEnv(),\n    encoding: "utf-8",';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: scripts/lib/differential-tree.ts readGit no longer passes `env: cleanEnv()` — retarget the probe",
+          );
+        }
+        return src.replace(anchor, '    env: process.env,\n    encoding: "utf-8",');
+      }),
+  },
+  {
+    script: "check-fixture-git-env",
+    proves:
+      "flags the STRUCTURAL layer coming unwired — the vitest setup that deletes every GIT_* from each gate-test worker before any test module loads (so a fixture spawn of ANY syntax inherits a clean env; three review rounds found shapes a per-spawn pattern missed). Probe empties `setupFiles` in the root vitest.config.mts that `pnpm test:gates` resolves; byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile("vitest.config.mts", (src) => {
+        const anchor = 'setupFiles: ["./scripts/lib/vitest-scrub-git-env.ts"]';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: vitest.config.mts no longer lists the setup file as `" +
+              anchor +
+              "` — retarget the probe",
+          );
+        }
+        return src.replace(anchor, "setupFiles: []");
+      }),
+  },
+  {
     script: "check-relay-frame-origin",
     proves:
       "flags a surface that handles a relay `command_request` and executes it through `executeCommand` without saying where the command came from — the 2026-09-16 class where five surfaces forwarded a relay frame with no origin, so a command that arrived over the wire answered as if typed on the machine and the return view's credential membrane never closed. Drops a fixture handler that reads a `command_request` frame and calls `executeCommand` bare; the gate finds the frame marker and no door and no explicit origin.",
