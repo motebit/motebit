@@ -822,18 +822,18 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-readme",
     proves:
-      "flags a README 'What you see:' block claim that disagrees with create-motebit / the CLI relay resolver source-of-truth (here: the relay URL ↔ DEFAULT_SYNC_URL pin)",
+      "flags a README 'What you see:' block claim that disagrees with create-motebit / the CLI source-of-truth (here: the relay-registration line's tool count ↔ the scaffold's tools)",
     perturb: () =>
-      // Replace the README's `Registered with relay:` value with an obviously
-      // invalid URL. The gate's claim-4 assertion compares this line against
-      // the exported `DEFAULT_SYNC_URL` in apps/cli/src/subcommands/_helpers.ts — under the
-      // perturbation, the two disagree and the gate fires. Distinctive
-      // `.invalid` TLD makes the perturbation trivially safe to grep-and-
-      // revert if cleanup ever fails.
+      // Rewrite the README's `Discovery: registered with relay (<n> tools)`
+      // count to one the scaffold cannot produce. The gate's claim-4
+      // assertion compares <n> with the number of tools create-motebit's
+      // agent template writes (and the line with its emitter in
+      // apps/cli/src/relay-registration.ts) — under the perturbation the
+      // count disagrees and the gate fires.
       mutateFile("README.md", (src) =>
         src.replace(
-          /^Registered with relay:\s+\S+/m,
-          "Registered with relay: https://probe-only-wrong-relay.invalid",
+          /^Discovery: registered with relay \(\d+ tools\)/m,
+          "Discovery: registered with relay (999 tools)",
         ),
       ),
   },
