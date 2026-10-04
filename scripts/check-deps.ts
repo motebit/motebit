@@ -588,8 +588,11 @@ function extractImports(
 
     const isTypeImport = singleLineTypeImport || inTypeImportBlock;
 
-    // Match: import ... from "@motebit/...", require("@motebit/..."), import("@motebit/...")
+    // Match: import ... from "@motebit/...", a bare side-effect
+    // `import "@motebit/..."` (no `from`, still loads the module),
+    // require("@motebit/..."), import("@motebit/...")
     const patterns = [
+      /^\s*import\s+['"](@motebit\/[^'"]+)['"]/g,
       /from\s+['"](@motebit\/[^'"]+)['"]/g,
       /from\s+['"](create-motebit)['"]/g,
       /require\(\s*['"](@motebit\/[^'"]+)['"]\s*\)/g,
@@ -1093,6 +1096,76 @@ function checkPermissiveExportSurface(packages: PkgInfo[]): void {
   }
 }
 
+// Check 11: Subpath-only imports — a consumer may reach a dual-ring package
+// ONLY through its contract subpath, never its root.
+//
+// `@motebit/render-engine` is two rings in one package: `./spec` is the Ring-1
+// contract (types, CANONICAL_SPEC, embodiment-mode contracts — no three.js),
+// while the root re-exports the Ring-3 renderer (creature.ts, adapter.ts, …)
+// that imports three.js. The interior (`@motebit/runtime`) binds to the
+// contract, never the renderer (docs/doctrine/motebit-computer.md "Contract is
+// Ring 1; renderer is Ring 3"; docs/doctrine/creature-canon.md). A root import
+// silently drags three.js into the runtime's module graph.
+//
+// Type-only root imports COUNT. `import type` from the root resolves through
+// `dist/index.d.ts`, whose re-exports reference `three`'s declarations, so a
+// type-only edge still makes the interior's typecheck depend on the renderer
+// surface — and every symbol the interior needs already lives in `./spec`, so
+// there is no legitimate reason to reach the root. Test files are exempt
+// (they are not in the published dist and may exercise the renderer).
+const SUBPATH_ONLY_IMPORTS: ReadonlyArray<{
+  consumer: string;
+  target: string;
+  allowedSubPaths: ReadonlySet<string>;
+  doctrine: string;
+}> = [
+  {
+    consumer: "@motebit/runtime",
+    target: "@motebit/render-engine",
+    allowedSubPaths: new Set(["spec"]),
+    doctrine: "docs/doctrine/motebit-computer.md",
+  },
+];
+
+function checkSubpathOnlyImports(packages: PkgInfo[]): void {
+  let filesScanned = 0;
+  let importsChecked = 0;
+  for (const rule of SUBPATH_ONLY_IMPORTS) {
+    const pkg = packages.find((p) => p.name === rule.consumer);
+    if (!pkg) {
+      fail(
+        "subpath-only",
+        `rule consumer "${rule.consumer}" not found — update SUBPATH_ONLY_IMPORTS`,
+      );
+      continue;
+    }
+    for (const file of collectSourceFiles(join(pkg.dir, "src"))) {
+      if (isTestFile(file)) continue;
+      filesScanned++;
+      for (const imp of extractImports(file)) {
+        if (extractPkgName(imp.specifier) !== rule.target) continue;
+        importsChecked++;
+        const subPath = extractSubPath(imp.specifier);
+        if (subPath !== null && rule.allowedSubPaths.has(subPath)) continue;
+        const allowed = [...rule.allowedSubPaths].map((s) => `${rule.target}/${s}`).join(", ");
+        fail(
+          "subpath-only",
+          `${relative(ROOT, file)}:${imp.line} imports "${imp.specifier}"` +
+            `${imp.typeOnly ? " (type-only)" : ""} — ${rule.consumer} may import ` +
+            `${rule.target} only via ${allowed}. Repair: change the specifier to ${allowed} ` +
+            `(export the symbol from the contract module if missing, without pulling the ` +
+            `renderer in); canonical rule: SUBPATH_ONLY_IMPORTS in scripts/check-deps.ts, ` +
+            `doctrine ${rule.doctrine}.`,
+        );
+      }
+    }
+  }
+  console.log(
+    `  subpath-only: ${SUBPATH_ONLY_IMPORTS.length} rule(s), ${filesScanned} non-test source file(s) scanned, ` +
+      `${importsChecked} target import(s) checked`,
+  );
+}
+
 // Check for wildcard exports (warnings, not errors)
 function warnWildcardExports(packages: PkgInfo[]): void {
   for (const pkg of packages) {
@@ -1127,6 +1200,7 @@ checkTsconfigReferences(packages);
 checkNoLicenseInSource(packages);
 checkPermissivePurity(packages);
 checkPermissiveExportSurface(packages);
+checkSubpathOnlyImports(packages);
 
 if (violations.length === 0) {
   console.log("\n  All architectural checks passed.\n");
@@ -1144,7 +1218,8 @@ if (violations.length === 0) {
       "         dependency; a workspace dep encodes layer membership, so don't just delete it.\n" +
       "       • permissive-floor purity — keep judgment/data out of protocol/crypto/sdk, or add\n" +
       "         the symbol to the gate's allowlist with a reason if it is genuinely floor-pure.\n" +
-      "       • tsconfig references — align the package's tsconfig `references` with its deps.\n",
+      "       • tsconfig references — align the package's tsconfig `references` with its deps.\n" +
+      "       • subpath-only — import the contract subpath named in the error (SUBPATH_ONLY_IMPORTS).\n",
   );
   process.exit(1);
 }
