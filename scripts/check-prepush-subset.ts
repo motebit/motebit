@@ -78,6 +78,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { cleanEnv } from "./lib/differential-tree.js";
 import { failWithRepair } from "./lib/gate-report.js";
 import { ShParseError, parseSh, walk, type Program, type Word } from "./lib/posix-sh.js";
 
@@ -1100,13 +1101,15 @@ export function evaluateTestCache(inp: TestCacheInputs): string[] {
  * default 1 MiB pipe `maxBuffer` (ENOBUFS, so the gate failed closed on a
  * healthy repo). stdout and stderr go to files, never an in-memory pipe, so
  * there is no buffer to outgrow. Throws with the exit status and stderr on
- * failure.
+ * failure. The child runs with `cleanEnv(env)`: a generic wrapper scrubs every
+ * GIT_* itself (check-fixture-git-env), so no caller — `process.env` from a
+ * hook included — can aim its command at another repository.
  */
 export function runToFile(
   cmd: string,
   args: readonly string[],
   cwd: string,
-  env: Record<string, string>,
+  env: NodeJS.ProcessEnv,
 ): string {
   const dir = mkdtempSync(join(tmpdir(), "prepush-subset-"));
   try {
@@ -1116,7 +1119,7 @@ export function runToFile(
     const errFd = openSync(errPath, "w");
     let r: ReturnType<typeof spawnSync>;
     try {
-      r = spawnSync(cmd, args, { cwd, env, stdio: ["ignore", outFd, errFd] });
+      r = spawnSync(cmd, args, { cwd, env: cleanEnv(env), stdio: ["ignore", outFd, errFd] });
     } finally {
       closeSync(outFd);
       closeSync(errFd);
@@ -1138,9 +1141,7 @@ export function readTestCacheInputs(
 ): TestCacheInputs {
   // `root` decides the repo, never an inherited GIT_DIR / GIT_WORK_TREE (a
   // hook's environment) — so scrub every GIT_* for both child processes.
-  const env: Record<string, string> = { TURBO_TELEMETRY_DISABLED: "1" };
-  for (const [k, val] of Object.entries(process.env))
-    if (val != null && !k.startsWith("GIT_")) env[k] ??= val;
+  const env = cleanEnv(process.env, { TURBO_TELEMETRY_DISABLED: "1" });
   let dry: DryTask[] | string;
   try {
     const out = runToFile(

@@ -26,6 +26,13 @@
 # bumping these is a deliberate, reviewable edit — the audit trail is the diff.
 set -euo pipefail
 
+# Every git command below targets a clone in a temp dir, never this repo: drop
+# any GIT_* a hook (or a caller) exported, or `git -C "$WORK/spec"` acts on the
+# caller's repository instead (scripts/lib/fixture-git-env.sh).
+# shellcheck source=lib/fixture-git-env.sh
+. "$(dirname "$0")/lib/fixture-git-env.sh"
+fixture_git_env_scrub
+
 SPEC_REPO="${SPEC_REPO:-https://github.com/agency-computer/pdf-text-spec}"
 # Re-cut fdbc4ad (was a6372ed): this independent reproduction caught a real gap —
 # the v1 build at a6372ed forked on HOST ARCHITECTURE. rust@sha256:c0a38f… is a

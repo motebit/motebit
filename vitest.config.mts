@@ -7,6 +7,8 @@
  *
  * The one setting: scrub every inherited GIT_* before any test file loads
  * (scripts/lib/vitest-scrub-git-env.ts — why, and the other two layers).
+ * check-fixture-git-env fails if this entry goes, if test:gates stops resolving
+ * this file, or if another root vitest config shadows it.
  */
 import { defineConfig } from "vitest/config";
 

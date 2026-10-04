@@ -74,6 +74,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { cleanEnv } from "./lib/differential-tree.js";
 import { failWithRepair } from "./lib/gate-report.js";
 import { readPushTrigger } from "./lib/workflow-triggers.js";
 
@@ -280,6 +281,8 @@ function gitOut(args: string[]): string | null {
   try {
     return execFileSync("git", args, {
       cwd: ROOT,
+      // `args` is computed: only a scrubbed env proves it is ROOT's repository.
+      env: cleanEnv(),
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
@@ -505,6 +508,8 @@ function runCosign(command: VerifyCommand, tag: string): CosignResult {
   try {
     const stdout = execFileSync(argv[0]!, argv.slice(1), {
       cwd: ROOT,
+      // argv[0] comes from data, so check-fixture-git-env cannot prove it is not git.
+      env: cleanEnv(),
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: COSIGN_TIMEOUT_MS,

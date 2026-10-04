@@ -4,7 +4,16 @@
  * tamper-runner's root-level runs). Registered by the root `vitest.config.mts`.
  *
  * Deletes EVERY `GIT_*` variable from the worker's environment before any test
- * file loads, so no child process a test spawns can inherit one. In a linked
+ * file loads, so no child process a test spawns can inherit one — whatever
+ * the spawn's syntax (an options variable, a computed args list, a generic
+ * wrapper, an `Object.assign` copy of `process.env`). The list is the
+ * canonical rule `isScrubbedGitEnvKey` in ./differential-tree.ts, imported,
+ * never copied; `check-fixture-git-env` fails if this file stops importing
+ * and applying it, or drops out of the root vitest config. Applies in every
+ * vitest pool (forks / threads / vmForks / vmThreads): a setup file runs in
+ * each worker before its test files, and a worker thread's `process.env` is
+ * its own copy that its children inherit — proven per pool by
+ * scripts/__tests__/git-env-structural.test.ts. In a linked
  * worktree git exports GIT_DIR=<repo>/.git/worktrees/<name> (+ GIT_PREFIX,
  * GIT_EXEC_PATH, GIT_EDITOR) into hooks; a fixture `git` that inherits it acts
  * on the REAL repository whatever its cwd — 2026-09-27 (#835) and 2026-10-02
@@ -16,9 +25,9 @@
  *   (b) THIS file — a direct `vitest` run outside the hook is safe too, and a
  *       new test that spawns git with `process.env` cannot reintroduce it;
  *   (c) each fixture-git helper passes `cleanEnv()` (scripts/lib/
- *       differential-tree.ts) anyway.
+ *       differential-tree.ts) anyway — held per spawn by check-fixture-git-env.
  * A test that needs a GIT_* variable sets it on its own child's `env`.
  */
-for (const k of Object.keys(process.env)) {
-  if (k.startsWith("GIT_")) delete process.env[k];
-}
+import { scrubGitEnvInPlace } from "./differential-tree.js";
+
+scrubGitEnvInPlace(process.env);
