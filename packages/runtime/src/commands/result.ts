@@ -89,6 +89,19 @@ function renderRetrieval(
         ...(paidNote ? { detail: `${paidNote}Do not hire again; the result is on its way.` } : {}),
         data,
       };
+    case "undetermined":
+      // One task, one body: the relay granted it and its executor was lost.
+      return {
+        summary: `Task ${id} is undetermined: the relay handed it to an executor that was then lost — it may have run. Try /result ${id} again later.`,
+        detail: `${paidNote}Do not hire again for this work. The executor's late signed result still resolves it. (${r.reason}: ${r.detail})`,
+        data,
+      };
+    case "expired":
+      return {
+        summary: `Task ${id} expired before any executor took it — it did not run.`,
+        detail: `${paidNote}(${r.reason}: ${r.detail})`,
+        data,
+      };
     case "failed":
       return {
         summary: `Task ${id}: the relay marked it failed without a signed result.`,

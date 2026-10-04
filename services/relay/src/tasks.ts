@@ -85,8 +85,8 @@ import {
 import type { TaskRouter } from "./task-routing.js";
 import { getBondBackingAdapter } from "./bond-backing-adapter.js";
 import { getArchivedReceiptForKeyOwner } from "./receipts-store.js";
-import { admitReceipt } from "./task-answer.js";
-import type { AnswerQueue } from "./task-answer.js";
+import { admitReceipt, verifyAnswerSignature } from "./task-answer.js";
+import type { AnswerDeps, AnswerQueue } from "./task-answer.js";
 import type { AnswerRefusal } from "./task-answer.js";
 import {
   MAX_SETTLEMENT_DEPTH,
@@ -98,6 +98,7 @@ import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
 import {
   TaskClaims,
+  claimBindsSignedAnswerer,
   claimRefusesAnswer,
   expiredOf,
   grantToSubmitter,
@@ -819,6 +820,40 @@ export function workerKeyFor(db: DatabaseDriver, motebitId: string): string | nu
 //
 // Returns { verified: true } on success, { verified: false, reason } on failure.
 // Callers decide how to surface the failure (HTTP 403, log warning, etc.).
+/**
+ * The answer chokepoint's deps for the LOCAL doors (the result POST and the
+ * MCP forward's callback): the receipt verifier and main's registry heal.
+ */
+function localAnswerDeps(deps: {
+  moteDb: MotebitDatabase;
+  identityManager: IdentityManager;
+  taskQueue: Map<string, TaskQueueEntry> & AnswerQueue;
+  reconcileKeyConnections: ReconcileKeyConnections;
+}): AnswerDeps {
+  const { moteDb } = deps;
+  return {
+    db: moteDb.db,
+    identityManager: deps.identityManager,
+    taskQueue: deps.taskQueue,
+    verifyReceipt: (r, keyHex) => verifyExecutionReceipt(r, hexToBytes(keyHex)),
+    // Main's heal (#758 review): the registry is departure's and the
+    // signature readers' INPUT for an identity with no holder. The
+    // chokepoint calls this only for an embedded key that is ALREADY a
+    // registered device of the signer and that the receipt verified under
+    // — never an arbitrary self-signed key (a cross-identity hijack).
+    // Legitimate rotation is the /rotate-key succession route.
+    healRegistryKey: (signer, keyHex) => {
+      moteDb.db
+        .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+        .run(keyHex, signer);
+      // The registry key is the fallback a socket with no device row was
+      // admitted under; a socket the previous value admitted is no longer
+      // admitted and is closed (#776).
+      deps.reconcileKeyConnections(signer);
+    },
+  };
+}
+
 export async function handleReceiptIngestion(
   receipt: ExecutionReceipt,
   taskId: string,
@@ -878,27 +913,7 @@ export async function handleReceiptIngestion(
   let credential_id: string | null = null;
   let pubKeyHex = "";
   const admission = await admitReceipt(
-    {
-      db: moteDb.db,
-      identityManager,
-      taskQueue,
-      verifyReceipt: (r, keyHex) => verifyExecutionReceipt(r, hexToBytes(keyHex)),
-      // Main's heal (#758 review): the registry is departure's and the
-      // signature readers' INPUT for an identity with no holder. The
-      // chokepoint calls this only for an embedded key that is ALREADY a
-      // registered device of the signer and that the receipt verified under
-      // — never an arbitrary self-signed key (a cross-identity hijack).
-      // Legitimate rotation is the /rotate-key succession route.
-      healRegistryKey: (signer, keyHex) => {
-        moteDb.db
-          .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
-          .run(keyHex, signer);
-        // The registry key is the fallback a socket with no device row was
-        // admitted under; a socket the previous value admitted is no longer
-        // admitted and is closed (#776).
-        deps.reconcileKeyConnections(signer);
-      },
-    },
+    localAnswerDeps(deps),
     taskId,
     receipt,
     { kind: door },
@@ -5007,15 +5022,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       );
     }
 
-    // One task, one body (task-claim.ts): while a device holds the task's
-    // claim — running it, or lost and undetermined — no other device of the
-    // identity answers it. The claimer's own late result is accepted: it
-    // resolves the uncertainty.
-    if (claimRefusesAnswer(entry, presentingDid)) {
+    const claimedByOther = (answeringDid: string | undefined, via: "token" | "signed") => {
       logger.warn("task.result_claimed_by_other", {
         correlationId: taskId,
         motebitId,
-        presentingDid,
+        presentingDid: answeringDid,
+        via,
         claimedBy: entry.claim_lease?.device_id,
       });
       return c.json(
@@ -5026,7 +5038,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         },
         409,
       );
-    }
+    };
+
+    // One task, one body (task-claim.ts): while a device holds the task's
+    // claim — running it, or lost and undetermined — no other device of the
+    // identity answers it. The claimer's own late result is accepted: it
+    // resolves the uncertainty.
+    if (claimRefusesAnswer(entry, presentingDid)) return claimedByOther(presentingDid, "token");
 
     const rawBody: unknown = await c.req.json().catch(() => null);
     const parsedReceipt = ExecutionReceiptSchema.safeParse(rawBody);
@@ -5034,6 +5052,28 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       return c.json({ error: parsedReceipt.error.flatten() }, 400);
     }
     const receipt = parsedReceipt.data as unknown as ExecutionReceipt;
+
+    // Under the master token the presentation names no device (the CLI
+    // daemon and desktop send it first when one is configured), so the
+    // receipt's SIGNED device_id names who answers — read only after its
+    // signature verifies, exactly as the chokepoint verifies it. A
+    // master-token answer to a task no body claimed — or claimed under an id
+    // the relay made, which no receipt can carry — is not refused here.
+    if (presentingDid == null && claimBindsSignedAnswerer(entry)) {
+      const sig = await verifyAnswerSignature(localAnswerDeps(ingestionDeps), taskId, receipt, {
+        kind: "result_post",
+      });
+      if ("refusal" in sig) {
+        throw new AuthorizationError(
+          "AUTHZ_INVALID_CREDENTIALS",
+          sig.refusal === "no_key"
+            ? `Receipt verification failed: no public key on file for agent ${receipt.motebit_id}`
+            : "Receipt verification failed: invalid Ed25519 signature",
+        );
+      }
+      const signedDid = typeof receipt.device_id === "string" ? receipt.device_id : "";
+      if (claimRefusesAnswer(entry, signedDid)) return claimedByOther(signedDid, "signed");
+    }
 
     // Reject stale receipts — completed_at must be within 1 hour of submitted_at
     if (receipt.completed_at && entry.task.submitted_at) {

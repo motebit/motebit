@@ -336,6 +336,23 @@ async function verifySignature(
 }
 
 /**
+ * The chokepoint's signature step alone (key resolution + verify, the
+ * local doors' heal included), for a door that must read a SIGNED field
+ * before it may hand the receipt to `answerTask` — the result POST under the
+ * master token reads the signed `device_id` against the task's claim
+ * (task-claim.ts `claimRefusesAnswer`). Never writes the entry; `answerTask`
+ * verifies again before any write.
+ */
+export async function verifyAnswerSignature(
+  deps: AnswerDeps,
+  taskId: string,
+  receipt: ExecutionReceipt,
+  door: AnswerDoor,
+): Promise<{ refusal: AnswerRefusal } | { key: string }> {
+  return verifySignature(deps, taskId, receipt, door);
+}
+
+/**
  * Decide — and, when it takes, write — the answer of `taskId`. See the
  * module comment for the order. `retainMs` extends the entry's life so the
  * answer can be read (the POST door keeps paid results longer).

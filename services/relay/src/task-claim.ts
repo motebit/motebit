@@ -31,7 +31,11 @@
  *
  * The claim also names who may answer: a result POSTed under a device token
  * of any device other than the claimer — whether or not the claiming
- * socket's device id was verified — is refused (`claimRefusesAnswer`). The
+ * socket's device id was verified — is refused (`claimRefusesAnswer`). A
+ * result POSTed under the master token names no device, so the receipt's
+ * SIGNED `device_id` (verified first) is compared instead: a non-claimer's
+ * is refused (the CLI daemon and desktop send the master token first when
+ * one is configured). The
  * answer itself stays `answerTask`'s (task-answer.ts) — write-once, settled
  * once.
  *
@@ -96,6 +100,12 @@ export interface TaskClaimLease {
   /** The device id was proven by the token that admitted the socket. */
   device_verified: boolean;
   /**
+   * The relay MADE the device id (the claiming socket declared none): it
+   * names no device a receipt can carry. Absent = declared (or an entry
+   * written before this existed).
+   */
+  device_generated?: true;
+  /**
    * The device the claiming socket's token proved, when that differs from
    * an unverified declared `device_id` — it may answer too.
    */
@@ -137,7 +147,7 @@ export type ClaimVerdict =
   { granted: true; lease_ms?: number } | { granted: false; reason: string };
 
 type ClaimingPeer = Pick<ConnectedDevice, "deviceId" | "deviceIdVerified" | "capabilities"> &
-  Partial<Pick<ConnectedDevice, "authenticatedDid">>;
+  Partial<Pick<ConnectedDevice, "authenticatedDid" | "deviceIdDeclared">>;
 
 interface Logger {
   info(event: string, ctx: Record<string, unknown>): void;
@@ -207,6 +217,7 @@ export class TaskClaims {
       presenter: "ws",
       device_id: peer.deviceId,
       device_verified: peer.deviceIdVerified === true,
+      ...(peer.deviceIdDeclared === false ? { device_generated: true as const } : {}),
       ...(peer.authenticatedDid != null && peer.authenticatedDid !== peer.deviceId
         ? { authenticated_did: peer.authenticatedDid }
         : {}),
@@ -479,17 +490,39 @@ export function grantToSubmitter(entry: TaskQueueEntry, submitter: string | unde
 }
 
 /**
- * Whether the task's claim refuses an answer presented under device `did`:
- * true whenever a device holds the claim and `did` is any other device —
+ * Whether a body's claim (a `ws` grant) names the device that may answer the
+ * task. A forward's or a submitter's grant names none: it is answered
+ * through the routed executor's receipt (`isRoutedExecutor`).
+ */
+export function claimNamesAnswerer(entry: TaskQueueEntry): boolean {
+  const lease = entry.claim_lease;
+  if (lease == null) return false;
+  return lease.presenter == null || lease.presenter === "ws";
+}
+
+/**
+ * Whether a master-token answer's SIGNED `device_id` is compared against the
+ * claim: only when a body's claim names a device a receipt can carry — one
+ * it declared or proved. A claimer whose id the relay made could never
+ * match any receipt, so its master-token answer keeps the behaviour before
+ * the signed comparison (stated limit, docs/doctrine/task-admission.md).
+ */
+export function claimBindsSignedAnswerer(entry: TaskQueueEntry): boolean {
+  return claimNamesAnswerer(entry) && entry.claim_lease?.device_generated !== true;
+}
+
+/**
+ * Whether the task's claim refuses an answer from device `did`: true
+ * whenever a device holds the claim and `did` is any other device —
  * whether or not the claiming socket's device id was verified (an
- * unverified claim also admits the device its token proved). A
- * master-token presentation (no `did`) is not refused here.
+ * unverified claim also admits the device its token proved). `did` is the
+ * presenting device token's `did`; under the master token it is the
+ * receipt's SIGNED `device_id`, read only after its signature verified
+ * (the result door). No `did` at all is not refused here.
  */
 export function claimRefusesAnswer(entry: TaskQueueEntry, did: string | undefined): boolean {
   const lease = entry.claim_lease;
   if (lease == null || did == null) return false;
-  // Only a body's claim names a device; a forward's or a submitter's grant
-  // is answered through the routed executor's receipt (`isRoutedExecutor`).
-  if (lease.presenter != null && lease.presenter !== "ws") return false;
+  if (!claimNamesAnswerer(entry)) return false;
   return did !== lease.device_id && did !== lease.authenticated_did;
 }

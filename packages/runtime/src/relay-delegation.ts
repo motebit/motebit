@@ -197,6 +197,23 @@ export type DelegationErrorCode =
   | "timeout"
   /** In-flight. Relay reported the agent failed mid-task. */
   | "agent_failed"
+  /**
+   * In-flight (one task, one body). The relay GRANTED the task to an
+   * executor and that executor was lost, or never answered (`undetermined`
+   * on the task read, reason in `relayVerdict`). The work MAY have run, may
+   * still be running, or never started — the relay itself does not know,
+   * and never hands the task to anyone else. Not a failure and not a
+   * timeout: the caller must NOT hire again for this work (a second paid
+   * hire for the same intent); the executor's late signed result still
+   * resolves the task, so re-read `relayVerdict.taskId` later.
+   */
+  | "undetermined"
+  /**
+   * In-flight (one task, one body). The task outlived its TTL with nothing
+   * ever granted it (`expired` on the task read, reason `never_claimed`):
+   * no executor took it, so it did NOT run and never will. Conclusive.
+   */
+  | "task_expired"
   /** Result-time. Receipt body missing required fields. */
   | "malformed_receipt"
   /** Unclassified. Used when the relay returns an unexpected shape. */
@@ -269,6 +286,11 @@ export interface DelegationError {
   ledgerWriteFailed?: true;
   /** #885: the human-readable statement of the two fields above. */
   notice?: string;
+  /**
+   * Set ONLY on `undetermined` / `task_expired`: the relay's own verdict on
+   * the task, as its read reported it.
+   */
+  relayVerdict?: { taskId: string; reason: string; detail: string };
 }
 
 /**
@@ -580,9 +602,22 @@ type TaskQueryOutcome =
   | { kind: "receipt"; receipt: ExecutionReceipt }
   | { kind: "failed" }
   | { kind: "pending"; taskStatus: string }
+  | { kind: "undetermined"; reason: string; detail: string }
+  | { kind: "expired"; reason: string; detail: string }
   | { kind: "http_error"; status: number; body: string }
   | { kind: "aborted" }
   | { kind: "network_error"; message: string };
+
+/** The relay's `undetermined` / `expired` verdict object, read defensively. */
+function relayVerdictOf(v: { reason?: unknown; detail?: unknown }): {
+  reason: string;
+  detail: string;
+} {
+  return {
+    reason: typeof v.reason === "string" ? v.reason : "unknown",
+    detail: typeof v.detail === "string" ? v.detail : "",
+  };
+}
 
 async function queryTaskOnce(args: {
   syncUrl: string;
@@ -602,12 +637,22 @@ async function queryTaskOnce(args: {
     const data = (await resp.json()) as {
       task: { status: string };
       receipt: ExecutionReceipt | null;
+      undetermined?: { reason?: unknown; detail?: unknown } | null;
+      expired?: { reason?: unknown; detail?: unknown } | null;
     };
     // Agent-failed status arrives either as receipt.status === "failed" (with
     // a signed receipt — preferred) or as task.status === "failed" without
     // one. Both are terminal for a single invocation — no retry.
     if (data.receipt != null) return { kind: "receipt", receipt: data.receipt };
     if (data.task.status === "failed") return { kind: "failed" };
+    // One task, one body: the relay's own verdicts on a task with no
+    // receipt — granted and its executor lost (`undetermined`: it may have
+    // run), or never granted before its TTL (`expired`: it did not run).
+    // Neither is "pending".
+    if (data.undetermined != null) {
+      return { kind: "undetermined", ...relayVerdictOf(data.undetermined) };
+    }
+    if (data.expired != null) return { kind: "expired", ...relayVerdictOf(data.expired) };
     return { kind: "pending", taskStatus: data.task.status };
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "AbortError") return { kind: "aborted" };
@@ -673,6 +718,25 @@ async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResul
         };
       case "aborted":
         return { ok: false, error: { code: "timeout", message: "Aborted mid-poll" } };
+      case "undetermined":
+        // The relay's verdict, not a timeout: stop polling now.
+        return {
+          ok: false,
+          error: {
+            code: "undetermined",
+            message: `Task ${args.taskId} is undetermined at the relay (${outcome.reason}): ${outcome.detail}`,
+            relayVerdict: { taskId: args.taskId, reason: outcome.reason, detail: outcome.detail },
+          },
+        };
+      case "expired":
+        return {
+          ok: false,
+          error: {
+            code: "task_expired",
+            message: `Task ${args.taskId} expired at the relay without ever being claimed (${outcome.reason}): ${outcome.detail}`,
+            relayVerdict: { taskId: args.taskId, reason: outcome.reason, detail: outcome.detail },
+          },
+        };
       case "http_error":
         args.logger.warn("delegation poll failed", {
           taskId: args.taskId,
@@ -703,6 +767,11 @@ async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResul
  * - `delivered` — the worker's signed receipt is held by the relay (its own
  *   `status` may still be `failed`: a signed failure is a delivered result).
  * - `pending` — the task exists and has no receipt yet; ask again later.
+ * - `undetermined` — the relay granted the task and its executor was lost
+ *   or never answered: the work MAY have run. Never hire again for it; the
+ *   executor's late signed result still resolves it (ask again later).
+ * - `expired` — the task outlived its TTL with nothing ever granted it: it
+ *   did not run and never will.
  * - `failed` — the relay marked the task failed without a signed receipt.
  * - `not_found` — HTTP 404: the relay no longer holds the task (reaped
  *   after its retention window) or the id is wrong. NOT proof the result
@@ -723,6 +792,8 @@ export type TaskRetrieval =
   | { status: "not_admitted"; taskId: string }
   | { status: "delivered"; taskId: string; receipt: ExecutionReceipt }
   | { status: "pending"; taskId: string; taskStatus: string }
+  | { status: "undetermined"; taskId: string; reason: string; detail: string }
+  | { status: "expired"; taskId: string; reason: string; detail: string }
   | { status: "failed"; taskId: string }
   | { status: "not_found"; taskId: string; message: string }
   | { status: "auth_error"; taskId: string; httpStatus?: number; message: string }
@@ -816,6 +887,10 @@ export async function retrieveDelegationResult(
       return { status: "failed", taskId };
     case "pending":
       return { status: "pending", taskId, taskStatus: outcome.taskStatus };
+    case "undetermined":
+      return { status: "undetermined", taskId, reason: outcome.reason, detail: outcome.detail };
+    case "expired":
+      return { status: "expired", taskId, reason: outcome.reason, detail: outcome.detail };
     case "http_error": {
       const message = classifyRelayError(outcome.status, outcome.body).message;
       if (outcome.status === 404) return { status: "not_found", taskId, message };
