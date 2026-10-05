@@ -7,19 +7,21 @@ This file is a thin adapter. It adds Motebit's specifics and points at existing 
 
 ## Authority, in order
 
-| #   | Source                                                                                                                                  | Role                                                                          |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| 1   | [`CLAUDE.md`](../../CLAUDE.md) (top) + [`DOCTRINE.md`](../../DOCTRINE.md)                                                               | Thesis + the derivation chain everything traces to                            |
-| 2   | [`CONSTITUTION.md`](../../CONSTITUTION.md)                                                                                              | One being, surfaces, consent, open-standard / proprietary-product split       |
-| 3   | [`protocol-primacy`](../doctrine/protocol-primacy.md)                                                                                   | Protocol with a company on top; the protocol-first audit                      |
-| 4   | [`clearing-house-not-thin-waist`](../doctrine/clearing-house-not-thin-waist.md)                                                         | Relay/settlement is the business on top of the protocol — accepted, not drift |
-| 5   | [`receipts-unified`](../doctrine/receipts-unified.md)                                                                                   | One receipt family, one verification path                                     |
-| 6   | [`atom-loop-occupant`](../doctrine/atom-loop-occupant.md)                                                                               | The generating predicate; its own conservation audit                          |
-| 7   | [`agentic-era-engineering`](../doctrine/agentic-era-engineering.md)                                                                     | Coherence as the scarce resource; gates teach                                 |
-| 8   | [`composition-preserves-enforcement`](../doctrine/composition-preserves-enforcement.md)                                                 | Guarantees must survive composition into the deployed system                  |
-| 9   | Remaining [`docs/doctrine/`](../doctrine/) (indexed in `CLAUDE.md`) + [`docs/proposals/`](../proposals/) (no separate ADR index exists) | Accepted and proposed decisions                                               |
+| #   | Source                                                                                                                                  | Role                                                                                    |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 1   | [`CLAUDE.md`](../../CLAUDE.md) (top) + [`DOCTRINE.md`](../../DOCTRINE.md)                                                               | Thesis + the derivation chain everything traces to                                      |
+| 2   | [`CONSTITUTION.md`](../../CONSTITUTION.md)                                                                                              | One being, surfaces, consent, open-standard / proprietary-product split                 |
+| 3   | [`protocol-primacy`](../doctrine/protocol-primacy.md)                                                                                   | Protocol with a company on top; the protocol-first audit                                |
+| 4   | [`clearing-house-not-thin-waist`](../doctrine/clearing-house-not-thin-waist.md)                                                         | Relay/settlement is the business on top of the protocol — the responsibility is settled |
+| 5   | [`receipts-unified`](../doctrine/receipts-unified.md)                                                                                   | One receipt family, one verification path                                               |
+| 6   | [`atom-loop-occupant`](../doctrine/atom-loop-occupant.md)                                                                               | The generating predicate; its own conservation audit                                    |
+| 7   | [`agentic-era-engineering`](../doctrine/agentic-era-engineering.md)                                                                     | Coherence as the scarce resource; gates teach                                           |
+| 8   | [`composition-preserves-enforcement`](../doctrine/composition-preserves-enforcement.md)                                                 | Guarantees must survive composition into the deployed system                            |
+| 9   | Remaining [`docs/doctrine/`](../doctrine/) (indexed in `CLAUDE.md`) + [`docs/proposals/`](../proposals/) (no separate ADR index exists) | Accepted and proposed decisions                                                         |
 
 Code and tests are evidence of what exists; they never outrank the thesis or accepted doctrine. A cold reconstruction is still performed first, then reconciled against this table. Conflicts are marked **UNCERTAIN** for the founder, never silently resolved.
+
+An accepted decision settles a **responsibility** (whether Motebit owns it), never its **implementation**. Do not re-litigate whether Motebit has a role that doctrine already assigns. Do audit how the repo realizes it: the correct boundary, and no more machinery than the responsibility needs.
 
 ## Product loop
 
@@ -27,7 +29,7 @@ Stated in [`CLAUDE.md`](../../CLAUDE.md) — "The three things no one else is bu
 
 ## Layer taxonomy
 
-Fixed across audits for comparability. Every workspace package (`pnpm-workspace.yaml`: `packages/*`, `apps/*`, `services/*`) lands in exactly one layer; tentative placements are marked `(?)`.
+Fixed across audits for comparability. Every workspace package (`pnpm-workspace.yaml`: `packages/*`, `apps/*`, `services/*`) has a **primary ownership layer**. Packages can be legitimately cross-cutting, so each audit record lists cross-layer dependencies explicitly; the taxonomy must not hide the coupling the audit exists to find. Where ownership itself is unclear, the package is **UNCERTAIN** (tentative placements are marked `(?)`).
 
 | Layer                                          | Paths                                                                                                                                                                                                                                                                                                           |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -63,6 +65,7 @@ In addition to the procedure's questions:
 - Layer audits are read-only. A whole-system synthesis pass (Layer 7) follows them.
 - Every consequential MOVE / EXTRACT / DELETE / SIMPLIFY requires a separate cold **DEFENDER** pass arguing the strongest preservation case before acceptance (procedure step 5).
 - Agreement between agents is judgment, not guarantee. Label every finding as judgment or deterministic evidence.
+- The canonical procedure is not reachable from cloud lanes (`~/src/standards` has no remote). Every audit lane is given the exact v1.0 text verbatim in its brief.
 
 ## Evidence sources
 
@@ -79,7 +82,14 @@ Before a major architectural phase, or a material change to the protocol, author
 
 ## Records
 
-Naming: `docs/audits/YYYY-MM-DD-<scope>.md`.
+Naming: `docs/audits/YYYY-MM-DD-<scope>.md`. Every record opens with its provenance. A record that does not name the procedure copy it used makes no claim of compliance with v1.0.
+
+```text
+Procedure: Repo Constitutional Audit v1.0
+Canonical commit: c6ce214
+Execution copy: procedure text supplied verbatim in the audit brief
+Evidence boundary: <motebit commit SHA>
+```
 
 | Date | Record | Procedure | Commit |
 | ---- | ------ | --------- | ------ |
