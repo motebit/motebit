@@ -922,12 +922,24 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-prepush-subset",
     proves:
-      "flags CI's `check` job narrowing `turbo run test:coverage` with a --filter — the change that would make a dependent's failing test (skipped by the fast pre-push by design) CI-invisible too, i.e. untested anywhere",
+      "flags CI's sharded `test-coverage` leg narrowed to one fixed shard instead of its matrix value — the change that would make a dependent's failing test (skipped by the fast pre-push by design) CI-invisible too, i.e. untested anywhere",
     perturb: () =>
       mutateFile(".github/workflows/ci.yml", (src) =>
         src.replace(
-          "run: pnpm exec turbo run test:coverage --concurrency=4\n",
-          `run: pnpm exec turbo run test:coverage --concurrency=4 --filter=[origin/main] # ${PROBE_PREFIX}injected\n`,
+          "run: pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json\n",
+          `run: pnpm test:coverage:shard --shard 1/3 --manifest coverage/test-coverage-shard.json # ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags a package with a test:coverage script that no CI shard runs — here packages/protocol losing its weight in scripts/test-coverage-shards.ts, so the computed assignment has nowhere to put it and CI's sharded suite would silently stop being every suite",
+    perturb: () =>
+      mutateFile("scripts/test-coverage-shards.ts", (src) =>
+        src.replace(
+          /\n  "packages\/protocol": \d+,\n/,
+          `\n  // ${PROBE_PREFIX}injected: packages/protocol weight dropped\n`,
         ),
       ),
   },
@@ -938,8 +950,8 @@ export async function probeLeak(): Promise<boolean> {
     perturb: () =>
       mutateFile(".github/workflows/ci.yml", (src) =>
         src.replace(
-          "run: pnpm exec turbo run test:coverage --concurrency=4\n",
-          `run: pnpm exec turbo run test:coverage --concurrency=4\n        continue-on-error: true # ${PROBE_PREFIX}injected\n`,
+          "run: pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json\n",
+          `run: pnpm test:coverage:shard --shard \${{ matrix.shard }} --manifest coverage/test-coverage-shard.json\n        continue-on-error: true # ${PROBE_PREFIX}injected\n`,
         ),
       ),
   },

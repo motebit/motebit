@@ -210,7 +210,8 @@
     "version-packages": "changeset version",
     "release": "changeset publish",
     "prepare": "husky",
-    "p2p-staging-proof": "tsx scripts/p2p-cold-start-staging-proof.ts"
+    "p2p-staging-proof": "tsx scripts/p2p-cold-start-staging-proof.ts",
+    "test:coverage:shard": "npx tsx scripts/test-coverage-shards.ts"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",

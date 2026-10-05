@@ -7,8 +7,10 @@
  * split is safe only while everything the hook runs has a CI counterpart that
  * runs AT LEAST AS WIDE, on every push to main. The trade-off that makes the
  * hook fast — a DEPENDENT's failing test does not block locally — is only
- * acceptable because CI's `check` job runs `turbo run test:coverage`
- * unfiltered.
+ * acceptable because CI runs `turbo run test:coverage` over EVERY package:
+ * unfiltered until 2026-10-05, now as the `test-coverage` shard matrix whose
+ * union this gate re-proves is every package with a test:coverage script,
+ * each exactly once (shardViolations), under the fail-closed `check` verdict.
  *
  * The first version of this gate (2026-09-30) matched `pnpm …` text with
  * regexes and accepted anything it did not recognise as "not a check"; a
@@ -40,7 +42,8 @@
  *     whose `if:`/`needs:` chain is exactly the pinned one (and whose needs
  *     run unconditionally); no step in those jobs writes $GITHUB_ENV /
  *     $GITHUB_PATH or uses an action outside the pinned set;
- *   - EVERY step of every counterpart job (check, format, the sharded
+ *   - EVERY step of every counterpart job (check-static, the sharded
+ *     test-coverage + its fail-closed `check` verdict job, format, the sharded
  *     gate-effectiveness-shard + gate-self-tests, the fail-closed
  *     gate-effectiveness verdict job, changes) equals CI_JOB_STEPS exactly, in order — an added, removed or
  *     changed step (another checkout `ref:`, a `rm -rf` of the tests, an
@@ -81,6 +84,12 @@ import { parse as parseYaml } from "yaml";
 import { cleanEnv } from "./lib/differential-tree.js";
 import { failWithRepair } from "./lib/gate-report.js";
 import { ShParseError, parseSh, walk, type Program, type Word } from "./lib/posix-sh.js";
+import {
+  assignShards,
+  coveragePackages,
+  turboArgs,
+  verifyPartition,
+} from "./test-coverage-shards.js";
 
 const ROOT = process.cwd();
 const HOOK = ".husky/pre-push";
@@ -290,16 +299,27 @@ interface CiForm {
   job: string;
   run: string;
 }
+/** The test:coverage counterpart: one leg of the sharded suite. */
+const SHARD_RUN =
+  "pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json";
+
 /** The CI counterpart of each task key: a step whose `run` is exactly this. */
 export const CI_FORMS: Record<Key, CiForm> = {
-  build: { job: "check", run: "pnpm build" },
-  audit: { job: "check", run: "pnpm audit --prod --audit-level=high --ignore-registry-errors" },
-  check: { job: "check", run: "pnpm check" },
-  typecheck: { job: "check", run: "pnpm typecheck" },
-  lint: { job: "check", run: "pnpm lint" },
+  build: { job: "check-static", run: "pnpm build" },
+  audit: {
+    job: "check-static",
+    run: "pnpm audit --prod --audit-level=high --ignore-registry-errors",
+  },
+  check: { job: "check-static", run: "pnpm check" },
+  typecheck: { job: "check-static", run: "pnpm typecheck" },
+  lint: { job: "check-static", run: "pnpm lint" },
   // test:coverage runs every suite AND the thresholds — a superset of `test`.
-  test: { job: "check", run: "pnpm exec turbo run test:coverage --concurrency=4" },
-  "test:coverage": { job: "check", run: "pnpm exec turbo run test:coverage --concurrency=4" },
+  // Sharded (2026-10-05): the union of the matrix legs is every package with a
+  // test:coverage script, each exactly once — the pinned strategy below must
+  // list every shard 1/N..N/N, and evaluateCi re-proves the partition
+  // scripts/test-coverage-shards.ts computes for that N (shardViolations).
+  test: { job: "test-coverage", run: SHARD_RUN },
+  "test:coverage": { job: "test-coverage", run: SHARD_RUN },
   format: { job: "format", run: "pnpm format:check" },
   "test:gates": { job: "gate-self-tests", run: "pnpm test:gates" },
   // Sharded: the union of the matrix legs is the full probe set — the pinned
@@ -317,7 +337,16 @@ export const CI_JOBS: Record<
   string,
   { if?: string; needs?: string | string[]; strategy?: Record<string, unknown> }
 > = {
-  check: {},
+  "check-static": {},
+  "test-coverage": {
+    strategy: { "fail-fast": false, matrix: { shard: ["1/3", "2/3", "3/3"] } },
+  },
+  // The required-check verdict: runs whatever the legs concluded and fails
+  // closed on a cancelled / skipped / failed one (its pinned steps below).
+  check: {
+    needs: ["check-static", "test-coverage"],
+    if: "always()",
+  },
   format: {},
   "gate-effectiveness-shard": {
     needs: "changes",
@@ -349,6 +378,35 @@ export function matrixIsCompleteShardList(strategy: unknown): boolean {
   return list.every((v, i) => v === `${i + 1}/${list.length}`);
 }
 /**
+ * The sharded test:coverage counterpart runs every suite the unfiltered
+ * `turbo run test:coverage` did only if, for the pinned N, the assignment
+ * scripts/test-coverage-shards.ts computes puts EVERY package with a
+ * test:coverage script in exactly one shard, and each shard's turbo command is
+ * the old unfiltered form plus exactly one `--filter=./<dir>` per package of
+ * that shard (no other flag that could narrow or skip it).
+ */
+export function shardViolations(
+  strategy: unknown,
+  packageScripts: Record<string, Record<string, string>>,
+): string[] {
+  if (!matrixIsCompleteShardList(strategy)) return []; // reported by the job rules
+  const n = (strategy as { matrix: { shard: string[] } }).matrix.shard.length;
+  const pkgs = coveragePackages(packageScripts);
+  const a = assignShards(pkgs, n);
+  if (a.violations.length > 0) return a.violations.map((v) => `${CI} test-coverage shards: ${v}`);
+  const v = verifyPartition(pkgs, a.shards).map((x) => `${CI} test-coverage shards: ${x}`);
+  a.shards.forEach((dirs, i) => {
+    const got = turboArgs(dirs);
+    const want = ["run", "test:coverage", "--concurrency=4", ...dirs.map((d) => `--filter=./${d}`)];
+    if (JSON.stringify(got) !== JSON.stringify(want))
+      v.push(
+        `${CI} test-coverage shard ${i + 1}/${n} runs \`turbo ${got.join(" ")}\`, not the unfiltered form filtered to its packages (\`turbo ${want.join(" ")}\`)`,
+      );
+  });
+  return v;
+}
+
+/**
  * EVERY step of every counterpart job, exactly (name, uses, with, run, if,
  * env, continue-on-error, id — the whole step object, in order). Deny by
  * default (2026-10-01 cold review, B1): a step inserted before a counterpart
@@ -358,7 +416,7 @@ export function matrixIsCompleteShardList(strategy: unknown): boolean {
  * deliberate edit to this list, reviewed against the pre-push ⊆ CI claim.
  */
 export const CI_JOB_STEPS: Record<string, Step[]> = {
-  check: [
+  "check-static": [
     {
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
     },
@@ -413,8 +471,40 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
       run: "pnpm run check-unused",
     },
     {
-      name: "Test with coverage",
-      run: "pnpm exec turbo run test:coverage --concurrency=4",
+      name: "Upload build artifacts for E2E",
+      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      with: {
+        name: "web-build",
+        path: "apps/web/dist/",
+        "retention-days": 1,
+      },
+    },
+  ],
+  "test-coverage": [
+    {
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    },
+    {
+      uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+    },
+    {
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: {
+        "node-version": "22",
+        cache: "pnpm",
+      },
+    },
+    {
+      name: "Install dependencies",
+      run: "pnpm install --frozen-lockfile",
+    },
+    {
+      name: "Build",
+      run: "pnpm build",
+    },
+    {
+      name: "Test with coverage (this shard)",
+      run: SHARD_RUN,
     },
     {
       name: "Coverage summary",
@@ -426,18 +516,65 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
       if: "always()",
       uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       with: {
-        name: "coverage-reports",
-        path: "packages/*/coverage/\napps/*/coverage/\nservices/*/coverage/\n",
+        name: "coverage-shard-${{ strategy.job-index }}",
+        path: "coverage/\npackages/*/coverage/\napps/*/coverage/\nservices/*/coverage/\n",
         "retention-days": 14,
       },
     },
+  ],
+  check: [
     {
-      name: "Upload build artifacts for E2E",
+      name: "Fail closed unless the static job and every shard succeeded",
+      env: {
+        STATIC: "${{ needs.check-static.result }}",
+        TESTS: "${{ needs.test-coverage.result }}",
+      },
+      run: 'echo "check-static=$STATIC test-coverage=$TESTS"\nif [ "$STATIC" != "success" ] || [ "$TESTS" != "success" ]; then\n  echo "::error::check-static \'$STATIC\', test-coverage \'$TESTS\' — a cancelled, skipped or failed leg is not a pass"\n  exit 1\nfi\n',
+    },
+    {
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    },
+    {
+      uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+    },
+    {
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: {
+        "node-version": "22",
+        cache: "pnpm",
+      },
+    },
+    {
+      name: "Install dependencies",
+      run: "pnpm install --frozen-lockfile",
+    },
+    {
+      name: "Download the shards' coverage",
+      uses: "actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e",
+      with: {
+        pattern: "coverage-shard-*",
+        path: "/tmp/coverage-shards",
+      },
+    },
+    {
+      name: "Prove the shards ran every suite exactly once",
+      run: "pnpm test:coverage:shard --verify-manifests /tmp/coverage-shards",
+    },
+    {
+      name: "Merge the shards' coverage",
+      run: 'for d in /tmp/coverage-shards/*/; do cp -R "$d". .; done\n',
+    },
+    {
+      name: "Coverage summary",
+      run: 'node scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"',
+    },
+    {
+      name: "Upload coverage reports",
       uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       with: {
-        name: "web-build",
-        path: "apps/web/dist/",
-        "retention-days": 1,
+        name: "coverage-reports",
+        path: "packages/*/coverage/\napps/*/coverage/\nservices/*/coverage/\n",
+        "retention-days": 14,
       },
     },
   ],
@@ -615,6 +752,7 @@ export const ROOT_SCRIPTS: Record<string, string> = {
   "format:check": 'prettier --check "**/*.{ts,tsx,js,jsx,json,md}"',
   "test:gates": "vitest run --dir scripts/__tests__ --testTimeout=30000 --hookTimeout=30000",
   "check-gates-effective": "npx tsx scripts/check-gates-effective.ts",
+  "test:coverage:shard": "npx tsx scripts/test-coverage-shards.ts",
 };
 
 // ---------------------------------------------------------------------------
@@ -954,6 +1092,12 @@ export function evaluateCi(
       break; // the first drift is the actionable one; later indexes shift with it
     }
     if (drifted) jobOk.set(name, false);
+  }
+
+  const sharded = shardViolations(jobs["test-coverage"]?.strategy, packageScripts);
+  if (sharded.length > 0) {
+    violations.push(...sharded);
+    jobOk.set("test-coverage", false);
   }
 
   for (const key of [...keys].sort()) {

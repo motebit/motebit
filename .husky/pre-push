@@ -183,7 +183,7 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
     skip_phase "audit" "no pnpm-lock.yaml changes; CI runs it"
   fi
 
-  # Hard gates — the same `pnpm check` CI's `check` job runs. Whole-repo on
+  # Hard gates — the same `pnpm check` CI's `check-static` job runs. Whole-repo on
   # purpose: most gates are cross-file invariants a diff cannot scope.
   run_phase "gates (pnpm check)" pnpm check
 

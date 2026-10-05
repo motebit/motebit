@@ -44,8 +44,10 @@ const script =
 const BUILD = '  run_phase "build" pnpm build\n';
 const before = (id: string, line: string) => hook(id, BUILD, `${line}\n${BUILD}`);
 const CHECK = 'run_phase "gates (pnpm check)" pnpm check\n';
-const COV = "        run: pnpm exec turbo run test:coverage --concurrency=4\n";
-const TEST_STEP = "      - name: Test with coverage\n";
+const SHARD_RUN =
+  "pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json";
+const COV = `        run: ${SHARD_RUN}\n`;
+const TEST_STEP = "      - name: Test with coverage (this shard)\n";
 const SCRUB = "unset $(env | sed -n 's/^\\(GIT_[A-Za-z0-9_]*\\)=.*/\\1/p')";
 const SCRUB_LINE = `  ${SCRUB} # git-env-scrub\n`;
 
@@ -87,7 +89,7 @@ export const MUTANTS: Edit[] = [
   m(
     "R8",
     "ci: counterpart made unable to fail (|| true)",
-    ci("R8", COV, "        run: pnpm exec turbo run test:coverage --concurrency=4 || true\n"),
+    ci("R8", COV, `        run: ${SHARD_RUN} || true\n`),
   ),
   m(
     "R9",
@@ -245,12 +247,8 @@ export const MUTANTS: Edit[] = [
   ),
   m(
     "S27",
-    "ci: counterpart narrowed with --filter",
-    ci(
-      "S27",
-      COV,
-      "        run: pnpm exec turbo run test:coverage --concurrency=4 --filter=[origin/main]\n",
-    ),
+    "ci: counterpart narrowed to one fixed shard",
+    ci("S27", COV, `        run: ${SHARD_RUN.replace("${{ matrix.shard }}", "1/3")}\n`),
   ),
   m(
     "S28",
@@ -268,11 +266,11 @@ export const MUTANTS: Edit[] = [
   ),
   m(
     "S30",
-    "ci: job-level continue-on-error on check",
+    "ci: job-level continue-on-error on check-static",
     ci(
       "S30",
-      "    timeout-minutes: 30\n",
-      "    timeout-minutes: 30\n    continue-on-error: true\n",
+      "  check-static:\n    runs-on: ubuntu-latest\n",
+      "  check-static:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n",
     ),
   ),
   m(
@@ -431,7 +429,11 @@ export const MUTANTS: Edit[] = [
   m(
     "G3",
     "ci: fail-fast on (a failing leg cancels the others into 'cancelled')",
-    ci("G3", "      fail-fast: false\n", "      fail-fast: true\n"),
+    ci(
+      "G3",
+      '      fail-fast: false\n      matrix:\n        shard: ["1/4"',
+      '      fail-fast: true\n      matrix:\n        shard: ["1/4"',
+    ),
   ),
   m(
     "G4",
@@ -474,6 +476,73 @@ export const MUTANTS: Edit[] = [
     "G9",
     "ci: self-tests job no longer runs on push",
     ci("G9", "  gate-self-tests:\n", "  gate-self-tests-old:\n"),
+  ),
+  // --- the sharded test:coverage + its `check` verdict (2026-10-05) --------
+  m(
+    "T1",
+    "ci: a test-coverage shard dropped from the matrix",
+    ci("T1", 'shard: ["1/3", "2/3", "3/3"]', 'shard: ["1/3", "2/3"]'),
+  ),
+  m(
+    "T2",
+    "ci: test-coverage matrix lists a shard twice (2/3 never runs)",
+    ci("T2", 'shard: ["1/3", "2/3", "3/3"]', 'shard: ["1/3", "1/3", "3/3"]'),
+  ),
+  m(
+    "T3",
+    "ci: test-coverage fail-fast on",
+    ci(
+      "T3",
+      '      fail-fast: false\n      matrix:\n        shard: ["1/3"',
+      '      fail-fast: true\n      matrix:\n        shard: ["1/3"',
+    ),
+  ),
+  m("T4", "package: a new package with test:coverage but no shard weight (unassigned)", (i) => ({
+    ...i,
+    packageScripts: {
+      ...i.packageScripts,
+      "packages/zz-planted": { test: "vitest run", "test:coverage": "vitest run --coverage" },
+    },
+  })),
+  m(
+    "T5",
+    "ci: the check verdict no longer runs when a leg is cancelled",
+    ci(
+      "T5",
+      "    needs: [check-static, test-coverage]\n    if: always()\n",
+      "    needs: [check-static, test-coverage]\n    if: success()\n",
+    ),
+  ),
+  m(
+    "T6",
+    "ci: the check verdict stops waiting on the shards",
+    ci("T6", "    needs: [check-static, test-coverage]\n", "    needs: [check-static]\n"),
+  ),
+  m(
+    "T7",
+    "ci: the check verdict accepts a cancelled shard",
+    ci("T7", '[ "$TESTS" != "success" ]', '[ "$TESTS" = "failure" ]'),
+  ),
+  m(
+    "T8",
+    "ci: the check verdict skips the shard-manifest proof",
+    ci(
+      "T8",
+      "        run: pnpm test:coverage:shard --verify-manifests /tmp/coverage-shards\n",
+      "        run: echo skipped\n",
+    ),
+  ),
+  m(
+    "T9",
+    "root: the shard runner script pointed elsewhere",
+    script("test:coverage:shard", "echo skipped"),
+  ),
+  m("T10", "ci: the shard step drops its Build step", (i) =>
+    ci(
+      "T10",
+      "      - name: Build\n        run: pnpm build\n\n      - name: Test with coverage (this shard)\n",
+      "      - name: Test with coverage (this shard)\n",
+    )(i),
   ),
   // --- the GIT_* scrub (2026-10-02, second #835-class incident) -------------
   m("E1", "hook: the GIT_* scrub removed", hook("E1", SCRUB_LINE, "")),
@@ -530,8 +599,8 @@ export const CONTROLS: Edit[] = [
   m("K7", "ci: a comment added", ci("K7", COV, `        # a comment\n${COV}`)),
   m(
     "K8",
-    "ci: check job timeout raised",
-    ci("K8", "    timeout-minutes: 30\n", "    timeout-minutes: 40\n"),
+    "ci: check-static job timeout raised (the first timeout-minutes: 20 is check-static's)",
+    ci("K8", "    timeout-minutes: 20\n", "    timeout-minutes: 25\n"),
   ),
   m(
     "K9",
