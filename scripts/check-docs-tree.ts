@@ -297,7 +297,9 @@ function main(): void {
     apps: lsDirs(join(ROOT, "apps")),
     packages: lsDirs(join(ROOT, "packages")),
     services: lsDirs(join(ROOT, "services")),
-    specs: lsFiles(join(ROOT, "spec"), ".md"),
+    // spec/README.md is the index of the specs, not a spec (same exclusion as
+    // check-doc-counts' countSpecMd); check-spec-coverage owns its contents.
+    specs: new Set([...lsFiles(join(ROOT, "spec"), ".md")].filter((f) => f !== "README.md")),
     scripts: lsFileNamesRecursive(join(ROOT, "scripts"), ".ts"),
   };
 
