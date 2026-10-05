@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { MOTEBIT_TEST_REPORTERS } from "../../vitest.shared.js";
 
 export default defineConfig({
   plugins: [react()],
@@ -13,7 +14,14 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
+    // The shared reporters (vitest.shared.ts): CI's verdict reads the JSON
+    // results they write, so this config — not the shared factory — must
+    // emit them too.
+    reporters: MOTEBIT_TEST_REPORTERS,
     coverage: {
+      // vitest's defaults + json-summary, which the verdict compares against
+      // the thresholds below (as defineMotebitTest does).
+      reporter: ["text", "html", "clover", "json", "json-summary"],
       include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/__tests__/**", "src/**/*.d.ts", "src/test-setup.ts"],
       // Floor thresholds anchored to the first measured baseline
