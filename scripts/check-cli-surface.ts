@@ -51,10 +51,28 @@
  * Strategy:
  *   - Extract the current surface from source.
  *   - Compare to the committed baseline at `apps/cli/etc/cli-surface.json`.
- *   - Fail on any drift unless a `.changeset/*.md` declares `motebit: major`.
- *   - To intentionally change the surface: regenerate the baseline with
- *     `pnpm check-cli-surface --write` and commit the diff alongside the
- *     `motebit: major` changeset.
+ *   - Fail on ANY drift. The baseline is a lockfile of the surface: it is
+ *     refreshed (`pnpm check-cli-surface --write`) in the same PR as the
+ *     surface change, never deferred to "before publishing".
+ *   - The baseline carries `motebitMajor` — the `motebit` major whose
+ *     contract the committed surface is. `--write` stamps it: a BREAKING
+ *     diff against the previous baseline (anything removed or changed)
+ *     stamps `current major + 1`; an additive diff keeps the stamp
+ *     (adding a subcommand or flag is a minor under semver).
+ *   - A stamp ahead of the package's current major is accepted only while a
+ *     pending `.changeset/*.md` declares `motebit: major`. After
+ *     `changeset version` consumes that changeset the package major has
+ *     caught up with the stamp, so the gate stays green on the release
+ *     commit with no further action.
+ *
+ * Why not "pending major excuses drift" (the pre-2026-10 rule): that rule
+ * accepted an UNWRITTEN baseline for as long as any `motebit: major`
+ * changeset was pending, and `changeset version` deletes the changeset —
+ * so the Version Packages PR, the one commit that must be green, was the
+ * commit that went red (#739: four additive drifts absorbed by an
+ * unrelated major). The excuse depended on state the release consumes;
+ * the stamp depends only on the baseline and the package version, which
+ * the release moves together.
  *
  * Companion: check-api-surface.ts is the protocol-floor analogue. Together
  * they enforce: every `motebit@X.0` consumer has a mechanical guarantee
@@ -85,7 +103,7 @@ interface FlagSpec {
   multiple?: boolean;
 }
 
-interface CliSurface {
+export interface CliSurface {
   /** Subcommand → list of sub-subcommands (empty array if none). Keys sorted. */
   subcommands: Record<string, string[]>;
   /** Flag definitions, sorted by name for stable diffs. */
@@ -309,9 +327,27 @@ function extractSurface(): CliSurface {
   };
 }
 
-function canonicalJson(surface: CliSurface): string {
+/** The committed baseline: the surface plus the major it is the contract for. */
+export interface CliSurfaceBaseline extends CliSurface {
+  /**
+   * The `motebit` major whose contract this surface is. Stamped by `--write`
+   * (see `stampForWrite`); a value ahead of the package major requires a
+   * pending `motebit: major` changeset.
+   */
+  motebitMajor: number;
+}
+
+function canonicalJson(baseline: CliSurfaceBaseline): string {
   // Stable, prettier-compatible 2-space JSON. Keys at every level sorted.
-  return JSON.stringify(surface, null, 2) + "\n";
+  const { motebitMajor, ...surface } = baseline;
+  return JSON.stringify({ motebitMajor, ...surface }, null, 2) + "\n";
+}
+
+function currentMotebitMajor(): number {
+  const pkg = JSON.parse(readFileSync(resolve(ROOT, "apps/cli/package.json"), "utf-8")) as {
+    version: string;
+  };
+  return Number(pkg.version.split(".")[0]);
 }
 
 // ── Pending major-bump detection (escape hatch) ───────────────────────
@@ -336,7 +372,7 @@ function hasPendingMotebitMajor(): boolean {
 
 // ── Diff reporting ────────────────────────────────────────────────────
 
-interface Diff {
+export interface Diff {
   kind:
     | "subcommand-added"
     | "subcommand-removed"
@@ -352,7 +388,65 @@ interface Diff {
   detail: string;
 }
 
-function diffSurfaces(current: CliSurface, baseline: CliSurface): Diff[] {
+/** Diff kinds that break a `motebit@X` consumer: something they used is gone or different. */
+const BREAKING_KINDS: ReadonlySet<Diff["kind"]> = new Set([
+  "subcommand-removed",
+  "subsubcommand-removed",
+  "flag-removed",
+  "flag-changed",
+  "exit-code-removed",
+  "path-removed",
+]);
+
+export function isBreaking(d: Diff): boolean {
+  return BREAKING_KINDS.has(d.kind);
+}
+
+/**
+ * The `motebitMajor` stamp `--write` records. A breaking diff against the
+ * previous baseline promises the NEXT major; an additive one keeps the
+ * existing promise. Never decreases (re-running `--write` after a breaking
+ * write must not erase the promise).
+ */
+export function stampForWrite(
+  current: CliSurface,
+  previous: CliSurfaceBaseline | null,
+  pkgMajor: number,
+): number {
+  const prior = previous?.motebitMajor ?? pkgMajor;
+  if (previous === null) return prior;
+  const breaking = diffSurfaces(current, previous).some(isBreaking);
+  return breaking ? Math.max(prior, pkgMajor + 1) : prior;
+}
+
+export type SurfaceVerdict =
+  | { ok: true; note?: string }
+  | { ok: false; reason: "drift"; diffs: Diff[] }
+  | { ok: false; reason: "undeclared-major"; stamp: number; pkgMajor: number };
+
+/** Pure decision for check mode — exported for the gate's own tests. */
+export function evaluateSurface(input: {
+  current: CliSurface;
+  baseline: CliSurfaceBaseline;
+  pkgMajor: number;
+  majorPending: boolean;
+}): SurfaceVerdict {
+  const diffs = diffSurfaces(input.current, input.baseline);
+  if (diffs.length > 0) return { ok: false, reason: "drift", diffs };
+  const stamp = input.baseline.motebitMajor;
+  if (stamp > input.pkgMajor) {
+    if (input.majorPending) {
+      return {
+        ok: true,
+        note: `baseline is the motebit@${stamp} contract; pending \`motebit: major\` changeset declares it`,
+      };
+    }
+    return { ok: false, reason: "undeclared-major", stamp, pkgMajor: input.pkgMajor };
+  }
+  return { ok: true };
+}
+
+export function diffSurfaces(current: CliSurface, baseline: CliSurface): Diff[] {
   const diffs: Diff[] = [];
 
   // Top-level subcommand diff.
@@ -427,50 +521,67 @@ function main(): void {
   const writeMode = args.includes("--write");
 
   const current = extractSurface();
-  const currentJson = canonicalJson(current);
+  const pkgMajor = currentMotebitMajor();
+  const previous = existsSync(BASELINE_PATH)
+    ? (JSON.parse(readFileSync(BASELINE_PATH, "utf-8")) as CliSurfaceBaseline)
+    : null;
 
   if (writeMode) {
-    writeFileSync(BASELINE_PATH, currentJson);
+    const motebitMajor = stampForWrite(current, previous, pkgMajor);
+    writeFileSync(BASELINE_PATH, canonicalJson({ motebitMajor, ...current }));
     process.stderr.write(
-      `  ✓ check-cli-surface: wrote baseline (${Object.keys(current.subcommands).length} subcommands, ${current.flags.length} flags, ${current.exitCodes.length} exit codes, ${current.onDiskLayout.length} on-disk paths) to apps/cli/etc/cli-surface.json\n`,
+      `  ✓ check-cli-surface: wrote baseline (${Object.keys(current.subcommands).length} subcommands, ${current.flags.length} flags, ${current.exitCodes.length} exit codes, ${current.onDiskLayout.length} on-disk paths; motebitMajor ${motebitMajor}) to apps/cli/etc/cli-surface.json\n`,
     );
+    if (motebitMajor > pkgMajor) {
+      process.stderr.write(
+        `  → breaking change: the baseline is now the motebit@${motebitMajor} contract — a pending \`"motebit": major\` changeset (with ## Migration) is required.\n`,
+      );
+    }
     return;
   }
 
-  if (!existsSync(BASELINE_PATH)) {
+  if (previous === null) {
     process.stderr.write(
       `\n✗ check-cli-surface: no baseline at apps/cli/etc/cli-surface.json.\n` +
         `Run \`pnpm check-cli-surface --write\` to generate one, then commit it.\n`,
     );
     process.exit(1);
   }
-
-  const baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf-8")) as CliSurface;
-  const diffs = diffSurfaces(current, baseline);
-
-  if (diffs.length === 0) {
+  if (typeof previous.motebitMajor !== "number") {
     process.stderr.write(
-      `  ✓ check-cli-surface: ${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), ${current.exitCodes.length} exit code(s), ${current.onDiskLayout.length} on-disk path(s), all match baseline.\n`,
+      `\n✗ check-cli-surface: apps/cli/etc/cli-surface.json has no \`motebitMajor\` stamp.\n` +
+        `Run \`pnpm check-cli-surface --write\` to stamp it, then commit it.\n`,
     );
+    process.exit(1);
+  }
+
+  const verdict = evaluateSurface({
+    current,
+    baseline: previous,
+    pkgMajor,
+    majorPending: hasPendingMotebitMajor(),
+  });
+  const counts = `${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), ${current.exitCodes.length} exit code(s), ${current.onDiskLayout.length} on-disk path(s)`;
+
+  if (verdict.ok) {
+    process.stderr.write(
+      `  ✓ check-cli-surface: ${counts}, all match baseline (motebit@${previous.motebitMajor} contract; package at major ${pkgMajor}).\n`,
+    );
+    if (verdict.note) process.stderr.write(`    ${verdict.note}\n`);
     return;
   }
 
-  // Surface changed. Accept iff a major bump is pending — else fail with
-  // the diff named.
-  const majorPending = hasPendingMotebitMajor();
-  if (majorPending) {
+  if (verdict.reason === "undeclared-major") {
     process.stderr.write(
-      `  ⚠ check-cli-surface: ${diffs.length} surface change(s) detected, accepted by pending \`motebit: major\` changeset.\n`,
+      `\n✗ check-cli-surface: apps/cli/etc/cli-surface.json is stamped as the motebit@${verdict.stamp} contract ` +
+        `(a breaking surface change), but \`motebit\` is at major ${verdict.pkgMajor} and no pending changeset declares \`"motebit": major\`.\n\n` +
+        `Add a \`"motebit": major\` changeset with a \`## Migration\` section naming the break, ` +
+        `or restore the removed/changed surface and re-run \`pnpm check-cli-surface --write\`.\n`,
     );
-    for (const d of diffs) {
-      process.stderr.write(`    ${d.kind}: ${d.detail}\n`);
-    }
-    process.stderr.write(
-      `  → Run \`pnpm check-cli-surface --write\` to refresh the baseline before publishing.\n`,
-    );
-    return;
+    process.exit(1);
   }
 
+  const diffs = verdict.diffs;
   process.stderr.write(
     `\n✗ check-cli-surface: ${diffs.length} drift(s) from baseline at apps/cli/etc/cli-surface.json.\n\n`,
   );
@@ -479,16 +590,21 @@ function main(): void {
     (grouped[d.kind] = grouped[d.kind] ?? []).push(d);
   }
   for (const [kind, items] of Object.entries(grouped)) {
-    process.stderr.write(`  ${kind}:\n`);
+    process.stderr.write(`  ${kind}${isBreaking(items[0]!) ? " (breaking)" : ""}:\n`);
     for (const item of items) process.stderr.write(`    - ${item.detail}\n`);
     process.stderr.write("\n");
   }
   process.stderr.write(
-    "If this change is intentional and breaking for `motebit@X.0` consumers,\n" +
-      "ship a `motebit: major` changeset and run `pnpm check-cli-surface --write` to\n" +
-      "refresh the baseline. Otherwise, restore the surface to match the baseline.\n",
+    "If the change is intentional, run `pnpm check-cli-surface --write` and commit\n" +
+      "apps/cli/etc/cli-surface.json in this same PR (the baseline is a lockfile —\n" +
+      "a pending changeset does not excuse an unwritten baseline, because\n" +
+      "`changeset version` deletes it). A breaking change (anything removed or\n" +
+      'changed) is stamped as the next major and also needs a `"motebit": major`\n' +
+      "changeset with ## Migration. Otherwise, restore the surface to match the baseline.\n",
   );
   process.exit(1);
 }
 
-main();
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
