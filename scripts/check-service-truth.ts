@@ -11,13 +11,23 @@
  *     `market` = the service has an identity and lists on the market. The
  *     marketplace count is the number of `market: true` services.
  *
- *   - PRICE — the EXECUTABLE default in the service's own source:
- *     `process.env["MOTEBIT_UNIT_COST"] ?? "<default>"`, with the unit taken
- *     from the listing's `per: "<unit>"`. Never copied into metadata; read here
- *     from the code. The coded default wins; docs conform. `0` renders as
- *     "unpriced". A `market: true` service MUST have exactly one coded default,
- *     a `market: false` service MUST have none — so the market flag is tied to
- *     the code that actually lists, not just asserted.
+ *   - PRICE — what the service actually LISTS, obtained by EXECUTION: every
+ *     listing service codes its price once, in `src/pricing.ts` as a pure,
+ *     import-free `listingPricing(env)`, and lists exactly
+ *     `pricing: listingPricing(process.env)`. The gate runs that function (in
+ *     an isolated vm context) with an empty env — the price main() lists by
+ *     default, `unit_cost` + `per` — and with a sentinel MOTEBIT_UNIT_COST that
+ *     every entry must carry unaltered. Arithmetic or a hardcoded price inside
+ *     the function shows up in what it returns; one outside it is refused
+ *     structurally (no `unit_cost`, no MOTEBIT_UNIT_COST read, no other
+ *     `pricing` value anywhere else in the service's source). Execution, not a
+ *     source pattern: an earlier version read the literal after
+ *     `?? "…"` and stayed green on `parseFloat(…) * 2` and on a hardcoded
+ *     `unit_cost: 0.5` in the listing (cold review, 2026-10-05). Never copied
+ *     into metadata; the listed default wins, docs conform. `0` renders as
+ *     "unpriced". A `market: true` service MUST have the module, a
+ *     `market: false` service MUST NOT (nor any MOTEBIT_UNIT_COST read) — so
+ *     the market flag is tied to the code that actually lists.
  *
  * The derived surfaces (both hand-written prose, so both checked):
  *
@@ -42,6 +52,8 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import vm from "node:vm";
+import ts from "typescript";
 import { failWithRepair } from "./lib/gate-report.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,7 +88,7 @@ export interface ServiceTruth {
   role: ServiceRole;
   identity: boolean;
   market: boolean;
-  /** Present iff the code carries a `MOTEBIT_UNIT_COST` default. */
+  /** Present iff the service lists: what its executed `listingPricing({})` returns. */
   price: Price | null;
 }
 
@@ -103,49 +115,223 @@ function listSourceFiles(dir: string): string[] {
   return out;
 }
 
-const ENV_READ = /process\.env(?:\.MOTEBIT_UNIT_COST\b|\[\s*["']MOTEBIT_UNIT_COST["']\s*\])/g;
-const ENV_DEFAULT =
-  /process\.env(?:\.MOTEBIT_UNIT_COST\b|\[\s*["']MOTEBIT_UNIT_COST["']\s*\])\s*\?\?\s*["']([^"']*)["']/g;
-const PER_UNIT = /\bper:\s*["']([a-z_]+)["']/g;
+/** The one module a listing service codes its price in, and its export. */
+export const PRICING_MODULE = "pricing.ts";
+export const PRICING_EXPORT = "listingPricing";
+/** Sentinel override: every listed entry must carry it, or it ignores the env. */
+const SENTINEL_COST = "0.123457";
 
-/** Read the coded price default for one service. Pushes violations on ambiguity. */
-export function readCodedPrice(root: string, name: string, violations: string[]): Price | null {
+interface ListingEntry {
+  capability: unknown;
+  unit_cost: unknown;
+  currency: unknown;
+  per: unknown;
+}
+
+/**
+ * EXECUTE `services/<name>/src/pricing.ts`'s `listingPricing(env)` — the same
+ * function main() lists — and return what it lists. Transpiled to CommonJS and
+ * run in a fresh `vm` context with no `require`, no `process`, no globals but
+ * the language built-ins: the module must be pure and read only the injected
+ * env, or it throws here and the service fails closed. Arithmetic, hardcoding,
+ * fallback chains — whatever the function does is what the gate sees.
+ */
+export function executeListingPricing(
+  file: string,
+  env: Record<string, string>,
+): { entries: ListingEntry[] } | { error: string } {
+  const out = ts.transpileModule(readFileSync(file, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  });
+  const mod = { exports: {} as Record<string, unknown> };
+  try {
+    vm.runInNewContext(out.outputText, { module: mod, exports: mod.exports }, { timeout: 1000 });
+    const fn = mod.exports[PRICING_EXPORT];
+    if (typeof fn !== "function") return { error: `exports no \`${PRICING_EXPORT}\` function` };
+    const result: unknown = (fn as (e: Record<string, string>) => unknown)(
+      Object.freeze({ ...env }),
+    );
+    if (!Array.isArray(result) || result.length === 0)
+      return { error: `${PRICING_EXPORT}(env) returned no pricing entries` };
+    return { entries: result as ListingEntry[] };
+  } catch (err) {
+    // Errors thrown inside the vm come from another realm: not `instanceof Error`.
+    const msg =
+      err != null && typeof (err as { message?: unknown }).message === "string"
+        ? (err as { message: string }).message
+        : String(err);
+    return {
+      error: `did not execute purely (${msg}) — it may import nothing and read only its \`env\` parameter`,
+    };
+  }
+}
+
+const isEnvRead = (n: ts.Node): boolean =>
+  (ts.isStringLiteralLike(n) || ts.isIdentifier(n)) && n.text === "MOTEBIT_UNIT_COST";
+const isUnitCost = (n: ts.Node): boolean =>
+  (ts.isStringLiteralLike(n) || ts.isIdentifier(n)) && n.text === "unit_cost";
+
+/** `pricing: listingPricing(process.env)` — the only listing shape accepted. */
+function isCanonicalListing(init: ts.Expression): boolean {
+  if (!ts.isCallExpression(init) || init.arguments.length !== 1) return false;
+  if (!ts.isIdentifier(init.expression) || init.expression.text !== PRICING_EXPORT) return false;
+  const a = init.arguments[0]!;
+  return (
+    ts.isPropertyAccessExpression(a) &&
+    ts.isIdentifier(a.expression) &&
+    a.expression.text === "process" &&
+    a.name.text === "env"
+  );
+}
+
+/**
+ * Read the price a service LISTS. A listing service (`market: true`) codes its
+ * price in exactly one place — `src/pricing.ts`'s pure `listingPricing(env)` —
+ * and its source lists exactly `pricing: listingPricing(process.env)`, imported
+ * from that module; nothing else in its source may read MOTEBIT_UNIT_COST, name
+ * `unit_cost`, or build a `pricing` value. The price is then read by EXECUTING
+ * the function with an empty env (the default the docs state) and with a
+ * sentinel MOTEBIT_UNIT_COST (every entry must carry it). A non-listing service
+ * may have neither a pricing module nor a MOTEBIT_UNIT_COST read.
+ */
+export function readCodedPrice(
+  root: string,
+  name: string,
+  market: boolean,
+  violations: string[],
+): Price | null {
   const srcDir = join(root, "services", name, "src");
-  const defaults: { value: string; file: string }[] = [];
-  const pers = new Set<string>();
-  let reads = 0;
+  const pricingFile = join(srcDir, PRICING_MODULE);
+  const pricingRel = relative(root, pricingFile);
+  const hasModule = existsSync(pricingFile);
+  const envReads: string[] = [];
+  const unitCosts: string[] = [];
+  const listings: string[] = [];
+  const badListings: string[] = [];
+  const shadows: string[] = [];
+  let imported = false;
   for (const file of listSourceFiles(srcDir)) {
-    const text = readFileSync(file, "utf8");
+    if (file === pricingFile) continue;
     const rel = relative(root, file);
-    reads += [...text.matchAll(ENV_READ)].length;
-    for (const m of text.matchAll(ENV_DEFAULT)) defaults.push({ value: m[1] ?? "", file: rel });
-    for (const m of text.matchAll(PER_UNIT)) pers.add(m[1] ?? "");
+    const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+    const at = (n: ts.Node) => `${rel}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}`;
+    const visit = (n: ts.Node): void => {
+      if (isEnvRead(n)) envReads.push(at(n));
+      if (market) {
+        if (isUnitCost(n)) unitCosts.push(at(n));
+        if (
+          ts.isImportDeclaration(n) &&
+          ts.isStringLiteral(n.moduleSpecifier) &&
+          resolve(dirname(file), n.moduleSpecifier.text.replace(/\.js$/, ".ts")) === pricingFile &&
+          n.importClause?.namedBindings != null &&
+          ts.isNamedImports(n.importClause.namedBindings) &&
+          n.importClause.namedBindings.elements.some(
+            (e) => e.name.text === PRICING_EXPORT && e.propertyName == null,
+          )
+        )
+          imported = true;
+        if (
+          (ts.isFunctionDeclaration(n) || ts.isVariableDeclaration(n)) &&
+          n.name != null &&
+          ts.isIdentifier(n.name) &&
+          n.name.text === PRICING_EXPORT
+        )
+          shadows.push(at(n));
+        if (ts.isPropertyAssignment(n) && n.name.getText(sf) === "pricing") {
+          if (isCanonicalListing(n.initializer)) listings.push(at(n));
+          else badListings.push(`${at(n)} (\`${n.initializer.getText(sf).slice(0, 60)}\`)`);
+        }
+        if (ts.isShorthandPropertyAssignment(n) && n.name.text === "pricing")
+          badListings.push(`${at(n)} (shorthand \`pricing\`)`);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
   }
-  if (reads !== defaults.length) {
-    violations.push(
-      `services/${name}: ${reads} read(s) of process.env MOTEBIT_UNIT_COST but ${defaults.length} with a literal \`?? "<default>"\` — the coded default must be a parseable string literal`,
-    );
+
+  if (!market) {
+    if (hasModule || envReads.length > 0)
+      violations.push(
+        `services/${name}: motebit.market is false but ${hasModule ? pricingRel : envReads.join(", ")} codes a MOTEBIT_UNIT_COST price — a priced listing is a market participant`,
+      );
+    return null;
   }
-  if (defaults.length === 0) return null;
-  const values = new Set(defaults.map((d) => d.value));
-  if (values.size !== 1) {
-    violations.push(
-      `services/${name}: MOTEBIT_UNIT_COST has ${values.size} different coded defaults (${[...values].join(", ")}) — one service, one default`,
+
+  const say = (msg: string) => violations.push(`services/${name}: ${msg}`);
+  if (!hasModule) {
+    say(
+      `motebit.market is true but there is no ${PRICING_MODULE} — a listing codes its price in src/${PRICING_MODULE} as \`export function ${PRICING_EXPORT}(env)\` (0 = unpriced)`,
     );
+    return null;
   }
-  const amount = Number.parseFloat(defaults[0]!.value);
-  if (!Number.isFinite(amount) || amount < 0) {
-    violations.push(
-      `services/${name}: MOTEBIT_UNIT_COST default "${defaults[0]!.value}" in ${defaults[0]!.file} is not a non-negative number`,
+  if (envReads.length > 0)
+    say(
+      `MOTEBIT_UNIT_COST is read outside ${pricingRel} (${envReads.join(", ")}) — the price is coded in one place, the function the listing calls`,
     );
+  if (unitCosts.length > 0)
+    say(
+      `\`unit_cost\` appears outside ${pricingRel} (${[...new Set(unitCosts)].join(", ")}) — the listing's price must be exactly what ${PRICING_EXPORT}(env) returns, never set or rewritten elsewhere`,
+    );
+  if (badListings.length > 0)
+    say(
+      `a \`pricing\` value other than \`${PRICING_EXPORT}(process.env)\` (${badListings.join(", ")}) — list exactly \`pricing: ${PRICING_EXPORT}(process.env)\``,
+    );
+  if (listings.length !== 1)
+    say(
+      `${listings.length} \`pricing: ${PRICING_EXPORT}(process.env)\` listing site(s) — main() must list exactly one (found: ${listings.join(", ") || "none"})`,
+    );
+  if (!imported)
+    say(
+      `no source file imports { ${PRICING_EXPORT} } from ./${PRICING_MODULE.replace(/\.ts$/, ".js")}`,
+    );
+  if (shadows.length > 0)
+    say(`\`${PRICING_EXPORT}\` is redeclared outside ${pricingRel} (${shadows.join(", ")})`);
+
+  const dflt = executeListingPricing(pricingFile, {});
+  if ("error" in dflt) {
+    violations.push(`${pricingRel}: ${dflt.error}`);
+    return null;
   }
-  let per: string | null = null;
-  if (pers.size === 1) per = [...pers][0]!;
-  else if (pers.size > 1)
+  const bad = dflt.entries.find(
+    (e) =>
+      e == null ||
+      typeof e.capability !== "string" ||
+      typeof e.unit_cost !== "number" ||
+      !Number.isFinite(e.unit_cost) ||
+      e.unit_cost < 0 ||
+      e.currency !== "USD" ||
+      typeof e.per !== "string",
+  );
+  if (bad != null) {
     violations.push(
-      `services/${name}: listing declares ${pers.size} different \`per\` units (${[...pers].join(", ")}) — the docs cannot state one price`,
+      `${pricingRel}: ${PRICING_EXPORT}({}) lists an entry that is not { capability: string, unit_cost: finite ≥ 0, currency: "USD", per: string } (${JSON.stringify(bad)})`,
     );
-  return { amount, per, source: defaults[0]!.file };
+    return null;
+  }
+  const costs = new Set(dflt.entries.map((e) => e.unit_cost as number));
+  if (costs.size !== 1)
+    violations.push(
+      `${pricingRel}: ${PRICING_EXPORT}({}) lists ${costs.size} different unit_costs (${[...costs].join(", ")}) — one service, one price`,
+    );
+  const pers = new Set(dflt.entries.map((e) => e.per as string));
+  if (pers.size !== 1)
+    violations.push(
+      `${pricingRel}: listing declares ${pers.size} different \`per\` units (${[...pers].join(", ")}) — the docs cannot state one price`,
+    );
+  const sentinel = executeListingPricing(pricingFile, { MOTEBIT_UNIT_COST: SENTINEL_COST });
+  if ("error" in sentinel) violations.push(`${pricingRel}: ${sentinel.error}`);
+  else {
+    const deaf = sentinel.entries.filter((e) => e?.unit_cost !== Number(SENTINEL_COST));
+    if (deaf.length > 0 || sentinel.entries.length !== dflt.entries.length)
+      violations.push(
+        `${pricingRel}: with MOTEBIT_UNIT_COST="${SENTINEL_COST}", ${PRICING_EXPORT} lists ${JSON.stringify(sentinel.entries.map((e) => e?.unit_cost))} — every entry's unit_cost must be the parsed override, unaltered (no arithmetic, no hardcoded price)`,
+      );
+  }
+  return {
+    amount: dflt.entries[0]!.unit_cost as number,
+    per: dflt.entries[0]!.per as string,
+    source: pricingRel,
+  };
 }
 
 /** Every services/* directory — the set the inventories must cover. */
@@ -193,17 +379,7 @@ export function readServices(root: string, violations: string[]): ServiceTruth[]
         `services/${name}/package.json: motebit.market is true but motebit.identity is false — only a service with an identity can list on the market`,
       );
     }
-    const price = readCodedPrice(root, name, violations);
-    if (market && price == null) {
-      violations.push(
-        `services/${name}: motebit.market is true but its source carries no \`process.env["MOTEBIT_UNIT_COST"] ?? "<default>"\` — a listing has a coded price (0 = unpriced)`,
-      );
-    }
-    if (!market && price != null) {
-      violations.push(
-        `services/${name}: motebit.market is false but ${price.source} codes a MOTEBIT_UNIT_COST default — a priced listing is a market participant`,
-      );
-    }
+    const price = readCodedPrice(root, name, market, violations);
     out.push({ name, role: role as ServiceRole, identity, market, price });
   }
   return out;
@@ -248,14 +424,14 @@ function checkPrice(svc: ServiceTruth, p: Placement, violations: string[]): void
   if (svc.price == null) {
     if (priceAt >= 0)
       say(
-        `states $${priceMatch![1]}/${priceMatch![2]} but the service does not list on the market (no coded MOTEBIT_UNIT_COST default)`,
+        `states $${priceMatch![1]}/${priceMatch![2]} but the service does not list on the market (motebit.market is false)`,
       );
     return;
   }
   const { amount, per, source } = svc.price;
   if (amount === 0) {
     if (unpricedAt < 0 || (priceAt >= 0 && priceAt < unpricedAt))
-      say(`must say "unpriced" — ${source} codes MOTEBIT_UNIT_COST default 0`);
+      say(`must say "unpriced" — ${source} lists unit_cost 0 by default`);
     return;
   }
   const want = `$${amount}${per != null ? `/${per}` : ""}`;
@@ -370,7 +546,8 @@ function checkInventory(
         `${p.where}: \`${p.name}\` is listed as ${p.role} but services/${p.name}/package.json motebit.role is ${svc.role}`,
       );
     }
-    checkPrice(svc, p, violations);
+    // A listing whose price could not be read is already reported; don't guess.
+    if (!(svc.market && svc.price == null)) checkPrice(svc, p, violations);
   }
   for (const s of services) {
     const n = seen.get(s.name) ?? 0;
@@ -502,14 +679,14 @@ function main(): void {
       invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price`,
       sites: r.violations,
       canonical:
-        'role/identity/market: the `motebit` block in services/<name>/package.json; price: the `process.env["MOTEBIT_UNIT_COST"] ?? "<default>"` literal + listing `per` unit in services/<name>/src/',
-      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
+        "role/identity/market: the `motebit` block in services/<name>/package.json; price: what services/<name>/src/pricing.ts `listingPricing(env)` returns when executed with an empty env (unit_cost + per), listed by main() as exactly `pricing: listingPricing(process.env)`",
+      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the listed default wins, docs conform. A listing service codes its price only in src/pricing.ts `listingPricing(env)` (pure, import-free) and lists `pricing: listingPricing(process.env)`. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
       doctrine: "docs/drift-defenses.md (#173)",
     });
   }
   const market = r.services.filter((s) => s.market).length;
   console.log(
-    `✓ check-service-truth: ${r.services.length} services' metadata + coded prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs match services/*/package.json and the coded MOTEBIT_UNIT_COST defaults — nothing about deployed listings, MOTEBIT_UNIT_COST overrides in prod, or other pages of the docs site.`,
+    `✓ check-service-truth: ${r.services.length} services' metadata + executed listing prices (${market} market listings, each read by running its listingPricing({})) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs match services/*/package.json and the price each listing service's own listingPricing() returns by default, and that main() lists exactly that function's output — nothing about deployed listings, MOTEBIT_UNIT_COST overrides in prod, or other pages of the docs site; "identity" is declared metadata, not verified against code.`,
   );
 }
 

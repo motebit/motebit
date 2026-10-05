@@ -23,6 +23,7 @@ import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolResult, ExecutionReceipt } from "@motebit/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
 import { summarizeSearchDefinition, createSummarizeSearchHandler } from "./tool.js";
+import { listingPricing } from "./pricing.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -37,9 +38,6 @@ function loadConfig() {
     // here on first boot and reloaded on every subsequent boot.
     dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
-    // Zero-cost atom until the multi-hop settlement arc; listed so the market
-    // renders it as priced (conformance "pricing listed").
-    unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0"),
     /** Externally-reachable URL the relay advertises for routing. Must be
      *  set to the Fly hostname in production. */
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
@@ -198,14 +196,7 @@ async function main(): Promise<void> {
             // service render as "priced"/discoverable in the market, matching
             // the sibling atoms (web-search, read-url). An empty array read as
             // "unpriced" and failed conformance.
-            pricing: [
-              {
-                capability: "summarize_search",
-                unit_cost: config.unitCost,
-                currency: "USD",
-                per: "task",
-              },
-            ],
+            pricing: listingPricing(process.env),
             sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
             description:
               "Summarize atom: delegates a web search and condenses the results, returning the summary with the search's signed receipt nested in its own.",

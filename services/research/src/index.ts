@@ -24,6 +24,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/tools";
 import { loadConfig } from "./helpers.js";
 import { research } from "./research.js";
 import type { ResearchConfig } from "./research.js";
+import { listingPricing } from "./pricing.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -95,7 +96,6 @@ async function main(): Promise<void> {
   // Default covers worst-case sonnet inference (~$0.26–0.42/report at the
   // 8-tool-call cap) — the per-report cost_estimate_usd log is the tuning
   // signal before any prod price change.
-  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.25");
 
   // Readiness: detected passively from real task failures (free), recovered
   // actively by the cheapest possible provider round-trip — one token, and only
@@ -338,9 +338,7 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["research"],
-            pricing: [
-              { capability: "research", unit_cost: unitCost, currency: "USD", per: "task" },
-            ],
+            pricing: listingPricing(process.env),
             sla: { max_latency_ms: 120_000, availability_guarantee: 0.95 },
             description:
               "Research with receipts: composes web-search and read-url atoms, returns a cited report whose every web claim carries a content digest you can re-verify. The delegation chain arrives as nested signed receipts.",

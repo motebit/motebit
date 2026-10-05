@@ -29,6 +29,7 @@ import type { ToolDefinition, ToolHandler } from "@motebit/tools";
 import { loadConfig } from "./helpers.js";
 import { runAudit, parseAuditPrompt, AuditRefusal, type AuditDeps } from "./audit.js";
 import { createRelayFetcher } from "./evidence.js";
+import { listingPricing } from "./pricing.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -203,14 +204,7 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["audit_agent"],
-            pricing: [
-              {
-                capability: "audit_agent",
-                unit_cost: config.unitCost,
-                currency: "USD",
-                per: "task",
-              },
-            ],
+            pricing: listingPricing(process.env),
             sla: { max_latency_ms: 30_000, availability_guarantee: 0.95 },
             description:
               "Audits agents against the public verification surface — identity binding, key succession, operator revocation, receipt spot-checks, bond integrity — and returns a signed eval attestation whose every measurement is a per-axis verdict you can re-check yourself. No LLM; pure verification.",

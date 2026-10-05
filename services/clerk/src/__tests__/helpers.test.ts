@@ -81,7 +81,6 @@ describe("clerk loadConfig — defaults and overrides", () => {
     expect(c.dataDir).toBe("./data");
     expect(c.defaultCapability).toBe("research");
     expect(c.ceilingMicro).toBe(1_000_000); // $1 lifetime
-    expect(c.unitCost).toBe(0.01);
   });
 
   it("leaves every optional binding null rather than inventing one", () => {
@@ -102,7 +101,6 @@ describe("clerk loadConfig — defaults and overrides", () => {
     process.env["MOTEBIT_RELAY_PUBLIC_KEY"] = "ab".repeat(32);
     process.env["MOTEBIT_CLERK_CAPABILITY"] = "summarize";
     process.env["MOTEBIT_CLERK_CEILING_MICRO"] = "250000";
-    process.env["MOTEBIT_UNIT_COST"] = "0.25";
     process.env["MOTEBIT_SYNC_URL"] = "https://relay.example";
     process.env["MOTEBIT_PUBLIC_URL"] = "https://clerk.example";
 
@@ -114,7 +112,6 @@ describe("clerk loadConfig — defaults and overrides", () => {
     expect(c.relayPublicKey).toBe("ab".repeat(32));
     expect(c.defaultCapability).toBe("summarize");
     expect(c.ceilingMicro).toBe(250_000);
-    expect(c.unitCost).toBe(0.25);
     expect(c.syncUrl).toBe("https://relay.example");
     expect(c.publicUrl).toBe("https://clerk.example");
   });
