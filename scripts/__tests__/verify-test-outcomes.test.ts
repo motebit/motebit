@@ -4,8 +4,10 @@
  * correct sharded run uploads; RED on the artifacts each known runner bypass
  * leaves behind (B1 exit-code zeroing, the GITHUB_JOB return-0 runner, B2 an
  * enumeration that skips apps/web) and on every per-package failure shape
- * (missing results, failed tests, zero tests, unhandled errors, coverage or a
- * per-glob floor below threshold, duplicates, foreign or copied results).
+ * (missing results, failed tests, zero tests, all or most tests skipped by a
+ * filter, unhandled errors, coverage or a per-glob floor below threshold,
+ * duplicates, foreign or copied results, a tracked coverage/ file, results
+ * older than their shard job).
  */
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -15,8 +17,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONFIG_NAMES,
+  MIN_RUN_SHARE,
   NO_THRESHOLD_PACKAGES,
+  SKIP_HEAVY_PACKAGES,
   ZERO_TEST_PACKAGES,
+  trackedCoverageFiles,
   globToRegExp,
   pct,
   verifyOutcomes,
@@ -63,6 +68,24 @@ describe("verifyOutcomes over fixture artifacts", () => {
     });
   }
 
+  it("names apps/cli when a -t filter skipped its whole suite (apps/cli has no coverage floor)", () => {
+    const f = greenFixture();
+    RED_VARIANTS["all-skipped-name-filter"]!.mutate(f);
+    const r = withFixture(f, ({ root, artifacts }) => verifyOutcomes(root, artifacts));
+    expect(r.violations.join("\n")).toMatch(/apps\/cli: 0 of 7 tests passed/);
+  });
+
+  it("counts only PASSED tests, never skipped or todo", () => {
+    const f = greenFixture();
+    const r0 = f.shards["coverage-shard-0"]!["services/relay"]!.results!;
+    r0.numTotalTests = 71;
+    r0.numPassedTests = 70;
+    r0.numPendingTests = 1;
+    const r = withFixture(f, ({ root, artifacts }) => verifyOutcomes(root, artifacts));
+    expect(r.violations).toEqual([]);
+    expect(r.tests).toBe(91);
+  });
+
   it("names the package B2 dropped", () => {
     const f = greenFixture();
     RED_VARIANTS["B2-enumeration-skips-web"]!.mutate(f);
@@ -98,6 +121,7 @@ describe("the CLI the `check` job runs", () => {
     const r = cli(greenFixture());
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/examined 4 workspace package/);
+    expect(r.stdout).toMatch(/28 test\(s\) passed \(skipped\/todo not counted/);
   });
 
   it("exits non-zero on B1 (vitest's own results say a test failed)", () => {
@@ -175,8 +199,24 @@ describe("over the real workspace", () => {
       expect(has || p in NO_THRESHOLD_PACKAGES, p).toBe(true);
       expect(has && p in NO_THRESHOLD_PACKAGES, p).toBe(false);
     }
-    for (const p of [...Object.keys(NO_THRESHOLD_PACKAGES), ...Object.keys(ZERO_TEST_PACKAGES)])
+    for (const p of [
+      ...Object.keys(NO_THRESHOLD_PACKAGES),
+      ...Object.keys(ZERO_TEST_PACKAGES),
+      ...Object.keys(SKIP_HEAVY_PACKAGES),
+    ])
       expect(pkgs).toContain(p);
+  });
+
+  it("every SKIP_HEAVY_PACKAGES entry gives a reason and a floor below the default", () => {
+    for (const [p, e] of Object.entries(SKIP_HEAVY_PACKAGES)) {
+      expect(e.reason.length, p).toBeGreaterThan(20);
+      expect(e.minRunShare, p).toBeGreaterThan(0);
+      expect(e.minRunShare, p).toBeLessThan(MIN_RUN_SHARE);
+    }
+  });
+
+  it("tracks nothing under any coverage/ directory", () => {
+    expect(trackedCoverageFiles(ROOT)).toEqual([]);
   });
 });
 

@@ -7,8 +7,10 @@
  * which executes the verifier against every variant on each `pnpm check`, so a
  * weakened verifier goes RED there and not only in `pnpm test:gates`.
  */
+import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { cleanEnv } from "./differential-tree.js";
 import type { CoverageThresholds } from "./vitest-thresholds.js";
 
 export interface FixturePackage {
@@ -27,11 +29,20 @@ export interface OutcomeFixture {
   workspace: Record<string, FixturePackage>;
   /** shard artifact name → package dir → what that shard uploaded for it. */
   shards: Record<string, Record<string, FixtureReport>>;
+  /**
+   * shard artifact name → the `coverage/shard-started-at.json` its CI job
+   * wrote before running anything (null = none). Absent key = SHARD_STARTED_AT.
+   */
+  stamps?: Record<string, Record<string, unknown> | null>;
+  /** Workspace-relative files committed to the fixture's git repo (path → contents). */
+  tracked?: Record<string, string>;
 }
 
 const F80: CoverageThresholds = { statements: 80, branches: 70, functions: 80, lines: 80 };
 const F100: CoverageThresholds = { statements: 100, branches: 100, functions: 100, lines: 100 };
 const CI_ROOT = "/home/runner/work/motebit/motebit";
+/** When every fixture shard job started (ms since epoch); each suite starts after it. */
+export const SHARD_STARTED_AT = 1_790_000_000_000;
 
 const axes = (total: number, covered: number) => ({
   statements: { total, covered, skipped: 0, pct: 0 },
@@ -50,6 +61,9 @@ export function passingReport(pkg: string): FixtureReport {
       numTotalTests: 7,
       numPassedTests: 7,
       numFailedTests: 0,
+      numPendingTests: 0,
+      numTodoTests: 0,
+      startTime: SHARD_STARTED_AT + 60_000,
       success: true,
       testResults: [
         { name: `${CI_ROOT}/${pkg}/src/__tests__/a.test.ts`, status: "passed" },
@@ -210,6 +224,62 @@ export const RED_VARIANTS: Record<string, { what: string; mutate: Mutate }> = {
       ).results!;
     },
   },
+  "all-skipped-name-filter": {
+    what: "a test-name filter that matches nothing (`-- -t zzzz-nomatch`, measured on apps/cli: exit 0, numTotalTests 1016, numPassedTests 0, numPendingTests 1016, success true, every file 'passed') — apps/cli has no coverage floor to catch it",
+    mutate: (f) => {
+      const r = results(f, "coverage-shard-1", "apps/cli");
+      r.numPassedTests = 0;
+      r.numPendingTests = r.numTotalTests;
+    },
+  },
+  "mostly-skipped": {
+    what: "a filter that leaves one test running: 1 passed, the rest skipped — passed > 0 but far below what the suite runs",
+    mutate: (f) => {
+      const r = results(f, "coverage-shard-2", "apps/web");
+      r.numPassedTests = 1;
+      r.numPendingTests = 6;
+    },
+  },
+  "todo-padded": {
+    what: "the suite's tests turned into it.todo — counted in numTotalTests, never run",
+    mutate: (f) => {
+      const r = results(f, "coverage-shard-0", "services/relay");
+      r.numPassedTests = 1;
+      r.numTodoTests = 6;
+    },
+  },
+  "tracked-results-file": {
+    what: "a vitest-results.json committed under a package's coverage/ — a checkout that ships its own verdict",
+    mutate: (f) => {
+      f.tracked = {
+        "apps/web/coverage/vitest-results.json": JSON.stringify(passingReport("apps/web").results),
+      };
+    },
+  },
+  "tracked-summary-file": {
+    what: "a coverage-summary.json committed under a package's coverage/",
+    mutate: (f) => {
+      f.tracked = { "packages/circuit-breaker/coverage/coverage-summary.json": "{}" };
+    },
+  },
+  "stale-start-time": {
+    what: "a results file from an earlier run (its startTime precedes the shard job's own start stamp)",
+    mutate: (f) => {
+      results(f, "coverage-shard-0", "services/relay").startTime = SHARD_STARTED_AT - 86_400_000;
+    },
+  },
+  "no-start-time": {
+    what: "a results file carrying no startTime — its age cannot be proven",
+    mutate: (f) => {
+      delete results(f, "coverage-shard-2", "apps/web").startTime;
+    },
+  },
+  "shard-stamp-missing": {
+    what: "a shard artifact without the start stamp its CI job writes first — nothing to date its results against",
+    mutate: (f) => {
+      f.stamps = { "coverage-shard-1": null };
+    },
+  },
 };
 
 function vitestConfig(p: FixturePackage): string {
@@ -244,8 +314,33 @@ export function materialize(f: OutcomeFixture, dir: string): { root: string; art
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify(body));
   };
+  for (const [rel, body] of Object.entries(f.tracked ?? {})) {
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    writeFileSync(join(root, rel), body);
+  }
+  // A real checkout: the verifier asks git what is tracked. cleanEnv() so a
+  // hook's GIT_DIR / GIT_INDEX_FILE can never point this at the real repo.
+  const git = (...args: string[]) => {
+    const r = spawnSync("git", args, { cwd: root, encoding: "utf8", env: cleanEnv() });
+    if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
+  };
+  git("init", "-q");
+  git("add", "-A", "-f");
+  git(
+    "-c",
+    "user.name=fixture",
+    "-c",
+    "user.email=fixture@invalid",
+    "commit",
+    "-q",
+    "--no-verify",
+    "-m",
+    "fixture",
+  );
   for (const [shard, pkgs] of Object.entries(f.shards)) {
     mkdirSync(join(artifacts, shard, "coverage"), { recursive: true });
+    const stamp = f.stamps && shard in f.stamps ? f.stamps[shard] : { startedAt: SHARD_STARTED_AT };
+    if (stamp) put(join(artifacts, shard, "coverage", "shard-started-at.json"), stamp);
     for (const [pkg, r] of Object.entries(pkgs)) {
       const cov = join(artifacts, shard, pkg, "coverage");
       mkdirSync(cov, { recursive: true });

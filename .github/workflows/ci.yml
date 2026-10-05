@@ -146,6 +146,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Stamp this shard's start
+        # Before install, build or any suite: every vitest results file this
+        # shard uploads must carry a startTime at or after this stamp, so a
+        # results file from an earlier run (committed, cached, restored) is
+        # RED in `check` (scripts/verify-test-outcomes.ts SHARD_STAMP_FILE).
+        # Written by the job itself, never by the shard runner.
+        run: |
+          mkdir -p coverage
+          echo "{\"startedAt\": $(date +%s%3N)}" > coverage/shard-started-at.json
+
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
@@ -238,9 +248,12 @@ jobs:
         # test:coverage script — enumerated from pnpm-workspace.yaml here, not
         # from the runner's list — must have vitest's own results (written by
         # MOTEBIT_TEST_REPORTERS in vitest.shared.ts) in exactly one shard
-        # artifact: tests > 0, none failed, no unhandled error, coverage at or
-        # above the package's own thresholds. A runner whose exit code lies
-        # (B1) or whose enumeration skips a package (B2) is RED here.
+        # artifact: tests passed > 0 and at least its run-share floor of the
+        # declared tests (a `-t` filter or blanket skip is RED), none failed,
+        # no unhandled error, results dated after their shard's start stamp,
+        # nothing under coverage/ tracked in git, coverage at or above the
+        # package's own thresholds. A runner whose exit code lies (B1) or
+        # whose enumeration skips a package (B2) is RED here.
         run: pnpm test:outcomes:verify --artifacts /tmp/coverage-shards
 
       - name: Merge the shards' coverage

@@ -36,10 +36,12 @@
  * `<artifacts>/<shard-artifact>/<package-dir>/coverage/…` is the layout
  * actions/download-artifact produces for the shard uploads.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { cleanEnv } from "./lib/differential-tree.js";
 import { failWithRepair } from "./lib/gate-report.js";
 import {
   COVERAGE_AXES,
@@ -52,6 +54,16 @@ import {
 export const RESULTS_FILE = "coverage/vitest-results.json";
 export const RUN_END_FILE = "coverage/vitest-run-end.json";
 export const SUMMARY_FILE = "coverage/coverage-summary.json";
+/**
+ * Written by each test-coverage shard job's FIRST step after checkout (ci.yml),
+ * before install, build or any suite: `{"startedAt": <ms since epoch>}`. Not
+ * the shard runner's — a step of the job itself. Every results file in that
+ * shard must carry a vitest `startTime` at or after it.
+ */
+export const SHARD_STAMP_FILE = "coverage/shard-started-at.json";
+
+/** Clock skew tolerated between a shard runner and the verdict runner. */
+export const CLOCK_SKEW_MS = 5 * 60_000;
 
 /**
  * Packages whose suite legitimately runs zero tests, with the reason. Empty:
@@ -59,6 +71,33 @@ export const SUMMARY_FILE = "coverage/coverage-summary.json";
  * package that does run tests is stale and RED, so the list cannot hide one.
  */
 export const ZERO_TEST_PACKAGES: Record<string, string> = {};
+
+/**
+ * The share of the tests a suite DECLARES and did not fail (vitest's
+ * numTotalTests counts skipped/pending and todo too) that it must actually
+ * RUN and pass. A name filter (`-- -t nomatch`: apps/cli exits 0 with
+ * numTotalTests 1016, numPassedTests 0, numPendingTests 1016, success true)
+ * or a blanket `.skip` leaves numTotalTests and `success` untouched while
+ * running nothing — this is what catches it.
+ *
+ * Measured over a real 3-shard run of every suite (2026-10-05, 72 packages,
+ * 20310 declared tests, 20301 passed, 9 skipped, 0 todo): 68 packages skip
+ * nothing; the four that skip are env-gated integrations —
+ * crypto-appattest 39/42 = 0.929 (real-device ceremony), mcp-client 176/179
+ * = 0.983 (live GitHub MCP), runtime 1817/1818 and relay 3598/3600 = 0.999
+ * (an eval doc-marked not CI-testable; devnet federation). 0.8 leaves the
+ * lowest ~8 more skips of headroom before RED and refuses any filter that
+ * runs under four fifths of a suite; a package that genuinely skips more
+ * takes a reasoned SKIP_HEAVY_PACKAGES entry, never a lower default.
+ */
+export const MIN_RUN_SHARE = 0.8;
+
+/**
+ * Packages that legitimately skip more than 1 − MIN_RUN_SHARE of their tests,
+ * each with its own floor and the reason. An entry for a package that skips
+ * nothing is stale and RED.
+ */
+export const SKIP_HEAVY_PACKAGES: Record<string, { minRunShare: number; reason: string }> = {};
 
 /**
  * Packages whose vitest config declares no coverage thresholds, with the
@@ -173,7 +212,12 @@ function floorsViolations(
 }
 
 /** Every violation for one package's artifact dir (`<shard>/<pkg>`). */
-export function packageViolations(root: string, pkg: string, dir: string): string[] {
+export function packageViolations(
+  root: string,
+  pkg: string,
+  dir: string,
+  notBefore?: number,
+): string[] {
   const v: string[] = [];
   const resultsPath = join(dir, RESULTS_FILE);
   if (!existsSync(resultsPath)) return [`${pkg}: no ${RESULTS_FILE} — its suite never reported`];
@@ -193,6 +237,48 @@ export function packageViolations(root: string, pkg: string, dir: string): strin
       v.push(
         `${pkg}: runs ${total} tests but is listed in ZERO_TEST_PACKAGES — remove the stale entry`,
       );
+    const passed = num("numPassedTests");
+    const notRun = num("numPendingTests") + num("numTodoTests");
+    if (!(passed >= 0)) v.push(`${pkg}: results carry no numPassedTests`);
+    else if (passed === 0 && !zeroOk)
+      v.push(
+        `${pkg}: 0 of ${total} tests passed (${notRun} skipped/pending/todo) — a suite whose tests were all filtered or skipped proves nothing`,
+      );
+    if (!(notRun >= 0)) v.push(`${pkg}: results carry no numPendingTests / numTodoTests`);
+    else if (total > 0 && passed > 0) {
+      const heavy = SKIP_HEAVY_PACKAGES[pkg];
+      const floor = heavy?.minRunShare ?? MIN_RUN_SHARE;
+      // Failed tests are judged below; the share is of the tests that were
+      // decided either way or not run at all.
+      if (passed + notRun > 0 && passed / (passed + notRun) < floor)
+        v.push(
+          `${pkg}: only ${passed} of ${passed + notRun} declared, non-failed tests passed (${notRun} skipped/pending/todo) — below its run-share floor ${floor}${heavy ? " (SKIP_HEAVY_PACKAGES)" : " (MIN_RUN_SHARE)"}; a filter or blanket skip ran a fraction of the suite`,
+        );
+      if (heavy && notRun === 0)
+        v.push(
+          `${pkg}: skips nothing but is listed in SKIP_HEAVY_PACKAGES — remove the stale entry`,
+        );
+    }
+    if (
+      total >= 0 &&
+      passed >= 0 &&
+      notRun >= 0 &&
+      passed + num("numFailedTests") + notRun !== total
+    )
+      v.push(
+        `${pkg}: numTotalTests ${total} ≠ passed ${passed} + failed ${String(r.numFailedTests)} + pending/todo ${notRun} — the counts were not written by one vitest run`,
+      );
+    const started = num("startTime");
+    if (!(started > 0))
+      v.push(
+        `${pkg}: results carry no startTime — their age cannot be proven against the shard's start`,
+      );
+    else if (notBefore !== undefined && started < notBefore)
+      v.push(
+        `${pkg}: results startTime ${new Date(started).toISOString()} precedes its shard job's start ${new Date(notBefore).toISOString()} — a results file from an earlier run`,
+      );
+    else if (started > Date.now() + CLOCK_SKEW_MS)
+      v.push(`${pkg}: results startTime ${new Date(started).toISOString()} is in the future`);
     if (num("numFailedTests") !== 0)
       v.push(`${pkg}: numFailedTests is ${String(r.numFailedTests)}, not 0`);
     if (num("numFailedTestSuites") !== 0)
@@ -276,8 +362,28 @@ export function packageViolations(root: string, pkg: string, dir: string): strin
 export interface OutcomeReport {
   packages: string[];
   violations: string[];
-  /** Tests vitest reported across every verified package. */
+  /** Tests vitest reported PASSED across every verified package (never skipped/todo). */
   tests: number;
+}
+
+/**
+ * Every tracked file under the root `coverage/` or a workspace package's
+ * `coverage/` — where the shards' uploads (and so this verdict's inputs) live.
+ * A committed results or summary file would be a checkout shipping its own
+ * verdict. Fails closed when git cannot answer.
+ */
+export function trackedCoverageFiles(root: string): string[] | { error: string } {
+  const r = spawnSync("git", ["ls-files", "-z"], {
+    cwd: root,
+    encoding: "utf8",
+    env: cleanEnv(),
+  });
+  if (r.status !== 0 || r.error)
+    return { error: (r.stderr || String(r.error ?? `exit ${String(r.status)}`)).trim() };
+  return r.stdout
+    .split("\0")
+    .filter((f) => /^(?:coverage|[^/]+\/[^/]+\/coverage)\//.test(f))
+    .sort();
 }
 
 /**
@@ -316,6 +422,37 @@ export function verifyOutcomes(root: string, artifacts: string): OutcomeReport {
   };
   for (const s of shards) walk(s, "");
 
+  const tracked = trackedCoverageFiles(root);
+  if (!Array.isArray(tracked))
+    violations.push(
+      `cannot list the checkout's tracked files (git ls-files: ${tracked.error}) — fail closed`,
+    );
+  else
+    for (const f of tracked)
+      violations.push(
+        `${f} is tracked in git — coverage/ holds the run's own outputs, never committed ones`,
+      );
+
+  // Each shard's start, from the stamp its CI job wrote before any suite ran.
+  const notBefore = new Map<string, number>();
+  for (const s of shards) {
+    const p = join(artifacts, s, SHARD_STAMP_FILE);
+    if (!existsSync(p)) {
+      violations.push(
+        `${s}: no ${SHARD_STAMP_FILE} — nothing to date its results against (ci.yml writes it first in every test-coverage shard)`,
+      );
+      continue;
+    }
+    const at = (readJson(p) as { startedAt?: unknown }).startedAt;
+    if (typeof at !== "number" || !(at > 0))
+      violations.push(`${s}: ${SHARD_STAMP_FILE} carries no numeric startedAt`);
+    else if (at > Date.now() + CLOCK_SKEW_MS)
+      violations.push(
+        `${s}: ${SHARD_STAMP_FILE} startedAt ${new Date(at).toISOString()} is in the future`,
+      );
+    else notBefore.set(s, at);
+  }
+
   const want = new Set(packages);
   for (const [pkg, where] of found)
     if (!want.has(pkg))
@@ -336,9 +473,9 @@ export function verifyOutcomes(root: string, artifacts: string): OutcomeReport {
         `${pkg}: reported by ${where.length} shards (${where.join(", ")}), not exactly one`,
       );
     for (const s of where) {
-      violations.push(...packageViolations(root, pkg, join(artifacts, s, pkg)));
-      const r = readJson(join(artifacts, s, pkg, RESULTS_FILE)) as { numTotalTests?: unknown };
-      if (typeof r.numTotalTests === "number") tests += r.numTotalTests;
+      violations.push(...packageViolations(root, pkg, join(artifacts, s, pkg), notBefore.get(s)));
+      const r = readJson(join(artifacts, s, pkg, RESULTS_FILE)) as { numPassedTests?: unknown };
+      if (typeof r.numPassedTests === "number") tests += r.numPassedTests;
     }
   }
   return { packages, violations, tests };
@@ -359,15 +496,15 @@ function main(argv: string[]): void {
   if (r.violations.length > 0)
     failWithRepair({
       invariant:
-        "every workspace package with a test:coverage script ran in exactly one CI shard and vitest itself reported it: tests > 0, none failed, no unhandled error, coverage at or above the package's own thresholds",
+        "every workspace package with a test:coverage script ran in exactly one CI shard and vitest itself reported it, in this run: tests passed > 0 and at least its run-share floor of the declared tests, none failed, no unhandled error, results started after the shard job did, nothing under coverage/ tracked in git, coverage at or above the package's own thresholds",
       sites: r.violations,
       canonical:
         "vitest's own results (MOTEBIT_TEST_REPORTERS in vitest.shared.ts) judged by scripts/verify-test-outcomes.ts; packages enumerated from pnpm-workspace.yaml",
-      fix: "Fix the failing suite or raise its coverage (never lower a threshold). A package missing from every shard means the shard runner skipped it — fix scripts/test-coverage-shards.ts. A missing results file means its vitest config dropped MOTEBIT_TEST_REPORTERS (or a CLI --reporter replaced them).",
+      fix: "Fix the failing suite or raise its coverage (never lower a threshold). A package missing from every shard means the shard runner skipped it — fix scripts/test-coverage-shards.ts. A missing results file means its vitest config dropped MOTEBIT_TEST_REPORTERS (or a CLI --reporter replaced them). A run-share failure means a -t filter or blanket .skip — remove it, or give a package that genuinely skips a reasoned SKIP_HEAVY_PACKAGES entry. A tracked coverage/ file: git rm --cached it. A stale startTime: the results predate the shard job — something restored or committed them.",
       doctrine: "docs/doctrine/composition-preserves-enforcement.md",
     });
   console.log(
-    `✓ verify-test-outcomes: examined ${r.packages.length} workspace package(s) with a test:coverage script (enumerated from pnpm-workspace.yaml, not the shard runner) — each reported by exactly one shard, ${r.tests} test(s) passed, 0 failed, every coverage floor met.`,
+    `✓ verify-test-outcomes: examined ${r.packages.length} workspace package(s) with a test:coverage script (enumerated from pnpm-workspace.yaml, not the shard runner) — each reported by exactly one shard in this run (results dated after their shard job started; nothing under coverage/ tracked), ${r.tests} test(s) passed (skipped/todo not counted; each package ran ≥ its run-share floor, default ${MIN_RUN_SHARE}), 0 failed, every coverage floor met.`,
   );
 }
 

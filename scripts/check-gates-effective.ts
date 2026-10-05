@@ -958,6 +958,18 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-prepush-subset",
     proves:
+      "flags the `check` job's outcome verifier accepting vitest results where every test was skipped — the `-t nomatch` shape (exit 0, success true, numTotalTests > 0, numPassedTests 0); here the GREEN fixture's numPassedTests set to 0 for every package, which a verifier counting numTotalTests alone passes",
+    perturb: () =>
+      mutateFile("scripts/lib/test-outcomes-fixture.ts", (src) =>
+        src.replace(
+          "      numPassedTests: 7,\n",
+          `      numPassedTests: 0, // ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
       "flags a package with a test:coverage script that no CI shard runs — here packages/protocol losing its weight in scripts/test-coverage-shards.ts, so the computed assignment has nowhere to put it and CI's sharded suite would silently stop being every suite",
     perturb: () =>
       mutateFile("scripts/test-coverage-shards.ts", (src) =>

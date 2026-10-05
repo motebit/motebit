@@ -740,6 +740,13 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
     },
     {
+      // Writes the shard's own start stamp (scripts/verify-test-outcomes.ts
+      // SHARD_STAMP_FILE) before install/build/tests; touches nothing a
+      // counterpart reads.
+      name: "Stamp this shard's start",
+      run: 'mkdir -p coverage\necho "{\\"startedAt\\": $(date +%s%3N)}" > coverage/shard-started-at.json\n',
+    },
+    {
       uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
     },
     {
