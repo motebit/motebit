@@ -24,6 +24,7 @@ import {
   evaluateTestCache,
   readInputs,
   readTestCacheInputs,
+  shardRunnerViolations,
   runToFile,
   canonHash,
   CI_JOBS,
@@ -36,6 +37,11 @@ import { MUTANTS, CONTROLS } from "./prepush-subset-mutants.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REAL = readInputs(ROOT);
+/** The gate's whole verdict on a set of inputs: the static evaluation plus the executed shard runner. */
+const verdict = (inp: typeof REAL): string[] => [
+  ...evaluate(inp).violations,
+  ...shardRunnerViolations(inp, ROOT).violations,
+];
 
 describe("check-prepush-subset over the real hook and ci.yml", () => {
   it("is green, and maps every phase to its CI counterpart", () => {
@@ -47,6 +53,15 @@ describe("check-prepush-subset over the real hook and ci.yml", () => {
     expect(e.phases).toBeGreaterThanOrEqual(10);
   });
 
+  it("executes the real shard runner (every shard + a zero-exit run) and finds it faithful", () => {
+    const r = shardRunnerViolations(REAL, ROOT);
+    expect(r.violations).toEqual([]);
+    expect(r.launches).toBe(
+      (CI_JOBS["test-coverage"]!.strategy as { matrix: { shard: string[] } }).matrix.shard.length +
+        1,
+    );
+  });
+
   it("pins the steps of EVERY counterpart job (B1: no job left unpinned)", () => {
     expect(Object.keys(CI_JOB_STEPS).sort()).toEqual(Object.keys(CI_JOBS).sort());
   });
@@ -55,7 +70,7 @@ describe("check-prepush-subset over the real hook and ci.yml", () => {
 describe("mutation table — every mutant RED", () => {
   for (const mu of MUTANTS) {
     it(`${mu.id}: ${mu.what}`, () => {
-      const v = evaluate(mu.apply(REAL)).violations;
+      const v = verdict(mu.apply(REAL));
       expect(v.length, `mutant ${mu.id} survived`).toBeGreaterThan(0);
     });
   }
@@ -64,7 +79,7 @@ describe("mutation table — every mutant RED", () => {
 describe("controls — every control GREEN", () => {
   for (const c of CONTROLS) {
     it(`${c.id}: ${c.what}`, () => {
-      expect(evaluate(c.apply(REAL)).violations).toEqual([]);
+      expect(verdict(c.apply(REAL))).toEqual([]);
     });
   }
 });

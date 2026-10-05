@@ -17,6 +17,7 @@ export interface Inputs {
   ci: string;
   rootScripts: Record<string, string>;
   packageScripts: Record<string, Record<string, string>>;
+  shardRunner: string;
 }
 
 export interface Edit {
@@ -40,6 +41,10 @@ const ci =
 const script =
   (name: string, value: string) =>
   (i: Inputs): Inputs => ({ ...i, rootScripts: { ...i.rootScripts, [name]: value } });
+
+const runner =
+  (id: string, from: string | RegExp, to: string) =>
+  (i: Inputs): Inputs => ({ ...i, shardRunner: sub(i.shardRunner, from, to, id) });
 
 const BUILD = '  run_phase "build" pnpm build\n';
 const before = (id: string, line: string) => hook(id, BUILD, `${line}\n${BUILD}`);
@@ -543,6 +548,26 @@ export const MUTANTS: Edit[] = [
       "      - name: Build\n        run: pnpm build\n\n      - name: Test with coverage (this shard)\n",
       "      - name: Test with coverage (this shard)\n",
     )(i),
+  ),
+  // --- what the shard runner actually launches (cold review, 2026-10-05) ---
+  m(
+    "T11",
+    "runner: every shard exits 0 whatever turbo returned (failing tests pass CI)",
+    runner(
+      "T11",
+      /process\.exit\((?:r\.status \?\? 1|runShard\(mine, spawnTurbo\(root\)\))\)/,
+      "process.exit(0)",
+    ),
+  ),
+  m(
+    "T12",
+    "runner: `--dry` appended to the shard's turbo args (no test runs)",
+    runner("T12", "`--filter=./${d}`)]", '`--filter=./${d}`), "--dry"]'),
+  ),
+  m(
+    "T13",
+    "runner: runShard swallows the child's exit status",
+    runner("T13", "return r.status ?? 1;", "return 0;"),
   ),
   // --- the GIT_* scrub (2026-10-02, second #835-class incident) -------------
   m("E1", "hook: the GIT_* scrub removed", hook("E1", SCRUB_LINE, "")),

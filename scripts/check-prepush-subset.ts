@@ -71,11 +71,15 @@ import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -299,6 +303,8 @@ interface CiForm {
   job: string;
   run: string;
 }
+/** The shard runner the pinned root `test:coverage:shard` script launches. */
+export const SHARD_RUNNER = "scripts/test-coverage-shards.ts";
 /** The test:coverage counterpart: one leg of the sharded suite. */
 const SHARD_RUN =
   "pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json";
@@ -381,9 +387,12 @@ export function matrixIsCompleteShardList(strategy: unknown): boolean {
  * The sharded test:coverage counterpart runs every suite the unfiltered
  * `turbo run test:coverage` did only if, for the pinned N, the assignment
  * scripts/test-coverage-shards.ts computes puts EVERY package with a
- * test:coverage script in exactly one shard, and each shard's turbo command is
- * the old unfiltered form plus exactly one `--filter=./<dir>` per package of
- * that shard (no other flag that could narrow or skip it).
+ * test:coverage script in exactly one shard, and `turboArgs` — the args the
+ * runner is meant to launch — is the old unfiltered form plus exactly one
+ * `--filter=./<dir>` per package of that shard. That `turboArgs` is what the
+ * runner ACTUALLY launches, unaltered, and that its exit status is turbo's, is
+ * not provable from these values: shardRunnerViolations proves it by executing
+ * the runner.
  */
 export function shardViolations(
   strategy: unknown,
@@ -404,6 +413,132 @@ export function shardViolations(
       );
   });
   return v;
+}
+
+export interface ShardRunnerResult {
+  violations: string[];
+  /** Runner processes actually executed (0 only when the assignment is already reported broken). */
+  launches: number;
+}
+const shardRunnerMemo = new Map<string, ShardRunnerResult>();
+
+/**
+ * Proves by EXECUTION what a CI shard leg launches and the exit it returns —
+ * not by reading the runner's source. In a throwaway workspace mirroring
+ * `inp.packageScripts`, with `inp.shardRunner` as scripts/test-coverage-shards.ts
+ * and `node_modules/.bin/turbo` a stub that records its argv and exits with a
+ * chosen status, it runs the pinned root `test:coverage:shard` command with
+ * the CI step's arguments, once per shard of the pinned matrix with the stub
+ * exiting 1, and once more with the stub exiting 0. Each run must have
+ * launched turbo exactly once with the literal unfiltered form filtered to that
+ * shard (computed here, not by the runner), written that shard's manifest, and
+ * exited with the stub's status: a runner that swallows a failure, adds a flag
+ * (`--dry`, a narrower filter), or launches nothing is RED.
+ */
+export function shardRunnerViolations(inp: Inputs, root: string = ROOT): ShardRunnerResult {
+  const cmd = inp.rootScripts["test:coverage:shard"];
+  if (cmd !== ROOT_SCRIPTS["test:coverage:shard"])
+    return {
+      violations: [
+        `package.json test:coverage:shard is ${JSON.stringify(cmd ?? null)}, not ${JSON.stringify(ROOT_SCRIPTS["test:coverage:shard"])} — the shard runner this gate executes is not the one CI launches`,
+      ],
+      launches: 0,
+    };
+  const shards = (CI_JOBS["test-coverage"]!.strategy as { matrix: { shard: string[] } }).matrix
+    .shard;
+  const n = shards.length;
+  const pkgs = coveragePackages(inp.packageScripts);
+  const a = assignShards(pkgs, n);
+  if (a.violations.length > 0) return { violations: [], launches: 0 }; // reported by shardViolations
+  const key = canonHash(JSON.stringify([inp.shardRunner, inp.packageScripts, cmd, n]));
+  const hit = shardRunnerMemo.get(key);
+  if (hit) return hit;
+
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "prepush-shard-runner-")));
+  const violations: string[] = [];
+  let launches = 0;
+  try {
+    const bases = [...new Set(Object.keys(inp.packageScripts).map((k) => k.split("/")[0]!))];
+    writeFileSync(
+      join(dir, "pnpm-workspace.yaml"),
+      `packages:\n${bases.map((b) => `  - "${b}/*"\n`).join("")}`,
+    );
+    for (const [pkg, scripts] of Object.entries(inp.packageScripts)) {
+      mkdirSync(join(dir, pkg), { recursive: true });
+      writeFileSync(join(dir, pkg, "package.json"), JSON.stringify({ name: pkg, scripts }));
+    }
+    mkdirSync(join(dir, "scripts"));
+    writeFileSync(join(dir, SHARD_RUNNER), inp.shardRunner);
+    symlinkSync(join(root, "scripts", "lib"), join(dir, "scripts", "lib"));
+    mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
+    for (const m of ["yaml", "tsx"])
+      symlinkSync(realpathSync(join(root, "node_modules", m)), join(dir, "node_modules", m));
+    symlinkSync(
+      join(root, "node_modules", ".bin", "tsx"),
+      join(dir, "node_modules", ".bin", "tsx"),
+    );
+    const argvFile = join(dir, "turbo-argv");
+    writeFileSync(
+      join(dir, "node_modules", ".bin", "turbo"),
+      `#!/bin/sh\nprintf '%s\\0' "$@" >> "$PREPUSH_STUB_ARGV"\nprintf '\\n' >> "$PREPUSH_STUB_ARGV"\nexit "$PREPUSH_STUB_EXIT"\n`,
+      { mode: 0o755 },
+    );
+    const runs = [
+      ...shards.map((sh, i) => ({ sh, i, exit: 1 })),
+      { sh: shards[n - 1]!, i: n - 1, exit: 0 },
+    ];
+    for (const { sh, i, exit } of runs) {
+      const manifest = join(dir, `manifest-${i}-${exit}.json`);
+      rmSync(argvFile, { force: true });
+      const r = spawnSync("sh", ["-c", `${cmd} --shard ${sh} --manifest ${manifest}`], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...process.env, PREPUSH_STUB_ARGV: argvFile, PREPUSH_STUB_EXIT: String(exit) },
+      });
+      launches++;
+      const where = `${SHARD_RUNNER} --shard ${sh} (stub turbo exiting ${exit})`;
+      const dirs = a.shards[i]!;
+      const want = [
+        "run",
+        "test:coverage",
+        "--concurrency=4",
+        ...dirs.map((d) => `--filter=./${d}`),
+      ];
+      const calls = existsSync(argvFile)
+        ? readFileSync(argvFile, "utf8")
+            .split("\n")
+            .filter((l) => l !== "")
+            .map((l) => l.split("\0").slice(0, -1))
+        : [];
+      if (calls.length !== 1)
+        violations.push(
+          `${where} launched turbo ${calls.length} time(s), not exactly once — ${(r.stderr ?? "").trim().split("\n").slice(-3).join(" / ")}`,
+        );
+      else if (JSON.stringify(calls[0]) !== JSON.stringify(want))
+        violations.push(
+          `${where} launched \`turbo ${calls[0]!.join(" ")}\`, not \`turbo ${want.join(" ")}\` — the shard would run narrower than (or none of) its suites`,
+        );
+      if (r.status !== exit)
+        violations.push(
+          `${where} exited ${r.status ?? `by signal ${r.signal}`}, not turbo's ${exit} — a shard's verdict must be its tests' verdict`,
+        );
+      let got: unknown = null;
+      try {
+        got = (JSON.parse(readFileSync(manifest, "utf8")) as { packages?: unknown }).packages;
+      } catch {
+        got = null;
+      }
+      if (JSON.stringify(got) !== JSON.stringify(dirs))
+        violations.push(
+          `${where} wrote manifest packages ${JSON.stringify(got)}, not its shard's ${dirs.length} package(s)`,
+        );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const res = { violations, launches };
+  shardRunnerMemo.set(key, res);
+  return res;
 }
 
 /**
@@ -764,6 +899,8 @@ export interface Inputs {
   rootScripts: Record<string, string>;
   /** dir → { test, test:coverage } for every workspace package. */
   packageScripts: Record<string, Record<string, string>>;
+  /** Source text of the shard runner the pinned `test:coverage:shard` script launches. */
+  shardRunner: string;
 }
 
 export interface Evaluation {
@@ -1348,6 +1485,7 @@ export function readInputs(root: string): Inputs {
     ci: readFileSync(join(root, CI), "utf8"),
     rootScripts,
     packageScripts,
+    shardRunner: readFileSync(join(root, SHARD_RUNNER), "utf8"),
   };
 }
 
@@ -1356,6 +1494,8 @@ function main(): void {
   const { violations, keys, commands, phases } = evaluate(inp);
   const testCache = readTestCacheInputs(ROOT, inp.packageScripts);
   violations.push(...evaluateTestCache(testCache));
+  const runner = shardRunnerViolations(inp, ROOT);
+  violations.push(...runner.violations);
   if (violations.length > 0) {
     failWithRepair({
       invariant:
@@ -1367,7 +1507,7 @@ function main(): void {
     });
   }
   console.log(
-    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned.`,
+    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned; the shard runner executed ${runner.launches} time(s) against a stub turbo — each launched exactly its shard's args and exited with turbo's status.`,
   );
 }
 

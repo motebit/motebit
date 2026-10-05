@@ -14,10 +14,12 @@ import {
   assignShards,
   coveragePackages,
   readPackageScripts,
+  runShard,
   turboArgs,
   verifyManifests,
   verifyPartition,
 } from "../test-coverage-shards.js";
+import type { TurboSpawn } from "../test-coverage-shards.js";
 import { CI_JOBS } from "../check-prepush-subset.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -119,5 +121,48 @@ describe("the verdict job's manifest proof", () => {
   it("rejects a shard that ran fewer packages than assigned", () => {
     const short = manifests.map((m, i) => (i === 1 ? { ...m, packages: m.packages.slice(1) } : m));
     expect(verifyManifests(PKGS, short).join("\n")).toMatch(/in no shard/);
+  });
+});
+
+describe("runShard — what a shard launches and the exit it returns", () => {
+  const recording = (status: number | null) => {
+    const calls: string[][] = [];
+    const spawn: TurboSpawn = (args) => {
+      calls.push(args);
+      return { status };
+    };
+    return { calls, spawn };
+  };
+  const a = assignShards(PKGS, N);
+
+  it("spawns exactly turboArgs(shard), once, for every real shard", () => {
+    a.shards.forEach((dirs) => {
+      const { calls, spawn } = recording(0);
+      runShard(dirs, spawn);
+      expect(calls).toEqual([turboArgs(dirs)]);
+      expect(calls[0]).toEqual([
+        "run",
+        "test:coverage",
+        "--concurrency=4",
+        ...dirs.map((d) => `--filter=./${d}`),
+      ]);
+    });
+  });
+
+  it("returns the child's status unchanged: 0 stays 0, non-zero stays non-zero", () => {
+    const dirs = a.shards[1]!;
+    expect(runShard(dirs, recording(0).spawn)).toBe(0);
+    expect(runShard(dirs, recording(1).spawn)).toBe(1);
+    expect(runShard(dirs, recording(137).spawn)).toBe(137);
+  });
+
+  it("a signal-killed child (status null) is a failure, never 0", () => {
+    expect(runShard(a.shards[1]!, recording(null).spawn)).toBe(1);
+  });
+
+  it("a spawn error throws rather than passing", () => {
+    expect(() =>
+      runShard(a.shards[1]!, () => ({ status: null, error: new Error("ENOENT turbo") })),
+    ).toThrow("ENOENT turbo");
   });
 });

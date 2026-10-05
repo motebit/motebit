@@ -210,6 +210,27 @@ export function turboArgs(dirs: readonly string[]): string[] {
   return ["run", "test:coverage", "--concurrency=4", ...dirs.map((d) => `--filter=./${d}`)];
 }
 
+/** Launches `turbo <args>`; returns the child's exit status (null when killed by a signal). */
+export type TurboSpawn = (args: string[]) => { status: number | null; error?: Error };
+
+/** The real launcher: the workspace's own turbo binary, output inherited. */
+export function spawnTurbo(root: string): TurboSpawn {
+  return (args) =>
+    spawnSync(join(root, "node_modules", ".bin", "turbo"), args, { cwd: root, stdio: "inherit" });
+}
+
+/**
+ * A shard's whole job: launch exactly `turbo ${turboArgs(dirs)}` and return the
+ * child's exit status unchanged (a signal-killed child is 1, never 0). `main`
+ * exits with this and nothing else. check-prepush-subset EXECUTES this path
+ * (stub turbo exiting non-zero, argv recorded) on every `pnpm check`.
+ */
+export function runShard(dirs: readonly string[], spawn: TurboSpawn): number {
+  const r = spawn(turboArgs(dirs));
+  if (r.error) throw r.error;
+  return r.status ?? 1;
+}
+
 export function readPackageScripts(root: string): Record<string, Record<string, string>> {
   const globs = (
     parseYaml(readFileSync(join(root, "pnpm-workspace.yaml"), "utf8")) as { packages: string[] }
@@ -335,12 +356,7 @@ function main(argv: string[]): void {
   console.log(
     `test-coverage shard ${shard.i}/${shard.n}: ${mine.length} of ${packages.length} package(s), ~${a.load[shard.i - 1]}s measured — ${mine.join(" ")}`,
   );
-  const r = spawnSync(join(root, "node_modules", ".bin", "turbo"), turboArgs(mine), {
-    cwd: root,
-    stdio: "inherit",
-  });
-  if (r.error) throw r.error;
-  process.exit(r.status ?? 1);
+  process.exit(runShard(mine, spawnTurbo(root)));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main(process.argv.slice(2));
