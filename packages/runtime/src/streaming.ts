@@ -293,6 +293,9 @@ export interface StreamingDeps {
  * The `invocation_id` matches `ToolInvocationReceipt.invocation_id`
  * for the same call, letting consumers correlate activity rows to
  * audit rows without a separate key.
+ *
+ * Fires before the receipt is signed and regardless of whether
+ * signing succeeds — it says "attempted", never "signed".
  */
 export interface ToolActivityEvent {
   invocation_id: string;
@@ -606,7 +609,9 @@ export class StreamingManager {
               // Fire the ephemeral activity channel FIRST — slab
               // items in virtual_browser mode respond to this
               // immediately; the signed receipt follows microseconds
-              // later. Each sink is independent and fail-closed.
+              // later. Each sink is independent and fail-closed, so
+              // activity is NOT evidence of signing: a surface that
+              // renders a "signed" claim triggers on the receipt sink.
               this.fireToolActivity({
                 invocation_id: chunk.tool_call_id,
                 task_id: runId,

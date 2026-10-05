@@ -82,9 +82,9 @@ const SLASH_COMMANDS: SlashCommandDef[] = [
   },
   { name: "goals", description: "Browse goals" },
   { name: "goal", description: "Quick-add a goal" },
-  { name: "computer", description: "Motebit Computer — reveal or hide the slab" },
-  { name: "halt", description: "Halt the Motebit Computer — preempt in-flight session dispatch" },
-  { name: "resume", description: "Resume the Motebit Computer after a halt" },
+  { name: "computer", description: "Reveal or hide the slab" },
+  { name: "halt", description: "Halt the slab session — preempt in-flight dispatch" },
+  { name: "resume", description: "Resume the slab session after a halt" },
   // Co-browse Slice 2b — keyboard-accessible drivers for the slab's
   // control band. Same fail-closed transitions that band-button clicks
   // drive; offered here as power-user / accessibility affordances.
