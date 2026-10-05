@@ -14,13 +14,13 @@
  *     exists to remove.
  */
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readMeasured } from "../measure-coverage-slack.js";
 
 function withPkg<T>(summary: unknown | null, fn: (dir: string) => T): T {
-  const dir = mkdtempSync(join(tmpdir(), "slack-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "slack-")));
   if (summary !== null) {
     mkdirSync(join(dir, "coverage"), { recursive: true });
     writeFileSync(join(dir, "coverage", "coverage-summary.json"), JSON.stringify(summary));
@@ -65,7 +65,7 @@ describe("readMeasured", () => {
   });
 
   it("returns null on malformed JSON instead of throwing", () => {
-    const dir = mkdtempSync(join(tmpdir(), "slack-"));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "slack-")));
     mkdirSync(join(dir, "coverage"), { recursive: true });
     writeFileSync(join(dir, "coverage", "coverage-summary.json"), "{ not json");
     try {

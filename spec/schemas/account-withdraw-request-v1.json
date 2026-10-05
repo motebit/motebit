@@ -9,7 +9,7 @@
     "amount": {
       "type": "number",
       "exclusiveMinimum": 0,
-      "description": "Positive decimal USD to withdraw."
+      "description": "Positive decimal USD to withdraw. The converted value MUST be at least 1 micro-unit (round(amount × 1,000,000) ≥ 1, i.e. at least 0.000001 USD); a smaller amount is refused with 400."
     },
     "destination": {
       "description": "Solana base58 payout address (Path 0); omitted ⇒ manual/pending. An EVM 0x address is refused before any debit (Path 1 retired, #948).",

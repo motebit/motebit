@@ -40,7 +40,12 @@ export const ACCOUNT_WITHDRAW_RESULT_SCHEMA_ID =
 
 export const AccountWithdrawRequestSchema = z
   .object({
-    amount: z.number().positive().describe("Positive decimal USD to withdraw."),
+    amount: z
+      .number()
+      .positive()
+      .describe(
+        "Positive decimal USD to withdraw. The converted value MUST be at least 1 micro-unit (round(amount × 1,000,000) ≥ 1, i.e. at least 0.000001 USD); a smaller amount is refused with 400.",
+      ),
     destination: z
       .string()
       .min(1)

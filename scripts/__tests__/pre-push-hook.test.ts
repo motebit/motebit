@@ -26,12 +26,13 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
-  existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -193,7 +194,7 @@ const TEST_CHANGED = "turbo run test --filter=./packages/leaf --concurrency=2";
 const REACH_LEAF = "ls -r --depth -1 --parseable --filter=...{./packages/leaf}";
 
 beforeAll(() => {
-  base = mkdtempSync(join(tmpdir(), "prepush-hook-"));
+  base = realpathSync(mkdtempSync(join(tmpdir(), "prepush-hook-")));
   shimDir = join(base, "bin");
   mkdirSync(shimDir);
   writeFileSync(join(shimDir, "pnpm"), SHIM);

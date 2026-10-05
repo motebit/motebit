@@ -10,8 +10,9 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
+  realpathSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -20,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-const SCRATCH = mkdtempSync(join(tmpdir(), "motebit-lock-test-"));
+const SCRATCH = realpathSync(mkdtempSync(join(tmpdir(), "motebit-lock-test-")));
 const LOCK = join(SCRATCH, "lock");
 process.env.MOTEBIT_GATE_LOCK_DIR = LOCK;
 // A starved acquirer fails fast instead of at the 25 s default.

@@ -27,6 +27,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -59,7 +60,7 @@ afterAll(() => {
 });
 
 function mk(): string {
-  const t = mkdtempSync(join(tmpdir(), "check-vercel-"));
+  const t = realpathSync(mkdtempSync(join(tmpdir(), "check-vercel-")));
   tmps.push(t);
   mkdirSync(join(t, "scripts"), { recursive: true });
   writeFileSync(join(t, "scripts/vercel-ignore-build.sh"), "");

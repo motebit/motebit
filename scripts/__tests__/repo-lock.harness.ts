@@ -35,7 +35,15 @@
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,7 +107,7 @@ async function until(pred: () => boolean, timeoutMs: number): Promise<boolean> {
  * mid-perturbation instead of mid-hold.
  */
 async function killInsideLock(perturb = false): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "motebit-lock-harness-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "motebit-lock-harness-")));
   const ready = join(dir, "ready");
   const child = driver([perturb ? "perturb-forever" : "hold-forever", ready]);
   const exited = finish(child, 120_000);
@@ -163,7 +171,7 @@ function record(name: string, green: boolean, detail: string): void {
 async function h1Trial(reuse: boolean): Promise<{ ok: boolean; why: string }> {
   await killInsideLock();
   if (reuse && fakePidReuse(process.pid) === 0) return { ok: false, why: "no owner record" };
-  const dir = mkdtempSync(join(tmpdir(), "motebit-lock-harness-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "motebit-lock-harness-")));
   writeFileSync(join(dir, "log"), "");
   const running = Array.from({ length: 8 }, () => finish(driver(["hold", dir, "100"]), 30_000));
   // Start barrier: every client is loaded and spinning before any may try.
