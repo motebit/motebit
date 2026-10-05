@@ -1,5 +1,7 @@
 # motebit/evidence-provenance@1.0
 
+**Status:** Draft
+
 Verifiable-locality extended from **signatures to EVIDENCE**. A
 `VerificationVerdict`'s `evidenceBasis` is a list of `EvidenceRef` pointers naming
 what a verdict used. This spec defines the optional, re-verifiable **provenance** an

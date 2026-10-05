@@ -1,5 +1,7 @@
 # motebit/agent-revocation@1.0
 
+**Status:** Draft
+
 Operator de-listing of agents from the relay's discovery registry, made
 sovereign-verifiable. The relay is a convenience layer, not a trust root
 (`services/relay/CLAUDE.md` rule 6); an operator who can silently disappear an
