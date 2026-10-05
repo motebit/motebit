@@ -28,6 +28,7 @@ import { McpClientAdapter } from "@motebit/mcp-client";
 import { openRelaySubTask } from "@motebit/molecule-runner";
 import type { Citation, ExecutionReceipt, TokenAudience } from "@motebit/sdk";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
+import { SONNET_MICRO_PER_MTOK } from "./helpers.js";
 import { reportShapeIssues } from "./report-shape.js";
 
 /**
@@ -127,6 +128,14 @@ export interface ResearchResult {
   search_count: number;
   /** Number of motebit_read_url calls. */
   fetch_count: number;
+  /**
+   * Micro-units this turn actually paid out on sub-hops (worker net + relay
+   * fee, from each hop's settlement fact, else its quote). Operator-side
+   * observability only — logged, never on the wire.
+   */
+  paid_spend_micro: number;
+  /** The per-task paid-spend budget this turn ran under; `null` = unbudgeted. */
+  paid_budget_micro: number | null;
 }
 
 export interface ResearchConfig {
@@ -167,6 +176,16 @@ export interface ResearchConfig {
    * its fee); an unpriced atom falls back to direct MCP.
    */
   paidSubDelegate?: PaidSubDelegate;
+  /**
+   * Per-task ceiling (micro-units) on PAID sub-hop outflow — worker net plus
+   * relay fee — so the task never spends more on atoms than its own price
+   * leaves after margin and inference (`computePaidSpendBudgetMicro`). When
+   * set, every paid hop is QUOTED first (a dry run of the same spend path,
+   * priced from the target's listing) and skipped if it would cross the
+   * budget; the turn synthesizes from what it has (fail-soft). Absent ⇒
+   * unbudgeted (no quote round-trip).
+   */
+  paidSpendBudgetMicro?: number;
 }
 
 /** Result of a paid P2P sub-delegation attempt (Inc 2b). */
@@ -197,6 +216,16 @@ export interface PaidSubDelegateResult {
   routingTranscript?: Record<string, unknown>;
   /** Failure code when `!ok` (e.g. `worker_not_payable`, `money_meter_denied`). */
   code?: string;
+}
+
+/**
+ * Total outflow (worker net + fee) of a settlement fact or quote, in
+ * micro-units; `null` when the worker leg is unknown — an unpriced quote is
+ * never paid blind.
+ */
+function outflowMicro(settlement: PaidSubDelegateResult["settlement"]): number | null {
+  if (settlement?.paidMicro == null) return null;
+  return settlement.paidMicro + (settlement.feeMicro ?? 0);
 }
 
 /**
@@ -232,6 +261,11 @@ export type PaidSubDelegate = (params: {
   capability: string;
   prompt: string;
   targetWorkerId?: string;
+  /**
+   * Quote only: resolve + price the hop (settlement carries `paidMicro` /
+   * `feeMicro`) without paying or running it. Used by the per-task budget.
+   */
+  dryRun?: boolean;
 }) => Promise<PaidSubDelegateResult>;
 
 /** Codes that mean "this atom is not set up for P2P" → fall back to direct MCP. */
@@ -586,14 +620,14 @@ export async function research(question: string, config: ResearchConfig): Promis
     const routingTranscripts: Record<string, unknown>[] = [];
     const citations: Citation[] = [];
     let recallSelfCount = 0;
-    // claude-sonnet-4-6 list pricing per million tokens; estimate only —
-    // logged per report so the operator can tune MOTEBIT_UNIT_COST.
-    // Cache tiers: writes bill 1.25x input, reads 0.1x — the loop's
-    // repeated prefix makes reads dominate from iteration 2 on.
-    const USD_PER_M_INPUT = 3;
-    const USD_PER_M_OUTPUT = 15;
-    const USD_PER_M_CACHE_WRITE = 3.75;
-    const USD_PER_M_CACHE_READ = 0.3;
+    // claude-sonnet-4-6 list pricing (helpers.ts, shared with the budget's
+    // LLM reserve); estimate only — logged per report so the operator can tune
+    // MOTEBIT_UNIT_COST. The loop's repeated prefix makes cache reads dominate
+    // from iteration 2 on.
+    const USD_PER_M_INPUT = SONNET_MICRO_PER_MTOK.input / 1e6;
+    const USD_PER_M_OUTPUT = SONNET_MICRO_PER_MTOK.output / 1e6;
+    const USD_PER_M_CACHE_WRITE = SONNET_MICRO_PER_MTOK.cacheWrite / 1e6;
+    const USD_PER_M_CACHE_READ = SONNET_MICRO_PER_MTOK.cacheRead / 1e6;
     let inputTokens = 0;
     let outputTokens = 0;
     let cacheWriteTokens = 0;
@@ -613,6 +647,9 @@ export async function research(question: string, config: ResearchConfig): Promis
     let searchCount = 0;
     let fetchCount = 0;
     let toolCallCount = 0;
+    // Integer micro-units — the money path carries no floating point.
+    const budgetMicro = config.paidSpendBudgetMicro ?? null;
+    let paidSpentMicro = 0;
 
     /**
      * Dispatch one Claude tool_use. Interior tier (recall_self) runs locally
@@ -703,7 +740,56 @@ export async function research(question: string, config: ResearchConfig): Promis
       // log which lane fires (paid P2P vs free direct MCP) and, on fallback,
       // the exact not-payable code. Same "make the silent decision loud"
       // discipline as the relay's mcp-forward logging.
-      if (config.paidSubDelegate != null) {
+      // Per-task budget: quote the hop from the target's own listing BEFORE
+      // paying it. A not-payable quote goes straight to the free lane; a hop
+      // that would cross the budget is not made — the model is told to
+      // synthesize from what it has (fail-soft, never a failed report).
+      let quotedMicro: number | null = null;
+      let payable = config.paidSubDelegate != null;
+      if (config.paidSubDelegate != null && budgetMicro != null) {
+        const quote = await config.paidSubDelegate({
+          capability: capabilityHint,
+          prompt,
+          ...(targetId != null ? { targetWorkerId: targetId } : {}),
+          dryRun: true,
+        });
+        if (!quote.ok) {
+          if (!NOT_PAYABLE_CODES.has(quote.code ?? "")) {
+            console.log(
+              `[research] sub-hop: quote REFUSED cap=${capabilityHint} code=${quote.code ?? "unknown"}`,
+            );
+            return {
+              type: "tool_result",
+              tool_use_id: tu.id,
+              content: `paid delegation to ${tu.name} refused (${quote.code ?? "unknown"})`,
+              is_error: true,
+            };
+          }
+          console.log(
+            `[research] sub-hop: fallback DIRECT cap=${capabilityHint} code=${quote.code}`,
+          );
+          payable = false;
+        } else {
+          quotedMicro = outflowMicro(quote.settlement);
+          if (quotedMicro == null || paidSpentMicro + quotedMicro > budgetMicro) {
+            if (paidSpentMicro === 0 && quotedMicro != null) {
+              console.log(
+                `[research] paid-spend budget ${budgetMicro} < one paid call (${quotedMicro}) cap=${capabilityHint} — running with zero paid calls; raise MOTEBIT_UNIT_COST or lower the margin/reserve`,
+              );
+            }
+            console.log(
+              `[research] sub-hop: BUDGET SKIP cap=${capabilityHint} spent=${paidSpentMicro} quote=${quotedMicro ?? "unpriced"} budget=${budgetMicro}`,
+            );
+            return {
+              type: "tool_result",
+              tool_use_id: tu.id,
+              content: `${tu.name} was not performed: this report's paid-call budget is exhausted (spent ${paidSpentMicro} of ${budgetMicro} micro-USD; next call quoted ${quotedMicro ?? "unpriced"}). Do not call ${tu.name} again — write the report from what you already gathered (free tools such as motebit_recall_self remain available).`,
+            };
+          }
+        }
+      }
+
+      if (config.paidSubDelegate != null && payable) {
         // Attempt paid P2P for any PRICED capability — pinned to `targetId` when
         // one is configured, otherwise UNPINNED so the runtime's first-person
         // ranker chooses among the discovered providers (the market). A
@@ -726,7 +812,12 @@ export async function research(question: string, config: ResearchConfig): Promis
               is_error: true,
             };
           }
-          console.log(`[research] sub-hop: PAID P2P cap=${capabilityHint}`);
+          // Charge the hop at its settlement fact; a live result with no fact
+          // is charged at its quote (0 only on the unbudgeted, unquoted path).
+          paidSpentMicro += outflowMicro(paid.settlement) ?? quotedMicro ?? 0;
+          console.log(
+            `[research] sub-hop: PAID P2P cap=${capabilityHint} spent=${paidSpentMicro}${budgetMicro != null ? `/${budgetMicro}` : ""}`,
+          );
           receipt = paid.receipt;
           delegationReceipts.push(receipt);
           // Self-attest the money fact: stamp the hop's settlement (mode + onchain
@@ -770,7 +861,7 @@ export async function research(question: string, config: ResearchConfig): Promis
             `[research] sub-hop: fallback DIRECT cap=${capabilityHint} code=${paid.code}`,
           );
         }
-      } else {
+      } else if (config.paidSubDelegate == null) {
         // No paid seam (money env unset) → free direct MCP.
         console.log(`[research] sub-hop: DIRECT (no paid seam) cap=${capabilityHint}`);
       }
@@ -897,6 +988,8 @@ export async function research(question: string, config: ResearchConfig): Promis
           recall_self_count: recallSelfCount,
           search_count: searchCount,
           fetch_count: fetchCount,
+          paid_spend_micro: paidSpentMicro,
+          paid_budget_micro: budgetMicro,
         };
       }
 
@@ -943,6 +1036,8 @@ export async function research(question: string, config: ResearchConfig): Promis
       recall_self_count: recallSelfCount,
       search_count: searchCount,
       fetch_count: fetchCount,
+      paid_spend_micro: paidSpentMicro,
+      paid_budget_micro: budgetMicro,
     };
   } finally {
     // Always release the atom MCP sessions
