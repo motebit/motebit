@@ -1,7 +1,7 @@
 # Audits
 
-**Procedure:** Repo Constitutional Audit **v1.0**.
-**Canonical source:** the shared standards repo, `repo-constitutional-audit/versions/v1.0.md` (local `~/src/standards`, commit `c6ce214`; not yet published).
+**Procedure:** Repo Constitutional Audit **v1.1**.
+**Canonical source:** the shared standards repo, `repo-constitutional-audit/versions/v1.1.md` (local `~/src/standards`, commit `f7008be`; not yet published).
 
 This file is a thin adapter. It adds Motebit's specifics and points at existing authority; it restates none of it ([`readme-as-glass`](../doctrine/readme-as-glass.md)). It may ADD questions. It never weakens the procedure's evidence or adversarial-review requirements.
 
@@ -45,7 +45,7 @@ Fixed across audits for comparability. Every workspace package (`pnpm-workspace.
 
 ## Motebit questions
 
-In addition to the procedure's questions:
+In addition to the procedure's questions (v1.1 already covers guards, claims vs proof and disclosure):
 
 1. Has implementation convenience become protocol?
 2. Are the protocol (Apache-2.0 permissive floor) and BSL runtime boundaries still clean?
@@ -57,7 +57,6 @@ In addition to the procedure's questions:
 8. Does each subsystem exist because Motebit itself must own it, rather than a downstream app, marketplace or workflow product?
 9. Are there duplicated authorities or sources of truth?
 10. Is any historical experiment or compatibility path kept only because it exists?
-11. **Disclosure (local; not part of v1.0):** what does each public read surface, committed artifact, spec/schema and published package disclose, and to whom?
 
 ## Execution rules
 
@@ -65,7 +64,7 @@ In addition to the procedure's questions:
 - Layer audits are read-only. A whole-system synthesis pass (Layer 7) follows them.
 - Every consequential MOVE / EXTRACT / DELETE / SIMPLIFY requires a separate cold **DEFENDER** pass arguing the strongest preservation case before acceptance (procedure step 5).
 - Agreement between agents is judgment, not guarantee. Label every finding as judgment or deterministic evidence.
-- The canonical procedure is not reachable from cloud lanes (`~/src/standards` has no remote). Every audit lane is given the exact v1.0 text verbatim in its brief.
+- The canonical procedure is not reachable from cloud lanes (`~/src/standards` has no remote). Every audit lane is given the exact v1.1 text verbatim in its brief.
 
 ## Evidence sources
 
@@ -82,16 +81,21 @@ Before a major architectural phase, or a material change to the protocol, author
 
 ## Records
 
-Naming: `docs/audits/YYYY-MM-DD-<scope>.md`. Every record opens with its provenance. A record that does not name the procedure copy it used makes no claim of compliance with v1.0.
+Audit records are **private by default** (procedure, "Where records live"). They are not committed to
+this public repository. Records live in the private cross-repo audit store `hakimlabs/audits` under
+`motebit/`, named `YYYY-MM-DD-<scope>.md`. Only durable results (fixes, guards, public contracts)
+land here, through ordinary changes.
+
+Every record opens with its provenance. A record that does not name the procedure copy it used makes
+no claim of compliance with v1.1. Every record also carries the procedure's required outputs,
+including the survival rate, guards exercised by failure versus taken on trust, claims that exceed
+their proof, and disclosures the product contract does not require.
 
 ```text
-Procedure: Repo Constitutional Audit v1.0
-Canonical commit: c6ce214
+Procedure: Repo Constitutional Audit v1.1
+Canonical commit: f7008be
 Execution copy: procedure text supplied verbatim in the audit brief
 Evidence boundary: <motebit commit SHA>
 ```
-
-| Date | Record | Procedure | Commit |
-| ---- | ------ | --------- | ------ |
 
 Pre-procedure audits in [`docs/doctrine/audits/`](../doctrine/audits/) are historical context only.
