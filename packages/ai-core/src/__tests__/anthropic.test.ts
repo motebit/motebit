@@ -295,6 +295,9 @@ describe("modelRejectsSamplingParams — Opus 4.7+/Claude-5 request-shape guard"
       // of it can't silently re-send `temperature` to them.
       "claude-opus-5-5",
       "claude-fable-5-1",
+      // Sonnet 5.5 — the live id the scheduled catalog-drift gate reported
+      // missing; same Claude-5 family as its siblings (regex unchanged).
+      "claude-sonnet-5-5",
     ]) {
       expect(modelRejectsSamplingParams(m)).toBe(true);
     }
