@@ -323,6 +323,7 @@ describe("runMolecule", () => {
     // Branch: omitting dryRun ⇒ the option is not forwarded (undefined, not false).
     await handle!.spend({ capability: "research", prompt: "again" });
     expect((execCalls[1] as Record<string, unknown>).dryRun).toBeUndefined();
+    expect((execCalls[1] as Record<string, unknown>).maxTotalMicro).toBeUndefined();
     const call = execCalls[0] as {
       capability: string;
       dryRun: boolean;
@@ -341,6 +342,10 @@ describe("runMolecule", () => {
     // forwarded verbatim to executeGrantedDelegation.
     await handle!.spend({ capability: "research", prompt: "pinned", targetWorkerId: "atom-xyz" });
     expect((execCalls[2] as Record<string, unknown>).targetWorkerId).toBe("atom-xyz");
+
+    // The per-call ceiling reaches the runtime verbatim (it enforces it pre-sign).
+    await handle!.spend({ capability: "research", prompt: "capped", maxTotalMicro: 66_200 });
+    expect((execCalls[3] as Record<string, unknown>).maxTotalMicro).toBe(66_200);
   });
 
   it("defaultCreateMoneyRuntime builds a real runtime with the granted-spend primitive + R4 delegation", () => {

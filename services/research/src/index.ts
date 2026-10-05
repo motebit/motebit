@@ -19,10 +19,14 @@ import {
   makeAuthTokenMinter,
 } from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
-import { toMicro } from "@motebit/sdk";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
-import { computePaidSpendBudgetMicro, loadConfig } from "./helpers.js";
+import {
+  computePaidSpendBudgetMicro,
+  loadConfig,
+  paidSpendBudgetConfigError,
+  parseUnitCostMicro,
+} from "./helpers.js";
 import { research } from "./research.js";
 import type { ResearchConfig } from "./research.js";
 
@@ -96,18 +100,32 @@ async function main(): Promise<void> {
   // Default covers worst-case sonnet inference (~$0.26–0.42/report at the
   // 8-tool-call cap) — the per-report cost_estimate_usd log is the tuning
   // signal before any prod price change.
-  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.25");
+  // Every budget input is validated at boot: a non-finite / negative value is
+  // an operator error and the service refuses to start (MOTEBIT_UNIT_COST=abc
+  // was a NaN budget that paid every hop).
+  const budgetConfigError = paidSpendBudgetConfigError({
+    unitCostRaw: process.env["MOTEBIT_UNIT_COST"],
+    maxToolCalls: config.maxToolCalls,
+    marginBps: config.marginBps,
+    llmReserveMicro: config.llmReserveMicro,
+  });
+  if (budgetConfigError != null) {
+    console.error(`[research] refusing to start: ${budgetConfigError}`);
+    process.exit(1);
+  }
+  const unitCostMicro = parseUnitCostMicro(process.env["MOTEBIT_UNIT_COST"])!;
+  const unitCost = unitCostMicro / 1_000_000;
 
   // Per-task paid-spend budget (first-party floor law, clearing-house doctrine):
   // atoms are paid from what this task earns, so their outflow is capped at
   // price − thin margin − the inference reserve. Integer micro-units.
   const paidSpendBudgetMicro = computePaidSpendBudgetMicro({
-    unitCostMicro: toMicro(unitCost),
+    unitCostMicro,
     marginBps: config.marginBps,
     llmReserveMicro: config.llmReserveMicro,
   });
   console.log(
-    `[research] paid-spend budget ${paidSpendBudgetMicro} micro/task (price ${toMicro(unitCost)} − margin ${config.marginBps}bps − LLM reserve ${config.llmReserveMicro})`,
+    `[research] paid-spend budget ${paidSpendBudgetMicro} micro/task (price ${unitCostMicro} − margin ${config.marginBps}bps − LLM reserve ${config.llmReserveMicro})`,
   );
   if (paidSpendBudgetMicro === 0) {
     console.log(
@@ -217,12 +235,38 @@ async function main(): Promise<void> {
                 prompt: string;
                 targetWorkerId?: string;
                 dryRun?: boolean;
+                maxTotalMicro?: number;
               }) => {
                 const r = await spend.spend(p);
-                if (!r.ok) return { ok: false as const, code: r.code };
+                // A failure that MOVED money (paid, then timeout/agent_failed;
+                // or unconfirmed) carries its facts through — dropping them
+                // to a bare code is what left a paid-then-failed hop uncounted.
+                if (!r.ok)
+                  return {
+                    ok: false as const,
+                    code: r.code,
+                    ...(r.settledPayment != null ? { settledPayment: r.settledPayment } : {}),
+                    ...(r.unconfirmedPayment != null
+                      ? { unconfirmedPayment: r.unconfirmedPayment }
+                      : {}),
+                    ...(r.extraPayments != null ? { extraPayments: r.extraPayments } : {}),
+                  };
                 // A dry run is the budget's QUOTE: the resolved price
-                // (paidMicro + feeMicro) from the target's listing, no payment.
-                if (r.dryRun) return { ok: true as const, settlement: r.settlement };
+                // (paidMicro + feeMicro) and the worker it priced, no payment.
+                if (r.dryRun)
+                  return {
+                    ok: true as const,
+                    settlement: r.settlement,
+                    ...(r.workerMotebitId != null ? { workerMotebitId: r.workerMotebitId } : {}),
+                    ...(r.routingTranscript != null
+                      ? {
+                          routingTranscript: r.routingTranscript as unknown as Record<
+                            string,
+                            unknown
+                          >,
+                        }
+                      : {}),
+                  };
                 // Surface the money fact so the molecule can self-attest the paid
                 // hop in its signed receipt (mode + onchain tx) — the runtime
                 // populated it from the payment proof; dropping it here is what

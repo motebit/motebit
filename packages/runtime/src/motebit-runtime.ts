@@ -6272,7 +6272,22 @@ export class MotebitRuntime {
      * (`worker_not_payable`).
      */
     targetWorkerId?: string;
+    /**
+     * Hard per-call ceiling, integer micro-units, over the RESOLVED total
+     * outflow (worker net + every fee leg). Enforced by the runtime after
+     * pricing and BEFORE the payment is signed or broadcast — a resolution
+     * above it refuses `budget_exceeded` with no money moved (fail-closed),
+     * on the dry-run and the live path alike. Narrows only: it can refuse a
+     * spend the grant would allow, never allow one the grant's meter refuses.
+     * A non-integer or negative value refuses (never "no ceiling"). Absent ⇒
+     * no per-call ceiling (the grant's lifetime meter still applies).
+     */
+    maxTotalMicro?: number;
   }): Promise<GrantedDelegationResult> {
+    const maxTotalMicro = params.maxTotalMicro;
+    if (maxTotalMicro != null && !(Number.isSafeInteger(maxTotalMicro) && maxTotalMicro >= 0)) {
+      return { ok: false, code: "budget_exceeded" };
+    }
     const coords = this._grantedSpendCoords;
     if (coords == null) return { ok: false, code: "sync_not_enabled" };
     const delegateToolDef = this.toolRegistry.get("delegate_to_agent");
@@ -6370,12 +6385,19 @@ export class MotebitRuntime {
         const req = resolved.paymentRequest;
         const totalOutflowMicro =
           req.amountMicro + req.feeAmountMicro + (req.executorFeeAmountMicro ?? 0);
+        // The per-call ceiling refuses the quote exactly as the live path's
+        // pre-broadcast check (resolveAndSubmitP2pDelegation 3b) refuses the pay.
+        if (maxTotalMicro != null && totalOutflowMicro > maxTotalMicro) {
+          return { ok: false, code: "budget_exceeded" };
+        }
         const dryMeter = createMoneyMeter(new InMemoryGrantSpendStore());
         const verdict = await dryMeter(presentedGrant, "p2p_payment", {
           amount_micro: totalOutflowMicro,
           counterparty: resolved.workerAddress,
         });
         if (!verdict.allowed) return { ok: false, code: verdict.denial ?? "money_meter_denied" };
+        // Re-read through a holder: TS narrows the closure-assigned `let` to null.
+        const quoteTranscript = mintedTranscript as RoutingDecisionTranscript | null;
         return {
           ok: true,
           dryRun: true,
@@ -6384,6 +6406,8 @@ export class MotebitRuntime {
             paidMicro: req.amountMicro,
             feeMicro: req.feeAmountMicro + (req.executorFeeAmountMicro ?? 0),
           },
+          workerMotebitId: resolved.workerMotebitId,
+          ...(quoteTranscript != null ? { routingTranscript: quoteTranscript } : {}),
         };
       }
 
@@ -6413,6 +6437,8 @@ export class MotebitRuntime {
         ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
         ...(selectWorker != null ? { selectWorker } : {}),
         ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
+        // Checked on the resolved total BEFORE the meter-wrapped builder signs.
+        ...(maxTotalMicro != null ? { maxTotalMicro } : {}),
         paidIntentLedger: this._paidIntentLedger,
         logger: this._logger,
       });

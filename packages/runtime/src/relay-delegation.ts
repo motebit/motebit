@@ -348,7 +348,24 @@ export type DelegationResult =
  * `AuthorityDelta`.
  */
 export type GrantedDelegationResult =
-  | { ok: true; dryRun: true; settlement: DelegationSettlement }
+  | {
+      ok: true;
+      dryRun: true;
+      settlement: DelegationSettlement;
+      /**
+       * The worker the quote priced. A caller that pays after quoting pins the
+       * live call to it (`targetWorkerId`) so the quote and the pay name the
+       * same counterparty — an unpinned live call re-ranks under a fresh tick
+       * seed and may pick another worker at another price.
+       */
+      workerMotebitId?: string;
+      /**
+       * The signed routing-decision transcript of the quote's ranked selection
+       * (absent on a pinned quote / no signing key). When the caller pins the
+       * live call to `workerMotebitId`, THIS is the hire's routing decision.
+       */
+      routingTranscript?: import("@motebit/protocol").RoutingDecisionTranscript;
+    }
   | {
       ok: true;
       dryRun: false;

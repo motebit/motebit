@@ -53,23 +53,73 @@ export function computePaidSpendBudgetMicro(params: {
   llmReserveMicro: number;
 }): number {
   const marginMicro = Math.ceil((params.unitCostMicro * params.marginBps) / 10_000);
-  return Math.max(0, params.unitCostMicro - marginMicro - params.llmReserveMicro);
+  const budget = params.unitCostMicro - marginMicro - params.llmReserveMicro;
+  // Defence in depth behind the boot validation: a non-finite input yields a
+  // ZERO budget, never NaN (`spent + q > NaN` is false — it would pay every hop).
+  return Number.isFinite(budget) ? Math.max(0, Math.floor(budget)) : 0;
 }
 
-/** Non-negative safe integer from env, else `fallback` (never a NaN/negative budget input). */
+/** Default listed price of a research task, USD (`MOTEBIT_UNIT_COST`). */
+export const DEFAULT_RESEARCH_UNIT_COST = "0.25";
+
+/**
+ * Parse `MOTEBIT_UNIT_COST` (USD, decimal) to integer micro-units, or `null`
+ * when it is not a finite non-negative decimal — the boot refuses rather than
+ * running with a NaN price (`parseFloat("abc")` ⇒ NaN ⇒ a NaN budget).
+ */
+export function parseUnitCostMicro(raw: string | undefined): number | null {
+  const v = (raw ?? DEFAULT_RESEARCH_UNIT_COST).trim();
+  if (!/^\d+(\.\d+)?$/.test(v)) return null;
+  const micro = Math.round(Number(v) * 1_000_000);
+  return Number.isSafeInteger(micro) ? micro : null;
+}
+
+/**
+ * Boot validation of every paid-spend budget input. Returns the refusal
+ * message, or `null` when all inputs are finite, non-negative and in range.
+ * The service refuses to start on a message — an invalid budget input is an
+ * operator error, never silently a default and never NaN.
+ */
+export function paidSpendBudgetConfigError(params: {
+  unitCostRaw: string | undefined;
+  maxToolCalls: number;
+  marginBps: number;
+  llmReserveMicro: number;
+}): string | null {
+  if (parseUnitCostMicro(params.unitCostRaw) == null) {
+    return `MOTEBIT_UNIT_COST=${JSON.stringify(params.unitCostRaw)} is not a non-negative decimal USD price`;
+  }
+  if (!Number.isSafeInteger(params.maxToolCalls) || params.maxToolCalls < 1) {
+    return "MOTEBIT_MAX_TOOL_CALLS must be a positive integer";
+  }
+  if (!Number.isSafeInteger(params.marginBps) || params.marginBps < 0 || params.marginBps > 9_999) {
+    return "MOTEBIT_RESEARCH_MARGIN_BPS must be an integer in [0, 9999]";
+  }
+  if (!Number.isSafeInteger(params.llmReserveMicro) || params.llmReserveMicro < 0) {
+    return "MOTEBIT_RESEARCH_LLM_RESERVE_MICRO must be a non-negative integer (micro-USD), or empty for the derived default";
+  }
+  return null;
+}
+
+/**
+ * Non-negative safe integer from env; unset or empty ⇒ `fallback`. A value
+ * that is SET but invalid (non-numeric, negative, above `max`) yields NaN, so
+ * `paidSpendBudgetConfigError` refuses the boot instead of silently defaulting.
+ */
 function envNonNegativeInt(
   raw: string | undefined,
   fallback: number,
   max = Number.MAX_SAFE_INTEGER,
 ): number {
-  if (raw == null || !/^\d+$/.test(raw.trim())) return fallback;
+  if (raw == null || raw.trim() === "") return fallback;
+  if (!/^\d+$/.test(raw.trim())) return NaN;
   const n = Number(raw.trim());
-  return n <= max ? n : fallback;
+  return Number.isSafeInteger(n) && n <= max ? n : NaN;
 }
 
 /** Load service configuration from environment variables. */
 export function loadConfig() {
-  const maxToolCalls = parseInt(process.env["MOTEBIT_MAX_TOOL_CALLS"] ?? "8", 10);
+  const maxToolCalls = envNonNegativeInt(process.env["MOTEBIT_MAX_TOOL_CALLS"], 8);
   return {
     port: parseInt(process.env["MOTEBIT_PORT"] ?? "3400", 10),
     dbPath: process.env["MOTEBIT_DB_PATH"] ?? "./data/research.db",

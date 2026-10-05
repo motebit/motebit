@@ -272,6 +272,14 @@ export interface MoleculeSpendHandle {
      * an ineligible pinned worker fails closed (`worker_not_payable`).
      */
     targetWorkerId?: string;
+    /**
+     * Hard per-call ceiling (integer micro-units) on the resolved total
+     * outflow (worker net + fees), enforced by the runtime BEFORE the payment
+     * is signed — over it ⇒ `budget_exceeded`, no money moved. A per-task
+     * budget passes its REMAINING budget here so the quote and the pay can
+     * never diverge past it (a re-ranked worker, a repriced listing).
+     */
+    maxTotalMicro?: number;
   }): Promise<GrantedDelegationResult>;
 }
 
@@ -986,7 +994,7 @@ export async function runMolecule(
     const heldGrant = await selfIssueGrant(identity, config.moneyExecution);
     spend = {
       heldGrant,
-      spend: async ({ capability, prompt, dryRun, targetWorkerId }) => {
+      spend: async ({ capability, prompt, dryRun, targetWorkerId, maxTotalMicro }) => {
         const rt = runtimeRef.current;
         const exec = rt?.executeGrantedDelegation;
         if (typeof exec !== "function") return { ok: false, code: "sync_not_enabled" };
@@ -997,6 +1005,7 @@ export async function runMolecule(
           delegation: { token, grant: heldGrant },
           ...(dryRun != null ? { dryRun } : {}),
           ...(targetWorkerId != null ? { targetWorkerId } : {}),
+          ...(maxTotalMicro != null ? { maxTotalMicro } : {}),
         });
       },
     };

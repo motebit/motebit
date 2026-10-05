@@ -206,6 +206,8 @@ export interface PaidSubDelegateResult {
     txHash?: string;
     paidMicro?: number;
     feeMicro?: number;
+    /** #885: other transactions this hire sent that may have moved money. */
+    extraPayments?: ReadonlyArray<unknown>;
   };
   /**
    * The delegator-signed routing-decision transcript for THIS hire's ranked
@@ -214,8 +216,24 @@ export interface PaidSubDelegateResult {
    * hires and when the runtime has no signing key. Reveals, never authorizes.
    */
   routingTranscript?: Record<string, unknown>;
+  /**
+   * Quote only: the worker the quote priced. The live call is pinned to it so
+   * the quote and the pay name the same counterparty.
+   */
+  workerMotebitId?: string;
   /** Failure code when `!ok` (e.g. `worker_not_payable`, `money_meter_denied`). */
   code?: string;
+  /**
+   * Money that LEFT the wallet on a FAILED hop (`!ok`) — the runtime's #433 /
+   * #885 facts, passed through: the payment landed but delivery failed
+   * (`settledPayment`, e.g. a post-broadcast `timeout` / `agent_failed`), or
+   * it may have landed and could not be confirmed (`unconfirmedPayment`).
+   * A failed hop that moved money is still charged to the task's budget.
+   */
+  settledPayment?: { paidMicro: number; feeMicro: number; txHash?: string; taskId?: string };
+  unconfirmedPayment?: { paidMicro: number; feeMicro: number };
+  /** Other transactions this hire sent that may have moved money (amounts unknown). */
+  extraPayments?: ReadonlyArray<unknown>;
 }
 
 /**
@@ -226,6 +244,19 @@ export interface PaidSubDelegateResult {
 function outflowMicro(settlement: PaidSubDelegateResult["settlement"]): number | null {
   if (settlement?.paidMicro == null) return null;
   return settlement.paidMicro + (settlement.feeMicro ?? 0);
+}
+
+/**
+ * Money a FAILED paid hop moved anyway (micro-units): a settled or unconfirmed
+ * payment, plus every extra transaction the hire sent, each charged at the
+ * same per-transaction amount (or `perTxFallback` — the quote / the cap —
+ * when the failure names no amount). Conservative by construction: money that
+ * may have left is counted as left.
+ */
+function failedHopOutflowMicro(r: PaidSubDelegateResult, perTxFallback: number): number {
+  const fact = r.settledPayment ?? r.unconfirmedPayment;
+  const perTx = fact != null ? fact.paidMicro + fact.feeMicro : perTxFallback;
+  return (fact != null ? perTx : 0) + (r.extraPayments?.length ?? 0) * perTx;
 }
 
 /**
@@ -266,6 +297,13 @@ export type PaidSubDelegate = (params: {
    * `feeMicro`) without paying or running it. Used by the per-task budget.
    */
   dryRun?: boolean;
+  /**
+   * Hard ceiling (integer micro-units) on this hop's resolved total outflow,
+   * enforced by the runtime BEFORE the payment is signed — over it the hop
+   * refuses `budget_exceeded` and no money moves. The budgeted turn passes its
+   * REMAINING budget on every live call.
+   */
+  maxTotalMicro?: number;
 }) => Promise<PaidSubDelegateResult>;
 
 /** Codes that mean "this atom is not set up for P2P" → fall back to direct MCP. */
@@ -648,7 +686,15 @@ export async function research(question: string, config: ResearchConfig): Promis
     let fetchCount = 0;
     let toolCallCount = 0;
     // Integer micro-units — the money path carries no floating point.
-    const budgetMicro = config.paidSpendBudgetMicro ?? null;
+    // Defence in depth: a non-finite or negative budget is ZERO paid hops,
+    // never "no ceiling" (`spent + q > NaN` is false — it would pay every hop).
+    const rawBudget = config.paidSpendBudgetMicro;
+    const budgetMicro =
+      rawBudget == null
+        ? null
+        : Number.isFinite(rawBudget)
+          ? Math.max(0, Math.floor(rawBudget))
+          : 0;
     let paidSpentMicro = 0;
 
     /**
@@ -661,6 +707,16 @@ export async function research(question: string, config: ResearchConfig): Promis
     const dispatchToolUse = async (
       tu: Anthropic.ToolUseBlock,
     ): Promise<Anthropic.ToolResultBlockParam> => {
+      // The runaway-cost cap is checked PER CALL, not only per model turn: one
+      // response may carry many tool_uses, and each must still fit the cap.
+      // Every tool_use gets a tool_result (the API requires the pairing).
+      if (toolCallCount >= config.maxToolCalls) {
+        return {
+          type: "tool_result",
+          tool_use_id: tu.id,
+          content: `${tu.name} was not performed: this report's tool-call limit (${config.maxToolCalls}) is reached. Write the report from what you already gathered.`,
+        };
+      }
       // ── Interior tier — synchronous, no network, no receipt. ─────────
       if (tu.name === "motebit_recall_self") {
         const query = (tu.input as { query?: string }).query ?? "";
@@ -745,6 +801,8 @@ export async function research(question: string, config: ResearchConfig): Promis
       // that would cross the budget is not made — the model is told to
       // synthesize from what it has (fail-soft, never a failed report).
       let quotedMicro: number | null = null;
+      let quotedWorkerId: string | undefined;
+      let quoteTranscript: Record<string, unknown> | undefined;
       let payable = config.paidSubDelegate != null;
       if (config.paidSubDelegate != null && budgetMicro != null) {
         const quote = await config.paidSubDelegate({
@@ -771,6 +829,8 @@ export async function research(question: string, config: ResearchConfig): Promis
           payable = false;
         } else {
           quotedMicro = outflowMicro(quote.settlement);
+          quotedWorkerId = quote.workerMotebitId;
+          quoteTranscript = quote.routingTranscript;
           if (quotedMicro == null || paidSpentMicro + quotedMicro > budgetMicro) {
             if (paidSpentMicro === 0 && quotedMicro != null) {
               console.log(
@@ -797,11 +857,48 @@ export async function research(question: string, config: ResearchConfig): Promis
         console.log(
           `[research] sub-hop: attempting P2P cap=${capabilityHint}${targetId ? ` target=${targetId}` : " (ranked)"}`,
         );
+        // The live call pays the worker the quote priced (pinned), under a hard
+        // ceiling of the REMAINING budget that the runtime enforces before it
+        // signs — so a re-ranked worker or a repriced listing can never pay
+        // past the budget; it refuses `budget_exceeded` with no money moved.
+        const liveTarget = targetId ?? quotedWorkerId;
+        const remainingMicro = budgetMicro != null ? budgetMicro - paidSpentMicro : null;
         const paid = await config.paidSubDelegate({
           capability: capabilityHint,
           prompt,
-          ...(targetId != null ? { targetWorkerId: targetId } : {}),
+          ...(liveTarget != null ? { targetWorkerId: liveTarget } : {}),
+          ...(remainingMicro != null ? { maxTotalMicro: remainingMicro } : {}),
         });
+        if (!paid.ok) {
+          // Money that left on a FAILED hop (paid, then timeout / agent_failed /
+          // unconfirmed) is still spent — charge it before anything else.
+          const moved = failedHopOutflowMicro(paid, quotedMicro ?? remainingMicro ?? 0);
+          if (moved > 0) {
+            paidSpentMicro += moved;
+            console.log(
+              `[research] sub-hop: paid-then-FAILED cap=${capabilityHint} code=${paid.code ?? "unknown"} moved=${moved} spent=${paidSpentMicro}${budgetMicro != null ? `/${budgetMicro}` : ""}`,
+            );
+            // Bought but not delivered: never re-do it for free, never re-hire.
+            return {
+              type: "tool_result",
+              tool_use_id: tu.id,
+              content: `paid delegation to ${tu.name} was paid but did not deliver (${paid.code ?? "unknown"})`,
+              is_error: true,
+            };
+          }
+        }
+        if (!paid.ok && paid.code === "budget_exceeded") {
+          // The runtime refused before signing: the resolved price exceeded
+          // the remaining budget (the market moved since the quote).
+          console.log(
+            `[research] sub-hop: BUDGET REFUSED pre-sign cap=${capabilityHint} spent=${paidSpentMicro} remaining=${remainingMicro ?? "unbudgeted"}`,
+          );
+          return {
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: `${tu.name} was not performed: its price exceeds what remains of this report's paid-call budget. Do not call ${tu.name} again — write the report from what you already gathered.`,
+          };
+        }
         if (paid.ok) {
           if (paid.receipt == null) {
             console.log(`[research] sub-hop: paid ok but NO receipt cap=${capabilityHint}`);
@@ -814,7 +911,10 @@ export async function research(question: string, config: ResearchConfig): Promis
           }
           // Charge the hop at its settlement fact; a live result with no fact
           // is charged at its quote (0 only on the unbudgeted, unquoted path).
-          paidSpentMicro += outflowMicro(paid.settlement) ?? quotedMicro ?? 0;
+          // Extra transactions the hire sent (#885) are charged at the same
+          // per-transaction amount — money that may have left counts as left.
+          const hopMicro = outflowMicro(paid.settlement) ?? quotedMicro ?? 0;
+          paidSpentMicro += hopMicro * (1 + (paid.settlement?.extraPayments?.length ?? 0));
           console.log(
             `[research] sub-hop: PAID P2P cap=${capabilityHint} spent=${paidSpentMicro}${budgetMicro != null ? `/${budgetMicro}` : ""}`,
           );
@@ -825,8 +925,11 @@ export async function research(question: string, config: ResearchConfig): Promis
           // from signed bytes, never inferred from the receipt's mere presence
           // (the free path below also pushes a receipt). Absent settlement ⇒ omit;
           // the assertion is presence-of-p2p, so a missing fact never fabricates one.
-          if (paid.routingTranscript != null) {
-            routingTranscripts.push(paid.routingTranscript);
+          // Pinned to the quote's worker, the hire's routing decision is the
+          // QUOTE's ranked selection — its transcript is the one to attest.
+          const transcript = paid.routingTranscript ?? quoteTranscript;
+          if (transcript != null) {
+            routingTranscripts.push(transcript);
           }
           if (paid.settlement != null) {
             const atomTaskId = (receipt as { task_id?: unknown }).task_id;

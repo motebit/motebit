@@ -31,6 +31,8 @@ import {
   computePaidSpendBudgetMicro,
   deriveLlmReserveMicro,
   loadConfig,
+  paidSpendBudgetConfigError,
+  parseUnitCostMicro,
   DEFAULT_RESEARCH_MARGIN_BPS,
 } from "../helpers.js";
 
@@ -463,17 +465,38 @@ describe("paid-spend budget configuration", () => {
     expect(loadConfig().llmReserveMicro).toBe(deriveLlmReserveMicro(4));
   });
 
-  it("invalid overrides fall back to the safe defaults", () => {
+  it("invalid overrides refuse the boot — never silently a default, never NaN", () => {
     process.env["MOTEBIT_RESEARCH_LLM_RESERVE_MICRO"] = "-5";
     process.env["MOTEBIT_RESEARCH_MARGIN_BPS"] = "lots";
     const c = loadConfig();
-    expect(c.llmReserveMicro).toBe(deriveLlmReserveMicro(8));
-    expect(c.marginBps).toBe(500);
+    expect(paidSpendBudgetConfigError({ unitCostRaw: undefined, ...c })).toMatch(
+      /MOTEBIT_RESEARCH_MARGIN_BPS/,
+    );
+    process.env["MOTEBIT_RESEARCH_MARGIN_BPS"] = "500";
+    expect(paidSpendBudgetConfigError({ unitCostRaw: undefined, ...loadConfig() })).toMatch(
+      /MOTEBIT_RESEARCH_LLM_RESERVE_MICRO/,
+    );
   });
 
-  it("a margin of 100% or more is refused back to the default", () => {
+  it("a margin of 100% or more refuses the boot", () => {
     process.env["MOTEBIT_RESEARCH_MARGIN_BPS"] = "10000";
-    expect(loadConfig().marginBps).toBe(500);
+    expect(paidSpendBudgetConfigError({ unitCostRaw: undefined, ...loadConfig() })).toMatch(
+      /MARGIN_BPS/,
+    );
+  });
+
+  it("an empty reserve override means the derived default (the .env.example shape)", () => {
+    process.env["MOTEBIT_RESEARCH_LLM_RESERVE_MICRO"] = "";
+    const c = loadConfig();
+    expect(c.llmReserveMicro).toBe(deriveLlmReserveMicro(8));
+    expect(paidSpendBudgetConfigError({ unitCostRaw: undefined, ...c })).toBeNull();
+  });
+
+  it("a non-numeric MOTEBIT_MAX_TOOL_CALLS refuses the boot (it fed a NaN reserve)", () => {
+    process.env["MOTEBIT_MAX_TOOL_CALLS"] = "many";
+    expect(paidSpendBudgetConfigError({ unitCostRaw: undefined, ...loadConfig() })).toMatch(
+      /MAX_TOOL_CALLS/,
+    );
   });
 
   it("a budget that would go negative clamps to zero (zero paid calls)", () => {
@@ -484,5 +507,213 @@ describe("paid-spend budget configuration", () => {
         llmReserveMicro: 171_300,
       }),
     ).toBe(0);
+  });
+});
+
+/**
+ * Cold-review probes (three violations of THE invariant: per task, money that
+ * LEFT the wallet for sub-hops ≤ the paid-spend budget). Each executes
+ * research() against a stub seam that behaves like the runtime.
+ */
+describe("paid-spend budget — money that left the wallet is bounded", () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  /** A market whose live hops PAY and then fail delivery (post-broadcast timeout). */
+  function paidThenTimeoutMarket() {
+    const state = { liveCalls: 0, outflow: 0 };
+    const seam: PaidSubDelegate = async (p) => {
+      const settlement = {
+        mode: "p2p" as const,
+        paidMicro: SEARCH_NET_MICRO,
+        feeMicro: SEARCH_FEE_MICRO,
+      };
+      if (p.dryRun === true) return { ok: true, settlement };
+      state.liveCalls++;
+      state.outflow += SEARCH_OUTFLOW_MICRO;
+      return {
+        ok: false,
+        code: "timeout",
+        settledPayment: {
+          txHash: `tx-${state.liveCalls}`,
+          paidMicro: SEARCH_NET_MICRO,
+          feeMicro: SEARCH_FEE_MICRO,
+          taskId: `t-${state.liveCalls}`,
+        },
+      };
+    };
+    return { state, seam };
+  }
+
+  it("probe 1 (unbudgeted): 4 paid-then-timed-out hops are COUNTED — 210,528 out, 210,528 reported", async () => {
+    const m = paidThenTimeoutMarket();
+    modelWantsSearches(4);
+    const result = await research("question", config({ paidSubDelegate: m.seam }));
+    expect(m.state.outflow).toBe(4 * SEARCH_OUTFLOW_MICRO);
+    expect(result.paid_spend_micro).toBe(m.state.outflow);
+    expect(result.search_count).toBe(0); // paid, but nothing delivered
+  });
+
+  it("probe 1 (budgeted): a paid-then-timed-out hop draws on the budget — the next hop is skipped", async () => {
+    const m = paidThenTimeoutMarket();
+    modelWantsSearches(4);
+    const result = await research(
+      "question",
+      config({ paidSubDelegate: m.seam, paidSpendBudgetMicro: DEFAULT_BUDGET }),
+    );
+    expect(m.state.liveCalls).toBe(1);
+    expect(m.state.outflow).toBeLessThanOrEqual(DEFAULT_BUDGET);
+    expect(result.paid_spend_micro).toBe(SEARCH_OUTFLOW_MICRO);
+    expect(result.report).toBe(REPORT);
+  });
+
+  it("probe 1: an UNCONFIRMED payment and extra transactions count as money out", async () => {
+    let live = 0;
+    const seam: PaidSubDelegate = async (p) => {
+      if (p.dryRun === true)
+        return { ok: true, settlement: { mode: "p2p", paidMicro: 10_000, feeMicro: 527 } };
+      live++;
+      return {
+        ok: false,
+        code: "payment_status_unknown",
+        unconfirmedPayment: { paidMicro: 10_000, feeMicro: 527 },
+        extraPayments: [{ txHash: "x", status: "unconfirmed" }],
+      };
+    };
+    modelWantsSearches(1);
+    const result = await research("question", config({ paidSubDelegate: seam }));
+    expect(live).toBe(1);
+    expect(result.paid_spend_micro).toBe(2 * 10_527);
+  });
+
+  /**
+   * The seam as the runtime behaves: the live call resolves its OWN worker /
+   * price (here: the market repriced 50× since the quote) and refuses before
+   * signing when that exceeds `maxTotalMicro`.
+   */
+  function repricingMarket() {
+    const state = {
+      outflow: 0,
+      live: [] as Array<{ targetWorkerId?: string; maxTotalMicro?: number }>,
+    };
+    const seam: PaidSubDelegate = async (p) => {
+      if (p.dryRun === true)
+        return {
+          ok: true,
+          workerMotebitId: "cheap-worker",
+          settlement: { mode: "p2p", paidMicro: 10_000, feeMicro: 527 },
+        };
+      state.live.push({ targetWorkerId: p.targetWorkerId, maxTotalMicro: p.maxTotalMicro });
+      const resolved = 500_000 + 26_316; // 526,316
+      if (p.maxTotalMicro != null && resolved > p.maxTotalMicro) {
+        return { ok: false, code: "budget_exceeded" }; // refused pre-sign: nothing moved
+      }
+      state.outflow += resolved;
+      return {
+        ok: true,
+        receipt: receipt(1),
+        settlement: { mode: "p2p", paidMicro: 500_000, feeMicro: 26_316, txHash: "tx" },
+      };
+    };
+    return { state, seam };
+  }
+
+  it("probe 2: a live price above the remaining budget is refused BEFORE money moves (quote 10,527, live 526,316)", async () => {
+    const m = repricingMarket();
+    modelWantsSearches(1);
+    const result = await research(
+      "question",
+      config({ paidSubDelegate: m.seam, paidSpendBudgetMicro: DEFAULT_BUDGET }),
+    );
+    expect(m.state.outflow).toBe(0);
+    expect(result.paid_spend_micro).toBe(0);
+    // The live call carried the remaining budget as a hard ceiling, pinned to the quoted worker.
+    expect(m.state.live).toEqual([
+      { targetWorkerId: "cheap-worker", maxTotalMicro: DEFAULT_BUDGET },
+    ]);
+    expect(result.report).toBe(REPORT);
+  });
+
+  it("probe 2: the ceiling is the REMAINING budget, not the whole budget", async () => {
+    const seen: Array<number | undefined> = [];
+    const seam: PaidSubDelegate = async (p) => {
+      const settlement = { mode: "p2p" as const, paidMicro: 20_000, feeMicro: 1_053 };
+      if (p.dryRun === true) return { ok: true, settlement };
+      seen.push(p.maxTotalMicro);
+      return { ok: true, receipt: receipt(seen.length), settlement };
+    };
+    modelWantsSearches(2);
+    await research(
+      "question",
+      config({ paidSubDelegate: seam, paidSpendBudgetMicro: DEFAULT_BUDGET }),
+    );
+    expect(seen).toEqual([DEFAULT_BUDGET, DEFAULT_BUDGET - 21_053]);
+  });
+
+  it("probe 2: a configured target keeps its pin (the quote never overrides the operator)", async () => {
+    const m = repricingMarket();
+    modelWantsSearches(1);
+    await research(
+      "question",
+      config({
+        paidSubDelegate: m.seam,
+        paidSpendBudgetMicro: DEFAULT_BUDGET,
+        webSearchTargetId: "web-search-agent",
+      }),
+    );
+    expect(m.state.live[0]!.targetWorkerId).toBe("web-search-agent");
+  });
+
+  it("probe 3: a NaN budget is ZERO paid hops, never unbounded (MOTEBIT_UNIT_COST=abc)", async () => {
+    const market = fakeMarket();
+    modelWantsSearches(8);
+    const result = await research(
+      "question",
+      config({ paidSubDelegate: market.seam, paidSpendBudgetMicro: Number.NaN }),
+    );
+    expect(market.state.liveCalls).toBe(0);
+    expect(market.state.liveOutflow).toBe(0);
+    expect(result.paid_spend_micro).toBe(0);
+    expect(result.report).toBe(REPORT);
+  });
+
+  it("probe 3: the budget computation never yields NaN, and boot refuses a non-numeric unit cost", () => {
+    expect(parseUnitCostMicro("abc")).toBeNull();
+    expect(parseUnitCostMicro("-0.25")).toBeNull();
+    expect(parseUnitCostMicro(undefined)).toBe(250_000);
+    expect(parseUnitCostMicro("0.25")).toBe(250_000);
+    expect(
+      paidSpendBudgetConfigError({
+        unitCostRaw: "abc",
+        maxToolCalls: 8,
+        marginBps: 500,
+        llmReserveMicro: 171_300,
+      }),
+    ).toMatch(/MOTEBIT_UNIT_COST/);
+    expect(
+      computePaidSpendBudgetMicro({
+        unitCostMicro: Number.NaN,
+        marginBps: 500,
+        llmReserveMicro: 0,
+      }),
+    ).toBe(0);
+  });
+
+  it("one response with more tool_uses than maxToolCalls dispatches at most maxToolCalls", async () => {
+    const market = fakeMarket();
+    mockCreate
+      .mockResolvedValueOnce({
+        content: Array.from({ length: 12 }, (_, i) => ({
+          type: "tool_use",
+          id: `tu-${i}`,
+          name: "motebit_web_search",
+          input: { query: `q${i}` },
+        })),
+      })
+      .mockResolvedValue({ content: [{ type: "text", text: REPORT }] });
+    const result = await research("question", config({ paidSubDelegate: market.seam }));
+    expect(market.state.liveCalls).toBe(8);
+    expect(result.search_count).toBe(8);
   });
 });
