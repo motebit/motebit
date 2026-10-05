@@ -20,8 +20,8 @@ import { bold, dim, cyan, green, command } from "./colors.js";
  *   byok          → "anthropic" | "openai" | "google"
  *   on-device     → "local-server"  (Ollama, LM Studio, llama.cpp, etc.)
  *
- * `--provider ollama` is accepted as an ergonomic alias for `local-server`
- * and silently normalized at parse time.
+ * The pre-1.0 alias `--provider ollama` was removed at 2.0.0; it is refused
+ * at parse time with a repair naming `--provider local-server`.
  */
 export type CliProvider =
   "anthropic" | "openai" | "google" | "groq" | "deepseek" | "local-server" | "proxy";
@@ -221,20 +221,19 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     allowPositionals: true,
   });
 
-  // Accept "ollama" as an ergonomic alias for "local-server" — old muscle
-  // memory + the de-facto-standard local inference server. The internal
-  // representation is always "local-server" so the rest of the system stays
-  // vendor-agnostic.
-  //
-  // @deprecated since 1.0.0, removed in 2.0.0. Use `--provider local-server` instead.
-  //
-  // Reason: muscle-memory accommodation for users coming from the pre-1.0
-  // Ollama-specific provider name. Vendor-neutral CLI flag aligns with
-  // the internal `local-server` representation. The persisted-value
-  // migration in `extractPersonality` (config.ts) has a separate
-  // lifecycle — it's @permanent and reads legacy `default_provider:
-  // "ollama"` entries from every config.json that ever shipped.
-  const rawProvider = values.provider === "ollama" ? "local-server" : values.provider;
+  // The pre-1.0 `--provider ollama` alias was deprecated at 1.0.0 and
+  // removed at 2.0.0 (vendor-neutral flag; the internal representation is
+  // `local-server`). Refuse it with the exact repair rather than letting it
+  // fall into the generic unknown-provider list. The persisted-value
+  // migration in `extractPersonality` (config.ts) is a separate, @permanent
+  // lifecycle: a config.json carrying `default_provider: "ollama"` still loads.
+  if (values.provider === "ollama") {
+    throw new Error(
+      `The "ollama" provider alias was removed in motebit 2.0.0. ` +
+        `Use \`--provider local-server\` (Ollama, LM Studio, llama.cpp, or any OpenAI-compatible local server).`,
+    );
+  }
+  const rawProvider = values.provider;
   const VALID_PROVIDERS: readonly CliProvider[] = [
     "anthropic",
     "openai",
@@ -258,8 +257,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
           : p;
     });
     throw new Error(
-      `Unknown provider "${values.provider}". Use one of: ${withStatus.join(", ")} ` +
-        `(or the alias "ollama" for local-server). "unverified" means wired and expected to ` +
+      `Unknown provider "${values.provider}". Use one of: ${withStatus.join(", ")}. ` +
+        `"unverified" means wired and expected to ` +
         `work, but no live turn has been witnessed yet — see #518.`,
     );
   }
@@ -615,7 +614,6 @@ Providers:
   local-server            Uses a local inference server — Ollama, LM Studio,
                           llama.cpp, Jan, vLLM, or any OpenAI-compatible
                           endpoint (no API key needed). Default model: ${DEFAULT_LOCAL_SERVER_MODEL}.
-                          Alias: --provider ollama
   proxy                   Motebit Cloud (subscription via the relay)
 
 Routing strategies (--routing-strategy):

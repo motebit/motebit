@@ -11,6 +11,9 @@
  * defense the inline copies didn't have.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { encryptPrivateKey, loadActiveSigningKey, IdentityKeyError, toHex } from "../identity.js";
 import { getPublicKeyBySuite, generateKeypair } from "@motebit/encryption";
 import type { FullConfig } from "../config.js";
@@ -92,6 +95,35 @@ describe("loadActiveSigningKey", () => {
       expect(warnSpy).toHaveBeenCalled();
       const warnMsg = warnSpy.mock.calls[0]?.[0] as string;
       expect(warnMsg).toContain("deprecated");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("a plaintext-only legacy config still yields the exact identity key until the 3.0.0 sunset", async () => {
+    // The `cli_private_key` sunset was extended from 2.0.0 to 3.0.0 (see the
+    // field's @deprecated block in config.ts): headless paths never run the
+    // rewrite-to-encrypted migration, so a pre-1.0 config can hold the ONLY
+    // copy of the identity key (= the sovereign wallet). Removing this read
+    // strands that user. This test stays green until the removing major.
+    const pkg = JSON.parse(
+      readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../package.json"), "utf-8"),
+    ) as { version: string };
+    expect(Number(pkg.version.split(".")[0])).toBeLessThan(3);
+
+    const { privateKeyHex, publicKeyHex } = await freshKeypair();
+    const config: FullConfig = {
+      motebit_id: "m-legacy",
+      device_id: "d-legacy",
+      device_public_key: publicKeyHex,
+      cli_private_key: privateKeyHex,
+    };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await loadActiveSigningKey(config);
+      expect(toHex(result.privateKey)).toBe(privateKeyHex.toLowerCase());
+      expect(result.publicKey.toLowerCase()).toBe(publicKeyHex.toLowerCase());
+      expect(warnSpy.mock.calls[0]?.[0] as string).toContain("motebit@3.0.0");
     } finally {
       warnSpy.mockRestore();
     }

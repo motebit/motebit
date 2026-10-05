@@ -371,7 +371,7 @@ export async function bootstrapIdentity(
 //      `MOTEBIT_PASSPHRASE` env (preferred, scriptable) or the
 //      `getPassphrase` callback (interactive prompt by default).
 //   2. `config.cli_private_key` — legacy plaintext (deprecated since
-//      1.0.0, removed at 2.0.0; see `config.ts:50`). Read only when
+//      1.0.0, removed at 3.0.0; see the `cli_private_key` field in `config.ts`). Read only when
 //      `cli_encrypted_key` is absent. Emits a deprecation warning.
 //
 // Sources NOT supported (deliberate):
@@ -613,11 +613,12 @@ export async function loadActiveSigningKey(
     }
     source = "encrypted-config";
   } else if (config.cli_private_key != null && config.cli_private_key !== "") {
-    // Legacy plaintext path. Per `config.ts:50`'s deprecation contract,
-    // remove at 2.0.0 — until then, accept it but warn so the user
+    // Legacy plaintext path. Per the `cli_private_key` deprecation contract
+    // in config.ts, remove at 3.0.0 (extended from 2.0.0: removal would
+    // strand headless configs that never ran the migration) — until then, accept it but warn so the user
     // migrates to the encrypted shape.
     console.warn(
-      "Warning: reading legacy plaintext private key (cli_private_key). This shape is deprecated and will be removed at motebit@2.0.0. Run `motebit init` (passphrase-prompt) to re-encrypt.",
+      "Warning: reading legacy plaintext private key (cli_private_key). This shape is deprecated and will be removed at motebit@3.0.0. Run `motebit init` (passphrase-prompt) to re-encrypt.",
     );
     privateKeyHex = config.cli_private_key;
     source = "plaintext-config-legacy";
