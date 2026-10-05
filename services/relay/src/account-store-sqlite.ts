@@ -30,7 +30,7 @@ import type {
   WithdrawalOpenStatus,
   WithdrawalRequest,
 } from "@motebit/virtual-accounts";
-import { DISPUTE_WINDOW_MS } from "@motebit/virtual-accounts";
+import { DISPUTE_WINDOW_MS, assertPositiveMicro } from "@motebit/virtual-accounts";
 import { createWithdrawalChainPayoutTables } from "./withdrawal-chain-payouts.js";
 
 /**
@@ -494,6 +494,7 @@ export class SqliteAccountStore implements AccountStore {
     w: NewWithdrawal,
     description: string,
   ): { record: WithdrawalRequest; newBalance: number } | { existing: WithdrawalRequest } | null {
+    assertPositiveMicro(w.amount, "debitAndRecordWithdrawal");
     // The key check, the debit (balance + ledger row) and the withdrawal row
     // commit together or roll back together. `debit` nests as a savepoint;
     // insufficient funds returns null with nothing written.

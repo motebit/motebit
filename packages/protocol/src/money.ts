@@ -35,6 +35,37 @@ export function fromMicro(micro: number): number {
   return micro / MICRO;
 }
 
+/**
+ * The smallest amount that moves value: 1 micro-unit (0.000001 USD). A money
+ * movement (withdrawal, deposit credit, transfer, priced listing) of less is
+ * not a movement — it is a rounding artifact or a programming error.
+ */
+export const MIN_POSITIVE_MICRO = 1;
+
+/**
+ * True when `micro` is a positive safe integer of micro-units — the only shape
+ * a value-moving ledger amount may take. Rejects 0, negatives, fractions, NaN,
+ * ±Infinity, values beyond `Number.MAX_SAFE_INTEGER` and non-numbers.
+ */
+export function isPositiveMicro(micro: unknown): micro is number {
+  return typeof micro === "number" && Number.isSafeInteger(micro) && micro >= MIN_POSITIVE_MICRO;
+}
+
+/**
+ * API-boundary parse of a client-supplied DOLLAR amount that must move value:
+ * the `toMicro` conversion when it is a positive safe integer, else `null`.
+ *
+ * Validate the CONVERTED value, never the dollar value alone: `1e-7` USD is
+ * `> 0` yet `toMicro(1e-7) === 0`, which is how a positive-dollar check let
+ * $0 withdrawals into the ledger. Non-numbers and non-finite values return
+ * `null`, so a route can pass the raw request field straight in.
+ */
+export function parsePositiveMicro(dollars: unknown): number | null {
+  if (typeof dollars !== "number" || !Number.isFinite(dollars)) return null;
+  const micro = toMicro(dollars);
+  return isPositiveMicro(micro) ? micro : null;
+}
+
 /** API dollars (float) → integer cents. */
 export function toCents(dollars: number): number {
   return Math.round(dollars * CENTS);

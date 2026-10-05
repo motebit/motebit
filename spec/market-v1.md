@@ -136,7 +136,7 @@ The TypeScript type in `@motebit/protocol` (`AccountBalanceTransaction`) is the 
 Every conforming implementation MUST enforce all of the following. These are security-relevant, not conveniences:
 
 1. **Idempotency is mandatory.** The `Idempotency-Key` HTTP header is REQUIRED (missing ⇒ 400). A replay MUST return the original response with no re-debit. A request whose key matches a prior withdrawal returns that withdrawal with `idempotent: true`.
-2. **Positive amount.** `amount` MUST be a positive decimal-USD number. Non-positive ⇒ 400 with no state change.
+2. **Positive amount.** `amount` MUST be a finite, positive decimal-USD number whose micro-unit conversion (`round(amount × 1,000,000)`) is at least 1 — the minimum is 0.000001 USD. The check applies to the CONVERTED value: a positive amount below half a micro-unit converts to 0 and MUST be refused. Otherwise ⇒ 400 with no state change.
 3. **Dispute-window hold.** The debit MUST respect the dispute-window hold (settlement-v1): funds from recent settlement credits are not withdrawable until the window elapses. Available balance below the requested amount ⇒ 402 with no state change.
 4. **Authorization.** The request MUST carry an `account:withdraw`-audience credential — the account owner's signed device token or the operator master token. A token minted for another audience MUST be rejected (cross-endpoint replay defense, auth-token-v1 §5).
 
