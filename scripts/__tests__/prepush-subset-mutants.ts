@@ -17,6 +17,7 @@ export interface Inputs {
   ci: string;
   rootScripts: Record<string, string>;
   packageScripts: Record<string, Record<string, string>>;
+  shardRunner: string;
 }
 
 export interface Edit {
@@ -41,15 +42,30 @@ const script =
   (name: string, value: string) =>
   (i: Inputs): Inputs => ({ ...i, rootScripts: { ...i.rootScripts, [name]: value } });
 
+const runner =
+  (id: string, from: string | RegExp, to: string) =>
+  (i: Inputs): Inputs => ({ ...i, shardRunner: sub(i.shardRunner, from, to, id) });
+
 const BUILD = '  run_phase "build" pnpm build\n';
 const before = (id: string, line: string) => hook(id, BUILD, `${line}\n${BUILD}`);
 const CHECK = 'run_phase "gates (pnpm check)" pnpm check\n';
-const COV = "        run: pnpm exec turbo run test:coverage --concurrency=4\n";
-const TEST_STEP = "      - name: Test with coverage\n";
+const SHARD_RUN =
+  "pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json";
+const COV = `        run: ${SHARD_RUN}\n`;
+const TEST_STEP = "      - name: Test with coverage (this shard)\n";
 const SCRUB = "unset $(env | sed -n 's/^\\(GIT_[A-Za-z0-9_]*\\)=.*/\\1/p')";
 const SCRUB_LINE = `  ${SCRUB} # git-env-scrub\n`;
 
 const m = (id: string, what: string, apply: (i: Inputs) => Inputs): Edit => ({ id, what, apply });
+
+/** A job inserted before `format:` (unpinned — only historyViolations judges it). */
+const job = (id: string, checkout: string, run: string) =>
+  ci(
+    id,
+    "\n  format:\n",
+    `\n  extra:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1${checkout}\n      - run: ${run}\n\n  format:\n`,
+  );
+const FULL = "\n        with:\n          fetch-depth: 0";
 
 export const MUTANTS: Edit[] = [
   // --- the ten review findings -------------------------------------------
@@ -87,7 +103,7 @@ export const MUTANTS: Edit[] = [
   m(
     "R8",
     "ci: counterpart made unable to fail (|| true)",
-    ci("R8", COV, "        run: pnpm exec turbo run test:coverage --concurrency=4 || true\n"),
+    ci("R8", COV, `        run: ${SHARD_RUN} || true\n`),
   ),
   m(
     "R9",
@@ -245,12 +261,8 @@ export const MUTANTS: Edit[] = [
   ),
   m(
     "S27",
-    "ci: counterpart narrowed with --filter",
-    ci(
-      "S27",
-      COV,
-      "        run: pnpm exec turbo run test:coverage --concurrency=4 --filter=[origin/main]\n",
-    ),
+    "ci: counterpart narrowed to one fixed shard",
+    ci("S27", COV, `        run: ${SHARD_RUN.replace("${{ matrix.shard }}", "1/3")}\n`),
   ),
   m(
     "S28",
@@ -268,11 +280,11 @@ export const MUTANTS: Edit[] = [
   ),
   m(
     "S30",
-    "ci: job-level continue-on-error on check",
+    "ci: job-level continue-on-error on check-static",
     ci(
       "S30",
-      "    timeout-minutes: 30\n",
-      "    timeout-minutes: 30\n    continue-on-error: true\n",
+      "  check-static:\n    runs-on: ubuntu-latest\n",
+      "  check-static:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n",
     ),
   ),
   m(
@@ -431,7 +443,11 @@ export const MUTANTS: Edit[] = [
   m(
     "G3",
     "ci: fail-fast on (a failing leg cancels the others into 'cancelled')",
-    ci("G3", "      fail-fast: false\n", "      fail-fast: true\n"),
+    ci(
+      "G3",
+      '      fail-fast: false\n      matrix:\n        shard: ["1/4"',
+      '      fail-fast: true\n      matrix:\n        shard: ["1/4"',
+    ),
   ),
   m(
     "G4",
@@ -475,6 +491,93 @@ export const MUTANTS: Edit[] = [
     "ci: self-tests job no longer runs on push",
     ci("G9", "  gate-self-tests:\n", "  gate-self-tests-old:\n"),
   ),
+  // --- the sharded test:coverage + its `check` verdict (2026-10-05) --------
+  m(
+    "T1",
+    "ci: a test-coverage shard dropped from the matrix",
+    ci("T1", 'shard: ["1/3", "2/3", "3/3"]', 'shard: ["1/3", "2/3"]'),
+  ),
+  m(
+    "T2",
+    "ci: test-coverage matrix lists a shard twice (2/3 never runs)",
+    ci("T2", 'shard: ["1/3", "2/3", "3/3"]', 'shard: ["1/3", "1/3", "3/3"]'),
+  ),
+  m(
+    "T3",
+    "ci: test-coverage fail-fast on",
+    ci(
+      "T3",
+      '      fail-fast: false\n      matrix:\n        shard: ["1/3"',
+      '      fail-fast: true\n      matrix:\n        shard: ["1/3"',
+    ),
+  ),
+  m("T4", "package: a new package with test:coverage but no shard weight (unassigned)", (i) => ({
+    ...i,
+    packageScripts: {
+      ...i.packageScripts,
+      "packages/zz-planted": { test: "vitest run", "test:coverage": "vitest run --coverage" },
+    },
+  })),
+  m(
+    "T5",
+    "ci: the check verdict no longer runs when a leg is cancelled",
+    ci(
+      "T5",
+      "    needs: [check-static, test-coverage]\n    if: always()\n",
+      "    needs: [check-static, test-coverage]\n    if: success()\n",
+    ),
+  ),
+  m(
+    "T6",
+    "ci: the check verdict stops waiting on the shards",
+    ci("T6", "    needs: [check-static, test-coverage]\n", "    needs: [check-static]\n"),
+  ),
+  m(
+    "T7",
+    "ci: the check verdict accepts a cancelled shard",
+    ci("T7", '[ "$TESTS" != "success" ]', '[ "$TESTS" = "failure" ]'),
+  ),
+  m(
+    "T8",
+    "ci: the check verdict skips the shard-manifest proof",
+    ci(
+      "T8",
+      "        run: pnpm test:coverage:shard --verify-manifests /tmp/coverage-shards\n",
+      "        run: echo skipped\n",
+    ),
+  ),
+  m(
+    "T9",
+    "root: the shard runner script pointed elsewhere",
+    script("test:coverage:shard", "echo skipped"),
+  ),
+  m("T10", "ci: the shard step drops its Build step", (i) =>
+    ci(
+      "T10",
+      "      - name: Build\n        run: pnpm build\n\n      - name: Test with coverage (this shard)\n",
+      "      - name: Test with coverage (this shard)\n",
+    )(i),
+  ),
+  // --- what the shard runner actually launches (cold review, 2026-10-05) ---
+  m(
+    "T11",
+    "runner: every shard exits 0 whatever turbo returned (failing tests pass CI)",
+    runner(
+      "T11",
+      /process\.exit\((?:r\.status \?\? 1|runShard\(mine, spawnTurbo\(root\)\))\)/,
+      "process.exit(0)",
+    ),
+  ),
+  m(
+    "T12",
+    "runner: `--dry` appended to the shard's turbo args (no test runs)",
+    runner("T12", "`--filter=./${d}`)]", '`--filter=./${d}`), "--dry"]'),
+  ),
+  m(
+    "T13",
+    "runner: runShard swallows the child's exit status",
+    runner("T13", "return r.status ?? 1;", "return 0;"),
+  ),
   // --- the GIT_* scrub (2026-10-02, second #835-class incident) -------------
   m("E1", "hook: the GIT_* scrub removed", hook("E1", SCRUB_LINE, "")),
   m("E2", "hook: the scrub moved after the build phase", (i) =>
@@ -498,6 +601,45 @@ export const MUTANTS: Edit[] = [
     "E9",
     "hook: the scrub after another command in the body",
     hook("E9", SCRUB_LINE, `  _scope_ok=1\n${SCRUB_LINE}`),
+  ),
+  // H*: a base-ref-dependent gate (check-cli-surface, check-test-outcome-floors)
+  // on a shallow checkout — #1062's first run (gate-self-tests red; every
+  // probe shard vacuously green, a fail-closed exit read as "fires").
+  m(
+    "H1",
+    "ci: gate-self-tests' checkout drops fetch-depth: 0 (the #1062 shape)",
+    ci(
+      "H1",
+      /(  gate-self-tests:[\s\S]*?actions\/checkout@\S+ # v7\.0\.1\n)        with:\n(?:          #.*\n)*          fetch-depth: 0\n/,
+      "$1",
+    ),
+  ),
+  m(
+    "H2",
+    "ci: gate-effectiveness-shard's checkout drops fetch-depth: 0 (its probes fire vacuously)",
+    ci(
+      "H2",
+      /(  gate-effectiveness-shard:[\s\S]*?actions\/checkout@\S+ # v7\.0\.1\n)        with:\n(?:          #.*\n)*          fetch-depth: 0\n/,
+      "$1",
+    ),
+  ),
+  m(
+    "H3",
+    "ci: a new job runs check-test-outcome-floors shallow",
+    job("H3", "", "pnpm check-test-outcome-floors"),
+  ),
+  m("H4", "ci: a new job runs check-cli-surface shallow", job("H4", "", "pnpm check-cli-surface")),
+  m("H5", "ci: a new job runs `pnpm check` shallow", job("H5", "", "pnpm check")),
+  m("H6", "ci: a new job runs the gate self-tests shallow", job("H6", "", "pnpm test:gates")),
+  m(
+    "H7",
+    "ci: a new job runs the gate probes shallow",
+    job("H7", "", "pnpm check-gates-effective --shard 1/1"),
+  ),
+  m(
+    "H8",
+    "ci: a new job runs check-test-outcome-floors at fetch-depth: 1",
+    job("H8", "\n        with:\n          fetch-depth: 1", "pnpm check-test-outcome-floors"),
   ),
 ];
 
@@ -530,8 +672,8 @@ export const CONTROLS: Edit[] = [
   m("K7", "ci: a comment added", ci("K7", COV, `        # a comment\n${COV}`)),
   m(
     "K8",
-    "ci: check job timeout raised",
-    ci("K8", "    timeout-minutes: 30\n", "    timeout-minutes: 40\n"),
+    "ci: check-static job timeout raised (the first timeout-minutes: 20 is check-static's)",
+    ci("K8", "    timeout-minutes: 20\n", "    timeout-minutes: 25\n"),
   ),
   m(
     "K9",
@@ -547,5 +689,19 @@ export const CONTROLS: Edit[] = [
     "K11",
     "hook: the scrub's comment reworded",
     hook("K11", "No inherited GIT_* past this line", "Scrub the inherited git environment"),
+  ),
+  m(
+    "HC1",
+    "ci: a new job runs check-test-outcome-floors on a full-history checkout",
+    job("HC1", FULL, "pnpm check-test-outcome-floors"),
+  ),
+  m(
+    "HC2",
+    "ci: a new shallow job runs only a --verify-shards read, or a check-* that is not `pnpm check`",
+    job(
+      "HC2",
+      "",
+      "pnpm check-gates-effective --verify-shards /tmp/x && pnpm check-no-secrets-in-client-bundles",
+    ),
   ),
 ];

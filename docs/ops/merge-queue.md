@@ -24,9 +24,9 @@ its timeout. Each one runs for real — none is skipped or passed blindly there.
 
 | Check           | Workflow  | On `merge_group`                                                                                                                                                                                                                                                                                                                                         |
 | --------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `check`         | `ci.yml`  | In full: audit, build, `pnpm check`, typecheck, lint, publish-integrity, `test:coverage` — on the combined commit.                                                                                                                                                                                                                                       |
+| `check`         | `ci.yml`  | In full, on the combined commit. `check` is the fail-closed verdict job over `check-static` (audit, build, `pnpm check`, typecheck, lint, publish-integrity) and the `test-coverage` shard matrix (every suite with coverage, partitioned by `scripts/test-coverage-shards.ts`); it fails unless every leg succeeded.                                    |
 | `format`        | `ci.yml`  | In full.                                                                                                                                                                                                                                                                                                                                                 |
-| `e2e`           | `ci.yml`  | In full (needs `check`; uses its web build).                                                                                                                                                                                                                                                                                                             |
+| `e2e`           | `ci.yml`  | In full (needs `check-static`; uses its web build).                                                                                                                                                                                                                                                                                                      |
 | `sibling-audit` | `ci.yml`  | Runs; diff base is `merge_group.base_sha` (the group's parent: `main`, or the queue entry ahead of it) instead of `origin/main`.                                                                                                                                                                                                                         |
 | `changeset`     | `ci.yml`  | Runs; `CHANGESET_BASE_REF` = `merge_group.base_sha`.                                                                                                                                                                                                                                                                                                     |
 | `cla`           | `cla.yml` | The CLA bot does not run (no PR, no comment thread). Instead the job proves every PR in the group is **already** CLA-verified: it lists the group's commits (`base_sha...head_sha`), maps each squash commit `… (#N)` to its PR, and requires that PR to be open into `main` with the **latest** `cla` check run on its head commit concluded `success`. |
@@ -63,7 +63,7 @@ workflows must already listen to `merge_group`, or the first queued PR hangs).
 | Maximum group size              | 5                                                                      |
 | Wait time to meet minimum group | 5 min                                                                  |
 | Require all queue entries pass  | on (`ALLGREEN`)                                                        |
-| Status check timeout            | 60 min (`check` alone may take 30, then `e2e`)                         |
+| Status check timeout            | 60 min (`check` waits on its slowest leg, ≤ 30 min, + verdict)         |
 
 Keep the existing required status checks (`check`, `format`, `e2e`,
 `sibling-audit`, `changeset`, `cla`) unchanged.
@@ -109,3 +109,14 @@ To roll back, run the same with the `+ [{ … }]` term removed.
 `on.merge_group: { types: [checks_requested] }` and pins the `changes` job's
 diff-base step; mutants S43/S44 prove it goes red if either trigger is dropped
 or narrowed.
+
+It also pins `check` as the verdict job (`needs: [check-static, test-coverage]`,
+`if: always()`, failing unless both succeeded) and re-proves that the
+`test-coverage` matrix's shards partition every package with a `test:coverage`
+script (mutants T1–T10) — so a skipped, cancelled or narrowed shard can never
+read as a green `check`. The verdict does not take the shard runner's word
+for it: `check` also runs `scripts/verify-test-outcomes.ts` over the shard
+artifacts, which requires vitest's own results for every package with a
+`test:coverage` script (enumerated from `pnpm-workspace.yaml`) — tests run,
+none failed, coverage floors met — so a runner whose exit code lies or whose
+package list skips a suite is still RED.

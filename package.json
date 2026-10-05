@@ -80,6 +80,7 @@
     "check-gate-references": "npx tsx scripts/check-gate-references.ts",
     "check-root-workspace-deps": "npx tsx scripts/check-root-workspace-deps.ts",
     "check-prepush-subset": "npx tsx scripts/check-prepush-subset.ts",
+    "check-test-outcome-floors": "npx tsx scripts/check-test-outcome-floors.ts",
     "check-turbo-global-deps": "npx tsx scripts/check-turbo-global-deps.ts",
     "check-skill-corpus": "npx tsx scripts/check-skill-corpus.ts",
     "check-skill-cli-coverage": "npx tsx scripts/check-skill-cli-coverage.ts",
@@ -210,7 +211,9 @@
     "version-packages": "changeset version",
     "release": "changeset publish",
     "prepare": "husky",
-    "p2p-staging-proof": "tsx scripts/p2p-cold-start-staging-proof.ts"
+    "p2p-staging-proof": "tsx scripts/p2p-cold-start-staging-proof.ts",
+    "test:coverage:shard": "npx tsx scripts/test-coverage-shards.ts",
+    "test:outcomes:verify": "npx tsx scripts/verify-test-outcomes.ts"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",

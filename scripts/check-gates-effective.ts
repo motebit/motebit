@@ -922,12 +922,60 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-prepush-subset",
     proves:
-      "flags CI's `check` job narrowing `turbo run test:coverage` with a --filter — the change that would make a dependent's failing test (skipped by the fast pre-push by design) CI-invisible too, i.e. untested anywhere",
+      "flags CI's sharded `test-coverage` leg narrowed to one fixed shard instead of its matrix value — the change that would make a dependent's failing test (skipped by the fast pre-push by design) CI-invisible too, i.e. untested anywhere",
     perturb: () =>
       mutateFile(".github/workflows/ci.yml", (src) =>
         src.replace(
-          "run: pnpm exec turbo run test:coverage --concurrency=4\n",
-          `run: pnpm exec turbo run test:coverage --concurrency=4 --filter=[origin/main] # ${PROBE_PREFIX}injected\n`,
+          "run: pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json\n",
+          `run: pnpm test:coverage:shard --shard 1/3 --manifest coverage/test-coverage-shard.json # ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags the `check` job's outcome verifier accepting a shard run where one package's vitest results file is missing — here the GREEN fixture's services/relay uploads no vitest-results.json, so the verifier must refuse it and the gate's green-fixture case goes RED",
+    perturb: () =>
+      mutateFile("scripts/lib/test-outcomes-fixture.ts", (src) =>
+        src.replace(
+          `"coverage-shard-0": { "services/relay": passingReport("services/relay") },`,
+          `"coverage-shard-0": { "services/relay": { ...passingReport("services/relay"), results: null } }, // ${PROBE_PREFIX}injected`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags the `check` job's outcome verifier accepting vitest results that report a failed test — here the GREEN fixture's numFailedTests flipped to 1 for every package, whatever any runner's exit code said",
+    perturb: () =>
+      mutateFile("scripts/lib/test-outcomes-fixture.ts", (src) =>
+        src.replace(
+          "      numFailedTests: 0,\n",
+          `      numFailedTests: 1, // ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags the `check` job's outcome verifier accepting vitest results where every test was skipped — the `-t nomatch` shape (exit 0, success true, numTotalTests > 0, numPassedTests 0); here the GREEN fixture's numPassedTests set to 0 for every package, which a verifier counting numTotalTests alone passes",
+    perturb: () =>
+      mutateFile("scripts/lib/test-outcomes-fixture.ts", (src) =>
+        src.replace(
+          "      numPassedTests: 7,\n",
+          `      numPassedTests: 0, // ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags a package with a test:coverage script that no CI shard runs — here packages/protocol losing its weight in scripts/test-coverage-shards.ts, so the computed assignment has nowhere to put it and CI's sharded suite would silently stop being every suite",
+    perturb: () =>
+      mutateFile("scripts/test-coverage-shards.ts", (src) =>
+        src.replace(
+          /\n  "packages\/protocol": \d+,\n/,
+          `\n  // ${PROBE_PREFIX}injected: packages/protocol weight dropped\n`,
         ),
       ),
   },
@@ -938,8 +986,8 @@ export async function probeLeak(): Promise<boolean> {
     perturb: () =>
       mutateFile(".github/workflows/ci.yml", (src) =>
         src.replace(
-          "run: pnpm exec turbo run test:coverage --concurrency=4\n",
-          `run: pnpm exec turbo run test:coverage --concurrency=4\n        continue-on-error: true # ${PROBE_PREFIX}injected\n`,
+          "run: pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json\n",
+          `run: pnpm test:coverage:shard --shard \${{ matrix.shard }} --manifest coverage/test-coverage-shard.json\n        continue-on-error: true # ${PROBE_PREFIX}injected\n`,
         ),
       ),
   },
@@ -954,6 +1002,31 @@ export async function probeLeak(): Promise<boolean> {
       writeFixture(
         "services/embed/turbo.json",
         `{"$schema":"https://turbo.build/schema.json#${PROBE_PREFIX}injected","extends":["//"],"tasks":{"test:coverage":{"dependsOn":[],"cache":true,"inputs":["package.json"]}}}\n`,
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags the `check` job's outcome verifier accepting a suite that passed FEWER tests than its committed floor — here the GREEN fixture's apps/cli narrowed to 1 passing test (the single-file `test:coverage` shape: exit 0, success true, nothing skipped, apps/cli has no coverage floor), which every rule but the test floor passes",
+    perturb: () =>
+      mutateFile("scripts/lib/test-outcomes-fixture.ts", (src) =>
+        src.replace(
+          `"apps/cli": passingReport("apps/cli"),`,
+          `"apps/cli": { ...passingReport("apps/cli"), results: { ...passingReport("apps/cli").results, numTotalTests: 1, numPassedTests: 1 } }, // ${PROBE_PREFIX}injected`,
+        ),
+      ),
+  },
+  {
+    script: "check-test-outcome-floors",
+    proves:
+      "flags a committed test floor lowered below its baseline with no allowedDecreases entry — here apps/cli's floor in scripts/test-outcome-floors.json dropped by one, the edit that would let a narrowed apps/cli suite pass the `check` verdict",
+    perturb: () =>
+      // JSON has no comments: the drain needle rides in an extra top-level
+      // key the floors reader ignores.
+      mutateFile("scripts/test-outcome-floors.json", (src) =>
+        src
+          .replace(/("apps\/cli": )(\d+)/, (_m, k: string, n: string) => `${k}${Number(n) - 1}`)
+          .replace("{\n", `{\n  "${PROBE_PREFIX}injected": true,\n`),
       ),
   },
   {
