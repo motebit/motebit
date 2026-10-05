@@ -1771,30 +1771,8 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
     script: "check-cli-surface",
     proves:
       "flags a divergence between the motebit CLI operator-ergonomic surface (subcommands / flags / exit codes / on-disk paths) and apps/cli/etc/cli-surface.json baseline",
-    skipWhen: () => {
-      // Gate's escape hatch: a pending `motebit: major` changeset accepts
-      // any drift. If one is present, perturbing the surface tests the
-      // escape rather than the detection.
-      const dir = resolve(ROOT, ".changeset");
-      if (!existsSync(dir)) return { skip: false, reason: "" };
-      const files = readdirSync(dir).filter(
-        (f) => f.endsWith(".md") && f !== "README.md" && f !== "CHANGELOG.md",
-      );
-      for (const f of files) {
-        const front = readFileSync(resolve(dir, f), "utf-8").match(/^---\n([\s\S]*?)\n---/);
-        if (!front) continue;
-        for (const line of front[1]!.split("\n")) {
-          const m = line.match(/^"motebit":\s*(patch|minor|major)/);
-          if (m && m[1] === "major") {
-            return {
-              skip: true,
-              reason: "pending `motebit: major` changeset authorizes CLI-surface drift",
-            };
-          }
-        }
-      }
-      return { skip: false, reason: "" };
-    },
+    // No skipWhen: since the #739 fix a pending `motebit: major` changeset no
+    // longer excuses an unwritten baseline, so drift bites unconditionally.
     perturb: () =>
       // Comment out the `voice` flag declaration in args.ts. Extract pulls
       // every `name: { type: ... }` entry; once `voice` is hidden behind

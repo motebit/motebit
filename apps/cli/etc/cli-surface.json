@@ -1,4 +1,5 @@
 {
+  "motebitMajor": 1,
   "subcommands": {
     "approvals": [
       "approve",
@@ -60,6 +61,8 @@
     "serve": [],
     "skills": [],
     "smoke": [],
+    "status": [],
+    "sync": [],
     "up": [],
     "verify": [
       "identity"
@@ -69,6 +72,11 @@
     "withdraw": []
   },
   "flags": [
+    {
+      "name": "abandon-funds",
+      "type": "boolean",
+      "default": false
+    },
     {
       "name": "address-only",
       "type": "boolean",
@@ -357,6 +365,11 @@
     {
       "name": "window-usd",
       "type": "string"
+    },
+    {
+      "name": "yes",
+      "type": "boolean",
+      "default": false
     }
   ],
   "exitCodes": [

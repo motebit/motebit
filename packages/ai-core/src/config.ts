@@ -6,8 +6,8 @@
  *   on-device     → "local-server"
  *
  * The historical value `"ollama"` was renamed to `"local-server"` to honor
- * vendor neutrality. CLI accepts `--provider ollama` as an ergonomic alias,
- * and `extractPersonality` (in `apps/cli/src/config.ts`) migrates persisted
+ * vendor neutrality. The CLI's `--provider ollama` alias was removed at
+ * motebit 2.0.0; `extractPersonality` (in `apps/cli/src/config.ts`) migrates persisted
  * `"ollama"` values transparently. New code must not write `"ollama"`.
  */
 export type PersonalityProvider = "anthropic" | "openai" | "google" | "local-server" | "proxy";
