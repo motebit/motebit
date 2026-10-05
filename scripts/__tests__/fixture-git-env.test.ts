@@ -328,8 +328,8 @@ describe("check-fixture-git-env classification", () => {
 
   it("the two scrubbed fixture helpers the old parse miscounted as repo-root read as scrubbed fixtures", () => {
     for (const [rel, line] of [
-      ["scripts/__tests__/pre-push-hook.test.ts", 73],
-      ["scripts/__tests__/check-turbo-global-deps.test.ts", 35],
+      ["scripts/__tests__/pre-push-hook.test.ts", 74],
+      ["scripts/__tests__/check-turbo-global-deps.test.ts", 36],
     ] as const) {
       const site = analyzeTs(readFileSync(join(ROOT, rel), "utf8"), join(ROOT, rel)).find(
         (s) => s.line === line,

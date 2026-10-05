@@ -19,7 +19,7 @@ export type {
   WithdrawalStatus,
 } from "./types.js";
 
-export { DISPUTE_WINDOW_MS, MICRO, fromMicro, toMicro } from "./money.js";
+export { DISPUTE_WINDOW_MS, MICRO, assertPositiveMicro, fromMicro, toMicro } from "./money.js";
 
 export type { AccountStore, InMemoryAccountStoreOptions } from "./store.js";
 export { InMemoryAccountStore } from "./store.js";

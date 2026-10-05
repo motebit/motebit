@@ -6,6 +6,7 @@ import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { asMotebitId, asListingId } from "@motebit/sdk";
+import { parsePositiveMicro } from "@motebit/protocol";
 import { graphRankCandidates } from "@motebit/market";
 import type { TaskRouter } from "./task-routing.js";
 import { fromMicro } from "./accounts.js";
@@ -35,6 +36,24 @@ export function registerListingsRoutes(deps: ListingsDeps): void {
       pay_to_address?: string;
       regulatory_risk?: number;
     }>();
+
+    // A listed unit_cost is a DOLLAR price every paid delegation converts with
+    // `toMicro`. Validate the converted value: 0 (free) or at least 1 micro.
+    // A positive sub-micro price (1e-7) rounds to 0 and would make a "paid"
+    // listing settle as free; negative and non-finite prices are nonsense.
+    if (body.pricing != null) {
+      if (!Array.isArray(body.pricing)) {
+        throw new HTTPException(400, { message: "pricing must be an array" });
+      }
+      for (const p of body.pricing as Array<{ capability?: unknown; unit_cost?: unknown }>) {
+        const cost = p?.unit_cost;
+        if (cost !== undefined && cost !== 0 && parsePositiveMicro(cost) === null) {
+          throw new HTTPException(400, {
+            message: `pricing unit_cost for "${String(p?.capability)}" must be 0 or a finite number of at least 0.000001 USD (1 micro-unit)`,
+          });
+        }
+      }
+    }
 
     const now = Date.now();
     moteDb.db.prepare("DELETE FROM relay_service_listings WHERE motebit_id = ?").run(motebitId);

@@ -5,15 +5,20 @@
  * vitest from its own directory with its own `vitest.config.ts`
  * (vitest.shared.ts), so this file reaches no package suite.
  *
- * The one setting: scrub every inherited GIT_* before any test file loads
- * (scripts/lib/vitest-scrub-git-env.ts — why, and the other two layers).
- * check-fixture-git-env fails if this entry goes, if test:gates stops resolving
+ * Two settings, both before any test file loads: scrub every inherited GIT_*
+ * (scripts/lib/vitest-scrub-git-env.ts — why, and the other two layers), and
+ * point TMPDIR at a symlink so CI runs the macOS temp-dir shape
+ * (scripts/lib/vitest-symlinked-tmpdir.ts).
+ * check-fixture-git-env fails if the scrub entry goes, if test:gates stops resolving
  * this file, or if another root vitest config shadows it.
  */
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    setupFiles: ["./scripts/lib/vitest-scrub-git-env.ts"],
+    setupFiles: [
+      "./scripts/lib/vitest-scrub-git-env.ts",
+      "./scripts/lib/vitest-symlinked-tmpdir.ts",
+    ],
   },
 });

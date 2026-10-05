@@ -1,6 +1,6 @@
 # motebit/eval-attestation@1.0
 
-**Status:** stable · **License of this spec:** Apache-2.0 · **Wire schema:** [`spec/schemas/eval-attestation-v1.json`](schemas/eval-attestation-v1.json)
+**Status:** Stable · **License of this spec:** Apache-2.0 · **Wire schema:** [`spec/schemas/eval-attestation-v1.json`](schemas/eval-attestation-v1.json)
 
 The signed third-party-measurement artifact. A receipt is first-person provenance — _"I did this thing, here is the proof."_ An eval attestation is third-party measurement — _"I observed this thing about you, here is the proof."_ **Subject ≠ signer** is the category law (doctrine: `docs/doctrine/evals-as-attestations.md`); self-issued attestations (subject == issuer) are permitted as the floor, but the signature always speaks for the issuer, never the subject.
 

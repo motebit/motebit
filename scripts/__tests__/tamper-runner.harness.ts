@@ -73,7 +73,7 @@ export function git(fx: Fx, args: string[]): string {
 }
 
 export async function setupFixture(): Promise<Fx> {
-  const base = mkdtempSync(join(tmpdir(), "tamper-runner-test-"));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "tamper-runner-test-")));
   const repo = join(base, "repo");
   const tmp = join(base, "tmp");
   mkdirSync(tmp);

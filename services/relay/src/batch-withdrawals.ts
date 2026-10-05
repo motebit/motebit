@@ -55,7 +55,7 @@ import type {
 import { isBatchableRail, isWithdrawableRail } from "@motebit/sdk";
 import { shouldBatchSettle, DEFAULT_BATCH_POLICY, type BatchPolicy } from "@motebit/market";
 import { fromMicro } from "./accounts.js";
-import { computeWithdrawableAvailable } from "@motebit/virtual-accounts";
+import { assertPositiveMicro, computeWithdrawableAvailable } from "@motebit/virtual-accounts";
 import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
 import { createLogger } from "./logger.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
@@ -128,9 +128,9 @@ interface PendingRow {
 export function enqueuePendingWithdrawal(db: DatabaseDriver, params: EnqueueParams): string | null {
   const { motebitId, amountMicro, destination, rail, source, idempotencyKey } = params;
 
-  if (amountMicro <= 0) {
-    throw new Error(`enqueuePendingWithdrawal: amount must be positive (got ${amountMicro})`);
-  }
+  // Positive safe integer of micro-units, else RangeError — the same rule as
+  // `requestWithdrawal` (`<= 0` alone let NaN and fractions through).
+  assertPositiveMicro(amountMicro, "enqueuePendingWithdrawal");
 
   // Withdrawal holds — BOTH of them. Aggregation is an exit path like any
   // other, so it subtracts the dispute-window escrow AND the unspent

@@ -16,6 +16,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -62,7 +63,7 @@ describe("discovery (fixture repo)", () => {
     );
 
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), "turbo-global-deps-"));
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "turbo-global-deps-")));
     git(dir, "init", "-q");
     write(dir, "pnpm-workspace.yaml", 'packages:\n  - "packages/*"\n');
     write(dir, "tsconfig.base.json", '{ "extends": "./tsconfig.root-strict.json" }\n');
@@ -220,7 +221,7 @@ describe("execution: each globalDependencies entry moves the turbo task hashes",
   }
 
   beforeAll(() => {
-    const base = mkdtempSync(join(tmpdir(), "turbo-global-deps-wt-"));
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "turbo-global-deps-wt-")));
     wt = join(base, "wt");
     git(ROOT, "worktree", "add", "-q", "--detach", wt, "HEAD");
     symlinkSync(join(ROOT, "node_modules"), join(wt, "node_modules"));
@@ -252,9 +253,12 @@ describe("execution: each globalDependencies entry moves the turbo task hashes",
   it("every entry, perturbed, changes the hashes; an unlisted root file does not", () => {
     const base = hashes();
     // A glob is perturbed through one file it selects; an exclusion has none.
+    // The exclusions ride along so the chosen file is one turbo actually hashes
+    // (spec/README.md sorts first under spec/*.md but is excluded).
+    const exclusions = declared.filter((g) => g.startsWith("!"));
     const inert = declared
       .filter((g) => !g.startsWith("!"))
-      .filter((g) => perturbed(isGlob(g) ? expand([g])[0]! : g) === base);
+      .filter((g) => perturbed(isGlob(g) ? expand([g, ...exclusions])[0]! : g) === base);
     expect(inert, "globalDependencies entries that do not move any task hash").toEqual([]);
     expect(perturbed("CONTRIBUTING.md"), "control: an unlisted root file moved the hash").toBe(
       base,
@@ -282,7 +286,7 @@ describe("execution: each globalDependencies entry moves the turbo task hashes",
       return json.tasks.find((t) => t.taskId === "@motebit/docs#build")!.hash;
     };
     const before = docs();
-    const spec = expand(["spec/*.md"])[0]!;
+    const spec = expand([...SPEC_COUNT_INPUTS])[0]!;
     const abs = join(wt, spec);
     const saved = readFileSync(abs);
     appendFileSync(abs, "\n");

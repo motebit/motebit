@@ -58,6 +58,7 @@ import {
   computeP2pFeeMicro,
   computeFederatedFeeSplit,
   roundSettlementSplitMicro,
+  parsePositiveMicro,
 } from "@motebit/protocol";
 import { getSpendableBalance, fromMicro, toMicro } from "./accounts.js";
 import { allocationEscrowHeld } from "./dispute-fund-ledger.js";
@@ -3669,7 +3670,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
             "Remote worker settlement address is not identity-bound (peer-asserted address rejected; no derived+sovereign or signed binding)",
         });
       }
-      if (fedPrice == null || fedPrice.unit_cost <= 0) {
+      // The peer-asserted price converts with `toMicro` below; validate the
+      // CONVERTED value (a sub-micro or non-finite price is not a price).
+      const fedBudgetMicro = fedPrice == null ? null : parsePositiveMicro(fedPrice.unit_cost);
+      if (fedBudgetMicro === null) {
         throw new HTTPException(400, {
           message: "Remote worker has no priced listing for the requested capability",
         });
@@ -3730,7 +3734,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       // The canonical `computeFederatedFeeSplit` (@motebit/protocol) is
       // shared with the delegator client that builds the proof so the two
       // cannot drift.
-      const budgetMicro = toMicro(fedPrice.unit_cost);
+      const budgetMicro = fedBudgetMicro;
       const {
         originFeeMicro: aFeeMicro,
         executorFeeMicro: bFeeMicro,

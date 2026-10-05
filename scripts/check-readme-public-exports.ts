@@ -122,7 +122,6 @@ const WAIVED_EXPORTS: ReadonlyArray<PackageWaiver> = [
       "resolveDropTarget",
       "MICRO",
       "CENTS",
-      "toMicro",
       "fromMicro",
       "toCents",
       "fromCents",
