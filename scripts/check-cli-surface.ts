@@ -64,6 +64,21 @@
  *     `changeset version` consumes that changeset the package major has
  *     caught up with the stamp, so the gate stays green on the release
  *     commit with no further action.
+ *   - Whether THIS change is breaking is decided against state it cannot
+ *     edit: the surface extracted from the tree vs the baseline committed at
+ *     the MERGE-BASE (CI: the merge queue's `merge_group.base_sha` or the
+ *     PR's `origin/<base_ref>`; locally `origin/main`; `--base <ref>`
+ *     overrides). Anything removed or changed there requires a changeset
+ *     declaring `motebit: major` that this change set adds (absent, or not
+ *     major, at the merge-base) — or the version bump itself. An unresolvable
+ *     merge-base (shallow clone, missing ref) fails closed with a repair
+ *     instruction. This closes two bypasses the stamp alone allowed (cold
+ *     review, 2026-10): `--write` then hand-setting the stamp back (or hand-
+ *     editing the baseline) went green; and a break leaning on an UNRELATED
+ *     pending major went green, then — that major released first — green
+ *     again with stamp == package major, shipping the break in an N.x minor.
+ *     Check order: drift (no git needed, so the effectiveness probe bites on
+ *     a shallow runner), then the merge-base check, then the stamp.
  *
  * Why not "pending major excuses drift" (the pre-2026-10 rule): that rule
  * accepted an UNWRITTEN baseline for as long as any `motebit: major`
@@ -81,7 +96,8 @@
  * This is the forty-sixth synchronization invariant defense.
  */
 
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -350,24 +366,27 @@ function currentMotebitMajor(): number {
   return Number(pkg.version.split(".")[0]);
 }
 
-// ── Pending major-bump detection (escape hatch) ───────────────────────
+// ── Changeset parsing ─────────────────────────────────────────────────
+
+/** Whether a changeset file's front matter declares `motebit: major`. */
+export function declaresMotebitMajor(content: string): boolean {
+  const front = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!front) return false;
+  return front[1]!.split(/\r?\n/).some((line) => /^["']?motebit["']?\s*:\s*major\b/.test(line));
+}
+
+function changesetFiles(): string[] {
+  const dir = resolve(ROOT, ".changeset");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".md") && f !== "README.md" && f !== "CHANGELOG.md")
+    .sort();
+}
 
 function hasPendingMotebitMajor(): boolean {
-  const dir = resolve(ROOT, ".changeset");
-  if (!existsSync(dir)) return false;
-  const files = readdirSync(dir).filter(
-    (f) => f.endsWith(".md") && f !== "README.md" && f !== "CHANGELOG.md",
+  return changesetFiles().some((f) =>
+    declaresMotebitMajor(readFileSync(resolve(ROOT, ".changeset", f), "utf-8")),
   );
-  for (const file of files) {
-    const content = readFileSync(resolve(dir, file), "utf-8");
-    const front = content.match(/^---\n([\s\S]*?)\n---/);
-    if (!front) continue;
-    for (const line of front[1]!.split("\n")) {
-      const m = line.match(/^"motebit":\s*(patch|minor|major)/);
-      if (m && m[1] === "major") return true;
-    }
-  }
-  return false;
 }
 
 // ── Diff reporting ────────────────────────────────────────────────────
@@ -514,6 +533,147 @@ export function diffSurfaces(current: CliSurface, baseline: CliSurface): Diff[] 
   return diffs;
 }
 
+// ── The change set: what this change does relative to its merge-base ──
+//
+// The committed baseline and its `motebitMajor` stamp are files the change
+// under review can edit — `--write` then hand-set the stamp back, or edit the
+// baseline JSON directly, and the stamp says "no break". And "a `motebit:
+// major` changeset is pending" is a fact about the whole repo, not about this
+// change — a break could lean on an UNRELATED pending major, and once that
+// major released, the break shipped in an N.x minor. So whether a change is
+// breaking is decided by EXECUTION against state the change cannot edit: the
+// surface extracted from this tree vs the baseline committed at the
+// merge-base, and the declaration must be a changeset THIS change adds.
+
+/** Pure decision for the change-set check — exported for the gate's own tests. */
+export function evaluateChangeSet(input: {
+  current: CliSurface;
+  /** The baseline committed at the merge-base; null when there was none. */
+  mergeBaseBaseline: CliSurface | null;
+  /** What, in this change set, declares a `motebit` major (null: nothing). */
+  majorDeclaredBy: string | null;
+}): { ok: true; note?: string } | { ok: false; reason: "undeclared-break"; breaking: Diff[] } {
+  if (input.mergeBaseBaseline === null) {
+    return { ok: true, note: "no baseline at the merge-base — nothing to break" };
+  }
+  const breaking = diffSurfaces(input.current, input.mergeBaseBaseline).filter(isBreaking);
+  if (breaking.length === 0) return { ok: true };
+  if (input.majorDeclaredBy !== null) {
+    return {
+      ok: true,
+      note: `${breaking.length} breaking change(s) vs the merge-base, declared by ${input.majorDeclaredBy}`,
+    };
+  }
+  return { ok: false, reason: "undeclared-break", breaking };
+}
+
+/**
+ * The ref whose merge-base with HEAD is where this change set starts:
+ *   - `--base <ref>` when given;
+ *   - in GitHub Actions, from the event — the merge queue's
+ *     `merge_group.base_sha` (main, or the queue entry ahead), a PR's
+ *     `origin/<base_ref>`, else `origin/main` (a push to main: merge-base =
+ *     HEAD, so only the plain drift check applies — the change was judged
+ *     as a PR / merge-queue entry);
+ *   - locally, `origin/main`.
+ */
+export function resolveBaseRef(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv,
+): { ok: true; ref: string; source: string } | { ok: false; why: string } {
+  const i = argv.indexOf("--base");
+  if (i >= 0) {
+    const ref = argv[i + 1];
+    if (ref === undefined || ref.startsWith("--"))
+      return { ok: false, why: "`--base` needs a ref" };
+    return { ok: true, ref, source: "--base" };
+  }
+  if (env.GITHUB_ACTIONS === "true") {
+    const event = env.GITHUB_EVENT_NAME;
+    if (event === "merge_group") {
+      try {
+        const payload = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH ?? "", "utf-8")) as {
+          merge_group?: { base_sha?: unknown };
+        };
+        const sha = payload.merge_group?.base_sha;
+        if (typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha)) {
+          return { ok: true, ref: sha, source: "merge_group.base_sha" };
+        }
+      } catch {
+        // fall through to the fail-closed answer below
+      }
+      return { ok: false, why: "merge_group event without a readable merge_group.base_sha" };
+    }
+    if (event === "pull_request" || event === "pull_request_target") {
+      const base = env.GITHUB_BASE_REF;
+      if (!base) return { ok: false, why: `${event} event without GITHUB_BASE_REF` };
+      return { ok: true, ref: `origin/${base}`, source: `${event} base` };
+    }
+  }
+  return { ok: true, ref: "origin/main", source: "default" };
+}
+
+/** `git show <rev>:<path>` from the repo root, or null when absent at that rev. */
+function gitShow(rev: string, path: string): string | null {
+  const r = spawnSync("git", ["show", `${rev}:${path}`], { cwd: ROOT, encoding: "utf-8" });
+  return r.status === 0 ? r.stdout : null;
+}
+
+function resolveMergeBase(ref: string): { ok: true; sha: string } | { ok: false; why: string } {
+  const verify = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+    cwd: ROOT,
+    encoding: "utf-8",
+  });
+  if (verify.status !== 0) return { ok: false, why: `\`${ref}\` does not resolve to a commit` };
+  const mb = spawnSync("git", ["merge-base", ref, "HEAD"], { cwd: ROOT, encoding: "utf-8" });
+  if (mb.status !== 0 || !/^[0-9a-f]{40}$/.test(mb.stdout.trim())) {
+    return {
+      ok: false,
+      why: `no merge-base between \`${ref}\` and HEAD (a shallow checkout, or unrelated history)`,
+    };
+  }
+  return { ok: true, sha: mb.stdout.trim() };
+}
+
+/**
+ * What in this change set (working tree vs the merge-base) declares a
+ * `motebit` major: a changeset that declares it now and did not at the
+ * merge-base (added, or edited up to major), or a `motebit` package major
+ * raised since the merge-base (the release commit itself). A major that was
+ * already pending at the merge-base belongs to some OTHER change.
+ */
+function majorDeclaredInChangeSet(mergeBase: string): string | null {
+  for (const f of changesetFiles()) {
+    if (!declaresMotebitMajor(readFileSync(resolve(ROOT, ".changeset", f), "utf-8"))) continue;
+    const before = gitShow(mergeBase, `.changeset/${f}`);
+    if (before === null || !declaresMotebitMajor(before)) return `.changeset/${f}`;
+  }
+  const pkgBefore = gitShow(mergeBase, "apps/cli/package.json");
+  if (pkgBefore !== null) {
+    const majorBefore = Number(
+      (JSON.parse(pkgBefore) as { version: string }).version.split(".")[0],
+    );
+    if (currentMotebitMajor() > majorBefore) {
+      return `the motebit@${currentMotebitMajor()} version bump`;
+    }
+  }
+  return null;
+}
+
+/** Exit with the fail-closed repair instruction for an unresolvable merge-base. */
+function failUnresolvedBase(why: string): never {
+  process.stderr.write(
+    `\n✗ check-cli-surface: cannot resolve this change's merge-base: ${why}.\n` +
+      `Whether the CLI surface change is breaking is judged against the baseline committed at\n` +
+      `the merge-base (never the stamp this change can edit), so the gate fails closed.\n\n` +
+      `  locally: \`git fetch origin main\` (in a shallow clone: \`git fetch --unshallow origin\`),\n` +
+      `           or name the base explicitly: \`pnpm check-cli-surface --base <ref>\`;\n` +
+      `  in CI:   the job's actions/checkout needs \`fetch-depth: 0\` so origin/<base> and the\n` +
+      `           merge-base exist (.github/workflows/ci.yml, \`check\` job).\n`,
+  );
+  process.exit(1);
+}
+
 // ── Main ──────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -534,7 +694,7 @@ function main(): void {
     );
     if (motebitMajor > pkgMajor) {
       process.stderr.write(
-        `  → breaking change: the baseline is now the motebit@${motebitMajor} contract — a pending \`"motebit": major\` changeset (with ## Migration) is required.\n`,
+        `  → breaking change: the baseline is now the motebit@${motebitMajor} contract — this change must add a \`"motebit": major\` changeset (with ## Migration).\n`,
       );
     }
     return;
@@ -563,25 +723,60 @@ function main(): void {
   });
   const counts = `${Object.keys(current.subcommands).length} subcommand(s), ${current.flags.length} flag(s), ${current.exitCodes.length} exit code(s), ${current.onDiskLayout.length} on-disk path(s)`;
 
-  if (verdict.ok) {
-    process.stderr.write(
-      `  ✓ check-cli-surface: ${counts}, all match baseline (motebit@${previous.motebitMajor} contract; package at major ${pkgMajor}).\n`,
-    );
-    if (verdict.note) process.stderr.write(`    ${verdict.note}\n`);
-    return;
+  if (!verdict.ok && verdict.reason === "drift") {
+    reportDrift(verdict.diffs);
+    process.exit(1);
   }
 
-  if (verdict.reason === "undeclared-major") {
+  // The change set vs its merge-base — the authority on "is this breaking?".
+  const base = resolveBaseRef(args, process.env);
+  if (!base.ok) failUnresolvedBase(base.why);
+  const mergeBase = resolveMergeBase(base.ref);
+  if (!mergeBase.ok) failUnresolvedBase(mergeBase.why);
+  const baseRaw = gitShow(mergeBase.sha, "apps/cli/etc/cli-surface.json");
+  const change = evaluateChangeSet({
+    current,
+    mergeBaseBaseline: baseRaw === null ? null : (JSON.parse(baseRaw) as CliSurface),
+    majorDeclaredBy: majorDeclaredInChangeSet(mergeBase.sha),
+  });
+  const mbLabel = `merge-base ${mergeBase.sha.slice(0, 12)} with ${base.ref} (${base.source})`;
+
+  if (!change.ok) {
     process.stderr.write(
-      `\n✗ check-cli-surface: apps/cli/etc/cli-surface.json is stamped as the motebit@${verdict.stamp} contract ` +
-        `(a breaking surface change), but \`motebit\` is at major ${verdict.pkgMajor} and no pending changeset declares \`"motebit": major\`.\n\n` +
-        `Add a \`"motebit": major\` changeset with a \`## Migration\` section naming the break, ` +
-        `or restore the removed/changed surface and re-run \`pnpm check-cli-surface --write\`.\n`,
+      `\n✗ check-cli-surface: ${change.breaking.length} breaking CLI surface change(s) vs the baseline at the ${mbLabel},\n` +
+        `and this change set adds no \`"motebit": major\` changeset.\n\n`,
+    );
+    for (const d of change.breaking) process.stderr.write(`  ${d.kind}: ${d.detail}\n`);
+    process.stderr.write(
+      `\nA removed or changed subcommand / flag / exit code / ~/.motebit path breaks a\n` +
+        `motebit@${pkgMajor} consumer. Add a \`"motebit": major\` changeset with a \`## Migration\`\n` +
+        `section naming the break IN THIS CHANGE (a major already pending on the base belongs to\n` +
+        `another change — if it releases first, this break would ship in a minor), or restore the\n` +
+        `surface. The committed baseline and its motebitMajor stamp do not decide this: they are\n` +
+        `files this change can edit.\n`,
     );
     process.exit(1);
   }
 
-  const diffs = verdict.diffs;
+  if (verdict.ok) {
+    process.stderr.write(
+      `  ✓ check-cli-surface: ${counts}, all match baseline (motebit@${previous.motebitMajor} contract; package at major ${pkgMajor}); no undeclared break vs the ${mbLabel}.\n`,
+    );
+    if (verdict.note) process.stderr.write(`    ${verdict.note}\n`);
+    if (change.note) process.stderr.write(`    ${change.note}\n`);
+    return;
+  }
+
+  process.stderr.write(
+    `\n✗ check-cli-surface: apps/cli/etc/cli-surface.json is stamped as the motebit@${verdict.stamp} contract ` +
+      `(a breaking surface change), but \`motebit\` is at major ${verdict.pkgMajor} and no pending changeset declares \`"motebit": major\`.\n\n` +
+      `Add a \`"motebit": major\` changeset with a \`## Migration\` section naming the break, ` +
+      `or restore the removed/changed surface and re-run \`pnpm check-cli-surface --write\`.\n`,
+  );
+  process.exit(1);
+}
+
+function reportDrift(diffs: Diff[]): void {
   process.stderr.write(
     `\n✗ check-cli-surface: ${diffs.length} drift(s) from baseline at apps/cli/etc/cli-surface.json.\n\n`,
   );
@@ -600,11 +795,18 @@ function main(): void {
       "a pending changeset does not excuse an unwritten baseline, because\n" +
       "`changeset version` deletes it). A breaking change (anything removed or\n" +
       'changed) is stamped as the next major and also needs a `"motebit": major`\n' +
-      "changeset with ## Migration. Otherwise, restore the surface to match the baseline.\n",
+      "changeset with ## Migration, added in this same change. Otherwise, restore the\n" +
+      "surface to match the baseline.\n",
   );
-  process.exit(1);
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Real paths on both sides: invoked through a symlinked path (a symlinked
+// TMPDIR, a linked checkout) a plain resolve() never matched, and the gate
+// exited 0 having checked nothing.
+if (
+  process.argv[1] !== undefined &&
+  existsSync(process.argv[1]) &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   main();
 }

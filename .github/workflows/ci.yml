@@ -49,6 +49,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: check-cli-surface judges a breaking CLI change against
+          # the baseline at the merge-base with the PR base (origin/<base_ref>)
+          # or the merge-queue base_sha, and fails closed when it can't resolve one.
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
 
