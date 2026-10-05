@@ -114,4 +114,9 @@ It also pins `check` as the verdict job (`needs: [check-static, test-coverage]`,
 `if: always()`, failing unless both succeeded) and re-proves that the
 `test-coverage` matrix's shards partition every package with a `test:coverage`
 script (mutants T1–T10) — so a skipped, cancelled or narrowed shard can never
-read as a green `check`.
+read as a green `check`. The verdict does not take the shard runner's word
+for it: `check` also runs `scripts/verify-test-outcomes.ts` over the shard
+artifacts, which requires vitest's own results for every package with a
+`test:coverage` script (enumerated from `pnpm-workspace.yaml`) — tests run,
+none failed, coverage floors met — so a runner whose exit code lies or whose
+package list skips a suite is still RED.

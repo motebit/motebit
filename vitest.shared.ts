@@ -24,6 +24,8 @@
  * declaration prevents accidental omission.
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { defineConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
@@ -88,6 +90,54 @@ const BASE_COVERAGE_EXCLUDE = ["src/__tests__/**", "src/**/*.d.ts"];
 // (turbo `--concurrency`, or vitest workers) rather than bumping this again.
 const DEFAULT_TEST_TIMEOUT_MS = 30_000;
 
+/**
+ * Where every suite writes vitest's own machine-readable verdict, relative to
+ * the package. CI's `check` verdict job (scripts/verify-test-outcomes.ts)
+ * reads this file — not any runner's exit code — to prove each package's tests
+ * ran (numTotalTests > 0), passed (numFailedTests 0, success true), next to
+ * the coverage-summary.json it checks against the package's own thresholds.
+ * Inside `coverage/` so the shard upload already carries it.
+ */
+export const TEST_RESULTS_FILE = "coverage/vitest-results.json";
+
+/**
+ * vitest's JSON results count failed tests and suites but not UNHANDLED errors
+ * (an error thrown after a test settles fails the run, yet the JSON still says
+ * `success: true`). This file records the run's own end state — vitest's
+ * `passed | failed | interrupted` and the unhandled-error count, both handed
+ * to `onTestRunEnd` by vitest — so the verifier sees those failures too.
+ */
+export const TEST_RUN_END_FILE = "coverage/vitest-run-end.json";
+
+/** Writes TEST_RUN_END_FILE (relative to the package root vitest runs in). */
+// Structurally typed (not `Reporter`): apps/cli resolves a different vitest
+// copy, whose nominal Reporter type this would not satisfy.
+const runEndReporter = {
+  onInit(ctx: { config: { root: string } }): void {
+    runEndRoot = ctx.config.root;
+  },
+  onTestRunEnd(_modules: readonly unknown[], errors: readonly unknown[], state: string): void {
+    const file = join(runEndRoot ?? process.cwd(), TEST_RUN_END_FILE);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify({ state, unhandledErrors: errors.length })}\n`);
+  },
+};
+let runEndRoot: string | undefined;
+
+/**
+ * The reporters every suite runs: vitest's defaults (`default`, plus
+ * `github-actions` annotations under Actions — what an unset `reporters`
+ * resolves to) the JSON verdict at TEST_RESULTS_FILE, and the run-end state at TEST_RUN_END_FILE. Set after `extra`
+ * so no package can drop the verdict file; a CLI `--reporter` replaces the
+ * list, which the verifier then reads as a missing verdict (fail-closed).
+ */
+export const MOTEBIT_TEST_REPORTERS = [
+  "default" as const,
+  ...(process.env.GITHUB_ACTIONS === "true" ? ["github-actions" as const] : []),
+  ["json" as const, { outputFile: TEST_RESULTS_FILE }] as ["json", { outputFile: string }],
+  runEndReporter,
+];
+
 export function defineMotebitTest(opts: MotebitVitestOptions): ViteUserConfig {
   const { thresholds, testExclude = [], coverageInclude, coverageExclude = [], extra, vite } = opts;
 
@@ -97,6 +147,7 @@ export function defineMotebitTest(opts: MotebitVitestOptions): ViteUserConfig {
       testTimeout: DEFAULT_TEST_TIMEOUT_MS,
       // `extra` spreads after, so a package can still override the default.
       ...(extra ?? {}),
+      reporters: MOTEBIT_TEST_REPORTERS,
       exclude: [...BASE_TEST_EXCLUDE, ...testExclude],
       coverage: {
         include: coverageInclude ?? BASE_COVERAGE_INCLUDE,

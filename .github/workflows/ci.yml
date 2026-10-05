@@ -190,8 +190,11 @@ jobs:
     # The verdict, under the required-check name. A cancelled, skipped or
     # failed leg must never read as success: `if: always()` makes this job run
     # whatever its needs concluded, and it passes only when check-static and
-    # EVERY test-coverage shard SUCCEEDED and the shard manifests prove each
-    # package with a test:coverage script ran exactly once.
+    # EVERY test-coverage shard SUCCEEDED, the shard manifests prove each
+    # package with a test:coverage script ran exactly once, AND vitest's own
+    # results prove every such package ran tests that all passed with its
+    # coverage floors met (scripts/verify-test-outcomes.ts — independent of the
+    # shard runner's exit code and its package list).
     needs: [check-static, test-coverage]
     if: always()
     runs-on: ubuntu-latest
@@ -229,6 +232,16 @@ jobs:
 
       - name: Prove the shards ran every suite exactly once
         run: pnpm test:coverage:shard --verify-manifests /tmp/coverage-shards
+
+      - name: Prove every suite passed, from vitest's own results
+        # The proof that does not trust the shard runner: every package with a
+        # test:coverage script — enumerated from pnpm-workspace.yaml here, not
+        # from the runner's list — must have vitest's own results (written by
+        # MOTEBIT_TEST_REPORTERS in vitest.shared.ts) in exactly one shard
+        # artifact: tests > 0, none failed, no unhandled error, coverage at or
+        # above the package's own thresholds. A runner whose exit code lies
+        # (B1) or whose enumeration skips a package (B2) is RED here.
+        run: pnpm test:outcomes:verify --artifacts /tmp/coverage-shards
 
       - name: Merge the shards' coverage
         run: |

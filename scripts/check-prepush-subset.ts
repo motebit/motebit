@@ -94,6 +94,8 @@ import {
   turboArgs,
   verifyPartition,
 } from "./test-coverage-shards.js";
+import { RED_VARIANTS, greenFixture, materialize } from "./lib/test-outcomes-fixture.js";
+import { verifyOutcomes } from "./verify-test-outcomes.js";
 
 const ROOT = process.cwd();
 const HOOK = ".husky/pre-push";
@@ -308,6 +310,15 @@ export const SHARD_RUNNER = "scripts/test-coverage-shards.ts";
 /** The test:coverage counterpart: one leg of the sharded suite. */
 const SHARD_RUN =
   "pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json";
+
+/**
+ * The outcome verifier the `check` verdict job runs over the downloaded shard
+ * artifacts. It reads vitest's own results and imports nothing from
+ * SHARD_RUNNER, so the proof that every suite ran and passed no longer rests
+ * on the runner's exit code or its package list (outcomeVerifierViolations).
+ */
+export const OUTCOME_VERIFIER = "scripts/verify-test-outcomes.ts";
+const OUTCOME_ARTIFACTS = "/tmp/coverage-shards";
 
 /** The CI counterpart of each task key: a step whose `run` is exactly this. */
 export const CI_FORMS: Record<Key, CiForm> = {
@@ -542,6 +553,115 @@ export function shardRunnerViolations(inp: Inputs, root: string = ROOT): ShardRu
 }
 
 /**
+ * Proves by EXECUTION that the `check` job's outcome verifier is a verdict:
+ * the pinned root `test:outcomes:verify` command, run over a fixture
+ * workspace + shard artifacts (scripts/lib/test-outcomes-fixture.ts), exits 0
+ * on the GREEN fixture and non-zero on EVERY red variant — the artifacts B1
+ * (exit code zeroed), the GITHUB_JOB return-0 runner, B2 (enumeration skips a
+ * package), a deleted results file, flipped numFailedTests, zero tests, an
+ * unhandled error, coverage or a per-glob floor below threshold, a duplicate,
+ * a foreign or a copied results file leave behind. And the verifier, through
+ * every local import, never imports SHARD_RUNNER: what it is judged against
+ * is not the runner's to shrink.
+ */
+export function outcomeVerifierViolations(
+  inp: Inputs,
+  root: string = ROOT,
+): { violations: string[]; runs: number } {
+  const cmd = inp.rootScripts["test:outcomes:verify"];
+  if (cmd !== ROOT_SCRIPTS["test:outcomes:verify"])
+    return {
+      violations: [
+        `package.json test:outcomes:verify is ${JSON.stringify(cmd ?? null)}, not ${JSON.stringify(ROOT_SCRIPTS["test:outcomes:verify"])} — the verifier this gate executes is not the one CI's check job runs`,
+      ],
+      runs: 0,
+    };
+  const violations: string[] = [];
+  const seen = new Set<string>();
+  const visit = (rel: string) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const src = readFileSync(join(root, rel), "utf8");
+    for (const m of src.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)) {
+      const spec = m[1]!;
+      if (/test-coverage-shards/.test(spec))
+        violations.push(
+          `${rel} imports ${spec} — the outcome verifier must not depend on the shard runner it judges`,
+        );
+      else if (spec.startsWith("."))
+        visit(join(rel, "..", spec.replace(/\.js$/, ".ts")).replace(/\\/g, "/"));
+    }
+  };
+  visit(OUTCOME_VERIFIER);
+
+  const cases: { id: string; red: boolean }[] = [
+    { id: "green", red: false },
+    ...Object.keys(RED_VARIANTS).map((id) => ({ id, red: true })),
+  ];
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "prepush-outcomes-")));
+  let runs = 0;
+  try {
+    const paths = cases.map(({ id }) => {
+      const f = greenFixture();
+      try {
+        if (id !== "green") RED_VARIANTS[id]!.mutate(f);
+      } catch (err) {
+        violations.push(
+          `RED fixture ${id} cannot be derived from the GREEN fixture (${err instanceof Error ? err.message : String(err)}) — scripts/lib/test-outcomes-fixture.ts`,
+        );
+      }
+      return materialize(f, join(dir, id));
+    });
+    // The exact CI command, as a process, on the GREEN fixture and on B1 (its
+    // exit code is the verdict the check job reads) …
+    const cli = ["green", "B1-exitcode-zeroed"];
+    const script = cli
+      .map((id) => {
+        const p = paths[cases.findIndex((c) => c.id === id)]!;
+        return `${cmd} --artifacts '${p.artifacts}' --root '${p.root}' >/dev/null 2>&1; echo "${id}=$?"`;
+      })
+      .join("\n");
+    const r = spawnSync("sh", ["-c", script], { cwd: root, encoding: "utf8" });
+    const status = new Map(
+      (r.stdout ?? "")
+        .split("\n")
+        .map((l) => /^([\w-]+)=(\d+)$/.exec(l))
+        .filter((m): m is RegExpExecArray => m !== null)
+        .map((m) => [m[1]!, Number(m[2])]),
+    );
+    // … and the same verifier function, in-process, on every case.
+    cases.forEach(({ id }, i) => {
+      if (!cli.includes(id))
+        status.set(
+          id,
+          verifyOutcomes(paths[i]!.root, paths[i]!.artifacts).violations.length > 0 ? 1 : 0,
+        );
+    });
+    for (const { id, red } of cases) {
+      const st = status.get(id);
+      if (st === undefined) {
+        violations.push(
+          `${OUTCOME_VERIFIER}: case ${id} never ran — ${(r.stderr ?? "").trim().slice(-300)}`,
+        );
+        continue;
+      }
+      runs++;
+      if (red && st === 0)
+        violations.push(
+          `${OUTCOME_VERIFIER} exited 0 on RED fixture ${id} (${RED_VARIANTS[id]!.what}) — the check job would pass a run whose suites did not all run and pass`,
+        );
+      if (!red && st !== 0)
+        violations.push(
+          `${OUTCOME_VERIFIER} exited ${st} on the GREEN fixture — a correct sharded run would fail the check job`,
+        );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return { violations, runs };
+}
+
+/**
  * EVERY step of every counterpart job, exactly (name, uses, with, run, if,
  * env, continue-on-error, id — the whole step object, in order). Deny by
  * default (2026-10-01 cold review, B1): a step inserted before a counterpart
@@ -694,6 +814,10 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
     {
       name: "Prove the shards ran every suite exactly once",
       run: "pnpm test:coverage:shard --verify-manifests /tmp/coverage-shards",
+    },
+    {
+      name: "Prove every suite passed, from vitest's own results",
+      run: `pnpm test:outcomes:verify --artifacts ${OUTCOME_ARTIFACTS}`,
     },
     {
       name: "Merge the shards' coverage",
@@ -888,6 +1012,7 @@ export const ROOT_SCRIPTS: Record<string, string> = {
   "test:gates": "vitest run --dir scripts/__tests__ --testTimeout=30000 --hookTimeout=30000",
   "check-gates-effective": "npx tsx scripts/check-gates-effective.ts",
   "test:coverage:shard": "npx tsx scripts/test-coverage-shards.ts",
+  "test:outcomes:verify": "npx tsx scripts/verify-test-outcomes.ts",
 };
 
 // ---------------------------------------------------------------------------
@@ -1496,6 +1621,8 @@ function main(): void {
   violations.push(...evaluateTestCache(testCache));
   const runner = shardRunnerViolations(inp, ROOT);
   violations.push(...runner.violations);
+  const outcomes = outcomeVerifierViolations(inp, ROOT);
+  violations.push(...outcomes.violations);
   if (violations.length > 0) {
     failWithRepair({
       invariant:
@@ -1507,7 +1634,7 @@ function main(): void {
     });
   }
   console.log(
-    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned; the shard runner executed ${runner.launches} time(s) against a stub turbo — each launched exactly its shard's args and exited with turbo's status.`,
+    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned; the shard runner executed ${runner.launches} time(s) against a stub turbo — each launched exactly its shard's args and exited with turbo's status; the outcome verifier judged ${outcomes.runs} fixture(s) (2 as the CI command) — green on the green one, red on all ${Object.keys(RED_VARIANTS).length} red ones.`,
   );
 }
 

@@ -934,6 +934,30 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-prepush-subset",
     proves:
+      "flags the `check` job's outcome verifier accepting a shard run where one package's vitest results file is missing — here the GREEN fixture's services/relay uploads no vitest-results.json, so the verifier must refuse it and the gate's green-fixture case goes RED",
+    perturb: () =>
+      mutateFile("scripts/lib/test-outcomes-fixture.ts", (src) =>
+        src.replace(
+          `"coverage-shard-0": { "services/relay": passingReport("services/relay") },`,
+          `"coverage-shard-0": { "services/relay": { ...passingReport("services/relay"), results: null } }, // ${PROBE_PREFIX}injected`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags the `check` job's outcome verifier accepting vitest results that report a failed test — here the GREEN fixture's numFailedTests flipped to 1 for every package, whatever any runner's exit code said",
+    perturb: () =>
+      mutateFile("scripts/lib/test-outcomes-fixture.ts", (src) =>
+        src.replace(
+          "      numFailedTests: 0,\n",
+          `      numFailedTests: 1, // ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
       "flags a package with a test:coverage script that no CI shard runs — here packages/protocol losing its weight in scripts/test-coverage-shards.ts, so the computed assignment has nowhere to put it and CI's sharded suite would silently stop being every suite",
     perturb: () =>
       mutateFile("scripts/test-coverage-shards.ts", (src) =>

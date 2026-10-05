@@ -22,7 +22,11 @@
  * by `check-prepush-subset` in `pnpm check` (the pre-push ⊆ CI gate — CI's
  * union must still be the full suite the hook's `turbo run test` subsets), by
  * every shard before it runs, and by the `check` verdict job from the
- * manifests the shards upload (`--verify-manifests`).
+ * manifests the shards upload (`--verify-manifests`). None of that is the
+ * proof the suites ran and passed: this runner's exit code and package list
+ * are exactly what a bypass would forge, so the `check` job judges vitest's
+ * own results with scripts/verify-test-outcomes.ts, which imports nothing
+ * from here.
  *
  * Usage:
  *   tsx scripts/test-coverage-shards.ts --shard 2/3 --manifest coverage/test-coverage-shard.json

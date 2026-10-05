@@ -1,11 +1,12 @@
 import { defineConfig } from "vitest/config";
+import { MOTEBIT_TEST_REPORTERS } from "../../vitest.shared.js";
 
 // vitest 4's default `exclude` only covers node_modules/.git (vitest 2 also
 // excluded dist/coverage). This package runs a bare `vitest run` with no
 // shared config, and the turbo `test` task builds first (`dependsOn: build`),
 // so without an explicit exclude vitest would discover compiled `*.test.js`
 // under dist/ alongside the real src tests — running stale artifacts. Restore
-// the standard excludes. (Coverage config is intentionally omitted: this
+// the standard excludes. (Coverage THRESHOLDS are intentionally omitted: this
 // package's `test:coverage` collects without per-package thresholds.)
 export default defineConfig({
   test: {
@@ -36,5 +37,11 @@ export default defineConfig({
     // gauntlet ran the whole repo after a @motebit/protocol change (#696 item
     // 4); it passes standalone 22/22. A hook and a test starve the same way.
     hookTimeout: 30_000,
+    // The shared reporters (vitest.shared.ts): CI's verdict reads the JSON
+    // results file they write, so this bare config must emit it too.
+    reporters: MOTEBIT_TEST_REPORTERS,
+    // vitest's coverage defaults + json-summary: the verdict requires the
+    // summary even where, as here, no thresholds are declared.
+    coverage: { reporter: ["text", "html", "clover", "json", "json-summary"] },
   },
 });
