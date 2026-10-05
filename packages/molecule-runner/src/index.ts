@@ -29,7 +29,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
-import { RiskLevel } from "@motebit/sdk";
+import { RiskLevel, toMicro } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { bootstrapAndEmitIdentity, startServiceServer, wireServerDeps } from "@motebit/mcp-server";
 import type { AdmittedTaskStore, TaskAdmissionConfig } from "@motebit/mcp-server";
@@ -65,6 +65,8 @@ import { embedText as defaultEmbedText } from "@motebit/memory-graph";
 import type { ToolRegistry } from "@motebit/tools";
 import { resolveListingPricing, UNIT_COST_ENV } from "./listing-price.js";
 import type { ListingPrice, ListingPriceSpec } from "./listing-price.js";
+import { fileTaskSpendLedger, memoryTaskSpendLedger, taskSpendFor } from "./task-spend.js";
+import type { TaskSpend, TaskSpendLedger } from "./task-spend.js";
 
 // Re-export the receipt builder so molecule authors don't reach into
 // `@motebit/mcp-server` for this one helper — runner is the single
@@ -72,6 +74,14 @@ import type { ListingPrice, ListingPriceSpec } from "./listing-price.js";
 export { createProviderReadiness, classifyProviderFailure } from "./readiness.js";
 export { resolveListingPricing, parseUnitCostOverride, UNIT_COST_ENV } from "./listing-price.js";
 export type { ListingPrice, ListingPriceSpec } from "./listing-price.js";
+export {
+  fileTaskSpendLedger,
+  memoryTaskSpend,
+  memoryTaskSpendLedger,
+  taskSpendFor,
+  TASK_SPEND_RETENTION_MS,
+} from "./task-spend.js";
+export type { TaskSpend, TaskSpendHold, TaskSpendLedger } from "./task-spend.js";
 export type { ProviderReadiness, ReadinessVerdict } from "./readiness.js";
 export { buildServiceReceipt } from "@motebit/mcp-server";
 export type { BuildServiceReceiptInput } from "@motebit/mcp-server";
@@ -308,7 +318,24 @@ export interface MoleculeSpendHandle {
      * an ineligible pinned worker fails closed (`worker_not_payable`).
      */
     targetWorkerId?: string;
+    /**
+     * Hard per-call ceiling (integer micro-units) on the resolved total
+     * outflow (worker net + fees), enforced by the runtime BEFORE the payment
+     * is signed — over it ⇒ `budget_exceeded`, no money moved. A per-task
+     * budget passes its REMAINING budget here so the quote and the pay can
+     * never diverge past it (a re-ranked worker, a repriced listing).
+     */
+    maxTotalMicro?: number;
   }): Promise<GrantedDelegationResult>;
+  /**
+   * The durable spend ledger for ONE admitted relay task — pass the
+   * `admittedRelayTaskId` the MCP surface hands `handleAgentTask` (the
+   * verified dispatch token's `sub`), never a caller-supplied id. Every run
+   * of that task (a timed-out run still paying, its honest retry) charges
+   * the same ledger, reserve-before-pay, so a per-task budget bounds the
+   * task, not the run. Persisted beside `admitted-tasks.json`.
+   */
+  taskSpend(admittedRelayTaskId: string): TaskSpend;
 }
 
 /**
@@ -382,7 +409,12 @@ export interface MoleculeRunnerAdapters {
    * (`relay-key-pins.json`, `admitted-tasks.json`) — the same persistent
    * volume that holds the identity. Tests inject in-memory stores.
    */
-  admissionStores?: { pinStorage: RelayKeyPinStorage; admittedStore: AdmittedTaskStore };
+  admissionStores?: {
+    pinStorage: RelayKeyPinStorage;
+    admittedStore: AdmittedTaskStore;
+    /** Per-admitted-task spend ledger. Default (when the stores are injected without one): in-process. */
+    spendLedger?: TaskSpendLedger;
+  };
   /**
    * Override construction of the sovereign wallet used for sweeping earnings.
    * Default: `createSolanaWalletRail({ rpcUrl, identitySeed })`. Tests inject a
@@ -404,6 +436,47 @@ export interface MoleculeRunnerAdapters {
 }
 
 /**
+ * The price the runner RESOLVED and lists — `config.pricing` with any
+ * `MOTEBIT_UNIT_COST` override applied — handed to the builder so a service
+ * that budgets against its own price reads the exact number the relay lists,
+ * never the environment (`check-service-truth`: no service source names the
+ * override). Integer micro-units: `toMicro` at this boundary, never a float
+ * in the money path.
+ */
+export interface MoleculeListingPrice {
+  /** The listed `unit_cost` of every capability, in integer micro-units. */
+  readonly unitCostMicro: number;
+  /** The unit the price is per ("task", "request", …). */
+  readonly per: string;
+}
+
+/** What the runner knows before the builder runs, beyond identity and spend. */
+export interface MoleculeBuildContext {
+  /** The resolved listing price; absent ⇔ the molecule lists no price (`config.pricing` unset). */
+  readonly listingPrice?: MoleculeListingPrice;
+}
+
+/**
+ * The resolved listing price of a runner-composed `pricing` array, or
+ * `undefined` for an unpriced molecule; throws when the price is too large to
+ * be an exact integer micro amount. Every entry carries the same
+ * `unit_cost` / `per` by construction (`resolveListingPricing`), so the first
+ * entry is the price.
+ */
+export function listingPriceOf(
+  pricing: readonly ListingPrice[] | undefined,
+): MoleculeListingPrice | undefined {
+  const p = pricing?.[0];
+  if (p == null) return undefined;
+  const unitCostMicro = toMicro(p.unit_cost);
+  if (!Number.isSafeInteger(unitCostMicro))
+    throw new Error(
+      `listing price: unit_cost ${p.unit_cost} is not an exact integer micro-unit amount — refusing to start rather than budget against an inexact price`,
+    );
+  return Object.freeze({ unitCostMicro, per: p.per });
+}
+
+/**
  * The callback services pass to `runMolecule`. Called after identity
  * bootstrap so tool handlers can close over the service's private key,
  * motebit id, and device id.
@@ -415,7 +488,9 @@ export type MoleculeBuilder = (
    * money molecule). Undefined for ordinary molecules. Back-compatible: a
    * one-argument builder ignores it.
    */
-  spend?: MoleculeSpendHandle,
+  spend: MoleculeSpendHandle | undefined,
+  /** Always passed: the resolved listing price ({@link MoleculeBuildContext}). */
+  context: MoleculeBuildContext,
 ) => MoleculeBuild | Promise<MoleculeBuild>;
 
 // ---------------------------------------------------------------------------
@@ -695,11 +770,15 @@ function jsonFileMap(path: string): {
 export function fileAdmissionStores(dataDir: string): {
   pinStorage: RelayKeyPinStorage;
   admittedStore: AdmittedTaskStore;
+  spendLedger: TaskSpendLedger;
 } {
   const pins = jsonFileMap(resolvePath(dataDir, "relay-key-pins.json"));
   const admitted = jsonFileMap(resolvePath(dataDir, "admitted-tasks.json"));
   return {
     pinStorage: { getItem: (k) => pins.get(k), setItem: (k, v) => pins.set(k, v) },
+    // Beside the admission rows it guards; same atomic write. Retained at
+    // least as long as the admission row (task-spend.ts, TASK_SPEND_RETENTION_MS).
+    spendLedger: fileTaskSpendLedger(resolvePath(dataDir, "task-spend.json")),
     // Value format: "<expiresAt>" = admitted, "<expiresAt>:done" = completed.
     // Legacy rows (pre-completion tracking) are bare numbers and read as
     // admitted-not-completed, so a token whose run was cut short by a deploy
@@ -1058,6 +1137,7 @@ export async function runMolecule(
     );
   const pricing: ListingPrice[] | undefined =
     config.pricing != null ? resolveListingPricing(config.pricing, unitCostRaw) : undefined;
+  const listingPrice = listingPriceOf(pricing);
   if (pricing != null)
     log(
       `Listing price: $${pricing[0]!.unit_cost}/${pricing[0]!.per} (${unitCostRaw !== undefined ? `${UNIT_COST_ENV} override` : "coded default"}) for ${pricing.map((p) => p.capability).join(", ")}`,
@@ -1099,12 +1179,17 @@ export async function runMolecule(
   //    the builder closes over it; its task handlers deref it at task time
   //    (long after the runtime exists), closing the chicken-and-egg.
   const runtimeRef: { current: RunnerRuntime | null } = { current: null };
+  // Admission state (relay-key pin, admitted task ids, per-task spend) lives
+  // under the data dir; built before the molecule so the spend handle can key
+  // its ledger to the admitted task.
+  const admissionStores = adapters.admissionStores ?? fileAdmissionStores(config.dataDir);
+  const spendLedger = admissionStores.spendLedger ?? memoryTaskSpendLedger();
   let spend: MoleculeSpendHandle | undefined;
   if (config.moneyExecution) {
     const heldGrant = await selfIssueGrant(identity, config.moneyExecution);
     spend = {
       heldGrant,
-      spend: async ({ capability, prompt, dryRun, targetWorkerId }) => {
+      spend: async ({ capability, prompt, dryRun, targetWorkerId, maxTotalMicro }) => {
         const rt = runtimeRef.current;
         const exec = rt?.executeGrantedDelegation;
         if (typeof exec !== "function") return { ok: false, code: "sync_not_enabled" };
@@ -1115,12 +1200,14 @@ export async function runMolecule(
           delegation: { token, grant: heldGrant },
           ...(dryRun != null ? { dryRun } : {}),
           ...(targetWorkerId != null ? { targetWorkerId } : {}),
+          ...(maxTotalMicro != null ? { maxTotalMicro } : {}),
         });
       },
+      taskSpend: (admittedRelayTaskId) => taskSpendFor(spendLedger, admittedRelayTaskId),
     };
     log(`Money seam: self-grant ${heldGrant.grant_id} (signed ceiling; dry-run is per-call)`);
   }
-  const molecule = await build(identity, spend);
+  const molecule = await build(identity, spend, listingPrice != null ? { listingPrice } : {});
   // Pricing is runner-owned: compose the ONE listing function before anything
   // reads it. Refuses (throws) when the molecule's listing carries its own
   // pricing, or when config prices a service that publishes no listing.
@@ -1232,7 +1319,6 @@ export async function runMolecule(
   // from the SAME composed listing the relay is sent, so pricing and admission
   // cannot drift apart: a service that charges is a service that requires the relay's
   // signed admission before it spends. Doctrine: task-admission.md.
-  const admissionStores = adapters.admissionStores ?? fileAdmissionStores(config.dataDir);
   const admission = await resolveTaskAdmission(
     config,
     { getServiceListing },

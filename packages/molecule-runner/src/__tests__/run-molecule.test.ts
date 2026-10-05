@@ -26,6 +26,8 @@ import {
   defaultCreateRuntime,
   defaultCreateMoneyRuntime,
   defaultLog,
+  memoryTaskSpend,
+  memoryTaskSpendLedger,
   runMolecule,
 } from "../index.js";
 import { deriveSolanaAddress } from "@motebit/wallet-solana";
@@ -323,6 +325,7 @@ describe("runMolecule", () => {
     // Branch: omitting dryRun ⇒ the option is not forwarded (undefined, not false).
     await handle!.spend({ capability: "research", prompt: "again" });
     expect((execCalls[1] as Record<string, unknown>).dryRun).toBeUndefined();
+    expect((execCalls[1] as Record<string, unknown>).maxTotalMicro).toBeUndefined();
     const call = execCalls[0] as {
       capability: string;
       dryRun: boolean;
@@ -341,6 +344,10 @@ describe("runMolecule", () => {
     // forwarded verbatim to executeGrantedDelegation.
     await handle!.spend({ capability: "research", prompt: "pinned", targetWorkerId: "atom-xyz" });
     expect((execCalls[2] as Record<string, unknown>).targetWorkerId).toBe("atom-xyz");
+
+    // The per-call ceiling reaches the runtime verbatim (it enforces it pre-sign).
+    await handle!.spend({ capability: "research", prompt: "capped", maxTotalMicro: 66_200 });
+    expect((execCalls[3] as Record<string, unknown>).maxTotalMicro).toBe(66_200);
   });
 
   it("defaultCreateMoneyRuntime builds a real runtime with the granted-spend primitive + R4 delegation", () => {
@@ -384,6 +391,40 @@ describe("runMolecule", () => {
       undefined as never,
     ) as unknown as { stop?: () => void };
     rt2.stop?.();
+  });
+
+  it("moneyExecution ⇒ taskSpend(id) charges the admission stores' per-task ledger", async () => {
+    const adapters = baseAdapters();
+    adapters.createMoneyRuntime = () =>
+      ({ ...fakeRuntime(), executeGrantedDelegation: async () => ({ ok: false }) }) as never;
+    const spendLedger = memoryTaskSpendLedger();
+    adapters.admissionStores = {
+      pinStorage: { getItem: () => null, setItem: () => {} },
+      admittedStore: { has: () => false, add: () => {} },
+      spendLedger,
+    };
+    let handle: { taskSpend: (id: string) => ReturnType<typeof memoryTaskSpend> } | undefined;
+    await runMolecule(
+      {
+        ...baseConfig(),
+        moneyExecution: {
+          solanaRpcUrl: "https://rpc.test",
+          relayPublicKeyHex: "07".repeat(32),
+          spendCeiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: 1_000_000 },
+        },
+      },
+      (_identity, spend) => {
+        handle = spend as typeof handle;
+        return { toolRegistry: new InMemoryToolRegistry() };
+      },
+      adapters,
+    );
+    const a = handle!.taskSpend("relay-task-1");
+    a.settle(null, 500);
+    // Every run of the task gets the same ledger row; another task its own.
+    expect(handle!.taskSpend("relay-task-1").committedMicro()).toBe(500);
+    expect(spendLedger.committedMicro("relay-task-1")).toBe(500);
+    expect(handle!.taskSpend("relay-task-2").committedMicro()).toBe(0);
   });
 
   it("defaultCreateMoneyRuntime without moneyExecution throws (misuse guard)", () => {

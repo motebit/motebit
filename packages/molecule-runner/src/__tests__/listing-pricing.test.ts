@@ -13,8 +13,14 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryToolRegistry } from "@motebit/tools";
-import type { ListingPrice, ListingPriceSpec, MoleculeConfig } from "../index.js";
-import { runMolecule } from "../index.js";
+import { toMicro } from "@motebit/sdk";
+import type {
+  ListingPrice,
+  ListingPriceSpec,
+  MoleculeBuildContext,
+  MoleculeConfig,
+} from "../index.js";
+import { listingPriceOf, runMolecule } from "../index.js";
 
 const RELAY_KEY = "ab".repeat(32);
 /** What a service's src/pricing.ts codes: data, one price, one unit. */
@@ -86,11 +92,13 @@ function harness() {
     relayPublicKeyHex: RELAY_KEY,
     ...extra,
   });
+  const contexts: MoleculeBuildContext[] = [];
   const run = (config: MoleculeConfig, getServiceListing?: unknown) =>
     runMolecule(
       config,
-      () =>
-        ({
+      (_identity, _spend, context) =>
+        (contexts.push(context),
+        {
           toolRegistry: new InMemoryToolRegistry(),
           ...(getServiceListing != null ? { getServiceListing } : {}),
         }) as never,
@@ -106,7 +114,7 @@ function harness() {
     const mcpTool = (await detached())?.pricing;
     return { admissionPriced: serverCfg.taskAdmission != null, registration, mcpTool };
   };
-  return { run, cfg, consumers, started, adapters };
+  return { run, cfg, consumers, started, adapters, contexts };
 }
 
 describe("listing pricing — one path from config to every consumer", () => {
@@ -226,6 +234,45 @@ describe("listing pricing — one path from config to every consumer", () => {
  * before identity or storage: a service's pricing.ts is data and cannot read
  * the environment (check-service-truth, cold review R5).
  */
+describe("listing pricing — the resolved price reaches the builder", () => {
+  const listing = async () => ({ capabilities: ["x"], sla: SLA, description: "d" });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    [undefined, 200_000],
+    ["0.25", 250_000],
+    ["0.30", 300_000],
+  ] as const)(
+    "MOTEBIT_UNIT_COST=%s: the builder's listingPrice is exactly the listed unit_cost, in micro-units",
+    async (raw, micro) => {
+      if (raw !== undefined) vi.stubEnv("MOTEBIT_UNIT_COST", raw);
+      const h = harness();
+      await h.run(h.cfg({ pricing: SPEC }), listing);
+      const { registration } = await h.consumers();
+      expect(h.contexts).toEqual([{ listingPrice: { unitCostMicro: micro, per: "task" } }]);
+      for (const p of registration as ListingPrice[])
+        expect(toMicro(p.unit_cost)).toBe(h.contexts[0]!.listingPrice!.unitCostMicro);
+      expect(Object.isFrozen(h.contexts[0]!.listingPrice)).toBe(true);
+    },
+  );
+
+  it("an unpriced molecule's builder gets no listingPrice", async () => {
+    const h = harness();
+    await h.run(h.cfg(), listing);
+    expect(h.contexts).toEqual([{}]);
+  });
+
+  it("a price too large to be an exact micro amount refuses to start", async () => {
+    vi.stubEnv("MOTEBIT_UNIT_COST", "100000000000");
+    const h = harness();
+    await expect(h.run(h.cfg({ pricing: SPEC }), listing)).rejects.toThrow(/exact integer micro/);
+    expect(h.adapters.bootstrapIdentity).not.toHaveBeenCalled();
+    expect(listingPriceOf(undefined)).toBeUndefined();
+  });
+});
+
 describe("listing pricing — the one operator override", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

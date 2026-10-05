@@ -25,9 +25,11 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
-import { openRelaySubTask } from "@motebit/molecule-runner";
+import { memoryTaskSpend, openRelaySubTask } from "@motebit/molecule-runner";
+import type { TaskSpend, TaskSpendHold } from "@motebit/molecule-runner";
 import type { Citation, ExecutionReceipt, TokenAudience } from "@motebit/sdk";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
+import { SONNET_MICRO_PER_MTOK } from "./helpers.js";
 import { reportShapeIssues } from "./report-shape.js";
 
 /**
@@ -127,6 +129,14 @@ export interface ResearchResult {
   search_count: number;
   /** Number of motebit_read_url calls. */
   fetch_count: number;
+  /**
+   * Micro-units this turn actually paid out on sub-hops (worker net + relay
+   * fee, from each hop's settlement fact, else its quote). Operator-side
+   * observability only — logged, never on the wire.
+   */
+  paid_spend_micro: number;
+  /** The per-task paid-spend budget this turn ran under; `null` = unbudgeted. */
+  paid_budget_micro: number | null;
 }
 
 export interface ResearchConfig {
@@ -167,6 +177,41 @@ export interface ResearchConfig {
    * its fee); an unpriced atom falls back to direct MCP.
    */
   paidSubDelegate?: PaidSubDelegate;
+  /**
+   * Per-task ceiling (micro-units) on PAID sub-hop outflow — worker net plus
+   * relay fee — so the task never spends more on atoms than its own price
+   * leaves after margin and inference (`computePaidSpendBudgetMicro`). When
+   * set, every paid hop is QUOTED first (a dry run of the same spend path,
+   * priced from the target's listing) and skipped if it would cross the
+   * budget; the turn synthesizes from what it has (fail-soft). Absent ⇒
+   * unbudgeted (no quote round-trip).
+   */
+  paidSpendBudgetMicro?: number;
+  /**
+   * Where this turn's paid outflow is charged, reserve-before-pay. The
+   * service passes the ADMITTED relay task's durable ledger
+   * (`MoleculeSpendHandle.taskSpend(admittedRelayTaskId)`), so every run of
+   * one admitted task — a timed-out run still paying, its honest retry —
+   * draws on ONE budget. Absent ⇒ a fresh per-run ledger (an unadmitted call
+   * keeps the per-run budget).
+   */
+  paidSpendLedger?: TaskSpend;
+}
+
+/**
+ * The config ONE run of `motebit_task` executes under: when the MCP surface
+ * admitted the call (`admittedRelayTaskId` — the verified dispatch token's
+ * `sub`, never a caller-supplied id) and the molecule can spend, the run
+ * charges that admitted task's durable ledger, so every run of the task
+ * shares one budget. Otherwise the base config (a per-run ledger).
+ */
+export function researchConfigForTask(
+  base: ResearchConfig,
+  admittedRelayTaskId: string | undefined,
+  taskSpend: ((admittedRelayTaskId: string) => TaskSpend) | undefined,
+): ResearchConfig {
+  if (admittedRelayTaskId == null || taskSpend == null) return base;
+  return { ...base, paidSpendLedger: taskSpend(admittedRelayTaskId) };
 }
 
 /** Result of a paid P2P sub-delegation attempt (Inc 2b). */
@@ -187,6 +232,8 @@ export interface PaidSubDelegateResult {
     txHash?: string;
     paidMicro?: number;
     feeMicro?: number;
+    /** #885: other transactions this hire sent that may have moved money. */
+    extraPayments?: ReadonlyArray<unknown>;
   };
   /**
    * The delegator-signed routing-decision transcript for THIS hire's ranked
@@ -195,8 +242,47 @@ export interface PaidSubDelegateResult {
    * hires and when the runtime has no signing key. Reveals, never authorizes.
    */
   routingTranscript?: Record<string, unknown>;
+  /**
+   * Quote only: the worker the quote priced. The live call is pinned to it so
+   * the quote and the pay name the same counterparty.
+   */
+  workerMotebitId?: string;
   /** Failure code when `!ok` (e.g. `worker_not_payable`, `money_meter_denied`). */
   code?: string;
+  /**
+   * Money that LEFT the wallet on a FAILED hop (`!ok`) — the runtime's #433 /
+   * #885 facts, passed through: the payment landed but delivery failed
+   * (`settledPayment`, e.g. a post-broadcast `timeout` / `agent_failed`), or
+   * it may have landed and could not be confirmed (`unconfirmedPayment`).
+   * A failed hop that moved money is still charged to the task's budget.
+   */
+  settledPayment?: { paidMicro: number; feeMicro: number; txHash?: string; taskId?: string };
+  unconfirmedPayment?: { paidMicro: number; feeMicro: number };
+  /** Other transactions this hire sent that may have moved money (amounts unknown). */
+  extraPayments?: ReadonlyArray<unknown>;
+}
+
+/**
+ * Total outflow (worker net + fee) of a settlement fact or quote, in
+ * micro-units; `null` when the worker leg is unknown — an unpriced quote is
+ * never paid blind.
+ */
+function outflowMicro(settlement: PaidSubDelegateResult["settlement"]): number | null {
+  if (settlement?.paidMicro == null) return null;
+  return settlement.paidMicro + (settlement.feeMicro ?? 0);
+}
+
+/**
+ * Money a FAILED paid hop moved anyway (micro-units): a settled or unconfirmed
+ * payment, plus every extra transaction the hire sent, each charged at the
+ * same per-transaction amount (or `perTxFallback` — the quote / the cap —
+ * when the failure names no amount). Conservative by construction: money that
+ * may have left is counted as left.
+ */
+function failedHopOutflowMicro(r: PaidSubDelegateResult, perTxFallback: number): number {
+  const fact = r.settledPayment ?? r.unconfirmedPayment;
+  const perTx = fact != null ? fact.paidMicro + fact.feeMicro : perTxFallback;
+  return (fact != null ? perTx : 0) + (r.extraPayments?.length ?? 0) * perTx;
 }
 
 /**
@@ -232,6 +318,18 @@ export type PaidSubDelegate = (params: {
   capability: string;
   prompt: string;
   targetWorkerId?: string;
+  /**
+   * Quote only: resolve + price the hop (settlement carries `paidMicro` /
+   * `feeMicro`) without paying or running it. Used by the per-task budget.
+   */
+  dryRun?: boolean;
+  /**
+   * Hard ceiling (integer micro-units) on this hop's resolved total outflow,
+   * enforced by the runtime BEFORE the payment is signed — over it the hop
+   * refuses `budget_exceeded` and no money moves. The budgeted turn passes its
+   * REMAINING budget on every live call.
+   */
+  maxTotalMicro?: number;
 }) => Promise<PaidSubDelegateResult>;
 
 /** Codes that mean "this atom is not set up for P2P" → fall back to direct MCP. */
@@ -586,14 +684,14 @@ export async function research(question: string, config: ResearchConfig): Promis
     const routingTranscripts: Record<string, unknown>[] = [];
     const citations: Citation[] = [];
     let recallSelfCount = 0;
-    // claude-sonnet-4-6 list pricing per million tokens; estimate only —
-    // logged per report so the operator can tune MOTEBIT_UNIT_COST.
-    // Cache tiers: writes bill 1.25x input, reads 0.1x — the loop's
-    // repeated prefix makes reads dominate from iteration 2 on.
-    const USD_PER_M_INPUT = 3;
-    const USD_PER_M_OUTPUT = 15;
-    const USD_PER_M_CACHE_WRITE = 3.75;
-    const USD_PER_M_CACHE_READ = 0.3;
+    // claude-sonnet-4-6 list pricing (helpers.ts, shared with the budget's
+    // LLM reserve); estimate only — logged per report so the operator can tune
+    // MOTEBIT_UNIT_COST. The loop's repeated prefix makes cache reads dominate
+    // from iteration 2 on.
+    const USD_PER_M_INPUT = SONNET_MICRO_PER_MTOK.input / 1e6;
+    const USD_PER_M_OUTPUT = SONNET_MICRO_PER_MTOK.output / 1e6;
+    const USD_PER_M_CACHE_WRITE = SONNET_MICRO_PER_MTOK.cacheWrite / 1e6;
+    const USD_PER_M_CACHE_READ = SONNET_MICRO_PER_MTOK.cacheRead / 1e6;
     let inputTokens = 0;
     let outputTokens = 0;
     let cacheWriteTokens = 0;
@@ -613,6 +711,42 @@ export async function research(question: string, config: ResearchConfig): Promis
     let searchCount = 0;
     let fetchCount = 0;
     let toolCallCount = 0;
+    // Integer micro-units — the money path carries no floating point.
+    // Defence in depth: a non-finite or negative budget is ZERO paid hops,
+    // never "no ceiling" (`spent + q > NaN` is false — it would pay every hop).
+    const rawBudget = config.paidSpendBudgetMicro;
+    const budgetMicro =
+      rawBudget == null
+        ? null
+        : Number.isFinite(rawBudget)
+          ? Math.max(0, Math.floor(rawBudget))
+          : 0;
+    // Charged reserve-before-pay against the task's ledger (shared by every
+    // run of one admitted task); `paidSpentMicro` is THIS run's share, for the
+    // result's observability field only.
+    const taskSpend = config.paidSpendLedger ?? memoryTaskSpend();
+    let paidSpentMicro = 0;
+    /** Committed spend of the TASK (every run): settled + outstanding holds. */
+    const committedMicro = (): number => {
+      try {
+        return taskSpend.committedMicro();
+      } catch {
+        return budgetMicro ?? paidSpentMicro;
+      }
+    };
+    /** Replace a hold with what left the wallet. Never throws past the hop. */
+    const settleHop = (hold: TaskSpendHold | null, chargeMicro: number): void => {
+      if (Number.isFinite(chargeMicro) && chargeMicro > 0) paidSpentMicro += chargeMicro;
+      if (hold == null && !(chargeMicro > 0)) return;
+      try {
+        taskSpend.settle(hold?.holdId ?? null, chargeMicro);
+      } catch (err: unknown) {
+        // The hold (if it was written) stays charged in full — conservative.
+        console.log(
+          `[research] spend ledger settle FAILED: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    };
 
     /**
      * Dispatch one Claude tool_use. Interior tier (recall_self) runs locally
@@ -624,6 +758,16 @@ export async function research(question: string, config: ResearchConfig): Promis
     const dispatchToolUse = async (
       tu: Anthropic.ToolUseBlock,
     ): Promise<Anthropic.ToolResultBlockParam> => {
+      // The runaway-cost cap is checked PER CALL, not only per model turn: one
+      // response may carry many tool_uses, and each must still fit the cap.
+      // Every tool_use gets a tool_result (the API requires the pairing).
+      if (toolCallCount >= config.maxToolCalls) {
+        return {
+          type: "tool_result",
+          tool_use_id: tu.id,
+          content: `${tu.name} was not performed: this report's tool-call limit (${config.maxToolCalls}) is reached. Write the report from what you already gathered.`,
+        };
+      }
       // ── Interior tier — synchronous, no network, no receipt. ─────────
       if (tu.name === "motebit_recall_self") {
         const query = (tu.input as { query?: string }).query ?? "";
@@ -703,7 +847,75 @@ export async function research(question: string, config: ResearchConfig): Promis
       // log which lane fires (paid P2P vs free direct MCP) and, on fallback,
       // the exact not-payable code. Same "make the silent decision loud"
       // discipline as the relay's mcp-forward logging.
-      if (config.paidSubDelegate != null) {
+      // Per-task budget: quote the hop from the target's own listing BEFORE
+      // paying it. A not-payable quote goes straight to the free lane; a hop
+      // that would cross the budget is not made — the model is told to
+      // synthesize from what it has (fail-soft, never a failed report).
+      let quotedMicro: number | null = null;
+      // The reservation for this hop: everything left of the TASK's budget,
+      // held atomically before the live call and settled to what actually
+      // moved after it. A concurrent run of the same task sees it as spent.
+      let hold: TaskSpendHold | null = null;
+      let quotedWorkerId: string | undefined;
+      let quoteTranscript: Record<string, unknown> | undefined;
+      let payable = config.paidSubDelegate != null;
+      if (config.paidSubDelegate != null && budgetMicro != null) {
+        const quote = await config.paidSubDelegate({
+          capability: capabilityHint,
+          prompt,
+          ...(targetId != null ? { targetWorkerId: targetId } : {}),
+          dryRun: true,
+        });
+        if (!quote.ok) {
+          if (!NOT_PAYABLE_CODES.has(quote.code ?? "")) {
+            console.log(
+              `[research] sub-hop: quote REFUSED cap=${capabilityHint} code=${quote.code ?? "unknown"}`,
+            );
+            return {
+              type: "tool_result",
+              tool_use_id: tu.id,
+              content: `paid delegation to ${tu.name} refused (${quote.code ?? "unknown"})`,
+              is_error: true,
+            };
+          }
+          console.log(
+            `[research] sub-hop: fallback DIRECT cap=${capabilityHint} code=${quote.code}`,
+          );
+          payable = false;
+        } else {
+          quotedMicro = outflowMicro(quote.settlement);
+          quotedWorkerId = quote.workerMotebitId;
+          quoteTranscript = quote.routingTranscript;
+          if (quotedMicro != null) {
+            try {
+              hold = taskSpend.reserve(budgetMicro, quotedMicro);
+            } catch (err: unknown) {
+              // An unreadable ledger reserves nothing (fail closed).
+              console.log(
+                `[research] spend ledger reserve FAILED: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+          if (hold == null) {
+            const spentNow = committedMicro();
+            if (spentNow === 0 && quotedMicro != null) {
+              console.log(
+                `[research] paid-spend budget ${budgetMicro} < one paid call (${quotedMicro}) cap=${capabilityHint} — running with zero paid calls; raise the listing price or lower the margin/reserve`,
+              );
+            }
+            console.log(
+              `[research] sub-hop: BUDGET SKIP cap=${capabilityHint} spent=${spentNow} quote=${quotedMicro ?? "unpriced"} budget=${budgetMicro}`,
+            );
+            return {
+              type: "tool_result",
+              tool_use_id: tu.id,
+              content: `${tu.name} was not performed: this report's paid-call budget is exhausted (spent ${spentNow} of ${budgetMicro} micro-USD; next call quoted ${quotedMicro ?? "unpriced"}). Do not call ${tu.name} again — write the report from what you already gathered (free tools such as motebit_recall_self remain available).`,
+            };
+          }
+        }
+      }
+
+      if (config.paidSubDelegate != null && payable) {
         // Attempt paid P2P for any PRICED capability — pinned to `targetId` when
         // one is configured, otherwise UNPINNED so the runtime's first-person
         // ranker chooses among the discovered providers (the market). A
@@ -711,11 +923,65 @@ export async function research(question: string, config: ResearchConfig): Promis
         console.log(
           `[research] sub-hop: attempting P2P cap=${capabilityHint}${targetId ? ` target=${targetId}` : " (ranked)"}`,
         );
-        const paid = await config.paidSubDelegate({
-          capability: capabilityHint,
-          prompt,
-          ...(targetId != null ? { targetWorkerId: targetId } : {}),
-        });
+        // The live call pays the worker the quote priced (pinned), under a hard
+        // ceiling of the RESERVED remainder of the task's budget that the
+        // runtime enforces before it signs — so a re-ranked worker or a
+        // repriced listing can never pay past the budget; it refuses
+        // `budget_exceeded` with no money moved.
+        const liveTarget = targetId ?? quotedWorkerId;
+        const remainingMicro = hold?.heldMicro ?? null;
+        let paid: PaidSubDelegateResult;
+        try {
+          paid = await config.paidSubDelegate({
+            capability: capabilityHint,
+            prompt,
+            ...(liveTarget != null ? { targetWorkerId: liveTarget } : {}),
+            ...(remainingMicro != null ? { maxTotalMicro: remainingMicro } : {}),
+          });
+        } catch (err: unknown) {
+          // Unknown whether money moved: the hold is charged in full.
+          settleHop(hold, hold?.heldMicro ?? 0);
+          throw err;
+        }
+        // Settle the reservation to what LEFT the wallet — once, on every
+        // path: a paid hop at its settlement fact (or its quote), extra
+        // transactions at the same per-transaction amount (#885); a failed hop
+        // at what it moved anyway; a hop refused before money moved at zero
+        // (the hold is released for the next hop / the next run).
+        const chargeMicro = paid.ok
+          ? (outflowMicro(paid.settlement) ?? quotedMicro ?? 0) *
+            (1 + (paid.settlement?.extraPayments?.length ?? 0))
+          : failedHopOutflowMicro(paid, quotedMicro ?? remainingMicro ?? 0);
+        settleHop(hold, chargeMicro);
+        if (!paid.ok) {
+          // Money that left on a FAILED hop (paid, then timeout / agent_failed /
+          // unconfirmed) is still spent — charged above.
+          const moved = chargeMicro;
+          if (moved > 0) {
+            console.log(
+              `[research] sub-hop: paid-then-FAILED cap=${capabilityHint} code=${paid.code ?? "unknown"} moved=${moved} spent=${committedMicro()}${budgetMicro != null ? `/${budgetMicro}` : ""}`,
+            );
+            // Bought but not delivered: never re-do it for free, never re-hire.
+            return {
+              type: "tool_result",
+              tool_use_id: tu.id,
+              content: `paid delegation to ${tu.name} was paid but did not deliver (${paid.code ?? "unknown"})`,
+              is_error: true,
+            };
+          }
+        }
+        if (!paid.ok && paid.code === "budget_exceeded") {
+          // The runtime refused before signing: the resolved price exceeded
+          // the remaining budget (the market moved since the quote).
+          console.log(
+            `[research] sub-hop: BUDGET REFUSED pre-sign cap=${capabilityHint} spent=${committedMicro()} remaining=${remainingMicro ?? "unbudgeted"}`,
+          );
+          return {
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: `${tu.name} was not performed: its price exceeds what remains of this report's paid-call budget. Do not call ${tu.name} again — write the report from what you already gathered.`,
+          };
+        }
         if (paid.ok) {
           if (paid.receipt == null) {
             console.log(`[research] sub-hop: paid ok but NO receipt cap=${capabilityHint}`);
@@ -726,7 +992,11 @@ export async function research(question: string, config: ResearchConfig): Promis
               is_error: true,
             };
           }
-          console.log(`[research] sub-hop: PAID P2P cap=${capabilityHint}`);
+          // Charged above at its settlement fact (a live result with no fact at
+          // its quote; 0 only on the unbudgeted, unquoted path).
+          console.log(
+            `[research] sub-hop: PAID P2P cap=${capabilityHint} spent=${committedMicro()}${budgetMicro != null ? `/${budgetMicro}` : ""}`,
+          );
           receipt = paid.receipt;
           delegationReceipts.push(receipt);
           // Self-attest the money fact: stamp the hop's settlement (mode + onchain
@@ -734,8 +1004,11 @@ export async function research(question: string, config: ResearchConfig): Promis
           // from signed bytes, never inferred from the receipt's mere presence
           // (the free path below also pushes a receipt). Absent settlement ⇒ omit;
           // the assertion is presence-of-p2p, so a missing fact never fabricates one.
-          if (paid.routingTranscript != null) {
-            routingTranscripts.push(paid.routingTranscript);
+          // Pinned to the quote's worker, the hire's routing decision is the
+          // QUOTE's ranked selection — its transcript is the one to attest.
+          const transcript = paid.routingTranscript ?? quoteTranscript;
+          if (transcript != null) {
+            routingTranscripts.push(transcript);
           }
           if (paid.settlement != null) {
             const atomTaskId = (receipt as { task_id?: unknown }).task_id;
@@ -770,7 +1043,7 @@ export async function research(question: string, config: ResearchConfig): Promis
             `[research] sub-hop: fallback DIRECT cap=${capabilityHint} code=${paid.code}`,
           );
         }
-      } else {
+      } else if (config.paidSubDelegate == null) {
         // No paid seam (money env unset) → free direct MCP.
         console.log(`[research] sub-hop: DIRECT (no paid seam) cap=${capabilityHint}`);
       }
@@ -897,6 +1170,8 @@ export async function research(question: string, config: ResearchConfig): Promis
           recall_self_count: recallSelfCount,
           search_count: searchCount,
           fetch_count: fetchCount,
+          paid_spend_micro: paidSpentMicro,
+          paid_budget_micro: budgetMicro,
         };
       }
 
@@ -943,6 +1218,8 @@ export async function research(question: string, config: ResearchConfig): Promis
       recall_self_count: recallSelfCount,
       search_count: searchCount,
       fetch_count: fetchCount,
+      paid_spend_micro: paidSpentMicro,
+      paid_budget_micro: budgetMicro,
     };
   } finally {
     // Always release the atom MCP sessions
