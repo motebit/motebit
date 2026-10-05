@@ -110,6 +110,12 @@ The cost of getting this wrong is large. The cost of doing the audit is one sent
 
 When someone proposes a motebit-cloud feature, the question is never "what does this lock users into?" The question is always "what convenience does this bundle on top of a protocol that already gives users everything?"
 
+## Reference-experience concepts stay out of the protocol
+
+Reference-experience concepts (slab, creature, embodiment modes, eye/hand/mind organs, presentation, satellites, chrome) MUST NOT become protocol data-model concepts, exported protocol identifiers, signed or wire fields, or normative interoperability requirements unless an explicit, recorded decision establishes an implementation-independent need. Renaming does not cure a leak: the test is whether a non-motebit implementation with no slab must populate or interpret the value. Existing cases migrate alias-first ([`deprecation-lifecycle.md`](deprecation-lifecycle.md)).
+
+Known existing cases, tracked as follow-ups (not yet migrated): `DropTarget` `"slab" | "creature"` in `packages/protocol/src/perception.ts`; `SensitivityElevationSource` `"slab_item"`; `ToolDefinition.embodimentMode` / `slabProjection`; `SignableComputerSessionReceipt.embodiment_mode` (`@alpha`).
+
 ## Cross-cuts
 
 - [`services/relay/CLAUDE.md`](../../services/relay/CLAUDE.md) rule 6 — "Relay is a convenience layer, not a trust root." The same principle at the relay layer.
