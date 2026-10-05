@@ -323,6 +323,7 @@ import {
   createSlabController,
   type SlabController,
   type SlabItemOutcome,
+  type ToolSlabItemPayload,
 } from "./slab-controller.js";
 import { DropDispatcher, type DropHandler, classifyToolResult } from "./perception.js";
 import { toolPolicy } from "./tool-policy.js";
@@ -2829,6 +2830,8 @@ export class MotebitRuntime {
     let accumulatedText = "";
     let outcome: SlabItemOutcome = { kind: "completed" };
     const toolItemIds = new Map<string, string>();
+    // slab item id → tool_call_id (the receipt's invocation_id).
+    const toolItemInvocationIds = new Map<string, string>();
     const delegationToolNames = new Set<string>();
 
     try {
@@ -2970,16 +2973,29 @@ export class MotebitRuntime {
             // under-claiming is correct, mis-claiming is the failure
             // mode the gate-and-validator pair closes.
             const stampedMode = normalizeEmbodimentMode(chunk.mode, policy.mode);
+            // `invocation_id` links the rendered act to its signed
+            // `ToolInvocationReceipt` (keyed by the same tool_call_id).
+            if (chunk.tool_call_id !== undefined) {
+              toolItemInvocationIds.set(toolItemId, chunk.tool_call_id);
+            }
+            const payload: ToolSlabItemPayload = {
+              name: chunk.name,
+              context: chunk.context,
+              status: "calling",
+              ...(chunk.tool_call_id !== undefined ? { invocation_id: chunk.tool_call_id } : {}),
+            };
             this.slab.openItem({
               id: toolItemId,
               kind: policy.kind,
               mode: stampedMode,
-              payload: { name: chunk.name, context: chunk.context, status: "calling" },
+              payload,
             });
           } else if (chunk.status === "done") {
             const toolItemId = toolItemIds.get(chunk.name);
             if (toolItemId != null) {
               toolItemIds.delete(chunk.name);
+              const openedInvocationId = toolItemInvocationIds.get(toolItemId);
+              toolItemInvocationIds.delete(toolItemId);
               // Classify the tool result before settling the slab
               // item. Per `motebit-computer.md` §"Mode contract":
               // tool_result mode carries `tier-bounded-by-tool`
@@ -3043,12 +3059,15 @@ export class MotebitRuntime {
               if (isControlStateFailure) {
                 this.slab.dismissItem(toolItemId);
               } else if (policy.endState === "rest" && chunk.result != null) {
-                this.slab.restItem(toolItemId, {
+                const invocationId = chunk.tool_call_id ?? openedInvocationId;
+                const restPayload: ToolSlabItemPayload = {
                   name: chunk.name,
                   context: chunk.context,
                   status: "done",
                   result: chunk.result,
-                });
+                  ...(invocationId !== undefined ? { invocation_id: invocationId } : {}),
+                };
+                this.slab.restItem(toolItemId, restPayload);
               } else {
                 this.slab.endItem(toolItemId, { kind: "completed", result: chunk.result });
               }

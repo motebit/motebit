@@ -5,6 +5,7 @@ import {
   OWNER_CALL,
   SimpleToolRegistry,
   createInMemoryStorage,
+  toolSlabItemInvocationId,
 } from "../index";
 import type { PlatformAdapters, StreamChunk, ConversationStoreAdapter } from "../index";
 import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-core";
@@ -3947,5 +3948,70 @@ describe("delegate_to_agent payment notice (#885)", () => {
       expect.objectContaining({ extra_payments: [{ tx_hash: "sigB", status: "landed" }] }),
     );
     expect(manager.paymentNotices).toHaveLength(0);
+  });
+});
+
+// === Slab item ↔ ToolInvocationReceipt linkage ===
+
+describe("tool slab items carry the invocation_id their receipt is keyed by", () => {
+  it("a rendered tool act resolves to its signed receipt (calling and resting)", async () => {
+    vi.clearAllMocks();
+    const { generateKeypair } = await import("@motebit/crypto");
+    const kp = await generateKeypair();
+    const receipts: Array<{ invocation_id: string; tool_name: string }> = [];
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "slab-link",
+        tickRateHz: 0,
+        deviceId: "device-link",
+        signingKeys: { privateKey: kp.privateKey, publicKey: kp.publicKey },
+        onToolInvocation: (r) => receipts.push(r),
+      },
+      createAdapters(createMockProvider()),
+    );
+
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "calling",
+          tool_call_id: "tc_link",
+          args: { url: "https://motebit.com" },
+          started_at: 1700000000000,
+        },
+        {
+          type: "tool_status",
+          name: "read_url",
+          status: "done",
+          result: "page text",
+          tool_call_id: "tc_link",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+
+    const toolItemPayloads: unknown[] = [];
+    runtime.slab.subscribe((state) => {
+      for (const item of state.items.values()) {
+        if (item.kind !== "stream") toolItemPayloads.push(item.payload);
+      }
+    });
+
+    await collectChunks(runtime.sendMessageStreaming("read motebit.com"));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.invocation_id).toBe("tc_link");
+    expect(toolItemPayloads.length).toBeGreaterThan(0);
+    for (const payload of toolItemPayloads) {
+      expect((payload as { invocation_id?: unknown }).invocation_id).toBe(
+        receipts[0]!.invocation_id,
+      );
+      expect(toolSlabItemInvocationId({ payload })).toBe(receipts[0]!.invocation_id);
+    }
+    // The resting act (read_url rests on the slab) is still resolvable.
+    const resting = [...runtime.slab.getState().items.values()].find((i) => i.kind !== "stream");
+    expect(resting && toolSlabItemInvocationId(resting)).toBe("tc_link");
   });
 });
