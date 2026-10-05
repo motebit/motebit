@@ -80,7 +80,7 @@ export interface FullConfig {
   device_id?: string;
   device_public_key?: string;
   /**
-   * @deprecated since 1.0.0, removed in 2.0.0. Use `cli_encrypted_key` instead.
+   * @deprecated since 1.0.0, removed in 3.0.0. Use `cli_encrypted_key` instead.
    *
    * Reason: pre-encryption legacy shape. Storing a private key as hex
    * plaintext on disk was a security downgrade; the encrypted replacement
@@ -92,8 +92,22 @@ export interface FullConfig {
    * rewrite as `cli_encrypted_key` and delete this field (see
    * `apps/cli/src/index.ts` bootstrap and `subcommands/attest.ts`). Per
    * `docs/doctrine/migration-cleanup.md`: rewrite-on-read shrinks the
-   * holder count each launch. At 2.0.0 the migrator is removed; configs
-   * that still carry this field will hard-error with a reset instruction.
+   * holder count each launch.
+   *
+   * Sunset extended from 2.0.0 to 3.0.0 because removal would strand
+   * users. The rewrite runs only on paths that can prompt for a
+   * passphrase (interactive launch, `attest`, `export`); the daemon,
+   * `delegate`, `wallet`, `grant`, `halt` and every other
+   * `loadActiveSigningKey` caller read the plaintext key without
+   * rewriting it, so a headless machine provisioned before 1.0 can still
+   * hold it as its ONLY copy of the identity key. That key is also the
+   * sovereign Solana wallet, so a "hard-error with a reset instruction"
+   * would orphan the identity, its trust history and any funds it
+   * controls. The holder count is unmeasurable (configs never leave the
+   * machine). Removal needs a migration that cannot strand: a non-interactive
+   * rewrite (or a one-release refusal that names `motebit export` / the
+   * recovery seed) shipped at least one minor ahead of the removing major.
+   * Guarded by `identity-load-active-signing-key.test.ts`.
    */
   cli_private_key?: string;
   /**
@@ -488,8 +502,8 @@ export function extractPersonality(full: FullConfig): MotebitPersonalityConfig {
   // them transparently and present the new name to the rest of the system.
   //
   // @permanent — never remove. Unlike the `--provider ollama` CLI flag
-  // alias in args.ts (which is muscle-memory accommodation and sunsets on
-  // a major version bump), this migration reads persisted user data we
+  // alias (muscle-memory accommodation, removed at 2.0.0 — args.ts now
+  // refuses it with a repair), this migration reads persisted user data we
   // can never crawl and rewrite. It must keep working for every config.json
   // file that has ever existed in the wild.
   const provider: PersonalityProvider | undefined =

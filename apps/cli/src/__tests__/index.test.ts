@@ -32,11 +32,13 @@ describe("parseCliArgs", () => {
     expect(config.model).toBe(DEFAULT_LOCAL_SERVER_MODEL);
   });
 
-  it("accepts --provider ollama as an ergonomic alias for local-server", () => {
-    const config = parseCliArgs(["--provider", "ollama"]);
-    // Internal representation is always the vendor-agnostic name.
-    expect(config.provider).toBe("local-server");
-    expect(config.model).toBe(DEFAULT_LOCAL_SERVER_MODEL);
+  it("refuses the removed --provider ollama alias with a repair naming local-server", () => {
+    // Deprecated at 1.0.0, removed at 2.0.0. Both spellings are refused, and
+    // the error names the replacement rather than the generic provider list.
+    for (const argv of [["--provider", "ollama"], ["--provider=ollama"]]) {
+      expect(() => parseCliArgs(argv)).toThrow(/removed in motebit 2\.0\.0/);
+      expect(() => parseCliArgs(argv)).toThrow(/--provider local-server/);
+    }
   });
 
   it("--model overrides provider default", () => {
