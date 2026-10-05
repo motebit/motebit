@@ -358,6 +358,13 @@ export type StreamChunk =
       result?: unknown;
       context?: string;
       /**
+       * Model-assigned id of this tool call, passed through from
+       * ai-core's `tool_status` chunk on both "calling" and "done". The
+       * call's `ToolInvocationReceipt.invocation_id` is this value, and
+       * `projectSlabForTurn` stamps it on the tool slab item's payload.
+       */
+      tool_call_id?: string;
+      /**
        * Owner-facing typed residual of a policy/meter refusal (WHAT
        * authority is missing, as data). Pass-through from ai-core's
        * tool_status chunk; rides ONLY this surface channel — the

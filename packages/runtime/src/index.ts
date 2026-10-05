@@ -303,6 +303,8 @@ export {
   type SlabControllerDeps,
   type SlabItem,
   type SlabItemOutcome,
+  type ToolSlabItemPayload,
+  toolSlabItemInvocationId,
   type SlabState,
   type SlabAmbient,
   type SlabSubscriber,
