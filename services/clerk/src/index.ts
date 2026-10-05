@@ -28,7 +28,7 @@ import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
 import { loadConfig } from "./helpers.js";
 import { parseClerkPrompt, ClerkRefusal, runClerkSpend, type SpendOutcome } from "./clerk.js";
-import { listingPricing } from "./pricing.js";
+import { LISTING_PRICE } from "./pricing.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -100,8 +100,8 @@ async function main(): Promise<void> {
           lifetime_limit_micro: config.ceilingMicro,
         },
       },
-      // The listing price — runner-owned, from the pure src/pricing.ts.
-      pricing: listingPricing(process.env),
+      // The listing price — literal data in src/pricing.ts; the runner applies MOTEBIT_UNIT_COST.
+      pricing: LISTING_PRICE,
     },
     (identity, spend) => {
       if (spend == null) {

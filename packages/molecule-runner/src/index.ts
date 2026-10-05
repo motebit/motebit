@@ -63,11 +63,15 @@ import type {
 } from "@motebit/sdk";
 import { embedText as defaultEmbedText } from "@motebit/memory-graph";
 import type { ToolRegistry } from "@motebit/tools";
+import { resolveListingPricing, UNIT_COST_ENV } from "./listing-price.js";
+import type { ListingPrice, ListingPriceSpec } from "./listing-price.js";
 
 // Re-export the receipt builder so molecule authors don't reach into
 // `@motebit/mcp-server` for this one helper — runner is the single
 // service-facing import.
 export { createProviderReadiness, classifyProviderFailure } from "./readiness.js";
+export { resolveListingPricing, parseUnitCostOverride, UNIT_COST_ENV } from "./listing-price.js";
+export type { ListingPrice, ListingPriceSpec } from "./listing-price.js";
 export type { ProviderReadiness, ReadinessVerdict } from "./readiness.js";
 export { buildServiceReceipt } from "@motebit/mcp-server";
 export type { BuildServiceReceiptInput } from "@motebit/mcp-server";
@@ -153,14 +157,6 @@ export interface MoleculeBuild {
   zeroPrivateKeyOnShutdown?: boolean;
 }
 
-/** One market listing price entry — what the relay lists and settles against. */
-export interface ListingPrice {
-  capability: string;
-  unit_cost: number;
-  currency: string;
-  per: string;
-}
-
 /** The listing fields a molecule supplies. Pricing is not one of them. */
 export interface MoleculeListing {
   capabilities: string[];
@@ -199,16 +195,20 @@ export interface MoleculeConfig {
   capabilities: string[];
 
   /**
-   * The market listing's pricing — the ONLY way a price reaches the relay.
-   * A priced service passes `pricing: listingPricing(process.env)` from its
-   * pure `src/pricing.ts`. The runner freezes a copy and lists exactly it, in
+   * The market listing's coded price — the ONLY way a price reaches the relay.
+   * A priced service passes `pricing: LISTING_PRICE`, the literal-only data
+   * constant in its `src/pricing.ts` (it cannot read the environment). The
+   * runner alone applies the operator override: it reads `MOTEBIT_UNIT_COST`
+   * once at boot, REFUSES to start on a malformed value (never lists NaN), and
+   * lists one entry per capability with one `unit_cost`, one `per`, USD — in
    * every consumer (task admission, relay registration, the
-   * `motebit_service_listing` tool); omitted ⇒ the listing carries
-   * `pricing: []` (unpriced). Requires `getServiceListing` (the rest of the
-   * listing). `scripts/check-service-truth.ts` holds every `market: true`
-   * service to passing exactly `listingPricing(process.env)` here.
+   * `motebit_service_listing` tool). Omitted ⇒ the listing carries
+   * `pricing: []` (unpriced) and a set `MOTEBIT_UNIT_COST` refuses the boot.
+   * Requires `getServiceListing` (the rest of the listing).
+   * `scripts/check-service-truth.ts` holds every `market: true` service to
+   * passing exactly `LISTING_PRICE` here.
    */
-  pricing?: readonly ListingPrice[];
+  pricing?: ListingPriceSpec;
 
   /** Optional bearer token guarding the MCP HTTP endpoint. */
   authToken?: string;
@@ -959,7 +959,7 @@ class ListingPricingRefusal extends Error {}
 function refuseOwnPricing(serviceName: string): Error {
   return new ListingPricingRefusal(
     `${serviceName}: getServiceListing() returned its own \`pricing\` — listing pricing is runner-owned. ` +
-      `Pass it to runMolecule as config \`pricing: listingPricing(process.env)\` (services/<name>/src/pricing.ts) ` +
+      `Pass it to runMolecule as config \`pricing: LISTING_PRICE\` (services/<name>/src/pricing.ts) ` +
       `and drop \`pricing\` from getServiceListing; refusing to publish a price from a second path.`,
   );
 }
@@ -1048,6 +1048,20 @@ export async function runMolecule(
   adapters: MoleculeRunnerAdapters = {},
 ): Promise<ServiceHandle> {
   const log = adapters.log ?? defaultLog;
+  // 0. The listing price — resolved FIRST, before identity or storage, so a
+  //    malformed MOTEBIT_UNIT_COST refuses the boot with nothing touched. The
+  //    one read of the override env (src/listing-price.ts).
+  const unitCostRaw = process.env["MOTEBIT_UNIT_COST"];
+  if (config.pricing == null && unitCostRaw !== undefined)
+    throw new Error(
+      `${config.serviceName}: ${UNIT_COST_ENV} is set but this molecule lists no price (config.pricing unset) — refusing to start with an override that would publish nothing; unset it`,
+    );
+  const pricing: ListingPrice[] | undefined =
+    config.pricing != null ? resolveListingPricing(config.pricing, unitCostRaw) : undefined;
+  if (pricing != null)
+    log(
+      `Listing price: $${pricing[0]!.unit_cost}/${pricing[0]!.per} (${unitCostRaw !== undefined ? `${UNIT_COST_ENV} override` : "coded default"}) for ${pricing.map((p) => p.capability).join(", ")}`,
+    );
   const bootstrap = adapters.bootstrapIdentity ?? bootstrapAndEmitIdentity;
   const openDb = adapters.openDatabase ?? openMotebitDatabase;
   const startServer = adapters.startServer ?? startServiceServer;
@@ -1112,7 +1126,7 @@ export async function runMolecule(
   // pricing, or when config prices a service that publishes no listing.
   const getServiceListing = await composeServiceListing(
     molecule.getServiceListing,
-    config.pricing,
+    pricing,
     config.serviceName,
   );
 

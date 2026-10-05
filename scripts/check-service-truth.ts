@@ -11,38 +11,50 @@
  *     `market` = the service has an identity and lists on the market. The
  *     marketplace count is the number of `market: true` services.
  *
- *   - PRICE — runner-owned BY CONSTRUCTION, so read from the one function
- *     that codes it. `@motebit/molecule-runner` lists exactly
- *     `MoleculeConfig.pricing` to every consumer (task admission, relay
- *     registration, the `motebit_service_listing` tool) and REFUSES at startup
- *     a `getServiceListing` that carries its own `pricing` (also a type error:
- *     `pricing?: never`). So a market service's price is whatever main() passes
- *     as config `pricing`, and this gate proves two things, nothing executed
- *     but a pure function:
- *       (a) the price: `services/<name>/src/pricing.ts` (type-only imports,
- *           types and function declarations — nothing runs at load) exports
- *           `listingPricing(env)`; imported and called with `{}` it is the
- *           `unit_cost` + `per` the docs and `.env.example` must state, and
- *           with a sentinel MOTEBIT_UNIT_COST every entry must carry it,
- *           unaltered. `0` renders as "unpriced".
- *       (b) the wiring, by TypeScript AST of `src/index.ts` (the file
+ *   - PRICE — runner-owned BY CONSTRUCTION, coded once as DATA.
+ *     `@motebit/molecule-runner` lists exactly `MoleculeConfig.pricing` to every
+ *     consumer (task admission, relay registration, the
+ *     `motebit_service_listing` tool) and REFUSES at startup a
+ *     `getServiceListing` that carries its own `pricing` (also a type error:
+ *     `pricing?: never`). `pricing` is a `ListingPriceSpec` — one capability
+ *     list, one `unit_cost`, one `per` — and the runner alone reads the
+ *     operator override MOTEBIT_UNIT_COST, once, through its pure
+ *     `resolveListingPricing` (packages/molecule-runner/src/listing-price.ts):
+ *     a malformed value refuses the boot, never lists NaN. This gate proves
+ *     three things, executing nothing but that zero-import runner rule:
+ *       (a) the price: `services/<name>/src/pricing.ts` is, by TypeScript AST,
+ *           type-only imports/types plus ONE `export const LISTING_PRICE =
+ *           { capabilities: [..], unit_cost: <number>, per: "<unit>" }` of
+ *           literals, naming no `process` / `globalThis` / `import.meta` /
+ *           `require` — so it CANNOT read the environment (cold review R5,
+ *           2026-10-05: the previous `listingPricing(env)` could read a second
+ *           override key, pick `per` from the env, or branch on
+ *           `process.env`, and stay green because the gate only called it
+ *           with `{}` and a sentinel). `unit_cost` + `per` are what the docs
+ *           and `.env.example` must state. `0` renders as "unpriced".
+ *       (b) the override rule: the runner's `resolveListingPricing` lists the
+ *           spec with no override, carries a sentinel MOTEBIT_UNIT_COST to
+ *           every entry unaltered, and THROWS on every malformed value in
+ *           MALFORMED_COSTS ("abc", "", "-1", "1e3", "0.20abc", …).
+ *       (c) the wiring, by TypeScript AST of `src/index.ts` (the file
  *           `node dist/index.js` — the Dockerfile CMD and `start` — boots):
  *           `runMolecule` imported by name from the runner and called exactly
  *           once (no alias, no other reference, in no other source file),
  *           with an object-literal config whose single `pricing` property is
- *           exactly `listingPricing(process.env)` — the named import from
- *           `./pricing.js`, neither name re-bound — and no spread after it.
+ *           exactly `LISTING_PRICE` — the named import from `./pricing.js`,
+ *           not re-bound and named nowhere else, no other file importing the
+ *           price module — and no spread after it.
  *     Why the AST and not a runtime "market ⇒ pricing required" check in the
  *     runner: the runner would have to find the service's package.json at
  *     runtime (deploy-layout dependent), and a missing price is a static
  *     property of one call site; the runtime half that CAN'T be static (a
- *     listing smuggling its own price, possibly after startup) is already
- *     refused by the runner. Earlier versions EXECUTED each service's main()
- *     under a captured runner and kept leaking (bound vs detached listing
- *     calls, post-construction mutation, the wrong entry, real server boots
- *     and a model download) — four review rounds, 2026-10-05; the seam was
- *     removed instead of proven. A `market: false` service reads no
- *     MOTEBIT_UNIT_COST, has no pricing.ts and never calls runMolecule.
+ *     listing smuggling its own price, possibly after startup; a malformed
+ *     override) is already refused by the runner. Earlier versions EXECUTED
+ *     each service's main() under a captured runner and kept leaking — four
+ *     review rounds, 2026-10-05; the seam was removed instead of proven, and
+ *     R5 removed the next one (env in the price module) the same way. A
+ *     `market: false` service reads no MOTEBIT_UNIT_COST, has no pricing.ts
+ *     and never calls runMolecule.
  *
  *   THREAT MODEL — what a green run claims, and what it cannot. This gate
  *   guards ACCIDENTAL drift between the price/unit/role the docs state and the
@@ -113,7 +125,7 @@ export interface ServiceTruth {
   role: ServiceRole;
   identity: boolean;
   market: boolean;
-  /** Present iff the service lists: what its pure `listingPricing({})` returns. */
+  /** Present iff the service lists: its `LISTING_PRICE` as the runner lists it with no override. */
   price: Price | null;
 }
 
@@ -219,20 +231,31 @@ function namedImport(sf: ts.SourceFile, name: string, module: string): ts.Import
   return found[0]!;
 }
 
-/** `listingPricing(process.env)`, exactly. */
-function isListingPricingOfEnv(e: ts.Expression): boolean {
-  if (!ts.isCallExpression(e) || e.questionDotToken != null || e.typeArguments != null)
-    return false;
-  if (!ts.isIdentifier(e.expression) || e.expression.text !== "listingPricing") return false;
-  if (e.arguments.length !== 1) return false;
-  const a = e.arguments[0]!;
-  return (
-    ts.isPropertyAccessExpression(a) &&
-    a.questionDotToken == null &&
-    ts.isIdentifier(a.expression) &&
-    a.expression.text === "process" &&
-    a.name.text === "env"
-  );
+/** Does this import/export/dynamic-import specifier name the price module? */
+const PRICING_SPEC = /(?:^|\/)pricing(?:\.[cm]?[jt]s)?$/;
+
+/** Every module specifier in `sf` (static imports, re-exports, `import()`, `require()`). */
+function specifiers(sf: ts.SourceFile): { text: string; node: ts.Node }[] {
+  const out: { text: string; node: ts.Node }[] = [];
+  walk(sf, (n) => {
+    if (
+      (ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) &&
+      n.moduleSpecifier != null &&
+      ts.isStringLiteral(n.moduleSpecifier)
+    )
+      out.push({ text: n.moduleSpecifier.text, node: n });
+    else if (
+      ts.isCallExpression(n) &&
+      (n.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(n.expression) && n.expression.text === "require")) &&
+      n.arguments[0] != null
+    )
+      out.push({
+        text: ts.isStringLiteralLike(n.arguments[0]) ? n.arguments[0].text : "<dynamic>",
+        node: n,
+      });
+  });
+  return out;
 }
 
 /** Strip `as T`, `satisfies T`, `!` and parentheses down to the expression. */
@@ -255,9 +278,10 @@ function unwrap(e: ts.Expression): ts.Expression {
  * one remaining seam is the call site: `runMolecule` is imported by name from
  * the runner, called exactly once (no alias, no other reference, in no other
  * source file), with an object literal whose `pricing` property is exactly
- * `listingPricing(process.env)` — `listingPricing` the named import from
- * `./pricing.js`, neither it nor `process` re-bound anywhere in the entry —
- * and no spread after it that could replace it.
+ * the identifier `LISTING_PRICE` — the named import from `./pricing.js`,
+ * named nowhere else in the entry (so nothing can mutate it before the call)
+ * and not re-bound — and no spread after it that could replace it. No other
+ * source file imports the price module or names `LISTING_PRICE`.
  */
 export function checkCallSite(root: string, name: string, violations: string[]): void {
   const srcDir = join(root, "services", name, "src");
@@ -268,13 +292,20 @@ export function checkCallSite(root: string, name: string, violations: string[]):
     violations.push(`services/${name}: motebit.market is true but there is no ${ENTRY}`);
     return;
   }
+  const pricingFile = join(root, "services", name, PRICING);
   for (const f of listSourceFiles(srcDir)) {
-    if (f === entry) continue;
+    if (f === entry || f === pricingFile) continue;
     const sf = parse(f);
     const ids = identifiers(sf, "runMolecule");
     if (ids.length > 0)
       violations.push(
         `${relative(root, f)}:${lineOf(sf, ids[0]!)}: names \`runMolecule\` — a market service calls it once, in ${ENTRY}`,
+      );
+    const lp = identifiers(sf, "LISTING_PRICE")[0];
+    const imp = specifiers(sf).find((x) => PRICING_SPEC.test(x.text));
+    if (lp != null || imp != null)
+      violations.push(
+        `${relative(root, f)}:${lineOf(sf, lp ?? imp!.node)}: ${lp != null ? "names `LISTING_PRICE`" : `imports "${imp!.text}"`} — only ${ENTRY} reads the price module, once, as runMolecule's \`pricing\``,
       );
   }
   const sf = parse(entry);
@@ -283,17 +314,23 @@ export function checkCallSite(root: string, name: string, violations: string[]):
     say(run);
     return;
   }
-  const lp = namedImport(sf, "listingPricing", "./pricing.js");
+  const lp = namedImport(sf, "LISTING_PRICE", "./pricing.js");
   if (typeof lp === "string") {
     say(lp);
     return;
   }
-  for (const n of ["listingPricing", "process"])
-    for (const id of identifiers(sf, n))
-      if (isBinding(id) && id !== lp.name)
-        say(
-          `line ${lineOf(sf, id)} re-binds \`${n}\` — the price must be \`listingPricing(process.env)\` from ./pricing.js`,
-        );
+  const otherImports = specifiers(sf).filter(
+    (x) => PRICING_SPEC.test(x.text) && x.node !== lp.parent.parent.parent,
+  );
+  for (const x of otherImports)
+    say(
+      `line ${lineOf(sf, x.node)}: imports "${x.text}" again — the price module is read once, as \`import { LISTING_PRICE } from "./pricing.js"\``,
+    );
+  for (const id of identifiers(sf, "LISTING_PRICE"))
+    if (isBinding(id) && id !== lp.name)
+      say(
+        `line ${lineOf(sf, id)} re-binds \`LISTING_PRICE\` — the price must be the one imported from ./pricing.js`,
+      );
   const uses = identifiers(sf, "runMolecule").filter((id) => id !== run.name);
   const calls = uses.filter((id) => ts.isCallExpression(id.parent) && id.parent.expression === id);
   if (calls.length !== 1 || uses.length !== 1) {
@@ -306,7 +343,7 @@ export function checkCallSite(root: string, name: string, violations: string[]):
   const cfg = call.arguments[0] != null ? unwrap(call.arguments[0]) : null;
   if (cfg == null || !ts.isObjectLiteralExpression(cfg)) {
     say(
-      `line ${lineOf(sf, call)}: runMolecule's config must be an object literal carrying \`pricing: listingPricing(process.env)\``,
+      `line ${lineOf(sf, call)}: runMolecule's config must be an object literal carrying \`pricing: LISTING_PRICE\``,
     );
     return;
   }
@@ -320,17 +357,23 @@ export function checkCallSite(root: string, name: string, violations: string[]):
   );
   if (pricingAt.length !== 1) {
     say(
-      `line ${lineOf(sf, call)}: runMolecule's config has ${pricingAt.length} \`pricing\` properties — exactly one, \`pricing: listingPricing(process.env)\` (the runner lists only config pricing; without it the service lists unpriced)`,
+      `line ${lineOf(sf, call)}: runMolecule's config has ${pricingAt.length} \`pricing\` properties — exactly one, \`pricing: LISTING_PRICE\` (the runner lists only config pricing; without it the service lists unpriced)`,
     );
     return;
   }
   const p = props[pricingAt[0]!]!;
-  if (!ts.isPropertyAssignment(p) || !isListingPricingOfEnv(unwrap(p.initializer))) {
+  const value = ts.isPropertyAssignment(p) ? unwrap(p.initializer) : null;
+  if (value == null || !ts.isIdentifier(value) || value.text !== "LISTING_PRICE") {
     say(
-      `line ${lineOf(sf, p)}: runMolecule's \`pricing\` must be exactly \`listingPricing(process.env)\` (the pure ${PRICING} the docs are checked against), not \`${p.getText(sf).slice(0, 80)}\``,
+      `line ${lineOf(sf, p)}: runMolecule's \`pricing\` must be exactly \`LISTING_PRICE\` (the literal data in ${PRICING} the docs are checked against; the runner applies MOTEBIT_UNIT_COST), not \`${p.getText(sf).slice(0, 80)}\``,
     );
     return;
   }
+  const refs = identifiers(sf, "LISTING_PRICE").filter((id) => id !== lp.name && id !== value);
+  for (const id of refs)
+    say(
+      `line ${lineOf(sf, id)}: names \`LISTING_PRICE\` outside runMolecule's \`pricing\` — the price is handed to the runner untouched, once`,
+    );
   const lateSpread = props.slice(pricingAt[0]! + 1).find((q) => ts.isSpreadAssignment(q));
   if (lateSpread != null)
     say(
@@ -338,12 +381,85 @@ export function checkCallSite(root: string, name: string, violations: string[]):
     );
 }
 
+/** Identifiers through which a module could read the environment. */
+const AMBIENT = ["process", "globalThis", "global", "window", "self", "Deno", "Bun", "require"];
+
+/** The literal value of a `LISTING_PRICE` property, or null when it is not one. */
+function literalOf(e: ts.Expression): string | number | string[] | null {
+  if (ts.isStringLiteral(e)) return e.text;
+  if (ts.isNumericLiteral(e)) return Number(e.text);
+  if (ts.isArrayLiteralExpression(e) && e.elements.every((x) => ts.isStringLiteral(x)))
+    return e.elements.map((x) => (x as ts.StringLiteral).text);
+  return null;
+}
+
 /**
- * Read the price a market service lists: its pure `listingPricing`, imported
- * (never main(), never a server) and called with `{}` — the default the docs
- * must state — and with a sentinel MOTEBIT_UNIT_COST every entry must carry,
- * unaltered. `src/pricing.ts` may have type-only imports and nothing else, so
- * importing it runs no code but its own.
+ * The override rule, proven where it lives: the runner's pure
+ * `resolveListingPricing` (packages/molecule-runner/src/listing-price.ts,
+ * zero imports) — the function runMolecule lists every price through. With
+ * no override every entry is the spec; a sentinel MOTEBIT_UNIT_COST reaches
+ * every entry unaltered; a malformed one THROWS (the boot refuses) instead of
+ * listing NaN. Checked once per run against the repo's own runner.
+ */
+export const RUNNER_RULE = "packages/molecule-runner/src/listing-price.ts";
+
+type Resolve = (spec: unknown, raw: string | undefined) => ListingEntry[];
+let resolver: Promise<Resolve | string> | null = null;
+
+function runnerRule(): Promise<Resolve | string> {
+  resolver ??= (async () => {
+    const file = join(ROOT, RUNNER_RULE);
+    try {
+      const m = (await import(pathToFileURL(file).href)) as { resolveListingPricing?: unknown };
+      if (typeof m.resolveListingPricing !== "function")
+        return `${RUNNER_RULE}: does not export \`resolveListingPricing\``;
+      const fn = m.resolveListingPricing as Resolve;
+      const spec = Object.freeze({ capabilities: ["a", "b"], unit_cost: 0.25, per: "task" });
+      const plain = JSON.stringify(fn(spec, undefined));
+      const want = (c: number) =>
+        JSON.stringify(
+          ["a", "b"].map((capability) => ({
+            capability,
+            unit_cost: c,
+            currency: "USD",
+            per: "task",
+          })),
+        );
+      if (plain !== want(0.25))
+        return `${RUNNER_RULE}: resolveListingPricing(spec, no override) lists ${plain} — must be the spec, one entry per capability, USD`;
+      const over = JSON.stringify(fn(spec, SENTINEL_COST));
+      if (over !== want(Number(SENTINEL_COST)))
+        return `${RUNNER_RULE}: with MOTEBIT_UNIT_COST="${SENTINEL_COST}" lists ${over} — every entry's unit_cost must be the parsed override, unaltered`;
+      for (const bad of MALFORMED_COSTS) {
+        let listed: unknown;
+        try {
+          listed = fn(spec, bad);
+        } catch {
+          continue;
+        }
+        return `${RUNNER_RULE}: MOTEBIT_UNIT_COST override rule accepts ${JSON.stringify(bad)} (lists ${JSON.stringify(listed)}) — a malformed override must refuse the boot, never list`;
+      }
+      return fn;
+    } catch (err) {
+      return `${RUNNER_RULE}: could not be imported or threw on a valid price (${err instanceof Error ? err.message : String(err)})`;
+    }
+  })();
+  return resolver;
+}
+
+/** Overrides the runner must refuse (throw) rather than list. */
+export const MALFORMED_COSTS = ["abc", "", " ", "-1", "NaN", "Infinity", "1e3", "0.20abc", "0x10"];
+
+/**
+ * Read the price a market service lists. `src/pricing.ts` is DATA — the
+ * TypeScript AST must show type-only imports/exports and types, plus exactly
+ * one `export const LISTING_PRICE = { capabilities: [<string>…], unit_cost:
+ * <number>, per: <string> }` of literals (no spread, no computed key, no
+ * expression), and no identifier through which code could reach the
+ * environment (`process`, `globalThis`, `import.meta`, …). So the module
+ * cannot read MOTEBIT_UNIT_COST, a second key, or choose `per` at runtime:
+ * the one override is the runner's. Nothing in it is executed; the listed
+ * default is what the runner's own `resolveListingPricing` makes of it.
  */
 export async function readListedPrice(
   root: string,
@@ -355,102 +471,108 @@ export async function readListedPrice(
   const say = (msg: string) => violations.push(`${rel}: ${msg}`);
   if (!existsSync(file)) {
     violations.push(
-      `services/${name}: motebit.market is true but there is no ${PRICING} exporting a pure \`listingPricing(env)\``,
+      `services/${name}: motebit.market is true but there is no ${PRICING} exporting \`LISTING_PRICE\` (literal data)`,
     );
     return null;
   }
-  // Pure by shape: type-only imports/re-exports, types, and function
-  // declarations — nothing that runs at module load, so the gate can import it.
   const sf = parse(file);
+  let ambient = false;
+  walk(sf, (n) => {
+    const hit =
+      ts.isMetaProperty(n) && n.keywordToken === ts.SyntaxKind.ImportKeyword
+        ? "import.meta"
+        : ts.isIdentifier(n) && AMBIENT.includes(n.text)
+          ? n.text
+          : null;
+    if (hit == null) return;
+    ambient = true;
+    say(
+      `line ${lineOf(sf, n)}: names \`${hit}\` — the price module cannot read the environment; MOTEBIT_UNIT_COST is read and validated by the runner alone (${RUNNER_RULE})`,
+    );
+  });
+  const shape = `${PRICING} holds type-only imports, types and ONE \`export const LISTING_PRICE: ListingPriceSpec = { capabilities: ["…"], unit_cost: <number>, per: "…" }\` of literals — data the runner prices, never code that reads the env`;
+  let decl: ts.VariableDeclaration | null = null;
   for (const st of sf.statements) {
-    const ok =
+    const typeOnly =
       (ts.isImportDeclaration(st) && st.importClause?.isTypeOnly === true) ||
       (ts.isExportDeclaration(st) && st.isTypeOnly && st.moduleSpecifier == null) ||
       ts.isInterfaceDeclaration(st) ||
-      ts.isTypeAliasDeclaration(st) ||
-      ts.isFunctionDeclaration(st);
-    if (!ok) {
+      ts.isTypeAliasDeclaration(st);
+    if (typeOnly) continue;
+    const d =
+      ts.isVariableStatement(st) &&
+      decl == null &&
+      (st.declarationList.flags & ts.NodeFlags.Const) !== 0 &&
+      st.modifiers?.length === 1 &&
+      st.modifiers[0]!.kind === ts.SyntaxKind.ExportKeyword &&
+      st.declarationList.declarations.length === 1
+        ? st.declarationList.declarations[0]!
+        : null;
+    if (d == null || !ts.isIdentifier(d.name) || d.name.text !== "LISTING_PRICE") {
+      say(`line ${lineOf(sf, st)}: \`${st.getText(sf).split("\n")[0]!.slice(0, 60)}\` — ${shape}`);
+      return null;
+    }
+    decl = d;
+  }
+  if (decl == null) {
+    say(`exports no \`LISTING_PRICE\` — ${shape}`);
+    return null;
+  }
+  if (ambient) return null;
+  let init = decl.initializer;
+  if (init != null && ts.isSatisfiesExpression(init)) init = init.expression;
+  if (init == null || !ts.isObjectLiteralExpression(init)) {
+    say(`line ${lineOf(sf, decl)}: LISTING_PRICE is not an object literal — ${shape}`);
+    return null;
+  }
+  const props = new Map<string, string | number | string[]>();
+  for (const p of init.properties) {
+    const key =
+      ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))
+        ? p.name.text
+        : null;
+    const value = key != null && ts.isPropertyAssignment(p) ? literalOf(p.initializer) : null;
+    if (key == null || value == null || props.has(key)) {
       say(
-        `line ${lineOf(sf, st)}: \`${st.getText(sf).split("\n")[0]!.slice(0, 60)}\` — ${PRICING} holds type-only imports, types and function declarations only (pure: importing it runs nothing)`,
+        `line ${lineOf(sf, p)}: \`${p.getText(sf).slice(0, 60)}\` — every LISTING_PRICE property is a plain \`key: <literal>\`, once (no spread, computed key, getter or expression)`,
       );
       return null;
     }
+    props.set(key, value);
   }
-  let fn: unknown;
+  const caps = props.get("capabilities");
+  const cost = props.get("unit_cost");
+  const per = props.get("per");
+  if (
+    props.size !== 3 ||
+    !Array.isArray(caps) ||
+    caps.length === 0 ||
+    typeof cost !== "number" ||
+    !Number.isFinite(cost) ||
+    typeof per !== "string" ||
+    per === ""
+  ) {
+    say(
+      `LISTING_PRICE is ${JSON.stringify(Object.fromEntries(props))} — exactly { capabilities: non-empty string[], unit_cost: finite number ≥ 0, per: non-empty string }`,
+    );
+    return null;
+  }
+  const rule = await runnerRule();
+  if (typeof rule === "string") {
+    violations.push(rule);
+    return null;
+  }
+  let entries: ListingEntry[];
   try {
-    fn = ((await import(pathToFileURL(file).href)) as { listingPricing?: unknown }).listingPricing;
+    entries = rule({ capabilities: caps, unit_cost: cost, per }, undefined);
   } catch (err) {
-    say(`could not be imported (${err instanceof Error ? err.message : String(err)})`);
+    say(`the runner refuses LISTING_PRICE (${err instanceof Error ? err.message : String(err)})`);
     return null;
-  }
-  if (typeof fn !== "function") {
-    say("does not export a function `listingPricing`");
-    return null;
-  }
-  const call = (env: Record<string, string>, label: string): ListingEntry[] | null => {
-    let out: unknown;
-    try {
-      out = (fn as (e: Record<string, string>) => unknown)(Object.freeze({ ...env }));
-    } catch (err) {
-      say(`listingPricing(${label}) threw (${err instanceof Error ? err.message : String(err)})`);
-      return null;
-    }
-    if (!Array.isArray(out) || out.length === 0) {
-      say(
-        `listingPricing(${label}) lists no pricing (${JSON.stringify(out ?? null).slice(0, 120)})`,
-      );
-      return null;
-    }
-    return out as ListingEntry[];
-  };
-  const entries = call({}, "{}");
-  if (entries == null) return null;
-  const again = call({}, "{}");
-  if (again != null && !isDeepStrictEqual(again, entries))
-    say(
-      "listingPricing({}) returned different pricing on a second call — the price must be a pure function of the env",
-    );
-  const bad = entries.find(
-    (e) =>
-      e == null ||
-      typeof e.capability !== "string" ||
-      typeof e.unit_cost !== "number" ||
-      !Number.isFinite(e.unit_cost) ||
-      e.unit_cost < 0 ||
-      e.currency !== "USD" ||
-      typeof e.per !== "string",
-  );
-  if (bad != null) {
-    say(
-      `lists a pricing entry that is not { capability: string, unit_cost: finite ≥ 0, currency: "USD", per: string } (${JSON.stringify(bad)})`,
-    );
-    return null;
-  }
-  const costs = new Set(entries.map((e) => e.unit_cost as number));
-  if (costs.size !== 1)
-    say(
-      `lists ${costs.size} different unit_costs (${[...costs].join(", ")}) — one service, one price`,
-    );
-  const pers = new Set(entries.map((e) => e.per as string));
-  if (pers.size !== 1)
-    say(
-      `lists ${pers.size} different \`per\` units (${[...pers].join(", ")}) — the docs cannot state one price`,
-    );
-  const over = call(
-    { MOTEBIT_UNIT_COST: SENTINEL_COST },
-    `{ MOTEBIT_UNIT_COST: "${SENTINEL_COST}" }`,
-  );
-  if (over != null) {
-    const deaf = over.filter((e) => e?.unit_cost !== Number(SENTINEL_COST));
-    if (deaf.length > 0 || over.length !== entries.length)
-      say(
-        `with MOTEBIT_UNIT_COST="${SENTINEL_COST}" lists unit_costs ${JSON.stringify(over.map((e) => e?.unit_cost))} — every entry's unit_cost must be the parsed override, unaltered (no arithmetic, no hardcoded price)`,
-      );
   }
   return {
     amount: entries[0]!.unit_cost as number,
     per: entries[0]!.per as string,
-    source: `${rel} listingPricing({})`,
+    source: `${rel} LISTING_PRICE`,
   };
 }
 
@@ -908,14 +1030,14 @@ async function main(): Promise<void> {
       invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price`,
       sites: r.violations,
       canonical:
-        "role/identity/market: the `motebit` block in services/<name>/package.json; price: the pure `listingPricing(env)` in services/<name>/src/pricing.ts, called with `{}` (no MOTEBIT_UNIT_COST), which main() must pass runMolecule as exactly `pricing: listingPricing(process.env)` — the runner lists only config pricing and refuses a listing that brings its own",
-      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A market service: keep its price in src/pricing.ts (pure; one price, one `per`, MOTEBIT_UNIT_COST overrides every entry unaltered) and call runMolecule once in src/index.ts with `pricing: listingPricing(process.env)` after any spread; never put `pricing` in getServiceListing. .env.example states the coded default. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
+        "role/identity/market: the `motebit` block in services/<name>/package.json; price: the literal `LISTING_PRICE = { capabilities, unit_cost, per }` in services/<name>/src/pricing.ts (data — it cannot read the environment), which main() must pass runMolecule as exactly `pricing: LISTING_PRICE`; the runner alone applies MOTEBIT_UNIT_COST (packages/molecule-runner/src/listing-price.ts, refusing a malformed value) and refuses a listing that brings its own price",
+      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A market service: keep its price in src/pricing.ts as `export const LISTING_PRICE: ListingPriceSpec = { capabilities: [...], unit_cost: <number>, per: <unit string> }` — literals only, no env reads (the runner applies MOTEBIT_UNIT_COST) — and call runMolecule once in src/index.ts with `pricing: LISTING_PRICE` after any spread, naming LISTING_PRICE nowhere else; never put `pricing` in getServiceListing. .env.example states the coded default. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
       doctrine: "docs/drift-defenses.md (#173)",
     });
   }
   const market = r.services.filter((s) => s.market).length;
   console.log(
-    `✓ check-service-truth: ${r.services.length} services' metadata + coded listing prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and each market service's pure ${PRICING} listingPricing({}) (and that a sentinel MOTEBIT_UNIT_COST reaches every entry unaltered); proves by TypeScript AST that each market service's ${ENTRY} — the file its Dockerfile CMD / start boots as dist/index.js — calls runMolecule exactly once with \`pricing: listingPricing(process.env)\` (the runner lists only config pricing and refuses a getServiceListing carrying its own — molecule-runner listing-pricing.test.ts); market:false services read no MOTEBIT_UNIT_COST, have no pricing.ts and call no runMolecule. Nothing is executed but those pure functions: no server boots, no network, no ports. Threat model: guards ACCIDENTAL drift between documented and coded price/unit/role; it does not cover production MOTEBIT_UNIT_COST overrides or hand-edited deployments — the deployed listing is the one the service POSTs to the relay (signed market:listing token) and the relay serves; read the production price there. Not covered: other docs pages; "identity" is declared metadata, not verified against code.`,
+    `✓ check-service-truth: ${r.services.length} services' metadata + coded listing prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and each market service's ${PRICING} LISTING_PRICE, which the TypeScript AST shows is literal data naming no process/globalThis/import.meta/require (it cannot read the environment); proves the runner's ${RUNNER_RULE} lists a spec unaltered, carries a sentinel MOTEBIT_UNIT_COST to every entry, and refuses ${MALFORMED_COSTS.length} malformed overrides (no NaN listing — a bad MOTEBIT_UNIT_COST refuses the boot); proves by TypeScript AST that each market service's ${ENTRY} — the file its Dockerfile CMD / start boots as dist/index.js — calls runMolecule exactly once with \`pricing: LISTING_PRICE\`, the price module imported by that file alone and named nowhere else (the runner lists only config pricing and refuses a getServiceListing carrying its own — molecule-runner listing-pricing.test.ts); market:false services read no MOTEBIT_UNIT_COST, have no pricing.ts and call no runMolecule. Nothing is executed but the runner's zero-import override rule: no server boots, no network, no ports. Threat model: guards ACCIDENTAL drift between documented and coded price/unit/role; it does not cover production MOTEBIT_UNIT_COST overrides or hand-edited deployments — the deployed listing is the one the service POSTs to the relay (signed market:listing token) and the relay serves; read the production price there. Not covered: other docs pages; "identity" is declared metadata, not verified against code.`,
   );
 }
 

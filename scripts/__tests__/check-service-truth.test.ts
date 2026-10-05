@@ -1,16 +1,17 @@
 /**
- * check-service-truth self-test — fixture round-trips, nothing executed.
+ * check-service-truth self-test — fixture round-trips, nothing executed but
+ * the runner's pure override rule.
  *
- * Builds a miniature repo (services/* with `motebit` metadata, a pure
- * `src/pricing.ts` exporting `listingPricing(env)`, and an entry
- * `src/index.ts` whose main() calls `runMolecule` with
- * `pricing: listingPricing(process.env)`; a README `## Architecture` section;
- * an architecture.mdx tree + `## Services` table) that the gate passes, then
- * applies one mutation per drift class and requires RED naming it. Pricing is
- * runner-owned by construction (molecule-runner listing-pricing.test.ts), so
- * the gate reads the price from the pure function and proves the wiring by
- * the TypeScript AST of the runMolecule call site. Finally runs the real gate
- * on the real repo through its CLI — in seconds, booting nothing.
+ * Builds a miniature repo (services/* with `motebit` metadata, a data-only
+ * `src/pricing.ts` exporting `LISTING_PRICE = { capabilities, unit_cost, per }`
+ * of literals, and an entry `src/index.ts` whose main() calls `runMolecule`
+ * with `pricing: LISTING_PRICE`; a README `## Architecture` section; an
+ * architecture.mdx tree + `## Services` table) that the gate passes, then
+ * applies one mutation per drift class and requires RED naming it. The price
+ * module cannot read the environment (R5, 2026-10-05): MOTEBIT_UNIT_COST is
+ * read and validated by the runner alone (molecule-runner listing-price.ts),
+ * so a second override path, an env-chosen `per`, or a NaN price has nowhere
+ * to live. Finally runs the real gate on the real repo through its CLI.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -18,7 +19,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluate, ARCHITECTURE_PATH } from "../check-service-truth.js";
+import { evaluate, ARCHITECTURE_PATH, MALFORMED_COSTS } from "../check-service-truth.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -43,12 +44,12 @@ interface Svc {
 }
 
 const LISTING = `() => Promise.resolve({ capabilities: ["x"], sla: { max_latency_ms: 1, availability_guarantee: 1 }, description: "d" })`;
-const CONFIG = `{ serviceName: "fixture", pricing: listingPricing(process.env) }`;
+const CONFIG = `{ serviceName: "fixture", pricing: LISTING_PRICE }`;
 
 /** A service entry: main() → runMolecule(config, builder). */
 const entry = (config = CONFIG, prelude = "", after = "") =>
   `import { runMolecule } from "@motebit/molecule-runner";\n` +
-  `import { listingPricing } from "./pricing.js";\n` +
+  `import { LISTING_PRICE } from "./pricing.js";\n` +
   prelude +
   `async function main(): Promise<void> {\n` +
   `  await runMolecule(${config} as never, () => ({ toolRegistry: {}, getServiceListing: ${LISTING} }) as never);\n` +
@@ -58,11 +59,28 @@ const entry = (config = CONFIG, prelude = "", after = "") =>
 
 const ENTRY = entry();
 
-const pricingModule = (amount: string, per: string, costExpr = "unitCost") =>
-  `export function listingPricing(env: Readonly<Record<string, string | undefined>>) {\n` +
-  `  const unitCost = parseFloat(env["MOTEBIT_UNIT_COST"] ?? "${amount}");\n` +
-  `  return [{ capability: "x", unit_cost: ${costExpr}, currency: "USD", per: "${per}" }];\n` +
-  `}\n`;
+const pricingModule = (amount: string, per: string, caps = `["x"]`) =>
+  `import type { ListingPriceSpec } from "@motebit/molecule-runner";\n\n` +
+  `export const LISTING_PRICE: ListingPriceSpec = { capabilities: ${caps}, unit_cost: ${amount}, per: "${per}" };\n`;
+
+/**
+ * The PREVIOUS contract (origin/fix/service-truth 3c7ba92): pricing.ts exported
+ * `listingPricing(env)` and main() passed `listingPricing(process.env)`. Cold
+ * review R5 showed the function could read any other key and stay green.
+ */
+const envFnService = (body: string): Pick<Svc, "src" | "pricing"> => ({
+  src:
+    `import { runMolecule } from "@motebit/molecule-runner";\n` +
+    `import { listingPricing } from "./pricing.js";\n` +
+    `async function main(): Promise<void> {\n` +
+    `  await runMolecule({ serviceName: "fixture", pricing: listingPricing(process.env) } as never, () => ({ toolRegistry: {}, getServiceListing: ${LISTING} }) as never);\n` +
+    `}\n` +
+    `main().catch((err: unknown) => { console.error(String(err)); process.exit(1); });\n`,
+  pricing:
+    `export function listingPricing(env: Readonly<Record<string, string | undefined>>) {\n` +
+    `  ${body}\n` +
+    `}\n`,
+});
 
 const priced = (amount: string, per: string): Pick<Svc, "src" | "pricing"> => ({
   src: ENTRY,
@@ -173,7 +191,7 @@ const research = (patch: Partial<Svc>) => {
 const SITE = "services/research/src/index.ts";
 
 describe("check-service-truth", () => {
-  it("is silent on a consistent fixture, and reads the price from the pure listingPricing({})", async () => {
+  it("is silent on a consistent fixture, and reads the price from the literal LISTING_PRICE", async () => {
     const r = await evaluate(fixture({}));
     expect(r.violations).toEqual([]);
     expect(r.placements).toBe(12);
@@ -181,7 +199,65 @@ describe("check-service-truth", () => {
     expect(r.services.find((s) => s.name === "research")!.price).toEqual({
       amount: 0.25,
       per: "task",
-      source: "services/research/src/pricing.ts listingPricing({})",
+      source: "services/research/src/pricing.ts LISTING_PRICE",
+    });
+  });
+
+  // Cold review R5 (2026-10-05): under the previous contract each of these
+  // stayed GREEN — the gate only called listingPricing with {} and a sentinel,
+  // so any other key was never exercised. The seam is removed, not probed:
+  // pricing.ts can no longer read the environment at all.
+  describe("R5: the price module cannot read the environment", () => {
+    const PRICE_MODULE = /services\/research\/src\/pricing\.ts: /;
+    it("a second, invisible override key is RED", async () => {
+      const v = await research(
+        envFnService(
+          `const unitCost = parseFloat(env["MOTEBIT_AUDITOR_COST"] ?? env["MOTEBIT_UNIT_COST"] ?? "0.25");\n` +
+            `  return [{ capability: "x", unit_cost: unitCost, currency: "USD", per: "task" }];`,
+        ),
+      );
+      expect(v).toMatch(PRICE_MODULE);
+      expect(v).toMatch(/holds type-only imports, types and ONE `export const LISTING_PRICE/);
+    });
+    it("an env-chosen `per` is RED", async () => {
+      const v = await research(
+        envFnService(
+          `const unitCost = parseFloat(env["MOTEBIT_UNIT_COST"] ?? "0.25");\n` +
+            `  return [{ capability: "x", unit_cost: unitCost, currency: "USD", per: env["MOTEBIT_PER"] ?? "task" }];`,
+        ),
+      );
+      expect(v).toMatch(PRICE_MODULE);
+    });
+    it("a process.env read inside the price module is RED (also in data-constant shape)", async () => {
+      const v = await research(
+        envFnService(
+          `const unitCost = process.env["PROD"] ? 9 : parseFloat(env["MOTEBIT_UNIT_COST"] ?? "0.25");\n` +
+            `  return [{ capability: "x", unit_cost: unitCost, currency: "USD", per: "task" }];`,
+        ),
+      );
+      expect(v).toMatch(PRICE_MODULE);
+      expect(v).toMatch(/names `process` — the price module cannot read the environment/);
+      for (const [expr, name] of [
+        [`process.env["PROD"] ? 9 : 0.25`, "process"],
+        [`globalThis.process ? 9 : 0.25`, "globalThis"],
+        [`import.meta.env ? 9 : 0.25`, "import.meta"],
+      ] as const)
+        expect(await research({ pricing: pricingModule(expr, "task") }), expr).toMatch(
+          new RegExp(
+            `names \`${name.replace(".", "\\.")}\` — the price module cannot read the environment`,
+          ),
+        );
+    });
+    it('a module that parses MOTEBIT_UNIT_COST itself ("abc" ⇒ NaN listed) is RED — the runner alone parses it', async () => {
+      const v = await research(
+        envFnService(
+          `const unitCost = parseFloat(env["MOTEBIT_UNIT_COST"] ?? "0.25");\n` +
+            `  return [{ capability: "x", unit_cost: unitCost, currency: "USD", per: "task" }];`,
+        ),
+      );
+      expect(v).toMatch(PRICE_MODULE);
+      // And the override rule the gate pins refuses it (molecule-runner listing-price.ts).
+      expect(v).not.toMatch(/MOTEBIT_UNIT_COST override rule/);
     });
   });
 
@@ -204,7 +280,7 @@ describe("check-service-truth", () => {
   it("bites on a wrong price (README and table) and a wrong unit (tree)", async () => {
     const readme = swap(README, "($0.25/task, Claude)", "($0.05/task, Claude)");
     expect(await violations({ readme })).toMatch(
-      /`research` states \$0\.05\/task but services\/research\/src\/pricing\.ts listingPricing\(\{\}\) lists \$0\.25\/task/,
+      /`research` states \$0\.05\/task but services\/research\/src\/pricing\.ts LISTING_PRICE lists \$0\.25\/task/,
     );
     const arch = swap(ARCH, "$0.25/task. Claude.", "$0.25/report. Claude.");
     expect(await violations({ arch })).toMatch(/states \$0\.25\/report/);
@@ -282,7 +358,7 @@ describe("check-service-truth", () => {
   it("a price change in pricing.ts is RED against the docs (the coded default wins)", async () => {
     const v = await research({ pricing: pricingModule("0.30", "task") });
     expect(v).toMatch(
-      /`research` states \$0\.25\/task but services\/research\/src\/pricing\.ts listingPricing\(\{\}\) lists \$0\.3\/task/,
+      /`research` states \$0\.25\/task but services\/research\/src\/pricing\.ts LISTING_PRICE lists \$0\.3\/task/,
     );
     expect(await research({ pricing: pricingModule("0.25", "report") })).toMatch(
       /lists \$0\.25\/report/,
@@ -304,37 +380,61 @@ describe("check-service-truth", () => {
     );
   });
 
-  it("config pricing must be exactly listingPricing(process.env)", async () => {
+  it("config pricing must be exactly LISTING_PRICE", async () => {
     for (const expr of [
-      "listingPricing({})",
-      'listingPricing({ ...process.env, MOTEBIT_UNIT_COST: "0.01" })',
-      '[{ capability: "x", unit_cost: 0.25, currency: "USD", per: "task" }]',
-      'listingPricing(process.env).map((p) => ({ ...p, per: "page" }))',
+      "{ ...LISTING_PRICE }",
+      '{ ...LISTING_PRICE, per: "page" }',
+      '{ capabilities: ["x"], unit_cost: 0.25, per: "task" }',
+      'process.env["X"] ? undefined : LISTING_PRICE',
     ])
       expect(
         await research({ src: entry(`{ serviceName: "f", pricing: ${expr} }`) }),
         expr,
-      ).toMatch(/runMolecule's `pricing` must be exactly `listingPricing\(process\.env\)`/);
+      ).toMatch(/runMolecule's `pricing` must be exactly `LISTING_PRICE`/);
     expect(
-      await research({ src: entry(`{ pricing: listingPricing(process.env), pricing: [] }`) }),
+      await research({ src: entry(`{ pricing: LISTING_PRICE, pricing: undefined }`) }),
     ).toMatch(/has 2 `pricing` properties/);
     // A config built elsewhere cannot be checked: it must be the literal.
     expect(
-      await research({
-        src: entry("cfg", "const cfg = { pricing: listingPricing(process.env) };\n"),
-      }),
+      await research({ src: entry("cfg", "const cfg = { pricing: LISTING_PRICE };\n") }),
     ).toMatch(/config must be an object literal/);
+  });
+
+  it("LISTING_PRICE reaches the runner untouched: no mutation site, no second reader", async () => {
+    expect(
+      await research({
+        src: entry(CONFIG, "(LISTING_PRICE as { unit_cost: number }).unit_cost = 9;\n"),
+      }),
+    ).toMatch(/names `LISTING_PRICE` outside runMolecule's `pricing`/);
+    expect(
+      await research({
+        files: {
+          "boot.ts": `import { LISTING_PRICE } from "./pricing.js";\n(LISTING_PRICE as { per: string }).per = "page";\n`,
+        },
+      }),
+    ).toMatch(/services\/research\/src\/boot\.ts:1: names `LISTING_PRICE`/);
+    expect(
+      await research({
+        files: { "boot.ts": `export async function f() { return import("./pricing.js"); }\n` },
+      }),
+    ).toMatch(/boot\.ts:1: imports "\.\/pricing\.js" — only src\/index\.ts reads the price module/);
+    expect(await research({ src: entry(CONFIG, `import "./pricing.js";\n`) })).toMatch(
+      /imports "\.\/pricing\.js" again/,
+    );
+    expect(
+      await research({ src: entry(CONFIG, `import * as P from "./pricing.js";\nvoid P;\n`) }),
+    ).toMatch(/`import \* as P from "\.\/pricing\.js"`/);
   });
 
   it("a spread after pricing could replace it (RED); a spread before it cannot (green)", async () => {
     expect(
       await research({
-        src: entry(`{ pricing: listingPricing(process.env), ...extra }`, "const extra = {};\n"),
+        src: entry(`{ pricing: LISTING_PRICE, ...extra }`, "const extra = {};\n"),
       }),
     ).toMatch(/a spread after `pricing` in runMolecule's config could replace it/);
     expect(
       await research({
-        src: entry(`{ ...extra, pricing: listingPricing(process.env) }`, "const extra = {};\n"),
+        src: entry(`{ ...extra, pricing: LISTING_PRICE }`, "const extra = {};\n"),
       }),
     ).toBe("");
   });
@@ -364,17 +464,14 @@ describe("check-service-truth", () => {
     expect(
       await research({
         src: ENTRY.replace(`"./pricing.js"`, `"./other.js"`),
-        files: { "other.ts": "export const listingPricing = () => [];\n" },
+        files: { "other.ts": "export const LISTING_PRICE = undefined;\n" },
       }),
-    ).toMatch(/`listingPricing` is imported from "\.\/other\.js"/);
+    ).toMatch(/`LISTING_PRICE` is imported from "\.\/other\.js"/);
     expect(
       await research({
-        src: entry(CONFIG, "", "  const listingPricing = () => [];\n  void listingPricing;\n"),
+        src: entry(CONFIG, "", "  const LISTING_PRICE = {};\n  void LISTING_PRICE;\n"),
       }),
-    ).toMatch(/re-binds `listingPricing`/);
-    expect(await research({ src: entry(CONFIG, "const process = { env: {} };\n") })).toMatch(
-      /re-binds `process`/,
-    );
+    ).toMatch(/re-binds `LISTING_PRICE`/);
     expect(
       await research({
         files: {
@@ -384,13 +481,13 @@ describe("check-service-truth", () => {
     ).toMatch(/services\/research\/src\/boot\.ts:\d+: names `runMolecule`/);
   });
 
-  it("pricing.ts must be pure by shape — the gate imports it, so nothing may run at load", async () => {
+  it("pricing.ts is literal data by shape — nothing runs, nothing reads the env", async () => {
     expect(
       await research({
         pricing: `import { readFileSync } from "node:fs";\n` + pricingModule("0.25", "task"),
       }),
     ).toMatch(
-      /src\/pricing\.ts: line 1: .* type-only imports, types and function declarations only/,
+      /src\/pricing\.ts: line 1: .* holds type-only imports, types and ONE `export const LISTING_PRICE/,
     );
     expect(
       await research({ pricing: `console.log("boot");\n` + pricingModule("0.25", "task") }),
@@ -401,41 +498,64 @@ describe("check-service-truth", () => {
           `import type { X } from "./x.js";\nexport type { X };\n` + pricingModule("0.25", "task"),
       }),
     ).toBe("");
+    // `satisfies` is a type position; the literal is still checked.
+    expect(
+      await research({
+        pricing: `export const LISTING_PRICE = { capabilities: ["x"], unit_cost: 0.25, per: "task" } satisfies object;\n`,
+      }),
+    ).toBe("");
   });
 
-  it("the override reaches every entry unaltered: arithmetic and hardcodes are RED", async () => {
-    expect(await research({ pricing: pricingModule("0.25", "task", "unitCost * 2") })).toMatch(
-      /with MOTEBIT_UNIT_COST="0\.123457" lists unit_costs \[0\.246914\]/,
-    );
-    // A hardcoded unit_cost equal to the docs: green on the default, deaf to the env.
-    expect(await research({ pricing: pricingModule("0.25", "task", "0.25") })).toMatch(
-      /lists unit_costs \[0\.25\] — every entry's unit_cost must be the parsed override/,
+  it("every LISTING_PRICE value is a literal: arithmetic, calls, spreads and negatives are RED", async () => {
+    for (const cost of ["0.125 * 2", 'Number("0.25")', "-0.25", "COST"])
+      expect(await research({ pricing: pricingModule(cost, "task") }), cost).toMatch(
+        /every LISTING_PRICE property is a plain `key: <literal>`/,
+      );
+    expect(
+      await research({
+        pricing: `const BASE = { per: "task" };\nexport const LISTING_PRICE = { ...BASE, capabilities: ["x"], unit_cost: 0.25 };\n`,
+      }),
+    ).toMatch(/line 1: `const BASE/);
+    expect(await research({ pricing: pricingModule("0.25", "task", "[`x`]") })).toMatch(
+      /plain `key: <literal>`/,
     );
   });
 
-  it("refuses an empty, malformed, multi-price or impure listing", async () => {
-    const fn = (body: string) =>
-      `export function listingPricing(env: Record<string, string | undefined>) {\n  void env;\n  ${body}\n}\n`;
-    expect(await research({ pricing: fn("return [];") })).toMatch(
-      /listingPricing\(\{\}\) lists no pricing/,
+  it("refuses an empty, malformed or multi-shape LISTING_PRICE", async () => {
+    expect(await research({ pricing: pricingModule("0.25", "task", "[]") })).toMatch(
+      /LISTING_PRICE is \{"capabilities":\[\],.*exactly \{ capabilities: non-empty string\[\]/,
+    );
+    expect(await research({ pricing: pricingModule(`"0.25"`, "task") })).toMatch(
+      /exactly \{ capabilities: non-empty string\[\], unit_cost: finite number/,
     );
     expect(
       await research({
-        pricing: fn(
-          `return [{ capability: "x", unit_cost: "0.25", currency: "USD", per: "task" }];`,
-        ),
+        pricing: `export const LISTING_PRICE = { capabilities: ["x"], unit_cost: 0.25, per: "task", currency: "EUR" };\n`,
       }),
-    ).toMatch(/is not \{ capability: string, unit_cost: finite ≥ 0/);
+    ).toMatch(/LISTING_PRICE is .*"currency":"EUR"/);
     expect(
       await research({
-        pricing: fn(
-          `const c = parseFloat(env["MOTEBIT_UNIT_COST"] ?? "0.25"); return [{ capability: "x", unit_cost: c, currency: "USD", per: "task" }, { capability: "y", unit_cost: c, currency: "USD", per: "page" }];`,
-        ),
+        pricing: `export const LISTING_PRICE = { capabilities: ["x"], unit_cost: 0.25, per: "task", per: "page" };\n`,
       }),
-    ).toMatch(/lists 2 different `per` units/);
-    expect(await research({ pricing: fn(`throw new Error("nope");`) })).toMatch(
-      /listingPricing\(\{\}\) threw \(nope\)/,
+    ).toMatch(/per: "page"` — every LISTING_PRICE property is a plain `key: <literal>`, once/);
+    expect(
+      await research({
+        pricing: `export function listingPricing() { return []; }\n`,
+      }),
+    ).toMatch(/line 1: `export function listingPricing\(\) \{ return \[\]; \}`/);
+    expect(await research({ pricing: `export type X = 1;\n` })).toMatch(
+      /exports no `LISTING_PRICE`/,
     );
+  });
+
+  it("the runner's override rule is the one the gate pins: sentinel to every entry, malformed refused", async () => {
+    const { resolveListingPricing } =
+      await import("../../packages/molecule-runner/src/listing-price.js");
+    const spec = { capabilities: ["x", "y"], unit_cost: 0.25, per: "task" };
+    for (const e of resolveListingPricing(spec, "0.123457")) expect(e.unit_cost).toBe(0.123457);
+    for (const bad of MALFORMED_COSTS)
+      expect(() => resolveListingPricing(spec, bad), bad).toThrow(/MOTEBIT_UNIT_COST/);
+    expect(resolveListingPricing(spec, " 0.37 ").map((e) => e.unit_cost)).toEqual([0.37, 0.37]);
   });
 
   it("ties market:false to no price, no pricing.ts and no runMolecule", async () => {
@@ -485,7 +605,7 @@ describe("check-service-truth", () => {
       await research({ envExample: "# Price per task (default: 0.25)\nMOTEBIT_UNIT_COST=0.25\n" }),
     ).toBe("");
     expect(await research({ envExample: "# Listed price\nMOTEBIT_UNIT_COST=0.05\n" })).toMatch(
-      /services\/research\/\.env\.example:2: MOTEBIT_UNIT_COST=0\.05 but services\/research\/src\/pricing\.ts listingPricing\(\{\}\) lists \$0\.25\/task by default/,
+      /services\/research\/\.env\.example:2: MOTEBIT_UNIT_COST=0\.05 but services\/research\/src\/pricing\.ts LISTING_PRICE lists \$0\.25\/task by default/,
     );
     expect(
       await research({ envExample: "# Price (default: 0.50)\n# MOTEBIT_UNIT_COST=0.25\n" }),

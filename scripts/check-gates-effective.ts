@@ -2974,7 +2974,7 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-service-truth",
     proves:
-      "flags a services inventory whose stated price disagrees with the price the service codes (its pure `listingPricing({})`, which the runner lists by construction) — the 2026-10-05 class where README.md and architecture.mdx quoted different web-search/read-url prices than the code. Perturbs by PREDICATE: bumps whatever dollar amount README.md's `research` bullet carries by one cent, never a literal price, so a future price change cannot make the probe vacuous; byte-identical restoration on cleanup.",
+      "flags a services inventory whose stated price disagrees with the price the service codes (its literal `LISTING_PRICE`, which the runner lists by construction) — the 2026-10-05 class where README.md and architecture.mdx quoted different web-search/read-url prices than the code. Perturbs by PREDICATE: bumps whatever dollar amount README.md's `research` bullet carries by one cent, never a literal price, so a future price change cannot make the probe vacuous; byte-identical restoration on cleanup.",
     perturb: () =>
       mutateFile("README.md", (src) => {
         const re = /(`research` \(\$)(\d+)\.(\d+)/;
@@ -2994,13 +2994,13 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-service-truth",
     proves:
-      "flags a market:true service whose main() stops handing runMolecule its price — the runner lists ONLY config `pricing` (and refuses a getServiceListing carrying its own), so a dropped `pricing: listingPricing(process.env)` would publish the auditor unpriced. Perturbs by deleting that property from services/auditor/src/index.ts; the AST call-site check is red.",
+      "flags a market:true service whose main() stops handing runMolecule its price — the runner lists ONLY config `pricing` (and refuses a getServiceListing carrying its own), so a dropped `pricing: LISTING_PRICE` would publish the auditor unpriced. Perturbs by deleting that property from services/auditor/src/index.ts; the AST call-site check is red.",
     perturb: () =>
       mutateFile("services/auditor/src/index.ts", (src) => {
-        const site = "      pricing: listingPricing(process.env),\n";
+        const site = "      pricing: LISTING_PRICE,\n";
         if (src.split(site).length !== 2) {
           throw new Error(
-            "probe vacuous: services/auditor/src/index.ts no longer has exactly one `pricing: listingPricing(process.env),` config line — retarget the probe",
+            "probe vacuous: services/auditor/src/index.ts no longer has exactly one `pricing: LISTING_PRICE,` config line — retarget the probe",
           );
         }
         return src.replace(site, "");
@@ -3009,14 +3009,14 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-service-truth",
     proves:
-      'reads the price from the service\'s pure pricing function, not the docs — bumps the default in services/auditor/src/pricing.ts by one cent (predicate: whatever `?? "X.YY"` default it carries), so README.md and architecture.mdx no longer state the coded price and the gate is red.',
+      "reads the price from the service's literal LISTING_PRICE, not the docs — bumps the `unit_cost` in services/auditor/src/pricing.ts by one cent (predicate: whatever `unit_cost: X.YY` it carries), so README.md and architecture.mdx no longer state the coded price and the gate is red.",
     perturb: () =>
       mutateFile("services/auditor/src/pricing.ts", (src) => {
-        const re = /(\["MOTEBIT_UNIT_COST"\] \?\? ")(\d+)\.(\d+)(")/;
+        const re = /(unit_cost: )(\d+)\.(\d+)(,)/;
         const m = re.exec(src);
         if (m == null) {
           throw new Error(
-            'probe vacuous: services/auditor/src/pricing.ts no longer defaults `env["MOTEBIT_UNIT_COST"] ?? "X.YY"` — retarget the probe',
+            "probe vacuous: services/auditor/src/pricing.ts no longer codes `unit_cost: X.YY,` — retarget the probe",
           );
         }
         const cents = Number(m[2]) * 100 + Number(m[3]!.padEnd(2, "0").slice(0, 2)) + 1;
@@ -3024,6 +3024,21 @@ export async function probeFetch(): Promise<unknown> {
           re,
           `$1${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}$4`,
         );
+      }),
+  },
+  {
+    script: "check-service-truth",
+    proves:
+      "flags a price module that reads the environment — cold review R5 (2026-10-05): a `listingPricing(env)` reading a second override key, an env-chosen `per`, or `process.env` stayed green because the gate only called it with `{}` and a sentinel. Now pricing.ts is literal data and the runner alone reads MOTEBIT_UNIT_COST; the probe makes services/auditor/src/pricing.ts's `unit_cost` branch on `process.env` (keeping the docs' price when unset) and the AST check is red.",
+    perturb: () =>
+      mutateFile("services/auditor/src/pricing.ts", (src) => {
+        const re = /(unit_cost: )(\d+(?:\.\d+)?)(,)/;
+        if (re.exec(src) == null) {
+          throw new Error(
+            "probe vacuous: services/auditor/src/pricing.ts no longer codes `unit_cost: <number>,` — retarget the probe",
+          );
+        }
+        return src.replace(re, '$1process.env["MOTEBIT_PROBE"] ? 9 : $2$3');
       }),
   },
   {

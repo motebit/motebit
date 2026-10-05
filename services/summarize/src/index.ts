@@ -23,7 +23,7 @@ import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolResult, ExecutionReceipt } from "@motebit/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
 import { summarizeSearchDefinition, createSummarizeSearchHandler } from "./tool.js";
-import { listingPricing } from "./pricing.js";
+import { LISTING_PRICE } from "./pricing.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -119,7 +119,7 @@ async function main(): Promise<void> {
       // service render as "priced"/discoverable in the market, matching
       // the sibling atoms (web-search, read-url). An empty array read as
       // "unpriced" and failed conformance.
-      pricing: listingPricing(process.env),
+      pricing: LISTING_PRICE,
     },
     (identity) => {
       const { motebitId, publicKey, privateKey } = identity;

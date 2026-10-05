@@ -38,7 +38,7 @@ async function bareListing() {
 }
 
 function pricing(unitCost: number) {
-  return [{ capability: "x", unit_cost: unitCost, currency: "USD", per: "task" }];
+  return { capabilities: ["x"], unit_cost: unitCost, per: "task" };
 }
 
 const noFetch = (() => {

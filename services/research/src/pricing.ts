@@ -1,21 +1,19 @@
 /**
- * The market listing's pricing — the ONE place this service's price is coded.
+ * The market listing's price — the ONE place this service's price is coded.
  *
- * Pure, with the environment injected. main() hands it to the runner as
- * config `pricing: listingPricing(process.env)`; `@motebit/molecule-runner`
- * owns the listing's pricing by construction (it lists exactly this, in task
- * admission, relay registration and the MCP listing tool, and refuses a
- * getServiceListing that brings its own). `scripts/check-service-truth.ts`
- * imports this function and calls it with `{}` (the default the docs and
- * .env.example must state) and with a sentinel MOTEBIT_UNIT_COST every entry
- * must carry, and checks main()'s runMolecule call passes exactly
- * `pricing: listingPricing(process.env)`.
+ * DATA, not a function: literals only, so it cannot read the environment.
+ * main() passes it to the runner as config `pricing: LISTING_PRICE`;
+ * `@motebit/molecule-runner` owns everything else by construction — it reads
+ * the operator override `MOTEBIT_UNIT_COST` once (refusing to start on a
+ * malformed value), applies it to every capability alike, and lists exactly
+ * that in task admission, relay registration and the MCP listing tool.
+ * `scripts/check-service-truth.ts` holds this file to that shape by AST and
+ * compares `unit_cost` / `per` with the docs and `.env.example`.
  */
-import type { ListingPrice } from "@motebit/molecule-runner";
+import type { ListingPriceSpec } from "@motebit/molecule-runner";
 
-export type { ListingPrice };
-
-export function listingPricing(env: Readonly<Record<string, string | undefined>>): ListingPrice[] {
-  const unitCost = parseFloat(env["MOTEBIT_UNIT_COST"] ?? "0.25");
-  return [{ capability: "research", unit_cost: unitCost, currency: "USD", per: "task" }];
-}
+export const LISTING_PRICE: ListingPriceSpec = {
+  capabilities: ["research"],
+  unit_cost: 0.25,
+  per: "task",
+};

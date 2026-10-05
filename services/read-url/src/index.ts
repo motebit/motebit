@@ -38,7 +38,7 @@ import {
 } from "@motebit/tools";
 import type { ToolResult } from "@motebit/sdk";
 import { loadConfig } from "./helpers.js";
-import { listingPricing } from "./pricing.js";
+import { LISTING_PRICE } from "./pricing.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -70,8 +70,8 @@ async function main(): Promise<void> {
       // call it), so every first-party hop binds through the relay at zero cost
       // and carries the token. MOTEBIT_TASK_ADMISSION=open is the escape hatch.
       taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
-      // The listing price — runner-owned, from the pure src/pricing.ts.
-      pricing: listingPricing(process.env),
+      // The listing price — literal data in src/pricing.ts; the runner applies MOTEBIT_UNIT_COST.
+      pricing: LISTING_PRICE,
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;

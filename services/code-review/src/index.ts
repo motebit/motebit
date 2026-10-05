@@ -27,7 +27,7 @@ import { loadConfig } from "./helpers.js";
 import { parsePrReference, prUrl } from "./github.js";
 import { reviewPrViaMotebit } from "./review-via-motebit.js";
 import type { ReviewConfig } from "./review-via-motebit.js";
-import { listingPricing } from "./pricing.js";
+import { LISTING_PRICE } from "./pricing.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -142,8 +142,8 @@ async function main(): Promise<void> {
       // relay-admitted work (docs/doctrine/task-admission.md). Escape hatch
       // for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
       taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
-      // The listing price — runner-owned, from the pure src/pricing.ts.
-      pricing: listingPricing(process.env),
+      // The listing price — literal data in src/pricing.ts; the runner applies MOTEBIT_UNIT_COST.
+      pricing: LISTING_PRICE,
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;

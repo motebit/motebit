@@ -42,7 +42,7 @@ import {
   subDelegateCircuitState,
   subDelegateClientConfig,
 } from "./sub-delegate.js";
-import { listingPricing } from "./pricing.js";
+import { LISTING_PRICE } from "./pricing.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -200,8 +200,8 @@ async function main(): Promise<void> {
       // promise that the work is bought — run only relay-admitted work. Escape
       // hatch for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
       taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
-      // The listing price — runner-owned, from the pure src/pricing.ts.
-      pricing: listingPricing(process.env),
+      // The listing price — literal data in src/pricing.ts; the runner applies MOTEBIT_UNIT_COST.
+      pricing: LISTING_PRICE,
     },
     (identity) => {
       const { motebitId, publicKey, privateKey } = identity;

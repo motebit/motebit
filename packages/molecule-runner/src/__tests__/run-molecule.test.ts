@@ -610,10 +610,11 @@ describe("runMolecule", () => {
       description: "Test listing",
     };
     const getServiceListing = vi.fn().mockResolvedValue(own);
+    const spec = { capabilities: ["test_tool"], unit_cost: 0.1, per: "call" };
     const pricing = [{ capability: "test_tool", unit_cost: 0.1, currency: "USD", per: "call" }];
 
     await runMolecule(
-      { ...baseConfig(), pricing },
+      { ...baseConfig(), pricing: spec },
       () => ({ toolRegistry: new InMemoryToolRegistry(), getServiceListing }),
       adapters,
     );
