@@ -56,6 +56,7 @@ import {
 import { buildEvidenceProvenanceJsonSchema } from "../src/evidence-provenance.js";
 import { buildEvalAttestationJsonSchema } from "../src/eval-attestation.js";
 import { buildRoutingTranscriptJsonSchema } from "../src/routing-transcript.js";
+import { buildSyncHoldReceiptJsonSchema } from "../src/sync-hold-receipt.js";
 import {
   buildAgentSettlementAnchorBatchJsonSchema,
   buildAgentSettlementAnchorProofJsonSchema,
@@ -159,6 +160,7 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "evidence-provenance-v1.json", build: buildEvidenceProvenanceJsonSchema },
   { filename: "eval-attestation-v1.json", build: buildEvalAttestationJsonSchema },
   { filename: "routing-transcript-v1.json", build: buildRoutingTranscriptJsonSchema },
+  { filename: "sync-hold-receipt-v1.json", build: buildSyncHoldReceiptJsonSchema },
   { filename: "delegation-token-v1.json", build: buildDelegationTokenJsonSchema },
   { filename: "standing-delegation-v1.json", build: buildStandingDelegationJsonSchema },
   { filename: "delegation-revocation-v1.json", build: buildDelegationRevocationJsonSchema },

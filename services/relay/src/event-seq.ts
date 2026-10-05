@@ -83,8 +83,8 @@
  */
 import type { EventLogEntry, EventType } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
-import { redactSensitiveEvents } from "./redaction.js";
 import { unwrapBound, type BoundIdentity } from "./identity-binding.js";
+import { redactSensitiveEvents } from "./redaction.js";
 
 /** The most events one seq pull returns; `has_more` says to pull again. */
 export const EVENT_SEQ_PAGE_MAX = 1000;
@@ -112,7 +112,8 @@ export interface SeqPullBody {
   latest_seq: number;
 }
 
-interface SeqRow {
+/** One `events` row as the relay stores it, with its seq. */
+export interface SeqRow {
   seq: number;
   event_id: string;
   motebit_id: string;
@@ -138,14 +139,17 @@ export function parseSeqCursor(raw: string | undefined): number | null | undefin
 /**
  * Read the bound identity's events after `afterSeq`, in seq order, redacted
  * exactly as the clock pull redacts them. One snapshot: the page and
- * `latest_seq` are read in one transaction.
+ * `latest_seq` are read in one transaction. `held` is, per served event, what
+ * the relay's hold receipt lists for it (`sync-hold-receipt.ts`) — read from
+ * the SAME snapshot, so the receipt describes exactly the page it is served
+ * beside.
  */
 export function readEventsAfterSeq(
   db: DatabaseDriver,
   owner: BoundIdentity,
   afterSeq: number,
   limit: number = EVENT_SEQ_PAGE_MAX,
-): SeqPullBody {
+): { body: SeqPullBody; held: HeldEvent[] } {
   const motebitId = unwrapBound(owner);
   const pageSize = Math.max(1, Math.min(limit, EVENT_SEQ_PAGE_MAX));
   const { rows, latest } = db.transaction(() => {
@@ -174,24 +178,28 @@ export function readEventsAfterSeq(
   // one row at a time so each entry keeps its own seq whatever the redactor
   // does to the list.
   const events: SequencedEvent[] = [];
+  const held: HeldEvent[] = [];
   for (const row of pageRows) {
-    for (const event of redactSensitiveEvents([rowToEvent(row)])) {
-      events.push({ ...event, seq: row.seq });
-    }
+    const h = heldFromRow(row, false);
+    events.push({ ...h.served, seq: row.seq });
+    held.push({ ...h, seq: row.seq });
   }
   const nextSeq = pageRows.length > 0 ? pageRows[pageRows.length - 1]!.seq : afterSeq;
   return {
-    motebit_id: motebitId,
-    events,
-    after_seq: afterSeq,
-    next_seq: nextSeq,
-    has_more: hasMore,
-    latest_seq: latest,
+    body: {
+      motebit_id: motebitId,
+      events,
+      after_seq: afterSeq,
+      next_seq: nextSeq,
+      has_more: hasMore,
+      latest_seq: latest,
+    },
+    held,
   };
 }
 
 /** The same projection `@motebit/persistence`'s `SqliteEventStore` applies (pinned by test). */
-function rowToEvent(row: SeqRow): EventLogEntry {
+export function rowToEvent(row: SeqRow): EventLogEntry {
   const entry: EventLogEntry = {
     event_id: row.event_id,
     motebit_id: row.motebit_id,
@@ -203,4 +211,31 @@ function rowToEvent(row: SeqRow): EventLogEntry {
   };
   if (row.device_id !== null) entry.device_id = row.device_id;
   return entry;
+}
+
+/** An event the relay holds, with the entry it would serve for it. */
+export interface HeldEvent {
+  event_id: string;
+  /** The entry exactly as a pull would serve it (without `seq`). */
+  served: EventLogEntry;
+  redacted: boolean;
+  seq?: number;
+}
+
+/** True when the served entry is a redaction (by the relay, or marked so in storage). */
+function isRedactedForm(stored: EventLogEntry, served: EventLogEntry): boolean {
+  if (served !== stored) return true; // egress redaction changed it
+  const payload = stored.payload as Record<string, unknown> | undefined;
+  return payload?.redacted === true;
+}
+
+/** Stored row → the held entry, redacted exactly as every pull redacts it. */
+export function heldFromRow(row: SeqRow, ingressRedacted: boolean): HeldEvent {
+  const stored = rowToEvent(row);
+  const served = redactSensitiveEvents([stored])[0]!;
+  return {
+    event_id: row.event_id,
+    served,
+    redacted: ingressRedacted || isRedactedForm(stored, served),
+  };
 }

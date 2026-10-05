@@ -34,6 +34,13 @@ import { admitKey, proveSovereignFirstKey, recordFirstIdentityKey } from "./iden
 import type { AuthEvent } from "./auth-events.js";
 import { appendBoundEvent, bindSyncEntries } from "./identity-binding.js";
 import { parseSeqCursor, readEventsAfterSeq } from "./event-seq.js";
+import {
+  ingressRedactedIds,
+  parseSyncNonce,
+  readHeldEvents,
+  signHeldEvents,
+} from "./sync-hold-receipt.js";
+import type { RelayIdentity } from "./federation.js";
 
 const logger = createLogger({ service: "sync-routes" });
 
@@ -49,6 +56,12 @@ export interface SyncRoutesDeps {
   connections: Map<string, ConnectedDevice[]>;
   /** Relay rule 6: a refused cross-identity push is recorded (#846). */
   recordAuthEvent: (event: AuthEvent) => void;
+  /**
+   * Signs the `hold_receipt` beside every push acknowledgment and seq pull
+   * page (`sync-hold-receipt.ts`). The relay server always passes it; a
+   * hand-built test fixture without it serves the unchanged bodies.
+   */
+  relayIdentity?: RelayIdentity;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +82,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
   /** @internal */
   app.post("/sync/:motebitId/push", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
-    const body = await c.req.json<{ events: EventLogEntry[] }>();
+    const body = await c.req.json<{ events: EventLogEntry[]; nonce?: unknown }>();
     if (!Array.isArray(body.events)) {
       throw new HTTPException(400, {
         message: "Missing or invalid 'events' field (must be array)",
@@ -118,10 +131,29 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       }
     }
 
+    // The hold receipt names what the relay STORES among this push's ids,
+    // read back after the writes — never the frame (a skipped duplicate or
+    // unbound entry is listed only if its id is genuinely held). Additive.
+    const holdReceipt = deps.relayIdentity
+      ? {
+          hold_receipt: await signHeldEvents(
+            deps.relayIdentity,
+            motebitId,
+            parseSyncNonce(body.nonce),
+            readHeldEvents(
+              deps.moteDb.db,
+              owner,
+              safeEvents.map((e) => e.event_id),
+              ingressRedactedIds(body.events, safeEvents),
+            ),
+          ),
+        }
+      : {};
+
     if (duplicates > 0 && accepted === 0) {
-      return c.json({ motebit_id: motebitId, accepted: 0, duplicate: true });
+      return c.json({ motebit_id: motebitId, accepted: 0, duplicate: true, ...holdReceipt });
     }
-    return c.json({ motebit_id: motebitId, accepted, duplicates });
+    return c.json({ motebit_id: motebitId, accepted, duplicates, ...holdReceipt });
   });
 
   // --- Sync: pull events (HTTP fallback) ---
@@ -143,7 +175,23 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       const owner = bindSyncEntries(c, [], motebitId, deps.recordAuthEvent);
       const limitRaw = parseSeqCursor(c.req.query("limit"));
       const limit = typeof limitRaw === "number" && limitRaw > 0 ? limitRaw : undefined;
-      return c.json(readEventsAfterSeq(deps.moteDb.db, owner, afterSeq, limit));
+      const { body, held } = readEventsAfterSeq(deps.moteDb.db, owner, afterSeq, limit);
+      if (!deps.relayIdentity) return c.json(body);
+      // The page's receipt covers its seq range and the request nonce, so a
+      // page cannot be replayed as the answer to another cursor. Additive.
+      const hold_receipt = await signHeldEvents(
+        deps.relayIdentity,
+        motebitId,
+        parseSyncNonce(c.req.query("nonce")),
+        held,
+        {
+          after_seq: body.after_seq,
+          next_seq: body.next_seq,
+          has_more: body.has_more,
+          latest_seq: body.latest_seq,
+        },
+      );
+      return c.json({ ...body, hold_receipt });
     }
     const afterClock = Number(c.req.query("after_clock") ?? "0");
     const events = await eventStore.query({

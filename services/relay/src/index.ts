@@ -1472,6 +1472,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     onPeerBound: (motebitId, peer) => observeHost(motebitId, peer),
     onPeerClosed: peerLeft,
     isDraining: () => draining,
+    relayIdentity,
   });
 
   // --- Agent-route auth (installed BEFORE any /api/v1/agents/:id/* route
@@ -1500,6 +1501,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     identityManager,
     connections,
     recordAuthEvent: authEvents.record,
+    relayIdentity,
   });
 
   // --- Intake routes (self-signed motebit announcement → durable intake ledger) ---

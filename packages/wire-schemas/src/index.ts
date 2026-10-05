@@ -381,3 +381,11 @@ export {
   ROUTING_TRANSCRIPT_SCHEMA_ID,
   buildRoutingTranscriptJsonSchema,
 } from "./routing-transcript.js";
+
+export {
+  SyncHoldReceiptSchema,
+  SyncHeldEventSchema,
+  SyncHoldPageSchema,
+  SYNC_HOLD_RECEIPT_SCHEMA_ID,
+  buildSyncHoldReceiptJsonSchema,
+} from "./sync-hold-receipt.js";

@@ -129,6 +129,10 @@ export const REGISTRY: Record<string, Classification> = {
   // recomputeRoutingDecision in @motebit/semiring (source-available, pinned
   // by algorithm_version) — deliberately outside the permissive floor.
   RoutingDecisionTranscript: { kind: "verifier", verifier: "verifyRoutingTranscript" },
+  // SyncHoldReceipt — the relay's signed record of which sync events it
+  // holds (subject = signer, receipt-family; spec/sync-hold-receipt-v1.md).
+  // The caller pins the relay key and its nonce via the verifier's options.
+  SyncHoldReceipt: { kind: "verifier", verifier: "verifySyncHoldReceipt" },
   DisputeAppeal: { kind: "verifier", verifier: "verifyDisputeAppeal" },
   DisputeEvidence: { kind: "verifier", verifier: "verifyDisputeEvidence" },
   DisputeRequest: { kind: "verifier", verifier: "verifyDisputeRequest" },

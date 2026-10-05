@@ -1327,6 +1327,9 @@ const WRITER_HELPERS: ReadonlyArray<{ file: string; fn: string; param: string }>
   // A READER, registered because it takes the capability: the seq pull
   // returns only the bound identity's events (#868).
   { file: R + "event-seq.ts", fn: "readEventsAfterSeq", param: "owner" },
+  // A READER: the sync hold receipt lists only ids stored under the bound
+  // identity (sync-hold-receipt.ts; spec/sync-hold-receipt-v1.md).
+  { file: R + "sync-hold-receipt.ts", fn: "readHeldEvents", param: "owner" },
   { file: R + "subscriptions.ts", fn: "setSubscriptionStatus", param: "owner" },
   { file: R + "migration.ts", fn: "updateMigrationState", param: "owner" },
   { file: R + "migration.ts", fn: "commitDeparture", param: "owner" },
