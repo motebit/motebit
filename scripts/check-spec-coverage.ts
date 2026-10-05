@@ -86,13 +86,7 @@ const PENDING_RENDERING = "pending decision";
  * entry whose spec now carries a valid status (or names no spec) fails as
  * stale. Never add to this map to get green.
  */
-const PENDING_STATUS_DECISION: Record<string, string> = {
-  "agent-revocation-v1.md": "no Status line; maturity is a founder decision",
-  "bond-v1.md": "no Status line; maturity is a founder decision",
-  "evidence-provenance-v1.md": "no Status line; maturity is a founder decision",
-  "machine-roster-v1.md": "no Status line; maturity is a founder decision",
-  "settlement-invoice-v1.md": "converged is not a status; Stable vs Draft is a founder decision",
-};
+const PENDING_STATUS_DECISION: Record<string, string> = {};
 
 /** An index entry: `- [name](name) · Status: <Word | pending decision> · purpose`. */
 const INDEX_ENTRY = /^-\s+\[([^\]]+)\]\(([^)]+)\)\s+·\s+Status:\s+(pending decision|\S+)\s+·\s+\S/;

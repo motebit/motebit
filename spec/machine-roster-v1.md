@@ -1,5 +1,7 @@
 # motebit/machine-roster@1.0
 
+**Status:** Draft
+
 A motebit's **machine roster** — the set of machines that host its unattended
 work, signed by the motebit and only ever transported by a relay. This spec
 defines the two wire artifacts, `HostEnrollment` and `HostRetirement`, and the
