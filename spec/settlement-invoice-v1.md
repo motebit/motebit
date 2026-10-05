@@ -1,6 +1,6 @@
 # motebit/settlement-invoice@1.0
 
-**Status:** converged (agency.computer forcing-consumer review, 2026-06-28 — shape accepted wholesale; three catches + two notes folded). Pending the gated-surface build (the two mandated digest helpers + protocol types + `@motebit/crypto` sign/verify + `@motebit/verifier` re-export + wire-schemas).
+**Status:** Draft — shape converged (agency.computer forcing-consumer review, 2026-06-28 — shape accepted wholesale; three catches + two notes folded). Pending the gated-surface build (the two mandated digest helpers + protocol types + `@motebit/crypto` sign/verify + `@motebit/verifier` re-export + wire-schemas).
 
 ## 1. Purpose
 

@@ -1,5 +1,7 @@
 # motebit/bond@1.0
 
+**Status:** Draft
+
 An agent's **commitment bond** — its own sovereign capital, posted as a
 self-signed proof-of-funds and RPC-verified by the relay, never custodied. This
 spec defines the `BondCommitment` wire artifact and the law that makes it an
