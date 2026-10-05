@@ -11,6 +11,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { computeP2pFeeMicro } from "@motebit/sdk";
+import { memoryTaskSpend } from "@motebit/molecule-runner";
+import type { TaskSpend } from "@motebit/molecule-runner";
 
 const mockCreate = vi.fn();
 vi.mock("@anthropic-ai/sdk", () => ({
@@ -715,5 +717,190 @@ describe("paid-spend budget — money that left the wallet is bounded", () => {
     const result = await research("question", config({ paidSubDelegate: market.seam }));
     expect(market.state.liveCalls).toBe(8);
     expect(result.search_count).toBe(8);
+  });
+});
+
+describe("paid-spend budget — ledger and seam failures degrade conservatively", () => {
+  let logs: string[];
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    mockCreate.mockReset();
+    logs = [];
+    logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
+  });
+  afterEach(() => {
+    logSpy.mockRestore();
+  });
+
+  /** The tool_result blocks the model was shown, in order. */
+  function toolResults(): Array<{ content: string; is_error?: boolean }> {
+    return mockCreate.mock.calls
+      .flatMap((c) => (c[0] as { messages: Array<{ content: unknown }> }).messages)
+      .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+      .filter((b: { type?: string }) => b.type === "tool_result") as Array<{
+      content: string;
+      is_error?: boolean;
+    }>;
+  }
+
+  it("a ledger whose reserve throws (a non-Error) reserves nothing: the hop is skipped, never paid", async () => {
+    const market = fakeMarket();
+    modelWantsSearches(1);
+    const ledger: TaskSpend = {
+      reserve: () => {
+        throw "ledger unreadable"; // eslint-disable-line @typescript-eslint/only-throw-error
+      },
+      settle: () => {},
+      committedMicro: () => 0,
+    };
+    const result = await research(
+      "question",
+      config({
+        paidSubDelegate: market.seam,
+        paidSpendBudgetMicro: DEFAULT_BUDGET,
+        paidSpendLedger: ledger,
+      }),
+    );
+    expect(market.state.quotes).toBe(1);
+    expect(market.state.liveCalls).toBe(0);
+    expect(result.paid_spend_micro).toBe(0);
+    expect(logs.some((l) => l.includes("spend ledger reserve FAILED: ledger unreadable"))).toBe(
+      true,
+    );
+    expect(toolResults()[0]!.content).toMatch(/paid-call budget is exhausted/);
+    expect(result.report).toBe(REPORT);
+  });
+
+  it("a ledger whose settle throws keeps the hold charged in full: the next hop is skipped", async () => {
+    const market = fakeMarket();
+    modelWantsSearches(2);
+    const inner = memoryTaskSpend();
+    const ledger: TaskSpend = {
+      reserve: (b, m) => inner.reserve(b, m),
+      settle: () => {
+        throw new Error("ledger write failed");
+      },
+      committedMicro: () => inner.committedMicro(),
+    };
+    const result = await research(
+      "question",
+      config({
+        paidSubDelegate: market.seam,
+        paidSpendBudgetMicro: DEFAULT_BUDGET,
+        paidSpendLedger: ledger,
+      }),
+    );
+    // The first hop was paid and delivered; its unsettled hold still holds the
+    // whole remainder, so the second hop finds no budget left.
+    expect(market.state.liveCalls).toBe(1);
+    expect(result.search_count).toBe(1);
+    expect(result.paid_spend_micro).toBe(SEARCH_OUTFLOW_MICRO);
+    expect(inner.committedMicro()).toBe(DEFAULT_BUDGET);
+    expect(logs.some((l) => l.includes("spend ledger settle FAILED: ledger write failed"))).toBe(
+      true,
+    );
+    expect(toolResults().at(-1)!.content).toMatch(/paid-call budget is exhausted/);
+  });
+
+  it("unbudgeted: a settle that throws a non-Error never breaks the hop, and spend is still reported", async () => {
+    const market = fakeMarket();
+    modelWantsSearches(2);
+    const ledger: TaskSpend = {
+      reserve: () => null,
+      settle: () => {
+        throw "settle refused"; // eslint-disable-line @typescript-eslint/only-throw-error
+      },
+      committedMicro: () => 0,
+    };
+    const result = await research(
+      "question",
+      config({ paidSubDelegate: market.seam, paidSpendLedger: ledger }),
+    );
+    expect(market.state.liveCalls).toBe(2);
+    expect(result.search_count).toBe(2);
+    expect(result.paid_spend_micro).toBe(2 * SEARCH_OUTFLOW_MICRO);
+    expect(
+      logs.filter((l) => l.includes("spend ledger settle FAILED: settle refused")),
+    ).toHaveLength(2);
+  });
+
+  it("unbudgeted, unreadable ledger: a paid-then-failed hop with no code reports this run's own spend", async () => {
+    modelWantsSearches(1);
+    const seam: PaidSubDelegate = async () => ({
+      ok: false,
+      settledPayment: {
+        txHash: "tx-1",
+        paidMicro: SEARCH_NET_MICRO,
+        feeMicro: SEARCH_FEE_MICRO,
+        taskId: "t-1",
+      },
+    });
+    const inner = memoryTaskSpend();
+    const ledger: TaskSpend = {
+      reserve: (b, m) => inner.reserve(b, m),
+      settle: (h, a) => inner.settle(h, a),
+      committedMicro: () => {
+        throw new Error("ledger unreadable");
+      },
+    };
+    const result = await research(
+      "question",
+      config({ paidSubDelegate: seam, paidSpendLedger: ledger }),
+    );
+    // No budget to fall back on: the committed figure is this run's own outflow,
+    // and the log carries no "/budget" suffix.
+    const line = logs.find((l) => l.includes("paid-then-FAILED"));
+    expect(line).toContain(
+      `code=unknown moved=${SEARCH_OUTFLOW_MICRO} spent=${SEARCH_OUTFLOW_MICRO}`,
+    );
+    expect(line).not.toMatch(/spent=\d+\//);
+    expect(toolResults()[0]).toEqual(
+      expect.objectContaining({
+        content: "paid delegation to motebit_web_search was paid but did not deliver (unknown)",
+        is_error: true,
+      }),
+    );
+    expect(result.paid_spend_micro).toBe(SEARCH_OUTFLOW_MICRO);
+    expect(inner.committedMicro()).toBe(SEARCH_OUTFLOW_MICRO);
+  });
+
+  it("unbudgeted: a live hop refused budget_exceeded before money moved reports no remaining ceiling", async () => {
+    modelWantsSearches(1);
+    const seam: PaidSubDelegate = async () => ({ ok: false, code: "budget_exceeded" });
+    const result = await research("question", config({ paidSubDelegate: seam }));
+    expect(
+      logs.some((l) => l.includes("BUDGET REFUSED pre-sign") && l.includes("remaining=unbudgeted")),
+    ).toBe(true);
+    expect(toolResults()[0]!.content).toMatch(/price exceeds what remains/);
+    expect(result.paid_spend_micro).toBe(0);
+  });
+
+  it("unbudgeted: a live seam that throws charges nothing it cannot attribute and propagates", async () => {
+    modelWantsSearches(1);
+    const seam: PaidSubDelegate = async () => {
+      throw new Error("transport exploded");
+    };
+    const settle = vi.fn();
+    const ledger: TaskSpend = { reserve: () => null, settle, committedMicro: () => 0 };
+    await expect(
+      research("question", config({ paidSubDelegate: seam, paidSpendLedger: ledger })),
+    ).rejects.toThrow("transport exploded");
+    // No hold was taken and no amount is known: nothing is written to the ledger.
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it("a unit cost too large for an exact integer micro amount refuses the boot", () => {
+    // 1e11 USD ⇒ 1e17 micro, past Number.MAX_SAFE_INTEGER: not representable exactly.
+    expect(parseUnitCostMicro("100000000000")).toBeNull();
+    expect(
+      paidSpendBudgetConfigError({
+        unitCostRaw: "100000000000",
+        maxToolCalls: 8,
+        marginBps: 500,
+        llmReserveMicro: 171_300,
+      }),
+    ).toMatch(/MOTEBIT_UNIT_COST/);
   });
 });
