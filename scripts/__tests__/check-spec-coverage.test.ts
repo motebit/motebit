@@ -14,7 +14,8 @@
  *       the pending list;
  *   (b) no Status line at all, not on the pending list;
  *   (c) a `PENDING_STATUS_DECISION` entry whose spec now carries a valid
- *       status — a stale entry, so the list only ever shrinks.
+ *       status — a stale entry, so the list only ever shrinks. The list is
+ *       empty today, so this case re-adds an entry to the gate itself.
  *
  * They drive the real gate over the real repo, perturbing files through
  * `repo-file-mutation.ts` (backup outside the tree, one perturbation at a time).
@@ -85,12 +86,21 @@ describe("check-spec-coverage — closed status vocabulary", () => {
     expect(out).toMatch(/no `\*\*Status:\*\*` line/);
   });
 
-  it("(c) goes RED when a pending spec gains a valid Status but stays on PENDING_STATUS_DECISION", async () => {
-    expect(STATUS_LINE.test(readFileSync(PENDING_SPEC, "utf8"))).toBe(false);
+  it("(c) goes RED when a spec carrying a valid Status is (re-)added to PENDING_STATUS_DECISION", async () => {
+    expect(STATUS_LINE.test(readFileSync(PENDING_SPEC, "utf8"))).toBe(true);
+    const empty = "const PENDING_STATUS_DECISION: Record<string, string> = {};";
     const { code, out } = await withRepoFileReplaced(
-      PENDING_SPEC,
-      (src) => src.replace(/^(# .*\n)/, "$1\n**Status:** Draft\n"),
-      () => withRepoFileReplaced(README, readmeWithStatus("bond-v1.md", "Draft"), runGate),
+      SCRIPT,
+      (src) => {
+        if (!src.includes(empty))
+          throw new Error("PENDING_STATUS_DECISION is not the empty literal");
+        return src.replace(
+          empty,
+          'const PENDING_STATUS_DECISION: Record<string, string> = { "bond-v1.md": "probe" };',
+        );
+      },
+      () =>
+        withRepoFileReplaced(README, readmeWithStatus("bond-v1.md", "pending decision"), runGate),
     );
     expect(code, out).toBe(1);
     expect(out).toMatch(/stale PENDING_STATUS_DECISION/);
