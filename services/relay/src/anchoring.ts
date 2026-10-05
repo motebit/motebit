@@ -33,6 +33,11 @@ import {
 } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import {
+  anchorSubmitErrorIsQuiet,
+  anchorSubmitPacerFor,
+  drainAnchorBacklog,
+} from "./anchor-submit-pacing.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 /** Cryptosuite for the per-agent settlement anchor batch + proof artifacts.
@@ -326,10 +331,13 @@ export async function submitAnchorOnChain(
   if (!batch) return true; // already submitted or doesn't exist
 
   try {
-    const result = await submitter.submitMerkleRoot(
-      batch.merkle_root,
-      batch.relay_id,
-      batch.leaf_count,
+    // Paced (anchor-submit-pacing.ts): serialized with every other anchoring
+    // stream on this submitter, refused without an RPC call while the shared
+    // backoff holds.
+    const result = await anchorSubmitPacerFor(submitter).submit(
+      "federation-settlement",
+      batchId,
+      () => submitter.submitMerkleRoot(batch.merkle_root, batch.relay_id, batch.leaf_count),
     );
     const now = Date.now();
 
@@ -346,6 +354,9 @@ export async function submitAnchorOnChain(
 
     return true;
   } catch (err: unknown) {
+    // A deferral made no RPC call; a rate-limit / deterministic failure was
+    // already logged once by the pacer. Neither repeats per batch.
+    if (anchorSubmitErrorIsQuiet(submitter, err)) return false;
     const message = err instanceof Error ? err.message : String(err);
     logger.warn("anchoring.chain_submit_error", { batch_id: batchId, error: message });
     return false;
@@ -393,9 +404,8 @@ export function startBatchAnchorLoop(
         if (countRow.cnt === 0) return;
 
         // Trigger 1: count threshold
-        let batch: AnchorRecord | null = null;
         if (countRow.cnt >= maxSize) {
-          batch = await cutBatch(db, relayIdentity, maxSize);
+          await cutBatch(db, relayIdentity, maxSize);
         } else {
           // Trigger 2: time threshold — check oldest unanchored settlement
           const oldest = db
@@ -405,26 +415,27 @@ export function startBatchAnchorLoop(
             .get() as { oldest: number | null };
 
           if (oldest.oldest != null && Date.now() - oldest.oldest >= intervalMs) {
-            batch = await cutBatch(db, relayIdentity, maxSize);
+            await cutBatch(db, relayIdentity, maxSize);
           }
         }
 
-        // Attempt on-chain submission for newly cut batch
-        if (batch && submitter) {
-          await submitAnchorOnChain(db, batch.batch_id, submitter);
-        }
-
-        // Retry previously failed submissions
+        // Submit signed-but-unconfirmed batches — the newly cut one included —
+        // oldest first, paced (anchor-submit-pacing.ts): a capped number per
+        // tick, stopping at the first rate-limit / unavailable / deterministic
+        // failure. The rest stay signed for a later tick; nothing is dropped
+        // or reordered.
         if (submitter) {
-          const failedBatches = db
+          const signedBatches = db
             .prepare(
-              "SELECT batch_id FROM relay_anchor_batches WHERE status = 'signed' AND tx_hash IS NULL",
+              "SELECT batch_id FROM relay_anchor_batches WHERE status = 'signed' AND tx_hash IS NULL ORDER BY created_at ASC, rowid ASC",
             )
             .all() as { batch_id: string }[];
 
-          for (const fb of failedBatches) {
-            await submitAnchorOnChain(db, fb.batch_id, submitter);
-          }
+          await drainAnchorBacklog(
+            submitter,
+            signedBatches.map((b) => b.batch_id),
+            (id) => submitAnchorOnChain(db, id, submitter),
+          );
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -767,10 +778,11 @@ export async function submitAgentAnchorOnChain(
   if (!batch) return true;
 
   try {
-    const result = await submitter.submitMerkleRoot(
-      batch.merkle_root,
-      batch.relay_id,
-      batch.leaf_count,
+    // Paced (anchor-submit-pacing.ts): serialized with every other anchoring
+    // stream on this submitter, refused without an RPC call while the shared
+    // backoff holds.
+    const result = await anchorSubmitPacerFor(submitter).submit("agent-settlement", batchId, () =>
+      submitter.submitMerkleRoot(batch.merkle_root, batch.relay_id, batch.leaf_count),
     );
     const now = Date.now();
 
@@ -787,6 +799,9 @@ export async function submitAgentAnchorOnChain(
 
     return true;
   } catch (err: unknown) {
+    // A deferral made no RPC call; a rate-limit / deterministic failure was
+    // already logged once by the pacer. Neither repeats per batch.
+    if (anchorSubmitErrorIsQuiet(submitter, err)) return false;
     const message = err instanceof Error ? err.message : String(err);
     logger.warn("anchoring.agent_chain_submit_error", { batch_id: batchId, error: message });
     return false;
@@ -930,10 +945,9 @@ export function startAgentSettlementAnchorLoop(
 
         if (countRow.cnt === 0) return;
 
-        let batch: AnchorRecord | null = null;
         if (countRow.cnt >= maxSize) {
           // Trigger 1: count threshold
-          batch = await cutAgentSettlementBatch(db, relayIdentity, maxSize);
+          await cutAgentSettlementBatch(db, relayIdentity, maxSize);
         } else {
           // Trigger 2: time threshold — check oldest unanchored signed settlement
           const oldest = db
@@ -943,26 +957,27 @@ export function startAgentSettlementAnchorLoop(
             .get() as { oldest: number | null };
 
           if (oldest.oldest != null && Date.now() - oldest.oldest >= intervalMs) {
-            batch = await cutAgentSettlementBatch(db, relayIdentity, maxSize);
+            await cutAgentSettlementBatch(db, relayIdentity, maxSize);
           }
         }
 
-        // Attempt onchain submission for newly cut batch
-        if (batch && submitter) {
-          await submitAgentAnchorOnChain(db, batch.batch_id, submitter);
-        }
-
-        // Retry previously failed submissions
+        // Submit signed-but-unconfirmed batches — the newly cut one included —
+        // oldest first, paced (anchor-submit-pacing.ts): a capped number per
+        // tick, stopping at the first rate-limit / unavailable / deterministic
+        // failure. The rest stay signed for a later tick; nothing is dropped
+        // or reordered.
         if (submitter) {
-          const failedBatches = db
+          const signedBatches = db
             .prepare(
-              "SELECT batch_id FROM relay_agent_anchor_batches WHERE status = 'signed' AND tx_hash IS NULL",
+              "SELECT batch_id FROM relay_agent_anchor_batches WHERE status = 'signed' AND tx_hash IS NULL ORDER BY created_at ASC, rowid ASC",
             )
             .all() as { batch_id: string }[];
 
-          for (const fb of failedBatches) {
-            await submitAgentAnchorOnChain(db, fb.batch_id, submitter);
-          }
+          await drainAnchorBacklog(
+            submitter,
+            signedBatches.map((b) => b.batch_id),
+            (id) => submitAgentAnchorOnChain(db, id, submitter),
+          );
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

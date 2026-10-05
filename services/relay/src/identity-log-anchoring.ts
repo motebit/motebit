@@ -25,6 +25,11 @@ import { createLogger } from "./logger.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 import { buildIdentityLog, type IdentityBinding } from "./identity-log.js";
 import { readIdentityBindings } from "./identity-transparency.js";
+import {
+  anchorSubmitErrorIsQuiet,
+  anchorSubmitPacerFor,
+  drainAnchorBacklog,
+} from "./anchor-submit-pacing.js";
 
 const logger = createLogger({ service: "relay", module: "identity-log-anchoring" });
 
@@ -181,10 +186,10 @@ export async function submitIdentityLogAnchorOnChain(
   if (!anchor) return true; // already submitted or doesn't exist
 
   try {
-    const result = await submitter.submitMerkleRoot(
-      anchor.merkle_root,
-      anchor.relay_id,
-      anchor.leaf_count,
+    // Paced: serialized with every other anchoring stream on this submitter,
+    // refused without an RPC call while the shared backoff holds.
+    const result = await anchorSubmitPacerFor(submitter).submit("identity-log", anchorId, () =>
+      submitter.submitMerkleRoot(anchor.merkle_root, anchor.relay_id, anchor.leaf_count),
     );
     db.prepare(
       "UPDATE relay_identity_log_anchors SET tx_hash = ?, network = ?, anchored_at = ?, status = 'confirmed' WHERE anchor_id = ?",
@@ -198,6 +203,9 @@ export async function submitIdentityLogAnchorOnChain(
     });
     return true;
   } catch (err: unknown) {
+    // A deferral made no RPC call; a rate-limit / deterministic failure was
+    // already logged once by the pacer. Neither repeats per anchor.
+    if (anchorSubmitErrorIsQuiet(submitter, err)) return false;
     logger.warn("identity_log.anchor_submit_error", {
       anchor_id: anchorId,
       error: err instanceof Error ? err.message : String(err),
@@ -328,16 +336,22 @@ export async function runIdentityLogAnchorTick(
   const intervalMs = config.intervalMs ?? DEFAULT_IDENTITY_ANCHOR_INTERVAL_MS;
   const submitter = config.submitter;
 
-  // Retry anchors that were signed but never confirmed on-chain.
+  // Retry anchors that were signed but never confirmed on-chain — oldest first,
+  // paced (anchor-submit-pacing.ts): a capped number per tick, stopping at the
+  // first rate-limit / unavailable / deterministic failure. The rest stay
+  // pending for a later tick; nothing is dropped or reordered.
+  let attempted = 0;
   if (submitter) {
     const pending = db
       .prepare(
-        "SELECT anchor_id FROM relay_identity_log_anchors WHERE status = 'signed' AND tx_hash IS NULL",
+        "SELECT anchor_id FROM relay_identity_log_anchors WHERE status = 'signed' AND tx_hash IS NULL ORDER BY created_at ASC, rowid ASC",
       )
       .all() as { anchor_id: string }[];
-    for (const p of pending) {
-      await submitIdentityLogAnchorOnChain(db, p.anchor_id, submitter);
-    }
+    ({ attempted } = await drainAnchorBacklog(
+      submitter,
+      pending.map((p) => p.anchor_id),
+      (id) => submitIdentityLogAnchorOnChain(db, id, submitter),
+    ));
   }
 
   // Build under the producer's version so the root matches what `anchorIdentityLog`
@@ -359,7 +373,14 @@ export async function runIdentityLogAnchorTick(
 
   const anchor = await anchorIdentityLog(db, relayIdentity);
   if (anchor && submitter) {
-    await submitIdentityLogAnchorOnChain(db, anchor.anchor_id, submitter);
+    // The fresh cut joins the backlog's pacing: submitted now only if this
+    // cycle is not held; otherwise it stays signed for a later tick.
+    await drainAnchorBacklog(
+      submitter,
+      [anchor.anchor_id],
+      (id) => submitIdentityLogAnchorOnChain(db, id, submitter),
+      attempted,
+    );
   }
 }
 

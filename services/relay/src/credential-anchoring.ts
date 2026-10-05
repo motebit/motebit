@@ -26,6 +26,11 @@ import {
 } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import {
+  anchorSubmitErrorIsQuiet,
+  anchorSubmitPacerFor,
+  drainAnchorBacklog,
+} from "./anchor-submit-pacing.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 const logger = createLogger({ service: "relay", module: "credential-anchoring" });
@@ -273,10 +278,11 @@ export async function submitCredentialAnchorOnChain(
   if (!batch) return true; // already submitted or doesn't exist
 
   try {
-    const result = await submitter.submitMerkleRoot(
-      batch.merkle_root,
-      batch.relay_id,
-      batch.leaf_count,
+    // Paced (anchor-submit-pacing.ts): serialized with every other anchoring
+    // stream on this submitter, refused without an RPC call while the shared
+    // backoff holds.
+    const result = await anchorSubmitPacerFor(submitter).submit("credential", batchId, () =>
+      submitter.submitMerkleRoot(batch.merkle_root, batch.relay_id, batch.leaf_count),
     );
     const now = Date.now();
 
@@ -295,6 +301,9 @@ export async function submitCredentialAnchorOnChain(
 
     return true;
   } catch (err: unknown) {
+    // A deferral made no RPC call; a rate-limit / deterministic failure was
+    // already logged once by the pacer. Neither repeats per batch.
+    if (anchorSubmitErrorIsQuiet(submitter, err)) return false;
     const message = err instanceof Error ? err.message : String(err);
     logger.warn("credential_anchoring.chain_submit_error", { batch_id: batchId, error: message });
     return false;
@@ -333,9 +342,8 @@ export function startCredentialAnchorLoop(
         if (countRow.cnt === 0) return;
 
         // Trigger 1: count threshold
-        let batch: CredentialAnchorRecord | null = null;
         if (countRow.cnt >= maxSize) {
-          batch = await cutCredentialBatch(db, relayIdentity, maxSize);
+          await cutCredentialBatch(db, relayIdentity, maxSize);
         } else {
           // Trigger 2: time threshold
           const oldest = db
@@ -345,26 +353,27 @@ export function startCredentialAnchorLoop(
             .get() as { oldest: number | null };
 
           if (oldest.oldest != null && Date.now() - oldest.oldest >= intervalMs) {
-            batch = await cutCredentialBatch(db, relayIdentity, maxSize);
+            await cutCredentialBatch(db, relayIdentity, maxSize);
           }
         }
 
-        // Submit newly cut batch onchain
-        if (batch && submitter) {
-          await submitCredentialAnchorOnChain(db, batch.batch_id, submitter);
-        }
-
-        // Retry previously failed submissions
+        // Submit signed-but-unconfirmed batches — the newly cut one included —
+        // oldest first, paced (anchor-submit-pacing.ts): a capped number per
+        // tick, stopping at the first rate-limit / unavailable / deterministic
+        // failure. The rest stay signed for a later tick; nothing is dropped
+        // or reordered.
         if (submitter) {
-          const failedBatches = db
+          const signedBatches = db
             .prepare(
-              "SELECT batch_id FROM relay_credential_anchor_batches WHERE status = 'signed' AND tx_hash IS NULL",
+              "SELECT batch_id FROM relay_credential_anchor_batches WHERE status = 'signed' AND tx_hash IS NULL ORDER BY created_at ASC, rowid ASC",
             )
             .all() as { batch_id: string }[];
 
-          for (const fb of failedBatches) {
-            await submitCredentialAnchorOnChain(db, fb.batch_id, submitter);
-          }
+          await drainAnchorBacklog(
+            submitter,
+            signedBatches.map((b) => b.batch_id),
+            (id) => submitCredentialAnchorOnChain(db, id, submitter),
+          );
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
