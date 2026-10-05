@@ -360,7 +360,12 @@ export function matrixIsCompleteShardList(strategy: unknown): boolean {
 export const CI_JOB_STEPS: Record<string, Step[]> = {
   check: [
     {
+      // Full history so check-cli-surface can resolve the merge-base; it
+      // checks out the same commit, so it cannot change what a counterpart tests.
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        "fetch-depth": 0,
+      },
     },
     {
       uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
