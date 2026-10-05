@@ -261,6 +261,96 @@ describe("check-service-truth", () => {
     });
   });
 
+  // Cold review R6 (2026-10-05): `process.env["MOTEBIT_UNIT_COST"] ??= "0.30"`
+  // at the top of main() (or in a helper module) stayed GREEN while research
+  // listed $0.30 against $0.25 in pricing.ts and the docs — a coded default
+  // smuggled in through the environment, the exact accidental pattern origin/main
+  // used. Deny by default, for EVERY service: the runner is the variable's only
+  // reader, and a service's sources never write process.env.
+  describe("R6: no service names MOTEBIT_UNIT_COST or writes process.env", () => {
+    const atTop = (stmt: string) =>
+      swap(
+        ENTRY,
+        "async function main(): Promise<void> {\n",
+        `async function main(): Promise<void> {\n  ${stmt}\n`,
+      );
+    const NAMES = (file: string) =>
+      new RegExp(`services/research/src/${file}:\\d+: names MOTEBIT_UNIT_COST`);
+    const WRITES = (file: string) =>
+      new RegExp(`services/research/src/${file}:\\d+: writes process\\.env`);
+
+    it("`??=` in index.ts is RED (names the variable and writes the env)", async () => {
+      const v = await research({ src: atTop(`process.env["MOTEBIT_UNIT_COST"] ??= "0.30";`) });
+      expect(v).toMatch(NAMES("index\\.ts"));
+      expect(v).toMatch(WRITES("index\\.ts"));
+    });
+    it("`??=` in a helper module the entry imports is RED", async () => {
+      const v = await research({
+        src: entry(CONFIG, `import "./helpers.js";\n`),
+        files: { "helpers.ts": `process.env["MOTEBIT_UNIT_COST"] ??= "0.30";\nexport {};\n` },
+      });
+      expect(v).toMatch(NAMES("helpers\\.ts"));
+      expect(v).toMatch(WRITES("helpers\\.ts"));
+    });
+    it("plain assignment and Object.assign of the variable are RED", async () => {
+      for (const stmt of [
+        `process.env.MOTEBIT_UNIT_COST = "0.30";`,
+        `Object.assign(process.env, { MOTEBIT_UNIT_COST: "0.30" });`,
+      ]) {
+        const v = await research({ src: atTop(stmt) });
+        expect(v, stmt).toMatch(NAMES("index\\.ts"));
+        expect(v, stmt).toMatch(WRITES("index\\.ts"));
+      }
+    });
+    it("a string or template literal naming the variable is RED, even without a write", async () => {
+      for (const stmt of [
+        `const k = "MOTEBIT_UNIT_COST"; void k;`,
+        "const k = `MOTEBIT_UNIT_COST`; void k;",
+        "const k = `${'x'}MOTEBIT_UNIT_COST`; void k;",
+        `const o = { MOTEBIT_UNIT_COST: 1 }; void o;`,
+      ]) {
+        const v = await research({ src: atTop(stmt) });
+        expect(v, stmt).toMatch(NAMES("index\\.ts"));
+        expect(v, stmt).not.toMatch(WRITES("index\\.ts"));
+      }
+    });
+    it("a write of an unrelated env key is RED, in every write form", async () => {
+      for (const stmt of [
+        `process.env.FOO = "1";`,
+        `process.env["FOO"] ||= "1";`,
+        `process.env.FOO += "1";`,
+        `delete process.env.FOO;`,
+        `process.env = {};`,
+        `Object.assign(process.env, { FOO: "1" });`,
+        `Object.defineProperty(process.env, "FOO", { value: "1" });`,
+        `Reflect.set(process.env, "FOO", "1");`,
+        `(process.env as Record<string, string>)["FOO"] = "1";`,
+      ]) {
+        const v = await research({ src: atTop(stmt) });
+        expect(v, stmt).toMatch(WRITES("index\\.ts"));
+        expect(v, stmt).not.toMatch(NAMES("index\\.ts"));
+      }
+    });
+    it("applies to market:false services too", async () => {
+      const s = baseServices();
+      s["relay"] = { ...s["relay"]!, src: `process.env.FOO = "1";\nexport {};\n` };
+      expect(await violations({ services: s })).toMatch(
+        /services\/relay\/src\/index\.ts:1: writes process\.env/,
+      );
+    });
+    it("is GREEN for a test file doing the same, for env reads, and for comments", async () => {
+      const both = `process.env["MOTEBIT_UNIT_COST"] ??= "0.30";\nprocess.env.FOO = "1";\nexport {};\n`;
+      expect(await research({ files: { "index.test.ts": both } })).toBe("");
+      expect(
+        await research({
+          src: atTop(
+            `// the runner applies MOTEBIT_UNIT_COST\n  const port = process.env["PORT"] ?? process.env.HOST; if (process.env.FOO === "1") void port;`,
+          ),
+        }),
+      ).toBe("");
+    });
+  });
+
   it("bites on a wrong role in the README bullets", async () => {
     const readme = swap(README, "- **Molecules** — `research`", "- **Atoms** — `research`");
     expect(await violations({ readme })).toMatch(

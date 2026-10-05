@@ -55,6 +55,15 @@
  *     R5 removed the next one (env in the price module) the same way. A
  *     `market: false` service reads no MOTEBIT_UNIT_COST, has no pricing.ts
  *     and never calls runMolecule.
+ *       (d) env discipline, EVERY service, by TypeScript AST of every non-test
+ *           source under src/: MOTEBIT_UNIT_COST is named nowhere in code
+ *           (identifier, property key, string or template literal — comments
+ *           are not code), and nothing writes process.env (assignment of any
+ *           operator incl. `??=`/`||=`, `++`/`--`, `delete`,
+ *           `Object.assign`/`defineProperty`/`Reflect.set` on it). Cold review
+ *           R6 (2026-10-05): `process.env["MOTEBIT_UNIT_COST"] ??= "0.30"` at
+ *           the top of main() (or in a helper) stayed green while research
+ *           listed $0.30 against the $0.25 its pricing.ts and docs state.
  *
  *   THREAT MODEL — what a green run claims, and what it cannot. This gate
  *   guards ACCIDENTAL drift between the price/unit/role the docs state and the
@@ -604,6 +613,111 @@ export function checkNonMarket(root: string, name: string, violations: string[])
   }
 }
 
+/** The operator override the runner alone reads (packages/molecule-runner/src/listing-price.ts). */
+export const OVERRIDE_KEY = "MOTEBIT_UNIT_COST";
+
+/** Is `e` `process.env` (also `process["env"]`, `globalThis.process.env`)? */
+function isProcessEnv(e: ts.Expression): boolean {
+  e = unwrap(e);
+  const key = ts.isPropertyAccessExpression(e)
+    ? e.name.text
+    : ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression)
+      ? e.argumentExpression.text
+      : null;
+  if (key !== "env") return false;
+  const obj = unwrap((e as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression);
+  return (
+    (ts.isIdentifier(obj) && obj.text === "process") ||
+    (ts.isPropertyAccessExpression(obj) &&
+      obj.name.text === "process" &&
+      ts.isIdentifier(obj.expression) &&
+      obj.expression.text === "globalThis")
+  );
+}
+
+/** Is `e` `process.env` or one of its members — an assignment target that writes the env? */
+function targetsEnv(e: ts.Expression): boolean {
+  e = unwrap(e);
+  return (
+    isProcessEnv(e) ||
+    ((ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) &&
+      isProcessEnv(e.expression))
+  );
+}
+
+/** `Object.*` / `Reflect.*` calls that mutate their first argument. */
+const MUTATORS: Record<string, readonly string[]> = {
+  Object: ["assign", "defineProperty", "defineProperties", "setPrototypeOf"],
+  Reflect: ["set", "defineProperty", "deleteProperty", "setPrototypeOf"],
+};
+
+/** How `n` writes process.env, or null when it does not. */
+function envWrite(sf: ts.SourceFile, n: ts.Node): string | null {
+  if (
+    ts.isBinaryExpression(n) &&
+    n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+    n.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+    targetsEnv(n.left)
+  )
+    return `\`${n.left.getText(sf)} ${n.operatorToken.getText(sf)} …\``;
+  if (
+    (ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) &&
+    (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken) &&
+    targetsEnv(n.operand)
+  )
+    return `\`${n.getText(sf)}\``;
+  if (ts.isDeleteExpression(n) && targetsEnv(n.expression)) return `\`${n.getText(sf)}\``;
+  if (ts.isCallExpression(n) && n.arguments[0] != null && isProcessEnv(n.arguments[0])) {
+    const c = unwrap(n.expression);
+    if (
+      ts.isPropertyAccessExpression(c) &&
+      ts.isIdentifier(c.expression) &&
+      (MUTATORS[c.expression.text] ?? []).includes(c.name.text)
+    )
+      return `\`${c.getText(sf)}(${n.arguments[0].getText(sf)}, …)\``;
+  }
+  return null;
+}
+
+/**
+ * EVERY service (market or not), every non-test source under src/: names
+ * MOTEBIT_UNIT_COST nowhere in code — identifier, property key, string or
+ * template literal (comments are not code) — and never writes process.env.
+ * Cold review R6 (2026-10-05): `process.env["MOTEBIT_UNIT_COST"] ??= "0.30"`
+ * at the top of main() kept this gate green while the service listed $0.30
+ * against the $0.25 its pricing.ts and docs state — a coded default smuggled
+ * in through the environment. The runner is the variable's only reader; the
+ * environment is the operator's input, never a service's output. Deliberate
+ * obfuscation (computed keys, strings built at runtime, an aliased env object)
+ * is outside the threat model (accidental drift).
+ */
+export function checkEnvDiscipline(root: string, name: string, violations: string[]): void {
+  for (const f of listSourceFiles(join(root, "services", name, "src"))) {
+    const sf = parse(f);
+    const at = (n: ts.Node) => `${relative(root, f)}:${lineOf(sf, n)}`;
+    walk(sf, (n) => {
+      const text =
+        ts.isIdentifier(n) ||
+        ts.isPrivateIdentifier(n) ||
+        ts.isStringLiteralLike(n) ||
+        ts.isTemplateHead(n) ||
+        ts.isTemplateMiddle(n) ||
+        ts.isTemplateTail(n)
+          ? n.text
+          : null;
+      if (text?.includes(OVERRIDE_KEY))
+        violations.push(
+          `${at(n)}: names ${OVERRIDE_KEY} — a service's code never names it; the runner alone reads and validates it (${RUNNER_RULE}), and the service's default is the literal LISTING_PRICE in ${PRICING}`,
+        );
+      const w = envWrite(sf, n);
+      if (w != null)
+        violations.push(
+          `${at(n)}: writes process.env (${w}) — a service never writes the environment (a write there is a default no doc or gate sees); pass the value as an argument or config field, or set it in .env.example / the deployment`,
+        );
+    });
+  }
+}
+
 /**
  * The entry this gate reads must be the one the deploy boots: a Dockerfile's
  * CMD and package.json `start` (when present) run `node dist/index.js`, the
@@ -683,6 +797,7 @@ export async function readServices(root: string, violations: string[]): Promise<
   const dir = join(root, "services");
   const out: ServiceTruth[] = [];
   for (const name of serviceDirs(root)) {
+    checkEnvDiscipline(root, name, violations);
     const pkgPath = join(dir, name, "package.json");
     if (!existsSync(pkgPath)) {
       violations.push(`services/${name}: no package.json, so no \`motebit\` service metadata`);
@@ -1027,17 +1142,17 @@ async function main(): Promise<void> {
   const r = await evaluate(root);
   if (r.violations.length > 0) {
     failWithRepair({
-      invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price`,
+      invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price, or a service's code names MOTEBIT_UNIT_COST / writes process.env`,
       sites: r.violations,
       canonical:
-        "role/identity/market: the `motebit` block in services/<name>/package.json; price: the literal `LISTING_PRICE = { capabilities, unit_cost, per }` in services/<name>/src/pricing.ts (data — it cannot read the environment), which main() must pass runMolecule as exactly `pricing: LISTING_PRICE`; the runner alone applies MOTEBIT_UNIT_COST (packages/molecule-runner/src/listing-price.ts, refusing a malformed value) and refuses a listing that brings its own price",
-      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A market service: keep its price in src/pricing.ts as `export const LISTING_PRICE: ListingPriceSpec = { capabilities: [...], unit_cost: <number>, per: <unit string> }` — literals only, no env reads (the runner applies MOTEBIT_UNIT_COST) — and call runMolecule once in src/index.ts with `pricing: LISTING_PRICE` after any spread, naming LISTING_PRICE nowhere else; never put `pricing` in getServiceListing. .env.example states the coded default. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
+        "role/identity/market: the `motebit` block in services/<name>/package.json; price: the literal `LISTING_PRICE = { capabilities, unit_cost, per }` in services/<name>/src/pricing.ts (data — it cannot read the environment), which main() must pass runMolecule as exactly `pricing: LISTING_PRICE`; the runner alone reads MOTEBIT_UNIT_COST — no service source names it or writes process.env — and applies it (packages/molecule-runner/src/listing-price.ts, refusing a malformed value) and refuses a listing that brings its own price",
+      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A market service: keep its price in src/pricing.ts as `export const LISTING_PRICE: ListingPriceSpec = { capabilities: [...], unit_cost: <number>, per: <unit string> }` — literals only, no env reads (the runner applies MOTEBIT_UNIT_COST) — and call runMolecule once in src/index.ts with `pricing: LISTING_PRICE` after any spread, naming LISTING_PRICE nowhere else; never put `pricing` in getServiceListing. .env.example states the coded default. A service source that names MOTEBIT_UNIT_COST or writes process.env: delete it — change the default in src/pricing.ts (and the docs), set an operator override in the deployment, and pass any other value as an argument or config field; tests (src/**/__tests__, *.test.*) may set env. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
       doctrine: "docs/drift-defenses.md (#173)",
     });
   }
   const market = r.services.filter((s) => s.market).length;
   console.log(
-    `✓ check-service-truth: ${r.services.length} services' metadata + coded listing prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and each market service's ${PRICING} LISTING_PRICE, which the TypeScript AST shows is literal data naming no process/globalThis/import.meta/require (it cannot read the environment); proves the runner's ${RUNNER_RULE} lists a spec unaltered, carries a sentinel MOTEBIT_UNIT_COST to every entry, and refuses ${MALFORMED_COSTS.length} malformed overrides (no NaN listing — a bad MOTEBIT_UNIT_COST refuses the boot); proves by TypeScript AST that each market service's ${ENTRY} — the file its Dockerfile CMD / start boots as dist/index.js — calls runMolecule exactly once with \`pricing: LISTING_PRICE\`, the price module imported by that file alone and named nowhere else (the runner lists only config pricing and refuses a getServiceListing carrying its own — molecule-runner listing-pricing.test.ts); market:false services read no MOTEBIT_UNIT_COST, have no pricing.ts and call no runMolecule. Nothing is executed but the runner's zero-import override rule: no server boots, no network, no ports. Threat model: guards ACCIDENTAL drift between documented and coded price/unit/role; it does not cover production MOTEBIT_UNIT_COST overrides or hand-edited deployments — the deployed listing is the one the service POSTs to the relay (signed market:listing token) and the relay serves; read the production price there. Not covered: other docs pages; "identity" is declared metadata, not verified against code.`,
+    `✓ check-service-truth: ${r.services.length} services' metadata + coded listing prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and each market service's ${PRICING} LISTING_PRICE, which the TypeScript AST shows is literal data naming no process/globalThis/import.meta/require (it cannot read the environment); proves the runner's ${RUNNER_RULE} lists a spec unaltered, carries a sentinel MOTEBIT_UNIT_COST to every entry, and refuses ${MALFORMED_COSTS.length} malformed overrides (no NaN listing — a bad MOTEBIT_UNIT_COST refuses the boot); proves by TypeScript AST that each market service's ${ENTRY} — the file its Dockerfile CMD / start boots as dist/index.js — calls runMolecule exactly once with \`pricing: LISTING_PRICE\`, the price module imported by that file alone and named nowhere else (the runner lists only config pricing and refuses a getServiceListing carrying its own — molecule-runner listing-pricing.test.ts); market:false services read no MOTEBIT_UNIT_COST, have no pricing.ts and call no runMolecule; and, by TypeScript AST of every non-test source under each of the ${r.services.length} services' src/, no code names MOTEBIT_UNIT_COST (identifier, key, string or template literal) and nothing writes process.env (assignment incl. ??=/||=, ++/--, delete, Object.assign/defineProperty/Reflect.set). Computed keys and strings built at runtime are outside the threat model. Nothing is executed but the runner's zero-import override rule: no server boots, no network, no ports. Threat model: guards ACCIDENTAL drift between documented and coded price/unit/role; it does not cover production MOTEBIT_UNIT_COST overrides or hand-edited deployments — the deployed listing is the one the service POSTs to the relay (signed market:listing token) and the relay serves; read the production price there. Not covered: other docs pages; "identity" is declared metadata, not verified against code.`,
   );
 }
 
