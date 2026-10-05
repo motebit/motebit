@@ -11,23 +11,29 @@
  *     `market` = the service has an identity and lists on the market. The
  *     marketplace count is the number of `market: true` services.
  *
- *   - PRICE — what the service actually LISTS, obtained by EXECUTION: every
- *     listing service codes its price once, in `src/pricing.ts` as a pure,
- *     import-free `listingPricing(env)`, and lists exactly
- *     `pricing: listingPricing(process.env)`. The gate runs that function (in
- *     an isolated vm context) with an empty env — the price main() lists by
- *     default, `unit_cost` + `per` — and with a sentinel MOTEBIT_UNIT_COST that
- *     every entry must carry unaltered. Arithmetic or a hardcoded price inside
- *     the function shows up in what it returns; one outside it is refused
- *     structurally (no `unit_cost`, no MOTEBIT_UNIT_COST read, no other
- *     `pricing` value anywhere else in the service's source). Execution, not a
- *     source pattern: an earlier version read the literal after
- *     `?? "…"` and stayed green on `parseFloat(…) * 2` and on a hardcoded
- *     `unit_cost: 0.5` in the listing (cold review, 2026-10-05). Never copied
+ *   - PRICE — what the service actually LISTS, obtained by EXECUTION: the
+ *     gate runs each listing service's real entry (`src/index.ts`, its real
+ *     main()) in a child process whose `@motebit/molecule-runner` is the real
+ *     package except `runMolecule`, swapped by module hooks for a capture
+ *     (scripts/lib/listing-probe/). The capture calls the builder main() handed
+ *     the runner and then the `getServiceListing` that builder returned — the
+ *     exact function the runner publishes to the relay — and the `pricing` it
+ *     resolves to under an env with no MOTEBIT_UNIT_COST is the price the docs
+ *     must state (`unit_cost` + `per`). A second run with a sentinel
+ *     MOTEBIT_UNIT_COST must list it, unaltered, in every entry. Nothing about
+ *     the listing is read from source: earlier versions read the literal after
+ *     `?? "…"`, then matched a `pricing: listingPricing(process.env)` site, and
+ *     both stayed green while main() listed something else (a renamed, dead
+ *     `getServiceListing`; a post-construction rewrite of `per`; a spread
+ *     override; a different object) — cold reviews, 2026-10-05. Never copied
  *     into metadata; the listed default wins, docs conform. `0` renders as
- *     "unpriced". A `market: true` service MUST have the module, a
- *     `market: false` service MUST NOT (nor any MOTEBIT_UNIT_COST read) — so
- *     the market flag is tied to the code that actually lists.
+ *     "unpriced". A `market: true` service MUST list non-empty pricing when
+ *     executed; a `market: false` service MUST NOT read MOTEBIT_UNIT_COST and,
+ *     if it imports the runner, MUST list no pricing when executed. A service
+ *     whose main() needs env to boot declares inert values in
+ *     `motebit.listingProbeEnv` (never MOTEBIT_UNIT_COST). Each
+ *     `.env.example`'s MOTEBIT_UNIT_COST (and any "default: N" above it) must
+ *     equal the executed default.
  *
  * The derived surfaces (both hand-written prose, so both checked):
  *
@@ -49,11 +55,12 @@
  * was labelled "glue" and `embed` (no identity, no MCP listing) an atom.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import vm from "node:vm";
-import ts from "typescript";
 import { failWithRepair } from "./lib/gate-report.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -88,7 +95,7 @@ export interface ServiceTruth {
   role: ServiceRole;
   identity: boolean;
   market: boolean;
-  /** Present iff the service lists: what its executed `listingPricing({})` returns. */
+  /** Present iff the service lists: the pricing its executed main() hands the runner. */
   price: Price | null;
 }
 
@@ -115,11 +122,14 @@ function listSourceFiles(dir: string): string[] {
   return out;
 }
 
-/** The one module a listing service codes its price in, and its export. */
-export const PRICING_MODULE = "pricing.ts";
-export const PRICING_EXPORT = "listingPricing";
+/** The service entry the probe runs — what `node dist/index.js` boots. */
+export const ENTRY = "src/index.ts";
+/** The runner whose `runMolecule` is the fleet's listing path. */
+export const RUNNER = "@motebit/molecule-runner";
 /** Sentinel override: every listed entry must carry it, or it ignores the env. */
 const SENTINEL_COST = "0.123457";
+const PROBE_CHILD = join(__dirname, "lib", "listing-probe", "child.mjs");
+const PROBE_TIMEOUT_MS = 60_000;
 
 interface ListingEntry {
   capability: unknown;
@@ -128,171 +138,208 @@ interface ListingEntry {
   per: unknown;
 }
 
+/** One `runMolecule(config, build)` call the probe captured. */
+export interface CapturedCall {
+  serviceName: string | null;
+  /** Whether the MoleculeBuild the builder returned carries `getServiceListing`. */
+  hasGetServiceListing?: boolean;
+  /** What that `getServiceListing()` resolved to (JSON round-tripped). */
+  listing?: { pricing?: unknown } | null;
+  /** The builder or the listing threw. */
+  error?: string;
+}
+
+export interface ProbeRun {
+  calls: CapturedCall[];
+  exitCode: number | null;
+  /** Set when the child produced no result (crash before the exit hook, timeout). */
+  failure?: string;
+  stderrTail: string;
+}
+
 /**
- * EXECUTE `services/<name>/src/pricing.ts`'s `listingPricing(env)` — the same
- * function main() lists — and return what it lists. Transpiled to CommonJS and
- * run in a fresh `vm` context with no `require`, no `process`, no globals but
- * the language built-ins: the module must be pure and read only the injected
- * env, or it throws here and the service fails closed. Arithmetic, hardcoding,
- * fallback chains — whatever the function does is what the gate sees.
+ * EXECUTE a service's real entry and capture what it hands the runner.
+ *
+ * Spawns `node --import tsx scripts/lib/listing-probe/child.mjs <entry>` with a
+ * scrubbed env (`PATH`, a throwaway `HOME`/cwd, the service's declared
+ * `listingProbeEnv`, plus `extraEnv`). Module hooks swap `runMolecule` — and
+ * nothing else — for a capture that calls the service's own builder with a
+ * fresh identity and then the `getServiceListing` it returned: the exact
+ * function the real runner publishes to the relay. So the listing read here is
+ * the one main() lists, whatever main() does to build it — no source pattern
+ * is consulted. Workspace imports resolve to built `dist/` (run `pnpm build`).
  */
-export function executeListingPricing(
-  file: string,
-  env: Record<string, string>,
-): { entries: ListingEntry[] } | { error: string } {
-  const out = ts.transpileModule(readFileSync(file, "utf8"), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  });
-  const mod = { exports: {} as Record<string, unknown> };
-  try {
-    vm.runInNewContext(out.outputText, { module: mod, exports: mod.exports }, { timeout: 1000 });
-    const fn = mod.exports[PRICING_EXPORT];
-    if (typeof fn !== "function") return { error: `exports no \`${PRICING_EXPORT}\` function` };
-    const result: unknown = (fn as (e: Record<string, string>) => unknown)(
-      Object.freeze({ ...env }),
+export function probeListing(
+  entry: string,
+  probeEnv: Record<string, string>,
+  extraEnv: Record<string, string> = {},
+): Promise<ProbeRun> {
+  const work = mkdtempSync(join(tmpdir(), "service-truth-probe-"));
+  const out = join(work, "result.json");
+  const env: Record<string, string> = {
+    PATH: process.env["PATH"] ?? "",
+    HOME: work,
+    TMPDIR: tmpdir(),
+    ...probeEnv,
+    ...extraEnv,
+  };
+  return new Promise((done) => {
+    const child = spawn(
+      process.execPath,
+      ["--import", pathToFileURL(TSX_LOADER).href, PROBE_CHILD, entry, out],
+      { cwd: work, env, stdio: ["ignore", "ignore", "pipe"] },
     );
-    if (!Array.isArray(result) || result.length === 0)
-      return { error: `${PRICING_EXPORT}(env) returned no pricing entries` };
-    return { entries: result as ListingEntry[] };
-  } catch (err) {
-    // Errors thrown inside the vm come from another realm: not `instanceof Error`.
-    const msg =
-      err != null && typeof (err as { message?: unknown }).message === "string"
-        ? (err as { message: string }).message
-        : String(err);
-    return {
-      error: `did not execute purely (${msg}) — it may import nothing and read only its \`env\` parameter`,
-    };
-  }
+    let stderr = "";
+    child.stderr.on("data", (d: Buffer) => {
+      stderr = (stderr + d.toString()).slice(-4000);
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, PROBE_TIMEOUT_MS);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const stderrTail = stderr.trim().split("\n").slice(-3).join(" ⏎ ").slice(-400);
+      let run: ProbeRun;
+      try {
+        const r = JSON.parse(readFileSync(out, "utf8")) as {
+          calls: CapturedCall[];
+          exitCode: number;
+        };
+        run = { calls: r.calls, exitCode: r.exitCode, stderrTail };
+      } catch {
+        run = {
+          calls: [],
+          exitCode: code,
+          stderrTail,
+          failure: timedOut
+            ? `did not call runMolecule within ${PROBE_TIMEOUT_MS / 1000}s`
+            : `the probe child died without a result (exit ${code})`,
+        };
+      }
+      rmSync(work, { recursive: true, force: true });
+      done(run);
+    });
+  });
 }
 
-const isEnvRead = (n: ts.Node): boolean =>
-  (ts.isStringLiteralLike(n) || ts.isIdentifier(n)) && n.text === "MOTEBIT_UNIT_COST";
-const isUnitCost = (n: ts.Node): boolean =>
-  (ts.isStringLiteralLike(n) || ts.isIdentifier(n)) && n.text === "unit_cost";
+const TSX_LOADER = createRequire(import.meta.url).resolve("tsx");
 
-/** `pricing: listingPricing(process.env)` — the only listing shape accepted. */
-function isCanonicalListing(init: ts.Expression): boolean {
-  if (!ts.isCallExpression(init) || init.arguments.length !== 1) return false;
-  if (!ts.isIdentifier(init.expression) || init.expression.text !== PRICING_EXPORT) return false;
-  const a = init.arguments[0]!;
-  return (
-    ts.isPropertyAccessExpression(a) &&
-    ts.isIdentifier(a.expression) &&
-    a.expression.text === "process" &&
-    a.name.text === "env"
-  );
+/** Does any non-test source file of the service import the runner? */
+function importsRunner(srcDir: string): boolean {
+  const re = new RegExp(`(?:from|import)\\s*\\(?\\s*["']${RUNNER.replace("/", "\\/")}["']`);
+  return listSourceFiles(srcDir).some((f) => re.test(readFileSync(f, "utf8")));
+}
+
+function describeRun(run: ProbeRun): string {
+  const why = run.failure ?? `exit ${run.exitCode}`;
+  return `${why}${run.stderrTail !== "" ? ` — stderr: ${run.stderrTail}` : ""}${
+    /Cannot find (?:module|package)/.test(run.stderrTail)
+      ? " (the probe runs the entry against built workspace packages: run `pnpm build`)"
+      : ""
+  }`;
 }
 
 /**
- * Read the price a service LISTS. A listing service (`market: true`) codes its
- * price in exactly one place — `src/pricing.ts`'s pure `listingPricing(env)` —
- * and its source lists exactly `pricing: listingPricing(process.env)`, imported
- * from that module; nothing else in its source may read MOTEBIT_UNIT_COST, name
- * `unit_cost`, or build a `pricing` value. The price is then read by EXECUTING
- * the function with an empty env (the default the docs state) and with a
- * sentinel MOTEBIT_UNIT_COST (every entry must carry it). A non-listing service
- * may have neither a pricing module nor a MOTEBIT_UNIT_COST read.
+ * Read the price a service LISTS, by running it. A `market: true` service's
+ * real entry must call `runMolecule` exactly once, with a builder whose
+ * `getServiceListing()` returns a non-empty, well-formed `pricing` array of
+ * one `unit_cost` and one `per`: that listing, under an env with no
+ * MOTEBIT_UNIT_COST, is the price the docs must state. Run again with a
+ * sentinel MOTEBIT_UNIT_COST, every entry must carry it unaltered (the
+ * override reaches the whole listing; no arithmetic, no hardcode). A
+ * `market: false` service may not read MOTEBIT_UNIT_COST anywhere in its
+ * source, and if it imports the runner its executed listing must carry no
+ * pricing.
  */
-export function readCodedPrice(
+export async function readListedPrice(
   root: string,
   name: string,
   market: boolean,
+  probeEnv: Record<string, string>,
   violations: string[],
-): Price | null {
+): Promise<Price | null> {
   const srcDir = join(root, "services", name, "src");
-  const pricingFile = join(srcDir, PRICING_MODULE);
-  const pricingRel = relative(root, pricingFile);
-  const hasModule = existsSync(pricingFile);
-  const envReads: string[] = [];
-  const unitCosts: string[] = [];
-  const listings: string[] = [];
-  const badListings: string[] = [];
-  const shadows: string[] = [];
-  let imported = false;
-  for (const file of listSourceFiles(srcDir)) {
-    if (file === pricingFile) continue;
-    const rel = relative(root, file);
-    const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
-    const at = (n: ts.Node) => `${rel}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}`;
-    const visit = (n: ts.Node): void => {
-      if (isEnvRead(n)) envReads.push(at(n));
-      if (market) {
-        if (isUnitCost(n)) unitCosts.push(at(n));
-        if (
-          ts.isImportDeclaration(n) &&
-          ts.isStringLiteral(n.moduleSpecifier) &&
-          resolve(dirname(file), n.moduleSpecifier.text.replace(/\.js$/, ".ts")) === pricingFile &&
-          n.importClause?.namedBindings != null &&
-          ts.isNamedImports(n.importClause.namedBindings) &&
-          n.importClause.namedBindings.elements.some(
-            (e) => e.name.text === PRICING_EXPORT && e.propertyName == null,
-          )
-        )
-          imported = true;
-        if (
-          (ts.isFunctionDeclaration(n) || ts.isVariableDeclaration(n)) &&
-          n.name != null &&
-          ts.isIdentifier(n.name) &&
-          n.name.text === PRICING_EXPORT
-        )
-          shadows.push(at(n));
-        if (ts.isPropertyAssignment(n) && n.name.getText(sf) === "pricing") {
-          if (isCanonicalListing(n.initializer)) listings.push(at(n));
-          else badListings.push(`${at(n)} (\`${n.initializer.getText(sf).slice(0, 60)}\`)`);
-        }
-        if (ts.isShorthandPropertyAssignment(n) && n.name.text === "pricing")
-          badListings.push(`${at(n)} (shorthand \`pricing\`)`);
-      }
-      ts.forEachChild(n, visit);
-    };
-    visit(sf);
-  }
+  const entry = join(root, "services", name, ENTRY);
+  const entryRel = relative(root, entry);
+  const say = (msg: string) => violations.push(`services/${name}: ${msg}`);
 
   if (!market) {
-    if (hasModule || envReads.length > 0)
-      violations.push(
-        `services/${name}: motebit.market is false but ${hasModule ? pricingRel : envReads.join(", ")} codes a MOTEBIT_UNIT_COST price — a priced listing is a market participant`,
+    const envReads = listSourceFiles(srcDir)
+      .filter((f) => readFileSync(f, "utf8").includes("MOTEBIT_UNIT_COST"))
+      .map((f) => relative(root, f));
+    if (envReads.length > 0)
+      say(
+        `motebit.market is false but ${envReads.join(", ")} reads MOTEBIT_UNIT_COST — a priced listing is a market participant`,
       );
+    if (!existsSync(entry) || !importsRunner(srcDir)) return null;
+    const run = await probeListing(entry, probeEnv);
+    if (run.failure != null && run.calls.length === 0) {
+      // Imports the runner but never reached it in time: fail closed.
+      say(`imports ${RUNNER} but executing ${entryRel} could not be read (${describeRun(run)})`);
+      return null;
+    }
+    for (const c of run.calls) {
+      if (c.error != null)
+        say(`executing ${entryRel}: the builder handed to runMolecule threw (${c.error})`);
+      const pricing = c.listing?.pricing;
+      if (Array.isArray(pricing) && pricing.length > 0)
+        say(
+          `motebit.market is false but executing ${entryRel} lists pricing ${JSON.stringify(pricing).slice(0, 160)} — a priced listing is a market participant`,
+        );
+    }
     return null;
   }
 
-  const say = (msg: string) => violations.push(`services/${name}: ${msg}`);
-  if (!hasModule) {
-    say(
-      `motebit.market is true but there is no ${PRICING_MODULE} — a listing codes its price in src/${PRICING_MODULE} as \`export function ${PRICING_EXPORT}(env)\` (0 = unpriced)`,
-    );
+  if (!existsSync(entry)) {
+    say(`motebit.market is true but there is no ${ENTRY} to execute`);
     return null;
   }
-  if (envReads.length > 0)
-    say(
-      `MOTEBIT_UNIT_COST is read outside ${pricingRel} (${envReads.join(", ")}) — the price is coded in one place, the function the listing calls`,
-    );
-  if (unitCosts.length > 0)
-    say(
-      `\`unit_cost\` appears outside ${pricingRel} (${[...new Set(unitCosts)].join(", ")}) — the listing's price must be exactly what ${PRICING_EXPORT}(env) returns, never set or rewritten elsewhere`,
-    );
-  if (badListings.length > 0)
-    say(
-      `a \`pricing\` value other than \`${PRICING_EXPORT}(process.env)\` (${badListings.join(", ")}) — list exactly \`pricing: ${PRICING_EXPORT}(process.env)\``,
-    );
-  if (listings.length !== 1)
-    say(
-      `${listings.length} \`pricing: ${PRICING_EXPORT}(process.env)\` listing site(s) — main() must list exactly one (found: ${listings.join(", ") || "none"})`,
-    );
-  if (!imported)
-    say(
-      `no source file imports { ${PRICING_EXPORT} } from ./${PRICING_MODULE.replace(/\.ts$/, ".js")}`,
-    );
-  if (shadows.length > 0)
-    say(`\`${PRICING_EXPORT}\` is redeclared outside ${pricingRel} (${shadows.join(", ")})`);
-
-  const dflt = executeListingPricing(pricingFile, {});
-  if ("error" in dflt) {
-    violations.push(`${pricingRel}: ${dflt.error}`);
-    return null;
-  }
-  const bad = dflt.entries.find(
+  const [dflt, sentinel] = await Promise.all([
+    probeListing(entry, probeEnv),
+    probeListing(entry, probeEnv, { MOTEBIT_UNIT_COST: SENTINEL_COST }),
+  ]);
+  const listed = (run: ProbeRun, label: string): ListingEntry[] | null => {
+    if (run.calls.length === 0) {
+      say(
+        `motebit.market is true but executing ${entryRel}${label} never called runMolecule (${describeRun(run)})${
+          Object.keys(probeEnv).length === 0
+            ? ` — if main() needs env to boot, declare inert values in package.json motebit.listingProbeEnv`
+            : ""
+        }`,
+      );
+      return null;
+    }
+    if (run.calls.length > 1) {
+      say(
+        `executing ${entryRel}${label} called runMolecule ${run.calls.length} times — one service, one listing`,
+      );
+      return null;
+    }
+    const c = run.calls[0]!;
+    if (c.error != null) {
+      say(`executing ${entryRel}${label}: the builder or its getServiceListing threw (${c.error})`);
+      return null;
+    }
+    if (c.hasGetServiceListing !== true) {
+      say(
+        `motebit.market is true but the build ${entryRel} hands runMolecule has no getServiceListing — the relay lists it with no pricing`,
+      );
+      return null;
+    }
+    const pricing = c.listing?.pricing;
+    if (!Array.isArray(pricing) || pricing.length === 0) {
+      say(
+        `motebit.market is true but executing ${entryRel}'s getServiceListing()${label} lists no pricing (${JSON.stringify(c.listing ?? null).slice(0, 120)})`,
+      );
+      return null;
+    }
+    return pricing as ListingEntry[];
+  };
+  const entries = listed(dflt, "");
+  if (entries == null) return null;
+  const bad = entries.find(
     (e) =>
       e == null ||
       typeof e.capability !== "string" ||
@@ -303,35 +350,73 @@ export function readCodedPrice(
       typeof e.per !== "string",
   );
   if (bad != null) {
-    violations.push(
-      `${pricingRel}: ${PRICING_EXPORT}({}) lists an entry that is not { capability: string, unit_cost: finite ≥ 0, currency: "USD", per: string } (${JSON.stringify(bad)})`,
+    say(
+      `executing ${entryRel} lists a pricing entry that is not { capability: string, unit_cost: finite ≥ 0, currency: "USD", per: string } (${JSON.stringify(bad)})`,
     );
     return null;
   }
-  const costs = new Set(dflt.entries.map((e) => e.unit_cost as number));
+  const costs = new Set(entries.map((e) => e.unit_cost as number));
   if (costs.size !== 1)
-    violations.push(
-      `${pricingRel}: ${PRICING_EXPORT}({}) lists ${costs.size} different unit_costs (${[...costs].join(", ")}) — one service, one price`,
+    say(
+      `executing ${entryRel} lists ${costs.size} different unit_costs (${[...costs].join(", ")}) — one service, one price`,
     );
-  const pers = new Set(dflt.entries.map((e) => e.per as string));
+  const pers = new Set(entries.map((e) => e.per as string));
   if (pers.size !== 1)
-    violations.push(
-      `${pricingRel}: listing declares ${pers.size} different \`per\` units (${[...pers].join(", ")}) — the docs cannot state one price`,
+    say(
+      `executing ${entryRel} lists ${pers.size} different \`per\` units (${[...pers].join(", ")}) — the docs cannot state one price`,
     );
-  const sentinel = executeListingPricing(pricingFile, { MOTEBIT_UNIT_COST: SENTINEL_COST });
-  if ("error" in sentinel) violations.push(`${pricingRel}: ${sentinel.error}`);
-  else {
-    const deaf = sentinel.entries.filter((e) => e?.unit_cost !== Number(SENTINEL_COST));
-    if (deaf.length > 0 || sentinel.entries.length !== dflt.entries.length)
-      violations.push(
-        `${pricingRel}: with MOTEBIT_UNIT_COST="${SENTINEL_COST}", ${PRICING_EXPORT} lists ${JSON.stringify(sentinel.entries.map((e) => e?.unit_cost))} — every entry's unit_cost must be the parsed override, unaltered (no arithmetic, no hardcoded price)`,
+  const over = listed(sentinel, ` with MOTEBIT_UNIT_COST="${SENTINEL_COST}"`);
+  if (over != null) {
+    const deaf = over.filter((e) => e?.unit_cost !== Number(SENTINEL_COST));
+    if (deaf.length > 0 || over.length !== entries.length)
+      say(
+        `with MOTEBIT_UNIT_COST="${SENTINEL_COST}", executing ${entryRel} lists unit_costs ${JSON.stringify(over.map((e) => e?.unit_cost))} — every entry's unit_cost must be the parsed override, unaltered (no arithmetic, no hardcoded price)`,
       );
   }
   return {
-    amount: dflt.entries[0]!.unit_cost as number,
-    per: dflt.entries[0]!.per as string,
-    source: pricingRel,
+    amount: entries[0]!.unit_cost as number,
+    per: entries[0]!.per as string,
+    source: `${entryRel} (executed)`,
   };
+}
+
+/**
+ * `.env.example` is what an operator copies: its MOTEBIT_UNIT_COST — set or
+ * commented out — and any "default: N" in the comment just above it must be
+ * the price the service lists by default. The coded default wins.
+ */
+export function checkEnvExample(
+  root: string,
+  name: string,
+  price: Price | null,
+  market: boolean,
+  violations: string[],
+): void {
+  const path = join(root, "services", name, ".env.example");
+  if (!existsSync(path)) return;
+  const rel = relative(root, path);
+  const lines = readFileSync(path, "utf8").split("\n");
+  lines.forEach((line, i) => {
+    const m = /^\s*#?\s*MOTEBIT_UNIT_COST\s*=\s*([^\s#]*)/.exec(line);
+    if (m == null) return;
+    const where = `${rel}:${i + 1}`;
+    if (!market) {
+      violations.push(`${where}: MOTEBIT_UNIT_COST on a service whose motebit.market is false`);
+      return;
+    }
+    if (price == null) return; // the listing could not be read — already reported
+    const stated: { v: number; at: string }[] = [];
+    if (m[1] !== "") stated.push({ v: Number.parseFloat(m[1]!), at: `MOTEBIT_UNIT_COST=${m[1]}` });
+    for (let j = i - 1; j >= 0 && /^\s*#/.test(lines[j]!); j--) {
+      const d = /\bdefault:?\s*\$?(\d+(?:\.\d+)?)/i.exec(lines[j]!);
+      if (d != null) stated.push({ v: Number.parseFloat(d[1]!), at: `"${d[0]}" (line ${j + 1})` });
+    }
+    for (const s of stated)
+      if (s.v !== price.amount)
+        violations.push(
+          `${where}: ${s.at} but ${price.source} lists $${price.amount}/${price.per} by default — the example must state the coded default`,
+        );
+  });
 }
 
 /** Every services/* directory — the set the inventories must cover. */
@@ -342,9 +427,9 @@ export function serviceDirs(root: string): string[] {
     .sort();
 }
 
-export function readServices(root: string, violations: string[]): ServiceTruth[] {
+export async function readServices(root: string, violations: string[]): Promise<ServiceTruth[]> {
   const dir = join(root, "services");
-  const out: ServiceTruth[] = [];
+  const pending: { svc: Omit<ServiceTruth, "price">; probeEnv: Record<string, string> }[] = [];
   for (const name of serviceDirs(root)) {
     const pkgPath = join(dir, name, "package.json");
     if (!existsSync(pkgPath)) {
@@ -379,10 +464,39 @@ export function readServices(root: string, violations: string[]): ServiceTruth[]
         `services/${name}/package.json: motebit.market is true but motebit.identity is false — only a service with an identity can list on the market`,
       );
     }
-    const price = readCodedPrice(root, name, market, violations);
-    out.push({ name, role: role as ServiceRole, identity, market, price });
+    const probeEnv = m["listingProbeEnv"] ?? {};
+    if (
+      typeof probeEnv !== "object" ||
+      probeEnv === null ||
+      Object.values(probeEnv).some((v) => typeof v !== "string")
+    ) {
+      violations.push(
+        `services/${name}/package.json: motebit.listingProbeEnv must be an object of string values`,
+      );
+      continue;
+    }
+    if ("MOTEBIT_UNIT_COST" in probeEnv) {
+      violations.push(
+        `services/${name}/package.json: motebit.listingProbeEnv may not set MOTEBIT_UNIT_COST — the probe reads the price main() lists by default`,
+      );
+      continue;
+    }
+    pending.push({
+      svc: { name, role: role as ServiceRole, identity, market },
+      probeEnv: probeEnv as Record<string, string>,
+    });
   }
-  return out;
+  // Probe every service concurrently; report in directory order.
+  const results = await Promise.all(
+    pending.map(async ({ svc, probeEnv }) => {
+      const v: string[] = [];
+      const price = await readListedPrice(root, svc.name, svc.market, probeEnv, v);
+      checkEnvExample(root, svc.name, price, svc.market, v);
+      return { truth: { ...svc, price }, v };
+    }),
+  );
+  for (const r of results) violations.push(...r.v);
+  return results.map((r) => r.truth);
 }
 
 // ── derived: the two inventories ────────────────────────────────────────────
@@ -436,13 +550,13 @@ function checkPrice(svc: ServiceTruth, p: Placement, violations: string[]): void
   }
   const want = `$${amount}${per != null ? `/${per}` : ""}`;
   if (priceAt < 0 || (unpricedAt >= 0 && unpricedAt < priceAt)) {
-    say(`states no price — ${source} codes ${want}`);
+    say(`states no price — ${source} lists ${want}`);
     return;
   }
   const docAmount = Number.parseFloat(priceMatch![1]!);
   const docPer = priceMatch![2]!;
   if (docAmount !== amount || (per != null && docPer !== per))
-    say(`states $${priceMatch![1]}/${docPer} but ${source} codes ${want}`);
+    say(`states $${priceMatch![1]}/${docPer} but ${source} lists ${want}`);
 }
 
 const NUMBER_WORDS: Record<string, number> = {
@@ -563,9 +677,9 @@ function roleOfLabel(label: string): ServiceRole | null {
   return LABEL_ROLE[label.trim().toLowerCase()] ?? null;
 }
 
-export function evaluate(root: string): Evaluation {
+export async function evaluate(root: string): Promise<Evaluation> {
   const violations: string[] = [];
-  const services = readServices(root, violations);
+  const services = await readServices(root, violations);
   // Placements are recognised against every services/* directory, so a service
   // whose metadata is broken still parses as itself (and is reported once, as
   // broken metadata, not again as an unknown name).
@@ -670,24 +784,28 @@ export function evaluate(root: string): Evaluation {
   return { violations, services, countClaims, placements };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argRoot = process.argv.indexOf("--root");
   const root = argRoot >= 0 ? resolve(process.argv[argRoot + 1] ?? ".") : ROOT;
-  const r = evaluate(root);
+  const r = await evaluate(root);
   if (r.violations.length > 0) {
     failWithRepair({
       invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price`,
       sites: r.violations,
       canonical:
-        "role/identity/market: the `motebit` block in services/<name>/package.json; price: what services/<name>/src/pricing.ts `listingPricing(env)` returns when executed with an empty env (unit_cost + per), listed by main() as exactly `pricing: listingPricing(process.env)`",
-      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the listed default wins, docs conform. A listing service codes its price only in src/pricing.ts `listingPricing(env)` (pure, import-free) and lists `pricing: listingPricing(process.env)`. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
+        "role/identity/market: the `motebit` block in services/<name>/package.json; price: the `pricing` (unit_cost + per) of the listing services/<name>/src/index.ts's main() hands runMolecule, read by executing it with no MOTEBIT_UNIT_COST set (scripts/lib/listing-probe/)",
+      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the listed default wins, docs conform. A market service's main() must hand runMolecule a builder whose getServiceListing() lists one non-empty price that MOTEBIT_UNIT_COST overrides in every entry; if main() needs env to boot, declare inert values in motebit.listingProbeEnv. .env.example states the coded default. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
       doctrine: "docs/drift-defenses.md (#173)",
     });
   }
   const market = r.services.filter((s) => s.market).length;
   console.log(
-    `✓ check-service-truth: ${r.services.length} services' metadata + executed listing prices (${market} market listings, each read by running its listingPricing({})) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs match services/*/package.json and the price each listing service's own listingPricing() returns by default, and that main() lists exactly that function's output — nothing about deployed listings, MOTEBIT_UNIT_COST overrides in prod, or other pages of the docs site; "identity" is declared metadata, not verified against code.`,
+    `✓ check-service-truth: ${r.services.length} services' metadata + executed listing prices (${market} market listings, each read by executing the service's main() and calling the getServiceListing it hands runMolecule) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and the price each market service's real main() lists by default when executed (runMolecule captured, everything else real; required env from motebit.listingProbeEnv); market:false services are executed only if they import ${RUNNER}, else checked for MOTEBIT_UNIT_COST reads — nothing about deployed listings, MOTEBIT_UNIT_COST overrides in prod, or other pages of the docs site; "identity" is declared metadata, not verified against code.`,
   );
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href)
+  main().catch((err: unknown) => {
+    console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+    process.exit(1);
+  });

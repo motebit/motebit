@@ -6,7 +6,12 @@
   "motebit": {
     "role": "molecule",
     "identity": true,
-    "market": true
+    "market": true,
+    "listingProbeEnv": {
+      "MOTEBIT_SOLANA_RPC_URL": "http://127.0.0.1:9",
+      "MOTEBIT_RELAY_PUBLIC_KEY": "0000000000000000000000000000000000000000000000000000000000000000",
+      "MOTEBIT_SYNC_URL": "http://127.0.0.1:9"
+    }
   },
   "type": "module",
   "main": "./dist/index.js",

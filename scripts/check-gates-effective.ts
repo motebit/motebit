@@ -2996,7 +2996,7 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-service-truth",
     proves:
-      "flags a services inventory whose stated price disagrees with the service's coded MOTEBIT_UNIT_COST default — the 2026-10-05 class where README.md and architecture.mdx quoted different web-search/read-url prices than the code. Perturbs by PREDICATE: bumps whatever dollar amount README.md's `research` bullet carries by one cent, never a literal price, so a future price change cannot make the probe vacuous; byte-identical restoration on cleanup.",
+      "flags a services inventory whose stated price disagrees with the price the service's executed main() lists — the 2026-10-05 class where README.md and architecture.mdx quoted different web-search/read-url prices than the code. Perturbs by PREDICATE: bumps whatever dollar amount README.md's `research` bullet carries by one cent, never a literal price, so a future price change cannot make the probe vacuous; byte-identical restoration on cleanup.",
     perturb: () =>
       mutateFile("README.md", (src) => {
         const re = /(`research` \(\$)(\d+)\.(\d+)/;
@@ -3010,6 +3010,43 @@ export async function probeFetch(): Promise<unknown> {
         return src.replace(
           re,
           `$1${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`,
+        );
+      }),
+  },
+  {
+    script: "check-service-truth",
+    proves:
+      "reads the price a service LISTS by executing its main(), not a source pattern — cold-review bypass B1: renames the auditor's `getServiceListing` to a dead `_retiredListing`, so main() hands runMolecule no listing while a `pricing: listingPricing(process.env)` site still sits in the source (the AST version stayed green). The executed build has no getServiceListing, so the market:true service is red.",
+    perturb: () =>
+      mutateFile("services/auditor/src/index.ts", (src) => {
+        if (src.split("getServiceListing:").length !== 2) {
+          throw new Error(
+            "probe vacuous: services/auditor/src/index.ts no longer has exactly one `getServiceListing:` — retarget the probe",
+          );
+        }
+        return src.replace("getServiceListing:", "_retiredListing:");
+      }),
+  },
+  {
+    script: "check-service-truth",
+    proves:
+      "reads the price a service LISTS by executing its main() — cold-review bypass B2: wraps the auditor's listing in a `perPage()` that rewrites every pricing entry's `per` to \"page\" AFTER construction (no `pricing:`/`unit_cost` token added, so the AST version stayed green). The executed listing says /page while README.md and architecture.mdx say /task, so the docs are red.",
+    perturb: () =>
+      mutateFile("services/auditor/src/index.ts", (src) => {
+        const re = /getServiceListing: \(\) =>\s*Promise\.resolve\(\{([\s\S]*?)\n(\s*)\}\),/;
+        if (!re.test(src)) {
+          throw new Error(
+            "probe vacuous: services/auditor/src/index.ts no longer lists `getServiceListing: () => Promise.resolve({ … })` — retarget the probe",
+          );
+        }
+        return (
+          src.replace(
+            re,
+            "getServiceListing: () =>\n          Promise.resolve(perPage({$1\n$2})),",
+          ) +
+          "\nfunction perPage<T extends { pricing: { per: string }[] }>(l: T): T {\n" +
+          '  for (const p of l.pricing) p.per = "page";\n' +
+          "  return l;\n}\n"
         );
       }),
   },

@@ -1,6 +1,6 @@
 /**
  * The listing price is the pure `listingPricing(env)` — the function main()
- * lists and check-service-truth executes. Default and override, every entry.
+ * lists (check-service-truth executes main() itself). Default and override, every entry.
  */
 import { describe, it, expect } from "vitest";
 import { listingPricing } from "../pricing.js";

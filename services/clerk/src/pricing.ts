@@ -1,12 +1,12 @@
 /**
  * The market listing's pricing — the ONE place this service's price is coded.
  *
- * Pure and import-free, with the environment injected, so
- * `scripts/check-service-truth.ts` EXECUTES it with an empty env to read the
- * price this service actually lists (the default the docs must state), and
- * with a sentinel `MOTEBIT_UNIT_COST` to prove the override reaches every
- * entry. `main()` lists exactly `listingPricing(process.env)`; the gate
- * refuses any other pricing construction in this service's source.
+ * Pure, with the environment injected, and listed by main() as
+ * `pricing: listingPricing(process.env)`. `scripts/check-service-truth.ts`
+ * does not read this file: it EXECUTES this service's real main() with
+ * `runMolecule` captured and reads the pricing of the listing main() hands the
+ * runner — with no MOTEBIT_UNIT_COST (the default the docs and .env.example
+ * must state) and with a sentinel MOTEBIT_UNIT_COST every entry must carry.
  */
 export interface ListingPrice {
   capability: string;
