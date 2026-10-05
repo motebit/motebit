@@ -27,7 +27,7 @@ import {
   paidSpendBudgetConfigError,
   parseUnitCostMicro,
 } from "./helpers.js";
-import { research } from "./research.js";
+import { research, researchConfigForTask } from "./research.js";
 import type { ResearchConfig } from "./research.js";
 
 function log(msg: string): void {
@@ -297,7 +297,7 @@ async function main(): Promise<void> {
 
       const handleAgentTask = async function* (
         prompt: string,
-        options?: { delegatedScope?: string; relayTaskId?: string },
+        options?: { delegatedScope?: string; relayTaskId?: string; admittedRelayTaskId?: string },
       ) {
         const taskId = crypto.randomUUID();
         const submittedAt = Date.now();
@@ -305,7 +305,16 @@ async function main(): Promise<void> {
         let result: { ok: boolean; data?: string; error?: string };
         let delegationReceipts: Record<string, unknown>[] = [];
         try {
-          const r = await research(prompt, researchConfig);
+          // The paid-spend budget bounds the ADMITTED task across every run of
+          // it (a timed-out run still paying + its retry), not this run alone.
+          const r = await research(
+            prompt,
+            researchConfigForTask(
+              researchConfig,
+              options?.admittedRelayTaskId,
+              spend != null ? (id) => spend.taskSpend(id) : undefined,
+            ),
+          );
           // #479 backstop at the signing seam: research() already refuses an
           // empty synthesis, but the receipt is signed HERE — a completed
           // receipt over an empty body must be structurally impossible, not

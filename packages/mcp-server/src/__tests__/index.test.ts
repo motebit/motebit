@@ -2151,6 +2151,29 @@ describe("McpServerAdapter — task admission (dispatch_token)", () => {
     expect(calls).toEqual([{ prompt: "p", relayTaskId: "task-1" }]);
   });
 
+  it("hands the handler the ADMITTED task id (the token's sub) — never a caller-supplied id", async () => {
+    const relay = await enc.generateKeypair();
+    const seen: Array<string | undefined> = [];
+    const handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]> = async function* (
+      _prompt,
+      options,
+    ) {
+      seen.push(options?.admittedRelayTaskId);
+      yield {
+        type: "task_result" as const,
+        receipt: { task_id: "t1", motebit_id: WORKER, signature: "s", status: "completed" },
+      };
+    };
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey, { sub: "adm-1" }) });
+    // Without admission, a claimed relay_task_id is passed as relayTaskId but
+    // is NOT an admitted id (per-task state must not key on it).
+    const open = new McpServerAdapter(makeConfig(), makeDeps({ handleAgentTask }));
+    await open.start();
+    await registrations.tools.get("motebit_task")!.handler({ prompt: "p", relay_task_id: "r-9" });
+    expect(seen).toEqual(["adm-1", undefined]);
+  });
+
   it("the token's sub is the binding — a claimed relay_task_id that disagrees is refused", async () => {
     const relay = await enc.generateKeypair();
     const { handleAgentTask, calls } = captureTask();

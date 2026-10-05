@@ -63,11 +63,21 @@ import type {
 } from "@motebit/sdk";
 import { embedText as defaultEmbedText } from "@motebit/memory-graph";
 import type { ToolRegistry } from "@motebit/tools";
+import { fileTaskSpendLedger, memoryTaskSpendLedger, taskSpendFor } from "./task-spend.js";
+import type { TaskSpend, TaskSpendLedger } from "./task-spend.js";
 
 // Re-export the receipt builder so molecule authors don't reach into
 // `@motebit/mcp-server` for this one helper — runner is the single
 // service-facing import.
 export { createProviderReadiness, classifyProviderFailure } from "./readiness.js";
+export {
+  fileTaskSpendLedger,
+  memoryTaskSpend,
+  memoryTaskSpendLedger,
+  taskSpendFor,
+  TASK_SPEND_RETENTION_MS,
+} from "./task-spend.js";
+export type { TaskSpend, TaskSpendHold, TaskSpendLedger } from "./task-spend.js";
 export type { ProviderReadiness, ReadinessVerdict } from "./readiness.js";
 export { buildServiceReceipt } from "@motebit/mcp-server";
 export type { BuildServiceReceiptInput } from "@motebit/mcp-server";
@@ -281,6 +291,15 @@ export interface MoleculeSpendHandle {
      */
     maxTotalMicro?: number;
   }): Promise<GrantedDelegationResult>;
+  /**
+   * The durable spend ledger for ONE admitted relay task — pass the
+   * `admittedRelayTaskId` the MCP surface hands `handleAgentTask` (the
+   * verified dispatch token's `sub`), never a caller-supplied id. Every run
+   * of that task (a timed-out run still paying, its honest retry) charges
+   * the same ledger, reserve-before-pay, so a per-task budget bounds the
+   * task, not the run. Persisted beside `admitted-tasks.json`.
+   */
+  taskSpend(admittedRelayTaskId: string): TaskSpend;
 }
 
 /**
@@ -354,7 +373,12 @@ export interface MoleculeRunnerAdapters {
    * (`relay-key-pins.json`, `admitted-tasks.json`) — the same persistent
    * volume that holds the identity. Tests inject in-memory stores.
    */
-  admissionStores?: { pinStorage: RelayKeyPinStorage; admittedStore: AdmittedTaskStore };
+  admissionStores?: {
+    pinStorage: RelayKeyPinStorage;
+    admittedStore: AdmittedTaskStore;
+    /** Per-admitted-task spend ledger. Default (when the stores are injected without one): in-process. */
+    spendLedger?: TaskSpendLedger;
+  };
   /**
    * Override construction of the sovereign wallet used for sweeping earnings.
    * Default: `createSolanaWalletRail({ rpcUrl, identitySeed })`. Tests inject a
@@ -667,11 +691,15 @@ function jsonFileMap(path: string): {
 export function fileAdmissionStores(dataDir: string): {
   pinStorage: RelayKeyPinStorage;
   admittedStore: AdmittedTaskStore;
+  spendLedger: TaskSpendLedger;
 } {
   const pins = jsonFileMap(resolvePath(dataDir, "relay-key-pins.json"));
   const admitted = jsonFileMap(resolvePath(dataDir, "admitted-tasks.json"));
   return {
     pinStorage: { getItem: (k) => pins.get(k), setItem: (k, v) => pins.set(k, v) },
+    // Beside the admission rows it guards; same atomic write. Retained at
+    // least as long as the admission row (task-spend.ts, TASK_SPEND_RETENTION_MS).
+    spendLedger: fileTaskSpendLedger(resolvePath(dataDir, "task-spend.json")),
     // Value format: "<expiresAt>" = admitted, "<expiresAt>:done" = completed.
     // Legacy rows (pre-completion tracking) are bare numbers and read as
     // admitted-not-completed, so a token whose run was cut short by a deploy
@@ -989,6 +1017,11 @@ export async function runMolecule(
   //    the builder closes over it; its task handlers deref it at task time
   //    (long after the runtime exists), closing the chicken-and-egg.
   const runtimeRef: { current: RunnerRuntime | null } = { current: null };
+  // Admission state (relay-key pin, admitted task ids, per-task spend) lives
+  // under the data dir; built before the molecule so the spend handle can key
+  // its ledger to the admitted task.
+  const admissionStores = adapters.admissionStores ?? fileAdmissionStores(config.dataDir);
+  const spendLedger = admissionStores.spendLedger ?? memoryTaskSpendLedger();
   let spend: MoleculeSpendHandle | undefined;
   if (config.moneyExecution) {
     const heldGrant = await selfIssueGrant(identity, config.moneyExecution);
@@ -1008,6 +1041,7 @@ export async function runMolecule(
           ...(maxTotalMicro != null ? { maxTotalMicro } : {}),
         });
       },
+      taskSpend: (admittedRelayTaskId) => taskSpendFor(spendLedger, admittedRelayTaskId),
     };
     log(`Money seam: self-grant ${heldGrant.grant_id} (signed ceiling; dry-run is per-call)`);
   }
@@ -1115,7 +1149,6 @@ export async function runMolecule(
   // from the molecule's OWN listing so pricing and admission cannot drift
   // apart: a service that charges is a service that requires the relay's
   // signed admission before it spends. Doctrine: task-admission.md.
-  const admissionStores = adapters.admissionStores ?? fileAdmissionStores(config.dataDir);
   const admission = await resolveTaskAdmission(
     config,
     molecule,
