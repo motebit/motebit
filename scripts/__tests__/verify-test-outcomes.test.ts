@@ -7,16 +7,22 @@
  * (missing results, failed tests, zero tests, all or most tests skipped by a
  * filter, unhandled errors, coverage or a per-glob floor below threshold,
  * duplicates, foreign or copied results, a tracked coverage/ file, results
- * older than their shard job).
+ * older than their shard job) — and on a suite whose DECLARATION was narrowed
+ * (one file named, --shard, --changed, deleted tests): below its committed
+ * test floor, or with no floor at all. `--write-floors` is a ratchet.
  */
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONFIG_NAMES,
+  FLOORS_FILE,
+  formatFloors,
+  nextFloors,
+  readFloors,
   MIN_RUN_SHARE,
   NO_THRESHOLD_PACKAGES,
   SKIP_HEAVY_PACKAGES,
@@ -75,6 +81,33 @@ describe("verifyOutcomes over fixture artifacts", () => {
     expect(r.violations.join("\n")).toMatch(/apps\/cli: 0 of 7 tests passed/);
   });
 
+  it("a suite narrowed to one file is RED by its floor alone — every other rule passes it", () => {
+    const f = greenFixture();
+    RED_VARIANTS["narrowed-to-one-file"]!.mutate(f);
+    const r = withFixture(f, ({ root, artifacts }) => verifyOutcomes(root, artifacts));
+    expect(r.violations).toEqual(r.floorViolations);
+    expect(r.violations).toEqual([
+      expect.stringMatching(/^apps\/cli: 1 test\(s\) passed, below its committed floor of 7/),
+    ]);
+  });
+
+  it("names the new package that has no floor", () => {
+    const f = greenFixture();
+    RED_VARIANTS["new-package-without-floor"]!.mutate(f);
+    const r = withFixture(f, ({ root, artifacts }) => verifyOutcomes(root, artifacts));
+    expect(r.violations).toEqual([
+      expect.stringMatching(/^packages\/brand-new: no entry in scripts\/test-outcome-floors\.json/),
+    ]);
+  });
+
+  it("is GREEN when a suite passes MORE than its floor (a floor is a minimum)", () => {
+    const f = greenFixture();
+    f.floors = { "apps/cli": 3, "apps/web": 7, "packages/circuit-breaker": 1, "services/relay": 7 };
+    const r = withFixture(f, ({ root, artifacts }) => verifyOutcomes(root, artifacts));
+    expect(r.violations).toEqual([]);
+    expect(r.passed["apps/cli"]).toBe(7);
+  });
+
   it("counts only PASSED tests, never skipped or todo", () => {
     const f = greenFixture();
     const r0 = f.shards["coverage-shard-0"]!["services/relay"]!.results!;
@@ -130,6 +163,114 @@ describe("the CLI the `check` job runs", () => {
     const r = cli(f);
     expect(r.status).not.toBe(0);
     expect(r.stdout + r.stderr).toMatch(/packages\/circuit-breaker: numFailedTests is 1/);
+  });
+});
+
+describe("--write-floors: the ratchet", () => {
+  const tsx = join(ROOT, "node_modules", ".bin", "tsx");
+  const write = (root: string, artifacts: string, ...extra: string[]) =>
+    spawnSync(
+      tsx,
+      [
+        join(ROOT, "scripts", "verify-test-outcomes.ts"),
+        "--artifacts",
+        artifacts,
+        "--root",
+        root,
+        "--write-floors",
+        ...extra,
+      ],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+  const floorsAt = (root: string) => {
+    const f = readFloors(root);
+    if (typeof f === "string") throw new Error(f);
+    return f;
+  };
+
+  it("measures every package from a full green run when there is no floors file", () => {
+    const f = greenFixture();
+    f.floors = null;
+    withFixture(f, ({ root, artifacts }) => {
+      const r = write(root, artifacts);
+      expect(r.status, r.stderr).toBe(0);
+      expect(floorsAt(root).floors).toEqual({
+        "apps/cli": 7,
+        "apps/web": 7,
+        "packages/circuit-breaker": 7,
+        "services/relay": 7,
+      });
+      expect(verifyOutcomes(root, artifacts).violations).toEqual([]);
+    });
+  });
+
+  it("raises a floor (GREEN) and never lowers one without --allow-lower (RED, floor kept)", () => {
+    const f = greenFixture();
+    f.floors = { "apps/cli": 5, "apps/web": 9, "packages/circuit-breaker": 7, "services/relay": 7 };
+    withFixture(f, ({ root, artifacts }) => {
+      const r = write(root, artifacts);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toMatch(/raised \(1\): apps\/cli 5 → 7/);
+      expect(r.stderr).toMatch(/apps\/web measured 7 < floor 9/);
+      expect(floorsAt(root).floors["apps/cli"]).toBe(7);
+      expect(floorsAt(root).floors["apps/web"]).toBe(9);
+      expect(floorsAt(root).allowedDecreases).toEqual({});
+    });
+  });
+
+  it("lowers only with --allow-lower and a reason, recording {from, to, reason}", () => {
+    const f = greenFixture();
+    f.floors = { "apps/cli": 7, "apps/web": 9, "packages/circuit-breaker": 7, "services/relay": 7 };
+    withFixture(f, ({ root, artifacts }) => {
+      expect(write(root, artifacts, "--allow-lower").status).toBe(2);
+      const r = write(root, artifacts, "--allow-lower", "deleted two obsolete web tests");
+      expect(r.status, r.stderr).toBe(0);
+      expect(floorsAt(root).floors["apps/web"]).toBe(7);
+      expect(floorsAt(root).allowedDecreases).toEqual({
+        "apps/web": { from: 9, to: 7, reason: "deleted two obsolete web tests" },
+      });
+    });
+  });
+
+  it("refuses to measure from a run that is not green in every other respect", () => {
+    const f = greenFixture();
+    RED_VARIANTS["B1-exitcode-zeroed"]!.mutate(f);
+    withFixture(f, ({ root, artifacts }) => {
+      const before = readFileSync(join(root, FLOORS_FILE), "utf8");
+      const r = write(root, artifacts);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/--write-floors refused/);
+      expect(readFileSync(join(root, FLOORS_FILE), "utf8")).toBe(before);
+    });
+  });
+
+  it("nextFloors drops a removed package's floor and an allowance that no longer describes the floor", () => {
+    const u = nextFloors(
+      {
+        floors: { a: 5, b: 9, gone: 3 },
+        allowedDecreases: {
+          b: { from: 12, to: 9, reason: "r" },
+          a: { from: 6, to: 4, reason: "r" },
+        },
+      },
+      { a: 6, b: 9 },
+      null,
+    );
+    expect(u.next.floors).toEqual({ a: 6, b: 9 });
+    expect(u.next.allowedDecreases).toEqual({ b: { from: 12, to: 9, reason: "r" } });
+    expect(u.removed).toEqual(["gone"]);
+    expect(formatFloors(u.next).endsWith("}\n")).toBe(true);
+  });
+
+  it("the written file round-trips through the reader", () => {
+    const dir = mkdtempSync(join(tmpdir(), "floors-rt-"));
+    try {
+      const ff = { floors: { "apps/x": 3 }, allowedDecreases: {} };
+      writeFileSync(join(dir, "f.json"), formatFloors(ff));
+      expect(JSON.parse(readFileSync(join(dir, "f.json"), "utf8"))).toEqual(ff);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -213,6 +354,13 @@ describe("over the real workspace", () => {
       expect(e.minRunShare, p).toBeGreaterThan(0);
       expect(e.minRunShare, p).toBeLessThan(MIN_RUN_SHARE);
     }
+  });
+
+  it("the committed floors file has a positive floor for exactly the packages with test:coverage", () => {
+    const ff = readFloors(ROOT);
+    if (typeof ff === "string") throw new Error(ff);
+    expect(Object.keys(ff.floors).sort()).toEqual(pkgs);
+    expect(readFileSync(join(ROOT, FLOORS_FILE), "utf8")).toBe(formatFloors(ff));
   });
 
   it("tracks nothing under any coverage/ directory", () => {

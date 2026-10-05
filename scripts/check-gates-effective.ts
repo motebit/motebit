@@ -1005,6 +1005,31 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-prepush-subset",
+    proves:
+      "flags the `check` job's outcome verifier accepting a suite that passed FEWER tests than its committed floor — here the GREEN fixture's apps/cli narrowed to 1 passing test (the single-file `test:coverage` shape: exit 0, success true, nothing skipped, apps/cli has no coverage floor), which every rule but the test floor passes",
+    perturb: () =>
+      mutateFile("scripts/lib/test-outcomes-fixture.ts", (src) =>
+        src.replace(
+          `"apps/cli": passingReport("apps/cli"),`,
+          `"apps/cli": { ...passingReport("apps/cli"), results: { ...passingReport("apps/cli").results, numTotalTests: 1, numPassedTests: 1 } }, // ${PROBE_PREFIX}injected`,
+        ),
+      ),
+  },
+  {
+    script: "check-test-outcome-floors",
+    proves:
+      "flags a committed test floor lowered below its baseline with no allowedDecreases entry — here apps/cli's floor in scripts/test-outcome-floors.json dropped by one, the edit that would let a narrowed apps/cli suite pass the `check` verdict",
+    perturb: () =>
+      // JSON has no comments: the drain needle rides in an extra top-level
+      // key the floors reader ignores.
+      mutateFile("scripts/test-outcome-floors.json", (src) =>
+        src
+          .replace(/("apps\/cli": )(\d+)/, (_m, k: string, n: string) => `${k}${Number(n) - 1}`)
+          .replace("{\n", `{\n  "${PROBE_PREFIX}injected": true,\n`),
+      ),
+  },
+  {
     script: "check-turbo-global-deps",
     proves:
       "flags a root file packages read that turbo.json does not declare — here `tsconfig.base.json` dropped from globalDependencies, the shape where an edit to it replays every package's stale cached typecheck",

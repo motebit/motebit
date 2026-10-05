@@ -1052,6 +1052,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-prepush-subset",
   },
   {
+    name: "check-test-outcome-floors",
+    defends:
+      "the committed per-package test floors (`scripts/test-outcome-floors.json`) that the `check` verdict (scripts/verify-test-outcomes.ts) holds every suite to are a RATCHET: every workspace package with a `test:coverage` script has a positive floor (a new package fails closed), none names a package that no longer runs coverage, and no floor is below its merge-base value unless `allowedDecreases` carries `{from, to, reason}` for exactly that decrease (written by `--write-floors --allow-lower \"<reason>\"`, a reviewed line in the diff); an allowance this change adds for no decrease, or whose `to` is not the floor, is stale. Why: every other outcome rule judges the suite a package DECLARES, and a declaration narrows invisibly — apps/cli's test:coverage naming one file ran 11 of 1017 tests, exit 0, nothing skipped, no coverage floor, verifier GREEN (2026-10-05 cold review). The floor is the suite's size held outside its own declaration; this gate keeps the same change from lowering it. Invariant #173, added 2026-10-05",
+    script: "check-test-outcome-floors",
+  },
+  {
     name: "check-turbo-global-deps",
     defends:
       "every repo-root file a workspace package's turbo task reads is a turbo input: turbo.json `globalDependencies` equals the set DISCOVERED from every package's config files (`../` path literals resolving outside every package — tsconfig `extends`, vitest configs importing `vitest.shared.ts`, api-extractor bases, a package script running a root script), the ESLint cascade up to `root: true`, and their transitive imports/extends/named files/declared data reads. Turbo hashes only files inside a package, so before this an edit to `tsconfig.base.json` or `.eslintrc.js` left every task hash unchanged (measured 2026-10-01 on @motebit/protocol) and replayed stale cached typecheck/lint verdicts — which the fast pre-push leans on. An unlisted input, an entry nothing reads, a glob, a root script with an unmodelled fs read, or a cacheable `test` task (source-level reads are out of the discovery aperture) is a violation; that each entry really moves the hash is proven by execution in its test. Invariant #167, added 2026-10-01",

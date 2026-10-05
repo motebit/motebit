@@ -30,15 +30,29 @@
  *     axes and per-glob floors, read from its vitest config by the same reader
  *     coverage-graduation uses, computed the way vitest computes them).
  *   - A results file for a package the workspace does not declare is RED too.
+ *   - Each package passed AT LEAST its committed floor of tests
+ *     (FLOORS_FILE, below). Everything above judges the suite the package
+ *     DECLARES; a declaration can be narrowed (a test:coverage script naming
+ *     one file, `--shard=k/N`, `--changed`, a narrowed include/exclude,
+ *     deleted test files) and every rule above still holds — measured on
+ *     apps/cli, which has no coverage thresholds: `vitest run
+ *     src/__tests__/approval-render.test.ts --coverage` ran 11 of 1017 tests,
+ *     exit 0, success true, nothing skipped, verifier GREEN. The floor is the
+ *     suite's size held OUTSIDE the suite's own declaration.
  *
  * Usage (CI's `check` job, after downloading every `coverage-shard-*`):
  *   tsx scripts/verify-test-outcomes.ts --artifacts /tmp/coverage-shards [--root .]
+ * Writing the floors (after a REAL full run of every shard, laid out the same way):
+ *   tsx scripts/verify-test-outcomes.ts --artifacts <dir> --write-floors
+ *     raises floors, adds a new package's, drops a removed package's; never lowers;
+ *   … --write-floors --allow-lower "<reason>"
+ *     also lowers (legitimate test deletion), recording each in allowedDecreases.
  * `<artifacts>/<shard-artifact>/<package-dir>/coverage/…` is the layout
  * actions/download-artifact produces for the shard uploads.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { cleanEnv } from "./lib/differential-tree.js";
@@ -61,6 +75,67 @@ export const SUMMARY_FILE = "coverage/coverage-summary.json";
  * shard must carry a vitest `startTime` at or after it.
  */
 export const SHARD_STAMP_FILE = "coverage/shard-started-at.json";
+
+/**
+ * The committed per-package floor of tests that must PASS, workspace-relative:
+ * `{ "floors": { "<pkg dir>": <int> }, "allowedDecreases": { "<pkg dir>":
+ * { "from": <int>, "to": <int>, "reason": "…" } } }`. Generated from a real
+ * full run by `--write-floors` and a RATCHET: the writer only raises unless
+ * `--allow-lower`, and scripts/check-test-outcome-floors.ts refuses any floor
+ * below its merge-base value without a matching allowedDecreases entry added
+ * in the same change. Every workspace package with a test:coverage script
+ * needs an entry — a new package fails closed until it has one.
+ */
+export const FLOORS_FILE = "scripts/test-outcome-floors.json";
+
+export interface FloorsFile {
+  floors: Record<string, number>;
+  allowedDecreases: Record<string, { from: number; to: number; reason: string }>;
+}
+
+/** The floors file at `root`, validated; a string when it cannot be trusted. */
+export function readFloors(root: string): FloorsFile | string {
+  const p = join(root, FLOORS_FILE);
+  if (!existsSync(p)) return `${FLOORS_FILE} does not exist`;
+  return parseFloors(readFileSync(p, "utf8"));
+}
+
+/** Parses and validates a floors file's text (also used on git-show'd copies). */
+export function parseFloors(text: string): FloorsFile | string {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    return `${FLOORS_FILE} is not JSON (${err instanceof Error ? err.message : String(err)})`;
+  }
+  const o = raw as { floors?: unknown; allowedDecreases?: unknown };
+  if (typeof o !== "object" || o === null || typeof o.floors !== "object" || o.floors === null)
+    return `${FLOORS_FILE} carries no "floors" object`;
+  const floors: Record<string, number> = {};
+  for (const [k, v] of Object.entries(o.floors as Record<string, unknown>)) {
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1)
+      return `${FLOORS_FILE} floors[${JSON.stringify(k)}] is ${JSON.stringify(v)}, not a positive integer`;
+    floors[k] = v;
+  }
+  const allowedDecreases: FloorsFile["allowedDecreases"] = {};
+  const ad = o.allowedDecreases ?? {};
+  if (typeof ad !== "object" || ad === null)
+    return `${FLOORS_FILE} "allowedDecreases" is not an object`;
+  for (const [k, v] of Object.entries(ad as Record<string, unknown>)) {
+    const e = v as { from?: unknown; to?: unknown; reason?: unknown };
+    if (
+      typeof e !== "object" ||
+      e === null ||
+      !Number.isInteger(e.from) ||
+      !Number.isInteger(e.to) ||
+      typeof e.reason !== "string" ||
+      e.reason.trim().length === 0
+    )
+      return `${FLOORS_FILE} allowedDecreases[${JSON.stringify(k)}] is not { from: int, to: int, reason: non-empty string }`;
+    allowedDecreases[k] = { from: e.from as number, to: e.to as number, reason: e.reason };
+  }
+  return { floors, allowedDecreases };
+}
 
 /** Clock skew tolerated between a shard runner and the verdict runner. */
 export const CLOCK_SKEW_MS = 5 * 60_000;
@@ -364,6 +439,14 @@ export interface OutcomeReport {
   violations: string[];
   /** Tests vitest reported PASSED across every verified package (never skipped/todo). */
   tests: number;
+  /** Per package, the tests vitest reported PASSED (summed over the shards that reported it). */
+  passed: Record<string, number>;
+  /**
+   * The floor violations alone (also in `violations`): what `--write-floors`
+   * may resolve. Anything else in `violations` means the run is not one to
+   * measure floors from.
+   */
+  floorViolations: string[];
 }
 
 /**
@@ -399,6 +482,8 @@ export function verifyOutcomes(root: string, artifacts: string): OutcomeReport {
       packages,
       violations: [`artifact dir ${artifacts} does not exist — no shard reported`],
       tests: 0,
+      passed: {},
+      floorViolations: [],
     };
   const shards = readdirSync(artifacts, { withFileTypes: true })
     .filter((d) => d.isDirectory())
@@ -460,6 +545,7 @@ export function verifyOutcomes(root: string, artifacts: string): OutcomeReport {
         `results for ${pkg} (in ${where.join(", ")}), which is not a workspace package with a test:coverage script`,
       );
   let tests = 0;
+  const passed: Record<string, number> = {};
   for (const pkg of packages) {
     const where = found.get(pkg) ?? [];
     if (where.length === 0) {
@@ -475,10 +561,103 @@ export function verifyOutcomes(root: string, artifacts: string): OutcomeReport {
     for (const s of where) {
       violations.push(...packageViolations(root, pkg, join(artifacts, s, pkg), notBefore.get(s)));
       const r = readJson(join(artifacts, s, pkg, RESULTS_FILE)) as { numPassedTests?: unknown };
-      if (typeof r.numPassedTests === "number") tests += r.numPassedTests;
+      if (typeof r.numPassedTests === "number") {
+        tests += r.numPassedTests;
+        passed[pkg] = (passed[pkg] ?? 0) + r.numPassedTests;
+      }
     }
   }
-  return { packages, violations, tests };
+
+  // The suite's size, held outside the suite's own declaration.
+  const floorViolations: string[] = [];
+  const ff = readFloors(root);
+  if (typeof ff === "string")
+    floorViolations.push(`${ff} — fail closed: no floor to judge against`);
+  else {
+    for (const pkg of packages) {
+      const floor = ff.floors[pkg];
+      if (floor === undefined)
+        floorViolations.push(
+          `${pkg}: no entry in ${FLOORS_FILE} — a package whose suite size nobody committed can be narrowed to one test unseen`,
+        );
+      else if (pkg in passed && passed[pkg]! < floor)
+        floorViolations.push(
+          `${pkg}: ${passed[pkg]} test(s) passed, below its committed floor of ${floor} (${FLOORS_FILE}) — the suite ran narrower than it is (a script naming one file, --shard, --changed, a narrowed include/exclude, or deleted tests)`,
+        );
+    }
+    for (const pkg of Object.keys(ff.floors))
+      if (!want.has(pkg))
+        floorViolations.push(
+          `${FLOORS_FILE} has a floor for ${pkg}, which is not a workspace package with a test:coverage script — remove the stale entry (--write-floors drops it)`,
+        );
+  }
+  violations.push(...floorViolations);
+  return { packages, violations, tests, passed, floorViolations };
+}
+
+export interface FloorsUpdate {
+  next: FloorsFile;
+  added: string[];
+  raised: string[];
+  lowered: string[];
+  /** Measured below the committed floor, left unlowered (no --allow-lower). */
+  refused: string[];
+  removed: string[];
+}
+
+/**
+ * The ratchet: the next floors from the committed ones and a full run's
+ * per-package passed counts. Raises and adds always; drops a floor whose
+ * package no longer runs coverage; lowers ONLY with `allowLower` (the reason),
+ * recording `{from, to, reason}` in allowedDecreases. An allowance whose `to`
+ * is no longer the floor is dropped — it describes a decrease that is gone.
+ */
+export function nextFloors(
+  current: FloorsFile | null,
+  measured: Record<string, number>,
+  allowLower: string | null,
+): FloorsUpdate {
+  const old = current?.floors ?? {};
+  const floors: Record<string, number> = {};
+  const allowedDecreases = { ...(current?.allowedDecreases ?? {}) };
+  const u: Omit<FloorsUpdate, "next"> = {
+    added: [],
+    raised: [],
+    lowered: [],
+    refused: [],
+    removed: [],
+  };
+  for (const pkg of Object.keys(measured).sort()) {
+    const m = measured[pkg]!;
+    const o = old[pkg];
+    if (o === undefined) {
+      floors[pkg] = m;
+      u.added.push(`${pkg} ${m}`);
+    } else if (m > o) {
+      floors[pkg] = m;
+      u.raised.push(`${pkg} ${o} → ${m}`);
+    } else if (m < o && allowLower !== null) {
+      floors[pkg] = m;
+      allowedDecreases[pkg] = { from: o, to: m, reason: allowLower };
+      u.lowered.push(`${pkg} ${o} → ${m}`);
+    } else {
+      floors[pkg] = o;
+      if (m < o) u.refused.push(`${pkg} measured ${m} < floor ${o}`);
+    }
+  }
+  for (const pkg of Object.keys(old)) if (!(pkg in measured)) u.removed.push(pkg);
+  for (const [pkg, a] of Object.entries(allowedDecreases))
+    if (floors[pkg] !== a.to) delete allowedDecreases[pkg];
+  return { next: { floors, allowedDecreases: sortKeys(allowedDecreases) }, ...u };
+}
+
+function sortKeys<T>(o: Record<string, T>): Record<string, T> {
+  return Object.fromEntries(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+/** The floors file's committed text: stable key order, a trailing newline. */
+export function formatFloors(f: FloorsFile): string {
+  return `${JSON.stringify({ floors: sortKeys(f.floors), allowedDecreases: sortKeys(f.allowedDecreases) }, null, 2)}\n`;
 }
 
 function main(argv: string[]): void {
@@ -493,19 +672,71 @@ function main(argv: string[]): void {
   }
   const root = arg("--root") ?? process.cwd();
   const r = verifyOutcomes(root, artifacts);
+  if (argv.includes("--write-floors")) {
+    writeFloors(root, artifacts, r, argv.includes("--allow-lower") ? arg("--allow-lower") : null);
+    return;
+  }
   if (r.violations.length > 0)
     failWithRepair({
       invariant:
-        "every workspace package with a test:coverage script ran in exactly one CI shard and vitest itself reported it, in this run: tests passed > 0 and at least its run-share floor of the declared tests, none failed, no unhandled error, results started after the shard job did, nothing under coverage/ tracked in git, coverage at or above the package's own thresholds",
+        "every workspace package with a test:coverage script ran in exactly one CI shard and vitest itself reported it, in this run: tests passed > 0 and at least its run-share floor of the declared tests, none failed, no unhandled error, results started after the shard job did, nothing under coverage/ tracked in git, coverage at or above the package's own thresholds, and at least its committed floor of tests passed (scripts/test-outcome-floors.json)",
       sites: r.violations,
       canonical:
         "vitest's own results (MOTEBIT_TEST_REPORTERS in vitest.shared.ts) judged by scripts/verify-test-outcomes.ts; packages enumerated from pnpm-workspace.yaml",
-      fix: "Fix the failing suite or raise its coverage (never lower a threshold). A package missing from every shard means the shard runner skipped it — fix scripts/test-coverage-shards.ts. A missing results file means its vitest config dropped MOTEBIT_TEST_REPORTERS (or a CLI --reporter replaced them). A run-share failure means a -t filter or blanket .skip — remove it, or give a package that genuinely skips a reasoned SKIP_HEAVY_PACKAGES entry. A tracked coverage/ file: git rm --cached it. A stale startTime: the results predate the shard job — something restored or committed them.",
+      fix: 'Fix the failing suite or raise its coverage (never lower a threshold). A package missing from every shard means the shard runner skipped it — fix scripts/test-coverage-shards.ts. A missing results file means its vitest config dropped MOTEBIT_TEST_REPORTERS (or a CLI --reporter replaced them). A run-share failure means a -t filter or blanket .skip — remove it, or give a package that genuinely skips a reasoned SKIP_HEAVY_PACKAGES entry. A tracked coverage/ file: git rm --cached it. A stale startTime: the results predate the shard job — something restored or committed them. A package below its test floor ran narrower than its suite: restore the suite (script, include/exclude, shard flag, deleted tests); if tests were legitimately deleted, re-measure from a full run with `pnpm test:outcomes:verify --artifacts <dir> --write-floors --allow-lower "<reason>"` and commit scripts/test-outcome-floors.json. A package with no floor: after a full run, `pnpm test:outcomes:verify --artifacts <dir> --write-floors` adds it.',
       doctrine: "docs/doctrine/composition-preserves-enforcement.md",
     });
   console.log(
-    `✓ verify-test-outcomes: examined ${r.packages.length} workspace package(s) with a test:coverage script (enumerated from pnpm-workspace.yaml, not the shard runner) — each reported by exactly one shard in this run (results dated after their shard job started; nothing under coverage/ tracked), ${r.tests} test(s) passed (skipped/todo not counted; each package ran ≥ its run-share floor, default ${MIN_RUN_SHARE}), 0 failed, every coverage floor met.`,
+    `✓ verify-test-outcomes: examined ${r.packages.length} workspace package(s) with a test:coverage script (enumerated from pnpm-workspace.yaml, not the shard runner) — each reported by exactly one shard in this run (results dated after their shard job started; nothing under coverage/ tracked), ${r.tests} test(s) passed (skipped/todo not counted; each package ran ≥ its run-share floor, default ${MIN_RUN_SHARE}), 0 failed, every coverage floor met, every package at or above its committed test floor (${FLOORS_FILE}).`,
   );
+}
+
+/**
+ * `--write-floors`: measure from a run that is green in every respect but the
+ * floors, then apply the ratchet. Refuses a run with any other violation — a
+ * failing, partial or stale run is not one to measure a suite's size from.
+ */
+function writeFloors(
+  root: string,
+  artifacts: string,
+  r: OutcomeReport,
+  allowLower: string | null | undefined,
+): void {
+  if (
+    allowLower !== null &&
+    (allowLower === undefined || allowLower.startsWith("--") || allowLower.trim() === "")
+  ) {
+    console.error('--allow-lower needs a reason: --allow-lower "<why these tests were deleted>"');
+    process.exit(2);
+  }
+  const other = r.violations.filter((v) => !r.floorViolations.includes(v));
+  if (other.length > 0) {
+    console.error(
+      `✗ --write-floors refused: the run under ${artifacts} is not a full green run (${other.length} violation(s)) — floors are measured only from one:\n${other.map((v) => `  - ${v}`).join("\n")}`,
+    );
+    process.exit(1);
+  }
+  const cur = existsSync(join(root, FLOORS_FILE)) ? readFloors(root) : null;
+  if (typeof cur === "string") {
+    console.error(`✗ --write-floors refused: ${cur} — repair it by hand first`);
+    process.exit(1);
+  }
+  const u = nextFloors(cur, r.passed, allowLower);
+  mkdirSync(dirname(join(root, FLOORS_FILE)), { recursive: true });
+  writeFileSync(join(root, FLOORS_FILE), formatFloors(u.next));
+  const line = (k: string, xs: string[]) =>
+    xs.length > 0 && console.log(`  ${k} (${xs.length}): ${xs.join(", ")}`);
+  console.log(`wrote ${FLOORS_FILE}: ${Object.keys(u.next.floors).length} package floor(s)`);
+  line("added", u.added);
+  line("raised", u.raised);
+  line("lowered", u.lowered);
+  line("removed (package no longer runs coverage)", u.removed);
+  if (u.refused.length > 0) {
+    console.error(
+      `✗ measured below the committed floor, NOT lowered (the ratchet): ${u.refused.join(", ")}. If tests were legitimately deleted, re-run with --allow-lower "<reason>"; otherwise the suite ran narrower than it is.`,
+    );
+    process.exit(1);
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main(process.argv.slice(2));

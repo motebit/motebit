@@ -36,7 +36,15 @@ export interface OutcomeFixture {
   stamps?: Record<string, Record<string, unknown> | null>;
   /** Workspace-relative files committed to the fixture's git repo (path → contents). */
   tracked?: Record<string, string>;
+  /**
+   * The committed scripts/test-outcome-floors.json `floors` (null = no file).
+   * Absent = FIXTURE_FLOOR for every package with test:coverage.
+   */
+  floors?: Record<string, number> | null;
 }
+
+/** Each fixture suite passes 7 tests (passingReport); its committed floor. */
+export const FIXTURE_FLOOR = 7;
 
 const F80: CoverageThresholds = { statements: 80, branches: 70, functions: 80, lines: 80 };
 const F100: CoverageThresholds = { statements: 100, branches: 100, functions: 100, lines: 100 };
@@ -103,6 +111,13 @@ type Mutate = (f: OutcomeFixture) => void;
 const report = (f: OutcomeFixture, shard: string, pkg: string) => f.shards[shard]![pkg]!;
 const results = (f: OutcomeFixture, shard: string, pkg: string) =>
   report(f, shard, pkg).results as Record<string, unknown>;
+const fixtureFloors = (f: OutcomeFixture): Record<string, number> =>
+  f.floors ??
+  Object.fromEntries(
+    Object.entries(f.workspace)
+      .filter(([, p]) => p.coverage !== false)
+      .map(([k]) => [k, FIXTURE_FLOOR]),
+  );
 
 /**
  * Each RED variant: the artifacts a known bypass leaves, which the verifier
@@ -274,6 +289,43 @@ export const RED_VARIANTS: Record<string, { what: string; mutate: Mutate }> = {
       delete results(f, "coverage-shard-2", "apps/web").startTime;
     },
   },
+  "narrowed-to-one-file": {
+    what: "the suite's DECLARATION narrowed (measured on apps/cli: test:coverage = `vitest run src/__tests__/approval-render.test.ts --coverage` ran 11 of 1017 tests — exit 0, success true, nothing skipped, so the run-share rule sees 11/11; apps/cli has no coverage floor) — only the committed test floor catches it",
+    mutate: (f) => {
+      const r = results(f, "coverage-shard-1", "apps/cli");
+      r.numTotalTests = 1;
+      r.numPassedTests = 1;
+      r.testResults = (r.testResults as unknown[]).slice(0, 1);
+    },
+  },
+  "floor-missing": {
+    what: "a package with test:coverage has no entry in the committed floors — its suite size is nobody's to check",
+    mutate: (f) => {
+      const fl = { ...fixtureFloors(f) };
+      delete fl["apps/cli"];
+      f.floors = fl;
+    },
+  },
+  "new-package-without-floor": {
+    what: "a NEW workspace package that runs and passes, added without a floor entry — fail closed until the floor is written",
+    mutate: (f) => {
+      f.floors = fixtureFloors(f);
+      f.workspace["packages/brand-new"] = { thresholds: F80 };
+      f.shards["coverage-shard-2"]!["packages/brand-new"] = passingReport("packages/brand-new");
+    },
+  },
+  "floors-file-missing": {
+    what: "no scripts/test-outcome-floors.json at all — fail closed",
+    mutate: (f) => {
+      f.floors = null;
+    },
+  },
+  "stale-floor": {
+    what: "a floor for a package that no longer runs coverage — a floors file that drifted from the workspace",
+    mutate: (f) => {
+      f.floors = { ...fixtureFloors(f), "packages/types-only": 3 };
+    },
+  },
   "shard-stamp-missing": {
     what: "a shard artifact without the start stamp its CI job writes first — nothing to date its results against",
     mutate: (f) => {
@@ -314,6 +366,13 @@ export function materialize(f: OutcomeFixture, dir: string): { root: string; art
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify(body));
   };
+  if (f.floors !== null) {
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    writeFileSync(
+      join(root, "scripts", "test-outcome-floors.json"),
+      JSON.stringify({ floors: fixtureFloors(f), allowedDecreases: {} }, null, 2),
+    );
+  }
   for (const [rel, body] of Object.entries(f.tracked ?? {})) {
     mkdirSync(dirname(join(root, rel)), { recursive: true });
     writeFileSync(join(root, rel), body);
