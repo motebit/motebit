@@ -161,8 +161,9 @@ describe("check-cli-surface decision", () => {
 
 describe("check-cli-surface (smoke)", () => {
   it("passes against the real repo", () => {
-    // `--base HEAD`: the gate-self-tests job checks out shallow, so origin/<base>
-    // is absent there; the merge-base logic is proven by the temp-repo cases.
+    // `--base HEAD`: the smoke judges the working tree only, independent of
+    // whether origin/<base> is fetched; the merge-base logic is proven by the
+    // temp-repo cases.
     const result = spawnSync(
       "npx",
       ["tsx", resolve(ROOT, "scripts/check-cli-surface.ts"), "--base", "HEAD"],

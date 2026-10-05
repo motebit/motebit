@@ -7,8 +7,10 @@
  * split is safe only while everything the hook runs has a CI counterpart that
  * runs AT LEAST AS WIDE, on every push to main. The trade-off that makes the
  * hook fast — a DEPENDENT's failing test does not block locally — is only
- * acceptable because CI's `check` job runs `turbo run test:coverage`
- * unfiltered.
+ * acceptable because CI runs `turbo run test:coverage` over EVERY package:
+ * unfiltered until 2026-10-05, now as the `test-coverage` shard matrix whose
+ * union this gate re-proves is every package with a test:coverage script,
+ * each exactly once (shardViolations), under the fail-closed `check` verdict.
  *
  * The first version of this gate (2026-09-30) matched `pnpm …` text with
  * regexes and accepted anything it did not recognise as "not a check"; a
@@ -40,11 +42,17 @@
  *     whose `if:`/`needs:` chain is exactly the pinned one (and whose needs
  *     run unconditionally); no step in those jobs writes $GITHUB_ENV /
  *     $GITHUB_PATH or uses an action outside the pinned set;
- *   - EVERY step of every counterpart job (check, format, the sharded
+ *   - EVERY step of every counterpart job (check-static, the sharded
+ *     test-coverage + its fail-closed `check` verdict job, format, the sharded
  *     gate-effectiveness-shard + gate-self-tests, the fail-closed
  *     gate-effectiveness verdict job, changes) equals CI_JOB_STEPS exactly, in order — an added, removed or
  *     changed step (another checkout `ref:`, a `rm -rf` of the tests, an
  *     `eval`'d $GITHUB_ENV write) is RED until the pinned list is updated;
+ *   - EVERY job (pinned or not) whose steps run a base-ref-dependent gate
+ *     (BASE_REF_GATES — directly, via `pnpm check`, the gate self-tests or the
+ *     effectiveness probes) checks out full history (`fetch-depth: 0`), so
+ *     `origin/<base_ref>` / `merge_group.base_sha` resolve (historyViolations;
+ *     #1062's first run: shallow self-tests red, shallow probes vacuous);
  *   - the root package.json scripts those forms reach compare by exact value,
  *     and every workspace package's `test:coverage` runs its `test` (plus
  *     coverage), so CI's test:coverage really is a superset of the hook's test.
@@ -68,11 +76,15 @@ import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -81,6 +93,14 @@ import { parse as parseYaml } from "yaml";
 import { cleanEnv } from "./lib/differential-tree.js";
 import { failWithRepair } from "./lib/gate-report.js";
 import { ShParseError, parseSh, walk, type Program, type Word } from "./lib/posix-sh.js";
+import {
+  assignShards,
+  coveragePackages,
+  turboArgs,
+  verifyPartition,
+} from "./test-coverage-shards.js";
+import { RED_VARIANTS, greenFixture, materialize } from "./lib/test-outcomes-fixture.js";
+import { verifyOutcomes } from "./verify-test-outcomes.js";
 
 const ROOT = process.cwd();
 const HOOK = ".husky/pre-push";
@@ -290,16 +310,38 @@ interface CiForm {
   job: string;
   run: string;
 }
+/** The shard runner the pinned root `test:coverage:shard` script launches. */
+export const SHARD_RUNNER = "scripts/test-coverage-shards.ts";
+/** The test:coverage counterpart: one leg of the sharded suite. */
+const SHARD_RUN =
+  "pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json";
+
+/**
+ * The outcome verifier the `check` verdict job runs over the downloaded shard
+ * artifacts. It reads vitest's own results and imports nothing from
+ * SHARD_RUNNER, so the proof that every suite ran and passed no longer rests
+ * on the runner's exit code or its package list (outcomeVerifierViolations).
+ */
+export const OUTCOME_VERIFIER = "scripts/verify-test-outcomes.ts";
+const OUTCOME_ARTIFACTS = "/tmp/coverage-shards";
+
 /** The CI counterpart of each task key: a step whose `run` is exactly this. */
 export const CI_FORMS: Record<Key, CiForm> = {
-  build: { job: "check", run: "pnpm build" },
-  audit: { job: "check", run: "pnpm audit --prod --audit-level=high --ignore-registry-errors" },
-  check: { job: "check", run: "pnpm check" },
-  typecheck: { job: "check", run: "pnpm typecheck" },
-  lint: { job: "check", run: "pnpm lint" },
+  build: { job: "check-static", run: "pnpm build" },
+  audit: {
+    job: "check-static",
+    run: "pnpm audit --prod --audit-level=high --ignore-registry-errors",
+  },
+  check: { job: "check-static", run: "pnpm check" },
+  typecheck: { job: "check-static", run: "pnpm typecheck" },
+  lint: { job: "check-static", run: "pnpm lint" },
   // test:coverage runs every suite AND the thresholds — a superset of `test`.
-  test: { job: "check", run: "pnpm exec turbo run test:coverage --concurrency=4" },
-  "test:coverage": { job: "check", run: "pnpm exec turbo run test:coverage --concurrency=4" },
+  // Sharded (2026-10-05): the union of the matrix legs is every package with a
+  // test:coverage script, each exactly once — the pinned strategy below must
+  // list every shard 1/N..N/N, and evaluateCi re-proves the partition
+  // scripts/test-coverage-shards.ts computes for that N (shardViolations).
+  test: { job: "test-coverage", run: SHARD_RUN },
+  "test:coverage": { job: "test-coverage", run: SHARD_RUN },
   format: { job: "format", run: "pnpm format:check" },
   "test:gates": { job: "gate-self-tests", run: "pnpm test:gates" },
   // Sharded: the union of the matrix legs is the full probe set — the pinned
@@ -317,7 +359,16 @@ export const CI_JOBS: Record<
   string,
   { if?: string; needs?: string | string[]; strategy?: Record<string, unknown> }
 > = {
-  check: {},
+  "check-static": {},
+  "test-coverage": {
+    strategy: { "fail-fast": false, matrix: { shard: ["1/3", "2/3", "3/3"] } },
+  },
+  // The required-check verdict: runs whatever the legs concluded and fails
+  // closed on a cancelled / skipped / failed one (its pinned steps below).
+  check: {
+    needs: ["check-static", "test-coverage"],
+    if: "always()",
+  },
   format: {},
   "gate-effectiveness-shard": {
     needs: "changes",
@@ -349,6 +400,273 @@ export function matrixIsCompleteShardList(strategy: unknown): boolean {
   return list.every((v, i) => v === `${i + 1}/${list.length}`);
 }
 /**
+ * The sharded test:coverage counterpart runs every suite the unfiltered
+ * `turbo run test:coverage` did only if, for the pinned N, the assignment
+ * scripts/test-coverage-shards.ts computes puts EVERY package with a
+ * test:coverage script in exactly one shard, and `turboArgs` — the args the
+ * runner is meant to launch — is the old unfiltered form plus exactly one
+ * `--filter=./<dir>` per package of that shard. That `turboArgs` is what the
+ * runner ACTUALLY launches, unaltered, and that its exit status is turbo's, is
+ * not provable from these values: shardRunnerViolations proves it by executing
+ * the runner.
+ */
+export function shardViolations(
+  strategy: unknown,
+  packageScripts: Record<string, Record<string, string>>,
+): string[] {
+  if (!matrixIsCompleteShardList(strategy)) return []; // reported by the job rules
+  const n = (strategy as { matrix: { shard: string[] } }).matrix.shard.length;
+  const pkgs = coveragePackages(packageScripts);
+  const a = assignShards(pkgs, n);
+  if (a.violations.length > 0) return a.violations.map((v) => `${CI} test-coverage shards: ${v}`);
+  const v = verifyPartition(pkgs, a.shards).map((x) => `${CI} test-coverage shards: ${x}`);
+  a.shards.forEach((dirs, i) => {
+    const got = turboArgs(dirs);
+    const want = ["run", "test:coverage", "--concurrency=4", ...dirs.map((d) => `--filter=./${d}`)];
+    if (JSON.stringify(got) !== JSON.stringify(want))
+      v.push(
+        `${CI} test-coverage shard ${i + 1}/${n} runs \`turbo ${got.join(" ")}\`, not the unfiltered form filtered to its packages (\`turbo ${want.join(" ")}\`)`,
+      );
+  });
+  return v;
+}
+
+export interface ShardRunnerResult {
+  violations: string[];
+  /** Runner processes actually executed (0 only when the assignment is already reported broken). */
+  launches: number;
+}
+const shardRunnerMemo = new Map<string, ShardRunnerResult>();
+
+/**
+ * Proves by EXECUTION what a CI shard leg launches and the exit it returns —
+ * not by reading the runner's source. In a throwaway workspace mirroring
+ * `inp.packageScripts`, with `inp.shardRunner` as scripts/test-coverage-shards.ts
+ * and `node_modules/.bin/turbo` a stub that records its argv and exits with a
+ * chosen status, it runs the pinned root `test:coverage:shard` command with
+ * the CI step's arguments, once per shard of the pinned matrix with the stub
+ * exiting 1, and once more with the stub exiting 0. Each run must have
+ * launched turbo exactly once with the literal unfiltered form filtered to that
+ * shard (computed here, not by the runner), written that shard's manifest, and
+ * exited with the stub's status: a runner that swallows a failure, adds a flag
+ * (`--dry`, a narrower filter), or launches nothing is RED.
+ */
+export function shardRunnerViolations(inp: Inputs, root: string = ROOT): ShardRunnerResult {
+  const cmd = inp.rootScripts["test:coverage:shard"];
+  if (cmd !== ROOT_SCRIPTS["test:coverage:shard"])
+    return {
+      violations: [
+        `package.json test:coverage:shard is ${JSON.stringify(cmd ?? null)}, not ${JSON.stringify(ROOT_SCRIPTS["test:coverage:shard"])} — the shard runner this gate executes is not the one CI launches`,
+      ],
+      launches: 0,
+    };
+  const shards = (CI_JOBS["test-coverage"]!.strategy as { matrix: { shard: string[] } }).matrix
+    .shard;
+  const n = shards.length;
+  const pkgs = coveragePackages(inp.packageScripts);
+  const a = assignShards(pkgs, n);
+  if (a.violations.length > 0) return { violations: [], launches: 0 }; // reported by shardViolations
+  const key = canonHash(JSON.stringify([inp.shardRunner, inp.packageScripts, cmd, n]));
+  const hit = shardRunnerMemo.get(key);
+  if (hit) return hit;
+
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "prepush-shard-runner-")));
+  const violations: string[] = [];
+  let launches = 0;
+  try {
+    const bases = [...new Set(Object.keys(inp.packageScripts).map((k) => k.split("/")[0]!))];
+    writeFileSync(
+      join(dir, "pnpm-workspace.yaml"),
+      `packages:\n${bases.map((b) => `  - "${b}/*"\n`).join("")}`,
+    );
+    for (const [pkg, scripts] of Object.entries(inp.packageScripts)) {
+      mkdirSync(join(dir, pkg), { recursive: true });
+      writeFileSync(join(dir, pkg, "package.json"), JSON.stringify({ name: pkg, scripts }));
+    }
+    mkdirSync(join(dir, "scripts"));
+    writeFileSync(join(dir, SHARD_RUNNER), inp.shardRunner);
+    symlinkSync(join(root, "scripts", "lib"), join(dir, "scripts", "lib"));
+    mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
+    for (const m of ["yaml", "tsx"])
+      symlinkSync(realpathSync(join(root, "node_modules", m)), join(dir, "node_modules", m));
+    symlinkSync(
+      join(root, "node_modules", ".bin", "tsx"),
+      join(dir, "node_modules", ".bin", "tsx"),
+    );
+    const argvFile = join(dir, "turbo-argv");
+    writeFileSync(
+      join(dir, "node_modules", ".bin", "turbo"),
+      `#!/bin/sh\nprintf '%s\\0' "$@" >> "$PREPUSH_STUB_ARGV"\nprintf '\\n' >> "$PREPUSH_STUB_ARGV"\nexit "$PREPUSH_STUB_EXIT"\n`,
+      { mode: 0o755 },
+    );
+    const runs = [
+      ...shards.map((sh, i) => ({ sh, i, exit: 1 })),
+      { sh: shards[n - 1]!, i: n - 1, exit: 0 },
+    ];
+    for (const { sh, i, exit } of runs) {
+      const manifest = join(dir, `manifest-${i}-${exit}.json`);
+      rmSync(argvFile, { force: true });
+      const r = spawnSync("sh", ["-c", `${cmd} --shard ${sh} --manifest ${manifest}`], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...process.env, PREPUSH_STUB_ARGV: argvFile, PREPUSH_STUB_EXIT: String(exit) },
+      });
+      launches++;
+      const where = `${SHARD_RUNNER} --shard ${sh} (stub turbo exiting ${exit})`;
+      const dirs = a.shards[i]!;
+      const want = [
+        "run",
+        "test:coverage",
+        "--concurrency=4",
+        ...dirs.map((d) => `--filter=./${d}`),
+      ];
+      const calls = existsSync(argvFile)
+        ? readFileSync(argvFile, "utf8")
+            .split("\n")
+            .filter((l) => l !== "")
+            .map((l) => l.split("\0").slice(0, -1))
+        : [];
+      if (calls.length !== 1)
+        violations.push(
+          `${where} launched turbo ${calls.length} time(s), not exactly once — ${(r.stderr ?? "").trim().split("\n").slice(-3).join(" / ")}`,
+        );
+      else if (JSON.stringify(calls[0]) !== JSON.stringify(want))
+        violations.push(
+          `${where} launched \`turbo ${calls[0]!.join(" ")}\`, not \`turbo ${want.join(" ")}\` — the shard would run narrower than (or none of) its suites`,
+        );
+      if (r.status !== exit)
+        violations.push(
+          `${where} exited ${r.status ?? `by signal ${r.signal}`}, not turbo's ${exit} — a shard's verdict must be its tests' verdict`,
+        );
+      let got: unknown = null;
+      try {
+        got = (JSON.parse(readFileSync(manifest, "utf8")) as { packages?: unknown }).packages;
+      } catch {
+        got = null;
+      }
+      if (JSON.stringify(got) !== JSON.stringify(dirs))
+        violations.push(
+          `${where} wrote manifest packages ${JSON.stringify(got)}, not its shard's ${dirs.length} package(s)`,
+        );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const res = { violations, launches };
+  shardRunnerMemo.set(key, res);
+  return res;
+}
+
+/**
+ * Proves by EXECUTION that the `check` job's outcome verifier is a verdict:
+ * the pinned root `test:outcomes:verify` command, run over a fixture
+ * workspace + shard artifacts (scripts/lib/test-outcomes-fixture.ts), exits 0
+ * on the GREEN fixture and non-zero on EVERY red variant — the artifacts B1
+ * (exit code zeroed), the GITHUB_JOB return-0 runner, B2 (enumeration skips a
+ * package), a deleted results file, flipped numFailedTests, zero tests, an
+ * unhandled error, coverage or a per-glob floor below threshold, a duplicate,
+ * a foreign or a copied results file leave behind. And the verifier, through
+ * every local import, never imports SHARD_RUNNER: what it is judged against
+ * is not the runner's to shrink.
+ */
+export function outcomeVerifierViolations(
+  inp: Inputs,
+  root: string = ROOT,
+): { violations: string[]; runs: number } {
+  const cmd = inp.rootScripts["test:outcomes:verify"];
+  if (cmd !== ROOT_SCRIPTS["test:outcomes:verify"])
+    return {
+      violations: [
+        `package.json test:outcomes:verify is ${JSON.stringify(cmd ?? null)}, not ${JSON.stringify(ROOT_SCRIPTS["test:outcomes:verify"])} — the verifier this gate executes is not the one CI's check job runs`,
+      ],
+      runs: 0,
+    };
+  const violations: string[] = [];
+  const seen = new Set<string>();
+  const visit = (rel: string) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const src = readFileSync(join(root, rel), "utf8");
+    for (const m of src.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)) {
+      const spec = m[1]!;
+      if (/test-coverage-shards/.test(spec))
+        violations.push(
+          `${rel} imports ${spec} — the outcome verifier must not depend on the shard runner it judges`,
+        );
+      else if (spec.startsWith("."))
+        visit(join(rel, "..", spec.replace(/\.js$/, ".ts")).replace(/\\/g, "/"));
+    }
+  };
+  visit(OUTCOME_VERIFIER);
+
+  const cases: { id: string; red: boolean }[] = [
+    { id: "green", red: false },
+    ...Object.keys(RED_VARIANTS).map((id) => ({ id, red: true })),
+  ];
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "prepush-outcomes-")));
+  let runs = 0;
+  try {
+    const paths = cases.map(({ id }) => {
+      const f = greenFixture();
+      try {
+        if (id !== "green") RED_VARIANTS[id]!.mutate(f);
+      } catch (err) {
+        violations.push(
+          `RED fixture ${id} cannot be derived from the GREEN fixture (${err instanceof Error ? err.message : String(err)}) — scripts/lib/test-outcomes-fixture.ts`,
+        );
+      }
+      return materialize(f, join(dir, id));
+    });
+    // The exact CI command, as a process, on the GREEN fixture and on B1 (its
+    // exit code is the verdict the check job reads) …
+    const cli = ["green", "B1-exitcode-zeroed"];
+    const script = cli
+      .map((id) => {
+        const p = paths[cases.findIndex((c) => c.id === id)]!;
+        return `${cmd} --artifacts '${p.artifacts}' --root '${p.root}' >/dev/null 2>&1; echo "${id}=$?"`;
+      })
+      .join("\n");
+    const r = spawnSync("sh", ["-c", script], { cwd: root, encoding: "utf8" });
+    const status = new Map(
+      (r.stdout ?? "")
+        .split("\n")
+        .map((l) => /^([\w-]+)=(\d+)$/.exec(l))
+        .filter((m): m is RegExpExecArray => m !== null)
+        .map((m) => [m[1]!, Number(m[2])]),
+    );
+    // … and the same verifier function, in-process, on every case.
+    cases.forEach(({ id }, i) => {
+      if (!cli.includes(id))
+        status.set(
+          id,
+          verifyOutcomes(paths[i]!.root, paths[i]!.artifacts).violations.length > 0 ? 1 : 0,
+        );
+    });
+    for (const { id, red } of cases) {
+      const st = status.get(id);
+      if (st === undefined) {
+        violations.push(
+          `${OUTCOME_VERIFIER}: case ${id} never ran — ${(r.stderr ?? "").trim().slice(-300)}`,
+        );
+        continue;
+      }
+      runs++;
+      if (red && st === 0)
+        violations.push(
+          `${OUTCOME_VERIFIER} exited 0 on RED fixture ${id} (${RED_VARIANTS[id]!.what}) — the check job would pass a run whose suites did not all run and pass`,
+        );
+      if (!red && st !== 0)
+        violations.push(
+          `${OUTCOME_VERIFIER} exited ${st} on the GREEN fixture — a correct sharded run would fail the check job`,
+        );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return { violations, runs };
+}
+
+/**
  * EVERY step of every counterpart job, exactly (name, uses, with, run, if,
  * env, continue-on-error, id — the whole step object, in order). Deny by
  * default (2026-10-01 cold review, B1): a step inserted before a counterpart
@@ -358,7 +676,7 @@ export function matrixIsCompleteShardList(strategy: unknown): boolean {
  * deliberate edit to this list, reviewed against the pre-push ⊆ CI claim.
  */
 export const CI_JOB_STEPS: Record<string, Step[]> = {
-  check: [
+  "check-static": [
     {
       // Full history so check-cli-surface can resolve the merge-base; it
       // checks out the same commit, so it cannot change what a counterpart tests.
@@ -418,8 +736,47 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
       run: "pnpm run check-unused",
     },
     {
-      name: "Test with coverage",
-      run: "pnpm exec turbo run test:coverage --concurrency=4",
+      name: "Upload build artifacts for E2E",
+      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      with: {
+        name: "web-build",
+        path: "apps/web/dist/",
+        "retention-days": 1,
+      },
+    },
+  ],
+  "test-coverage": [
+    {
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    },
+    {
+      // Writes the shard's own start stamp (scripts/verify-test-outcomes.ts
+      // SHARD_STAMP_FILE) before install/build/tests; touches nothing a
+      // counterpart reads.
+      name: "Stamp this shard's start",
+      run: 'mkdir -p coverage\necho "{\\"startedAt\\": $(date +%s%3N)}" > coverage/shard-started-at.json\n',
+    },
+    {
+      uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+    },
+    {
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: {
+        "node-version": "22",
+        cache: "pnpm",
+      },
+    },
+    {
+      name: "Install dependencies",
+      run: "pnpm install --frozen-lockfile",
+    },
+    {
+      name: "Build",
+      run: "pnpm build",
+    },
+    {
+      name: "Test with coverage (this shard)",
+      run: SHARD_RUN,
     },
     {
       name: "Coverage summary",
@@ -431,18 +788,69 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
       if: "always()",
       uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       with: {
-        name: "coverage-reports",
-        path: "packages/*/coverage/\napps/*/coverage/\nservices/*/coverage/\n",
+        name: "coverage-shard-${{ strategy.job-index }}",
+        path: "coverage/\npackages/*/coverage/\napps/*/coverage/\nservices/*/coverage/\n",
         "retention-days": 14,
       },
     },
+  ],
+  check: [
     {
-      name: "Upload build artifacts for E2E",
+      name: "Fail closed unless the static job and every shard succeeded",
+      env: {
+        STATIC: "${{ needs.check-static.result }}",
+        TESTS: "${{ needs.test-coverage.result }}",
+      },
+      run: 'echo "check-static=$STATIC test-coverage=$TESTS"\nif [ "$STATIC" != "success" ] || [ "$TESTS" != "success" ]; then\n  echo "::error::check-static \'$STATIC\', test-coverage \'$TESTS\' — a cancelled, skipped or failed leg is not a pass"\n  exit 1\nfi\n',
+    },
+    {
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    },
+    {
+      uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+    },
+    {
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: {
+        "node-version": "22",
+        cache: "pnpm",
+      },
+    },
+    {
+      name: "Install dependencies",
+      run: "pnpm install --frozen-lockfile",
+    },
+    {
+      name: "Download the shards' coverage",
+      uses: "actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e",
+      with: {
+        pattern: "coverage-shard-*",
+        path: "/tmp/coverage-shards",
+      },
+    },
+    {
+      name: "Prove the shards ran every suite exactly once",
+      run: "pnpm test:coverage:shard --verify-manifests /tmp/coverage-shards",
+    },
+    {
+      name: "Prove every suite passed, from vitest's own results",
+      run: `pnpm test:outcomes:verify --artifacts ${OUTCOME_ARTIFACTS}`,
+    },
+    {
+      name: "Merge the shards' coverage",
+      run: 'for d in /tmp/coverage-shards/*/; do cp -R "$d". .; done\n',
+    },
+    {
+      name: "Coverage summary",
+      run: 'node scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"',
+    },
+    {
+      name: "Upload coverage reports",
       uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       with: {
-        name: "web-build",
-        path: "apps/web/dist/",
-        "retention-days": 1,
+        name: "coverage-reports",
+        path: "packages/*/coverage/\napps/*/coverage/\nservices/*/coverage/\n",
+        "retention-days": 14,
       },
     },
   ],
@@ -471,7 +879,13 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
   ],
   "gate-effectiveness-shard": [
     {
+      // Full history: required by historyViolations (the shard probes run
+      // the base-ref-dependent gates); same commit, so it changes nothing a
+      // counterpart tests.
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        "fetch-depth": 0,
+      },
     },
     {
       uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
@@ -508,7 +922,12 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
   ],
   "gate-self-tests": [
     {
+      // Full history: required by historyViolations (the self-tests run
+      // check-test-outcome-floors over the real repo).
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        "fetch-depth": 0,
+      },
     },
     {
       uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
@@ -596,6 +1015,78 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
     },
   ],
 };
+/**
+ * Gates that judge a change against its BASE: they resolve the merge-base of
+ * HEAD with the event's base (`resolveBaseRef` in check-cli-surface.ts — the
+ * merge queue's `merge_group.base_sha`, a PR's `origin/<base_ref>`, else
+ * `origin/main`) and fail closed when it does not resolve. On a shallow
+ * checkout it never does: the gate goes red on correct code, and an
+ * effectiveness probe of it "fires" for the wrong reason (#1062's first run:
+ * gate-self-tests red, every probe shard vacuously green).
+ */
+export const BASE_REF_GATES = ["check-cli-surface", "check-test-outcome-floors"] as const;
+
+/**
+ * Step `run` shapes that execute a BASE_REF_GATE, and why. Matched against
+ * every step of EVERY job in ci.yml — not only the pinned counterparts — so a
+ * new job that runs one is covered the moment it appears.
+ */
+export const BASE_REF_RUNNERS: { pattern: RegExp; why: string }[] = [
+  {
+    pattern: new RegExp(`\\b(?:${BASE_REF_GATES.join("|")})\\b`),
+    why: "names a base-ref-dependent gate",
+  },
+  {
+    pattern: /\bpnpm (?:run )?check(?=\s|$)/m,
+    why: "`pnpm check` runs every gate in scripts/check.ts, the base-ref-dependent ones included",
+  },
+  {
+    pattern: /\bpnpm (?:run )?test:gates\b/,
+    why: "`pnpm test:gates` runs the gate self-tests, which run check-test-outcome-floors over the real repo",
+  },
+  {
+    pattern: /\bcheck-gates-effective\b(?![^\n]*--verify-shards)/,
+    why: "check-gates-effective runs every gate's probe (a --verify-shards run reads manifests only)",
+  },
+];
+
+/**
+ * Every job in ci.yml that runs a BASE_REF_GATE must check out FULL history
+ * (`fetch-depth: 0` on every checkout step): only then do `origin/<base_ref>`
+ * and `merge_group.base_sha` resolve to commits with a merge-base. Semantic,
+ * not a pin — editing CI_JOB_STEPS to drop the fetch-depth keeps this RED.
+ */
+export function historyViolations(jobs: Record<string, Job>): {
+  violations: string[];
+  jobs: string[];
+} {
+  const violations: string[] = [];
+  const runs: string[] = [];
+  for (const [name, job] of Object.entries(jobs)) {
+    const steps = job.steps ?? [];
+    const why = BASE_REF_RUNNERS.find((r) =>
+      steps.some((s) => typeof s.run === "string" && r.pattern.test(s.run)),
+    )?.why;
+    if (!why) continue;
+    runs.push(name);
+    const checkouts = steps.filter(
+      (s) => typeof s.uses === "string" && s.uses.startsWith("actions/checkout@"),
+    );
+    if (checkouts.length === 0)
+      violations.push(
+        `${CI} job \`${name}\` runs a base-ref-dependent gate (${why}) but has no actions/checkout step with \`fetch-depth: 0\``,
+      );
+    for (const c of checkouts) {
+      const depth = (c.with as Record<string, unknown> | undefined)?.["fetch-depth"];
+      if (depth !== 0)
+        violations.push(
+          `${CI} job \`${name}\` runs a base-ref-dependent gate (${why}) on a checkout with fetch-depth ${JSON.stringify(depth ?? null)} — ${BASE_REF_GATES.join(" / ")} resolve the merge-base with origin/<base_ref> or merge_group.base_sha and fail closed on a shallow clone (a probe of them then "fires" for the wrong reason); give that checkout \`with: { fetch-depth: 0 }\``,
+        );
+    }
+  }
+  return { violations, jobs: runs };
+}
+
 const JOB_KEYS = new Set(["runs-on", "timeout-minutes", "steps", "needs", "if", "outputs"]);
 const STEP_ACTIONS = [
   "actions/checkout@",
@@ -620,6 +1111,8 @@ export const ROOT_SCRIPTS: Record<string, string> = {
   "format:check": 'prettier --check "**/*.{ts,tsx,js,jsx,json,md}"',
   "test:gates": "vitest run --dir scripts/__tests__ --testTimeout=30000 --hookTimeout=30000",
   "check-gates-effective": "npx tsx scripts/check-gates-effective.ts",
+  "test:coverage:shard": "npx tsx scripts/test-coverage-shards.ts",
+  "test:outcomes:verify": "npx tsx scripts/verify-test-outcomes.ts",
 };
 
 // ---------------------------------------------------------------------------
@@ -631,6 +1124,8 @@ export interface Inputs {
   rootScripts: Record<string, string>;
   /** dir → { test, test:coverage } for every workspace package. */
   packageScripts: Record<string, Record<string, string>>;
+  /** Source text of the shard runner the pinned `test:coverage:shard` script launches. */
+  shardRunner: string;
 }
 
 export interface Evaluation {
@@ -961,6 +1456,14 @@ export function evaluateCi(
     if (drifted) jobOk.set(name, false);
   }
 
+  violations.push(...historyViolations(jobs).violations);
+
+  const sharded = shardViolations(jobs["test-coverage"]?.strategy, packageScripts);
+  if (sharded.length > 0) {
+    violations.push(...sharded);
+    jobOk.set("test-coverage", false);
+  }
+
   for (const key of [...keys].sort()) {
     const form = CI_FORMS[key];
     const steps = jobs[form.job]?.steps ?? [];
@@ -1209,6 +1712,7 @@ export function readInputs(root: string): Inputs {
     ci: readFileSync(join(root, CI), "utf8"),
     rootScripts,
     packageScripts,
+    shardRunner: readFileSync(join(root, SHARD_RUNNER), "utf8"),
   };
 }
 
@@ -1217,6 +1721,10 @@ function main(): void {
   const { violations, keys, commands, phases } = evaluate(inp);
   const testCache = readTestCacheInputs(ROOT, inp.packageScripts);
   violations.push(...evaluateTestCache(testCache));
+  const runner = shardRunnerViolations(inp, ROOT);
+  violations.push(...runner.violations);
+  const outcomes = outcomeVerifierViolations(inp, ROOT);
+  violations.push(...outcomes.violations);
   if (violations.length > 0) {
     failWithRepair({
       invariant:
@@ -1227,8 +1735,11 @@ function main(): void {
       doctrine: "docs/drift-defenses.md",
     });
   }
+  const history = historyViolations(
+    ((parseYaml(inp.ci) as { jobs?: Record<string, Job> }).jobs ?? {}) as Record<string, Job>,
+  );
   console.log(
-    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned.`,
+    `✓ check-prepush-subset: ${history.jobs.length} ${CI} job(s) run a base-ref-dependent gate (${BASE_REF_GATES.join(", ")}) [${history.jobs.join(", ")}], each on a full-history checkout; ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned; the shard runner executed ${runner.launches} time(s) against a stub turbo — each launched exactly its shard's args and exited with turbo's status; the outcome verifier judged ${outcomes.runs} fixture(s) (2 as the CI command) — green on the green one, red on all ${Object.keys(RED_VARIANTS).length} red ones.`,
   );
 }
 

@@ -28,23 +28,24 @@ env:
   TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
 
 jobs:
-  check:
+  # `check` is a REQUIRED status check (branch protection + the merge queue,
+  # docs/ops/merge-queue.md). It was one serial job (audit, build, drift
+  # gates, typecheck, lint, lint:pack, check-unused, then every suite with
+  # coverage) that took 16–25 min against its 30-min wall and timed out four
+  # times on 2026-10-04 — each time ejecting a PR from the merge queue.
+  # SHARDED (2026-10-05): `check-static` and the `test-coverage` matrix run in
+  # parallel on their own runners, and `check` below is only the fail-closed
+  # verdict over them, under the name the rulesets require.
+  #
+  # Timeout history of the serial job: 15 → 20 (the suite alone reached
+  # ~14–15 min cold); 20 → 30 (2026-09-28: 8.8–17.8 min green, crossed 20 six
+  # times in a day with runners shared); 30 timed out ×4 on 2026-10-04 → shard.
+  check-static:
     runs-on: ubuntu-latest
-    # 20, not 15: the full monorepo `test:coverage` now completes at ~14–15 min
-    # on a cold cache (tests PASS, then the job is cancelled at the 15-min wall —
-    # a false red that cancelled #245's first run and every recent Dependabot PR).
-    # Concurrency is already pinned to the runner's core count (`--concurrency=4`
-    # below), so lowering it would only slow the suite; headroom is the lever.
-    # Precedent: the deploy jobs carry 30 for the same cold-build class. Revisit
-    # (make the suite faster / shard) if this trends toward the ceiling again.
-    #
-    # 30, not 20 (2026-09-28): it trended back. Successful `check` runs took
-    # 8.8–17.8 min over the last 12 green runs; with 2–3 CI runs sharing the
-    # runners it crossed 20 six times in one day (#899, #930, #932, #936 ×2,
-    # and main itself — which blocked a production relay deploy, since deploys
-    # are CI-gated). Every timed-out run passed on rerun. Headroom now; the
-    # structural fix — shard the suite — is tracked separately.
-    timeout-minutes: 30
+    # Install + audit + build (~3 min cold) + `pnpm check` + typecheck + lint
+    # + lint:pack + check-unused: the serial job minus the suites. 20 leaves
+    # headroom for a cold turbo cache with runners shared.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -114,27 +115,160 @@ jobs:
         continue-on-error: true
         run: pnpm run check-unused
 
-      - name: Test with coverage
-        # --concurrency=4 matches the GitHub runner's CPU count. Turbo's
-        # default concurrency=10 oversubscribes 4-core runners: each test
-        # package spawns its own vitest worker pool, so 10 parallel packages
-        # can balloon to 40+ competing workers and surface as timing-sensitive
-        # test flakes. Cap it at the core count so vitest's per-package
-        # parallelism doesn't collide with turbo's cross-package parallelism.
-        #
-        # Invoke turbo directly via `pnpm exec` rather than `pnpm run
-        # test:coverage -- --concurrency=4`. The `--` form causes pnpm to
-        # preserve `--` when forwarding to turbo, and turbo then treats `--`
-        # as "pass everything after to the task," which routes --concurrency
-        # into vitest (where it's an unknown option and fails the run).
-        run: pnpm exec turbo run test:coverage --concurrency=4
+      - name: Upload build artifacts for E2E
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: web-build
+          path: apps/web/dist/
+          retention-days: 1
+
+  test-coverage:
+    # Every workspace suite with coverage, split into disjoint shards by
+    # scripts/test-coverage-shards.ts: services/relay (the dominant suite)
+    # alone in shard 1, the rest bin-packed over the others by the measured
+    # weights committed there. The assignment is computed — a package with a
+    # test:coverage script and no weight fails every shard, never drops out —
+    # and the partition is re-proven by check-prepush-subset (`pnpm check`),
+    # by each shard before it runs, and by `check` from the uploaded
+    # manifests. Coverage thresholds stay per package (each vitest.config).
+    # Each shard builds for itself (turbo remote cache restores most of it):
+    # the suites then see exactly what `pnpm build` makes, as before.
+    # Adding a shard = one matrix entry here + the pinned strategy in
+    # scripts/check-prepush-subset.ts (which proves the list is 1/N..N/N).
+    runs-on: ubuntu-latest
+    # Sized by the relay leg, the irreducible floor of this split: relay's
+    # suite alone ran 998s inside the serial run of 2026-10-05 (and 928s
+    # alone on a 4-core box), so setup + install + build + relay ≈ 18–20 min
+    # on a cold cache. The other legs measure ~7–8 min. 30 keeps the relay leg
+    # near 60% of its wall; the next lever, if it trends up, is splitting
+    # relay's own suite (vitest --shard + merged coverage), not this timeout.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Stamp this shard's start
+        # Before install, build or any suite: every vitest results file this
+        # shard uploads must carry a startTime at or after this stamp, so a
+        # results file from an earlier run (committed, cached, restored) is
+        # RED in `check` (scripts/verify-test-outcomes.ts SHARD_STAMP_FILE).
+        # Written by the job itself, never by the shard runner.
+        run: |
+          mkdir -p coverage
+          echo "{\"startedAt\": $(date +%s%3N)}" > coverage/shard-started-at.json
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test with coverage (this shard)
+        # --concurrency=4 (inside the script's turbo invocation) matches the
+        # GitHub runner's CPU count. Turbo's default concurrency=10
+        # oversubscribes 4-core runners: each test package spawns its own
+        # vitest worker pool, so 10 parallel packages can balloon to 40+
+        # competing workers and surface as timing-sensitive test flakes.
+        run: pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json
 
       - name: Coverage summary
         if: always()
         run: node scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage reports
+        # The root coverage/ (the shard manifest) keeps every path relative to
+        # the repo root, so the `check` job can merge the shards back into one
+        # tree. Named per shard; `check` re-uploads the union as coverage-reports.
         if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-shard-${{ strategy.job-index }}
+          path: |
+            coverage/
+            packages/*/coverage/
+            apps/*/coverage/
+            services/*/coverage/
+          retention-days: 14
+
+  check:
+    # The verdict, under the required-check name. A cancelled, skipped or
+    # failed leg must never read as success: `if: always()` makes this job run
+    # whatever its needs concluded, and it passes only when check-static and
+    # EVERY test-coverage shard SUCCEEDED, the shard manifests prove each
+    # package with a test:coverage script ran exactly once, AND vitest's own
+    # results prove every such package ran tests that all passed with its
+    # coverage floors met (scripts/verify-test-outcomes.ts — independent of the
+    # shard runner's exit code and its package list).
+    needs: [check-static, test-coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Fail closed unless the static job and every shard succeeded
+        env:
+          STATIC: ${{ needs.check-static.result }}
+          TESTS: ${{ needs.test-coverage.result }}
+        run: |
+          echo "check-static=$STATIC test-coverage=$TESTS"
+          if [ "$STATIC" != "success" ] || [ "$TESTS" != "success" ]; then
+            echo "::error::check-static '$STATIC', test-coverage '$TESTS' — a cancelled, skipped or failed leg is not a pass"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download the shards' coverage
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          pattern: coverage-shard-*
+          path: /tmp/coverage-shards
+
+      - name: Prove the shards ran every suite exactly once
+        run: pnpm test:coverage:shard --verify-manifests /tmp/coverage-shards
+
+      - name: Prove every suite passed, from vitest's own results
+        # The proof that does not trust the shard runner: every package with a
+        # test:coverage script — enumerated from pnpm-workspace.yaml here, not
+        # from the runner's list — must have vitest's own results (written by
+        # MOTEBIT_TEST_REPORTERS in vitest.shared.ts) in exactly one shard
+        # artifact: tests passed > 0 and at least its run-share floor of the
+        # declared tests (a `-t` filter or blanket skip is RED), none failed,
+        # no unhandled error, results dated after their shard's start stamp,
+        # nothing under coverage/ tracked in git, coverage at or above the
+        # package's own thresholds. A runner whose exit code lies (B1) or
+        # whose enumeration skips a package (B2) is RED here.
+        run: pnpm test:outcomes:verify --artifacts /tmp/coverage-shards
+
+      - name: Merge the shards' coverage
+        run: |
+          for d in /tmp/coverage-shards/*/; do cp -R "$d". .; done
+
+      - name: Coverage summary
+        run: node scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage reports
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage-reports
@@ -143,13 +277,6 @@ jobs:
             apps/*/coverage/
             services/*/coverage/
           retention-days: 14
-
-      - name: Upload build artifacts for E2E
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: web-build
-          path: apps/web/dist/
-          retention-days: 1
 
   format:
     runs-on: ubuntu-latest
@@ -172,7 +299,9 @@ jobs:
         run: pnpm format:check
 
   e2e:
-    needs: check
+    # Needs only the job that builds web (its artifact), not the suites: e2e
+    # starts as soon as the static job is green instead of after every shard.
+    needs: check-static
     runs-on: ubuntu-latest
     # Playwright Chromium download (~150 MB) + artifact download + 14 tests
     # have historically run in 2m56s–3m21s, leaving only ~1.5m of headroom
@@ -327,6 +456,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the check-cli-surface and check-test-outcome-floors
+          # probes resolve the merge-base with the PR base (origin/<base_ref>)
+          # or the merge-queue base_sha. Shallow, both fail closed even
+          # unperturbed — so their probes "fire" for the wrong reason.
+          # Required by check-prepush-subset (historyViolations).
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
 
@@ -376,6 +512,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the self-tests run check-test-outcome-floors over the
+          # real repo, which resolves the merge-base with the PR base
+          # (origin/<base_ref>) or the merge-queue base_sha and fails closed on
+          # a shallow checkout (#1062's first run). Required by
+          # check-prepush-subset (historyViolations).
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
 
