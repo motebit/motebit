@@ -36,6 +36,15 @@
  * UNKNOWN status and is left out of every receipt: a device can never credit
  * it, so it can never compact on a false "unredacted".
  *
+ * ## Only a nonce-bearing request gets one — and only it pays for one
+ *
+ * A receipt without the client's nonce answers no request, and a client MUST
+ * NOT credit it (spec §5); no shipped client sends a nonce yet. So a request
+ * with no usable nonce gets NO receipt, and {@link tryHoldReceipt} returns
+ * before any receipt work — no readback, no digest, no signature — leaving
+ * every existing client's push and pull exactly main's cost (pinned by spies
+ * at all three doors, `__tests__/sync-hold-receipt-nonceless.test.ts`).
+ *
  * ## Best-effort decoration
  *
  * The receipt is additive (`hold_receipt`, beside every field an existing
@@ -70,9 +79,8 @@ const SYNC_NONCE = /^[A-Za-z0-9_-]{22,128}$/;
 
 /**
  * Read the client's request nonce. Absent or unusable ⇒ `undefined`: the
- * request is served exactly as before and its receipt carries no nonce (which
- * a verifying client never credits). Never refused — a request is not failed
- * for a field no shipped client sends.
+ * request is served exactly as before, with NO receipt and no receipt work.
+ * Never refused — a request is not failed for a field no shipped client sends.
  */
 export function parseSyncNonce(raw: unknown): string | undefined {
   return typeof raw === "string" && SYNC_NONCE.test(raw) ? raw : undefined;
@@ -171,7 +179,7 @@ const nodeSha256 = (bytes: Uint8Array): Uint8Array =>
 async function signHeldEvents(
   relay: RelayIdentity,
   motebitId: string,
-  nonce: string | undefined,
+  nonce: string,
   held: readonly HeldEvent[],
   page: SyncHoldPage | undefined,
   now: number,
@@ -192,7 +200,7 @@ async function signHeldEvents(
       relay_motebit_id: relay.relayMotebitId,
       relay_public_key: relay.publicKeyHex.toLowerCase(),
       motebit_id: motebitId,
-      ...(nonce !== undefined ? { nonce } : {}),
+      nonce,
       issued_at: now,
       events,
       ...(page !== undefined ? { page } : {}),
@@ -221,15 +229,19 @@ export interface HoldReceiptRequest {
 }
 
 /**
- * The ONLY way a door obtains a hold receipt. Best-effort: any failure in
- * reading back, digesting or signing is caught and logged, and `undefined`
- * is returned — the door then serves its normal response without
- * `hold_receipt`, exactly as before the receipt existed.
+ * The ONLY way a door obtains a hold receipt. A request without a usable
+ * nonce gets none, and nothing is read back, digested or signed for it — the
+ * check precedes the `held` thunk. Best-effort: any failure in reading back,
+ * digesting or signing is caught and logged, and `undefined` is returned —
+ * the door then serves its normal response without `hold_receipt`, exactly
+ * as before the receipt existed.
  */
 export async function tryHoldReceipt(
   req: HoldReceiptRequest,
 ): Promise<SyncHoldReceipt | undefined> {
   if (req.relay === undefined) return undefined;
+  const nonce = parseSyncNonce(req.nonce);
+  if (nonce === undefined) return undefined;
   let stage: "readback" | "sign" = "readback";
   let count: number | undefined;
   try {
@@ -239,7 +251,7 @@ export async function tryHoldReceipt(
     return await signHeldEvents(
       req.relay,
       req.motebitId,
-      parseSyncNonce(req.nonce),
+      nonce,
       held,
       req.page,
       req.now ?? Date.now(),

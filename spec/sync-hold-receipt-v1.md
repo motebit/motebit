@@ -49,7 +49,7 @@ Required fields:
 
 Optional fields:
 
-- `nonce`: the client's request nonce, echoed exactly. It is absent when the request carried none, or carried one the relay could not use (§4.1).
+- `nonce` (required): the client's request nonce, echoed exactly. A relay issues a receipt only to a request carrying a nonce it accepts (§4.1), so every receipt carries one.
 - `page`: a `SyncHoldPage`. It is present on a pull-page receipt and absent on a push receipt.
 
 JCS discipline: an optional field is ABSENT, never `null`.
@@ -87,11 +87,13 @@ A client MAY send a nonce:
 
 A nonce MUST carry at least 128 bits of randomness, chosen fresh for each request. A process counter is not a nonce: socket `push_id` values restart at `"1"` in each client process, and an HTTP push has no id at all.
 
-The relay accepts a nonce of 22 to 128 characters from the base64url alphabet (`A–Z a–z 0–9 _ -`), which covers hex. It echoes an accepted nonce exactly. A request with no nonce, or with one the relay does not accept, is served exactly as before, and its receipt carries no `nonce`. The relay never refuses a request because of its nonce.
+The relay accepts a nonce of 22 to 128 characters from the base64url alphabet (`A–Z a–z 0–9 _ -`), which covers hex. It echoes an accepted nonce exactly.
+
+A receipt is issued **only** to a request carrying an accepted nonce. A request with no nonce, or with one the relay does not accept, gets no `hold_receipt` and is served exactly as before. The relay MUST NOT do any receipt work for it: no readback, no digest, no signature. A receipt without the client's nonce would answer no request, and a client could not credit it (§5), so producing one would only cost every client that does not yet read receipts. The relay never refuses a request because of its nonce.
 
 ### 4.2 Push receipts
 
-A relay that answers a push (an HTTP push response, or a socket `ack` frame) attaches a receipt in the additive field `hold_receipt`. Every other field of the response is unchanged.
+A relay that answers a push carrying an accepted nonce (an HTTP push response, or a socket `ack` frame) attaches a receipt in the additive field `hold_receipt`. Every other field of the response is unchanged.
 
 The receipt lists the event ids of the push that the relay **stores** for the bound identity, read back after the writes. It never copies the frame. Both push routes acknowledge entries they did not write:
 
@@ -105,7 +107,7 @@ None of these appears in the receipt unless the relay genuinely holds that `even
 
 ### 4.3 Pull-page receipts
 
-A relay that serves `GET /sync/:motebitId/pull?after_seq=…` attaches a receipt in the additive field `hold_receipt`. The receipt:
+A relay that serves `GET /sync/:motebitId/pull?after_seq=…&nonce=…` with an accepted nonce attaches a receipt in the additive field `hold_receipt`. The receipt:
 
 - lists every event on the page, with its `seq`, in page order;
 - carries `page`, copied from the page;
@@ -143,22 +145,28 @@ The receipt is decoration on a response that existing clients already read. A fa
 
 ## 5. Verification law
 
-`verifySyncHoldReceipt(receipt, { expectedPublicKey?, expectedNonce? })` in `@motebit/crypto` is fail-closed. It rejects a receipt, with a typed reason, when:
+`verifySyncHoldReceipt(receipt, { expectedPublicKey, expectedNonce, expectedMotebitId })` in `@motebit/crypto` is fail-closed. All three expectations are REQUIRED: there is no unpinned mode. It rejects a receipt, with a typed reason, when:
 
+- an expectation is missing, empty or not a string (`missing_expectation`);
 - `suite` or `spec` is unknown (`unsupported_suite`, `unsupported_spec`);
-- the shape is malformed (`malformed_receipt`);
+- the shape is malformed, including a receipt with no `nonce` (`malformed_receipt`);
 - the events are inconsistent with `page` (`page_mismatch`):
   - with `page`, every event carries a `seq`, strictly increasing, in `(after_seq, next_seq]`, and `next_seq ≥ after_seq`; the events may be a subset of the page (§4.3);
   - without `page`, no event carries a `seq`;
+- `motebit_id` does not equal the expected motebit (`motebit_id_mismatch`);
 - the key does not equal the pinned key (`public_key_mismatch`);
 - the nonce does not equal the expected nonce (`nonce_mismatch`);
 - the key or signature is malformed (`malformed_public_key`, `malformed_signature`);
 - the signature does not verify (`signature_invalid`).
 
+Why each expectation is required:
+
+- **The key.** A receipt carries its own key, so a check against the embedded key would accept any attacker's self-consistent receipt. The caller pins the relay key.
+- **The nonce.** A receipt answers the request whose nonce it echoes, and no other. A receipt without one is malformed.
+- **The motebit.** A receipt for another identity describes another identity's events.
+
 What verification does NOT establish:
 
-- **That the key is the relay's.** A receipt carries its own key, so verification without `expectedPublicKey` proves only self-consistency. A client MUST pin the relay key.
-- **Freshness.** A receipt without a nonce answers no particular request, and a client MUST NOT credit it.
 - **Durability.** A relay may later delete events under its retention policy. The receipt records what the relay held when it signed.
 
 ## 6. Consumer obligations (Inc 2, normative when this document is Stable)
@@ -166,7 +174,7 @@ What verification does NOT establish:
 A conforming client:
 
 1. sends a fresh nonce on every push and seq pull;
-2. verifies each receipt with `expectedPublicKey` set to the relay key it pins and `expectedNonce` set to the nonce it sent;
+2. verifies each receipt with `expectedPublicKey` set to the relay key it pins, `expectedNonce` set to the nonce it sent and `expectedMotebitId` set to the identity it pushed or pulled for;
 3. treats an event as held by that relay only when a verified receipt lists its `event_id` with:
    - a `digest` equal to the digest of the entry it holds; or
    - `redacted: true`, where the redacted form is the expected outcome for that entry;
@@ -174,7 +182,8 @@ A conforming client:
 
 ## 7. Change log
 
-| Version | Date       | Change                                                                                                                                                                                                                                             |
-| ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1.0     | 2026-10-05 | Initial Draft. The relay signs a per-id hold receipt on HTTP push, socket `ack` and seq pull pages, as an additive field; clients do not read it yet.                                                                                              |
-| 1.0     | 2026-10-05 | Draft revision: `redacted` is decided at write time and read from the stored row by every door (§4.4); events of unknown status are omitted, so a page receipt may list a subset of its page (§4.5, §5); receipt production is best effort (§4.6). |
+| Version | Date       | Change                                                                                                                                                                                                                                                                  |
+| ------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.0     | 2026-10-05 | Initial Draft. The relay signs a per-id hold receipt on HTTP push, socket `ack` and seq pull pages, as an additive field; clients do not read it yet.                                                                                                                   |
+| 1.0     | 2026-10-05 | Draft revision: `redacted` is decided at write time and read from the stored row by every door (§4.4); events of unknown status are omitted, so a page receipt may list a subset of its page (§4.5, §5); receipt production is best effort (§4.6).                      |
+| 1.0     | 2026-10-05 | Draft revision: a receipt is issued only to a request carrying an accepted nonce, and a nonce-less request costs the relay no receipt work (§4.1); `nonce` is required (§2.1); verification requires the pinned key, the sent nonce and the expected `motebit_id` (§5). |

@@ -21,10 +21,16 @@ const D1 = "a".repeat(64);
 const D2 = "b".repeat(64);
 const NONCE = "q7Zt1nC4cE3d8oN0nCeV4lUeXx"; // ≥128-bit base64url
 
+// One relay key for the minted receipts, so every check below pins it.
+const KP = await generateKeypair();
+const PUB = bytesToHex(KP.publicKey);
+/** The full required expectation triple for a `mint()`ed receipt. */
+const EXP = { expectedPublicKey: PUB, expectedNonce: NONCE, expectedMotebitId: "alice" };
+
 async function mint(
   extra: Partial<Omit<SyncHoldReceipt, "signature" | "suite">> = {},
 ): Promise<{ receipt: SyncHoldReceipt; pub: string }> {
-  const kp = await generateKeypair();
+  const kp = KP;
   const pub = bytesToHex(kp.publicKey);
   const receipt = await signSyncHoldReceipt(
     {
@@ -59,9 +65,13 @@ describe("sync-hold-receipt envelope law", () => {
   it("sign → verify round-trips valid, pinned and nonce-checked", async () => {
     const { receipt, pub } = await mint();
     expect(receipt.suite).toBe(SYNC_HOLD_RECEIPT_SUITE);
-    expect(await verifySyncHoldReceipt(receipt)).toEqual({ valid: true });
+    expect(await verifySyncHoldReceipt(receipt, EXP)).toEqual({ valid: true });
     expect(
-      await verifySyncHoldReceipt(receipt, { expectedPublicKey: pub, expectedNonce: NONCE }),
+      await verifySyncHoldReceipt(receipt, {
+        ...EXP,
+        expectedPublicKey: pub,
+        expectedNonce: NONCE,
+      }),
     ).toEqual({ valid: true });
   });
 
@@ -78,22 +88,27 @@ describe("sync-hold-receipt envelope law", () => {
       { events: [receipt.events[0]!, { ...receipt.events[1]!, redacted: false }] },
     ];
     for (const t of tampers) {
-      const r = await verifySyncHoldReceipt({ ...receipt, ...t });
+      const r = await verifySyncHoldReceipt({ ...receipt, ...t }, EXP);
       expect(r.valid, JSON.stringify(t)).toBe(false);
     }
     // Removing the nonce (a replay as an "un-nonced" receipt) also fails.
     const { nonce: _n, ...noNonce } = receipt;
-    expect((await verifySyncHoldReceipt(noNonce as SyncHoldReceipt)).valid).toBe(false);
+    expect((await verifySyncHoldReceipt(noNonce as SyncHoldReceipt, EXP)).valid).toBe(false);
   });
 
   it("a wrong pinned key fails; a substituted self-consistent key fails the signature", async () => {
     const { receipt } = await mint();
     const other = bytesToHex((await generateKeypair()).publicKey);
-    expect(await verifySyncHoldReceipt(receipt, { expectedPublicKey: other })).toEqual({
+    expect(await verifySyncHoldReceipt(receipt, { ...EXP, expectedPublicKey: other })).toEqual({
       valid: false,
       reason: "public_key_mismatch",
     });
-    expect(await verifySyncHoldReceipt({ ...receipt, relay_public_key: other })).toEqual({
+    expect(
+      await verifySyncHoldReceipt(
+        { ...receipt, relay_public_key: other },
+        { ...EXP, expectedPublicKey: other },
+      ),
+    ).toEqual({
       valid: false,
       reason: "signature_invalid",
     });
@@ -101,14 +116,14 @@ describe("sync-hold-receipt envelope law", () => {
 
   it("the nonce must be echoed exactly", async () => {
     const { receipt } = await mint();
-    expect(await verifySyncHoldReceipt(receipt, { expectedNonce: "different" })).toEqual({
+    expect(await verifySyncHoldReceipt(receipt, { ...EXP, expectedNonce: "different" })).toEqual({
       valid: false,
       reason: "nonce_mismatch",
     });
     const { receipt: unNonced } = await mint({ nonce: undefined });
     expect("nonce" in unNonced && unNonced.nonce !== undefined).toBe(false);
-    expect((await verifySyncHoldReceipt(unNonced, { expectedNonce: NONCE })).reason).toBe(
-      "nonce_mismatch",
+    expect((await verifySyncHoldReceipt(unNonced, { ...EXP, expectedNonce: NONCE })).reason).toBe(
+      "malformed_receipt",
     );
   });
 
@@ -116,18 +131,24 @@ describe("sync-hold-receipt envelope law", () => {
     const { receipt } = await mint();
     expect(
       (
-        await verifySyncHoldReceipt({
-          ...receipt,
-          suite: "motebit-jcs-ed25519-hex-v1" as "motebit-jcs-ed25519-b64-v1",
-        })
+        await verifySyncHoldReceipt(
+          {
+            ...receipt,
+            suite: "motebit-jcs-ed25519-hex-v1" as "motebit-jcs-ed25519-b64-v1",
+          },
+          EXP,
+        )
       ).reason,
     ).toBe("unsupported_suite");
     expect(
       (
-        await verifySyncHoldReceipt({
-          ...receipt,
-          spec: "motebit/routing-transcript@1.0" as "motebit/sync-hold-receipt@1.0",
-        })
+        await verifySyncHoldReceipt(
+          {
+            ...receipt,
+            spec: "motebit/routing-transcript@1.0" as "motebit/sync-hold-receipt@1.0",
+          },
+          EXP,
+        )
       ).reason,
     ).toBe("unsupported_spec");
   });
@@ -163,33 +184,39 @@ describe("sync-hold-receipt envelope law", () => {
       motebit_id: "alice",
       events: [],
     } as unknown as SyncHoldReceipt;
-    expect((await verifySyncHoldReceipt(relabelled)).valid).toBe(false);
+    expect(
+      (await verifySyncHoldReceipt(relabelled, { ...EXP, expectedPublicKey: pub })).valid,
+    ).toBe(false);
   });
 
   it("a page receipt covers its seq range — altering from/to or a seq fails", async () => {
     const { receipt, pub } = await mintPage();
-    expect(await verifySyncHoldReceipt(receipt, { expectedPublicKey: pub })).toEqual({
+    expect(await verifySyncHoldReceipt(receipt, { ...EXP, expectedPublicKey: pub })).toEqual({
       valid: true,
     });
     const page = receipt.page!;
     // Moving `after_seq` below the first listed seq keeps the structure
     // consistent, so only the signature can catch it.
-    expect(await verifySyncHoldReceipt({ ...receipt, page: { ...page, after_seq: 0 } })).toEqual({
+    expect(
+      await verifySyncHoldReceipt({ ...receipt, page: { ...page, after_seq: 0 } }, EXP),
+    ).toEqual({
       valid: false,
       reason: "signature_invalid",
     });
     expect(
-      (await verifySyncHoldReceipt({ ...receipt, page: { ...page, next_seq: 9 } })).valid,
+      (await verifySyncHoldReceipt({ ...receipt, page: { ...page, next_seq: 9 } }, EXP)).valid,
     ).toBe(false);
     expect(
-      (await verifySyncHoldReceipt({ ...receipt, page: { ...page, has_more: true } })).valid,
+      (await verifySyncHoldReceipt({ ...receipt, page: { ...page, has_more: true } }, EXP)).valid,
     ).toBe(false);
     expect(
-      (await verifySyncHoldReceipt({ ...receipt, page: { ...page, latest_seq: 99 } })).valid,
+      (await verifySyncHoldReceipt({ ...receipt, page: { ...page, latest_seq: 99 } }, EXP)).valid,
     ).toBe(false);
     // Dropping the page turns it into a push-shaped receipt carrying seqs: refused.
     const { page: _p, ...noPage } = receipt;
-    expect((await verifySyncHoldReceipt(noPage as SyncHoldReceipt)).reason).toBe("page_mismatch");
+    expect((await verifySyncHoldReceipt(noPage as SyncHoldReceipt, EXP)).reason).toBe(
+      "page_mismatch",
+    );
   });
 
   it("page structure is checked before crypto", async () => {
@@ -197,17 +224,17 @@ describe("sync-hold-receipt envelope law", () => {
       events: [{ event_id: "e1", digest: D1, redacted: false, seq: 9 }],
       page: { after_seq: 3, next_seq: 7, has_more: false, latest_seq: 9 },
     });
-    expect((await verifySyncHoldReceipt(outOfRange.receipt)).reason).toBe("page_mismatch");
+    expect((await verifySyncHoldReceipt(outOfRange.receipt, EXP)).reason).toBe("page_mismatch");
     const missingSeq = await mint({
       events: [{ event_id: "e1", digest: D1, redacted: false }],
       page: { after_seq: 0, next_seq: 1, has_more: false, latest_seq: 1 },
     });
-    expect((await verifySyncHoldReceipt(missingSeq.receipt)).reason).toBe("page_mismatch");
+    expect((await verifySyncHoldReceipt(missingSeq.receipt, EXP)).reason).toBe("page_mismatch");
     const empty = await mint({
       events: [],
       page: { after_seq: 5, next_seq: 5, has_more: false, latest_seq: 5 },
     });
-    expect((await verifySyncHoldReceipt(empty.receipt)).valid).toBe(true);
+    expect((await verifySyncHoldReceipt(empty.receipt, EXP)).valid).toBe(true);
   });
 
   it("malformed shapes are rejected", async () => {
@@ -223,12 +250,14 @@ describe("sync-hold-receipt envelope law", () => {
       },
     ];
     for (const b of bad) {
-      expect((await verifySyncHoldReceipt({ ...receipt, ...b })).reason).toBe("malformed_receipt");
+      expect((await verifySyncHoldReceipt({ ...receipt, ...b }, EXP)).reason).toBe(
+        "malformed_receipt",
+      );
     }
-    expect((await verifySyncHoldReceipt({ ...receipt, relay_public_key: "zz" })).reason).toBe(
+    expect((await verifySyncHoldReceipt({ ...receipt, relay_public_key: "zz" }, EXP)).reason).toBe(
       "malformed_public_key",
     );
-    expect((await verifySyncHoldReceipt({ ...receipt, signature: "AAAA" })).reason).toBe(
+    expect((await verifySyncHoldReceipt({ ...receipt, signature: "AAAA" }, EXP)).reason).toBe(
       "malformed_signature",
     );
   });
@@ -238,7 +267,7 @@ describe("sync-hold-receipt envelope law", () => {
     const reordered = Object.fromEntries(
       Object.entries(receipt).reverse(),
     ) as unknown as SyncHoldReceipt;
-    expect(await verifySyncHoldReceipt(reordered)).toEqual({ valid: true });
+    expect(await verifySyncHoldReceipt(reordered, EXP)).toEqual({ valid: true });
   });
 });
 
@@ -271,20 +300,22 @@ describe("page subset + synchronous digest", () => {
       events: [{ event_id: "e1", digest: D1, redacted: false, seq: 4 }],
       page: { after_seq: 3, next_seq: 7, has_more: false, latest_seq: 7 },
     });
-    expect(await verifySyncHoldReceipt(subset.receipt, { expectedPublicKey: subset.pub })).toEqual({
+    expect(
+      await verifySyncHoldReceipt(subset.receipt, { ...EXP, expectedPublicKey: subset.pub }),
+    ).toEqual({
       valid: true,
     });
     const none = await mint({
       events: [],
       page: { after_seq: 3, next_seq: 7, has_more: false, latest_seq: 7 },
     });
-    expect((await verifySyncHoldReceipt(none.receipt)).valid).toBe(true);
+    expect((await verifySyncHoldReceipt(none.receipt, EXP)).valid).toBe(true);
     // A listed seq above next_seq is still refused structurally.
     const above = await mint({
       events: [{ event_id: "e1", digest: D1, redacted: false, seq: 8 }],
       page: { after_seq: 3, next_seq: 7, has_more: false, latest_seq: 9 },
     });
-    expect((await verifySyncHoldReceipt(above.receipt)).reason).toBe("page_mismatch");
+    expect((await verifySyncHoldReceipt(above.receipt, EXP)).reason).toBe("page_mismatch");
   });
 
   it("computeSyncEventDigestSync equals the async digest, default and injected hash", async () => {
@@ -300,5 +331,92 @@ describe("page subset + synchronous digest", () => {
       expect(computeSyncEventDigestSync(e)).toBe(expected);
       expect(computeSyncEventDigestSync(e, nodeSha)).toBe(expected);
     }
+  });
+});
+
+describe("verifySyncHoldReceipt is fail-closed on its expectations (verify-family-fail-closed)", () => {
+  type Expect = Parameters<typeof verifySyncHoldReceipt>[1];
+  const call = (r: SyncHoldReceipt, e: unknown) => verifySyncHoldReceipt(r, e as Expect);
+
+  it("the correct triple (pinned key, sent nonce, motebit_id) is accepted", async () => {
+    const { receipt, pub } = await mint();
+    expect(
+      await call(receipt, {
+        expectedPublicKey: pub,
+        expectedNonce: NONCE,
+        expectedMotebitId: "alice",
+      }),
+    ).toEqual({ valid: true });
+    // Key pin is case-insensitive hex.
+    expect(
+      await call(receipt, {
+        expectedPublicKey: pub.toUpperCase(),
+        expectedNonce: NONCE,
+        expectedMotebitId: "alice",
+      }),
+    ).toEqual({ valid: true });
+  });
+
+  it("a missing expectation is rejected — never verified under the embedded key", async () => {
+    const { receipt, pub } = await mint();
+    const full = { expectedPublicKey: pub, expectedNonce: NONCE, expectedMotebitId: "alice" };
+    expect((await call(receipt, undefined)).valid).toBe(false);
+    expect((await call(receipt, {})).valid).toBe(false);
+    for (const k of Object.keys(full) as Array<keyof typeof full>) {
+      for (const v of [undefined, "", 42]) {
+        const r = await call(receipt, { ...full, [k]: v });
+        expect(r, `${k}=${String(v)}`).toEqual({ valid: false, reason: "missing_expectation" });
+      }
+    }
+  });
+
+  it("an attacker's self-consistent receipt fails against the pinned key", async () => {
+    const { receipt: forged } = await mint(); // self-consistent under its own embedded key
+    const pinned = bytesToHex((await generateKeypair()).publicKey);
+    expect(
+      await call(forged, {
+        expectedPublicKey: pinned,
+        expectedNonce: NONCE,
+        expectedMotebitId: "alice",
+      }),
+    ).toEqual({ valid: false, reason: "public_key_mismatch" });
+  });
+
+  it("a nonce-less receipt is rejected (nonce is a required field); a wrong nonce is rejected", async () => {
+    const { receipt, pub } = await mint();
+    const { nonce: _n, ...rest } = receipt;
+    const kp = await generateKeypair();
+    const unNonced = await signSyncHoldReceipt(
+      {
+        ...(rest as Omit<SyncHoldReceipt, "signature" | "suite">),
+        relay_public_key: bytesToHex(kp.publicKey),
+      },
+      kp.privateKey,
+    );
+    expect(
+      await call(unNonced, {
+        expectedPublicKey: bytesToHex(kp.publicKey),
+        expectedNonce: NONCE,
+        expectedMotebitId: "alice",
+      }),
+    ).toEqual({ valid: false, reason: "malformed_receipt" });
+    expect(
+      await call(receipt, {
+        expectedPublicKey: pub,
+        expectedNonce: "other",
+        expectedMotebitId: "alice",
+      }),
+    ).toEqual({ valid: false, reason: "nonce_mismatch" });
+  });
+
+  it("a receipt for another motebit_id is rejected", async () => {
+    const { receipt, pub } = await mint();
+    expect(
+      await call(receipt, {
+        expectedPublicKey: pub,
+        expectedNonce: NONCE,
+        expectedMotebitId: "bob",
+      }),
+    ).toEqual({ valid: false, reason: "motebit_id_mismatch" });
   });
 });

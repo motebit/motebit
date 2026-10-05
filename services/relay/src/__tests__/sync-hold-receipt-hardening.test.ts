@@ -44,6 +44,11 @@ vi.mock("@motebit/crypto", async (importOriginal) => {
 
 const NONCE = "Zq81vD0pTmL3xWb4nYp1sKdE6a";
 
+/** The full expectation triple a verifying client passes (all three required). */
+function pinned(mid: string) {
+  return { expectedPublicKey: relayKey, expectedNonce: NONCE, expectedMotebitId: mid };
+}
+
 let relay: SyncRelay;
 let server: ReturnType<typeof serve>;
 let port: number;
@@ -91,7 +96,8 @@ function entry(mid: string, overrides: Partial<EventLogEntry> = {}): EventLogEnt
 async function push(
   mid: string,
   events: EventLogEntry[],
-  nonce?: string,
+  /** Defaults to NONCE (a receipt is issued only to a nonce-bearing request); `null` sends none. */
+  nonce: unknown = NONCE,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await relay.app.request(`/sync/${mid}/push`, {
     method: "POST",
@@ -100,7 +106,7 @@ async function push(
       "x-correlation-id": "corr-hardening-1",
       ...AUTH_HEADER,
     },
-    body: JSON.stringify(nonce === undefined ? { events } : { events, nonce }),
+    body: JSON.stringify(nonce === null ? { events } : { events, nonce }),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
@@ -108,8 +114,14 @@ async function push(
 async function pullSeq(
   mid: string,
   query: string,
+  /** Adds `&nonce=NONCE` to a seq pull unless the query names its own (or this is false). */
+  withNonce = true,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  const res = await relay.app.request(`/sync/${mid}/pull?${query}`, { headers: AUTH_HEADER });
+  const q =
+    withNonce && query.includes("after_seq") && !query.includes("nonce=")
+      ? `${query}&nonce=${NONCE}`
+      : query;
+  const res = await relay.app.request(`/sync/${mid}/pull?${q}`, { headers: AUTH_HEADER });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
@@ -133,7 +145,10 @@ async function wsPush(
         }
       });
     });
-    ws.send(JSON.stringify({ type: "push", ...frame }));
+    // A receipt is issued only to a nonce-bearing frame; `nonce: undefined` sends none.
+    ws.send(
+      JSON.stringify({ type: "push", ...("nonce" in frame ? {} : { nonce: NONCE }), ...frame }),
+    );
     return await ack;
   } finally {
     ws.terminate();
@@ -359,9 +374,7 @@ describe("(4) legacy rows (written before the flag existed)", () => {
     const pulled = receiptOf(page);
     expect(pulled.events.map((e) => e.event_id)).toEqual([before.event_id]);
     expect(pulled.page).toEqual({ after_seq: 0, next_seq: 2, has_more: false, latest_seq: 2 });
-    expect(
-      await verifySyncHoldReceipt(pulled, { expectedPublicKey: relayKey, expectedNonce: NONCE }),
-    ).toEqual({ valid: true });
+    expect(await verifySyncHoldReceipt(pulled, pinned(mid))).toEqual({ valid: true });
   });
 
   it("legacy rows decidable from their bytes are still listed with the right flag", async () => {

@@ -2303,17 +2303,18 @@ export function verifySubjectBinding(binding: SubjectBindingV1, artifact: {
 export function verifySuccessionChain(chain: KeySuccessionRecord[], guardianPublicKeyHex?: string): Promise<SuccessionChainResult>;
 
 // @public
-export function verifySyncHoldReceipt(receipt: SyncHoldReceipt, options?: VerifySyncHoldReceiptOptions): Promise<VerifySyncHoldReceiptResult>;
+export function verifySyncHoldReceipt(receipt: SyncHoldReceipt, expected: VerifySyncHoldReceiptExpectations): Promise<VerifySyncHoldReceiptResult>;
 
 // @public
-export interface VerifySyncHoldReceiptOptions {
-    readonly expectedNonce?: string;
-    readonly expectedPublicKey?: string;
+export interface VerifySyncHoldReceiptExpectations {
+    readonly expectedMotebitId: string;
+    readonly expectedNonce: string;
+    readonly expectedPublicKey: string;
 }
 
 // @public
 export interface VerifySyncHoldReceiptResult {
-    readonly reason?: "unsupported_suite" | "unsupported_spec" | "malformed_receipt" | "page_mismatch" | "public_key_mismatch" | "nonce_mismatch" | "malformed_public_key" | "malformed_signature" | "signature_invalid";
+    readonly reason?: "missing_expectation" | "unsupported_suite" | "unsupported_spec" | "malformed_receipt" | "page_mismatch" | "motebit_id_mismatch" | "public_key_mismatch" | "nonce_mismatch" | "malformed_public_key" | "malformed_signature" | "signature_invalid";
     // (undocumented)
     readonly valid: boolean;
 }

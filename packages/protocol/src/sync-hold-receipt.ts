@@ -83,11 +83,11 @@ export interface SyncHoldReceipt {
   /** The identity whose events are held. */
   readonly motebit_id: string;
   /**
-   * The client-supplied request nonce, echoed exactly. ABSENT when the request
-   * carried none (or an unusable one) — a receipt without a nonce answers no
-   * particular request and a verifying client MUST NOT credit it.
+   * The client-supplied request nonce, echoed exactly. Always present: the
+   * relay issues a receipt only to a request carrying a usable nonce (spec
+   * §4.1) — a request without one gets no receipt at all.
    */
-  readonly nonce?: string;
+  readonly nonce: string;
   /** Signing time, epoch milliseconds. */
   readonly issued_at: number;
   /**

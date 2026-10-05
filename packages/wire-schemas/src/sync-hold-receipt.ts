@@ -76,8 +76,9 @@ export const SyncHoldReceiptSchema = z
     nonce: z
       .string()
       .min(1)
-      .optional()
-      .describe("The client-supplied request nonce, echoed exactly. Absent when none was sent."),
+      .describe(
+        "The client-supplied request nonce, echoed exactly. Always present: a receipt is issued only to a request carrying a usable nonce.",
+      ),
     issued_at: z.number().int().nonnegative().describe("Signing time, epoch milliseconds."),
     events: z
       .array(SyncHeldEventSchema)

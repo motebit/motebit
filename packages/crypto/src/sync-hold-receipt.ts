@@ -5,22 +5,24 @@
  * The category law is subject = signer: the relay signs a record of its OWN
  * act of holding events, so the receipt is receipt-family first-person
  * provenance (docs/doctrine/receipts-unified.md), not an attestation. The
- * verify law establishes exactly one sentence — "the holder of this key said,
- * at `issued_at`, in answer to `nonce`, that it holds these event ids with
- * these digests" — and DELIBERATELY nothing more:
+ * verify law establishes exactly one sentence — "the relay whose key the
+ * caller pinned said, at `issued_at`, in answer to the nonce the caller sent,
+ * that it holds these event ids for this motebit with these digests" — and
+ * DELIBERATELY nothing more (NOT durability: a relay may later delete under
+ * its retention policy; the receipt records what it held when it signed).
  *
- *   - NOT that the key is the relay's. The caller pins the relay key
- *     (`expectedPublicKey`); a receipt carrying its own key proves only
- *     self-consistency, and a receipt verified without a pin authorizes
- *     nothing.
- *   - NOT freshness. The caller checks the echoed nonce (`expectedNonce`)
- *     against the one it sent; a receipt without a nonce answers no request.
- *   - NOT durability. A relay may later delete under its retention policy; the
- *     receipt records what it held when it signed.
+ * The three expectations are REQUIRED (docs/doctrine/verify-family-fail-closed.md):
+ * the pinned relay key, the nonce the caller sent, and the motebit the caller
+ * asked about. A receipt carries its own key, so a check without a pin would
+ * accept any attacker's self-consistent receipt; a receipt without the
+ * caller's nonce answers no request of the caller's; a receipt for another
+ * motebit describes someone else's events. There is no unpinned mode — a
+ * missing, empty or non-string expectation is `missing_expectation`.
  *
- * Fail-closed at every step it DOES own: unknown suite or spec, malformed
- * shape, an event list inconsistent with the page range it claims, key
- * mismatch, nonce mismatch, malformed key/signature, signature mismatch.
+ * Fail-closed at every step: missing expectation, unknown suite or spec,
+ * malformed shape, an event list inconsistent with the page range it claims,
+ * motebit mismatch, key mismatch, nonce mismatch, malformed key/signature,
+ * signature mismatch.
  */
 
 import type { SyncHoldReceipt, SyncHeldEvent } from "@motebit/protocol";
@@ -109,10 +111,12 @@ export interface VerifySyncHoldReceiptResult {
   readonly valid: boolean;
   /** Structured failure reason when `valid === false`. */
   readonly reason?:
+    | "missing_expectation"
     | "unsupported_suite"
     | "unsupported_spec"
     | "malformed_receipt"
     | "page_mismatch"
+    | "motebit_id_mismatch"
     | "public_key_mismatch"
     | "nonce_mismatch"
     | "malformed_public_key"
@@ -120,12 +124,21 @@ export interface VerifySyncHoldReceiptResult {
     | "signature_invalid";
 }
 
-/** What the caller pins. Both are optional; an unpinned check proves self-consistency only. */
-export interface VerifySyncHoldReceiptOptions {
-  /** The relay key the caller trusts (lowercase or uppercase hex). Mismatch fails. */
-  readonly expectedPublicKey?: string;
+/**
+ * What the caller expects. All three are REQUIRED — there is no unpinned
+ * mode; a missing or empty value is rejected (`missing_expectation`).
+ */
+export interface VerifySyncHoldReceiptExpectations {
+  /** The relay key the caller pins (lowercase or uppercase hex). Mismatch fails. */
+  readonly expectedPublicKey: string;
   /** The nonce the caller sent. The receipt must echo it exactly. */
-  readonly expectedNonce?: string;
+  readonly expectedNonce: string;
+  /** The motebit the caller pushed or pulled for. The receipt's `motebit_id` must equal it. */
+  readonly expectedMotebitId: string;
+}
+
+function isExpectation(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -151,8 +164,18 @@ function isSeq(n: unknown): n is number {
  */
 export async function verifySyncHoldReceipt(
   receipt: SyncHoldReceipt,
-  options: VerifySyncHoldReceiptOptions = {},
+  expected: VerifySyncHoldReceiptExpectations,
 ): Promise<VerifySyncHoldReceiptResult> {
+  // 0. Expectations — required, checked at runtime too (a JS caller, a cast).
+  const exp = (expected ?? {}) as Partial<Record<keyof VerifySyncHoldReceiptExpectations, unknown>>;
+  if (
+    !isExpectation(exp.expectedPublicKey) ||
+    !isExpectation(exp.expectedNonce) ||
+    !isExpectation(exp.expectedMotebitId)
+  ) {
+    return { valid: false, reason: "missing_expectation" };
+  }
+
   // 1. Suite — fail-closed on unknown/missing (crypto CLAUDE.md rule 3).
   if (receipt.suite !== SYNC_HOLD_RECEIPT_SUITE) {
     return { valid: false, reason: "unsupported_suite" };
@@ -170,7 +193,7 @@ export async function verifySyncHoldReceipt(
     typeof receipt.motebit_id !== "string" ||
     typeof receipt.relay_motebit_id !== "string" ||
     !Number.isSafeInteger(receipt.issued_at) ||
-    (receipt.nonce !== undefined && typeof receipt.nonce !== "string") ||
+    typeof receipt.nonce !== "string" ||
     !events.every(isHeldEvent)
   ) {
     return { valid: false, reason: "malformed_receipt" };
@@ -209,23 +232,25 @@ export async function verifySyncHoldReceipt(
     return { valid: false, reason: "page_mismatch" };
   }
 
-  // 5. Relay key shape + pin.
+  // 5. Subject — the motebit the caller asked about.
+  if (receipt.motebit_id !== exp.expectedMotebitId) {
+    return { valid: false, reason: "motebit_id_mismatch" };
+  }
+
+  // 6. Relay key shape + pin.
   if (typeof receipt.relay_public_key !== "string" || !HEX64.test(receipt.relay_public_key)) {
     return { valid: false, reason: "malformed_public_key" };
   }
-  if (
-    options.expectedPublicKey !== undefined &&
-    options.expectedPublicKey.toLowerCase() !== receipt.relay_public_key
-  ) {
+  if (exp.expectedPublicKey.toLowerCase() !== receipt.relay_public_key) {
     return { valid: false, reason: "public_key_mismatch" };
   }
 
-  // 6. Nonce echo.
-  if (options.expectedNonce !== undefined && receipt.nonce !== options.expectedNonce) {
+  // 7. Nonce echo — a receipt without the caller's nonce answers no request of its.
+  if (receipt.nonce !== exp.expectedNonce) {
     return { valid: false, reason: "nonce_mismatch" };
   }
 
-  // 7. Signature bytes.
+  // 8. Signature bytes.
   let sigBytes: Uint8Array;
   try {
     sigBytes = fromBase64Url(receipt.signature);
@@ -236,7 +261,7 @@ export async function verifySyncHoldReceipt(
     return { valid: false, reason: "malformed_signature" };
   }
 
-  // 8. Signature over canonical bytes, via suite dispatch.
+  // 9. Signature over canonical bytes, via suite dispatch.
   const { signature: _sig, ...unsigned } = receipt;
   const message = canonicalizeForSigning(unsigned);
   let valid: boolean;

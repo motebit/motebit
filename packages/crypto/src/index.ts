@@ -3046,7 +3046,7 @@ export {
 } from "./sync-hold-receipt.js";
 export type {
   VerifySyncHoldReceiptResult,
-  VerifySyncHoldReceiptOptions,
+  VerifySyncHoldReceiptExpectations,
   SyncDigestHash,
 } from "./sync-hold-receipt.js";
 export {

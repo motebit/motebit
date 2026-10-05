@@ -536,11 +536,7 @@ describe("#914 round 7: the relay echoes a push frame's `push_id` in its ack (ad
       await until(() => acks().length === 2, "ack for the unnamed frame");
       ws.send(JSON.stringify({ type: "push", push_id: 7, events: [event(mid, 3)] }));
       await until(() => acks().length === 3, "ack for a non-string id");
-      // The signed `hold_receipt` rides beside every ack (sync-hold-receipt.ts,
-      // additive); every field a shipped client reads is unchanged.
-      const all = acks();
-      expect(all.every((a) => typeof a.hold_receipt === "object")).toBe(true);
-      expect(all.map(({ hold_receipt: _r, ...rest }) => rest)).toEqual([
+      expect(acks()).toEqual([
         { type: "ack", accepted: 1, push_id: "f1" },
         { type: "ack", accepted: 1 },
         { type: "ack", accepted: 1 },

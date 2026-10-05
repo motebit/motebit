@@ -12,7 +12,7 @@
  *       frame are absent; an id genuinely held already is present;
  *   (b) it verifies under the relay's PUBLISHED key, and fails on a single
  *       field tamper, a wrong key, or another artifact re-labelled;
- *   (c) the client nonce is echoed exactly (absent/unusable ⇒ no nonce);
+ *   (c) the client nonce is echoed exactly (absent/unusable ⇒ no receipt);
  *   (d) a pull page's receipt covers its seq range — altering from/to fails;
  *   (e) a redacted event is marked redacted with the digest of the stored
  *       (redacted) bytes; older stored ciphertext is described as stored;
@@ -32,6 +32,11 @@ import type { SyncRelay } from "../index.js";
 import { AUTH_HEADER, API_TOKEN, createTestRelay } from "./test-helpers.js";
 
 const NONCE = "hR7c2Vq0tLmZ9xWb4nYp1sKdE6";
+
+/** The full expectation triple a verifying client passes (all three required). */
+function pinned(mid: string) {
+  return { expectedPublicKey: relayKey, expectedNonce: NONCE, expectedMotebitId: mid };
+}
 
 let relay: SyncRelay;
 let server: ReturnType<typeof serve>;
@@ -75,18 +80,28 @@ function entry(mid: string, overrides: Partial<EventLogEntry> = {}): EventLogEnt
 async function push(
   mid: string,
   events: EventLogEntry[],
-  nonce?: unknown,
+  /** Defaults to NONCE (a receipt is issued only to a nonce-bearing request); `null` sends none. */
+  nonce: unknown = NONCE,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await relay.app.request(`/sync/${mid}/push`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-    body: JSON.stringify(nonce === undefined ? { events } : { events, nonce }),
+    body: JSON.stringify(nonce === null ? { events } : { events, nonce }),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-async function pullSeq(mid: string, query: string): Promise<Record<string, unknown>> {
-  const res = await relay.app.request(`/sync/${mid}/pull?${query}`, { headers: AUTH_HEADER });
+async function pullSeq(
+  mid: string,
+  query: string,
+  /** Adds `&nonce=NONCE` to a seq pull unless the query names its own (or this is false). */
+  withNonce = true,
+): Promise<Record<string, unknown>> {
+  const q =
+    withNonce && query.includes("after_seq") && !query.includes("nonce=")
+      ? `${query}&nonce=${NONCE}`
+      : query;
+  const res = await relay.app.request(`/sync/${mid}/pull?${q}`, { headers: AUTH_HEADER });
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
@@ -116,7 +131,10 @@ async function wsPush(
         if (m.type === "ack") resolve(m);
       });
     });
-    ws.send(JSON.stringify({ type: "push", ...frame }));
+    // A receipt is issued only to a nonce-bearing frame; `nonce: undefined` sends none.
+    ws.send(
+      JSON.stringify({ type: "push", ...("nonce" in frame ? {} : { nonce: NONCE }), ...frame }),
+    );
     return await ack;
   } finally {
     ws.terminate();
@@ -202,9 +220,7 @@ describe("(b) the receipt verifies under the relay's published key, and only it"
     expect(r.relay_public_key).toBe(relayKey.toLowerCase());
     expect(r.motebit_id).toBe(mid);
     expect(r.page).toBeUndefined();
-    expect(
-      await verifySyncHoldReceipt(r, { expectedPublicKey: relayKey, expectedNonce: NONCE }),
-    ).toEqual({ valid: true });
+    expect(await verifySyncHoldReceipt(r, pinned(mid))).toEqual({ valid: true });
 
     const tampers: Array<Partial<SyncHoldReceipt>> = [
       { motebit_id: crypto.randomUUID() },
@@ -216,11 +232,16 @@ describe("(b) the receipt verifies under the relay's published key, and only it"
       { events: [{ ...r.events[0]!, redacted: true }, ...r.events.slice(1)] },
     ];
     for (const t of tampers) {
-      expect((await verifySyncHoldReceipt({ ...r, ...t })).valid, JSON.stringify(t)).toBe(false);
+      expect(
+        (await verifySyncHoldReceipt({ ...r, ...t }, pinned(mid))).valid,
+        JSON.stringify(t),
+      ).toBe(false);
     }
     // A wrong pinned key (an impostor's own, self-consistent receipt).
     const impostorKey = "ab".repeat(32);
-    expect(await verifySyncHoldReceipt(r, { expectedPublicKey: impostorKey })).toEqual({
+    expect(
+      await verifySyncHoldReceipt(r, { ...pinned(mid), expectedPublicKey: impostorKey }),
+    ).toEqual({
       valid: false,
       reason: "public_key_mismatch",
     });
@@ -238,40 +259,43 @@ describe("(b) the receipt verifies under the relay's published key, and only it"
       issued_at: r.issued_at,
       events: [],
     } as unknown as SyncHoldReceipt;
-    expect((await verifySyncHoldReceipt(relabelled, { expectedPublicKey: relayKey })).valid).toBe(
-      false,
-    );
+    expect(
+      (await verifySyncHoldReceipt(relabelled, { ...pinned(mid), expectedPublicKey: relayKey }))
+        .valid,
+    ).toBe(false);
     // A push receipt replayed as a page (page grafted on) fails.
     expect(
       (
         await verifySyncHoldReceipt(
           { ...r, events: [], page: { after_seq: 0, next_seq: 0, has_more: false, latest_seq: 0 } },
-          { expectedPublicKey: relayKey },
+          { ...pinned(mid), expectedPublicKey: relayKey },
         )
       ).valid,
     ).toBe(false);
   });
 });
 
-describe("(c) the client nonce is echoed exactly", () => {
-  it("HTTP push, WebSocket ack and seq pull echo it; absent or unusable ⇒ no nonce", async () => {
+describe("(c) the client nonce is echoed exactly; no nonce ⇒ no receipt", () => {
+  it("HTTP push, WebSocket ack and seq pull echo it; absent or unusable ⇒ no hold_receipt at all", async () => {
     const mid = crypto.randomUUID();
     expect(receiptOf((await push(mid, [entry(mid)], NONCE)).body).nonce).toBe(NONCE);
     const ack = await wsPush(mid, { nonce: NONCE, events: [entry(mid)] });
     expect(receiptOf(ack).nonce).toBe(NONCE);
     expect(receiptOf(await pullSeq(mid, `after_seq=0&nonce=${NONCE}`)).nonce).toBe(NONCE);
 
-    const noNonce = receiptOf((await push(mid, [entry(mid)])).body);
-    expect("nonce" in noNonce).toBe(false);
-    expect(await verifySyncHoldReceipt(noNonce, { expectedPublicKey: relayKey })).toEqual({
-      valid: true,
-    });
-    // Too short to be ≥128 bits, wrong type, illegal characters: never echoed.
+    // A receipt without the client's nonce answers no request (spec §5), so
+    // none is issued: the response is exactly main's.
+    const noNonce = await push(mid, [entry(mid)], null);
+    expect(noNonce.body).toEqual({ motebit_id: mid, accepted: 1, duplicates: 0 });
+    // Too short to be ≥128 bits, wrong type, illegal characters: no receipt.
     for (const bad of ["short", 12345, "x".repeat(21), "has spaces in it, 22+ chars"]) {
-      expect("nonce" in receiptOf((await push(mid, [entry(mid)], bad)).body)).toBe(false);
+      expect((await push(mid, [entry(mid)], bad)).body.hold_receipt, String(bad)).toBeUndefined();
     }
-    const wsAck = await wsPush(mid, { push_id: "x", events: [entry(mid)] });
-    expect("nonce" in receiptOf(wsAck)).toBe(false);
+    const wsAck = await wsPush(mid, { push_id: "x", nonce: undefined, events: [entry(mid)] });
+    expect(wsAck.hold_receipt).toBeUndefined();
+    expect(wsAck.push_id).toBe("x");
+    expect((await pullSeq(mid, "after_seq=0", false)).hold_receipt).toBeUndefined();
+    expect((await pullSeq(mid, "after_seq=0&nonce=short")).hold_receipt).toBeUndefined();
   });
 });
 
@@ -301,9 +325,7 @@ describe("(d) a pull page's receipt covers its seq range", () => {
         seq,
       },
     ]);
-    expect(
-      await verifySyncHoldReceipt(r, { expectedPublicKey: relayKey, expectedNonce: NONCE }),
-    ).toEqual({ valid: true });
+    expect(await verifySyncHoldReceipt(r, pinned(mid))).toEqual({ valid: true });
 
     // An impostor replaying this page as the answer to a lower cursor, or
     // stretching its top, cannot keep the relay's signature.
@@ -313,7 +335,10 @@ describe("(d) a pull page's receipt covers its seq range", () => {
       { ...r.page!, has_more: false },
       { ...r.page!, latest_seq: 2 },
     ]) {
-      expect((await verifySyncHoldReceipt({ ...r, page: p })).valid, JSON.stringify(p)).toBe(false);
+      expect(
+        (await verifySyncHoldReceipt({ ...r, page: p }, pinned(mid))).valid,
+        JSON.stringify(p),
+      ).toBe(false);
     }
 
     // An empty page is signed too (nothing above the cursor).
@@ -326,7 +351,12 @@ describe("(d) a pull page's receipt covers its seq range", () => {
       latest_seq: 3,
     });
     expect(
-      (await verifySyncHoldReceipt(receiptOf(empty), { expectedPublicKey: relayKey })).valid,
+      (
+        await verifySyncHoldReceipt(receiptOf(empty), {
+          ...pinned(mid),
+          expectedPublicKey: relayKey,
+        })
+      ).valid,
     ).toBe(true);
   });
 });

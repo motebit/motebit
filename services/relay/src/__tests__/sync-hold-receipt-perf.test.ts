@@ -14,7 +14,14 @@
  *     body's own JCS + Ed25519 signature ~3–5 ms
  *   page JSON.stringify:                                          ~4 ms
  * The bound below (≤ 8 × stringify + 15 ms) holds the after-number with
- * margin and fails the before-number.
+ * margin and fails the before-number. That is the cost a NONCE-BEARING
+ * request pays (Inc 2's clients).
+ *
+ * A request without a usable nonce gets no receipt and pays for none (spec
+ * §4.1): `tryHoldReceipt` returns before the `held` thunk. The deterministic
+ * proof is the zero-work spies in `sync-hold-receipt-nonceless.test.ts`; the
+ * timing sanity check here bounds the nonce-less call at ≤ 0.15 × the page's
+ * own stringify (+ 0.5 ms), i.e. within noise of main's serve path.
  */
 import { describe, it, expect } from "vitest";
 import { generateKeypair, bytesToHex } from "@motebit/crypto";
@@ -51,6 +58,7 @@ describe("hold receipt cost on a full page", () => {
       };
       return { event_id: served.event_id, served, redacted: false, seq: i + 1 };
     });
+    const NONCE = "pF3s9Kq2LmZ0xWb4nYp1sKdE6a";
     const pageBody = { events: held.map((h) => ({ ...h.served, seq: h.seq })) };
     const page = { after_seq: 0, next_seq: 1000, has_more: false, latest_seq: 1000 };
 
@@ -61,7 +69,7 @@ describe("hold receipt cost on a full page", () => {
         relay,
         door: "http_pull",
         motebitId: "m",
-        nonce: undefined,
+        nonce: NONCE,
         held: () => held,
         page,
       });
@@ -77,7 +85,7 @@ describe("hold receipt cost on a full page", () => {
         relay,
         door: "http_pull",
         motebitId: "m",
-        nonce: undefined,
+        nonce: NONCE,
         held: () => held,
         page,
       });
@@ -88,5 +96,48 @@ describe("hold receipt cost on a full page", () => {
     const r = median(receipt);
     console.log(`hold-receipt perf: receipt ${r.toFixed(1)} ms, page stringify ${s.toFixed(1)} ms`);
     expect(r).toBeLessThanOrEqual(8 * s + 15);
+  });
+
+  it("a nonce-less request does no receipt work: ≤ 0.15 × page stringify + 0.5 ms", async () => {
+    const kp = await generateKeypair();
+    const relay: RelayIdentity = {
+      relayMotebitId: "relay-perf",
+      publicKey: kp.publicKey,
+      privateKey: kp.privateKey,
+      publicKeyHex: bytesToHex(kp.publicKey),
+      did: "did:key:perf",
+    };
+    let thunkCalls = 0;
+    const pageBody = {
+      events: Array.from({ length: 1000 }, (_, i) => ({ i, blob: "x".repeat(1900) })),
+    };
+    const stringify: number[] = [];
+    const nonceless: number[] = [];
+    for (let k = 0; k < 9; k++) {
+      let t = performance.now();
+      JSON.stringify(pageBody);
+      stringify.push(performance.now() - t);
+      t = performance.now();
+      const r = await tryHoldReceipt({
+        relay,
+        door: "http_pull",
+        motebitId: "m",
+        nonce: k % 2 === 0 ? undefined : "short",
+        held: () => {
+          thunkCalls++;
+          return [];
+        },
+        page: { after_seq: 0, next_seq: 1000, has_more: false, latest_seq: 1000 },
+      });
+      nonceless.push(performance.now() - t);
+      expect(r).toBeUndefined();
+    }
+    expect(thunkCalls).toBe(0);
+    const s = median(stringify);
+    const n = median(nonceless);
+    console.log(
+      `hold-receipt perf: nonce-less ${n.toFixed(3)} ms, page stringify ${s.toFixed(1)} ms`,
+    );
+    expect(n).toBeLessThanOrEqual(0.15 * s + 0.5);
   });
 });

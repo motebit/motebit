@@ -27,9 +27,9 @@
       "description": "The identity whose events are held."
     },
     "nonce": {
-      "description": "The client-supplied request nonce, echoed exactly. Absent when none was sent.",
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The client-supplied request nonce, echoed exactly. Always present: a receipt is issued only to a request carrying a usable nonce."
     },
     "issued_at": {
       "type": "integer",
@@ -114,6 +114,7 @@
     "relay_motebit_id",
     "relay_public_key",
     "motebit_id",
+    "nonce",
     "issued_at",
     "events",
     "suite",

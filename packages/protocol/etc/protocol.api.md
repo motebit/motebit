@@ -4539,7 +4539,7 @@ export interface SyncHoldReceipt {
     readonly events: readonly SyncHeldEvent[];
     readonly issued_at: number;
     readonly motebit_id: string;
-    readonly nonce?: string;
+    readonly nonce: string;
     readonly page?: SyncHoldPage;
     readonly relay_motebit_id: string;
     readonly relay_public_key: string;
