@@ -1346,3 +1346,57 @@ export function animateMarkForReceipt(
   const { keyframes, options } = getReceiptAnimation(kind);
   (mark as HTMLElement).animate(keyframes, options);
 }
+
+/** Activity-bus event fields the receipt-sign pulse reads. */
+export interface ReceiptPulseActivity {
+  invocation_id: string;
+  tool_name: string;
+  args: Record<string, unknown>;
+}
+
+/** Receipt-bus fields the receipt-sign pulse reads. */
+export interface ReceiptPulseReceipt {
+  invocation_id: string;
+  tool_name: string;
+}
+
+/**
+ * Wire the chrome-1c receipt-sign pulse to the runtime's buses.
+ * `onSigned` is the pulse — it fires once per tool call whose
+ * receipt was actually signed, never for an act that was only
+ * attempted. Returns an unsubscribe thunk.
+ */
+export function wireReceiptSignPulse(
+  buses: {
+    subscribeToolActivity: (listener: (event: ReceiptPulseActivity) => void) => () => void;
+    subscribeToolInvocations: (listener: (receipt: ReceiptPulseReceipt) => void) => () => void;
+  },
+  onSigned: (toolName: string, args: Record<string, unknown> | undefined) => void,
+): () => void {
+  // The receipt bus is the trigger: it fires only after a receipt is
+  // signed, and signing is fail-closed, so an unsigned call never
+  // pulses. The activity bus fires first and only supplies `args`
+  // (the receipt carries `args_hash`), joined by `invocation_id`.
+  // Entries whose receipt never arrives are evicted oldest-first.
+  const argsByInvocation = new Map<string, Record<string, unknown>>();
+  const offActivity = buses.subscribeToolActivity((event) => {
+    argsByInvocation.set(event.invocation_id, event.args);
+    if (argsByInvocation.size > RECEIPT_PULSE_PENDING_MAX) {
+      const oldest = argsByInvocation.keys().next().value;
+      if (oldest !== undefined) argsByInvocation.delete(oldest);
+    }
+  });
+  const offReceipts = buses.subscribeToolInvocations((receipt) => {
+    const args = argsByInvocation.get(receipt.invocation_id);
+    argsByInvocation.delete(receipt.invocation_id);
+    onSigned(receipt.tool_name, args);
+  });
+  return () => {
+    offActivity();
+    offReceipts();
+    argsByInvocation.clear();
+  };
+}
+
+/** Bound on activity args held while awaiting their signed receipt. */
+const RECEIPT_PULSE_PENDING_MAX = 64;
