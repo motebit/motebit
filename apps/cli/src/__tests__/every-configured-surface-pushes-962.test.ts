@@ -20,7 +20,8 @@
  * Dimensions: identity {fresh — never bootstrapped, bootstrapped} × relay
  * {up at start, down at start then up} × token {the configured master token,
  * none}. The relay is a real in-process `services/relay` served on a real
- * port, device auth ON; "down" is a reserved port nothing listens on; its
+ * port, device auth ON; "down" is the cell's port held open with no relay
+ * behind it (every connection reset — see `holdPort`); its
  * database is a file, so a bootstrapped identity survives the restart.
  *
  * The invariant pair, per cell:
@@ -39,8 +40,9 @@
  * not configured and compaction is not held on a relay that does not exist.
  */
 import { mkdtempSync } from "node:fs";
+import type { Server as HttpServer } from "node:http";
 import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, vi, afterAll } from "vitest";
@@ -56,7 +58,7 @@ await vi.hoisted(async () => {
     delete process.env[k];
 });
 
-import { serve } from "@hono/node-server";
+import { createAdaptorServer } from "@hono/node-server";
 import { createSyncRelay } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
 import {
@@ -112,12 +114,54 @@ interface ServedRelay {
   close(): Promise<void>;
 }
 
-async function reservePort(): Promise<number> {
-  const srv = createServer();
+/**
+ * A cell's relay port, BOUND for the cell's whole life. Each connection is
+ * handed to the relay currently up on it, or reset while none is ("down").
+ *
+ * The port is never released between "down" and "up": a port reserved and
+ * then closed is free for any other relay — another cell, another test file
+ * in the same vitest run — to bind while this cell's relay is down. The
+ * cell's pushes then reached THAT relay at the cell's URL, it acknowledged
+ * and held them, compaction rightly deleted them, and the safety check —
+ * reading only this cell's relay — reported them lost (#962 down→up flake,
+ * traced 2026-10-05: the "lost" events sat in the other cell's relay.db).
+ */
+interface CellPort {
+  port: number;
+  /** Route connections to `server` (a relay up), or reset them (`undefined`, down). */
+  route(server: HttpServer | undefined): void;
+  close(): Promise<void>;
+}
+
+async function holdPort(): Promise<CellPort> {
+  let target: HttpServer | undefined;
+  /** Connections handed to the current relay — dropped when it goes down. */
+  let routed = new Set<Socket>();
+  const all = new Set<Socket>();
+  const srv = createServer((socket) => {
+    all.add(socket);
+    socket.once("close", () => all.delete(socket));
+    if (!target) {
+      socket.resetAndDestroy();
+      return;
+    }
+    routed.add(socket);
+    target.emit("connection", socket);
+  });
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
-  const port = (srv.address() as AddressInfo).port;
-  await new Promise<void>((r) => srv.close(() => r()));
-  return port;
+  return {
+    port: (srv.address() as AddressInfo).port,
+    route(server) {
+      target = server;
+      for (const s of routed) s.destroy();
+      routed = new Set();
+    },
+    async close() {
+      target = undefined;
+      for (const s of all) s.destroy();
+      await new Promise<void>((r) => srv.close(() => r()));
+    },
+  };
 }
 
 /** Event-sync requests the relay refused (401/403), per cell. */
@@ -126,7 +170,7 @@ interface Refusals {
 }
 
 async function startRelay(
-  port: number,
+  port: CellPort,
   dbPath: string,
   refusals: Refusals = { count: 0 },
 ): Promise<ServedRelay> {
@@ -141,29 +185,21 @@ async function startRelay(
     drainGraceMs: 10,
     allowPrivateEndpoints: true,
   });
-  const server = serve({
+  const server = createAdaptorServer({
     fetch: async (req: Request, env: unknown) => {
       const res = await relay.app.fetch(req, env);
       if (/\/sync\//.test(new URL(req.url).pathname) && (res.status === 401 || res.status === 403))
         refusals.count++;
       return res;
     },
-    port,
-    hostname: "127.0.0.1",
-  });
+  }) as HttpServer;
   (relay.app as unknown as { injectWebSocket: (s: unknown) => void }).injectWebSocket(server);
-  await new Promise<void>((r, j) => {
-    if (server.listening) r();
-    else {
-      server.once("listening", () => r());
-      server.once("error", j);
-    }
-  });
+  port.route(server);
   return {
     relay,
     async close() {
+      port.route(undefined);
       await relay.close();
-      await new Promise<void>((r) => server.close(() => r()));
     },
   };
 }
@@ -408,16 +444,17 @@ afterAll(async () => {
 
 async function newCell(token: string | undefined): Promise<{
   ctx: CellCtx;
-  port: number;
+  port: CellPort;
   relayDb: string;
 }> {
   const dir = mkdtempSync(join(tmpdir(), "motebit-962h-"));
-  const port = await reservePort();
+  const port = await holdPort();
+  cleanups.push(() => port.close());
   const kp = await generateKeypair();
   const mid = await deriveSovereignMotebitId(hex(kp));
   return {
     ctx: {
-      base: `http://127.0.0.1:${port}`,
+      base: `http://127.0.0.1:${port.port}`,
       mid,
       deviceId: `${mid}-dev`,
       kp,
@@ -587,7 +624,7 @@ type Cfg = "config-sync_url" | "no-config";
 
 interface XCell {
   ctx: CellCtx;
-  port: number;
+  port: CellPort;
   relayDb: string;
   dbPath: string;
   fullConfig: { sync_url?: string };
