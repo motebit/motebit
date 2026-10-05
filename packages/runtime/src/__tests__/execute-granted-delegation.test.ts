@@ -1314,3 +1314,130 @@ describe("executeGrantedDelegation — failure carries the money facts (#885)", 
 
 // Keep the StreamChunk import meaningful for the type-only harness surface.
 export type _Chunk = StreamChunk;
+
+/**
+ * The per-call hard ceiling (`maxTotalMicro`): a caller that quoted a hop
+ * passes its REMAINING budget, and the runtime refuses — before the payment is
+ * signed or broadcast — any resolution whose total (worker + fees) exceeds it.
+ * The quote and the pay are separate resolutions (a fresh tick seed may
+ * re-rank; a listing may reprice), so a check AFTER payment is too late.
+ */
+describe("executeGrantedDelegation — per-call ceiling maxTotalMicro, enforced before signing", () => {
+  beforeEach(() => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (isRelayMetadataUrl(url)) return relayMetadataResponse();
+      if (url.includes("mock-relay.test")) return relayFetch()(url);
+      return originalFetch(input as string);
+    }) as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function payingWallet() {
+    return mockWallet(async (r) => ({
+      tx_hash: "tx-cap",
+      chain: "solana",
+      network: "solana:devnet",
+      to_address: r.workerAddress,
+      amount_micro: r.amountMicro,
+      fee_to_address: r.treasuryAddress,
+      fee_amount_micro: r.feeAmountMicro,
+    }));
+  }
+
+  /** The resolved total outflow (worker + fees) of the mock listing, from a quote. */
+  async function quotedTotal(): Promise<{ total: number; worker?: string }> {
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const q = await clerkRuntime().executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey",
+      delegation: { token, grant },
+      dryRun: true,
+    });
+    if (!q.ok || !q.dryRun) throw new Error("quote failed");
+    return {
+      total: (q.settlement.paidMicro ?? 0) + (q.settlement.feeMicro ?? 0),
+      ...(q.workerMotebitId != null ? { worker: q.workerMotebitId } : {}),
+    };
+  }
+
+  async function live(maxTotalMicro?: number) {
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const { wallet, buildP2pPayment } = payingWallet();
+    const submits: string[] = [];
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/task")) submits.push(url);
+      return inner(input as string, init);
+    }) as typeof fetch;
+    const result = await clerkRuntime(wallet).executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey",
+      delegation: { token, grant },
+      ...(maxTotalMicro !== undefined ? { maxTotalMicro } : {}),
+    });
+    return { result, buildP2pPayment, submits };
+  }
+
+  it("the quote names the worker it priced (the live call can pin to it)", async () => {
+    const q = await quotedTotal();
+    expect(q.worker).toBe("bob-worker");
+    expect(q.total).toBeGreaterThan(50_000); // worker net + relay fee
+  });
+
+  it("resolved total ABOVE the cap ⇒ budget_exceeded; nothing signed, broadcast, or submitted", async () => {
+    const { total } = await quotedTotal();
+    const { result, buildP2pPayment, submits } = await live(total - 1);
+    expect(result).toEqual({ ok: false, code: "budget_exceeded" });
+    expect(buildP2pPayment).not.toHaveBeenCalled();
+    expect(submits).toEqual([]);
+  });
+
+  it("resolved total EQUAL to the cap ⇒ allowed (the hop pays)", async () => {
+    const { total } = await quotedTotal();
+    const { result, buildP2pPayment } = await live(total);
+    expect(result.ok).toBe(true);
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+    const req = buildP2pPayment.mock.calls[0]![0];
+    expect(req.amountMicro + req.feeAmountMicro + (req.executorFeeAmountMicro ?? 0)).toBe(total);
+  });
+
+  it("cap ABSENT ⇒ today's behaviour unchanged (the hop pays)", async () => {
+    const { result, buildP2pPayment } = await live(undefined);
+    expect(result.ok).toBe(true);
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+  });
+
+  it("a malformed cap (NaN / negative / fractional) refuses fail-closed — never read as 'no ceiling'", async () => {
+    for (const bad of [Number.NaN, -1, 0.5, Number.POSITIVE_INFINITY]) {
+      const { result, buildP2pPayment } = await live(bad);
+      expect(result).toEqual({ ok: false, code: "budget_exceeded" });
+      expect(buildP2pPayment).not.toHaveBeenCalled();
+    }
+  });
+
+  it("dry-run ABOVE the cap refuses with the same code (the quote obeys the pay's ceiling)", async () => {
+    const { total } = await quotedTotal();
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const result = await clerkRuntime().executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey",
+      delegation: { token, grant },
+      dryRun: true,
+      maxTotalMicro: total - 1,
+    });
+    expect(result).toEqual({ ok: false, code: "budget_exceeded" });
+  });
+});

@@ -202,7 +202,19 @@ interface MotebitServerDeps {
   storeMemory?(content: string, sensitivity?: string): Promise<{ node_id: string }>;
   handleAgentTask?(
     prompt: string,
-    options?: { delegatedScope?: string; relayTaskId?: string },
+    options?: {
+      delegatedScope?: string;
+      relayTaskId?: string;
+      /**
+       * The relay task id this run was ADMITTED under — the verified
+       * dispatch token's `sub`, set only when `taskAdmission` admitted the
+       * call (never a caller-supplied `relay_task_id`). One admission may
+       * run more than once (a timed-out run's honest retry), so state that
+       * must hold across every run of one admitted task — a per-task spend
+       * budget — keys on this, never on the run.
+       */
+      admittedRelayTaskId?: string;
+    },
   ): AsyncGenerator<
     | { type: "text"; text: string }
     | { type: "task_result"; receipt: Record<string, unknown> }
@@ -1210,6 +1222,7 @@ export class McpServerAdapter {
             const gen = handleAgentTask(args.prompt, {
               delegatedScope,
               relayTaskId,
+              ...(admittedSub != null ? { admittedRelayTaskId: admittedSub } : {}),
             });
             let timedOut = false;
             try {

@@ -7,12 +7,14 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { parseClerkPrompt, ClerkRefusal, runClerkSpend } from "../clerk.js";
+import { memoryTaskSpend } from "@motebit/molecule-runner";
 import type { MoleculeSpendHandle, ExecutionReceipt } from "@motebit/molecule-runner";
 
 function spendStub(result: unknown): MoleculeSpendHandle {
   return {
     heldGrant: {} as MoleculeSpendHandle["heldGrant"],
     spend: vi.fn(async () => result as Awaited<ReturnType<MoleculeSpendHandle["spend"]>>),
+    taskSpend: () => memoryTaskSpend(),
   };
 }
 

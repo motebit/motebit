@@ -21,8 +21,13 @@ import {
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
-import { loadConfig } from "./helpers.js";
-import { research } from "./research.js";
+import {
+  computePaidSpendBudgetMicro,
+  loadConfig,
+  paidSpendBudgetConfigError,
+  parseUnitCostMicro,
+} from "./helpers.js";
+import { research, researchConfigForTask } from "./research.js";
 import type { ResearchConfig } from "./research.js";
 
 function log(msg: string): void {
@@ -95,7 +100,38 @@ async function main(): Promise<void> {
   // Default covers worst-case sonnet inference (~$0.26–0.42/report at the
   // 8-tool-call cap) — the per-report cost_estimate_usd log is the tuning
   // signal before any prod price change.
-  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.25");
+  // Every budget input is validated at boot: a non-finite / negative value is
+  // an operator error and the service refuses to start (MOTEBIT_UNIT_COST=abc
+  // was a NaN budget that paid every hop).
+  const budgetConfigError = paidSpendBudgetConfigError({
+    unitCostRaw: process.env["MOTEBIT_UNIT_COST"],
+    maxToolCalls: config.maxToolCalls,
+    marginBps: config.marginBps,
+    llmReserveMicro: config.llmReserveMicro,
+  });
+  if (budgetConfigError != null) {
+    console.error(`[research] refusing to start: ${budgetConfigError}`);
+    process.exit(1);
+  }
+  const unitCostMicro = parseUnitCostMicro(process.env["MOTEBIT_UNIT_COST"])!;
+  const unitCost = unitCostMicro / 1_000_000;
+
+  // Per-task paid-spend budget (first-party floor law, clearing-house doctrine):
+  // atoms are paid from what this task earns, so their outflow is capped at
+  // price − thin margin − the inference reserve. Integer micro-units.
+  const paidSpendBudgetMicro = computePaidSpendBudgetMicro({
+    unitCostMicro,
+    marginBps: config.marginBps,
+    llmReserveMicro: config.llmReserveMicro,
+  });
+  console.log(
+    `[research] paid-spend budget ${paidSpendBudgetMicro} micro/task (price ${unitCostMicro} − margin ${config.marginBps}bps − LLM reserve ${config.llmReserveMicro})`,
+  );
+  if (paidSpendBudgetMicro === 0) {
+    console.log(
+      "[research] paid-spend budget is ZERO — refusing to fund any paid sub-hop; running with free tools only. Raise MOTEBIT_UNIT_COST or lower MOTEBIT_RESEARCH_MARGIN_BPS / MOTEBIT_RESEARCH_LLM_RESERVE_MICRO.",
+    );
+  }
 
   // Readiness: detected passively from real task failures (free), recovered
   // actively by the cheapest possible provider round-trip — one token, and only
@@ -193,16 +229,44 @@ async function main(): Promise<void> {
         // receipt from the granted-delegation result.
         ...(spend != null
           ? {
+              paidSpendBudgetMicro,
               paidSubDelegate: async (p: {
                 capability: string;
                 prompt: string;
                 targetWorkerId?: string;
+                dryRun?: boolean;
+                maxTotalMicro?: number;
               }) => {
                 const r = await spend.spend(p);
-                if (!r.ok) return { ok: false as const, code: r.code };
-                // The research turn never dry-runs, so the live variant carries
-                // the atom's receipt; the dry-run variant is unreachable here.
-                if (r.dryRun) return { ok: true as const };
+                // A failure that MOVED money (paid, then timeout/agent_failed;
+                // or unconfirmed) carries its facts through — dropping them
+                // to a bare code is what left a paid-then-failed hop uncounted.
+                if (!r.ok)
+                  return {
+                    ok: false as const,
+                    code: r.code,
+                    ...(r.settledPayment != null ? { settledPayment: r.settledPayment } : {}),
+                    ...(r.unconfirmedPayment != null
+                      ? { unconfirmedPayment: r.unconfirmedPayment }
+                      : {}),
+                    ...(r.extraPayments != null ? { extraPayments: r.extraPayments } : {}),
+                  };
+                // A dry run is the budget's QUOTE: the resolved price
+                // (paidMicro + feeMicro) and the worker it priced, no payment.
+                if (r.dryRun)
+                  return {
+                    ok: true as const,
+                    settlement: r.settlement,
+                    ...(r.workerMotebitId != null ? { workerMotebitId: r.workerMotebitId } : {}),
+                    ...(r.routingTranscript != null
+                      ? {
+                          routingTranscript: r.routingTranscript as unknown as Record<
+                            string,
+                            unknown
+                          >,
+                        }
+                      : {}),
+                  };
                 // Surface the money fact so the molecule can self-attest the paid
                 // hop in its signed receipt (mode + onchain tx) — the runtime
                 // populated it from the payment proof; dropping it here is what
@@ -233,7 +297,7 @@ async function main(): Promise<void> {
 
       const handleAgentTask = async function* (
         prompt: string,
-        options?: { delegatedScope?: string; relayTaskId?: string },
+        options?: { delegatedScope?: string; relayTaskId?: string; admittedRelayTaskId?: string },
       ) {
         const taskId = crypto.randomUUID();
         const submittedAt = Date.now();
@@ -241,7 +305,16 @@ async function main(): Promise<void> {
         let result: { ok: boolean; data?: string; error?: string };
         let delegationReceipts: Record<string, unknown>[] = [];
         try {
-          const r = await research(prompt, researchConfig);
+          // The paid-spend budget bounds the ADMITTED task across every run of
+          // it (a timed-out run still paying + its retry), not this run alone.
+          const r = await research(
+            prompt,
+            researchConfigForTask(
+              researchConfig,
+              options?.admittedRelayTaskId,
+              spend != null ? (id) => spend.taskSpend(id) : undefined,
+            ),
+          );
           // #479 backstop at the signing seam: research() already refuses an
           // empty synthesis, but the receipt is signed HERE — a completed
           // receipt over an empty body must be structurally impossible, not
@@ -254,7 +327,7 @@ async function main(): Promise<void> {
           // The reprice tuning signal (2026-08-01): cost was logged only on
           // the unused tool-registry path — the HIRE path priced blind.
           log(
-            `research complete: ${r.report.length} chars, ${r.recall_self_count} interior, ${r.search_count} searches, ${r.fetch_count} fetches, ${r.citations.length} citations, report_cost_estimate_usd=${r.cost_estimate_usd.toFixed(4)}`,
+            `research complete: ${r.report.length} chars, ${r.recall_self_count} interior, ${r.search_count} searches, ${r.fetch_count} fetches, ${r.citations.length} citations, report_cost_estimate_usd=${r.cost_estimate_usd.toFixed(4)}, paid_spend_micro=${r.paid_spend_micro}/${r.paid_budget_micro ?? "unbudgeted"}`,
           );
           // A completed research turn is the strongest readiness evidence there is.
           readiness.recordSuccess();
