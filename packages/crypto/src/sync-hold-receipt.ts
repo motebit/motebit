@@ -24,7 +24,9 @@
  */
 
 import type { SyncHoldReceipt, SyncHeldEvent } from "@motebit/protocol";
+import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
 import {
+  bytesToHex,
   canonicalJson,
   canonicalSha256,
   hexToBytes,
@@ -54,6 +56,26 @@ export const SYNC_HOLD_RECEIPT_SPEC_MIRROR = "motebit/sync-hold-receipt@1.0" as 
  */
 export async function computeSyncEventDigest(entry: unknown): Promise<string> {
   return canonicalSha256(entry);
+}
+
+const UTF8 = new TextEncoder();
+
+/** A synchronous SHA-256 over bytes (raw 32-byte digest). */
+export type SyncDigestHash = (bytes: Uint8Array) => Uint8Array;
+
+/**
+ * The same digest as {@link computeSyncEventDigest}, computed synchronously —
+ * for a producer that digests a whole pull page per request, where one
+ * awaited `crypto.subtle` call per event dominates the cost. `hash` defaults
+ * to `@noble/hashes` SHA-256; a host with a native synchronous SHA-256 (Node's
+ * `node:crypto`) may inject it. The value is identical either way (pinned by
+ * test against the async form).
+ */
+export function computeSyncEventDigestSync(
+  entry: unknown,
+  hash: SyncDigestHash = nobleSha256,
+): string {
+  return bytesToHex(hash(UTF8.encode(canonicalJson(entry))));
 }
 
 /** Canonical bytes used for signing — the receipt without its own signature field. */
@@ -159,7 +181,10 @@ export async function verifySyncHoldReceipt(
   }
 
   // 4. Page consistency — a page receipt lists seq-carrying events inside its
-  //    range, in order; a push receipt lists none with a seq.
+  //    range, in order; a push receipt lists none with a seq. A page receipt
+  //    may list a SUBSET of the page: the relay omits an event whose
+  //    redaction status it cannot establish (spec §4.5), so the last listed
+  //    seq may sit below `next_seq`. An omitted event is simply not credited.
   const page = receipt.page;
   if (page !== undefined) {
     if (
@@ -180,8 +205,6 @@ export async function verifySyncHoldReceipt(
       }
       prev = e.seq;
     }
-    const top = held.length > 0 ? held[held.length - 1]!.seq : page.after_seq;
-    if (top !== page.next_seq) return { valid: false, reason: "page_mismatch" };
   } else if (held.some((e) => e.seq !== undefined)) {
     return { valid: false, reason: "page_mismatch" };
   }

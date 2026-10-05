@@ -34,12 +34,7 @@ import { admitKey, proveSovereignFirstKey, recordFirstIdentityKey } from "./iden
 import type { AuthEvent } from "./auth-events.js";
 import { appendBoundEvent, bindSyncEntries } from "./identity-binding.js";
 import { parseSeqCursor, readEventsAfterSeq } from "./event-seq.js";
-import {
-  ingressRedactedIds,
-  parseSyncNonce,
-  readHeldEvents,
-  signHeldEvents,
-} from "./sync-hold-receipt.js";
+import { heldOnPage, readHeldEvents, tryHoldReceipt } from "./sync-hold-receipt.js";
 import type { RelayIdentity } from "./federation.js";
 
 const logger = createLogger({ service: "sync-routes" });
@@ -97,7 +92,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
 
     let accepted = 0;
     let duplicates = 0;
-    for (const event of safeEvents) {
+    for (const [i, event] of safeEvents.entries()) {
       // Receipt idempotency: if this event carries a receipt, check for replay
       const receipt = event.payload?.receipt as Record<string, unknown> | undefined;
       if (receipt && typeof receipt.signature === "string" && receipt.signature !== "") {
@@ -111,7 +106,9 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
           continue;
         }
       }
-      if (!(await appendBoundEvent(eventStore, owner, event))) continue;
+      // The redactor returns an entry it left alone by identity; the flag is
+      // stored with the row (the hold receipt reads it back from there).
+      if (!appendBoundEvent(deps.moteDb.db, owner, event, event !== body.events[i])) continue;
       accepted++;
       // Deletion propagation: a synced DeleteRequested for a memory
       // node erases the relay-stored memory_formed content for that
@@ -133,22 +130,22 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
 
     // The hold receipt names what the relay STORES among this push's ids,
     // read back after the writes — never the frame (a skipped duplicate or
-    // unbound entry is listed only if its id is genuinely held). Additive.
-    const holdReceipt = deps.relayIdentity
-      ? {
-          hold_receipt: await signHeldEvents(
-            deps.relayIdentity,
-            motebitId,
-            parseSyncNonce(body.nonce),
-            readHeldEvents(
-              deps.moteDb.db,
-              owner,
-              safeEvents.map((e) => e.event_id),
-              ingressRedactedIds(body.events, safeEvents),
-            ),
-          ),
-        }
-      : {};
+    // unbound entry is listed only if its id is genuinely held). Additive and
+    // best-effort: on any failure the response is exactly main's.
+    const hold_receipt = await tryHoldReceipt({
+      relay: deps.relayIdentity,
+      door: "http_push",
+      motebitId,
+      nonce: body.nonce,
+      correlationId: c.req.header("x-correlation-id"),
+      held: () =>
+        readHeldEvents(
+          deps.moteDb.db,
+          owner,
+          safeEvents.map((e) => e.event_id),
+        ),
+    });
+    const holdReceipt = hold_receipt !== undefined ? { hold_receipt } : {};
 
     if (duplicates > 0 && accepted === 0) {
       return c.json({ motebit_id: motebitId, accepted: 0, duplicate: true, ...holdReceipt });
@@ -175,22 +172,25 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       const owner = bindSyncEntries(c, [], motebitId, deps.recordAuthEvent);
       const limitRaw = parseSeqCursor(c.req.query("limit"));
       const limit = typeof limitRaw === "number" && limitRaw > 0 ? limitRaw : undefined;
-      const { body, held } = readEventsAfterSeq(deps.moteDb.db, owner, afterSeq, limit);
-      if (!deps.relayIdentity) return c.json(body);
+      const { body, served } = readEventsAfterSeq(deps.moteDb.db, owner, afterSeq, limit);
       // The page's receipt covers its seq range and the request nonce, so a
-      // page cannot be replayed as the answer to another cursor. Additive.
-      const hold_receipt = await signHeldEvents(
-        deps.relayIdentity,
+      // page cannot be replayed as the answer to another cursor. Additive and
+      // best-effort: on any failure the page is served exactly as main's.
+      const hold_receipt = await tryHoldReceipt({
+        relay: deps.relayIdentity,
+        door: "http_pull",
         motebitId,
-        parseSyncNonce(c.req.query("nonce")),
-        held,
-        {
+        nonce: c.req.query("nonce"),
+        correlationId: c.req.header("x-correlation-id"),
+        held: () => heldOnPage(served),
+        page: {
           after_seq: body.after_seq,
           next_seq: body.next_seq,
           has_more: body.has_more,
           latest_seq: body.latest_seq,
         },
-      );
+      });
+      if (hold_receipt === undefined) return c.json(body);
       return c.json({ ...body, hold_receipt });
     }
     const afterClock = Number(c.req.query("after_clock") ?? "0");

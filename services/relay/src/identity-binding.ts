@@ -35,9 +35,8 @@
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { EventLogEntry } from "@motebit/sdk";
-import type { EventStore } from "@motebit/event-log";
 import type { MigrationRequest } from "@motebit/protocol";
-import type { DatabaseDriver } from "@motebit/persistence";
+import type { DatabaseDriver, PreparedStatement } from "@motebit/persistence";
 import { bytesToHex, didKeyToPublicKey, hexToBytes } from "@motebit/encryption";
 import {
   deriveSovereignMotebitId,
@@ -437,16 +436,51 @@ export function bindSyncEntries(
 }
 
 /**
- * Append a synced event under its bound owner. The only relay route path to
- * `EventStore.append` for client-supplied entries: an entry that does not
- * name `owner` is refused here too, so the type and the row agree.
+ * The statement `@motebit/persistence`'s `SqliteEventStore.append` runs, with
+ * the same bind values, plus the relay's write-time redaction fact
+ * (`relay_ingress_redacted`, migration v56). Pinned row-for-row against
+ * `SqliteEventStore.append` by `__tests__/sync-hold-receipt-hardening.test.ts`.
  */
-export async function appendBoundEvent(
-  eventStore: EventStore,
+const APPEND_BOUND_EVENT_SQL = `INSERT OR IGNORE INTO events (event_id, motebit_id, device_id, event_type, payload, version_clock, timestamp, tombstoned, relay_ingress_redacted)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const appendStatements = new WeakMap<DatabaseDriver, PreparedStatement>();
+
+/**
+ * Append a synced event under its bound owner. The only relay route path for
+ * client-supplied entries into `events`: an entry that does not name `owner`
+ * is refused here too, so the type and the row agree.
+ *
+ * `ingressRedacted` is whether the door's ingress redaction changed this
+ * entry. It is written in the SAME statement as the bytes, so it describes
+ * exactly the row that statement stores; when `INSERT OR IGNORE` keeps an
+ * older row, the older row keeps its own flag. The sync hold receipt reads
+ * it back from the stored row (`sync-hold-receipt.ts`), never from a frame.
+ */
+export function appendBoundEvent(
+  db: DatabaseDriver,
   owner: BoundIdentity,
   entry: EventLogEntry,
-): Promise<boolean> {
+  ingressRedacted: boolean,
+): boolean {
   if (entry.motebit_id !== unwrapBound(owner)) return false;
-  await eventStore.append(entry);
+  // `EventStore.append`'s own refusals, in its order and words.
+  if (entry.event_id === "") throw new Error("event_id must not be empty");
+  if (entry.motebit_id === "") throw new Error("motebit_id must not be empty");
+  let stmt = appendStatements.get(db);
+  if (stmt === undefined) {
+    stmt = db.prepare(APPEND_BOUND_EVENT_SQL);
+    appendStatements.set(db, stmt);
+  }
+  stmt.run(
+    entry.event_id,
+    entry.motebit_id,
+    entry.device_id ?? null,
+    entry.event_type,
+    JSON.stringify(entry.payload),
+    entry.version_clock,
+    entry.timestamp,
+    entry.tombstoned ? 1 : 0,
+    ingressRedacted ? 1 : 0,
+  );
   return true;
 }

@@ -63,6 +63,20 @@ export function stripConsolidationManifest(
 }
 
 /**
+ * The event types whose ingress redaction can leave NO marker in the stored
+ * bytes. Every other redaction here writes `redacted: true` into the payload,
+ * so whether a stored row of another type was redacted is a function of its
+ * bytes; a stripped `mutation_manifest` leaves nothing behind. For these
+ * types the relay records the fact at write time (`events.relay_ingress_redacted`,
+ * migration v56), and a row stored before that column existed has an
+ * unknowable status (`sync-hold-receipt.ts`). A new unmarked redaction MUST be
+ * added here (pinned by `__tests__/sync-hold-receipt-hardening.test.ts`).
+ */
+export const UNMARKED_INGRESS_REDACTION_TYPES: ReadonlySet<string> = new Set<string>([
+  EventType.ConsolidationReceiptSigned,
+]);
+
+/**
  * Strip the raw user text from a `memory_audit` payload. This event fires
  * precisely when the model FAILED to tag a memory-worthy pattern, so its
  * `turn_message` (up to 200 chars of the raw user message) and `missed_patterns`

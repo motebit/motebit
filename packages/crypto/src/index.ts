@@ -3040,12 +3040,14 @@ export {
   signSyncHoldReceipt,
   verifySyncHoldReceipt,
   computeSyncEventDigest,
+  computeSyncEventDigestSync,
   SYNC_HOLD_RECEIPT_SUITE,
   SYNC_HOLD_RECEIPT_SPEC_MIRROR,
 } from "./sync-hold-receipt.js";
 export type {
   VerifySyncHoldReceiptResult,
   VerifySyncHoldReceiptOptions,
+  SyncDigestHash,
 } from "./sync-hold-receipt.js";
 export {
   computeCredentialLeaf,

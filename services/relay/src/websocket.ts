@@ -26,12 +26,7 @@ import type { TaskQueueEntry } from "./tasks.js";
 import type { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
 import { sendToEach, WS_OPEN } from "./ws-send.js";
-import {
-  ingressRedactedIds,
-  parseSyncNonce,
-  readHeldEvents,
-  signHeldEvents,
-} from "./sync-hold-receipt.js";
+import { readHeldEvents, tryHoldReceipt } from "./sync-hold-receipt.js";
 import type { RelayIdentity } from "./federation.js";
 import { recoverableOnReconnect } from "./task-presentation.js";
 import { TaskClaims } from "./task-claim.js";
@@ -974,7 +969,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               // unredacted (the previous fan-out below sent raw entries).
               const safeEvents = redactSensitiveEvents(msg.events);
               let wsAccepted = 0;
-              for (const entry of safeEvents) {
+              for (const [i, entry] of safeEvents.entries()) {
                 // Receipt idempotency: skip events with duplicate receipt signatures
                 const receipt = entry.payload?.receipt as Record<string, unknown> | undefined;
                 if (receipt && typeof receipt.signature === "string" && receipt.signature !== "") {
@@ -985,7 +980,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                   });
                   if (isDuplicate) continue;
                 }
-                if (!(await appendBoundEvent(eventStore, owner, entry))) continue;
+                // The redactor returns an entry it left alone by identity; the
+                // flag is stored with the row (the hold receipt reads it back).
+                if (!appendBoundEvent(db, owner, entry, entry !== msg.events[i])) continue;
                 wsAccepted++;
                 // Deletion propagation — per-event best-effort on the WS
                 // path (a dropped propagation here is recovered by the
@@ -1006,22 +1003,20 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               // The hold receipt names what the relay STORES among this
               // frame's ids, read back after the writes — never the frame (a
               // skipped duplicate or unbound entry is listed only if its id is
-              // genuinely held). Additive, like `push_id`.
-              const holdReceipt = deps.relayIdentity
-                ? {
-                    hold_receipt: await signHeldEvents(
-                      deps.relayIdentity,
-                      motebitId,
-                      parseSyncNonce(msg.nonce),
-                      readHeldEvents(
-                        db,
-                        owner,
-                        safeEvents.map((e) => e.event_id),
-                        ingressRedactedIds(msg.events, safeEvents),
-                      ),
-                    ),
-                  }
-                : {};
+              // genuinely held). Additive, like `push_id`, and best-effort: on
+              // any failure the ack is exactly main's.
+              const hold_receipt = await tryHoldReceipt({
+                relay: deps.relayIdentity,
+                door: "ws_push",
+                motebitId,
+                nonce: msg.nonce,
+                held: () =>
+                  readHeldEvents(
+                    db,
+                    owner,
+                    safeEvents.map((e) => e.event_id),
+                  ),
+              });
 
               // Acknowledge. A frame that names itself (`push_id`) has its id
               // echoed, so a client may keep several frames in flight and
@@ -1034,7 +1029,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                   ...(typeof msg.push_id === "string" && msg.push_id.length <= 64
                     ? { push_id: msg.push_id }
                     : {}),
-                  ...holdReceipt,
+                  ...(hold_receipt !== undefined ? { hold_receipt } : {}),
                 }),
               );
 

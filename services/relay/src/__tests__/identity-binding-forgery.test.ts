@@ -320,19 +320,24 @@ describe("every registered identity-row writer refuses a forged owner (#846 v4)"
     });
   }
 
-  it("appendBoundEvent: rejects on a cast string; no event is appended", async () => {
+  it("appendBoundEvent: throws on a cast string; no event is appended", () => {
     const before = total();
-    await expect(
-      appendBoundEvent(relay.moteDb.eventStore as never, forged, {
-        event_id: "e1",
-        motebit_id: VICTIM as never,
-        timestamp: 1,
-        event_type: "memory_formed" as never,
-        payload: {},
-        version_clock: 1,
-        tombstoned: false,
-      }),
-    ).rejects.toThrow(/not a BoundIdentity/);
+    expect(() =>
+      appendBoundEvent(
+        relay.moteDb.db,
+        forged,
+        {
+          event_id: "e1",
+          motebit_id: VICTIM as never,
+          timestamp: 1,
+          event_type: "memory_formed" as never,
+          payload: {},
+          version_clock: 1,
+          tombstoned: false,
+        },
+        false,
+      ),
+    ).toThrow(/not a BoundIdentity/);
     expect(total()).toBe(before);
   });
 });

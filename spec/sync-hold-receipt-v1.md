@@ -62,7 +62,7 @@ The `SyncHeldEvent` type is exported from `@motebit/protocol`.
 
 - `event_id` (required): the id of an event that the relay stores for `motebit_id`.
 - `digest` (required): lowercase hex SHA-256 of the JCS-canonical event entry, exactly as the relay would serve it on a pull, without `seq`. "As served" means the stored row, projected as the pull projects it, after the relay's egress redaction.
-- `redacted` (required): `true` when the held entry is in redacted form. The relay redacted it on ingress or egress, or the stored payload carries the redaction marker. The digest of a redacted entry cannot match the client's original bytes.
+- `redacted` (required): `true` when the held entry is in redacted form. The relay redacted it on ingress or egress, or the stored payload carries the redaction marker. The digest of a redacted entry cannot match the client's original bytes. The flag is a property of the stored row, never of the request being answered (§4.4).
 - `seq` (optional): the event's relay ingest sequence. It is present on pull-page receipts only.
 
 ### 2.3 — SyncHoldPage
@@ -101,7 +101,7 @@ The receipt lists the event ids of the push that the relay **stores** for the bo
 
 None of these appears in the receipt unless the relay genuinely holds that `event_id` for `motebit_id`.
 
-`INSERT OR IGNORE` keeps the first write of an id. If the relay already held an earlier version of an id (for example, older end-to-end ciphertext), the receipt lists the id, and its digest describes the stored bytes, not the bytes just pushed.
+`INSERT OR IGNORE` keeps the first write of an id. If the relay already held an earlier version of an id (for example, older end-to-end ciphertext, or the same memory at an earlier sensitivity), the receipt lists the id, and its digest and `redacted` flag describe the stored row, not the bytes just pushed.
 
 ### 4.3 Pull-page receipts
 
@@ -115,6 +115,32 @@ Because the signature covers the seq range and the request nonce, a page cannot 
 
 A pull without `after_seq` (the clock path) carries no receipt. A client MUST NOT count an event served on the clock path as held under this specification.
 
+A page receipt MAY list a subset of the page: an event of unknown redaction status (§4.5) is served on the page and left out of its receipt. The last listed `seq` may then be below `next_seq`.
+
+### 4.4 The `redacted` flag is decided at write time
+
+Every door computes `digest` and `redacted` with one rule, from the stored row alone, so a push receipt and a pull receipt for the same row always agree.
+
+Most ingress redactions leave the marker `redacted: true` in the stored payload. One does not: stripping the owner-local `mutation_manifest` from a `consolidation_receipt_signed` payload leaves no trace in the bytes. A conforming relay therefore records, in the same write that stores an entry, whether its ingress redaction changed that entry. A later write of the same id that the store ignores does not change the record.
+
+A held entry is `redacted: true` when any of these holds:
+
+- egress redaction changes the stored entry;
+- the stored payload carries `redacted: true`;
+- the relay recorded at write time that ingress redaction changed it.
+
+Otherwise it is `redacted: false`, subject to §4.5.
+
+### 4.5 Unknown status
+
+A row stored before the relay recorded the write-time fact has an unknown status when its bytes cannot decide it: its type is one whose ingress redaction leaves no marker, and the stored payload carries no marker. The relay MUST NOT list such an event in any receipt. It never signs `redacted: false` for an entry it may have redacted. A client cannot credit an omitted event, so it never compacts one on a false "unredacted".
+
+Rows of every other type are decided by their bytes, whenever they were stored.
+
+### 4.6 Best effort
+
+The receipt is decoration on a response that existing clients already read. A failure in producing it (reading back the held rows, digesting, or signing) MUST NOT change that response. The relay serves the response exactly as it would without this specification, omits `hold_receipt`, and records the failure in its logs without payload content.
+
 ## 5. Verification law
 
 `verifySyncHoldReceipt(receipt, { expectedPublicKey?, expectedNonce? })` in `@motebit/crypto` is fail-closed. It rejects a receipt, with a typed reason, when:
@@ -122,7 +148,7 @@ A pull without `after_seq` (the clock path) carries no receipt. A client MUST NO
 - `suite` or `spec` is unknown (`unsupported_suite`, `unsupported_spec`);
 - the shape is malformed (`malformed_receipt`);
 - the events are inconsistent with `page` (`page_mismatch`):
-  - with `page`, every event carries a `seq`, strictly increasing, in `(after_seq, next_seq]`, and the last `seq` equals `next_seq`; an empty page has `next_seq = after_seq`;
+  - with `page`, every event carries a `seq`, strictly increasing, in `(after_seq, next_seq]`, and `next_seq ≥ after_seq`; the events may be a subset of the page (§4.3);
   - without `page`, no event carries a `seq`;
 - the key does not equal the pinned key (`public_key_mismatch`);
 - the nonce does not equal the expected nonce (`nonce_mismatch`);
@@ -148,6 +174,7 @@ A conforming client:
 
 ## 7. Change log
 
-| Version | Date       | Change                                                                                                                                                |
-| ------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1.0     | 2026-10-05 | Initial Draft. The relay signs a per-id hold receipt on HTTP push, socket `ack` and seq pull pages, as an additive field; clients do not read it yet. |
+| Version | Date       | Change                                                                                                                                                                                                                                             |
+| ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.0     | 2026-10-05 | Initial Draft. The relay signs a per-id hold receipt on HTTP push, socket `ack` and seq pull pages, as an additive field; clients do not read it yet.                                                                                              |
+| 1.0     | 2026-10-05 | Draft revision: `redacted` is decided at write time and read from the stored row by every door (§4.4); events of unknown status are omitted, so a page receipt may list a subset of its page (§4.5, §5); receipt production is best effort (§4.6). |

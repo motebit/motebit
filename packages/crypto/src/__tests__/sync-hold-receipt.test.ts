@@ -11,8 +11,10 @@ import {
   signSyncHoldReceipt,
   verifySyncHoldReceipt,
   computeSyncEventDigest,
+  computeSyncEventDigestSync,
   SYNC_HOLD_RECEIPT_SUITE,
 } from "../sync-hold-receipt.js";
+import { createHash } from "node:crypto";
 import { signRoutingTranscript } from "../routing-transcript.js";
 
 const D1 = "a".repeat(64);
@@ -259,5 +261,44 @@ describe("computeSyncEventDigest", () => {
     expect(await computeSyncEventDigest(b)).toBe(expected);
     expect(expected).toMatch(/^[0-9a-f]{64}$/);
     expect(await computeSyncEventDigest({ ...a, payload: { b: 1, a: [1, 2] } })).not.toBe(expected);
+  });
+});
+
+describe("page subset + synchronous digest", () => {
+  it("a page receipt may list a subset of its page (an omitted event is never credited)", async () => {
+    // Seqs 4..7 served; only 4 listed (5..7 omitted — status unknown).
+    const subset = await mint({
+      events: [{ event_id: "e1", digest: D1, redacted: false, seq: 4 }],
+      page: { after_seq: 3, next_seq: 7, has_more: false, latest_seq: 7 },
+    });
+    expect(await verifySyncHoldReceipt(subset.receipt, { expectedPublicKey: subset.pub })).toEqual({
+      valid: true,
+    });
+    const none = await mint({
+      events: [],
+      page: { after_seq: 3, next_seq: 7, has_more: false, latest_seq: 7 },
+    });
+    expect((await verifySyncHoldReceipt(none.receipt)).valid).toBe(true);
+    // A listed seq above next_seq is still refused structurally.
+    const above = await mint({
+      events: [{ event_id: "e1", digest: D1, redacted: false, seq: 8 }],
+      page: { after_seq: 3, next_seq: 7, has_more: false, latest_seq: 9 },
+    });
+    expect((await verifySyncHoldReceipt(above.receipt)).reason).toBe("page_mismatch");
+  });
+
+  it("computeSyncEventDigestSync equals the async digest, default and injected hash", async () => {
+    const entries: unknown[] = [
+      { event_id: "x", payload: { b: [1, { z: 2, a: "é" }], a: null }, version_clock: 3 },
+      { event_id: "y", payload: { content: "x".repeat(4096) } },
+      {},
+    ];
+    const nodeSha = (b: Uint8Array): Uint8Array =>
+      new Uint8Array(createHash("sha256").update(b).digest());
+    for (const e of entries) {
+      const expected = await computeSyncEventDigest(e);
+      expect(computeSyncEventDigestSync(e)).toBe(expected);
+      expect(computeSyncEventDigestSync(e, nodeSha)).toBe(expected);
+    }
   });
 });

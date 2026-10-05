@@ -256,6 +256,9 @@ export const COMPUTER_SESSION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 export function computeSyncEventDigest(entry: unknown): Promise<string>;
 
 // @public
+export function computeSyncEventDigestSync(entry: unknown, hash?: SyncDigestHash): string;
+
+// @public
 export const CONSOLIDATION_MUTATION_MANIFEST_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
@@ -1872,6 +1875,9 @@ export const SYNC_HOLD_RECEIPT_SPEC_MIRROR: "motebit/sync-hold-receipt@1.0";
 
 // @public
 export const SYNC_HOLD_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export type SyncDigestHash = (bytes: Uint8Array) => Uint8Array;
 
 export { TemporalBasis }
 

@@ -43,7 +43,10 @@ export interface SyncHeldEvent {
    * `true` when the held entry is in redacted form — the relay redacted it at
    * ingress or egress (sensitivity ceiling, owner-local fields stripped), or
    * the stored payload carries the redaction marker. A redacted entry's digest
-   * cannot match the client's original bytes.
+   * cannot match the client's original bytes. A property of the STORED ROW,
+   * decided when it was written — never of the request being answered. An
+   * event whose status the relay cannot establish is not listed at all
+   * (spec §4.5), so `false` is never a guess.
    */
   readonly redacted: boolean;
   /** The event's relay ingest sequence. Present on pull-page receipts only. */
@@ -87,7 +90,11 @@ export interface SyncHoldReceipt {
   readonly nonce?: string;
   /** Signing time, epoch milliseconds. */
   readonly issued_at: number;
-  /** The events the relay holds among those the request concerned, in request order. */
+  /**
+   * The events the relay holds among those the request concerned, in request
+   * order. On a page receipt, possibly a subset of the page: an event of
+   * unknown redaction status is served but not listed (spec §4.5).
+   */
   readonly events: readonly SyncHeldEvent[];
   /** Present on pull-page receipts only: the seq range the page covers. */
   readonly page?: SyncHoldPage;
