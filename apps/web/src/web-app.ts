@@ -31,7 +31,7 @@ import { buildSlabHomeView } from "./ui/slab-home.js";
 import { buildGoalArtifactView } from "./ui/slab-goal-artifact.js";
 import { buildIdentityFace } from "./ui/identity-face.js";
 import { deriveHomeSeed, type HomeSeedInputs, type HomeTileAction } from "./ui/slab-home-model.js";
-import { animateMarkForReceipt } from "./ui/cobrowse-chrome";
+import { animateMarkForReceipt, wireReceiptSignPulse } from "./ui/cobrowse-chrome";
 import { renderSlabChrome } from "./ui/slab-chrome";
 import { urlHasTrustHeld } from "./cookie-host-match.js";
 import type { LiveBrowserElementHandle, SlabBodyRegister } from "@motebit/render-engine";
@@ -1309,27 +1309,21 @@ export class UnbootedWebApp {
     });
 
     // chrome-1c — animate the mark on every signed receipt. The
-    // receipts bus fires once per successful + signed tool call;
-    // each fire produces a tool-name-keyed Web-Animation pulse on
-    // the current mark element. Closes the felt thesis line
-    // "Motebit acts, I supervise" at sub-second granularity.
-    //
-    // Uses `subscribeToolActivity` (not `subscribeToolInvocations`)
-    // because the activity bus carries the raw `args` field we
-    // need to discriminate `computer({kind: "screenshot"})` from
-    // `computer({kind: "click"})`. The receipt envelope only
-    // carries `args_hash` — the right fan-out for chrome-1c is the
-    // bus that has the args. The activity bus fires at the same
-    // moment as the receipt bus, so the visual feedback is
-    // semantically equivalent: every act that signs also pulses.
-    const unsubscribeReceiptAnim = this.subscribeToolActivity((event) => {
+    // pulse is a "this was signed" claim, so it is driven by the
+    // receipts bus (fires only after a receipt is actually signed;
+    // signing is fail-closed). The activity bus fires before signing
+    // and only supplies the raw `args` needed to discriminate
+    // `computer({kind: "screenshot"})` from `computer({kind: "click"})`
+    // — the receipt carries `args_hash`. `wireReceiptSignPulse` joins
+    // the two by `invocation_id`.
+    const unsubscribeReceiptAnim = wireReceiptSignPulse(this, (toolName, args) => {
       // Find the live mark element. The chrome strip is rebuilt on
       // every state transition; the mark element is always reachable
       // via the standard class selector. Robust against null when
       // the strip hasn't mounted yet (early-init race).
       const mark = document.querySelector(".cobrowse-chrome-mark");
       if (!mark) return;
-      animateMarkForReceipt(mark, event.tool_name, event.args);
+      animateMarkForReceipt(mark, toolName, args);
     });
     this.coBrowseDisposers.push(unsubscribeReceiptAnim);
 
@@ -1995,10 +1989,12 @@ export class UnbootedWebApp {
 
   /**
    * Subscribe to the ephemeral tool-activity stream — the raw args +
-   * result bytes the receipt's hashes commit to. Fires at the same
-   * moment as `subscribeToolInvocations`, so consumers that need both
-   * (e.g. slab-item projection reads `event.args` + `event.result`
-   * to paint live content onto the plane) receive them in lockstep.
+   * result bytes the receipt's hashes commit to. Fires BEFORE the
+   * receipt is signed and whether or not signing succeeds, so it is
+   * an "attempted" signal, never a "signed" one: a consumer that
+   * renders a signed claim must trigger on `subscribeToolInvocations`
+   * (see `wireReceiptSignPulse`). Slab-item projection reads
+   * `event.args` + `event.result` to paint live content.
    *
    * Contract: subscribers must not retain the payload across calls.
    * Activity is for live rendering, not persistence — the signed

@@ -150,6 +150,34 @@ export const defaultDetachPolicy: DetachPolicy = (_item, outcome) => {
   return { action: "dissolve" };
 };
 
+/**
+ * Payload of a slab item the runtime opens for one tool call
+ * (`tool_call` / `shell` / `fetch` / `memory` kinds, chosen by
+ * `toolPolicy`). `invocation_id` is the `tool_call_id` the call's
+ * `ToolInvocationReceipt` is keyed by (`receipt.invocation_id`), so a
+ * surface can resolve a rendered act to its signed receipt. Absent
+ * when the call has no id (hand-built streams, the approval-resume
+ * path) — such an act has no receipt to resolve.
+ */
+export interface ToolSlabItemPayload {
+  readonly name: string;
+  readonly context?: string;
+  readonly status: "calling" | "done";
+  readonly result?: unknown;
+  readonly invocation_id?: string;
+}
+
+/**
+ * The `ToolInvocationReceipt.invocation_id` a slab item renders, or
+ * `undefined` when the item is not a tool act or carries no id.
+ */
+export function toolSlabItemInvocationId(item: Pick<SlabItem, "payload">): string | undefined {
+  const payload = item.payload;
+  if (payload == null || typeof payload !== "object") return undefined;
+  const id = (payload as { invocation_id?: unknown }).invocation_id;
+  return typeof id === "string" ? id : undefined;
+}
+
 export interface SlabItem {
   readonly id: string;
   readonly kind: SlabItemKind;
