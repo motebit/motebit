@@ -6,7 +6,7 @@
  * `check-gates-effective` probe (they are excluded from the static pass), so
  * this file is where their firing is proven.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -38,7 +38,7 @@ describe("parseWorkspaceGlobs", () => {
 
 describe("publishablePackages", () => {
   it("keeps public manifests, drops private ones, missing ones and unparseable ones", () => {
-    const root = mkdtempSync(join(tmpdir(), "pf-ws-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "pf-ws-")));
     const put = (dir: string, body: string) => {
       mkdirSync(join(root, dir), { recursive: true });
       writeFileSync(join(root, dir, "package.json"), body);
@@ -154,7 +154,7 @@ describe("the gate bites", () => {
   });
 
   function workspace(version = "1.0.0"): string {
-    const root = mkdtempSync(join(tmpdir(), "pf-gate-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "pf-gate-")));
     roots.push(root);
     writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "packages/*"\n');
     mkdirSync(join(root, "packages/one"), { recursive: true });
@@ -283,7 +283,7 @@ describe("the gate bites", () => {
   });
 
   it("reds on an empty aperture instead of passing over nothing", async () => {
-    const empty = mkdtempSync(join(tmpdir(), "pf-empty-"));
+    const empty = realpathSync(mkdtempSync(join(tmpdir(), "pf-empty-")));
     roots.push(empty);
     writeFileSync(join(empty, "pnpm-workspace.yaml"), 'packages:\n  - "nowhere/*"\n');
     const r = await run(serving("1.0.0"), { root: empty });

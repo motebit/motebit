@@ -30,7 +30,7 @@
  * would, so only the vitest setup layer and the tests themselves defend.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,7 +63,7 @@ const git = (cwd: string, ...args: string[]) =>
   }).trim();
 
 // ── The sentinel ─────────────────────────────────────────────────────────
-const tmp = mkdtempSync(join(tmpdir(), "motebit-git-sentinel-"));
+const tmp = realpathSync(mkdtempSync(join(tmpdir(), "motebit-git-sentinel-")));
 const main = join(tmp, "sentinel");
 const wt = join(tmp, "sentinel-wt");
 mkdirSync(main);

@@ -21,7 +21,7 @@
  * declaration order is irrelevant.
  */
 import { describe, it, expect } from "vitest";
-import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -32,7 +32,7 @@ import {
 } from "../lib/vitest-thresholds.js";
 
 function withConfig<T>(source: string, fn: (path: string) => T): T {
-  const dir = mkdtempSync(join(tmpdir(), "vt-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "vt-")));
   const path = join(dir, "vitest.config.ts");
   writeFileSync(path, source);
   try {

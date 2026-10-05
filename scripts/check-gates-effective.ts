@@ -2979,18 +2979,18 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-fixture-git-env",
     proves:
-      "flags the STRUCTURAL layer coming unwired — the vitest setup that deletes every GIT_* from each gate-test worker before any test module loads (so a fixture spawn of ANY syntax inherits a clean env; three review rounds found shapes a per-spawn pattern missed). Probe empties `setupFiles` in the root vitest.config.mts that `pnpm test:gates` resolves; byte-identical restoration on cleanup.",
+      "flags the STRUCTURAL layer coming unwired — the vitest setup that deletes every GIT_* from each gate-test worker before any test module loads (so a fixture spawn of ANY syntax inherits a clean env; three review rounds found shapes a per-spawn pattern missed). Probe drops the scrub entry from `setupFiles` in the root vitest.config.mts that `pnpm test:gates` resolves (the symlinked-TMPDIR entry beside it stays, so the gate must name the scrub, not merely a non-empty list); byte-identical restoration on cleanup.",
     perturb: () =>
       mutateFile("vitest.config.mts", (src) => {
-        const anchor = 'setupFiles: ["./scripts/lib/vitest-scrub-git-env.ts"]';
-        if (!src.includes(anchor)) {
+        const anchor = '      "./scripts/lib/vitest-scrub-git-env.ts",\n';
+        if (!/setupFiles: \[\n/.test(src) || !src.includes(anchor)) {
           throw new Error(
-            "probe vacuous: vitest.config.mts no longer lists the setup file as `" +
-              anchor +
+            "probe vacuous: vitest.config.mts no longer lists the setup file as a `setupFiles` element `" +
+              anchor.trim() +
               "` — retarget the probe",
           );
         }
-        return src.replace(anchor, "setupFiles: []");
+        return src.replace(anchor, "");
       }),
   },
   {

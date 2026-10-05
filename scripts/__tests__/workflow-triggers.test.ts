@@ -8,7 +8,7 @@
  * missing file. The last group reads the REAL deploy workflows, so a new shape
  * committed there fails here before either gate misreads it in production.
  */
-import { mkdtempSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,7 +16,7 @@ import { describe, it, expect } from "vitest";
 
 import { readPushTrigger } from "../lib/workflow-triggers.js";
 
-const dir = mkdtempSync(join(tmpdir(), "wf-triggers-"));
+const dir = realpathSync(mkdtempSync(join(tmpdir(), "wf-triggers-")));
 let n = 0;
 function file(body: string): string {
   const p = join(dir, `wf-${n++}.yml`);

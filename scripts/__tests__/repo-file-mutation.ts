@@ -79,6 +79,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -514,7 +515,7 @@ export async function withRepoFileReplaced<T>(
       );
     }
     const perturbedText = typeof next === "string" ? next : next(original.toString("utf8"));
-    const dir = mkdtempSync(join(tmpdir(), "motebit-gate-self-test-"));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "motebit-gate-self-test-")));
     const entry: Entry = {
       rel,
       backup: join(dir, basename(absPath)),
