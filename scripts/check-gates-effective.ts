@@ -2994,6 +2994,26 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-service-truth",
+    proves:
+      "flags a services inventory whose stated price disagrees with the service's coded MOTEBIT_UNIT_COST default — the 2026-10-05 class where README.md and architecture.mdx quoted different web-search/read-url prices than the code. Perturbs by PREDICATE: bumps whatever dollar amount README.md's `research` bullet carries by one cent, never a literal price, so a future price change cannot make the probe vacuous; byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile("README.md", (src) => {
+        const re = /(`research` \(\$)(\d+)\.(\d+)/;
+        const m = re.exec(src);
+        if (m == null) {
+          throw new Error(
+            "probe vacuous: README.md no longer prices `research` as `research` ($X.YY/… — retarget the probe",
+          );
+        }
+        const cents = Number(m[2]) * 100 + Number(m[3]!.padEnd(2, "0").slice(0, 2)) + 1;
+        return src.replace(
+          re,
+          `$1${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`,
+        );
+      }),
+  },
+  {
     script: "check-relay-frame-origin",
     proves:
       "flags a surface that handles a relay `command_request` and executes it through `executeCommand` without saying where the command came from — the 2026-09-16 class where five surfaces forwarded a relay frame with no origin, so a command that arrived over the wire answered as if typed on the machine and the return view's credential membrane never closed. Drops a fixture handler that reads a `command_request` frame and calls `executeCommand` bare; the gate finds the frame marker and no door and no explicit origin.",
