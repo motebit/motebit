@@ -602,23 +602,26 @@ describe("runMolecule", () => {
     expect(deps.handleAgentTask).toBe(handleAgentTask);
   });
 
-  it("passes through getServiceListing when provided", async () => {
+  it("publishes the molecule's listing with the runner-owned config pricing", async () => {
     const adapters = baseAdapters();
-    const getServiceListing = vi.fn().mockResolvedValue({
+    const own = {
       capabilities: ["test_tool"],
-      pricing: [{ capability: "test_tool", unit_cost: 0.1, currency: "USD", per: "call" }],
       sla: { max_latency_ms: 30_000, availability_guarantee: 0.99 },
       description: "Test listing",
-    });
+    };
+    const getServiceListing = vi.fn().mockResolvedValue(own);
+    const pricing = [{ capability: "test_tool", unit_cost: 0.1, currency: "USD", per: "call" }];
 
     await runMolecule(
-      baseConfig(),
+      { ...baseConfig(), pricing },
       () => ({ toolRegistry: new InMemoryToolRegistry(), getServiceListing }),
       adapters,
     );
 
     const deps = (adapters.startCalls[0] as { deps: Record<string, unknown> }).deps;
-    expect(deps.getServiceListing).toBe(getServiceListing);
+    const published = await (deps.getServiceListing as () => Promise<unknown>)();
+    expect(published).toEqual({ ...own, pricing });
+    expect(getServiceListing).toHaveBeenCalled();
   });
 
   it("wires customRoutes into the server config", async () => {

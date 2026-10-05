@@ -100,6 +100,8 @@ async function main(): Promise<void> {
           lifetime_limit_micro: config.ceilingMicro,
         },
       },
+      // The listing price — runner-owned, from the pure src/pricing.ts.
+      pricing: listingPricing(process.env),
     },
     (identity, spend) => {
       if (spend == null) {
@@ -183,7 +185,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["execute_delegation"],
-            pricing: listingPricing(process.env),
             sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
             description:
               "Executes paid sub-delegations under a signed standing grant, within a self-imposed spend ceiling — the fail-closed proof of the R4 money spine. Over-ceiling or out-of-scope spends are refused with a signed denial; no payment.",

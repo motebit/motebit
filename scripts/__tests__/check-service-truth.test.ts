@@ -1,66 +1,62 @@
 /**
- * check-service-truth self-test — fixture round-trips, prices by EXECUTION.
+ * check-service-truth self-test — fixture round-trips, nothing executed.
  *
- * Builds a miniature repo (services/* with `motebit` metadata and a real
- * entry `src/index.ts` whose main() calls `runMolecule` from
- * `@motebit/molecule-runner` with a builder returning `getServiceListing`, a
- * README `## Architecture` section, an architecture.mdx tree + `## Services`
- * table) that the gate passes, then applies one mutation per drift class and
- * requires RED naming it. The gate runs each fixture entry for real, with
- * `runMolecule` captured (scripts/lib/listing-probe/), so every listing case
- * below is decided by what main() actually lists — including the cold-review
- * bypasses an AST-matching version missed (B1: a renamed, dead
- * `getServiceListing`; B2: a post-construction `per` rewrite; B3: a spread
- * override; B4: a different listing object; B5: a market:false service that
- * lists a price). Finally runs the real gate on the real repo through its CLI.
+ * Builds a miniature repo (services/* with `motebit` metadata, a pure
+ * `src/pricing.ts` exporting `listingPricing(env)`, and an entry
+ * `src/index.ts` whose main() calls `runMolecule` with
+ * `pricing: listingPricing(process.env)`; a README `## Architecture` section;
+ * an architecture.mdx tree + `## Services` table) that the gate passes, then
+ * applies one mutation per drift class and requires RED naming it. Pricing is
+ * runner-owned by construction (molecule-runner listing-pricing.test.ts), so
+ * the gate reads the price from the pure function and proves the wiring by
+ * the TypeScript AST of the runMolecule call site. Finally runs the real gate
+ * on the real repo through its CLI — in seconds, booting nothing.
  */
-import { describe, it as vitestIt, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluate, probeListing, ARCHITECTURE_PATH } from "../check-service-truth.js";
+import { evaluate, ARCHITECTURE_PATH } from "../check-service-truth.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
-
-// Each evaluate() spawns a node child per listing service and env.
-const it = (name: string, fn: () => Promise<void>) => vitestIt(name, fn, 120_000);
 
 interface Svc {
   role: string;
   identity: boolean;
   market: boolean;
-  /** Source of services/<name>/src/index.ts — the entry the gate executes. */
+  /** Source of services/<name>/src/index.ts — the entry whose call site is checked. */
   src: string;
   /** Source of services/<name>/src/pricing.ts, when the service has one. */
   pricing?: string;
   /** Extra files under services/<name>/src. */
   files?: Record<string, string>;
-  /** motebit.listingProbeEnv. */
-  probeEnv?: Record<string, string>;
+  /** Extra files under services/<name> (Dockerfile …). */
+  dirFiles?: Record<string, string>;
+  /** Extra fields merged into package.json (and into its `motebit` block). */
+  pkg?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
   /** services/<name>/.env.example. */
   envExample?: string;
 }
 
-/** The listing object main() hands the runner, as an expression. */
-const LISTING_OBJ = `{ capabilities: ["x"], pricing: listingPricing(process.env) }`;
+const LISTING = `() => Promise.resolve({ capabilities: ["x"], sla: { max_latency_ms: 1, availability_guarantee: 1 }, description: "d" })`;
+const CONFIG = `{ serviceName: "fixture", pricing: listingPricing(process.env) }`;
 
-/** A service entry: main() → runMolecule(config, builder → { getServiceListing }). */
-const entry = (build: string, prelude = "", after = "") =>
+/** A service entry: main() → runMolecule(config, builder). */
+const entry = (config = CONFIG, prelude = "", after = "") =>
   `import { runMolecule } from "@motebit/molecule-runner";\n` +
   `import { listingPricing } from "./pricing.js";\n` +
   prelude +
   `async function main(): Promise<void> {\n` +
-  `  await runMolecule({ serviceName: "fixture" } as never, () => (${build}) as never);\n` +
+  `  await runMolecule(${config} as never, () => ({ toolRegistry: {}, getServiceListing: ${LISTING} }) as never);\n` +
   after +
   `}\n` +
   `main().catch((err: unknown) => { console.error(String(err)); process.exit(1); });\n`;
 
-const ENTRY = entry(
-  `{ toolRegistry: {}, getServiceListing: () => Promise.resolve(${LISTING_OBJ}) }`,
-);
+const ENTRY = entry();
 
 const pricingModule = (amount: string, per: string, costExpr = "unitCost") =>
   `export function listingPricing(env: Readonly<Record<string, string | undefined>>) {\n` +
@@ -134,8 +130,6 @@ function fixture(opts: {
   services?: Record<string, Svc | null>;
   readme?: string;
   arch?: string;
-  /** Extra files at the fixture root (e.g. a node_modules package). */
-  rootFiles?: Record<string, string>;
 }): string {
   const root = mkdtempSync(join(tmpdir(), "st-service-truth-"));
   dirs.push(root);
@@ -143,24 +137,17 @@ function fixture(opts: {
   for (const [name, s] of Object.entries(services)) {
     const src = join(root, "services", name, "src");
     mkdirSync(src, { recursive: true });
-    const pkg: Record<string, unknown> = { name: `@motebit/${name}`, type: "module" };
+    const pkg: Record<string, unknown> = { name: `@motebit/${name}`, type: "module", ...s?.pkg };
     if (s != null)
-      pkg["motebit"] = {
-        role: s.role,
-        identity: s.identity,
-        market: s.market,
-        ...(s.probeEnv != null ? { listingProbeEnv: s.probeEnv } : {}),
-      };
+      pkg["motebit"] = { role: s.role, identity: s.identity, market: s.market, ...s.meta };
     writeFileSync(join(root, "services", name, "package.json"), JSON.stringify(pkg));
     writeFileSync(join(src, "index.ts"), s?.src ?? "export {};\n");
     if (s?.pricing != null) writeFileSync(join(src, "pricing.ts"), s.pricing);
     for (const [f, body] of Object.entries(s?.files ?? {})) writeFileSync(join(src, f), body);
+    for (const [f, body] of Object.entries(s?.dirFiles ?? {}))
+      writeFileSync(join(root, "services", name, f), body);
     if (s?.envExample != null)
       writeFileSync(join(root, "services", name, ".env.example"), s.envExample);
-  }
-  for (const [f, body] of Object.entries(opts.rootFiles ?? {})) {
-    mkdirSync(dirname(join(root, f)), { recursive: true });
-    writeFileSync(join(root, f), body);
   }
   writeFileSync(join(root, "README.md"), opts.readme ?? README);
   mkdirSync(dirname(join(root, ARCHITECTURE_PATH)), { recursive: true });
@@ -183,8 +170,10 @@ const research = (patch: Partial<Svc>) => {
   return violations({ services: s });
 };
 
+const SITE = "services/research/src/index.ts";
+
 describe("check-service-truth", () => {
-  it("is silent on a consistent fixture, and reads the price by executing main()", async () => {
+  it("is silent on a consistent fixture, and reads the price from the pure listingPricing({})", async () => {
     const r = await evaluate(fixture({}));
     expect(r.violations).toEqual([]);
     expect(r.placements).toBe(12);
@@ -192,7 +181,7 @@ describe("check-service-truth", () => {
     expect(r.services.find((s) => s.name === "research")!.price).toEqual({
       amount: 0.25,
       per: "task",
-      source: "services/research/src/index.ts (executed)",
+      source: "services/research/src/pricing.ts listingPricing({})",
     });
   });
 
@@ -215,7 +204,7 @@ describe("check-service-truth", () => {
   it("bites on a wrong price (README and table) and a wrong unit (tree)", async () => {
     const readme = swap(README, "($0.25/task, Claude)", "($0.05/task, Claude)");
     expect(await violations({ readme })).toMatch(
-      /`research` states \$0\.05\/task but services\/research\/src\/index\.ts \(executed\) lists \$0\.25\/task/,
+      /`research` states \$0\.05\/task but services\/research\/src\/pricing\.ts listingPricing\(\{\}\) lists \$0\.25\/task/,
     );
     const arch = swap(ARCH, "$0.25/task. Claude.", "$0.25/report. Claude.");
     expect(await violations({ arch })).toMatch(/states \$0\.25\/report/);
@@ -290,142 +279,204 @@ describe("check-service-truth", () => {
     expect(v).toMatch(/unrecognised role label/);
   });
 
-  it("ties the market flag to what main() lists", async () => {
-    // market:false reading MOTEBIT_UNIT_COST anywhere in its source.
-    const s = baseServices();
-    s["embed"] = { ...s["embed"]!, pricing: pricingModule("0.01", "request") };
-    expect(await violations({ services: s })).toMatch(
-      /services\/embed: motebit\.market is false but services\/embed\/src\/pricing\.ts reads MOTEBIT_UNIT_COST/,
+  it("a price change in pricing.ts is RED against the docs (the coded default wins)", async () => {
+    const v = await research({ pricing: pricingModule("0.30", "task") });
+    expect(v).toMatch(
+      /`research` states \$0\.25\/task but services\/research\/src\/pricing\.ts listingPricing\(\{\}\) lists \$0\.3\/task/,
     );
-    // market:true whose main() never reaches the runner.
+    expect(await research({ pricing: pricingModule("0.25", "report") })).toMatch(
+      /lists \$0\.25\/report/,
+    );
+  });
+
+  it("a market:true service whose runMolecule config carries no pricing is RED", async () => {
+    expect(await research({ src: entry(`{ serviceName: "fixture" }`) })).toMatch(
+      new RegExp(`${SITE}: line \\d+: runMolecule's config has 0 \`pricing\` properties`),
+    );
+    // No runMolecule call at all, or no pricing.ts at all.
     expect(await research({ src: "export {};\n" })).toMatch(
-      /services\/research: motebit\.market is true but executing services\/research\/src\/index\.ts never called runMolecule \(exit 0\)/,
+      /no `import \{ runMolecule \} from "@motebit\/molecule-runner"`/,
+    );
+    const s = baseServices();
+    delete s["research"]!.pricing;
+    expect(await violations({ services: s })).toMatch(
+      /services\/research: motebit\.market is true but there is no src\/pricing\.ts/,
+    );
+  });
+
+  it("config pricing must be exactly listingPricing(process.env)", async () => {
+    for (const expr of [
+      "listingPricing({})",
+      'listingPricing({ ...process.env, MOTEBIT_UNIT_COST: "0.01" })',
+      '[{ capability: "x", unit_cost: 0.25, currency: "USD", per: "task" }]',
+      'listingPricing(process.env).map((p) => ({ ...p, per: "page" }))',
+    ])
+      expect(
+        await research({ src: entry(`{ serviceName: "f", pricing: ${expr} }`) }),
+        expr,
+      ).toMatch(/runMolecule's `pricing` must be exactly `listingPricing\(process\.env\)`/);
+    expect(
+      await research({ src: entry(`{ pricing: listingPricing(process.env), pricing: [] }`) }),
+    ).toMatch(/has 2 `pricing` properties/);
+    // A config built elsewhere cannot be checked: it must be the literal.
+    expect(
+      await research({
+        src: entry("cfg", "const cfg = { pricing: listingPricing(process.env) };\n"),
+      }),
+    ).toMatch(/config must be an object literal/);
+  });
+
+  it("a spread after pricing could replace it (RED); a spread before it cannot (green)", async () => {
+    expect(
+      await research({
+        src: entry(`{ pricing: listingPricing(process.env), ...extra }`, "const extra = {};\n"),
+      }),
+    ).toMatch(/a spread after `pricing` in runMolecule's config could replace it/);
+    expect(
+      await research({
+        src: entry(`{ ...extra, pricing: listingPricing(process.env) }`, "const extra = {};\n"),
+      }),
+    ).toBe("");
+  });
+
+  it("one call, one import, no aliases, no re-binding, no other file", async () => {
+    expect(
+      await research({
+        src: entry(CONFIG, "", `  await runMolecule(${CONFIG} as never, () => ({}) as never);\n`),
+      }),
+    ).toMatch(/`runMolecule` must be referenced exactly once, as a direct call \(found 2 call/);
+    expect(await research({ src: entry(CONFIG, "const again = runMolecule;\n") })).toMatch(
+      /found 1 call\(s\), 2 reference\(s\)/,
+    );
+    expect(
+      await research({
+        src: ENTRY.replace("{ runMolecule }", "{ runMolecule as rm, runMolecule }"),
+      }),
+    ).toMatch(/`runMolecule` is imported from "@motebit\/molecule-runner" as an alias \(`rm`\)/);
+    expect(
+      await research({
+        src: ENTRY.replace(
+          `import { runMolecule } from "@motebit/molecule-runner";`,
+          `import * as R from "@motebit/molecule-runner";\nconst { runMolecule } = R;`,
+        ),
+      }),
+    ).toMatch(/`import \* as R from "@motebit\/molecule-runner"`/);
+    expect(
+      await research({
+        src: ENTRY.replace(`"./pricing.js"`, `"./other.js"`),
+        files: { "other.ts": "export const listingPricing = () => [];\n" },
+      }),
+    ).toMatch(/`listingPricing` is imported from "\.\/other\.js"/);
+    expect(
+      await research({
+        src: entry(CONFIG, "", "  const listingPricing = () => [];\n  void listingPricing;\n"),
+      }),
+    ).toMatch(/re-binds `listingPricing`/);
+    expect(await research({ src: entry(CONFIG, "const process = { env: {} };\n") })).toMatch(
+      /re-binds `process`/,
+    );
+    expect(
+      await research({
+        files: {
+          "boot.ts": `import { runMolecule } from "@motebit/molecule-runner";\nvoid runMolecule;\n`,
+        },
+      }),
+    ).toMatch(/services\/research\/src\/boot\.ts:\d+: names `runMolecule`/);
+  });
+
+  it("pricing.ts must be pure by shape — the gate imports it, so nothing may run at load", async () => {
+    expect(
+      await research({
+        pricing: `import { readFileSync } from "node:fs";\n` + pricingModule("0.25", "task"),
+      }),
+    ).toMatch(
+      /src\/pricing\.ts: line 1: .* type-only imports, types and function declarations only/,
+    );
+    expect(
+      await research({ pricing: `console.log("boot");\n` + pricingModule("0.25", "task") }),
+    ).toMatch(/line 1: `console\.log\("boot"\);`/);
+    expect(
+      await research({
+        pricing:
+          `import type { X } from "./x.js";\nexport type { X };\n` + pricingModule("0.25", "task"),
+      }),
+    ).toBe("");
+  });
+
+  it("the override reaches every entry unaltered: arithmetic and hardcodes are RED", async () => {
+    expect(await research({ pricing: pricingModule("0.25", "task", "unitCost * 2") })).toMatch(
+      /with MOTEBIT_UNIT_COST="0\.123457" lists unit_costs \[0\.246914\]/,
+    );
+    // A hardcoded unit_cost equal to the docs: green on the default, deaf to the env.
+    expect(await research({ pricing: pricingModule("0.25", "task", "0.25") })).toMatch(
+      /lists unit_costs \[0\.25\] — every entry's unit_cost must be the parsed override/,
+    );
+  });
+
+  it("refuses an empty, malformed, multi-price or impure listing", async () => {
+    const fn = (body: string) =>
+      `export function listingPricing(env: Record<string, string | undefined>) {\n  void env;\n  ${body}\n}\n`;
+    expect(await research({ pricing: fn("return [];") })).toMatch(
+      /listingPricing\(\{\}\) lists no pricing/,
+    );
+    expect(
+      await research({
+        pricing: fn(
+          `return [{ capability: "x", unit_cost: "0.25", currency: "USD", per: "task" }];`,
+        ),
+      }),
+    ).toMatch(/is not \{ capability: string, unit_cost: finite ≥ 0/);
+    expect(
+      await research({
+        pricing: fn(
+          `const c = parseFloat(env["MOTEBIT_UNIT_COST"] ?? "0.25"); return [{ capability: "x", unit_cost: c, currency: "USD", per: "task" }, { capability: "y", unit_cost: c, currency: "USD", per: "page" }];`,
+        ),
+      }),
+    ).toMatch(/lists 2 different `per` units/);
+    expect(await research({ pricing: fn(`throw new Error("nope");`) })).toMatch(
+      /listingPricing\(\{\}\) threw \(nope\)/,
+    );
+  });
+
+  it("ties market:false to no price, no pricing.ts and no runMolecule", async () => {
+    const s = baseServices();
+    s["embed"] = { ...s["embed"]!, src: `const c = process.env["MOTEBIT_UNIT_COST"];\nvoid c;\n` };
+    expect(await violations({ services: s })).toMatch(
+      /services\/embed: motebit\.market is false but services\/embed\/src\/index\.ts reads MOTEBIT_UNIT_COST/,
+    );
+    const t = baseServices();
+    t["embed"] = {
+      ...t["embed"]!,
+      src: entry(`{ serviceName: "e" }`),
+      pricing: pricingModule("0", "x"),
+    };
+    const v = await violations({ services: t });
+    expect(v).toMatch(/services\/embed: motebit\.market is false but src\/pricing\.ts exists/);
+    expect(v).toMatch(
+      /services\/embed: motebit\.market is false but services\/embed\/src\/index\.ts:\d+ calls runMolecule/,
     );
     const u = baseServices();
     u["research"] = { ...u["research"]!, identity: false };
     expect(await violations({ services: u })).toMatch(/only a service with an identity can list/);
   });
 
-  // ── the cold-review bypasses: decided by what main() lists ──────────────
-
-  it("B1: a renamed (dead) getServiceListing — main() lists nothing", async () => {
-    const v = await research({
-      src: ENTRY.replace("getServiceListing:", "_retiredListing:"),
-    });
-    expect(v).toMatch(
-      /services\/research: motebit\.market is true but the build services\/research\/src\/index\.ts hands runMolecule has no getServiceListing/,
-    );
-  });
-
-  it("B2: tweak() rewrites every entry's per after construction", async () => {
-    const v = await research({
-      src: entry(
-        `{ toolRegistry: {}, getServiceListing: () => Promise.resolve(tweak(${LISTING_OBJ})) }`,
-        `function tweak<T extends { pricing: { per: string }[] }>(l: T): T {\n` +
-          `  for (const p of l.pricing) p.per = "page";\n  return l;\n}\n`,
-      ),
-    });
-    expect(v).toMatch(
-      /`research` states \$0\.25\/task but services\/research\/src\/index\.ts \(executed\) lists \$0\.25\/page/,
-    );
-  });
-
-  it("B3: a spread overrides the listing's per", async () => {
-    const v = await research({
-      src: entry(
-        `{ toolRegistry: {}, getServiceListing: () => Promise.resolve({ ...${LISTING_OBJ}, ...{ ["pricing"]: listingPricing(process.env).map((p) => ({ ...p, per: "page" })) } }) }`,
-      ),
-    });
-    expect(v).toMatch(/`research` states \$0\.25\/task but .* lists \$0\.25\/page/);
-  });
-
-  it("B4: getServiceListing returns a different object than the canonical one", async () => {
-    const v = await research({
-      src: entry(
-        `{ toolRegistry: {}, _canonical: () => Promise.resolve(${LISTING_OBJ}), getServiceListing: () => Promise.resolve(JSON.parse('{"capabilities":["x"],"pricing":[{"capability":"x","unit_cost":0.5,"currency":"USD","per":"task"}]}')) }`,
-      ),
-    });
-    expect(v).toMatch(/`research` states \$0\.25\/task but .* lists \$0\.5\/task/);
-    expect(v).toMatch(/with MOTEBIT_UNIT_COST="0\.123457", executing .* lists unit_costs \[0\.5\]/);
-  });
-
-  it("B5: a market:false service whose main() lists a price", async () => {
-    const s = baseServices();
-    s["embed"] = {
-      ...s["embed"]!,
-      src: entry(
-        `{ toolRegistry: {}, getServiceListing: () => Promise.resolve({ capabilities: ["e"], pricing: [{ capability: "e", unit_cost: 0.02, currency: "USD", per: "request" }] }) }`,
-      ).replace(`import { listingPricing } from "./pricing.js";\n`, ""),
-    };
-    expect(await violations({ services: s })).toMatch(
-      /services\/embed: motebit\.market is false but executing services\/embed\/src\/index\.ts lists pricing \[\{"capability":"e","unit_cost":0\.02/,
-    );
-  });
-
-  it("P1: arithmetic on the price — in pricing.ts or on the listing in main()", async () => {
-    const v1 = await research({
-      pricing: pricingModule("0.25", "task").replace('"0.25");', '"0.25") * 2;'),
-    });
-    expect(v1).toMatch(/`research` states \$0\.25\/task but .* lists \$0\.5\/task/);
-    expect(v1).toMatch(/with MOTEBIT_UNIT_COST="0\.123457", .* lists unit_costs \[0\.246914\]/);
-    const v2 = await research({
-      src: ENTRY.replace(
-        "listingPricing(process.env) }",
-        "listingPricing(process.env).map((p) => ({ ...p, unit_cost: p.unit_cost * 2 })) }",
-      ),
-    });
-    expect(v2).toMatch(/`research` states \$0\.25\/task but .* lists \$0\.5\/task/);
-  });
-
-  it("P2: a hardcoded unit_cost — even one that equals the docs (dead override)", async () => {
-    expect(await research({ pricing: pricingModule("0.25", "task", "0.25") })).toMatch(
-      /lists unit_costs \[0\.25\] — every entry's unit_cost must be the parsed override/,
-    );
-    const v = await research({
-      src: ENTRY.replace(
-        "pricing: listingPricing(process.env)",
-        `pricing: [{ capability: "x", unit_cost: 0.5, currency: "USD", per: "task" }]`,
-      ),
-    });
-    expect(v).toMatch(/lists \$0\.5\/task/);
-  });
-
-  it("refuses an empty or malformed listing, a throwing builder and two runMolecule calls", async () => {
-    expect(await research({ src: ENTRY.replace("listingPricing(process.env)", "[]") })).toMatch(
-      /getServiceListing\(\) lists no pricing/,
-    );
-    expect(
-      await research({ pricing: pricingModule("0.25", "task").replace('"USD"', '"EUR"') }),
-    ).toMatch(/lists a pricing entry that is not \{ capability/);
+  it("the checked entry is the one the deploy boots; listingProbeEnv is retired", async () => {
     expect(
       await research({
-        src: entry(`(() => { throw new Error("boom"); })()`),
+        dirFiles: { Dockerfile: `FROM node\nCMD ["node", "dist/index.js"]\n` },
+        pkg: { scripts: { start: "node dist/index.js" } },
       }),
-    ).toMatch(/the builder or its getServiceListing threw \(boom\)/);
+    ).toBe("");
     expect(
-      await research({
-        src: entry(
-          `{ toolRegistry: {}, getServiceListing: () => Promise.resolve(${LISTING_OBJ}) }`,
-          "",
-          `  await runMolecule({ serviceName: "again" } as never, () => ({ toolRegistry: {} }) as never);\n`,
-        ),
-      }),
-    ).toMatch(/called runMolecule 2 times/);
-  });
-
-  it("boots main() with motebit.listingProbeEnv, never with MOTEBIT_UNIT_COST", async () => {
-    const needsKey = entry(
-      `{ toolRegistry: {}, getServiceListing: () => Promise.resolve(${LISTING_OBJ}) }`,
-    ).replace(
-      "async function main(): Promise<void> {\n",
-      `async function main(): Promise<void> {\n  if (!process.env["API_KEY"]) { console.error("API_KEY is required"); process.exit(1); }\n`,
+      await research({ dirFiles: { Dockerfile: `FROM node\nCMD ["node", "dist/server.js"]\n` } }),
+    ).toMatch(
+      /services\/research\/Dockerfile: must boot exactly `CMD \["node", "dist\/index\.js"\]`/,
     );
-    expect(await research({ src: needsKey })).toMatch(
-      /never called runMolecule \(exit 1 — stderr: API_KEY is required\) — if main\(\) needs env to boot, declare inert values in package\.json motebit\.listingProbeEnv/,
+    expect(await research({ pkg: { scripts: { start: "node dist/server.js" } } })).toMatch(
+      /services\/research\/package\.json: scripts\.start is "node dist\/server\.js"/,
     );
-    expect(await research({ src: needsKey, probeEnv: { API_KEY: "probe" } })).toBe("");
-    expect(await research({ probeEnv: { MOTEBIT_UNIT_COST: "0.25" } })).toMatch(
-      /motebit\.listingProbeEnv may not set MOTEBIT_UNIT_COST/,
+    expect(await research({ meta: { listingProbeEnv: {} } })).toMatch(
+      /motebit\.listingProbeEnv is retired/,
     );
   });
 
@@ -434,7 +485,7 @@ describe("check-service-truth", () => {
       await research({ envExample: "# Price per task (default: 0.25)\nMOTEBIT_UNIT_COST=0.25\n" }),
     ).toBe("");
     expect(await research({ envExample: "# Listed price\nMOTEBIT_UNIT_COST=0.05\n" })).toMatch(
-      /services\/research\/\.env\.example:2: MOTEBIT_UNIT_COST=0\.05 but services\/research\/src\/index\.ts \(executed\) lists \$0\.25\/task by default/,
+      /services\/research\/\.env\.example:2: MOTEBIT_UNIT_COST=0\.05 but services\/research\/src\/pricing\.ts listingPricing\(\{\}\) lists \$0\.25\/task by default/,
     );
     expect(
       await research({ envExample: "# Price (default: 0.50)\n# MOTEBIT_UNIT_COST=0.25\n" }),
@@ -446,97 +497,15 @@ describe("check-service-truth", () => {
     );
   });
 
-  // ── second cold review: call count, subpath import, identity ────────────
-
-  it("G1: getServiceListing must list the same thing on every call the runner makes", async () => {
-    // The runner calls it for task admission, again to register with the relay,
-    // and again per motebit_service_listing tool call. A listing that only the
-    // first call gets right is a different listing in the relay.
-    const v = await research({
-      src: entry(
-        `{ toolRegistry: {}, getServiceListing: () => Promise.resolve(n++ === 0 ? ${LISTING_OBJ} : { capabilities: ["x"], pricing: listingPricing(process.env).map((p) => ({ ...p, per: "page" })) }) }`,
-        `let n = 0;\n`,
-      ),
-    });
-    expect(v).toMatch(
-      /services\/research: executing services\/research\/src\/index\.ts, getServiceListing\(\) returned different listings across the 3 calls the runner makes/,
-    );
-  });
-
-  /** A stand-in for the real runner package, reachable only by a subpath. */
-  const REAL_RUNNER = {
-    "node_modules/@motebit/molecule-runner/package.json": JSON.stringify({
-      name: "@motebit/molecule-runner",
-      type: "module",
-      main: "dist/index.js",
-    }),
-    // The "real" runner boots a server on MOTEBIT_PORT (default 3200) and stays up.
-    "node_modules/@motebit/molecule-runner/dist/index.js":
-      `import { createServer } from "node:http";\n` +
-      `export async function runMolecule(config, build) {\n` +
-      `  await build({ motebitId: "real" }, undefined);\n` +
-      `  createServer(() => {}).listen(Number(process.env.MOTEBIT_PORT ?? 3200));\n` +
-      `}\n`,
-  };
-  const SUBPATH = `import { runMolecule } from "@motebit/molecule-runner/dist/index.js";\n`;
-  const RUNNER_IMPORT = `import { runMolecule } from "@motebit/molecule-runner";\n`;
-  const PRICED_EMBED = entry(
-    `{ toolRegistry: {}, getServiceListing: () => Promise.resolve({ capabilities: ["e"], pricing: [{ capability: "e", unit_cost: 0.02, currency: "USD", per: "request" }] }) }`,
-  ).replace(`import { listingPricing } from "./pricing.js";\n`, "");
-
-  it("G4a: a market:true service importing the runner by subpath is probed, not booted", async () => {
-    const s = baseServices();
-    s["research"] = {
-      ...s["research"]!,
-      src: ENTRY.replace(RUNNER_IMPORT, SUBPATH),
-      pricing: pricingModule("0.5", "task"),
-    };
+  it("the real repo passes through the CLI in seconds, booting nothing, with an aperture line", async () => {
     const t0 = Date.now();
-    const v = await violations({ services: s, rootFiles: REAL_RUNNER });
-    expect(v).toMatch(/`research` states \$0\.25\/task but .* lists \$0\.5\/task/);
-    expect(Date.now() - t0, "decided by the captured listing, not a timeout").toBeLessThan(30_000);
-  });
-
-  it("G4b: a market:false service importing the runner by subpath, with a hard-coded price", async () => {
-    const s = baseServices();
-    s["embed"] = { ...s["embed"]!, src: PRICED_EMBED.replace(RUNNER_IMPORT, SUBPATH) };
-    expect(await violations({ services: s, rootFiles: REAL_RUNNER })).toMatch(
-      /services\/embed: motebit\.market is false but executing services\/embed\/src\/index\.ts lists pricing \[\{"capability":"e","unit_cost":0\.02/,
-    );
-  });
-
-  it("G4c: a market:false service reaching runMolecule by a computed specifier", async () => {
-    // No import the source scan can see: decided by execution alone.
-    const s = baseServices();
-    s["embed"] = {
-      ...s["embed"]!,
-      src: PRICED_EMBED.replace(
-        RUNNER_IMPORT,
-        `const { runMolecule } = (await import(["@motebit", "molecule-runner"].join("/"))) as { runMolecule: (c: unknown, b: unknown) => Promise<unknown> };\n`,
-      ),
-    };
-    expect(await violations({ services: s, rootFiles: REAL_RUNNER })).toMatch(
-      /services\/embed: motebit\.market is false but executing services\/embed\/src\/index\.ts lists pricing/,
-    );
-  });
-
-  it("G2: each probe run hands the builder a fresh, realistic identity", async () => {
-    const root = fixture({});
-    const e = join(root, "services", "research", "src", "index.ts");
-    const [a, b] = await Promise.all([probeListing(e, {}), probeListing(e, {})]);
-    const ids = [a, b].map((r) => r.calls[0]?.identity?.motebitId);
-    for (const id of ids)
-      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(ids[0]).not.toBe(ids[1]);
-    expect(a.calls[0]?.identity?.deviceId).not.toBe(b.calls[0]?.identity?.deviceId);
-  });
-
-  it("the real repo passes through the CLI, with an aperture line", async () => {
     const r = spawnSync("npx", ["tsx", join(ROOT, "scripts/check-service-truth.ts")], {
       cwd: ROOT,
       encoding: "utf8",
     });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/Aperture: proves these two docs and each \.env\.example match/);
-  });
+    expect(r.stdout).toMatch(/no server boots, no network, no ports/);
+    expect(Date.now() - t0).toBeLessThan(30_000);
+  }, 60_000);
 });

@@ -28,6 +28,19 @@ function listing(unitCost: number) {
   });
 }
 
+/** A molecule's own listing — no pricing (runner-owned, via config.pricing). */
+async function bareListing() {
+  return {
+    capabilities: ["x"],
+    sla: { max_latency_ms: 1000, availability_guarantee: 0.99 },
+    description: "t",
+  };
+}
+
+function pricing(unitCost: number) {
+  return [{ capability: "x", unit_cost: unitCost, currency: "USD", per: "task" }];
+}
+
 const noFetch = (() => {
   throw new Error("fetch must not be called");
 }) as unknown as typeof fetch;
@@ -395,10 +408,11 @@ describe("runMolecule threads task admission into startServiceServer", () => {
       syncUrl: "http://relay",
       relayPublicKeyHex: RELAY_KEY,
       taskAdmission: "relay",
+      pricing: pricing(0.2),
     };
     await runMolecule(
       cfg,
-      () => ({ toolRegistry: new InMemoryToolRegistry(), getServiceListing: listing(0.2) }),
+      () => ({ toolRegistry: new InMemoryToolRegistry(), getServiceListing: bareListing }),
       adapters as never,
     );
     expect(startCalls).toHaveLength(1);
@@ -507,7 +521,7 @@ describe("resolveRelayTrust — the relay may authenticate as itself to any rela
         relayPublicKeyHex: RELAY_KEY,
         taskAdmission: "open",
       },
-      () => ({ toolRegistry: new InMemoryToolRegistry(), getServiceListing: listing(0) }),
+      () => ({ toolRegistry: new InMemoryToolRegistry(), getServiceListing: bareListing }),
       adapters as never,
     );
     expect(startCalls[0]!.taskAdmission).toBeUndefined();

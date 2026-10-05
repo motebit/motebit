@@ -200,6 +200,8 @@ async function main(): Promise<void> {
       // promise that the work is bought — run only relay-admitted work. Escape
       // hatch for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
       taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
+      // The listing price — runner-owned, from the pure src/pricing.ts.
+      pricing: listingPricing(process.env),
     },
     (identity) => {
       const { motebitId, publicKey, privateKey } = identity;
@@ -374,7 +376,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["web_search", "read_url"],
-            pricing: listingPricing(process.env),
             sla: { max_latency_ms: 30_000, availability_guarantee: 0.99 },
             description:
               "Web search atom: query the live web (Tavily, Brave, DuckDuckGo provider chain) and fetch pages, each result bound into a signed execution receipt.",

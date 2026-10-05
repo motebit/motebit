@@ -70,6 +70,8 @@ async function main(): Promise<void> {
       // call it), so every first-party hop binds through the relay at zero cost
       // and carries the token. MOTEBIT_TASK_ADMISSION=open is the escape hatch.
       taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
+      // The listing price — runner-owned, from the pure src/pricing.ts.
+      pricing: listingPricing(process.env),
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;
@@ -160,7 +162,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["read_url"],
-            pricing: listingPricing(process.env),
             sla: { max_latency_ms: 30_000, availability_guarantee: 0.95 },
             description:
               "Read-URL atom: fetches a page and returns its text with a content digest of the raw bytes, so downstream citations stay re-verifiable to the primary record.",

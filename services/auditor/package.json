@@ -6,10 +6,7 @@
   "motebit": {
     "role": "molecule",
     "identity": true,
-    "market": true,
-    "listingProbeEnv": {
-      "MOTEBIT_RELAY_URL": "http://127.0.0.1:9"
-    }
+    "market": true
   },
   "type": "module",
   "main": "./dist/index.js",

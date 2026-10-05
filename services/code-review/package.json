@@ -6,11 +6,7 @@
   "motebit": {
     "role": "molecule",
     "identity": true,
-    "market": true,
-    "listingProbeEnv": {
-      "ANTHROPIC_API_KEY": "listing-probe",
-      "MOTEBIT_READ_URL_URL": "http://127.0.0.1:9"
-    }
+    "market": true
   },
   "type": "module",
   "main": "./dist/index.js",

@@ -96,6 +96,8 @@ async function main(): Promise<void> {
       // promise that the work is bought — run only relay-admitted work. Escape
       // hatch for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
       taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
+      // The listing price — runner-owned, from the pure src/pricing.ts.
+      pricing: listingPricing(process.env),
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;
@@ -204,7 +206,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["audit_agent"],
-            pricing: listingPricing(process.env),
             sla: { max_latency_ms: 30_000, availability_guarantee: 0.95 },
             description:
               "Audits agents against the public verification surface — identity binding, key succession, operator revocation, receipt spot-checks, bond integrity — and returns a signed eval attestation whose every measurement is a per-axis verdict you can re-check yourself. No LLM; pure verification.",

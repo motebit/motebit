@@ -113,11 +113,15 @@ export interface MoleculeBuild {
   policyOverrides?: Partial<PolicyConfig>;
 
   /**
-   * Optional service listing published to the relay. When omitted the
-   * relay uses the registration-time default (capabilities + boilerplate
-   * SLA; no pricing).
+   * Optional service listing published to the relay — capabilities, SLA and
+   * description ONLY. Pricing is runner-owned: it comes from
+   * `MoleculeConfig.pricing`, never from here (`pricing?: never`; a listing
+   * that carries its own `pricing` is refused at startup and at every call).
+   * The runner calls this detached (never bound) and composes the one listing
+   * every consumer reads. When omitted the relay uses the registration-time
+   * default (capabilities + boilerplate SLA; no pricing).
    */
-  getServiceListing?: ServiceServerDepsSliceListing;
+  getServiceListing?: MoleculeListingFn;
 
   /**
    * Optional readiness probe. When it answers `ready: false`, the service
@@ -149,9 +153,29 @@ export interface MoleculeBuild {
   zeroPrivateKeyOnShutdown?: boolean;
 }
 
+/** One market listing price entry — what the relay lists and settles against. */
+export interface ListingPrice {
+  capability: string;
+  unit_cost: number;
+  currency: string;
+  per: string;
+}
+
+/** The listing fields a molecule supplies. Pricing is not one of them. */
+export interface MoleculeListing {
+  capabilities: string[];
+  sla: { max_latency_ms: number; availability_guarantee: number };
+  description: string;
+  /** Runner-owned — set `MoleculeConfig.pricing`. Present here ⇒ refused. */
+  pricing?: never;
+}
+
+export type MoleculeListingFn = () => Promise<MoleculeListing | null>;
+
+/** The composed listing every consumer reads (admission, relay registration, MCP tool). */
 type ServiceServerDepsSliceListing = () => Promise<{
   capabilities: string[];
-  pricing: Array<{ capability: string; unit_cost: number; currency: string; per: string }>;
+  pricing: ListingPrice[];
   sla: { max_latency_ms: number; availability_guarantee: number };
   description: string;
 } | null>;
@@ -173,6 +197,18 @@ export interface MoleculeConfig {
   displayName: string;
   serviceDescription: string;
   capabilities: string[];
+
+  /**
+   * The market listing's pricing — the ONLY way a price reaches the relay.
+   * A priced service passes `pricing: listingPricing(process.env)` from its
+   * pure `src/pricing.ts`. The runner freezes a copy and lists exactly it, in
+   * every consumer (task admission, relay registration, the
+   * `motebit_service_listing` tool); omitted ⇒ the listing carries
+   * `pricing: []` (unpriced). Requires `getServiceListing` (the rest of the
+   * listing). `scripts/check-service-truth.ts` holds every `market: true`
+   * service to passing exactly `listingPricing(process.env)` here.
+   */
+  pricing?: readonly ListingPrice[];
 
   /** Optional bearer token guarding the MCP HTTP endpoint. */
   authToken?: string;
@@ -827,7 +863,7 @@ export async function resolveTaskAdmission(
     MoleculeConfig,
     "syncUrl" | "relayPublicKeyHex" | "moneyExecution" | "taskAdmission" | "serviceName"
   >,
-  molecule: Pick<MoleculeBuild, "getServiceListing">,
+  molecule: { getServiceListing?: ServiceServerDepsSliceListing },
   fetchImpl: typeof fetch,
   log: (msg: string) => void,
   stores: { pinStorage: RelayKeyPinStorage; admittedStore: AdmittedTaskStore },
@@ -917,6 +953,74 @@ export async function resolveTaskAdmission(
   };
 }
 
+/** A listing-pricing refusal — the one listing-read failure that stops the boot. */
+class ListingPricingRefusal extends Error {}
+
+function refuseOwnPricing(serviceName: string): Error {
+  return new ListingPricingRefusal(
+    `${serviceName}: getServiceListing() returned its own \`pricing\` — listing pricing is runner-owned. ` +
+      `Pass it to runMolecule as config \`pricing: listingPricing(process.env)\` (services/<name>/src/pricing.ts) ` +
+      `and drop \`pricing\` from getServiceListing; refusing to publish a price from a second path.`,
+  );
+}
+
+/**
+ * Compose the one listing function every consumer reads — task admission,
+ * relay registration (mcp-server calls it as `deps.getServiceListing()`), and
+ * the `motebit_service_listing` tool (which calls it detached). The molecule's
+ * own function is always invoked DETACHED, so a `this`-sensitive listing reads
+ * the same everywhere; its result contributes capabilities/SLA/description
+ * only, and the pricing is a frozen copy of `config.pricing` (`[]` when
+ * unpriced), copied fresh per call so no consumer can mutate another's view.
+ *
+ * Refuses (throws) at startup when the listing carries its own `pricing`, or
+ * when `pricing` is configured with no listing (or a null one) to carry it;
+ * a later call that turns up with `pricing` throws instead of publishing.
+ *
+ * @internal exported for tests
+ */
+export async function composeServiceListing(
+  own: MoleculeListingFn | undefined,
+  pricing: readonly ListingPrice[] | undefined,
+  serviceName: string,
+): Promise<ServiceServerDepsSliceListing | undefined> {
+  const frozen = Object.freeze((pricing ?? []).map((p) => Object.freeze({ ...p })));
+  if (own == null) {
+    if (pricing != null)
+      throw new Error(
+        `${serviceName}: config.pricing is set but the molecule returns no getServiceListing — a price with no listing to publish it on; return getServiceListing (capabilities, sla, description)`,
+      );
+    return undefined;
+  }
+  const inner: () => Promise<unknown> = own;
+  const read = async (): Promise<Awaited<ReturnType<ServiceServerDepsSliceListing>>> => {
+    const l = (await inner()) as MoleculeListing | null | undefined;
+    if (l == null) {
+      if (pricing != null)
+        throw new ListingPricingRefusal(
+          `${serviceName}: getServiceListing() returned null but config.pricing is set — refusing to drop the price`,
+        );
+      return null;
+    }
+    if (Object.prototype.hasOwnProperty.call(l, "pricing")) throw refuseOwnPricing(serviceName);
+    return {
+      capabilities: l.capabilities,
+      pricing: frozen.map((p) => ({ ...p })),
+      sla: l.sla,
+      description: l.description,
+    };
+  };
+  // Startup refusal: a listing that brings its own price never boots. Any other
+  // read failure keeps today's behaviour (boot; admission treats an unreadable
+  // listing as priced; registration publishes nothing that round).
+  try {
+    await read();
+  } catch (err) {
+    if (err instanceof ListingPricingRefusal) throw err;
+  }
+  return read;
+}
+
 // ---------------------------------------------------------------------------
 // runMolecule — the entrypoint services call
 // ---------------------------------------------------------------------------
@@ -1003,6 +1107,14 @@ export async function runMolecule(
     log(`Money seam: self-grant ${heldGrant.grant_id} (signed ceiling; dry-run is per-call)`);
   }
   const molecule = await build(identity, spend);
+  // Pricing is runner-owned: compose the ONE listing function before anything
+  // reads it. Refuses (throws) when the molecule's listing carries its own
+  // pricing, or when config prices a service that publishes no listing.
+  const getServiceListing = await composeServiceListing(
+    molecule.getServiceListing,
+    config.pricing,
+    config.serviceName,
+  );
 
   // 4. Storage + runtime
   const storage = assembleStorageAdapters(db);
@@ -1069,8 +1181,8 @@ export async function runMolecule(
   if (molecule.handleAgentTask) wireOpts.handleAgentTask = molecule.handleAgentTask;
 
   const deps = wireServerDeps(runtime as unknown as ServiceRuntime, wireOpts);
-  if (molecule.getServiceListing) {
-    deps.getServiceListing = molecule.getServiceListing;
+  if (getServiceListing) {
+    deps.getServiceListing = getServiceListing;
   }
   if (molecule.checkReadiness) {
     deps.checkReadiness = molecule.checkReadiness;
@@ -1103,13 +1215,13 @@ export async function runMolecule(
     },
   };
   // Task admission — priced work enters through the relay's gate. Decided
-  // from the molecule's OWN listing so pricing and admission cannot drift
-  // apart: a service that charges is a service that requires the relay's
+  // from the SAME composed listing the relay is sent, so pricing and admission
+  // cannot drift apart: a service that charges is a service that requires the relay's
   // signed admission before it spends. Doctrine: task-admission.md.
   const admissionStores = adapters.admissionStores ?? fileAdmissionStores(config.dataDir);
   const admission = await resolveTaskAdmission(
     config,
-    molecule,
+    { getServiceListing },
     adapters.fetch ?? fetch,
     log,
     admissionStores,

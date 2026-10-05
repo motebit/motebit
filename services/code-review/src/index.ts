@@ -142,6 +142,8 @@ async function main(): Promise<void> {
       // relay-admitted work (docs/doctrine/task-admission.md). Escape hatch
       // for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
       taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
+      // The listing price — runner-owned, from the pure src/pricing.ts.
+      pricing: listingPricing(process.env),
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;
@@ -240,7 +242,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["review_pr"],
-            pricing: listingPricing(process.env),
             sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
             description:
               "Code review molecule: fetches a public PR patch through the read-url atom and returns structured review findings under a signed receipt with the fetch receipt nested.",

@@ -114,6 +114,12 @@ async function main(): Promise<void> {
       // secret #649 retired.
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      // Runner-owned listing price (zero-cost atom until the multi-hop
+      // settlement arc) — a non-empty pricing array is what makes the
+      // service render as "priced"/discoverable in the market, matching
+      // the sibling atoms (web-search, read-url). An empty array read as
+      // "unpriced" and failed conformance.
+      pricing: listingPricing(process.env),
     },
     (identity) => {
       const { motebitId, publicKey, privateKey } = identity;
@@ -191,12 +197,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["summarize_search"],
-            // List the capability's price (zero-cost atom until the multi-hop
-            // settlement arc) — a non-empty pricing array is what makes the
-            // service render as "priced"/discoverable in the market, matching
-            // the sibling atoms (web-search, read-url). An empty array read as
-            // "unpriced" and failed conformance.
-            pricing: listingPricing(process.env),
             sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
             description:
               "Summarize atom: delegates a web search and condenses the results, returning the summary with the search's signed receipt nested in its own.",

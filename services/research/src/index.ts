@@ -164,6 +164,8 @@ async function main(): Promise<void> {
             },
           }
         : {}),
+      // The listing price — runner-owned, from the pure src/pricing.ts.
+      pricing: listingPricing(process.env),
     },
     (identity, spend) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;
@@ -338,7 +340,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["research"],
-            pricing: listingPricing(process.env),
             sla: { max_latency_ms: 120_000, availability_guarantee: 0.95 },
             description:
               "Research with receipts: composes web-search and read-url atoms, returns a cited report whose every web claim carries a content digest you can re-verify. The delegation chain arrives as nested signed receipts.",
