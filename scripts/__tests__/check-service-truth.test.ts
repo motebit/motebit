@@ -20,7 +20,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluate, ARCHITECTURE_PATH } from "../check-service-truth.js";
+import { evaluate, probeListing, ARCHITECTURE_PATH } from "../check-service-truth.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -134,6 +134,8 @@ function fixture(opts: {
   services?: Record<string, Svc | null>;
   readme?: string;
   arch?: string;
+  /** Extra files at the fixture root (e.g. a node_modules package). */
+  rootFiles?: Record<string, string>;
 }): string {
   const root = mkdtempSync(join(tmpdir(), "st-service-truth-"));
   dirs.push(root);
@@ -155,6 +157,10 @@ function fixture(opts: {
     for (const [f, body] of Object.entries(s?.files ?? {})) writeFileSync(join(src, f), body);
     if (s?.envExample != null)
       writeFileSync(join(root, "services", name, ".env.example"), s.envExample);
+  }
+  for (const [f, body] of Object.entries(opts.rootFiles ?? {})) {
+    mkdirSync(dirname(join(root, f)), { recursive: true });
+    writeFileSync(join(root, f), body);
   }
   writeFileSync(join(root, "README.md"), opts.readme ?? README);
   mkdirSync(dirname(join(root, ARCHITECTURE_PATH)), { recursive: true });
@@ -438,6 +444,91 @@ describe("check-service-truth", () => {
     expect(await violations({ services: s })).toMatch(
       /services\/embed\/\.env\.example:1: MOTEBIT_UNIT_COST on a service whose motebit\.market is false/,
     );
+  });
+
+  // ── second cold review: call count, subpath import, identity ────────────
+
+  it("G1: getServiceListing must list the same thing on every call the runner makes", async () => {
+    // The runner calls it for task admission, again to register with the relay,
+    // and again per motebit_service_listing tool call. A listing that only the
+    // first call gets right is a different listing in the relay.
+    const v = await research({
+      src: entry(
+        `{ toolRegistry: {}, getServiceListing: () => Promise.resolve(n++ === 0 ? ${LISTING_OBJ} : { capabilities: ["x"], pricing: listingPricing(process.env).map((p) => ({ ...p, per: "page" })) }) }`,
+        `let n = 0;\n`,
+      ),
+    });
+    expect(v).toMatch(
+      /services\/research: executing services\/research\/src\/index\.ts, getServiceListing\(\) returned different listings across the 3 calls the runner makes/,
+    );
+  });
+
+  /** A stand-in for the real runner package, reachable only by a subpath. */
+  const REAL_RUNNER = {
+    "node_modules/@motebit/molecule-runner/package.json": JSON.stringify({
+      name: "@motebit/molecule-runner",
+      type: "module",
+      main: "dist/index.js",
+    }),
+    // The "real" runner boots a server on MOTEBIT_PORT (default 3200) and stays up.
+    "node_modules/@motebit/molecule-runner/dist/index.js":
+      `import { createServer } from "node:http";\n` +
+      `export async function runMolecule(config, build) {\n` +
+      `  await build({ motebitId: "real" }, undefined);\n` +
+      `  createServer(() => {}).listen(Number(process.env.MOTEBIT_PORT ?? 3200));\n` +
+      `}\n`,
+  };
+  const SUBPATH = `import { runMolecule } from "@motebit/molecule-runner/dist/index.js";\n`;
+  const RUNNER_IMPORT = `import { runMolecule } from "@motebit/molecule-runner";\n`;
+  const PRICED_EMBED = entry(
+    `{ toolRegistry: {}, getServiceListing: () => Promise.resolve({ capabilities: ["e"], pricing: [{ capability: "e", unit_cost: 0.02, currency: "USD", per: "request" }] }) }`,
+  ).replace(`import { listingPricing } from "./pricing.js";\n`, "");
+
+  it("G4a: a market:true service importing the runner by subpath is probed, not booted", async () => {
+    const s = baseServices();
+    s["research"] = {
+      ...s["research"]!,
+      src: ENTRY.replace(RUNNER_IMPORT, SUBPATH),
+      pricing: pricingModule("0.5", "task"),
+    };
+    const t0 = Date.now();
+    const v = await violations({ services: s, rootFiles: REAL_RUNNER });
+    expect(v).toMatch(/`research` states \$0\.25\/task but .* lists \$0\.5\/task/);
+    expect(Date.now() - t0, "decided by the captured listing, not a timeout").toBeLessThan(30_000);
+  });
+
+  it("G4b: a market:false service importing the runner by subpath, with a hard-coded price", async () => {
+    const s = baseServices();
+    s["embed"] = { ...s["embed"]!, src: PRICED_EMBED.replace(RUNNER_IMPORT, SUBPATH) };
+    expect(await violations({ services: s, rootFiles: REAL_RUNNER })).toMatch(
+      /services\/embed: motebit\.market is false but executing services\/embed\/src\/index\.ts lists pricing \[\{"capability":"e","unit_cost":0\.02/,
+    );
+  });
+
+  it("G4c: a market:false service reaching runMolecule by a computed specifier", async () => {
+    // No import the source scan can see: decided by execution alone.
+    const s = baseServices();
+    s["embed"] = {
+      ...s["embed"]!,
+      src: PRICED_EMBED.replace(
+        RUNNER_IMPORT,
+        `const { runMolecule } = (await import(["@motebit", "molecule-runner"].join("/"))) as { runMolecule: (c: unknown, b: unknown) => Promise<unknown> };\n`,
+      ),
+    };
+    expect(await violations({ services: s, rootFiles: REAL_RUNNER })).toMatch(
+      /services\/embed: motebit\.market is false but executing services\/embed\/src\/index\.ts lists pricing/,
+    );
+  });
+
+  it("G2: each probe run hands the builder a fresh, realistic identity", async () => {
+    const root = fixture({});
+    const e = join(root, "services", "research", "src", "index.ts");
+    const [a, b] = await Promise.all([probeListing(e, {}), probeListing(e, {})]);
+    const ids = [a, b].map((r) => r.calls[0]?.identity?.motebitId);
+    for (const id of ids)
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(ids[0]).not.toBe(ids[1]);
+    expect(a.calls[0]?.identity?.deviceId).not.toBe(b.calls[0]?.identity?.deviceId);
   });
 
   it("the real repo passes through the CLI, with an aperture line", async () => {

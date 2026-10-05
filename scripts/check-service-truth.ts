@@ -35,6 +35,31 @@
  *     `.env.example`'s MOTEBIT_UNIT_COST (and any "default: N" above it) must
  *     equal the executed default.
  *
+ *     How it executes (second cold review, 2026-10-05): EVERY service with a
+ *     `src/index.ts` is run, not only those whose source names the runner —
+ *     the hooks redirect any import that RESOLVES into the runner package
+ *     (bare name, `/dist/index.js` subpath, computed specifier), so a
+ *     market:false service that lists a price is RED by execution. The child
+ *     env is PATH, a throwaway HOME/cwd, TMPDIR, `listingProbeEnv`, then
+ *     PORT=0 and MOTEBIT_PORT=0 forced, so nothing the entry boots can take a
+ *     real port; market services get 60s to reach runMolecule, the rest 15s.
+ *     The builder gets a fresh random identity per run (sovereign motebit_id
+ *     of a new key, random device id), and `getServiceListing()` is called 3
+ *     times — as the runner does (task admission, relay registration, the
+ *     `motebit_service_listing` tool) — and must return deep-equal listings.
+ *
+ *   THREAT MODEL — what a green run claims, and what it cannot. This gate
+ *   guards against ACCIDENTAL drift between the price/unit/role the docs state
+ *   and the listing the code builds under a neutral boot. It does not, and
+ *   cannot, rule out code written to deceive the probe: a listing that changes
+ *   when a production env var is present (FLY_APP_NAME, NODE_ENV, a real
+ *   MOTEBIT_UNIT_COST), on a particular identity, clock, host or after N
+ *   calls beyond the runner's, or that detects the capture itself, is green
+ *   here. The listing a deployed service actually publishes is the one it
+ *   POSTs to the relay at runtime under its signed `market:listing` token (the
+ *   body itself is not signed) and the relay serves — the place to read the
+ *   production price is the relay, never this gate.
+ *
  * The derived surfaces (both hand-written prose, so both checked):
  *
  *   - README.md, `## Architecture` up to the `**Protocol**` paragraph: the role
@@ -57,6 +82,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -129,7 +155,22 @@ export const RUNNER = "@motebit/molecule-runner";
 /** Sentinel override: every listed entry must carry it, or it ignores the env. */
 const SENTINEL_COST = "0.123457";
 const PROBE_CHILD = join(__dirname, "lib", "listing-probe", "child.mjs");
+/** A market service must reach runMolecule within this (cold tsx boot under load). */
 const PROBE_TIMEOUT_MS = 60_000;
+/**
+ * Every other service entry is executed too, for this long: one that never
+ * reaches the runner (the relay, embed's HTTP server) is killed here, unread.
+ */
+const PROBE_TIMEOUT_NONMARKET_MS = 15_000;
+/**
+ * Forced over the service's env, after `listingProbeEnv`: every service binds
+ * an ephemeral port, so an entry that boots a real server anyway (the runner
+ * reached by some path the hooks missed, or its own HTTP server) cannot take a
+ * real one (:3200 …) and is killed by the timeout.
+ */
+export const PROBE_FORCED_ENV: Readonly<Record<string, string>> = { PORT: "0", MOTEBIT_PORT: "0" };
+/** `getServiceListing()` calls per probe — the runner's (see capture.mjs LISTING_CALLS). */
+export const LISTING_CALLS = 3;
 
 interface ListingEntry {
   capability: unknown;
@@ -143,8 +184,12 @@ export interface CapturedCall {
   serviceName: string | null;
   /** Whether the MoleculeBuild the builder returned carries `getServiceListing`. */
   hasGetServiceListing?: boolean;
-  /** What that `getServiceListing()` resolved to (JSON round-tripped). */
+  /** What the first `getServiceListing()` call resolved to (JSON round-tripped). */
   listing?: { pricing?: unknown } | null;
+  /** Every call's result, in order — LISTING_CALLS of them, as the runner makes. */
+  listings?: ({ pricing?: unknown } | null)[];
+  /** The identity the probe handed the builder (fresh per run). */
+  identity?: { motebitId: string; deviceId: string };
   /** The builder or the listing threw. */
   error?: string;
 }
@@ -152,6 +197,8 @@ export interface CapturedCall {
 export interface ProbeRun {
   calls: CapturedCall[];
   exitCode: number | null;
+  /** The entry loaded the runner package (by any specifier) — known even after a timeout. */
+  runnerLoaded: boolean;
   /** Set when the child produced no result (crash before the exit hook, timeout). */
   failure?: string;
   stderrTail: string;
@@ -161,11 +208,13 @@ export interface ProbeRun {
  * EXECUTE a service's real entry and capture what it hands the runner.
  *
  * Spawns `node --import tsx scripts/lib/listing-probe/child.mjs <entry>` with a
- * scrubbed env (`PATH`, a throwaway `HOME`/cwd, the service's declared
- * `listingProbeEnv`, plus `extraEnv`). Module hooks swap `runMolecule` — and
- * nothing else — for a capture that calls the service's own builder with a
- * fresh identity and then the `getServiceListing` it returned: the exact
- * function the real runner publishes to the relay. So the listing read here is
+ * scrubbed env (`PATH`, a throwaway `HOME`/cwd, `TMPDIR`, the service's
+ * declared `listingProbeEnv`, `extraEnv`, then PROBE_FORCED_ENV), killed after
+ * `timeoutMs`. Module hooks swap `runMolecule` — and nothing else — for a
+ * capture, wherever the import resolves into the runner package (any
+ * specifier); the capture calls the service's own builder with a fresh random
+ * identity and then the `getServiceListing` it returned, LISTING_CALLS times:
+ * the exact function the real runner publishes to the relay. So the listing read here is
  * the one main() lists, whatever main() does to build it — no source pattern
  * is consulted. Workspace imports resolve to built `dist/` (run `pnpm build`).
  */
@@ -173,6 +222,7 @@ export function probeListing(
   entry: string,
   probeEnv: Record<string, string>,
   extraEnv: Record<string, string> = {},
+  timeoutMs: number = PROBE_TIMEOUT_MS,
 ): Promise<ProbeRun> {
   const work = mkdtempSync(join(tmpdir(), "service-truth-probe-"));
   const out = join(work, "result.json");
@@ -182,6 +232,7 @@ export function probeListing(
     TMPDIR: tmpdir(),
     ...probeEnv,
     ...extraEnv,
+    ...PROBE_FORCED_ENV,
   };
   return new Promise((done) => {
     const child = spawn(
@@ -197,24 +248,26 @@ export function probeListing(
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
-    }, PROBE_TIMEOUT_MS);
+    }, timeoutMs);
     child.on("close", (code) => {
       clearTimeout(timer);
       const stderrTail = stderr.trim().split("\n").slice(-3).join(" ⏎ ").slice(-400);
+      const runnerLoaded = existsSync(`${out}.runner`);
       let run: ProbeRun;
       try {
         const r = JSON.parse(readFileSync(out, "utf8")) as {
           calls: CapturedCall[];
           exitCode: number;
         };
-        run = { calls: r.calls, exitCode: r.exitCode, stderrTail };
+        run = { calls: r.calls, exitCode: r.exitCode, runnerLoaded, stderrTail };
       } catch {
         run = {
           calls: [],
           exitCode: code,
+          runnerLoaded,
           stderrTail,
           failure: timedOut
-            ? `did not call runMolecule within ${PROBE_TIMEOUT_MS / 1000}s`
+            ? `did not call runMolecule within ${timeoutMs / 1000}s`
             : `the probe child died without a result (exit ${code})`,
         };
       }
@@ -226,10 +279,52 @@ export function probeListing(
 
 const TSX_LOADER = createRequire(import.meta.url).resolve("tsx");
 
-/** Does any non-test source file of the service import the runner? */
-function importsRunner(srcDir: string): boolean {
-  const re = new RegExp(`(?:from|import)\\s*\\(?\\s*["']${RUNNER.replace("/", "\\/")}["']`);
-  return listSourceFiles(srcDir).some((f) => re.test(readFileSync(f, "utf8")));
+/** The `name` of the nearest package.json above `file`, or null. */
+function packageNameOf(file: string): string | null {
+  for (let dir = dirname(file); ; dir = dirname(dir)) {
+    const pj = join(dir, "package.json");
+    if (existsSync(pj)) {
+      try {
+        return (
+          ((JSON.parse(readFileSync(pj, "utf8")) as { name?: unknown }).name as string) ?? null
+        );
+      } catch {
+        return null;
+      }
+    }
+    if (dirname(dir) === dir) return null;
+  }
+}
+
+/**
+ * Does any non-test source file of the service import the runner — by ANY
+ * specifier that RESOLVES into the runner package (the bare name, a subpath
+ * like `@motebit/molecule-runner/dist/index.js`, an alias)? Static, so it
+ * sees only literal specifiers; the probe's own `runnerLoaded` (the hooks
+ * saw the package load, by whatever path) covers computed ones.
+ */
+export function importsRunner(srcDir: string): boolean {
+  const spec = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["']([^"'\s]+)["']/g;
+  return listSourceFiles(srcDir).some((f) => {
+    const req = createRequire(f);
+    for (const m of readFileSync(f, "utf8").matchAll(spec)) {
+      const s = m[1]!;
+      if (s === RUNNER || s.startsWith(`${RUNNER}/`)) return true;
+      if (s.startsWith(".") || s.startsWith("node:")) continue;
+      try {
+        if (packageNameOf(req.resolve(s)) === RUNNER) return true;
+      } catch {
+        // unresolvable bare specifier: not provably the runner
+      }
+    }
+    return false;
+  });
+}
+
+/** RED unless every getServiceListing() call in `c` returned the same listing. */
+function sameEveryCall(c: CapturedCall): boolean {
+  const ls = c.listings ?? [];
+  return ls.every((l) => isDeepStrictEqual(l, ls[0]));
 }
 
 function describeRun(run: ProbeRun): string {
@@ -273,20 +368,27 @@ export async function readListedPrice(
       say(
         `motebit.market is false but ${envReads.join(", ")} reads MOTEBIT_UNIT_COST — a priced listing is a market participant`,
       );
-    if (!existsSync(entry) || !importsRunner(srcDir)) return null;
-    const run = await probeListing(entry, probeEnv);
+    if (!existsSync(entry)) return null;
+    // Executed whether or not an import of the runner is visible: a runner
+    // reached by a computed specifier is caught by the hooks, not the scan.
+    const run = await probeListing(entry, probeEnv, {}, PROBE_TIMEOUT_NONMARKET_MS);
     if (run.failure != null && run.calls.length === 0) {
-      // Imports the runner but never reached it in time: fail closed.
-      say(`imports ${RUNNER} but executing ${entryRel} could not be read (${describeRun(run)})`);
+      // Reached the runner (or imports it) but never handed it a build in
+      // time: fail closed. Otherwise an entry that never touches the runner
+      // (a server, a library) is not a listing — nothing to read.
+      if (run.runnerLoaded || importsRunner(srcDir))
+        say(`imports ${RUNNER} but executing ${entryRel} could not be read (${describeRun(run)})`);
       return null;
     }
     for (const c of run.calls) {
       if (c.error != null)
         say(`executing ${entryRel}: the builder handed to runMolecule threw (${c.error})`);
-      const pricing = c.listing?.pricing;
-      if (Array.isArray(pricing) && pricing.length > 0)
+      const priced = (c.listings ?? []).find(
+        (l) => Array.isArray(l?.pricing) && (l.pricing as unknown[]).length > 0,
+      );
+      if (priced != null)
         say(
-          `motebit.market is false but executing ${entryRel} lists pricing ${JSON.stringify(pricing).slice(0, 160)} — a priced listing is a market participant`,
+          `motebit.market is false but executing ${entryRel} lists pricing ${JSON.stringify(priced.pricing).slice(0, 160)} — a priced listing is a market participant`,
         );
     }
     return null;
@@ -325,6 +427,16 @@ export async function readListedPrice(
     if (c.hasGetServiceListing !== true) {
       say(
         `motebit.market is true but the build ${entryRel} hands runMolecule has no getServiceListing — the relay lists it with no pricing`,
+      );
+      return null;
+    }
+    if (c.listings?.length !== LISTING_CALLS || !sameEveryCall(c)) {
+      say(
+        `executing ${entryRel}${label}, getServiceListing() returned different listings across the ${LISTING_CALLS} calls the runner makes (task admission, relay registration, the motebit_service_listing tool): ${(
+          c.listings ?? []
+        )
+          .map((l) => JSON.stringify(l?.pricing ?? null).slice(0, 100))
+          .join(" / ")} — one service, one listing, every call`,
       );
       return null;
     }
@@ -800,7 +912,7 @@ async function main(): Promise<void> {
   }
   const market = r.services.filter((s) => s.market).length;
   console.log(
-    `✓ check-service-truth: ${r.services.length} services' metadata + executed listing prices (${market} market listings, each read by executing the service's main() and calling the getServiceListing it hands runMolecule) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and the price each market service's real main() lists by default when executed (runMolecule captured, everything else real; required env from motebit.listingProbeEnv); market:false services are executed only if they import ${RUNNER}, else checked for MOTEBIT_UNIT_COST reads — nothing about deployed listings, MOTEBIT_UNIT_COST overrides in prod, or other pages of the docs site; "identity" is declared metadata, not verified against code.`,
+    `✓ check-service-truth: ${r.services.length} services' metadata + executed listing prices (${market} market listings, each read by executing the service's main() and calling the getServiceListing it hands runMolecule) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and the price each market service's real main() lists by default when executed (runMolecule captured wherever an import resolves into ${RUNNER}, everything else real; env = PATH + throwaway HOME + motebit.listingProbeEnv + PORT=0/MOTEBIT_PORT=0; fresh random identity; getServiceListing() called ${LISTING_CALLS}× and required identical); every service with src/index.ts is executed (${PROBE_TIMEOUT_NONMARKET_MS / 1000}s for market:false) and must list no pricing unless market:true. Threat model: guards ACCIDENTAL drift between documented and listed price/unit/role; it does not and cannot rule out code written to deceive the probe (env/identity/host sniffing) — the deployed listing is the one the service POSTs to the relay at runtime (signed market:listing token) and the relay serves; read the production price there, not from this gate. Nothing about MOTEBIT_UNIT_COST overrides in prod or other docs pages; "identity" is declared metadata, not verified against code.`,
   );
 }
 
