@@ -30,6 +30,7 @@ Supporting trees: [`schemas/`](schemas/) (generated JSON Schemas for the wire ar
 - [consolidation-receipt-v1.md](consolidation-receipt-v1.md) · Status: Stable · verifiable receipts for idle-time consolidation cycles.
 - [consolidation-mutation-manifest-v1.md](consolidation-mutation-manifest-v1.md) · Status: Stable · commitment to the exact mutations a consolidation cycle made.
 - [routing-transcript-v1.md](routing-transcript-v1.md) · Status: Stable · a recomputable record of a worker-routing decision.
+- [sync-hold-receipt-v1.md](sync-hold-receipt-v1.md) · Status: Draft · a relay-signed record of which synced events it stores.
 
 ## Execution & routing
 

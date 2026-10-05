@@ -68,6 +68,10 @@ import {
   buildRoutingTranscriptJsonSchema,
 } from "../routing-transcript.js";
 import {
+  SYNC_HOLD_RECEIPT_SCHEMA_ID,
+  buildSyncHoldReceiptJsonSchema,
+} from "../sync-hold-receipt.js";
+import {
   CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
   CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
   buildCredentialAnchorBatchJsonSchema,
@@ -796,6 +800,12 @@ const CASES: SchemaCase[] = [
     filename: "routing-transcript-v1.json",
     expectedId: ROUTING_TRANSCRIPT_SCHEMA_ID,
     build: buildRoutingTranscriptJsonSchema,
+  },
+  {
+    name: "sync-hold-receipt-v1",
+    filename: "sync-hold-receipt-v1.json",
+    expectedId: SYNC_HOLD_RECEIPT_SCHEMA_ID,
+    build: buildSyncHoldReceiptJsonSchema,
   },
 ];
 

@@ -4134,6 +4134,12 @@ export { ALL_EVAL_KINDS, isEvalKind } from "./eval-attestation.js";
 export type { TranscriptCandidate, RoutingDecisionTranscript } from "./routing-transcript.js";
 export { ROUTING_TRANSCRIPT_SPEC_ID } from "./routing-transcript.js";
 
+// SyncHoldReceipt — the relay's signed record of which sync events it holds
+// (receipt-family: subject = signer = relay; spec/sync-hold-receipt-v1.md).
+// A device may compact only what a relay provably holds; this is the proof.
+export type { SyncHeldEvent, SyncHoldPage, SyncHoldReceipt } from "./sync-hold-receipt.js";
+export { SYNC_HOLD_RECEIPT_SPEC_ID } from "./sync-hold-receipt.js";
+
 // Merkle tree-hash version registry — the agility axis for leaf/node domain
 // separation (RFC 6962 §2.1). Separate from `SuiteId` (signature recipe): this
 // names the tree-hash recipe that builds the root the signature commits to. A

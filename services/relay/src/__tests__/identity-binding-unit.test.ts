@@ -183,16 +183,21 @@ describe("owner guards inside the branded helpers", () => {
     ).toBe(0);
   });
 
-  it("appendBoundEvent refuses an entry that does not name its owner", async () => {
-    const ok = await appendBoundEvent(relay.moteDb.eventStore as never, bound("A"), {
-      event_id: "e1",
-      motebit_id: "B" as never,
-      timestamp: 1,
-      event_type: "memory_formed" as never,
-      payload: {},
-      version_clock: 1,
-      tombstoned: false,
-    });
+  it("appendBoundEvent refuses an entry that does not name its owner", () => {
+    const ok = appendBoundEvent(
+      relay.moteDb.db,
+      bound("A"),
+      {
+        event_id: "e1",
+        motebit_id: "B" as never,
+        timestamp: 1,
+        event_type: "memory_formed" as never,
+        payload: {},
+        version_clock: 1,
+        tombstoned: false,
+      },
+      false,
+    );
     expect(ok).toBe(false);
     expect(count("SELECT COUNT(*) AS n FROM events WHERE event_id = 'e1'")).toBe(0);
   });

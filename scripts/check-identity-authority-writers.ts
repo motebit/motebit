@@ -478,7 +478,15 @@ const WRITERS: readonly Writer[] = [
     table: "events",
     count: 2,
     principal:
-      "`append` / `appendWithClock`, which file an entry under its own motebit_id and prove nothing themselves. Relay callers are the closed EVENT_APPENDS set below: `appendBoundEvent` (sync doors, owner minted by the entry binding, #846) and tasks.ts's relay-authored TrustLevelChanged. INSERT OR IGNORE never overwrites a held event_id",
+      "`append` / `appendWithClock`, which file an entry under its own motebit_id and prove nothing themselves. Relay callers are the closed EVENT_APPENDS set below: tasks.ts's relay-authored TrustLevelChanged. (The sync doors write through `appendBoundEvent`'s own INSERT, registered next.) INSERT OR IGNORE never overwrites a held event_id",
+  },
+  {
+    file: R + "identity-binding.ts",
+    verb: "INSERT",
+    table: "events",
+    count: 1,
+    principal:
+      "`appendBoundEvent` — the sync doors' only write of client-supplied entries (HTTP push, socket push): the entry is written only when its own motebit_id IS the BoundIdentity the entry binding minted from the presenter (#846), read through unwrapBound. The same statement as persistence's `SqliteEventStore.append` (pinned row-for-row by test) plus the write-time `relay_ingress_redacted` fact the sync hold receipt reads back. INSERT OR IGNORE never overwrites a held event_id",
   },
   {
     file: P,
@@ -1327,6 +1335,9 @@ const WRITER_HELPERS: ReadonlyArray<{ file: string; fn: string; param: string }>
   // A READER, registered because it takes the capability: the seq pull
   // returns only the bound identity's events (#868).
   { file: R + "event-seq.ts", fn: "readEventsAfterSeq", param: "owner" },
+  // A READER: the sync hold receipt lists only ids stored under the bound
+  // identity (sync-hold-receipt.ts; spec/sync-hold-receipt-v1.md).
+  { file: R + "sync-hold-receipt.ts", fn: "readHeldEvents", param: "owner" },
   { file: R + "subscriptions.ts", fn: "setSubscriptionStatus", param: "owner" },
   { file: R + "migration.ts", fn: "updateMigrationState", param: "owner" },
   { file: R + "migration.ts", fn: "commitDeparture", param: "owner" },
@@ -1370,11 +1381,6 @@ const MUST_READ_UPSERTS: ReadonlyArray<{ file: string; table: string }> = [
 
 /** Every call of `.append(` / `.appendWithClock(` in the relay. */
 const EVENT_APPENDS: ReadonlyArray<{ file: string; count: number; why: string }> = [
-  {
-    file: BINDING_FILE,
-    count: 1,
-    why: "`appendBoundEvent` — the sync doors' only path, owner = BoundIdentity",
-  },
   {
     file: R + "tasks.ts",
     count: 1,

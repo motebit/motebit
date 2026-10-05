@@ -4462,6 +4462,9 @@ export type SuiteStatus = "preferred" | "allowed" | "legacy";
 export const SYNC_AUDIENCE: TokenAudience;
 
 // @public
+export const SYNC_HOLD_RECEIPT_SPEC_ID = "motebit/sync-hold-receipt@1.0";
+
+// @public
 export const SYNC_PULL_ARTIFACT: ContentArtifactType;
 
 // @public
@@ -4513,6 +4516,36 @@ export interface SyncCursor {
     last_version_clock: number;
     // (undocumented)
     motebit_id: MotebitId;
+}
+
+// @public
+export interface SyncHeldEvent {
+    readonly digest: string;
+    readonly event_id: string;
+    readonly redacted: boolean;
+    readonly seq?: number;
+}
+
+// @public
+export interface SyncHoldPage {
+    readonly after_seq: number;
+    readonly has_more: boolean;
+    readonly latest_seq: number;
+    readonly next_seq: number;
+}
+
+// @public
+export interface SyncHoldReceipt {
+    readonly events: readonly SyncHeldEvent[];
+    readonly issued_at: number;
+    readonly motebit_id: string;
+    readonly nonce: string;
+    readonly page?: SyncHoldPage;
+    readonly relay_motebit_id: string;
+    readonly relay_public_key: string;
+    readonly signature: string;
+    readonly spec: typeof SYNC_HOLD_RECEIPT_SPEC_ID;
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
 }
 
 // @public

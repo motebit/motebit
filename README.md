@@ -274,14 +274,14 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 - **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.05/request default), `read-url` and `summarize` (unpriced — $0 by default; their value is priced into the molecules that call them), `embed` (plain HTTP embedding compute — no identity, no MCP listing), plus `browser-sandbox` (Playwright-driven Chromium for the `virtual_browser` embodiment). Defaults are overridable per deployment via `MOTEBIT_UNIT_COST`
 - **Glue** — `proxy` (Vercel edge CORS for the web app)
 
-**Protocol** ([`spec/`](spec/)) — 36 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`, `eval-attestation`, `routing-transcript`, `machine-roster`, `terminology`. By their own headers: 15 are `Status: Stable` and 21 `Draft`.
+**Protocol** ([`spec/`](spec/)) — 37 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`, `eval-attestation`, `routing-transcript`, `machine-roster`, `terminology`. By their own headers: 15 are `Status: Stable` and 21 `Draft`.
 
 → Full directory tree, package-by-package descriptions, layer-by-layer breakdown, and data flow: **[docs.motebit.com/docs/operator/architecture](https://docs.motebit.com/docs/operator/architecture)**.
 
 ## Specification
 
 > [!NOTE]
-> **Motebit is a protocol first.** All [36 specs](spec/) are Apache-2.0; 15 are marked Stable and the rest Draft (see [Architecture](#architecture)). A third party can build an interoperating implementation from the published specs and the permissive-floor packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
+> **Motebit is a protocol first.** All [37 specs](spec/) are Apache-2.0; 15 are marked Stable and the rest Draft (see [Architecture](#architecture)). A third party can build an interoperating implementation from the published specs and the permissive-floor packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
 
 A `motebit.md` is YAML frontmatter signed with Ed25519:
 
@@ -340,7 +340,7 @@ The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit
 
 The **permissive floor** is Apache-2.0 licensed — use it freely, build on it, implement the spec in any language, with an explicit patent grant from every contributor:
 
-- [`spec/`](spec/) — 36 open specs (full list in [Architecture](#architecture))
+- [`spec/`](spec/) — 37 open specs (full list in [Architecture](#architecture))
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, delegation, settlement, trust algebra)
 - [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
 - [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
@@ -370,7 +370,7 @@ The **state a relay accumulates** — trust graph, federation routing, signed ex
 
 - [motebit.com](https://motebit.com) — meet the creature
 - [Documentation](https://docs.motebit.com) — guides, architecture, API reference
-- [Specifications](spec/) — 36 open specs (Apache-2.0)
+- [Specifications](spec/) — 37 open specs (Apache-2.0)
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know
