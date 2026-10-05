@@ -3,6 +3,11 @@
   "version": "0.0.0-private",
   "license": "BUSL-1.1",
   "private": true,
+  "motebit": {
+    "role": "infrastructure",
+    "identity": false,
+    "market": false
+  },
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3003",

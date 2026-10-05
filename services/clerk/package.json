@@ -3,6 +3,11 @@
   "version": "0.0.0-private",
   "license": "BUSL-1.1",
   "private": true,
+  "motebit": {
+    "role": "molecule",
+    "identity": true,
+    "market": true
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
