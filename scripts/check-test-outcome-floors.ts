@@ -89,18 +89,29 @@ export function ratchetViolations(
   return v;
 }
 
-function git(args: string[]): { status: number | null; stdout: string } {
-  const r = spawnSync("git", args, { cwd: ROOT, encoding: "utf8", env: cleanEnv() });
+function git(args: string[], cwd: string): { status: number | null; stdout: string } {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8", env: cleanEnv() });
   return { status: r.status, stdout: r.stdout ?? "" };
 }
 
-/** The baseline floors and where they came from; a string when it fails closed. */
-function baseline(argv: readonly string[]): { floors: FloorsFile | null; label: string } | string {
-  const ref = resolveBaseRef(argv, process.env);
+/**
+ * The baseline floors and where they came from; a string when it fails closed.
+ * The base comes from `resolveBaseRef` — the SAME resolution check-cli-surface
+ * uses, per event: `merge_group` → the payload's `merge_group.base_sha`
+ * (GITHUB_BASE_REF is unset there), `pull_request` → `origin/<GITHUB_BASE_REF>`,
+ * otherwise (a push, or locally) `origin/main`. CI must check out full history
+ * for any of them to resolve (check-prepush-subset's historyViolations).
+ */
+export function baseline(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = ROOT,
+): { floors: FloorsFile | null; label: string } | string {
+  const ref = resolveBaseRef(argv, env);
   if (!ref.ok) return `cannot resolve the change set's base (${ref.why})`;
-  const verify = git(["rev-parse", "--verify", "--quiet", `${ref.ref}^{commit}`]);
+  const verify = git(["rev-parse", "--verify", "--quiet", `${ref.ref}^{commit}`], cwd);
   if (verify.status !== 0) return `\`${ref.ref}\` (${ref.source}) does not resolve to a commit`;
-  const mb = git(["merge-base", ref.ref, "HEAD"]);
+  const mb = git(["merge-base", ref.ref, "HEAD"], cwd);
   const sha = mb.stdout.trim();
   if (mb.status !== 0 || !/^[0-9a-f]{40}$/.test(sha))
     return `no merge-base between \`${ref.ref}\` and HEAD (a shallow checkout, or unrelated history)`;
@@ -108,7 +119,7 @@ function baseline(argv: readonly string[]): { floors: FloorsFile | null; label: 
     [sha, `the merge-base ${sha.slice(0, 10)} (${ref.ref})`],
     ["HEAD", `HEAD (${FLOORS_FILE} is new since the merge-base ${sha.slice(0, 10)})`],
   ] as const) {
-    const show = git(["show", `${rev}:${FLOORS_FILE}`]);
+    const show = git(["show", `${rev}:${FLOORS_FILE}`], cwd);
     if (show.status !== 0) continue;
     const f = parseFloors(show.stdout);
     if (typeof f === "string") return `${label}: ${f}`;
@@ -132,7 +143,7 @@ function main(argv: string[]): void {
         "the committed per-package test floors cover every package with a test:coverage script and only ever go down through a reviewed allowedDecreases entry",
       sites: violations,
       canonical: `${FLOORS_FILE}, written by \`pnpm test:outcomes:verify --artifacts <dir> --write-floors\` from a real full run of every shard`,
-      fix: 'Add a missing floor by running every shard locally (scripts/test-coverage-shards.ts --shard i/N, each into its own artifact dir) and `pnpm test:outcomes:verify --artifacts <dir> --write-floors`. Restore a lowered floor, or — when tests were legitimately deleted — re-measure with `--write-floors --allow-lower "<reason>"`, which records { from, to, reason } in allowedDecreases for review. Remove a stale floor or allowance.',
+      fix: 'Add a missing floor by running every shard locally (scripts/test-coverage-shards.ts --shard i/N, each into its own artifact dir) and `pnpm test:outcomes:verify --artifacts <dir> --write-floors`. Restore a lowered floor, or — when tests were legitimately deleted — re-measure with `--write-floors --allow-lower "<reason>"`, which records { from, to, reason } in allowedDecreases for review. Remove a stale floor or allowance. An unresolvable base: locally `git fetch origin main`; in CI set `fetch-depth: 0` on the actions/checkout of that job (check-prepush-subset requires it of every job that runs this gate).',
       doctrine: "docs/doctrine/composition-preserves-enforcement.md",
     });
   const b = (base as { label: string }).label;

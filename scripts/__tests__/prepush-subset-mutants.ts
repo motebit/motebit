@@ -58,6 +58,15 @@ const SCRUB_LINE = `  ${SCRUB} # git-env-scrub\n`;
 
 const m = (id: string, what: string, apply: (i: Inputs) => Inputs): Edit => ({ id, what, apply });
 
+/** A job inserted before `format:` (unpinned — only historyViolations judges it). */
+const job = (id: string, checkout: string, run: string) =>
+  ci(
+    id,
+    "\n  format:\n",
+    `\n  extra:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1${checkout}\n      - run: ${run}\n\n  format:\n`,
+  );
+const FULL = "\n        with:\n          fetch-depth: 0";
+
 export const MUTANTS: Edit[] = [
   // --- the ten review findings -------------------------------------------
   m(
@@ -593,6 +602,45 @@ export const MUTANTS: Edit[] = [
     "hook: the scrub after another command in the body",
     hook("E9", SCRUB_LINE, `  _scope_ok=1\n${SCRUB_LINE}`),
   ),
+  // H*: a base-ref-dependent gate (check-cli-surface, check-test-outcome-floors)
+  // on a shallow checkout — #1062's first run (gate-self-tests red; every
+  // probe shard vacuously green, a fail-closed exit read as "fires").
+  m(
+    "H1",
+    "ci: gate-self-tests' checkout drops fetch-depth: 0 (the #1062 shape)",
+    ci(
+      "H1",
+      /(  gate-self-tests:[\s\S]*?actions\/checkout@\S+ # v7\.0\.1\n)        with:\n(?:          #.*\n)*          fetch-depth: 0\n/,
+      "$1",
+    ),
+  ),
+  m(
+    "H2",
+    "ci: gate-effectiveness-shard's checkout drops fetch-depth: 0 (its probes fire vacuously)",
+    ci(
+      "H2",
+      /(  gate-effectiveness-shard:[\s\S]*?actions\/checkout@\S+ # v7\.0\.1\n)        with:\n(?:          #.*\n)*          fetch-depth: 0\n/,
+      "$1",
+    ),
+  ),
+  m(
+    "H3",
+    "ci: a new job runs check-test-outcome-floors shallow",
+    job("H3", "", "pnpm check-test-outcome-floors"),
+  ),
+  m("H4", "ci: a new job runs check-cli-surface shallow", job("H4", "", "pnpm check-cli-surface")),
+  m("H5", "ci: a new job runs `pnpm check` shallow", job("H5", "", "pnpm check")),
+  m("H6", "ci: a new job runs the gate self-tests shallow", job("H6", "", "pnpm test:gates")),
+  m(
+    "H7",
+    "ci: a new job runs the gate probes shallow",
+    job("H7", "", "pnpm check-gates-effective --shard 1/1"),
+  ),
+  m(
+    "H8",
+    "ci: a new job runs check-test-outcome-floors at fetch-depth: 1",
+    job("H8", "\n        with:\n          fetch-depth: 1", "pnpm check-test-outcome-floors"),
+  ),
 ];
 
 export const CONTROLS: Edit[] = [
@@ -641,5 +689,19 @@ export const CONTROLS: Edit[] = [
     "K11",
     "hook: the scrub's comment reworded",
     hook("K11", "No inherited GIT_* past this line", "Scrub the inherited git environment"),
+  ),
+  m(
+    "HC1",
+    "ci: a new job runs check-test-outcome-floors on a full-history checkout",
+    job("HC1", FULL, "pnpm check-test-outcome-floors"),
+  ),
+  m(
+    "HC2",
+    "ci: a new shallow job runs only a --verify-shards read, or a check-* that is not `pnpm check`",
+    job(
+      "HC2",
+      "",
+      "pnpm check-gates-effective --verify-shards /tmp/x && pnpm check-no-secrets-in-client-bundles",
+    ),
   ),
 ];

@@ -456,6 +456,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the check-cli-surface and check-test-outcome-floors
+          # probes resolve the merge-base with the PR base (origin/<base_ref>)
+          # or the merge-queue base_sha. Shallow, both fail closed even
+          # unperturbed — so their probes "fire" for the wrong reason.
+          # Required by check-prepush-subset (historyViolations).
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
 
@@ -505,6 +512,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the self-tests run check-test-outcome-floors over the
+          # real repo, which resolves the merge-base with the PR base
+          # (origin/<base_ref>) or the merge-queue base_sha and fails closed on
+          # a shallow checkout (#1062's first run). Required by
+          # check-prepush-subset (historyViolations).
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
 

@@ -48,6 +48,11 @@
  *     gate-effectiveness verdict job, changes) equals CI_JOB_STEPS exactly, in order — an added, removed or
  *     changed step (another checkout `ref:`, a `rm -rf` of the tests, an
  *     `eval`'d $GITHUB_ENV write) is RED until the pinned list is updated;
+ *   - EVERY job (pinned or not) whose steps run a base-ref-dependent gate
+ *     (BASE_REF_GATES — directly, via `pnpm check`, the gate self-tests or the
+ *     effectiveness probes) checks out full history (`fetch-depth: 0`), so
+ *     `origin/<base_ref>` / `merge_group.base_sha` resolve (historyViolations;
+ *     #1062's first run: shallow self-tests red, shallow probes vacuous);
  *   - the root package.json scripts those forms reach compare by exact value,
  *     and every workspace package's `test:coverage` runs its `test` (plus
  *     coverage), so CI's test:coverage really is a superset of the hook's test.
@@ -874,7 +879,13 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
   ],
   "gate-effectiveness-shard": [
     {
+      // Full history: required by historyViolations (the shard probes run
+      // the base-ref-dependent gates); same commit, so it changes nothing a
+      // counterpart tests.
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        "fetch-depth": 0,
+      },
     },
     {
       uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
@@ -911,7 +922,12 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
   ],
   "gate-self-tests": [
     {
+      // Full history: required by historyViolations (the self-tests run
+      // check-test-outcome-floors over the real repo).
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        "fetch-depth": 0,
+      },
     },
     {
       uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
@@ -999,6 +1015,78 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
     },
   ],
 };
+/**
+ * Gates that judge a change against its BASE: they resolve the merge-base of
+ * HEAD with the event's base (`resolveBaseRef` in check-cli-surface.ts — the
+ * merge queue's `merge_group.base_sha`, a PR's `origin/<base_ref>`, else
+ * `origin/main`) and fail closed when it does not resolve. On a shallow
+ * checkout it never does: the gate goes red on correct code, and an
+ * effectiveness probe of it "fires" for the wrong reason (#1062's first run:
+ * gate-self-tests red, every probe shard vacuously green).
+ */
+export const BASE_REF_GATES = ["check-cli-surface", "check-test-outcome-floors"] as const;
+
+/**
+ * Step `run` shapes that execute a BASE_REF_GATE, and why. Matched against
+ * every step of EVERY job in ci.yml — not only the pinned counterparts — so a
+ * new job that runs one is covered the moment it appears.
+ */
+export const BASE_REF_RUNNERS: { pattern: RegExp; why: string }[] = [
+  {
+    pattern: new RegExp(`\\b(?:${BASE_REF_GATES.join("|")})\\b`),
+    why: "names a base-ref-dependent gate",
+  },
+  {
+    pattern: /\bpnpm (?:run )?check(?=\s|$)/m,
+    why: "`pnpm check` runs every gate in scripts/check.ts, the base-ref-dependent ones included",
+  },
+  {
+    pattern: /\bpnpm (?:run )?test:gates\b/,
+    why: "`pnpm test:gates` runs the gate self-tests, which run check-test-outcome-floors over the real repo",
+  },
+  {
+    pattern: /\bcheck-gates-effective\b(?![^\n]*--verify-shards)/,
+    why: "check-gates-effective runs every gate's probe (a --verify-shards run reads manifests only)",
+  },
+];
+
+/**
+ * Every job in ci.yml that runs a BASE_REF_GATE must check out FULL history
+ * (`fetch-depth: 0` on every checkout step): only then do `origin/<base_ref>`
+ * and `merge_group.base_sha` resolve to commits with a merge-base. Semantic,
+ * not a pin — editing CI_JOB_STEPS to drop the fetch-depth keeps this RED.
+ */
+export function historyViolations(jobs: Record<string, Job>): {
+  violations: string[];
+  jobs: string[];
+} {
+  const violations: string[] = [];
+  const runs: string[] = [];
+  for (const [name, job] of Object.entries(jobs)) {
+    const steps = job.steps ?? [];
+    const why = BASE_REF_RUNNERS.find((r) =>
+      steps.some((s) => typeof s.run === "string" && r.pattern.test(s.run)),
+    )?.why;
+    if (!why) continue;
+    runs.push(name);
+    const checkouts = steps.filter(
+      (s) => typeof s.uses === "string" && s.uses.startsWith("actions/checkout@"),
+    );
+    if (checkouts.length === 0)
+      violations.push(
+        `${CI} job \`${name}\` runs a base-ref-dependent gate (${why}) but has no actions/checkout step with \`fetch-depth: 0\``,
+      );
+    for (const c of checkouts) {
+      const depth = (c.with as Record<string, unknown> | undefined)?.["fetch-depth"];
+      if (depth !== 0)
+        violations.push(
+          `${CI} job \`${name}\` runs a base-ref-dependent gate (${why}) on a checkout with fetch-depth ${JSON.stringify(depth ?? null)} — ${BASE_REF_GATES.join(" / ")} resolve the merge-base with origin/<base_ref> or merge_group.base_sha and fail closed on a shallow clone (a probe of them then "fires" for the wrong reason); give that checkout \`with: { fetch-depth: 0 }\``,
+        );
+    }
+  }
+  return { violations, jobs: runs };
+}
+
 const JOB_KEYS = new Set(["runs-on", "timeout-minutes", "steps", "needs", "if", "outputs"]);
 const STEP_ACTIONS = [
   "actions/checkout@",
@@ -1368,6 +1456,8 @@ export function evaluateCi(
     if (drifted) jobOk.set(name, false);
   }
 
+  violations.push(...historyViolations(jobs).violations);
+
   const sharded = shardViolations(jobs["test-coverage"]?.strategy, packageScripts);
   if (sharded.length > 0) {
     violations.push(...sharded);
@@ -1645,8 +1735,11 @@ function main(): void {
       doctrine: "docs/drift-defenses.md",
     });
   }
+  const history = historyViolations(
+    ((parseYaml(inp.ci) as { jobs?: Record<string, Job> }).jobs ?? {}) as Record<string, Job>,
+  );
   console.log(
-    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned; the shard runner executed ${runner.launches} time(s) against a stub turbo — each launched exactly its shard's args and exited with turbo's status; the outcome verifier judged ${outcomes.runs} fixture(s) (2 as the CI command) — green on the green one, red on all ${Object.keys(RED_VARIANTS).length} red ones.`,
+    `✓ check-prepush-subset: ${history.jobs.length} ${CI} job(s) run a base-ref-dependent gate (${BASE_REF_GATES.join(", ")}) [${history.jobs.join(", ")}], each on a full-history checkout; ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned; the shard runner executed ${runner.launches} time(s) against a stub turbo — each launched exactly its shard's args and exited with turbo's status; the outcome verifier judged ${outcomes.runs} fixture(s) (2 as the CI command) — green on the green one, red on all ${Object.keys(RED_VARIANTS).length} red ones.`,
   );
 }
 

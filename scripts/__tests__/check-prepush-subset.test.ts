@@ -11,6 +11,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -22,6 +23,9 @@ import { fileURLToPath } from "node:url";
 import {
   evaluate,
   evaluateTestCache,
+  historyViolations,
+  BASE_REF_GATES,
+  BASE_REF_RUNNERS,
   readInputs,
   readTestCacheInputs,
   shardRunnerViolations,
@@ -34,6 +38,7 @@ import {
 import { cleanEnv } from "../lib/differential-tree.js";
 import { parseSh, walk } from "../lib/posix-sh.js";
 import { MUTANTS, CONTROLS } from "./prepush-subset-mutants.js";
+import { parse as parseYaml } from "yaml";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REAL = readInputs(ROOT);
@@ -64,6 +69,73 @@ describe("check-prepush-subset over the real hook and ci.yml", () => {
 
   it("pins the steps of EVERY counterpart job (B1: no job left unpinned)", () => {
     expect(Object.keys(CI_JOB_STEPS).sort()).toEqual(Object.keys(CI_JOBS).sort());
+  });
+});
+
+describe("full history for every job that runs a base-ref-dependent gate", () => {
+  const jobsOf = (yml: string) =>
+    ((parseYaml(yml) as { jobs: Record<string, unknown> }).jobs ?? {}) as Parameters<
+      typeof historyViolations
+    >[0];
+
+  it("RED on b9a1738's ci.yml (#1062's first run: gate-self-tests + the probe shards were shallow)", () => {
+    const old = execFileSync("git", ["show", "b9a1738:.github/workflows/ci.yml"], {
+      cwd: ROOT,
+      env: cleanEnv(),
+      encoding: "utf8",
+    });
+    const r = historyViolations(jobsOf(old));
+    expect(r.violations).toEqual([
+      expect.stringMatching(
+        /job `gate-effectiveness-shard` runs a base-ref-dependent gate .* fetch-depth null/,
+      ),
+      expect.stringMatching(
+        /job `gate-self-tests` runs a base-ref-dependent gate .* fetch-depth null/,
+      ),
+    ]);
+  });
+
+  it("GREEN on the real ci.yml, and it sees every job that runs one (and only those)", () => {
+    const r = historyViolations(jobsOf(REAL.ci));
+    expect(r.violations).toEqual([]);
+    expect(r.jobs.sort()).toEqual(["check-static", "gate-effectiveness-shard", "gate-self-tests"]);
+  });
+
+  it("RED in each MUTANT H* for this rule's reason (not only the step pin)", () => {
+    for (const mu of MUTANTS.filter((x) => /^H\d/.test(x.id)))
+      expect(
+        evaluate(mu.apply(REAL)).violations.some((v) => v.includes("base-ref-dependent gate")),
+        mu.id,
+      ).toBe(true);
+  });
+
+  it("each runner's reason holds in the repo (the table is not folklore)", () => {
+    const check = readFileSync(join(ROOT, "scripts/check.ts"), "utf8");
+    const probes = readFileSync(join(ROOT, "scripts/check-gates-effective.ts"), "utf8");
+    for (const gate of BASE_REF_GATES) {
+      expect(check, `scripts/check.ts runs ${gate}`).toContain(`script: "${gate}"`);
+      expect(probes, `check-gates-effective probes ${gate}`).toContain(`script: "${gate}"`);
+    }
+    // The self-tests run check-test-outcome-floors over the real repo.
+    expect(
+      readFileSync(join(ROOT, "scripts/__tests__/check-test-outcome-floors.test.ts"), "utf8"),
+    ).toContain('"the gate over the real repo"');
+    const runs = (cmd: string) => BASE_REF_RUNNERS.some((r) => r.pattern.test(cmd));
+    for (const cmd of [
+      "pnpm check",
+      "pnpm run check",
+      "pnpm test:gates",
+      "pnpm check-cli-surface --base HEAD",
+      "npx tsx scripts/check-test-outcome-floors.ts",
+      "pnpm check-gates-effective --shard 1/4 --manifest /tmp/m.json",
+    ])
+      expect(runs(cmd), cmd).toBe(true);
+    for (const cmd of [
+      "pnpm check-no-secrets-in-client-bundles --require-dist web,verify",
+      "pnpm check-gates-effective --verify-shards /tmp/gate-shards",
+      "pnpm checkout",
+    ])
+      expect(runs(cmd), cmd).toBe(false);
   });
 });
 
