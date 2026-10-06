@@ -27,11 +27,13 @@
  *          that landed. Nothing is sent on one observation: the first is
  *          recorded on the row (`expired_seen_at` + `expired_seen_height`).
  *          The memo is replaced only by a pass that sees it expired AGAIN at a
- *          point separated from that first observation BOTH in wall time (at
- *          least `minExpiryGapMs`, default three anchoring ticks) AND in chain
- *          progress (finalized height strictly above the first observation's).
- *          Any other answer in between (pending, a lookup error, landed)
- *          clears the observation.
+ *          finalized height at least `minExpiryGapBlocks` (default 450, about
+ *          three anchoring ticks of chain) above the first observation's. The
+ *          separation is measured on the CHAIN, never on a wall clock: a clock
+ *          that jumps, steps back or runs ahead in another relay process on
+ *          the same database cannot bring a replacement sooner, and a finalized
+ *          height that goes backwards is never progress. Any other answer in
+ *          between (pending, a lookup error, landed) clears the observation.
  *   3. Every replacement is a compare-and-set on the row. Anchoring ticks can
  *      overlap (a tick starts while the previous one drains; a restarted
  *      process runs beside one still draining), so two passes can reach the
@@ -69,29 +71,33 @@ interface StoredAnchorBroadcast extends AnchorBroadcastRecord {
 }
 
 /**
- * The least wall time between the two expiry observations that replace a
- * memo: three 60 s anchoring ticks. It is the bound on how long a lagging
- * node's absent answer is believed; a landed memo reported absent for longer,
- * with the finalized height advancing meanwhile, is replaced once.
+ * The least finalized-height advance between the two expiry observations that
+ * replace a memo: 450 blocks, about 180 s (three 60 s anchoring ticks) at
+ * Solana's ~400 ms blocks. It is the bound on how far behind the finalized
+ * height a lagging node's absent answer is believed; a landed memo reported
+ * absent while the finalized height advanced this far is replaced once.
+ * Measured on the chain so no local clock can shorten it.
  */
-export const DEFAULT_MIN_EXPIRY_GAP_MS = 180_000;
+export const DEFAULT_MIN_EXPIRY_GAP_BLOCKS = 450;
 
 export interface AnchorBroadcastOptions {
-  /** Wall clock (ms). Default `Date.now()`. */
+  /** Wall clock (ms), for the recorded times only — never the replacement decision. Default `Date.now()`. */
   now?: () => number;
-  /** Least wall time between the two expiry observations. Default `DEFAULT_MIN_EXPIRY_GAP_MS`. */
-  minExpiryGapMs?: number;
+  /** Least finalized-height advance between the two expiry observations. Default `DEFAULT_MIN_EXPIRY_GAP_BLOCKS`. */
+  minExpiryGapBlocks?: number;
 }
 
 const options = new WeakMap<object, Required<AnchorBroadcastOptions>>();
 
-/** Set the clock and the expiry gap for broadcasts recorded in `db` (tests inject a clock). */
+/** Set the clock and the expiry gap for broadcasts recorded in `db` (tests inject them). */
 export function configureAnchorBroadcasts(db: DatabaseDriver, opts: AnchorBroadcastOptions): void {
   options.set(db, { ...optionsFor(db), ...opts });
 }
 
 function optionsFor(db: DatabaseDriver): Required<AnchorBroadcastOptions> {
-  return options.get(db) ?? { now: () => Date.now(), minExpiryGapMs: DEFAULT_MIN_EXPIRY_GAP_MS };
+  return (
+    options.get(db) ?? { now: () => Date.now(), minExpiryGapBlocks: DEFAULT_MIN_EXPIRY_GAP_BLOCKS }
+  );
 }
 
 /** What the chain says about a recorded broadcast (`@motebit/wallet-solana` shape). */
@@ -345,13 +351,16 @@ export async function submitRecordedAnchor(
         });
         throw new AnchorBroadcastPendingError(
           prior.signature,
-          "expiry observed once; replaced only if seen again later, at a higher finalized height",
+          `expiry observed once; replaced only if seen again at a finalized height ${opts.minExpiryGapBlocks} blocks higher`,
         );
       }
-      if (now - first.at < opts.minExpiryGapMs || outcome.blockHeight <= first.height) {
+      // Chain progress only: the wall clock never decides, and a finalized
+      // height at or below the first observation's (a node behind, or one
+      // that went backwards) is never progress.
+      if (outcome.blockHeight - first.height < opts.minExpiryGapBlocks) {
         throw new AnchorBroadcastPendingError(
           prior.signature,
-          `expiry first observed at height ${first.height}; replaced only ${opts.minExpiryGapMs} ms later at a higher finalized height`,
+          `expiry first observed at finalized height ${first.height}; replaced only once seen again at height ${first.height + opts.minExpiryGapBlocks} or above (now ${outcome.blockHeight})`,
         );
       }
       if (!claimExpiryReplacement(db, stream, subject, prior.signature, first)) {

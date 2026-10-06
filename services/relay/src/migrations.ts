@@ -2659,8 +2659,9 @@ export const relayMigrations: Migration[] = [
       // memo is sent; a later cycle asks the chain about THAT signature
       // (landed ⇒ the anchor is confirmed with it; pending ⇒ wait; expired or
       // failed ⇒ one new memo; expired ⇒ one new memo only once a pass sees
-      // it expired again at least the configured gap after the first
-      // observation and at a higher finalized height — the first recorded in
+      // it expired again at a finalized height at least the configured block
+      // gap above the first observation's (chain progress, never wall time)
+      // — the first recorded in
       // `expired_seen_at` + `expired_seen_height` — and every replacement is a
       // compare-and-set on the row) instead of sending blindly. One row per
       // (stream, subject) — the latest broadcast for that anchor. Idempotent:
