@@ -701,7 +701,27 @@ ProbeArtifact {
   {
     script: "check-suite-dispatch",
     proves:
-      "flags a direct @noble/ed25519 primitive call outside packages/crypto/src/suite-dispatch.ts (scope: packages/crypto/src/, services/, apps/)",
+      'flags an Ed25519 verify through WebCrypto (`crypto.subtle.verify({ name: "Ed25519" }, …)`) outside packages/crypto/src/suite-dispatch.ts — before, the gate matched only noble calls and scanned only part of packages/, so a WebCrypto Ed25519 caller in packages/runtime stayed green. The algorithm argument is resolved on the AST; ECDSA/RSA WebCrypto (hardware leaves) is not flagged. writeFixture-and-delete (no real file mutated).',
+    perturb: () =>
+      writeFixture(
+        `packages/runtime/src/${PROBE_PREFIX}webcrypto_ed25519.ts`,
+        'export async function probe(key: CryptoKey, sig: Uint8Array, data: Uint8Array): Promise<boolean> {\n  return crypto.subtle.verify({ name: "Ed25519" }, key, sig as BufferSource, data as BufferSource);\n}\n',
+      ),
+  },
+  {
+    script: "check-suite-dispatch",
+    proves:
+      'flags a NAMED @noble/ed25519 import used outside the dispatcher in a package the old scope never read (packages/runtime) — `import { verifyAsync } from "@noble/ed25519"`. writeFixture-and-delete (no real file mutated).',
+    perturb: () =>
+      writeFixture(
+        `packages/runtime/src/${PROBE_PREFIX}noble_ed25519.ts`,
+        'import { verifyAsync } from "@noble/ed25519";\nexport const probe = (sig: Uint8Array, msg: Uint8Array, pub: Uint8Array): Promise<boolean> =>\n  verifyAsync(sig, msg, pub);\n',
+      ),
+  },
+  {
+    script: "check-suite-dispatch",
+    proves:
+      "flags a direct @noble/ed25519 primitive call outside packages/crypto/src/suite-dispatch.ts (scope: packages/, apps/, services/)",
     perturb: () =>
       writeFixture(
         // Any .ts under packages/crypto/src/ (outside suite-dispatch.ts) that
@@ -737,6 +757,22 @@ export async function probeLeak(): Promise<boolean> {
         () =>
           `#!/usr/bin/env node\nconsole.error("${PROBE_PREFIX}intentional crash for dist-smoke probe");\nprocess.exit(2);\n`,
       ),
+  },
+  {
+    script: "check-api-surface",
+    // Same no-rebuild shape as the protocol probe below: mutate the committed
+    // baseline, leave dist/ untouched, so api-extractor's extracted surface
+    // diverges. Requires packages/verifier/dist (pnpm build).
+    proves:
+      "tracks the pinned @motebit/verifier surface the first-party consumer codes against (docs/doctrine/agency-proof-integration.md) — before, verifier was absent from TRACKED, so adding a required parameter to `formatHuman` stayed green. Probe makes the committed verifier baseline's formatHuman signature diverge from the extracted surface; the gate must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile("packages/verifier/etc/verifier.api.md", (src) =>
+        src.replace(
+          "export function formatHuman(result: VerifyResultWithBinding): string;",
+          "export function formatHuman(result: VerifyResultWithBinding, extra: string): string;",
+        ),
+      ),
+    skipWhen: () => scanChangesetsForMajor("@motebit/verifier"),
   },
   {
     script: "check-api-surface",
@@ -2672,6 +2708,28 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-money-authority",
+    proves:
+      "flags the R4 standing-authority block NEUTRALIZED in place — `if (false && profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null)`. The condition text is still present, so the old substring marker stayed green while a grantless R4 call under a permissive band auto-executed money; assertion 1 now matches the whole statement (`if (` + condition + `{ needsApproval = true; }`) and must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/policy/src/policy-gate.ts`, (src) =>
+        src.replace(
+          "if (profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null) {",
+          "if (false && profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null) {",
+        ),
+      ),
+  },
+  {
+    script: "check-money-authority",
+    proves:
+      "flags an ASSIGNMENT-form verifiedGrant producer outside the audited producer — `ctx.verifiedGrant = { grant_id, verified_at }`. The old scan matched only the object-literal property form (`verifiedGrant: {`), so minting authority by assignment stayed green; assertion 3 must fire. writeFixture-and-delete (no real file mutated).",
+    perturb: () =>
+      writeFixture(
+        `packages/runtime/src/${PROBE_PREFIX}grant_assign.ts`,
+        'export function probe(ctx: { verifiedGrant?: unknown }): void {\n  ctx.verifiedGrant = { grant_id: "g", verified_at: 0 };\n}\n',
+      ),
+  },
+  {
     script: "check-ceiling-from-grant",
     proves:
       "flags an unsanctioned blast-radius enforcement call site — the drift class where a new consumer calls evaluateBlastRadius/tryConsume directly with a config-sourced or hand-built ceiling instead of routing through createMoneyMeter (whose ceiling provably comes from the verified grant's signed spend_ceiling via spendCeilingFromGrant — spec/standing-delegation-v1.md §3.3 rule 2). Probe plants a production file under packages/runtime/src that calls evaluateBlastRadius with an inline literal ceiling; assertion 3 must fire with the route-through-createMoneyMeter repair. writeFixture-and-delete (no real file mutated).",
@@ -2955,6 +3013,16 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-credit-caller-allowlist",
     proves:
+      "resolves ALIASED credit calls — `import { creditAccount as topUp }` then `topUp(…)`. The old line regex matched only the literal `creditAccount(` / `.credit(` text, so renaming the import laundered a balance credit past the allowlist; the AST scan binds the alias and must flag the call. writeFixture-and-delete (no real file mutated).",
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}credit_alias.ts`,
+        'import { creditAccount as topUp } from "./accounts.js";\nexport const probe = (db: never): void => {\n  topUp(db, "m", 1, "deposit", null, "x");\n};\n',
+      ),
+  },
+  {
+    script: "check-credit-caller-allowlist",
+    proves:
       "flags a balance-credit call site reintroduced outside the verified-funding allowlist — the treasury-drain shape (crediting spendable/withdrawable balance from an unreviewed, potentially client-supplied source, as the deleted /deposit route did). Probe injects a `creditAccount(...)` call into budget.ts (a non-allowlisted module); the gate must flag it. byte-identical restoration on cleanup.",
     perturb: () =>
       mutateFile(`services/relay/src/budget.ts`, (src) =>
@@ -3092,6 +3160,16 @@ export async function probeFetch(): Promise<unknown> {
         }
         return src.replace(anchor, 'const token = await this.createSyncToken("task:submit");');
       }),
+  },
+  {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      'flags a SQL write whose table name is interpolated — `UPDATE ${LEDGER} SET …` with LEDGER = "relay_transactions". The R2 regexes see an interpolation as ` ? `, so a template-built ledger rewrite stayed green; the non-literal-table arm must fire. writeFixture-and-delete (no real file mutated).',
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}dynamic_table.ts`,
+        'const LEDGER = "relay_transactions";\nexport const probe = (db: { prepare(s: string): { run(): void } }): void => {\n  db.prepare(`UPDATE ${LEDGER} SET amount = 0`).run();\n};\n',
+      ),
   },
   {
     script: "check-allocation-money-chokepoint",
@@ -3234,6 +3312,22 @@ export function probeForward(db: DatabaseDriver): void {
         }
         return src.replace(re, `$1$2.${Number(m[3]) + 1}.$4`);
       }),
+  },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
+      "checks the never-deployed PREMISE behind the LOCAL_OPERATOR_TOKEN allowlist entries, not just assumes it: apps/operator bakes the operator's relay master bearer into its bundle and is allowlisted only because it is never deployed. Planting `apps/operator/vercel.json` (one push from a public URL serving that bearer) stayed green before; the premise arm must fire. writeFixture-and-delete (no real file mutated).",
+    perturb: () => writeFixture(`apps/operator/vercel.json`, "{}\n"),
+  },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
+      "flags a deploy workflow referencing a local-only app — the second way the never-deployed premise of the LOCAL_OPERATOR_TOKEN allowlist breaks. The fixture workflow builds `@motebit/inspector` (package name, not path), which must be matched; the premise arm must fire. writeFixture-and-delete (no real file mutated).",
+    perturb: () =>
+      writeFixture(
+        `.github/workflows/${PROBE_PREFIX}deploy_inspector.yml`,
+        "name: probe\non: workflow_dispatch\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pnpm --filter @motebit/inspector build\n",
+      ),
   },
   {
     script: "check-no-secrets-in-client-bundles",

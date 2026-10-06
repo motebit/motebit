@@ -37,7 +37,22 @@ import {
   findGrantRevocation,
 } from "@motebit/crypto";
 
-export interface VerifiedGrant {
+// Phantom-type brand (the `SensitivityCleared<T>` pattern): the symbol is
+// `declare const`-only and never exported, so the ONLY way to obtain a
+// `VerifiedGrant` is the single `as VerifiedGrant` cast at the end of
+// `verifyGrantForTurn` below. An object literal shaped like a grant is a
+// compile error wherever a `VerifiedGrant` is required — the type-level
+// twin of `check-money-authority`'s single-producer scan. Zero runtime
+// representation: the value is the plain body.
+declare const __verifiedGrant: unique symbol;
+
+/**
+ * A standing-delegation grant that `verifyGrantForTurn` verified.
+ * Constructible only by that function (see the brand above).
+ */
+export type VerifiedGrant = VerifiedGrantBody & { readonly [__verifiedGrant]: true };
+
+export interface VerifiedGrantBody {
   grant_id: string;
   verified_at: number;
   /**
@@ -88,10 +103,12 @@ export async function verifyGrantForTurn(
   const tokenResult = await verifyTokenAgainstGrant(token, grant, { now, isRevoked });
   if (!tokenResult.valid) return null;
 
-  return {
+  const body: VerifiedGrantBody = {
     grant_id: grant.grant_id,
     verified_at: now,
     token_issued_at: token.issued_at,
     ...(grant.spend_ceiling !== undefined ? { spend_ceiling: grant.spend_ceiling } : {}),
   };
+  // The single authorized production site for the brand.
+  return body as VerifiedGrant;
 }

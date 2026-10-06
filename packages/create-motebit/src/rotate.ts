@@ -344,7 +344,7 @@ export class RotationFundsRefused extends Error {
 }
 
 /** Throws `RotationFundsRefused` unless the address is empty. */
-async function preflightRotationFunds(
+export async function preflightRotationFunds(
   publicKey: Uint8Array,
   read: WalletHoldingsReader,
 ): Promise<void> {

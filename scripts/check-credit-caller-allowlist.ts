@@ -22,19 +22,27 @@
  * ## Detection
  *
  *   1. Walk `services/relay/src/**\/*.ts`, excluding `__tests__/`.
- *   2. Flag every `creditAccount(` and `.credit(` CALL outside an allowlisted
- *      file. (`debitSpendable`/`debit` are not matched; the `.credit(`
- *      method-call form matches the raw store call.)
+ *   2. Parse each file with the TypeScript compiler API and flag, outside an
+ *      allowlisted file, every CALL of a credit function — `creditAccount(…)`,
+ *      `x.creditAccount(…)`, `x.credit(…)`, `x["credit"](…)` — AND every call
+ *      through a local ALIAS of one: `import { creditAccount as topUp }`,
+ *      `const topUp = creditAccount`, `const { credit: c } = store`,
+ *      `const c = store.credit.bind(store)`. A renamed re-export
+ *      (`export { creditAccount as topUp } from …`) and a credit function
+ *      escaping as a VALUE (`fns.forEach(creditAccount)`) are flagged too —
+ *      both launder the name past a call-site scan. (`debitSpendable`/`debit`
+ *      are not matched; the `.credit(` method form matches the raw store call.)
  *   3. Whole-file allow, like check-loops-supervised's owner shape — the
  *      allowlisted modules are legitimately credit-authorized.
  *   4. Exit 1 on any call from a non-allowlisted file.
  *
- * Static text parse — no execution. Doctrine: services/relay/CLAUDE.md
+ * Static AST parse — no execution. Doctrine: services/relay/CLAUDE.md
  * (money model, transmitter-surface-zero) + docs/doctrine/off-ramp-as-user-action.md.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import ts from "typescript";
 import { failWithRepair } from "./lib/gate-report.js";
 
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
@@ -90,26 +98,134 @@ function walk(dir: string): string[] {
 }
 
 /** A `creditAccount(` or `.credit(` call, ignoring comments and imports. */
-function isCreditCall(line: string): boolean {
-  const code = line.replace(/\/\/.*$/, "").trim();
-  if (code.startsWith("*") || code.startsWith("/*")) return false;
-  if (code.startsWith("import ") || code.startsWith("export {")) return false;
-  return /\bcreditAccount\s*\(/.test(code) || /\.credit\s*\(/.test(code);
+/** Names whose call credits a balance. */
+const CREDIT_NAMES = new Set(["creditAccount", "credit"]);
+
+function memberName(e: ts.Expression): string | null {
+  if (ts.isPropertyAccessExpression(e)) return e.name.text;
+  if (ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression)) {
+    return e.argumentExpression.text;
+  }
+  return null;
+}
+
+/** Is `e` a reference to a credit function (by name, member, alias, or `.bind`)? */
+function isCreditRef(e: ts.Expression, aliases: ReadonlySet<string>): boolean {
+  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e)) {
+    e = e.expression;
+  }
+  if (ts.isIdentifier(e)) return e.text === "creditAccount" || aliases.has(e.text);
+  const m = memberName(e);
+  if (m !== null && CREDIT_NAMES.has(m)) return true;
+  // `credit.bind(store)` / `creditAccount.call(…)` keeps the function.
+  if (
+    (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) &&
+    (m === "bind" || m === "call" || m === "apply")
+  ) {
+    return isCreditRef(e.expression, aliases);
+  }
+  if (ts.isCallExpression(e) && memberName(e.expression) === "bind") {
+    return isCreditRef((e.expression as ts.PropertyAccessExpression).expression, aliases);
+  }
+  return false;
+}
+
+/** Local names bound to a credit function in this file. */
+function collectAliases(sf: ts.SourceFile): Set<string> {
+  const aliases = new Set<string>();
+  let grew = true;
+  while (grew) {
+    grew = false;
+    const add = (name: string): void => {
+      if (!aliases.has(name)) {
+        aliases.add(name);
+        grew = true;
+      }
+    };
+    const visit = (n: ts.Node): void => {
+      if (ts.isImportSpecifier(n) && n.propertyName && CREDIT_NAMES.has(n.propertyName.text)) {
+        add(n.name.text);
+      }
+      if (ts.isVariableDeclaration(n) && n.initializer) {
+        if (ts.isIdentifier(n.name) && isCreditRef(n.initializer, aliases)) add(n.name.text);
+        if (ts.isObjectBindingPattern(n.name)) {
+          for (const el of n.name.elements) {
+            const key = el.propertyName ?? el.name;
+            if (ts.isIdentifier(key) && CREDIT_NAMES.has(key.text) && ts.isIdentifier(el.name)) {
+              add(el.name.text);
+            }
+          }
+        }
+      }
+      if (
+        ts.isBinaryExpression(n) &&
+        n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isIdentifier(n.left) &&
+        isCreditRef(n.right, aliases)
+      ) {
+        add(n.left.text);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  return aliases;
+}
+
+/** Every credit call (direct or aliased), renamed re-export, or value escape in `sf`. */
+function creditSites(sf: ts.SourceFile): { line: number; what: string }[] {
+  const aliases = collectAliases(sf);
+  const out: { line: number; what: string }[] = [];
+  const line = (n: ts.Node): number => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const text = (n: ts.Node): string => n.getText(sf).replace(/\s+/g, " ").slice(0, 100);
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n) && isCreditRef(n.expression, aliases)) {
+      const m = memberName(n.expression);
+      // `x.bind(…)` itself is not a credit; the call through its result is.
+      if (m !== "bind") out.push({ line: line(n), what: text(n) });
+    } else if (
+      ts.isExportSpecifier(n) &&
+      CREDIT_NAMES.has((n.propertyName ?? n.name).text) &&
+      n.propertyName != null &&
+      n.propertyName.text !== n.name.text
+    ) {
+      out.push({ line: line(n), what: `renamed re-export ${text(n)}` });
+    } else if (
+      ts.isIdentifier(n) &&
+      (n.text === "creditAccount" || aliases.has(n.text)) &&
+      isValueEscape(n)
+    ) {
+      out.push({ line: line(n), what: `credit function escapes as a value: ${text(n.parent)}` });
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** An identifier used as a value (argument, array/object element, return) — not a call, binding or import. */
+function isValueEscape(id: ts.Identifier): boolean {
+  const p = id.parent;
+  if (ts.isCallExpression(p)) return p.arguments.includes(id);
+  return (
+    ts.isArrayLiteralExpression(p) ||
+    ts.isShorthandPropertyAssignment(p) ||
+    (ts.isPropertyAssignment(p) && p.initializer === id) ||
+    ts.isReturnStatement(p)
+  );
 }
 
 function main(): void {
   const violations: string[] = [];
+  let scanned = 0;
 
   for (const file of walk(RELAY_SRC)) {
     const base = file.split("/").pop()!;
     if (ALLOWED_FILES.has(base)) continue;
     const rel = relative(REPO_ROOT, file);
-    const lines = readFileSync(file, "utf-8").split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      if (isCreditCall(lines[i]!)) {
-        violations.push(`${rel}:${i + 1} — ${lines[i]!.trim()}`);
-      }
-    }
+    const sf = ts.createSourceFile(file, readFileSync(file, "utf-8"), ts.ScriptTarget.Latest, true);
+    scanned++;
+    for (const site of creditSites(sf)) violations.push(`${rel}:${site.line} — ${site.what}`);
   }
 
   if (violations.length > 0) {
@@ -131,7 +247,9 @@ function main(): void {
 
   console.log(
     `check-credit-caller-allowlist: OK — every balance-credit call site is in a verified-funding ` +
-      `module (${ALLOWLIST.length} allowlisted).`,
+      `module (${ALLOWLIST.length} allowlisted); ${scanned} non-allowlisted relay source file(s) ` +
+      `parsed for direct, member, aliased (import-as / const / destructure / .bind) and ` +
+      `value-escaping credit references.`,
   );
 }
 

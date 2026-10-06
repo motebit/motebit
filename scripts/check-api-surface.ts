@@ -1,9 +1,9 @@
 /**
  * Public-API-surface drift gate for the permissive-floor packages.
  *
- * Motebit publishes `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk`
- * to npm as Apache-2.0 types + primitives that third parties will build against. Once
- * external developers depend on those packages, any silent breaking change —
+ * Motebit publishes `@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk`, and
+ * `@motebit/verifier` to npm as Apache-2.0 types + primitives that third
+ * parties will build against. Once external developers depend on those packages, any silent breaking change —
  * a renamed export, a tightened signature, a removed type — burns them
  * without warning. Semver is the social contract; enforcement turns it from
  * promise into guarantee.
@@ -47,6 +47,10 @@ const TRACKED: ReadonlyArray<TrackedPackage> = [
   { path: "packages/protocol", name: "@motebit/protocol", baseline: "etc/protocol.api.md" },
   { path: "packages/crypto", name: "@motebit/crypto", baseline: "etc/crypto.api.md" },
   { path: "packages/sdk", name: "@motebit/sdk", baseline: "etc/sdk.api.md" },
+  // The pinned verify API a repo-blind consumer (agency.computer) codes
+  // against — docs/doctrine/agency-proof-integration.md §2 names this gate as
+  // the guarantee, so the package must actually be tracked here.
+  { path: "packages/verifier", name: "@motebit/verifier", baseline: "etc/verifier.api.md" },
 ];
 
 /**

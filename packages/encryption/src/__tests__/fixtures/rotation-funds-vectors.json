@@ -1,0 +1,243 @@
+{
+  "$comment": "Shared parity vectors for the rotation-funds preflight. Run by BOTH @motebit/encryption `checkRotationFunds` (src/__tests__/rotation-funds-vectors.test.ts) and the zero-dep inlined sibling `preflightRotationFunds` in create-motebit (packages/create-motebit/src/__tests__/rotate-funds-parity.test.ts). Same input => same decision (clear | holds-value | unknown), same address, same holdings summary / read-failure reason. Amounts are base-unit decimal strings (bigint). `read` is either {holdings}, {throwsError: message} (reader throws an Error) or {throwsValue: value} (reader throws a non-Error string).",
+  "version": 1,
+  "vectors": [
+    {
+      "id": "empty-wallet-clear",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": { "holdings": { "solLamports": "0", "tokens": [] } },
+      "expected": { "kind": "clear", "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS" }
+    },
+    {
+      "id": "one-lamport-refuses",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": { "holdings": { "solLamports": "1", "tokens": [] } },
+      "expected": {
+        "kind": "holds-value",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "summary": "0.000000001 SOL"
+      }
+    },
+    {
+      "id": "exactly-one-sol-trims-fraction",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": { "holdings": { "solLamports": "1000000000", "tokens": [] } },
+      "expected": {
+        "kind": "holds-value",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "summary": "1 SOL"
+      }
+    },
+    {
+      "id": "negative-lamports-not-value",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": { "holdings": { "solLamports": "-1", "tokens": [] } },
+      "expected": { "kind": "clear", "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS" }
+    },
+    {
+      "id": "zero-amount-token-account-skipped",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": {
+        "holdings": {
+          "solLamports": "0",
+          "tokens": [
+            {
+              "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              "amount": "0",
+              "decimals": 6
+            },
+            { "mint": "UnknownMint1111111111111111111111111111111", "amount": "0", "decimals": 0 }
+          ]
+        }
+      },
+      "expected": { "kind": "clear", "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS" }
+    },
+    {
+      "id": "negative-token-amount-skipped",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": {
+        "holdings": {
+          "solLamports": "0",
+          "tokens": [
+            {
+              "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              "amount": "-5",
+              "decimals": 6
+            }
+          ]
+        }
+      },
+      "expected": { "kind": "clear", "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS" }
+    },
+    {
+      "id": "one-base-unit-usdc-refuses",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": {
+        "holdings": {
+          "solLamports": "0",
+          "tokens": [
+            { "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "amount": "1", "decimals": 6 }
+          ]
+        }
+      },
+      "expected": {
+        "kind": "holds-value",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "summary": "0.000001 USDC"
+      }
+    },
+    {
+      "id": "devnet-usdc-symbol",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": {
+        "holdings": {
+          "solLamports": "0",
+          "tokens": [
+            {
+              "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+              "amount": "12500000",
+              "decimals": 6
+            }
+          ]
+        }
+      },
+      "expected": {
+        "kind": "holds-value",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "summary": "12.5 USDC (devnet)"
+      }
+    },
+    {
+      "id": "unknown-mint-zero-decimals",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": {
+        "holdings": {
+          "solLamports": "0",
+          "tokens": [
+            {
+              "mint": "UnknownMint1111111111111111111111111111111",
+              "amount": "1000",
+              "decimals": 0
+            }
+          ]
+        }
+      },
+      "expected": {
+        "kind": "holds-value",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "summary": "1000 of token UnknownMint1111111111111111111111111111111"
+      }
+    },
+    {
+      "id": "negative-decimals-render-raw",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": {
+        "holdings": {
+          "solLamports": "0",
+          "tokens": [
+            { "mint": "UnknownMint1111111111111111111111111111111", "amount": "42", "decimals": -3 }
+          ]
+        }
+      },
+      "expected": {
+        "kind": "holds-value",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "summary": "42 of token UnknownMint1111111111111111111111111111111"
+      }
+    },
+    {
+      "id": "beyond-float-precision-amount",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": {
+        "holdings": {
+          "solLamports": "9007199254740993",
+          "tokens": []
+        }
+      },
+      "expected": {
+        "kind": "holds-value",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "summary": "9007199.254740993 SOL"
+      }
+    },
+    {
+      "id": "mixed-holdings-order-and-skips",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": {
+        "holdings": {
+          "solLamports": "1500000000",
+          "tokens": [
+            {
+              "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              "amount": "12500000",
+              "decimals": 6
+            },
+            { "mint": "ZeroMint11111111111111111111111111111111111", "amount": "0", "decimals": 9 },
+            { "mint": "UnknownMint1111111111111111111111111111111", "amount": "3", "decimals": 0 }
+          ]
+        }
+      },
+      "expected": {
+        "kind": "holds-value",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "summary": "1.5 SOL, 12.5 USDC, 3 of token UnknownMint1111111111111111111111111111111"
+      }
+    },
+    {
+      "id": "reader-throws-error-fail-closed",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": { "throwsError": "fetch failed: ECONNREFUSED" },
+      "expected": {
+        "kind": "unknown",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "reason": "fetch failed: ECONNREFUSED"
+      }
+    },
+    {
+      "id": "reader-throws-error-empty-message",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": { "throwsError": "" },
+      "expected": {
+        "kind": "unknown",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "reason": ""
+      }
+    },
+    {
+      "id": "reader-throws-non-error-fail-closed",
+      "publicKeyHex": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": { "throwsValue": "rate limited" },
+      "expected": {
+        "kind": "unknown",
+        "address": "4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS",
+        "reason": "rate limited"
+      }
+    },
+    {
+      "id": "leading-zero-byte-address",
+      "publicKeyHex": "006a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": { "holdings": { "solLamports": "0", "tokens": [] } },
+      "expected": { "kind": "clear", "address": "12ctHWiVawToqyJ6r6ZpcNKRAvf1RZ9ZuSdJzGVVN7j6" }
+    },
+    {
+      "id": "two-leading-zero-bytes-address-refuses",
+      "publicKeyHex": "000027bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "read": { "holdings": { "solLamports": "2", "tokens": [] } },
+      "expected": {
+        "kind": "holds-value",
+        "address": "118xpGuqj5x5GfgYScwZSoHR6qubnamD8y6Gj5GnwvQ",
+        "summary": "0.000000002 SOL"
+      }
+    },
+    {
+      "id": "all-zero-key-address",
+      "publicKeyHex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "read": { "throwsError": "timeout" },
+      "expected": {
+        "kind": "unknown",
+        "address": "11111111111111111111111111111111",
+        "reason": "timeout"
+      }
+    }
+  ]
+}

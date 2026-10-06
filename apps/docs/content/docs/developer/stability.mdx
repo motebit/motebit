@@ -30,7 +30,7 @@ The full published list and the protocol/package boundary live in [Public surfac
 
 You don't have to take motebit's word for it — the stability is mechanical:
 
-- **`check-api-surface`** pins the exported type surface of `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk` to committed api-extractor baselines (`packages/{protocol,crypto,sdk}/etc/*.api.md`); the other published packages are covered by their own conformance fixtures and semver review, not by an extracted baseline. Any change to an exported signature **fails CI** unless a `major` changeset ships with it. A breaking change *cannot* be released as a patch.
+- **`check-api-surface`** pins the exported type surface of `@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk`, and `@motebit/verifier` to committed api-extractor baselines (`packages/{protocol,crypto,sdk,verifier}/etc/*.api.md`); the other published packages are covered by their own conformance fixtures and semver review, not by an extracted baseline. Any change to an exported signature **fails CI** unless a `major` changeset ships with it. A breaking change *cannot* be released as a patch.
 - **`check-cli-surface`** locks the `motebit` CLI's subcommands, top-level flags, exit codes, and `~/.motebit/` layout the same way. Relay HTTP routes are documented per spec (`check-spec-routes`) but are not part of this gate.
 
 These are drift gates that break the build — the same discipline that keeps the docs honest keeps the API honest.

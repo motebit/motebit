@@ -3189,7 +3189,7 @@ export class MotebitRuntime {
        * always require live approval. Doctrine:
        * `docs/doctrine/memory-never-confers-authority.md`.
        */
-      verifiedGrant?: NonNullable<import("@motebit/protocol").TurnContext["verifiedGrant"]>;
+      verifiedGrant?: import("./grant-verifier.js").VerifiedGrant;
       /**
        * Standing-delegation PRESENTATION — the ingress callers actually
        * use: present the signed ARTIFACTS (per-tick token + grant +
