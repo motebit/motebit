@@ -3037,6 +3037,19 @@ export {
 } from "./routing-transcript.js";
 export type { VerifyRoutingTranscriptResult } from "./routing-transcript.js";
 export {
+  signSyncHoldReceipt,
+  verifySyncHoldReceipt,
+  computeSyncEventDigest,
+  computeSyncEventDigestSync,
+  SYNC_HOLD_RECEIPT_SUITE,
+  SYNC_HOLD_RECEIPT_SPEC_MIRROR,
+} from "./sync-hold-receipt.js";
+export type {
+  VerifySyncHoldReceiptResult,
+  VerifySyncHoldReceiptExpectations,
+  SyncDigestHash,
+} from "./sync-hold-receipt.js";
+export {
   computeCredentialLeaf,
   verifyCredentialAnchor,
   verifyRevocationAnchor,

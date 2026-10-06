@@ -64,6 +64,7 @@ import type { SkillSignature } from '@motebit/protocol';
 import type { StandingDelegation } from '@motebit/protocol';
 import type { SubjectBindingV1 } from '@motebit/protocol';
 import type { SuiteId } from '@motebit/protocol';
+import type { SyncHoldReceipt } from '@motebit/protocol';
 import type { TemporalBasis } from '@motebit/protocol';
 import type { VerdictSubject } from '@motebit/protocol';
 import type { VerificationVerdict } from '@motebit/protocol';
@@ -250,6 +251,12 @@ export function computeFederationSettlementLeaf(settlement: Record<string, unkno
 
 // @public
 export const COMPUTER_SESSION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export function computeSyncEventDigest(entry: unknown): Promise<string>;
+
+// @public
+export function computeSyncEventDigestSync(entry: unknown, hash?: SyncDigestHash): string;
 
 // @public
 export const CONSOLIDATION_MUTATION_MANIFEST_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -1722,6 +1729,9 @@ export function signSovereignPaymentReceipt(input: SovereignPaymentReceiptInput,
 export function signStandingDelegation(grant: Omit<StandingDelegation, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<StandingDelegation>;
 
 // @public
+export function signSyncHoldReceipt(body: Omit<SyncHoldReceipt, "signature" | "suite">, relayPrivateKey: Uint8Array): Promise<SyncHoldReceipt>;
+
+// @public
 export function signToolInvocationReceipt<T extends Omit<SignableToolInvocationReceipt, "signature" | "suite">>(receipt: T, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<T & {
     suite: typeof TOOL_INVOCATION_RECEIPT_SUITE;
     signature: string;
@@ -1859,6 +1869,15 @@ export interface SuccessionRecord {
     // (undocumented)
     timestamp: number;
 }
+
+// @public
+export const SYNC_HOLD_RECEIPT_SPEC_MIRROR: "motebit/sync-hold-receipt@1.0";
+
+// @public
+export const SYNC_HOLD_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export type SyncDigestHash = (bytes: Uint8Array) => Uint8Array;
 
 export { TemporalBasis }
 
@@ -2282,6 +2301,23 @@ export function verifySubjectBinding(binding: SubjectBindingV1, artifact: {
 
 // @public
 export function verifySuccessionChain(chain: KeySuccessionRecord[], guardianPublicKeyHex?: string): Promise<SuccessionChainResult>;
+
+// @public
+export function verifySyncHoldReceipt(receipt: SyncHoldReceipt, expected: VerifySyncHoldReceiptExpectations): Promise<VerifySyncHoldReceiptResult>;
+
+// @public
+export interface VerifySyncHoldReceiptExpectations {
+    readonly expectedMotebitId: string;
+    readonly expectedNonce: string;
+    readonly expectedPublicKey: string;
+}
+
+// @public
+export interface VerifySyncHoldReceiptResult {
+    readonly reason?: "missing_expectation" | "unsupported_suite" | "unsupported_spec" | "malformed_receipt" | "page_mismatch" | "motebit_id_mismatch" | "public_key_mismatch" | "nonce_mismatch" | "malformed_public_key" | "malformed_signature" | "signature_invalid";
+    // (undocumented)
+    readonly valid: boolean;
+}
 
 // @public
 export function verifyTokenAgainstGrant(token: DelegationToken, grant: StandingDelegation, options?: {

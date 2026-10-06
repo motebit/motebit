@@ -26,6 +26,8 @@ import type { TaskQueueEntry } from "./tasks.js";
 import type { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
 import { sendToEach, WS_OPEN } from "./ws-send.js";
+import { readHeldEvents, tryHoldReceipt } from "./sync-hold-receipt.js";
+import type { RelayIdentity } from "./federation.js";
 import { recoverableOnReconnect } from "./task-presentation.js";
 import { TaskClaims } from "./task-claim.js";
 import {
@@ -422,6 +424,12 @@ export interface WebSocketDeps {
    * `connections`, with the peer as it was.
    */
   onPeerClosed?: (motebitId: string, peer: ConnectedDevice) => void;
+  /**
+   * Signs the `hold_receipt` on every push `ack` (`sync-hold-receipt.ts`).
+   * The relay server always passes it; a hand-built test fixture without it
+   * gets the unchanged ack.
+   */
+  relayIdentity?: RelayIdentity;
   /** When true, new WebSocket upgrades are rejected with close code 1001. */
   isDraining?: () => boolean;
   /**
@@ -832,6 +840,8 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               capabilities?: string[];
               /** A push frame's own id, echoed in its ack (#914; additive). */
               push_id?: unknown;
+              /** A push frame's client nonce, echoed in its ack's hold receipt (additive). */
+              nonce?: unknown;
             };
 
             // Post-connect auth frame: client sends { type: "auth", token: "..." }
@@ -959,7 +969,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               // unredacted (the previous fan-out below sent raw entries).
               const safeEvents = redactSensitiveEvents(msg.events);
               let wsAccepted = 0;
-              for (const entry of safeEvents) {
+              for (const [i, entry] of safeEvents.entries()) {
                 // Receipt idempotency: skip events with duplicate receipt signatures
                 const receipt = entry.payload?.receipt as Record<string, unknown> | undefined;
                 if (receipt && typeof receipt.signature === "string" && receipt.signature !== "") {
@@ -970,7 +980,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                   });
                   if (isDuplicate) continue;
                 }
-                if (!(await appendBoundEvent(eventStore, owner, entry))) continue;
+                // The redactor returns an entry it left alone by identity; the
+                // flag is stored with the row (the hold receipt reads it back).
+                if (!appendBoundEvent(db, owner, entry, entry !== msg.events[i])) continue;
                 wsAccepted++;
                 // Deletion propagation — per-event best-effort on the WS
                 // path (a dropped propagation here is recovered by the
@@ -988,6 +1000,24 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                 }
               }
 
+              // The hold receipt names what the relay STORES among this
+              // frame's ids, read back after the writes — never the frame (a
+              // skipped duplicate or unbound entry is listed only if its id is
+              // genuinely held). Additive, like `push_id`, and best-effort: on
+              // any failure the ack is exactly main's.
+              const hold_receipt = await tryHoldReceipt({
+                relay: deps.relayIdentity,
+                door: "ws_push",
+                motebitId,
+                nonce: msg.nonce,
+                held: () =>
+                  readHeldEvents(
+                    db,
+                    owner,
+                    safeEvents.map((e) => e.event_id),
+                  ),
+              });
+
               // Acknowledge. A frame that names itself (`push_id`) has its id
               // echoed, so a client may keep several frames in flight and
               // credit each ack to its own frame (#914). Additive: a frame
@@ -999,6 +1029,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                   ...(typeof msg.push_id === "string" && msg.push_id.length <= 64
                     ? { push_id: msg.push_id }
                     : {}),
+                  ...(hold_receipt !== undefined ? { hold_receipt } : {}),
                 }),
               );
 

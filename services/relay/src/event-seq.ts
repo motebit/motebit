@@ -112,7 +112,8 @@ export interface SeqPullBody {
   latest_seq: number;
 }
 
-interface SeqRow {
+/** One `events` row as the relay stores it, with its seq. */
+export interface SeqRow {
   seq: number;
   event_id: string;
   motebit_id: string;
@@ -122,6 +123,25 @@ interface SeqRow {
   version_clock: number;
   timestamp: number;
   tombstoned: number;
+  /**
+   * Whether the relay's INGRESS redaction changed this entry before the write
+   * that stored it (migration v56; written in the same INSERT by
+   * `appendBoundEvent`): 1 / 0, or `null` for a row stored before the column
+   * existed or by a writer that does not redact. Never served — it feeds the
+   * hold receipt's `redacted` flag only (`sync-hold-receipt.ts`).
+   */
+  relay_ingress_redacted: number | null;
+}
+
+/**
+ * A page row with its stored projection and the entry served for it (the
+ * hold receipt's input). `served === stored` exactly when egress redaction
+ * left the entry alone.
+ */
+export interface ServedRow {
+  row: SeqRow;
+  stored: EventLogEntry;
+  served: EventLogEntry;
 }
 
 /**
@@ -138,21 +158,24 @@ export function parseSeqCursor(raw: string | undefined): number | null | undefin
 /**
  * Read the bound identity's events after `afterSeq`, in seq order, redacted
  * exactly as the clock pull redacts them. One snapshot: the page and
- * `latest_seq` are read in one transaction.
+ * `latest_seq` are read in one transaction. `served` pairs each stored row
+ * with the entry served for it — the hold receipt's input
+ * (`sync-hold-receipt.ts`), from the SAME snapshot, so the receipt describes
+ * exactly the page it is served beside.
  */
 export function readEventsAfterSeq(
   db: DatabaseDriver,
   owner: BoundIdentity,
   afterSeq: number,
   limit: number = EVENT_SEQ_PAGE_MAX,
-): SeqPullBody {
+): { body: SeqPullBody; served: ServedRow[] } {
   const motebitId = unwrapBound(owner);
   const pageSize = Math.max(1, Math.min(limit, EVENT_SEQ_PAGE_MAX));
   const { rows, latest } = db.transaction(() => {
     const page = db
       .prepare(
         `SELECT s.seq AS seq, e.event_id, e.motebit_id, e.device_id, e.event_type, e.payload,
-                e.version_clock, e.timestamp, e.tombstoned
+                e.version_clock, e.timestamp, e.tombstoned, e.relay_ingress_redacted
            FROM relay_event_seq s
            JOIN events e ON e.event_id = s.event_id
           WHERE s.motebit_id = ? AND e.motebit_id = ? AND s.seq > ?
@@ -174,24 +197,30 @@ export function readEventsAfterSeq(
   // one row at a time so each entry keeps its own seq whatever the redactor
   // does to the list.
   const events: SequencedEvent[] = [];
+  const served: ServedRow[] = [];
   for (const row of pageRows) {
-    for (const event of redactSensitiveEvents([rowToEvent(row)])) {
+    const stored = rowToEvent(row);
+    for (const event of redactSensitiveEvents([stored])) {
       events.push({ ...event, seq: row.seq });
+      served.push({ row, stored, served: event });
     }
   }
   const nextSeq = pageRows.length > 0 ? pageRows[pageRows.length - 1]!.seq : afterSeq;
   return {
-    motebit_id: motebitId,
-    events,
-    after_seq: afterSeq,
-    next_seq: nextSeq,
-    has_more: hasMore,
-    latest_seq: latest,
+    body: {
+      motebit_id: motebitId,
+      events,
+      after_seq: afterSeq,
+      next_seq: nextSeq,
+      has_more: hasMore,
+      latest_seq: latest,
+    },
+    served,
   };
 }
 
 /** The same projection `@motebit/persistence`'s `SqliteEventStore` applies (pinned by test). */
-function rowToEvent(row: SeqRow): EventLogEntry {
+export function rowToEvent(row: SeqRow): EventLogEntry {
   const entry: EventLogEntry = {
     event_id: row.event_id,
     motebit_id: row.motebit_id,
