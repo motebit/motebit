@@ -2672,6 +2672,28 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-money-authority",
+    proves:
+      "flags the R4 standing-authority block NEUTRALIZED in place — `if (false && profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null)`. The condition text is still present, so the old substring marker stayed green while a grantless R4 call under a permissive band auto-executed money; assertion 1 now matches the whole statement (`if (` + condition + `{ needsApproval = true; }`) and must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/policy/src/policy-gate.ts`, (src) =>
+        src.replace(
+          "if (profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null) {",
+          "if (false && profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null) {",
+        ),
+      ),
+  },
+  {
+    script: "check-money-authority",
+    proves:
+      "flags an ASSIGNMENT-form verifiedGrant producer outside the audited producer — `ctx.verifiedGrant = { grant_id, verified_at }`. The old scan matched only the object-literal property form (`verifiedGrant: {`), so minting authority by assignment stayed green; assertion 3 must fire. writeFixture-and-delete (no real file mutated).",
+    perturb: () =>
+      writeFixture(
+        `packages/runtime/src/${PROBE_PREFIX}grant_assign.ts`,
+        'export function probe(ctx: { verifiedGrant?: unknown }): void {\n  ctx.verifiedGrant = { grant_id: "g", verified_at: 0 };\n}\n',
+      ),
+  },
+  {
     script: "check-ceiling-from-grant",
     proves:
       "flags an unsanctioned blast-radius enforcement call site — the drift class where a new consumer calls evaluateBlastRadius/tryConsume directly with a config-sourced or hand-built ceiling instead of routing through createMoneyMeter (whose ceiling provably comes from the verified grant's signed spend_ceiling via spendCeilingFromGrant — spec/standing-delegation-v1.md §3.3 rule 2). Probe plants a production file under packages/runtime/src that calls evaluateBlastRadius with an inline literal ceiling; assertion 3 must fire with the route-through-createMoneyMeter repair. writeFixture-and-delete (no real file mutated).",
