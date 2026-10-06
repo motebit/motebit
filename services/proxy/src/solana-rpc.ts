@@ -102,8 +102,19 @@ export interface RateLimiter {
   readonly kind: "shared" | "memory";
 }
 
+/**
+ * The env keys the handler reads — closed, so a new key is a type error until
+ * the route supplies it (as a literal-key `process.env.<NAME>` read).
+ */
+export interface SolanaRpcEnv {
+  SOLANA_RPC_ALLOWED_ORIGINS?: string | undefined;
+  SOLANA_RPC_GLOBAL_PER_MINUTE?: string | undefined;
+  SOLANA_RPC_UPSTREAM_URL?: string | undefined;
+  VERCEL_ENV?: string | undefined;
+}
+
 export interface SolanaRpcDeps {
-  env: Record<string, string | undefined>;
+  env: SolanaRpcEnv;
   fetch: typeof fetch;
   limiter: RateLimiter;
   log: (line: string) => void;
@@ -136,7 +147,7 @@ export function createMemoryRateLimiter(maxKeys = 10_000): RateLimiter {
 }
 
 /** The global upstream budget per minute from env (invalid ⇒ the default). */
-export function globalBudget(env: Record<string, string | undefined>): number {
+export function globalBudget(env: SolanaRpcEnv): number {
   const raw = env.SOLANA_RPC_GLOBAL_PER_MINUTE?.trim() ?? "";
   if (!/^[1-9][0-9]{0,8}$/.test(raw)) return SOLANA_RPC_GLOBAL_PER_MINUTE_DEFAULT;
   return Number(raw);
@@ -172,7 +183,7 @@ export function scrubUpstream(text: string, upstream: string): string {
   return out;
 }
 
-function allowedOrigins(env: Record<string, string | undefined>): Set<string> {
+function allowedOrigins(env: SolanaRpcEnv): Set<string> {
   const extra = (env.SOLANA_RPC_ALLOWED_ORIGINS ?? "")
     .split(",")
     .map((s) => s.trim())

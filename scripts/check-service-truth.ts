@@ -58,12 +58,18 @@
  *       (d) env discipline, EVERY service, by TypeScript AST of every non-test
  *           source under src/: MOTEBIT_UNIT_COST is named nowhere in code
  *           (identifier, property key, string or template literal — comments
- *           are not code), and nothing writes process.env (assignment of any
- *           operator incl. `??=`/`||=`, `++`/`--`, `delete`,
- *           `Object.assign`/`defineProperty`/`Reflect.set` on it). Cold review
- *           R6 (2026-10-05): `process.env["MOTEBIT_UNIT_COST"] ??= "0.30"` at
- *           the top of main() (or in a helper) stayed green while research
- *           listed $0.30 against the $0.25 its pricing.ts and docs state.
+ *           are not code), and env access is DENY-BY-DEFAULT: the only
+ *           permitted use of `process.env` is a direct literal-key READ,
+ *           `process.env.NAME` / `process.env["NAME"]` (also via
+ *           `globalThis.process`). Every other handle — process or
+ *           process.env as a value (aliased, passed, spread, destructured),
+ *           a computed-key read, any write, `env`/namespace/aliased default
+ *           imported from "process"/"node:process" or that module required,
+ *           `loadEnvFile`, an env-file loader package (dotenv, …) — is red.
+ *           Cold review R6 (2026-10-05) found `process.env["MOTEBIT_UNIT_COST"]
+ *           ??= "0.30"`; the review after R7 found the same write through
+ *           `loadEnvFile`, `import { env }`, an alias and a destructure —
+ *           matching spellings never ends, refusing every handle does.
  *
  *   THREAT MODEL — what a green run claims, and what it cannot. This gate
  *   guards ACCIDENTAL drift between the price/unit/role the docs state and the
@@ -616,80 +622,224 @@ export function checkNonMarket(root: string, name: string, violations: string[])
 /** The operator override the runner alone reads (packages/molecule-runner/src/listing-price.ts). */
 export const OVERRIDE_KEY = "MOTEBIT_UNIT_COST";
 
-/** Is `e` `process.env` (also `process["env"]`, `globalThis.process.env`)? */
-function isProcessEnv(e: ts.Expression): boolean {
-  e = unwrap(e);
-  const key = ts.isPropertyAccessExpression(e)
-    ? e.name.text
-    : ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression)
-      ? e.argumentExpression.text
-      : null;
-  if (key !== "env") return false;
-  const obj = unwrap((e as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression);
+/** The module specifiers through which Node exposes `process`. */
+const PROCESS_MODULES = new Set(["process", "node:process"]);
+
+/**
+ * A package that loads a `.env` file into process.env (dotenv, dotenv/config,
+ * @dotenvx/dotenvx, env-cmd, …): any bare (non-relative) specifier whose
+ * package name mentions `env`.
+ */
+function isEnvLoader(spec: string): boolean {
+  if (spec.startsWith(".") || spec.startsWith("/") || spec.startsWith("node:")) return false;
+  const parts = spec.split("/");
+  const pkg = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
+  return /env/i.test(pkg);
+}
+
+/** The literal key of a member access (`a.k`, `a["k"]`), or null when computed. */
+function memberKey(e: ts.Node): string | null {
+  if (ts.isPropertyAccessExpression(e)) return e.name.text;
+  if (ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression))
+    return e.argumentExpression.text;
+  return null;
+}
+
+/** Climb `( … )`, `as T`, `satisfies T` and `!` wrappers from `n` to the node that uses it. */
+function outerOf(n: ts.Expression): ts.Expression {
+  let e = n;
+  while (
+    ts.isParenthesizedExpression(e.parent) ||
+    ts.isAsExpression(e.parent) ||
+    ts.isSatisfiesExpression(e.parent) ||
+    ts.isNonNullExpression(e.parent) ||
+    ts.isTypeAssertionExpression(e.parent)
+  )
+    e = e.parent;
+  return e;
+}
+
+/** Is `e` the object of a member access on its parent (`e.k` / `e[k]`)? */
+function isObjectOf(e: ts.Expression): boolean {
+  const p = e.parent;
   return (
-    (ts.isIdentifier(obj) && obj.text === "process") ||
-    (ts.isPropertyAccessExpression(obj) &&
-      obj.name.text === "process" &&
-      ts.isIdentifier(obj.expression) &&
-      obj.expression.text === "globalThis")
+    (ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === e
   );
 }
 
-/** Is `e` `process.env` or one of its members — an assignment target that writes the env? */
-function targetsEnv(e: ts.Expression): boolean {
-  e = unwrap(e);
-  return (
-    isProcessEnv(e) ||
-    ((ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) &&
-      isProcessEnv(e.expression))
-  );
-}
-
-/** `Object.*` / `Reflect.*` calls that mutate their first argument. */
-const MUTATORS: Record<string, readonly string[]> = {
-  Object: ["assign", "defineProperty", "defineProperties", "setPrototypeOf"],
-  Reflect: ["set", "defineProperty", "deleteProperty", "setPrototypeOf"],
-};
-
-/** How `n` writes process.env, or null when it does not. */
-function envWrite(sf: ts.SourceFile, n: ts.Node): string | null {
+/** Is `e` (already climbed by outerOf) written: assigned, ++/--, deleted, or a destructuring target? */
+function isWritten(e: ts.Expression): boolean {
+  const p = e.parent;
   if (
-    ts.isBinaryExpression(n) &&
-    n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-    n.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
-    targetsEnv(n.left)
+    ts.isBinaryExpression(p) &&
+    p.left === e &&
+    p.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+    p.operatorToken.kind <= ts.SyntaxKind.LastAssignment
   )
-    return `\`${n.left.getText(sf)} ${n.operatorToken.getText(sf)} …\``;
+    return true;
   if (
-    (ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) &&
-    (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken) &&
-    targetsEnv(n.operand)
+    (ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) &&
+    (p.operator === ts.SyntaxKind.PlusPlusToken || p.operator === ts.SyntaxKind.MinusMinusToken)
   )
-    return `\`${n.getText(sf)}\``;
-  if (ts.isDeleteExpression(n) && targetsEnv(n.expression)) return `\`${n.getText(sf)}\``;
-  if (ts.isCallExpression(n) && n.arguments[0] != null && isProcessEnv(n.arguments[0])) {
-    const c = unwrap(n.expression);
+    return true;
+  if (ts.isDeleteExpression(p)) return true;
+  if ((ts.isForInStatement(p) || ts.isForOfStatement(p)) && p.initializer === e) return true;
+  // `[a.b] = …`, `({ k: a.b } = …)`, `({ ...a.b } = …)`: climb the literal to its assignment.
+  let n: ts.Node = e;
+  for (;;) {
+    const q = n.parent;
     if (
-      ts.isPropertyAccessExpression(c) &&
-      ts.isIdentifier(c.expression) &&
-      (MUTATORS[c.expression.text] ?? []).includes(c.name.text)
-    )
-      return `\`${c.getText(sf)}(${n.arguments[0].getText(sf)}, …)\``;
+      ts.isArrayLiteralExpression(q) ||
+      ts.isSpreadElement(q) ||
+      ts.isSpreadAssignment(q) ||
+      ts.isShorthandPropertyAssignment(q) ||
+      (ts.isPropertyAssignment(q) && q.initializer === n) ||
+      ts.isObjectLiteralExpression(q) ||
+      ts.isParenthesizedExpression(q)
+    ) {
+      n = q;
+      continue;
+    }
+    if (n === e) return false;
+    return (
+      (ts.isBinaryExpression(q) &&
+        q.left === n &&
+        q.operatorToken.kind === ts.SyntaxKind.EqualsToken) ||
+      ((ts.isForInStatement(q) || ts.isForOfStatement(q)) && q.initializer === n)
+    );
   }
+}
+
+/**
+ * The `process` object this identifier denotes, climbed to its outermost
+ * spelling (`process`, `globalThis.process`, `global["process"]`), or null
+ * when the identifier is not a use of the process object.
+ */
+function processRef(id: ts.Identifier): ts.Expression | null {
+  const p = id.parent;
+  if (id.text === "process") {
+    // a property name (`x.process`, `{ process: … }`), a declaration's name, or an import binding is not a use
+    if (ts.isPropertyAccessExpression(p) && p.name === id) {
+      const o = unwrap(p.expression);
+      return ts.isIdentifier(o) && (o.text === "globalThis" || o.text === "global") ? p : null;
+    }
+    if (isBinding(id) || ts.isPropertyAssignment(p) || ts.isPropertySignature(p)) return null;
+    if (ts.isQualifiedName(p) || ts.isTypeReferenceNode(p) || ts.isTypeQueryNode(p)) return null;
+    return id;
+  }
+  if (id.text === "globalThis" || id.text === "global") {
+    const o = outerOf(id);
+    if (
+      ts.isElementAccessExpression(o.parent) &&
+      o.parent.expression === o &&
+      memberKey(o.parent) === "process"
+    )
+      return o.parent;
+  }
+  return null;
+}
+
+/**
+ * Deny-by-default env access, one source file: how each node reads or writes
+ * the environment other than a direct literal-key READ of process.env.
+ */
+function envAccess(sf: ts.SourceFile, n: ts.Node): string | null {
+  // imports / requires of the process module, and env-file loader packages
+  if (
+    (ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) &&
+    n.moduleSpecifier != null &&
+    ts.isStringLiteral(n.moduleSpecifier)
+  ) {
+    const spec = n.moduleSpecifier.text;
+    if (isEnvLoader(spec))
+      return `imports "${spec}" — a package that loads env files into process.env`;
+    if (!PROCESS_MODULES.has(spec)) return null;
+    if (ts.isExportDeclaration(n)) return `re-exports "${spec}"`;
+    const c = n.importClause;
+    if (c == null || c.isTypeOnly) return null;
+    const nb = c.namedBindings;
+    if (nb != null && ts.isNamespaceImport(nb))
+      return `\`import * as ${nb.name.text} from "${spec}"\` — a second name for process`;
+    if (nb != null && ts.isNamedImports(nb))
+      for (const el of nb.elements) {
+        if (el.isTypeOnly) continue;
+        const imported = (el.propertyName ?? el.name).text;
+        if (imported === "env" || imported === "default" || imported === "loadEnvFile")
+          return `\`import { ${el.getText(sf)} } from "${spec}"\` — env reached through an import`;
+      }
+    if (c.name != null && c.name.text !== "process")
+      return `\`import ${c.name.text} from "${spec}"\` — a second name for process`;
+    return null;
+  }
+  if (
+    ts.isCallExpression(n) &&
+    (n.expression.kind === ts.SyntaxKind.ImportKeyword ||
+      (ts.isIdentifier(n.expression) && n.expression.text === "require")) &&
+    n.arguments[0] != null &&
+    ts.isStringLiteralLike(n.arguments[0])
+  ) {
+    const spec = n.arguments[0].text;
+    if (PROCESS_MODULES.has(spec))
+      return `\`${n.getText(sf).slice(0, 60)}\` — a second name for process`;
+    if (isEnvLoader(spec))
+      return `\`${n.getText(sf).slice(0, 60)}\` — a package that loads env files into process.env`;
+    return null;
+  }
+  if ((ts.isIdentifier(n) || ts.isStringLiteralLike(n)) && n.text === "loadEnvFile")
+    return "names `loadEnvFile` — it loads a .env file into process.env";
+  // `{ process } = globalThis` / `const { process: p } = global`
+  if (
+    ts.isBindingElement(n) &&
+    ((n.propertyName ?? n.name) as ts.Node).getText(sf).replace(/["']/g, "") === "process" &&
+    ts.isObjectBindingPattern(n.parent)
+  )
+    return `destructures \`process\` (\`${n.parent.parent.getText(sf).slice(0, 60)}\`)`;
+  if (!ts.isIdentifier(n)) return null;
+  const ref = processRef(n);
+  if (ref == null) return null;
+  const p = outerOf(ref);
+  if (!isObjectOf(p)) {
+    if (ts.isTypeOfExpression(p.parent)) return null; // `typeof process` is a feature test
+    return `\`${p.parent.getText(sf).slice(0, 60)}\` uses process as a value (aliased, passed, spread or destructured)`;
+  }
+  const access = p.parent as ts.PropertyAccessExpression | ts.ElementAccessExpression;
+  const key = memberKey(access);
+  if (key !== "env") return null; // process.exit, process.argv, …; a computed key is out of scope
+  const env = outerOf(access);
+  if (!isObjectOf(env))
+    return `\`${env.parent.getText(sf).slice(0, 60)}\` uses process.env as a value (aliased, passed, spread, destructured or written)`;
+  const member = env.parent as ts.PropertyAccessExpression | ts.ElementAccessExpression;
+  if (memberKey(member) == null)
+    return `\`${member.getText(sf).slice(0, 60)}\` reads process.env with a computed key`;
+  if (isWritten(outerOf(member)))
+    return `\`${outerOf(member).parent.getText(sf).slice(0, 60)}\` writes process.env`;
+  if (
+    ts.isCallExpression(outerOf(member).parent) &&
+    outerOf(member).parent.expression === outerOf(member)
+  )
+    return `\`${member.getText(sf)}(…)\` calls a member of process.env`;
   return null;
 }
 
 /**
  * EVERY service (market or not), every non-test source under src/: names
  * MOTEBIT_UNIT_COST nowhere in code — identifier, property key, string or
- * template literal (comments are not code) — and never writes process.env.
- * Cold review R6 (2026-10-05): `process.env["MOTEBIT_UNIT_COST"] ??= "0.30"`
- * at the top of main() kept this gate green while the service listed $0.30
- * against the $0.25 its pricing.ts and docs state — a coded default smuggled
- * in through the environment. The runner is the variable's only reader; the
- * environment is the operator's input, never a service's output. Deliberate
- * obfuscation (computed keys, strings built at runtime, an aliased env object)
- * is outside the threat model (accidental drift).
+ * template literal (comments are not code) — and touches the environment
+ * ONLY as a direct literal-key READ: `process.env.NAME` / `process.env["NAME"]`
+ * (also through `globalThis.process`). DENY BY DEFAULT — everything else is a
+ * violation: process.env (or process) as a value — aliased, passed, spread,
+ * destructured (`const { env } = process`); a computed-key read; any write;
+ * `env` / a namespace / an aliased default imported from "process" /
+ * "node:process", or that module required; `loadEnvFile`; an env-file loader
+ * package (dotenv, dotenv/config, any bare specifier naming `env`).
+ *
+ * Why deny-by-default: R6 (2026-10-05) caught `process.env["MOTEBIT_UNIT_COST"]
+ * ??= "0.30"`; the cold review after it found the same write through
+ * `process.loadEnvFile(".env")`, `import { env } from "node:process"`,
+ * `const e = process.env; e.X = …` and `const { env: en } = process`. Each
+ * round matched one more spelling; a write needs a handle on the env object,
+ * so the gate refuses every handle. Computed keys and module names built at
+ * runtime (deliberate obfuscation) stay outside the threat model.
  */
 export function checkEnvDiscipline(root: string, name: string, violations: string[]): void {
   for (const f of listSourceFiles(join(root, "services", name, "src"))) {
@@ -709,10 +859,10 @@ export function checkEnvDiscipline(root: string, name: string, violations: strin
         violations.push(
           `${at(n)}: names ${OVERRIDE_KEY} — a service's code never names it; the runner alone reads and validates it (${RUNNER_RULE}), and the service's default is the literal LISTING_PRICE in ${PRICING}`,
         );
-      const w = envWrite(sf, n);
+      const w = envAccess(sf, n);
       if (w != null)
         violations.push(
-          `${at(n)}: writes process.env (${w}) — a service never writes the environment (a write there is a default no doc or gate sees); pass the value as an argument or config field, or set it in .env.example / the deployment`,
+          `${at(n)}: ${w} — env access is deny-by-default: read env only as process.env.NAME (or process.env["NAME"]); config flows through the runner (pass values as arguments or config fields; set operator values in .env.example / the deployment)`,
         );
     });
   }
@@ -1142,17 +1292,17 @@ async function main(): Promise<void> {
   const r = await evaluate(root);
   if (r.violations.length > 0) {
     failWithRepair({
-      invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price, or a service's code names MOTEBIT_UNIT_COST / writes process.env`,
+      invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price, or a service's code names MOTEBIT_UNIT_COST / touches the environment other than as a direct literal-key read`,
       sites: r.violations,
       canonical:
-        "role/identity/market: the `motebit` block in services/<name>/package.json; price: the literal `LISTING_PRICE = { capabilities, unit_cost, per }` in services/<name>/src/pricing.ts (data — it cannot read the environment), which main() must pass runMolecule as exactly `pricing: LISTING_PRICE`; the runner alone reads MOTEBIT_UNIT_COST — no service source names it or writes process.env — and applies it (packages/molecule-runner/src/listing-price.ts, refusing a malformed value) and refuses a listing that brings its own price",
-      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A market service: keep its price in src/pricing.ts as `export const LISTING_PRICE: ListingPriceSpec = { capabilities: [...], unit_cost: <number>, per: <unit string> }` — literals only, no env reads (the runner applies MOTEBIT_UNIT_COST) — and call runMolecule once in src/index.ts with `pricing: LISTING_PRICE` after any spread, naming LISTING_PRICE nowhere else; never put `pricing` in getServiceListing. .env.example states the coded default. A service source that names MOTEBIT_UNIT_COST or writes process.env: delete it — change the default in src/pricing.ts (and the docs), set an operator override in the deployment, and pass any other value as an argument or config field; tests (src/**/__tests__, *.test.*) may set env. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
-      doctrine: "docs/drift-defenses.md (#173)",
+        "role/identity/market: the `motebit` block in services/<name>/package.json; price: the literal `LISTING_PRICE = { capabilities, unit_cost, per }` in services/<name>/src/pricing.ts (data — it cannot read the environment), which main() must pass runMolecule as exactly `pricing: LISTING_PRICE`; the runner alone reads MOTEBIT_UNIT_COST — no service source names it, and service sources read env only as process.env.NAME — and applies it (packages/molecule-runner/src/listing-price.ts, refusing a malformed value) and refuses a listing that brings its own price",
+      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A market service: keep its price in src/pricing.ts as `export const LISTING_PRICE: ListingPriceSpec = { capabilities: [...], unit_cost: <number>, per: <unit string> }` — literals only, no env reads (the runner applies MOTEBIT_UNIT_COST) — and call runMolecule once in src/index.ts with `pricing: LISTING_PRICE` after any spread, naming LISTING_PRICE nowhere else; never put `pricing` in getServiceListing. .env.example states the coded default. A service source that names MOTEBIT_UNIT_COST: delete it — change the default in src/pricing.ts (and the docs) or set an operator override in the deployment. Any other env access: read env only as process.env.NAME (or process.env['NAME']); config flows through the runner — where code needs an env map, build it from literal reads (`{ NAME: process.env.NAME }`) and pass values as arguments or config fields; never alias, pass, spread or destructure process.env, never import env from 'node:process', never loadEnvFile or dotenv (set values in .env.example / the deployment). Tests (src/**/__tests__, *.test.*) may set env. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
+      doctrine: "docs/drift-defenses.md (#174)",
     });
   }
   const market = r.services.filter((s) => s.market).length;
   console.log(
-    `✓ check-service-truth: ${r.services.length} services' metadata + coded listing prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and each market service's ${PRICING} LISTING_PRICE, which the TypeScript AST shows is literal data naming no process/globalThis/import.meta/require (it cannot read the environment); proves the runner's ${RUNNER_RULE} lists a spec unaltered, carries a sentinel MOTEBIT_UNIT_COST to every entry, and refuses ${MALFORMED_COSTS.length} malformed overrides (no NaN listing — a bad MOTEBIT_UNIT_COST refuses the boot); proves by TypeScript AST that each market service's ${ENTRY} — the file its Dockerfile CMD / start boots as dist/index.js — calls runMolecule exactly once with \`pricing: LISTING_PRICE\`, the price module imported by that file alone and named nowhere else (the runner lists only config pricing and refuses a getServiceListing carrying its own — molecule-runner listing-pricing.test.ts); market:false services read no MOTEBIT_UNIT_COST, have no pricing.ts and call no runMolecule; and, by TypeScript AST of every non-test source under each of the ${r.services.length} services' src/, no code names MOTEBIT_UNIT_COST (identifier, key, string or template literal) and nothing writes process.env (assignment incl. ??=/||=, ++/--, delete, Object.assign/defineProperty/Reflect.set). Computed keys and strings built at runtime are outside the threat model. Nothing is executed but the runner's zero-import override rule: no server boots, no network, no ports. Threat model: guards ACCIDENTAL drift between documented and coded price/unit/role; it does not cover production MOTEBIT_UNIT_COST overrides or hand-edited deployments — the deployed listing is the one the service POSTs to the relay (signed market:listing token) and the relay serves; read the production price there. Not covered: other docs pages; "identity" is declared metadata, not verified against code.`,
+    `✓ check-service-truth: ${r.services.length} services' metadata + coded listing prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and each market service's ${PRICING} LISTING_PRICE, which the TypeScript AST shows is literal data naming no process/globalThis/import.meta/require (it cannot read the environment); proves the runner's ${RUNNER_RULE} lists a spec unaltered, carries a sentinel MOTEBIT_UNIT_COST to every entry, and refuses ${MALFORMED_COSTS.length} malformed overrides (no NaN listing — a bad MOTEBIT_UNIT_COST refuses the boot); proves by TypeScript AST that each market service's ${ENTRY} — the file its Dockerfile CMD / start boots as dist/index.js — calls runMolecule exactly once with \`pricing: LISTING_PRICE\`, the price module imported by that file alone and named nowhere else (the runner lists only config pricing and refuses a getServiceListing carrying its own — molecule-runner listing-pricing.test.ts); market:false services read no MOTEBIT_UNIT_COST, have no pricing.ts and call no runMolecule; and, by TypeScript AST of every non-test source under each of the ${r.services.length} services' src/, no code names MOTEBIT_UNIT_COST (identifier, key, string or template literal) and env access is DENY-BY-DEFAULT: process.env is permitted ONLY as a direct literal-key READ — process.env.NAME or process.env["NAME"] (or via globalThis.process) in a non-write position; red on any other occurrence of process.env or process as a value (aliased, passed, spread, destructured, incl. \`const { env } = process\`), a computed-key read, any write (assignment, ++/--, delete, destructuring target), env/default-alias/namespace imported from "process"/"node:process" or that module required or dynamically imported, loadEnvFile anywhere, and any env-file loader package (dotenv, dotenv/config, any bare specifier naming env). Computed keys on process itself and module names built at runtime are outside the threat model. Nothing is executed but the runner's zero-import override rule: no server boots, no network, no ports. Threat model: guards ACCIDENTAL drift between documented and coded price/unit/role; it does not cover production MOTEBIT_UNIT_COST overrides or hand-edited deployments — the deployed listing is the one the service POSTs to the relay (signed market:listing token) and the relay serves; read the production price there. Not covered: other docs pages; "identity" is declared metadata, not verified against code.`,
   );
 }
 

@@ -3114,6 +3114,46 @@ export async function probeFetch(): Promise<unknown> {
         return src.replace(re, '$1process.env["MOTEBIT_PROBE"] ? 9 : $2$3');
       }),
   },
+  // Cold review after R7 (2026-10-06): env writes through ordinary idioms
+  // stayed green while the gate matched write spellings. The gate is now
+  // deny-by-default (process.env only as a direct literal-key read); each
+  // probe plants one formerly-green handle in a fixture under
+  // services/research/src and the gate must go red.
+  ...(
+    [
+      ["loadEnvFile", `process.loadEnvFile(".env");\nexport {};\n`],
+      [
+        '`import { env } from "node:process"` + write',
+        `import { env } from "node:process";\nenv.MOTEBIT_PROBE = "1";\n`,
+      ],
+      [
+        '`import process from "node:process"` + `const e = process.env`',
+        `import process from "node:process";\nexport const e = process.env;\n`,
+      ],
+      [
+        "`const e = process.env; e.X = 1`",
+        `const e = process.env;\ne.MOTEBIT_PROBE = "1";\nexport {};\n`,
+      ],
+      [
+        "`const { env: en } = process`",
+        `const { env: en } = process;\nen.MOTEBIT_PROBE = "1";\nexport {};\n`,
+      ],
+      [
+        "`Object.assign(env, …)`",
+        `import { env } from "node:process";\nObject.assign(env, { MOTEBIT_PROBE: "1" });\n`,
+      ],
+      ['`import "dotenv/config"`', `import "dotenv/config";\nexport {};\n`],
+      [
+        "`fn(process.env)`",
+        `declare function fn(e: unknown): void;\nfn(process.env);\nexport {};\n`,
+      ],
+      ["`{ ...process.env }`", `export const o = { ...process.env };\n`],
+    ] as const
+  ).map(([label, body], i): Probe => ({
+    script: "check-service-truth",
+    proves: `env access in a service is deny-by-default (process.env only as a direct literal-key read) — refuses ${label}, a handle on the env object that stayed green while the gate matched write spellings (cold review after R7, 2026-10-06). Drops a fixture under services/research/src; the gate's AST env check is red.`,
+    perturb: () => writeFixture(`services/research/src/${PROBE_PREFIX}env_handle_${i}.ts`, body),
+  })),
   {
     script: "check-relay-frame-origin",
     proves:

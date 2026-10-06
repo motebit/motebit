@@ -277,7 +277,7 @@ describe("check-service-truth", () => {
     const NAMES = (file: string) =>
       new RegExp(`services/research/src/${file}:\\d+: names MOTEBIT_UNIT_COST`);
     const WRITES = (file: string) =>
-      new RegExp(`services/research/src/${file}:\\d+: writes process\\.env`);
+      new RegExp(`services/research/src/${file}:\\d+: .* — env access is deny-by-default`);
 
     it("`??=` in index.ts is RED (names the variable and writes the env)", async () => {
       const v = await research({ src: atTop(`process.env["MOTEBIT_UNIT_COST"] ??= "0.30";`) });
@@ -335,7 +335,7 @@ describe("check-service-truth", () => {
       const s = baseServices();
       s["relay"] = { ...s["relay"]!, src: `process.env.FOO = "1";\nexport {};\n` };
       expect(await violations({ services: s })).toMatch(
-        /services\/relay\/src\/index\.ts:1: writes process\.env/,
+        /services\/relay\/src\/index\.ts:1: .* — env access is deny-by-default/,
       );
     });
     it("is GREEN for a test file doing the same, for env reads, and for comments", async () => {
@@ -348,6 +348,94 @@ describe("check-service-truth", () => {
           ),
         }),
       ).toBe("");
+    });
+  });
+
+  // Cold review after R7 (2026-10-06): the write rules matched spellings, and
+  // each round found another — `process.loadEnvFile(".env")`, `import { env }
+  // from "node:process"`, `const e = process.env; e.X = …`, `const { env: en }
+  // = process`. DENY BY DEFAULT: env is touched only as a direct literal-key
+  // READ (`process.env.NAME` / `process.env["NAME"]`); every other handle on
+  // it is RED, in every service, outside tests.
+  describe("R8: env access is deny-by-default", () => {
+    const atTop = (stmt: string, prelude = "") =>
+      swap(
+        entry(CONFIG, prelude),
+        "async function main(): Promise<void> {\n",
+        `async function main(): Promise<void> {\n  ${stmt}\n`,
+      );
+    const DENIED =
+      /services\/research\/src\/index\.ts:\d+: .* — env access is deny-by-default: read env only as process\.env\.NAME/;
+    const RED: [string, string, string?][] = [
+      ["loadEnvFile", `process.loadEnvFile(".env");`],
+      [
+        "loadEnvFile imported",
+        `loadEnvFile(".env");`,
+        `import { loadEnvFile } from "node:process";\n`,
+      ],
+      ["named env import + write", `env.FOO = "1";`, `import { env } from "node:process";\n`],
+      ["aliased named env import", `en.FOO = "1";`, `import { env as en } from "process";\n`],
+      [
+        "Object.assign(env, …)",
+        `Object.assign(env, { FOO: "1" });`,
+        `import { env } from "node:process";\n`,
+      ],
+      ["default import aliased", `p.env.FOO = "1";`, `import p from "node:process";\n`],
+      ["namespace import", `ns.env.FOO = "1";`, `import * as ns from "node:process";\n`],
+      [
+        "default import + alias of process.env",
+        `const e = process.env; void e;`,
+        `import process from "node:process";\n`,
+      ],
+      ["alias then write", `const e = process.env; e.FOO = "1";`],
+      ["destructure env", `const { env } = process; env.FOO = "1";`],
+      ["destructure env renamed", `const { env: en } = process; en.FOO = "1";`],
+      [
+        "destructure process from globalThis",
+        `const { process: p } = globalThis; p.env.FOO = "1";`,
+      ],
+      ["process aliased", `const p = process; p.env.FOO = "1";`],
+      ["dotenv/config", `void 0;`, `import "dotenv/config";\n`],
+      ["dotenv", `dotenv.config();`, `import dotenv from "dotenv";\n`],
+      ["@dotenvx", `void 0;`, `import "@dotenvx/dotenvx/config";\n`],
+      ["require(node:process)", `require("node:process").env.FOO = "1";`],
+      ["dynamic import(process)", `(await import("process")).env.FOO = "1";`],
+      ["passed as an argument", `fn(process.env);`, `declare function fn(e: unknown): void;\n`],
+      ["spread", `const o = { ...process.env }; void o;`],
+      ["computed-key read", `const k = "FOO"; void process.env[k];`],
+      ["globalThis alias", `const e = globalThis.process.env; void e;`],
+      ["destructuring assignment write", `[process.env.FOO] = ["1"];`],
+    ];
+    for (const [label, stmt, prelude] of RED)
+      it(`RED: ${label}`, async () => {
+        expect(await research({ src: atTop(stmt, prelude) })).toMatch(DENIED);
+      });
+    it("GREEN: direct literal-key reads, typeof, other process members", async () => {
+      for (const stmt of [
+        `const a = process.env.FOO; void a;`,
+        `const b = process.env["FOO"] ?? "x"; void b;`,
+        `const c = globalThis.process.env.FOO; void c;`,
+        `if (typeof process !== "undefined") void process.argv;`,
+        "const t = `${process.env.FOO ?? ''}`; void t;",
+      ])
+        expect(await research({ src: atTop(stmt) }), stmt).toBe("");
+      expect(
+        await research({
+          src: atTop(`const d = process.env.FOO; void d;`, `import process from "node:process";\n`),
+        }),
+      ).toBe("");
+    });
+    it("GREEN: the same violating code in a __tests__ file or *.test.ts", async () => {
+      const bad =
+        `import { env } from "node:process";\nimport "dotenv/config";\nprocess.loadEnvFile(".env");\n` +
+        `const e = process.env; e.X = "1";\nconst { env: en } = process; void en;\nObject.assign(env, { A: "1" });\n` +
+        `fn(process.env);\nconst o = { ...process.env }; void o;\ndeclare function fn(e: unknown): void;\nexport {};\n`;
+      expect(await research({ files: { "index.test.ts": bad } })).toBe("");
+      const s = baseServices();
+      const dir = fixture({ services: s });
+      mkdirSync(join(dir, "services", "research", "src", "__tests__"), { recursive: true });
+      writeFileSync(join(dir, "services", "research", "src", "__tests__", "x.ts"), bad);
+      expect((await evaluate(dir)).violations).toEqual([]);
     });
   });
 

@@ -56,8 +56,7 @@ export interface FreeCreditConfig {
   dailyBudgetMicro: number;
 }
 
-function envNum(name: string, fallback: number): number {
-  const raw = process.env[name];
+function envNum(raw: string | undefined, fallback: number): number {
   if (raw == null || raw === "") return fallback;
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -66,9 +65,9 @@ function envNum(name: string, fallback: number): number {
 /** Read the free-credit config from env. Defaults keep the feature OFF (amount 0). */
 export function freeCreditConfigFromEnv(): FreeCreditConfig {
   return {
-    amountMicro: toMicro(envNum("MOTEBIT_FREE_CREDIT_USD", 0)),
-    ipDailyCap: Math.floor(envNum("MOTEBIT_FREE_CREDIT_IP_DAILY_CAP", 10)),
-    dailyBudgetMicro: toMicro(envNum("MOTEBIT_FREE_CREDIT_DAILY_BUDGET_USD", 25)),
+    amountMicro: toMicro(envNum(process.env.MOTEBIT_FREE_CREDIT_USD, 0)),
+    ipDailyCap: Math.floor(envNum(process.env.MOTEBIT_FREE_CREDIT_IP_DAILY_CAP, 10)),
+    dailyBudgetMicro: toMicro(envNum(process.env.MOTEBIT_FREE_CREDIT_DAILY_BUDGET_USD, 25)),
   };
 }
 
