@@ -64,6 +64,7 @@ import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
 import { anchorSubmitPacerFor } from "./anchor-submit-pacing.js";
+import { submitRecordedAnchor, type AnchorBroadcastHooks } from "./anchor-broadcasts.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 import { FederationError } from "./errors.js";
 import { FixedWindowLimiter } from "./rate-limiter.js";
@@ -380,7 +381,11 @@ export const REVOCATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Set once at relay startup via setRevocationAnchorSubmitter().
 let revocationAnchorSubmitter:
   | {
-      submitRevocation(publicKeyHex: string, timestamp: number): Promise<{ txHash: string }>;
+      submitRevocation(
+        publicKeyHex: string,
+        timestamp: number,
+        hooks?: AnchorBroadcastHooks,
+      ): Promise<{ txHash: string }>;
       isAvailable(): Promise<boolean>;
     }
   | undefined;
@@ -452,7 +457,7 @@ export async function insertRevocationEvent(
   // Revocations are rare and urgent — anchor immediately, no batching.
   // The memo carries the EFFECTIVE time, not the recording time.
   if (revocationAnchorSubmitter && opts?.revokedPublicKey) {
-    anchorRevocationOnChain(opts.revokedPublicKey, effectiveAt).catch((err) => {
+    anchorRevocationOnChain(db, opts.revokedPublicKey, effectiveAt).catch((err) => {
       logger.error("revocation.anchor_failed", {
         motebitId,
         type,
@@ -473,6 +478,7 @@ export async function insertRevocationEvent(
 
 /** Anchor a revocation event onchain via the configured submitter. */
 async function anchorRevocationOnChain(
+  db: DatabaseDriver,
   revokedPublicKeyHex: string,
   timestamp: number,
 ): Promise<void> {
@@ -491,7 +497,15 @@ async function anchorRevocationOnChain(
   const { txHash } = await anchorSubmitPacerFor(submitter).submit(
     "revocation",
     revokedPublicKeyHex.slice(0, 16),
-    () => submitter.submitRevocation(revokedPublicKeyHex, timestamp),
+    // Sign → record → send → confirm that signature (anchor-broadcasts.ts).
+    () =>
+      submitRecordedAnchor(
+        db,
+        submitter,
+        "revocation",
+        `${revokedPublicKeyHex}:${timestamp}`,
+        (hooks) => submitter.submitRevocation(revokedPublicKeyHex, timestamp, hooks),
+      ),
     { gate: false },
   );
   logger.info("revocation.anchored_onchain", {
