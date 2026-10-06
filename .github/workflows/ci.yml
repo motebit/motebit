@@ -477,7 +477,7 @@ jobs:
       - name: Build
         # The check-api-surface probe perturbs the committed baseline and
         # expects api-extractor to produce an etc/temp/ surface that diverges —
-        # which requires dist/*.d.ts to exist for protocol/crypto/sdk. Without
+        # which requires dist/*.d.ts to exist for protocol/crypto/sdk/verifier. Without
         # this, the gate errors on missing input and the probe would pass for
         # the wrong reason.
         run: pnpm build

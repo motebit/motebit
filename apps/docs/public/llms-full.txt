@@ -952,7 +952,7 @@ Three paths, in order of how much motebit you take with you:
 
 1. **Implement the spec.** 37 open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
 
-2. **Build against the Apache-2.0 floor.** Import `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto` directly from npm. Verify identity files, parse receipts, compose semirings, compute optimal paths. The type surface of `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk` is fixed by the api-extractor baselines at [`packages/{protocol,crypto,sdk}/etc/*.api.md`](https://github.com/motebit/motebit/tree/main/packages) — every break to one of those three requires a `major` changeset (`check-api-surface`); the other published packages keep their promises through conformance fixtures and semver review.
+2. **Build against the Apache-2.0 floor.** Import `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto` directly from npm. Verify identity files, parse receipts, compose semirings, compute optimal paths. The type surface of `@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk`, and `@motebit/verifier` is fixed by the api-extractor baselines at [`packages/{protocol,crypto,sdk,verifier}/etc/*.api.md`](https://github.com/motebit/motebit/tree/main/packages) — every break to one of those four requires a `major` changeset (`check-api-surface`); the other published packages keep their promises through conformance fixtures and semver review.
 
 3. **Run `motebit` and use its operator surface.** Install the bundle via `npm install -g motebit`. The CLI subcommands, flags, exit codes, `~/.motebit/` layout, and relay HTTP routes are stable per the operator-surface check (`check-cli-surface`). The internals can refactor freely; the surface holds.
 
@@ -1683,7 +1683,7 @@ The full published list and the protocol/package boundary live in [Public surfac
 
 You don't have to take motebit's word for it — the stability is mechanical:
 
-- **`check-api-surface`** pins the exported type surface of `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk` to committed api-extractor baselines (`packages/{protocol,crypto,sdk}/etc/*.api.md`); the other published packages are covered by their own conformance fixtures and semver review, not by an extracted baseline. Any change to an exported signature **fails CI** unless a `major` changeset ships with it. A breaking change *cannot* be released as a patch.
+- **`check-api-surface`** pins the exported type surface of `@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk`, and `@motebit/verifier` to committed api-extractor baselines (`packages/{protocol,crypto,sdk,verifier}/etc/*.api.md`); the other published packages are covered by their own conformance fixtures and semver review, not by an extracted baseline. Any change to an exported signature **fails CI** unless a `major` changeset ships with it. A breaking change *cannot* be released as a patch.
 - **`check-cli-surface`** locks the `motebit` CLI's subcommands, top-level flags, exit codes, and `~/.motebit/` layout the same way. Relay HTTP routes are documented per spec (`check-spec-routes`) but are not part of this gate.
 
 These are drift gates that break the build — the same discipline that keeps the docs honest keeps the API honest.
@@ -5275,6 +5275,7 @@ The exhaustive type surface for each Apache-2.0 published package lives in a com
 | `@motebit/protocol` | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing primitives                       | [`protocol.api.md`](https://github.com/motebit/motebit/blob/main/packages/protocol/etc/protocol.api.md) |
 | `@motebit/sdk`      | Developer contract — stable types, adapter interfaces, governance config (re-exports `@motebit/protocol` plus surface-config types) | [`sdk.api.md`](https://github.com/motebit/motebit/blob/main/packages/sdk/etc/sdk.api.md)                |
 | `@motebit/crypto`   | Sign and verify every motebit artifact — Ed25519 today, cryptosuite-agile for post-quantum                                          | [`crypto.api.md`](https://github.com/motebit/motebit/blob/main/packages/crypto/etc/crypto.api.md)       |
+| `@motebit/verifier` | Verify library — `verifyFile`, `verifyArtifact`, `formatHuman`; the pinned verify API external consumers code against               | [`verifier.api.md`](https://github.com/motebit/motebit/blob/main/packages/verifier/etc/verifier.api.md) |
 
 The other published packages expose narrow surfaces, documented in each package's [README on npm](https://www.npmjs.com/org/motebit) and committed under `packages/<name>/README.md`. The two close-named ones to disambiguate at install time:
 
@@ -7942,7 +7943,7 @@ The 62 workspace-private packages (everything not in the table above) are pinned
 
 ## Versioning policy
 
-Each published package follows [semver 2.0.0](https://semver.org/). Breaking changes require a `major` changeset with a non-empty `## Migration` section per `check-changeset-discipline`. Three of the Apache-2.0 packages — `@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk` — use `check-api-surface` to enforce that the type-extracted baseline (`packages/<name>/etc/<name>.api.md`) cannot drift without an explicit major bump. The `motebit` CLI uses `check-cli-surface` against `apps/cli/etc/cli-surface.json` for the operator-facing surface (subcommands, flags, exit codes, paths).
+Each published package follows [semver 2.0.0](https://semver.org/). Breaking changes require a `major` changeset with a non-empty `## Migration` section per `check-changeset-discipline`. Four of the Apache-2.0 packages — `@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk`, `@motebit/verifier` — use `check-api-surface` to enforce that the type-extracted baseline (`packages/<name>/etc/<name>.api.md`) cannot drift without an explicit major bump. The `motebit` CLI uses `check-cli-surface` against `apps/cli/etc/cli-surface.json` for the operator-facing surface (subcommands, flags, exit codes, paths).
 
 10 of the 12 packages converged on `1.0.0` in the coordinated initial release (five of them had shipped pre-1.0 versions to npm before it); `@motebit/state-export-client` joined later (first published version `0.2.0`, 2026-05-13). Each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.
 

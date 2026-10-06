@@ -49,7 +49,7 @@ If parts of the API are intentionally still in flux, annotate them with `@experi
 
 ### 5. Add the package to `check-api-surface`'s tracked roster
 
-`scripts/check-api-surface.ts` already scans `packages/*/etc/*.api.md` automatically once the baseline exists. No manual roster update needed — but verify by running `pnpm check-api-surface` and confirming the package appears in the report.
+`scripts/check-api-surface.ts` does NOT discover baselines — it checks only the packages in its `TRACKED` roster. Append `{ path, name, baseline }` for the package (plus `api-extractor.json` extending `config/api-extractor.base.json` and an `api:extract` script), then run `pnpm check-api-surface` and confirm the package appears in the report.
 
 ### 6. Update the public-surface docs
 

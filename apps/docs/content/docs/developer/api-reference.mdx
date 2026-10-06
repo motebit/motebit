@@ -14,6 +14,7 @@ The exhaustive type surface for each Apache-2.0 published package lives in a com
 | `@motebit/protocol` | Identity, receipts, credentials, delegation, settlement, trust algebra — types, semirings, routing primitives                       | [`protocol.api.md`](https://github.com/motebit/motebit/blob/main/packages/protocol/etc/protocol.api.md) |
 | `@motebit/sdk`      | Developer contract — stable types, adapter interfaces, governance config (re-exports `@motebit/protocol` plus surface-config types) | [`sdk.api.md`](https://github.com/motebit/motebit/blob/main/packages/sdk/etc/sdk.api.md)                |
 | `@motebit/crypto`   | Sign and verify every motebit artifact — Ed25519 today, cryptosuite-agile for post-quantum                                          | [`crypto.api.md`](https://github.com/motebit/motebit/blob/main/packages/crypto/etc/crypto.api.md)       |
+| `@motebit/verifier` | Verify library — `verifyFile`, `verifyArtifact`, `formatHuman`; the pinned verify API external consumers code against               | [`verifier.api.md`](https://github.com/motebit/motebit/blob/main/packages/verifier/etc/verifier.api.md) |
 
 The other published packages expose narrow surfaces, documented in each package's [README on npm](https://www.npmjs.com/org/motebit) and committed under `packages/<name>/README.md`. The two close-named ones to disambiguate at install time:
 

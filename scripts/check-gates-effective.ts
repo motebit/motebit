@@ -740,6 +740,22 @@ export async function probeLeak(): Promise<boolean> {
   },
   {
     script: "check-api-surface",
+    // Same no-rebuild shape as the protocol probe below: mutate the committed
+    // baseline, leave dist/ untouched, so api-extractor's extracted surface
+    // diverges. Requires packages/verifier/dist (pnpm build).
+    proves:
+      "tracks the pinned @motebit/verifier surface the first-party consumer codes against (docs/doctrine/agency-proof-integration.md) — before, verifier was absent from TRACKED, so adding a required parameter to `formatHuman` stayed green. Probe makes the committed verifier baseline's formatHuman signature diverge from the extracted surface; the gate must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile("packages/verifier/etc/verifier.api.md", (src) =>
+        src.replace(
+          "export function formatHuman(result: VerifyResultWithBinding): string;",
+          "export function formatHuman(result: VerifyResultWithBinding, extra: string): string;",
+        ),
+      ),
+    skipWhen: () => scanChangesetsForMajor("@motebit/verifier"),
+  },
+  {
+    script: "check-api-surface",
     // Requires packages/{protocol,crypto,sdk}/dist to exist so api-extractor
     // can read the .d.ts and produce etc/temp/*.api.md to diff against the
     // (mutated) baseline. Pre-push and the CI gate-effectiveness job run
