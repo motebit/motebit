@@ -17,6 +17,7 @@ import {
 import { IDENTITY_KEYS_BACKFILL_SQL } from "./identity-keys.js";
 import { DISPUTE_FUND_ACTIONS_DDL, backfillDisputeFundActions } from "./dispute-fund-ledger.js";
 import { backfillAllocationEscrow, installAllocationEscrowGuards } from "./allocation-escrow.js";
+import { createAnchorBroadcastsTable } from "./anchor-broadcasts.js";
 
 const logger = createLogger({ service: "migrations" });
 
@@ -2644,6 +2645,28 @@ export const relayMigrations: Migration[] = [
       if (!cols.some((c) => c.name === "relay_ingress_redacted")) {
         db.exec("ALTER TABLE events ADD COLUMN relay_ingress_redacted INTEGER");
       }
+    },
+  },
+  {
+    version: 57,
+    name: "anchor_broadcasts",
+    up: (db) => {
+      // Sign → record → send → confirm that signature, for anchor memos
+      // (anchor-broadcasts.ts). A memo whose confirmation failed AFTER it was
+      // sent (an RPC without websocket `signatureSubscribe` threw on every
+      // confirm) left its anchor row unsubmitted, and every cycle sent a NEW
+      // memo for the same root. The signature is now written here before the
+      // memo is sent; a later cycle asks the chain about THAT signature
+      // (landed ⇒ the anchor is confirmed with it; pending ⇒ wait; expired or
+      // failed ⇒ one new memo; expired ⇒ one new memo only once a pass sees
+      // it expired again at a finalized height at least the configured block
+      // gap above the first observation's (chain progress, never wall time)
+      // — the first recorded in
+      // `expired_seen_at` + `expired_seen_height` — and every replacement is a
+      // compare-and-set on the row) instead of sending blindly. One row per
+      // (stream, subject) — the latest broadcast for that anchor. Idempotent:
+      // a table created by an earlier build of v57 gains the missing columns.
+      createAnchorBroadcastsTable(db);
     },
   },
 ];

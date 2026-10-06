@@ -98,10 +98,11 @@ describe("swapUsdcToSol", () => {
       blockhash,
       lastValidBlockHeight: 100,
     });
-    vi.spyOn(connection, "confirmTransaction").mockResolvedValue({
+    vi.spyOn(connection, "getBlockHeight").mockResolvedValue(0);
+    vi.spyOn(connection, "getSignatureStatuses").mockResolvedValue({
       context: { slot: 1 },
-      value: { err: null },
-    });
+      value: [{ slot: 1, confirmations: 0, err: null, confirmationStatus: "confirmed" }],
+    } as never);
 
     const result = await swapUsdcToSol(20_000n, keypair, connection);
 
@@ -134,10 +135,11 @@ describe("swapUsdcToSol", () => {
       blockhash: Keypair.generate().publicKey.toBase58(),
       lastValidBlockHeight: 1,
     });
-    vi.spyOn(connection, "confirmTransaction").mockResolvedValue({
+    vi.spyOn(connection, "getBlockHeight").mockResolvedValue(0);
+    vi.spyOn(connection, "getSignatureStatuses").mockResolvedValue({
       context: { slot: 1 },
-      value: { err: null },
-    });
+      value: [{ slot: 1, confirmations: 0, err: null, confirmationStatus: "confirmed" }],
+    } as never);
 
     const result = await swapUsdcToSol(1n, keypair, connection);
     expect(result.outputAmount).toBe(0n);
@@ -219,7 +221,11 @@ describe("swapSolToUsdc — the funding-side mirror", () => {
       blockhash: "h",
       lastValidBlockHeight: 1,
     } as never);
-    vi.spyOn(connection, "confirmTransaction").mockResolvedValue({ value: { err: null } } as never);
+    vi.spyOn(connection, "getBlockHeight").mockResolvedValue(0);
+    vi.spyOn(connection, "getSignatureStatuses").mockResolvedValue({
+      context: { slot: 1 },
+      value: [{ slot: 1, confirmations: 0, err: null, confirmationStatus: "confirmed" }],
+    } as never);
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -239,5 +245,119 @@ describe("swapSolToUsdc — the funding-side mirror", () => {
       inputAmount: 10_000_000n,
       outputAmount: 1_500_000n,
     });
+  });
+});
+
+describe("Jupiter swap confirmation — anything but confirmed throws", () => {
+  function arrangeSubmittedSwap(): { keypair: Keypair; connection: Connection } {
+    const { keypair, connection } = makeKeypairAndConnection();
+    const fakeTx = { sign: vi.fn(), serialize: vi.fn().mockReturnValue(new Uint8Array([1])) };
+    vi.spyOn(VersionedTransaction, "deserialize").mockReturnValue(fakeTx as never);
+    vi.spyOn(connection, "sendRawTransaction").mockResolvedValue("sig-unconfirmed");
+    vi.spyOn(connection, "getLatestBlockhash").mockResolvedValue({
+      blockhash: "h",
+      lastValidBlockHeight: 50,
+    } as never);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ outAmount: "1" }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ swapTransaction: "AAAA" }) }),
+    );
+    return { keypair, connection };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("throws 'failed onchain' with the error when the swap landed with an error", async () => {
+    const { keypair, connection } = arrangeSubmittedSwap();
+    vi.spyOn(connection, "getBlockHeight").mockResolvedValue(0);
+    vi.spyOn(connection, "getSignatureStatuses").mockResolvedValue({
+      context: { slot: 1 },
+      value: [
+        {
+          slot: 1,
+          confirmations: 0,
+          err: { InstructionError: [2, "Custom"] },
+          confirmationStatus: "confirmed",
+        },
+      ],
+    } as never);
+
+    await expect(swapUsdcToSol(20_000n, keypair, connection)).rejects.toThrow(
+      'Jupiter swap sig-unconfirmed failed onchain: {"InstructionError":[2,"Custom"]}',
+    );
+  });
+
+  it("throws 'has expired' when the status is absent past the blockhash expiry", async () => {
+    const { keypair, connection } = arrangeSubmittedSwap();
+    vi.spyOn(connection, "getBlockHeight").mockResolvedValue(51);
+    vi.spyOn(connection, "getSignatureStatuses").mockResolvedValue({
+      context: { slot: 1 },
+      value: [null],
+    } as never);
+
+    await expect(swapUsdcToSol(20_000n, keypair, connection)).rejects.toThrow(
+      "Signature sig-unconfirmed has expired: block height exceeded.",
+    );
+  });
+
+  it("throws 'may still land' when the bounded wait ends still pending — never reports success", async () => {
+    vi.useFakeTimers();
+    const { keypair, connection } = arrangeSubmittedSwap();
+    vi.spyOn(connection, "getBlockHeight").mockResolvedValue(0);
+    vi.spyOn(connection, "getSignatureStatuses").mockResolvedValue({
+      context: { slot: 1 },
+      value: [null],
+    } as never);
+
+    const settled = swapUsdcToSol(20_000n, keypair, connection).then(
+      () => {
+        throw new Error("expected the unconfirmed swap to throw");
+      },
+      (err: unknown) => err,
+    );
+    await vi.advanceTimersByTimeAsync(91_000);
+    const err = await settled;
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe(
+      "Jupiter swap sig-unconfirmed was not confirmed in the bounded wait; it may still land",
+    );
+  });
+});
+
+describe("swapSolToUsdc — swap endpoint failure", () => {
+  it("throws a labeled error when the Jupiter swap endpoint returns a non-OK HTTP status", async () => {
+    const { keypair, connection } = makeKeypairAndConnection();
+    vi.spyOn(connection, "getBalance").mockResolvedValue(100_000_000);
+    const send = vi.spyOn(connection, "sendRawTransaction");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ outAmount: "1500000" }) })
+      .mockResolvedValueOnce({ ok: false, status: 502 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(swapSolToUsdc(10_000_000n, keypair, connection)).rejects.toThrow(
+      "Jupiter swap failed: HTTP 502",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("swapSolToUsdc — wallet already at or below its gas floor", () => {
+  it("names a max swappable of 0, never a negative amount", async () => {
+    const { keypair, connection } = makeKeypairAndConnection();
+    vi.spyOn(connection, "getBalance").mockResolvedValue(4_000_000); // 0.004 SOL < floor
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(swapSolToUsdc(1n, keypair, connection)).rejects.toThrow(
+      /Balance 4000000 lamports; max swappable 0 lamports/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

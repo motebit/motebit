@@ -26,7 +26,15 @@ import {
   type Commitment,
 } from "@solana/web3.js";
 
-import type { ChainAnchorSubmitter } from "@motebit/protocol";
+import { base58Encode, type ChainAnchorSubmitter } from "@motebit/protocol";
+
+import {
+  checkSignatureOnce,
+  confirmSignatureByPolling,
+  type ConfirmByPollingOptions,
+  type PolledSignatureOutcome,
+  type PolledSignatureRef,
+} from "./confirm-signature.js";
 
 import {
   SOLANA_MAINNET_CAIP2,
@@ -40,6 +48,67 @@ const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfc
 
 // Minimum SOL balance to submit a memo (~5000 lamports for tx fee)
 const MIN_SOL_LAMPORTS = 10_000;
+
+/** A signed memo transaction, known before it is sent. */
+export type AnchorBroadcastRef = PolledSignatureRef;
+
+/**
+ * Sign → record → send → confirm that signature. `beforeBroadcast` runs after
+ * the memo is signed and before it is sent; a hook that throws stops the send.
+ * A caller that records the signature here never sends a second memo for the
+ * same anchor while the first may still land: it asks `checkBroadcast` instead.
+ */
+export interface AnchorBroadcastHooks {
+  beforeBroadcast?: (ref: AnchorBroadcastRef) => void | Promise<void>;
+}
+
+/** The memo landed with an error: its fee was spent, nothing was anchored. */
+export class AnchorTransactionFailedError extends Error {
+  constructor(
+    readonly signature: string,
+    readonly err: unknown,
+  ) {
+    super(`anchor memo ${signature} landed with an error: ${JSON.stringify(err)}`);
+    this.name = "AnchorTransactionFailedError";
+  }
+}
+
+/** The memo's blockhash expired without it landing: it can never land. */
+export class AnchorBroadcastExpiredError extends Error {
+  constructor(readonly signature: string) {
+    super(`anchor memo ${signature} expired without landing`);
+    this.name = "AnchorBroadcastExpiredError";
+  }
+}
+
+/**
+ * The bounded confirmation wait ended undecided. The memo may still land; a
+ * caller that recorded the signature asks `checkBroadcast` later and never
+ * re-sends blindly.
+ */
+export class AnchorConfirmationPendingError extends Error {
+  constructor(
+    readonly signature: string,
+    detail?: string,
+  ) {
+    super(
+      `anchor memo ${signature} is not confirmed yet${detail ? ` (${detail})` : ""}; its signature decides it later`,
+    );
+    this.name = "AnchorConfirmationPendingError";
+  }
+}
+
+/** The RPC reads and writes the memo submitter makes. A web3.js `Connection` satisfies it. */
+export type MemoSubmitterConnection = Pick<
+  Connection,
+  | "getLatestBlockhash"
+  | "sendRawTransaction"
+  | "getSignatureStatuses"
+  | "getBlockHeight"
+  | "getBalance"
+  | "getMinimumBalanceForRentExemption"
+  | "getGenesisHash"
+>;
 
 export interface SolanaMemoSubmitterConfig {
   /** Solana RPC endpoint URL. */
@@ -65,7 +134,13 @@ export interface SolanaMemoSubmitterConfig {
    * Default: a resolver over this submitter's own connection.
    */
   networkResolver?: SolanaNetworkResolver;
+  /** The RPC client. Default: a web3.js `Connection` on `rpcUrl` (tests inject a fake). */
+  connection?: MemoSubmitterConnection;
+  /** Bounds on the HTTP-polling confirmation wait. Default: 1 s polls for up to 45 s. */
+  confirm?: ConfirmByPollingOptions;
 }
+
+const MEMO_CONFIRM_MAX_WAIT_MS = 45_000;
 
 function mismatchError(expected: string, served: string): Error {
   return new Error(
@@ -76,7 +151,8 @@ function mismatchError(expected: string, served: string): Error {
 export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
   readonly chain = "solana" as const;
 
-  private readonly connection: Connection;
+  private readonly connection: MemoSubmitterConnection;
+  private readonly confirmOpts: ConfirmByPollingOptions;
   private readonly keypair: Keypair;
   private readonly commitment: Commitment;
   /** Where the network comes from: the RPC's genesis hash, lazily, with a timeout. */
@@ -89,7 +165,8 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
       );
     }
     this.commitment = config.commitment ?? "confirmed";
-    this.connection = new Connection(config.rpcUrl, this.commitment);
+    this.connection = config.connection ?? new Connection(config.rpcUrl, this.commitment);
+    this.confirmOpts = { maxWaitMs: MEMO_CONFIRM_MAX_WAIT_MS, ...config.confirm };
     this.keypair = Keypair.fromSeed(config.identitySeed);
     if (config.networkResolver) {
       if (config.network !== undefined && config.network !== config.networkResolver.expected) {
@@ -173,6 +250,7 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
     root: string,
     _relayId: string,
     leafCount: number,
+    hooks?: AnchorBroadcastHooks,
   ): Promise<{ txHash: string }> {
     // relayId is implicit — the transaction signer IS the relay's identity key.
     // Verifiers derive the relay identity from the tx's signer pubkey.
@@ -182,31 +260,7 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
     // Build memo data — human-readable, machine-parseable
     const memo = `motebit:anchor:v1:${root}:${leafCount}`;
 
-    // Construct memo instruction
-    const instruction = new TransactionInstruction({
-      keys: [{ pubkey: this.keypair.publicKey, isSigner: true, isWritable: true }],
-      programId: MEMO_PROGRAM_ID,
-      data: Buffer.from(memo, "utf-8"),
-    });
-
-    // Build, sign, submit
-    const tx = new Transaction().add(instruction);
-    const latest = await this.connection.getLatestBlockhash(this.commitment);
-    tx.recentBlockhash = latest.blockhash;
-    tx.feePayer = this.keypair.publicKey;
-    tx.sign(this.keypair);
-
-    const signature = await this.connection.sendRawTransaction(tx.serialize());
-    await this.connection.confirmTransaction(
-      {
-        signature,
-        blockhash: latest.blockhash,
-        lastValidBlockHeight: latest.lastValidBlockHeight,
-      },
-      this.commitment,
-    );
-
-    return { txHash: signature };
+    return this.sendMemo(memo, hooks);
   }
 
   /**
@@ -218,33 +272,15 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
    *
    * Memo format: "motebit:revocation:v1:{old_public_key_hex}:{timestamp}"
    */
-  async submitRevocation(oldPublicKeyHex: string, timestamp: number): Promise<{ txHash: string }> {
+  async submitRevocation(
+    oldPublicKeyHex: string,
+    timestamp: number,
+    hooks?: AnchorBroadcastHooks,
+  ): Promise<{ txHash: string }> {
     await this.resolveNetwork();
     const memo = `motebit:revocation:v1:${oldPublicKeyHex}:${timestamp}`;
 
-    const instruction = new TransactionInstruction({
-      keys: [{ pubkey: this.keypair.publicKey, isSigner: true, isWritable: true }],
-      programId: MEMO_PROGRAM_ID,
-      data: Buffer.from(memo, "utf-8"),
-    });
-
-    const tx = new Transaction().add(instruction);
-    const latest = await this.connection.getLatestBlockhash(this.commitment);
-    tx.recentBlockhash = latest.blockhash;
-    tx.feePayer = this.keypair.publicKey;
-    tx.sign(this.keypair);
-
-    const signature = await this.connection.sendRawTransaction(tx.serialize());
-    await this.connection.confirmTransaction(
-      {
-        signature,
-        blockhash: latest.blockhash,
-        lastValidBlockHeight: latest.lastValidBlockHeight,
-      },
-      this.commitment,
-    );
-
-    return { txHash: signature };
+    return this.sendMemo(memo, hooks);
   }
 
   /**
@@ -265,33 +301,61 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
    * Doctrine: `docs/doctrine/operator-transparency.md` (Stage 2 onchain
    * anchor), `docs/doctrine/nist-alignment.md` §8 (savant-gap closure).
    */
-  async submitTransparencyAnchor(declarationHashHex: string): Promise<{ txHash: string }> {
+  async submitTransparencyAnchor(
+    declarationHashHex: string,
+    hooks?: AnchorBroadcastHooks,
+  ): Promise<{ txHash: string }> {
     await this.resolveNetwork();
     const memo = `motebit:transparency:v1:${declarationHashHex}`;
 
+    return this.sendMemo(memo, hooks);
+  }
+
+  /**
+   * Sign `memo`, report its signature (`hooks.beforeBroadcast`), send it ONCE
+   * and confirm THAT signature by HTTP polling (`confirm-signature.ts` — never
+   * a websocket subscription). Throws `AnchorTransactionFailedError` (landed
+   * with an error), `AnchorBroadcastExpiredError` (can never land) or
+   * `AnchorConfirmationPendingError` (undecided — ask `checkBroadcast` later).
+   */
+  private async sendMemo(memo: string, hooks?: AnchorBroadcastHooks): Promise<{ txHash: string }> {
     const instruction = new TransactionInstruction({
       keys: [{ pubkey: this.keypair.publicKey, isSigner: true, isWritable: true }],
       programId: MEMO_PROGRAM_ID,
       data: Buffer.from(memo, "utf-8"),
     });
-
     const tx = new Transaction().add(instruction);
     const latest = await this.connection.getLatestBlockhash(this.commitment);
     tx.recentBlockhash = latest.blockhash;
     tx.feePayer = this.keypair.publicKey;
     tx.sign(this.keypair);
+    const rawSig = tx.signature;
+    if (rawSig == null) throw new Error("signed memo transaction has no signature");
+    const ref: AnchorBroadcastRef = {
+      signature: base58Encode(new Uint8Array(rawSig)),
+      lastValidBlockHeight: latest.lastValidBlockHeight,
+    };
 
-    const signature = await this.connection.sendRawTransaction(tx.serialize());
-    await this.connection.confirmTransaction(
-      {
-        signature,
-        blockhash: latest.blockhash,
-        lastValidBlockHeight: latest.lastValidBlockHeight,
-      },
+    // Recorded before it is sent; a hook that cannot record stops the send.
+    if (hooks?.beforeBroadcast != null) await hooks.beforeBroadcast(ref);
+
+    await this.connection.sendRawTransaction(tx.serialize());
+    const outcome = await confirmSignatureByPolling(
+      this.connection,
+      ref,
       this.commitment,
+      this.confirmOpts,
     );
+    return { txHash: settledTxHash(ref.signature, outcome) };
+  }
 
-    return { txHash: signature };
+  /**
+   * What became of a memo this submitter sent earlier (its recorded
+   * signature). One read, no send. `expired` means it can never land, so a
+   * new memo for the same anchor is safe; `pending` means ask again later.
+   */
+  async checkBroadcast(ref: AnchorBroadcastRef): Promise<PolledSignatureOutcome> {
+    return checkSignatureOnce(this.connection, ref, this.commitment);
   }
 
   async isAvailable(): Promise<boolean> {
@@ -308,6 +372,20 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
     } catch {
       return false;
     }
+  }
+}
+
+/** The tx hash of a confirmed memo, or the matching error for any other outcome. */
+function settledTxHash(signature: string, outcome: PolledSignatureOutcome): string {
+  switch (outcome.status) {
+    case "confirmed":
+      return signature;
+    case "failed":
+      throw new AnchorTransactionFailedError(signature, outcome.err);
+    case "expired":
+      throw new AnchorBroadcastExpiredError(signature);
+    case "pending":
+      throw new AnchorConfirmationPendingError(signature, outcome.reason);
   }
 }
 

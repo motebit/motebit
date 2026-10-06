@@ -17,6 +17,7 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
+import { submitRecordedMerkleRoot } from "./anchor-broadcasts.js";
 import type { MerkleTreeVersion } from "@motebit/protocol";
 import type { ChainAnchorSubmitter } from "@motebit/sdk";
 import { canonicalJson, sign, bytesToHex } from "@motebit/encryption";
@@ -212,7 +213,9 @@ async function submitIdentityLogAnchorOnChainOnce(
             "SELECT 1 FROM relay_identity_log_anchors WHERE anchor_id = ? AND status = 'signed' AND tx_hash IS NULL",
           )
           .get(anchorId) !== undefined,
-      () => submitter.submitMerkleRoot(anchor.merkle_root, anchor.relay_id, anchor.leaf_count),
+      // Sign → record → send → confirm that signature (anchor-broadcasts.ts):
+      // a memo already sent for this anchor is reconciled, never re-sent blindly.
+      () => submitRecordedMerkleRoot(db, submitter, "identity-log", anchorId, anchor),
     );
     if (!out.submitted) return true; // landed by another submit while this one waited
     const result = out.result;

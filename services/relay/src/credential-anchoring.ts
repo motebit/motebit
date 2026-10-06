@@ -10,6 +10,7 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
+import { submitRecordedMerkleRoot } from "./anchor-broadcasts.js";
 import type {
   CredentialAnchorBatch,
   CredentialAnchorProof,
@@ -305,7 +306,9 @@ async function submitCredentialAnchorOnChainOnce(
             "SELECT 1 FROM relay_credential_anchor_batches WHERE batch_id = ? AND status = 'signed' AND tx_hash IS NULL",
           )
           .get(batchId) !== undefined,
-      () => submitter.submitMerkleRoot(batch.merkle_root, batch.relay_id, batch.leaf_count),
+      // Sign → record → send → confirm that signature (anchor-broadcasts.ts):
+      // a memo already sent for this anchor is reconciled, never re-sent blindly.
+      () => submitRecordedMerkleRoot(db, submitter, "credential", batchId, batch),
     );
     if (!out.submitted) return true; // landed by another submit while this one waited
     const result = out.result;

@@ -15,6 +15,8 @@
 import { Connection, VersionedTransaction, type Commitment } from "@solana/web3.js";
 import type { Keypair } from "@solana/web3.js";
 
+import { confirmSignatureByPolling } from "./confirm-signature.js";
+
 /** SOL mint (native, wrapped). */
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
@@ -30,6 +32,33 @@ const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
  * tier; same quote/swap shapes.
  */
 const JUPITER_API = "https://lite-api.jup.ag/swap/v1";
+
+/**
+ * Confirm a swap by HTTP polling. Anything but a clean confirmation throws —
+ * as `confirmTransaction` did — so a caller never reports an unconfirmed swap.
+ */
+async function confirmSwap(
+  connection: Connection,
+  signature: string,
+  lastValidBlockHeight: number,
+  commitment: Commitment,
+): Promise<void> {
+  const outcome = await confirmSignatureByPolling(
+    connection,
+    { signature, lastValidBlockHeight },
+    commitment,
+  );
+  if (outcome.status === "confirmed") return;
+  if (outcome.status === "failed") {
+    throw new Error(`Jupiter swap ${signature} failed onchain: ${JSON.stringify(outcome.err)}`);
+  }
+  if (outcome.status === "expired") {
+    throw new Error(`Signature ${signature} has expired: block height exceeded.`);
+  }
+  throw new Error(
+    `Jupiter swap ${signature} was not confirmed in the bounded wait; it may still land`,
+  );
+}
 
 export interface JupiterSwapResult {
   /** Transaction signature. */
@@ -98,9 +127,9 @@ export async function swapUsdcToSol(
     preflightCommitment: commitment,
   });
 
-  // 4. Confirm
+  // 4. Confirm (HTTP polling — never a websocket subscription)
   const latestBlockhash = await connection.getLatestBlockhash(commitment);
-  await connection.confirmTransaction({ signature, ...latestBlockhash }, commitment);
+  await confirmSwap(connection, signature, latestBlockhash.lastValidBlockHeight, commitment);
 
   return {
     signature,
@@ -195,9 +224,9 @@ export async function swapSolToUsdc(
     preflightCommitment: commitment,
   });
 
-  // 4. Confirm
+  // 4. Confirm (HTTP polling — never a websocket subscription)
   const latestBlockhash = await connection.getLatestBlockhash(commitment);
-  await connection.confirmTransaction({ signature, ...latestBlockhash }, commitment);
+  await confirmSwap(connection, signature, latestBlockhash.lastValidBlockHeight, commitment);
 
   return {
     signature,
