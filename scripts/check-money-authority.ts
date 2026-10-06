@@ -110,13 +110,19 @@ function fail(message: string): void {
     fail("could not read packages/policy/src/policy-gate.ts");
   } else {
     const trustSwitchIdx = source.indexOf("ctx.callerTrustLevel");
+    // Match the WHOLE statement — the bare condition, opened directly by
+    // `if (` and closed by a body that re-raises approval. A substring match
+    // on the condition alone stayed green when the branch was neutralized
+    // (`if (false && profile.risk …)`) or its body emptied; the guard must
+    // bite on exactly those edits.
     const grantCheckIdx = source.search(
-      /profile\.risk >= RiskLevel\.R4_MONEY && !needsApproval && ctx\.verifiedGrant == null/,
+      /if \(\s*profile\.risk >= RiskLevel\.R4_MONEY && !needsApproval && ctx\.verifiedGrant == null\s*\)\s*\{\s*needsApproval = true;\s*\}/,
     );
     if (grantCheckIdx === -1) {
       fail(
         "policy-gate.ts is missing the R4 standing-authority block " +
-          "(`profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null`). " +
+          "(`if (profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null) { needsApproval = true; }`), " +
+          "or the block is present but neutralized (a prefixed constant, an extra conjunct, an emptied body). " +
           "An R4_MONEY tool call must never auto-execute without a verified grant — " +
           "docs/doctrine/memory-never-confers-authority.md.",
       );
@@ -168,14 +174,18 @@ function fail(message: string): void {
       if (rel.includes("__tests__") || rel.endsWith(".test.ts")) continue;
       const content = readFile(rel);
       if (content === null) continue;
-      const lines = content.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        // A CONSTRUCTED grant value: `verifiedGrant: {` (object literal).
-        // Pass-through threading (`verifiedGrant: options?.verifiedGrant`,
-        // `verifiedGrant: x.verifiedGrant`) is permitted.
-        if (/verifiedGrant\s*:\s*\{/.test(lines[i] as string)) {
-          violations.push(`${rel}:${i + 1}`);
-        }
+      // A CONSTRUCTED grant value, in either producer form:
+      //   - property form:   `verifiedGrant: {` (object literal)
+      //   - assignment form: `x.verifiedGrant = {`, `verifiedGrant = {`,
+      //     `x["verifiedGrant"] = {` (optionally parenthesised / cast)
+      // Scanned over the whole file so a line break between the key and the
+      // literal does not hide it. Pass-through threading
+      // (`verifiedGrant: options?.verifiedGrant`, `x.verifiedGrant = y`)
+      // is permitted — it moves a producer-minted value, it mints nothing.
+      const constructed = /verifiedGrant\s*:\s*\{|verifiedGrant["'`]?\]?\s*=(?!=)\s*(?:\(\s*)*\{/g;
+      for (const m of content.matchAll(constructed)) {
+        const line = content.slice(0, m.index).split("\n").length;
+        violations.push(`${rel}:${line}`);
       }
     }
   }
@@ -185,7 +195,10 @@ function fail(message: string): void {
         `(${PRODUCER}):\n` +
         violations.map((v) => `  - ${v}`).join("\n") +
         "\nOnly verifyGrantForTurn may mint the value — a constructed grant is an " +
-        "unverified authority claim. docs/doctrine/memory-never-confers-authority.md.",
+        "unverified authority claim. Fix: obtain the value from verifyGrantForTurn " +
+        "(packages/runtime/src/grant-verifier.ts) and thread it through, or present the signed " +
+        "artifacts via the turn's `delegation` option — never construct or assign a grant " +
+        "literal. docs/doctrine/memory-never-confers-authority.md.",
     );
   }
 }

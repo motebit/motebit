@@ -15,6 +15,7 @@
 import { describe, it, expect } from "vitest";
 import { PolicyGate } from "../policy-gate.js";
 import { RiskLevel } from "../index.js";
+import { AgentTrustLevel } from "@motebit/protocol";
 import type { ToolDefinition } from "@motebit/sdk";
 
 const MONEY_TOOL = {
@@ -84,6 +85,39 @@ describe("approval (validate step 8c)", () => {
   it("grantless R4 still requires approval (8b unchanged)", () => {
     const g = gate({ requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY });
     const d = g.validate(MONEY_TOOL, {}, g.createTurnContext());
+    expect(d.requiresApproval).toBe(true);
+  });
+
+  it("grantless R4 requires approval even when the band would auto-execute it (8b is load-bearing)", () => {
+    // The test above uses `requireApprovalAbove: R1`, so the threshold band
+    // already raises approval and step 8b never decides anything. Here the
+    // band is fully permissive (approve-above R4, deny-above R4): the ONLY
+    // thing that re-raises approval for a grantless R4 call is 8b. If 8b is
+    // neutralized this call auto-executes money with no grant and no human.
+    const g = gate({
+      maxRiskLevel: RiskLevel.R4_MONEY,
+      requireApprovalAbove: RiskLevel.R4_MONEY,
+      denyAbove: RiskLevel.R4_MONEY,
+    });
+    const d = g.validate(MONEY_TOOL, {}, g.createTurnContext());
+    expect(d.allowed).toBe(true);
+    expect(d.requiresApproval).toBe(true);
+  });
+
+  it("8b subordinates the Trusted-caller bypass for grantless R4 under a permissive band", () => {
+    const g = gate({
+      maxRiskLevel: RiskLevel.R4_MONEY,
+      requireApprovalAbove: RiskLevel.R4_MONEY,
+      denyAbove: RiskLevel.R4_MONEY,
+    });
+    const d = g.validate(
+      MONEY_TOOL,
+      {},
+      {
+        ...g.createTurnContext(),
+        callerTrustLevel: AgentTrustLevel.Trusted,
+      },
+    );
     expect(d.requiresApproval).toBe(true);
   });
 

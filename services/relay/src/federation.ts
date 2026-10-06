@@ -63,6 +63,7 @@ import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
+import { anchorSubmitPacerFor } from "./anchor-submit-pacing.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 import { FederationError } from "./errors.js";
 import { FixedWindowLimiter } from "./rate-limiter.js";
@@ -483,9 +484,15 @@ async function anchorRevocationOnChain(
     });
     return;
   }
-  const { txHash } = await revocationAnchorSubmitter.submitRevocation(
-    revokedPublicKeyHex,
-    timestamp,
+  // Serialized with the other anchoring streams and feeding their shared
+  // backoff, but never deferred by it: a revocation is a one-shot urgent write
+  // with no backlog to retry it from (anchor-submit-pacing.ts).
+  const submitter = revocationAnchorSubmitter;
+  const { txHash } = await anchorSubmitPacerFor(submitter).submit(
+    "revocation",
+    revokedPublicKeyHex.slice(0, 16),
+    () => submitter.submitRevocation(revokedPublicKeyHex, timestamp),
+    { gate: false },
   );
   logger.info("revocation.anchored_onchain", {
     publicKey: revokedPublicKeyHex.slice(0, 16) + "...",
