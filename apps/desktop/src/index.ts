@@ -132,7 +132,6 @@ export type {
 };
 export type { PairingSession, PairingStatus };
 export type { MemoryNode, MemoryEdge };
-export type { DeletionCertificate } from "@motebit/encryption";
 
 // Sync + goal event types live in ./sync-controller.ts and ./goal-scheduler.ts
 // and are re-exported from the top of this file.

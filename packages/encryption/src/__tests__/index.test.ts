@@ -9,7 +9,6 @@ import {
   deriveKey,
   deriveSyncEncryptionKey,
   hash,
-  createDeletionCertificate,
   secureErase,
   generateKeypair,
   sign,
@@ -239,38 +238,6 @@ describe("hash", () => {
     const a = await hash(new TextEncoder().encode("input-a"));
     const b = await hash(new TextEncoder().encode("input-b"));
     expect(a).not.toBe(b);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// createDeletionCertificate()
-// ---------------------------------------------------------------------------
-
-describe("createDeletionCertificate", () => {
-  it("creates a valid deletion certificate", async () => {
-    const cert = await createDeletionCertificate("node-123", "memory", "user-456");
-
-    expect(cert.target_id).toBe("node-123");
-    expect(cert.target_type).toBe("memory");
-    expect(cert.deleted_by).toBe("user-456");
-    expect(typeof cert.deleted_at).toBe("number");
-    expect(cert.deleted_at).toBeGreaterThan(0);
-    expect(typeof cert.tombstone_hash).toBe("string");
-    expect(cert.tombstone_hash.length).toBe(64);
-  });
-
-  it("creates different hashes for different targets", async () => {
-    const certA = await createDeletionCertificate("a", "memory", "user");
-    const certB = await createDeletionCertificate("b", "memory", "user");
-    expect(certA.tombstone_hash).not.toBe(certB.tombstone_hash);
-  });
-
-  it("supports event and identity target types", async () => {
-    const eventCert = await createDeletionCertificate("e1", "event", "user");
-    expect(eventCert.target_type).toBe("event");
-
-    const idCert = await createDeletionCertificate("i1", "identity", "user");
-    expect(idCert.target_type).toBe("identity");
   });
 });
 
