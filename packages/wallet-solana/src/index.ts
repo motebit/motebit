@@ -97,6 +97,12 @@ export {
 export {
   SolanaMemoSubmitter,
   type SolanaMemoSubmitterConfig,
+  type MemoSubmitterConnection,
+  type AnchorBroadcastRef,
+  type AnchorBroadcastHooks,
+  AnchorTransactionFailedError,
+  AnchorBroadcastExpiredError,
+  AnchorConfirmationPendingError,
   createSolanaMemoSubmitter,
   parseMemoAnchor,
   parseRevocationMemo,
@@ -122,3 +128,12 @@ export {
   type SolanaTreasuryReconciliationLogger,
   type SolanaTreasuryReconciliationStore,
 } from "./operator-treasury-reconciler.js";
+
+export {
+  confirmSignatureByPolling,
+  checkSignatureOnce,
+  type SignatureStatusReader,
+  type PolledSignatureRef,
+  type PolledSignatureOutcome,
+  type ConfirmByPollingOptions,
+} from "./confirm-signature.js";

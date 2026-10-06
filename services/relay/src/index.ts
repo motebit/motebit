@@ -2281,15 +2281,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // the shared getSignedDeclaration singleton so what lands IS what the
     // endpoint serves. Doctrine: docs/doctrine/operator-transparency.md
     // § Stage 2 onchain anchor; docs/doctrine/nist-alignment.md §8.
-    const { startTransparencyAnchorLoop } = await import("./transparency.js");
+    const { startTransparencyAnchorLoop, TRANSPARENCY_ANCHOR_RETRY_MS } =
+      await import("./transparency.js");
     transparencyAnchorInterval = startTransparencyAnchorLoop(
       relayIdentity,
       memoSubmitter,
       () => getEmergencyFreeze(),
       loopSupervisor,
-      ...(config.transparencyAnchorIntervalMs !== undefined
-        ? [config.transparencyAnchorIntervalMs]
-        : []),
+      config.transparencyAnchorIntervalMs ?? TRANSPARENCY_ANCHOR_RETRY_MS,
+      // Records each memo's signature before it is sent (anchor-broadcasts.ts).
+      moteDb.db,
     );
 
     // --- Fee-payer solvency guard ---

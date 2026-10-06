@@ -17,6 +17,7 @@ import {
 import { IDENTITY_KEYS_BACKFILL_SQL } from "./identity-keys.js";
 import { DISPUTE_FUND_ACTIONS_DDL, backfillDisputeFundActions } from "./dispute-fund-ledger.js";
 import { backfillAllocationEscrow, installAllocationEscrowGuards } from "./allocation-escrow.js";
+import { createAnchorBroadcastsTable } from "./anchor-broadcasts.js";
 
 const logger = createLogger({ service: "migrations" });
 
@@ -2644,6 +2645,22 @@ export const relayMigrations: Migration[] = [
       if (!cols.some((c) => c.name === "relay_ingress_redacted")) {
         db.exec("ALTER TABLE events ADD COLUMN relay_ingress_redacted INTEGER");
       }
+    },
+  },
+  {
+    version: 57,
+    name: "anchor_broadcasts",
+    up: (db) => {
+      // Sign → record → send → confirm that signature, for anchor memos
+      // (anchor-broadcasts.ts). A memo whose confirmation failed AFTER it was
+      // sent (an RPC without websocket `signatureSubscribe` threw on every
+      // confirm) left its anchor row unsubmitted, and every cycle sent a NEW
+      // memo for the same root. The signature is now written here before the
+      // memo is sent; a later cycle asks the chain about THAT signature
+      // (landed ⇒ the anchor is confirmed with it; pending ⇒ wait; expired or
+      // failed ⇒ one new memo) instead of sending blindly. One row per
+      // (stream, subject) — the latest broadcast for that anchor.
+      createAnchorBroadcastsTable(db);
     },
   },
 ];

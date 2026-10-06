@@ -98,10 +98,11 @@ describe("swapUsdcToSol", () => {
       blockhash,
       lastValidBlockHeight: 100,
     });
-    vi.spyOn(connection, "confirmTransaction").mockResolvedValue({
+    vi.spyOn(connection, "getBlockHeight").mockResolvedValue(0);
+    vi.spyOn(connection, "getSignatureStatuses").mockResolvedValue({
       context: { slot: 1 },
-      value: { err: null },
-    });
+      value: [{ slot: 1, confirmations: 0, err: null, confirmationStatus: "confirmed" }],
+    } as never);
 
     const result = await swapUsdcToSol(20_000n, keypair, connection);
 
@@ -134,10 +135,11 @@ describe("swapUsdcToSol", () => {
       blockhash: Keypair.generate().publicKey.toBase58(),
       lastValidBlockHeight: 1,
     });
-    vi.spyOn(connection, "confirmTransaction").mockResolvedValue({
+    vi.spyOn(connection, "getBlockHeight").mockResolvedValue(0);
+    vi.spyOn(connection, "getSignatureStatuses").mockResolvedValue({
       context: { slot: 1 },
-      value: { err: null },
-    });
+      value: [{ slot: 1, confirmations: 0, err: null, confirmationStatus: "confirmed" }],
+    } as never);
 
     const result = await swapUsdcToSol(1n, keypair, connection);
     expect(result.outputAmount).toBe(0n);
@@ -219,7 +221,11 @@ describe("swapSolToUsdc — the funding-side mirror", () => {
       blockhash: "h",
       lastValidBlockHeight: 1,
     } as never);
-    vi.spyOn(connection, "confirmTransaction").mockResolvedValue({ value: { err: null } } as never);
+    vi.spyOn(connection, "getBlockHeight").mockResolvedValue(0);
+    vi.spyOn(connection, "getSignatureStatuses").mockResolvedValue({
+      context: { slot: 1 },
+      value: [{ slot: 1, confirmations: 0, err: null, confirmationStatus: "confirmed" }],
+    } as never);
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({

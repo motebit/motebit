@@ -30,6 +30,7 @@ import {
   type Commitment,
 } from "@solana/web3.js";
 import { base58Encode, hexToBytes32 } from "@motebit/protocol";
+import { confirmSignatureByPolling, type ConfirmByPollingOptions } from "./confirm-signature.js";
 
 /**
  * Derive the motebit's sovereign Solana address from its Ed25519 identity
@@ -203,6 +204,12 @@ export interface Web3JsRpcAdapterConfig {
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
   };
+  /**
+   * The HTTP-polling confirmation wait of a non-durable send
+   * (`confirm-signature.ts`; never a websocket subscription). Default: 1 s
+   * polls for up to 90 s. Tests inject `sleep`/`now`.
+   */
+  confirm?: ConfirmByPollingOptions;
   /** Per-call RPC timeout in the durable paths. Default 10 s. */
   rpcTimeoutMs?: number;
   /** The nonce lane's seed suffix (`nonceSeedFor`); absent ⇒ `NONCE_ACCOUNT_SEED`. */
@@ -238,6 +245,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   private readonly finalitySleep: (ms: number) => Promise<void>;
   private readonly finalityNow: () => number;
   private readonly rpcTimeoutMs: number;
+  private readonly confirmOpts: ConfirmByPollingOptions;
   private nonceAddress: PublicKey | null = null;
   private readonly nonceSeed: string;
   private creatingNonce: Promise<void> | null = null;
@@ -267,6 +275,8 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       config.finality?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.finalityNow = config.finality?.now ?? Date.now;
     this.rpcTimeoutMs = config.rpcTimeoutMs ?? RPC_TIMEOUT_MS;
+    // The polled confirmation shares the expiry poll's clock unless given its own.
+    this.confirmOpts = config.confirm ?? { sleep: this.sleep, now: this.now };
     this.nonceSeed = nonceSeedFor(config.nonceSeedSuffix);
     // Keypair.fromSeed is the standard Ed25519 seed → keypair derivation.
     // The resulting public key is identical to the motebit identity
@@ -430,21 +440,32 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
 
     try {
       const signature = await this.connection.sendRawTransaction(tx.serialize());
-      const confirmation = await this.connection.confirmTransaction(
-        {
-          signature,
-          blockhash: latest.blockhash,
-          lastValidBlockHeight: latest.lastValidBlockHeight,
-        },
+      // HTTP polling, never a websocket subscription: an RPC without
+      // `signatureSubscribe` must not turn a landed payment into a throw.
+      const confirmation = await confirmSignatureByPolling(
+        this.connection,
+        signed,
         this.decisionCommitment,
+        this.confirmOpts,
       );
-      return {
-        signature,
-        slot: confirmation.context.slot,
-        confirmed: confirmation.value.err === null,
-        // Exactly one transaction is ever broadcast per send.
-        earlierBroadcastsDead: true,
-      };
+      if (confirmation.status === "confirmed" || confirmation.status === "failed") {
+        return {
+          signature,
+          slot: confirmation.slot,
+          confirmed: confirmation.status === "confirmed",
+          // Exactly one transaction is ever broadcast per send.
+          earlierBroadcastsDead: true,
+        };
+      }
+      if (confirmation.status === "expired") {
+        // Same contract as web3.js's TransactionExpiredBlockheightExceededError.
+        throw new Error(`Signature ${signed.signature} has expired: block height exceeded.`);
+      }
+      // The bounded wait ended undecided: it may still land. Never re-signed;
+      // the caller decides later from its recorded signature.
+      throw new Error(
+        `Transaction ${signed.signature} was not confirmed in the bounded wait${confirmation.reason ? ` (${confirmation.reason})` : ""}; it may still land`,
+      );
     } catch (err) {
       if (!isBlockhashExpiry(err)) throw err;
       const outcome = await this.awaitDecisiveOutcome(signed);
