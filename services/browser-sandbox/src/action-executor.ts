@@ -53,6 +53,7 @@ import type { Page, Request } from "playwright-core";
 import type { BrowserSession } from "./chromium-pool.js";
 import { ServiceError } from "./errors.js";
 import { urlsAreEquivalent } from "./url-equivalence.js";
+import { assertNavigableUrl } from "./url-law.js";
 
 /**
  * Slice 2h — text bounds for `read_page` results. `text` is the
@@ -573,11 +574,12 @@ export function deriveVisualContentDetected(heuristic: {
 
 async function doNavigate(session: BrowserSession, action: NavigateAction): Promise<ActionResult> {
   // Normalize relative-looking inputs (`example.com`, `tesla.com/about`)
-  // into absolute URLs. Per spec: implementations SHOULD normalize but
-  // MAY reject malformed inputs with `not_supported`. The test for
-  // "looks absolute" is presence of a scheme — anything else is treated
-  // as a hostname-leading path and prefixed with `https://`.
-  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(action.url) ? action.url : `https://${action.url}`;
+  // into absolute URLs and apply the outbound-URL law before anything
+  // reaches `page.goto`: non-http(s) schemes, loopback, private, link-
+  // local / cloud-metadata and `*.internal` targets are refused with
+  // `policy_denied` (url-law.ts — the egress proxy is the resolving floor
+  // beneath this check).
+  const url = await assertNavigableUrl(action.url);
 
   // Surface-determinism defense at the dispatch layer. The prompt
   // rule in PERCEPTION_DOCTRINE teaches the AI to read the [Now]
@@ -888,7 +890,9 @@ export async function executeUserInput(
       // so a malformed wire input fails honestly here rather than
       // letting Playwright produce a noisier error. Mirrors the regex
       // motebit-side `doNavigate` uses.
-      const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(event.url) ? event.url : `https://${event.url}`;
+      // Same law as `doNavigate`: the user's address bar is no less a
+      // server-side fetch than the motebit's navigate.
+      const url = await assertNavigableUrl(event.url);
       try {
         // Single-phase wait. Unlike motebit-side `doNavigate` we don't
         // need the SPA-settle window or in-page heuristics — the
