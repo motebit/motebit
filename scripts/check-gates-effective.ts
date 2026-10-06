@@ -3260,6 +3260,22 @@ export function probeForward(db: DatabaseDriver): void {
   {
     script: "check-no-secrets-in-client-bundles",
     proves:
+      "checks the never-deployed PREMISE behind the LOCAL_OPERATOR_TOKEN allowlist entries, not just assumes it: apps/operator bakes the operator's relay master bearer into its bundle and is allowlisted only because it is never deployed. Planting `apps/operator/vercel.json` (one push from a public URL serving that bearer) stayed green before; the premise arm must fire. writeFixture-and-delete (no real file mutated).",
+    perturb: () => writeFixture(`apps/operator/vercel.json`, "{}\n"),
+  },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
+      "flags a deploy workflow referencing a local-only app — the second way the never-deployed premise of the LOCAL_OPERATOR_TOKEN allowlist breaks. The fixture workflow builds `@motebit/inspector` (package name, not path), which must be matched; the premise arm must fire. writeFixture-and-delete (no real file mutated).",
+    perturb: () =>
+      writeFixture(
+        `.github/workflows/${PROBE_PREFIX}deploy_inspector.yml`,
+        "name: probe\non: workflow_dispatch\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pnpm --filter @motebit/inspector build\n",
+      ),
+  },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
       "flags a credential-named public env var read in app source — the 2026-09-30 shape, where apps/web read a provider URL from VITE_* and Vite inlined its `?api-key=` into motebit.com's public bundle. The fixture reads `import.meta.env.VITE_PROBE_HELIUS_API_KEY` in apps/web/src, which is not in PUBLIC_BUILD_ENV.web (deny by default); the static arm scans textually (no build needed).",
     perturb: () =>
       writeFixture(

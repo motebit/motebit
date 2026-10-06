@@ -116,6 +116,94 @@ export const PUBLIC_ENV_ALLOWLIST: readonly PublicEnvAllowEntry[] = [
   },
 ];
 
+/**
+ * The apps whose allowlist entries rest on the LOCAL-ONLY premise ("never
+ * deployed: no vercel.json, no deploy workflow"). Derived from the allowlist
+ * itself, so a new entry citing `LOCAL_OPERATOR_TOKEN` is covered with no
+ * second list to keep in sync.
+ */
+export function localOnlyApps(
+  allowlist: readonly PublicEnvAllowEntry[] = PUBLIC_ENV_ALLOWLIST,
+): string[] {
+  const apps = new Set<string>();
+  for (const a of allowlist) {
+    if (a.why !== LOCAL_OPERATOR_TOKEN) continue;
+    const m = /^apps\/([^/]+)\//.exec(a.file);
+    if (m) apps.add(m[1] as string);
+  }
+  return [...apps].sort();
+}
+
+/** Hosting configs whose presence in an app dir means "this app deploys somewhere". */
+export const DEPLOY_CONFIG_FILES = [
+  "vercel.json",
+  ".vercel/project.json",
+  "netlify.toml",
+  "netlify.json",
+  "fly.toml",
+] as const;
+
+/**
+ * The premise check behind `LOCAL_OPERATOR_TOKEN`: an app allowlisted to bake
+ * the operator's relay bearer into its bundle is safe ONLY while it is never
+ * deployed. Unchecked, that premise is a pre-authorization waiting for a
+ * leak — a `vercel.json` (or a deploy workflow) appearing for the app would
+ * publish the master token to the internet with the gate still green.
+ * RED when any local-only app gains a hosting config in its own dir, a
+ * repo-root hosting config names it, or any workflow under
+ * `.github/workflows` references it (by path or by package name).
+ */
+export function localOnlyPremiseViolations(
+  root: string,
+  allowlist: readonly PublicEnvAllowEntry[] = PUBLIC_ENV_ALLOWLIST,
+): { findings: string[]; apps: string[]; workflows: number } {
+  const findings: string[] = [];
+  const apps = localOnlyApps(allowlist);
+  const needlesFor = (app: string): string[] => {
+    const needles = [`apps/${app}`];
+    const pkg = join(root, "apps", app, "package.json");
+    if (existsSync(pkg)) {
+      try {
+        const name = (JSON.parse(readFileSync(pkg, "utf8")) as { name?: unknown }).name;
+        if (typeof name === "string" && name.length > 0) needles.push(name);
+      } catch {
+        // An unparseable manifest still has its path needle.
+      }
+    }
+    return needles;
+  };
+  const why =
+    "its PUBLIC_ENV_ALLOWLIST entries bake the operator relay bearer into the bundle on the premise it is never deployed";
+
+  for (const app of apps) {
+    for (const cf of DEPLOY_CONFIG_FILES) {
+      if (existsSync(join(root, "apps", app, cf))) {
+        findings.push(`apps/${app}/${cf} — local-only app gained a hosting config; ${why}`);
+      }
+    }
+  }
+
+  const rootConfigs = DEPLOY_CONFIG_FILES.filter((cf) => existsSync(join(root, cf)));
+  const wfDir = join(root, ".github", "workflows");
+  const workflows = existsSync(wfDir)
+    ? readdirSync(wfDir)
+        .filter((f) => /\.ya?ml$/.test(f))
+        .map((f) => `.github/workflows/${f}`)
+    : [];
+  for (const rel of [...rootConfigs, ...workflows]) {
+    const text = readFileSync(join(root, rel), "utf8");
+    for (const app of apps) {
+      const hit = needlesFor(app).find((n) =>
+        new RegExp(`(?<![\\w@-])${n.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}(?![\\w-])`).test(text),
+      );
+      if (hit != null) {
+        findings.push(`${rel} — references local-only app \`${app}\` (\`${hit}\`); ${why}`);
+      }
+    }
+  }
+  return { findings, apps, workflows: workflows.length };
+}
+
 /** Every public-prefixed env name referenced in `text` (code or comment). */
 export function scanSourceForPublicEnvNames(text: string): { name: string; offset: number }[] {
   const out: { name: string; offset: number }[] = [];
