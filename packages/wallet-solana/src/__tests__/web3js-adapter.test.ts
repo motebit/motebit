@@ -988,7 +988,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     expect(sendSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("a 'processed' adapter never DECIDES at processed: confirmation and the height read run at confirmed", async () => {
+  it("a 'processed' adapter never DECIDES at processed: confirmation runs at confirmed, the expiry height read at finalized", async () => {
     let t = 0;
     const adapter = new Web3JsRpcAdapter({
       rpcUrl: "https://api.devnet.solana.com",
@@ -1014,7 +1014,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       value: [{ confirmationStatus: "confirmed", err: null, slot: 42, confirmations: 1 }],
     } as never);
     await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
-    expect(height.mock.calls[0]?.[0]).toBe("confirmed");
+    expect(height.mock.calls[0]?.[0]).toBe("finalized");
     // No height read decides anything any more (#990).
     expect(epoch).not.toHaveBeenCalled();
   });

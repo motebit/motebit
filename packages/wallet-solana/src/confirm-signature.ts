@@ -16,15 +16,17 @@
  *   - `confirmed` — the status reached the requested commitment, no error;
  *   - `failed` — the transaction landed with an error (its fee was spent; it
  *     did nothing else);
- *   - `expired` — the chain's block height (read BEFORE the status) is past
+ *   - `expired` — the chain's finalized block height (read BEFORE the status) is past
  *     `lastValidBlockHeight` and the status, history included, is absent. The
  *     blockhash can no longer be used, so the transaction can never land;
  *   - `pending` — the bounded wait ended with neither. Never evidence that it
  *     did not land: the caller keeps the signature and asks again later.
  *
- * `expired` is read from absence. That is acceptable where a mistaken re-send
- * costs one duplicate idempotent write (an anchor memo); a value-moving send
- * must not re-sign on it (the adapter's payment paths never do — #990).
+ * `expired` is read from absence, and one absent read can be a lagging
+ * load-balanced node. A caller that re-sends on it should see it twice, on
+ * separate passes (the relay's anchor broadcasts do), and only where a mistaken
+ * re-send costs one duplicate idempotent write (an anchor memo); a value-moving
+ * send must not re-sign on it (the adapter's payment paths never do — #990).
  */
 
 import type { Commitment, SignatureStatus } from "@solana/web3.js";
@@ -99,9 +101,10 @@ export async function checkSignatureOnce(
   try {
     // Height FIRST: if it is already past the expiry, a transaction that
     // landed did so before this read, so the status read below must see it.
-    const blockHeight = await conn.getBlockHeight(
-      commitment === "processed" ? "confirmed" : commitment,
-    );
+    // Read at `finalized` whatever the requested commitment: the expiry
+    // verdict needs the most conservative height (the lowest the cluster
+    // agrees on), never an optimistic one.
+    const blockHeight = await conn.getBlockHeight("finalized");
     const resp = await conn.getSignatureStatuses([ref.signature], {
       searchTransactionHistory: true,
     });

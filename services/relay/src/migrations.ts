@@ -2658,8 +2658,10 @@ export const relayMigrations: Migration[] = [
       // memo for the same root. The signature is now written here before the
       // memo is sent; a later cycle asks the chain about THAT signature
       // (landed ⇒ the anchor is confirmed with it; pending ⇒ wait; expired or
-      // failed ⇒ one new memo) instead of sending blindly. One row per
-      // (stream, subject) — the latest broadcast for that anchor.
+      // failed ⇒ one new memo; expired ⇒ one new memo only once a SECOND,
+      // later pass sees it expired, the first recorded in `expired_seen_at`)
+      // instead of sending blindly. One row per (stream, subject) — the latest
+      // broadcast for that anchor.
       createAnchorBroadcastsTable(db);
     },
   },

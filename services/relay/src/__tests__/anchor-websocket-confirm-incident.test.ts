@@ -64,8 +64,15 @@ class FakeRpc {
   /** Every memo sent, in order: its signature and the anchored root / hash. */
   sends: { sig: string; memo: string }[] = [];
   statuses = new Map<string, Status | null>();
-  /** What happens to the next sends: "land" | "never" | "err". */
-  plan: Array<"land" | "never" | "err"> = [];
+  /**
+   * What happens to the next sends: "land" | "never" | "err" | "late" (not
+   * visible when sent; the test lands it later with `land(sig)`).
+   */
+  plan: Array<"land" | "never" | "err" | "late"> = [];
+  /** Signatures whose NEXT status read returns null once (a lagging load-balanced node). */
+  absentOnce = new Set<string>();
+  /** While set, every status read fails with an HTTP 500. */
+  statusError = false;
   websocketConfirmCalls = 0;
 
   getGenesisHash = async (): Promise<string> => SOLANA_DEVNET_GENESIS_HASH;
@@ -82,7 +89,7 @@ class FakeRpc {
     const fate = this.plan.shift() ?? "land";
     this.statuses.set(
       sig,
-      fate === "never"
+      fate === "never" || fate === "late"
         ? null
         : {
             slot: 1_000 + this.sends.length,
@@ -102,10 +109,25 @@ class FakeRpc {
   };
   getSignatureStatuses = async (
     sigs: string[],
-  ): Promise<{ context: { slot: number }; value: (Status | null)[] }> => ({
-    context: { slot: 2_000 },
-    value: sigs.map((s) => this.statuses.get(s) ?? null),
-  });
+  ): Promise<{ context: { slot: number }; value: (Status | null)[] }> => {
+    if (this.statusError) throw new Error("500 Internal Server Error");
+    return {
+      context: { slot: 2_000 },
+      value: sigs.map((s) => {
+        if (this.absentOnce.delete(s)) return null;
+        return this.statuses.get(s) ?? null;
+      }),
+    };
+  };
+  /** A "late" memo lands now (finalized, no error). */
+  land(sig: string): void {
+    this.statuses.set(sig, {
+      slot: 1_500,
+      confirmations: null,
+      err: null,
+      confirmationStatus: "finalized",
+    });
+  }
   getBlockHeight = async (): Promise<number> => this.height;
   getBalance = async (): Promise<number> => 1_000_000_000;
   getMinimumBalanceForRentExemption = async (): Promise<number> => 890_880;
@@ -280,6 +302,47 @@ describe("anchoring on an RPC without websocket signatureSubscribe", () => {
     const sent = rpc.sendsOf(roots.fed!);
     expect(sent).toHaveLength(2);
     expect(row("fed")).toEqual({ status: "confirmed", tx_hash: sent[1] });
+  });
+
+  it("one absent status read past expiry does not re-send a memo that landed late", async () => {
+    rpc.plan = ["late"]; // fed's memo is undecided when the confirm wait ends
+    await cycle();
+    const [first] = rpc.sendsOf(roots.fed!);
+    expect(first).toBeDefined();
+    rpc.land(first!); // it lands (finalized, no error)…
+    rpc.height += 1_000; // …and the chain moves past its lastValidBlockHeight
+    rpc.absentOnce.add(first!); // one lagging node answers [null] once
+    await cycle();
+    await cycle();
+    await cycle();
+    expect(rpc.sendsOf(roots.fed!)).toEqual([first]);
+    expect(row("fed")).toEqual({ status: "confirmed", tx_hash: first });
+  });
+
+  it("a memo that never lands is replaced only after expiry is seen on two cycles, then never again", async () => {
+    rpc.plan = ["never"];
+    await cycle(); // sent; undecided
+    rpc.height += 1_000; // past lastValidBlockHeight
+    await cycle(); // first expiry observation: recorded, nothing sent
+    expect(rpc.sendsOf(roots.fed!)).toHaveLength(1);
+    expect(row("fed").tx_hash).toBeNull();
+    await cycle(); // second observation: exactly one replacement, which lands
+    await cycle();
+    await cycle();
+    await cycle();
+    const sent = rpc.sendsOf(roots.fed!);
+    expect(sent).toHaveLength(2);
+    expect(row("fed")).toEqual({ status: "confirmed", tx_hash: sent[1] });
+  });
+
+  it("a status-lookup error past expiry is never an expiry observation", async () => {
+    rpc.plan = ["never"];
+    await cycle();
+    rpc.height += 1_000;
+    rpc.statusError = true;
+    for (let i = 0; i < 5; i++) await cycle();
+    expect(rpc.sendsOf(roots.fed!)).toHaveLength(1);
+    expect(row("fed").tx_hash).toBeNull();
   });
 
   it("a memo that landed with an error is a failure, not a success, and is replaced by exactly one new memo", async () => {
