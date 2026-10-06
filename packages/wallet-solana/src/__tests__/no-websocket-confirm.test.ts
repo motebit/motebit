@@ -11,61 +11,56 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const SRC = join(__dirname, "..");
-const SOURCE_EXT = /\.(ts|tsx|mts|cts|js|cjs|mjs)$/;
+const SOURCE_EXT = /\.(ts|tsx|mts|cts|js|jsx|cjs|mjs)$/;
 /** The bare names, anywhere outside a comment: a call, an alias, a `.bind`, a destructuring. */
 const FORBIDDEN =
   /\b(confirmTransaction|sendAndConfirmTransaction|sendAndConfirmRawTransaction|onSignatureWithOptions|onSignature|signatureSubscribe)\b/g;
 
-/**
- * Blank every comment (line and block), keeping newlines so line numbers hold.
- * String and template contents stay: a name in a string (`c["onSignature"]`)
- * is still a reference. A `//` or `/*` inside a string is not a comment.
- */
-function stripComments(source: string): string {
-  let out = "";
-  let quote: string | null = null;
-  for (let i = 0; i < source.length; i++) {
-    const ch = source[i]!;
-    const next = source[i + 1];
-    if (quote != null) {
-      out += ch;
-      if (ch === "\\") {
-        out += next ?? "";
-        i++;
-      } else if (ch === quote || (ch === "\n" && quote !== "`")) {
-        quote = null;
-      }
-      continue;
-    }
-    if (ch === "/" && next === "/") {
-      while (i < source.length && source[i] !== "\n") i++;
-      out += "\n";
-      continue;
-    }
-    if (ch === "/" && next === "*") {
-      const close = source.indexOf("*/", i + 2);
-      const stop = close === -1 ? source.length : close + 2;
-      out += source.slice(i, stop).replace(/[^\n]/g, " ");
-      i = stop - 1;
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === "`") quote = ch;
-    out += ch;
-  }
-  return out;
+/** The TypeScript script kind for a file name (regex, JSX and template literals parse per kind). */
+function scriptKindOf(file: string): ts.ScriptKind {
+  if (/\.tsx$/.test(file)) return ts.ScriptKind.TSX;
+  if (/\.jsx$/.test(file)) return ts.ScriptKind.JSX;
+  if (/\.(js|cjs|mjs)$/.test(file)) return ts.ScriptKind.JS;
+  return ts.ScriptKind.TS;
 }
 
-/** Every websocket-confirm name referenced in `source` outside comments. */
-function findWebsocketConfirms(source: string): { line: number; name: string }[] {
+/**
+ * Every websocket-confirm name referenced in `source` outside comments.
+ *
+ * The source is PARSED (the TypeScript parser), never lexed by hand: regex,
+ * template and string literals are tokenized as the compiler does, so a `/*`
+ * or `//` inside one is never read as a comment. Every identifier and every
+ * string, template and regex literal is checked; comments are trivia and
+ * never reach the walk. A name in a string (`c["onSignature"]`) is still a
+ * reference.
+ */
+function findWebsocketConfirms(
+  source: string,
+  file = "source.ts",
+): { line: number; name: string }[] {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKindOf(file));
   const out: { line: number; name: string }[] = [];
-  stripComments(source)
-    .split("\n")
-    .forEach((line, i) => {
-      for (const m of line.matchAll(FORBIDDEN)) out.push({ line: i + 1, name: m[1]! });
-    });
+  const visit = (node: ts.Node): void => {
+    const text =
+      ts.isIdentifier(node) || ts.isPrivateIdentifier(node)
+        ? node.text
+        : ts.isStringLiteralLike(node) ||
+            ts.isTemplateLiteralToken(node) ||
+            ts.isRegularExpressionLiteral(node) ||
+            ts.isJsxText(node)
+          ? node.text
+          : null;
+    if (text != null) {
+      const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+      for (const m of text.matchAll(FORBIDDEN)) out.push({ line, name: m[1]! });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
   return out;
 }
 
@@ -88,7 +83,7 @@ describe("no websocket confirmation in wallet-solana src", () => {
     expect(files.length).toBeGreaterThan(5);
     const offenders: string[] = [];
     for (const file of files) {
-      for (const hit of findWebsocketConfirms(readFileSync(file, "utf-8"))) {
+      for (const hit of findWebsocketConfirms(readFileSync(file, "utf-8"), file)) {
         offenders.push(`${file}:${hit.line}: ${hit.name}`);
       }
     }
@@ -100,7 +95,7 @@ describe("no websocket confirmation in wallet-solana src", () => {
 });
 
 describe("findWebsocketConfirms (the matcher)", () => {
-  const flagged: Array<[string, string]> = [
+  const flagged: Array<[string, string, string?]> = [
     ["a direct call", "await conn.confirmTransaction(sig);"],
     [
       "an import alias",
@@ -113,10 +108,29 @@ describe("findWebsocketConfirms (the matcher)", () => {
     ["an element access", 'const f = c["signatureSubscribe"];'],
     ["code after a block comment on the same line", "/* x */ const f = c.onSignature;"],
     ["code after a // inside a string", 'const u = "http://rpc"; const f = c.onSignature;'],
+    [
+      "a live call after a regex literal that looks like a block-comment opener",
+      'const v = u.replace(/\\/*$/, "");\nawait c.confirmTransaction(sig, "confirmed");',
+    ],
+    [
+      "a live call after a regex holding // on the same line",
+      "const ok = /https?:\\/\\//.test(u); await c.confirmTransaction(sig);",
+    ],
+    [
+      "a live call after a template literal holding /*",
+      "const t = `glob/*`;\nconst f = c.onSignature;",
+    ],
+    [
+      "a live call after a template literal holding //",
+      "const t = `a//b`; c.onSignature(sig, cb);",
+    ],
+    ["a name inside a string", 'const k = "sendAndConfirmTransaction";'],
+    ["a live call in a template substitution", "const t = `${await c.confirmTransaction(sig)}`;"],
+    ["a live call in a .tsx file", "const el = <A f={c.onSignature} />;", "x.tsx"],
   ];
-  for (const [label, src] of flagged) {
+  for (const [label, src, file] of flagged) {
     it(`flags ${label}`, () => {
-      expect(findWebsocketConfirms(src)).toHaveLength(1);
+      expect(findWebsocketConfirms(src, file)).toHaveLength(1);
     });
   }
 
@@ -125,6 +139,9 @@ describe("findWebsocketConfirms (the matcher)", () => {
     ["a JSDoc mention", "/**\n * as `sendAndConfirmTransaction` did\n */\nconst x = 1;"],
     ["a trailing comment", "const x = 1; // no signatureSubscribe here"],
     ["a longer identifier", "const confirmTransactionByPolling = 1;"],
+    ["a block comment after a regex literal", "const r = /a\\/b/; /* confirmTransaction */"],
+    ["a line comment after a string holding /*", 'const g = "src/*"; // onSignature'],
+    ["a comment inside a template substitution", "const t = `${/* onSignature */ 1}`;"],
   ];
   for (const [label, src] of clean) {
     it(`does not flag ${label}`, () => {
