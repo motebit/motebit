@@ -335,7 +335,7 @@ pnpm run lint          # Lint all packages
 
 The 62 workspace-private packages — `@motebit/runtime`, `@motebit/relay`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 12 published packages above.
 
-The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`.
+The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`. The same gate pins `@motebit/verifier`'s verify API (`verifyFile`, `verifyArtifact`, `formatHuman`).
 
 ## License
 

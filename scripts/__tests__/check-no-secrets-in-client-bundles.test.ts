@@ -38,6 +38,8 @@ import {
   scanOutputForEnvValues,
   valueNeedles,
   isSecretShapedEnvName,
+  localOnlyApps,
+  localOnlyPremiseViolations,
   publicBuildEnvGuard,
   publicEnvViolations,
   publicUrlViolation,
@@ -1786,4 +1788,65 @@ describe("R6 a Vercel preview's full system env: the docs build is green, platfo
       }
     });
   }
+});
+
+describe("LOCAL_OPERATOR_TOKEN premise (never deployed) is checked, not assumed", () => {
+  function premiseRoot(name: string): string {
+    const root = join(tmp, `premise-${name}`);
+    mkdirSync(join(root, "apps", "operator"), { recursive: true });
+    mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+    writeFileSync(
+      join(root, "apps", "operator", "package.json"),
+      JSON.stringify({ name: "@motebit/operator" }),
+    );
+    writeFileSync(
+      join(root, ".github", "workflows", "deploy-web.yml"),
+      "jobs:\n  d:\n    steps:\n      - run: pnpm --filter @motebit/operator-ish build\n",
+    );
+    return root;
+  }
+
+  it("derives the local-only apps from the allowlist itself", () => {
+    expect(localOnlyApps()).toEqual(["inspector", "operator"]);
+  });
+
+  it("GREEN when no hosting config or workflow names a local-only app", () => {
+    expect(localOnlyPremiseViolations(premiseRoot("clean")).findings).toEqual([]);
+  });
+
+  it("RED on a hosting config in a local-only app", () => {
+    for (const cf of ["vercel.json", "netlify.toml", "fly.toml"]) {
+      const root = premiseRoot(`cfg-${cf}`);
+      writeFileSync(join(root, "apps", "operator", cf), "{}\n");
+      const f = localOnlyPremiseViolations(root).findings;
+      expect(f.some((x) => x.startsWith(`apps/operator/${cf} — local-only app`))).toBe(true);
+    }
+  });
+
+  it("RED on a workflow referencing a local-only app by path or by package name", () => {
+    for (const ref of [
+      "working-directory: apps/operator",
+      "pnpm --filter @motebit/operator build",
+    ]) {
+      const root = premiseRoot(`wf-${ref.length}`);
+      writeFileSync(
+        join(root, ".github", "workflows", "deploy-x.yml"),
+        `steps:\n  - run: ${ref}\n`,
+      );
+      const f = localOnlyPremiseViolations(root).findings;
+      expect(
+        f.some((x) =>
+          x.startsWith(".github/workflows/deploy-x.yml — references local-only app `operator`"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("RED on a repo-root hosting config naming a local-only app", () => {
+    const root = premiseRoot("rootcfg");
+    writeFileSync(join(root, "vercel.json"), JSON.stringify({ rootDirectory: "apps/operator" }));
+    expect(
+      localOnlyPremiseViolations(root).findings.some((x) => x.startsWith("vercel.json —")),
+    ).toBe(true);
+  });
 });

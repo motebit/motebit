@@ -73,6 +73,8 @@ import { checkBuildOutput } from "./check-client-build-output.js";
 import {
   PUBLIC_BUILD_ENV,
   PUBLIC_ENV_ALLOWLIST,
+  DEPLOY_CONFIG_FILES,
+  localOnlyPremiseViolations,
   PUBLIC_ENV_SURFACES,
   isSecretShapedEnvName,
   publicEnvViolations,
@@ -266,6 +268,8 @@ export interface GateResult {
   missingDist: string[];
   /** Governed output dirs the ground-truth output scan (the law) read. */
   outputScanned: string[];
+  /** Local-only apps whose never-deployed premise was checked, and the workflows read for it. */
+  localOnly: { apps: string[]; workflows: number };
 }
 
 export interface GateOptions {
@@ -359,6 +363,12 @@ export function runGate(
     }
   }
 
+  // The LOCAL_OPERATOR_TOKEN premise ("never deployed") is checked, not
+  // assumed: a local-only app gaining a hosting config or a deploy-workflow
+  // reference turns its allowlist entries into a published master token.
+  const premise = localOnlyPremiseViolations(root, allowlist);
+  staticFindings.push(...premise.findings);
+
   const distDirs: { app: string; dir: string }[] = [];
   for (const app of apps) {
     for (const d of ["dist", join(".next", "static")]) {
@@ -405,6 +415,7 @@ export function runGate(
     staticFindings,
     artifactFindings,
     outputScanned,
+    localOnly: { apps: premise.apps, workflows: premise.workflows },
     sourceFiles,
     configFiles,
     apps: apps.length,
@@ -579,7 +590,10 @@ async function main(): Promise<void> {
       `${r.artifactFiles} built artifact file(s) in ${r.distDirs.length} dist dir(s) ` +
       `scanned for credential shapes + the public env literal${r.distDirs.length > 0 ? ` (${r.distDirs.join(", ")})` : " — none built; CI runs --require-dist after pnpm build"}; ` +
       `${wiring.checked.length} vite config(s) executed with a planted unlisted var and refused (${wiring.checked.join(", ") || "none present"}); ` +
-      `sibling vite.config.* refused; every governed build script runs the output scan.`,
+      `sibling vite.config.* refused; every governed build script runs the output scan; ` +
+      `the never-deployed premise of ${r.localOnly.apps.length} local-only app(s) (${r.localOnly.apps.join(", ")}) held: ` +
+      `no hosting config (${DEPLOY_CONFIG_FILES.join(", ")}) in the app or naming it at the repo root, ` +
+      `no reference in ${r.localOnly.workflows} workflow(s) under .github/workflows.`,
   );
 }
 

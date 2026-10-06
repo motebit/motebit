@@ -24,7 +24,9 @@
  *       allocation, UPDATEs or DELETEs ledger rows, forwards or fee-journal
  *       rows. (relay_transactions INSERTs are allowed only in the account
  *       store, the primitive the chokepoint writes through; R1 governs its
- *       callers.)
+ *       callers.) Nor does any SQL write outside the chokepoint name its
+ *       table NON-literally (`UPDATE ${t} …`, `"DELETE FROM " + t`) — an
+ *       interpolated table cannot be proven not to be a money table.
  *   R3  Every `moveAllocationMoney` call names a literal `kind` declared in
  *       `ALLOCATION_MONEY_KINDS`.
  *   R4  Every declared kind maps, in the harness's `KIND_ACTIONS`, to at least
@@ -256,6 +258,36 @@ function isPassThroughWrapper(call: ts.CallExpression, arg: ts.Expression): bool
   return fn.parameters.some((param) => ts.isIdentifier(param.name) && param.name.text === arg.text);
 }
 
+/**
+ * A write whose TABLE NAME is not literal — `UPDATE ${table} SET …`,
+ * `"DELETE FROM " + table` — cannot be proven not to touch an
+ * allocation-money table, and the R2 regexes (which see an interpolation as
+ * ` ? `) are blind to it. Flagged wherever it appears outside the chokepoint;
+ * a genuinely safe dynamic writer names its tables literally instead.
+ */
+const DYNAMIC_TABLE_TAIL =
+  /\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s*$/i;
+
+function dynamicTableWrite(n: ts.Node): string | null {
+  if (ts.isTemplateExpression(n)) {
+    let prefix = n.head.text;
+    for (const span of n.templateSpans) {
+      if (DYNAMIC_TABLE_TAIL.test(prefix)) return prefix.replace(/\s+/g, " ").trim();
+      prefix = span.literal.text;
+    }
+    return null;
+  }
+  if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const left = n.left;
+    const lt =
+      ts.isStringLiteral(left) || ts.isNoSubstitutionTemplateLiteral(left) ? left.text : null;
+    if (lt !== null && DYNAMIC_TABLE_TAIL.test(lt) && sqlText(n.right) === null) {
+      return lt.replace(/\s+/g, " ").trim();
+    }
+  }
+  return null;
+}
+
 interface Finding {
   rule: string;
   site: string;
@@ -291,6 +323,14 @@ function main(): void {
             }
           }
         }
+      }
+      // R2 — a write whose table name is interpolated / concatenated.
+      const dyn = isChokepoint ? null : dynamicTableWrite(n);
+      if (dyn !== null) {
+        findings.push({
+          rule: "R2",
+          site: `${rel}:${lineOf(sf, n)} — SQL write with a non-literal table name (\`${dyn} <expr>\`): cannot prove it is not an allocation-money table`,
+        });
       }
       if (ts.isCallExpression(n)) {
         const name = calleeName(n);
@@ -412,7 +452,7 @@ function main(): void {
   console.log(
     `check-allocation-money-chokepoint — scanned ${files.length} file(s) under services/relay/src (excluding tests); ` +
       `${totalCalls} chokepoint call site(s) across ${callFiles.size} file(s) [${byKind}]; ` +
-      `${sqlStrings} SQL write string(s) and ${ledgerCalls} ledger write call(s) examined; ` +
+      `${sqlStrings} SQL write string(s) (incl. non-literal table names) and ${ledgerCalls} ledger write call(s) examined; ` +
       `harness alphabet: ${alphabet.size} action(s), ${kindActions.size}/${kinds.length} kind(s) mapped`,
   );
 

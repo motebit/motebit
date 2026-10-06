@@ -199,7 +199,7 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-suite-dispatch",
     defends:
-      "every signature primitive call in @motebit/crypto, services/, and apps/ routes through suite-dispatch.ts — no implicit Ed25519 defaults (invariant #11; scope widened from packages/crypto/src/ only on 2026-04-13)",
+      "every Ed25519 signature primitive call in packages/, apps/, and services/ source (tests and build output excluded) routes through packages/crypto/src/suite-dispatch.ts — direct @noble/ed25519 / @noble/curves ed25519 use AND WebCrypto `subtle.*` with an Ed25519 algorithm, parsed with the TypeScript compiler API; ECDSA/RSA/HMAC/AES/X25519 WebCrypto is not flagged. Current non-dispatcher callers sit on an exact-count WAIVERS table, and a stale waiver fails (invariant #11; scope widened from packages/crypto/src/ only on 2026-04-13, to all of packages/ plus WebCrypto on 2026-10-06)",
     script: "check-suite-dispatch",
   },
   {
@@ -292,7 +292,7 @@ const GATES: ReadonlyArray<Gate> = [
   {
     name: "check-api-surface",
     defends:
-      "@motebit/{protocol,crypto,sdk} public API must match committed baseline unless a `major` changeset is pending",
+      "@motebit/{protocol,crypto,sdk,verifier} public API must match committed baseline unless a `major` changeset is pending",
     script: "check-api-surface",
   },
   {
