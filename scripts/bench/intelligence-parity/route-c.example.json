@@ -1,0 +1,12 @@
+{
+  "bench": "intelligence-parity/route-c",
+  "version": 1,
+  "entries": [
+    {
+      "prompt_id": "fact-boiling-altitude",
+      "answer": "Paste the vendor product's answer here verbatim (a fresh chat, no custom instructions, no memory).",
+      "source": "claude.ai (Claude Sonnet 5)",
+      "collected_at": "2026-10-06T12:00:00Z"
+    }
+  ]
+}

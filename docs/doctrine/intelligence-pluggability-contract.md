@@ -92,6 +92,10 @@ Density catches conformance-shape drift (the runtime-invariants violation). Budg
 
 The gate is a smoke alarm in the same shape as `check-prompt-density` — bumping the baseline IS the doctrine moment. The commit that bumps it names what crossed the threshold and why.
 
+## Measuring the cost of the runtime
+
+The two gates bound the prompt's size; neither says what the assembled turn costs the model. That is measured, not gated: [`scripts/bench/intelligence-parity/`](../../scripts/bench/intelligence-parity/README.md) runs the same model through the real runtime (route A) and straight at the provider API with the parameters A actually sent, copied off the wire (route B; B′ replays A's exact request to isolate pipeline time), and a blind judge on a different model scores both. Its report's "Motebit tax" section is the evidence for or against the claim that the runtime is constant and the intelligence is the parameter. It is manual-dispatch only (`.github/workflows/intelligence-parity-bench.yml`, hard `max_usd` spend guard) and never in `pnpm check`, because it costs real tokens.
+
 ## Worked example — the WebLLM Llama-3.2-3B path
 
 Pre-doctrine (witnessed 2026-05-17):
