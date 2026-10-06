@@ -23,8 +23,9 @@
  *     did not land: the caller keeps the signature and asks again later.
  *
  * `expired` is read from absence, and one absent read can be a lagging
- * load-balanced node. A caller that re-sends on it should see it twice, on
- * separate passes (the relay's anchor broadcasts do), and only where a mistaken
+ * load-balanced node. A caller that re-sends on it should see it twice, apart
+ * both in wall time and in finalized height (the relay's anchor broadcasts
+ * do, carrying `blockHeight` between passes), and only where a mistaken
  * re-send costs one duplicate idempotent write (an anchor memo); a value-moving
  * send must not re-sign on it (the adapter's payment paths never do — #990).
  */

@@ -23,15 +23,23 @@
  *        - failed (landed with an error) → it can never anchor, so exactly
  *          one new memo is sent (and recorded) in its place;
  *        - expired (absent, finalized height past its expiry) → read from
- *          ABSENCE, which one lagging load-balanced node can report for a memo
- *          that landed. The first observation is only recorded
- *          (`expired_seen_at`) and nothing is sent; a LATER pass that sees it
- *          expired again sends exactly one replacement. Any other answer in
- *          between (pending, a lookup error, landed) clears the observation.
- *
- * Callers already run this inside the shared pacer's serial chain after their
- * `stillPending` re-check, single-flighted per anchor, so overlapping ticks
- * reach the record one at a time.
+ *          ABSENCE, which a lagging load-balanced node can report for a memo
+ *          that landed. Nothing is sent on one observation: the first is
+ *          recorded on the row (`expired_seen_at` + `expired_seen_height`).
+ *          The memo is replaced only by a pass that sees it expired AGAIN at a
+ *          point separated from that first observation BOTH in wall time (at
+ *          least `minExpiryGapMs`, default three anchoring ticks) AND in chain
+ *          progress (finalized height strictly above the first observation's).
+ *          Any other answer in between (pending, a lookup error, landed)
+ *          clears the observation.
+ *   3. Every replacement is a compare-and-set on the row. Anchoring ticks can
+ *      overlap (a tick starts while the previous one drains; a restarted
+ *      process runs beside one still draining), so two passes can reach the
+ *      same record at once. An expiry replacement first CLAIMS the observation
+ *      (cleared only if it is still the one this pass read), and the new
+ *      signature is recorded only over the signature this pass read (a first
+ *      send only where no row exists). The pass that loses either sends
+ *      nothing: at most one replacement per recorded signature.
  *
  * A submitter without `checkBroadcast` (a test double, a non-Solana chain) is
  * called directly, as before.
@@ -49,9 +57,41 @@ export interface AnchorBroadcastRecord {
   lastValidBlockHeight: number;
 }
 
-/** A recorded broadcast plus when (if ever) a pass first saw it expired. */
+/** A pass's first sight of a recorded broadcast as expired: when, and the finalized height it read. */
+interface ExpiryObservation {
+  at: number;
+  height: number;
+}
+
+/** A recorded broadcast plus the first expiry observation, if one stands. */
 interface StoredAnchorBroadcast extends AnchorBroadcastRecord {
-  expiredSeenAt: number | null;
+  expiry: ExpiryObservation | null;
+}
+
+/**
+ * The least wall time between the two expiry observations that replace a
+ * memo: three 60 s anchoring ticks. It is the bound on how long a lagging
+ * node's absent answer is believed; a landed memo reported absent for longer,
+ * with the finalized height advancing meanwhile, is replaced once.
+ */
+export const DEFAULT_MIN_EXPIRY_GAP_MS = 180_000;
+
+export interface AnchorBroadcastOptions {
+  /** Wall clock (ms). Default `Date.now()`. */
+  now?: () => number;
+  /** Least wall time between the two expiry observations. Default `DEFAULT_MIN_EXPIRY_GAP_MS`. */
+  minExpiryGapMs?: number;
+}
+
+const options = new WeakMap<object, Required<AnchorBroadcastOptions>>();
+
+/** Set the clock and the expiry gap for broadcasts recorded in `db` (tests inject a clock). */
+export function configureAnchorBroadcasts(db: DatabaseDriver, opts: AnchorBroadcastOptions): void {
+  options.set(db, { ...optionsFor(db), ...opts });
+}
+
+function optionsFor(db: DatabaseDriver): Required<AnchorBroadcastOptions> {
+  return options.get(db) ?? { now: () => Date.now(), minExpiryGapMs: DEFAULT_MIN_EXPIRY_GAP_MS };
 }
 
 /** What the chain says about a recorded broadcast (`@motebit/wallet-solana` shape). */
@@ -99,6 +139,7 @@ const ANCHOR_BROADCASTS_DDL = `
     last_valid_block_height INTEGER NOT NULL,
     broadcast_at            INTEGER NOT NULL,
     expired_seen_at         INTEGER,
+    expired_seen_height     INTEGER,
     PRIMARY KEY (stream, subject)
   );
 `;
@@ -106,12 +147,14 @@ const ANCHOR_BROADCASTS_DDL = `
 /** Create the broadcast record table (migration v57; idempotent). */
 export function createAnchorBroadcastsTable(db: DatabaseDriver): void {
   db.exec(ANCHOR_BROADCASTS_DDL);
-  // A table created before `expired_seen_at` existed gains it here.
+  // A table created before the expiry-observation columns existed gains them here.
   const cols = db.prepare("PRAGMA table_info(relay_anchor_broadcasts)").all() as Array<{
     name: string;
   }>;
-  if (!cols.some((c) => c.name === "expired_seen_at")) {
-    db.exec("ALTER TABLE relay_anchor_broadcasts ADD COLUMN expired_seen_at INTEGER");
+  for (const col of ["expired_seen_at", "expired_seen_height"]) {
+    if (!cols.some((c) => c.name === col)) {
+      db.exec(`ALTER TABLE relay_anchor_broadcasts ADD COLUMN ${col} INTEGER`);
+    }
   }
 }
 
@@ -141,48 +184,110 @@ function readAnchorBroadcast(
 ): StoredAnchorBroadcast | undefined {
   const row = db
     .prepare(
-      "SELECT signature, last_valid_block_height, expired_seen_at FROM relay_anchor_broadcasts WHERE stream = ? AND subject = ?",
+      "SELECT signature, last_valid_block_height, expired_seen_at, expired_seen_height FROM relay_anchor_broadcasts WHERE stream = ? AND subject = ?",
     )
     .get(stream, subject) as
-    | { signature: string; last_valid_block_height: number; expired_seen_at: number | null }
-    | undefined;
-  return row
-    ? {
-        signature: row.signature,
-        lastValidBlockHeight: row.last_valid_block_height,
-        expiredSeenAt: row.expired_seen_at ?? null,
+    | {
+        signature: string;
+        last_valid_block_height: number;
+        expired_seen_at: number | null;
+        expired_seen_height: number | null;
       }
-    : undefined;
+    | undefined;
+  if (!row) return undefined;
+  return {
+    signature: row.signature,
+    lastValidBlockHeight: row.last_valid_block_height,
+    expiry:
+      row.expired_seen_at != null && row.expired_seen_height != null
+        ? { at: row.expired_seen_at, height: row.expired_seen_height }
+        : null,
+  };
 }
 
-/** Record (or clear, with `null`) the first expiry observation of `signature`. */
-function setExpiredSeenAt(
+/** Record the first expiry observation of `signature`; a standing one is kept. */
+function recordExpiryObservation(
   db: DatabaseDriver,
   stream: string,
   subject: string,
   signature: string,
-  at: number | null,
+  seen: ExpiryObservation,
 ): void {
   db.prepare(
-    "UPDATE relay_anchor_broadcasts SET expired_seen_at = ? WHERE stream = ? AND subject = ? AND signature = ?",
-  ).run(at, stream, subject, signature);
+    `UPDATE relay_anchor_broadcasts SET expired_seen_at = ?, expired_seen_height = ?
+     WHERE stream = ? AND subject = ? AND signature = ? AND expired_seen_height IS NULL`,
+  ).run(seen.at, seen.height, stream, subject, signature);
 }
 
+/** Clear any expiry observation of `signature` (a non-absent answer breaks the streak). */
+function clearExpiryObservation(
+  db: DatabaseDriver,
+  stream: string,
+  subject: string,
+  signature: string,
+): void {
+  db.prepare(
+    `UPDATE relay_anchor_broadcasts SET expired_seen_at = NULL, expired_seen_height = NULL
+     WHERE stream = ? AND subject = ? AND signature = ?`,
+  ).run(stream, subject, signature);
+}
+
+/**
+ * Claim the replacement of `signature`: consume the expiry observation this
+ * pass read, only if it still stands unchanged. One concurrent pass wins.
+ */
+function claimExpiryReplacement(
+  db: DatabaseDriver,
+  stream: string,
+  subject: string,
+  signature: string,
+  seen: ExpiryObservation,
+): boolean {
+  const out = db
+    .prepare(
+      `UPDATE relay_anchor_broadcasts SET expired_seen_at = NULL, expired_seen_height = NULL
+       WHERE stream = ? AND subject = ? AND signature = ? AND expired_seen_at = ? AND expired_seen_height = ?`,
+    )
+    .run(stream, subject, signature, seen.at, seen.height);
+  return out.changes === 1;
+}
+
+/**
+ * Record the memo about to be sent, over exactly the broadcast this pass read
+ * (`replaces`; `null` = none recorded). A row that changed meanwhile means
+ * another pass recorded first: throw, which stops this send.
+ */
 function recordAnchorBroadcast(
   db: DatabaseDriver,
   stream: string,
   subject: string,
   ref: AnchorBroadcastRecord,
+  replaces: string | null,
+  at: number,
 ): void {
-  db.prepare(
-    `INSERT INTO relay_anchor_broadcasts (stream, subject, signature, last_valid_block_height, broadcast_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT (stream, subject) DO UPDATE SET
-       signature = excluded.signature,
-       last_valid_block_height = excluded.last_valid_block_height,
-       broadcast_at = excluded.broadcast_at,
-       expired_seen_at = NULL`,
-  ).run(stream, subject, ref.signature, ref.lastValidBlockHeight, Date.now());
+  const out =
+    replaces === null
+      ? db
+          .prepare(
+            `INSERT INTO relay_anchor_broadcasts (stream, subject, signature, last_valid_block_height, broadcast_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (stream, subject) DO NOTHING`,
+          )
+          .run(stream, subject, ref.signature, ref.lastValidBlockHeight, at)
+      : db
+          .prepare(
+            `UPDATE relay_anchor_broadcasts SET signature = ?, last_valid_block_height = ?, broadcast_at = ?,
+               expired_seen_at = NULL, expired_seen_height = NULL
+             WHERE stream = ? AND subject = ? AND signature = ?`,
+          )
+          .run(ref.signature, ref.lastValidBlockHeight, at, stream, subject, replaces);
+  if (out.changes !== 1) {
+    const current = readAnchorBroadcast(db, stream, subject);
+    throw new AnchorBroadcastPendingError(
+      current?.signature ?? replaces ?? ref.signature,
+      "another pass recorded a memo for this anchor first; not sending",
+    );
+  }
 }
 
 /**
@@ -199,6 +304,7 @@ export async function submitRecordedAnchor(
 ): Promise<{ txHash: string }> {
   if (!isRecordingAnchorSubmitter(submitter)) return send(undefined);
   ensureTable(db);
+  const opts = optionsFor(db);
 
   const prior = readAnchorBroadcast(db, stream, subject);
   if (prior) {
@@ -218,28 +324,45 @@ export async function submitRecordedAnchor(
     if (outcome.status === "pending") {
       // Seen, undecided, or a lookup error: none of these is an expiry, and a
       // node that answers anything but absent-past-expiry breaks the streak.
-      if (prior.expiredSeenAt != null) {
-        setExpiredSeenAt(db, stream, subject, prior.signature, null);
-      }
+      if (prior.expiry != null) clearExpiryObservation(db, stream, subject, prior.signature);
       throw new AnchorBroadcastPendingError(prior.signature, outcome.reason);
     }
-    if (outcome.status === "expired" && prior.expiredSeenAt == null) {
-      // One absent read can be a lagging node over a memo that landed. Record
-      // it; only a later pass that sees it expired again replaces the memo.
-      setExpiredSeenAt(db, stream, subject, prior.signature, Date.now());
-      logger.info("anchoring.broadcast_expiry_observed", {
-        stream,
-        subject,
-        signature: prior.signature,
-        block_height: outcome.blockHeight,
-      });
-      throw new AnchorBroadcastPendingError(
-        prior.signature,
-        "expiry observed once; replaced only if a later pass sees it again",
-      );
+    if (outcome.status === "expired") {
+      const now = opts.now();
+      const first = prior.expiry;
+      if (first == null) {
+        // One absent read can be a lagging node over a memo that landed.
+        // Record it; only a later, separated observation replaces the memo.
+        recordExpiryObservation(db, stream, subject, prior.signature, {
+          at: now,
+          height: outcome.blockHeight,
+        });
+        logger.info("anchoring.broadcast_expiry_observed", {
+          stream,
+          subject,
+          signature: prior.signature,
+          block_height: outcome.blockHeight,
+        });
+        throw new AnchorBroadcastPendingError(
+          prior.signature,
+          "expiry observed once; replaced only if seen again later, at a higher finalized height",
+        );
+      }
+      if (now - first.at < opts.minExpiryGapMs || outcome.blockHeight <= first.height) {
+        throw new AnchorBroadcastPendingError(
+          prior.signature,
+          `expiry first observed at height ${first.height}; replaced only ${opts.minExpiryGapMs} ms later at a higher finalized height`,
+        );
+      }
+      if (!claimExpiryReplacement(db, stream, subject, prior.signature, first)) {
+        throw new AnchorBroadcastPendingError(
+          prior.signature,
+          "another pass changed this record first; not replacing",
+        );
+      }
     }
-    // failed, or expired on two passes: that memo can never anchor; one new
-    // memo replaces it (recording it clears the expiry observation).
+    // failed, or expired at two separated observations (claimed above): that
+    // memo can never anchor; one new memo replaces it, recorded only over it.
     logger.warn("anchoring.broadcast_replaced", {
       stream,
       subject,
@@ -248,8 +371,9 @@ export async function submitRecordedAnchor(
     });
   }
 
+  const replaces = prior?.signature ?? null;
   return send({
-    beforeBroadcast: (ref) => recordAnchorBroadcast(db, stream, subject, ref),
+    beforeBroadcast: (ref) => recordAnchorBroadcast(db, stream, subject, ref, replaces, opts.now()),
   });
 }
 

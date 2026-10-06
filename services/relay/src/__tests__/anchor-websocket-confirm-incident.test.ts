@@ -20,7 +20,7 @@
  * (not a success) and is replaced by exactly one new memo on a later cycle;
  * overlapping ticks send once; a restart reconciles the recorded signature.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from "vitest";
 import { generateKeypair, bytesToHex } from "@motebit/crypto";
 import { base58Encode } from "@motebit/protocol";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
@@ -30,6 +30,8 @@ import {
   SOLANA_DEVNET_GENESIS_HASH,
 } from "@motebit/wallet-solana";
 import { randomBytes } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import * as broadcasts from "../anchor-broadcasts.js";
 import type { RelayIdentity } from "../federation.js";
 import {
   createIdentityLogAnchorTables,
@@ -74,6 +76,11 @@ class FakeRpc {
   /** While set, every status read fails with an HTTP 500. */
   statusError = false;
   websocketConfirmCalls = 0;
+  /** Harness hooks (interleaving matrix): override a status read, a height read, or a send. */
+  onStatus?: (sig: string) => Status | null | undefined;
+  onBlockHeight?: () => number;
+  /** Called with each signed transaction's signature; "before" / "after" stop the process around the send. */
+  onSend?: (sig: string) => "crash-before-send" | "crash-after-send" | undefined;
 
   getGenesisHash = async (): Promise<string> => SOLANA_DEVNET_GENESIS_HASH;
   getLatestBlockhash = async (): Promise<{ blockhash: string; lastValidBlockHeight: number }> => ({
@@ -85,6 +92,8 @@ class FakeRpc {
     const bytes = Buffer.from(raw);
     const sig = base58Encode(new Uint8Array(bytes.subarray(1, 65)));
     const memo = /motebit:[a-z]+:v1:[0-9a-f]+(?::\d+)?/.exec(bytes.toString("latin1"))?.[0] ?? "";
+    const stop = this.onSend?.(sig);
+    if (stop === "crash-before-send") throw new Error("relay process stopped before the send");
     this.sends.push({ sig, memo });
     const fate = this.plan.shift() ?? "land";
     this.statuses.set(
@@ -98,6 +107,7 @@ class FakeRpc {
             confirmationStatus: "finalized",
           },
     );
+    if (stop === "crash-after-send") throw new Error("relay process stopped after the send");
     return sig;
   };
   /** web3.js 1.98: waits on a websocket `signatureSubscribe` this RPC does not implement. */
@@ -114,6 +124,8 @@ class FakeRpc {
     return {
       context: { slot: 2_000 },
       value: sigs.map((s) => {
+        const scripted = this.onStatus?.(s);
+        if (scripted !== undefined) return scripted;
         if (this.absentOnce.delete(s)) return null;
         return this.statuses.get(s) ?? null;
       }),
@@ -128,7 +140,10 @@ class FakeRpc {
       confirmationStatus: "finalized",
     });
   }
-  getBlockHeight = async (): Promise<number> => this.height;
+  getBlockHeight = async (): Promise<number> => {
+    if (this.onBlockHeight) this.height = this.onBlockHeight();
+    return this.height;
+  };
   getBalance = async (): Promise<number> => 1_000_000_000;
   getMinimumBalanceForRentExemption = async (): Promise<number> => 890_880;
 
@@ -179,6 +194,12 @@ describe("anchoring on an RPC without websocket signatureSubscribe", () => {
   let rpc: FakeRpc;
   let submitter: SolanaMemoSubmitter;
   const roots: Record<string, string> = {};
+  let clock = 0;
+  /** The chain and the wall clock move on far enough for a second expiry observation to count. */
+  function laterOnChain(): void {
+    clock += broadcasts.DEFAULT_MIN_EXPIRY_GAP_MS;
+    rpc.height += 1;
+  }
 
   beforeEach(async () => {
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -220,6 +241,8 @@ describe("anchoring on an RPC without websocket signatureSubscribe", () => {
     };
     rpc = new FakeRpc();
     submitter = memoSubmitterOn(rpc);
+    clock = 1_000_000;
+    broadcasts.configureAnchorBroadcasts(db, { now: () => clock });
     let k = 0;
     for (const s of STREAMS) {
       const extra =
@@ -296,6 +319,8 @@ describe("anchoring on an RPC without websocket signatureSubscribe", () => {
     expect(rpc.sendsOf(roots.fed!)).toHaveLength(1);
     expect(row("fed").tx_hash).toBeNull();
     rpc.height += 1_000; // past lastValidBlockHeight: it can never land
+    await cycle(); // first expiry observation: nothing sent
+    laterOnChain();
     await cycle(); // exactly one replacement, which lands
     await cycle();
     await cycle();
@@ -319,14 +344,21 @@ describe("anchoring on an RPC without websocket signatureSubscribe", () => {
     expect(row("fed")).toEqual({ status: "confirmed", tx_hash: first });
   });
 
-  it("a memo that never lands is replaced only after expiry is seen on two cycles, then never again", async () => {
+  it("a memo that never lands is replaced only after expiry is seen twice, apart in wall time and chain height, then never again", async () => {
     rpc.plan = ["never"];
     await cycle(); // sent; undecided
     rpc.height += 1_000; // past lastValidBlockHeight
     await cycle(); // first expiry observation: recorded, nothing sent
     expect(rpc.sendsOf(roots.fed!)).toHaveLength(1);
     expect(row("fed").tx_hash).toBeNull();
-    await cycle(); // second observation: exactly one replacement, which lands
+    await cycle(); // seen again at once, same height: still nothing sent
+    rpc.height += 1;
+    await cycle(); // higher height, but too soon: still nothing sent
+    clock += broadcasts.DEFAULT_MIN_EXPIRY_GAP_MS - 1;
+    await cycle(); // just short of the gap: still nothing sent
+    expect(rpc.sendsOf(roots.fed!)).toHaveLength(1);
+    laterOnChain();
+    await cycle(); // second, separated observation: exactly one replacement, which lands
     await cycle();
     await cycle();
     await cycle();
@@ -383,4 +415,211 @@ describe("anchoring on an RPC without websocket signatureSubscribe", () => {
     expect(again?.txHash).toBe(first?.txHash);
     expect(rpc.sends.filter((s) => s.memo.startsWith("motebit:transparency:"))).toHaveLength(1);
   });
+});
+
+/**
+ * Exhaustive interleaving matrix for ONE root: a landed memo must never be
+ * re-sent because of absent status reads, however the reconciliation passes
+ * interleave; a memo that truly expired must be replaced exactly once.
+ *
+ * Generated cross product (no hand-listed cells):
+ *   - ticks: sequential (one pass per 60 s tick); overlapping (two passes per
+ *     tick, 10 ms apart, through the same pacer — the reviewed incident); mid-drain
+ *     (two passes per tick running concurrently through separate pacers, so the
+ *     second starts while the first is between its status read and its write);
+ *   - the first signature's status reads, past its expiry, over the passes: every
+ *     length-4 sequence over {landed-finalized, landed-confirmed, pending, null,
+ *     lookup-error(500)} (1, 2 and 3 consecutive nulls interleaved with landed
+ *     reads among them); after the script the chain tells the truth (landed ⇒
+ *     finalized, never landed ⇒ null forever);
+ *   - finalized height: advancing on every read, or stalled (one height) for the
+ *     whole script;
+ *   - restart (fresh submitter + pacer, same database): none, after record before
+ *     send, after send before confirm, between the two expiry observations.
+ *
+ * Ground truth: the first signature landed iff it was sent and the script
+ * shows it landed. Landed ⇒ exactly one send for the root, row confirmed with
+ * the FIRST signature. Never landed ⇒ exactly one replacement (total sends 2,
+ * or 1 when the first was recorded but never sent), row confirmed with it.
+ * Absent reads of a landed memo come from a lagging node; the matrix's lags
+ * stay under the replacement gap (at most 3 null reads 60 s apart), which is
+ * the bound the gap is set against.
+ */
+type Read = "LF" | "LC" | "P" | "N" | "E";
+type TickMode = "sequential" | "overlap-10ms" | "mid-drain";
+type HeightMode = "advancing" | "stalled";
+type RestartPoint = "none" | "after-record" | "after-send" | "between-observations";
+
+const READS: Read[] = ["LF", "LC", "P", "N", "E"];
+const TICK_MODES: TickMode[] = ["sequential", "overlap-10ms", "mid-drain"];
+const HEIGHT_MODES: HeightMode[] = ["advancing", "stalled"];
+const RESTARTS: RestartPoint[] = ["none", "after-record", "after-send", "between-observations"];
+const SCRIPT_LEN = 4;
+const TICK_MS = 60_000;
+
+function scripts(len: number): Read[][] {
+  if (len === 0) return [[]];
+  return scripts(len - 1).flatMap((s) => READS.map((r) => [...s, r]));
+}
+
+function statusOf(read: Exclude<Read, "N" | "E">): Status {
+  return {
+    slot: 1_200,
+    confirmations: null,
+    err: null,
+    confirmationStatus: read === "LF" ? "finalized" : read === "LC" ? "confirmed" : "processed",
+  };
+}
+
+describe("anchor broadcast reconciliation: exhaustive interleaving matrix", () => {
+  let db: DatabaseDriver;
+  let clock = 0;
+  let cellNo = 0;
+  const failures: string[] = [];
+  let total = 0;
+
+  beforeAll(async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    db = (await openMotebitDatabase(":memory:")).db;
+    createAnchoringTables(db);
+    broadcasts.configureAnchorBroadcasts(db, { now: () => clock });
+  });
+
+  afterAll(() => {
+    vi.restoreAllMocks();
+    const report = process.env.ANCHOR_MATRIX_REPORT;
+    if (report) {
+      writeFileSync(report, JSON.stringify({ total, failing: failures.length, failures }, null, 1));
+    }
+  });
+
+  async function runCell(
+    ticks: TickMode,
+    height: HeightMode,
+    restart: RestartPoint,
+    script: Read[],
+  ): Promise<string | null> {
+    const n = cellNo++;
+    const batchId = `matrix-${n}`;
+    const root = (0x100000 + n).toString(16).padStart(64, "0");
+    db.prepare(
+      `INSERT INTO relay_anchor_batches (batch_id, relay_id, merkle_root, leaf_count, first_settled_at, last_settled_at, signature, status, created_at)
+       VALUES (?, 'relay-test', ?, 1, 1, 1, 'sig', 'signed', 1000)`,
+    ).run(batchId, root);
+
+    const rpc = new FakeRpc();
+    // Each submitter is a relay process: its boot reads the network (the
+    // warm-up read and the supervised `solana-network` loop) before it anchors.
+    const process_ = async (): Promise<SolanaMemoSubmitter> => {
+      const s = memoSubmitterOn(rpc);
+      await s.resolveNetwork();
+      return s;
+    };
+    let primary = await process_();
+    let secondary = await process_();
+    let sig1: string | undefined;
+    let sig1Sent = false;
+    let reconciling = false;
+    let readIdx = 0;
+    let heightReads = 0;
+
+    rpc.onSend = (sig) => {
+      if (sig1 !== undefined) return undefined;
+      sig1 = sig;
+      if (restart === "after-record") return "crash-before-send";
+      sig1Sent = true;
+      return restart === "after-send" ? "crash-after-send" : undefined;
+    };
+    rpc.onBlockHeight = () => {
+      if (!reconciling) return 10;
+      heightReads++;
+      if (height === "stalled" && readIdx < script.length) return 1_000;
+      return 1_000 + heightReads;
+    };
+    const landed = restart !== "after-record" && script.some((r) => r === "LF" || r === "LC");
+    rpc.onStatus = (sig) => {
+      if (sig !== sig1) return undefined;
+      if (!reconciling) return null; // not visible yet when the send's own confirm reads it
+      const read: Read = readIdx < script.length ? script[readIdx++]! : landed ? "LF" : "N";
+      if (read === "E") throw new Error("500 Internal Server Error");
+      if (read === "N" || !sig1Sent) return null;
+      return statusOf(read);
+    };
+
+    const pass = (s: SolanaMemoSubmitter): Promise<boolean> => submitAnchorOnChain(db, batchId, s);
+    const restartNow = async (): Promise<void> => {
+      primary = await process_();
+      secondary = await process_();
+    };
+
+    clock = 0;
+    await pass(primary);
+    if (restart === "after-record" || restart === "after-send") await restartNow();
+    reconciling = true;
+    let restarted = false;
+    for (let k = 1; k <= SCRIPT_LEN + 8; k++) {
+      clock = k * TICK_MS;
+      if (ticks === "sequential") {
+        await pass(primary);
+      } else if (ticks === "overlap-10ms") {
+        await pass(primary);
+        clock += 10;
+        await pass(primary);
+      } else {
+        await Promise.all([pass(primary), pass(secondary)]);
+      }
+      if (restart === "between-observations" && !restarted) {
+        const r = db
+          .prepare(
+            "SELECT expired_seen_at FROM relay_anchor_broadcasts WHERE stream = 'federation-settlement' AND subject = ?",
+          )
+          .get(batchId) as { expired_seen_at: number | null } | undefined;
+        if (r?.expired_seen_at != null) {
+          await restartNow();
+          restarted = true;
+        }
+      }
+    }
+
+    const sends = rpc.sendsOf(root);
+    const row = db
+      .prepare("SELECT status, tx_hash FROM relay_anchor_batches WHERE batch_id = ?")
+      .get(batchId) as { status: string; tx_hash: string | null };
+    const cell = `${ticks}/${height}/restart=${restart}/[${script.join(",")}]`;
+    if (landed) {
+      if (sends.length !== 1 || row.status !== "confirmed" || row.tx_hash !== sig1) {
+        return `${cell}: landed first memo — sends=${sends.length}, status=${row.status}, confirmed with ${row.tx_hash === sig1 ? "first" : "another"} signature`;
+      }
+    } else {
+      const want = sig1Sent ? 2 : 1;
+      const replacement = sends[sends.length - 1];
+      if (
+        sends.length !== want ||
+        replacement === sig1 ||
+        row.status !== "confirmed" ||
+        row.tx_hash !== replacement
+      ) {
+        return `${cell}: never-landed first memo — sends=${sends.length} (want ${want}), status=${row.status}`;
+      }
+    }
+    return null;
+  }
+
+  for (const ticks of TICK_MODES) {
+    for (const height of HEIGHT_MODES) {
+      for (const restart of RESTARTS) {
+        it(`${ticks} × height ${height} × restart ${restart}: every status-read script`, async () => {
+          const local: string[] = [];
+          for (const script of scripts(SCRIPT_LEN)) {
+            total++;
+            const f = await runCell(ticks, height, restart, script);
+            if (f) local.push(f);
+          }
+          failures.push(...local);
+          expect(local.slice(0, 3), `${local.length} failing cells`).toEqual([]);
+        }, 120_000);
+      }
+    }
+  }
 });
