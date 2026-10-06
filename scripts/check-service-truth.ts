@@ -151,20 +151,85 @@ export interface Evaluation {
   countClaims: number;
   /** How many (service, inventory) placements were checked. */
   placements: number;
+  /** How many files under each service src/ were enumerated (each scanned, inert, or refused). */
+  sourceFiles: number;
 }
 
 // ── canonical: metadata + code ──────────────────────────────────────────────
 
-function listSourceFiles(dir: string): string[] {
+/** Extensions the AST scans (TypeScript infers each file's script kind from it). */
+export const SCANNED_EXTENSIONS = [".ts", ".tsx", ".mts", ".js", ".mjs"] as const;
+
+/**
+ * Extensions known to be inert — data, docs, images, fonts — allowed under a
+ * service's src/ without a scan. Everything else is refused (fail closed): an
+ * unscanned source form (.cts, .cjs, .jsx, .wasm, a shell script, no
+ * extension …) could hold a price default or an env write the gate never sees.
+ */
+export const INERT_EXTENSIONS = [
+  ".json",
+  ".md",
+  ".txt",
+  ".css",
+  ".svg",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".ico",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+] as const;
+
+const extensionOf = (file: string): string => {
+  const base = file.slice(file.lastIndexOf("/") + 1).replace(/^\.+/, "");
+  const dot = base.lastIndexOf(".");
+  return dot < 0 ? "" : base.slice(dot).toLowerCase();
+};
+const isScanned = (file: string) =>
+  (SCANNED_EXTENSIONS as readonly string[]).includes(extensionOf(file));
+
+/** Every file under `dir` (dotfiles and __tests__ included; node_modules skipped). */
+function enumerateFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
-    if (entry === "__tests__" || entry === "node_modules" || entry.startsWith(".")) continue;
+    if (entry === "node_modules") continue;
     const p = join(dir, entry);
-    if (statSync(p).isDirectory()) out.push(...listSourceFiles(p));
-    else if (/\.(?:ts|tsx|mts|js|mjs)$/.test(entry) && !/\.test\.[a-z]+$/.test(entry)) out.push(p);
+    if (statSync(p).isDirectory()) out.push(...enumerateFiles(p));
+    else out.push(p);
   }
   return out;
+}
+
+/** The non-test files the AST checks read: scanned extensions outside __tests__ and *.test.*. */
+function listSourceFiles(dir: string): string[] {
+  return enumerateFiles(dir).filter(
+    (p) =>
+      isScanned(p) &&
+      !relative(dir, p).split(/[\\/]/).includes("__tests__") &&
+      !/\.test\.[a-z]+$/.test(p),
+  );
+}
+
+/**
+ * Fail closed on source forms the scan cannot read: every file under the
+ * service's src/ is either scanned or on the inert allow-list; any other
+ * extension (or none) is RED, naming the file.
+ */
+export function checkSourceForms(root: string, name: string, violations: string[]): number {
+  const files = enumerateFiles(join(root, "services", name, "src"));
+  for (const f of files) {
+    const ext = extensionOf(f);
+    if (isScanned(f) || (INERT_EXTENSIONS as readonly string[]).includes(ext)) continue;
+    violations.push(
+      `${relative(root, f)}: ${ext === "" ? "no extension" : `extension \`${ext}\``} is not scanned by this gate — a price default or env access there would be invisible; scan it (rename to one of ${SCANNED_EXTENSIONS.join(" ")}, or add its extension to SCANNED_EXTENSIONS in scripts/check-service-truth.ts with a parser for it) or move it out of services/${name}/src`,
+    );
+  }
+  return files.length;
 }
 
 /** The service entry the deploy boots (`node dist/index.js`, compiled from this). */
@@ -943,10 +1008,15 @@ export function serviceDirs(root: string): string[] {
     .sort();
 }
 
-export async function readServices(root: string, violations: string[]): Promise<ServiceTruth[]> {
+export async function readServices(
+  root: string,
+  violations: string[],
+  stats: { sourceFiles: number } = { sourceFiles: 0 },
+): Promise<ServiceTruth[]> {
   const dir = join(root, "services");
   const out: ServiceTruth[] = [];
   for (const name of serviceDirs(root)) {
+    stats.sourceFiles += checkSourceForms(root, name, violations);
     checkEnvDiscipline(root, name, violations);
     const pkgPath = join(dir, name, "package.json");
     if (!existsSync(pkgPath)) {
@@ -1181,7 +1251,8 @@ function roleOfLabel(label: string): ServiceRole | null {
 
 export async function evaluate(root: string): Promise<Evaluation> {
   const violations: string[] = [];
-  const services = await readServices(root, violations);
+  const stats = { sourceFiles: 0 };
+  const services = await readServices(root, violations, stats);
   // Placements are recognised against every services/* directory, so a service
   // whose metadata is broken still parses as itself (and is reported once, as
   // broken metadata, not again as an unknown name).
@@ -1283,7 +1354,7 @@ export async function evaluate(root: string): Promise<Evaluation> {
     checkInventory(`${ARCHITECTURE_PATH} § Services (table)`, ps, services, violations);
   }
 
-  return { violations, services, countClaims, placements };
+  return { violations, services, countClaims, placements, sourceFiles: stats.sourceFiles };
 }
 
 async function main(): Promise<void> {
@@ -1292,17 +1363,17 @@ async function main(): Promise<void> {
   const r = await evaluate(root);
   if (r.violations.length > 0) {
     failWithRepair({
-      invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price, or a service's code names MOTEBIT_UNIT_COST / touches the environment other than as a direct literal-key read`,
+      invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price, or a service's code names MOTEBIT_UNIT_COST / touches the environment other than as a direct literal-key read, or a file under a service's src/ has an extension the gate does not scan`,
       sites: r.violations,
       canonical:
         "role/identity/market: the `motebit` block in services/<name>/package.json; price: the literal `LISTING_PRICE = { capabilities, unit_cost, per }` in services/<name>/src/pricing.ts (data — it cannot read the environment), which main() must pass runMolecule as exactly `pricing: LISTING_PRICE`; the runner alone reads MOTEBIT_UNIT_COST — no service source names it, and service sources read env only as process.env.NAME — and applies it (packages/molecule-runner/src/listing-price.ts, refusing a malformed value) and refuses a listing that brings its own price",
-      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A market service: keep its price in src/pricing.ts as `export const LISTING_PRICE: ListingPriceSpec = { capabilities: [...], unit_cost: <number>, per: <unit string> }` — literals only, no env reads (the runner applies MOTEBIT_UNIT_COST) — and call runMolecule once in src/index.ts with `pricing: LISTING_PRICE` after any spread, naming LISTING_PRICE nowhere else; never put `pricing` in getServiceListing. .env.example states the coded default. A service source that names MOTEBIT_UNIT_COST: delete it — change the default in src/pricing.ts (and the docs) or set an operator override in the deployment. Any other env access: read env only as process.env.NAME (or process.env['NAME']); config flows through the runner — where code needs an env map, build it from literal reads (`{ NAME: process.env.NAME }`) and pass values as arguments or config fields; never alias, pass, spread or destructure process.env, never import env from 'node:process', never loadEnvFile or dotenv (set values in .env.example / the deployment). Tests (src/**/__tests__, *.test.*) may set env. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
+      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A market service: keep its price in src/pricing.ts as `export const LISTING_PRICE: ListingPriceSpec = { capabilities: [...], unit_cost: <number>, per: <unit string> }` — literals only, no env reads (the runner applies MOTEBIT_UNIT_COST) — and call runMolecule once in src/index.ts with `pricing: LISTING_PRICE` after any spread, naming LISTING_PRICE nowhere else; never put `pricing` in getServiceListing. .env.example states the coded default. A service source that names MOTEBIT_UNIT_COST: delete it — change the default in src/pricing.ts (and the docs) or set an operator override in the deployment. Any other env access: read env only as process.env.NAME (or process.env['NAME']); config flows through the runner — where code needs an env map, build it from literal reads (`{ NAME: process.env.NAME }`) and pass values as arguments or config fields; never alias, pass, spread or destructure process.env, never import env from 'node:process', never loadEnvFile or dotenv (set values in .env.example / the deployment). Tests (src/**/__tests__, *.test.*) may set env. A file under services/<name>/src with an unscanned extension (.cts, .cjs, .jsx, .wasm, a script, none …): scan it — rename it to .ts/.tsx/.mts/.js/.mjs, or teach the gate its extension (SCANNED_EXTENSIONS) — or move it out of src/; only inert data/doc/image/font files (INERT_EXTENSIONS) may sit there unscanned. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
       doctrine: "docs/drift-defenses.md (#174)",
     });
   }
   const market = r.services.filter((s) => s.market).length;
   console.log(
-    `✓ check-service-truth: ${r.services.length} services' metadata + coded listing prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and each market service's ${PRICING} LISTING_PRICE, which the TypeScript AST shows is literal data naming no process/globalThis/import.meta/require (it cannot read the environment); proves the runner's ${RUNNER_RULE} lists a spec unaltered, carries a sentinel MOTEBIT_UNIT_COST to every entry, and refuses ${MALFORMED_COSTS.length} malformed overrides (no NaN listing — a bad MOTEBIT_UNIT_COST refuses the boot); proves by TypeScript AST that each market service's ${ENTRY} — the file its Dockerfile CMD / start boots as dist/index.js — calls runMolecule exactly once with \`pricing: LISTING_PRICE\`, the price module imported by that file alone and named nowhere else (the runner lists only config pricing and refuses a getServiceListing carrying its own — molecule-runner listing-pricing.test.ts); market:false services read no MOTEBIT_UNIT_COST, have no pricing.ts and call no runMolecule; and, by TypeScript AST of every non-test source under each of the ${r.services.length} services' src/, no code names MOTEBIT_UNIT_COST (identifier, key, string or template literal) and env access is DENY-BY-DEFAULT: process.env is permitted ONLY as a direct literal-key READ — process.env.NAME or process.env["NAME"] (or via globalThis.process) in a non-write position; red on any other occurrence of process.env or process as a value (aliased, passed, spread, destructured, incl. \`const { env } = process\`), a computed-key read, any write (assignment, ++/--, delete, destructuring target), env/default-alias/namespace imported from "process"/"node:process" or that module required or dynamically imported, loadEnvFile anywhere, and any env-file loader package (dotenv, dotenv/config, any bare specifier naming env). Computed keys on process itself and module names built at runtime are outside the threat model. Nothing is executed but the runner's zero-import override rule: no server boots, no network, no ports. Threat model: guards ACCIDENTAL drift between documented and coded price/unit/role; it does not cover production MOTEBIT_UNIT_COST overrides or hand-edited deployments — the deployed listing is the one the service POSTs to the relay (signed market:listing token) and the relay serves; read the production price there. Not covered: other docs pages; "identity" is declared metadata, not verified against code.`,
+    `✓ check-service-truth: ${r.services.length} services' metadata + coded listing prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and each market service's ${PRICING} LISTING_PRICE, which the TypeScript AST shows is literal data naming no process/globalThis/import.meta/require (it cannot read the environment); proves the runner's ${RUNNER_RULE} lists a spec unaltered, carries a sentinel MOTEBIT_UNIT_COST to every entry, and refuses ${MALFORMED_COSTS.length} malformed overrides (no NaN listing — a bad MOTEBIT_UNIT_COST refuses the boot); proves by TypeScript AST that each market service's ${ENTRY} — the file its Dockerfile CMD / start boots as dist/index.js — calls runMolecule exactly once with \`pricing: LISTING_PRICE\`, the price module imported by that file alone and named nowhere else (the runner lists only config pricing and refuses a getServiceListing carrying its own — molecule-runner listing-pricing.test.ts); market:false services read no MOTEBIT_UNIT_COST, have no pricing.ts and call no runMolecule; every one of the ${r.sourceFiles} file(s) under the ${r.services.length} services' src/ (dotfiles and tests included) is FAIL-CLOSED by extension: ${SCANNED_EXTENSIONS.join(" ")} are scanned, ${INERT_EXTENSIONS.length} inert data/doc/image/font extensions are allowed, any other extension or none is red; and, by TypeScript AST of every non-test scanned source, no code names MOTEBIT_UNIT_COST (identifier, key, string or template literal) and env access is DENY-BY-DEFAULT: process.env is permitted ONLY as a direct literal-key READ — process.env.NAME or process.env["NAME"] (or via globalThis.process) in a non-write position; red on any other occurrence of process.env or process as a value (aliased, passed, spread, destructured, incl. \`const { env } = process\`), a computed-key read, any write (assignment, ++/--, delete, destructuring target), env/default-alias/namespace imported from "process"/"node:process" or that module required or dynamically imported, loadEnvFile anywhere, and any env-file loader package (dotenv, dotenv/config, any bare specifier naming env). Computed keys on process itself and module names built at runtime are outside the threat model. Nothing is executed but the runner's zero-import override rule: no server boots, no network, no ports. Threat model: guards ACCIDENTAL drift between documented and coded price/unit/role; it does not cover production MOTEBIT_UNIT_COST overrides or hand-edited deployments — the deployed listing is the one the service POSTs to the relay (signed market:listing token) and the relay serves; read the production price there. Not covered: other docs pages; "identity" is declared metadata, not verified against code.`,
   );
 }
 

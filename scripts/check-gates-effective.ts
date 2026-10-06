@@ -3222,6 +3222,20 @@ export async function probeFetch(): Promise<unknown> {
     proves: `env access in a service is deny-by-default (process.env only as a direct literal-key read) — refuses ${label}, a handle on the env object that stayed green while the gate matched write spellings (cold review after R7, 2026-10-06). Drops a fixture under services/research/src; the gate's AST env check is red.`,
     perturb: () => writeFixture(`services/research/src/${PROBE_PREFIX}env_handle_${i}.ts`, body),
   })),
+  // R9 (2026-10-06): the source scan read only some extensions, so a price
+  // default or env write in a .cts/.cjs/.jsx file was invisible. The gate now
+  // enumerates every file under each service's src/ and refuses any
+  // extension it neither scans nor knows to be inert.
+  {
+    script: "check-service-truth",
+    proves:
+      "fails CLOSED on a source form it does not scan — drops a `.cjs` canary (an env write + a price default) under services/research/src; the old extension filter skipped it and stayed green, now the enumeration names the file with a scan-it-or-move-it repair and the gate is red.",
+    perturb: () =>
+      writeFixture(
+        `services/research/src/${PROBE_PREFIX}unscanned_price.cjs`,
+        `process.env.MOTEBIT_UNIT_COST = "9";\nmodule.exports = { unit_cost: 9 };\n`,
+      ),
+  },
   {
     script: "check-relay-frame-origin",
     proves:

@@ -161,7 +161,10 @@ function fixture(opts: {
     writeFileSync(join(root, "services", name, "package.json"), JSON.stringify(pkg));
     writeFileSync(join(src, "index.ts"), s?.src ?? "export {};\n");
     if (s?.pricing != null) writeFileSync(join(src, "pricing.ts"), s.pricing);
-    for (const [f, body] of Object.entries(s?.files ?? {})) writeFileSync(join(src, f), body);
+    for (const [f, body] of Object.entries(s?.files ?? {})) {
+      mkdirSync(dirname(join(src, f)), { recursive: true });
+      writeFileSync(join(src, f), body);
+    }
     for (const [f, body] of Object.entries(s?.dirFiles ?? {}))
       writeFileSync(join(root, "services", name, f), body);
     if (s?.envExample != null)
@@ -436,6 +439,54 @@ describe("check-service-truth", () => {
       mkdirSync(join(dir, "services", "research", "src", "__tests__"), { recursive: true });
       writeFileSync(join(dir, "services", "research", "src", "__tests__", "x.ts"), bad);
       expect((await evaluate(dir)).violations).toEqual([]);
+    });
+  });
+
+  // R9 (2026-10-06): the source scan read only .ts/.tsx/.mts/.js/.mjs, so a
+  // price default or env write in a .cts/.cjs/.jsx file was invisible. FAIL
+  // CLOSED: every file under src/ is enumerated; a scanned extension is
+  // scanned, an inert one (data, docs, images, fonts) is allowed, and any
+  // other extension — or none — is RED until it is scanned or moved.
+  describe("R9: every file under src/ is scanned or refused", () => {
+    const REFUSED = (file: string) =>
+      new RegExp(
+        `services/research/src/${file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: .*not scanned by this gate.*scan it .* or move it`,
+      );
+    const CANARY = `process.env.MOTEBIT_UNIT_COST = "9";\nmodule.exports = { unit_cost: 9 };\n`;
+    for (const file of [
+      "price.cjs",
+      "price.cts",
+      "view.jsx",
+      "nested/deep/price.cjs",
+      ".hidden.cjs",
+      "__tests__/helper.cjs",
+      "worker.wasm",
+      "launcher.sh",
+      "Makefile",
+      "price.mjs.bak",
+    ])
+      it(`RED: an unscanned source form (${file}) names the file with a repair`, async () => {
+        expect(await research({ files: { [file]: CANARY } })).toMatch(REFUSED(file));
+      });
+    it("RED: a scanned file with a wrong price", async () => {
+      expect(await research({ pricing: pricingModule("0.31", "task") })).toMatch(
+        /`research` states \$0\.25\/task but services\/research\/src\/pricing\.ts LISTING_PRICE lists \$0\.31\/task/,
+      );
+    });
+    it("GREEN: a clean tree, including allow-listed inert files and .d.ts", async () => {
+      expect(
+        await research({
+          files: {
+            "data.json": "{}",
+            "README.md": "# x\n",
+            "notes.txt": "x\n",
+            "logo.svg": "<svg/>",
+            "logo.png": "",
+            "types.d.ts": "export type X = 1;\n",
+            "types.d.mts": "export type Y = 1;\n",
+          },
+        }),
+      ).toBe("");
     });
   });
 
