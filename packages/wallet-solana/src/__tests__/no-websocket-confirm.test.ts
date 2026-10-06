@@ -8,9 +8,16 @@
  * it again — production resubmitted the same anchor memo on every cycle. Every
  * confirmation goes through `confirm-signature.ts` (HTTP polling). Repair: call
  * `confirmSignatureByPolling` / `checkSignatureOnce` instead.
+ *
+ * The names alone are not the whole surface: `@solana/spl-token`'s action
+ * helpers (`transfer`, `getOrCreateAssociatedTokenAccount`, `mintTo`, …) call
+ * `sendAndConfirmTransaction` inside the dependency, where the name scan never
+ * looks. So spl-token imports are allowlisted: only `create*Instruction`
+ * builders and the pure address/getter/decoder helpers in `SPL_TOKEN_ALLOWED`,
+ * each checked against the INSTALLED package below to never send or confirm.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -64,6 +71,108 @@ function findWebsocketConfirms(
   return out;
 }
 
+const SPL_TOKEN = /^@solana\/spl-token(\/|$)/;
+/** spl-token builders: return a `TransactionInstruction`, never touch a connection. */
+const SPL_TOKEN_BUILDER = /^create\w*Instruction$/;
+/**
+ * spl-token exports that make no network send. Each is defined outside the
+ * package's `actions` files (the only files that call `sendAndConfirmTransaction`)
+ * — asserted against the installed package below. Extend only after reading
+ * the export's implementation.
+ */
+const SPL_TOKEN_ALLOWED = new Set([
+  "getAssociatedTokenAddress",
+  "getAssociatedTokenAddressSync",
+  "getAccount",
+  "getMint",
+  "unpackAccount",
+  "unpackMint",
+  "AccountLayout",
+  "MintLayout",
+  "ACCOUNT_SIZE",
+  "MINT_SIZE",
+  "TokenAccountNotFoundError",
+  "TokenInvalidAccountOwnerError",
+  "TOKEN_PROGRAM_ID",
+  "TOKEN_2022_PROGRAM_ID",
+  "ASSOCIATED_TOKEN_PROGRAM_ID",
+  "NATIVE_MINT",
+]);
+
+function splTokenNameAllowed(name: string): boolean {
+  return SPL_TOKEN_BUILDER.test(name) || SPL_TOKEN_ALLOWED.has(name);
+}
+
+function isSplTokenSpecifier(node: ts.Node | undefined): boolean {
+  return node != null && ts.isStringLiteralLike(node) && SPL_TOKEN.test(node.text);
+}
+
+/**
+ * Every value import of `@solana/spl-token` in `source` that is not allowlisted:
+ * named imports and `export … from` re-exports are checked name by name
+ * (type-only ones skipped); a default, namespace, `export *`, `import =
+ * require`, dynamic `import()` or `require()` is refused outright, since its
+ * member accesses cannot be checked statically.
+ */
+function findForbiddenSplTokenImports(
+  source: string,
+  file = "source.ts",
+): { line: number; name: string }[] {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKindOf(file));
+  const out: { line: number; name: string }[] = [];
+  const hit = (node: ts.Node, name: string): void => {
+    out.push({ line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, name });
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && isSplTokenSpecifier(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      if (clause && !clause.isTypeOnly) {
+        if (clause.name) hit(node, "default import");
+        const bindings = clause.namedBindings;
+        if (bindings && ts.isNamespaceImport(bindings)) hit(node, "namespace import");
+        if (bindings && ts.isNamedImports(bindings)) {
+          for (const el of bindings.elements) {
+            const name = (el.propertyName ?? el.name).text;
+            if (!el.isTypeOnly && !splTokenNameAllowed(name)) hit(el, name);
+          }
+        }
+      }
+    } else if (ts.isExportDeclaration(node) && isSplTokenSpecifier(node.moduleSpecifier)) {
+      if (!node.isTypeOnly) {
+        const clause = node.exportClause;
+        if (!clause) hit(node, "export *");
+        else if (ts.isNamespaceExport(clause)) hit(node, "namespace re-export");
+        else {
+          for (const el of clause.elements) {
+            const name = (el.propertyName ?? el.name).text;
+            if (!el.isTypeOnly && !splTokenNameAllowed(name)) hit(el, name);
+          }
+        }
+      }
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      !node.isTypeOnly &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      isSplTokenSpecifier(node.moduleReference.expression)
+    ) {
+      hit(node, "import = require");
+    } else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
+      isSplTokenSpecifier(node.arguments[0])
+    ) {
+      hit(
+        node,
+        node.expression.kind === ts.SyntaxKind.ImportKeyword ? "dynamic import" : "require",
+      );
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -91,6 +200,115 @@ describe("no websocket confirmation in wallet-solana src", () => {
       offenders,
       `websocket confirm found — route it through confirmSignatureByPolling (confirm-signature.ts); examined ${files.length} files`,
     ).toEqual([]);
+  });
+});
+
+describe("no spl-token action helper in wallet-solana src", () => {
+  it("imports from @solana/spl-token only builders and pure helpers", () => {
+    const files = sourceFiles(SRC);
+    expect(files.length).toBeGreaterThan(5);
+    const offenders: string[] = [];
+    for (const file of files) {
+      for (const hit of findForbiddenSplTokenImports(readFileSync(file, "utf-8"), file)) {
+        offenders.push(`${file}:${hit.line}: ${hit.name} from @solana/spl-token`);
+      }
+    }
+    expect(
+      offenders,
+      `spl-token action helpers confirm over a websocket (sendAndConfirmTransaction) — build the instruction with a create*Instruction builder and send/confirm through confirmSignatureByPolling (confirm-signature.ts); examined ${files.length} files`,
+    ).toEqual([]);
+  });
+
+  it("the allowlist holds against the installed spl-token (no allowed name ever sends)", () => {
+    // lib/cjs/index.js → lib/esm: the ESM build keeps one export per declaration.
+    const esm = join(dirname(require.resolve("@solana/spl-token")), "..", "esm");
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (name.endsWith(".js")) files.push(path);
+      }
+    };
+    walk(esm);
+    const sends =
+      /\b(sendAndConfirmTransaction|confirmTransaction|sendTransaction|sendRawTransaction|onSignature|signatureSubscribe)\b/;
+    const sending = new Set(files.filter((f) => sends.test(readFileSync(f, "utf-8"))));
+    expect(sending.size).toBeGreaterThan(10);
+    const definedIn = new Map<string, string>();
+    for (const f of files) {
+      const src = readFileSync(f, "utf-8");
+      for (const m of src.matchAll(/^export (?:async )?(?:function|const|class|var|let) (\w+)/gm)) {
+        definedIn.set(m[1]!, f);
+      }
+      // A non-sending file must not import a sending one (barrels re-export, they don't call).
+      if (!sending.has(f)) {
+        for (const m of src.matchAll(/^import [^;]* from '(\.[^']+)'/gm)) {
+          expect(sending.has(join(dirname(f), m[1]!)), `${f} imports ${m[1]}`).toBe(false);
+        }
+      }
+    }
+    for (const name of SPL_TOKEN_ALLOWED) {
+      const f = definedIn.get(name);
+      expect(f, `${name} not found in spl-token`).toBeDefined();
+      expect(sending.has(f!), `${name} is defined in a sending file ${f}`).toBe(false);
+    }
+    const builders = [...definedIn].filter(([n]) => SPL_TOKEN_BUILDER.test(n));
+    expect(builders.length).toBeGreaterThan(20);
+    for (const [name, f] of builders) {
+      expect(sending.has(f), `${name} is defined in a sending file ${f}`).toBe(false);
+    }
+  });
+});
+
+describe("findForbiddenSplTokenImports (the matcher)", () => {
+  const flagged: Array<[string, string, string?]> = [
+    ["a named action import", 'import { transfer } from "@solana/spl-token";'],
+    [
+      "getOrCreateAssociatedTokenAccount",
+      'import { getOrCreateAssociatedTokenAccount } from "@solana/spl-token";',
+    ],
+    [
+      "an aliased action import",
+      'import { createTransferInstruction, mintTo as mint } from "@solana/spl-token";',
+    ],
+    ["a namespace import", 'import * as spl from "@solana/spl-token";'],
+    ["a default import", 'import spl from "@solana/spl-token";'],
+    ["a dynamic import", 'const spl = await import("@solana/spl-token");'],
+    ["a require", 'const spl = require("@solana/spl-token");', "x.cjs"],
+    ["an import = require", 'import spl = require("@solana/spl-token");'],
+    ["a re-export", 'export { transfer } from "@solana/spl-token";'],
+    ["an export *", 'export * from "@solana/spl-token";'],
+    ["a subpath", 'import { burnChecked } from "@solana/spl-token/lib/esm/index.js";'],
+  ];
+  for (const [label, src, file] of flagged) {
+    it(`flags ${label}`, () => {
+      expect(findForbiddenSplTokenImports(src, file)).toHaveLength(1);
+    });
+  }
+
+  const clean: Array<[string, string]> = [
+    ["a builder", 'import { createTransferInstruction } from "@solana/spl-token";'],
+    ["an address helper", 'import { getAssociatedTokenAddress } from "@solana/spl-token";'],
+    ["a type-only import", 'import type { transfer, Account } from "@solana/spl-token";'],
+    ["a type-only element", 'import { type transfer, getAccount } from "@solana/spl-token";'],
+    ["a type-only re-export", 'export type { transfer } from "@solana/spl-token";'],
+    ["an allowed re-export", 'export { createTransferInstruction } from "@solana/spl-token";'],
+    ["another package", 'import { transfer } from "./transfer.js";'],
+    ["a type query", 'type T = typeof import("@solana/spl-token");'],
+  ];
+  for (const [label, src] of clean) {
+    it(`does not flag ${label}`, () => {
+      expect(findForbiddenSplTokenImports(src)).toEqual([]);
+    });
+  }
+
+  it("flags the forbidden name and line", () => {
+    expect(
+      findForbiddenSplTokenImports(
+        '// ok\nimport {\n  getAccount,\n  transfer,\n} from "@solana/spl-token";',
+      ),
+    ).toEqual([{ line: 4, name: "transfer" }]);
   });
 });
 
