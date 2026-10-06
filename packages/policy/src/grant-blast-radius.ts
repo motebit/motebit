@@ -112,6 +112,7 @@ export type BlastRadiusDenial =
   | "ceiling_absent" // no total bound set ⇒ a money grant authorizes nothing
   | "invalid_amount" // non-positive, non-integer, or would overflow MAX_SAFE_INTEGER
   | "invalid_counterparty" // unparseable / empty destination
+  | "invalid_ceiling" // a present limit is not a non-negative safe integer (NaN/Infinity/negative/fractional/unsafe)
   | "invalid_window" // a per-window limit is set but window_ms ≤ 0
   | "replay" // nonce ≤ high-water (dedupe; replay-of-signed-token lands with the wire binding)
   | "lifetime_exceeded"
@@ -209,6 +210,15 @@ export function spendCeilingFromGrant(
 ): GrantSpendCeiling | null {
   const wire = grant.spend_ceiling;
   if (wire == null) return null;
+  // A malformed limit is refused here, not mapped: a NaN or Infinity bound
+  // compares as "never exceeded", and `canonicalJson` writes NaN as `null`, so
+  // a grant signed over one still verifies. `window_ms` rides the same rule.
+  for (const field of [...CEILING_LIMIT_FIELDS, "window_ms"] as const) {
+    const v: unknown = (wire as unknown as Record<string, unknown>)[field];
+    if (v !== undefined && !isNonNegativeSafeInteger(v)) {
+      throw new InvalidSpendCeilingError(field, v);
+    }
+  }
   return {
     ...(wire.cumulative_limit_micro !== undefined
       ? { cumulative_limit_micro: wire.cumulative_limit_micro }
@@ -222,6 +232,37 @@ export function spendCeilingFromGrant(
       : {}),
     ...(wire.window_ms !== undefined ? { window_ms: wire.window_ms } : {}),
   };
+}
+
+/** The ceiling fields that bound spend; each, when present, must be a non-negative safe integer. */
+const CEILING_LIMIT_FIELDS = [
+  "cumulative_limit_micro",
+  "per_counterparty_limit_micro",
+  "max_action_count",
+  "lifetime_limit_micro",
+] as const;
+
+function isNonNegativeSafeInteger(v: unknown): v is number {
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+}
+
+/**
+ * A grant's `spend_ceiling` carries a limit that is not a non-negative safe
+ * integer. `denial` is the blast-radius code a caller reports for it.
+ */
+export class InvalidSpendCeilingError extends Error {
+  readonly denial = "invalid_ceiling" as const;
+  constructor(
+    readonly field: string,
+    value: unknown,
+  ) {
+    super(
+      `spend_ceiling.${field} must be a non-negative safe integer, got ${
+        typeof value === "number" ? String(value) : JSON.stringify(value)
+      }`,
+    );
+    this.name = "InvalidSpendCeilingError";
+  }
 }
 
 const deny = (
@@ -253,7 +294,15 @@ export function evaluateBlastRadius(
   const cp = canonicalizeCounterparty(action.counterparty);
   if (cp === null) return deny("invalid_counterparty");
 
-  // 3. A money grant must bound total exposure somehow. Neither total bound ⇒ deny.
+  // 3. Every PRESENT limit must be a non-negative safe integer. Each comparison
+  //    below is `>`, and nothing exceeds NaN or Infinity — a malformed bound
+  //    would authorize unbounded spend. Present (not `undefined`) includes null.
+  for (const field of CEILING_LIMIT_FIELDS) {
+    const v: unknown = ceiling[field];
+    if (v !== undefined && !isNonNegativeSafeInteger(v)) return deny("invalid_ceiling");
+  }
+
+  // 3b. A money grant must bound total exposure somehow. Neither total bound ⇒ deny.
   const hasWindowLimit =
     ceiling.cumulative_limit_micro !== undefined ||
     ceiling.per_counterparty_limit_micro !== undefined ||

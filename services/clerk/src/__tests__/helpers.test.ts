@@ -119,3 +119,23 @@ describe("clerk loadConfig — defaults and overrides", () => {
     expect(c.publicUrl).toBe("https://clerk.example");
   });
 });
+
+describe("clerk loadConfig — the spend ceiling is read strictly (boot refuses a malformed one)", () => {
+  // The ceiling is signed into the clerk's own standing grant. `parseInt("")`
+  // is NaN, NaN canonicalizes to null, and the grant still verified — with a
+  // lifetime limit nothing exceeds. Unset keeps the documented $1 default;
+  // anything set must be a plain non-negative integer of micro-units.
+  it.each(["", "   ", "NaN", "Infinity", "-1", "1.5", "abc", "12abc", "1e6", String(2 ** 53)])(
+    "MOTEBIT_CLERK_CEILING_MICRO=%j ⇒ loadConfig throws (boot refused)",
+    (raw) => {
+      process.env["MOTEBIT_CLERK_CEILING_MICRO"] = raw;
+      expect(() => loadConfig()).toThrow("MOTEBIT_CLERK_CEILING_MICRO");
+    },
+  );
+
+  it("unset keeps the documented $1 default; 0 is a real (deny-all) ceiling", () => {
+    expect(loadConfig().ceilingMicro).toBe(1_000_000);
+    process.env["MOTEBIT_CLERK_CEILING_MICRO"] = "0";
+    expect(loadConfig().ceilingMicro).toBe(0);
+  });
+});

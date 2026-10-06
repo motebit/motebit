@@ -27,7 +27,11 @@
  */
 
 import type { GrantSpendStore } from "@motebit/policy";
-import { spendCeilingFromGrant, extractMoneyAction } from "@motebit/policy";
+import {
+  spendCeilingFromGrant,
+  extractMoneyAction,
+  InvalidSpendCeilingError,
+} from "@motebit/policy";
 import type { TurnContext } from "@motebit/protocol";
 import type { BuildP2pPayment } from "./relay-delegation.js";
 
@@ -69,7 +73,15 @@ export function createMoneyMeter(
           "grant lifetime ceiling is metered in-memory and re-arms on restart — inject the persistent SqliteGrantSpendStore (@motebit/persistence) for live money",
       });
     }
-    const ceiling = spendCeilingFromGrant(verifiedGrant);
+    let ceiling: ReturnType<typeof spendCeilingFromGrant>;
+    try {
+      ceiling = spendCeilingFromGrant(verifiedGrant);
+    } catch (err) {
+      // A signed limit that is not a non-negative safe integer (NaN survives
+      // signing as null) is refused, never metered as a bound nothing exceeds.
+      if (err instanceof InvalidSpendCeilingError) return { allowed: false, denial: err.denial };
+      throw err;
+    }
     if (ceiling == null) return { allowed: false, denial: "ceiling_absent" };
 
     const action = extractMoneyAction(args);
