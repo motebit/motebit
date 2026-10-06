@@ -52,15 +52,43 @@ export interface PromptSet {
   prompts: BenchPrompt[];
 }
 
-/** Route identity. `Bp` is B′: motebit's exact request replayed directly. */
-export type RouteId = "A" | "B" | "Bp" | "C";
+/**
+ * Route identity.
+ *   Bp  = B′: A's captured provider requests replayed byte-for-byte, directly.
+ *   Bpp = B″: neutral system prompt + A's TRIMMED messages + A's exact params/tools.
+ *   Bpf = the 2×2 interaction cell: A's system prompt + the FULL untrimmed
+ *         conversation + A's params/tools. Optional; quality subset only.
+ */
+export type RouteId = "A" | "B" | "Bp" | "Bpp" | "Bpf" | "C";
 
 export const ROUTE_LABELS: Readonly<Record<RouteId, string>> = {
   A: "motebit runtime",
   B: "direct API, neutral prompt, untrimmed history",
-  Bp: "direct API, motebit's exact request replayed",
+  Bp: "direct API, byte-for-byte replay of motebit's captured requests",
+  Bpp: "direct API, neutral prompt, motebit's trimmed messages",
+  Bpf: "direct API, motebit's system prompt, untrimmed history (interaction cell)",
   C: "vendor product (manually collected)",
 };
+
+/** Display name for a route id (B′, B″ …). */
+export const ROUTE_DISPLAY: Readonly<Record<RouteId, string>> = {
+  A: "A",
+  B: "B",
+  Bp: "B′",
+  Bpp: "B″",
+  Bpf: "B′ᶠ",
+  C: "C",
+};
+
+/**
+ * Provider under test / judge provider. Mirrors the product's BYOK vendor
+ * registry; each reads its own secret.
+ */
+export const BENCH_PROVIDERS = ["anthropic", "openai", "google", "groq", "deepseek"] as const;
+export type BenchProvider = (typeof BENCH_PROVIDERS)[number];
+
+/** Wire protocol family a provider speaks (the product dispatches the same way). */
+export type WireProtocol = "anthropic" | "openai";
 
 export interface Usage {
   input_tokens: number;
@@ -69,11 +97,16 @@ export interface Usage {
   cache_creation_input_tokens: number;
 }
 
-/** One HTTP round to `/v1/messages`, as observed on the wire. */
+/** One HTTP round to a model endpoint, as observed on the wire. */
 export interface WireExchange {
   url: string;
-  /** The exact JSON body sent (api key never lives in the body). */
+  protocol: WireProtocol;
+  /** The exact JSON body sent, parsed (api key never lives in the body). */
   request_body: Record<string, unknown>;
+  /** The exact request body BYTES sent, as a string — what B′ replays. */
+  request_raw: string;
+  /** Request headers as sent, credential headers redacted. */
+  request_headers: Record<string, string>;
   status: number;
   started_at: number;
   /** First streamed `text_delta`. Absent on a round that streamed no text. */
@@ -81,10 +114,23 @@ export interface WireExchange {
   ended_at?: number;
   usage: Usage;
   stop_reason?: string;
-  /** Reassembled content blocks (text / thinking / tool_use …), in order. */
+  /**
+   * Reassembled content blocks (text / thinking / tool_use …), in order. On the
+   * OpenAI protocol, streamed `tool_calls` are normalized to `tool_use` blocks
+   * carrying the raw `arguments` string as `arguments_raw`.
+   */
   content: Array<Record<string, unknown>>;
   text: string;
   error?: string;
+}
+
+/** One provider request exactly as A's adapter sent it — what B′ replays. */
+export interface CapturedRequest {
+  url: string;
+  /** Body bytes as handed to fetch. */
+  raw: string;
+  /** Headers as sent, credentials redacted. */
+  headers: Record<string, string>;
 }
 
 /** Everything not content: the parameters B and B′ copy from A. */
@@ -136,29 +182,47 @@ export interface MotebitTurnDetail {
 
 export interface RouteAResult extends RouteResult {
   route: "A";
+  protocol: WireProtocol;
+  /** Every in-turn model request as captured at the transport seam (B′ replays these). */
+  captured: CapturedRequest[];
+  /** Per in-turn round: did the model stop for a tool call? (B′'s divergence reference.) */
+  rounds_stopped_for_tools: boolean[];
   motebit: MotebitTurnDetail;
 }
 
+export type DirectRouteId = "B" | "Bp" | "Bpp" | "Bpf";
+
 export interface DirectRouteResult extends RouteResult {
-  route: "B" | "Bp";
+  route: DirectRouteId;
   /** Tool calls answered by replaying A's recorded result vs. refused. */
   tool_replay: { replayed: number; unavailable: number };
+  /**
+   * B′ only: the 1-based round at which the replayed model's stop behaviour
+   * (tool call vs. final answer) first differed from A's on the same request.
+   * Replay stops there. Absent when the trajectory matched end to end.
+   */
+  diverged_at_round?: number;
 }
 
 export interface PromptRun {
   prompt_id: string;
   category: PromptCategory;
   repetition: number;
+  /** In the designated quality subset (repeated, judged). */
+  quality: boolean;
   results: Partial<Record<RouteId, RouteResult>>;
 }
 
 export interface RunFile {
   bench: "intelligence-parity";
-  version: 1;
+  version: 2;
   started_at: string;
+  provider: BenchProvider;
   model: string;
   routes: RouteId[];
+  /** Samples per quality-subset prompt; every other prompt runs once (latency only). */
   repetitions: number;
+  quality_subset: string[];
   runs: PromptRun[];
   spend_usd: number;
 }
@@ -203,7 +267,8 @@ export interface Judgment {
 
 export interface JudgeFile {
   bench: "intelligence-parity/judgments";
-  version: 1;
+  version: 2;
+  judge_provider: BenchProvider;
   judge_model: string;
   judgments: Judgment[];
   spend_usd: number;

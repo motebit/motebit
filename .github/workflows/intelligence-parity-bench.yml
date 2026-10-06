@@ -2,21 +2,29 @@
 # model slower or worse than calling the provider API directly?
 #
 # Route A runs the real runtime turn path (system-prompt assembly, context
-# trimming, memory pipeline, AnthropicProvider). Route B calls the API directly
-# with the parameters A actually sent (copied off the wire), a neutral system
-# prompt and the full untrimmed conversation. B′ (routes=A,B,Bp) replays A's
-# exact request directly, which isolates pipeline time from prompt effect. A blind judge
-# (a different model) scores the answers. See scripts/bench/intelligence-parity/.
+# trimming, memory pipeline, the provider adapter). Every direct route is
+# derived from A's request as captured at the transport seam:
+#   B′  A's captured requests replayed byte for byte       (A ↔ B′: runtime cost)
+#   B″  neutral system prompt + A's trimmed messages       (B′ ↔ B″: system-prompt effect)
+#   B   neutral system prompt + full untrimmed history     (B″ ↔ B: trimming effect)
+#   Bpf (optional) A's system prompt + full history — the 2×2 cell that tests
+#       whether the effects are separable before any additive attribution.
+# A blind judge (a different model) scores repeated samples of a designated
+# quality subset; the report gives bootstrap CIs. See scripts/bench/intelligence-parity/.
 #
 # A MEASUREMENT: it changes no prompt, context policy, routing or model default.
 #
-# Secrets (repository level): ANTHROPIC_API_KEY. A missing key fails the run;
-# it never degrades to a silent no-op.
+# Secrets (repository level), one per provider: ANTHROPIC_API_KEY,
+# OPENAI_API_KEY, GOOGLE_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY. Only the
+# selected provider's and judge provider's are read; a missing one fails the
+# run naming the secret — it never degrades to a silent no-op.
 #
-# HARD SPEND GUARD: the run refuses to start when its estimate (tokens ×
-# published price, scripts/bench/intelligence-parity/spend.ts) exceeds
-# `max_usd`, and a live meter stops it before the next call once actual spend
-# reaches `max_usd`. An unpriced model is refused, never priced at zero.
+# HARD SPEND GUARD: the run refuses to start when its estimate (every route ×
+# repetitions + the judge, tokens × published price,
+# scripts/bench/intelligence-parity/spend.ts) exceeds `max_usd`, and a live
+# meter stops it before the next call once actual spend reaches `max_usd`. An
+# unpriced model is refused, never priced at zero — pass its published price in
+# `prices` for a model not tabled in spend.ts.
 #
 # MANUAL DISPATCH ONLY, and that is why this file has no `if: failure()` alert:
 # a human triggered the run and is reading the artifact. If you add a
@@ -28,36 +36,58 @@ name: Intelligence-parity bench
 on:
   workflow_dispatch:
     inputs:
+      provider:
+        description: "Provider under test"
+        required: false
+        type: choice
+        options: [anthropic, openai, google, groq, deepseek]
+        default: anthropic
       model:
-        description: "Model under test (blank = the resolver's Anthropic default)"
+        description: "Model under test (blank = the resolver's default for the provider)"
+        required: false
+        type: string
+        default: ""
+      judge_provider:
+        description: "Judge provider"
+        required: false
+        type: choice
+        options: [anthropic, openai, google, groq, deepseek]
+        default: anthropic
+      judge_model:
+        description: "Judge model, must differ from the model under test (blank = claude-opus-5-5 on anthropic, else the judge provider's default)"
         required: false
         type: string
         default: ""
       subset:
-        description: "Comma list of prompt ids and/or categories (blank = all 25)"
+        description: "Comma list of prompt ids and/or categories for latency (blank = all 25)"
         required: false
         type: string
         default: ""
-      judge_model:
-        description: "Judge model (must differ from the model under test)"
+      quality_subset:
+        description: "Prompts repeated + judged (blank = the 6 designated prompts; 'all' = every selected prompt)"
         required: false
         type: string
-        default: "claude-opus-5-5"
+        default: ""
       repetitions:
-        description: "Repetitions per prompt"
+        description: "Samples per quality-subset prompt"
         required: false
         type: string
-        default: "1"
+        default: "3"
       routes:
-        description: "Live routes: A,B (default) or A,B,Bp to also isolate pipeline time (~+50% spend)"
+        description: "Live routes: A,B,Bp,Bpp (default); add Bpf for the 2×2 separability check"
         required: false
         type: string
-        default: "A,B"
+        default: "A,B,Bp,Bpp"
       max_usd:
         description: "Hard spend ceiling for the whole run, USD"
         required: false
         type: string
         default: "5"
+      prices:
+        description: "Prices for models not in spend.ts: model=in:out[:cache_read] USD/MTok, comma-separated"
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: intelligence-parity-bench
@@ -82,29 +112,45 @@ jobs:
         run: pnpm --filter @motebit/runtime... --filter @motebit/tools... --filter @motebit/ai-core... build
       - name: Spend guard (pre-flight estimate)
         env:
+          PROVIDER: ${{ inputs.provider }}
           MODEL: ${{ inputs.model }}
-          SUBSET: ${{ inputs.subset }}
+          JUDGE_PROVIDER: ${{ inputs.judge_provider }}
           JUDGE_MODEL: ${{ inputs.judge_model }}
+          SUBSET: ${{ inputs.subset }}
+          QUALITY_SUBSET: ${{ inputs.quality_subset }}
           REPETITIONS: ${{ inputs.repetitions }}
           ROUTES: ${{ inputs.routes }}
           MAX_USD: ${{ inputs.max_usd }}
+          PRICES: ${{ inputs.prices }}
         run: |
           npx tsx scripts/bench/intelligence-parity/run.ts estimate \
-            --model="$MODEL" --subset="$SUBSET" --judge-model="$JUDGE_MODEL" \
-            --repetitions="$REPETITIONS" --routes="$ROUTES" --max-usd="$MAX_USD"
+            --provider="$PROVIDER" --model="$MODEL" \
+            --judge-provider="$JUDGE_PROVIDER" --judge-model="$JUDGE_MODEL" \
+            --subset="$SUBSET" --quality-subset="$QUALITY_SUBSET" \
+            --repetitions="$REPETITIONS" --routes="$ROUTES" --max-usd="$MAX_USD" --prices="$PRICES"
       - name: Run routes, judge, report
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          PROVIDER: ${{ inputs.provider }}
           MODEL: ${{ inputs.model }}
-          SUBSET: ${{ inputs.subset }}
+          JUDGE_PROVIDER: ${{ inputs.judge_provider }}
           JUDGE_MODEL: ${{ inputs.judge_model }}
+          SUBSET: ${{ inputs.subset }}
+          QUALITY_SUBSET: ${{ inputs.quality_subset }}
           REPETITIONS: ${{ inputs.repetitions }}
           ROUTES: ${{ inputs.routes }}
           MAX_USD: ${{ inputs.max_usd }}
+          PRICES: ${{ inputs.prices }}
         run: |
           npx tsx scripts/bench/intelligence-parity/run.ts all \
-            --model="$MODEL" --subset="$SUBSET" --judge-model="$JUDGE_MODEL" \
-            --repetitions="$REPETITIONS" --routes="$ROUTES" --max-usd="$MAX_USD" \
+            --provider="$PROVIDER" --model="$MODEL" \
+            --judge-provider="$JUDGE_PROVIDER" --judge-model="$JUDGE_MODEL" \
+            --subset="$SUBSET" --quality-subset="$QUALITY_SUBSET" \
+            --repetitions="$REPETITIONS" --routes="$ROUTES" --max-usd="$MAX_USD" --prices="$PRICES" \
             --out=bench-out/intelligence-parity
       - name: Publish report to the job summary
         if: always()

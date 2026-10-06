@@ -1,27 +1,41 @@
 /**
- * Parameter freezing — the bench's attribution guarantee.
+ * Route bodies — every one DERIVED from A's captured request, never configured.
  *
- * B and B′ are only comparable to A if they send the SAME model with the SAME
- * provider parameters. So nothing here is configured for B: its parameters are
- * COPIED from A's round-1 request body as it was observed on the wire. The
- * split is by exclusion, not by allowlist — every top-level key that is not
- * conversation content (`system`, `messages`) or transport (`stream`) is a
- * parameter. A parameter motebit starts sending tomorrow (a new `output_config`
- * field, a beta knob) is therefore frozen automatically instead of being
- * silently dropped from B, which would make B "differ by" something the report
- * then misattributes to motebit's prompt.
+ * The routes form pairwise contrasts, each differing from its neighbour in one
+ * ingredient only:
+ *
+ *   A   ↔ B′   runtime/pipeline — B′ is A's captured requests replayed byte for byte
+ *   B′  ↔ B″   system prompt    — B″ swaps motebit's system prompt for a neutral one
+ *   B″  ↔ B    context trimming — B sends the full untrimmed conversation
+ *   (B′ᶠ)      the fourth cell of the 2×2 {system} × {trimming}: motebit's system
+ *              prompt + the full conversation, run only to test separability
+ *
+ * Parameter freezing works by EXCLUSION, not allowlist — every top-level key
+ * that is not conversation content (`system`, `messages`) or transport
+ * (`stream`) is a parameter. A parameter motebit starts sending tomorrow (a new
+ * `output_config` field, a beta knob) is therefore frozen automatically instead
+ * of being silently dropped, which would make a route "differ by" something the
+ * report then misattributes.
  */
 
-import type { FrozenParams, ScriptedMessage } from "./types.js";
+import type {
+  CapturedRequest,
+  FrozenParams,
+  ScriptedMessage,
+  WireExchange,
+  WireProtocol,
+} from "./types.js";
+import { contentKeys, splitMessages } from "./protocol.js";
 
-/** Keys that are conversation content or transport, never parameters. */
-export const CONTENT_KEYS: ReadonlySet<string> = new Set(["system", "messages", "stream"]);
-
-export function freezeParams(round1Body: Record<string, unknown>): FrozenParams {
+export function freezeParams(
+  round1Body: Record<string, unknown>,
+  protocol: WireProtocol = "anthropic",
+): FrozenParams {
+  const skip = contentKeys(protocol);
   const frozen: FrozenParams = {};
   for (const key of Object.keys(round1Body).sort()) {
-    if (CONTENT_KEYS.has(key)) continue;
-    // Deep copy: B must not be able to mutate A's recorded request.
+    if (skip.has(key)) continue;
+    // Deep copy: a route must not be able to mutate A's recorded request.
     frozen[key] = structuredClone(round1Body[key]);
   }
   return frozen;
@@ -29,85 +43,88 @@ export function freezeParams(round1Body: Record<string, unknown>): FrozenParams 
 
 /**
  * Deliberately minimal and neutral: no persona, no tool coaching, no format
- * rules. Anything said here is something B has that A lacks, so it says
+ * rules. Anything said here is something B/B″ have that A lacks, so it says
  * nothing a bare API caller would not.
  */
 export const NEUTRAL_SYSTEM_PROMPT = "You are a helpful assistant.";
+
+function withSystem(
+  protocol: WireProtocol,
+  base: Record<string, unknown>,
+  system: "neutral" | null,
+  messages: Array<Record<string, unknown>>,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { ...base };
+  if (protocol === "anthropic") {
+    if (system === "neutral") body["system"] = NEUTRAL_SYSTEM_PROMPT;
+    body["messages"] = messages;
+  } else {
+    body["messages"] =
+      system === "neutral"
+        ? [{ role: "system", content: NEUTRAL_SYSTEM_PROMPT }, ...messages]
+        : messages;
+  }
+  body["stream"] = true;
+  return body;
+}
+
+const plain = (history: readonly ScriptedMessage[]) =>
+  history.map((m) => ({ role: m.role, content: m.content }));
 
 /** Route B round 1: A's frozen params, neutral system, the FULL untrimmed conversation. */
 export function buildRouteBRequest(
   frozen: FrozenParams,
   history: readonly ScriptedMessage[],
   prompt: string,
+  protocol: WireProtocol = "anthropic",
 ): Record<string, unknown> {
-  return {
-    ...structuredClone(frozen),
-    system: NEUTRAL_SYSTEM_PROMPT,
-    messages: [
-      ...history.map((m) => ({ role: m.role, content: m.content })),
-      { role: "user", content: prompt },
-    ],
-    stream: true,
-  };
+  return withSystem(protocol, structuredClone(frozen), "neutral", [
+    ...plain(history),
+    { role: "user", content: prompt },
+  ]);
 }
 
 /**
- * Route B′ round 1: A's round-1 body replayed VERBATIM — motebit's exact system
- * prompt, exact trimmed messages, exact params — sent straight to the API. A − B′
- * is then pure pipeline time (memory, events, context assembly, runtime); B′ − B
- * is pure prompt/context effect.
+ * Route B″ round 1: A's round-1 body with ONLY the system prompt replaced —
+ * A's trimmed messages (trim note included, exactly as sent), A's params and
+ * tools. On the OpenAI wire motebit's system prompt is its `system`-role
+ * messages (static doctrine first, per-turn context before the turn), so those
+ * are what is removed.
  */
-export function buildRouteBpRequest(round1Body: Record<string, unknown>): Record<string, unknown> {
-  return { ...structuredClone(round1Body), stream: true };
-}
-
-/** Stable JSON (sorted keys) — the replay key for tool calls. */
-export function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const obj = value as Record<string, unknown>;
-  return `{${Object.keys(obj)
-    .sort()
-    .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
-    .join(",")}}`;
-}
-
-export interface RecordedToolResult {
-  content: unknown;
-  is_error?: boolean;
+export function buildRouteBppRequest(
+  round1Body: Record<string, unknown>,
+  protocol: WireProtocol = "anthropic",
+): Record<string, unknown> {
+  const body = structuredClone(round1Body);
+  const { conversation, turn } = splitMessages(body);
+  return withSystem(protocol, body, "neutral", [...conversation, ...turn]);
 }
 
 /**
- * Index A's tool results by `name + canonical input`, read from A's own later
- * request bodies (the assistant `tool_use` blocks and the user `tool_result`
- * blocks motebit sent back). B cannot run motebit's tools — that is the point —
- * so a B tool call that exactly matches one A made is answered with A's real
- * result; anything else is refused and counted.
+ * Route B′ᶠ round 1 (the interaction cell): A's round-1 body with ONLY the
+ * trimmed conversation replaced by the full untrimmed history — A's system
+ * prompt, A's turn message, A's params and tools.
  */
-export function indexToolResults(
-  requests: ReadonlyArray<Record<string, unknown>>,
-): Map<string, RecordedToolResult> {
-  const uses = new Map<string, { name: string; input: unknown }>();
-  const out = new Map<string, RecordedToolResult>();
-  for (const body of requests) {
-    const messages = Array.isArray(body["messages"])
-      ? (body["messages"] as Array<Record<string, unknown>>)
-      : [];
-    for (const msg of messages) {
-      if (!Array.isArray(msg["content"])) continue;
-      for (const block of msg["content"] as Array<Record<string, unknown>>) {
-        if (block["type"] === "tool_use") {
-          uses.set(String(block["id"]), { name: String(block["name"]), input: block["input"] });
-        } else if (block["type"] === "tool_result") {
-          const use = uses.get(String(block["tool_use_id"]));
-          if (!use) continue;
-          out.set(`${use.name}:${stableStringify(use.input)}`, {
-            content: block["content"],
-            ...(block["is_error"] === true ? { is_error: true } : {}),
-          });
-        }
-      }
-    }
-  }
-  return out;
+export function buildRouteBpfRequest(
+  round1Body: Record<string, unknown>,
+  history: readonly ScriptedMessage[],
+  protocol: WireProtocol = "anthropic",
+): Record<string, unknown> {
+  const body = structuredClone(round1Body);
+  const { leadingSystem, trailingSystem, turn } = splitMessages(body);
+  return withSystem(protocol, body, null, [
+    ...leadingSystem,
+    ...plain(history),
+    ...trailingSystem,
+    ...turn,
+  ]);
+}
+
+/** Capture A's rounds for B′ — the recorded bytes, untouched. */
+export function captureRequests(rounds: readonly WireExchange[]): CapturedRequest[] {
+  return rounds.map((ex) => ({
+    url: ex.url,
+    raw: ex.request_raw,
+    headers: { ...ex.request_headers },
+  }));
 }

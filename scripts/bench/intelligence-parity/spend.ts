@@ -16,7 +16,9 @@
  *
  * Prices: Anthropic first-party list prices, USD per million tokens (as of
  * 2026-09-25). Cache writes bill at 1.25× input (5-minute TTL), cache reads at
- * the per-model rate below.
+ * the per-model rate below. Other providers' models are NOT tabled here — the
+ * operator supplies their published price with `--prices=` (the workflow's
+ * `prices` input), and an unsupplied one is refused like any unpriced model.
  */
 
 import type { BenchPrompt, RouteId, Usage } from "./types.js";
@@ -43,7 +45,44 @@ export const PRICES_USD_PER_MTOK: Readonly<Record<string, ModelPrice>> = {
 
 export const CACHE_WRITE_MULTIPLIER = 1.25;
 
-export function priceFor(model: string): ModelPrice {
+/** Operator-supplied prices (`--prices=`), consulted before the table. */
+export type PriceOverrides = Readonly<Record<string, ModelPrice>>;
+
+/**
+ * Parse `--prices=<model>=<input>:<output>[:<cache_read>],…` (USD per MTok).
+ * Cache read defaults to the input price — the pessimistic choice.
+ */
+export function parsePrices(spec: string | undefined): Record<string, ModelPrice> {
+  const out: Record<string, ModelPrice> = {};
+  for (const entry of (spec ?? "").split(",").map((s) => s.trim())) {
+    if (entry.length === 0) continue;
+    const eq = entry.lastIndexOf("=");
+    const model = entry.slice(0, eq).trim();
+    const nums = entry
+      .slice(eq + 1)
+      .split(":")
+      .map((v) => Number(v));
+    if (
+      eq <= 0 ||
+      model.length === 0 ||
+      nums.length < 2 ||
+      nums.length > 3 ||
+      nums.some((n) => !Number.isFinite(n) || n < 0)
+    ) {
+      throw new Error(
+        `--prices entry "${entry}" is malformed.\n` +
+          `  → Use <model>=<input>:<output>[:<cache_read>] in USD per million tokens, ` +
+          `e.g. --prices=gpt-5.4-mini=0.75:4.5:0.075`,
+      );
+    }
+    out[model] = { input: nums[0]!, output: nums[1]!, cache_read: nums[2] ?? nums[0]! };
+  }
+  return out;
+}
+
+export function priceFor(model: string, overrides: PriceOverrides = {}): ModelPrice {
+  const override = overrides[model];
+  if (override) return override;
   const exact = PRICES_USD_PER_MTOK[model];
   if (exact) return exact;
   // Dated snapshot ids (`claude-haiku-4-5-20251001`) price as their family.
@@ -53,13 +92,14 @@ export function priceFor(model: string): ModelPrice {
   if (family) return PRICES_USD_PER_MTOK[family]!;
   throw new Error(
     `No price for model "${model}". The spend guard refuses to run an unpriced model.\n` +
-      `  → Add its USD-per-MTok row to PRICES_USD_PER_MTOK in ` +
-      `scripts/bench/intelligence-parity/spend.ts (from the vendor's published price list).`,
+      `  → Pass its published USD-per-MTok price: --prices=${model}=<input>:<output>[:<cache_read>] ` +
+      `(workflow input \`prices\`), or add a row to PRICES_USD_PER_MTOK in ` +
+      `scripts/bench/intelligence-parity/spend.ts.`,
   );
 }
 
-export function costUsd(model: string, usage: Usage): number {
-  const p = priceFor(model);
+export function costUsd(model: string, usage: Usage, overrides: PriceOverrides = {}): number {
+  const p = priceFor(model, overrides);
   return (
     (usage.input_tokens * p.input +
       usage.output_tokens * p.output +
@@ -96,60 +136,78 @@ export interface SpendEstimate {
   input_tokens: number;
   output_tokens: number;
   calls: number;
+  /** USD per live route and for the judge — so the printout shows every route is priced. */
+  by_route: Partial<Record<RouteId | "judge", number>>;
 }
+
+/** Routes whose round 1 carries motebit's assembled system prompt. */
+const MOTEBIT_SYSTEM_ROUTES: ReadonlySet<RouteId> = new Set(["A", "Bp", "Bpf"]);
 
 export function estimateRun(opts: {
   prompts: readonly BenchPrompt[];
   routes: readonly RouteId[];
+  /** Samples per quality-subset prompt. */
   repetitions: number;
+  /** Prompt ids that are repeated and judged; every other prompt runs once. */
+  qualityIds: ReadonlySet<string>;
   model: string;
   judgeModel: string | null;
+  /** Manually collected route-C answers also go to the judge. */
+  routeC?: boolean;
+  prices?: PriceOverrides;
 }): SpendEstimate {
+  const prices = opts.prices ?? {};
   const live = opts.routes.filter((r) => r !== "C");
+  const reps = Math.max(1, opts.repetitions);
+  const by: Partial<Record<RouteId | "judge", number>> = {};
   let usd = 0;
   let input = 0;
   let output = 0;
   let calls = 0;
+  const add = (key: RouteId | "judge", model: string, inTok: number, outTok: number, n: number) => {
+    const c =
+      n *
+      costUsd(
+        model,
+        {
+          input_tokens: inTok,
+          output_tokens: outTok,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        prices,
+      );
+    by[key] = (by[key] ?? 0) + c;
+    usd += c;
+    input += n * inTok;
+    output += n * outTok;
+  };
   for (const p of opts.prompts) {
+    const quality = opts.qualityIds.has(p.id);
+    const samples = quality ? reps : 1;
     const convo =
       tokensOf(p.prompt) + (p.history ?? []).reduce((n, m) => n + tokensOf(m.content), 0);
     const rounds = p.tools_expected ? ESTIMATE.toolRounds : 1;
     for (const r of live) {
-      const sys = r === "B" ? ESTIMATE.directSystemTokens : ESTIMATE.motebitSystemTokens;
+      // The interaction cell runs on the quality subset only.
+      if (r === "Bpf" && !quality) continue;
+      const sys = MOTEBIT_SYSTEM_ROUTES.has(r)
+        ? ESTIMATE.motebitSystemTokens
+        : ESTIMATE.directSystemTokens;
       // Every round resends the whole context plus the prior rounds' output.
       const inTok = rounds * (sys + convo) + ((rounds * (rounds - 1)) / 2) * 500;
       const outTok = rounds * ESTIMATE.outputTokensPerAnswer;
-      input += inTok;
-      output += outTok;
-      calls += rounds;
-      usd += costUsd(opts.model, {
-        input_tokens: inTok,
-        output_tokens: outTok,
-        cache_read_input_tokens: 0,
-        cache_creation_input_tokens: 0,
-      });
+      add(r, opts.model, inTok, outTok, samples);
+      calls += rounds * samples;
     }
-    if (opts.judgeModel) {
-      const answers = opts.routes.length * ESTIMATE.outputTokensPerAnswer;
+    if (opts.judgeModel && quality) {
+      const answers = (live.length + (opts.routeC ? 1 : 0)) * ESTIMATE.outputTokensPerAnswer;
       const inTok = ESTIMATE.judgeOverheadTokens + convo + answers;
-      input += inTok;
-      output += ESTIMATE.judgeOutputTokens;
-      calls += 1;
-      usd += costUsd(opts.judgeModel, {
-        input_tokens: inTok,
-        output_tokens: ESTIMATE.judgeOutputTokens,
-        cache_read_input_tokens: 0,
-        cache_creation_input_tokens: 0,
-      });
+      add("judge", opts.judgeModel, inTok, ESTIMATE.judgeOutputTokens, samples);
+      calls += samples;
     }
   }
-  const reps = Math.max(1, opts.repetitions);
-  return {
-    usd: usd * reps,
-    input_tokens: input * reps,
-    output_tokens: output * reps,
-    calls: calls * reps,
-  };
+  return { usd, input_tokens: input, output_tokens: output, calls, by_route: by };
 }
 
 export class SpendLimitExceeded extends Error {
@@ -168,11 +226,16 @@ export class SpendLimitExceeded extends Error {
 /** Live meter. `charge` after every call; `check` before the next one. */
 export class SpendMeter {
   private spent = 0;
-  constructor(readonly maxUsd: number) {
+  constructor(
+    readonly maxUsd: number,
+    readonly prices: PriceOverrides = {},
+  ) {
     if (!(maxUsd > 0)) throw new Error(`--max-usd must be > 0 (got ${maxUsd})`);
   }
-  charge(model: string, usage: Usage): void {
-    this.spent += costUsd(model, usage);
+  charge(model: string, usage: Usage): number {
+    const c = costUsd(model, usage, this.prices);
+    this.spent += c;
+    return c;
   }
   get spentUsd(): number {
     return this.spent;
@@ -189,7 +252,7 @@ export function assertEstimateWithinBudget(est: SpendEstimate, maxUsd: number): 
       `Spend guard: estimated $${est.usd.toFixed(2)} (${est.calls} calls, ` +
         `~${est.input_tokens.toLocaleString()} in / ~${est.output_tokens.toLocaleString()} out tokens) ` +
         `exceeds --max-usd=$${maxUsd.toFixed(2)}.\n` +
-        `  → Narrow --subset, lower --repetitions, or raise --max-usd deliberately.`,
+        `  → Narrow --subset or --quality-subset, lower --repetitions, drop a route, or raise --max-usd deliberately.`,
     );
   }
 }

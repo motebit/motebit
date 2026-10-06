@@ -3,9 +3,9 @@
  *
  * The SAME code path a surface uses: `MotebitRuntime.sendMessageStreaming`
  * (system-prompt assembly, conversation trimming, memory recall + formation,
- * the agentic loop) over `AnthropicProvider` built the way the CLI builds it
- * (`resolveProviderSpec` byok → `AnthropicProvider` with the personality
- * default temperature). Nothing is reimplemented here and nothing in the
+ * the agentic loop) over the provider adapter built the way the CLI builds it
+ * (`resolveProviderSpec` byok → `AnthropicProvider` or `OpenAIProvider` by wire
+ * protocol, with the personality default temperature). Nothing is reimplemented here and nothing in the
  * product is configured differently for the bench.
  *
  * What the bench supplies is only what a fresh install would have: a new
@@ -27,7 +27,11 @@ import {
   createInMemoryStorage,
 } from "../../../packages/runtime/src/index.js";
 import type { StreamChunk } from "../../../packages/runtime/src/index.js";
-import { AnthropicProvider, DEFAULT_CONFIG } from "../../../packages/ai-core/src/index.js";
+import {
+  AnthropicProvider,
+  DEFAULT_CONFIG,
+  OpenAIProvider,
+} from "../../../packages/ai-core/src/index.js";
 import { resolveProviderSpec } from "../../../packages/sdk/src/index.js";
 import type { ConversationStoreAdapter, ResolverEnv } from "../../../packages/sdk/src/index.js";
 import {
@@ -44,8 +48,16 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import type { AttributedMemoryCandidate } from "../../../packages/sdk/src/index.js";
 import { addUsage, ZERO_USAGE, type WireTap } from "./wire-tap.js";
-import { freezeParams } from "./params.js";
-import type { BenchPrompt, RouteAResult, ScriptedMessage, Usage, WireExchange } from "./types.js";
+import { captureRequests, freezeParams } from "./params.js";
+import { messagesOf, stoppedForTools, systemPromptChars } from "./protocol.js";
+import type {
+  BenchPrompt,
+  BenchProvider,
+  RouteAResult,
+  ScriptedMessage,
+  Usage,
+  WireExchange,
+} from "./types.js";
 
 /** The CLI's resolver env, minus on-device backends (BYOK only here). */
 const BENCH_RESOLVER_ENV: ResolverEnv = {
@@ -160,18 +172,14 @@ function memoryFormation(): Promise<MemoryFormationModule> {
 }
 
 export interface MotebitRouteConfig {
+  /** BYOK vendor under test. Default `anthropic`. */
+  provider?: BenchProvider;
   apiKey: string;
   model: string;
   /** Override for tests (a fake server). Default: the resolver's canonical URL. */
   baseUrl?: string;
   tap: WireTap;
   clock?: () => number;
-}
-
-function messagesOf(body: Record<string, unknown>): Array<Record<string, unknown>> {
-  return Array.isArray(body["messages"])
-    ? (body["messages"] as Array<Record<string, unknown>>)
-    : [];
 }
 
 function contentText(content: unknown): string {
@@ -182,10 +190,6 @@ function contentText(content: unknown): string {
     .join("");
 }
 
-function systemChars(body: Record<string, unknown>): number {
-  return contentText(body["system"]).length || String(body["system"] ?? "").length;
-}
-
 /**
  * Split the turn's observed exchanges into model rounds of THE turn vs.
  * auxiliary calls. The agentic loop streams (`generateStream`); auxiliary
@@ -193,7 +197,9 @@ function systemChars(body: Record<string, unknown>): number {
  * use the non-streaming `generate`. A round also continues round 1's
  * conversation — same first message. The system prompt is deliberately NOT
  * compared: the runtime re-assembles it per iteration (session state can change
- * mid-turn), so round 2's legitimately differs from round 1's.
+ * mid-turn), so round 2's legitimately differs from round 1's. On the OpenAI
+ * wire the system prompt is `system`-role messages, so those are skipped when
+ * finding the conversation's first message.
  */
 export function splitRounds(exchanges: readonly WireExchange[]): {
   rounds: WireExchange[];
@@ -204,14 +210,16 @@ export function splitRounds(exchanges: readonly WireExchange[]): {
   // first message is re-serialized without it on round 2.
   const headOf = (m: Record<string, unknown> | undefined): string =>
     m ? `${String(m["role"])}:${contentText(m["content"])}` : "";
+  const convo = (body: Record<string, unknown>) =>
+    messagesOf(body).filter((m) => m["role"] !== "system");
   const first = exchanges.find((ex) => ex.request_body["stream"] === true);
   if (!first) return { rounds: [], auxiliary: [...exchanges] };
-  const head = headOf(messagesOf(first.request_body)[0]);
-  const n = messagesOf(first.request_body).length;
+  const head = headOf(convo(first.request_body)[0]);
+  const n = convo(first.request_body).length;
   const rounds: WireExchange[] = [];
   const auxiliary: WireExchange[] = [];
   for (const ex of exchanges) {
-    const msgs = messagesOf(ex.request_body);
+    const msgs = convo(ex.request_body);
     const isRound =
       ex.request_body["stream"] === true && headOf(msgs[0]) === head && msgs.length >= n;
     (isRound ? rounds : auxiliary).push(ex);
@@ -232,7 +240,10 @@ export function measureRetention(
   tokensRetained: number;
   trimNote: boolean;
 } {
-  const sent = messagesOf(round1Body).map((m) => contentText(m["content"]));
+  // System-role messages (the OpenAI wire's system prompt) are not history.
+  const sent = messagesOf(round1Body)
+    .filter((m) => m["role"] !== "system")
+    .map((m) => contentText(m["content"]));
   const trimNote = sent.some((t) =>
     /^\[(This conversation continues from earlier|Earlier in this conversation)/.test(t),
   );
@@ -259,7 +270,7 @@ export async function runMotebitRoute(
   const spec = resolveProviderSpec(
     {
       mode: "byok",
-      vendor: "anthropic",
+      vendor: cfg.provider ?? "anthropic",
       apiKey: cfg.apiKey,
       model: cfg.model,
       ...(cfg.baseUrl !== undefined ? { baseUrl: cfg.baseUrl } : {}),
@@ -267,16 +278,22 @@ export async function runMotebitRoute(
     BENCH_RESOLVER_ENV,
   );
   if (spec.kind !== "cloud") throw new Error(`unexpected provider spec kind ${spec.kind}`);
-  // Mirrors apps/cli/src/runtime-factory.ts specToCliProvider: personality
-  // default temperature, resolver max_tokens (undefined ⇒ the adapter default).
-  const provider = new AnthropicProvider({
+  // Mirrors apps/cli/src/runtime-factory.ts specToCliProvider: dispatch on
+  // wire protocol, personality default temperature, resolver max_tokens
+  // (undefined ⇒ the adapter default).
+  const adapterConfig = {
     api_key: spec.apiKey,
     model: spec.model,
     base_url: spec.baseUrl,
     max_tokens: spec.maxTokens,
     temperature: spec.temperature ?? DEFAULT_CONFIG.temperature,
+    extra_headers: spec.extraHeaders,
     personalityConfig: DEFAULT_CONFIG,
-  });
+  };
+  const provider =
+    spec.wireProtocol === "openai"
+      ? new OpenAIProvider(adapterConfig)
+      : new AnthropicProvider(adapterConfig);
 
   const conversationStore = new BenchConversationStore();
   const motebitId = `bench-${prompt.id}-${repetition}-${crypto.randomUUID().slice(0, 8)}`;
@@ -378,6 +395,7 @@ export async function runMotebitRoute(
 
   return {
     route: "A",
+    protocol: spec.wireProtocol,
     prompt_id: prompt.id,
     repetition,
     // The runtime's final response is the answer a surface renders (internal
@@ -389,7 +407,9 @@ export async function runMotebitRoute(
     model_rounds: rounds.length,
     tool_calls: toolCalls,
     requests: rounds.map((ex) => ex.request_body),
-    params: freezeParams(round1),
+    captured: captureRequests(rounds),
+    rounds_stopped_for_tools: rounds.map(stoppedForTools),
+    params: freezeParams(round1, spec.wireProtocol),
     motebit: {
       ...(result?.latency ? { latency: { ...result.latency } } : {}),
       history_messages: history.length,
@@ -400,7 +420,7 @@ export async function runMotebitRoute(
       memories_retrieved: result?.memoriesRetrieved.length ?? 0,
       auxiliary_calls: auxiliary.length,
       auxiliary_usage: auxUsage,
-      system_prompt_chars: systemChars(round1),
+      system_prompt_chars: systemPromptChars(round1),
     },
     ...(error !== undefined ? { error } : {}),
   };

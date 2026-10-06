@@ -8,13 +8,20 @@ import { afterEach, describe, expect, it } from "vitest";
 import { installWireTap, type WireTap } from "../bench/intelligence-parity/wire-tap.js";
 import {
   buildRouteBRequest,
-  buildRouteBpRequest,
-  CONTENT_KEYS,
+  buildRouteBpfRequest,
+  buildRouteBppRequest,
   freezeParams,
-  indexToolResults,
   NEUTRAL_SYSTEM_PROMPT,
 } from "../bench/intelligence-parity/params.js";
-import { runDirectRoute } from "../bench/intelligence-parity/route-direct.js";
+import {
+  contentKeys,
+  indexToolResults,
+  parseProvider,
+  PROVIDER_KEY_ENV,
+  replayHeaders,
+  requireProviderKey,
+} from "../bench/intelligence-parity/protocol.js";
+import { runDirectRoute, runReplayRoute } from "../bench/intelligence-parity/route-direct.js";
 import {
   measureRetention,
   runMotebitRoute,
@@ -26,17 +33,23 @@ import {
   hashSeed,
   IDENTITY_MASK,
   judgePrompt,
+  judgeWireBody,
   loadRubric,
   maskIdentity,
   parseJudgeReply,
   seededRng,
 } from "../bench/intelligence-parity/judge.js";
 import {
+  bootstrapCI,
   buildReport,
+  interactionCheck,
+  latencyDelta,
   latencyStats,
+  mean,
   median,
   outputLengthRatio,
   percentile,
+  qualityContrast,
   renderMarkdown,
   winRate,
 } from "../bench/intelligence-parity/report.js";
@@ -44,22 +57,28 @@ import {
   assertEstimateWithinBudget,
   costUsd,
   estimateRun,
+  parsePrices,
   priceFor,
   SpendLimitExceeded,
   SpendMeter,
 } from "../bench/intelligence-parity/spend.js";
 import {
+  DEFAULT_QUALITY_SUBSET,
   loadPrompts,
   parseArgs,
   runRoutes,
   selectPrompts,
+  selectQuality,
 } from "../bench/intelligence-parity/run.js";
 import type {
   BenchPrompt,
   Judgment,
+  RouteId,
   RouteResult,
   RunFile,
+  Scores,
   Usage,
+  WireExchange,
 } from "../bench/intelligence-parity/types.js";
 import { ROUTE_LABELS } from "../bench/intelligence-parity/types.js";
 
@@ -156,11 +175,17 @@ function turnEvents(turn: FakeTurn): Array<Record<string, unknown>> {
 /** A fake `/v1/messages`. `script` decides each reply from the request body. */
 function fakeAnthropic(script: (body: Record<string, unknown>, n: number) => FakeTurn) {
   const received: Array<Record<string, unknown>> = [];
+  /** The exact body string and headers each call carried — the byte-level record. */
+  const raw: string[] = [];
+  const headers: Array<Record<string, string>> = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     if (!url.endsWith("/v1/messages")) throw new Error(`unexpected fetch in test: ${url}`);
-    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    if (typeof init?.body !== "string") throw new Error("fake expects a string body");
+    raw.push(init.body);
+    headers.push({ ...(init.headers as Record<string, string>) });
+    const body = JSON.parse(init.body) as Record<string, unknown>;
     received.push(body);
     const turn = script(body, received.length);
     if (body["stream"] === true) return sse(turnEvents(turn));
@@ -173,7 +198,52 @@ function fakeAnthropic(script: (body: Record<string, unknown>, n: number) => Fak
       { status: 200, headers: { "content-type": "application/json" } },
     );
   }) as typeof fetch;
-  return { fetchImpl, received };
+  return { fetchImpl, received, raw, headers };
+}
+
+/** A fake OpenAI-compatible `/chat/completions` (SSE chunks, `[DONE]`). */
+function fakeOpenAi(reply: (body: Record<string, unknown>) => string) {
+  const received: Array<Record<string, unknown>> = [];
+  const raw: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (!url.endsWith("/chat/completions")) throw new Error(`unexpected fetch in test: ${url}`);
+    raw.push(String(init?.body));
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    received.push(body);
+    const text = reply(body);
+    const usage = {
+      prompt_tokens: 120,
+      completion_tokens: 9,
+      prompt_tokens_details: { cached_tokens: 20 },
+    };
+    if (body["stream"] !== true) {
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: text }, finish_reason: "stop" }],
+          usage,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    const enc = new TextEncoder();
+    const chunks = [
+      { choices: [{ index: 0, delta: { role: "assistant", content: text.slice(0, 2) } }] },
+      { choices: [{ index: 0, delta: { content: text.slice(2) } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+      { choices: [], usage },
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(enc.encode(`data: ${JSON.stringify(c)}\n\n`));
+        controller.enqueue(enc.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  return { fetchImpl, received, raw };
 }
 
 const FAKE_BASE = "https://fake-anthropic.test";
@@ -198,7 +268,7 @@ function prompt(over: Partial<BenchPrompt> = {}): BenchPrompt {
 
 // === 1. Parameter freezing ===
 
-describe("parameter freezing — B sends exactly A's parameters", () => {
+describe("parameter freezing — derived routes send exactly A's parameters", () => {
   it("copies every non-content key of A's observed round-1 body, and nothing else", () => {
     const a = {
       model: "m",
@@ -216,16 +286,22 @@ describe("parameter freezing — B sends exactly A's parameters", () => {
     const frozen = freezeParams(a);
     expect(Object.keys(frozen).sort()).toEqual(
       Object.keys(a)
-        .filter((k) => !CONTENT_KEYS.has(k))
+        .filter((k) => !contentKeys("anthropic").has(k))
         .sort(),
     );
     for (const k of Object.keys(frozen)) expect(frozen[k]).toEqual(a[k as keyof typeof a]);
     // Deep copy — mutating B's params never reaches A's record.
     (frozen["tools"] as Array<Record<string, unknown>>)[0]!["name"] = "mutated";
     expect(a.tools[0]!.name).toBe("t");
+    // On the OpenAI wire `system` is not a top-level key, and stream_options IS a parameter.
+    expect(
+      Object.keys(
+        freezeParams({ model: "g", messages: [], stream: true, stream_options: {} }, "openai"),
+      ).sort(),
+    ).toEqual(["model", "stream_options"]);
   });
 
-  it("end to end: B's wire body carries A's wire params, a neutral system and the FULL history; B′ replays A verbatim", async () => {
+  it("end to end: B′ replays A's captured request BYTE FOR BYTE; B″ = neutral system + A's trimmed messages + A's params; B = neutral + full history", async () => {
     const fake = fakeAnthropic(() => ({ text: "Four." }));
     tap = installWireTap({ underlying: fake.fetchImpl });
     const history = [
@@ -245,8 +321,63 @@ describe("parameter freezing — B sends exactly A's parameters", () => {
     expect(aWire["model"]).toBe(MODEL);
     const frozen = freezeParams(aWire);
     expect(a.params).toEqual(frozen);
+    // The bytes the adapter handed to fetch, as the FAKE saw them (independent of the tap).
+    const aIndex = fake.received.indexOf(
+      fake.received.find(
+        (b) => b["stream"] === true && JSON.stringify(b) === JSON.stringify(aWire),
+      )!,
+    );
+    const aRaw = fake.raw[aIndex]!;
+    expect(a.captured[0]!.raw).toBe(aRaw);
+    // Credentials never land in the record.
+    expect(JSON.stringify(a.captured)).not.toContain("test-key");
 
-    const mark = fake.received.length;
+    // --- B′: byte-for-byte replay ---
+    let mark = fake.raw.length;
+    const bp = await runReplayRoute({
+      prompt_id: p.id,
+      repetition: 0,
+      apiKey: "test-key",
+      captured: a.captured,
+      aStoppedForTools: a.rounds_stopped_for_tools,
+      params: frozen,
+      tap,
+    });
+    expect(bp.error).toBeUndefined();
+    expect(fake.raw.length - mark).toBe(a.captured.length);
+    const bpRaw = fake.raw[mark]!;
+    expect(bpRaw).toBe(aRaw);
+    expect(Buffer.from(bpRaw, "utf8").equals(Buffer.from(aRaw, "utf8"))).toBe(true);
+    // Headers too: A's own, with the redacted credential re-supplied.
+    expect(fake.headers[mark]).toEqual(fake.headers[aIndex]);
+    expect(bp.diverged_at_round).toBeUndefined();
+    expect(bp.answer).toBe("Four.");
+
+    // --- B″: neutral system prompt, A's TRIMMED messages, A's params + tools ---
+    mark = fake.received.length;
+    const bpp = await runDirectRoute({
+      route: "Bpp",
+      prompt_id: p.id,
+      repetition: 0,
+      apiKey: "test-key",
+      baseUrl: FAKE_BASE,
+      body: buildRouteBppRequest(aWire),
+      params: frozen,
+      toolResults: indexToolResults(a.requests),
+      tap,
+    });
+    expect(bpp.error).toBeUndefined();
+    const bppWire = fake.received[mark]!;
+    expect(bppWire["system"]).toBe(NEUTRAL_SYSTEM_PROMPT);
+    expect(bppWire["messages"]).toEqual(aWire["messages"]);
+    for (const [k, v] of Object.entries(aWire)) {
+      if (k === "system") continue;
+      expect(bppWire[k], `B″ key ${k}`).toEqual(v);
+    }
+    expect(Object.keys(bppWire).sort()).toEqual(Object.keys(aWire).sort());
+
+    // --- B: neutral system, FULL untrimmed history, A's params ---
+    mark = fake.received.length;
     const b = await runDirectRoute({
       route: "B",
       prompt_id: p.id,
@@ -261,32 +392,162 @@ describe("parameter freezing — B sends exactly A's parameters", () => {
     expect(b.error).toBeUndefined();
     const bWire = fake.received[mark]!;
     for (const [k, v] of Object.entries(aWire)) {
-      if (CONTENT_KEYS.has(k)) continue;
+      if (contentKeys("anthropic").has(k)) continue;
       expect(bWire[k], `param ${k}`).toEqual(v);
     }
     expect(
       Object.keys(bWire)
-        .filter((k) => !CONTENT_KEYS.has(k))
+        .filter((k) => !contentKeys("anthropic").has(k))
         .sort(),
     ).toEqual(Object.keys(frozen).sort());
     expect(bWire["system"]).toBe(NEUTRAL_SYSTEM_PROMPT);
     expect(bWire["messages"]).toEqual([...history, { role: "user", content: p.prompt }]);
+    expect(b.answer).toBe("Four.");
+    expect(b.usage.output_tokens).toBe(7);
+  }, 60_000);
 
-    const bp = await runDirectRoute({
-      route: "Bp",
+  it("B″ keeps A's trimmed messages (trim note included) and B′ᶠ restores the full history under A's system prompt", () => {
+    const history = [
+      { role: "user" as const, content: "turn one" },
+      { role: "assistant" as const, content: "reply one" },
+      { role: "user" as const, content: "turn two" },
+      { role: "assistant" as const, content: "reply two" },
+    ];
+    const turn = {
+      role: "user",
+      content: [{ type: "text", text: "now", cache_control: { type: "ephemeral" } }],
+    };
+    const aWire = {
+      model: "m",
+      max_tokens: 100,
+      tools: [{ name: "t" }],
+      system: [{ type: "text", text: "MOTEBIT SYSTEM" }],
+      messages: [
+        { role: "user", content: "[This conversation continues from earlier.]" },
+        { role: "user", content: "turn two" },
+        { role: "assistant", content: "reply two" },
+        turn,
+      ],
+      stream: true,
+    };
+    const bpp = buildRouteBppRequest(aWire);
+    expect(bpp["system"]).toBe(NEUTRAL_SYSTEM_PROMPT);
+    expect(bpp["messages"]).toEqual(aWire.messages);
+    expect(bpp["tools"]).toEqual(aWire.tools);
+    const bpf = buildRouteBpfRequest(aWire, history);
+    expect(bpf["system"]).toEqual(aWire.system);
+    expect(bpf["messages"]).toEqual([...history, turn]);
+    expect(bpf["max_tokens"]).toBe(100);
+    // A is never mutated by derivation.
+    expect(aWire.system[0]!.text).toBe("MOTEBIT SYSTEM");
+
+    // OpenAI wire: motebit's system prompt is its system-ROLE messages (static head + per-turn context).
+    const oWire = {
+      model: "g",
+      stream_options: { include_usage: true },
+      messages: [
+        { role: "system", content: "STATIC DOCTRINE" },
+        { role: "user", content: "turn two" },
+        { role: "assistant", content: "reply two" },
+        { role: "system", content: "DYNAMIC CONTEXT" },
+        { role: "user", content: "now" },
+      ],
+      stream: true,
+    };
+    expect(buildRouteBppRequest(oWire, "openai")["messages"]).toEqual([
+      { role: "system", content: NEUTRAL_SYSTEM_PROMPT },
+      { role: "user", content: "turn two" },
+      { role: "assistant", content: "reply two" },
+      { role: "user", content: "now" },
+    ]);
+    expect(buildRouteBpfRequest(oWire, history, "openai")["messages"]).toEqual([
+      { role: "system", content: "STATIC DOCTRINE" },
+      ...history,
+      { role: "system", content: "DYNAMIC CONTEXT" },
+      { role: "user", content: "now" },
+    ]);
+    expect(buildRouteBRequest({ model: "g" }, history, "now", "openai")["messages"]).toEqual([
+      { role: "system", content: NEUTRAL_SYSTEM_PROMPT },
+      ...history,
+      { role: "user", content: "now" },
+    ]);
+  });
+
+  it("replay re-supplies only the redacted credential", () => {
+    expect(
+      replayHeaders(
+        { "x-api-key": "[redacted]", "anthropic-version": "2023-06-01", "anthropic-beta": "x" },
+        "K",
+      ),
+    ).toEqual({ "x-api-key": "K", "anthropic-version": "2023-06-01", "anthropic-beta": "x" });
+    expect(replayHeaders({ Authorization: "[redacted]" }, "K")).toEqual({
+      Authorization: "Bearer K",
+    });
+  });
+
+  it("openai provider end to end: A runs OpenAIProvider through the same tap; B′ replays its bytes; B″ strips motebit's system messages", async () => {
+    const fake = fakeOpenAi(() => "Four, plainly.");
+    tap = installWireTap({ underlying: fake.fetchImpl });
+    const p = prompt({ id: "t-openai" });
+    const a = await runMotebitRoute(p, 0, {
+      provider: "openai",
+      apiKey: "sk-test",
+      model: "gpt-5.4-mini",
+      baseUrl: "https://fake-openai.test/v1",
+      tap,
+    });
+    expect(a.error).toBeUndefined();
+    expect(a.protocol).toBe("openai");
+    expect(a.captured[0]!.url).toBe("https://fake-openai.test/v1/chat/completions");
+    expect(a.answer).toContain("Four");
+    // prompt_tokens includes cached tokens; the tap splits them so pricing is not double-counted.
+    expect(a.usage).toMatchObject({
+      input_tokens: 100,
+      cache_read_input_tokens: 20,
+      output_tokens: 9,
+    });
+    const round1 = a.requests[0]!;
+    const sys = (round1["messages"] as Array<Record<string, unknown>>).filter(
+      (m) => m["role"] === "system",
+    );
+    expect(sys.length).toBeGreaterThanOrEqual(1);
+    expect(a.motebit.system_prompt_chars).toBeGreaterThan(0);
+
+    const mark = fake.raw.length;
+    const bp = await runReplayRoute({
       prompt_id: p.id,
       repetition: 0,
-      apiKey: "test-key",
-      baseUrl: FAKE_BASE,
-      body: buildRouteBpRequest(aWire),
-      params: frozen,
-      toolResults: new Map(),
+      apiKey: "sk-test",
+      captured: a.captured,
+      aStoppedForTools: a.rounds_stopped_for_tools,
+      params: a.params,
       tap,
     });
     expect(bp.error).toBeUndefined();
-    expect(fake.received.at(-1)).toEqual({ ...aWire, stream: true });
-    expect(b.answer).toBe("Four.");
-    expect(b.usage.output_tokens).toBe(7);
+    expect(fake.raw[mark]).toBe(a.captured[0]!.raw);
+
+    const bpp = await runDirectRoute({
+      route: "Bpp",
+      protocol: "openai",
+      prompt_id: p.id,
+      repetition: 0,
+      apiKey: "sk-test",
+      baseUrl: "https://fake-openai.test/v1",
+      body: buildRouteBppRequest(round1, "openai"),
+      params: a.params,
+      toolResults: new Map(),
+      tap,
+    });
+    expect(bpp.error).toBeUndefined();
+    const sent = fake.received.at(-1)!;
+    const msgs = sent["messages"] as Array<Record<string, unknown>>;
+    expect(msgs[0]).toEqual({ role: "system", content: NEUTRAL_SYSTEM_PROMPT });
+    expect(msgs.filter((m) => m["role"] === "system")).toHaveLength(1);
+    expect(msgs.slice(1)).toEqual(
+      (round1["messages"] as Array<Record<string, unknown>>).filter((m) => m["role"] !== "system"),
+    );
+    for (const k of Object.keys(a.params)) expect(sent[k], `param ${k}`).toEqual(round1[k]);
+    expect(bpp.answer).toBe("Four, plainly.");
   }, 60_000);
 });
 
@@ -341,6 +602,59 @@ describe("route A — measured off the real runtime", () => {
     expect(b.tool_replay).toEqual({ replayed: 1, unavailable: 0 });
     expect(b.model_rounds).toBe(2);
     expect(b.answer).toBe("It is noon UTC.");
+
+    // B′ replays EVERY one of A's rounds, byte for byte — round 2 carries A's
+    // own tool result, so no tool is re-run and no body is rebuilt.
+    expect(a.rounds_stopped_for_tools).toEqual([true, false]);
+    const mark = fake.raw.length;
+    const bp = await runReplayRoute({
+      prompt_id: p.id,
+      repetition: 0,
+      apiKey: "k",
+      captured: a.captured,
+      aStoppedForTools: a.rounds_stopped_for_tools,
+      params: a.params,
+      tap,
+    });
+    expect(fake.raw.slice(mark)).toEqual(a.captured.map((c) => c.raw));
+    expect(bp.model_rounds).toBe(2);
+    expect(bp.diverged_at_round).toBeUndefined();
+    expect(bp.answer).toBe("It is noon UTC.");
+  }, 60_000);
+
+  it("B′ stops and records divergence when the replayed model leaves A's trajectory", async () => {
+    let replaying = false;
+    const fake = fakeAnthropic((body) => {
+      const last = (body["messages"] as Array<Record<string, unknown>>).at(-1)!;
+      const sawResult =
+        Array.isArray(last["content"]) &&
+        (last["content"] as Array<Record<string, unknown>>).some(
+          (b) => b["type"] === "tool_result",
+        );
+      if (replaying) return { text: "I'd guess noon." }; // answers without the tool A used
+      return sawResult
+        ? { text: "It is noon UTC." }
+        : { toolUse: { id: "tu_1", name: "current_time", input: {} } };
+    });
+    tap = installWireTap({ underlying: fake.fetchImpl });
+    const p = prompt({ id: "t-diverge", category: "tool", tools_expected: true, prompt: "Time?" });
+    const a = await runMotebitRoute(p, 0, { apiKey: "k", model: MODEL, baseUrl: FAKE_BASE, tap });
+    expect(a.rounds_stopped_for_tools[0]).toBe(true);
+    replaying = true;
+    const mark = fake.raw.length;
+    const bp = await runReplayRoute({
+      prompt_id: p.id,
+      repetition: 0,
+      apiKey: "k",
+      captured: a.captured,
+      aStoppedForTools: a.rounds_stopped_for_tools,
+      params: a.params,
+      tap,
+    });
+    expect(bp.diverged_at_round).toBe(1);
+    expect(fake.raw.length - mark).toBe(1);
+    expect(fake.raw[mark]).toBe(a.captured[0]!.raw);
+    expect(bp.answer).toBe("I'd guess noon.");
   }, 60_000);
 
   it("measures history retention on the committed long conversation; B always sends all of it", async () => {
@@ -391,8 +705,11 @@ describe("route A — measured off the real runtime", () => {
   });
 
   it("splitRounds keeps auxiliary calls out of the turn", () => {
-    const ex = (system: string, messages: unknown[], stream = true) => ({
+    const ex = (system: string, messages: unknown[], stream = true): WireExchange => ({
       url: "u",
+      protocol: "anthropic",
+      request_raw: "",
+      request_headers: {},
       request_body: { system, messages, stream },
       status: 200,
       started_at: 0,
@@ -490,7 +807,7 @@ describe("blinding — no route identity reaches the judge", () => {
   });
 
   it("judgePrompt sends only the blinded message + rubric to the transport", async () => {
-    const sent: Array<Record<string, unknown>> = [];
+    const sent: Array<Parameters<Parameters<typeof judgePrompt>[4]>[0]> = [];
     const { judgment } = await judgePrompt(
       prompt(),
       0,
@@ -519,7 +836,7 @@ describe("blinding — no route identity reaches the judge", () => {
   });
 });
 
-// === 4. Report math ===
+// === 4. Report math + repetition statistics ===
 
 function res(
   route: RouteResult["route"],
@@ -547,6 +864,25 @@ function res(
   };
 }
 
+const sc = (v: number): Scores => ({ correctness: v, completeness: v, depth: v, clarity: v });
+
+function judgment(
+  prompt_id: string,
+  repetition: number,
+  scores: Partial<Record<RouteId, number>>,
+  pairwise: Judgment["pairwise"] = [],
+): Judgment {
+  return {
+    prompt_id,
+    category: "factual",
+    repetition,
+    judge_model: "j",
+    scores: Object.fromEntries(Object.entries(scores).map(([k, v]) => [k, sc(v!)])),
+    pairwise,
+    presentation_order: [],
+  };
+}
+
 describe("report math", () => {
   it("nearest-rank percentiles only report observed values", () => {
     const xs = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
@@ -558,58 +894,61 @@ describe("report math", () => {
   });
 
   it("win rates count ties as half and are symmetric", () => {
-    const j = (
-      pairwise: Judgment["pairwise"],
-      category: Judgment["category"] = "factual",
-    ): Judgment => ({
-      prompt_id: "p",
-      category,
-      repetition: 0,
-      judge_model: "j",
-      scores: {},
-      pairwise,
-      presentation_order: [],
-    });
     const js = [
-      j([{ a: "A", b: "B", winner: "A" }]),
-      j([{ a: "B", b: "A", winner: "B" }]),
-      j([{ a: "A", b: "B", winner: "tie" }]),
-      j([{ a: "A", b: "B", winner: "A" }], "coding"),
+      judgment("p", 0, {}, [{ a: "A", b: "Bp", winner: "A" }]),
+      judgment("p", 1, {}, [{ a: "Bp", b: "A", winner: "Bp" }]),
+      judgment("p", 2, {}, [{ a: "A", b: "Bp", winner: "tie" }]),
+      judgment("q", 0, {}, [{ a: "A", b: "Bp", winner: "A" }]),
     ];
-    const ab = winRate(js, "A", "B");
+    const ab = winRate(js, "A", "Bp");
     expect(ab).toMatchObject({ wins: 2, losses: 1, ties: 1, n: 4 });
     expect(ab.rate).toBeCloseTo(2.5 / 4);
-    expect(winRate(js, "B", "A").rate).toBeCloseTo(1.5 / 4);
+    expect(winRate(js, "Bp", "A").rate).toBeCloseTo(1.5 / 4);
     expect(winRate([], "A", "B").rate).toBeNull();
   });
 
-  it("latency, output ratio and the motebit tax come out of the run file", () => {
+  it("latency uses every prompt; A ↔ B′ is a paired per-sample delta", () => {
     const run: RunFile = {
       bench: "intelligence-parity",
-      version: 1,
+      version: 2,
       started_at: "t",
+      provider: "anthropic",
       model: "m",
-      routes: ["A", "B"],
+      routes: ["A", "B", "Bp", "Bpp"],
       repetitions: 1,
+      quality_subset: [],
       spend_usd: 0.5,
       runs: [
         {
           prompt_id: "p1",
           category: "factual",
           repetition: 0,
-          results: { A: res("A", 900, 2000, 200), B: res("B", 600, 1500, 100) },
+          quality: false,
+          results: {
+            A: res("A", 900, 2000, 200),
+            Bp: res("Bp", 600, 1500, 100),
+            Bpp: res("Bpp", 500, 1400, 50),
+            B: res("B", 600, 1500, 100),
+          },
         },
         {
           prompt_id: "p2",
           category: "coding",
           repetition: 0,
-          results: { A: res("A", 1100, 3000, 300), B: res("B", 700, 2500, 300) },
+          quality: false,
+          results: {
+            A: res("A", 1100, 3000, 300),
+            Bp: res("Bp", 700, 2500, 300),
+            Bpp: res("Bpp", 700, 2500, 150),
+            B: res("B", 700, 2500, 300),
+          },
         },
         {
           prompt_id: "p3",
           category: "coding",
           repetition: 0,
-          results: { A: { ...res("A", 50, 60, 1), error: "boom" }, B: res("B", 800, 2600, 100) },
+          quality: false,
+          results: { A: { ...res("A", 50, 60, 1), error: "boom" }, Bp: res("Bp", 800, 2600, 100) },
         },
       ],
     };
@@ -619,19 +958,156 @@ describe("report math", () => {
       ttft_p90: 1100,
       total_median: 2000,
     });
-    expect(latencyStats(run, "B")).toMatchObject({ n: 3, ttft_median: 700, total_median: 2500 });
-    const ratio = outputLengthRatio(run);
-    expect(ratio.aggregate).toBeCloseTo(500 / 400);
-    expect(ratio.median_per_prompt).toBe(1);
+    expect(latencyStats(run, "Bp")).toMatchObject({ n: 3, ttft_median: 700, total_median: 2500 });
+    const d = latencyDelta(run, "A", "Bp");
+    // Per-sample deltas: ttft 300, 400; total 500, 500 (the errored sample is excluded).
+    expect(d.ttft.median.estimate).toBe(300);
+    expect(d.ttft.p90).toBe(400);
+    expect(d.total.median).toMatchObject({ estimate: 500, lo: 500, hi: 500, n: 2, clusters: 2 });
+    const ratio = outputLengthRatio(run, "Bp", "Bpp");
+    expect(ratio.aggregate).toBeCloseTo(400 / 200);
+    expect(ratio.median_per_sample).toBe(2);
     const rep = buildReport(run, null);
-    expect(rep.ttft_tax_ms).toBe(200);
-    expect(rep.total_tax_ms).toBe(-500);
-    expect(rep.errors).toEqual([{ prompt_id: "p3", route: "A", error: "boom" }]);
+    expect(rep.sections.map((x) => [x.key, x.x, x.y])).toEqual([
+      ["runtime", "A", "Bp"],
+      ["system_prompt", "Bp", "Bpp"],
+      ["trimming", "Bpp", "B"],
+      ["user_gap", "A", "C"],
+    ]);
+    expect(rep.errors).toEqual([{ prompt_id: "p3", repetition: 0, route: "A", error: "boom" }]);
     const md = renderMarkdown(rep);
-    expect(md).toContain("## Motebit tax (A vs B)");
-    expect(md).toContain("## Vendor product advantage (C vs B)");
-    expect(md).toContain("## User gap (A vs C)");
-    expect(md).toContain("+200 ms");
+    expect(md).toContain("## Runtime / pipeline effect (A ↔ B′)");
+    expect(md).toContain("## System-prompt effect (B′ ↔ B″)");
+    expect(md).toContain("## Context-trimming effect (B″ ↔ B)");
+    expect(md).toContain("## User gap (A ↔ C)");
+    expect(md).toContain("+300 ms");
+    // No 2×2 ⇒ no attribution, and the report says so.
+    expect(md).toContain("_Not tested_");
+    expect(md).toMatch(/must not be summed/);
+    expect(md).not.toMatch(/share of A − B/);
+  });
+});
+
+describe("repetition statistics", () => {
+  it("bootstrapCI resamples clusters, is seeded, and collapses on constant data", () => {
+    const constant = bootstrapCI([[2, 2], [2]], mean, 1);
+    expect(constant).toEqual({ estimate: 2, lo: 2, hi: 2, n: 3, clusters: 2 });
+    const clusters = [[1, 2, 3], [4, 5], [9], [0, 1]];
+    const x = bootstrapCI(clusters, mean, 42);
+    const y = bootstrapCI(clusters, mean, 42);
+    expect(x).toEqual(y);
+    expect(x.estimate).toBeCloseTo(25 / 8);
+    expect(x.lo!).toBeLessThanOrEqual(x.estimate!);
+    expect(x.hi!).toBeGreaterThanOrEqual(x.estimate!);
+    // Bounds can only be values a cluster-resample can produce: within [min cluster mean, max cluster mean].
+    expect(x.lo!).toBeGreaterThanOrEqual(0.5);
+    expect(x.hi!).toBeLessThanOrEqual(9);
+    expect(bootstrapCI([], mean, 1)).toEqual({
+      estimate: null,
+      lo: null,
+      hi: null,
+      n: 0,
+      clusters: 0,
+    });
+  });
+
+  it("qualityContrast reports the distribution over samples, not one verdict", () => {
+    // 2 prompts × 3 samples. A beats B′ by 1 point on p, ties on q.
+    const js = [
+      judgment("p", 0, { A: 8, Bp: 7 }, [{ a: "A", b: "Bp", winner: "A" }]),
+      judgment("p", 1, { A: 9, Bp: 8 }, [{ a: "Bp", b: "A", winner: "A" }]),
+      judgment("p", 2, { A: 7, Bp: 6 }, [{ a: "A", b: "Bp", winner: "tie" }]),
+      judgment("q", 0, { A: 5, Bp: 5 }, [{ a: "A", b: "Bp", winner: "tie" }]),
+      judgment("q", 1, { A: 6, Bp: 6 }, [{ a: "A", b: "Bp", winner: "Bp" }]),
+      judgment("q", 2, { A: 4, Bp: 4 }, [{ a: "A", b: "Bp", winner: "tie" }]),
+    ];
+    const q = qualityContrast(js, "A", "Bp");
+    expect(q.diff.n).toBe(6);
+    expect(q.diff.clusters).toBe(2);
+    expect(q.diff.estimate).toBeCloseTo(0.5);
+    expect(q.mean_x).toBeCloseTo(39 / 6);
+    expect(q.mean_y).toBeCloseTo(36 / 6);
+    expect([q.diff_p10, q.diff_median, q.diff_p90]).toEqual([0, 0, 1]);
+    // With two clusters, a resample is (p,p), (p,q) or (q,q): mean diff ∈ {1, 0.5, 0}.
+    expect(q.diff.lo).toBe(0);
+    expect(q.diff.hi).toBe(1);
+    expect(q.win).toMatchObject({ wins: 2, losses: 1, ties: 3, n: 6 });
+    expect(q.win_rate.estimate).toBeCloseTo(3.5 / 6);
+    expect(q.per_prompt).toEqual([
+      { prompt_id: "p", samples: 3, mean_x: 8, mean_y: 7, wins: 2, losses: 0, ties: 1 },
+      { prompt_id: "q", samples: 3, mean_x: 5, mean_y: 5, wins: 0, losses: 1, ties: 2 },
+    ]);
+    // Symmetric.
+    expect(qualityContrast(js, "Bp", "A").diff.estimate).toBeCloseTo(-0.5);
+  });
+
+  it("interaction check: additive 2×2 licenses attribution; a real interaction forbids it", () => {
+    // Additive: system effect +1 regardless of trimming; trimming effect −0.5; runtime 0.
+    const additive: Judgment[] = [];
+    const interacting: Judgment[] = [];
+    for (const [i, pid] of ["p", "q", "r"].entries()) {
+      for (let rep = 0; rep < 3; rep++) {
+        const base = 5 + i + (rep % 2) * 0.25;
+        additive.push(
+          judgment(pid, rep, {
+            A: base + 0.5,
+            Bp: base + 0.5,
+            Bpp: base - 0.5,
+            Bpf: base + 1,
+            B: base,
+          }),
+        );
+        // System prompt helps only on the trimmed conversation.
+        interacting.push(
+          judgment(pid, rep, { A: base + 2, Bp: base + 2, Bpp: base, Bpf: base, B: base }),
+        );
+      }
+    }
+    const ok = interactionCheck(additive);
+    expect(ok.tested).toBe(true);
+    expect(ok.interaction.estimate).toBeCloseTo(0);
+    expect(ok.separable).toBe(true);
+    expect(ok.attribution).not.toBeNull();
+    // Gap A − B = +0.5 = runtime 0 + system +1 + trimming −0.5.
+    expect(ok.attribution!.gap.estimate).toBeCloseTo(0.5);
+    expect(ok.attribution!.runtime).toBeCloseTo(0);
+    expect(ok.attribution!.system_prompt).toBeCloseTo(2);
+    expect(ok.attribution!.trimming).toBeCloseTo(-1);
+
+    const bad = interactionCheck(interacting);
+    expect(bad.interaction.estimate).toBeCloseTo(2);
+    expect(bad.separable).toBe(false);
+    expect(bad.attribution).toBeNull();
+
+    const none = interactionCheck([judgment("p", 0, { A: 5, Bp: 5, Bpp: 4, B: 4 })]);
+    expect(none.tested).toBe(false);
+    expect(none.separable).toBe(false);
+
+    const runFile: RunFile = {
+      bench: "intelligence-parity",
+      version: 2,
+      started_at: "t",
+      provider: "anthropic",
+      model: "m",
+      routes: ["A", "B", "Bp", "Bpp", "Bpf"],
+      repetitions: 3,
+      quality_subset: ["p", "q", "r"],
+      spend_usd: 0,
+      runs: [],
+    };
+    const judged = (judgments: Judgment[]) => ({
+      bench: "intelligence-parity/judgments" as const,
+      version: 2 as const,
+      judge_provider: "anthropic" as const,
+      judge_model: "j",
+      judgments,
+      spend_usd: 0,
+    });
+    expect(renderMarkdown(buildReport(runFile, judged(additive)))).toMatch(/share of A − B/);
+    const mdBad = renderMarkdown(buildReport(runFile, judged(interacting)));
+    expect(mdBad).toMatch(/depends on whether the conversation was trimmed/);
+    expect(mdBad).toMatch(/no additive attribution/);
+    expect(mdBad).not.toMatch(/share of A − B/);
   });
 });
 
@@ -656,29 +1132,88 @@ describe("spend guard", () => {
       }),
     ).toBeCloseTo(0.2 + 5);
     expect(priceFor("claude-haiku-4-5-20251001")).toEqual(priceFor("claude-haiku-4-5"));
-    expect(() => priceFor("gpt-imaginary")).toThrow(/No price/);
+    expect(() => priceFor("gpt-imaginary")).toThrow(/No price[\s\S]*--prices=gpt-imaginary=/);
   });
 
-  it("refuses a run whose estimate exceeds max_usd", () => {
+  it("operator-supplied --prices price a non-tabled model and fail closed when malformed", () => {
+    const prices = parsePrices("gpt-5.4-mini=0.5:4:0.05, gemini-2.5-flash=0.3:2.5");
+    expect(prices["gpt-5.4-mini"]).toEqual({ input: 0.5, output: 4, cache_read: 0.05 });
+    // cache_read defaults to the input price — the pessimistic choice.
+    expect(prices["gemini-2.5-flash"]).toEqual({ input: 0.3, output: 2.5, cache_read: 0.3 });
+    expect(
+      costUsd(
+        "gpt-5.4-mini",
+        {
+          input_tokens: 1_000_000,
+          output_tokens: 1_000_000,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        prices,
+      ),
+    ).toBeCloseTo(4.5);
+    expect(() => parsePrices("gpt-x=1")).toThrow(/malformed/);
+    expect(() => parsePrices("=1:2")).toThrow(/malformed/);
+    expect(() => parsePrices("gpt-x=a:b")).toThrow(/malformed/);
+    expect(() => parsePrices("gpt-x=-1:2")).toThrow(/malformed/);
+  });
+
+  it("the estimate prices EVERY route × repetitions + the judge before any call", () => {
     const prompts = loadPrompts();
-    const est = estimateRun({
+    const qualityIds = new Set(DEFAULT_QUALITY_SUBSET);
+    const base = {
       prompts,
-      routes: ["A", "B"],
-      repetitions: 1,
+      repetitions: 3,
+      qualityIds,
       model: "claude-sonnet-5",
       judgeModel: "claude-opus-5-5",
-    });
-    expect(est.usd).toBeGreaterThan(0);
-    expect(() => assertEstimateWithinBudget(est, est.usd + 0.01)).not.toThrow();
-    expect(() => assertEstimateWithinBudget(est, est.usd / 2)).toThrow(/exceeds --max-usd/);
-    const ten = estimateRun({
-      prompts,
-      routes: ["A", "B"],
-      repetitions: 10,
-      model: "claude-sonnet-5",
+    };
+    const full = estimateRun({ ...base, routes: ["A", "B", "Bp", "Bpp", "Bpf"] });
+    expect(Object.keys(full.by_route).sort()).toEqual(["A", "B", "Bp", "Bpf", "Bpp", "judge"]);
+    for (const v of Object.values(full.by_route)) expect(v).toBeGreaterThan(0);
+    expect(Object.values(full.by_route).reduce((a, b) => a + b, 0)).toBeCloseTo(full.usd);
+    // Each route adds cost: dropping any one lowers the route spend by exactly its share
+    // (and the judge's, which then reads one answer fewer).
+    for (const r of ["B", "Bp", "Bpp", "Bpf"] as const) {
+      const without = estimateRun({
+        ...base,
+        routes: (["A", "B", "Bp", "Bpp", "Bpf"] as RouteId[]).filter((x) => x !== r),
+      });
+      expect(without.usd - without.by_route.judge!).toBeCloseTo(
+        full.usd - full.by_route.judge! - full.by_route[r]!,
+      );
+      expect(without.by_route.judge!).toBeLessThan(full.by_route.judge!);
+    }
+    // Repetitions multiply the quality subset only; latency prompts run once.
+    const one = estimateRun({ ...base, routes: ["A"], repetitions: 1, judgeModel: null });
+    const three = estimateRun({ ...base, routes: ["A"], judgeModel: null });
+    const perPromptA = (ids: Set<string>) =>
+      estimateRun({
+        ...base,
+        prompts: prompts.filter((p) => ids.has(p.id)),
+        routes: ["A"],
+        repetitions: 1,
+        judgeModel: null,
+      }).usd;
+    expect(three.usd - one.usd).toBeCloseTo(2 * perPromptA(qualityIds));
+    // B′ᶠ runs on the quality subset only.
+    const bpfOnly = estimateRun({ ...base, routes: ["A", "Bpf"], judgeModel: null });
+    const bpfQualityOnly = estimateRun({
+      ...base,
+      prompts: prompts.filter((p) => qualityIds.has(p.id)),
+      routes: ["A", "Bpf"],
       judgeModel: null,
     });
-    expect(ten.usd).toBeGreaterThan(est.usd);
+    expect(bpfOnly.by_route.Bpf).toBeCloseTo(bpfQualityOnly.by_route.Bpf!);
+    // The judge is priced per judged sample, and sees route C when supplied.
+    const withC = estimateRun({ ...base, routes: ["A", "B", "Bp", "Bpp", "Bpf"], routeC: true });
+    expect(withC.by_route.judge!).toBeGreaterThan(full.by_route.judge!);
+    expect(() => assertEstimateWithinBudget(full, full.usd + 0.01)).not.toThrow();
+    expect(() => assertEstimateWithinBudget(full, full.usd / 2)).toThrow(/exceeds --max-usd/);
+    // Unpriced judge is refused at estimate time, not after spending.
+    expect(() => estimateRun({ ...base, routes: ["A"], judgeModel: "gpt-imaginary" })).toThrow(
+      /No price/,
+    );
   });
 
   it("the live meter stops a run before the next call once spent", async () => {
@@ -692,13 +1227,14 @@ describe("spend guard", () => {
         "run",
         "--model=claude-sonnet-5",
         `--base-url=${FAKE_BASE}`,
-        "--routes=A,B",
+        "--routes=A,B,Bp,Bpp",
       ]);
       const prompts = selectPrompts(loadPrompts(), ["fact-tcp-handshake", "fact-unix-epoch"]);
       const run = await runRoutes(opts, prompts, "k", meter, () => {});
-      // A ran once and crossed the limit; neither B nor the second prompt was sent.
+      // A ran once and crossed the limit; no direct route, repetition or second prompt was sent.
       expect(run.runs).toHaveLength(1);
-      expect(run.runs[0]!.results.B).toBeUndefined();
+      expect(run.runs[0]!.quality).toBe(true);
+      expect(Object.keys(run.runs[0]!.results)).toEqual(["A"]);
       expect(fake.received.filter((b) => b["stream"] === true)).toHaveLength(1);
       expect(run.spend_usd).toBeGreaterThanOrEqual(0.5);
       expect(() => meter.check()).toThrow(SpendLimitExceeded);
@@ -706,6 +1242,43 @@ describe("spend guard", () => {
       globalThis.fetch = prev;
     }
   }, 60_000);
+
+  it("a full fake run: latency prompts once, quality prompts × repetitions, every route on each", async () => {
+    const fake = fakeAnthropic(() => ({ text: "ok" }));
+    const prev = globalThis.fetch;
+    globalThis.fetch = fake.fetchImpl;
+    try {
+      const opts = parseArgs([
+        "run",
+        "--model=claude-sonnet-5",
+        `--base-url=${FAKE_BASE}`,
+        "--routes=A,B,Bp,Bpp,Bpf",
+        "--repetitions=2",
+        "--quality-subset=fact-tcp-handshake",
+      ]);
+      const prompts = selectPrompts(loadPrompts(), ["fact-tcp-handshake", "fact-unix-epoch"]);
+      const run = await runRoutes(opts, prompts, "k", new SpendMeter(100), () => {});
+      expect(run.quality_subset).toEqual(["fact-tcp-handshake"]);
+      expect(
+        run.runs.map((r) => [
+          r.prompt_id,
+          r.repetition,
+          r.quality,
+          Object.keys(r.results).sort().join(),
+        ]),
+      ).toEqual([
+        ["fact-tcp-handshake", 0, true, "A,B,Bp,Bpf,Bpp"],
+        ["fact-tcp-handshake", 1, true, "A,B,Bp,Bpf,Bpp"],
+        ["fact-unix-epoch", 0, false, "A,B,Bp,Bpp"],
+      ]);
+      for (const r of run.runs) {
+        const a = r.results.A as import("../bench/intelligence-parity/types.js").RouteAResult;
+        expect(r.results.Bp!.requests[0]).toEqual(a.requests[0]);
+      }
+    } finally {
+      globalThis.fetch = prev;
+    }
+  }, 120_000);
 });
 
 // === 6. Prompt set + CLI contract ===
@@ -736,6 +1309,9 @@ describe("committed prompt set + CLI", () => {
       prompts.filter((p) => p.memory_expected).every((p) => (p.seed_memories ?? []).length > 0),
     ).toBe(true);
     expect(prompts.some((p) => p.tools_expected)).toBe(true);
+    // The designated quality subset is 6 real prompts.
+    expect(DEFAULT_QUALITY_SUBSET).toHaveLength(6);
+    for (const id of DEFAULT_QUALITY_SUBSET) expect(prompts.some((p) => p.id === id)).toBe(true);
   });
 
   it("refuses ambiguous or self-defeating options", () => {
@@ -743,12 +1319,83 @@ describe("committed prompt set + CLI", () => {
       parseArgs(["run", "--model=claude-opus-5-5", "--judge-model=claude-opus-5-5"]),
     ).toThrow(/self-preference/);
     expect(() => parseArgs(["run", "--routes=B"])).toThrow(/must include A/);
+    expect(() => parseArgs(["run", "--routes=Bpp"])).toThrow(/must include A/);
     expect(() => parseArgs(["run", "--routes=A,C"])).toThrow(/Unknown live route/);
     expect(() => parseArgs(["run", "--max-usd=0"])).toThrow();
+    expect(() => parseArgs(["run", "--repetitions=0"])).toThrow(/positive integer/);
     expect(() => selectPrompts(loadPrompts(), ["no-such-prompt"])).toThrow(/names nothing/);
     expect(selectPrompts(loadPrompts(), ["coding"]).every((p) => p.category === "coding")).toBe(
       true,
     );
-    expect(parseArgs([]).routes).toEqual(["A", "B"]);
+    const d = parseArgs([]);
+    expect(d.routes).toEqual(["A", "B", "Bp", "Bpp"]);
+    expect(d.repetitions).toBe(3);
+    expect(d.maxUsd).toBe(5);
+    expect(d.provider).toBe("anthropic");
+    expect(d.judgeProvider).toBe("anthropic");
+    expect(d.judgeModel).toBe("claude-opus-5-5");
+    // Quality subset: default intersects the selection; a named-but-unselected prompt is an error.
+    const sel = selectPrompts(loadPrompts(), ["factual"]);
+    expect(selectQuality(sel, null)).toEqual(["fact-tcp-handshake"]);
+    expect(selectQuality(sel, "all")).toEqual(sel.map((p) => p.id));
+    expect(() => selectQuality(sel, ["code-lru-cache"])).toThrow(/not selected/);
+    expect(selectQuality(loadPrompts(), null)).toEqual(
+      [...DEFAULT_QUALITY_SUBSET].sort(
+        (a, b) =>
+          loadPrompts().findIndex((p) => p.id === a) - loadPrompts().findIndex((p) => p.id === b),
+      ),
+    );
+  });
+
+  it("provider and judge provider are validated inputs, each reading its own secret", () => {
+    for (const p of ["anthropic", "openai", "google", "groq", "deepseek"] as const) {
+      expect(parseProvider(p, "--provider")).toBe(p);
+      const opts = parseArgs([`--provider=${p}`, "--judge-model=some-judge"]);
+      expect(opts.provider).toBe(p);
+      expect(opts.model.length).toBeGreaterThan(0);
+      // Its own secret: present → returned; absent → a hard error naming exactly that secret.
+      expect(requireProviderKey(p, { [PROVIDER_KEY_ENV[p]]: "sekrit" })).toBe("sekrit");
+      expect(() =>
+        requireProviderKey(p, { ANTHROPIC_API_KEY: p === "anthropic" ? "" : "x" }),
+      ).toThrow(new RegExp(`${PROVIDER_KEY_ENV[p]} is not set`));
+    }
+    expect(PROVIDER_KEY_ENV).toEqual({
+      anthropic: "ANTHROPIC_API_KEY",
+      openai: "OPENAI_API_KEY",
+      google: "GOOGLE_API_KEY",
+      groq: "GROQ_API_KEY",
+      deepseek: "DEEPSEEK_API_KEY",
+    });
+    expect(parseProvider("", "--provider")).toBe("anthropic");
+    expect(() => parseArgs(["--provider=mistral"])).toThrow(/Unknown --provider "mistral"/);
+    expect(() => parseArgs(["--judge-provider=ollama"])).toThrow(/Unknown --judge-provider/);
+    const o = parseArgs([
+      "--provider=openai",
+      "--model=gpt-5.4-mini",
+      "--judge-provider=deepseek",
+      "--judge-model=deepseek-chat",
+    ]);
+    expect(o.baseUrl).toBe("https://api.openai.com/v1");
+    expect(o.judgeBaseUrl).toBe("https://api.deepseek.com");
+    expect(() => requireProviderKey("deepseek", {}, "the judge")).toThrow(
+      /DEEPSEEK_API_KEY is not set.*the judge/,
+    );
+    // The judge request is mapped onto the judge provider's own wire.
+    const req = {
+      model: "gpt-5.4",
+      max_tokens: 100,
+      system: "R",
+      messages: [{ role: "user" as const, content: "u" }],
+    };
+    expect(judgeWireBody("openai", req)).toEqual({
+      model: "gpt-5.4",
+      messages: [
+        { role: "system", content: "R" },
+        { role: "user", content: "u" },
+      ],
+      max_completion_tokens: 100,
+      stream: false,
+    });
+    expect(judgeWireBody("anthropic", req)).toEqual(req);
   });
 });

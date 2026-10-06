@@ -19,7 +19,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BenchPrompt, Judgment, PairwiseVerdict, RouteId, Scores, Usage } from "./types.js";
 import { SCORE_DIMENSIONS } from "./types.js";
-import { ANTHROPIC_API_VERSION } from "./route-direct.js";
+import type { BenchProvider } from "./types.js";
+import { directHeaders, endpointFor, protocolOf } from "./protocol.js";
+import { openAiRequestShape } from "../../../packages/ai-core/src/index.js";
 import { ZERO_USAGE } from "./wire-tap.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +36,9 @@ const IDENTITY_PATTERNS: readonly RegExp[] = [
   /\bopenai\b/gi,
   /\banthropic\b/gi,
   /\bgemini\b/gi,
+  /\bdeepseek\b/gi,
+  /\bgroq\b/gi,
+  /\bllama[- ]?\d+(?:\.\d+)*\b/gi,
 ];
 export const IDENTITY_MASK = "[assistant]";
 
@@ -158,33 +163,76 @@ export function parseJudgeReply(
   return { scores, pairwise };
 }
 
-export interface JudgeTransport {
-  /** Send the judge request; return reply text + usage. */
-  (body: Record<string, unknown>): Promise<{ text: string; usage: Usage }>;
+/** A judge request in one provider-neutral shape; each transport maps it onto its wire. */
+export interface JudgeRequest {
+  model: string;
+  max_tokens: number;
+  system: string;
+  messages: Array<{ role: "user"; content: string }>;
 }
 
-export function anthropicJudgeTransport(apiKey: string, baseUrl: string): JudgeTransport {
-  return async (body) => {
-    const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/v1/messages`, {
+export interface JudgeTransport {
+  /** Send the judge request; return reply text + usage. */
+  (body: JudgeRequest): Promise<{ text: string; usage: Usage }>;
+}
+
+/** The judge's request body on the provider's own wire (non-streaming). */
+export function judgeWireBody(provider: BenchProvider, req: JudgeRequest): Record<string, unknown> {
+  if (protocolOf(provider) === "anthropic") return { ...req };
+  return {
+    model: req.model,
+    messages: [{ role: "system", content: req.system }, ...req.messages],
+    // Same budget-field rule the product's OpenAI adapter applies per model family.
+    ...(openAiRequestShape(req.model) === "reasoning-era"
+      ? { max_completion_tokens: req.max_tokens }
+      : { max_tokens: req.max_tokens }),
+    stream: false,
+  };
+}
+
+export function judgeTransport(
+  provider: BenchProvider,
+  apiKey: string,
+  baseUrl: string,
+): JudgeTransport {
+  const protocol = protocolOf(provider);
+  return async (req) => {
+    const res = await fetch(endpointFor(protocol, baseUrl), {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": ANTHROPIC_API_VERSION,
-      },
-      body: JSON.stringify(body),
+      headers: directHeaders(protocol, apiKey),
+      body: JSON.stringify(judgeWireBody(provider, req)),
     });
     if (!res.ok) throw new Error(`judge HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    if (protocol === "anthropic") {
+      const data = (await res.json()) as {
+        content?: Array<{ type: string; text?: string }>;
+        usage?: Partial<Usage>;
+      };
+      return {
+        text: (data.content ?? [])
+          .filter((b) => b.type === "text")
+          .map((b) => b.text ?? "")
+          .join(""),
+        usage: { ...ZERO_USAGE, ...data.usage } as Usage,
+      };
+    }
     const data = (await res.json()) as {
-      content?: Array<{ type: string; text?: string }>;
-      usage?: Partial<Usage>;
+      choices?: Array<{ message?: { content?: string | null } }>;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+      };
     };
+    const cached = data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
     return {
-      text: (data.content ?? [])
-        .filter((b) => b.type === "text")
-        .map((b) => b.text ?? "")
-        .join(""),
-      usage: { ...ZERO_USAGE, ...data.usage } as Usage,
+      text: data.choices?.[0]?.message?.content ?? "",
+      usage: {
+        input_tokens: Math.max(0, (data.usage?.prompt_tokens ?? 0) - cached),
+        output_tokens: data.usage?.completion_tokens ?? 0,
+        cache_read_input_tokens: cached,
+        cache_creation_input_tokens: 0,
+      },
     };
   };
 }
