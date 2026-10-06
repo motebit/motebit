@@ -10,7 +10,7 @@
  *      hitting Solana. The mock preserves Keypair / PublicKey / Transaction
  *      so address derivation stays real.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Keypair } from "@solana/web3.js";
 
 // ── Mock the Connection class with deterministic in-memory behavior ──
@@ -20,7 +20,14 @@ import { Keypair } from "@solana/web3.js";
 // by the submitter's sign + serialize path).
 const latestBlockhashMock = vi.fn();
 const sendRawTransactionMock = vi.fn();
-const confirmTransactionMock = vi.fn();
+// Confirmation is HTTP polling (confirm-signature.ts): a status read and a
+// block-height read — never a websocket subscription.
+const getSignatureStatusesMock = vi.fn();
+const getBlockHeightMock = vi.fn(async () => 0);
+const CONFIRMED_STATUS = {
+  context: { slot: 1 },
+  value: [{ slot: 7, confirmations: 0, err: null, confirmationStatus: "confirmed" }],
+};
 const getBalanceMock = vi.fn();
 const getMinimumBalanceForRentExemptionMock = vi.fn();
 // The RPC's cluster. Defaults to mainnet-beta's genesis hash; the #954 tests
@@ -36,7 +43,8 @@ vi.mock("@solana/web3.js", async (importOriginal) => {
     }
     getLatestBlockhash = latestBlockhashMock;
     sendRawTransaction = sendRawTransactionMock;
-    confirmTransaction = confirmTransactionMock;
+    getSignatureStatuses = getSignatureStatusesMock;
+    getBlockHeight = getBlockHeightMock;
     getBalance = getBalanceMock;
     getMinimumBalanceForRentExemption = getMinimumBalanceForRentExemptionMock;
     getGenesisHash = getGenesisHashMock;
@@ -47,11 +55,26 @@ vi.mock("@solana/web3.js", async (importOriginal) => {
   };
 });
 
+import { base58Encode } from "@motebit/protocol";
+import { Transaction } from "@solana/web3.js";
+
+/** The signature of a serialized transaction — what a real RPC returns from sendRawTransaction. */
+function sigOf(raw: Buffer | Uint8Array): string {
+  return base58Encode(new Uint8Array(Transaction.from(Buffer.from(raw)).signature!));
+}
+/** The signature of the n-th transaction sent. */
+function sentSig(n = 0): string {
+  return sigOf(sendRawTransactionMock.mock.calls[n]![0] as Uint8Array);
+}
+
 import {
   parseMemoAnchor,
   parseRevocationMemo,
   parseTransparencyAnchorMemo,
   SolanaMemoSubmitter,
+  AnchorBroadcastExpiredError,
+  AnchorConfirmationPendingError,
+  AnchorTransactionFailedError,
   SOLANA_MAINNET_CAIP2,
   SOLANA_DEVNET_CAIP2,
   SOLANA_TESTNET_CAIP2,
@@ -326,15 +349,15 @@ describe("SolanaMemoSubmitter — submitMerkleRoot", () => {
   beforeEach(() => {
     latestBlockhashMock.mockReset();
     sendRawTransactionMock.mockReset();
-    confirmTransactionMock.mockReset();
+    getSignatureStatusesMock.mockReset();
     getBalanceMock.mockReset();
 
     latestBlockhashMock.mockResolvedValue({
       blockhash: validBlockhash(),
       lastValidBlockHeight: 1_000_000,
     });
-    sendRawTransactionMock.mockResolvedValue("FakeTxSignature11111111111111111111111111111111");
-    confirmTransactionMock.mockResolvedValue({ value: { err: null } });
+    sendRawTransactionMock.mockImplementation(async (raw: Uint8Array) => sigOf(raw));
+    getSignatureStatusesMock.mockResolvedValue(CONFIRMED_STATUS);
   });
 
   it("returns the tx signature from sendRawTransaction", async () => {
@@ -343,7 +366,7 @@ describe("SolanaMemoSubmitter — submitMerkleRoot", () => {
       identitySeed: seed,
     });
     const result = await submitter.submitMerkleRoot(ROOT, "relay-x", LEAF_COUNT);
-    expect(result.txHash).toBe("FakeTxSignature11111111111111111111111111111111");
+    expect(result.txHash).toBe(sentSig());
   });
 
   it("submits a transaction whose memo decodes to the expected motebit anchor string", async () => {
@@ -374,9 +397,9 @@ describe("SolanaMemoSubmitter — submitMerkleRoot", () => {
       order.push("send");
       return "S3333333333333333333333333333333333333333333";
     });
-    confirmTransactionMock.mockImplementation(async () => {
+    getSignatureStatusesMock.mockImplementation(async () => {
       order.push("confirm");
-      return { value: { err: null } };
+      return CONFIRMED_STATUS;
     });
     const submitter = new SolanaMemoSubmitter({
       rpcUrl: "https://api.mainnet-beta.solana.com",
@@ -396,26 +419,168 @@ describe("SolanaMemoSubmitter — submitMerkleRoot", () => {
   });
 
   it("propagates confirmation errors (transaction rejected on confirm)", async () => {
-    confirmTransactionMock.mockRejectedValue(new Error("transaction expired"));
+    // Landed with an error: a failure, never a silent success.
+    getSignatureStatusesMock.mockResolvedValue({
+      context: { slot: 1 },
+      value: [
+        {
+          slot: 7,
+          confirmations: 0,
+          err: { InstructionError: [0, "Custom"] },
+          confirmationStatus: "confirmed",
+        },
+      ],
+    });
     const submitter = new SolanaMemoSubmitter({
       rpcUrl: "https://api.mainnet-beta.solana.com",
       identitySeed: seed,
     });
     await expect(submitter.submitMerkleRoot(ROOT, "r", LEAF_COUNT)).rejects.toThrow(
-      "transaction expired",
+      "landed with an error",
     );
   });
 
-  it("honors injected commitment level through to confirmTransaction", async () => {
+  it("honors injected commitment level through to the polled confirmation", async () => {
+    const reads: string[] = [];
+    getSignatureStatusesMock.mockImplementation(async () => {
+      reads.push("status");
+      // confirmed first, then finalized: a finalized submitter waits for finality.
+      const level = reads.length === 1 ? "confirmed" : "finalized";
+      return {
+        context: { slot: 1 },
+        value: [{ slot: 7, confirmations: null, err: null, confirmationStatus: level }],
+      };
+    });
     const submitter = new SolanaMemoSubmitter({
       rpcUrl: "https://api.mainnet-beta.solana.com",
       identitySeed: seed,
       commitment: "finalized",
+      confirm: { sleep: async () => {}, pollMs: 1 },
     });
     await submitter.submitMerkleRoot(ROOT, "r", LEAF_COUNT);
     expect(latestBlockhashMock).toHaveBeenCalledWith("finalized");
-    const [, commitment] = confirmTransactionMock.mock.calls[0]!;
-    expect(commitment).toBe("finalized");
+    expect(getBlockHeightMock).toHaveBeenCalledWith("finalized");
+    expect(reads).toHaveLength(2);
+  });
+});
+
+// === Websocket-free confirmation + sign → record → send ===
+
+describe("SolanaMemoSubmitter — HTTP-polled confirmation and broadcast hooks", () => {
+  const seed = Keypair.generate().secretKey.slice(0, 32);
+  const ROOT = "c".repeat(64);
+  let clock = 0;
+  const confirm = {
+    pollMs: 1_000,
+    maxWaitMs: 5_000,
+    sleep: async (ms: number) => {
+      clock += ms;
+    },
+    now: () => clock,
+  };
+  const absent = { context: { slot: 1 }, value: [null] };
+
+  beforeEach(() => {
+    clock = 0;
+    latestBlockhashMock.mockReset();
+    sendRawTransactionMock.mockReset();
+    getSignatureStatusesMock.mockReset();
+    getBlockHeightMock.mockReset();
+    latestBlockhashMock.mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    sendRawTransactionMock.mockImplementation(async (raw: Uint8Array) => sigOf(raw));
+    getBlockHeightMock.mockResolvedValue(50);
+  });
+
+  afterEach(() => {
+    getBlockHeightMock.mockReset();
+    getBlockHeightMock.mockResolvedValue(0);
+  });
+
+  it("confirms through getSignatureStatuses alone — no websocket method exists on the connection", async () => {
+    getSignatureStatusesMock.mockResolvedValue(CONFIRMED_STATUS);
+    const submitter = new SolanaMemoSubmitter({ rpcUrl: "x", identitySeed: seed, confirm });
+    const { txHash } = await submitter.submitMerkleRoot(ROOT, "r", 1);
+    expect(txHash).toBe(sentSig());
+    const [sigs, cfg] = getSignatureStatusesMock.mock.calls[0]!;
+    expect(sigs).toEqual([txHash]);
+    expect(cfg).toEqual({ searchTransactionHistory: true });
+  });
+
+  it("reports the exact signature that is then sent, before sending", async () => {
+    getSignatureStatusesMock.mockResolvedValue(CONFIRMED_STATUS);
+    const recorded: string[] = [];
+    const submitter = new SolanaMemoSubmitter({ rpcUrl: "x", identitySeed: seed, confirm });
+    const { txHash } = await submitter.submitMerkleRoot(ROOT, "r", 1, {
+      beforeBroadcast: (ref) => {
+        expect(sendRawTransactionMock).not.toHaveBeenCalled();
+        expect(ref.lastValidBlockHeight).toBe(100);
+        recorded.push(ref.signature);
+      },
+    });
+    expect(recorded).toEqual([txHash]);
+  });
+
+  it("a hook that cannot record stops the send", async () => {
+    const submitter = new SolanaMemoSubmitter({ rpcUrl: "x", identitySeed: seed, confirm });
+    await expect(
+      submitter.submitRevocation("ab".repeat(32), 1, {
+        beforeBroadcast: () => {
+          throw new Error("db down");
+        },
+      }),
+    ).rejects.toThrow("db down");
+    expect(sendRawTransactionMock).not.toHaveBeenCalled();
+  });
+
+  it("undecided at the cap ⇒ AnchorConfirmationPendingError carrying the signature; one send", async () => {
+    getSignatureStatusesMock.mockResolvedValue(absent);
+    const submitter = new SolanaMemoSubmitter({ rpcUrl: "x", identitySeed: seed, confirm });
+    const err = await submitter.submitTransparencyAnchor("d".repeat(64)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnchorConfirmationPendingError);
+    expect((err as AnchorConfirmationPendingError).signature).toBe(sentSig());
+    expect(sendRawTransactionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("past lastValidBlockHeight with no status ⇒ AnchorBroadcastExpiredError; one send", async () => {
+    getSignatureStatusesMock.mockResolvedValue(absent);
+    getBlockHeightMock.mockResolvedValue(101);
+    const submitter = new SolanaMemoSubmitter({ rpcUrl: "x", identitySeed: seed, confirm });
+    await expect(submitter.submitMerkleRoot(ROOT, "r", 1)).rejects.toBeInstanceOf(
+      AnchorBroadcastExpiredError,
+    );
+    expect(sendRawTransactionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("landed with an error ⇒ AnchorTransactionFailedError; one send", async () => {
+    getSignatureStatusesMock.mockResolvedValue({
+      context: { slot: 1 },
+      value: [{ slot: 9, confirmations: 1, err: { Custom: 1 }, confirmationStatus: "confirmed" }],
+    });
+    const submitter = new SolanaMemoSubmitter({ rpcUrl: "x", identitySeed: seed, confirm });
+    await expect(submitter.submitMerkleRoot(ROOT, "r", 1)).rejects.toBeInstanceOf(
+      AnchorTransactionFailedError,
+    );
+    expect(sendRawTransactionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("checkBroadcast asks about a recorded signature without sending", async () => {
+    getSignatureStatusesMock.mockResolvedValue(CONFIRMED_STATUS);
+    const submitter = new SolanaMemoSubmitter({ rpcUrl: "x", identitySeed: seed, confirm });
+    const outcome = await submitter.checkBroadcast({ signature: "sig", lastValidBlockHeight: 100 });
+    expect(outcome).toEqual({ status: "confirmed", slot: 7 });
+    getSignatureStatusesMock.mockResolvedValue(absent);
+    getBlockHeightMock.mockResolvedValue(101);
+    expect(
+      (await submitter.checkBroadcast({ signature: "sig", lastValidBlockHeight: 100 })).status,
+    ).toBe("expired");
+    getBlockHeightMock.mockRejectedValue(new Error("429"));
+    expect(
+      (await submitter.checkBroadcast({ signature: "sig", lastValidBlockHeight: 100 })).status,
+    ).toBe("pending");
+    expect(sendRawTransactionMock).not.toHaveBeenCalled();
   });
 });
 
@@ -429,13 +594,13 @@ describe("SolanaMemoSubmitter — submitRevocation", () => {
   beforeEach(() => {
     latestBlockhashMock.mockReset();
     sendRawTransactionMock.mockReset();
-    confirmTransactionMock.mockReset();
+    getSignatureStatusesMock.mockReset();
     latestBlockhashMock.mockResolvedValue({
       blockhash: validBlockhash(),
       lastValidBlockHeight: 2_000_000,
     });
-    sendRawTransactionMock.mockResolvedValue("RevTxSignature1111111111111111111111111111111");
-    confirmTransactionMock.mockResolvedValue({ value: { err: null } });
+    sendRawTransactionMock.mockImplementation(async (raw: Uint8Array) => sigOf(raw));
+    getSignatureStatusesMock.mockResolvedValue(CONFIRMED_STATUS);
   });
 
   it("returns the revocation tx signature", async () => {
@@ -444,7 +609,7 @@ describe("SolanaMemoSubmitter — submitRevocation", () => {
       identitySeed: seed,
     });
     const result = await submitter.submitRevocation(OLD_KEY_HEX, TIMESTAMP);
-    expect(result.txHash).toBe("RevTxSignature1111111111111111111111111111111");
+    expect(result.txHash).toBe(sentSig());
   });
 
   it("submits the expected revocation memo string", async () => {
@@ -480,13 +645,13 @@ describe("SolanaMemoSubmitter — submitTransparencyAnchor", () => {
   beforeEach(() => {
     latestBlockhashMock.mockReset();
     sendRawTransactionMock.mockReset();
-    confirmTransactionMock.mockReset();
+    getSignatureStatusesMock.mockReset();
     latestBlockhashMock.mockResolvedValue({
       blockhash: validBlockhash(),
       lastValidBlockHeight: 2_000_000,
     });
-    sendRawTransactionMock.mockResolvedValue("TransparencyTx1111111111111111111111111111111");
-    confirmTransactionMock.mockResolvedValue({ value: { err: null } });
+    sendRawTransactionMock.mockImplementation(async (raw: Uint8Array) => sigOf(raw));
+    getSignatureStatusesMock.mockResolvedValue(CONFIRMED_STATUS);
   });
 
   it("returns the transparency anchor tx signature", async () => {
@@ -495,7 +660,7 @@ describe("SolanaMemoSubmitter — submitTransparencyAnchor", () => {
       identitySeed: seed,
     });
     const result = await submitter.submitTransparencyAnchor(DECL_HASH);
-    expect(result.txHash).toBe("TransparencyTx1111111111111111111111111111111");
+    expect(result.txHash).toBe(sentSig());
   });
 
   it("submits the expected transparency anchor memo string", async () => {
@@ -619,7 +784,7 @@ describe("SolanaMemoSubmitter — network is the RPC's cluster, never a default 
   beforeEach(() => {
     latestBlockhashMock.mockReset();
     sendRawTransactionMock.mockReset();
-    confirmTransactionMock.mockReset();
+    getSignatureStatusesMock.mockReset();
     getBalanceMock.mockReset();
     getGenesisHashMock.mockReset();
     getGenesisHashMock.mockResolvedValue(MAINNET_GENESIS);
@@ -627,8 +792,8 @@ describe("SolanaMemoSubmitter — network is the RPC's cluster, never a default 
       blockhash: validBlockhash(),
       lastValidBlockHeight: 1_000_000,
     });
-    sendRawTransactionMock.mockResolvedValue("NetTx111111111111111111111111111111111111111");
-    confirmTransactionMock.mockResolvedValue({ value: { err: null } });
+    sendRawTransactionMock.mockImplementation(async (raw: Uint8Array) => sigOf(raw));
+    getSignatureStatusesMock.mockResolvedValue(CONFIRMED_STATUS);
   });
 
   const clusters = [

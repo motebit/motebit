@@ -33,6 +33,8 @@ import { TRANSPARENCY_SPEC_ID, TRANSPARENCY_SUITE } from "@motebit/protocol";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import { anchorSubmitPacerFor } from "./anchor-submit-pacing.js";
+import { submitRecordedAnchor, type AnchorBroadcastHooks } from "./anchor-broadcasts.js";
+import type { DatabaseDriver } from "@motebit/persistence";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 const logger = createLogger({ service: "relay", module: "transparency" });
@@ -503,13 +505,30 @@ export function getSignedDeclaration(relayIdentity: RelayIdentity): Promise<Sign
  */
 export async function anchorTransparencyDeclaration(
   declaration: SignedDeclaration,
-  submitter: { submitTransparencyAnchor: (hashHex: string) => Promise<{ txHash: string }> },
+  submitter: TransparencyAnchorSubmitter,
+  db?: DatabaseDriver,
 ): Promise<{ txHash: string }> {
   // Paced with every other anchoring stream on this submitter (shared backoff;
   // a deferral throws without an RPC call, so the supervised loop retries).
+  // With a database, sign → record → send → confirm that signature
+  // (anchor-broadcasts.ts): the loop retries every tick until it lands, and a
+  // memo already sent for this hash is reconciled, never re-sent blindly —
+  // across restarts too.
   return anchorSubmitPacerFor(submitter).submit("transparency", declaration.hash, () =>
-    submitter.submitTransparencyAnchor(declaration.hash),
+    db
+      ? submitRecordedAnchor(db, submitter, "transparency", declaration.hash, (hooks) =>
+          submitter.submitTransparencyAnchor(declaration.hash, hooks),
+        )
+      : submitter.submitTransparencyAnchor(declaration.hash),
   );
+}
+
+/** The transparency anchor's submitter (`SolanaMemoSubmitter`). */
+export interface TransparencyAnchorSubmitter {
+  submitTransparencyAnchor: (
+    hashHex: string,
+    hooks?: AnchorBroadcastHooks,
+  ) => Promise<{ txHash: string }>;
 }
 
 /** Default retry cadence for the transparency anchor loop (1 minute). */
@@ -534,7 +553,8 @@ export interface TransparencyAnchorState {
 export async function attemptTransparencyAnchor(
   state: TransparencyAnchorState,
   relayIdentity: RelayIdentity,
-  submitter: { submitTransparencyAnchor: (hashHex: string) => Promise<{ txHash: string }> },
+  submitter: TransparencyAnchorSubmitter,
+  db?: DatabaseDriver,
 ): Promise<{ txHash: string; hash: string } | null> {
   if (state.anchored) return null;
   const declaration = await getSignedDeclaration(relayIdentity);
@@ -543,7 +563,7 @@ export async function attemptTransparencyAnchor(
   // re-read once this attempt reaches the front.
   return anchorSubmitPacerFor(submitter).submitOnce("transparency", declaration.hash, async () => {
     if (state.anchored) return null;
-    const result = await anchorTransparencyDeclaration(declaration, submitter);
+    const result = await anchorTransparencyDeclaration(declaration, submitter, db);
     state.anchored = true;
     return { txHash: result.txHash, hash: declaration.hash };
   });
@@ -572,13 +592,11 @@ export async function attemptTransparencyAnchor(
  */
 export function startTransparencyAnchorLoop(
   relayIdentity: RelayIdentity,
-  submitter: {
-    submitTransparencyAnchor: (hashHex: string) => Promise<{ txHash: string }>;
-    address: string;
-  },
+  submitter: TransparencyAnchorSubmitter & { address: string },
   isFrozen: () => boolean,
   supervisor?: LoopSupervisor,
   intervalMs: number = TRANSPARENCY_ANCHOR_RETRY_MS,
+  db?: DatabaseDriver,
 ): ReturnType<typeof setInterval> {
   const state: TransparencyAnchorState = { anchored: false };
   return superviseInterval(
@@ -586,7 +604,7 @@ export function startTransparencyAnchorLoop(
     "transparency-anchor",
     intervalMs,
     async () => {
-      const landed = await attemptTransparencyAnchor(state, relayIdentity, submitter);
+      const landed = await attemptTransparencyAnchor(state, relayIdentity, submitter, db);
       if (landed) {
         logger.info("transparency.anchored", {
           hash: landed.hash,

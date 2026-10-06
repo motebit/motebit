@@ -46,7 +46,7 @@ export const SOLANA_RPC_METHOD_ALLOWLIST: ReadonlyMap<string, string> = new Map(
   ],
   [
     "getBlockHeight",
-    "web3.js confirmTransaction: blockhash-expiry polling (adapter, memo-submitter, jupiter)",
+    "wallet-solana confirm-signature: blockhash-expiry check of HTTP-polled confirmation (adapter, memo-submitter, jupiter)",
   ],
   ["getEpochInfo", "wallet-solana web3js-adapter getSignatureOutcome: decisive expiry verdict"],
   [
@@ -55,7 +55,10 @@ export const SOLANA_RPC_METHOD_ALLOWLIST: ReadonlyMap<string, string> = new Map(
   ],
   ["getLatestBlockhash", "wallet-solana adapter/memo-submitter/jupiter: tx build + outcome check"],
   ["getMinimumBalanceForRentExemption", "wallet-solana memo-submitter: anchor fee-payer floor"],
-  ["getSignatureStatuses", "web3.js confirmTransaction + adapter getSignatureOutcome"],
+  [
+    "getSignatureStatuses",
+    "wallet-solana confirm-signature (HTTP-polled confirmation) + adapter getSignatureOutcome",
+  ],
   [
     "getSignaturesForAddress",
     "state-export-client anchor/revocation lookups (apps/verify) + adapter",
