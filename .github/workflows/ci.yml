@@ -377,6 +377,7 @@ jobs:
     outputs:
       scripts: ${{ steps.filter.outputs.scripts }}
       relay: ${{ steps.filter.outputs.relay }}
+      github_action: ${{ steps.filter.outputs.github_action }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -387,6 +388,7 @@ jobs:
         run: |
           scripts=false
           relay=false
+          github_action=false
           # The diff base: the PR's base branch, or — in the merge queue — the
           # group's parent commit (main, or the queue entry ahead of it), so
           # the group's own changes decide, exactly as the PR's did.
@@ -415,9 +417,15 @@ jobs:
             if echo "$changed" | grep -qE '^services/relay/'; then
               relay=true
             fi
+            # github-action-smoke: the public Action, or the identity-file
+            # generator whose output the Action's pinned verifier must accept.
+            if echo "$changed" | grep -qE '^packages/github-action/|^packages/identity-file/'; then
+              github_action=true
+            fi
           fi
           echo "scripts=$scripts" >> "$GITHUB_OUTPUT"
           echo "relay=$relay" >> "$GITHUB_OUTPUT"
+          echo "github_action=$github_action" >> "$GITHUB_OUTPUT"
           echo "scripts/ touched vs '$base': $scripts; services/relay/ touched: $relay"
 
   gate-effectiveness-shard:
@@ -643,6 +651,80 @@ jobs:
 
       - name: Prove every booted activation suite discriminates its severing
         run: pnpm check-activation-effective
+
+  github-action-smoke:
+    # The public GitHub Action (packages/github-action) runs a PINNED npm
+    # verifier, so nothing in the monorepo build exercises it: it once sat on
+    # `create-motebit@0.8.0 verify`, which rejected every identity file the
+    # repo's own generator produces ("Missing signature") while the canonical
+    # `@motebit/verify` accepted it. This job runs the Action exactly as a
+    # consumer would (`uses: ./packages/github-action`) against a freshly
+    # generated identity file and asserts its outputs, then tampers the file
+    # and asserts the Action refuses it. Scoped to changes under
+    # packages/github-action/ or packages/identity-file/ (ci.yml has no
+    # schedule to hang a weekly run on).
+    needs: changes
+    if: needs.changes.outputs.github_action == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the identity-file generator
+        run: pnpm --filter "@motebit/identity-file..." build
+
+      - name: Generate a fresh identity file
+        id: gen
+        run: node packages/github-action/test/generate-identity.mjs "$RUNNER_TEMP/motebit.md" >> "$GITHUB_OUTPUT"
+
+      - name: Run the Action on it
+        id: action
+        uses: ./packages/github-action
+        with:
+          path: ${{ runner.temp }}/motebit.md
+
+      - name: Assert the Action's outputs
+        env:
+          VALID: ${{ steps.action.outputs.valid }}
+          GOT_ID: ${{ steps.action.outputs.motebit-id }}
+          GOT_PK: ${{ steps.action.outputs.public-key }}
+          WANT_ID: ${{ steps.gen.outputs.motebit_id }}
+          WANT_PK: ${{ steps.gen.outputs.public_key }}
+        run: |
+          echo "valid=$VALID motebit-id=$GOT_ID public-key=$GOT_PK"
+          test "$VALID" = "true"
+          test "$GOT_ID" = "$WANT_ID"
+          test "$GOT_PK" = "${WANT_PK:0:16}"
+
+      - name: Tamper with the identity file
+        run: sed -i 's/github-action-smoke/tampered/' "$RUNNER_TEMP/motebit.md"
+
+      - name: Run the Action on the tampered file
+        id: tampered
+        continue-on-error: true
+        uses: ./packages/github-action
+        with:
+          path: ${{ runner.temp }}/motebit.md
+
+      - name: Assert the tampered file was refused
+        env:
+          OUTCOME: ${{ steps.tampered.outcome }}
+          VALID: ${{ steps.tampered.outputs.valid }}
+        run: |
+          echo "outcome=$OUTCOME valid=$VALID"
+          test "$OUTCOME" = "failure"
+          test "$VALID" = "false"
 
   sibling-audit:
     # A required check: runs on the PR and again in the merge queue, where the
