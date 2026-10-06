@@ -10,6 +10,12 @@ Receipts, credentials, delegations, successions, presentations. Zero runtime dep
 npm install @motebit/crypto
 ```
 
+Zero runtime dependencies: nothing else is installed or loaded at runtime. The type declarations reference the wire types in [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol), declared as an optional peer dependency — TypeScript consumers that type-check libraries (`skipLibCheck: false`) add it alongside:
+
+```bash
+npm install @motebit/crypto @motebit/protocol
+```
+
 ## Verify
 
 ```typescript
