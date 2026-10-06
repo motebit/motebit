@@ -2977,6 +2977,16 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-credit-caller-allowlist",
     proves:
+      "resolves ALIASED credit calls — `import { creditAccount as topUp }` then `topUp(…)`. The old line regex matched only the literal `creditAccount(` / `.credit(` text, so renaming the import laundered a balance credit past the allowlist; the AST scan binds the alias and must flag the call. writeFixture-and-delete (no real file mutated).",
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}credit_alias.ts`,
+        'import { creditAccount as topUp } from "./accounts.js";\nexport const probe = (db: never): void => {\n  topUp(db, "m", 1, "deposit", null, "x");\n};\n',
+      ),
+  },
+  {
+    script: "check-credit-caller-allowlist",
+    proves:
       "flags a balance-credit call site reintroduced outside the verified-funding allowlist — the treasury-drain shape (crediting spendable/withdrawable balance from an unreviewed, potentially client-supplied source, as the deleted /deposit route did). Probe injects a `creditAccount(...)` call into budget.ts (a non-allowlisted module); the gate must flag it. byte-identical restoration on cleanup.",
     perturb: () =>
       mutateFile(`services/relay/src/budget.ts`, (src) =>
@@ -3114,6 +3124,16 @@ export async function probeFetch(): Promise<unknown> {
         }
         return src.replace(anchor, 'const token = await this.createSyncToken("task:submit");');
       }),
+  },
+  {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      'flags a SQL write whose table name is interpolated — `UPDATE ${LEDGER} SET …` with LEDGER = "relay_transactions". The R2 regexes see an interpolation as ` ? `, so a template-built ledger rewrite stayed green; the non-literal-table arm must fire. writeFixture-and-delete (no real file mutated).',
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}dynamic_table.ts`,
+        'const LEDGER = "relay_transactions";\nexport const probe = (db: { prepare(s: string): { run(): void } }): void => {\n  db.prepare(`UPDATE ${LEDGER} SET amount = 0`).run();\n};\n',
+      ),
   },
   {
     script: "check-allocation-money-chokepoint",
