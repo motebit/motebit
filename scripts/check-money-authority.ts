@@ -195,7 +195,10 @@ function fail(message: string): void {
         `(${PRODUCER}):\n` +
         violations.map((v) => `  - ${v}`).join("\n") +
         "\nOnly verifyGrantForTurn may mint the value — a constructed grant is an " +
-        "unverified authority claim. docs/doctrine/memory-never-confers-authority.md.",
+        "unverified authority claim. Fix: obtain the value from verifyGrantForTurn " +
+        "(packages/runtime/src/grant-verifier.ts) and thread it through, or present the signed " +
+        "artifacts via the turn's `delegation` option — never construct or assign a grant " +
+        "literal. docs/doctrine/memory-never-confers-authority.md.",
     );
   }
 }
