@@ -317,7 +317,20 @@ export async function cutBatch(
  * Updates the batch record with tx_hash, network, anchored_at on success.
  * Returns false if submission fails (caller should retry).
  */
-export async function submitAnchorOnChain(
+export function submitAnchorOnChain(
+  db: DatabaseDriver,
+  batchId: string,
+  submitter: ChainAnchorSubmitter,
+): Promise<boolean> {
+  // Exactly once per batch (anchor-submit-pacing.ts `submitOnce`): a tick can start
+  // while the previous one is still draining, so the same signed row can be
+  // handed here twice; the second caller joins the first.
+  return anchorSubmitPacerFor(submitter).submitOnce("federation-settlement", batchId, () =>
+    submitAnchorOnChainOnce(db, batchId, submitter),
+  );
+}
+
+async function submitAnchorOnChainOnce(
   db: DatabaseDriver,
   batchId: string,
   submitter: ChainAnchorSubmitter,
@@ -334,11 +347,21 @@ export async function submitAnchorOnChain(
     // Paced (anchor-submit-pacing.ts): serialized with every other anchoring
     // stream on this submitter, refused without an RPC call while the shared
     // backoff holds.
-    const result = await anchorSubmitPacerFor(submitter).submit(
+    const out = await anchorSubmitPacerFor(submitter).submitIfPending(
       "federation-settlement",
       batchId,
+      // Re-read inside the serial chain, immediately before the RPC call: the
+      // row read above may have landed while this submit waited its turn.
+      () =>
+        db
+          .prepare(
+            "SELECT 1 FROM relay_anchor_batches WHERE batch_id = ? AND status = 'signed' AND tx_hash IS NULL",
+          )
+          .get(batchId) !== undefined,
       () => submitter.submitMerkleRoot(batch.merkle_root, batch.relay_id, batch.leaf_count),
     );
+    if (!out.submitted) return true; // landed by another submit while this one waited
+    const result = out.result;
     const now = Date.now();
 
     db.prepare(
@@ -764,7 +787,20 @@ export async function cutAgentSettlementBatch(
  * abstraction (ChainAnchorSubmitter), same idempotency semantics
  * (only acts on `status = 'signed'` batches).
  */
-export async function submitAgentAnchorOnChain(
+export function submitAgentAnchorOnChain(
+  db: DatabaseDriver,
+  batchId: string,
+  submitter: ChainAnchorSubmitter,
+): Promise<boolean> {
+  // Exactly once per batch (anchor-submit-pacing.ts `submitOnce`): a tick can start
+  // while the previous one is still draining, so the same signed row can be
+  // handed here twice; the second caller joins the first.
+  return anchorSubmitPacerFor(submitter).submitOnce("agent-settlement", batchId, () =>
+    submitAgentAnchorOnChainOnce(db, batchId, submitter),
+  );
+}
+
+async function submitAgentAnchorOnChainOnce(
   db: DatabaseDriver,
   batchId: string,
   submitter: ChainAnchorSubmitter,
@@ -781,9 +817,21 @@ export async function submitAgentAnchorOnChain(
     // Paced (anchor-submit-pacing.ts): serialized with every other anchoring
     // stream on this submitter, refused without an RPC call while the shared
     // backoff holds.
-    const result = await anchorSubmitPacerFor(submitter).submit("agent-settlement", batchId, () =>
-      submitter.submitMerkleRoot(batch.merkle_root, batch.relay_id, batch.leaf_count),
+    const out = await anchorSubmitPacerFor(submitter).submitIfPending(
+      "agent-settlement",
+      batchId,
+      // Re-read inside the serial chain, immediately before the RPC call: the
+      // row read above may have landed while this submit waited its turn.
+      () =>
+        db
+          .prepare(
+            "SELECT 1 FROM relay_agent_anchor_batches WHERE batch_id = ? AND status = 'signed' AND tx_hash IS NULL",
+          )
+          .get(batchId) !== undefined,
+      () => submitter.submitMerkleRoot(batch.merkle_root, batch.relay_id, batch.leaf_count),
     );
+    if (!out.submitted) return true; // landed by another submit while this one waited
+    const result = out.result;
     const now = Date.now();
 
     db.prepare(

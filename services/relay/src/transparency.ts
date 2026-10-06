@@ -538,9 +538,15 @@ export async function attemptTransparencyAnchor(
 ): Promise<{ txHash: string; hash: string } | null> {
   if (state.anchored) return null;
   const declaration = await getSignedDeclaration(relayIdentity);
-  const result = await anchorTransparencyDeclaration(declaration, submitter);
-  state.anchored = true;
-  return { txHash: result.txHash, hash: declaration.hash };
+  // Exactly once (anchor-submit-pacing.ts `submitOnce`): a tick that starts
+  // while the previous attempt is still queued joins it, and the flag is
+  // re-read once this attempt reaches the front.
+  return anchorSubmitPacerFor(submitter).submitOnce("transparency", declaration.hash, async () => {
+    if (state.anchored) return null;
+    const result = await anchorTransparencyDeclaration(declaration, submitter);
+    state.anchored = true;
+    return { txHash: result.txHash, hash: declaration.hash };
+  });
 }
 
 /**

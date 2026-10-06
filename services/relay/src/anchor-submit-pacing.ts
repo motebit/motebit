@@ -58,7 +58,7 @@ export type AnchorSubmitErrorClass =
 const NETWORK_UNRESOLVED = /refuses to write: the rpc's network is unknown/i;
 const RATE_LIMITED = /\b429\b|too many requests|rate[ -]?limit/i;
 const DETERMINISTIC =
-  /no record of a prior credit|insufficient (funds|lamports)|insufficientfunds|insufficient funds for (fee|rent)|refuses to write: the network|disagrees with|network mismatch/i;
+  /no record of a prior credit|insufficient (funds|lamports)|insufficientfunds|insufficient funds for (fee|rent)|refuses to write: the network|refuses to write: declared network .* but the rpc serves|disagrees with|network mismatch/i;
 const UNAVAILABLE =
   /fetch failed|econnrefused|econnreset|etimedout|enotfound|eai_again|socket hang up|network ?error|\b50[234]\b|service unavailable|bad gateway|gateway time-?out|failed to get recent blockhash/i;
 
@@ -111,6 +111,8 @@ export class AnchorSubmitPacer {
   private chain: Promise<unknown> = Promise.resolve();
   /** Errors this pacer already logged — the stream does not log them again. */
   private readonly reported = new WeakSet<object>();
+  /** Per-anchor submits queued or in flight, keyed `stream\0id` (single-flight). */
+  private readonly inFlight = new Map<string, Promise<unknown>>();
 
   constructor(opts: AnchorSubmitPacerOptions = {}) {
     this.baseBackoffMs = opts.baseBackoffMs ?? 60_000;
@@ -148,13 +150,59 @@ export class AnchorSubmitPacer {
     fn: () => Promise<T>,
     opts: { gate?: boolean } = {},
   ): Promise<T> {
-    const gate = opts.gate ?? true;
-    const run = async (): Promise<T> => {
+    const out = await this.enqueue(stream, subject, fn, opts.gate ?? true, null);
+    return (out as { result: T }).result;
+  }
+
+  /**
+   * Run one anchor's RPC submit exactly once. The anchoring loops read their
+   * `status = 'signed'` backlog BEFORE waiting in the serial chain, and a tick
+   * can start while the previous one is still draining, so the same row can
+   * reach here more than once. Two guards, both at the executor:
+   *
+   *   - `stillPending` is re-read inside the chain, immediately before the RPC
+   *     call; a row another submit already landed makes no call
+   *     (`{ submitted: false }`) and records nothing on the backoff.
+   *   - single-flight per `(stream, id)`: a second caller while one is queued or
+   *     in flight joins it instead of enqueueing another copy (`run` includes
+   *     the caller's own row update, so once the key is released the row is
+   *     already confirmed and every later read sees it).
+   */
+  submitOnce<R>(stream: string, id: string, run: () => Promise<R>): Promise<R> {
+    const key = `${stream}\0${id}`;
+    const held = this.inFlight.get(key);
+    if (held) return held as Promise<R>;
+    const p = run().finally(() => {
+      this.inFlight.delete(key);
+    });
+    this.inFlight.set(key, p);
+    return p;
+  }
+
+  /** Paced submit that first re-checks, inside the serial chain, that the anchor is still unsubmitted. */
+  async submitIfPending<T>(
+    stream: string,
+    subject: string,
+    stillPending: () => boolean,
+    fn: () => Promise<T>,
+  ): Promise<{ submitted: true; result: T } | { submitted: false }> {
+    return this.enqueue(stream, subject, fn, true, stillPending);
+  }
+
+  private enqueue<T>(
+    stream: string,
+    subject: string,
+    fn: () => Promise<T>,
+    gate: boolean,
+    stillPending: (() => boolean) | null,
+  ): Promise<{ submitted: true; result: T } | { submitted: false }> {
+    const run = async (): Promise<{ submitted: true; result: T } | { submitted: false }> => {
+      if (stillPending && !stillPending()) return { submitted: false };
       if (gate && !this.canAttempt()) throw new AnchorSubmitDeferredError(this.blockedUntil);
       try {
         const result = await fn();
         this.recordSuccess();
-        return result;
+        return { submitted: true, result };
       } catch (err: unknown) {
         this.recordFailure(stream, subject, err);
         throw err;

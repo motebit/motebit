@@ -259,6 +259,14 @@ describe("anchor-submit pacing", () => {
         new Error("SolanaMemoSubmitter refuses to write: the RPC's network is unknown (HTTP 503)"),
       ),
     ).toBe("other");
+    // SolanaMemoSubmitter's network-label mismatch fails every anchor until an operator acts.
+    expect(
+      classifyAnchorSubmitError(
+        new Error(
+          "SolanaMemoSubmitter refuses to write: declared network solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1 but the RPC serves solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        ),
+      ),
+    ).toBe("deterministic");
     expect(
       classifyAnchorSubmitError(
         new Error("Transaction was not confirmed in 30.00 seconds. It is unknown if it succeeded"),

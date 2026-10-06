@@ -264,7 +264,20 @@ export async function cutCredentialBatch(
  * Submit a batch's Merkle root onchain via the configured ChainAnchorSubmitter.
  * Updates the batch record with tx_hash, chain, network, anchored_at on success.
  */
-export async function submitCredentialAnchorOnChain(
+export function submitCredentialAnchorOnChain(
+  db: DatabaseDriver,
+  batchId: string,
+  submitter: ChainAnchorSubmitter,
+): Promise<boolean> {
+  // Exactly once per batch (anchor-submit-pacing.ts `submitOnce`): a tick can start
+  // while the previous one is still draining, so the same signed row can be
+  // handed here twice; the second caller joins the first.
+  return anchorSubmitPacerFor(submitter).submitOnce("credential", batchId, () =>
+    submitCredentialAnchorOnChainOnce(db, batchId, submitter),
+  );
+}
+
+async function submitCredentialAnchorOnChainOnce(
   db: DatabaseDriver,
   batchId: string,
   submitter: ChainAnchorSubmitter,
@@ -281,9 +294,21 @@ export async function submitCredentialAnchorOnChain(
     // Paced (anchor-submit-pacing.ts): serialized with every other anchoring
     // stream on this submitter, refused without an RPC call while the shared
     // backoff holds.
-    const result = await anchorSubmitPacerFor(submitter).submit("credential", batchId, () =>
-      submitter.submitMerkleRoot(batch.merkle_root, batch.relay_id, batch.leaf_count),
+    const out = await anchorSubmitPacerFor(submitter).submitIfPending(
+      "credential",
+      batchId,
+      // Re-read inside the serial chain, immediately before the RPC call: the
+      // row read above may have landed while this submit waited its turn.
+      () =>
+        db
+          .prepare(
+            "SELECT 1 FROM relay_credential_anchor_batches WHERE batch_id = ? AND status = 'signed' AND tx_hash IS NULL",
+          )
+          .get(batchId) !== undefined,
+      () => submitter.submitMerkleRoot(batch.merkle_root, batch.relay_id, batch.leaf_count),
     );
+    if (!out.submitted) return true; // landed by another submit while this one waited
+    const result = out.result;
     const now = Date.now();
 
     db.prepare(
