@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 // eslint-disable-next-line no-restricted-imports -- the test mints a real signed certificate
 import { generateKeypair, signCertAsSubject } from "@motebit/crypto";
-import type { DeletionCertificate, NodeId } from "@motebit/protocol";
+import type { DeletionCertificate, NodeId } from "@motebit/sdk";
 import type { DesktopContext } from "../types";
 
 function mountMemoryDom(): void {

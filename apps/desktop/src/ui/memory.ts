@@ -1,5 +1,5 @@
 import { RelationType, SensitivityLevel } from "@motebit/sdk";
-import type { DeletionCertificate } from "@motebit/protocol";
+import type { DeletionCertificate } from "@motebit/sdk";
 import type { MemoryNode, MemoryEdge } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
