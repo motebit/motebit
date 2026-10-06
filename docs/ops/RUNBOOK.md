@@ -2,8 +2,7 @@
 
 Last updated: 2026-04-03
 
-Motebit, Inc. — Delaware C Corp (EIN 41-4957563, file #10549131).
-Solo founder. Bus factor = 1. This document exists so someone else can take over.
+Motebit, Inc. This document exists so someone else can take over operations.
 
 ---
 
@@ -77,16 +76,16 @@ Set via `fly secrets set -a motebit-sync KEY=VALUE`.
 
 NOT secrets — every value here is also exposed via the relay's signed transparency declaration at `https://motebit-sync.fly.dev/.well-known/motebit-transparency.json` or the proxy's `RELAY_PUBLIC_KEY` env. Listed here for one-glance reference.
 
-| Item                                                        | Value                                                                      |
-| ----------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Relay public key (Ed25519, hex)                             | `11c266f2749a02e1d8507e307f910eca06c5d7f8dfc4504345959099783922b6`         |
-| Relay Solana address (base58, derived from pubkey)          | `2CKrwjT5aRCyBcenyCVCUm2v5SGRauAcaMdCNwQxkaGd`                             |
-| Relay motebit_id                                            | `relay-758b78dc-ef68-4104-b2d6-52966381b064`                               |
-| EVM treasury (Base mainnet, Ledger Flex `motebit-treasury`) | `0xee51c5a65c6Fa81c9CC85505884290e90C09D285`                               |
-| Fly app                                                     | `motebit-sync` (region `sjc`)                                              |
-| Public endpoint                                             | `https://motebit-sync.fly.dev` (custom domain `relay.motebit.com` planned) |
-| Transparency declaration                                    | `https://motebit-sync.fly.dev/.well-known/motebit-transparency.json`       |
-| Operator transparency manifest spec                         | `motebit-transparency/draft-2026-04-14`                                    |
+| Item                                               | Value                                                                      |
+| -------------------------------------------------- | -------------------------------------------------------------------------- |
+| Relay public key (Ed25519, hex)                    | `11c266f2749a02e1d8507e307f910eca06c5d7f8dfc4504345959099783922b6`         |
+| Relay Solana address (base58, derived from pubkey) | `2CKrwjT5aRCyBcenyCVCUm2v5SGRauAcaMdCNwQxkaGd`                             |
+| Relay motebit_id                                   | `relay-758b78dc-ef68-4104-b2d6-52966381b064`                               |
+| EVM treasury (Base mainnet, hardware wallet)       | `0xee51c5a65c6Fa81c9CC85505884290e90C09D285`                               |
+| Fly app                                            | `motebit-sync` (region `sjc`)                                              |
+| Public endpoint                                    | `https://motebit-sync.fly.dev` (custom domain `relay.motebit.com` planned) |
+| Transparency declaration                           | `https://motebit-sync.fly.dev/.well-known/motebit-transparency.json`       |
+| Operator transparency manifest spec                | `motebit-transparency/draft-2026-04-14`                                    |
 
 **Solana memo signer note** (see [`docs/doctrine/settlement-rails.md`](../doctrine/settlement-rails.md) §SolanaWalletRail): the relay's Ed25519 public key doubles as its Solana address by curve coincidence. The SAME private key that signs all relay attestations (receipts, transparency declaration, federation co-witness, credential anchor batches) ALSO signs Solana memo program transactions for the six pipelines listed under `SOLANA_RPC_URL` above. Keep the SOL balance small (hot key); top up rather than over-fund. ~0.01 SOL ≈ ~20,000 memo submissions at 5,000 lamports each. Current funding status lives in `SECRETS.md §7`.
 

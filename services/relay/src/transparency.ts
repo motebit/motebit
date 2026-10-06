@@ -32,6 +32,7 @@ import type { SignedTransparencyDeclaration } from "@motebit/protocol";
 import { TRANSPARENCY_SPEC_ID, TRANSPARENCY_SUITE } from "@motebit/protocol";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { anchorSubmitPacerFor } from "./anchor-submit-pacing.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 const logger = createLogger({ service: "relay", module: "transparency" });
@@ -504,7 +505,11 @@ export async function anchorTransparencyDeclaration(
   declaration: SignedDeclaration,
   submitter: { submitTransparencyAnchor: (hashHex: string) => Promise<{ txHash: string }> },
 ): Promise<{ txHash: string }> {
-  return submitter.submitTransparencyAnchor(declaration.hash);
+  // Paced with every other anchoring stream on this submitter (shared backoff;
+  // a deferral throws without an RPC call, so the supervised loop retries).
+  return anchorSubmitPacerFor(submitter).submit("transparency", declaration.hash, () =>
+    submitter.submitTransparencyAnchor(declaration.hash),
+  );
 }
 
 /** Default retry cadence for the transparency anchor loop (1 minute). */
@@ -533,9 +538,15 @@ export async function attemptTransparencyAnchor(
 ): Promise<{ txHash: string; hash: string } | null> {
   if (state.anchored) return null;
   const declaration = await getSignedDeclaration(relayIdentity);
-  const result = await anchorTransparencyDeclaration(declaration, submitter);
-  state.anchored = true;
-  return { txHash: result.txHash, hash: declaration.hash };
+  // Exactly once (anchor-submit-pacing.ts `submitOnce`): a tick that starts
+  // while the previous attempt is still queued joins it, and the flag is
+  // re-read once this attempt reaches the front.
+  return anchorSubmitPacerFor(submitter).submitOnce("transparency", declaration.hash, async () => {
+    if (state.anchored) return null;
+    const result = await anchorTransparencyDeclaration(declaration, submitter);
+    state.anchored = true;
+    return { txHash: result.txHash, hash: declaration.hash };
+  });
 }
 
 /**
