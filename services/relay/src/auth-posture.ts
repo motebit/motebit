@@ -76,8 +76,10 @@ export interface ResolveRelayAuthPostureOptions {
   fallbackToken?: () => string;
 }
 
-const ON = new Set(["1", "true", "yes", "on"]);
-const OFF = new Set(["", "0", "false", "no", "off"]);
+// The relay's one boolean vocabulary (`env.ts` `parseBoolEnv`): `true`/`1` on,
+// `false`/`0` off, empty = unset; anything else refuses.
+const ON = new Set(["1", "true"]);
+const OFF = new Set(["", "0", "false"]);
 
 /** `development` / `test` exactly (trimmed, lowercased); anything else is production. */
 function devNodeEnv(raw: string | undefined): "development" | "test" | null {

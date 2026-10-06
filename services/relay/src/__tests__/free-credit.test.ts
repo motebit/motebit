@@ -210,9 +210,10 @@ describe("POST /api/v1/agents/:motebitId/proxy-token — free credit lands in th
   let relay: SyncRelay;
 
   beforeEach(async () => {
-    relay = await createTestRelay();
-    // Enable a generous free credit for the duration of this test.
+    // Enable a generous free credit for the duration of this test — set
+    // before boot: the relay reads its free-credit knobs once, at boot.
     process.env.MOTEBIT_FREE_CREDIT_USD = "0.50";
+    relay = await createTestRelay();
   });
   afterEach(async () => {
     delete process.env.MOTEBIT_FREE_CREDIT_USD;
@@ -404,8 +405,8 @@ describe("free credit is not sweepable (aggregated exit paths)", () => {
 describe("proxy-token model ceiling — free credit is a first taste, not the frontier tier", () => {
   let relay: SyncRelay;
   beforeEach(async () => {
-    relay = await createTestRelay();
     process.env.MOTEBIT_FREE_CREDIT_USD = "0.10";
+    relay = await createTestRelay();
   });
   afterEach(async () => {
     delete process.env.MOTEBIT_FREE_CREDIT_USD;

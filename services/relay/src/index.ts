@@ -74,7 +74,8 @@ import { IdentityManager } from "@motebit/core-identity";
 import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
-import { parseBoolEnv, parseFloatEnv, parseIntEnv } from "./env.js";
+import { parseBoolEnv, parseFloatEnv, parseIntEnv, RECONCILIATION_INTERVAL_BOUNDS } from "./env.js";
+import { freeCreditConfigFromEnv, type FreeCreditConfig } from "./free-credit.js";
 import { buildOutboundPolicy } from "./outbound-policy.js";
 import { createRelaySchema } from "./schema.js";
 import {
@@ -623,6 +624,17 @@ export interface SyncRelayConfig {
   /** Platform fee rate for settlement (0–1). Default: 0.05 (5%). Protocol supports any value. */
   platformFeeRate?: number;
   /**
+   * Free "first taste" credit knobs, read ONCE at boot (strictly) — never
+   * per grant from `process.env`. Default: `freeCreditConfigFromEnv()`.
+   */
+  freeCredit?: FreeCreditConfig;
+  /** EVM treasury reconciliation cadence. Default: `MOTEBIT_TREASURY_RECONCILIATION_INTERVAL_MS` or 15 min. */
+  treasuryReconciliationIntervalMs?: number;
+  /** x402 settlement reconciliation cadence. Default: `MOTEBIT_X402_RECONCILIATION_INTERVAL_MS` or 60 s. */
+  x402ReconciliationIntervalMs?: number;
+  /** Solana treasury reconciliation cadence. Default: `MOTEBIT_SOLANA_TREASURY_RECONCILIATION_INTERVAL_MS` or 15 min. */
+  solanaTreasuryReconciliationIntervalMs?: number;
+  /**
    * Passphrase for encrypting the relay's identity key at rest. When set,
    * the relay's Ed25519 private key is AES-GCM encrypted with a key derived
    * via PBKDF2-600K from this passphrase. Omit for plaintext storage.
@@ -906,6 +918,25 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     offramp: offrampOverride,
     operatorSolanaTransfer: operatorSolanaTransferOverride,
     platformFeeRate = parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
+    // Every money knob is parsed HERE, at boot, strictly — a malformed value
+    // throws `RelayEnvConfigError` before the relay opens its database, never
+    // on the first grant or the first loop tick.
+    freeCredit: freeCreditConfig = freeCreditConfigFromEnv(),
+    treasuryReconciliationIntervalMs = parseIntEnv(
+      "MOTEBIT_TREASURY_RECONCILIATION_INTERVAL_MS",
+      15 * 60_000,
+      RECONCILIATION_INTERVAL_BOUNDS,
+    ),
+    x402ReconciliationIntervalMs = parseIntEnv(
+      "MOTEBIT_X402_RECONCILIATION_INTERVAL_MS",
+      60_000,
+      RECONCILIATION_INTERVAL_BOUNDS,
+    ),
+    solanaTreasuryReconciliationIntervalMs = parseIntEnv(
+      "MOTEBIT_SOLANA_TREASURY_RECONCILIATION_INTERVAL_MS",
+      15 * 60_000,
+      RECONCILIATION_INTERVAL_BOUNDS,
+    ),
   } = config;
 
   // Async work boot starts but does not await (a warm-up read, a first loop
@@ -1743,6 +1774,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
     subscriptionEventAdapter,
     authEvents.record,
+    freeCreditConfig,
   );
 
   // --- Credential routes ---
@@ -2447,7 +2479,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const usdcContractAddress = USDC_CONTRACTS[x402Config.network];
     const rpcUrl = DEFAULT_RPC_URLS[x402Config.network];
     if (x402Config.testnet === false && x402Config.payToAddress && usdcContractAddress && rpcUrl) {
-      const intervalMs = parseIntEnv("MOTEBIT_TREASURY_RECONCILIATION_INTERVAL_MS", 15 * 60_000);
+      const intervalMs = treasuryReconciliationIntervalMs;
       const { HttpJsonRpcEvmAdapter } = await import("@motebit/evm-rpc");
       const evmRpc = new HttpJsonRpcEvmAdapter({ rpcUrl });
       treasuryReconciliationInterval = startTreasuryReconciliationLoop({
@@ -2501,7 +2533,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       x402ReconciliationInterval = startX402ReconciliationLoop({
         db: moteDb.db,
         reader: x402ChainReader,
-        intervalMs: parseIntEnv("MOTEBIT_X402_RECONCILIATION_INTERVAL_MS", 60_000),
+        intervalMs: x402ReconciliationIntervalMs,
         isFrozen: () => getEmergencyFreeze(),
         supervisor: loopSupervisor,
       });
@@ -2623,10 +2655,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // whether recorded `platform_fee` accumulation matches the wallet's
     // onchain USDC balance after the verifier confirmed both legs of
     // each Arc 2 atomic multi-output tx.
-    const solanaReconciliationIntervalMs = parseIntEnv(
-      "MOTEBIT_SOLANA_TREASURY_RECONCILIATION_INTERVAL_MS",
-      15 * 60_000,
-    );
+    const solanaReconciliationIntervalMs = solanaTreasuryReconciliationIntervalMs;
     solanaTreasuryReconciliationInterval = startSolanaTreasuryReconciliationLoop({
       db: moteDb.db,
       rpcUrl: solanaRpcUrl,
