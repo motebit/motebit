@@ -21,7 +21,12 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { SyncRelayConfig } from "@motebit/relay";
+import {
+  isInsecureDevPosture,
+  RelayAuthRefusal,
+  type RelayAuthPosture,
+  type SyncRelayConfig,
+} from "@motebit/relay";
 import { SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "motebit-relay-test-"));
@@ -55,7 +60,7 @@ interface BaseOpts {
   passphrase: string | undefined;
   corsOrigin: string;
   apiToken: string | undefined;
-  insecureNoAuth: boolean;
+  authPosture: RelayAuthPosture;
 }
 
 function baseOptions(overrides: Partial<BaseOpts> = {}): BaseOpts {
@@ -69,7 +74,7 @@ function baseOptions(overrides: Partial<BaseOpts> = {}): BaseOpts {
     passphrase: undefined,
     corsOrigin: "*",
     apiToken: "relay-up-test-token",
-    insecureNoAuth: false,
+    authPosture: { kind: "token", token: "relay-up-test-token", source: "env" },
     ...overrides,
   };
 }
@@ -78,13 +83,19 @@ describe("relay up — the master token is never absent by default", () => {
   // `motebit relay up` used to build its relay with no `apiToken` at all, so
   // every master-token route (admin freeze, fee and withdrawal dashboards,
   // memory/state/audit exports, sync) was open on the port it bound.
-  it("buildRelayConfig threads the token and the opt-in through", () => {
+  it("buildRelayConfig threads the token and the decided posture through", () => {
     const cfg = mod.buildRelayConfig(baseOptions({ apiToken: "t0k" }));
     expect(cfg.apiToken).toBe("t0k");
-    expect(cfg.allowInsecureNoAuth).toBe(false);
-    const open = mod.buildRelayConfig(baseOptions({ apiToken: undefined, insecureNoAuth: true }));
+    expect(isInsecureDevPosture(cfg.authPosture)).toBe(false);
+    const auth = mod.resolveRelayApiToken(":memory:", {
+      NODE_ENV: "development",
+      MOTEBIT_RELAY_INSECURE_NO_AUTH: "1",
+    });
+    const open = mod.buildRelayConfig(
+      baseOptions({ apiToken: auth.apiToken, authPosture: auth.authPosture }),
+    );
     expect(open.apiToken).toBeUndefined();
-    expect(open.allowInsecureNoAuth).toBe(true);
+    expect(isInsecureDevPosture(open.authPosture)).toBe(true);
   });
 
   it("MOTEBIT_API_TOKEN wins", () => {
@@ -92,7 +103,8 @@ describe("relay up — the master token is never absent by default", () => {
     const r = mod.resolveRelayApiToken(path.join(dir, "relay.db"), {
       MOTEBIT_API_TOKEN: "env-tok",
     });
-    expect(r).toEqual({ apiToken: "env-tok", insecureNoAuth: false, source: "env" });
+    expect(r.apiToken).toBe("env-tok");
+    expect(r.source).toBe("env");
     expect(fs.readdirSync(dir)).toEqual([]);
   });
 
@@ -102,11 +114,12 @@ describe("relay up — the master token is never absent by default", () => {
     const first = mod.resolveRelayApiToken(db, {});
     expect(first.source).toBe("generated");
     expect(first.apiToken).toMatch(/^[0-9a-f]{64}$/);
-    expect(first.insecureNoAuth).toBe(false);
+    expect(first.authPosture.kind).toBe("token");
     const file = mod.relayApiTokenPath(db);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     const second = mod.resolveRelayApiToken(db, {});
-    expect(second).toEqual({ apiToken: first.apiToken, insecureNoAuth: false, source: "file" });
+    expect(second.apiToken).toBe(first.apiToken);
+    expect(second.source).toBe("file");
   });
 
   it("an empty MOTEBIT_API_TOKEN is not a token", () => {
@@ -115,14 +128,94 @@ describe("relay up — the master token is never absent by default", () => {
     expect(r.source).toBe("generated");
   });
 
-  it("MOTEBIT_RELAY_INSECURE_NO_AUTH=1 is the only way to run it open", () => {
+  it("MOTEBIT_RELAY_INSECURE_NO_AUTH=1 under NODE_ENV=development is the only way to run it open", () => {
     const dir = fs.mkdtempSync(path.join(tmpHome, "tok-"));
     const r = mod.resolveRelayApiToken(path.join(dir, "relay.db"), {
+      NODE_ENV: "development",
       MOTEBIT_RELAY_INSECURE_NO_AUTH: "1",
     });
-    expect(r).toEqual({ apiToken: undefined, insecureNoAuth: true, source: "insecure" });
+    expect(r.apiToken).toBeUndefined();
+    expect(r.source).toBe("insecure");
+    expect(isInsecureDevPosture(r.authPosture)).toBe(true);
     expect(fs.readdirSync(dir)).toEqual([]);
   });
+
+  // The cold review's wrong answer: `relay up` read the opt-in on its own and
+  // skipped the production refusal, so NODE_ENV=production + the flag booted
+  // an open relay. The CLI now asks the relay's ONE decision function.
+  for (const nodeEnv of ["production", "Production", "production ", "staging", undefined]) {
+    it(`the opt-in is refused under NODE_ENV=${JSON.stringify(nodeEnv)}, token or not, writing nothing`, () => {
+      const dir = fs.mkdtempSync(path.join(tmpHome, "tok-"));
+      for (const token of [undefined, "env-tok"]) {
+        const env: Record<string, string | undefined> = { MOTEBIT_RELAY_INSECURE_NO_AUTH: "1" };
+        if (nodeEnv !== undefined) env["NODE_ENV"] = nodeEnv;
+        if (token !== undefined) env["MOTEBIT_API_TOKEN"] = token;
+        expect(() => mod.resolveRelayApiToken(path.join(dir, "relay.db"), env)).toThrow(
+          RelayAuthRefusal,
+        );
+      }
+      expect(fs.readdirSync(dir)).toEqual([]);
+    });
+  }
+});
+
+describe("relay up — the CLI slice of the auth-posture boot matrix", () => {
+  // services/relay `auth-posture-boot-matrix.test.ts` boots every cell of this
+  // decision (with the CLI's token-file fallback) and probes every protected
+  // route; this slice pins that `relay up` composes exactly that decision.
+  const NODE_ENVS = [
+    "production",
+    "Production",
+    "production ",
+    "staging",
+    undefined,
+    "development",
+    "test",
+  ];
+  const TOKENS = [undefined, "", "   ", "matrix-token"];
+  const FLAGS = [undefined, "1", "ture"];
+  for (const nodeEnv of NODE_ENVS) {
+    it(`NODE_ENV=${JSON.stringify(nodeEnv)}: every token × flag cell matches the boot table`, () => {
+      const wrong: string[] = [];
+      for (const token of TOKENS) {
+        for (const flag of FLAGS) {
+          const env: Record<string, string | undefined> = {};
+          if (nodeEnv !== undefined) env["NODE_ENV"] = nodeEnv;
+          if (token !== undefined) env["MOTEBIT_API_TOKEN"] = token;
+          if (flag !== undefined) env["MOTEBIT_RELAY_INSECURE_NO_AUTH"] = flag;
+          const dev = ["development", "test"].includes(nodeEnv?.trim().toLowerCase() ?? "");
+          const want =
+            flag === "ture" || (flag === "1" && !dev)
+              ? "refuse"
+              : token != null && token.trim() !== ""
+                ? "env"
+                : flag === "1"
+                  ? "insecure"
+                  : "ephemeral";
+          let got: string;
+          try {
+            const r = mod.resolveRelayApiToken(":memory:", env);
+            const cfg = mod.buildRelayConfig(
+              baseOptions({ dbPath: ":memory:", apiToken: r.apiToken, authPosture: r.authPosture }),
+            );
+            if (cfg.authPosture !== r.authPosture || cfg.apiToken !== r.apiToken)
+              got = "config-drift";
+            else if (r.source === "insecure" && !isInsecureDevPosture(cfg.authPosture))
+              got = "unminted";
+            else if (r.source !== "insecure" && (r.apiToken ?? "").trim() === "") got = "no-token";
+            else got = r.source;
+          } catch (err) {
+            got = err instanceof RelayAuthRefusal ? "refuse" : `threw ${String(err)}`;
+          }
+          if (got !== want)
+            wrong.push(
+              `token=${JSON.stringify(token)} flag=${JSON.stringify(flag)}: want ${want}, got ${got}`,
+            );
+        }
+      }
+      expect(wrong).toEqual([]);
+    });
+  }
 });
 
 describe("buildRelayConfig — design-answer invariants", () => {

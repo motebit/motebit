@@ -46,6 +46,7 @@ import {
 } from "./auth-events.js";
 import { pathIdentity } from "./id-bounds.js";
 import { SYNC_PRESENTER_KEY } from "./identity-binding.js";
+import { masterGateToken } from "./auth-posture.js";
 
 const logger = createLogger({ service: "middleware" });
 
@@ -79,6 +80,13 @@ export interface HealthCheckDeps {
 export interface MiddlewareDeps {
   app: Hono;
   apiToken: string | undefined;
+  /**
+   * The posture `resolveRelayAuthPosture` decided. With no `apiToken`, the
+   * master-token gates are left open ONLY for the insecure-dev posture it
+   * mints; any other value (absent included) seals them (auth-posture.ts
+   * `masterGateToken`).
+   */
+  authPosture?: unknown;
   corsOrigin: string;
   enableDeviceAuth: boolean;
   identityManager: IdentityManager;
@@ -610,7 +618,10 @@ export function isMasterTokenCarveOut(method: string, path: string): boolean {
 // ---------------------------------------------------------------------------
 
 export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
-  const { app, apiToken, corsOrigin, enableDeviceAuth } = deps;
+  const { app, corsOrigin, enableDeviceAuth } = deps;
+  // Fail-closed by construction: an absent token seals every gate below
+  // unless the posture is the minted insecure-dev opt-in.
+  const apiToken = masterGateToken(deps.apiToken, deps.authPosture);
 
   // --- Security & CORS ---
   app.use("*", secureHeaders());
@@ -1220,8 +1231,10 @@ const TASK_RESULT_PATH = /^\/agent\/[^/]+\/task\/[^/]+\/result$/;
 export function registerAuthMiddleware(
   deps: MiddlewareDeps & { recordAuthEvent: NonNullable<MiddlewareDeps["recordAuthEvent"]> },
 ): void {
-  const { app, apiToken } = deps;
-  const dualAuth = createDualAuth(deps);
+  const { app } = deps;
+  // Fail-closed by construction (see registerMiddleware).
+  const apiToken = masterGateToken(deps.apiToken, deps.authPosture);
+  const dualAuth = createDualAuth({ ...deps, apiToken });
 
   // Subscription owner routes (#846): cancel and resubscribe act on ONE
   // identity's Stripe subscription, so they take that identity's device token

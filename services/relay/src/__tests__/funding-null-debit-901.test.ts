@@ -37,6 +37,7 @@ import {
   JSON_AUTH,
   seedBalance,
   X402_TEST_CONFIG,
+  INSECURE_DEV_POSTURE,
 } from "./test-helpers.js";
 import { facilitator, signPayment } from "./x402-fake-facilitator.js";
 import { creditAccount, getSpendableBalance, toMicro } from "../accounts.js";
@@ -678,7 +679,7 @@ describe("#901 round 3: the gate reads the VERIFIED caller, never a re-parse of 
     relay = await createTestRelay({
       enableDeviceAuth: false,
       apiToken: "",
-      allowInsecureNoAuth: true,
+      authPosture: INSECURE_DEV_POSTURE,
     });
     // The listing route needs auth this relay doesn't mount; seed the same
     // priced listing directly (pricedWorker's shape, with a payTo).

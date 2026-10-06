@@ -28,6 +28,11 @@ services:
       # any token, and a fresh Ed25519 keypair for OPERATOR_IDENTITY.
       MOTEBIT_DB_PATH: /data/motebit.db
       NODE_ENV: production
+      # REQUIRED: the relay refuses to start without a master token (every
+      # admin, export and sync route is gated by it). Compose itself refuses
+      # to start the stack while it is unset. Set it in a `.env` file beside
+      # this one, e.g. `MOTEBIT_API_TOKEN=$(openssl rand -hex 32)`.
+      MOTEBIT_API_TOKEN: ${MOTEBIT_API_TOKEN:?set MOTEBIT_API_TOKEN (openssl rand -hex 32)}
       # Required for federation; see self-host.md § Federate with motebit.
       # OPERATOR_IDENTITY_PRIVATE_KEY: ${OPERATOR_IDENTITY_PRIVATE_KEY}
       # OPERATOR_IDENTITY_PUBLIC_KEY: ${OPERATOR_IDENTITY_PUBLIC_KEY}

@@ -8,17 +8,27 @@
  * authentication at all. Auth that depends on a config value being present is
  * fail-open by construction. The relay now refuses to construct without the
  * token; the only way to run it open is the loudly-named dev opt-in
- * `allowInsecureNoAuth` (`MOTEBIT_RELAY_INSECURE_NO_AUTH=1`), which production
- * (`NODE_ENV=production`) refuses.
+ * `MOTEBIT_RELAY_INSECURE_NO_AUTH=1`, honoured only under NODE_ENV
+ * development / test, and only as the posture `resolveRelayAuthPosture`
+ * mints. A hand-wired middleware with no token installs sealed gates. The
+ * exhaustive entry × env cut is `auth-posture-boot-matrix.test.ts`.
  *
  * The route-table half enumerates `/api/v1/admin/*` from the app's own router
  * (never a hand list — a hand list is the drift `admin-auth-parity` names) and
  * asserts each handler answers 401 without credentials.
  */
 import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from "vitest";
+import { Hono } from "hono";
 import { createSyncRelay, type SyncRelay } from "../index.js";
+import { isInsecureDevPosture } from "../auth-posture.js";
+import { registerAuthMiddleware, registerMiddleware, type MiddlewareDeps } from "../middleware.js";
 import { buildRelayConfigFromEnv, MINIMAL_VALID_RELAY_ENV } from "../relay-config.js";
-import { TEST_RELAY_NETWORK, X402_TEST_CONFIG, createTestRelay } from "./test-helpers.js";
+import {
+  INSECURE_DEV_POSTURE,
+  TEST_RELAY_NETWORK,
+  X402_TEST_CONFIG,
+  createTestRelay,
+} from "./test-helpers.js";
 import {
   BOOT_TIMEOUT_MS,
   SOURCE_TIER,
@@ -61,13 +71,67 @@ describe("createSyncRelay refuses to construct without the master token", () => 
       return true;
     });
     relay = await createSyncRelay({
-      allowInsecureNoAuth: true,
+      authPosture: INSECURE_DEV_POSTURE,
       x402: X402_TEST_CONFIG,
       ...TEST_RELAY_NETWORK,
     });
     const warn = writes.find((w) => w.includes("relay.insecure_no_auth"));
     expect(warn).toBeDefined();
     expect(JSON.parse(warn!).level).toBe("warn");
+  });
+
+  it("a hand-built insecure posture is not the opt-in → throws", async () => {
+    await expect(
+      createSyncRelay({
+        authPosture: { kind: "insecure-dev", nodeEnv: "development" } as never,
+        x402: X402_TEST_CONFIG,
+        ...TEST_RELAY_NETWORK,
+      }),
+    ).rejects.toThrow(/MOTEBIT_API_TOKEN/);
+  });
+});
+
+describe("hand-wired middleware with no token seals the master-token gates", () => {
+  function wire(authPosture: unknown): Hono {
+    const app = new Hono();
+    const deps = {
+      app,
+      apiToken: undefined,
+      authPosture,
+      corsOrigin: "*",
+      enableDeviceAuth: true,
+      identityManager: {},
+      getEmergencyFreeze: () => false,
+      getFreezeReason: () => null,
+      isTokenBlacklisted: () => false,
+      isAgentRevoked: () => false,
+      verifySignedTokenForDevice: async () => false,
+      parseTokenPayloadUnsafe: () => null,
+      recordAuthEvent: () => {},
+    } as unknown as MiddlewareDeps & { recordAuthEvent: () => void };
+    registerMiddleware(deps);
+    registerAuthMiddleware(deps);
+    for (const p of ["/api/v1/admin/freeze-status", "/api/v1/memory/abc", "/api/v1/state/abc"]) {
+      app.get(p, (c) => c.json({ open: true }));
+    }
+    return app;
+  }
+
+  for (const [name, posture] of [
+    ["no posture", undefined],
+    ["a forged insecure posture", { kind: "insecure-dev", nodeEnv: "development" }],
+  ] as const) {
+    it(`${name} → 401 on every protected route`, async () => {
+      const app = wire(posture);
+      for (const p of ["/api/v1/admin/freeze-status", "/api/v1/memory/abc", "/api/v1/state/abc"]) {
+        expect((await app.request(p)).status, p).toBe(401);
+      }
+    });
+  }
+
+  it("the minted insecure-dev posture → open (the explicit dev opt-in)", async () => {
+    const app = wire(INSECURE_DEV_POSTURE);
+    expect((await app.request("/api/v1/admin/freeze-status")).status).toBe(200);
   });
 });
 
@@ -85,10 +149,19 @@ describe("buildRelayConfigFromEnv (the production boot path) refuses a missing t
     );
   });
 
-  it("MOTEBIT_RELAY_INSECURE_NO_AUTH=1 → builds with the opt-in carried", () => {
-    const cfg = buildRelayConfigFromEnv({ ...base, MOTEBIT_RELAY_INSECURE_NO_AUTH: "1" }, DEPS);
-    expect(cfg.allowInsecureNoAuth).toBe(true);
+  it("MOTEBIT_RELAY_INSECURE_NO_AUTH=1 under NODE_ENV=development → builds with the opt-in carried", () => {
+    const cfg = buildRelayConfigFromEnv(
+      { ...base, MOTEBIT_RELAY_INSECURE_NO_AUTH: "1", NODE_ENV: "development" },
+      DEPS,
+    );
+    expect(isInsecureDevPosture(cfg.authPosture)).toBe(true);
     expect(cfg.apiToken).toBeUndefined();
+  });
+
+  it("the opt-in is refused with NODE_ENV unset (unset is production)", () => {
+    expect(() =>
+      buildRelayConfigFromEnv({ ...base, MOTEBIT_RELAY_INSECURE_NO_AUTH: "1" }, DEPS),
+    ).toThrow(/NODE_ENV/);
   });
 
   it("the opt-in is refused under NODE_ENV=production", () => {
@@ -97,13 +170,13 @@ describe("buildRelayConfigFromEnv (the production boot path) refuses a missing t
         { ...base, MOTEBIT_RELAY_INSECURE_NO_AUTH: "1", NODE_ENV: "production" },
         DEPS,
       ),
-    ).toThrow(/production/);
+    ).toThrow(/NODE_ENV="production"/);
   });
 
   it("a configured token builds with the opt-in off", () => {
     const cfg = buildRelayConfigFromEnv({ ...base, MOTEBIT_API_TOKEN: "t" }, DEPS);
     expect(cfg.apiToken).toBe("t");
-    expect(cfg.allowInsecureNoAuth).toBe(false);
+    expect(isInsecureDevPosture(cfg.authPosture)).toBe(false);
   });
 });
 

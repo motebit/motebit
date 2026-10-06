@@ -31,7 +31,7 @@ import {
   type RelayRouteAudience,
   type TokenAudience,
 } from "@motebit/protocol";
-import { createTestRelay, createAgent } from "./test-helpers.js";
+import { INSECURE_DEV_POSTURE, createTestRelay, createAgent } from "./test-helpers.js";
 
 // Minting a proxy token requires the debit secret (subscriptions.ts): a token
 // whose debits could never land is never issued.
@@ -205,7 +205,7 @@ describe("HEAD is authenticated as its GET (#836)", () => {
       beforeEach(async () => {
         relay = master
           ? await createTestRelay()
-          : await createTestRelay({ apiToken: undefined, allowInsecureNoAuth: true });
+          : await createTestRelay({ apiToken: undefined, authPosture: INSECURE_DEV_POSTURE });
       });
       afterEach(async () => {
         await relay.close();
@@ -260,7 +260,10 @@ describe("HEAD is authenticated as its GET (#836)", () => {
   it.each(["balance", "settlements", "withdrawals"])(
     "the #836 cells: admin:query on HEAD /%s is refused (no-master relay)",
     async (sub) => {
-      const relay = await createTestRelay({ apiToken: undefined, allowInsecureNoAuth: true });
+      const relay = await createTestRelay({
+        apiToken: undefined,
+        authPosture: INSECURE_DEV_POSTURE,
+      });
       try {
         const a = await seedAgent(relay);
         expect(

@@ -34,6 +34,7 @@ import {
   walletOf,
   JSON_AUTH,
   type FakePaymentChain,
+  INSECURE_DEV_POSTURE,
 } from "./test-helpers.js";
 import { toMicro } from "../accounts.js";
 import { mayDiscloseAdmittedTask } from "../tasks.js";
@@ -706,7 +707,7 @@ describe("#918 round 2: a proof is admissible only from its payer", () => {
     await relay.close();
     relay = await createTestRelay({
       apiToken: undefined,
-      allowInsecureNoAuth: true,
+      authPosture: INSECURE_DEV_POSTURE,
       p2pPaymentChain: chain,
     });
     const victim = await newAgent();

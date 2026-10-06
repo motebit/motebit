@@ -33,11 +33,11 @@ This starts the relay on `http://localhost:3000` with hot reload via `tsx watch`
 
 ### What the environment variables do
 
-| Variable                         | Purpose                                                                                                                               | Local value                                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| `MOTEBIT_API_TOKEN`              | Master/admin token for authenticated endpoints                                                                                        | Any string (e.g. `test-token`)                |
-| `MOTEBIT_RELAY_INSECURE_NO_AUTH` | Optional: `1` starts with no master token, leaving every master-token route open (warns at boot; refused under `NODE_ENV=production`) | Leave unset                                   |
-| `X402_PAY_TO_ADDRESS`            | Wallet address for x402 payment settlement                                                                                            | Use the zero address to disable real payments |
+| Variable                         | Purpose                                                                                                                                                                  | Local value                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| `MOTEBIT_API_TOKEN`              | Master/admin token for authenticated endpoints                                                                                                                           | Any string (e.g. `test-token`)                |
+| `MOTEBIT_RELAY_INSECURE_NO_AUTH` | Optional: `1` starts with no master token, leaving every master-token route open (warns at boot). Honoured only with `NODE_ENV=development` or `test`; refused otherwise | Leave unset                                   |
+| `X402_PAY_TO_ADDRESS`            | Wallet address for x402 payment settlement                                                                                                                               | Use the zero address to disable real payments |
 
 The relay creates an in-memory SQLite database by default (no `MOTEBIT_DB_PATH`), which is fine for testing — data resets on restart. Set `MOTEBIT_DB_PATH=./relay.db` if you want persistence across restarts.
 

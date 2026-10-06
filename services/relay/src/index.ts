@@ -67,6 +67,7 @@
  */
 
 import { createNodeWebSocket } from "@hono/node-ws";
+import { isInsecureDevPosture, type RelayAuthPosture } from "./auth-posture.js";
 import { Hono } from "hono";
 import { EventStore } from "@motebit/event-log";
 import { IdentityManager } from "@motebit/core-identity";
@@ -222,6 +223,15 @@ import { gatePaymentChainOnNetwork, paymentChainFromEnv } from "./p2p-payer.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
 
+export {
+  resolveRelayAuthPosture,
+  isInsecureDevPosture,
+  RelayAuthRefusal,
+  type RelayAuthPosture,
+  type RelayTokenPosture,
+  type RelayInsecureDevPosture,
+  type ResolveRelayAuthPostureOptions,
+} from "./auth-posture.js";
 export { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 export type { TokenPayload } from "./auth.js";
 export type { ConnectedDevice } from "./websocket.js";
@@ -502,20 +512,22 @@ export function refundExhaustedForward(
 export interface SyncRelayConfig {
   dbPath?: string;
   /**
-   * The operator's master token (`MOTEBIT_API_TOKEN`). REQUIRED: every
-   * master-token gate is installed from it, so a relay built without it would
-   * serve the admin, export and sync surfaces unauthenticated.
-   * `createSyncRelay` throws when it is missing or blank, unless
-   * `allowInsecureNoAuth` is set.
+   * The operator's master token (`MOTEBIT_API_TOKEN`). REQUIRED unless
+   * `authPosture` carries one or is the minted insecure-dev posture: every
+   * master-token gate is installed from it. `createSyncRelay` throws without
+   * one, and a hand-wired middleware with no token installs SEALED gates
+   * (401), never open ones (auth-posture.ts `masterGateToken`).
    */
   apiToken?: string;
   /**
-   * Local-development opt-in (`MOTEBIT_RELAY_INSECURE_NO_AUTH=1`): construct a
-   * relay with NO master token, which leaves every master-token route open.
-   * Logged as a warning at boot; refused under `NODE_ENV=production` by the
-   * env builder. Ignored when a token is configured.
+   * The posture `resolveRelayAuthPosture(env)` decided — the ONE decision
+   * every entry point (server.ts, library embedders, `motebit relay up`)
+   * makes. A `token` posture supplies the token when `apiToken` is unset.
+   * Only the insecure-dev posture it MINTS (opt-in + NODE_ENV development /
+   * test) lets a relay run with the master-token routes open; a hand-built
+   * object or a bare boolean never does.
    */
-  allowInsecureNoAuth?: boolean;
+  authPosture?: RelayAuthPosture;
   corsOrigin?: string;
   enableDeviceAuth?: boolean; // When true, validates per-device tokens (default: true)
   /**
@@ -836,36 +848,47 @@ function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
 
 /**
  * The master token is a boot requirement, not a mode (fail-closed config).
- * Throws unless a non-blank token is configured or the relay was explicitly
- * built open with `allowInsecureNoAuth`, which is announced at warn level.
+ * Returns the token every master-token gate is installed from, or
+ * `undefined` ONLY for an insecure-dev posture minted by
+ * `resolveRelayAuthPosture` (announced at warn level). Throws otherwise.
  */
 export function assertMasterTokenConfigured(
-  config: Pick<SyncRelayConfig, "apiToken" | "allowInsecureNoAuth">,
-): void {
-  if (config.apiToken != null && config.apiToken.trim() !== "") return;
-  if (config.allowInsecureNoAuth === true) {
+  config: Pick<SyncRelayConfig, "apiToken" | "authPosture">,
+): string | undefined {
+  if (config.apiToken != null && config.apiToken.trim() !== "") return config.apiToken;
+  const posture: unknown = config.authPosture;
+  if (
+    typeof posture === "object" &&
+    posture !== null &&
+    (posture as { kind?: unknown }).kind === "token" &&
+    typeof (posture as { token?: unknown }).token === "string" &&
+    (posture as { token: string }).token.trim() !== ""
+  ) {
+    return (posture as { token: string }).token;
+  }
+  if (isInsecureDevPosture(posture)) {
     createLogger({ service: "relay" }).warn("relay.insecure_no_auth", {
       reason:
         "MOTEBIT_RELAY_INSECURE_NO_AUTH is set and no MOTEBIT_API_TOKEN is configured: " +
         "every master-token route (admin, state/memory/audit export, sync) is UNAUTHENTICATED. " +
-        "Local development only.",
+        `Local development only (NODE_ENV=${posture.nodeEnv}).`,
     });
-    return;
+    return undefined;
   }
   throw new Error(
     "MOTEBIT_API_TOKEN is required: the relay refuses to start without a master token, " +
       "because every admin, export and sync route is gated by it. Set MOTEBIT_API_TOKEN " +
       "(config `apiToken`) to a non-empty secret. For local development only, " +
-      "MOTEBIT_RELAY_INSECURE_NO_AUTH=1 (config `allowInsecureNoAuth: true`) starts the " +
-      "relay with those routes open.",
+      "MOTEBIT_RELAY_INSECURE_NO_AUTH=1 with NODE_ENV=development (config `authPosture` from " +
+      "`resolveRelayAuthPosture`) starts the relay with those routes open.",
   );
 }
 
 export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRelay> {
-  assertMasterTokenConfigured(config);
+  const apiToken = assertMasterTokenConfigured(config);
   const {
     dbPath = ":memory:",
-    apiToken,
+    authPosture,
     corsOrigin = "*",
     enableDeviceAuth = true,
     allowPrivateEndpoints = parseBoolEnv("MOTEBIT_ALLOW_PRIVATE_ENDPOINTS", false),
@@ -1250,6 +1273,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const { allLimiters, wsLimiter } = registerMiddleware({
     app,
     apiToken,
+    authPosture,
     corsOrigin,
     enableDeviceAuth,
     identityManager,
@@ -1555,6 +1579,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerAuthMiddleware({
     app,
     apiToken,
+    authPosture,
     corsOrigin,
     enableDeviceAuth,
     identityManager,

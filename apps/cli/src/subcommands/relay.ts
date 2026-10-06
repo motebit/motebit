@@ -65,7 +65,12 @@
 import * as fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { serve } from "@hono/node-server";
-import { createSyncRelay, type SyncRelayConfig } from "@motebit/relay";
+import {
+  createSyncRelay,
+  resolveRelayAuthPosture,
+  type RelayAuthPosture,
+  type SyncRelayConfig,
+} from "@motebit/relay";
 import type { CliConfig } from "../args.js";
 import { RELAY_DIR, RELAY_DB_PATH } from "../config.js";
 import { mkdirOwnerOnly, narrowOnLoad } from "../durable-file.js";
@@ -90,10 +95,10 @@ export interface RelayCliOptions {
   federationUrl: string | undefined;
   passphrase: string | undefined;
   corsOrigin: string;
-  /** The relay's master token; `undefined` only with `insecureNoAuth`. */
+  /** The relay's master token; `undefined` only for the insecure-dev posture. */
   apiToken: string | undefined;
-  /** `MOTEBIT_RELAY_INSECURE_NO_AUTH=1`: run with the master-token routes open. */
-  insecureNoAuth: boolean;
+  /** The posture the relay's `resolveRelayAuthPosture` decided. */
+  authPosture: RelayAuthPosture;
   /** Where the token came from, for the boot banner. */
   apiTokenSource?: RelayApiTokenSource;
 }
@@ -117,7 +122,7 @@ export function buildRelayConfig(opts: RelayCliOptions): SyncRelayConfig {
   return {
     dbPath: opts.dbPath,
     apiToken: opts.apiToken,
-    allowInsecureNoAuth: opts.insecureNoAuth,
+    authPosture: opts.authPosture,
     corsOrigin: opts.corsOrigin,
     x402: {
       payToAddress: opts.payToAddress ?? "",
@@ -192,30 +197,46 @@ export function relayApiTokenPath(dbPath: string): string {
 }
 
 /**
- * The relay's master token. A relay refuses to start without one, because
- * every admin, export and sync route is gated by it — and `relay up` binds a
- * real port. Precedence: `MOTEBIT_API_TOKEN`; else the token kept beside the
- * database (generated on first boot, owner-only, so the one-liner still needs
- * no setup); `MOTEBIT_RELAY_INSECURE_NO_AUTH=1` with no `MOTEBIT_API_TOKEN` is
- * the only way to run with those routes open. An in-memory database gets a
- * token for this run only.
+ * The relay's master token, decided by the relay's own
+ * `resolveRelayAuthPosture` — the ONE auth decision every entry point makes,
+ * so `relay up` can never boot a relay `server.ts` would refuse. A relay
+ * refuses to start without a token, because every admin, export and sync
+ * route is gated by it — and `relay up` binds a real port. Precedence:
+ * `MOTEBIT_API_TOKEN`; else (no opt-in requested) the token kept beside the
+ * database (generated on first boot, owner-only, so the one-liner still
+ * needs no setup); `MOTEBIT_RELAY_INSECURE_NO_AUTH=1` with no
+ * `MOTEBIT_API_TOKEN` runs with those routes open ONLY under NODE_ENV
+ * `development` or `test`, and is refused under any other NODE_ENV (unset
+ * included). An in-memory database gets a token for this run only.
  */
 export function resolveRelayApiToken(
   dbPath: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
-): { apiToken: string | undefined; insecureNoAuth: boolean; source: RelayApiTokenSource } {
-  const fromEnv = env["MOTEBIT_API_TOKEN"]?.trim();
-  if (fromEnv != null && fromEnv !== "") {
-    return { apiToken: fromEnv, insecureNoAuth: false, source: "env" };
+): { apiToken: string | undefined; authPosture: RelayAuthPosture; source: RelayApiTokenSource } {
+  let fallbackSource: RelayApiTokenSource = "file";
+  const authPosture = resolveRelayAuthPosture(env, {
+    fallbackToken: () => {
+      const fallback = relayTokenFromFile(dbPath);
+      fallbackSource = fallback.source;
+      return fallback.token;
+    },
+  });
+  if (authPosture.kind === "insecure-dev") {
+    return { apiToken: undefined, authPosture, source: "insecure" };
   }
-  const insecure = env["MOTEBIT_RELAY_INSECURE_NO_AUTH"]?.trim().toLowerCase();
-  if (insecure === "1" || insecure === "true" || insecure === "yes" || insecure === "on") {
-    return { apiToken: undefined, insecureNoAuth: true, source: "insecure" };
-  }
+  return {
+    apiToken: authPosture.token,
+    authPosture,
+    source: authPosture.source === "env" ? "env" : fallbackSource,
+  };
+}
+
+function relayTokenFromFile(dbPath: string): {
+  token: string;
+  source: "ephemeral" | "generated" | "file";
+} {
   const fresh = randomBytes(32).toString("hex");
-  if (dbPath === ":memory:") {
-    return { apiToken: fresh, insecureNoAuth: false, source: "ephemeral" };
-  }
+  if (dbPath === ":memory:") return { token: fresh, source: "ephemeral" };
   const file = relayApiTokenPath(dbPath);
   try {
     const fd = fs.openSync(file, "wx", 0o600);
@@ -225,7 +246,7 @@ export function resolveRelayApiToken(
     } finally {
       fs.closeSync(fd);
     }
-    return { apiToken: fresh, insecureNoAuth: false, source: "generated" };
+    return { token: fresh, source: "generated" };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
   }
@@ -236,7 +257,7 @@ export function resolveRelayApiToken(
       `The relay's token file ${file} is empty. Delete it to generate a new token, or set MOTEBIT_API_TOKEN.`,
     );
   }
-  return { apiToken: stored, insecureNoAuth: false, source: "file" };
+  return { token: stored, source: "file" };
 }
 
 async function resolveOptions(config: CliConfig): Promise<RelayCliOptions> {
@@ -262,7 +283,7 @@ async function resolveOptions(config: CliConfig): Promise<RelayCliOptions> {
     port,
     dbPath,
     apiToken: auth.apiToken,
-    insecureNoAuth: auth.insecureNoAuth,
+    authPosture: auth.authPosture,
     apiTokenSource: auth.source,
     payToAddress: payToAddress === "" ? undefined : payToAddress,
     network,
@@ -324,7 +345,7 @@ function printAuthLine(opts: RelayCliOptions): void {
   switch (opts.apiTokenSource) {
     case "insecure":
       console.log(
-        `  ${dim("—")} auth     ${bold("OPEN")} ${dim("(MOTEBIT_RELAY_INSECURE_NO_AUTH=1 — admin, export and sync routes are unauthenticated; local development only)")}`,
+        `  ${dim("—")} auth     ${bold("OPEN")} ${dim("(MOTEBIT_RELAY_INSECURE_NO_AUTH=1, NODE_ENV=development — admin, export and sync routes are unauthenticated; local development only)")}`,
       );
       return;
     case "env":
