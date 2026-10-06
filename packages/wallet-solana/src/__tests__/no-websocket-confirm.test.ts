@@ -108,11 +108,33 @@ function isSplTokenSpecifier(node: ts.Node | undefined): boolean {
 }
 
 /**
+ * A spl-token string the static checks above already own: the specifier of an
+ * `import`/`export … from` (named bindings checked against the allowlist), of
+ * an `import x = require(…)` (refused unless type-only), or of a type-position
+ * `import("…")` (`typeof import(…)`, `import(…).Account` — no runtime load).
+ */
+function isCheckedSpecifierPosition(node: ts.Node): boolean {
+  const p = node.parent;
+  return (
+    ((ts.isImportDeclaration(p) || ts.isExportDeclaration(p)) && p.moduleSpecifier === node) ||
+    ts.isExternalModuleReference(p) ||
+    (ts.isLiteralTypeNode(p) && ts.isImportTypeNode(p.parent))
+  );
+}
+
+/**
  * Every value import of `@solana/spl-token` in `source` that is not allowlisted:
  * named imports and `export … from` re-exports are checked name by name
- * (type-only ones skipped); a default, namespace, `export *`, `import =
- * require`, dynamic `import()` or `require()` is refused outright, since its
- * member accesses cannot be checked statically.
+ * (type-only ones skipped); a default, namespace, `export *` or `import =
+ * require` is refused outright, since its member accesses cannot be checked
+ * statically.
+ *
+ * Deny by default: EVERY other string or no-substitution template literal
+ * naming the package (or a subpath) is refused wherever it appears — `require`,
+ * `createRequire(…)(…)`, an aliased `require`, dynamic `import()`, any wrapper
+ * taking the name as a literal — so a new call shape needs no new case.
+ * Residual: a specifier assembled at runtime (concatenation, a substitution, a
+ * value read from config) cannot be seen statically.
  */
 function findForbiddenSplTokenImports(
   source: string,
@@ -156,15 +178,17 @@ function findForbiddenSplTokenImports(
       isSplTokenSpecifier(node.moduleReference.expression)
     ) {
       hit(node, "import = require");
-    } else if (
-      ts.isCallExpression(node) &&
-      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
-      isSplTokenSpecifier(node.arguments[0])
-    ) {
+    } else if (isSplTokenSpecifier(node) && !isCheckedSpecifierPosition(node)) {
+      const call = node.parent;
       hit(
         node,
-        node.expression.kind === ts.SyntaxKind.ImportKeyword ? "dynamic import" : "require",
+        ts.isCallExpression(call) && call.expression.kind === ts.SyntaxKind.ImportKeyword
+          ? "dynamic import"
+          : ts.isCallExpression(call) &&
+              ts.isIdentifier(call.expression) &&
+              call.expression.text === "require"
+            ? "require"
+            : "module name literal",
       );
     }
     ts.forEachChild(node, visit);
@@ -280,6 +304,14 @@ describe("findForbiddenSplTokenImports (the matcher)", () => {
     ["a re-export", 'export { transfer } from "@solana/spl-token";'],
     ["an export *", 'export * from "@solana/spl-token";'],
     ["a subpath", 'import { burnChecked } from "@solana/spl-token/lib/esm/index.js";'],
+    [
+      "a createRequire",
+      'const req = createRequire(import.meta.url);\nconst t = req("@solana/spl-token").transfer;',
+    ],
+    ["an aliased require", 'const r = require;\nr("@solana/spl-token");', "x.cjs"],
+    ["a wrapper call", 'const spl = await load("@solana/spl-token");'],
+    ["a template literal specifier", "const spl = await import(`@solana/spl-token`);"],
+    ["a subpath in a bare string", 'const name = "@solana/spl-token/lib/cjs/index.js";'],
   ];
   for (const [label, src, file] of flagged) {
     it(`flags ${label}`, () => {
@@ -296,6 +328,9 @@ describe("findForbiddenSplTokenImports (the matcher)", () => {
     ["an allowed re-export", 'export { createTransferInstruction } from "@solana/spl-token";'],
     ["another package", 'import { transfer } from "./transfer.js";'],
     ["a type query", 'type T = typeof import("@solana/spl-token");'],
+    ["an import type position", 'let a: import("@solana/spl-token").Account;'],
+    ["a type-only import = require", 'import type spl = require("@solana/spl-token");'],
+    ["a longer package name", 'const n = "@solana/spl-token-registry";'],
   ];
   for (const [label, src] of clean) {
     it(`does not flag ${label}`, () => {
