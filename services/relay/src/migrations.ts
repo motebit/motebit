@@ -2621,4 +2621,29 @@ export const relayMigrations: Migration[] = [
       logger.info("migration.allocation_escrow_chokepoint", result);
     },
   },
+  {
+    version: 56,
+    name: "event_ingress_redaction_flag",
+    up: (db) => {
+      // The sync hold receipt's `redacted` flag is a property of the STORED
+      // ROW (`sync-hold-receipt.ts`, spec/sync-hold-receipt-v1.md §4.4). Most
+      // ingress redactions leave `redacted: true` in the stored payload, but
+      // the consolidation-manifest strip leaves nothing, so the relay records
+      // the fact in the same INSERT that stores the bytes
+      // (`appendBoundEvent`). Existing rows get NULL — unknown — never a
+      // backfilled guess: a row whose status its bytes cannot decide is left
+      // out of every receipt. Additive column; never served.
+      //
+      // The events table belongs to @motebit/persistence's schema, created at
+      // boot before relay migrations run (index.ts).
+      const hasEvents = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+        .get() as { name: string } | undefined;
+      if (!hasEvents) return;
+      const cols = db.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "relay_ingress_redacted")) {
+        db.exec("ALTER TABLE events ADD COLUMN relay_ingress_redacted INTEGER");
+      }
+    },
+  },
 ];

@@ -284,6 +284,14 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Standard:** novel.
 - **Forbidden synonyms:** stake (in normative text — it is not slashable), collateral, escrow, deposit.
 
+### 6.10 SyncHoldReceipt
+
+- **Definition:** a relay-signed record of which synced event ids the relay stores for one identity. Each entry carries a digest of the entry as the relay holds and serves it, and a `redacted` flag. The receipt echoes the client's request nonce; on a pull page it also covers the page's seq range. Subject = signer (the relay records its own act of holding), so it is in the receipt family. Companion types: `SyncHeldEvent`, `SyncHoldPage`.
+- **Layer:** protocol (`SyncHoldReceipt`, `SyncHeldEvent`, `SyncHoldPage`), crypto (`signSyncHoldReceipt`, `verifySyncHoldReceipt`, `computeSyncEventDigest`).
+- **Wire:** `spec/schemas/sync-hold-receipt-v1.json`; spec id `motebit/sync-hold-receipt@1.0`. See [`sync-hold-receipt-v1.md`](sync-hold-receipt-v1.md).
+- **Standard:** novel.
+- **Forbidden synonyms:** ack, sync attestation, storage proof.
+
 ## 7. Settlement
 
 ### 7.1 SettlementMode
