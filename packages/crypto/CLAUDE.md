@@ -4,7 +4,7 @@ Sign and verify every Motebit artifact. Apache-2.0 (permissive floor), Layer 0, 
 
 ## Rules
 
-1. **`src/suite-dispatch.ts` is the ONLY file permitted to call `@noble/ed25519` primitives directly.** `check-suite-dispatch` enforces this across `packages/crypto/`, `services/`, and `apps/`. Every verifier routes through `verifyBySuite`.
+1. **`src/suite-dispatch.ts` is the ONLY file permitted to call `@noble/ed25519` primitives directly.** `check-suite-dispatch` enforces this across every source file under `packages/`, `apps/`, and `services/` — direct noble Ed25519 calls and Ed25519 via WebCrypto (`crypto.subtle`) alike — with a reasoned, count-exact waiver list for the pre-existing callers (stale waivers fail). Every verifier routes through `verifyBySuite`.
 2. **Explicit escape hatches use a named waiver.** `// crypto-suite: intentional-primitive-call` on the same line exempts a single call (reviewer-gated). Don't waive broadly.
 3. **Missing or unknown `suite` values are rejected fail-closed.** No legacy-no-suite acceptance path. Adding a new suite means a new `SuiteId` entry in `@motebit/protocol` and a new dispatch arm here.
 4. **Self-verification is the contract.** A third party must be able to verify any Motebit artifact (identity file, execution receipt, credential, credential anchor, revocation, succession) with only this package and the signer's public key. No relay contact, no external system required.

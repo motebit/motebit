@@ -701,7 +701,27 @@ ProbeArtifact {
   {
     script: "check-suite-dispatch",
     proves:
-      "flags a direct @noble/ed25519 primitive call outside packages/crypto/src/suite-dispatch.ts (scope: packages/crypto/src/, services/, apps/)",
+      'flags an Ed25519 verify through WebCrypto (`crypto.subtle.verify({ name: "Ed25519" }, …)`) outside packages/crypto/src/suite-dispatch.ts — before, the gate matched only noble calls and scanned only part of packages/, so a WebCrypto Ed25519 caller in packages/runtime stayed green. The algorithm argument is resolved on the AST; ECDSA/RSA WebCrypto (hardware leaves) is not flagged. writeFixture-and-delete (no real file mutated).',
+    perturb: () =>
+      writeFixture(
+        `packages/runtime/src/${PROBE_PREFIX}webcrypto_ed25519.ts`,
+        'export async function probe(key: CryptoKey, sig: Uint8Array, data: Uint8Array): Promise<boolean> {\n  return crypto.subtle.verify({ name: "Ed25519" }, key, sig as BufferSource, data as BufferSource);\n}\n',
+      ),
+  },
+  {
+    script: "check-suite-dispatch",
+    proves:
+      'flags a NAMED @noble/ed25519 import used outside the dispatcher in a package the old scope never read (packages/runtime) — `import { verifyAsync } from "@noble/ed25519"`. writeFixture-and-delete (no real file mutated).',
+    perturb: () =>
+      writeFixture(
+        `packages/runtime/src/${PROBE_PREFIX}noble_ed25519.ts`,
+        'import { verifyAsync } from "@noble/ed25519";\nexport const probe = (sig: Uint8Array, msg: Uint8Array, pub: Uint8Array): Promise<boolean> =>\n  verifyAsync(sig, msg, pub);\n',
+      ),
+  },
+  {
+    script: "check-suite-dispatch",
+    proves:
+      "flags a direct @noble/ed25519 primitive call outside packages/crypto/src/suite-dispatch.ts (scope: packages/, apps/, services/)",
     perturb: () =>
       writeFixture(
         // Any .ts under packages/crypto/src/ (outside suite-dispatch.ts) that
