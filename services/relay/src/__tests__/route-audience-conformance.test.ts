@@ -203,7 +203,9 @@ describe("HEAD is authenticated as its GET (#836)", () => {
     describe(master ? "master-token relay" : "relay with no master token", () => {
       let relay: SyncRelay;
       beforeEach(async () => {
-        relay = master ? await createTestRelay() : await createTestRelay({ apiToken: undefined });
+        relay = master
+          ? await createTestRelay()
+          : await createTestRelay({ apiToken: undefined, allowInsecureNoAuth: true });
       });
       afterEach(async () => {
         await relay.close();
@@ -258,7 +260,7 @@ describe("HEAD is authenticated as its GET (#836)", () => {
   it.each(["balance", "settlements", "withdrawals"])(
     "the #836 cells: admin:query on HEAD /%s is refused (no-master relay)",
     async (sub) => {
-      const relay = await createTestRelay({ apiToken: undefined });
+      const relay = await createTestRelay({ apiToken: undefined, allowInsecureNoAuth: true });
       try {
         const a = await seedAgent(relay);
         expect(

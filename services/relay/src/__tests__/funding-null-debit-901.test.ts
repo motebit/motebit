@@ -675,7 +675,11 @@ describe("#901 round 3: each request is charged its own quote", () => {
 describe("#901 round 3: the gate reads the VERIFIED caller, never a re-parse of the bearer", () => {
   it("relay without apiToken + a forged bearer naming a broken payer: the funded path agent is debited once, x402 never settles (no double charge)", async () => {
     await relay.close();
-    relay = await createTestRelay({ enableDeviceAuth: false, apiToken: "" });
+    relay = await createTestRelay({
+      enableDeviceAuth: false,
+      apiToken: "",
+      allowInsecureNoAuth: true,
+    });
     // The listing route needs auth this relay doesn't mount; seed the same
     // priced listing directly (pricedWorker's shape, with a payTo).
     const worker = await newAgent();

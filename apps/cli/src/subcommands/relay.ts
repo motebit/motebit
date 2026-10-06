@@ -63,6 +63,7 @@
  */
 
 import * as fs from "node:fs";
+import { randomBytes } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { createSyncRelay, type SyncRelayConfig } from "@motebit/relay";
 import type { CliConfig } from "../args.js";
@@ -89,6 +90,12 @@ export interface RelayCliOptions {
   federationUrl: string | undefined;
   passphrase: string | undefined;
   corsOrigin: string;
+  /** The relay's master token; `undefined` only with `insecureNoAuth`. */
+  apiToken: string | undefined;
+  /** `MOTEBIT_RELAY_INSECURE_NO_AUTH=1`: run with the master-token routes open. */
+  insecureNoAuth: boolean;
+  /** Where the token came from, for the boot banner. */
+  apiTokenSource?: RelayApiTokenSource;
 }
 
 /**
@@ -109,6 +116,8 @@ export interface RelayCliOptions {
 export function buildRelayConfig(opts: RelayCliOptions): SyncRelayConfig {
   return {
     dbPath: opts.dbPath,
+    apiToken: opts.apiToken,
+    allowInsecureNoAuth: opts.insecureNoAuth,
     corsOrigin: opts.corsOrigin,
     x402: {
       payToAddress: opts.payToAddress ?? "",
@@ -175,6 +184,61 @@ export function secureRelayDbFiles(dbPath: string): void {
   }
 }
 
+export type RelayApiTokenSource = "env" | "file" | "generated" | "ephemeral" | "insecure";
+
+/** The owner-only file `relay up` keeps its master token in, beside the database. */
+export function relayApiTokenPath(dbPath: string): string {
+  return `${dbPath}.api-token`;
+}
+
+/**
+ * The relay's master token. A relay refuses to start without one, because
+ * every admin, export and sync route is gated by it — and `relay up` binds a
+ * real port. Precedence: `MOTEBIT_API_TOKEN`; else the token kept beside the
+ * database (generated on first boot, owner-only, so the one-liner still needs
+ * no setup); `MOTEBIT_RELAY_INSECURE_NO_AUTH=1` with no `MOTEBIT_API_TOKEN` is
+ * the only way to run with those routes open. An in-memory database gets a
+ * token for this run only.
+ */
+export function resolveRelayApiToken(
+  dbPath: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): { apiToken: string | undefined; insecureNoAuth: boolean; source: RelayApiTokenSource } {
+  const fromEnv = env["MOTEBIT_API_TOKEN"]?.trim();
+  if (fromEnv != null && fromEnv !== "") {
+    return { apiToken: fromEnv, insecureNoAuth: false, source: "env" };
+  }
+  const insecure = env["MOTEBIT_RELAY_INSECURE_NO_AUTH"]?.trim().toLowerCase();
+  if (insecure === "1" || insecure === "true" || insecure === "yes" || insecure === "on") {
+    return { apiToken: undefined, insecureNoAuth: true, source: "insecure" };
+  }
+  const fresh = randomBytes(32).toString("hex");
+  if (dbPath === ":memory:") {
+    return { apiToken: fresh, insecureNoAuth: false, source: "ephemeral" };
+  }
+  const file = relayApiTokenPath(dbPath);
+  try {
+    const fd = fs.openSync(file, "wx", 0o600);
+    try {
+      fs.writeFileSync(fd, `${fresh}\n`, "utf-8");
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    return { apiToken: fresh, insecureNoAuth: false, source: "generated" };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+  }
+  narrowOnLoad(file);
+  const stored = fs.readFileSync(file, "utf-8").trim();
+  if (stored === "") {
+    throw new Error(
+      `The relay's token file ${file} is empty. Delete it to generate a new token, or set MOTEBIT_API_TOKEN.`,
+    );
+  }
+  return { apiToken: stored, insecureNoAuth: false, source: "file" };
+}
+
 async function resolveOptions(config: CliConfig): Promise<RelayCliOptions> {
   const port = parsePort(config.port) ?? DEFAULT_PORT;
   const dbPath = resolveRelayDbPath(config.dbPath);
@@ -192,9 +256,14 @@ async function resolveOptions(config: CliConfig): Promise<RelayCliOptions> {
     if (passphrase === "") passphrase = undefined;
   }
 
+  const auth = resolveRelayApiToken(dbPath);
+
   return {
     port,
     dbPath,
+    apiToken: auth.apiToken,
+    insecureNoAuth: auth.insecureNoAuth,
+    apiTokenSource: auth.source,
     payToAddress: payToAddress === "" ? undefined : payToAddress,
     network,
     facilitatorUrl: facilitatorUrl === "" ? undefined : facilitatorUrl,
@@ -223,6 +292,7 @@ function printStartBanner(opts: RelayCliOptions): void {
   console.log(`  ${bold("motebit relay up")}`);
   console.log(`  ${dim("—")} port     ${String(opts.port)}`);
   console.log(`  ${dim("—")} db       ${opts.dbPath}`);
+  printAuthLine(opts);
   console.log(
     `  ${dim("—")} network  ${opts.network}${isTestnetNetwork(opts.network) ? dim(" (testnet)") : ""}`,
   );
@@ -248,6 +318,30 @@ function printStartBanner(opts: RelayCliOptions): void {
     console.log(`  ${dim("—")} key      ${success("encrypted (AES-GCM + PBKDF2-600K)")}`);
   }
   console.log();
+}
+
+function printAuthLine(opts: RelayCliOptions): void {
+  switch (opts.apiTokenSource) {
+    case "insecure":
+      console.log(
+        `  ${dim("—")} auth     ${bold("OPEN")} ${dim("(MOTEBIT_RELAY_INSECURE_NO_AUTH=1 — admin, export and sync routes are unauthenticated; local development only)")}`,
+      );
+      return;
+    case "env":
+      console.log(
+        `  ${dim("—")} auth     ${success("master token")} ${dim("from MOTEBIT_API_TOKEN")}`,
+      );
+      return;
+    case "ephemeral":
+      console.log(
+        `  ${dim("—")} auth     ${success("master token")} ${dim("(this run only):")} ${opts.apiToken ?? ""}`,
+      );
+      return;
+    default:
+      console.log(
+        `  ${dim("—")} auth     ${success("master token")} ${dim(`in ${relayApiTokenPath(opts.dbPath)} (export MOTEBIT_API_TOKEN=$(cat <that file>) for operator commands)`)}`,
+      );
+  }
 }
 
 function printListeningBanner(port: number, relayMotebitId: string, did: string): void {

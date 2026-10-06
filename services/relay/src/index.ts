@@ -501,7 +501,21 @@ export function refundExhaustedForward(
 
 export interface SyncRelayConfig {
   dbPath?: string;
-  apiToken?: string; // Legacy single token (still supported as admin/master token)
+  /**
+   * The operator's master token (`MOTEBIT_API_TOKEN`). REQUIRED: every
+   * master-token gate is installed from it, so a relay built without it would
+   * serve the admin, export and sync surfaces unauthenticated.
+   * `createSyncRelay` throws when it is missing or blank, unless
+   * `allowInsecureNoAuth` is set.
+   */
+  apiToken?: string;
+  /**
+   * Local-development opt-in (`MOTEBIT_RELAY_INSECURE_NO_AUTH=1`): construct a
+   * relay with NO master token, which leaves every master-token route open.
+   * Logged as a warning at boot; refused under `NODE_ENV=production` by the
+   * env builder. Ignored when a token is configured.
+   */
+  allowInsecureNoAuth?: boolean;
   corsOrigin?: string;
   enableDeviceAuth?: boolean; // When true, validates per-device tokens (default: true)
   /**
@@ -820,7 +834,35 @@ function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
   });
 }
 
+/**
+ * The master token is a boot requirement, not a mode (fail-closed config).
+ * Throws unless a non-blank token is configured or the relay was explicitly
+ * built open with `allowInsecureNoAuth`, which is announced at warn level.
+ */
+export function assertMasterTokenConfigured(
+  config: Pick<SyncRelayConfig, "apiToken" | "allowInsecureNoAuth">,
+): void {
+  if (config.apiToken != null && config.apiToken.trim() !== "") return;
+  if (config.allowInsecureNoAuth === true) {
+    createLogger({ service: "relay" }).warn("relay.insecure_no_auth", {
+      reason:
+        "MOTEBIT_RELAY_INSECURE_NO_AUTH is set and no MOTEBIT_API_TOKEN is configured: " +
+        "every master-token route (admin, state/memory/audit export, sync) is UNAUTHENTICATED. " +
+        "Local development only.",
+    });
+    return;
+  }
+  throw new Error(
+    "MOTEBIT_API_TOKEN is required: the relay refuses to start without a master token, " +
+      "because every admin, export and sync route is gated by it. Set MOTEBIT_API_TOKEN " +
+      "(config `apiToken`) to a non-empty secret. For local development only, " +
+      "MOTEBIT_RELAY_INSECURE_NO_AUTH=1 (config `allowInsecureNoAuth: true`) starts the " +
+      "relay with those routes open.",
+  );
+}
+
 export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRelay> {
+  assertMasterTokenConfigured(config);
   const {
     dbPath = ":memory:",
     apiToken,

@@ -384,7 +384,7 @@ describe("#855 sibling: PUBLIC_AGENT_ROUTES is exact", () => {
 describe("#855 sibling: the agent door refuses every over-match with no token (relay with no master token)", () => {
   let relay: SyncRelay;
   beforeEach(async () => {
-    relay = await createTestRelay({ apiToken: undefined });
+    relay = await createTestRelay({ apiToken: undefined, allowInsecureNoAuth: true });
   });
   afterEach(async () => {
     await relay.close();

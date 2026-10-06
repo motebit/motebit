@@ -54,6 +54,8 @@ interface BaseOpts {
   federationUrl: string | undefined;
   passphrase: string | undefined;
   corsOrigin: string;
+  apiToken: string | undefined;
+  insecureNoAuth: boolean;
 }
 
 function baseOptions(overrides: Partial<BaseOpts> = {}): BaseOpts {
@@ -66,9 +68,62 @@ function baseOptions(overrides: Partial<BaseOpts> = {}): BaseOpts {
     federationUrl: undefined,
     passphrase: undefined,
     corsOrigin: "*",
+    apiToken: "relay-up-test-token",
+    insecureNoAuth: false,
     ...overrides,
   };
 }
+
+describe("relay up — the master token is never absent by default", () => {
+  // `motebit relay up` used to build its relay with no `apiToken` at all, so
+  // every master-token route (admin freeze, fee and withdrawal dashboards,
+  // memory/state/audit exports, sync) was open on the port it bound.
+  it("buildRelayConfig threads the token and the opt-in through", () => {
+    const cfg = mod.buildRelayConfig(baseOptions({ apiToken: "t0k" }));
+    expect(cfg.apiToken).toBe("t0k");
+    expect(cfg.allowInsecureNoAuth).toBe(false);
+    const open = mod.buildRelayConfig(baseOptions({ apiToken: undefined, insecureNoAuth: true }));
+    expect(open.apiToken).toBeUndefined();
+    expect(open.allowInsecureNoAuth).toBe(true);
+  });
+
+  it("MOTEBIT_API_TOKEN wins", () => {
+    const dir = fs.mkdtempSync(path.join(tmpHome, "tok-"));
+    const r = mod.resolveRelayApiToken(path.join(dir, "relay.db"), {
+      MOTEBIT_API_TOKEN: "env-tok",
+    });
+    expect(r).toEqual({ apiToken: "env-tok", insecureNoAuth: false, source: "env" });
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it("no token: generates one owner-only beside the database, and reuses it", () => {
+    const dir = fs.mkdtempSync(path.join(tmpHome, "tok-"));
+    const db = path.join(dir, "relay.db");
+    const first = mod.resolveRelayApiToken(db, {});
+    expect(first.source).toBe("generated");
+    expect(first.apiToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(first.insecureNoAuth).toBe(false);
+    const file = mod.relayApiTokenPath(db);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    const second = mod.resolveRelayApiToken(db, {});
+    expect(second).toEqual({ apiToken: first.apiToken, insecureNoAuth: false, source: "file" });
+  });
+
+  it("an empty MOTEBIT_API_TOKEN is not a token", () => {
+    const dir = fs.mkdtempSync(path.join(tmpHome, "tok-"));
+    const r = mod.resolveRelayApiToken(path.join(dir, "relay.db"), { MOTEBIT_API_TOKEN: "" });
+    expect(r.source).toBe("generated");
+  });
+
+  it("MOTEBIT_RELAY_INSECURE_NO_AUTH=1 is the only way to run it open", () => {
+    const dir = fs.mkdtempSync(path.join(tmpHome, "tok-"));
+    const r = mod.resolveRelayApiToken(path.join(dir, "relay.db"), {
+      MOTEBIT_RELAY_INSECURE_NO_AUTH: "1",
+    });
+    expect(r).toEqual({ apiToken: undefined, insecureNoAuth: true, source: "insecure" });
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+});
 
 describe("buildRelayConfig — design-answer invariants", () => {
   it("answer #2: omitted --pay-to-address maps to empty string (rail silently disabled)", () => {

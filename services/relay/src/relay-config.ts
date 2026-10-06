@@ -56,7 +56,9 @@ export interface RelayConfigRuntimeDeps {
  * port binding. `server.ts` is the only production caller; the effective-
  * config test drives it with crafted env maps.
  *
- * Throws `X402ConfigError`-shaped `Error` when the required
+ * Throws when `MOTEBIT_API_TOKEN` is missing or blank (unless the dev opt-in
+ * `MOTEBIT_RELAY_INSECURE_NO_AUTH` is set outside production), and an
+ * `X402ConfigError`-shaped `Error` when the required
  * `X402_PAY_TO_ADDRESS` is absent — the one config-validation invariant that
  * belongs in the pure builder (every task settlement flows through x402).
  */
@@ -66,6 +68,22 @@ export function buildRelayConfigFromEnv(
 ): SyncRelayConfig {
   if (env.X402_PAY_TO_ADDRESS == null || env.X402_PAY_TO_ADDRESS === "") {
     throw new Error("X402_PAY_TO_ADDRESS is required. Set it to the platform USDC wallet address.");
+  }
+  const allowInsecureNoAuth = parseBoolEnv("MOTEBIT_RELAY_INSECURE_NO_AUTH", false, env);
+  const tokenConfigured = env.MOTEBIT_API_TOKEN != null && env.MOTEBIT_API_TOKEN.trim() !== "";
+  if (!tokenConfigured) {
+    if (!allowInsecureNoAuth) {
+      throw new Error(
+        "MOTEBIT_API_TOKEN is required: the relay refuses to start without a master token. " +
+          "Set it to a non-empty secret (MOTEBIT_RELAY_INSECURE_NO_AUTH=1 opens the " +
+          "master-token routes for local development only).",
+      );
+    }
+    if (env.NODE_ENV === "production") {
+      throw new Error(
+        "MOTEBIT_RELAY_INSECURE_NO_AUTH is refused under NODE_ENV=production: set MOTEBIT_API_TOKEN.",
+      );
+    }
   }
   const x402: X402Config = {
     payToAddress: env.X402_PAY_TO_ADDRESS,
@@ -77,6 +95,9 @@ export function buildRelayConfigFromEnv(
   return {
     dbPath: env.MOTEBIT_DB_PATH,
     apiToken: env.MOTEBIT_API_TOKEN,
+    // The master token is required; this dev opt-in is the only way past it
+    // (and never under NODE_ENV=production — refused above).
+    allowInsecureNoAuth: tokenConfigured ? false : allowInsecureNoAuth,
     corsOrigin: env.MOTEBIT_CORS_ORIGIN,
     // Opt-out boolean (device auth): safe default ON — an operator disables it
     // explicitly. A shadowing literal here would silently drop device-token
@@ -234,6 +255,7 @@ export const SECURITY_BOUNDARY_DEFAULTS: readonly SecurityBoundaryDefault[] = [
  */
 export const MINIMAL_VALID_RELAY_ENV: EnvSource = {
   X402_PAY_TO_ADDRESS: "0x0000000000000000000000000000000000000000",
+  MOTEBIT_API_TOKEN: "minimal-valid-relay-env-token",
 };
 
 /**

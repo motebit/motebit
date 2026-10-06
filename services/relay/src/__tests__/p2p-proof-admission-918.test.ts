@@ -704,7 +704,11 @@ describe("#918 round 2: a proof is admissible only from its payer", () => {
 
   it("a relay with NO API token (the submit route authenticates nobody): an anonymous caller naming the payer in submitted_by is refused NOT_PAYER — never treated as the operator", async () => {
     await relay.close();
-    relay = await createTestRelay({ apiToken: undefined, p2pPaymentChain: chain });
+    relay = await createTestRelay({
+      apiToken: undefined,
+      allowInsecureNoAuth: true,
+      p2pPaymentChain: chain,
+    });
     const victim = await newAgent();
     const { worker, dispatched } = await pricedWorker();
     establishPair(victim.motebitId, worker.motebitId);

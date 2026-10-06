@@ -25,7 +25,7 @@ flyctl secrets set \
   MOTEBIT_DB_PATH="/data/motebit.db"
 ```
 
-`MOTEBIT_API_TOKEN` is the master token — gates admin endpoints and device registration. Generate with `openssl rand -hex 32` or similar.
+`MOTEBIT_API_TOKEN` is the master token — gates admin endpoints and device registration. Generate with `openssl rand -hex 32` or similar. The relay refuses to start when it is unset or empty (`MOTEBIT_API_TOKEN is required…` on stderr, exit 1): every master-token route is installed from it, so a relay without it would serve them unauthenticated.
 
 ### 3. Deploy
 
@@ -50,14 +50,15 @@ The workflow at `.github/workflows/deploy-sync.yml` auto-deploys on push to `mai
 
 ## Environment Variables
 
-| Variable                     | Required | Default      | Purpose                              |
-| ---------------------------- | -------- | ------------ | ------------------------------------ |
-| `PORT`                       | No       | `3000`       | HTTP/WS listen port                  |
-| `NODE_ENV`                   | No       | `production` | Runtime environment                  |
-| `MOTEBIT_DB_PATH`            | Yes      | `:memory:`   | SQLite database file path            |
-| `MOTEBIT_API_TOKEN`          | Yes      | —            | Master bearer token for admin routes |
-| `MOTEBIT_CORS_ORIGIN`        | No       | `*`          | CORS origin whitelist                |
-| `MOTEBIT_ENABLE_DEVICE_AUTH` | No       | `true`       | Require per-device signed tokens     |
+| Variable                         | Required | Default      | Purpose                                                                                                                                     |
+| -------------------------------- | -------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                           | No       | `3000`       | HTTP/WS listen port                                                                                                                         |
+| `NODE_ENV`                       | No       | `production` | Runtime environment                                                                                                                         |
+| `MOTEBIT_DB_PATH`                | Yes      | `:memory:`   | SQLite database file path                                                                                                                   |
+| `MOTEBIT_API_TOKEN`              | Yes      | —            | Master bearer token for admin routes; boot is refused without it                                                                            |
+| `MOTEBIT_RELAY_INSECURE_NO_AUTH` | No       | unset        | Local development only: `1` starts with no master token, every master-token route open (warns at boot; refused under `NODE_ENV=production`) |
+| `MOTEBIT_CORS_ORIGIN`            | No       | `*`          | CORS origin whitelist                                                                                                                       |
+| `MOTEBIT_ENABLE_DEVICE_AUTH`     | No       | `true`       | Require per-device signed tokens                                                                                                            |
 
 ## Architecture
 
