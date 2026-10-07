@@ -29,6 +29,8 @@
  *   stepResult   — a plan step's result (accumulated into later steps)
  *   planStep     — a plan step's prompt (derived by decomposition)
  *   approvalArgs — a pending approval's tool arguments
+ *   goalSummary  — a scheduled goal run's saved outcome summary (read by the next run)
+ *   subGoal      — a sub-goal prompt the model wrote during a Secret goal run
  *
  * Entry points (`ENTRY_POINTS`) — every runtime method that can reach a
  * provider. The static lock at the bottom enumerates every provider call
@@ -82,6 +84,9 @@ import {
   StepStatus,
 } from "@motebit/sdk";
 import type { InMemoryPlanStore } from "@motebit/planner";
+import { InMemoryPlanStore as InMemoryPlanStoreImpl, PlanEngine } from "@motebit/planner";
+import { createSubGoalDefinition } from "@motebit/tools/web-safe";
+import type { GoalRun } from "../index";
 import { generateKeypair } from "@motebit/encryption";
 import { findProviderSites } from "./provider-egress-lock";
 
@@ -101,6 +106,8 @@ const CANARY = {
   stepResult: "CNRYSTEPRESULT13",
   planStep: "CNRYPLANSTEP14",
   approvalArgs: "CNRYAPPROVAL15",
+  goalSummary: "CNRYGOALSUMMARY16",
+  subGoal: "CNRYSUBGOAL17",
 } as const;
 type CanaryKey = keyof typeof CANARY;
 const CANARY_KEYS = Object.keys(CANARY) as CanaryKey[];
@@ -235,6 +242,15 @@ function recordingProvider(
       });
     if (um.startsWith("You are a memory consolidation engine")) return plain('{"action":"add"}');
     if (um.startsWith("long")) return plain(LONG);
+    if (um.startsWith("You are executing a scheduled goal")) {
+      if (um.includes(CANARY.goal) && live && !history.includes("t-subgoal"))
+        return plain("", {
+          tool_calls: [
+            { id: "t-subgoal", name: "create_sub_goal", args: { prompt: `sub ${c("subGoal")}` } },
+          ],
+        });
+      return plain(`run done ${c("goalSummary")}`);
+    }
     return plain("ok");
   };
   return {
@@ -403,6 +419,106 @@ const tierOf = (runtime: MotebitRuntime): SensitivityLevel =>
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
+// ---------------------------------------------------------------------------
+// Scheduled goals — the goal-scheduler shape every surface shares (desktop
+// goal-scheduler.ts, cli scheduler.ts, mobile goal-scheduler.ts): a goal
+// store, saved run outcomes, a create_sub_goal tool, and a tick that builds
+// each run's prompt through `runtime.beginGoalRun`. The surfaces' own
+// schedulers are driven against a real runtime in their app tests
+// (`goal-egress-canary.test.ts` in apps/desktop, apps/cli, apps/mobile).
+// ---------------------------------------------------------------------------
+
+interface HarnessGoal {
+  goal_id: string;
+  prompt: string;
+  mode: string;
+  sensitivity?: SensitivityLevel;
+  parent_goal_id?: string | null;
+}
+interface HarnessOutcome {
+  goal_id: string;
+  ran_at: number;
+  status: string;
+  summary: string | null;
+  error_message: string | null;
+  sensitivity?: SensitivityLevel;
+}
+
+function goalBook(runtime: MotebitRuntime) {
+  const goals: HarnessGoal[] = [];
+  const outcomes: HarnessOutcome[] = [];
+  let current: { goalId: string; run: GoalRun } | null = null;
+  runtime.getToolRegistry().register(
+    { ...createSubGoalDefinition, riskHint: { risk: RiskLevel.R0_READ } },
+    vi.fn(async (args: Record<string, unknown>) => {
+      if (current == null) return { ok: false, error: "No active goal context" };
+      goals.push({
+        goal_id: `sub-${goals.length}`,
+        prompt: String(args.prompt),
+        mode: "recurring",
+        parent_goal_id: current.goalId,
+        sensitivity: current.run.outcomeSensitivity(),
+      });
+      return { ok: true, data: "created" };
+    }),
+  );
+  /** One scheduler tick: every goal runs once; refusals are recorded as failed outcomes. */
+  const tick = async (planEngine?: PlanEngine): Promise<{ refused: string[] }> => {
+    const refused: string[] = [];
+    for (const goal of [...goals]) {
+      const prior = outcomes
+        .filter((o) => o.goal_id === goal.goal_id)
+        .sort((a, b) => b.ran_at - a.ran_at)
+        .slice(0, 3);
+      let run: GoalRun;
+      try {
+        run = runtime.beginGoalRun(goal);
+      } catch (err) {
+        if (!(err instanceof SovereignTierRequiredError)) throw err;
+        refused.push(goal.goal_id);
+        continue;
+      }
+      current = { goalId: goal.goal_id, run };
+      let text = "";
+      try {
+        if (planEngine != null && goal.parent_goal_id == null && goal.mode === "plan") {
+          const created = await planEngine.createPlan(
+            goal.goal_id,
+            "owner",
+            { goalPrompt: goal.prompt, previousOutcomes: run.planOutcomes(prior) },
+            runtime.getLoopDeps()!,
+          );
+          for await (const chunk of planEngine.executePlan(
+            created.plan.plan_id,
+            runtime.getLoopDeps()!,
+          ))
+            if (chunk.type === "step_completed") text += chunk.step.result_summary ?? "";
+        } else {
+          for await (const chunk of runtime.sendMessageStreaming(
+            run.prompt(goal, prior, Date.now()),
+          ))
+            if ((chunk as { type: string }).type === "text")
+              text += (chunk as { text: string }).text;
+        }
+      } finally {
+        run.end();
+        current = null;
+      }
+      outcomes.push({
+        goal_id: goal.goal_id,
+        ran_at: Date.now() + outcomes.length,
+        status: "completed",
+        summary: text.slice(0, 200),
+        error_message: null,
+        sensitivity: run.outcomeSensitivity(),
+      });
+      runtime.resetConversation();
+    }
+    return { refused };
+  };
+  return { goals, outcomes, tick };
+}
+
 /** Seed every interior store at Secret on the on-device provider. */
 async function seedAtSecret(h: Harness): Promise<void> {
   const { runtime } = h;
@@ -568,6 +684,53 @@ const ENTRY_POINTS: Record<string, (h: Harness) => Promise<void>> = {
       },
     ]),
   ),
+  "goal scheduler tick (goals, outcomes and sub-goals written at Secret)": async (h) => {
+    // Seed on-device at Secret: a goal written at Secret, a goal written at
+    // Personal, one Secret-tier run of each (the Secret goal's run writes a
+    // sub-goal), and a legacy unstamped outcome.
+    const book = goalBook(h.runtime);
+    h.setMode("on-device");
+    h.runtime.setSessionSensitivity(SensitivityLevel.Secret);
+    book.goals.push({
+      goal_id: "g-secret",
+      prompt: `goal ${CANARY.goal}`,
+      mode: "recurring",
+      sensitivity: h.runtime.goalCreationSensitivity(),
+    });
+    book.goals.push({
+      goal_id: "g-plain",
+      prompt: "tidy the desk",
+      mode: "recurring",
+      sensitivity: SensitivityLevel.Personal,
+    });
+    book.goals.push({ goal_id: "g-plan", prompt: "plan the week", mode: "plan" });
+    const planEngine = new PlanEngine(new InMemoryPlanStoreImpl());
+    await book.tick(planEngine);
+    book.outcomes.push({
+      goal_id: "g-plain",
+      ran_at: 1,
+      status: "completed",
+      summary: `legacy ${CANARY.goalSummary}`,
+      error_message: null,
+    });
+    book.outcomes.push({
+      goal_id: "g-plan",
+      ran_at: 2,
+      status: "completed",
+      summary: `planned ${CANARY.goalSummary}`,
+      error_message: null,
+      sensitivity: SensitivityLevel.Secret,
+    });
+    expect(book.goals.some((g) => g.parent_goal_id === "g-secret")).toBe(true);
+    h.toTarget();
+    const { refused } = await book.tick(planEngine);
+    if (!h.target.onDevice) {
+      // The Secret goal and its sub-goal refuse on BYOK; the Personal goals run.
+      expect(refused.sort()).toEqual(["g-secret", "sub-3"]);
+    } else {
+      expect(refused).toEqual([]);
+    }
+  },
   "handleAgentTask (foreign principal)": async ({ runtime }) => {
     const kp = await generateKeypair();
     const task: AgentTask = {
@@ -663,9 +826,7 @@ describe("egress canary: an interior-reading tool returns only what the CURRENT 
  * Stores no provider request reads at ANY tier — listed so the liveness
  * check below stays exact. Each must say why.
  */
-const NO_PROVIDER_CHANNEL: Partial<Record<CanaryKey, string>> = {
-  goal: "the goal prompt reaches only its own plan's decomposition request; goal / plan events are unstamped and withheld at every tier",
-};
+const NO_PROVIDER_CHANNEL: Partial<Record<CanaryKey, string>> = {};
 
 describe("egress canary: the seeds are live — on-device at Secret sees them", () => {
   it("every canary reaches the on-device provider through some entry point", async () => {
