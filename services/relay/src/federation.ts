@@ -1786,10 +1786,25 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     checkMaxPeers();
 
     const existing = db
-      .prepare("SELECT state, last_heartbeat_at FROM relay_peers WHERE peer_relay_id = ?")
-      .get(relay_id) as { state: string; last_heartbeat_at: number | null } | undefined;
+      .prepare(
+        "SELECT state, last_heartbeat_at, public_key FROM relay_peers WHERE peer_relay_id = ?",
+      )
+      .get(relay_id) as
+      { state: string; last_heartbeat_at: number | null; public_key: string } | undefined;
     if (existing && (existing.state === "active" || existing.state === "pending")) {
       throw new HTTPException(409, { message: `Peer already exists in ${existing.state} state` });
+    }
+    // A known peer id is bound to the key it peered under, in EVERY state.
+    // Propose + confirm prove control of the proposed key and nothing about
+    // the id, so a re-proposal under a different key would hand a suspended
+    // or removed peer's id — and its earned trust — to whoever asks. The key
+    // changes only by a verified succession or explicit operator action.
+    if (existing && existing.public_key.toLowerCase() !== public_key.toLowerCase()) {
+      logger.warn("federation.peer.key_change_refused", { peerId: relay_id });
+      throw new HTTPException(409, {
+        message:
+          "relay_id is bound to a different public_key; a peer key changes only by key succession or operator action",
+      });
     }
     // Cooldown: removed peers must wait 5 minutes before re-peering.
     // Prevents rapid removed→pending oscillation when the root cause persists.
@@ -1856,7 +1871,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const peer = db
       .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state = 'pending'")
       .get(relay_id) as
-      { peer_relay_id: string; public_key: string; nonce: string | null } | undefined;
+      | {
+          peer_relay_id: string;
+          public_key: string;
+          nonce: string | null;
+          peered_at: number | null;
+        }
+      | undefined;
     if (!peer) throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
     if (!peer.nonce) throw new HTTPException(400, { message: "No nonce stored for this peer" });
 
@@ -1869,7 +1890,18 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       hexToBytes(peer.public_key),
     );
     if (!valid) {
-      db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(relay_id);
+      // A never-established proposal is junk and goes. An ESTABLISHED peer's
+      // row (it re-proposed after suspension/removal) is kept — key, trust and
+      // history — and parked `removed`: deleting it would free the id for a
+      // fresh proposal under any key, which is the takeover the key binding
+      // in /peer/propose refuses.
+      if (peer.peered_at == null) {
+        db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(relay_id);
+      } else {
+        db.prepare(
+          "UPDATE relay_peers SET state = 'removed', nonce = NULL WHERE peer_relay_id = ?",
+        ).run(relay_id);
+      }
       throw new HTTPException(403, { message: "Challenge response verification failed" });
     }
 
