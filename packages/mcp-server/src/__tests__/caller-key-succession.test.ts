@@ -20,6 +20,7 @@ import {
   bytesToHex,
   createSignedToken,
   generateKeypair,
+  signGuardianRecoverySuccession,
   signKeySuccession,
   verifySignedToken,
 } from "@motebit/encryption";
@@ -410,5 +411,75 @@ describe("caller key resolution — relay unavailable", () => {
     up = false;
     vi.setSystemTime(Date.now() + 60_000);
     expect(await deps.resolveCallerKey!(CALLER)).toBeNull();
+  });
+});
+
+describe("caller key succession — a guardian recovery carries trust only under a PINNED guardian", () => {
+  async function recovered() {
+    const oldKey = await generateKeypair();
+    const newKey = await generateKeypair();
+    const guardian = await generateKeypair();
+    const record = await signGuardianRecoverySuccession(
+      guardian.privateKey,
+      newKey.privateKey,
+      oldKey.publicKey,
+      newKey.publicKey,
+      "guardian_recovery",
+    );
+    return { oldKey, newKey, guardian, record };
+  }
+
+  it("a recovery signed by a guardian the RELAY names never carries trust — at most Verified, stored key kept", async () => {
+    const { oldKey, newKey, guardian, record: succ } = await recovered();
+    const syncUrl = await fakeRelay(() => ({
+      motebit_id: CALLER,
+      created_at: new Date().toISOString(),
+      current_public_key: bytesToHex(newKey.publicKey),
+      succession: [succ],
+      guardian_public_key: bytesToHex(guardian.publicKey),
+      anchored: null,
+    }));
+    const { runtime, record, calls } = liveRuntime(
+      bytesToHex(oldKey.publicKey),
+      AgentTrustLevel.Trusted,
+    );
+    const deps = wireServerDeps(runtime, { motebitId: SERVER, syncUrl });
+    const port = await serve(deps.resolveCallerKey, deps.onCallerVerified);
+    expect(await status(port, newKey.privateKey)).toBe(200);
+    await tick();
+    expect(calls.at(-1)).toEqual({ key: bytesToHex(newKey.publicKey), proven: false });
+    expect(record.public_key).toBe(bytesToHex(oldKey.publicKey));
+    expect(await deps.resolveCallerKey!(CALLER)).toEqual({
+      publicKey: bytesToHex(newKey.publicKey),
+      trustLevel: AgentTrustLevel.Verified,
+    });
+  });
+
+  it("a recovery signed by the guardian the caller's OWN stored record pins keeps the earned level", async () => {
+    const { oldKey, newKey, guardian, record: succ } = await recovered();
+    const other = await generateKeypair();
+    const syncUrl = await fakeRelay(() => ({
+      motebit_id: CALLER,
+      created_at: new Date().toISOString(),
+      current_public_key: bytesToHex(newKey.publicKey),
+      succession: [succ],
+      // The relay's claim is ignored either way.
+      guardian_public_key: bytesToHex(other.publicKey),
+      anchored: null,
+    }));
+    const { runtime, record, calls } = liveRuntime(
+      bytesToHex(oldKey.publicKey),
+      AgentTrustLevel.Trusted,
+    );
+    (record as Record<string, unknown>)["guardian_public_key"] = bytesToHex(guardian.publicKey);
+    const deps = wireServerDeps(runtime, { motebitId: SERVER, syncUrl });
+    const port = await serve(deps.resolveCallerKey, deps.onCallerVerified);
+    expect(await status(port, newKey.privateKey)).toBe(200);
+    await tick();
+    expect(calls.at(-1)).toEqual({ key: bytesToHex(newKey.publicKey), proven: true });
+    expect(await deps.resolveCallerKey!(CALLER)).toEqual({
+      publicKey: bytesToHex(newKey.publicKey),
+      trustLevel: AgentTrustLevel.Trusted,
+    });
   });
 });
