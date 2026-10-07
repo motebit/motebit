@@ -159,6 +159,12 @@ export interface ExecutionReceipt {
   result_hash: string;
   delegation_receipts?: ExecutionReceipt[];
   delegated_scope?: string;
+  /**
+   * SHA-256 of the paid service's result bytes (lowercase hex), as asserted by
+   * the payer and signed by the payee. Present on sovereign payment receipts
+   * (spec/settlement-v1.md §7); `verifyReceipt` checks its shape when present.
+   */
+  service_result_hash?: string;
   signature: string;
 }
 
@@ -1952,6 +1958,22 @@ async function verifyReceiptAtDepth(
     });
   }
 
+  // service_result_hash is optional; when present it must be a SHA-256 hex
+  // digest like every other hash field (spec/settlement-v1.md §7). Receipts
+  // without it take no branch here.
+  let serviceHashOk = true;
+  if (receipt.service_result_hash !== undefined) {
+    serviceHashOk =
+      typeof receipt.service_result_hash === "string" &&
+      /^[0-9a-f]{64}$/.test(receipt.service_result_hash);
+    if (!serviceHashOk) {
+      errors.push({
+        message: "service_result_hash must be 64 lowercase hex characters (SHA-256)",
+        path: "service_result_hash",
+      });
+    }
+  }
+
   // Strict mode: the signature proves authenticity, NOT that result_hash binds
   // the result field. Recompute it per spec and reject a self-inconsistent
   // receipt (one whose result_hash a third party can't reproduce from result).
@@ -1971,7 +1993,7 @@ async function verifyReceiptAtDepth(
 
   return {
     type: "receipt",
-    valid: sigResult.valid && delegationErrors.length === 0 && resultHashOk,
+    valid: sigResult.valid && delegationErrors.length === 0 && resultHashOk && serviceHashOk,
     receipt,
     signer: signerDid,
     keySource: "embedded",
@@ -2059,6 +2081,19 @@ export async function verifyReceiptVerdict(receipt: SignableReceipt): Promise<Ve
         "Signature verifies, but result_hash != hex(SHA-256(result)) — a valid signature over a self-inconsistent receipt; the digest does not bind the result.",
       canonical: "the receipt's result_hash field (recompute hex(SHA-256(result)))",
       fix: "result_hash MUST equal hex(SHA-256(result)). The signer committed an inconsistent digest — reject the receipt; never trust result_hash as a content address for the result.",
+    };
+  } else if (
+    receipt.service_result_hash !== undefined &&
+    !/^[0-9a-f]{64}$/.test(receipt.service_result_hash)
+  ) {
+    integrity = "invalid";
+    integrityRepair = {
+      code: "integrity.service_result_hash_malformed",
+      axis: "integrity",
+      summary:
+        "Signature verifies, but service_result_hash is not a SHA-256 digest (64 lowercase hex characters).",
+      canonical: "spec/settlement-v1.md §7 (service_result_hash)",
+      fix: "service_result_hash MUST be 64 lowercase hex characters. The signer committed a malformed digest — reject the receipt.",
     };
   } else {
     integrity = "verified";

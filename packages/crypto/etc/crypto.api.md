@@ -539,6 +539,7 @@ export interface ExecutionReceipt {
     result: string;
     // (undocumented)
     result_hash: string;
+    service_result_hash?: string;
     // (undocumented)
     signature: string;
     // (undocumented)
@@ -1459,6 +1460,7 @@ export interface SignableReceipt {
     result: string;
     // (undocumented)
     result_hash: string;
+    service_result_hash?: string;
     // (undocumented)
     signature: string;
     source_digest?: DigestRef;

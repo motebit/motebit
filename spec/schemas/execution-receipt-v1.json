@@ -82,6 +82,11 @@
       "description": "Scope from the delegation token that authorized this execution, if any. Present when the executor received a scoped token; absent for self-submitted tasks.",
       "type": "string"
     },
+    "service_result_hash": {
+      "description": "SHA-256 of the paid service's result bytes, as asserted by the payer and signed by the payee (lowercase hex, 64 characters). Set on sovereign payment receipts, whose `result` is a synthesized payment record: there `result_hash` binds that record like on every receipt, and this field carries the service result's hash. Signature-bound; absent on every other receipt. See spec/settlement-v1.md §7.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "source_digest": {
       "description": "Content digest of the RAW primary-source bytes a fetch-type task retrieved, when `result` is a verbatim raw-byte-addressable span of them (e.g. read_url over a text/* source). Signature-bound; back-compat by absence. A citation builder copies it into Citation.provenance for evidence-provenance re-checking. See spec/evidence-provenance-v1.md.",
       "type": "object",

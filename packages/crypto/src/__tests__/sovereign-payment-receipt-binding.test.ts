@@ -112,6 +112,15 @@ describe("signSovereignPaymentReceipt — hash binding", () => {
     expect(v.errors?.some((e) => e.path === "service_result_hash")).toBe(true);
   });
 
+  it("refuses to sign when the service result hash is not a SHA-256 hex digest", async () => {
+    const pub = await getPublicKeyBySuite(PRIV, SUITE);
+    for (const bad of ["sha256:result", "B".repeat(64), "b".repeat(63), ""]) {
+      await expect(
+        signSovereignPaymentReceipt(input({ result_hash: bad }), PRIV, pub),
+      ).rejects.toThrow(/must be 64 lowercase hex characters/);
+    }
+  });
+
   it("a receipt whose result_hash does not bind result fails strict", async () => {
     const pub = await getPublicKeyBySuite(PRIV, SUITE);
     const r = await signExecutionReceipt(

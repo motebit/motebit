@@ -104,7 +104,7 @@ const vc = await issueReputationCredential(
 - **`signEvalAttestation(body, issuerPrivateKey)`** — Sign an eval attestation with the issuer's identity key (JCS + Ed25519 + base64url under the pinned suite). The body carries `issuer.public_key` self-describingly; each result embeds a whole per-axis `VerificationVerdict`.
 
 - **`signExecutionReceipt(receipt, privateKey, publicKey?)`** — Sign a receipt with Ed25519.
-- **`signSovereignPaymentReceipt(input, privateKey, publicKey)`** — Sign a sovereign onchain payment receipt.
+- **`signSovereignPaymentReceipt(input, privateKey, publicKey)`** — Sign a sovereign onchain payment receipt. `result_hash` is computed from the receipt's own `result` text; `input.result_hash` (the paid service's result hash, 64 lowercase hex characters) is signed as `service_result_hash`.
 - **`signDelegation(delegation, delegatorPrivateKey)`** — Sign a delegation token.
 - **`signKeySuccession(oldPrivateKey, newPrivateKey, newPublicKey, oldPublicKey)`** — Sign a key rotation.
 - **`signCollaborativeReceipt(receipt, initiatorPrivateKey)`** — Sign a collaborative receipt.

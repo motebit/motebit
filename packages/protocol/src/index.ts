@@ -1582,6 +1582,16 @@ export interface ExecutionReceipt {
   /** Scope from the delegation token that authorized this execution, if any. */
   delegated_scope?: string;
   /**
+   * SHA-256 of the paid service's result bytes, as asserted by the payer and
+   * signed by the payee: lowercase hex, 64 characters. Set on sovereign payment
+   * receipts (`spec/settlement-v1.md` §7), whose `result` is a synthesized
+   * payment record rather than the service's result. There `result_hash` binds
+   * that record, as on every receipt (`hex(SHA-256(UTF-8(result)))`), and this
+   * field carries the service result's hash. Signature-bound. Absent on every
+   * other receipt.
+   */
+  service_result_hash?: string;
+  /**
    * Content digest of the RAW primary-source bytes this task retrieved, when the
    * task's `result` is a verbatim, raw-byte-addressable span of those bytes
    * (a fetch-type atom — `read_url` — over a `text/*` non-HTML source). Set from

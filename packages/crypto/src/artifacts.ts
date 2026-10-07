@@ -71,6 +71,13 @@ export interface SignableReceipt {
   relay_task_id?: string;
   delegated_scope?: string;
   /**
+   * SHA-256 of the paid service's result bytes (lowercase hex), as asserted by
+   * the payer and signed by the payee. Set by `signSovereignPaymentReceipt`,
+   * whose `result` is a synthesized payment record that `result_hash` binds;
+   * absent on every other receipt. Signature-bound; back-compat by absence.
+   */
+  service_result_hash?: string;
+  /**
    * Content digest of the RAW primary-source bytes a fetch-type task retrieved,
    * when the `result` is a verbatim raw-byte-addressable span of them (e.g.
    * `read_url` over a `text/*` source). Signature-bound via `canonicalJson(body)`
@@ -520,6 +527,9 @@ export async function verifyComputerSessionReceipt(
 
 // === Sovereign Payment Receipts ===
 
+/** A SHA-256 digest as receipts carry it: 64 lowercase hex characters. */
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
 /**
  * Inputs for a sovereign payment receipt — produced by the *payee* when
  * a counterparty pays them directly via an onchain wallet rail (Solana,
@@ -558,7 +568,12 @@ export interface SovereignPaymentReceiptInput {
   service_description: string;
   /** SHA-256 hash of the request payload. */
   prompt_hash: string;
-  /** SHA-256 hash of the result payload. */
+  /**
+   * SHA-256 of the paid service's result bytes (lowercase hex, 64 characters),
+   * as asserted by the payer. Signed into the receipt as `service_result_hash`.
+   * It is NOT the receipt's `result_hash`: that binds the receipt's own
+   * synthesized `result` text and is computed by the signer.
+   */
   result_hash: string;
   /** Tools the payee used to deliver the service. Empty array if pure payment ack. */
   tools_used?: string[];
@@ -576,12 +591,25 @@ export interface SovereignPaymentReceiptInput {
  *
  * No relay is contacted at any point. The resulting receipt is
  * self-verifiable forever from the embedded `public_key` field.
+ *
+ * Every hash binds the bytes it names: `result_hash` is
+ * `hex(SHA-256(UTF-8(result)))` of the synthesized `result` text, as on every
+ * receipt, so the receipt verifies under strict hash binding; the paid
+ * service's result hash (`input.result_hash`) is signed as
+ * `service_result_hash`. Throws when `input.result_hash` is not a 64-character
+ * lowercase hex digest.
  */
 export async function signSovereignPaymentReceipt(
   input: SovereignPaymentReceiptInput,
   privateKey: Uint8Array,
   publicKey: Uint8Array,
 ): Promise<SignableReceipt> {
+  if (!SHA256_HEX.test(input.result_hash)) {
+    throw new Error(
+      "signSovereignPaymentReceipt: result_hash (the paid service's result hash, signed as service_result_hash) must be 64 lowercase hex characters",
+    );
+  }
+  const result = `${input.service_description} | paid by ${input.payer_motebit_id}: ${input.amount_micro.toString()} micro-${input.asset} via ${input.rail}`;
   const receipt: Omit<SignableReceipt, "signature" | "suite"> = {
     task_id: `${input.rail}:tx:${input.tx_hash}`,
     motebit_id: input.payee_motebit_id,
@@ -589,11 +617,12 @@ export async function signSovereignPaymentReceipt(
     submitted_at: input.submitted_at,
     completed_at: input.completed_at,
     status: "completed",
-    result: `${input.service_description} | paid by ${input.payer_motebit_id}: ${input.amount_micro.toString()} micro-${input.asset} via ${input.rail}`,
+    result,
     tools_used: input.tools_used ?? [],
     memories_formed: 0,
     prompt_hash: input.prompt_hash,
-    result_hash: input.result_hash,
+    result_hash: await hash(new TextEncoder().encode(result)),
+    service_result_hash: input.result_hash,
     // relay_task_id intentionally omitted — sovereign rail, no relay binding
     // suite is stamped by signExecutionReceipt
   };

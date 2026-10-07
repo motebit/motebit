@@ -405,6 +405,11 @@ function summarizeValid(result: VerifyResultWithBinding): ReadonlyArray<readonly
       const out: Array<readonly [string, string]> = [];
       out.push(["task:", result.receipt.task_id]);
       out.push(["motebit:", result.receipt.motebit_id]);
+      // Sovereign payment receipts: the paid service's result hash, as the
+      // payer asserted it (shape-checked by verifyReceipt).
+      if (result.receipt.service_result_hash !== undefined) {
+        out.push(["service result:", result.receipt.service_result_hash]);
+      }
       if (result.signer) out.push(["signer:", result.signer]);
       // Binding rung — checkable offline from the receipt alone.
       out.push([

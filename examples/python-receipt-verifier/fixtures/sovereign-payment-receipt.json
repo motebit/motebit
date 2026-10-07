@@ -1,0 +1,17 @@
+{
+  "task_id": "solana:tx:5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW",
+  "motebit_id": "65b60673-d6ed-884b-b01c-2c222d82ada0",
+  "device_id": "019dc500-0000-7000-a000-0000000000de",
+  "submitted_at": 1777109000245,
+  "completed_at": 1777109004871,
+  "status": "completed",
+  "result": "Literature summary | paid by c945cbf2-a560-8002-941e-2fb9d17054d6: 250000 micro-USDC via solana",
+  "tools_used": ["web_search"],
+  "memories_formed": 0,
+  "prompt_hash": "d26520ef9c7d695a7077c9791bc3ef2c3b54ebcd7c6d90bcca6fadd2600f6c67",
+  "result_hash": "2091b85de3db7c04249256be14df690cb1c5d778045c8bafe81d023b8b54a35b",
+  "service_result_hash": "e6141a1d4d00bebab85c37cc7cc5c7710578fcc1958456de4ee5f9f2d256119f",
+  "public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "PX6mwaR8aUyJCsSJNATeQjbhKl8lFmclYE8aX5KZKjHspWuLrXSyYxMuFFzRGH4kimyf4SD5fpQT-jFFGzvvDA"
+}

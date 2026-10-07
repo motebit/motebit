@@ -105,6 +105,7 @@ interface ExecutionReceiptShape {
   delegation_receipts?: ExecutionReceiptShape[] | undefined;
   relay_task_id?: string | undefined;
   delegated_scope?: string | undefined;
+  service_result_hash?: string | undefined;
   invocation_origin?: "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent" | undefined;
   suite: "motebit-jcs-ed25519-b64-v1";
   signature: string;
@@ -176,6 +177,13 @@ export const ExecutionReceiptSchema: z.ZodType<ExecutionReceiptShape> = z.lazy((
         .optional()
         .describe(
           "Scope from the delegation token that authorized this execution, if any. Present when the executor received a scoped token; absent for self-submitted tasks.",
+        ),
+      service_result_hash: z
+        .string()
+        .regex(/^[0-9a-f]{64}$/, "service_result_hash MUST be 64 lowercase hex characters")
+        .optional()
+        .describe(
+          "SHA-256 of the paid service's result bytes, as asserted by the payer and signed by the payee (lowercase hex, 64 characters). Set on sovereign payment receipts, whose `result` is a synthesized payment record: there `result_hash` binds that record like on every receipt, and this field carries the service result's hash. Signature-bound; absent on every other receipt. See spec/settlement-v1.md §7.",
         ),
       source_digest: z
         .object({

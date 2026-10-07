@@ -112,6 +112,7 @@ describe("every committed receipt fixture verifies strict", () => {
     "packages/verify/examples/sample-receipt.json",
     "examples/python-receipt-verifier/fixtures/example-receipt.json",
     "examples/python-receipt-verifier/fixtures/sovereign-receipt.json",
+    "examples/python-receipt-verifier/fixtures/sovereign-payment-receipt.json",
     "examples/python-receipt-verifier/fixtures/sovereign-receipt-email-approval.json",
     "examples/python-receipt-verifier/fixtures/sovereign-receipt-payment-denied.json",
     "examples/python-receipt-verifier/fixtures/sovereign-receipt-research-complete.json",

@@ -248,6 +248,16 @@ def _validate_shape(receipt: Any, *, depth: int = 0) -> list[str]:
                 f"§11.4 violation: {hash_field} must be 64-char lowercase hex SHA-256"
             )
 
+    # Optional (settlement-v1 §7): the paid service's result hash on a
+    # sovereign payment receipt. Absent on every other receipt; when present
+    # it is a SHA-256 hex digest like every other hash field.
+    if "service_result_hash" in receipt:
+        h = receipt.get("service_result_hash")
+        if not isinstance(h, str) or len(h) != HEX_64 or not _is_hex(h):
+            reasons.append(
+                "§11.4 violation: service_result_hash must be 64-char lowercase hex SHA-256"
+            )
+
     nested = receipt.get("delegation_receipts")
     if nested is not None and not isinstance(nested, list):
         reasons.append("§11.5 violation: delegation_receipts must be an array")

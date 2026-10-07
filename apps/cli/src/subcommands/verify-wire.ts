@@ -144,6 +144,16 @@ export async function verifyWire(
         checks.push({ name: "signature", ok: false, detail: `verifier threw: ${msg}` });
       }
     }
+    // (4b) service_result_hash — sovereign payment receipts only: the paid
+    // service's result hash as the payer asserted it (spec/settlement-v1.md
+    // §7). The schema step already rejected a malformed value; report it.
+    if (parsed.data.service_result_hash !== undefined) {
+      checks.push({
+        name: "service_result_hash",
+        ok: true,
+        detail: `${parsed.data.service_result_hash} — the paid service's result hash, as the payer asserted it (signature-bound)`,
+      });
+    }
     // (5) result_hash binds result — strict by default. A valid signature
     // proves the bytes are authentic, not that result_hash commits to the
     // result field; a receipt whose hash a third party cannot recompute from
