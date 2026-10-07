@@ -71,6 +71,9 @@ export {
   type ReceiptVerifyDetail,
   // Receipt-chain verifier with optional strict result_hash binding at every depth.
   verifyReceipt,
+  // The one nested walk over a verifyReceipt tree (both receipt CLIs read it).
+  collectReceiptTreeErrors,
+  type ReceiptTreeError,
   signSovereignPaymentReceipt,
   verifyReceiptChain,
   verifyReceiptSequence,

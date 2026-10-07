@@ -151,7 +151,7 @@ describe("verify receipt", () => {
     expect(report.ok).toBe(false);
     const sig = report.checks.find((c) => c.name === "signature");
     expect(sig?.ok).toBe(false);
-    expect(sig?.detail).toMatch(/no embedded public_key/);
+    expect(sig?.detail).toMatch(/no embedded public_key/i);
   });
 });
 

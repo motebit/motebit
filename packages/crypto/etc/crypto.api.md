@@ -238,6 +238,9 @@ export type ChainAnchorVerifier = (anchor: {
 export const COLLABORATIVE_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
+export function collectReceiptTreeErrors(result: ReceiptVerifyResult): ReceiptTreeError[];
+
+// @public
 export function computeAgentSettlementLeaf(settlement: Record<string, unknown>, treeHashVersion?: MerkleTreeVersion): Promise<string>;
 
 // @public
@@ -761,6 +764,9 @@ export function hashLeaf(entry: Uint8Array, treeHashVersion?: MerkleTreeVersion)
 // @public
 export function hashToolPayload(value: unknown): Promise<string>;
 
+// @public
+export function hasUnpairedSurrogate(value: unknown): boolean;
+
 // @public (undocumented)
 export function hexPublicKeyToDidKey(hexPublicKey: string): string;
 
@@ -1141,6 +1147,16 @@ export interface ReceiptChainEntry {
     signer_public_key: Uint8Array;
 }
 
+// @public
+export interface ReceiptTreeError {
+    depth: number;
+    // (undocumented)
+    message: string;
+    path?: string;
+    // (undocumented)
+    task_id: string | undefined;
+}
+
 // @public (undocumented)
 export interface ReceiptVerification {
     // (undocumented)
@@ -1160,7 +1176,7 @@ export interface ReceiptVerification {
 export interface ReceiptVerifyDetail {
     canonical_preview: string;
     canonical_sha256: string;
-    reason: "ok" | "wrong_suite" | "bad_base64" | "ed25519_mismatch";
+    reason: "ok" | "wrong_suite" | "bad_base64" | "ed25519_mismatch" | "unpaired_surrogate";
     // (undocumented)
     valid: boolean;
 }

@@ -94,6 +94,25 @@ export function canonicalJson(obj: unknown): string {
   return "{" + entries.join(",") + "}";
 }
 
+/**
+ * True when `value` (deeply: string values and object keys) holds an unpaired
+ * UTF-16 surrogate. UTF-8 is undefined for such a string, so a signed artifact
+ * carrying one has no canonical byte form (JCS requires I-JSON — RFC 8785 §3.1,
+ * RFC 7493 §2.1). Verifiers reject it; they never substitute U+FFFD, which
+ * would let two distinct strings share one signature and one digest.
+ */
+export function hasUnpairedSurrogate(value: unknown): boolean {
+  if (typeof value === "string") return UNPAIRED_SURROGATE.test(value);
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(hasUnpairedSurrogate);
+  for (const [k, v] of Object.entries(value)) {
+    if (UNPAIRED_SURROGATE.test(k) || hasUnpairedSurrogate(v)) return true;
+  }
+  return false;
+}
+
+const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 // === Encoding Helpers ===
 
 export function bytesToHex(bytes: Uint8Array): string {

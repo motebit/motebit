@@ -359,6 +359,9 @@ If the `publicKey` parameter is provided, the signer MUST set the `public_key` f
 ```
 function verifyReceipt(receipt, public_key?) → { valid: bool, signer?: did:key }
 
+  0. If any string in the receipt (values or member names, at any depth)
+     holds an unpaired UTF-16 surrogate, return { valid: false } (§11.4).
+
   1. Resolve public key:
      a. If receipt.public_key is present and is a valid 32-byte hex string,
         use it as the verification key.
@@ -395,6 +398,10 @@ These hashes serve two purposes: (1) privacy — the prompt and result content a
 Every hash field binds exactly the bytes it names. `result_hash` is always the digest of this receipt's own `result` field, never of other content, so a verifier that recomputes it from `result` accepts every conformant receipt. When a receipt's `result` is a synthesized record rather than the content it accounts for (a sovereign payment receipt, `settlement-v1.md` §7), the digest of that other content goes in a separate field (`service_result_hash`), never in `result_hash`. `service_result_hash` is optional and uses the same encoding: lowercase hex, 64 characters. A verifier that finds it present MUST reject a value of any other shape.
 
 _Added 2026-10-07 (additive, minor): `service_result_hash`. Receipts without the field are unchanged._
+
+**Well-formed Unicode.** `UTF-8(s)` is defined only for a string of Unicode scalar values. A JSON string MAY spell an unpaired UTF-16 surrogate (`"\ud800"`), but such a string has no UTF-8 encoding, and JCS (§5) requires I-JSON input (RFC 8785 §3.1, RFC 7493 §2.1), so the receipt has no canonical bytes either. A verifier MUST reject a receipt that contains an unpaired surrogate in any string value or member name, at any depth of `delegation_receipts`, whether or not it checks `result_hash`. It MUST NOT substitute U+FFFD (or any other character) and verify the result: substitution would let two distinct `result` strings share one signature and one `result_hash`. A producer MUST NOT emit such a receipt (the reference producers verify each receipt they sign before returning it, so they refuse one). The cross-implementation conformance set carries this case as a negative vector (`examples/python-receipt-verifier/fixtures/negative/result-lone-surrogate.json`) that every implementation must reject.
+
+**Every depth, every key state.** A verifier that checks `result_hash` binding checks it on every receipt in the `delegation_receipts` tree. The check does not depend on whether a receipt's `public_key` is present or usable: a nested receipt whose key is missing or malformed fails signature verification (§11.3 step 1c) and still has its `result_hash` checked.
 
 ### 11.5 — Delegation Chains
 

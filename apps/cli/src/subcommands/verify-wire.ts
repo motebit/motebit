@@ -33,10 +33,10 @@ import { resolve } from "node:path";
 // re-exports every receipt/delegation verifier from crypto, so the import path
 // changes but the runtime behavior is identical.
 import {
-  hexToBytes,
+  collectReceiptTreeErrors,
   verifyDelegation,
-  verifyExecutionReceipt,
   verifyReceipt,
+  type ReceiptTreeError,
 } from "@motebit/encryption";
 import {
   AgentServiceListingSchema,
@@ -122,74 +122,83 @@ export async function verifyWire(
       ok: true,
       detail: `recognized: ${parsed.data.suite}`,
     });
-    // (4) Signature
-    if (parsed.data.public_key == null || parsed.data.public_key === "") {
-      checks.push({
-        name: "signature",
-        ok: false,
-        detail: "no embedded public_key — cannot verify offline",
-      });
-    } else {
-      try {
-        const valid = await verifyExecutionReceipt(parsed.data, hexToBytes(parsed.data.public_key));
-        checks.push({
-          name: "signature",
-          ok: valid,
-          detail: valid
-            ? `Ed25519 over JCS body — verified with embedded public_key`
-            : `Ed25519 verification returned false (signature does not match canonical body)`,
-        });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        checks.push({ name: "signature", ok: false, detail: `verifier threw: ${msg}` });
-      }
+    // (4)–(5) One walk over the whole delegation tree: @motebit/crypto's
+    // verifyReceipt verifies every node (signature always; result_hash binding
+    // under strict) whether or not a node's key is usable, and
+    // collectReceiptTreeErrors flattens it per node. motebit-verify reads the
+    // same walk, so the two CLIs cannot diverge on a nested receipt.
+    const strictMode = opts.lenient !== true;
+    let treeErrors: ReceiptTreeError[];
+    let nodes: number;
+    try {
+      const tree = await verifyReceipt(parsed.data, { strictHashBinding: strictMode });
+      treeErrors = collectReceiptTreeErrors(tree);
+      nodes = countNodes(tree);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      checks.push({ name: "signature", ok: false, detail: `verifier threw: ${msg}` });
+      return finalize(kind, absPath, checks);
     }
+    const describe = (e: ReceiptTreeError): string =>
+      e.depth === 0
+        ? e.message
+        : `delegation depth ${e.depth}, task_id ${e.task_id ?? "unknown"}: ${e.message}`;
+    // (4) Signature — every node that could not be authenticated (no key, a
+    // malformed key, a bad signature, an unencodable string).
+    const sigFailures = treeErrors.filter((e) => e.path === undefined);
+    checks.push({
+      name: "signature",
+      ok: sigFailures.length === 0,
+      detail:
+        sigFailures.length === 0
+          ? nodes > 1
+            ? `Ed25519 over JCS body — verified with the embedded public_key at every delegation depth (${nodes} receipts)`
+            : `Ed25519 over JCS body — verified with embedded public_key`
+          : sigFailures.map(describe).join("; "),
+    });
     // (4b) service_result_hash — sovereign payment receipts only: the paid
     // service's result hash as the payer asserted it (spec/settlement-v1.md
-    // §7). The schema step already rejected a malformed value; report it.
-    if (parsed.data.service_result_hash !== undefined) {
+    // §7). The schema step already rejected a malformed outer value.
+    const serviceFailures = treeErrors.filter((e) => e.path === "service_result_hash");
+    if (parsed.data.service_result_hash !== undefined || serviceFailures.length > 0) {
       checks.push({
         name: "service_result_hash",
-        ok: true,
-        detail: `${parsed.data.service_result_hash} — the paid service's result hash, as the payer asserted it (signature-bound)`,
+        ok: serviceFailures.length === 0,
+        detail:
+          serviceFailures.length === 0
+            ? `${parsed.data.service_result_hash} — the paid service's result hash, as the payer asserted it (signature-bound)`
+            : serviceFailures.map(describe).join("; "),
       });
     }
     // (5) result_hash binds result — strict by default. A valid signature
     // proves the bytes are authentic, not that result_hash commits to the
     // result field; a receipt whose hash a third party cannot recompute from
     // its own result is INVALID unless --lenient asks for signature-only.
-    if (opts.lenient === true) {
+    if (!strictMode) {
       checks.push({
         name: "result_hash",
         ok: true,
         detail: "not checked (--lenient) — the result is not bound to the signature",
       });
     } else {
-      // The crypto strict path checks every delegation_receipts entry at
-      // every depth; collect its result_hash failures across the whole tree.
-      const strict = await verifyReceipt(parsed.data, {
-        strictHashBinding: true,
-      });
-      const nested = collectNestedHashErrors(strict.delegations ?? []);
-      const expected = createHash("sha256").update(parsed.data.result, "utf8").digest("hex");
-      const outerOk = expected === parsed.data.result_hash;
-      const failures = [
-        ...(outerOk
-          ? []
-          : [
-              `mismatch: result_hash ${parsed.data.result_hash} != hex(SHA-256(result)) ${expected}`,
-            ]),
-        ...nested,
-      ];
+      const hashFailures = treeErrors.filter((e) => e.path === "result_hash");
       checks.push({
         name: "result_hash",
-        ok: failures.length === 0,
+        ok: hashFailures.length === 0,
         detail:
-          failures.length === 0
-            ? (strict.delegations?.length ?? 0) > 0
+          hashFailures.length === 0
+            ? nodes > 1
               ? "equals hex(SHA-256(result)) at every delegation depth — the results are bound to the signatures"
               : "equals hex(SHA-256(result)) — the result is bound to the signature"
-            : failures.join("; "),
+            : hashFailures
+                .map((e) =>
+                  e.depth === 0
+                    ? // Display only — the verdict is crypto's. Shows the digest a
+                      // conformant receipt would carry.
+                      `mismatch: result_hash ${parsed.data.result_hash} != hex(SHA-256(result)) ${createHash("sha256").update(parsed.data.result, "utf8").digest("hex")}`
+                    : e.message,
+                )
+                .join("; "),
       });
     }
     return finalize(kind, absPath, checks);
@@ -251,19 +260,11 @@ export async function verifyWire(
   return finalize(kind, absPath, checks);
 }
 
-/** Every nested `result_hash` failure in a strict `verifyReceipt` tree, deepest included. */
-function collectNestedHashErrors(
-  delegations: ReadonlyArray<{
-    errors?: ReadonlyArray<{ message: string; path?: string }>;
-    delegations?: ReadonlyArray<unknown>;
-  }>,
-): string[] {
-  const out: string[] = [];
-  for (const d of delegations) {
-    for (const e of d.errors ?? []) if (e.path === "result_hash") out.push(e.message);
-    out.push(...collectNestedHashErrors((d.delegations ?? []) as typeof delegations));
-  }
-  return out;
+/** Receipts in a `verifyReceipt` tree, the outer one included. */
+function countNodes(node: { delegations?: ReadonlyArray<unknown> }): number {
+  let n = 1;
+  for (const d of node.delegations ?? []) n += countNodes(d as typeof node);
+  return n;
 }
 
 function finalize(kind: VerifyKind, filePath: string, checks: VerifyCheck[]): VerifyReport {

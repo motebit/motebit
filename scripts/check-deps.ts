@@ -368,6 +368,8 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "verifyExecutionReceipt",
     "verifyReceipt",
     "verifyReceiptVerdict",
+    // Pure flattening of a verifyReceipt result — the one nested walk both receipt CLIs read.
+    "collectReceiptTreeErrors",
     "verifyDelegationTokenVerdict",
     "verifyEvidenceProvenance",
     "isFullyVerified",

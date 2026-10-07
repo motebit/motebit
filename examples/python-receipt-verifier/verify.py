@@ -274,6 +274,33 @@ def _validate_shape(receipt: Any, *, depth: int = 0) -> list[str]:
     return reasons
 
 
+# §11.4: UTF-8 is undefined for a string holding an unpaired UTF-16 surrogate
+# (JSON permits the escape `\ud800`; JCS requires I-JSON, RFC 8785 §3.1 /
+# RFC 7493 §2.1, which forbids it). Such a receipt has no canonical bytes and
+# no result digest, so it is rejected — never re-encoded with U+FFFD. Message
+# matches @motebit/crypto's byte-for-byte.
+UNPAIRED_SURROGATE_ERROR = (
+    "§11.4 violation: receipt contains a string with an unpaired UTF-16 "
+    "surrogate — it has no UTF-8 encoding"
+)
+
+
+def _has_unpaired_surrogate(value: Any) -> bool:
+    if isinstance(value, str):
+        # json.loads leaves a lone escaped surrogate as a code point in
+        # U+D800..U+DFFF (a valid escaped pair is combined into one astral
+        # code point), so any surrogate code point here is unpaired.
+        return any("\ud800" <= ch <= "\udfff" for ch in value)
+    if isinstance(value, list):
+        return any(_has_unpaired_surrogate(v) for v in value)
+    if isinstance(value, dict):
+        return any(
+            _has_unpaired_surrogate(k) or _has_unpaired_surrogate(v)
+            for k, v in value.items()
+        )
+    return False
+
+
 def _is_hex(s: str) -> bool:
     """Lowercase-hex check. The spec mandates lowercase per §11.4."""
     if not s:
@@ -310,6 +337,10 @@ def verify_receipt(
     shape_errors = _validate_shape(receipt, depth=depth)
     if shape_errors:
         result.reasons.extend(shape_errors)
+        return result
+
+    if _has_unpaired_surrogate(receipt):
+        result.reasons.append(UNPAIRED_SURROGATE_ERROR)
         return result
 
     embedded_pk = receipt.get("public_key")

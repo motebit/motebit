@@ -5,7 +5,7 @@
  * from @motebit/crypto), so a divergence here means one grew a second walker.
  * Includes the committed negative conformance fixtures.
  */
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -20,13 +20,15 @@ const MOTEBIT_VERIFY_WIRE = resolve(HERE, "helpers", "run-verify-wire.ts");
 const MOTEBIT_VERIFY_CLI = join(REPO, "packages", "verify", "src", "cli.ts");
 const NEGATIVE_DIR = join(REPO, "examples", "python-receipt-verifier", "fixtures", "negative");
 
-function exitOf(script: string, args: readonly string[]): number | null {
-  const r = spawnSync("npx", ["--yes", "tsx", script, ...args], {
-    encoding: "utf-8",
-    timeout: 60_000,
-    cwd: REPO,
+function exitOf(script: string, args: readonly string[]): Promise<number | null> {
+  return new Promise((resolveExit) => {
+    const child = spawn("npx", ["--yes", "tsx", script, ...args], { cwd: REPO, stdio: "ignore" });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolveExit(code);
+    });
   });
-  return r.status;
 }
 
 describe("motebit verify receipt ≡ motebit-verify (exit codes)", () => {
@@ -48,41 +50,40 @@ describe("motebit verify receipt ≡ motebit-verify (exit codes)", () => {
   });
 
   it("every corpus entry: identical exit codes, matching the expected verdict", async () => {
-    const rows: string[] = [];
-    for (const e of corpus) {
-      const f = files[e.name]!;
-      for (const lenient of [false, true]) {
+    const runs = corpus.flatMap((e) =>
+      [false, true].map(async (lenient) => {
+        const f = files[e.name]!;
         const flag = lenient ? ["--lenient"] : [];
-        const a = exitOf(MOTEBIT_VERIFY_WIRE, ["receipt", f, ...flag]);
-        const b = exitOf(MOTEBIT_VERIFY_CLI, [...flag, f]);
+        const [motebit, motebitVerify] = await Promise.all([
+          exitOf(MOTEBIT_VERIFY_WIRE, ["receipt", f, ...flag]),
+          exitOf(MOTEBIT_VERIFY_CLI, [...flag, f]),
+        ]);
         const want = (lenient ? e.lenientOk : e.strictOk) ? 0 : 1;
-        rows.push(
-          `${e.name}${lenient ? " --lenient" : ""}: motebit=${a} motebit-verify=${b} want=${want}`,
-        );
-        expect({ name: e.name, lenient, motebit: a, motebitVerify: b }).toEqual({
-          name: e.name,
-          lenient,
-          motebit: want,
-          motebitVerify: want,
-        });
-      }
+        return { got: { name: e.name, lenient, motebit, motebitVerify }, want };
+      }),
+    );
+    const results = await Promise.all(runs);
+    expect(results.length).toBe(corpus.length * 2);
+    for (const { got, want } of results) {
+      expect(got).toEqual({ ...got, motebit: want, motebitVerify: want });
     }
-    expect(rows.length).toBe(corpus.length * 2);
   }, 600_000);
 
-  it("committed negative conformance fixtures: both CLIs exit 1, strict and --lenient", () => {
+  it("committed negative conformance fixtures: both CLIs exit 1, strict and --lenient", async () => {
     const negatives = readdirSync(NEGATIVE_DIR).filter((f) => f.endsWith(".json"));
     expect(negatives.length).toBeGreaterThan(0);
-    for (const n of negatives) {
-      const f = join(NEGATIVE_DIR, n);
-      for (const flag of [[], ["--lenient"]]) {
-        expect([n, flag, exitOf(MOTEBIT_VERIFY_WIRE, ["receipt", f, ...flag])]).toEqual([
-          n,
-          flag,
-          1,
+    const runs = negatives.flatMap((n) =>
+      [[], ["--lenient"]].map(async (flag) => {
+        const f = join(NEGATIVE_DIR, n);
+        const [motebit, motebitVerify] = await Promise.all([
+          exitOf(MOTEBIT_VERIFY_WIRE, ["receipt", f, ...flag]),
+          exitOf(MOTEBIT_VERIFY_CLI, [...flag, f]),
         ]);
-        expect([n, flag, exitOf(MOTEBIT_VERIFY_CLI, [...flag, f])]).toEqual([n, flag, 1]);
-      }
+        return { n, flag, motebit, motebitVerify };
+      }),
+    );
+    for (const r of await Promise.all(runs)) {
+      expect(r).toEqual({ ...r, motebit: 1, motebitVerify: 1 });
     }
   }, 300_000);
 });

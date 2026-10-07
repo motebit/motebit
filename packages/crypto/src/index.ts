@@ -52,7 +52,7 @@ import type {
   VerdictSubject,
   VerificationVerdict,
 } from "@motebit/protocol";
-import { hash, isScopeNarrowed } from "./signing.js";
+import { hash, hasUnpairedSurrogate, isScopeNarrowed } from "./signing.js";
 // The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
 // as a side effect of module load. Importing verifyBySuite here is
 // enough to guarantee that the primitive is ready before any verify
@@ -1823,6 +1823,9 @@ async function verifyReceiptSignature(
   // section), phrased to match the Python reference verifier byte-for-byte —
   // the cross-language conformance story depends on both verifiers reporting
   // the same spec violation for the same artifact.
+  if (hasUnpairedSurrogate(body)) {
+    return { valid: false, error: UNPAIRED_SURROGATE_ERROR };
+  }
   if (!signature || signature.trim() === "") {
     return { valid: false, error: "§11.2 violation: receipt signature is empty" };
   }
@@ -1899,49 +1902,34 @@ async function verifyReceiptAtDepth(
   depth: number,
 ): Promise<ReceiptVerifyResult> {
   const strict = options?.strictHashBinding === true;
-  // Resolve public key: embedded in receipt, or fail
+  // Resolve public key: embedded in receipt, or fail. Only 64 hex characters
+  // (32 bytes) is a usable key; anything else is treated as absent.
   let publicKey: Uint8Array | null = null;
   let signerDid: string | undefined;
 
-  if (receipt.public_key) {
-    try {
-      publicKey = hexToBytes(receipt.public_key);
-      if (publicKey.length === 32) {
-        signerDid = publicKeyToDidKey(publicKey);
-      } else {
-        publicKey = null;
-      }
-    } catch {
-      publicKey = null;
+  if (typeof receipt.public_key === "string" && /^[0-9a-fA-F]{64}$/.test(receipt.public_key)) {
+    publicKey = hexToBytes(receipt.public_key);
+    signerDid = publicKeyToDidKey(publicKey);
+  }
+
+  const errors: VerificationError[] = [];
+  let sigValid = false;
+  if (!publicKey) {
+    errors.push({
+      message: "§11.3 violation: No embedded public_key — cannot verify without known keys",
+    });
+  } else {
+    const sigResult = await verifyReceiptSignature(receipt, publicKey);
+    sigValid = sigResult.valid;
+    if (!sigResult.valid) {
+      errors.push({
+        message: sigResult.error ?? "§11.2 violation: Ed25519 signature did not verify",
+      });
     }
   }
 
-  if (!publicKey) {
-    // Recursively verify delegations even if root can't be verified
-    const delegations = await verifyReceiptDelegations(receipt, strict, depth);
-    return {
-      type: "receipt",
-      valid: false,
-      receipt,
-      errors: [
-        {
-          message: "§11.3 violation: No embedded public_key — cannot verify without known keys",
-        },
-      ],
-      ...(delegations.length > 0 ? { delegations } : {}),
-    };
-  }
-
-  const sigResult = await verifyReceiptSignature(receipt, publicKey);
-  const errors: VerificationError[] = [];
-
-  if (!sigResult.valid) {
-    errors.push({
-      message: sigResult.error ?? "§11.2 violation: Ed25519 signature did not verify",
-    });
-  }
-
-  // Recursively verify delegation receipts
+  // Recursively verify delegation receipts — whether or not this node's key
+  // was usable, so every depth is walked.
   const delegations = await verifyReceiptDelegations(receipt, strict, depth);
   const delegationErrors = delegations.filter((d) => !d.valid);
   for (const d of delegationErrors) {
@@ -1977,10 +1965,16 @@ async function verifyReceiptAtDepth(
   // Strict mode: the signature proves authenticity, NOT that result_hash binds
   // the result field. Recompute it per spec and reject a self-inconsistent
   // receipt (one whose result_hash a third party can't reproduce from result).
+  // Independent of the key: a node whose signature cannot be checked still
+  // has its binding checked. A result with an unpaired surrogate has no UTF-8
+  // form (§11.4), so it binds nothing.
   let resultHashOk = true;
   if (strict) {
-    const expected = await hash(new TextEncoder().encode(receipt.result));
-    resultHashOk = expected === receipt.result_hash;
+    const result: unknown = receipt.result;
+    resultHashOk =
+      typeof result === "string" &&
+      !hasUnpairedSurrogate(result) &&
+      (await hash(new TextEncoder().encode(result))) === receipt.result_hash;
     if (!resultHashOk) {
       const where =
         depth === 0 ? "" : ` (delegation depth ${depth}, task_id ${receipt.task_id ?? "unknown"})`;
@@ -1993,13 +1987,57 @@ async function verifyReceiptAtDepth(
 
   return {
     type: "receipt",
-    valid: sigResult.valid && delegationErrors.length === 0 && resultHashOk && serviceHashOk,
+    valid: sigValid && delegationErrors.length === 0 && resultHashOk && serviceHashOk,
     receipt,
-    signer: signerDid,
-    keySource: "embedded",
+    ...(signerDid !== undefined ? { signer: signerDid, keySource: "embedded" as const } : {}),
     ...(delegations.length > 0 ? { delegations } : {}),
     ...(errors.length > 0 ? { errors } : {}),
   };
+}
+
+/** The §11.4 reason for a receipt carrying an unpaired UTF-16 surrogate. */
+const UNPAIRED_SURROGATE_ERROR =
+  "§11.4 violation: receipt contains a string with an unpaired UTF-16 surrogate — it has no UTF-8 encoding";
+
+/** One failure at one node of a `verifyReceipt` tree. */
+export interface ReceiptTreeError {
+  /** 0 = the outer receipt; n = a `delegation_receipts` entry n levels down. */
+  depth: number;
+  /** The failing node's `task_id`, as carried by the receipt. */
+  task_id: string | undefined;
+  /**
+   * The failing field: `"result_hash"` for a strict binding failure,
+   * `"service_result_hash"` for a malformed service hash; absent for a
+   * signature / key failure (the node could not be authenticated).
+   */
+  path?: string;
+  /** The verifier's reason, as `verifyReceipt` reported it on that node. */
+  message: string;
+}
+
+/**
+ * Flatten a `verifyReceipt` result into every node's OWN failures, at every
+ * depth. The parent's aggregated `§11.5` entry (path `delegation_receipts`) is
+ * skipped: the child it summarises is walked directly. Empty iff the tree is
+ * valid. The one nested walk both CLIs (`motebit verify receipt`,
+ * `motebit-verify`) read, so they cannot diverge on a nested receipt.
+ */
+export function collectReceiptTreeErrors(result: ReceiptVerifyResult): ReceiptTreeError[] {
+  const out: ReceiptTreeError[] = [];
+  const walk = (node: ReceiptVerifyResult, depth: number): void => {
+    for (const e of node.errors ?? []) {
+      if (e.path === "delegation_receipts") continue;
+      out.push({
+        depth,
+        task_id: node.receipt?.task_id,
+        ...(e.path !== undefined ? { path: e.path } : {}),
+        message: e.message,
+      });
+    }
+    for (const d of node.delegations ?? []) walk(d, depth + 1);
+  };
+  walk(result, 0);
+  return out;
 }
 
 // ===========================================================================
@@ -2034,12 +2072,7 @@ export async function verifyReceiptVerdict(receipt: SignableReceipt): Promise<Ve
   // Resolve the embedded key (same rule as `verifyReceipt`).
   let publicKey: Uint8Array | null = null;
   if (receipt.public_key) {
-    try {
-      const b = hexToBytes(receipt.public_key);
-      if (b.length === 32) publicKey = b;
-    } catch {
-      publicKey = null;
-    }
+    if (/^[0-9a-fA-F]{64}$/.test(receipt.public_key)) publicKey = hexToBytes(receipt.public_key);
     evidenceBasis.push({ kind: "public_key", ref: receipt.public_key });
   }
   evidenceBasis.push({ kind: "receipt", ref: receipt.result_hash });
@@ -2054,7 +2087,18 @@ export async function verifyReceiptVerdict(receipt: SignableReceipt): Promise<Ve
   // carry distinct repair codes.
   let integrity: IntegrityVerdict;
   let integrityRepair: RepairInstruction | undefined;
-  if (!publicKey) {
+  const { signature: _sig, ...unsignedBody } = receipt;
+  if (hasUnpairedSurrogate(unsignedBody)) {
+    integrity = "invalid";
+    integrityRepair = {
+      code: "integrity.unpaired_surrogate",
+      axis: "integrity",
+      summary:
+        "The receipt contains a string with an unpaired UTF-16 surrogate — it has no UTF-8 encoding, so no canonical bytes to verify or hash.",
+      canonical: "spec/execution-ledger-v1.md §11.4",
+      fix: "Reject the receipt. A signer MUST emit well-formed Unicode; a verifier never substitutes U+FFFD.",
+    };
+  } else if (!publicKey) {
     integrity = "invalid";
     integrityRepair = {
       code: "integrity.no_key",

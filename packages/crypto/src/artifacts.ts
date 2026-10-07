@@ -22,6 +22,7 @@ import {
   ed25519Sign,
   ed25519Verify,
   base58btcEncode,
+  hasUnpairedSurrogate,
 } from "./signing.js";
 
 /**
@@ -186,6 +187,9 @@ export async function verifyExecutionReceipt(
     return false;
   }
   const { signature, ...body } = receipt;
+  // No UTF-8 form exists for an unpaired surrogate (spec/execution-ledger-v1.md
+  // §11.4) — reject rather than verify over substituted bytes.
+  if (hasUnpairedSurrogate(body)) return false;
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
 
@@ -228,7 +232,7 @@ export interface ReceiptVerifyDetail {
   /** First 256 chars of the canonical JSON — enough to spot most field-level diffs. */
   canonical_preview: string;
   /** Reason category if valid is false; `"ok"` if true. */
-  reason: "ok" | "wrong_suite" | "bad_base64" | "ed25519_mismatch";
+  reason: "ok" | "wrong_suite" | "bad_base64" | "ed25519_mismatch" | "unpaired_surrogate";
 }
 
 export async function verifyExecutionReceiptDetailed(
@@ -247,6 +251,14 @@ export async function verifyExecutionReceiptDetailed(
   const { signature, ...body } = receipt;
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
+  if (hasUnpairedSurrogate(body)) {
+    return {
+      valid: false,
+      canonical_sha256: await hash(message),
+      canonical_preview: canonical.slice(0, 256),
+      reason: "unpaired_surrogate",
+    };
+  }
 
   let sigBytes: Uint8Array;
   try {

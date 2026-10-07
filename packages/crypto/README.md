@@ -127,6 +127,7 @@ const vc = await issueReputationCredential(
 ### Chain Verification
 
 - **`verifyReceiptChain(receipt, knownKeys)`** — Recursively verify a delegation receipt tree.
+- **`collectReceiptTreeErrors(result)`** — Flatten a `verifyReceipt` result into every node's own failures (depth, `task_id`, failing field, message), empty iff the tree is valid. With `strictHashBinding`, `result_hash` is checked on every node, including one whose key is missing or malformed (that node also fails its signature check). A receipt containing an unpaired UTF-16 surrogate is invalid in every mode: it has no UTF-8 encoding (spec/execution-ledger-v1.md §11.4).
 - **`verifyReceiptSequence(chain)`** — Verify a flat sequence of receipts.
 - **`verifyDelegation(delegation, options?)`** — Verify a delegation token signature.
 - **`verifyDelegationChain(chain)`** — Verify a chain of delegations with scope narrowing.
