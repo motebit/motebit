@@ -3,7 +3,7 @@ import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { PlatformAdapters, PlanChunk } from "../index";
 import type { StreamingProvider, AgenticChunk } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
-import { PlanStatus, StepStatus } from "@motebit/sdk";
+import { PlanStatus, SensitivityLevel, StepStatus } from "@motebit/sdk";
 import { InMemoryPlanStore } from "@motebit/planner";
 
 // === Mock ai-core: override runTurnStreaming, keep everything else real ===
@@ -288,6 +288,8 @@ describe("MotebitRuntime.resumePlan", () => {
       updated_at: Date.now(),
       current_step_index: 1,
       total_steps: 2,
+      // Created by this runtime: stamped at its tier.
+      sensitivity: SensitivityLevel.Personal,
     });
 
     planStore.saveStep({
@@ -362,6 +364,8 @@ describe("MotebitRuntime.resumePlan", () => {
       updated_at: Date.now(),
       current_step_index: 0,
       total_steps: 0,
+      // Created by this runtime: stamped at its tier.
+      sensitivity: SensitivityLevel.Personal,
     });
 
     await expect(async () => {
@@ -431,6 +435,8 @@ describe("#890: executePlan never re-plans a goal whose delegated step has an un
       updated_at: Date.now(),
       current_step_index: 0,
       total_steps: 1,
+      // Created by this runtime: stamped at its tier.
+      sensitivity: SensitivityLevel.Personal,
     });
     planStore.saveStep({
       step_id: "step-held",

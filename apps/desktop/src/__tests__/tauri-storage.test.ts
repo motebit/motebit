@@ -8,6 +8,7 @@ import {
   type InvokeFn,
 } from "../tauri-storage";
 import { DESKTOP_MIGRATIONS } from "../tauri-migrations";
+import { SensitivityLevel } from "@motebit/sdk";
 import { pushCompactionFloor } from "@motebit/sync-engine";
 
 // Schema matching main.rs SCHEMA constant
@@ -66,7 +67,8 @@ CREATE TABLE IF NOT EXISTS plans (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   current_step_index INTEGER NOT NULL DEFAULT 0,
-  total_steps INTEGER NOT NULL DEFAULT 0
+  total_steps INTEGER NOT NULL DEFAULT 0,
+  sensitivity TEXT DEFAULT NULL -- tauri-migrations v9
 );
 CREATE INDEX IF NOT EXISTS idx_plans_goal ON plans (goal_id);
 
@@ -726,6 +728,15 @@ describe("TauriPlanStore", () => {
     const rows = db.prepare("SELECT * FROM plans WHERE plan_id = ?").all("plan-1");
     expect(rows).toHaveLength(1);
     expect((rows[0] as { title: string }).title).toBe("Test Plan");
+  });
+
+  it("savePlan without a stamp keeps the stamp on record (a sync import never erases it)", async () => {
+    store.savePlan({ ...makePlan(), sensitivity: SensitivityLevel.Secret });
+    store.savePlan(makePlan());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(store.getPlan("plan-1")?.sensitivity).toBe(SensitivityLevel.Secret);
+    const rows = db.prepare("SELECT sensitivity FROM plans WHERE plan_id = ?").all("plan-1");
+    expect((rows[0] as { sensitivity: string }).sensitivity).toBe("secret");
   });
 
   it("saveStep persists to DB", async () => {

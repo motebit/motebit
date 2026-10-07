@@ -26,7 +26,13 @@ import type {
   SettlementRecord,
   StoredCredential,
 } from "@motebit/sdk";
-import { PlanStatus, StepStatus, AgentTrustLevel, isMemorySource } from "@motebit/sdk";
+import {
+  PlanStatus,
+  StepStatus,
+  AgentTrustLevel,
+  isMemorySource,
+  isSensitivityLevel,
+} from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
@@ -2996,6 +3002,7 @@ interface PlanRow {
   total_steps: number;
   proposal_id: string | null;
   collaborative: number;
+  sensitivity?: string | null;
 }
 
 function rowToPlan(row: PlanRow): Plan {
@@ -3011,6 +3018,7 @@ function rowToPlan(row: PlanRow): Plan {
     total_steps: row.total_steps,
     proposal_id: row.proposal_id ?? undefined,
     collaborative: row.collaborative === 1,
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
@@ -3074,9 +3082,11 @@ export class SqlitePlanStore {
   private stmtListStepsSince: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
+    // A plan saved without a stamp (a sync import — the stamp is local)
+    // keeps the stamp already on record; it is never erased.
     this.stmtSavePlan = db.prepare(
-      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT sensitivity FROM plans WHERE plan_id = ?)))`,
     );
     this.stmtGetPlan = db.prepare(`SELECT * FROM plans WHERE plan_id = ?`);
     this.stmtGetPlanForGoal = db.prepare(
@@ -3117,6 +3127,8 @@ export class SqlitePlanStore {
       plan.total_steps,
       plan.proposal_id ?? null,
       plan.collaborative ? 1 : 0,
+      plan.sensitivity ?? null,
+      plan.plan_id,
     );
   }
 
@@ -3163,6 +3175,8 @@ export class SqlitePlanStore {
       merged.total_steps,
       merged.proposal_id ?? null,
       merged.collaborative ? 1 : 0,
+      merged.sensitivity ?? null,
+      merged.plan_id,
     );
   }
 

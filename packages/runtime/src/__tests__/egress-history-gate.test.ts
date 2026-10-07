@@ -97,10 +97,18 @@ describe("conversation history egress gate", () => {
       expect(["history", "this.egressHistory()"]).toContain(m[1]!.trim());
     }
     expect(conv).toMatch(
-      /const history = this\.egressHistory\(\);\s*if \(history\.length < 2\) return null;\s*const existingSummary/,
+      /const history = this\.egressHistory\(\);\s*if \(history\.length < 2\) return null;/,
     );
+    // The stored summary is derived content: it reaches a provider only
+    // through the stamp-filtered view (interior-egress.ts).
+    expect(conv).toMatch(/const existing = this\.egressSummary\(\);/);
+    expect(conv).toMatch(/this\.egressSummary\(\)\?\.text \?\? null/);
+    expect(conv).not.toMatch(/getActiveConversation\([^)]*\)\?\.summary \?\? null/);
     expect(conv).toMatch(/tryAiTitle\(this\.egressHistory\(\)\)/);
     const rt = FILES.find((f) => f.rel === "motebit-runtime.ts")!.text;
     expect(rt).toMatch(/getConversationHistory: \(\) => this\.conversation\.egressHistory\(\)/);
+    expect(rt).toMatch(
+      /getConversationSummary: \(\) => this\.conversation\.egressSummary\(\)\?\.text \?\? null/,
+    );
   });
 });

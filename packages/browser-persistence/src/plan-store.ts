@@ -39,10 +39,14 @@ export class IdbPlanStore implements PlanStoreAdapter {
   }
 
   savePlan(plan: Plan): void {
-    this._plans.set(plan.plan_id, { ...plan });
+    // A plan saved without a stamp (a sync import — the stamp is local)
+    // keeps the stamp already on record; it is never erased.
+    const sensitivity = plan.sensitivity ?? this._plans.get(plan.plan_id)?.sensitivity;
+    const stored: Plan = sensitivity != null ? { ...plan, sensitivity } : { ...plan };
+    this._plans.set(plan.plan_id, stored);
     this._goalIndex.set(plan.goal_id, plan.plan_id);
     const tx = this.db.transaction("plans", "readwrite");
-    tx.objectStore("plans").put({ ...plan });
+    tx.objectStore("plans").put({ ...stored });
   }
 
   getPlan(planId: string): Plan | null {

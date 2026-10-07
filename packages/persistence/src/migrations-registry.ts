@@ -704,4 +704,15 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    version: 51,
+    description: "plans.sensitivity — the tier a plan's derived content was produced at",
+    statements: [
+      // A plan's steps carry content derived from the goal and the turns
+      // that ran them; executing or resuming it sends that content, so it
+      // is a send at the plan's tier (ai-core interior-egress.ts). NULL is a
+      // legacy plan, held at secret (fail-closed). Local, never on a wire.
+      "ALTER TABLE plans ADD COLUMN sensitivity TEXT DEFAULT NULL",
+    ],
+  },
 ];

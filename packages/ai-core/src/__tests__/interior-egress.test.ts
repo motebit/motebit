@@ -7,6 +7,12 @@ import {
   interiorEgressSensitivities,
   interiorEventsPermittedAt,
   METADATA_ONLY_EVENT_TYPES,
+  derivedSensitivity,
+  maxStampedSensitivity,
+  enforcedDerivedSensitivity,
+  stampDerivedText,
+  readDerivedText,
+  derivedTextPermittedAt,
 } from "../interior-egress.js";
 
 const S = SensitivityLevel;
@@ -86,5 +92,52 @@ describe("interior-egress rule", () => {
         EventType.SensitivityGateFired,
       ].sort(),
     );
+  });
+});
+
+describe("derived artifacts inherit the taint of their inputs", () => {
+  it("derivedSensitivity is the max of the send tier's ceiling and every input stamp", () => {
+    expect(derivedSensitivity(S.None)).toBe(S.Personal);
+    expect(derivedSensitivity(S.Secret)).toBe(S.Secret);
+    expect(derivedSensitivity(S.Personal, S.Medical, undefined, null)).toBe(S.Medical);
+  });
+
+  it("maxStampedSensitivity is unknowable (null) when empty or any member is unstamped", () => {
+    expect(maxStampedSensitivity([])).toBeNull();
+    expect(maxStampedSensitivity([S.Personal, undefined])).toBeNull();
+    expect(maxStampedSensitivity([S.None, S.Financial, S.Personal])).toBe(S.Financial);
+  });
+
+  it("an unstamped artifact is enforced at its fallback, else Secret", () => {
+    expect(enforcedDerivedSensitivity(S.Personal)).toBe(S.Personal);
+    expect(enforcedDerivedSensitivity(undefined, () => S.Medical)).toBe(S.Medical);
+    expect(enforcedDerivedSensitivity(undefined, () => null)).toBe(S.Secret);
+    expect(enforcedDerivedSensitivity(null)).toBe(S.Secret);
+  });
+
+  it("stamped text round-trips; text without a header reads as unstamped", () => {
+    const stored = stampDerivedText("the summary\nline two", S.Medical);
+    expect(readDerivedText(stored)).toEqual({
+      text: "the summary\nline two",
+      sensitivity: S.Medical,
+    });
+    expect(readDerivedText("plain")).toEqual({ text: "plain", sensitivity: null });
+    expect(readDerivedText("[motebit:sensitivity=bogus]\nx")).toEqual({
+      text: "[motebit:sensitivity=bogus]\nx",
+      sensitivity: null,
+    });
+  });
+
+  it("derived text passes only where the one rule permits its stamp", () => {
+    const secret = stampDerivedText("s", S.Secret);
+    expect(derivedTextPermittedAt(secret, S.Personal)).toBeNull();
+    expect(derivedTextPermittedAt(secret, S.Secret)).toEqual({ text: "s", sensitivity: S.Secret });
+    expect(derivedTextPermittedAt(stampDerivedText("p", S.Personal), S.None)?.text).toBe("p");
+    // Legacy: held to the fallback, withheld when unknowable.
+    expect(derivedTextPermittedAt("legacy", S.Personal, () => S.Personal)?.text).toBe("legacy");
+    expect(derivedTextPermittedAt("legacy", S.Personal, () => S.Medical)).toBeNull();
+    expect(derivedTextPermittedAt("legacy", S.Personal, () => null)).toBeNull();
+    expect(derivedTextPermittedAt("legacy", S.Secret)?.text).toBe("legacy");
+    expect(derivedTextPermittedAt(null, S.Secret)).toBeNull();
   });
 });

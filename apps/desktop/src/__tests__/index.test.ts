@@ -1718,88 +1718,26 @@ describe("DesktopApp.summarizeConversation", () => {
     expect(result).toBeNull();
   });
 
-  it("returns summary when generateCompletion succeeds", async () => {
+  it("delegates to the runtime's tier-filtered summarize, never a raw-history completion", async () => {
     const setup = await setupAppWithConversation({ messageCount: 6 });
     app = setup.app;
 
-    // Mock generateCompletion
     const rt = appInternals(app).runtime as unknown as {
       generateCompletion: (p: string) => Promise<string>;
+      summarizeCurrentConversation: () => Promise<string | null>;
     };
-    rt.generateCompletion = vi
+    rt.generateCompletion = vi.fn();
+    rt.summarizeCurrentConversation = vi
       .fn()
       .mockResolvedValue("A conversation about computing history and evolution.");
 
     const result = await app.summarizeConversation();
     expect(result).toBe("A conversation about computing history and evolution.");
-
-    // Verify it called generateCompletion with a summarization prompt
-    expect(rt.generateCompletion).toHaveBeenCalledOnce();
-    const prompt = (rt.generateCompletion as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
-    expect(prompt).toContain("Summarize this conversation");
-  });
-
-  it("persists summary via updateSummary (db_execute)", async () => {
-    const setup = await setupAppWithConversation({ messageCount: 6 });
-    app = setup.app;
-
-    const rt = appInternals(app).runtime as unknown as {
-      generateCompletion: (p: string) => Promise<string>;
-    };
-    rt.generateCompletion = vi.fn().mockResolvedValue("Summary of the conversation.");
-
-    await app.summarizeConversation();
-
-    const summaryUpdates = setup.db.executions.filter((e) =>
-      e.sql.includes("UPDATE conversations SET summary"),
-    );
-    expect(summaryUpdates).toHaveLength(1);
-    expect(summaryUpdates[0]!.params).toContain("Summary of the conversation.");
-    expect(summaryUpdates[0]!.params).toContain("conv-auto-title");
-  });
-
-  it("includes existing summary in the prompt for updates", async () => {
-    const db = emptyDb();
-    db.conversations.push({
-      conversation_id: "conv-summ",
-      motebit_id: "desktop-local",
-      started_at: 1000,
-      last_active_at: 2000,
-      title: null,
-      summary: "Previous summary content.",
-      message_count: 6,
-    });
-    for (let i = 0; i < 6; i++) {
-      db.messages.push({
-        message_id: `msg-${i}`,
-        conversation_id: "conv-summ",
-        motebit_id: "desktop-local",
-        role: i % 2 === 0 ? "user" : "assistant",
-        content: `Message ${i}`,
-        tool_calls: null,
-        tool_call_id: null,
-        created_at: 1000 + i,
-        token_estimate: 10,
-      });
-    }
-
-    app = new DesktopApp();
-    await app.initAI({ provider: "local-server", isTauri: true, invoke: createMockInvoke(db) });
-
-    const internals = appInternals(app);
-    const rt = internals.runtime!;
-    rt.conversationId = "conv-summ";
-    rt.conversationHistory = db.messages.map((m) => ({ role: m.role, content: m.content }));
-
-    const rtTyped = rt as unknown as { generateCompletion: (p: string) => Promise<string> };
-    rtTyped.generateCompletion = vi.fn().mockResolvedValue("Updated summary.");
-
-    const result = await app.summarizeConversation();
-    expect(result).toBe("Updated summary.");
-
-    const prompt = (rtTyped.generateCompletion as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as string;
-    expect(prompt).toContain("Update this conversation summary");
-    expect(prompt).toContain("Previous summary content.");
+    expect(rt.summarizeCurrentConversation).toHaveBeenCalledOnce();
+    expect(rt.generateCompletion).not.toHaveBeenCalled();
+    // The runtime persists the stamped summary; the desktop writes none.
+    expect(
+      setup.db.executions.filter((e) => e.sql.includes("UPDATE conversations SET summary")),
+    ).toHaveLength(0);
   });
 });

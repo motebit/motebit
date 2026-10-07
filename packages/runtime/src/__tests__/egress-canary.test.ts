@@ -46,7 +46,12 @@ vi.mock("@motebit/memory-graph", async () => {
   return { ...actual, embedText: (text: string) => Promise.resolve(actual.embedTextHash(text)) };
 });
 
-import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  SovereignTierRequiredError,
+  createInMemoryStorage,
+} from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import { buildSystemPrompt } from "@motebit/ai-core";
 import { embedTextHash } from "@motebit/memory-graph";
@@ -57,7 +62,16 @@ import type {
   ConversationStoreAdapter,
   ToolDefinition,
 } from "@motebit/sdk";
-import { AgentTaskStatus, MemoryType, RiskLevel, SensitivityLevel } from "@motebit/sdk";
+import {
+  AgentTaskStatus,
+  EventType,
+  MemoryType,
+  PlanStatus,
+  RiskLevel,
+  SensitivityLevel,
+  StepStatus,
+} from "@motebit/sdk";
+import type { InMemoryPlanStore } from "@motebit/planner";
 import { generateKeypair } from "@motebit/encryption";
 
 const CANARY = {
@@ -287,6 +301,7 @@ async function makeRuntime() {
   const sent: Sent[] = [];
   let mode = "on-device";
   let entry = "seed";
+  const store = conversationStore();
   const runtime = new MotebitRuntime(
     {
       motebitId: "owner",
@@ -299,7 +314,7 @@ async function makeRuntime() {
       },
     },
     {
-      storage: { ...createInMemoryStorage(), conversationStore: conversationStore() },
+      storage: { ...createInMemoryStorage(), conversationStore: store },
       renderer: new NullRenderer(),
       ai: recordingProvider(
         sent,
@@ -334,7 +349,7 @@ async function makeRuntime() {
       target.onDevice ? SensitivityLevel.Secret : SensitivityLevel.Personal,
     );
   };
-  return { runtime, sent, setMode, setEntry, planId: "", target, toTarget };
+  return { runtime, sent, setMode, setEntry, planId: "", target, toTarget, store };
 }
 
 const tierOf = (runtime: MotebitRuntime): SensitivityLevel =>
@@ -516,23 +531,47 @@ async function runEntry(name: string, onDevice: boolean) {
   h.target.onDevice = onDevice;
   h.toTarget();
   h.setEntry(name);
-  await ENTRY_POINTS[name]!(h);
+  let refused: unknown = null;
+  try {
+    await ENTRY_POINTS[name]!(h);
+  } catch (err) {
+    if (!(err instanceof SovereignTierRequiredError)) throw err;
+    refused = err;
+  }
   await settle();
   const mode = onDevice ? "on-device" : "byok";
   const sends = h.sent.slice(before).filter((s) => s.mode === mode);
   const leaked = new Set<CanaryKey>();
   for (const s of sends) for (const k of CANARY_KEYS) if (s.seen.includes(CANARY[k])) leaked.add(k);
-  return { sends, leaked: [...leaked].sort(), h };
+  return { sends, leaked: [...leaked].sort(), h, refused };
 }
+
+/**
+ * Entry points whose whole content is a DERIVED artifact produced at Secret
+ * (the paused turn, the plan's steps): on BYOK the only safe outcome is the
+ * gate's refusal before any request — the call is a send at the artifact's
+ * tier. On-device they run.
+ */
+const REFUSED_ON_BYOK = new Set([
+  "resumeAfterApproval (turn started at Secret)",
+  "resumePlan (plan created at Secret)",
+]);
 
 describe("egress canary: every entry point on BYOK at Personal carries no Secret-tier interior", () => {
   for (const name of Object.keys(ENTRY_POINTS)) {
     it(name, async () => {
-      const { sends, leaked } = await runEntry(name, false);
-      expect(
-        sends.length,
-        `${name} made no provider request — the entry point is not driven`,
-      ).toBeGreaterThan(0);
+      const { sends, leaked, refused } = await runEntry(name, false);
+      if (REFUSED_ON_BYOK.has(name)) {
+        expect(refused, `${name} must be refused on BYOK (its content is Secret)`).toBeInstanceOf(
+          SovereignTierRequiredError,
+        );
+      } else {
+        expect(refused, `${name} was refused`).toBeNull();
+        expect(
+          sends.length,
+          `${name} made no provider request — the entry point is not driven`,
+        ).toBeGreaterThan(0);
+      }
       expect(leaked, `${name} sent these Secret canaries to BYOK`).toEqual([]);
     });
   }
@@ -550,7 +589,8 @@ describe("egress canary: the seeds are live — on-device at Secret sees them", 
   it("every canary reaches the on-device provider through some entry point", async () => {
     const seen = new Set<CanaryKey>();
     for (const name of Object.keys(ENTRY_POINTS)) {
-      const { leaked } = await runEntry(name, true);
+      const { leaked, refused } = await runEntry(name, true);
+      expect(refused, `${name} was refused on-device at Secret`).toBeNull();
       for (const k of leaked) seen.add(k as CanaryKey);
     }
     const expected = CANARY_KEYS.filter((k) => !(k in NO_PROVIDER_CHANNEL));
@@ -567,6 +607,120 @@ describe("egress canary: the seeds are live — on-device at Secret sees them", 
         s.seen.includes(`[Earlier in this conversation: summary ${CANARY.summary}`),
       ),
     ).toBe(true);
+  });
+});
+
+describe("egress canary: a legacy (unstamped) derived artifact fails closed", () => {
+  const LEGACY = "LEGACYDERIVED99";
+
+  async function byokConversation() {
+    const h = await makeRuntime();
+    h.setMode("byok");
+    h.runtime.setSessionSensitivity(SensitivityLevel.Personal);
+    await drain(h.runtime.sendMessageStreaming("hello"));
+    const id = h.runtime.getConversationId()!;
+    return { h, id };
+  }
+  async function trimmedTurnSees(h: Harness, text: string): Promise<boolean> {
+    const before = h.sent.length;
+    for (let i = 0; i < 8; i++) await drain(h.runtime.sendMessageStreaming(`long ${i} ${LONG}`));
+    return h.sent.slice(before).some((s) => s.seen.includes(text));
+  }
+
+  it("an unstamped summary is held to its conversation's stored messages — Personal: sent", async () => {
+    const { h, id } = await byokConversation();
+    h.store.updateSummary(id, `legacy ${LEGACY}`);
+    expect(await trimmedTurnSees(h, LEGACY)).toBe(true);
+  });
+
+  it("an unstamped summary over a Secret message is withheld", async () => {
+    const { h, id } = await byokConversation();
+    h.store.appendMessage(id, "owner", {
+      role: "user",
+      content: "synced from elsewhere",
+      sensitivity: SensitivityLevel.Secret,
+    });
+    h.store.updateSummary(id, `legacy ${LEGACY}`);
+    expect(await trimmedTurnSees(h, LEGACY)).toBe(false);
+  });
+
+  it("an unstamped summary over an unstamped message is withheld (unknowable)", async () => {
+    const { h, id } = await byokConversation();
+    h.store.appendMessage(id, "owner", { role: "user", content: "pre-floor message" });
+    h.store.updateSummary(id, `legacy ${LEGACY}`);
+    expect(await trimmedTurnSees(h, LEGACY)).toBe(false);
+  });
+
+  it("an unstamped plan is refused on BYOK and runs on-device", async () => {
+    const h = await makeRuntime();
+    const planStore = (h.runtime as unknown as { planStore: InMemoryPlanStore }).planStore;
+    planStore.savePlan({
+      plan_id: "legacy-plan",
+      goal_id: "g",
+      motebit_id: "owner",
+      title: "legacy",
+      status: PlanStatus.Active,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      current_step_index: 0,
+      total_steps: 1,
+    } as never);
+    planStore.saveStep({
+      step_id: "legacy-step",
+      plan_id: "legacy-plan",
+      ordinal: 0,
+      description: "d",
+      prompt: `do ${LEGACY}`,
+      depends_on: [],
+      optional: false,
+      status: StepStatus.Pending,
+      result_summary: null,
+      error_message: null,
+      tool_calls_made: 0,
+      started_at: null,
+      completed_at: null,
+      retry_count: 0,
+      updated_at: Date.now(),
+    } as never);
+    h.setMode("byok");
+    h.runtime.setSessionSensitivity(SensitivityLevel.Personal);
+    await expect(drain(h.runtime.resumePlan("legacy-plan"))).rejects.toBeInstanceOf(
+      SovereignTierRequiredError,
+    );
+    expect(h.sent.some((s) => s.seen.includes(LEGACY))).toBe(false);
+
+    h.setMode("on-device");
+    await drain(h.runtime.resumePlan("legacy-plan"));
+    expect(h.sent.some((s) => s.mode === "on-device" && s.seen.includes(LEGACY))).toBe(true);
+  });
+
+  it("a reflection restored without a stamp never enters a BYOK prompt; a Personal one does", async () => {
+    for (const [stamp, expected] of [
+      [undefined, false],
+      [SensitivityLevel.Personal, true],
+    ] as const) {
+      const h = await makeRuntime();
+      await h.runtime.events.appendWithClock({
+        event_id: crypto.randomUUID(),
+        motebit_id: "owner",
+        timestamp: Date.now(),
+        event_type: EventType.ReflectionCompleted,
+        payload: {
+          insights: [`restored ${LEGACY}`],
+          ...(stamp != null ? { sensitivity: stamp } : {}),
+        },
+        tombstoned: false,
+      });
+      await (
+        h.runtime as unknown as {
+          gradientManager: { restoreLastReflection(): Promise<void> };
+        }
+      ).gradientManager.restoreLastReflection();
+      h.setMode("byok");
+      h.runtime.setSessionSensitivity(SensitivityLevel.Personal);
+      await drain(h.runtime.sendMessageStreaming("hello"));
+      expect(h.sent.some((s) => s.seen.includes(LEGACY))).toBe(expected);
+    }
   });
 });
 

@@ -22,6 +22,7 @@ function makeRuntime(overrides: Record<string, unknown> = {}): any {
     loadConversation: vi.fn(),
     resetConversation: vi.fn(),
     generateCompletion: vi.fn(async () => "summary text"),
+    summarizeCurrentConversation: vi.fn(async () => "runtime summary"),
     sendMessage: vi.fn(async () => ({ response: "title text" })),
     ...overrides,
   };
@@ -143,6 +144,14 @@ describe("ConversationManager.getConversationSummary", () => {
     expect(await mgr.getConversationSummary("c1")).toBe("hello world");
   });
 
+  it("displays a stamped summary without its sensitivity header", async () => {
+    const { mgr, store } = makeManager();
+    store.listConversationsAsync.mockResolvedValue([
+      { conversationId: "c1", summary: "[motebit:sensitivity=personal]\nhello world" },
+    ]);
+    expect(await mgr.getConversationSummary("c1")).toBe("hello world");
+  });
+
   it("returns null for unknown conversation", async () => {
     const { mgr } = makeManager();
     expect(await mgr.getConversationSummary("unknown")).toBeNull();
@@ -150,62 +159,20 @@ describe("ConversationManager.getConversationSummary", () => {
 });
 
 describe("ConversationManager.summarizeConversation", () => {
-  it("returns null when runtime or store missing", async () => {
-    const { mgr: m1 } = makeManager({ getRuntime: () => null });
-    expect(await m1.summarizeConversation()).toBeNull();
-
-    const { mgr: m2 } = makeManager({ getConversationStore: () => null });
-    expect(await m2.summarizeConversation()).toBeNull();
-  });
-
-  it("returns null when conversationId is empty", async () => {
-    const { mgr, runtime } = makeManager();
-    runtime.getConversationId.mockReturnValue("");
+  it("returns null when there is no runtime", async () => {
+    const { mgr } = makeManager({ getRuntime: () => null });
     expect(await mgr.summarizeConversation()).toBeNull();
   });
 
-  it("returns null when history has <2 messages", async () => {
+  it("routes through the runtime's tier-filtered, stamp-persisting summarize — never a raw-history completion", async () => {
     const { mgr, runtime } = makeManager();
-    runtime.getConversationHistory.mockReturnValue([{ role: "user", content: "hi" }]);
-    expect(await mgr.summarizeConversation()).toBeNull();
-  });
-
-  it("generates + persists summary for fresh conversation", async () => {
-    const { mgr, runtime, store } = makeManager();
     runtime.getConversationHistory.mockReturnValue([
-      { role: "user", content: "question" },
-      { role: "assistant", content: "answer" },
+      { role: "user", content: "my code is SECRETDX", sensitivity: "secret" },
+      { role: "assistant", content: "ok", sensitivity: "secret" },
     ]);
-    runtime.generateCompletion.mockResolvedValue("a concise summary");
     const result = await mgr.summarizeConversation();
-    expect(result).toBe("a concise summary");
-    expect(store.updateSummary).toHaveBeenCalledWith("conv-1", "a concise summary");
-  });
-
-  it("uses 'update' prompt when existing summary is present", async () => {
-    const { mgr, runtime, store } = makeManager();
-    runtime.getConversationHistory.mockReturnValue([
-      { role: "user", content: "q" },
-      { role: "assistant", content: "a" },
-    ]);
-    store.listConversationsAsync.mockResolvedValue([
-      { conversationId: "conv-1", summary: "prior summary" },
-    ]);
-    await mgr.summarizeConversation();
-    const prompt = runtime.generateCompletion.mock.calls[0][0] as string;
-    expect(prompt).toContain("Existing summary:");
-    expect(prompt).toContain("prior summary");
-  });
-
-  it("returns null when AI returns empty string", async () => {
-    const { mgr, runtime, store } = makeManager();
-    runtime.getConversationHistory.mockReturnValue([
-      { role: "user", content: "q" },
-      { role: "assistant", content: "a" },
-    ]);
-    runtime.generateCompletion.mockResolvedValue("   ");
-    const result = await mgr.summarizeConversation();
-    expect(result).toBeNull();
-    expect(store.updateSummary).not.toHaveBeenCalled();
+    expect(result).toBe("runtime summary");
+    expect(runtime.summarizeCurrentConversation).toHaveBeenCalledTimes(1);
+    expect(runtime.generateCompletion).not.toHaveBeenCalled();
   });
 });

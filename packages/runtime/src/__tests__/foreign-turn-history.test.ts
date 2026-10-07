@@ -39,6 +39,7 @@ import { describe, it, expect, vi } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { StreamChunk } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
+import { stampDerivedText } from "@motebit/ai-core";
 import type {
   AIResponse,
   AgentTask,
@@ -48,7 +49,7 @@ import type {
   SyncConversationMessage,
   ToolDefinition,
 } from "@motebit/sdk";
-import { AgentTaskStatus, RiskLevel } from "@motebit/sdk";
+import { AgentTaskStatus, RiskLevel, SensitivityLevel } from "@motebit/sdk";
 import { ConversationSyncEngine } from "@motebit/sync-engine";
 import type { ConversationSyncStoreAdapter } from "@motebit/sync-engine";
 import { generateKeypair } from "@motebit/encryption";
@@ -396,7 +397,8 @@ function seededStore() {
   store.conv.appendMessage(id, "owner-mote", { role: "assistant", content: "ok" });
   store.conv.appendMessage(id, "owner-mote", { role: "user", content: SECRET });
   store.conv.appendMessage(id, "owner-mote", { role: "assistant", content: "Understood." });
-  store.conv.updateSummary(id, SUMMARY);
+  // Stored with the stamp a summary is persisted with (interior-egress.ts).
+  store.conv.updateSummary(id, stampDerivedText(SUMMARY, SensitivityLevel.Personal));
   return store;
 }
 

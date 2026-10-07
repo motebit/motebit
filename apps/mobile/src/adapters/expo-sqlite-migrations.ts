@@ -532,4 +532,14 @@ export const MOBILE_MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    version: 29,
+    description: "plans.sensitivity — the tier a plan's derived content was produced at",
+    statements: [
+      // Sibling of persistence v51 + desktop v9. Executing or resuming a
+      // plan sends its steps' content, so it is a send at the plan's tier
+      // (ai-core interior-egress.ts). NULL is a legacy plan, held at secret.
+      "ALTER TABLE plans ADD COLUMN sensitivity TEXT DEFAULT NULL",
+    ],
+  },
 ];

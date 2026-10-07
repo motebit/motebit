@@ -13,9 +13,14 @@ import type {
   ConversationMessage,
   ApprovalStoreAdapter,
 } from "@motebit/sdk";
-import type { BehaviorCues, SensitivityCleared, SensitivityGateEntry } from "@motebit/sdk";
+import type {
+  BehaviorCues,
+  SensitivityCleared,
+  SensitivityGateEntry,
+  SensitivityLevel,
+} from "@motebit/sdk";
 import type { AgenticChunk, TurnResult } from "@motebit/ai-core";
-import { extractStateTags, runTurnStreaming } from "@motebit/ai-core";
+import { derivedSensitivity, extractStateTags, runTurnStreaming } from "@motebit/ai-core";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 import type { SignableToolInvocationReceipt } from "@motebit/crypto";
 import { signToolInvocationReceipt, hashToolPayload, signApprovalDecision } from "@motebit/crypto";
@@ -143,6 +148,14 @@ export interface StreamingDeps {
     entry: SensitivityGateEntry,
     toolName?: string,
   ): SensitivityCleared<MotebitLoopDependencies>;
+  /** The runtime's effective tier now — stamps a paused approval. */
+  getEffectiveSensitivity(): SensitivityLevel;
+  /**
+   * Raise the effective tier to a derived artifact's stamp until the
+   * returned restore is called — the resume of a paused approval is a send
+   * at the tier the paused turn ran at (`interior-egress.ts`).
+   */
+  raiseContentFloor(tier: SensitivityLevel): () => void;
   /** Current latest cues (for continuation turns). */
   getLatestCues(): BehaviorCues;
   /** Approval store for quorum persistence. */
@@ -331,6 +344,12 @@ interface PendingApproval {
    * new foreign approval is ever created.
    */
   foreignPrincipal?: boolean;
+  /**
+   * The tier the paused turn ran at (`derivedSensitivity`). The pending
+   * call's arguments and the continuation's prompt are that turn's
+   * content, so the resume sends at no lower tier.
+   */
+  sensitivity: SensitivityLevel;
 }
 
 export class StreamingManager {
@@ -795,6 +814,7 @@ export class StreamingManager {
           auditCallId: chunk.audit_call_id,
           turnId: chunk.turn_id,
           ...(principal.foreign ? { foreignPrincipal: true } : {}),
+          sensitivity: derivedSensitivity(this.deps.getEffectiveSensitivity()),
         };
 
         // Persist quorum metadata to the approval store (source of truth)
@@ -873,6 +893,17 @@ export class StreamingManager {
   }
 
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
+    // The resume sends the paused turn's content — at its tier at least.
+    const floor = this._pendingApproval?.sensitivity;
+    const restore = floor != null ? this.deps.raiseContentFloor(floor) : null;
+    try {
+      yield* this.resumePaused(approved);
+    } finally {
+      restore?.();
+    }
+  }
+
+  private async *resumePaused(approved: boolean): AsyncGenerator<StreamChunk> {
     // Clear timeout FIRST to prevent the race where timeout fires between
     // our check and the state mutation (timeout sets _pendingApproval = null).
     this.clearApprovalTimeout();

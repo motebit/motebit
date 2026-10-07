@@ -38,6 +38,12 @@ export { turnFormationMode } from "./foreign-turn.js";
 export {
   interiorEgressCeiling,
   interiorEgressPermits,
+  derivedSensitivity,
+  maxStampedSensitivity,
+  enforcedDerivedSensitivity,
+  stampDerivedText,
+  readDerivedText,
+  derivedTextPermittedAt,
   interiorEgressSensitivities,
   interiorEventsPermittedAt,
   METADATA_ONLY_EVENT_TYPES,

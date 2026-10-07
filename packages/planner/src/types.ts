@@ -24,7 +24,9 @@ export class InMemoryPlanStore implements PlanStoreAdapter {
   }
 
   savePlan(plan: Plan): void {
-    this.plans.set(plan.plan_id, { ...plan });
+    // A plan saved without a stamp keeps the one on record (never erased).
+    const sensitivity = plan.sensitivity ?? this.plans.get(plan.plan_id)?.sensitivity;
+    this.plans.set(plan.plan_id, sensitivity != null ? { ...plan, sensitivity } : { ...plan });
   }
 
   getPlan(planId: string): Plan | null {

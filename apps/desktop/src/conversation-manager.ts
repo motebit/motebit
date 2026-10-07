@@ -18,6 +18,7 @@
  * to re-bind the manager.
  */
 
+import { readDerivedText } from "@motebit/ai-core";
 import type { MotebitRuntime } from "@motebit/runtime";
 import type { TauriConversationStore } from "./tauri-storage.js";
 
@@ -74,52 +75,29 @@ export class ConversationManager {
   }
 
   /**
-   * Get the summary for a specific conversation by ID.
+   * Get the summary for a specific conversation by ID, for display.
    * Returns null if no summary exists or conversation store is unavailable.
+   * The stored summary carries its sensitivity stamp; display reads the
+   * text only.
    */
   async getConversationSummary(conversationId: string): Promise<string | null> {
     const store = this.deps.getConversationStore();
     if (!store) return null;
     const conversations = await store.listConversationsAsync(this.deps.getMotebitId(), 100);
     const conv = conversations.find((c) => c.conversationId === conversationId);
-    return conv?.summary ?? null;
+    return conv?.summary != null ? readDerivedText(conv.summary).text : null;
   }
 
   /**
-   * Manually trigger summarization of the current conversation.
-   * Uses the AI provider via a side-channel call (no conversation pollution).
+   * Manually trigger summarization of the current conversation. Routes
+   * through the runtime, which sends only the tier-filtered history and
+   * stored summary and persists the result with its sensitivity stamp —
+   * never the raw history through a side-channel completion.
    * Returns the generated summary, or null if there's nothing to summarize.
    */
   async summarizeConversation(): Promise<string | null> {
     const runtime = this.deps.getRuntime();
-    const store = this.deps.getConversationStore();
-    if (!runtime || !store) return null;
-
-    const conversationId = runtime.getConversationId();
-    if (conversationId == null || conversationId === "") return null;
-
-    const history = runtime.getConversationHistory();
-    if (history.length < 2) return null;
-
-    // Get existing summary if any
-    const existingSummary = await this.getConversationSummary(conversationId);
-
-    // Use the ai-core summarizeConversation via generateCompletion (side-channel)
-    const formatted = history.map((m) => `${m.role}: ${m.content}`).join("\n");
-
-    const prompt =
-      existingSummary != null && existingSummary !== ""
-        ? `Update this conversation summary with the new messages.\n\nExisting summary:\n${existingSummary}\n\nNew messages:\n${formatted}\n\nReturn ONLY the updated summary (2-4 sentences). No quotes, no explanation.`
-        : `Summarize this conversation in 2-4 concise sentences. Return ONLY the summary, no quotes, no explanation.\n\n${formatted}`;
-
-    const summary = await runtime.generateCompletion(prompt);
-    const cleaned = summary.trim();
-
-    if (cleaned.length > 0) {
-      store.updateSummary(conversationId, cleaned);
-      return cleaned;
-    }
-
-    return null;
+    if (!runtime) return null;
+    return runtime.summarizeCurrentConversation();
   }
 }
