@@ -50,9 +50,9 @@ for (const top of ["packages", "apps"]) {
 const NONE = String.raw`(?:SensitivityLevel(?:Enum)?\.None|"none")`;
 /** `sensitivity: NONE` or `sensitivity: <expr> ?? NONE` (a property). */
 const PROPERTY_DEFAULT = new RegExp(String.raw`\bsensitivity\??:\s*(?:[^,;\n]*\?\?\s*)?${NONE}`);
-/** `sensitivity: T = null | NONE | undefined` (a parameter default). */
+/** `sensitivity: T = null | NONE | undefined` (a parameter or variable default). */
 const PARAM_DEFAULT = new RegExp(
-  String.raw`\bsensitivity\??:\s*[^=,;\n)]*=\s*(?:null|undefined|${NONE})\s*[,)]`,
+  String.raw`\bsensitivity\??:\s*[^=,;\n)]*=\s*(?:null|undefined|${NONE})\s*[,);]`,
 );
 
 /** Not writes: `file` + a line fragment, and why. */

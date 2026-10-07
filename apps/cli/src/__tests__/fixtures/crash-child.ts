@@ -13,7 +13,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { createMotebitDatabase } from "@motebit/persistence";
-import { RiskLevel } from "@motebit/sdk";
+import { RiskLevel, SensitivityLevel } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import { GoalScheduler } from "../../scheduler.js";
 import { goalRunFakes } from "../goal-run-fakes.js";
@@ -96,6 +96,7 @@ function scheduler(rt: MotebitRuntime): GoalScheduler {
 async function main(): Promise<void> {
   // Phase 1 — pause on approval, "stop" the daemon, human approves.
   db.goalStore.add({
+    sensitivity: SensitivityLevel.Personal,
     goal_id: "goal-crash",
     motebit_id: "mote-crash",
     prompt: "tidy the inbox",

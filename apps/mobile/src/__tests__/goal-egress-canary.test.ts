@@ -187,20 +187,13 @@ async function seedAndRun(withPlans: boolean, target: "byok" | "on-device") {
   addGoal("g-secret", `goal ${CANARY.goal}`, "secret");
   addGoal("g-plain", "tidy the desk", "personal");
   await tick();
-  store.insertOutcome({
-    outcome_id: "legacy",
-    goal_id: "g-plain",
-    motebit_id: "owner",
-    ran_at: 1,
-    status: "completed",
-    summary: `legacy ${CANARY.legacy}`,
-    tool_calls_made: 0,
-    memories_formed: 0,
-    error_message: null,
-    tokens_used: null,
-    response_full: null,
-    signed_manifest: null,
-  });
+  // A row that pre-dates the stamp column (the store refuses to write an
+  // unstamped row now): seeded as migration v30 left it, sensitivity NULL.
+  handle.runSync(
+    `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, sensitivity)
+     VALUES ('legacy', 'g-plain', 'owner', 1, 'completed', ?, 0, 0, NULL, NULL)`,
+    [`legacy ${CANARY.legacy}`],
+  );
   const sub = store.listGoals("owner").find((g) => g.prompt.includes(CANARY.subGoal));
   expect(sub, "the Secret run wrote a sub-goal").toBeDefined();
   for (const g of store.listGoals("owner")) store.updateLastRun(g.goal_id, 0);

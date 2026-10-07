@@ -11,7 +11,8 @@ import {
   type GoalsState,
   type ScheduledGoal,
 } from "@motebit/panels";
-import { slabTurnIdForRun } from "@motebit/runtime";
+import { sessionlessGoalSensitivity, slabTurnIdForRun } from "@motebit/runtime";
+import { createGoalRow } from "../goal-rows";
 
 // === DOM Refs ===
 
@@ -137,24 +138,19 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       if (config?.isTauri !== true || config.invoke == null) return;
       const motebitId = ctx.app.motebitId;
       if (!motebitId) return;
-      const goalId = crypto.randomUUID();
-      await config.invoke("goals_create", {
+      // The goal's text is written at the session's tier (no runtime yet:
+      // no session, nothing elevated — `sessionlessGoalSensitivity`); a
+      // scheduled run sends at no lower tier (runtime goal-run.ts).
+      await createGoalRow(config.invoke, {
         motebitId,
-        goalId,
+        goalId: crypto.randomUUID(),
         prompt: input.prompt,
         intervalMs: input.interval_ms,
         mode: input.mode,
         budgetTokens: input.budget_tokens ?? null,
+        sensitivity:
+          ctx.app.getRuntime()?.goalCreationSensitivity() ?? sessionlessGoalSensitivity(),
       });
-      // The goal's text is written at the session's tier; a scheduled run
-      // sends at no lower tier (runtime goal-run.ts).
-      const stamp = ctx.app.getRuntime()?.goalCreationSensitivity();
-      if (stamp != null) {
-        await config.invoke("db_execute", {
-          sql: "UPDATE goals SET sensitivity = ? WHERE goal_id = ?",
-          params: [stamp, goalId],
-        });
-      }
     },
     setEnabled: async (goalId, _enabled) => {
       const config = ctx.getConfig();

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { GoalRunScope, MotebitRuntime, StreamChunk } from "@motebit/runtime";
-import { goalOutcomeLines } from "@motebit/runtime";
+import { goalOutcomeLines, sessionlessGoalSensitivity } from "@motebit/runtime";
 import {
   paymentNoticeCopy,
   paidResultsOwedByRuns,
@@ -281,6 +281,9 @@ export class GoalScheduler {
       goal_id: crypto.randomUUID(),
       motebit_id: this.motebitId,
       prompt: `${GoalScheduler.MAINTENANCE_PREFIX} Review fading memories and ask the user to confirm or update them.`,
+      // Fixed wording the daemon writes — no session, nothing elevated in
+      // scope (runtime goal-run.ts `sessionlessGoalSensitivity`).
+      sensitivity: sessionlessGoalSensitivity(),
       interval_ms: 24 * 60 * 60 * 1000, // 24 hours
       last_run_at: null,
       enabled: true,
@@ -1482,9 +1485,11 @@ export class GoalScheduler {
 
         case "reflection": {
           logLine(`[plan] reflection: ${chunk.result.summary}`);
+          // The learnings derive from the plan the run executed: stamped at
+          // the run's tier (the plan's floor is raised while it streams).
           const stored = await this.persistReflectionMemories(
             chunk.result.memoryCandidates,
-            goalId,
+            this.currentRun?.outcomeSensitivity() ?? this.runtime.interiorWriteSensitivity(),
           );
           memoriesFormed += stored;
           void this.logGoalEvent(EventType.ReflectionCompleted, goalId, {
@@ -2083,10 +2088,14 @@ export class GoalScheduler {
   }
 
   /**
-   * Persist memory candidates from plan reflection into the memory graph.
-   * Returns the number of memories successfully formed.
+   * Persist memory candidates from plan reflection into the memory graph,
+   * stamped with the tier of the run that reflected — the learnings derive
+   * from everything the plan read. Returns the number formed.
    */
-  private async persistReflectionMemories(candidates: string[], _goalId: string): Promise<number> {
+  private async persistReflectionMemories(
+    candidates: string[],
+    sensitivity: SensitivityLevel,
+  ): Promise<number> {
     let stored = 0;
     for (const text of candidates) {
       try {
@@ -2095,7 +2104,7 @@ export class GoalScheduler {
           {
             content: `[goal_learning] ${text}`,
             confidence: 0.7,
-            sensitivity: SensitivityLevel.None,
+            sensitivity,
             // Plan-reflection learnings are agent-synthesized, not user statements.
             source: "agent_inferred",
           },
@@ -2137,12 +2146,16 @@ export class GoalScheduler {
   /**
    * Every outcome row goes through here: stamped with the tier of the run
    * that produced it (`GoalRun.outcomeSensitivity`) unless it carries its
-   * own stamp. A row written with no run in reach (restart recovery) stays
-   * unstamped — legacy, so a later run below `secret` never reads it.
+   * own stamp. A row written with no run in reach (restart recovery) has no
+   * knowable taint: it is stamped `secret`, so a later run below `secret`
+   * never reads its text. Never written unstamped.
    */
   private addOutcome(outcome: GoalOutcome): void {
-    const stamp = outcome.sensitivity ?? this.currentRun?.outcomeSensitivity();
-    this.goalOutcomeStore.add(stamp != null ? { ...outcome, sensitivity: stamp } : outcome);
+    this.goalOutcomeStore.add({
+      ...outcome,
+      sensitivity:
+        outcome.sensitivity ?? this.currentRun?.outcomeSensitivity() ?? SensitivityLevel.Secret,
+    });
   }
 
   private async recordCompletedOutcome(

@@ -28,6 +28,14 @@
  *                                declaring only `generate` all count), a typed
  *                                declaration, an object-literal property, a
  *                                return, an assignment
+ *   use(deps) with `d: any`,     container erasure: a CONTAINER whose data-
+ *   (deps as any).provider,      property chain reaches a provider (≤ 3 hops:
+ *   (d as Record<string, any>),  a deps object, a runtime, `this`) cast,
+ *   const x: unknown = deps,     declared, assigned or passed (by name or
+ *   (this as any).provider       `this`) into an ERASING slot — `any`,
+ *                                `unknown`, or an any / unknown index
+ *                                signature (`Record<string, any>`); past it
+ *                                `d.provider.generate` type-checks unseen
  *
  * A value is a provider when its type (or a union / intersection member, or
  * a base type) is named `IntelligenceProvider` / `StreamingProvider`, or
@@ -45,6 +53,10 @@
  * - a provider that reaches a narrower slot through an EXPRESSION rather
  *   than a name (`use(cond ? p : q)`, `use(getProvider())`, `[p][0]`,
  *   spread `use(...[p])`, a rest parameter) — narrowing is checked on names;
+ * - a container narrowed to a NON-erasing slot that drops the provider's
+ *   property (`nameOf(d: { name: string })`) — reaching the provider again
+ *   needs a cast, which is counted; a container more than 3 data-property
+ *   hops from its provider, or reaching it only through a getter / method;
  * - an untyped (implicit-any) parameter in a JavaScript file, `eval` /
  *   `Function`, and anything the checker cannot type;
  * - a value built structurally from parts with no provider type at any point
@@ -59,7 +71,8 @@ import ts from "typescript";
 const EGRESS_METHODS = new Set(["generate", "generateStream"]);
 const PROVIDER_TYPE_NAMES = new Set(["IntelligenceProvider", "StreamingProvider"]);
 
-export type ProviderSiteKind = "access" | "element" | "destructure" | "erasure" | "narrowing";
+export type ProviderSiteKind =
+  "access" | "element" | "destructure" | "erasure" | "narrowing" | "container";
 
 export interface ProviderSite {
   file: string;
@@ -116,6 +129,59 @@ function makeIsProvider(checker: ts.TypeChecker): (type: ts.Type) => boolean {
   return (type) => visit(type, 0);
 }
 
+/**
+ * Does `type` reach a provider through its property chain (≤ 3 hops, data
+ * properties only — a method's function type carries no provider)? The
+ * container a provider rides in: deps objects, a runtime, `this`.
+ */
+function makeContainsProvider(
+  checker: ts.TypeChecker,
+  isProvider: (type: ts.Type) => boolean,
+): (type: ts.Type) => boolean {
+  const memo = new Map<ts.Type, boolean>();
+  const visit = (raw: ts.Type, depth: number): boolean => {
+    // `this` and generic `T` are type parameters: read their constraint.
+    const type = raw.isTypeParameter() ? checker.getApparentType(raw) : raw;
+    if (isProvider(type)) return true;
+    if (depth >= 3 || isAnyOrUnknown(type)) return false;
+    const cached = memo.get(type);
+    if (cached != null) return cached;
+    memo.set(type, false); // cycle guard
+    let result = false;
+    if (type.isUnionOrIntersection()) {
+      result = type.types.some((t) => visit(t, depth));
+    } else if ((type.flags & ts.TypeFlags.Object) !== 0 && type.getCallSignatures().length === 0) {
+      for (const prop of checker.getPropertiesOfType(type)) {
+        if ((prop.flags & (ts.SymbolFlags.Method | ts.SymbolFlags.Accessor)) !== 0) continue;
+        const decl = prop.valueDeclaration ?? prop.declarations?.[0];
+        if (decl == null) continue;
+        if (visit(checker.getTypeOfSymbolAtLocation(prop, decl), depth + 1)) {
+          result = true;
+          break;
+        }
+      }
+    }
+    memo.set(type, result);
+    return result;
+  };
+  return (type) => visit(type, 0);
+}
+
+/**
+ * A slot that erases what flows into it: `any`, `unknown`, or a record whose
+ * index signature is `any` / `unknown` (`Record<string, any>`) — past it,
+ * any property chain type-checks.
+ */
+function erases(checker: ts.TypeChecker, type: ts.Type | undefined): boolean {
+  if (type == null) return false;
+  if (isAnyOrUnknown(type)) return true;
+  for (const kind of [ts.IndexKind.String, ts.IndexKind.Number]) {
+    const index = checker.getIndexTypeOfType(type, kind);
+    if (index != null && isAnyOrUnknown(index)) return true;
+  }
+  return false;
+}
+
 /** A value reached by name: `p`, `a.b`, `this.b` (not a call, literal or operator result). */
 function isNameExpression(node: ts.Node): node is ts.Expression {
   return (
@@ -165,6 +231,7 @@ export function findProviderSites(files: readonly string[]): ProviderSite[] {
   const program = ts.createProgram({ rootNames: [...files], options: COMPILER_OPTIONS });
   const checker = program.getTypeChecker();
   const isProvider = makeIsProvider(checker);
+  const containsProvider = makeContainsProvider(checker, isProvider);
   const roots = new Set(files);
   const sites: ProviderSite[] = [];
 
@@ -176,6 +243,11 @@ export function findProviderSites(files: readonly string[]): ProviderSite[] {
     };
     const typeIsProvider = (expr: ts.Node) => isProvider(checker.getTypeAtLocation(expr));
     const erasedTo = (target: ts.Type | undefined) => target != null && isAnyOrUnknown(target);
+    /** A CONTAINER (not itself a provider) whose property chain reaches one. */
+    const typeIsContainer = (expr: ts.Node) => {
+      const t = checker.getTypeAtLocation(expr);
+      return !isProvider(t) && containsProvider(t);
+    };
 
     const visit = (node: ts.Node): void => {
       if (ts.isPropertyAccessExpression(node)) {
@@ -196,23 +268,24 @@ export function findProviderSites(files: readonly string[]): ProviderSite[] {
         });
         if (takesEgress && typeIsProvider(node)) add(node, "destructure");
       } else if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
-        if (erasedTo(checker.getTypeFromTypeNode(node.type)) && typeIsProvider(node.expression))
-          add(node, "erasure");
+        const target = checker.getTypeFromTypeNode(node.type);
+        if (erasedTo(target) && typeIsProvider(node.expression)) add(node, "erasure");
+        else if (erases(checker, target) && typeIsContainer(node.expression))
+          add(node, "container");
       } else if (ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) {
-        if (
-          node.type != null &&
-          node.initializer != null &&
-          erasedTo(checker.getTypeFromTypeNode(node.type)) &&
-          typeIsProvider(node.initializer)
-        )
-          add(node, "erasure");
+        if (node.type != null && node.initializer != null) {
+          const target = checker.getTypeFromTypeNode(node.type);
+          if (erasedTo(target) && typeIsProvider(node.initializer)) add(node, "erasure");
+          else if (erases(checker, target) && typeIsContainer(node.initializer))
+            add(node, "container");
+        }
       } else if (
         ts.isBinaryExpression(node) &&
-        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        erasedTo(checker.getTypeAtLocation(node.left)) &&
-        typeIsProvider(node.right)
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken
       ) {
-        add(node, "erasure");
+        const target = checker.getTypeAtLocation(node.left);
+        if (erasedTo(target) && typeIsProvider(node.right)) add(node, "erasure");
+        else if (erases(checker, target) && typeIsContainer(node.right)) add(node, "container");
       }
       // Narrowing: a provider-typed NAME (identifier, `a.b`, `this.b`)
       // flowing into a slot whose declared type is not a provider — a call
@@ -223,6 +296,15 @@ export function findProviderSites(files: readonly string[]): ProviderSite[] {
       if (isNameExpression(node) && flowsIntoSlot(node) && typeIsProvider(node)) {
         const slot = slotType(checker, node);
         if (slot != null && !isProvider(slot)) add(node, "narrowing");
+      } else if (
+        (isNameExpression(node) || node.kind === ts.SyntaxKind.ThisKeyword) &&
+        flowsIntoSlot(node as ts.Expression) &&
+        typeIsContainer(node)
+      ) {
+        // Container erasure: a container that carries a provider handed to
+        // an erasing slot (`use(deps)` with `d: any`) — past it the chain
+        // `d.provider.generate` type-checks unseen.
+        if (erases(checker, slotType(checker, node as ts.Expression))) add(node, "container");
       }
       ts.forEachChild(node, visit);
     };

@@ -108,6 +108,7 @@ function makeDeps(provider: StreamingProvider): SensitivityCleared<MotebitLoopDe
     stateEngine: new StateVectorEngine(),
     behaviorEngine: new BehaviorEngine(),
     provider,
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 }
 

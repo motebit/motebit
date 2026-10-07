@@ -62,6 +62,19 @@ export function goalTextSensitivity(goal: GoalRunGoal): SensitivityLevel {
     : interiorEgressCeiling(SensitivityLevel.None);
 }
 
+/**
+ * The stamp for owner-authored goal text written OUTSIDE any session — a
+ * CLI subcommand (`motebit goal add`), a `motebit up` routine, the daemon's
+ * own maintenance goal, a goal typed before a surface's runtime is up.
+ * There is no session tier to read and nothing elevated is in scope: the
+ * text is the owner's (or the operator's fixed wording), so it is stamped at
+ * the context-safe ceiling — exactly what `goalCreationSensitivity()`
+ * derives for a fresh, unelevated session. Never `none`, never absent.
+ */
+export function sessionlessGoalSensitivity(): SensitivityLevel {
+  return derivedSensitivity(undefined);
+}
+
 /** The stamp to enforce for an outcome row (legacy: `secret`). */
 export function goalOutcomeSensitivity(outcome: GoalRunOutcome): SensitivityLevel {
   return enforcedDerivedSensitivity(

@@ -1375,6 +1375,23 @@ export interface Goal {
   sensitivity?: SensitivityLevel | null;
 }
 
+/**
+ * A goal as WRITTEN: the tier its text was written at is required. `Goal`
+ * keeps `sensitivity` optional because a legacy row read back has none.
+ */
+export type StampedGoal = Goal & { sensitivity: SensitivityLevel };
+
+/** An outcome as WRITTEN: the tier of the run that produced it is required. */
+export type StampedGoalOutcome = GoalOutcome & { sensitivity: SensitivityLevel };
+
+function assertWriteStamp(what: string, stamp: unknown): void {
+  if (!isSensitivityLevel(stamp)) {
+    throw new Error(
+      `Cannot write a ${what} row without a sensitivity stamp (got ${String(stamp)})`,
+    );
+  }
+}
+
 interface GoalRow {
   goal_id: string;
   motebit_id: string;
@@ -1472,7 +1489,14 @@ export class SqliteGoalStore {
     );
   }
 
-  add(goal: Goal): void {
+  /**
+   * Write a goal row. The stamp is required by type (`StampedGoal`) and
+   * checked here: an unstamped row would take the legacy rule meant only
+   * for rows that pre-date migration #52 (`goalTextSensitivity` in
+   * @motebit/runtime).
+   */
+  add(goal: StampedGoal): void {
+    assertWriteStamp("goal", goal.sensitivity);
     this.stmtAdd.run(
       goal.goal_id,
       goal.motebit_id,
@@ -1492,8 +1516,7 @@ export class SqliteGoalStore {
       goal.routine_source ?? null,
       goal.routine_hash ?? null,
       goal.budget_tokens ?? null,
-      // A re-add without a stamp keeps the stamp on record; never erased.
-      goal.sensitivity ?? null,
+      goal.sensitivity,
       goal.goal_id,
     );
   }
@@ -1679,7 +1702,13 @@ export class SqliteGoalOutcomeStore {
     );
   }
 
-  add(outcome: GoalOutcome): void {
+  /**
+   * Write an outcome row, stamped with the tier of the run that produced it
+   * (`StampedGoalOutcome`; checked here). Unknown provenance is stamped
+   * `secret` by the caller, never left absent.
+   */
+  add(outcome: StampedGoalOutcome): void {
+    assertWriteStamp("goal outcome", outcome.sensitivity);
     this.stmtAdd.run(
       outcome.outcome_id,
       outcome.goal_id,
@@ -1694,7 +1723,7 @@ export class SqliteGoalOutcomeStore {
       outcome.response_full ?? null,
       outcome.signed_manifest ?? null,
       outcome.run_id ?? null,
-      outcome.sensitivity ?? null,
+      outcome.sensitivity,
     );
   }
 

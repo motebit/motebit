@@ -34,7 +34,7 @@ vi.mock("@motebit/memory-graph", async (importOriginal) => {
 
 import { GoalScheduler } from "../scheduler.js";
 import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
-import { RiskLevel } from "@motebit/sdk";
+import { RiskLevel, SensitivityLevel } from "@motebit/sdk";
 import type {
   DelegatedStepResult,
   ExecutionReceipt,
@@ -190,6 +190,7 @@ function newScheduler(w: World, runtime: MotebitRuntime): GoalScheduler {
 function newWorld(): World {
   const db = createMotebitDatabase(":memory:");
   db.goalStore.add({
+    sensitivity: SensitivityLevel.Personal,
     goal_id: GOAL,
     motebit_id: MOTE,
     prompt: "buy the report",

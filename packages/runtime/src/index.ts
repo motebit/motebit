@@ -118,6 +118,7 @@ export {
   goalOutcomesPermittedAt,
   goalOutcomeLines,
   goalPlanOutcomes,
+  sessionlessGoalSensitivity,
 } from "./goal-run.js";
 export type { GoalRunScope, GoalRunGoal, GoalRunOutcome } from "./goal-run.js";
 export type {

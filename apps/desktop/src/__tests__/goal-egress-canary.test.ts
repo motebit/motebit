@@ -99,20 +99,23 @@ function fakeDb() {
     const sql = String((args as { sql?: string } | undefined)?.sql ?? "").replace(/\s+/g, " ");
     const params = [...(((args as { params?: unknown[] } | undefined)?.params ?? []) as unknown[])];
     if (cmd === "goals_create") {
+      // Tauri passes command args camelCase; the Rust command requires the stamp.
+      if (typeof args!.sensitivity !== "string")
+        throw new Error("goals_create: missing sensitivity");
       goals.push({
-        goal_id: args!.goal_id,
-        motebit_id: args!.motebit_id,
+        goal_id: args!.goalId,
+        motebit_id: args!.motebitId,
         prompt: args!.prompt,
-        interval_ms: args!.interval_ms,
+        interval_ms: args!.intervalMs,
         mode: args!.mode,
         status: "active",
         enabled: 1,
         last_run_at: null,
-        parent_goal_id: null,
+        parent_goal_id: args!.parentGoalId ?? null,
         max_retries: 3,
         consecutive_failures: 0,
-        budget_tokens: null,
-        sensitivity: null,
+        budget_tokens: args!.budgetTokens ?? null,
+        sensitivity: args!.sensitivity,
       });
       return undefined;
     }

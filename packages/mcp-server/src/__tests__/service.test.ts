@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { wireServerDeps, startServiceServer } from "../service.js";
 import type { ServiceRuntime } from "../service.js";
-import { AgentTrustLevel } from "@motebit/sdk";
+import { AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
 
 // === Mock runtime ===
 
@@ -42,6 +42,7 @@ function makeRuntime(overrides: Partial<ServiceRuntime> = {}): ServiceRuntime {
     events: {
       append: vi.fn().mockResolvedValue(undefined),
     },
+    interiorWriteSensitivity: () => SensitivityLevel.Personal,
     ...overrides,
   };
 }
@@ -142,6 +143,38 @@ describe("wireServerDeps", () => {
 
     const stored = await deps.storeMemory!("new memory");
     expect(stored.node_id).toBe("mem-123");
+  });
+
+  it("storeMemory stamps at the session's write tier — never a default none", async () => {
+    const formMemory = vi.fn().mockResolvedValue({ node_id: "mem-1" });
+    const runtime = makeRuntime({ interiorWriteSensitivity: () => SensitivityLevel.Secret });
+    runtime.memory.formMemory = formMemory;
+    const deps = wireServerDeps(runtime, {
+      motebitId: "test-id",
+      embedText: vi.fn().mockResolvedValue([0.1]),
+    });
+    await deps.storeMemory!("undeclared");
+    await deps.storeMemory!("declared low", "none");
+    await deps.storeMemory!("malformed", "bogus");
+    const tiers = formMemory.mock.calls.map((c) => (c[0] as { sensitivity: string }).sensitivity);
+    expect(tiers).toEqual([
+      SensitivityLevel.Secret,
+      SensitivityLevel.Secret,
+      SensitivityLevel.Secret,
+    ]);
+
+    const calm = makeRuntime();
+    calm.memory.formMemory = formMemory;
+    formMemory.mockClear();
+    const calmDeps = wireServerDeps(calm, {
+      motebitId: "test-id",
+      embedText: vi.fn().mockResolvedValue([0.1]),
+    });
+    await calmDeps.storeMemory!("undeclared");
+    await calmDeps.storeMemory!("declared high", "medical");
+    expect(formMemory.mock.calls.map((c) => (c[0] as { sensitivity: string }).sensitivity)).toEqual(
+      [SensitivityLevel.Personal, SensitivityLevel.Medical],
+    );
   });
 
   it("wires identityFileContent when provided", () => {

@@ -1219,6 +1219,14 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
 
 // === GoalStore ===
 
+function assertWriteStamp(what: string, stamp: unknown): void {
+  if (!isSensitivityLevel(stamp)) {
+    throw new Error(
+      `Cannot write a ${what} row without a sensitivity stamp (got ${String(stamp)})`,
+    );
+  }
+}
+
 export class ExpoGoalStore {
   constructor(private db: SQLite.SQLiteDatabase) {}
 
@@ -1250,7 +1258,13 @@ export class ExpoGoalStore {
     this.db.runSync("UPDATE goals SET last_run_at = ? WHERE goal_id = ?", [timestamp, goalId]);
   }
 
-  insertOutcome(outcome: GoalOutcome): void {
+  /**
+   * Write an outcome row, stamped with the tier of the run that produced it
+   * — required by type and checked here (unknown provenance is stamped
+   * `secret` by the caller, never left absent).
+   */
+  insertOutcome(outcome: GoalOutcome & { sensitivity: SensitivityLevel }): void {
+    assertWriteStamp("goal outcome", outcome.sensitivity);
     this.db.runSync(
       `INSERT OR REPLACE INTO goal_outcomes
        (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest, sensitivity)
@@ -1268,7 +1282,7 @@ export class ExpoGoalStore {
         outcome.tokens_used,
         outcome.response_full,
         outcome.signed_manifest,
-        outcome.sensitivity ?? null,
+        outcome.sensitivity,
       ],
     );
   }
@@ -1347,15 +1361,23 @@ export class ExpoGoalStore {
     this.db.runSync("UPDATE goals SET consecutive_failures = 0 WHERE goal_id = ?", [goalId]);
   }
 
+  /**
+   * Write a goal row. The tier its text was written at is required (no
+   * default): an unstamped row would take the legacy rule meant only for
+   * rows that pre-date migration v30 (`goalTextSensitivity` in
+   * @motebit/runtime).
+   */
   addGoal(
     motebitId: string,
     prompt: string,
     intervalMs: number,
-    mode: GoalMode = "recurring",
-    budgetTokens: number | null = null,
-    /** The tier the text was written at (`runtime.goalCreationSensitivity`). */
-    sensitivity: SensitivityLevel | null = null,
+    mode: GoalMode,
+    budgetTokens: number | null,
+    /** `runtime.goalCreationSensitivity()`, a run's `outcomeSensitivity()`,
+     *  or `sessionlessGoalSensitivity()`. */
+    sensitivity: SensitivityLevel,
   ): string {
+    assertWriteStamp("goal", sensitivity);
     const goalId = crypto.randomUUID();
     const now = Date.now();
     this.db.runSync(

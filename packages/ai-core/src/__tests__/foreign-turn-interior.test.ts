@@ -113,6 +113,7 @@ async function seededDeps(contexts: ContextPack[]): Promise<MotebitLoopDependenc
     stateEngine: markedStateEngine(),
     behaviorEngine: new BehaviorEngine(),
     provider: recordingProvider(contexts),
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   } as unknown as MotebitLoopDependencies;
 }
 
@@ -163,6 +164,7 @@ const cleared = (d: MotebitLoopDependencies, foreign: boolean) =>
   ({
     ...d,
     ...(foreign ? { foreignPrincipal: true } : {}),
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   }) as unknown as SensitivityCleared<MotebitLoopDependencies>;
 
 describe("#943 — the loop's owner-interior floor", () => {

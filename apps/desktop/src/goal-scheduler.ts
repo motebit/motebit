@@ -55,7 +55,7 @@ import {
   goalRunWindows,
   goalAwaitingResultMessage,
 } from "@motebit/runtime";
-import { PlanStatus } from "@motebit/sdk";
+import { PlanStatus, SensitivityLevel } from "@motebit/sdk";
 import type { PlanChunk, PlanEngine, PlanStoreAdapter } from "@motebit/planner";
 import { isDelegationUndetermined } from "@motebit/planner";
 import {
@@ -63,6 +63,7 @@ import {
   completeGoalDefinition,
   reportProgressDefinition,
 } from "@motebit/tools/web-safe";
+import { createGoalRow } from "./goal-rows.js";
 import type { InvokeFn, TauriPlanStore } from "./tauri-storage.js";
 
 /** Maximum tool calls across all turns in a single goal run (default 50). */
@@ -253,20 +254,17 @@ export class GoalScheduler {
       const subGoalId = crypto.randomUUID();
 
       try {
-        await invoke("goals_create", {
-          motebit_id: getMotebitId(),
-          goal_id: subGoalId,
-          prompt,
-          interval_ms: intervalMs,
-          mode,
-        });
         // The sub-goal's text was written by the model during this run:
-        // stamped at the run's tier (runtime goal-run.ts).
-        const stamp =
-          this._run?.outcomeSensitivity() ?? this.deps.getRuntime()?.goalCreationSensitivity();
-        await invoke<number>("db_execute", {
-          sql: "UPDATE goals SET parent_goal_id = ?, sensitivity = ? WHERE goal_id = ?",
-          params: [this._currentGoalId, stamp ?? null, subGoalId],
+        // stamped at the run's tier (runtime goal-run.ts). With no run in
+        // reach its taint is unknowable: `secret`.
+        await createGoalRow(invoke, {
+          motebitId: getMotebitId(),
+          goalId: subGoalId,
+          prompt,
+          intervalMs,
+          mode,
+          parentGoalId: this._currentGoalId,
+          sensitivity: this._run?.outcomeSensitivity() ?? SensitivityLevel.Secret,
         });
         return { ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } };
       } catch (err: unknown) {
@@ -680,9 +678,11 @@ export class GoalScheduler {
     // record, no run — failing closed costs one tick.
     try {
       await invoke<number>("db_execute", {
-        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-              VALUES (?, ?, ?, ?, 'running', NULL, 0, 0, NULL)`,
-        params: [runId, goal.goal_id, motebitId, now],
+        // Stamped `secret` until the final outcome replaces it: a row left
+        // behind by a dead run has no knowable taint (it carries no text).
+        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, sensitivity)
+              VALUES (?, ?, ?, ?, 'running', NULL, 0, 0, NULL, ?)`,
+        params: [runId, goal.goal_id, motebitId, now, SensitivityLevel.Secret],
       });
     } catch {
       this._goalExecuting = false;

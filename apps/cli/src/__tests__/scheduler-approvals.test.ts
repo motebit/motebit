@@ -1,6 +1,11 @@
+import { SensitivityLevel } from "@motebit/sdk";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GoalScheduler } from "../scheduler.js";
-import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
+import {
+  createMotebitDatabase,
+  type MotebitDatabase,
+  type StampedGoal,
+} from "@motebit/persistence";
 import { EventType, RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
@@ -167,8 +172,9 @@ function createMockRuntime(
   };
 }
 
-function makeGoal(overrides: Partial<Goal> = {}): Goal {
+function makeGoal(overrides: Partial<StampedGoal> = {}): StampedGoal {
   return {
+    sensitivity: SensitivityLevel.Personal,
     goal_id: "goal-001",
     motebit_id: "mote-test",
     prompt: "check system health",

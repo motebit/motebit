@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GoalScheduler } from "../scheduler.js";
-import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
+import {
+  createMotebitDatabase,
+  type MotebitDatabase,
+  type StampedGoal,
+} from "@motebit/persistence";
 import { EventType, RiskLevel, SensitivityLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { ToolDefinition, ToolHandler, MemoryNode } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
@@ -179,8 +183,9 @@ function createMockRuntime(
   return { runtime, registeredTools, eventsAppended, memoryGraph };
 }
 
-function makeGoal(overrides: Partial<Goal> = {}): Goal {
+function makeGoal(overrides: Partial<StampedGoal> = {}): StampedGoal {
   return {
+    sensitivity: SensitivityLevel.Personal,
     goal_id: "goal-001",
     motebit_id: "mote-test",
     prompt: "check system health",
@@ -348,7 +353,9 @@ describe("GoalScheduler — learning loop", () => {
       expect(memoryGraph.formMemory.mock.calls[0]![0]).toMatchObject({
         content: "[goal_learning] All API endpoints respond under 200ms",
         confidence: 0.7,
-        sensitivity: SensitivityLevel.None,
+        // Stamped with the tier of the run that reflected (a calm run:
+        // the context-safe ceiling) — never a default `none`.
+        sensitivity: SensitivityLevel.Personal,
       });
       expect(memoryGraph.formMemory.mock.calls[1]![0]).toMatchObject({
         content: "[goal_learning] Database connection pool is healthy",

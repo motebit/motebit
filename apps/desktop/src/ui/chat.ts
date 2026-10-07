@@ -1403,7 +1403,9 @@ End with a question — you are curious about who they are.`;
       try {
         const node = await ctx.app.formMemoryDirect("First meeting with my person.", 0.9);
         if (node) {
-          memoriesFormed = [{ node_id: node.node_id, content: node.content, sensitivity: "none" }];
+          memoriesFormed = [
+            { node_id: node.node_id, content: node.content, sensitivity: node.sensitivity },
+          ];
         }
       } catch {
         /* best-effort */

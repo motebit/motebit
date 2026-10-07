@@ -17,5 +17,6 @@ export function goalRunFakes() {
         assert: () => {},
       }),
     goalCreationSensitivity: () => SensitivityLevel.Personal,
+    interiorWriteSensitivity: () => SensitivityLevel.Personal,
   };
 }

@@ -22,7 +22,7 @@ import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
 import { RiskLevel, SensitivityLevel } from "@motebit/sdk";
 import { InMemoryPlanStore, PlanEngine } from "@motebit/planner";
-import { createMotebitDatabase, type Goal } from "@motebit/persistence";
+import { createMotebitDatabase, type StampedGoal } from "@motebit/persistence";
 import { GoalScheduler } from "../scheduler.js";
 
 const CANARY = {
@@ -96,8 +96,9 @@ function recordingProvider(
   };
 }
 
-function goal(overrides: Partial<Goal> & { goal_id: string; prompt: string }): Goal {
+function goal(overrides: Partial<StampedGoal> & { goal_id: string; prompt: string }): StampedGoal {
   return {
+    sensitivity: SensitivityLevel.Personal,
     motebit_id: "owner",
     interval_ms: 0,
     last_run_at: null,
@@ -184,17 +185,14 @@ async function seedAndRun(withPlans: boolean, target: "byok" | "on-device") {
     }),
   );
   await scheduler.tickOnce();
-  db.goalOutcomeStore.add({
-    outcome_id: "legacy",
-    goal_id: "g-plain",
-    motebit_id: "owner",
-    ran_at: 1,
-    status: "completed",
-    summary: `legacy ${CANARY.legacy}`,
-    tool_calls_made: 0,
-    memories_formed: 0,
-    error_message: null,
-  });
+  // A row that pre-dates the stamp column (the store refuses to write an
+  // unstamped row now): seeded as the migration left it, sensitivity NULL.
+  db.db
+    .prepare(
+      `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, sensitivity)
+       VALUES ('legacy', 'g-plain', 'owner', 1, 'completed', ?, 0, 0, NULL, NULL)`,
+    )
+    .run(`legacy ${CANARY.legacy}`);
   const sub = db.goalStore.listChildren("g-secret").find((g) => g.goal_id !== "g-child");
   expect(sub, "the Secret run wrote a sub-goal").toBeDefined();
 

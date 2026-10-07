@@ -40,7 +40,7 @@ import {
 import type { PlanChunk, PlanEngine } from "@motebit/planner";
 import { isDelegationUndetermined } from "@motebit/planner";
 import { PlanStatus } from "@motebit/sdk";
-import type { SensitivityLevel } from "@motebit/sdk";
+import { SensitivityLevel } from "@motebit/sdk";
 import type { ExpoGoalStore, GoalOutcome } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 
@@ -99,10 +99,6 @@ export interface GoalSchedulerDeps {
   getStorage: () => ExpoStorageResult | null;
 }
 
-function stampOf(stamp: SensitivityLevel | undefined): { sensitivity?: SensitivityLevel } {
-  return stamp != null ? { sensitivity: stamp } : {};
-}
-
 /** The plan store the scheduler's runs read and stamp. */
 function planStore(deps: GoalSchedulerDeps): ExpoStorageResult["planStore"] | null {
   return deps.getStorage()?.planStore ?? null;
@@ -154,9 +150,16 @@ export class MobileGoalScheduler {
     return this.deps.getStorage()?.goalStore ?? null;
   }
 
-  /** The stamp for what the current run produces (no run: the session's tier). */
-  private outcomeStamp(): SensitivityLevel | undefined {
-    return this._scope?.outcomeSensitivity() ?? this.deps.getRuntime()?.goalCreationSensitivity();
+  /**
+   * The stamp for what the current run produces (no run: the session's
+   * write tier; no runtime either: unknowable, `secret`). Never absent.
+   */
+  private outcomeStamp(): SensitivityLevel {
+    return (
+      this._scope?.outcomeSensitivity() ??
+      this.deps.getRuntime()?.interiorWriteSensitivity() ??
+      SensitivityLevel.Secret
+    );
   }
 
   /**
@@ -184,7 +187,7 @@ export class MobileGoalScheduler {
       intervalMs,
       mode,
       null,
-      this.outcomeStamp() ?? null,
+      this.outcomeStamp(),
     );
     return Promise.resolve({
       ok: true,
@@ -406,6 +409,9 @@ export class MobileGoalScheduler {
             tokens_used: null,
             response_full: null,
             signed_manifest: null,
+            // Replaced by the final outcome; a row left behind by a dead
+            // run carries no text and has no knowable taint.
+            sensitivity: SensitivityLevel.Secret,
           });
         } catch {
           continue;
@@ -716,7 +722,7 @@ export class MobileGoalScheduler {
       // close).
       response_full: responseFull,
       signed_manifest: signedManifestJson,
-      ...stampOf(this.outcomeStamp()),
+      sensitivity: this.outcomeStamp(),
     });
 
     if (goal.mode === "once") {
@@ -804,7 +810,7 @@ export class MobileGoalScheduler {
         tokens_used: null,
         response_full: null,
         signed_manifest: null,
-        ...stampOf(this.outcomeStamp()),
+        sensitivity: this.outcomeStamp(),
       });
       goalStore.updateLastRun(goal.goal_id, now);
     } catch {
@@ -854,7 +860,7 @@ export class MobileGoalScheduler {
         // projection's `last_manifest_signed` resolve to NULL on the
         // card, hiding the indicator cleanly.
         signed_manifest: null,
-        ...stampOf(this.outcomeStamp()),
+        sensitivity: this.outcomeStamp(),
       });
     } catch {
       /* non-fatal */

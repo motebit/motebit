@@ -36,8 +36,9 @@
  * provider. The static lock at the bottom enumerates every provider call
  * site in packages/ and apps/ — TYPE-AWARE (`provider-egress-lock.ts`: any
  * access, element access, destructuring, any/unknown erasure, or narrowing
- * into a slot not typed as a provider, of a provider-typed value; its header
- * names the aperture) — and fails when one is not listed in
+ * into a slot not typed as a provider, of a provider-typed value, and the
+ * erasure of a container that carries one; its header names the aperture)
+ * — and fails when one is not listed in
  * `COVERED_CALL_SITES` with the entry point(s) that drive it here.
  *
  * Built-in tools that read the interior (list_events, search_conversations,
@@ -1084,7 +1085,8 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 /**
  * Provider egress sites per file (`provider-egress-lock.ts`: type-aware —
  * property access, element access, destructuring, any/unknown erasure and
- * narrowing of a provider-typed value), over every packages/<pkg>/src and
+ * narrowing of a provider-typed value, and erasure of a container that
+ * carries one), over every packages/<pkg>/src and
  * apps/<app>/src non-test source file under `root`.
  */
 export function scanProviderCallSites(root: string): Record<string, number> {
@@ -1145,7 +1147,8 @@ describe("egress canary: static completeness lock", () => {
         // and, in provider-egress-lock.ts's header, what it cannot see.
         `examined ${scanned} source files under packages/*/src and apps/*/src; ` +
           `${Object.keys(found).length} carry provider sites (access, element, destructure, ` +
-          `erasure, narrowing). Not seen: names-only narrowing, untyped JS, tests/scripts/services`,
+          `erasure, narrowing, container erasure). Not seen: names-only narrowing, containers ` +
+          `> 3 hops or via getters, untyped JS, tests/scripts/services`,
       ).toEqual([]);
     },
   );

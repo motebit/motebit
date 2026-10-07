@@ -27,6 +27,7 @@
 //   - Goals + runs persist through the adapter on every mutation. The
 //     adapter owns the storage medium (localStorage).
 
+import type { SensitivityLevel } from "@motebit/sdk";
 import type { NewGoalInput, ScheduledGoal } from "@motebit/panels";
 
 const TICK_INTERVAL_MS = 30_000;
@@ -137,8 +138,13 @@ export interface GoalsEngineDeps {
   setInterval?: (handler: () => void, ms: number) => ReturnType<typeof setInterval>;
   clearInterval?: (handle: ReturnType<typeof setInterval>) => void;
   generateId?: () => string;
-  /** The tier a new goal's text is written at (`runtime.goalCreationSensitivity`). */
-  goalSensitivity?: () => string | null | undefined;
+  /**
+   * The tier a new goal's text is written at — `runtime.goalCreationSensitivity()`
+   * (before the runtime is up: `sessionlessGoalSensitivity()`). Required:
+   * every goal the engine creates is stamped; the legacy rule for an
+   * unstamped goal applies only to goals persisted before the stamp existed.
+   */
+  goalSensitivity: () => SensitivityLevel;
 }
 
 export interface GoalsEngine {
@@ -178,10 +184,7 @@ function defaultGenerateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function createGoalsEngine(
-  adapter: GoalsEngineAdapter,
-  deps: GoalsEngineDeps = {},
-): GoalsEngine {
+export function createGoalsEngine(adapter: GoalsEngineAdapter, deps: GoalsEngineDeps): GoalsEngine {
   const now = deps.now ?? (() => Date.now());
   const generateId = deps.generateId ?? defaultGenerateId;
   const scheduleTick = deps.setInterval ?? ((h, ms) => setInterval(h, ms));
@@ -250,9 +253,8 @@ export function createGoalsEngine(
       // runtime helper's contract.
       budget_tokens: input.budget_tokens ?? null,
       spent_tokens: 0,
+      sensitivity: deps.goalSensitivity(),
     };
-    const stamp = deps.goalSensitivity?.();
-    if (stamp != null) goal.sensitivity = stamp;
     state = { ...state, goals: [...state.goals, goal] };
     persistGoals();
     emit();

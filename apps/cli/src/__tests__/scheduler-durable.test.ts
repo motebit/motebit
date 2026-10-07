@@ -1,3 +1,4 @@
+import { SensitivityLevel } from "@motebit/sdk";
 /**
  * Durable unattended execution — the three interruption points.
  *
@@ -15,7 +16,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { GoalScheduler } from "../scheduler.js";
-import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
+import {
+  createMotebitDatabase,
+  type MotebitDatabase,
+  type StampedGoal,
+} from "@motebit/persistence";
 import { RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
@@ -167,8 +172,9 @@ function mockRuntime(
   return m;
 }
 
-function goal(over: Partial<Goal> = {}): Goal {
+function goal(over: Partial<StampedGoal> = {}): StampedGoal {
   return {
+    sensitivity: SensitivityLevel.Personal,
     goal_id: "goal-001",
     motebit_id: "mote-test",
     prompt: "tidy the inbox",
@@ -776,6 +782,7 @@ describe("durable execution — review round: every running transition has a fai
     db.goalStore.add(goal());
     db.goalRunStore.start({ run_id: "run-keep", goal_id: "goal-001", motebit_id: "mote-test" });
     db.goalOutcomeStore.add({
+      sensitivity: SensitivityLevel.Personal,
       outcome_id: "run-keep",
       goal_id: "goal-001",
       motebit_id: "mote-test",

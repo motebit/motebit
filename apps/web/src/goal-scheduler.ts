@@ -30,7 +30,7 @@ import {
 } from "@motebit/runtime";
 import type { ScheduledGoal } from "@motebit/panels";
 import type { GoalRunScope } from "@motebit/runtime";
-import { slabTurnIdForRun } from "@motebit/runtime";
+import { sessionlessGoalSensitivity, slabTurnIdForRun } from "@motebit/runtime";
 
 import {
   createGoalsEngine,
@@ -366,7 +366,9 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
   };
 
   return createGoalsEngine(adapter, {
-    // A goal's text is written at the session's tier (runtime goal-run.ts).
-    goalSensitivity: () => app.getRuntime()?.goalCreationSensitivity(),
+    // A goal's text is written at the session's tier (runtime goal-run.ts);
+    // before the runtime is up there is no session and nothing elevated.
+    goalSensitivity: () =>
+      app.getRuntime()?.goalCreationSensitivity() ?? sessionlessGoalSensitivity(),
   });
 }

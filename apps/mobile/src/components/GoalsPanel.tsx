@@ -24,6 +24,7 @@ import {
   type ScheduledGoal,
 } from "@motebit/panels";
 import { COHESIVE_RADIUS } from "@motebit/render-engine";
+import { sessionlessGoalSensitivity } from "@motebit/runtime";
 
 const INTERVAL_OPTIONS: { label: string; ms: number }[] = [
   { label: "Hourly", ms: 3_600_000 },
@@ -124,9 +125,10 @@ function createMobileGoalsAdapter(app: MobileApp): GoalsFetchAdapter {
           input.interval_ms,
           input.mode,
           input.budget_tokens ?? null,
-          // Written at the session's tier; a scheduled run sends at no
-          // lower tier (runtime goal-run.ts).
-          app.getRuntime()?.goalCreationSensitivity() ?? null,
+          // Written at the session's tier (no runtime yet: no session,
+          // nothing elevated — `sessionlessGoalSensitivity`); a scheduled run
+          // sends at no lower tier (runtime goal-run.ts).
+          app.getRuntime()?.goalCreationSensitivity() ?? sessionlessGoalSensitivity(),
         );
       return Promise.resolve();
     },

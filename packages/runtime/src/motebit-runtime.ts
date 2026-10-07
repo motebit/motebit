@@ -2387,6 +2387,16 @@ export class MotebitRuntime {
    * sub-goal the model writes outside a run (`goal-run.ts`).
    */
   goalCreationSensitivity(): SensitivityLevel {
+    return this.interiorWriteSensitivity();
+  }
+
+  /**
+   * The stamp for interior content written NOW outside a goal run — a
+   * memory a surface or a remote caller stores directly, a goal the owner
+   * creates: the effective tier (session × slab × content floor) at the
+   * context-safe ceiling. Writers pass it; there is no default to `none`.
+   */
+  interiorWriteSensitivity(): SensitivityLevel {
     return derivedSensitivity(this.getEffectiveSessionSensitivity());
   }
 
@@ -5411,20 +5421,32 @@ export class MotebitRuntime {
    * the effective tier is at least its stamp, so the gate refuses an
    * external provider for medical+ content, and everything the call
    * writes (messages, events, memories) is stamped at that tier rather
-   * than laundered down to the session's. Raised and restored only by
+   * than laundered down to the session's. Held only through
    * `raiseContentFloor`.
+   *
+   * A SET of raises, not a stack: runs overlap (two goal runs, a goal run
+   * and a plan resume) and finish in any order. The floor is the max over
+   * the raises still held, and a release drops only its own raise — a run
+   * that finishes first never lowers the floor under one still in flight.
    */
-  private _contentFloor: SensitivityLevel | null = null;
+  private readonly _contentRaises = new Set<{ readonly tier: SensitivityLevel }>();
+
+  private get _contentFloor(): SensitivityLevel | null {
+    let floor: SensitivityLevel | null = null;
+    for (const r of this._contentRaises)
+      floor = floor == null ? r.tier : maxSensitivity(floor, r.tier);
+    return floor;
+  }
 
   /**
-   * Raise the effective tier to at least `tier` until the returned
-   * function is called (nesting-safe: it restores the previous floor).
+   * Raise the effective tier to at least `tier` until the returned release
+   * is called. The release drops this raise only, and is idempotent.
    */
   private raiseContentFloor(tier: SensitivityLevel): () => void {
-    const previous = this._contentFloor;
-    this._contentFloor = previous == null ? tier : maxSensitivity(previous, tier);
+    const raise = { tier };
+    this._contentRaises.add(raise);
     return () => {
-      this._contentFloor = previous;
+      this._contentRaises.delete(raise);
     };
   }
 
@@ -5851,11 +5873,9 @@ export class MotebitRuntime {
         elevatedByItem = { id: item.id };
       }
     }
-    if (
-      this._contentFloor != null &&
-      rankSensitivity(this._contentFloor) > rankSensitivity(effective)
-    ) {
-      effective = this._contentFloor;
+    const contentFloor = this._contentFloor;
+    if (contentFloor != null && rankSensitivity(contentFloor) > rankSensitivity(effective)) {
+      effective = contentFloor;
       elevatedByItem = null;
       elevatedByContent = true;
     }

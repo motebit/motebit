@@ -1,14 +1,20 @@
+import { SensitivityLevel } from "@motebit/sdk";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { handleSlashCommand, type ReplContext } from "../index.js";
-import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
+import {
+  createMotebitDatabase,
+  type MotebitDatabase,
+  type StampedGoal,
+} from "@motebit/persistence";
 import type { MotebitRuntime } from "@motebit/runtime";
 
 function makeRepl(moteDb: MotebitDatabase, motebitId = "mote-test"): ReplContext {
   return { moteDb, motebitId, mcpAdapters: [] };
 }
 
-function makeGoal(overrides: Partial<Goal> = {}): Goal {
+function makeGoal(overrides: Partial<StampedGoal> = {}): StampedGoal {
   return {
+    sensitivity: SensitivityLevel.Personal,
     goal_id: "goal-001",
     motebit_id: "mote-test",
     prompt: "check system health",
@@ -120,6 +126,7 @@ describe("REPL /goals command", () => {
     const repl = makeRepl(moteDb);
     moteDb.goalStore.add(makeGoal());
     moteDb.goalOutcomeStore.add({
+      sensitivity: SensitivityLevel.Personal,
       outcome_id: "out-1",
       goal_id: "goal-001",
       motebit_id: "mote-test",
@@ -249,6 +256,7 @@ describe("REPL /goal outcomes", () => {
     const repl = makeRepl(moteDb);
     moteDb.goalStore.add(makeGoal());
     moteDb.goalOutcomeStore.add({
+      sensitivity: SensitivityLevel.Personal,
       outcome_id: "out-1",
       goal_id: "goal-001",
       motebit_id: "mote-test",
@@ -260,6 +268,7 @@ describe("REPL /goal outcomes", () => {
       error_message: null,
     });
     moteDb.goalOutcomeStore.add({
+      sensitivity: SensitivityLevel.Personal,
       outcome_id: "out-2",
       goal_id: "goal-001",
       motebit_id: "mote-test",

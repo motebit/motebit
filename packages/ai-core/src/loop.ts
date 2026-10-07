@@ -515,10 +515,13 @@ export interface MotebitLoopDependencies {
    *
    * Doctrine: `motebit-computer.md` §"Mode contract" + the closure of
    * the `sensitivity` ALLOWLIST entry in `check-mode-contract-readers`.
-   * Optional because in-tree tests fixture the loop without a runtime;
-   * production wiring threads `runtime.getEffectiveSessionSensitivity`.
+   * Required: every memory the turn forms, the exchange event it logs and
+   * the pixel projection read it — a turn with no tier would write its
+   * interior at `none`. Production wiring threads
+   * `runtime.getEffectiveSessionSensitivity`; a test fixture declares the
+   * tier it runs at.
    */
-  getEffectiveSensitivity?: () => SensitivityLevel;
+  getEffectiveSensitivity: () => SensitivityLevel;
   /**
    * Provider mode at projection time — composed into `projectForAi`'s
    * pixel gate. `on-device` bypasses pixel stripping entirely (bytes
@@ -1045,7 +1048,7 @@ async function recallOwnerInterior(
   // The tiers this turn's request may carry — the one interior-egress rule
   // (`interior-egress.ts`): context-safe at any tier (so every tier an
   // external provider ever sends at), up to the send tier on-device.
-  const sendTier = deps.getEffectiveSensitivity?.();
+  const sendTier = deps.getEffectiveSensitivity();
   const permitted = interiorEgressSensitivities(sendTier);
 
   // Emptiness probe BEFORE the context batch. A brand-new / anonymous motebit
@@ -1608,7 +1611,7 @@ export async function* runTurnStreaming(
         // chunk path (yielded above) still gets the raw `result.data`.
         const projectionCtx: ProjectionContext = {
           providerMode: deps.getProviderMode?.() ?? null,
-          sensitivity: deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
+          sensitivity: deps.getEffectiveSensitivity(),
           pixelConsent: deps.getPixelConsent?.() ?? "denied",
         };
         const aiProjectedResult: ToolResult = {
@@ -1830,7 +1833,7 @@ export async function* runTurnStreaming(
       // through the three pixel gates before the AI sees them.
       const fallbackProjectionCtx: ProjectionContext = {
         providerMode: deps.getProviderMode?.() ?? null,
-        sensitivity: deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
+        sensitivity: deps.getEffectiveSensitivity(),
         pixelConsent: deps.getPixelConsent?.() ?? "denied",
       };
       const aiProjectedData = projectForAi(
@@ -2072,7 +2075,7 @@ export async function* runTurnStreaming(
   // none-tier session retrieves the leaked memory. Conservative
   // by design — over-restricting forms recoverable by re-elevating
   // and re-forming, while under-restricting leaks structurally.
-  const effectiveTier = deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
+  const effectiveTier = deps.getEffectiveSensitivity();
   if (effectiveTier !== SensitivityLevel.None) {
     // Floor each candidate at the effective tier — keep candidates already
     // at or above the floor; raise the rest. Direct rank comparison reads
@@ -2210,7 +2213,7 @@ export async function* runTurnStreaming(
       response: finalText,
       memories_formed: memoriesFormed.length,
       // Read back by `interiorEventsPermittedAt` — the exchange's tier.
-      sensitivity: deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
+      sensitivity: deps.getEffectiveSensitivity(),
     },
     tombstoned: false,
   });

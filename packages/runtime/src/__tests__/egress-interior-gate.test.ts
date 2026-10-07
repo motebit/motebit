@@ -98,7 +98,7 @@ describe("owner-interior egress gate", () => {
 
   it("the turn's recall reads through the shared rule at the send tier", () => {
     const loop = file(LOOP);
-    expect(loop).toMatch(/const sendTier = deps\.getEffectiveSensitivity\?\.\(\);/);
+    expect(loop).toMatch(/const sendTier = deps\.getEffectiveSensitivity\(\);/);
     expect(loop).toMatch(/const permitted = interiorEgressSensitivities\(sendTier\);/);
     expect(loop).toMatch(
       /pinnedMemoriesRaw\.filter\(\(m\) =>\s*interiorEgressPermits\(sendTier, m\.sensitivity\)/,
@@ -162,7 +162,7 @@ describe("owner-interior egress gate", () => {
   it("every content-bearing event the runtime stack writes is stamped with its tier", () => {
     const loop = file(LOOP);
     expect(loop).toMatch(
-      /event_type: EventType\.StateUpdated,[\s\S]{0,400}sensitivity: deps\.getEffectiveSensitivity\?\.\(\) \?\? SensitivityLevel\.None,/,
+      /event_type: EventType\.StateUpdated,[\s\S]{0,400}sensitivity: deps\.getEffectiveSensitivity\(\),/,
     );
     const rt = file(RUNTIME);
     expect(rt).toMatch(

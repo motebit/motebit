@@ -82,7 +82,9 @@ describe("new goal rows are stamped", () => {
     expect((await applyMotebitYaml(opts)).kind).toBe("applied");
     const rows = await goals();
     expectStamped(rows);
-    expect(rows.map((g) => g.sensitivity)).toEqual([SensitivityLevel.Personal]);
+    // A content change rotates the goal_id (the yaml's hash): the old row
+    // stays until pruned. Every row is stamped.
+    expect(new Set(rows.map((g) => g.sensitivity))).toEqual(new Set([SensitivityLevel.Personal]));
   });
 
   it("the scheduler's maintenance goal is stamped", async () => {
