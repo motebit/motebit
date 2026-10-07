@@ -260,7 +260,7 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 
 ## Architecture
 
-**53 packages across 7 architectural layers · 5 surfaces + 6 supporting apps · 1 relay + 4 molecule agents + 5 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
+**53 packages across 7 architectural layers · 5 surfaces + 6 supporting apps · 1 relay + 4 molecule agents + 4 atom providers + 2 infrastructure services.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
 
 **The permissive / BSL split is algebra vs. judgment.** The Apache-2.0 protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ "best path" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives on the permissive floor. The `check-spec-permissive-boundary` CI gate enforces this: every callable referenced in a spec must be exported from a permissive-floor package or explicitly waived as reference-implementation convention.
 
@@ -268,12 +268,12 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 
 **Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and six supporting (`operator` console, `inspector`, `identity` viewer, `verify` receipt verifier, `docs` site, `vscode` extension).
 
-**Marketplace** ([`services/`](services/)) — 11 services in four roles:
+**Marketplace** ([`services/`](services/)) — 11 services in four roles; 7 list on the market (an identity plus a priced listing):
 
 - **The relay** — `relay` (sync, settlement, federation, 5-tier rate limiting, the only piece with legitimate centralization)
-- **Molecules** — agents that reason and compose other agents: `research` ($0.25/task, Claude + web search with cryptographic citation chain), `code-review` ($0.20/review, Claude-powered), `auditor` ($0.01/audit, LLM-free — measures another agent's public verification surface and signs the result as an eval attestation), `clerk` ($0.01/task — the money-execution pole: a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first)
-- **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.05/request default), `read-url` and `summarize` (unpriced — $0 by default; their value is priced into the molecules that call them), `embed` (plain HTTP embedding compute — no identity, no MCP listing), plus `browser-sandbox` (Playwright-driven Chromium for the `virtual_browser` embodiment). Defaults are overridable per deployment via `MOTEBIT_UNIT_COST`
-- **Glue** — `proxy` (Vercel edge CORS for the web app)
+- **Molecules** — agents that reason and compose other agents: `research` ($0.25/task, Claude + web search with cryptographic citation chain), `code-review` ($0.20/review, Claude-powered), `auditor` ($0.01/task, LLM-free — measures another agent's public verification surface and signs the result as an eval attestation), `clerk` ($0.01/task — the money-execution pole: a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first)
+- **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.05/request default), `read-url` (unpriced) and `summarize` (unpriced — $0 by default; their value is priced into the molecules that call them), plus `browser-sandbox` (Playwright-driven Chromium for the `virtual_browser` embodiment; no identity or listing of its own). Defaults are overridable per deployment via `MOTEBIT_UNIT_COST`
+- **Infrastructure** — not marketplace participants (no identity, no MCP listing): `proxy` (Vercel edge CORS for the web app), `embed` (plain HTTP embedding compute)
 
 **Protocol** ([`spec/`](spec/)) — 37 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`, `eval-attestation`, `routing-transcript`, `machine-roster`, `terminology`. By their own headers: 15 are `Status: Stable` and 21 `Draft`.
 

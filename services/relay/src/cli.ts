@@ -42,8 +42,12 @@ interface ParsedArgs {
 }
 
 /** Injectable IO seam — real implementations in `defaultIo`, fakes in tests. */
+/** The env vars the CLI reads — each a literal-key read in `defaultIo.env`. */
+export type CliEnvName =
+  "MOTEBIT_DB_PATH" | "MOTEBIT_RELAY_BACKUP_PASSPHRASE" | "MOTEBIT_RELAY_KEY_PASSPHRASE";
+
 export interface CliIo {
-  env(name: string): string | undefined;
+  env(name: CliEnvName): string | undefined;
   readFile(path: string): string;
   writeFile(path: string, content: string): void;
   log(line: string): void;
@@ -52,7 +56,15 @@ export interface CliIo {
 }
 
 const defaultIo: CliIo = {
-  env: (name) => process.env[name],
+  // Literal-key reads only (check-service-truth: env access is deny-by-default).
+  env: (name) => {
+    const read: Record<CliEnvName, string | undefined> = {
+      MOTEBIT_DB_PATH: process.env.MOTEBIT_DB_PATH,
+      MOTEBIT_RELAY_BACKUP_PASSPHRASE: process.env.MOTEBIT_RELAY_BACKUP_PASSPHRASE,
+      MOTEBIT_RELAY_KEY_PASSPHRASE: process.env.MOTEBIT_RELAY_KEY_PASSPHRASE,
+    };
+    return read[name];
+  },
   readFile: (path) => readFileSync(path, "utf8"),
   writeFile: (path, content) => writeFileSync(path, content, { mode: 0o600 }),
   log: (line) => process.stdout.write(`${line}\n`),
@@ -98,7 +110,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   return parsed;
 }
 
-function requireEnv(io: CliIo, name: string, why: string): string {
+function requireEnv(io: CliIo, name: CliEnvName, why: string): string {
   const v = io.env(name);
   if (v === undefined || v.length === 0) throw new Error(`${name} must be set (${why})`);
   return v;

@@ -29,7 +29,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
-import { RiskLevel } from "@motebit/sdk";
+import { RiskLevel, toMicro } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { bootstrapAndEmitIdentity, startServiceServer, wireServerDeps } from "@motebit/mcp-server";
 import type { AdmittedTaskStore, TaskAdmissionConfig } from "@motebit/mcp-server";
@@ -63,6 +63,8 @@ import type {
 } from "@motebit/sdk";
 import { embedText as defaultEmbedText } from "@motebit/memory-graph";
 import type { ToolRegistry } from "@motebit/tools";
+import { resolveListingPricing, UNIT_COST_ENV } from "./listing-price.js";
+import type { ListingPrice, ListingPriceSpec } from "./listing-price.js";
 import { fileTaskSpendLedger, memoryTaskSpendLedger, taskSpendFor } from "./task-spend.js";
 import { parseMicroEnv } from "./money-env.js";
 import type { TaskSpend, TaskSpendLedger } from "./task-spend.js";
@@ -71,6 +73,8 @@ import type { TaskSpend, TaskSpendLedger } from "./task-spend.js";
 // `@motebit/mcp-server` for this one helper — runner is the single
 // service-facing import.
 export { createProviderReadiness, classifyProviderFailure } from "./readiness.js";
+export { resolveListingPricing, parseUnitCostOverride, UNIT_COST_ENV } from "./listing-price.js";
+export type { ListingPrice, ListingPriceSpec } from "./listing-price.js";
 export {
   fileTaskSpendLedger,
   memoryTaskSpend,
@@ -125,11 +129,15 @@ export interface MoleculeBuild {
   policyOverrides?: Partial<PolicyConfig>;
 
   /**
-   * Optional service listing published to the relay. When omitted the
-   * relay uses the registration-time default (capabilities + boilerplate
-   * SLA; no pricing).
+   * Optional service listing published to the relay — capabilities, SLA and
+   * description ONLY. Pricing is runner-owned: it comes from
+   * `MoleculeConfig.pricing`, never from here (`pricing?: never`; a listing
+   * that carries its own `pricing` is refused at startup and at every call).
+   * The runner calls this detached (never bound) and composes the one listing
+   * every consumer reads. When omitted the relay uses the registration-time
+   * default (capabilities + boilerplate SLA; no pricing).
    */
-  getServiceListing?: ServiceServerDepsSliceListing;
+  getServiceListing?: MoleculeListingFn;
 
   /**
    * Optional readiness probe. When it answers `ready: false`, the service
@@ -161,9 +169,21 @@ export interface MoleculeBuild {
   zeroPrivateKeyOnShutdown?: boolean;
 }
 
+/** The listing fields a molecule supplies. Pricing is not one of them. */
+export interface MoleculeListing {
+  capabilities: string[];
+  sla: { max_latency_ms: number; availability_guarantee: number };
+  description: string;
+  /** Runner-owned — set `MoleculeConfig.pricing`. Present here ⇒ refused. */
+  pricing?: never;
+}
+
+export type MoleculeListingFn = () => Promise<MoleculeListing | null>;
+
+/** The composed listing every consumer reads (admission, relay registration, MCP tool). */
 type ServiceServerDepsSliceListing = () => Promise<{
   capabilities: string[];
-  pricing: Array<{ capability: string; unit_cost: number; currency: string; per: string }>;
+  pricing: ListingPrice[];
   sla: { max_latency_ms: number; availability_guarantee: number };
   description: string;
 } | null>;
@@ -185,6 +205,22 @@ export interface MoleculeConfig {
   displayName: string;
   serviceDescription: string;
   capabilities: string[];
+
+  /**
+   * The market listing's coded price — the ONLY way a price reaches the relay.
+   * A priced service passes `pricing: LISTING_PRICE`, the literal-only data
+   * constant in its `src/pricing.ts` (it cannot read the environment). The
+   * runner alone applies the operator override: it reads `MOTEBIT_UNIT_COST`
+   * once at boot, REFUSES to start on a malformed value (never lists NaN), and
+   * lists one entry per capability with one `unit_cost`, one `per`, USD — in
+   * every consumer (task admission, relay registration, the
+   * `motebit_service_listing` tool). Omitted ⇒ the listing carries
+   * `pricing: []` (unpriced) and a set `MOTEBIT_UNIT_COST` refuses the boot.
+   * Requires `getServiceListing` (the rest of the listing).
+   * `scripts/check-service-truth.ts` holds every `market: true` service to
+   * passing exactly `LISTING_PRICE` here.
+   */
+  pricing?: ListingPriceSpec;
 
   /** Optional bearer token guarding the MCP HTTP endpoint. */
   authToken?: string;
@@ -402,6 +438,47 @@ export interface MoleculeRunnerAdapters {
 }
 
 /**
+ * The price the runner RESOLVED and lists — `config.pricing` with any
+ * `MOTEBIT_UNIT_COST` override applied — handed to the builder so a service
+ * that budgets against its own price reads the exact number the relay lists,
+ * never the environment (`check-service-truth`: no service source names the
+ * override). Integer micro-units: `toMicro` at this boundary, never a float
+ * in the money path.
+ */
+export interface MoleculeListingPrice {
+  /** The listed `unit_cost` of every capability, in integer micro-units. */
+  readonly unitCostMicro: number;
+  /** The unit the price is per ("task", "request", …). */
+  readonly per: string;
+}
+
+/** What the runner knows before the builder runs, beyond identity and spend. */
+export interface MoleculeBuildContext {
+  /** The resolved listing price; absent ⇔ the molecule lists no price (`config.pricing` unset). */
+  readonly listingPrice?: MoleculeListingPrice;
+}
+
+/**
+ * The resolved listing price of a runner-composed `pricing` array, or
+ * `undefined` for an unpriced molecule; throws when the price is too large to
+ * be an exact integer micro amount. Every entry carries the same
+ * `unit_cost` / `per` by construction (`resolveListingPricing`), so the first
+ * entry is the price.
+ */
+export function listingPriceOf(
+  pricing: readonly ListingPrice[] | undefined,
+): MoleculeListingPrice | undefined {
+  const p = pricing?.[0];
+  if (p == null) return undefined;
+  const unitCostMicro = toMicro(p.unit_cost);
+  if (!Number.isSafeInteger(unitCostMicro))
+    throw new Error(
+      `listing price: unit_cost ${p.unit_cost} is not an exact integer micro-unit amount — refusing to start rather than budget against an inexact price`,
+    );
+  return Object.freeze({ unitCostMicro, per: p.per });
+}
+
+/**
  * The callback services pass to `runMolecule`. Called after identity
  * bootstrap so tool handlers can close over the service's private key,
  * motebit id, and device id.
@@ -413,7 +490,9 @@ export type MoleculeBuilder = (
    * money molecule). Undefined for ordinary molecules. Back-compatible: a
    * one-argument builder ignores it.
    */
-  spend?: MoleculeSpendHandle,
+  spend: MoleculeSpendHandle | undefined,
+  /** Always passed: the resolved listing price ({@link MoleculeBuildContext}). */
+  context: MoleculeBuildContext,
 ) => MoleculeBuild | Promise<MoleculeBuild>;
 
 // ---------------------------------------------------------------------------
@@ -875,7 +954,7 @@ export async function resolveTaskAdmission(
     MoleculeConfig,
     "syncUrl" | "relayPublicKeyHex" | "moneyExecution" | "taskAdmission" | "serviceName"
   >,
-  molecule: Pick<MoleculeBuild, "getServiceListing">,
+  molecule: { getServiceListing?: ServiceServerDepsSliceListing },
   fetchImpl: typeof fetch,
   log: (msg: string) => void,
   stores: { pinStorage: RelayKeyPinStorage; admittedStore: AdmittedTaskStore },
@@ -965,6 +1044,74 @@ export async function resolveTaskAdmission(
   };
 }
 
+/** A listing-pricing refusal — the one listing-read failure that stops the boot. */
+class ListingPricingRefusal extends Error {}
+
+function refuseOwnPricing(serviceName: string): Error {
+  return new ListingPricingRefusal(
+    `${serviceName}: getServiceListing() returned its own \`pricing\` — listing pricing is runner-owned. ` +
+      `Pass it to runMolecule as config \`pricing: LISTING_PRICE\` (services/<name>/src/pricing.ts) ` +
+      `and drop \`pricing\` from getServiceListing; refusing to publish a price from a second path.`,
+  );
+}
+
+/**
+ * Compose the one listing function every consumer reads — task admission,
+ * relay registration (mcp-server calls it as `deps.getServiceListing()`), and
+ * the `motebit_service_listing` tool (which calls it detached). The molecule's
+ * own function is always invoked DETACHED, so a `this`-sensitive listing reads
+ * the same everywhere; its result contributes capabilities/SLA/description
+ * only, and the pricing is a frozen copy of `config.pricing` (`[]` when
+ * unpriced), copied fresh per call so no consumer can mutate another's view.
+ *
+ * Refuses (throws) at startup when the listing carries its own `pricing`, or
+ * when `pricing` is configured with no listing (or a null one) to carry it;
+ * a later call that turns up with `pricing` throws instead of publishing.
+ *
+ * @internal exported for tests
+ */
+export async function composeServiceListing(
+  own: MoleculeListingFn | undefined,
+  pricing: readonly ListingPrice[] | undefined,
+  serviceName: string,
+): Promise<ServiceServerDepsSliceListing | undefined> {
+  const frozen = Object.freeze((pricing ?? []).map((p) => Object.freeze({ ...p })));
+  if (own == null) {
+    if (pricing != null)
+      throw new Error(
+        `${serviceName}: config.pricing is set but the molecule returns no getServiceListing — a price with no listing to publish it on; return getServiceListing (capabilities, sla, description)`,
+      );
+    return undefined;
+  }
+  const inner: () => Promise<unknown> = own;
+  const read = async (): Promise<Awaited<ReturnType<ServiceServerDepsSliceListing>>> => {
+    const l = (await inner()) as MoleculeListing | null | undefined;
+    if (l == null) {
+      if (pricing != null)
+        throw new ListingPricingRefusal(
+          `${serviceName}: getServiceListing() returned null but config.pricing is set — refusing to drop the price`,
+        );
+      return null;
+    }
+    if (Object.prototype.hasOwnProperty.call(l, "pricing")) throw refuseOwnPricing(serviceName);
+    return {
+      capabilities: l.capabilities,
+      pricing: frozen.map((p) => ({ ...p })),
+      sla: l.sla,
+      description: l.description,
+    };
+  };
+  // Startup refusal: a listing that brings its own price never boots. Any other
+  // read failure keeps today's behaviour (boot; admission treats an unreadable
+  // listing as priced; registration publishes nothing that round).
+  try {
+    await read();
+  } catch (err) {
+    if (err instanceof ListingPricingRefusal) throw err;
+  }
+  return read;
+}
+
 // ---------------------------------------------------------------------------
 // runMolecule — the entrypoint services call
 // ---------------------------------------------------------------------------
@@ -992,6 +1139,21 @@ export async function runMolecule(
   adapters: MoleculeRunnerAdapters = {},
 ): Promise<ServiceHandle> {
   const log = adapters.log ?? defaultLog;
+  // 0. The listing price — resolved FIRST, before identity or storage, so a
+  //    malformed MOTEBIT_UNIT_COST refuses the boot with nothing touched. The
+  //    one read of the override env (src/listing-price.ts).
+  const unitCostRaw = process.env["MOTEBIT_UNIT_COST"];
+  if (config.pricing == null && unitCostRaw !== undefined)
+    throw new Error(
+      `${config.serviceName}: ${UNIT_COST_ENV} is set but this molecule lists no price (config.pricing unset) — refusing to start with an override that would publish nothing; unset it`,
+    );
+  const pricing: ListingPrice[] | undefined =
+    config.pricing != null ? resolveListingPricing(config.pricing, unitCostRaw) : undefined;
+  const listingPrice = listingPriceOf(pricing);
+  if (pricing != null)
+    log(
+      `Listing price: $${pricing[0]!.unit_cost}/${pricing[0]!.per} (${unitCostRaw !== undefined ? `${UNIT_COST_ENV} override` : "coded default"}) for ${pricing.map((p) => p.capability).join(", ")}`,
+    );
   const bootstrap = adapters.bootstrapIdentity ?? bootstrapAndEmitIdentity;
   const openDb = adapters.openDatabase ?? openMotebitDatabase;
   const startServer = adapters.startServer ?? startServiceServer;
@@ -1057,7 +1219,15 @@ export async function runMolecule(
     };
     log(`Money seam: self-grant ${heldGrant.grant_id} (signed ceiling; dry-run is per-call)`);
   }
-  const molecule = await build(identity, spend);
+  const molecule = await build(identity, spend, listingPrice != null ? { listingPrice } : {});
+  // Pricing is runner-owned: compose the ONE listing function before anything
+  // reads it. Refuses (throws) when the molecule's listing carries its own
+  // pricing, or when config prices a service that publishes no listing.
+  const getServiceListing = await composeServiceListing(
+    molecule.getServiceListing,
+    pricing,
+    config.serviceName,
+  );
 
   // 4. Storage + runtime
   const storage = assembleStorageAdapters(db);
@@ -1124,8 +1294,8 @@ export async function runMolecule(
   if (molecule.handleAgentTask) wireOpts.handleAgentTask = molecule.handleAgentTask;
 
   const deps = wireServerDeps(runtime as unknown as ServiceRuntime, wireOpts);
-  if (molecule.getServiceListing) {
-    deps.getServiceListing = molecule.getServiceListing;
+  if (getServiceListing) {
+    deps.getServiceListing = getServiceListing;
   }
   if (molecule.checkReadiness) {
     deps.checkReadiness = molecule.checkReadiness;
@@ -1158,12 +1328,12 @@ export async function runMolecule(
     },
   };
   // Task admission — priced work enters through the relay's gate. Decided
-  // from the molecule's OWN listing so pricing and admission cannot drift
-  // apart: a service that charges is a service that requires the relay's
+  // from the SAME composed listing the relay is sent, so pricing and admission
+  // cannot drift apart: a service that charges is a service that requires the relay's
   // signed admission before it spends. Doctrine: task-admission.md.
   const admission = await resolveTaskAdmission(
     config,
-    molecule,
+    { getServiceListing },
     adapters.fetch ?? fetch,
     log,
     admissionStores,

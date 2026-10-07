@@ -900,7 +900,7 @@ export async function research(question: string, config: ResearchConfig): Promis
             const spentNow = committedMicro();
             if (spentNow === 0 && quotedMicro != null) {
               console.log(
-                `[research] paid-spend budget ${budgetMicro} < one paid call (${quotedMicro}) cap=${capabilityHint} — running with zero paid calls; raise MOTEBIT_UNIT_COST or lower the margin/reserve`,
+                `[research] paid-spend budget ${budgetMicro} < one paid call (${quotedMicro}) cap=${capabilityHint} — running with zero paid calls; raise the listing price or lower the margin/reserve`,
               );
             }
             console.log(
