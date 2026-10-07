@@ -8,7 +8,14 @@ import { applyConfiguredMaxTokens, applyLaunchProvider } from "./provider-config
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
 import { installTaskPollFault } from "./fault-injection.js";
-import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";
+import {
+  parseCliArgs,
+  printHelp,
+  printVersion,
+  printBanner,
+  trimHistory,
+  isExitInput,
+} from "./args.js";
 import type { CliConfig } from "./args.js";
 import { IdentityBootstrapRefusedError } from "@motebit/core-identity";
 import {
@@ -1143,7 +1150,7 @@ async function main(): Promise<void> {
   const handleLine = async (line: string): Promise<void> => {
     const trimmed = line.trim();
 
-    if (trimmed === "quit" || trimmed === "exit") {
+    if (isExitInput(trimmed)) {
       writeOutput("Goodbye!\n");
       await shutdown();
       // Mirror the SIGINT path: exit explicitly. Waiting for the event

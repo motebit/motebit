@@ -676,6 +676,25 @@ MOTEBIT_SYNC_URL=https://relay.motebit.com
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Non-TTY gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Refuse the interactive path when stdin is not a terminal. Without a TTY the
+ * first prompt prints, stdin closes unanswered, the pending readline question
+ * never resolves, and Node exits 0 having created nothing — a silent success
+ * for CI and piped runs. Called immediately before the first prompt so the
+ * earlier refusals (existing project, existing identity) keep their messages.
+ */
+function requireInteractiveTerminal(): void {
+  if (process.stdin.isTTY) return;
+  console.error(
+    `  ${red("!")} No interactive terminal: re-run with --yes and set MOTEBIT_PASSPHRASE (e.g. MOTEBIT_PASSPHRASE=... npx create-motebit --yes).`,
+  );
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
 // agentScaffold — generate a runnable agent project
 // ---------------------------------------------------------------------------
 
@@ -748,6 +767,7 @@ async function agentScaffold(
     agentDescription = process.env["MOTEBIT_SERVICE_DESCRIPTION"] ?? `${dirName} agent`;
     if (targetDir === ".") dirName = "my-agent";
   } else {
+    requireInteractiveTerminal();
     const rl = createRL();
 
     if (targetDir === ".") {
@@ -913,6 +933,7 @@ async function guidedScaffold(
       dirName = "my-motebit";
     }
   } else {
+    requireInteractiveTerminal();
     rl = createRL();
 
     // Project name (if scaffolding in ".")
@@ -1351,6 +1372,7 @@ async function rotateCmd(
     }
     newPassphrase = oldPassphrase; // reuse with --yes
   } else {
+    requireInteractiveTerminal();
     const rl = createRL();
     oldPassphrase = await password(rl, "? Current passphrase: ");
     if (!oldPassphrase) {

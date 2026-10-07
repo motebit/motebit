@@ -2275,7 +2275,7 @@ On first launch, the system runs a shared bootstrap protocol (`bootstrapIdentity
 
 1. **Generate an Ed25519 keypair** using `@noble/ed25519` — a zero-dependency, audited library. The same signing scheme used by SSH, Signal, and WireGuard.
 2. **Store the private key** in the platform's secure storage. On desktop, `~/.motebit/dev-keyring.json` — an owner-only (mode `0600` on Unix; Windows is best-effort) file, access-controlled rather than application-encrypted; the OS keychain is not used yet (its enablement is a separate arc gated on real-device testing, because keychain providers differ in ways that can lose a key). On CLI, PBKDF2-encrypted as `cli_encrypted_key` in `~/.motebit/config.json`. On mobile, `expo-secure-store` (iOS Keychain / Android Keystore, no fallback). The private key never appears in the non-secret `config.json` and never crosses the network; on desktop the key file is access-controlled but not application-encrypted (moving it into the OS keychain is tracked as its own arc — see [security boundaries](https://github.com/motebit/motebit/blob/main/docs/doctrine/security-boundaries.md)).
-3. **Generate a UUID v7** `motebit_id` (time-ordered, sortable) and a `device_id`.
+3. **Derive the `motebit_id` from the public key** — a UUIDv8 (RFC 9562) built from the first 16 bytes of `SHA-256(public_key)` with the version and variant bits set (`deriveSovereignMotebitId` in `@motebit/crypto`). The id is a self-certifying commitment to the genesis key: anyone can recompute it offline, and it is recoverable from the key's seed. A random `device_id` is generated alongside it. Identities minted before this default carry a random UUID v7 `motebit_id` that is not bound to any key; they remain valid identifiers.
 4. **Register the device** against the identity, binding the device's public key to the `motebit_id`.
 5. **Write config** — the `motebit_id`, `device_id`, and public key are persisted to `~/.motebit/config.json` (non-secret metadata only).
 
@@ -2354,15 +2354,17 @@ import { verify } from "@motebit/crypto";
 import fs from "node:fs";
 
 const result = await verify(fs.readFileSync("motebit.md", "utf-8"));
-if (result.valid) {
-  console.log("Verified:", result.identity.motebit_id);
+// `verify` auto-detects the artifact and returns a union discriminated on
+// `type`; narrow to "identity" before reading identity-file fields.
+if (result.type === "identity" && result.valid) {
+  console.log("Verified:", result.identity?.motebit_id);
 }
 ```
 
-A valid result includes a `did` field — the W3C `did:key` derived from the Ed25519 public key. This bridges motebit to ecosystems that use Decentralized Identifiers (Verifiable Credentials, DIDComm, MCP-Identity).
+A valid identity result includes a `did` field — the W3C `did:key` derived from the Ed25519 public key. This bridges motebit to ecosystems that use Decentralized Identifiers (Verifiable Credentials, DIDComm, MCP-Identity).
 
 ```typescript
-if (result.valid) {
+if (result.type === "identity" && result.valid) {
   console.log(result.did); // "did:key:z6Mk..."
 }
 ```
@@ -4317,8 +4319,8 @@ import { mappedSemiring, CostSemiring } from "@motebit/protocol";
 type Micro = number & { readonly __brand: "Micro" };
 const MicroCostSemiring = mappedSemiring(
   CostSemiring,
-  (micro: Micro) => micro as number,
-  (n: number) => n as Micro,
+  (n: number) => n as Micro, // to: base value → mapped value
+  (micro: Micro) => micro as number, // from: mapped value → base value
 );
 ```
 
@@ -4713,7 +4715,7 @@ Each relay has a persistent cryptographic identity, independent of the agents it
 | Algorithm  | Ed25519                                                                                                                         |
 | Key size   | 32-byte public key, 64-byte private key                                                                                         |
 | Storage    | AES-256-GCM encrypted at rest (PBKDF2, 600k iterations) when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Plaintext hex for dev mode. |
-| Identifier | `motebit_id` (UUID v7), distinct from any agent's identity                                                                      |
+| Identifier | `relay_motebit_id` (`relay-` + a random UUID v4), distinct from any agent's identity                                            |
 
 The relay's identity is generated on first startup and persists across restarts. The public key and `motebit_id` are published to peers during the peering handshake.
 
@@ -5320,7 +5322,7 @@ interface ExecutionReceipt {
 | Field                 | Type                  | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `task_id`             | `string`              | Correlation ID for the task. Matches the `task_id` returned by the relay on submission.                                                                                                                                                                                                                                                                                                                                                                        |
-| `motebit_id`          | `MotebitId`           | UUID v7 of the agent that executed the task. This is who did the work.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `motebit_id`          | `MotebitId`           | `motebit_id` of the agent that executed the task (a UUIDv8 key commitment for identities minted today; legacy identities carry a UUID v7). This is who did the work.                                                                                                                                                                                                                                                                                                                                                                                         |
 | `public_key`          | `string?`             | Signer's Ed25519 public key in hex. Enables verification without a relay lookup — the verifier can check the signature directly.                                                                                                                                                                                                                                                                                                                               |
 | `device_id`           | `DeviceId`            | Which device executed the task. A single motebit may run across multiple devices.                                                                                                                                                                                                                                                                                                                                                                              |
 | `submitted_at`        | `number`              | Unix timestamp (ms) when the task was submitted.                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -6017,22 +6019,39 @@ Source: https://docs.motebit.com/docs/apps/cli
 
 > The developer REPL — slash commands, streaming, and debugging.
 
-The CLI is a Node.js REPL for talking to your motebit — streaming responses, tool approvals, slash commands, and a daemon mode for scheduled goals. Same code that ships via `npm install -g motebit`; running `pnpm --filter motebit start` from a monorepo clone invokes it with the package source instead of the published bundle.
+The CLI is a Node.js REPL for talking to your motebit — streaming responses, tool approvals, slash commands, and a daemon mode for scheduled goals.
 
 ## Running the CLI
 
+Install it from npm and run it:
+
 ```bash
-pnpm --filter motebit start
+npm install -g motebit
+motebit
+```
+
+Or run it once without a global install:
+
+```bash
+npx motebit
+```
+
+The default provider is Anthropic and needs `ANTHROPIC_API_KEY`. With no API key, run against a local model server (Ollama, LM Studio, llama.cpp, vLLM, or any OpenAI-compatible endpoint):
+
+```bash
+motebit --provider local-server
 ```
 
 Or with options:
 
 ```bash
-pnpm --filter motebit start -- \
+motebit \
   --provider anthropic \
   --model claude-sonnet-5 \
   --operator
 ```
+
+**Contributors:** from a monorepo clone, `pnpm --filter motebit start` runs the same CLI from the package source instead of the published bundle; pass flags after `--` (for example `pnpm --filter motebit start -- --provider local-server`).
 
 ### CLI flags
 
@@ -6087,7 +6106,7 @@ pnpm --filter motebit start -- \
 | `/agents block <id>` | Block an agent |
 | `/result [task_id] [owner_id]` | Fetch a delegated task's result by id. Free and read-only: one `task:query` read, never a new hire, never a payment. With no id, lists the paid tasks whose results never arrived; startup shows one line when any are waiting. `/result dismiss <task_id>` clears an entry after the relay has reaped the task. |
 | `/operator` | Show operator mode status |
-| `quit` / `exit` | Exit the CLI |
+| `quit` / `exit` | Exit the CLI (a leading slash also works) |
 
 ## Tool approval flow
 
@@ -6511,7 +6530,7 @@ motebit/
 │   ├── state-vector/          [L2]          Tick-based EMA smoothing, hysteresis, 60 FPS interp.
 │   ├── render-engine/         [L2]          Droplet geometry, glass material, ThreeJS adapter.
 │   ├── memory-graph/          [L2]          Semantic memory, cosine similarity, half-life decay.
-│   ├── core-identity/         [L2]          UUID v7, multi-device, Ed25519 binding.
+│   ├── core-identity/         [L2]          Key-derived (UUIDv8) motebit_id, multi-device, Ed25519 binding.
 │   ├── sync-engine/           [L2]          Multi-device sync. HTTP/WebSocket, conflict detection.
 │   ├── mcp-client/            [L2]          MCP stdio/HTTP client, credential sources, verifiers.
 │   ├── relay-client/          [L2]          Typed relay HTTP transport — wire-schema-validated bodies, audience-bound auth, one error shape.
@@ -6739,7 +6758,7 @@ On first launch the system bootstraps a cryptographic identity.
 
 1. **Generate** an Ed25519 keypair.
 2. **Store** the private key on the device — an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (the OS keychain is not used yet), PBKDF2-encrypted file (600K iterations) on CLI, expo-secure-store on mobile, IndexedDB with a derived-key envelope on web. The key never leaves the device.
-3. **Register** the device against the identity (UUID v7). Multi-device pairing uses X25519 + HKDF + AES to transfer the identity key through the relay without exposing it to the relay.
+3. **Derive** the `motebit_id` from the public key (a UUIDv8 commitment to `SHA-256(public_key)`, self-certifying and recoverable from the seed; legacy identities carry a random UUID v7) and **register** the device against it. Multi-device pairing uses X25519 + HKDF + AES to transfer the identity key through the relay without exposing it to the relay.
 4. **Authenticate** with the sync relay using signed bearer tokens (suite `motebit-jwt-ed25519-v1`) with required `aud` audience binding (`sync`, `task:submit`, `admin:query`, `rotate-key`, `pair`, `register-device`) to prevent cross-endpoint replay.
 
 Key rotation uses dual-signed **succession records**: the old keypair signs a tombstone declaring the new keypair; both keys sign the canonical payload. Chains verify end-to-end without a centralized revocation registry. Individual revocations additionally anchor onchain via Solana Memo (`motebit:revocation:v1:{pubkey}:{ts}`) so the chain is the permanent trust root — the relay is the fast path.

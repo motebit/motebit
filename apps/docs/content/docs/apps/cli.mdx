@@ -3,22 +3,39 @@ title: CLI
 description: The developer REPL — slash commands, streaming, and debugging.
 ---
 
-The CLI is a Node.js REPL for talking to your motebit — streaming responses, tool approvals, slash commands, and a daemon mode for scheduled goals. Same code that ships via `npm install -g motebit`; running `pnpm --filter motebit start` from a monorepo clone invokes it with the package source instead of the published bundle.
+The CLI is a Node.js REPL for talking to your motebit — streaming responses, tool approvals, slash commands, and a daemon mode for scheduled goals.
 
 ## Running the CLI
 
+Install it from npm and run it:
+
 ```bash
-pnpm --filter motebit start
+npm install -g motebit
+motebit
+```
+
+Or run it once without a global install:
+
+```bash
+npx motebit
+```
+
+The default provider is Anthropic and needs `ANTHROPIC_API_KEY`. With no API key, run against a local model server (Ollama, LM Studio, llama.cpp, vLLM, or any OpenAI-compatible endpoint):
+
+```bash
+motebit --provider local-server
 ```
 
 Or with options:
 
 ```bash
-pnpm --filter motebit start -- \
+motebit \
   --provider anthropic \
   --model claude-sonnet-5 \
   --operator
 ```
+
+**Contributors:** from a monorepo clone, `pnpm --filter motebit start` runs the same CLI from the package source instead of the published bundle; pass flags after `--` (for example `pnpm --filter motebit start -- --provider local-server`).
 
 ### CLI flags
 
@@ -73,7 +90,7 @@ pnpm --filter motebit start -- \
 | `/agents block <id>` | Block an agent |
 | `/result [task_id] [owner_id]` | Fetch a delegated task's result by id. Free and read-only: one `task:query` read, never a new hire, never a payment. With no id, lists the paid tasks whose results never arrived; startup shows one line when any are waiting. `/result dismiss <task_id>` clears an entry after the relay has reaped the task. |
 | `/operator` | Show operator mode status |
-| `quit` / `exit` | Exit the CLI |
+| `quit` / `exit` | Exit the CLI (a leading slash also works) |
 
 ## Tool approval flow
 

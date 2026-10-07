@@ -115,8 +115,8 @@ import { mappedSemiring, CostSemiring } from "@motebit/protocol";
 type Micro = number & { readonly __brand: "Micro" };
 const MicroCostSemiring = mappedSemiring(
   CostSemiring,
-  (micro: Micro) => micro as number,
-  (n: number) => n as Micro,
+  (n: number) => n as Micro, // to: base value → mapped value
+  (micro: Micro) => micro as number, // from: mapped value → base value
 );
 ```
 

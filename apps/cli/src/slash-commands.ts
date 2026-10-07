@@ -356,7 +356,7 @@ function printHelp(): void {
     console.log(`  ${styleUsage(usage)}${gap}${dim(desc)}`);
   }
   console.log(
-    `  ${dim("quit, exit")}${" ".repeat(Math.max(1, col - "quit, exit".length))}${dim("Exit")}\n`,
+    `  ${dim("quit, exit")}${" ".repeat(Math.max(1, col - "quit, exit".length))}${dim("Exit (/quit and /exit also work)")}\n`,
   );
 }
 
