@@ -1,5 +1,54 @@
 # @motebit/sdk Changelog
 
+## 2.10.0
+
+### Minor Changes
+
+- 8bb3155: Current Claude models in one canonical picker (#654). `ANTHROPIC_MODELS` gains `claude-opus-5-5`. New `ANTHROPIC_PICKER` (id, label, tier) — Opus 5.5 (most capable), Sonnet 5 (recommended, the default), Haiku 4.5 (fastest) — plus `pickerModelForTier(tier)` and `pickerOptionsWithStored(stored)`, which renders a stored non-picker id (e.g. a pre-existing `claude-sonnet-4-6`) as its own selected row and never migrates it. `DEFAULT_ANTHROPIC_MODEL` moves from `claude-sonnet-4-6` to `claude-sonnet-5` (the BYOK default for callers that name no model; an explicitly configured model is unaffected); `MODEL_DEFAULT_REVIEW_BY.anthropic` → 2026-12-31. `DEFAULT_PROXY_MODEL` / `PROXY_MODELS` (Motebit Cloud) are unchanged. Every other registry id, Fable 5.1 included, stays selectable by id.
+- 002c6dd: **A paid delegation's result can now be fetched by task id, for free, after the session that paid for it is gone** (#874).
+
+  Before this, a delegation whose payment settled but whose result poll failed had no recovery path. Nothing fetched a result by task id, and the record of the unretrieved payment lived only in memory. After a restart, a user asking for "the result of task ed665235 — I already paid for it" got an agent whose only tool was `delegate_to_agent`: a second paid hire. Only a human "n" at the payment prompt stopped it.
+
+  `motebit` (CLI):
+
+  - `/result` lists the paid tasks whose results have not arrived. `/result <task_id>` fetches one with a single authenticated `task:query` read. It never submits a task and never pays. A short id (the first 8 characters) works for an outstanding paid task. `/result <task_id> <owner_id>` reads a task filed under another motebit, which is what `motebit delegate`'s relay-mode path does. `/result dismiss <task_id>` clears an entry once the relay has reaped the task and the result is gone. With nothing recorded, it says "No paid result is known on this device". That is not a claim that nothing is owed anywhere.
+  - A paid delegation is written to `~/.motebit/motebit.db` (migration 49) the moment the relay accepts it. It is written as **in flight** and tagged with the current runtime session. While that session is still polling, the entry locks nothing: concurrent hires, including two of the same worker and capability, proceed exactly as before. It becomes **unretrieved** in two cases: the poll ends without the result, or a different session reads it because the process that was polling died. Only unretrieved entries refuse a re-hire of the same worker and capability, or suspend paid hiring once two are owed. A delivered result resolves the entry. A ledger write that fails (for example SQLITE_BUSY) is logged with the task id and tx, and never aborts the hire, the poll or the settlement facts returned on failure. The record is per identity. Entries are keyed by task, not by worker and capability. The old in-memory ledger keyed them by worker and capability, so two lost results of the same pair overwrote each other and the two-owed suspension never fired. It now does.
+
+  One limit: two processes on one database (the REPL and a daemon) each see the other's in-flight hires as unretrieved. Normally that lasts until the poll ends. If the delivery's resolve write itself fails, the entry stays for the other process, and for the next session, until `/result <task>` retrieves it. Running `/result dismiss` on a hire that another process is still polling clears the entry.
+
+  - When paid results are waiting, startup prints one line, e.g. `1 paid result not retrieved — /result ed665235`.
+  - The model gets a `retrieve_task_result` tool (read-only, api tier, R0). Its description tells the model to use it instead of delegating again. It returns typed fields: `status`, `already_paid`, `retrieval_cost`, `payment`, `result`. It refuses while the runtime is running another principal's task, so a customer's prompt cannot read this motebit's paid tasks. In that situation `delegate_to_agent`'s duplicate-payment refusal also omits the owner's task id, tx and `/result` pointer.
+  - `motebit delegate --sovereign` now uses the same durable ledger. Before, it was the one paid path with no interlock. When its payment settles and the result does not arrive, it prints the `/result` command.
+  - `motebit delegate` used to print an unauthenticated `curl` hint on timeout, which could only ever 401. It now prints the `/result` command.
+  - `/serve` no longer offers `delegate_to_agent`, `discover_agents` or `retrieve_task_result` to callers.
+
+  `@motebit/protocol`: `ToolDefinition` gains an optional `localOnly` flag, an exposure axis. A tool that sets it acts for the motebit's owner against its own interior. No MCP server built on `@motebit/mcp-server` lists it or executes it as a direct tool call, and no surface advertises it. The flag does not remove the tool from the agent loop that `motebit_task` runs; a tool that must be unreachable there guards its own handler. Absent means unchanged behavior.
+
+  `@motebit/sdk`: this adds `PaidIntentRecord`, `PaidIntentStoreAdapter` and an optional `StorageAdapters.paidIntentStore`. The change is additive. A surface without the store keeps the in-memory interlock, which holds for one process only.
+
+- 0ea4d4c: `ANTHROPIC_MODELS` gains `claude-sonnet-5-5`, the id the live Anthropic catalog serves and the scheduled `check-model-catalog-drift` gate reported missing from the snapshot. It is selectable by id. `DEFAULT_ANTHROPIC_MODEL`, `ANTHROPIC_PICKER`, `PROXY_MODELS` and Motebit Cloud admission are unchanged.
+- 8bb3155: Add `motebitCloudPickerModels()` — the Motebit Cloud picker list (`PROXY_MODELS` filtered by `motebitCloudAdmission` for a funding tier), so every surface (web and desktop) renders the Cloud `<select>` from one source. `PROXY_MODELS` drops `claude-opus-4-7`, which Motebit Cloud refuses; it now lists no id the proxy refuses for a deposit-funded account.
+- 8bb3155: One provider-default derivation for every surface (#654 cold review). New `defaultModelForProvider(provider)` — exhaustive over `anthropic | openai | google | groq | deepseek | local-server | ollama | proxy | motebit-cloud`, with the Motebit Cloud arms returning `DEFAULT_PROXY_MODEL` — replaces the per-surface ternary chains whose fall-through arm handed Cloud users the BYOK Anthropic default, which Motebit Cloud refuses. New `MOTEBIT_CLOUD_ACCEPTED_MODELS` (the exact set the Cloud proxy admits, which the proxy now consumes), `MOTEBIT_CLOUD_AUTO_MODEL` and `motebitCloudAdmitsModel(model)`. No existing export changes; `PROXY_MODELS` and `DEFAULT_PROXY_MODEL` are unchanged.
+- 8bb3155: One Motebit Cloud admission rule for the relay, the proxy and every client (#654 cold review R2, R3). New `motebitCloudAdmission(model, { tokenModels?, tier?, catalog? }) → { admitted, resolved, refusal? }` — the alias step (new `MOTEBIT_CLOUD_MODEL_ALIASES`, lifted from the Cloud proxy, which now calls this function and keeps no private copy), then the proxy-token model list (`refusal: "token_model"`, the proxy's 400), then membership in `MOTEBIT_CLOUD_ACCEPTED_MODELS` (`refusal: "not_in_catalog"`, its 451); `"auto"` admitted; non-string / empty refused; exact match. The token lists the relay mints are now sdk tables — new `MOTEBIT_CLOUD_DEPOSIT_MODELS`, `MOTEBIT_CLOUD_FREE_CREDIT_MODELS`, `MOTEBIT_CLOUD_TOKEN_MODELS` and the `MotebitCloudFundingTier` type; the relay mints from them, the proxy passes the presented token's list, and a client that holds no token names a tier (default `"deposit"`, the paying-account ceiling). Also new: `MOTEBIT_CLOUD_CATALOG`, `MotebitCloudAdmission`, `MotebitCloudAdmissionOptions`, `MotebitCloudCatalog`, `MotebitCloudRefusal`. `motebitCloudAdmitsModel` now resolves aliases (`claude-opus`, `gpt-4o`, … are admitted, as the proxy admits them) and applies the deposit ceiling. `providerAcceptsModel("proxy" | "motebit-cloud", model)` now returns exactly `motebitCloudAdmission(model).admitted` instead of a vendor-family guess — a fix aligning it with what Cloud serves: `true` → `false` for ids Cloud refuses (`claude-sonnet-5`, `llama-3.3-70b-versatile`, `openai/gpt-oss-120b`, unknown ids). Other providers are unchanged. Scope: client/proxy agreement is proven for DEPOSIT-funded tokens (real relay mint, real proxy route). Known gap, owned by the Cloud-models lane: a client admits at the deposit ceiling, so a FREE-CREDIT token can still refuse (400) an id the client admitted — as on main; clients will admit from the token's own `models` list.
+
+### Patch Changes
+
+- Updated dependencies [22c133c]
+- Updated dependencies [1889764]
+- Updated dependencies [22d6607]
+- Updated dependencies [002c6dd]
+- Updated dependencies [97a0695]
+- Updated dependencies [c7bea85]
+- Updated dependencies [6e621cf]
+- Updated dependencies [2d8a7ba]
+- Updated dependencies [a86dd02]
+- Updated dependencies [be23c6d]
+- Updated dependencies [97f0838]
+- Updated dependencies [0c9c304]
+- Updated dependencies [fcf9bee]
+- Updated dependencies [1c509ab]
+  - @motebit/protocol@3.19.0
+
 ## 2.9.0
 
 ### Minor Changes

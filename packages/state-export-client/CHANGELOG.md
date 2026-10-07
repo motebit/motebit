@@ -1,5 +1,38 @@
 # @motebit/state-export-client
 
+## 0.6.0
+
+### Minor Changes
+
+- fbf2658: `verifyReceiptDocument` now reports the on-chain key-revocation scan outcome as an additive `revocation` field (`"not_revoked" | "revoked_after_signing" | "revoked" | "unknown"`, plus `revocationDetail` when unknown), present only when `options.revocation` was supplied — absent means not checked. A surface can now say "revocation passed" versus "not checked" without guessing.
+
+### Patch Changes
+
+- ac80972: Pin the cryptosuite wherever `suite` sits outside the signed bytes (F-20).
+
+  `verifyTransparencyDeclaration`, `verifyAgentRevocationRecord` and `verifyAgentRevocationFeed` (`@motebit/state-export-client`) and the multi-signature arms of `verifyDeletionCertificate` (`@motebit/crypto`) dispatched signature verification on a `suite` value the signature does not cover, so an artifact whose `suite` was rewritten to any other registered `SuiteId` without re-signing still verified. Each verifier now pins the suite its artifact is produced under (`TRANSPARENCY_SUITE`, `AGENT_REVOCATION_SUITE`, `DELETION_CERTIFICATE_SUITE`) and rejects anything else (`unsupported_suite` / signature invalid). Every producer already stamps exactly these suites, so every previously valid artifact still verifies; the signed bytes are unchanged.
+
+- Updated dependencies [22c133c]
+- Updated dependencies [1889764]
+- Updated dependencies [22d6607]
+- Updated dependencies [002c6dd]
+- Updated dependencies [97a0695]
+- Updated dependencies [c7bea85]
+- Updated dependencies [6e621cf]
+- Updated dependencies [2d8a7ba]
+- Updated dependencies [a86dd02]
+- Updated dependencies [be23c6d]
+- Updated dependencies [fa009df]
+- Updated dependencies [36f4432]
+- Updated dependencies [97f0838]
+- Updated dependencies [b6e1b2d]
+- Updated dependencies [0c9c304]
+- Updated dependencies [ac80972]
+- Updated dependencies [fcf9bee]
+- Updated dependencies [1c509ab]
+  - @motebit/protocol@3.19.0
+  - @motebit/crypto@3.21.0
+
 ## 0.5.25
 
 ### Patch Changes
