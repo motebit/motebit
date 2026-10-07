@@ -13,6 +13,7 @@ import {
 } from "@motebit/sdk";
 import { VERSION } from "./config.js";
 import { bold, dim, cyan, green, command } from "./colors.js";
+import { PUBLIC_RELAY_URL } from "./sync-opt-in.js";
 
 /**
  * CLI provider flag union. Flat shape mapped onto the three-mode architecture:
@@ -147,6 +148,9 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "db-path": { type: "string" },
       "no-stream": { type: "boolean", default: false },
       "sync-url": { type: "string" },
+      // Opt in to the public relay for this process (`sync-opt-in.ts`);
+      // `--sync-url` wins when both are given.
+      sync: { type: "boolean", default: false },
       "sync-token": { type: "string" },
       operator: { type: "boolean", default: false },
       "auto-approve": { type: "boolean", default: false },
@@ -276,7 +280,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     modelExplicit: values.model != null,
     dbPath: values["db-path"],
     noStream: values["no-stream"],
-    syncUrl: values["sync-url"],
+    syncUrl: values["sync-url"] ?? (values.sync ? PUBLIC_RELAY_URL : undefined),
     syncToken: values["sync-token"],
     operator: values.operator,
     autoApprove: values["auto-approve"],
@@ -494,7 +498,7 @@ Commands:
                             Kinds: receipt | token | listing | identity.
                             Validates schema + suite + Ed25519 signature
                             (+ time window for tokens). [--json]
-  register [--sync-url <url>]  Register this identity with the relay (enables discovery)
+  register [--sync-url <url> | --sync]  Register this identity with a relay (enables discovery)
   rotate [--reason "..."]   Rotate Ed25519 keypair with cryptographic succession chain
                             Your wallet address IS this key: rotation refuses while
                             the old address holds SOL or tokens, or the relay holds
@@ -505,6 +509,8 @@ Commands:
   machines retire <device_id>  Sign a retirement for a machine's line (undo: machines enroll)
   machines enroll <device_id> [--force]  Rejoin a retired line, or enrol an id explicitly
   status                    Identity, relay and compaction floor; a relay pinning it is named
+  sync enable [url]         Opt in to relay sync: persist the relay (default ${PUBLIC_RELAY_URL})
+  sync disable              Turn relay sync off: remove the persisted relay
   sync status [--json]      Each relay stream behind the compaction floor: acked cursor, last ack, events held back
   sync retire <relay-url> [--force] [--yes]  Stop a relay you no longer use from holding compaction back
   sync clear-intent [--force] [--yes]  Clear the record that this identity syncs (confirm first)
@@ -600,7 +606,10 @@ Options:
   --routing-strategy <s>  Agent delegation routing: "cost", "quality", or "balanced"
   --db-path <path>        Database file path (default: ~/.motebit/motebit.db)
   --no-stream             Disable streaming (use blocking mode)
-  --sync-url <url>        Remote sync server URL (or set MOTEBIT_SYNC_URL)
+  --sync-url <url>        Opt in to relay sync with this relay (or set MOTEBIT_SYNC_URL).
+                          Relay sync is off unless a relay is named here, in the env,
+                          or in config.json (\`motebit sync enable\`)
+  --sync                  Opt in to relay sync with the public relay (${PUBLIC_RELAY_URL})
   --sync-token <tok>      Auth token for sync server (or set MOTEBIT_SYNC_TOKEN)
   --once                  Create a one-shot goal (runs once then completes)
   --wall-clock <duration> Max wall-clock time per goal run (e.g. '30m', '1h'). Default: 10m

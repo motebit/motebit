@@ -3,9 +3,10 @@
  * CLI construction of a `MotebitRuntime` — the REPL (`createRuntime`), both
  * daemons (`motebit run`, `motebit serve`) and `motebit delegate`.
  *
- * Configured when the process syncs its events with a relay: the REPL and
- * `delegate` always do (`resolveRelayUrl` / `getRelayUrl` fall back to the
- * default relay); `motebit run` does when a sync URL is set, and `motebit
+ * Configured when the process syncs its events with a relay: the REPL does
+ * when a relay is named (relay sync is opt-in — `sync-opt-in.ts`; no
+ * default) and `delegate` always does (`getRelayUrl` refuses without one);
+ * `motebit run` does when a sync URL is set, and `motebit
  * serve` when it serves over HTTP with one. Each of them then pushes on its
  * own (`cli-event-push.ts`). Also configured: a daemon that pushes to no
  * relay itself (`serve` over stdio) while a relay is NAMED for its identity
