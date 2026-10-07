@@ -30,8 +30,14 @@ const CANARY = {
   summary: "CCNRYSUMMARY02",
   legacy: "CCNRYLEGACY03",
   subGoal: "CCNRYSUBGOAL04",
+  // A plan reflection's learning (`[goal_learning]` memory) produced by a
+  // Secret run — reached a BYOK plan's recalled memories while it was
+  // stamped `none` (round-5 finding 1). Only plan runs reflect.
+  learning: "CCNRYLEARN05",
 } as const;
-const KEYS = Object.keys(CANARY) as Array<keyof typeof CANARY>;
+type Key = keyof typeof CANARY;
+const keysFor = (withPlans: boolean): Key[] =>
+  (Object.keys(CANARY) as Key[]).filter((k) => withPlans || k !== "learning");
 
 interface Sent {
   mode: string;
@@ -54,6 +60,13 @@ function recordingProvider(
     sent.push({ mode: mode(), seen: JSON.stringify(ctx) });
     const um = ctx.user_message ?? "";
     const history = JSON.stringify(ctx.conversation_history ?? []);
+    if (history.includes("reflecting on a completed plan"))
+      return plain(
+        JSON.stringify({
+          summary: "reflected",
+          memoryCandidates: [live() ? `learned ${CANARY.learning}` : "learned nothing new"],
+        }),
+      );
     if (history.includes("planning engine"))
       return plain(
         JSON.stringify({
@@ -194,12 +207,15 @@ async function seedAndRun(withPlans: boolean, target: "byok" | "on-device") {
   if (target === "byok") set("byok", SensitivityLevel.Personal);
   await scheduler.tickOnce();
   const sends = sent.slice(before).filter((s) => s.mode === target);
-  const seen = KEYS.filter((k) => sends.some((s) => s.seen.includes(CANARY[k])));
+  const seen = keysFor(withPlans).filter((k) => sends.some((s) => s.seen.includes(CANARY[k])));
   const failed = (id: string) =>
     db.goalOutcomeStore
       .listForGoal(id, 10)
       .some((o) => o.status === "failed" && String(o.error_message).includes("on-device"));
-  return { db, sends, seen, sub: sub!, failed };
+  const learnings = (await runtime.memory.exportAll()).nodes.filter((n) =>
+    n.content.startsWith("[goal_learning]"),
+  );
+  return { db, sends, seen, sub: sub!, failed, learnings };
 }
 
 describe.each([false, true])("CLI goal scheduler egress canary (plans: %s)", (withPlans) => {
@@ -211,8 +227,14 @@ describe.each([false, true])("CLI goal scheduler egress canary (plans: %s)", (wi
   });
 
   it("a tick on BYOK carries no goal, summary, outcome memory or sub-goal written at Secret", async () => {
-    const { sends, seen, sub, failed, db } = await seedAndRun(withPlans, "byok");
+    const { sends, seen, sub, failed, db, learnings } = await seedAndRun(withPlans, "byok");
     expect(seen, "Secret goal-scheduler canaries sent to BYOK").toEqual([]);
+    // A plan reflection's learnings carry the tier of the run that reflected.
+    if (withPlans) {
+      const secret = learnings.filter((n) => n.content.includes(CANARY.learning));
+      expect(secret.length, "the Secret run reflected a learning").toBeGreaterThan(0);
+      expect(secret.map((n) => n.sensitivity)).toEqual(secret.map(() => SensitivityLevel.Secret));
+    }
     expect(sends.length).toBeGreaterThan(0);
     expect(failed("g-secret")).toBe(true);
     expect(failed(sub.goal_id)).toBe(true);
@@ -229,6 +251,6 @@ describe.each([false, true])("CLI goal scheduler egress canary (plans: %s)", (wi
 
   it("the seeds are live: on-device at Secret, the same tick sees every canary", async () => {
     const { seen } = await seedAndRun(withPlans, "on-device");
-    expect(seen.sort()).toEqual([...KEYS].sort());
+    expect(seen.sort()).toEqual(keysFor(withPlans).sort());
   });
 });

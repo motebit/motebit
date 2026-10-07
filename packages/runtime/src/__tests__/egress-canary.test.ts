@@ -1194,6 +1194,21 @@ export function f(p: IntelligenceProvider) { return use(p); }`,
     "narrow-object-prop.ts": `export function f(p: IntelligenceProvider) { const deps: { gen: { generate(c: object): unknown } } = { gen: p }; return deps; }`,
     "narrow-shorthand.ts": `export function f(gen: IntelligenceProvider) { const deps: { gen: { generate(c: object): unknown } } = { gen }; return deps; }`,
     "narrow-return.ts": `export function f(p: IntelligenceProvider): { generate(c: object): unknown } { return p; }`,
+    // Container erasure: the provider is never named — a CONTAINER whose
+    // property chain reaches one is erased to any / unknown / an any-valued
+    // record, and the request method is reached through the erased chain.
+    "container-any-param.ts": `interface Deps { provider: IntelligenceProvider }
+function use(d: any) { return d.provider.generate({}); }
+export function f(deps: Deps) { return use(deps); }`,
+    "container-as-any.ts": `interface Deps { provider: IntelligenceProvider }
+export function f(d: Deps) { return (d as any).provider.generate({}); }`,
+    "container-record-any.ts": `interface Deps { provider: IntelligenceProvider }
+export function f(d: Deps, k: string) { return (d as Record<string, any>)[k].generate({}); }`,
+    "container-nested-any.ts": `interface Outer { deps: { ai: StreamingProvider } }
+export function f(o: Outer) { const x: unknown = o; return (x as { deps: { ai: { generateStream(c: object): unknown } } }).deps.ai.generateStream({}); }`,
+    "container-this-any.ts": `class Host { constructor(private readonly provider: IntelligenceProvider) {}
+  run() { return (this as any).provider.generate({}); } }
+export const h = Host;`,
   };
 
   it("counts every probe as a provider call site", { timeout: 60_000 }, () => {
@@ -1213,6 +1228,12 @@ export function f(p: IntelligenceProvider) { return use(p); }`,
       join(src, "benign-provider-slot.ts"),
       `${PROVIDER_DECL}\nfunction keep(p: IntelligenceProvider) { return p.estimateConfidence(); }\nexport function f(p: StreamingProvider) { const q: IntelligenceProvider = p; return [keep(p), keep(q), { inner: p as IntelligenceProvider }]; }\n`,
     );
+    // A container passed to a slot typed as the same container (or one
+    // that still carries the provider) is not an erasure.
+    writeFileSync(
+      join(src, "benign-container-slot.ts"),
+      `${PROVIDER_DECL}\ninterface Deps { provider: IntelligenceProvider; name: string }\nfunction keep(d: Deps) { return d.name; }\nfunction keepPick(d: Pick<Deps, "provider">) { return d.provider.estimateConfidence(); }\nfunction nameOf(d: { name: string }) { return d.name; }\nexport function f(d: Deps) { return [keep(d), keepPick(d), nameOf(d), { inner: d as Deps }]; }\n`,
+    );
     const found = scanProviderCallSites(root);
     const missed = Object.keys(PROBES).filter(
       (name) => !(found[`packages/probe/src/${name}`] ?? 0),
@@ -1222,6 +1243,10 @@ export function f(p: IntelligenceProvider) { return use(p); }`,
     expect(
       found["packages/probe/src/benign-provider-slot.ts"] ?? 0,
       "a provider passed to a provider-typed slot",
+    ).toBe(0);
+    expect(
+      found["packages/probe/src/benign-container-slot.ts"] ?? 0,
+      "a container passed to a slot that keeps (or never reaches) its provider",
     ).toBe(0);
   });
 });
