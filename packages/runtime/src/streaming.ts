@@ -15,12 +15,7 @@ import type {
 } from "@motebit/sdk";
 import type { BehaviorCues, SensitivityCleared, SensitivityGateEntry } from "@motebit/sdk";
 import type { AgenticChunk, TurnResult } from "@motebit/ai-core";
-import {
-  extractStateTags,
-  runTurnStreaming,
-  stripPartialActionTag,
-  stripTags,
-} from "@motebit/ai-core";
+import { extractStateTags, runTurnStreaming, stripTags, stripTagsLive } from "@motebit/ai-core";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 import type { SignableToolInvocationReceipt } from "@motebit/crypto";
 import { signToolInvocationReceipt, hashToolPayload, signApprovalDecision } from "@motebit/crypto";
@@ -469,12 +464,13 @@ export class StreamingManager {
     // The live display is ai-core's display strip — the same primitive the
     // final answer goes through, never a local copy (a duplicated regex set
     // here once deleted markdown bold and collapsed code-block spacing on
-    // every streamed chunk). Mid-stream frames hold back a partial tag or
-    // `*action` at the edge; the final frame is `stripTags(accumulated)`.
+    // every streamed chunk). Mid-stream frames (`stripTagsLive`) hold back an
+    // unclosed block, a partial tag or `*action` at the edge; the final frame
+    // is `stripTags(accumulated)`, which releases a tail never closed.
     // Only the new suffix is yielded, so a frame that does not extend what
     // was already shown is withheld rather than emitted garbled.
     const displayDelta = (final: boolean): string => {
-      const clean = final ? stripTags(accumulated) : stripPartialActionTag(accumulated);
+      const clean = final ? stripTags(accumulated) : stripTagsLive(accumulated);
       if (!clean.startsWith(yieldedClean)) return "";
       const delta = clean.slice(yieldedClean.length);
       yieldedClean = clean;

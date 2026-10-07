@@ -4,6 +4,7 @@ import {
   AnthropicProvider,
   stripPartialActionTag,
   stripInternalTags,
+  stripTagsLive,
   getImpulsesForAction,
 } from "../index";
 import type { AnthropicProviderConfig } from "../index";
@@ -453,8 +454,11 @@ describe("stripInternalTags", () => {
     expect(stripInternalTags("Hello <thinking")).toBe("Hello");
   });
 
-  it("hides an unclosed [EXTERNAL_DATA] payload (fail-closed mid-stream)", () => {
-    expect(stripInternalTags('Hello [EXTERNAL_DATA source="x"]mid-payload')).toBe("Hello");
+  it("drops a lone [EXTERNAL_DATA] marker; the live stream holds its payload", () => {
+    expect(stripInternalTags('Hello [EXTERNAL_DATA source="x"]mid-payload')).toBe(
+      "Hello mid-payload",
+    );
+    expect(stripTagsLive('Hello [EXTERNAL_DATA source="x"]mid-payload')).toBe("Hello");
   });
 
   it("strips orphan [/MEMORY_DATA] closer", () => {

@@ -16,7 +16,13 @@
  * drop — outside fenced code, which survives untouched.
  */
 import { describe, expect, it } from "vitest";
-import { extractActions, stripInternalTags, stripPartialActionTag, stripTags } from "../core.js";
+import {
+  extractActions,
+  stripInternalTags,
+  stripPartialActionTag,
+  stripTags,
+  stripTagsLive,
+} from "../core.js";
 
 const TCP_MODEL_TEXT = [
   "The TCP three-way handshake establishes a connection before any data flows:",
@@ -185,10 +191,15 @@ describe("stripInternalTags — markdown surfaces keep markdown and newlines", (
   it("fenced code survives", () => {
     expect(stripInternalTags(FENCED_CODE)).toBe(FENCED_CODE);
   });
-  it("strips narration and unclosed interior blocks", () => {
+  it("strips narration; an unclosed opener is held only by the live stream", () => {
     expect(stripInternalTags("<narration>x</narration>Hi")).toBe("Hi");
-    expect(stripInternalTags("Hi <thinking>secret plan so far")).toBe("Hi");
-    expect(stripInternalTags('Hi <memory confidence="0.9">partial fact')).toBe("Hi");
+    // Finished text never truncates: with no closer the tag is a mention
+    // (or a block the model never finished) — origin/main showed it too.
+    expect(stripInternalTags("Hi <thinking>secret plan so far")).toBe(
+      "Hi <thinking>secret plan so far",
+    );
+    expect(stripTagsLive("Hi <thinking>secret plan so far")).toBe("Hi");
+    expect(stripTagsLive('Hi <memory confidence="0.9">partial fact')).toBe("Hi");
   });
 });
 
@@ -236,11 +247,12 @@ describe("streaming — random chunk boundaries display identically once complet
         let acc = "";
         for (const c of chunk(input, rand)) {
           acc += c;
-          const frame = stripPartialActionTag(acc);
+          const frame = stripTagsLive(acc);
           for (const marker of LEAK_MARKERS) {
             if (!expected.includes(marker)) expect(frame).not.toContain(marker);
           }
         }
+        expect(stripTagsLive(acc)).toBe(expected);
         expect(stripPartialActionTag(acc)).toBe(expected);
         expect(stripTags(acc)).toBe(expected);
       }
@@ -255,9 +267,13 @@ describe("streaming — random chunk boundaries display identically once complet
 
   it("partial `<state` / `<thinking>` at a chunk edge does not leak", () => {
     expect(stripPartialActionTag('Hello <state field="curio')).toBe("Hello");
-    expect(stripPartialActionTag("Hello <sta")).toBe("Hello");
-    expect(stripPartialActionTag("Hello <thinking>I should not be se")).toBe("Hello");
-    expect(stripPartialActionTag('Hi [EXTERNAL_DATA source="to')).toBe("Hi");
+    expect(stripTagsLive('Hello <state field="curio')).toBe("Hello");
+    expect(stripTagsLive("Hello <sta")).toBe("Hello");
+    expect(stripTagsLive("Hello <thinking>I should not be se")).toBe("Hello");
+    expect(stripTagsLive('Hi [EXTERNAL_DATA source="to')).toBe("Hi");
+    // Surface strips also run on finished answers: only main's partial-opener
+    // rule (on the last line) is held there, never a bare name like `<sta`.
+    expect(stripPartialActionTag("Hello <sta")).toBe("Hello <sta");
   });
 
   it("a partial leading action is held back, then removed when complete", () => {
@@ -299,7 +315,9 @@ describe("action grammar edges", () => {
   it("a non-tag `<` / `[` at the chunk edge is not held back", () => {
     expect(stripPartialActionTag("x <y")).toBe("x <y");
     expect(stripPartialActionTag("see [Foo")).toBe("see [Foo");
-    expect(stripPartialActionTag("see [MEMORY_D")).toBe("see");
+    expect(stripTagsLive("x <y")).toBe("x <y");
+    expect(stripTagsLive("see [Foo")).toBe("see [Foo");
+    expect(stripTagsLive("see [MEMORY_D")).toBe("see");
   });
 });
 
@@ -328,8 +346,10 @@ describe("internal tag names need a delimiter — hyphenated / underscored looka
     expect(stripTags('A <state attention="0.5"/> B')).toBe("A B");
     expect(stripTags("A <state/> B")).toBe("A B");
     expect(stripTags("A <memory>x</memory> B")).toBe("A B");
-    expect(stripTags("Answer.\n<thinking>never closed")).toBe("Answer.");
-    expect(stripTags('Answer.\n<memory confidence="0.9">never closed')).toBe("Answer.");
+    expect(stripTagsLive("Answer.\n<thinking>never closed")).toBe("Answer.");
+    expect(stripTagsLive('Answer.\n<memory confidence="0.9">never closed')).toBe("Answer.");
+    // The finished answer keeps an opener that never closed (a mention).
+    expect(stripTags("Answer.\n<thinking>never closed")).toBe("Answer.\n<thinking>never closed");
     expect(stripPartialActionTag("Answer. <memory")).toBe("Answer.");
     expect(stripPartialActionTag('Answer. <state attention="0.')).toBe("Answer.");
   });

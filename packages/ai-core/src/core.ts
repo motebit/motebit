@@ -778,35 +778,56 @@ function forEachProseLine(
 
 // Every tag-name pattern requires a delimiter after the name — `\b` treats
 // `-` as a boundary, so `<memory\b` would match `<memory-card>` (or
-// `<state-machine/>`) and an unclosed-block rule would delete the rest of the
-// answer. `(?=[\s>/]|$)`: whitespace, `>`, `/`, or the end of streamed text.
+// `<state-machine/>`) and a look-alike would be cut as internal markup.
+// `(?=[\s>/]|$)`: whitespace, `>`, `/`, or the end of streamed text.
 const D = String.raw`(?=[\s>/]|$)`;
 const BLOCK_NAMES = "thinking|memory|narration|parameter";
 /** Tool-call markup a model may echo into its prose (never shown). */
 const TOOL_MARKUP = String.raw`(?:artifact|function_calls|invoke|antml:[a-z_]+)`;
-const INTERNAL_PAIRS: RegExp[] = [
-  /<thinking\s*>[\s\S]*?<\/thinking\s*>/g,
-  /<memory(?:\s[^>]*)?>[\s\S]*?<\/memory\s*>/g,
-  /<narration\s*>[\s\S]*?<\/narration\s*>/g,
-  /<parameter(?:\s[^>]*)?>[\s\S]*?<\/parameter\s*>/g,
-  new RegExp(String.raw`<state${D}[^>]*\/>`, "g"),
-  new RegExp(String.raw`<\/?${TOOL_MARKUP}${D}[^>]*>`, "g"),
-  /\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g,
-  /\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g,
+
+/** A block that is removed only when its closer is present. */
+interface PairRule {
+  open: RegExp;
+  close: RegExp;
+  /** A lone EXTERNAL_DATA / MEMORY_DATA marker is removed even unclosed. */
+  loneMarker: boolean;
+}
+const PAIR_RULES: PairRule[] = [
+  { open: /<thinking\s*>/y, close: /<\/thinking\s*>/g, loneMarker: false },
+  { open: /<memory(?:\s[^>]*)?>/y, close: /<\/memory\s*>/g, loneMarker: false },
+  { open: /<narration\s*>/y, close: /<\/narration\s*>/g, loneMarker: false },
+  { open: /<parameter(?:\s[^>]*)?>/y, close: /<\/parameter\s*>/g, loneMarker: false },
+  { open: /\[EXTERNAL_DATA[^\]]*\]/y, close: /\[\/EXTERNAL_DATA\]/g, loneMarker: true },
+  { open: /\[MEMORY_DATA\]/y, close: /\[\/MEMORY_DATA\]/g, loneMarker: true },
 ];
-const INTERNAL_SINGLES: RegExp[] = [
-  // Unclosed interior block — never shown, fail-closed (the stream may not
-  // have delivered the closer yet, or the model never wrote one).
-  new RegExp(String.raw`<(?:${BLOCK_NAMES})${D}[^>]*>[\s\S]*$`, "g"),
-  /\[EXTERNAL_DATA[^\]]*\][\s\S]*$/g,
-  /\[MEMORY_DATA\][\s\S]*$/g,
-  // Opener still being streamed: `<state field="cur`.
-  new RegExp(String.raw`<\/?(?:state|${BLOCK_NAMES}|${TOOL_MARKUP})${D}[^>]*$`, "g"),
-  new RegExp(String.raw`<\/(?:${BLOCK_NAMES})\s*>`, "g"),
-  /\[EXTERNAL_DATA[^\]]*$/g,
-  /\[\/EXTERNAL_DATA\]/g,
-  /\[\/MEMORY_DATA\]/g,
+/** Self-contained internal markup, removed wherever it appears outside code. */
+const SINGLE_RULES: RegExp[] = [
+  new RegExp(String.raw`<state${D}[^>]*\/>`, "y"),
+  new RegExp(String.raw`<\/?${TOOL_MARKUP}${D}[^>]*>`, "y"),
+  /\[\/EXTERNAL_DATA\]/y,
+  /\[\/MEMORY_DATA\]/y,
 ];
+/** An opener whose `>` / `]` has not arrived yet: `<state field="cur`. */
+const PARTIAL_OPENERS: RegExp[] = [
+  new RegExp(String.raw`<\/?(?:state|${BLOCK_NAMES}|${TOOL_MARKUP})${D}[^>]*$`, "y"),
+  /\[EXTERNAL_DATA[^\]]*$/y,
+];
+/**
+ * All a surface strip ever holds: origin/main's partial-opener rule, confined
+ * to the last line so it can never reach past the unfinished tag.
+ */
+const SURFACE_PARTIAL_OPENER = new RegExp(String.raw`<(?:state|thinking|memory)${D}[^>\n]*$`, "y");
+
+/**
+ * - `final`: the finished answer. Nothing is held back.
+ * - `surface`: a surface strip that may run on a finished answer or on a
+ *   stream it accumulates itself — holds only a `<state` / `<thinking` /
+ *   `<memory` opener still arriving on the last line (`<state field="cur`).
+ * - `live`: the runtime's live stream frame, released at end of stream —
+ *   also holds an unclosed block and anything internal-looking after a
+ *   backtick that may yet open a code span.
+ */
+type CutMode = "final" | "surface" | "live";
 const INTERNAL_NAMES = [
   "state",
   "thinking",
@@ -828,6 +849,158 @@ const INTERNAL_NAMES = [
 ];
 const MARKER_NAMES = ["EXTERNAL_DATA", "MEMORY_DATA", "/EXTERNAL_DATA", "/MEMORY_DATA"];
 
+function matchAt(re: RegExp, text: string, i: number): RegExpExecArray | null {
+  re.lastIndex = i;
+  return re.exec(text);
+}
+
+/** A tag or marker name still arriving at the very end of streamed text (`<sta`, `[MEMORY_D`). */
+function isPartialName(text: string, i: number): boolean {
+  const tag = matchAt(/<(\/?[a-z_:]*)$/y, text, i);
+  if (tag) {
+    const name = tag[1]!;
+    return INTERNAL_NAMES.some(
+      (n) => n.startsWith(name) || (n.endsWith(":") && name.startsWith(n)),
+    );
+  }
+  const marker = matchAt(/\[(\/?[A-Z_]*)$/y, text, i);
+  return marker !== null && MARKER_NAMES.some((n) => n.startsWith(marker[1]!));
+}
+
+/**
+ * Where the paragraph holding `from` ends: the start of the next blank line
+ * or fence-opening line, else the end of the text. An inline code span never
+ * crosses it.
+ */
+function paragraphEnd(text: string, from: number): number {
+  let nl = text.indexOf("\n", from);
+  while (nl !== -1) {
+    const start = nl + 1;
+    const end = text.indexOf("\n", start);
+    const line = text.slice(start, end === -1 ? text.length : end);
+    if (end !== -1 && /^[ \t]*$/.test(line)) return start;
+    if (FENCE.test(line)) return start;
+    nl = end;
+  }
+  return text.length;
+}
+
+/**
+ * Remove motebit's internal markup, scanning the text the way markdown reads
+ * it: inside a fenced code block or an inline code span a tag is only
+ * MENTIONED (an example the model is showing), so it is never touched.
+ *
+ * Final text never truncates: an opener with no closer is a mention (or a
+ * block the model never finished) and stays — only a lone EXTERNAL_DATA /
+ * MEMORY_DATA marker is dropped. In the live stream, anything whose meaning
+ * the next chunk could still change is held back instead of shown — an
+ * unclosed block opener, a partial tag name, internal-looking markup after a
+ * backtick that may yet open a code span — so every frame is a prefix of
+ * the final display and nothing internal flashes on screen.
+ */
+function cutInternal(text: string, mode: CutMode): string {
+  const live = mode === "live";
+  const src = text.replace(/\uE000/g, "");
+  let out = "";
+  let i = 0;
+  let lineStart = true;
+  let fence: string | null = null;
+  // Live only: past an unpaired backtick whose paragraph is still open,
+  // so whether what follows is code is not yet known.
+  let undecided = false;
+  // Drop src[i, end). A line holding only removed markup (and indentation)
+  // so far is still at its start — it reads that way once the cut closes.
+  const cut = (end: number) => {
+    out += SENTINEL;
+    i = end;
+    lineStart = /(?:^|\n)[ \t\uE000]*$/.test(out);
+  };
+
+  scan: while (i < src.length) {
+    if (lineStart) {
+      const nl = src.indexOf("\n", i);
+      const end = nl === -1 ? src.length : nl;
+      const line = src.slice(i, end);
+      const m = FENCE.exec(line);
+      if (fence !== null || m) {
+        if (fence === null) fence = m![1]!;
+        else if (m && m[1]![0] === fence[0] && m[1]!.length >= fence.length && line.trim() === m[1])
+          fence = null;
+        out += src.slice(i, nl === -1 ? end : end + 1);
+        i = nl === -1 ? src.length : end + 1;
+        continue;
+      }
+      lineStart = false;
+    }
+
+    const ch = src[i]!;
+    if (ch === "\n") {
+      out += ch;
+      i++;
+      lineStart = true;
+      continue;
+    }
+
+    if (ch === "`") {
+      const n = matchAt(/`+/y, src, i)![0].length;
+      const limit = paragraphEnd(src, i);
+      const runs = /`+/g;
+      runs.lastIndex = i + n;
+      let closeEnd = -1;
+      let r;
+      while ((r = runs.exec(src)) !== null && r.index < limit) {
+        if (r[0].length === n) {
+          closeEnd = r.index + n;
+          break;
+        }
+      }
+      // A closing run at the very end of streamed text may still grow.
+      if (closeEnd !== -1 && !(live && closeEnd === src.length)) {
+        out += src.slice(i, closeEnd);
+        i = closeEnd;
+        continue;
+      }
+      if (live && limit === src.length) undecided = true;
+      out += src.slice(i, i + n);
+      i += n;
+      continue;
+    }
+
+    if (ch === "<" || ch === "[") {
+      for (const rule of PAIR_RULES) {
+        const open = matchAt(rule.open, src, i);
+        if (!open) continue;
+        rule.close.lastIndex = i + open[0].length;
+        const close = rule.close.exec(src);
+        if (undecided || (live && !close)) break scan;
+        if (close || rule.loneMarker) {
+          cut(close ? close.index + close[0].length : i + open[0].length);
+          continue scan;
+        }
+        out += ch;
+        i++;
+        continue scan;
+      }
+      for (const re of SINGLE_RULES) {
+        const m = matchAt(re, src, i);
+        if (!m) continue;
+        if (undecided) break scan;
+        cut(i + m[0].length);
+        continue scan;
+      }
+      if (live && (PARTIAL_OPENERS.some((re) => matchAt(re, src, i)) || isPartialName(src, i)))
+        break scan;
+      if (mode === "surface" && matchAt(SURFACE_PARTIAL_OPENER, src, i)) break scan;
+    }
+
+    out += ch;
+    i++;
+  }
+  // Anything the scan stopped short of is held back (never in `final`).
+  if (i < src.length) out += SENTINEL;
+  return closeSentinels(out);
+}
+
 /**
  * Replace every SENTINEL run (plus the horizontal whitespace around it) with
  * one space when it sat between two words on a line, else nothing.
@@ -840,25 +1013,6 @@ function closeSentinels(text: string): string {
     if (atEdge) return "";
     return /[ \t]/.test(run) ? " " : "";
   });
-}
-
-function cutInternal(text: string, streaming: boolean): string {
-  let out = text.replace(/\uE000/g, "");
-  for (const re of INTERNAL_PAIRS) out = out.replace(re, SENTINEL);
-  for (const re of INTERNAL_SINGLES) out = out.replace(re, SENTINEL);
-  if (streaming) {
-    // A tag/marker name still arriving at the chunk edge (`<`, `<sta`,
-    // `[MEMORY_D`) is held until it resolves, so frames only ever extend.
-    out = out.replace(/<(\/?[a-z_:]*)$/, (m, name: string) =>
-      INTERNAL_NAMES.some((n) => n.startsWith(name) || (n.endsWith(":") && name.startsWith(n)))
-        ? SENTINEL
-        : m,
-    );
-    out = out.replace(/\[(\/?[A-Z_]*)$/, (m, name: string) =>
-      MARKER_NAMES.some((n) => n.startsWith(name)) ? SENTINEL : m,
-    );
-  }
-  return closeSentinels(out);
 }
 
 function formatDisplay(text: string, streaming: boolean): string {
@@ -879,7 +1033,9 @@ function formatDisplay(text: string, streaming: boolean): string {
     }
     if (streaming && i === lines.length - 1) {
       const m = PARTIAL_ACTION.exec(l);
-      if (m && isActionPosition(l.slice(0, m.index))) l = l.slice(0, m.index) + SENTINEL;
+      // A removed action before it counts as leading (`*smiles* *nod`).
+      const before = l.slice(0, m?.index).replace(/\uE000/g, " ");
+      if (m && isActionPosition(before)) l = l.slice(0, m.index) + SENTINEL;
     }
     l = closeSentinels(l).replace(/[ \t]+$/, "");
     // A line that held only narration disappears rather than becoming blank.
@@ -903,7 +1059,7 @@ function formatDisplay(text: string, streaming: boolean): string {
  * code is byte-for-byte.
  */
 export function stripTags(text: string): string {
-  return formatDisplay(cutInternal(text, false), false);
+  return formatDisplay(cutInternal(text, "final"), false);
 }
 
 // === Impulse Map ===
@@ -1001,11 +1157,14 @@ export function getImpulsesForAction(
  *   - `<narration>…</narration>`           — task-step chrome narration
  *   - `[EXTERNAL_DATA source="…"]…[/EXTERNAL_DATA]` — tool-result boundaries
  *   - `[MEMORY_DATA]…[/MEMORY_DATA]`       — recalled-memory boundaries
- *   - Any of the above in partial/unclosed form (streaming mid-tag); an
- *     unclosed interior block (`<thinking>…` with no closer yet) is hidden
- *     through the end of the text, fail-closed
+ *   - A lone EXTERNAL_DATA / MEMORY_DATA marker, and a `<state` /
+ *     `<thinking` / `<memory` opener still arriving on the last line
  *
- * Markdown, newlines and indentation are never touched.
+ * Markdown, newlines and indentation are never touched. A tag inside inline
+ * code or a fenced block is a mention and stays; so does an opener with no
+ * closer — this runs on finished answers too, so it never truncates. (The
+ * runtime's live stream holds unclosed blocks back itself — see
+ * {@link stripTagsLive}.)
  *
  * Does NOT strip the `*action*` asterisk pattern used in creature action
  * syntax — that is a plain-text-surface concern composed on top of this
@@ -1018,19 +1177,32 @@ export function getImpulsesForAction(
  * content on desktop. One primitive, one regex set, surfaces converge.
  */
 export function stripInternalTags(text: string): string {
-  return cutInternal(text, true);
+  return cutInternal(text, "surface");
 }
 
 /**
- * Streaming counterpart of {@link stripTags}: the same display text, applied
- * to the accumulated text after every chunk. Additionally holds back a tag
- * name or `*action` still arriving at the chunk edge (`<sta`, `*smi`), so a
- * partial never leaks; once the stream completes the result equals
- * `stripTags(fullText)`. Used by plain-text chat surfaces (desktop, mobile
- * streaming) — markdown surfaces (web) use `stripInternalTags` alone.
+ * Plain-text counterpart of {@link stripTags} for surfaces that re-render the
+ * accumulated text after every chunk (desktop, mobile streaming): the same
+ * display text, additionally holding back an `*action` still arriving at
+ * the chunk edge (`*smi`). Like `stripInternalTags` it never truncates an
+ * unclosed block, so it is safe on the finished answer.
+ * Markdown surfaces (web) use `stripInternalTags` alone.
  */
 export function stripPartialActionTag(text: string): string {
-  return formatDisplay(cutInternal(text, true), true);
+  return formatDisplay(cutInternal(text, "surface"), true);
+}
+
+/**
+ * The runtime's live-stream frame for the accumulated model text: what
+ * {@link stripTags} will show, cut short wherever the next chunk could still
+ * change the reading — an unclosed `<thinking>` / `<memory>` / marker block,
+ * a tag still arriving, internal-looking markup after a backtick that may
+ * yet open a code span, a partial `*action`. Every frame is a prefix of
+ * `stripTags(fullText)`; the stream's last frame IS `stripTags(fullText)`,
+ * which releases a held tail that never got its closer.
+ */
+export function stripTagsLive(text: string): string {
+  return formatDisplay(cutInternal(text, "live"), true);
 }
 
 function parseSensitivity(raw: string): SensitivityLevel {

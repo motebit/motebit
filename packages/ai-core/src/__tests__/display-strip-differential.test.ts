@@ -19,9 +19,11 @@
  * And for the live stream, at every prefix: the streaming frame is a prefix
  * of the final display (so the accumulated stream equals the final strip),
  * and no internal payload is ever shown transiently unless main showed it.
+ * The live frame is `stripTagsLive` (the runtime's stream); the surface
+ * functions must also leave the runtime's yielded text unchanged.
  */
 import { describe, expect, it } from "vitest";
-import { stripInternalTags, stripPartialActionTag, stripTags } from "../core.js";
+import { stripInternalTags, stripPartialActionTag, stripTags, stripTagsLive } from "../core.js";
 import {
   mainStripInternalTags,
   mainStripPartialActionTag,
@@ -257,26 +259,85 @@ describe("display strip differential corpus", () => {
     });
   }
 
+  it("live stream: every prefix of 3000 seeded random token mixes", () => {
+    // Token soup: backticks, fences, internal tags (paired, lone, partial),
+    // markers, action cues, markdown — the arrangements no table lists.
+    const TOKENS = [
+      "`",
+      "``",
+      "```\n",
+      "~~~\n",
+      "\n",
+      "\n\n",
+      "<thinking>",
+      "</thinking>",
+      '<memory a="1">',
+      "</memory>",
+      "[MEMORY_DATA]",
+      "[/MEMORY_DATA]",
+      '[EXTERNAL_DATA s="w"]',
+      "[/EXTERNAL_DATA]",
+      '<state x="1"/>',
+      "<narration>",
+      "</narration>",
+      '<parameter name="x">',
+      "</parameter>",
+      "<invoke>",
+      "<sta",
+      "<",
+      "word ",
+      "  ",
+      "*smiles* ",
+      "**b** ",
+      "*",
+      "- ",
+      "> ",
+      "| ",
+    ];
+    let seed = 0x5eed;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) >>> 0;
+      return seed / 2 ** 32;
+    };
+    for (let n = 0; n < 3000; n++) {
+      let input = "";
+      for (let t = 3 + Math.floor(rand() * 12); t > 0; t--) {
+        input += TOKENS[Math.floor(rand() * TOKENS.length)];
+      }
+      const final = stripTags(input);
+      for (let k = 0; k <= input.length; k++) {
+        const frame = stripTagsLive(input.slice(0, k));
+        expect(final.startsWith(frame), JSON.stringify({ input, k, frame })).toBe(true);
+      }
+    }
+  });
+
   describe("live stream: every prefix", () => {
     for (const c of CORPUS) {
       it(c.id, () => {
         const final = stripTags(c.input);
         for (let k = 0; k <= c.input.length; k++) {
           const prefix = c.input.slice(0, k);
-          const frame = stripPartialActionTag(prefix);
+          const frame = stripTagsLive(prefix);
           // Every frame extends to the final display, so the accumulated
           // stream (deltas of frames) equals the final strip.
           expect(final.startsWith(frame), `prefix ${k}: ${JSON.stringify(frame)}`).toBe(true);
+          // Desktop / mobile re-strip the runtime's yielded text each chunk.
+          expect(final.startsWith(stripPartialActionTag(frame)), `prefix ${k}`).toBe(true);
           if (c.real) {
-            for (const [fn, mainFn] of [
-              [stripPartialActionTag, mainStripPartialActionTag],
-              [stripInternalTags, mainStripInternalTags],
-            ] as const) {
-              if (mainFn(prefix).includes(SECRET)) continue;
+            expect(frame, `prefix ${k}`).not.toContain(SECRET);
+            // A surface stripping a raw stream itself: no leak beyond main's
+            // `stripInternalTags` (main's `stripPartialActionTag` hid some of
+            // these only by deleting everything after any `*`).
+            if (mainStripInternalTags(prefix).includes(SECRET)) continue;
+            for (const fn of [stripPartialActionTag, stripInternalTags]) {
               expect(fn(prefix), `prefix ${k}`).not.toContain(SECRET);
             }
           }
         }
+        // Surfaces re-strip the finished answer; it must be a fixed point.
+        expect(stripPartialActionTag(final)).toBe(final);
+        expect(stripInternalTags(final)).toBe(final);
       });
     }
   });

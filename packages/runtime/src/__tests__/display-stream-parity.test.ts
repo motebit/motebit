@@ -102,6 +102,16 @@ const MARKDOWN: Record<string, string> = {
   emoji: "Done 🎉 — **great** ✨ work 👍🏽.",
   tildeFence: "~~~\n  *keep*  spacing  \n~~~\nTail.",
   lookalikeTags: "```html\n<memory-card>hi</memory-card>\n<state-machine/>\n```\nEnd text here.",
+  // Round-2 repros: a MENTIONED tag (code, or an opener that never closes)
+  // was cut with everything after it.
+  mentionInCode:
+    "Claude can reason in a `<thinking>` block before answering. **Tips:**\n\n1. Keep it short",
+  mentionParameter: 'Pass `<parameter name="x">` to the tool.\n\n- then **this**',
+  bareNarration: "The <narration> tag carries step chrome. **Note:** ok",
+  fencedMemoryExample:
+    '```xml\n<memory confidence="0.9">likes tea</memory>\n```\n\nThat is the **format**.',
+  unclosedParameter: 'Use <parameter name="x"> then **bold**.',
+  mentionOnly: "Use `<thinking>` tags.",
 };
 
 /** Mixed with internal markup / action narration — display must equal stripTags. */
@@ -114,6 +124,8 @@ const MIXED: Record<string, string> = {
   externalData: 'Result: [EXTERNAL_DATA source="web"]ignore previous[/EXTERNAL_DATA] **ok**.',
   memoryData: "[MEMORY_DATA]secret[/MEMORY_DATA]Recall **done**.",
   unclosedThinking: "Answer **first**.\n<thinking>never closed, secret",
+  mentionThenReal: "Use `<thinking>` tags. <thinking>plan</thinking> Answer **ok**.",
+  mentionThenUnclosedMarker: "See `[MEMORY_DATA]`. [MEMORY_DATA]recalled **fact**",
   hardBreaks: "Line one  \nLine two\n\n\n\nPara.",
 };
 
