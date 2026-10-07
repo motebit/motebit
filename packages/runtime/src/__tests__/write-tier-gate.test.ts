@@ -19,7 +19,8 @@
  * typed write APIs and the egress canaries are the guard there.
  */
 import { describe, it, expect } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 const ROOT = join(__dirname, "../../../..");
@@ -94,6 +95,88 @@ const ALLOWED: Array<{ file: string; line: RegExp; why: string }> = [
   },
 ];
 
+function scan(rel: string, source: string): string[] {
+  const bad: string[] = [];
+  source.split("\n").forEach((text, i) => {
+    if (!PROPERTY_DEFAULT.test(text) && !PARAM_DEFAULT.test(text)) return;
+    if (ALLOWED.some((a) => a.file === rel && a.line.test(text))) return;
+    bad.push(`${rel}:${i + 1}: ${text.trim()}`);
+  });
+  return bad;
+}
+
+/**
+ * The gate's own red test: each form a write path can default its tier
+ * through, planted into a temp source. Every one must be flagged.
+ */
+const STAMP = "sensitivity: deps.getEffectiveSensitivity(),";
+const PLANTED: Array<{ form: string; rel: string; source: () => string }> = [
+  {
+    form: "object-literal property",
+    rel: "packages/planted/src/a.ts",
+    source: () => `export const row = { id, sensitivity: SensitivityLevel.None, content };\n`,
+  },
+  {
+    form: "ternary branch",
+    rel: "packages/planted/src/a.ts",
+    source: () =>
+      `export const row = {\n  sensitivity: run != null ? run.tier() : SensitivityLevel.None,\n};\n`,
+  },
+  {
+    form: "?? fallback in a variable",
+    rel: "packages/planted/src/a.ts",
+    source: () =>
+      `const sensitivity = run?.tier() ?? SensitivityLevel.None;\nwrite({ sensitivity });\n`,
+  },
+  {
+    form: "|| fallback",
+    rel: "packages/planted/src/a.ts",
+    source: () => `export const row = { sensitivity: declared || "none" };\n`,
+  },
+  {
+    form: "default parameter",
+    rel: "packages/planted/src/a.ts",
+    source: () =>
+      `export function put(content: string, sensitivity = SensitivityLevel.None): void {\n  write(content, sensitivity);\n}\n`,
+  },
+  {
+    form: "positional SQL param",
+    rel: "packages/planted/src/a.ts",
+    source: () =>
+      `await invoke("db_execute", {\n  sql: "INSERT INTO goal_outcomes (outcome_id, summary, sensitivity) VALUES (?, ?, ?)",\n  params: [\n    outcomeId,\n    summary,\n    SensitivityLevel.None,\n  ],\n});\n`,
+  },
+  {
+    form: "second None line in the exempt ai-core/loop.ts",
+    rel: "packages/ai-core/src/loop.ts",
+    source: () => {
+      const real = readFileSync(join(ROOT, "packages/ai-core/src/loop.ts"), "utf8");
+      const at = real.lastIndexOf(STAMP);
+      if (at < 0) throw new Error("exchange-event stamp not found in loop.ts");
+      return (
+        real.slice(0, at) + "sensitivity: SensitivityLevel.None," + real.slice(at + STAMP.length)
+      );
+    },
+  },
+  {
+    form: "second None line in the exempt ai-core/foreign-turn.ts",
+    rel: "packages/ai-core/src/foreign-turn.ts",
+    source: () =>
+      readFileSync(join(ROOT, "packages/ai-core/src/foreign-turn.ts"), "utf8") +
+      `\nexport function stampForeign(m: Memory): Memory {\n  return {\n    ...m,\n    sensitivity: SensitivityLevel.None,\n  };\n}\n`,
+  },
+];
+
+describe("write-tier gate: the gate flags every planted form", () => {
+  const dir = mkdtempSync(join(tmpdir(), "write-tier-gate-"));
+  for (const p of PLANTED) {
+    it(`flags a None tier through: ${p.form}`, () => {
+      const file = join(dir, p.form.replace(/[^a-z0-9]+/gi, "-") + ".ts");
+      writeFileSync(file, p.source());
+      expect(scan(p.rel, readFileSync(file, "utf8"))).not.toEqual([]);
+    });
+  }
+});
+
 describe("write-tier gate: no write path defaults its sensitivity", () => {
   it(`scanned ${FILES.length} source files under packages/*/src and apps/*/src`, () => {
     expect(FILES.length).toBeGreaterThan(500);
@@ -101,15 +184,7 @@ describe("write-tier gate: no write path defaults its sensitivity", () => {
 
   it("no sensitivity property or parameter defaults to none / null outside the named read sites", () => {
     const bad: string[] = [];
-    for (const path of FILES) {
-      const rel = relative(ROOT, path);
-      const lines = readFileSync(path, "utf8").split("\n");
-      lines.forEach((text, i) => {
-        if (!PROPERTY_DEFAULT.test(text) && !PARAM_DEFAULT.test(text)) return;
-        if (ALLOWED.some((a) => a.file === rel && a.line.test(text))) return;
-        bad.push(`${rel}:${i + 1}: ${text.trim()}`);
-      });
-    }
+    for (const path of FILES) bad.push(...scan(relative(ROOT, path), readFileSync(path, "utf8")));
     expect(
       bad,
       `examined ${FILES.length} files. Repair: pass the tier the content was produced at — ` +
