@@ -1055,18 +1055,24 @@ function main(): void {
           (rel === "packages/runtime/src/streaming.ts" &&
             /const principal = TurnPrincipal\.of\(pending\.foreignPrincipal === true\);/.test(
               line,
+            )) ||
+          // The deterministic one-tool entry (`executeToolGated`, serve --direct):
+          // decided from its transport-set `caller` option, never from args.
+          (rel === "packages/runtime/src/motebit-runtime.ts" &&
+            /const principal = TurnPrincipal\.of\(options\.caller\.principal === "foreign"\);/.test(
+              line,
             ));
         if (!isEntry) {
           interiorViolations.push(
-            `${rel}:${i + 1}: decides a \`TurnPrincipal\` outside a turn entry — only \`sendMessage*\` (from its option) and the approval resume (from its paused record) decide; everything else receives it: ${line.trim()}`,
+            `${rel}:${i + 1}: decides a \`TurnPrincipal\` outside a turn entry — only \`sendMessage*\` (from its option), \`executeToolGated\` (from its transport-set caller) and the approval resume (from its paused record) decide; everything else receives it: ${line.trim()}`,
           );
         }
       }
     }
   }
-  if (principalDecisions !== 3) {
+  if (principalDecisions !== 4) {
     interiorViolations.push(
-      `packages/runtime/src: expected exactly three turn entries deciding a \`TurnPrincipal\` (sendMessage, sendMessageStreaming, the approval resume) — found ${principalDecisions}`,
+      `packages/runtime/src: expected exactly four call entries deciding a \`TurnPrincipal\` (sendMessage, sendMessageStreaming, the approval resume, executeToolGated) — found ${principalDecisions}`,
     );
   }
   const strSrcLaw = readFile("packages/runtime/src/simple-tool-registry.ts") ?? "";

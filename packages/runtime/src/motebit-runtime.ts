@@ -6350,10 +6350,10 @@ export class MotebitRuntime {
       return { ok: false, error: why + binding };
     }
 
-    const call: ToolCall = {
-      destination: OWNER_ACT,
-      principal: TurnPrincipal.of(foreign),
-    };
+    // CALL ENTRY: the principal is decided here, once, from the transport's
+    // `caller` option — never from args — and threaded on the call.
+    const principal = TurnPrincipal.of(options.caller.principal === "foreign");
+    const call: ToolCall = { destination: OWNER_ACT, principal };
     const startedAt = Date.now();
     let result: ToolResult;
     if (presentedGrant != null) {
