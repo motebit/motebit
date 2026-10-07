@@ -3236,6 +3236,34 @@ export async function probeFetch(): Promise<unknown> {
         `process.env.MOTEBIT_UNIT_COST = "9";\nmodule.exports = { unit_cost: 9 };\n`,
       ),
   },
+  // R10 (2026-10-06): the price/env scans skip test files, and nothing stopped
+  // production code from importing one; and motebit.identity was never
+  // compared with the docs.
+  ...(
+    [
+      ["`./boot.test.js`", "boot_import.ts", `import "./boot.test.js";\nexport {};\n`],
+      ["`./__tests__/boot.js`", "tests_import.ts", `import "./__tests__/boot.js";\nexport {};\n`],
+    ] as const
+  ).map(([label, file, body]): Probe => ({
+    script: "check-service-truth",
+    proves: `production code never imports test code — a non-test source under services/research/src importing ${label} (the R10 repro: a boot.test.ts / __tests__/boot.ts that set MOTEBIT_UNIT_COST stayed green because the env scan skips test files). Drops the importing fixture; the specifier resolves to a test path and the gate is red.`,
+    perturb: () => writeFixture(`services/research/src/${PROBE_PREFIX}${file}`, body),
+  })),
+  {
+    script: "check-service-truth",
+    proves:
+      'compares each service\'s declared motebit.identity with what README.md and architecture.mdx state — flips services/proxy/package.json `"identity": false` to true (both docs say proxy has no identity); before R10 (2026-10-06) the declaration was never compared and the gate stayed green.',
+    perturb: () =>
+      mutateFile("services/proxy/package.json", (src) => {
+        const re = /("identity":\s*)false/;
+        if (src.match(new RegExp(re.source, "g"))?.length !== 1) {
+          throw new Error(
+            'probe vacuous: services/proxy/package.json no longer declares exactly one `"identity": false` — retarget the probe',
+          );
+        }
+        return src.replace(re, "$1true");
+      }),
+  },
   {
     script: "check-relay-frame-origin",
     proves:

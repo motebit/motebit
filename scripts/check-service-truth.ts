@@ -70,6 +70,14 @@
  *           ??= "0.30"`; the review after R7 found the same write through
  *           `loadEnvFile`, `import { env }`, an alias and a destructure —
  *           matching spellings never ends, refusing every handle does.
+ *       (e) no production code reaches test code, EVERY service: the scans
+ *           above skip `*.test.*` and `__tests__/` (tests may set env), so a
+ *           non-test source under src/ that imports, re-exports, dynamically
+ *           imports or requires a test-named file or anything under
+ *           `__tests__` (relative specifiers resolved, any extension or none)
+ *           is red, as is a non-literal module specifier — R10 (2026-10-06):
+ *           `import "./boot.test.js"` in web-search's index.ts set the
+ *           override to 0.9 and stayed green.
  *
  *   THREAT MODEL — what a green run claims, and what it cannot. This gate
  *   guards ACCIDENTAL drift between the price/unit/role the docs state and the
@@ -90,7 +98,11 @@
  *     column, and the counts in that section's prose.
  *
  * In each inventory every service appears exactly once, under the role its
- * metadata names, carrying the price its code names (`$X/<unit>`, or the word
+ * metadata names, with the identity its metadata declares (a service with
+ * `identity: false` is covered by "no identity" wording — in its annotation,
+ * or row-level wording naming no service; one with `identity: true` is not —
+ * R10, 2026-10-06: the declaration was never compared with the docs),
+ * carrying the price its code names (`$X/<unit>`, or the word
  * "unpriced" when the coded default is 0; no price at all when it does not
  * list). Counts bound to a role word ("4 molecule agents", "Eleven services in
  * four roles", "7 list on the market") must equal what the metadata derives.
@@ -933,6 +945,81 @@ export function checkEnvDiscipline(root: string, name: string, violations: strin
   }
 }
 
+/** A path segment that is a test file (`x.test`, `x.test.ts`, …) or a `__tests__` directory. */
+const TEST_SEGMENT = /^__tests__$|\.test(?:\.[A-Za-z0-9]+)?$/;
+
+/** Does this path or specifier name a test file or anything under `__tests__`? */
+export function namesTestPath(path: string): boolean {
+  return path.split(/[\\/]/).some((s) => TEST_SEGMENT.test(s));
+}
+
+/** Does a string look like a file path / file URL (so it could name a module at runtime)? */
+const PATH_LIKE = /^(?:\.\.?(?:[\\/]|$)|[\\/]|file:)/;
+
+/**
+ * Production code never reaches test code. The price/env scans skip
+ * `*.test.*` and `__tests__/` (tests may set env), so a non-test source that
+ * imports one would boot code no rule reads — R10 (2026-10-06):
+ * `import "./boot.test.js"` (or `./__tests__/boot.js`) at the top of
+ * web-search's index.ts set MOTEBIT_UNIT_COST to 0.9 and the gate stayed green.
+ * DENY BY DEFAULT, every non-test source under every service's src/: a module
+ * specifier — static import, `import x = require()`, re-export, `import()`,
+ * `require()`, a triple-slash reference — is resolved (relative specifiers
+ * against the importing file, any extension or none) and refused when it
+ * names a test file or anything under `__tests__`; a module specifier that is
+ * not a literal (it cannot be resolved) is refused; and any other path-like
+ * string literal (`./…`, `../…`, `/…`, `file:…` — `createRequire(…)(…)`,
+ * `new URL(…, import.meta.url)`) or any string naming `__tests__` that names a
+ * test path is refused.
+ */
+export function checkTestImports(root: string, name: string, violations: string[]): void {
+  for (const f of listSourceFiles(join(root, "services", name, "src"))) {
+    const sf = parse(f);
+    const say = (n: ts.Node | null, what: string) =>
+      violations.push(
+        `${relative(root, f)}:${n == null ? 1 : lineOf(sf, n)}: ${what} — production code never reaches test code (the price/env scans skip *.test.* and __tests__/, so whatever it runs is unread); move the code out of the test file into a non-test module under src/ and import that, or delete the import`,
+      );
+    const resolves = (spec: string) =>
+      spec.startsWith(".") ? relative(root, resolve(dirname(f), spec)) : spec;
+    const seen = new Set<ts.Node>();
+    for (const { text, node } of specifiers(sf)) {
+      const lit =
+        ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
+          ? node.moduleSpecifier
+          : (node as ts.CallExpression).arguments[0];
+      if (lit != null) seen.add(lit);
+      if (text === "<dynamic>")
+        say(
+          node,
+          `\`${node.getText(sf).slice(0, 60)}\` loads a module named by a non-literal — it cannot be resolved, so it could load a test file`,
+        );
+      else if (namesTestPath(resolves(text)))
+        say(node, `loads "${text}" (${resolves(text)}), a test file or a file under __tests__`);
+    }
+    walk(sf, (n) => {
+      if (
+        ts.isImportEqualsDeclaration(n) &&
+        ts.isExternalModuleReference(n.moduleReference) &&
+        ts.isStringLiteralLike(n.moduleReference.expression)
+      ) {
+        const spec = n.moduleReference.expression.text;
+        seen.add(n.moduleReference.expression);
+        if (namesTestPath(resolves(spec)))
+          say(n, `loads "${spec}" (${resolves(spec)}), a test file or a file under __tests__`);
+        return;
+      }
+      if (!ts.isStringLiteralLike(n) || seen.has(n)) return;
+      if ((PATH_LIKE.test(n.text) || n.text.includes("__tests__")) && namesTestPath(n.text))
+        say(n, `names the test path "${n.text.slice(0, 80)}"`);
+    });
+    for (const ref of sf.referencedFiles)
+      if (
+        namesTestPath(resolves(ref.fileName.startsWith(".") ? ref.fileName : `./${ref.fileName}`))
+      )
+        say(null, `\`/// <reference path="${ref.fileName}" />\` pulls in a test file`);
+  }
+}
+
 /**
  * The entry this gate reads must be the one the deploy boots: a Dockerfile's
  * CMD and package.json `start` (when present) run `node dist/index.js`, the
@@ -1018,6 +1105,7 @@ export async function readServices(
   for (const name of serviceDirs(root)) {
     stats.sourceFiles += checkSourceForms(root, name, violations);
     checkEnvDiscipline(root, name, violations);
+    checkTestImports(root, name, violations);
     const pkgPath = join(dir, name, "package.json");
     if (!existsSync(pkgPath)) {
       violations.push(`services/${name}: no package.json, so no \`motebit\` service metadata`);
@@ -1078,28 +1166,79 @@ interface Placement {
   role: ServiceRole | null;
   /** The text after the name up to the next service name (price search span). */
   annotation: string;
+  /**
+   * The identity the doc states for this placement: false when "no identity"
+   * wording covers it (its own annotation, or row-level wording that names no
+   * service), true otherwise — a doc that is silent claims the default, an
+   * identity.
+   */
+  identity: boolean;
   where: string;
 }
 
+/** Wording that states a service has no identity. */
+export const NO_IDENTITY =
+  /\bno (?:motebit )?identity\b|\bwithout (?:an? )?identity\b|\bidentity-less\b/i;
+
 const PRICE_RE = /\$(\d+(?:\.\d+)?)\/([a-z_]+)/;
 
-/** Find every backticked service name in a segment, with its annotation span. */
+/** Every backticked known service name in `text`. */
+function namesIn(text: string, known: Set<string>): { name: string; start: number; end: number }[] {
+  const hits: { name: string; start: number; end: number }[] = [];
+  for (const m of text.matchAll(/`([a-z][a-z0-9-]*)`/g)) {
+    if (known.has(m[1]!)) hits.push({ name: m[1]!, start: m.index!, end: m.index! + m[0].length });
+  }
+  return hits;
+}
+
+/**
+ * Find every backticked service name in a segment, with its annotation span.
+ * "No identity" wording before the first name covers every name in the
+ * segment (`not marketplace participants (no identity …): \`proxy\`, …`);
+ * wording in a name's annotation covers that name; `noIdentity` names covered
+ * by wording elsewhere in the row (a table's Pattern column).
+ */
 function placementsIn(
   segment: string,
   role: ServiceRole | null,
   known: Set<string>,
   where: string,
+  noIdentity: ReadonlySet<string> = new Set(),
 ): Placement[] {
-  const hits: { name: string; start: number; end: number }[] = [];
-  for (const m of segment.matchAll(/`([a-z][a-z0-9-]*)`/g)) {
-    if (known.has(m[1]!)) hits.push({ name: m[1]!, start: m.index!, end: m.index! + m[0].length });
+  const hits = namesIn(segment, known);
+  const rowWide = hits.length > 0 && NO_IDENTITY.test(segment.slice(0, hits[0]!.start));
+  return hits.map((h, i) => {
+    const annotation = segment.slice(h.end, hits[i + 1]?.start ?? segment.length);
+    return {
+      name: h.name,
+      role,
+      annotation,
+      identity: !(rowWide || noIdentity.has(h.name) || NO_IDENTITY.test(annotation)),
+      where,
+    };
+  });
+}
+
+/**
+ * The services a free-text cell states "no identity" for: each sentence or
+ * clause (split at `.`/`;`) carrying the wording covers the services it names,
+ * or — naming none — every service in the row (`rowNames`).
+ */
+function noIdentityIn(text: string, rowNames: string[], known: Set<string>): Set<string> {
+  const out = new Set<string>();
+  for (const clause of text.split(/(?<=[.;])\s+/)) {
+    if (!NO_IDENTITY.test(clause)) continue;
+    const named = namesIn(clause, known).map((h) => h.name);
+    for (const n of named.length > 0 ? named : rowNames) out.add(n);
   }
-  return hits.map((h, i) => ({
-    name: h.name,
-    role,
-    annotation: segment.slice(h.end, hits[i + 1]?.start ?? segment.length),
-    where,
-  }));
+  return out;
+}
+
+function checkIdentity(svc: ServiceTruth, p: Placement, doc: string, violations: string[]): void {
+  if (p.identity === svc.identity) return;
+  violations.push(
+    `${p.where}: \`${svc.name}\` — ${doc} states ${p.identity ? 'an identity (no "no identity" wording covers it)' : "no identity"} but services/${svc.name}/package.json motebit.identity is ${svc.identity}; expected: ${svc.identity ? `remove the "no identity" wording that covers \`${svc.name}\` in ${doc}` : `state "no identity" for \`${svc.name}\` in ${doc} (in its own annotation, or in row-level wording that names no service)`} — or correct motebit.identity if the doc is right`,
+  );
 }
 
 function checkPrice(svc: ServiceTruth, p: Placement, violations: string[]): void {
@@ -1213,6 +1352,7 @@ function sliceBetween(
 
 function checkInventory(
   inventory: string,
+  doc: string,
   placements: Placement[],
   services: ServiceTruth[],
   violations: string[],
@@ -1232,6 +1372,7 @@ function checkInventory(
         `${p.where}: \`${p.name}\` is listed as ${p.role} but services/${p.name}/package.json motebit.role is ${svc.role}`,
       );
     }
+    checkIdentity(svc, p, doc, violations);
     // A listing whose price could not be read is already reported; don't guess.
     if (!(svc.market && svc.price == null)) checkPrice(svc, p, violations);
   }
@@ -1290,7 +1431,13 @@ export async function evaluate(root: string): Promise<Evaluation> {
       );
     });
     placements += ps.length;
-    checkInventory(`${README_PATH} § Architecture (services bullets)`, ps, services, violations);
+    checkInventory(
+      `${README_PATH} § Architecture (services bullets)`,
+      README_PATH,
+      ps,
+      services,
+      violations,
+    );
   }
 
   // architecture.mdx — the tree and the `## Services` table.
@@ -1317,10 +1464,22 @@ export async function evaluate(root: string): Promise<Evaluation> {
         );
         continue;
       }
-      ps.push({ name: t[1]!, role, annotation: t[3]!, where: `${ARCHITECTURE_PATH}:${i + 1}` });
+      ps.push({
+        name: t[1]!,
+        role,
+        annotation: t[3]!,
+        identity: !NO_IDENTITY.test(t[3]!),
+        where: `${ARCHITECTURE_PATH}:${i + 1}`,
+      });
     }
     placements += ps.length;
-    checkInventory(`${ARCHITECTURE_PATH} (services/ tree)`, ps, services, violations);
+    checkInventory(
+      `${ARCHITECTURE_PATH} (services/ tree)`,
+      ARCHITECTURE_PATH,
+      ps,
+      services,
+      violations,
+    );
   }
 
   const sRegion = sliceBetween(arch, /^## Services\s*$/m, /^## /m);
@@ -1339,19 +1498,27 @@ export async function evaluate(root: string): Promise<Evaluation> {
       countClaims += checkCounts(prose, `${ARCHITECTURE_PATH} § Services`, services, violations);
     const ps: Placement[] = [];
     sRegion.body.split("\n").forEach((line, i) => {
-      const row = /^\|\s*\*\*([^*]+)\*\*\s*\|([^|]*)\|/.exec(line);
+      const row = /^\|\s*\*\*([^*]+)\*\*\s*\|([^|]*)\|(.*)$/.exec(line);
       if (row == null) return;
+      const rowNames = namesIn(row[2]!, known).map((h) => h.name);
       ps.push(
         ...placementsIn(
           row[2]!,
           roleOfLabel(row[1]!),
           known,
           `${ARCHITECTURE_PATH}:${sRegion.line + i}`,
+          noIdentityIn(row[3]!, rowNames, known),
         ),
       );
     });
     placements += ps.length;
-    checkInventory(`${ARCHITECTURE_PATH} § Services (table)`, ps, services, violations);
+    checkInventory(
+      `${ARCHITECTURE_PATH} § Services (table)`,
+      ARCHITECTURE_PATH,
+      ps,
+      services,
+      violations,
+    );
   }
 
   return { violations, services, countClaims, placements, sourceFiles: stats.sourceFiles };
@@ -1363,17 +1530,17 @@ async function main(): Promise<void> {
   const r = await evaluate(root);
   if (r.violations.length > 0) {
     failWithRepair({
-      invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price, or a service's code names MOTEBIT_UNIT_COST / touches the environment other than as a direct literal-key read, or a file under a service's src/ has an extension the gate does not scan`,
+      invariant: `check-service-truth: ${r.violations.length} service-inventory drift(s) — a doc disagrees with the service's metadata or coded price, or a service's code names MOTEBIT_UNIT_COST / touches the environment other than as a direct literal-key read or imports a test file, or a doc states an identity the metadata does not declare, or a file under a service's src/ has an extension the gate does not scan`,
       sites: r.violations,
       canonical:
         "role/identity/market: the `motebit` block in services/<name>/package.json; price: the literal `LISTING_PRICE = { capabilities, unit_cost, per }` in services/<name>/src/pricing.ts (data — it cannot read the environment), which main() must pass runMolecule as exactly `pricing: LISTING_PRICE`; the runner alone reads MOTEBIT_UNIT_COST — no service source names it, and service sources read env only as process.env.NAME — and applies it (packages/molecule-runner/src/listing-price.ts, refusing a malformed value) and refuses a listing that brings its own price",
-      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A market service: keep its price in src/pricing.ts as `export const LISTING_PRICE: ListingPriceSpec = { capabilities: [...], unit_cost: <number>, per: <unit string> }` — literals only, no env reads (the runner applies MOTEBIT_UNIT_COST) — and call runMolecule once in src/index.ts with `pricing: LISTING_PRICE` after any spread, naming LISTING_PRICE nowhere else; never put `pricing` in getServiceListing. .env.example states the coded default. A service source that names MOTEBIT_UNIT_COST: delete it — change the default in src/pricing.ts (and the docs) or set an operator override in the deployment. Any other env access: read env only as process.env.NAME (or process.env['NAME']); config flows through the runner — where code needs an env map, build it from literal reads (`{ NAME: process.env.NAME }`) and pass values as arguments or config fields; never alias, pass, spread or destructure process.env, never import env from 'node:process', never loadEnvFile or dotenv (set values in .env.example / the deployment). Tests (src/**/__tests__, *.test.*) may set env. A file under services/<name>/src with an unscanned extension (.cts, .cjs, .jsx, .wasm, a script, none …): scan it — rename it to .ts/.tsx/.mts/.js/.mjs, or teach the gate its extension (SCANNED_EXTENSIONS) — or move it out of src/; only inert data/doc/image/font files (INERT_EXTENSIONS) may sit there unscanned. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
+      fix: "correct README.md § Architecture and apps/docs/content/docs/operator/architecture.mdx (tree + § Services table + counts) to match the canonical source — the coded default wins, docs conform. A market service: keep its price in src/pricing.ts as `export const LISTING_PRICE: ListingPriceSpec = { capabilities: [...], unit_cost: <number>, per: <unit string> }` — literals only, no env reads (the runner applies MOTEBIT_UNIT_COST) — and call runMolecule once in src/index.ts with `pricing: LISTING_PRICE` after any spread, naming LISTING_PRICE nowhere else; never put `pricing` in getServiceListing. .env.example states the coded default. A service source that names MOTEBIT_UNIT_COST: delete it — change the default in src/pricing.ts (and the docs) or set an operator override in the deployment. Any other env access: read env only as process.env.NAME (or process.env['NAME']); config flows through the runner — where code needs an env map, build it from literal reads (`{ NAME: process.env.NAME }`) and pass values as arguments or config fields; never alias, pass, spread or destructure process.env, never import env from 'node:process', never loadEnvFile or dotenv (set values in .env.example / the deployment). Tests (src/**/__tests__, *.test.*) may set env, but no non-test source may import, re-export, import() or require them (or load a module by a non-literal specifier): move shared code out of the test file into a non-test module. A doc that disagrees with motebit.identity: state \"no identity\" for an identity:false service in its annotation (or row-level wording naming no service), and remove that wording for an identity:true one. A file under services/<name>/src with an unscanned extension (.cts, .cjs, .jsx, .wasm, a script, none …): scan it — rename it to .ts/.tsx/.mts/.js/.mjs, or teach the gate its extension (SCANNED_EXTENSIONS) — or move it out of src/; only inert data/doc/image/font files (INERT_EXTENSIONS) may sit there unscanned. A new service: add its `motebit` block, then name it once in each inventory. Re-run `pnpm check-service-truth`.",
       doctrine: "docs/drift-defenses.md (#174)",
     });
   }
   const market = r.services.filter((s) => s.market).length;
   console.log(
-    `✓ check-service-truth: ${r.services.length} services' metadata + coded listing prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and each market service's ${PRICING} LISTING_PRICE, which the TypeScript AST shows is literal data naming no process/globalThis/import.meta/require (it cannot read the environment); proves the runner's ${RUNNER_RULE} lists a spec unaltered, carries a sentinel MOTEBIT_UNIT_COST to every entry, and refuses ${MALFORMED_COSTS.length} malformed overrides (no NaN listing — a bad MOTEBIT_UNIT_COST refuses the boot); proves by TypeScript AST that each market service's ${ENTRY} — the file its Dockerfile CMD / start boots as dist/index.js — calls runMolecule exactly once with \`pricing: LISTING_PRICE\`, the price module imported by that file alone and named nowhere else (the runner lists only config pricing and refuses a getServiceListing carrying its own — molecule-runner listing-pricing.test.ts); market:false services read no MOTEBIT_UNIT_COST, have no pricing.ts and call no runMolecule; every one of the ${r.sourceFiles} file(s) under the ${r.services.length} services' src/ (dotfiles and tests included) is FAIL-CLOSED by extension: ${SCANNED_EXTENSIONS.join(" ")} are scanned, ${INERT_EXTENSIONS.length} inert data/doc/image/font extensions are allowed, any other extension or none is red; and, by TypeScript AST of every non-test scanned source, no code names MOTEBIT_UNIT_COST (identifier, key, string or template literal) and env access is DENY-BY-DEFAULT: process.env is permitted ONLY as a direct literal-key READ — process.env.NAME or process.env["NAME"] (or via globalThis.process) in a non-write position; red on any other occurrence of process.env or process as a value (aliased, passed, spread, destructured, incl. \`const { env } = process\`), a computed-key read, any write (assignment, ++/--, delete, destructuring target), env/default-alias/namespace imported from "process"/"node:process" or that module required or dynamically imported, loadEnvFile anywhere, and any env-file loader package (dotenv, dotenv/config, any bare specifier naming env). Computed keys on process itself and module names built at runtime are outside the threat model. Nothing is executed but the runner's zero-import override rule: no server boots, no network, no ports. Threat model: guards ACCIDENTAL drift between documented and coded price/unit/role; it does not cover production MOTEBIT_UNIT_COST overrides or hand-edited deployments — the deployed listing is the one the service POSTs to the relay (signed market:listing token) and the relay serves; read the production price there. Not covered: other docs pages; "identity" is declared metadata, not verified against code.`,
+    `✓ check-service-truth: ${r.services.length} services' metadata + coded listing prices (${market} market listings) agree with ${r.placements} placement(s) and ${r.countClaims} count claim(s) in ${README_PATH} § Architecture and ${ARCHITECTURE_PATH} (tree + § Services). Aperture: proves these two docs and each .env.example match services/*/package.json and each market service's ${PRICING} LISTING_PRICE, which the TypeScript AST shows is literal data naming no process/globalThis/import.meta/require (it cannot read the environment); proves the runner's ${RUNNER_RULE} lists a spec unaltered, carries a sentinel MOTEBIT_UNIT_COST to every entry, and refuses ${MALFORMED_COSTS.length} malformed overrides (no NaN listing — a bad MOTEBIT_UNIT_COST refuses the boot); proves by TypeScript AST that each market service's ${ENTRY} — the file its Dockerfile CMD / start boots as dist/index.js — calls runMolecule exactly once with \`pricing: LISTING_PRICE\`, the price module imported by that file alone and named nowhere else (the runner lists only config pricing and refuses a getServiceListing carrying its own — molecule-runner listing-pricing.test.ts); market:false services read no MOTEBIT_UNIT_COST, have no pricing.ts and call no runMolecule; every one of the ${r.sourceFiles} file(s) under the ${r.services.length} services' src/ (dotfiles and tests included) is FAIL-CLOSED by extension: ${SCANNED_EXTENSIONS.join(" ")} are scanned, ${INERT_EXTENSIONS.length} inert data/doc/image/font extensions are allowed, any other extension or none is red; and, by TypeScript AST of every non-test scanned source, no code names MOTEBIT_UNIT_COST (identifier, key, string or template literal) and env access is DENY-BY-DEFAULT: process.env is permitted ONLY as a direct literal-key READ — process.env.NAME or process.env["NAME"] (or via globalThis.process) in a non-write position; red on any other occurrence of process.env or process as a value (aliased, passed, spread, destructured, incl. \`const { env } = process\`), a computed-key read, any write (assignment, ++/--, delete, destructuring target), env/default-alias/namespace imported from "process"/"node:process" or that module required or dynamically imported, loadEnvFile anywhere, and any env-file loader package (dotenv, dotenv/config, any bare specifier naming env). Computed keys on process itself and module names built at runtime are outside the threat model. Nothing is executed but the runner's zero-import override rule: no server boots, no network, no ports. Threat model: guards ACCIDENTAL drift between documented and coded price/unit/role; it does not cover production MOTEBIT_UNIT_COST overrides or hand-edited deployments — the deployed listing is the one the service POSTs to the relay (signed market:listing token) and the relay serves; read the production price there. Each placement's stated identity ("no identity" wording in its annotation, its bullet/row before the first service name, or a table Pattern clause naming it or no service; silence states an identity) must equal motebit.identity. Every non-test scanned source is also refused if it imports, re-exports, dynamically imports, requires or names by path a test file or anything under __tests__ (relative specifiers resolved, any extension), or loads a module by a non-literal specifier. Not covered: other docs pages; "identity" is declared metadata, compared with the docs but not verified against code.`,
   );
 }
 

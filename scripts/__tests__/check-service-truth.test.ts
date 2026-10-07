@@ -15,11 +15,16 @@
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluate, ARCHITECTURE_PATH, MALFORMED_COSTS } from "../check-service-truth.js";
+import {
+  evaluate,
+  ARCHITECTURE_PATH,
+  MALFORMED_COSTS,
+  README_PATH,
+} from "../check-service-truth.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -120,7 +125,7 @@ motebit/
 │   ├── relay/                 [relay]       Sync.
 │   ├── research/              [molecule]    $0.25/task. Claude.
 │   ├── read-url/              [atom]        Unpriced. Reads URLs.
-│   └── embed/                 [infrastructure] ONNX embedding service.
+│   └── embed/                 [infrastructure] ONNX embedding service — no identity.
 │
 ├── spec/
 \`\`\`
@@ -134,7 +139,7 @@ Four services in four roles.
 | **Relay**           | \`relay\`                 | Sync.   |
 | **Molecules**       | \`research\` ($0.25/task) | Reason. |
 | **Atoms**           | \`read-url\` (unpriced)   | Read.   |
-| **Infrastructure**  | \`embed\`                 | Embed.  |
+| **Infrastructure**  | \`embed\`                 | No identity. Embed. |
 
 ## Specifications
 `;
@@ -844,6 +849,171 @@ describe("check-service-truth", () => {
     expect(await violations({ services: s })).toMatch(
       /services\/embed\/\.env\.example:1: MOTEBIT_UNIT_COST on a service whose motebit\.market is false/,
     );
+  });
+
+  // R10 (2026-10-06): the price/env scans skip *.test.* and __tests__/, and
+  // nothing stopped production code from importing one — web-search's index.ts
+  // importing a boot.test.ts (or __tests__/boot.ts) that set MOTEBIT_UNIT_COST
+  // to 0.9 stayed GREEN while the docs said $0.05. Deny by default: no non-test
+  // source loads a test path, however it spells the load.
+  describe("R10: production code never imports test code", () => {
+    const BOOT = `process.env.MOTEBIT_UNIT_COST = "0.9";\nexport {};\n`;
+    const LOADS = (file: string) =>
+      new RegExp(`services/research/src/${file}:\\d+: .*production code never reaches test code`);
+    it("both repro forms are RED: ./boot.test.js and ./__tests__/boot.js", async () => {
+      for (const [spec, f] of [
+        ["./boot.test.js", "boot.test.ts"],
+        ["./__tests__/boot.js", "__tests__/boot.ts"],
+      ] as const) {
+        const v = await research({
+          src: entry(CONFIG, `import "${spec}";\n`),
+          files: { [f]: BOOT },
+        });
+        expect(v, spec).toMatch(LOADS("index\\.ts"));
+        expect(v, spec).toMatch(new RegExp(`loads "${spec.replace(/\./g, "\\.")}"`));
+        // the test file itself stays unscanned for the env rules
+        expect(v, spec).not.toMatch(/boot\.test\.ts:\d+|__tests__\/boot\.ts:\d+/);
+      }
+    });
+    it("every load form, extension and helper-module path is RED", async () => {
+      for (const stmt of [
+        `export * from "./boot.test.js";`,
+        `export { x } from "./__tests__/boot.js";`,
+        `import "./boot.test";`,
+        `import "./boot.test.mjs";`,
+        `import "./__tests__";`,
+        `import "./sub/../__tests__/boot.js";`,
+        `void import("./boot.test.js");`,
+        "void import(`./__tests__/boot.js`);",
+        `declare const require: (s: string) => unknown; require("./boot.test.js");`,
+        `import x = require("./boot.test.js"); void x;`,
+        `import type { T } from "./__tests__/types.js"; export type { T };`,
+        `import { createRequire } from "node:module"; createRequire(import.meta.url)("./boot.test.js");`,
+        `void new URL("./__tests__/boot.js", import.meta.url);`,
+        `const m = "./boot"; void import(m + ".test.js");`,
+      ]) {
+        const v = await research({
+          src: entry(CONFIG, `${stmt}\n`),
+          files: { "boot.test.ts": BOOT },
+        });
+        expect(v, stmt).toMatch(LOADS("index\\.ts"));
+      }
+      const v = await research({
+        src: entry(CONFIG, `import "./helpers.js";\n`),
+        files: {
+          "helpers.ts": `import "./__tests__/boot.js";\nexport {};\n`,
+          "__tests__/boot.ts": BOOT,
+        },
+      });
+      expect(v).toMatch(LOADS("helpers\\.ts"));
+      const s = baseServices();
+      s["embed"] = {
+        ...s["embed"]!,
+        src: `import "./boot.test.js";\n`,
+        files: { "boot.test.ts": BOOT },
+      };
+      expect(await violations({ services: s })).toMatch(
+        /services\/embed\/src\/index\.ts:1: loads "\.\/boot\.test\.js"/,
+      );
+    });
+    it("tests importing tests, and look-alike non-test names, stay GREEN", async () => {
+      expect(
+        await research({
+          files: {
+            "__tests__/a.test.ts": `import "./helpers.js";\nimport "../boot.test.js";\nprocess.env.X = "1";\n`,
+            "__tests__/helpers.ts": BOOT,
+            "boot.test.ts": BOOT,
+            "contest.ts": `export const u = "https://agent.test/x"; export const r = /a/.test("a");\n`,
+          },
+          src: entry(CONFIG, `import "./contest.js";\n`),
+        }),
+      ).toBe("");
+    });
+  });
+
+  // R10 (2026-10-06): motebit.identity was never compared with the docs —
+  // flipping proxy/embed/browser-sandbox false→true or relay true→false stayed
+  // GREEN while README.md and architecture.mdx state each one's identity. Runs
+  // on a copy of the REAL services/ + both docs, so the doc forms checked are
+  // the ones the repo actually uses (row-level wording, annotations, the tree
+  // line, a table Pattern clause naming the service).
+  describe("R10: declared identity agrees with both docs", () => {
+    function realCopy(): string {
+      const root = mkdtempSync(join(tmpdir(), "st-service-truth-real-"));
+      dirs.push(root);
+      cpSync(join(ROOT, "services"), join(root, "services"), {
+        recursive: true,
+        filter: (p) => !/[\\/](?:node_modules|dist|\.next|\.turbo)$/.test(p),
+      });
+      for (const f of [README_PATH, ARCHITECTURE_PATH]) {
+        mkdirSync(dirname(join(root, f)), { recursive: true });
+        cpSync(join(ROOT, f), join(root, f));
+      }
+      return root;
+    }
+    const flip = (root: string, name: string) => {
+      const p = join(root, "services", name, "package.json");
+      const pkg = JSON.parse(readFileSync(p, "utf8")) as { motebit: { identity: boolean } };
+      pkg.motebit.identity = !pkg.motebit.identity;
+      writeFileSync(p, JSON.stringify(pkg));
+      return pkg.motebit.identity;
+    };
+    it("the real copy is GREEN", async () => {
+      expect((await evaluate(realCopy())).violations).toEqual([]);
+    }, 60_000);
+    for (const name of ["proxy", "embed", "browser-sandbox", "relay"])
+      it(`flipping ${name}'s identity is RED in README.md and architecture.mdx`, async () => {
+        const root = realCopy();
+        const now = flip(root, name);
+        const v = (await evaluate(root)).violations.join("\n");
+        for (const doc of [README_PATH, ARCHITECTURE_PATH]) {
+          const esc = doc.replace(/[./]/g, (c) => `\\${c}`);
+          expect(v, `${name} in ${doc}`).toMatch(
+            new RegExp(
+              `${esc}:\\d+: \`${name}\` — ${esc} states .* but services/${name}/package\\.json motebit\\.identity is ${now}; expected: ${now ? "remove" : 'state "no identity"'}`,
+            ),
+          );
+        }
+      }, 60_000);
+    it("the web-search boot.test repro is RED on the real copy (both import forms)", async () => {
+      for (const [spec, f] of [
+        ["./boot.test.js", "boot.test.ts"],
+        ["./__tests__/boot.js", "__tests__/boot.ts"],
+      ] as const) {
+        const root = realCopy();
+        const src = join(root, "services/web-search/src");
+        mkdirSync(dirname(join(src, f)), { recursive: true });
+        writeFileSync(join(src, f), `process.env.MOTEBIT_UNIT_COST = "0.9";\nexport {};\n`);
+        const idx = join(src, "index.ts");
+        writeFileSync(idx, `import "${spec}";\n` + readFileSync(idx, "utf8"));
+        expect((await evaluate(root)).violations.join("\n"), spec).toMatch(
+          /services\/web-search\/src\/index\.ts:1: loads .*production code never reaches test code/,
+        );
+      }
+    }, 60_000);
+    it("fixture: row-level and annotation wording both count", async () => {
+      expect(
+        await violations({
+          readme: swap(
+            README,
+            "`research` ($0.25/task, Claude)",
+            "`research` ($0.25/task, Claude, no identity)",
+          ),
+        }),
+      ).toMatch(
+        /README\.md:\d+: `research` — README\.md states no identity but .* motebit\.identity is true; expected: remove/,
+      );
+      expect(
+        await violations({
+          arch: swap(ARCH, "ONNX embedding service — no identity.", "ONNX embedding service."),
+        }),
+      ).toMatch(
+        /architecture\.mdx:\d+: `embed` — .* states an identity .* motebit\.identity is false; expected: state "no identity"/,
+      );
+      expect(await violations({ arch: swap(ARCH, "No identity. Embed.", "Embed.") })).toMatch(
+        /architecture\.mdx:\d+: `embed` — .* states an identity/,
+      );
+    });
   });
 
   it("the real repo passes through the CLI in seconds, booting nothing, with an aperture line", async () => {
