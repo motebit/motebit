@@ -32,7 +32,12 @@ import { resolve } from "node:path";
 // (@motebit/crypto) directly — see check-app-primitives. The encryption barrel
 // re-exports every receipt/delegation verifier from crypto, so the import path
 // changes but the runtime behavior is identical.
-import { hexToBytes, verifyDelegation, verifyExecutionReceipt } from "@motebit/encryption";
+import {
+  hexToBytes,
+  verifyDelegation,
+  verifyExecutionReceipt,
+  verifyReceipt,
+} from "@motebit/encryption";
 import {
   AgentServiceListingSchema,
   DelegationTokenSchema,
@@ -150,14 +155,31 @@ export async function verifyWire(
         detail: "not checked (--lenient) — the result is not bound to the signature",
       });
     } else {
+      // The crypto strict path checks every delegation_receipts entry at
+      // every depth; collect its result_hash failures across the whole tree.
+      const strict = await verifyReceipt(parsed.data, {
+        strictHashBinding: true,
+      });
+      const nested = collectNestedHashErrors(strict.delegations ?? []);
       const expected = createHash("sha256").update(parsed.data.result, "utf8").digest("hex");
-      const ok = expected === parsed.data.result_hash;
+      const outerOk = expected === parsed.data.result_hash;
+      const failures = [
+        ...(outerOk
+          ? []
+          : [
+              `mismatch: result_hash ${parsed.data.result_hash} != hex(SHA-256(result)) ${expected}`,
+            ]),
+        ...nested,
+      ];
       checks.push({
         name: "result_hash",
-        ok,
-        detail: ok
-          ? "equals hex(SHA-256(result)) — the result is bound to the signature"
-          : `mismatch: result_hash ${parsed.data.result_hash} != hex(SHA-256(result)) ${expected}`,
+        ok: failures.length === 0,
+        detail:
+          failures.length === 0
+            ? (strict.delegations?.length ?? 0) > 0
+              ? "equals hex(SHA-256(result)) at every delegation depth — the results are bound to the signatures"
+              : "equals hex(SHA-256(result)) — the result is bound to the signature"
+            : failures.join("; "),
       });
     }
     return finalize(kind, absPath, checks);
@@ -217,6 +239,21 @@ export async function verifyWire(
     detail: "n/a — listings are not self-signed (relay-authenticated PUT)",
   });
   return finalize(kind, absPath, checks);
+}
+
+/** Every nested `result_hash` failure in a strict `verifyReceipt` tree, deepest included. */
+function collectNestedHashErrors(
+  delegations: ReadonlyArray<{
+    errors?: ReadonlyArray<{ message: string; path?: string }>;
+    delegations?: ReadonlyArray<unknown>;
+  }>,
+): string[] {
+  const out: string[] = [];
+  for (const d of delegations) {
+    for (const e of d.errors ?? []) if (e.path === "result_hash") out.push(e.message);
+    out.push(...collectNestedHashErrors((d.delegations ?? []) as typeof delegations));
+  }
+  return out;
 }
 
 function finalize(kind: VerifyKind, filePath: string, checks: VerifyCheck[]): VerifyReport {
