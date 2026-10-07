@@ -16,7 +16,7 @@ import type {
 import type { BehaviorCues, SensitivityCleared, SensitivityGateEntry } from "@motebit/sdk";
 import type { AgenticChunk, TurnResult } from "@motebit/ai-core";
 import { extractStateTags, runTurnStreaming } from "@motebit/ai-core";
-import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import type { MotebitLoopDependencies, TurnOptions } from "@motebit/ai-core";
 import type { SignableToolInvocationReceipt } from "@motebit/crypto";
 import { signToolInvocationReceipt, hashToolPayload, signApprovalDecision } from "@motebit/crypto";
 import type { ApprovalDecision } from "@motebit/crypto";
@@ -1091,16 +1091,17 @@ export class StreamingManager {
       }
 
       // #904: the continuation's history. An OWNER resume records the pair
-      // in the owner's conversation and continues over it. A FOREIGN resume
-      // continues over a private copy — the pair is that principal's turn,
-      // never the owner's history (the conversation manager refuses the
-      // write anyway; this keeps the continuation's own context whole).
-      let continuationHistory: ConversationMessage[];
+      // in the owner's conversation and continues over it — through the
+      // same `trimmed` a normal turn uses: filtered to the tier at send time,
+      // then sized to the window the loop measures. A FOREIGN resume
+      // continues over the pair alone — that principal's turn, never the
+      // owner's history (the conversation manager refuses the write anyway).
+      let history: Pick<TurnOptions, "conversationHistory" | "budgetConversationHistory">;
       if (principal.foreign) {
-        continuationHistory = [...convo.liveHistory(), ...continuationPair];
+        history = { conversationHistory: [...continuationPair] };
       } else {
         convo.injectIntermediateMessages(continuationPair[0], continuationPair[1]);
-        continuationHistory = convo.liveHistory();
+        history = { budgetConversationHistory: (n) => convo.trimmed(n) };
       }
 
       // Run continuation turn with updated history. `priorTurnActions`
@@ -1112,7 +1113,7 @@ export class StreamingManager {
         this.deps.loopDepsForTurn?.(loopDeps, principal) ?? loopDeps,
         pending.userMessage,
         {
-          conversationHistory: continuationHistory,
+          ...history,
           previousCues: this.deps.getLatestCues(),
           runId: pending.runId,
           priorTurnActions: approved

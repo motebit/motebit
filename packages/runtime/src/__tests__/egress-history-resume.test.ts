@@ -9,9 +9,6 @@
  * needs approval. The continuation after `resumeAfterApproval` used to carry
  * the raw live history — the Secret exchange included — to the BYOK
  * provider, and to overflow a small window on a long conversation.
- *
- * HARNESS: every case is `it.fails` — the leak and the overflow reproduce at
- * this commit; the fix flips them to `it`.
  */
 import { describe, it, expect, vi } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
@@ -149,66 +146,59 @@ function historyText(ctx: ContextPack): string {
 
 describe("approval resume sends filtered, budgeted history", () => {
   for (const n of [1, 5, 25]) {
-    it.fails(
-      `a Secret exchange never reaches the BYOK provider on the continuation (N=${n})`,
-      async () => {
-        const { runtime, sent, setMode, extWrite } = makeRuntime();
-        setMode("on-device");
-        runtime.setSessionSensitivity(SensitivityLevel.Secret);
-        await drain(runtime.sendMessageStreaming(`my code is ${SECRET}`));
-        expect(sent.length).toBeGreaterThan(0);
+    it(`a Secret exchange never reaches the BYOK provider on the continuation (N=${n})`, async () => {
+      const { runtime, sent, setMode, extWrite } = makeRuntime();
+      setMode("on-device");
+      runtime.setSessionSensitivity(SensitivityLevel.Secret);
+      await drain(runtime.sendMessageStreaming(`my code is ${SECRET}`));
+      expect(sent.length).toBeGreaterThan(0);
 
-        setMode("byok");
-        runtime.setSessionSensitivity(SensitivityLevel.Personal);
-        for (let i = 0; i < n; i++) await drain(runtime.sendMessageStreaming(`ordinary ${i}`));
-
-        const before = sent.length;
-        const chunks = await drain(runtime.sendMessageStreaming("store x"));
-        expect(chunks.some((c) => c.type === "approval_request")).toBe(true);
-        await drain(runtime.resumeAfterApproval(true));
-        expect(extWrite).toHaveBeenCalledTimes(1);
-
-        const continuation = sent
-          .slice(before)
-          .filter((s) => historyText(s.ctx).includes("tool_result"));
-        expect(continuation.length).toBeGreaterThan(0);
-        for (const s of sent.filter((x) => x.mode === "byok")) {
-          expect(historyText(s.ctx)).not.toContain(SECRET);
-        }
-      },
-    );
-  }
-
-  it.fails(
-    "the continuation on a long conversation fits the model's window",
-    async () => {
-      const WINDOW = 32_768;
-      const reply = "r".repeat(400);
-      const { runtime, sent, setMode } = makeRuntime({ contextWindowTokens: WINDOW, reply });
       setMode("byok");
       runtime.setSessionSensitivity(SensitivityLevel.Personal);
-      for (let i = 0; i < 150; i++) {
-        await drain(runtime.sendMessageStreaming(`message ${i} ${"u".repeat(400)}`));
-      }
+      for (let i = 0; i < n; i++) await drain(runtime.sendMessageStreaming(`ordinary ${i}`));
+
       const before = sent.length;
-      await drain(runtime.sendMessageStreaming("store x"));
+      const chunks = await drain(runtime.sendMessageStreaming("store x"));
+      expect(chunks.some((c) => c.type === "approval_request")).toBe(true);
       await drain(runtime.resumeAfterApproval(true));
+      expect(extWrite).toHaveBeenCalledTimes(1);
 
       const continuation = sent
         .slice(before)
         .filter((s) => historyText(s.ctx).includes("tool_result"));
       expect(continuation.length).toBeGreaterThan(0);
-      for (const s of continuation) {
-        const history = (s.ctx.conversation_history ?? []).reduce(
-          (sum, m) => sum + estimateTokens(typeof m.content === "string" ? m.content : ""),
-          0,
-        );
-        const system = measureNonHistoryTokens(s.ctx, "mock-model");
-        expect(history + system).toBeLessThanOrEqual(WINDOW);
+      for (const s of sent.filter((x) => x.mode === "byok")) {
+        expect(historyText(s.ctx)).not.toContain(SECRET);
       }
-    },
-    60_000,
-  );
+    });
+  }
+
+  it("the continuation on a long conversation fits the model's window", async () => {
+    const WINDOW = 32_768;
+    const reply = "r".repeat(400);
+    const { runtime, sent, setMode } = makeRuntime({ contextWindowTokens: WINDOW, reply });
+    setMode("byok");
+    runtime.setSessionSensitivity(SensitivityLevel.Personal);
+    for (let i = 0; i < 150; i++) {
+      await drain(runtime.sendMessageStreaming(`message ${i} ${"u".repeat(400)}`));
+    }
+    const before = sent.length;
+    await drain(runtime.sendMessageStreaming("store x"));
+    await drain(runtime.resumeAfterApproval(true));
+
+    const continuation = sent
+      .slice(before)
+      .filter((s) => historyText(s.ctx).includes("tool_result"));
+    expect(continuation.length).toBeGreaterThan(0);
+    for (const s of continuation) {
+      const history = (s.ctx.conversation_history ?? []).reduce(
+        (sum, m) => sum + estimateTokens(typeof m.content === "string" ? m.content : ""),
+        0,
+      );
+      const system = measureNonHistoryTokens(s.ctx, "mock-model");
+      expect(history + system).toBeLessThanOrEqual(WINDOW);
+    }
+  }, 60_000);
 });
 
 describe("history-reading completions send filtered history", () => {
@@ -223,7 +213,7 @@ describe("history-reading completions send filtered history", () => {
     return r;
   }
 
-  it.fails("summarization never sends a Secret exchange to the BYOK provider", async () => {
+  it("summarization never sends a Secret exchange to the BYOK provider", async () => {
     const { runtime, sent } = await secretThenByok();
     const before = sent.length;
     await runtime.summarizeCurrentConversation();
@@ -233,7 +223,7 @@ describe("history-reading completions send filtered history", () => {
     }
   });
 
-  it.fails("reflection never sends a Secret exchange to the BYOK provider", async () => {
+  it("reflection never sends a Secret exchange to the BYOK provider", async () => {
     const { runtime, sent } = await secretThenByok();
     const before = sent.length;
     await runtime.reflect();
@@ -241,5 +231,19 @@ describe("history-reading completions send filtered history", () => {
     for (const s of sent.filter((x) => x.mode === "byok")) {
       expect(JSON.stringify(s.ctx)).not.toContain(SECRET);
     }
+  });
+
+  it("a normal turn's recent events withhold the Secret exchange, and return it at Secret tier", async () => {
+    const { runtime, sent, setMode } = await secretThenByok();
+    await drain(runtime.sendMessageStreaming("another"));
+    const lastByok = sent.find((x) => x.ctx.user_message === "another")!;
+    expect(JSON.stringify(lastByok.ctx.recent_events)).not.toContain(SECRET);
+    expect(JSON.stringify(lastByok.ctx.recent_events)).toContain("ordinary");
+
+    setMode("on-device");
+    runtime.setSessionSensitivity(SensitivityLevel.Secret);
+    await drain(runtime.sendMessageStreaming("back on device"));
+    const back = sent.find((x) => x.ctx.user_message === "back on device")!;
+    expect(JSON.stringify(back.ctx.recent_events)).toContain(SECRET);
   });
 });

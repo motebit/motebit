@@ -21,10 +21,26 @@ budget; a foreign turn's view is empty and `budgetConversationHistory` is
 classified owner-interior (floored away for a foreign turn);
 `assertSensitivityPermitsAiCall` is untouched.
 
-Known limits: the approval-continuation path (`streaming.ts`) still sends the
-live in-memory history unbudgeted, now bounded by the token bound rather than
-40 messages; a small local window should be configured
-(`contextWindowTokens`) and still trims at the 6,976 floor.
+One egress path for history. Every path that sends conversation history to a
+provider reads `ConversationManager.egressHistory()` — the live history
+filtered to the session's effective tier at send time. Turns and the approval
+continuation (`streaming.ts`) take it budgeted through `trimmed(n)`;
+summarization, the AI title and reflection take it whole. There is no raw
+live-history accessor; `getHistory()` is for local rendering and counts
+(`egress-history-gate.test.ts` locks this). Before this, the approval
+continuation sent the raw live history: a Secret exchange reached a BYOK
+provider after a tier drop (also on main, whenever fewer than ~40 messages
+separated it from the resume), and a long conversation overflowed the window
+(`egress-history-resume.test.ts`). The `state_updated` event, which carries the
+exchange verbatim into `[Recent Events]`, is stamped with its tier and filtered
+the same way.
+
+Known limits: a small local window should be configured
+(`contextWindowTokens`) and still trims at the 6,976 floor. A stored summary is
+not tier-stamped: one written at a high tier is still prepended at a lower one.
+Skip-not-stop can leave an assistant reply whose skipped user paste is gone;
+pairing them conflicts with the "kept set ⊇ old policy's kept set" acceptance
+invariant, so it is deferred.
 
 ## Problem
 
