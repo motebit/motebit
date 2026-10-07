@@ -357,6 +357,18 @@ function parseRoutingStrategy(
   throw new Error(`Unknown routing strategy "${value}". Use "cost", "quality", or "balanced".`);
 }
 
+/**
+ * REPL exit words. Handled by the REPL loop, not the slash dispatcher (exit
+ * must run the runtime's shutdown), so they live outside `COMMANDS`. The
+ * slash forms are accepted because users reach for `/quit` after `/help`.
+ */
+const EXIT_INPUTS = new Set(["quit", "exit", "/quit", "/exit"]);
+
+/** True when a trimmed REPL line asks to leave the REPL. */
+export function isExitInput(trimmed: string): boolean {
+  return EXIT_INPUTS.has(trimmed);
+}
+
 /** Command metadata — single source of truth for REPL /help and CLI --help. */
 export interface CommandEntry {
   /** Usage pattern, e.g. "/goal add \"<prompt>\" --every <interval>" */
@@ -627,7 +639,7 @@ Slash commands (in REPL):`,
     const gap = " ".repeat(Math.max(1, col - usage.length));
     console.log(`  ${usage}${gap}${desc}`);
   }
-  console.log("  quit, exit         Exit the REPL");
+  console.log("  quit, exit         Exit the REPL (/quit and /exit also work)");
 }
 
 export function printVersion(): void {

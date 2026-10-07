@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { COMMANDS } from "../args.js";
+import { COMMANDS, isExitInput } from "../args.js";
 
 describe("command registry", () => {
   // Extract top-level command names from the COMMANDS registry
@@ -40,5 +40,25 @@ describe("command registry", () => {
       seen.add(c.usage);
     }
     expect(dupes, `Duplicate COMMANDS entries: ${dupes.join(", ")}`).toEqual([]);
+  });
+});
+
+describe("REPL exit inputs", () => {
+  it("accepts the bare and slash forms of quit and exit", () => {
+    for (const word of ["quit", "exit", "/quit", "/exit"]) {
+      expect(isExitInput(word), word).toBe(true);
+    }
+  });
+
+  it("does not treat other input as an exit", () => {
+    for (const word of ["", "/help", "quit now", "/quitx", "Quit", "exit please"]) {
+      expect(isExitInput(word), word).toBe(false);
+    }
+  });
+
+  // The slash forms are handled by the REPL loop, never the dispatcher — a
+  // COMMANDS entry would demand a switch case that cannot run shutdown.
+  it("keeps exit out of the slash-command registry", () => {
+    expect(COMMANDS.some((c) => /^\/(quit|exit)\b/.test(c.usage))).toBe(false);
   });
 });

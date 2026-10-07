@@ -13,7 +13,7 @@ On first launch, the system runs a shared bootstrap protocol (`bootstrapIdentity
 
 1. **Generate an Ed25519 keypair** using `@noble/ed25519` — a zero-dependency, audited library. The same signing scheme used by SSH, Signal, and WireGuard.
 2. **Store the private key** in the platform's secure storage. On desktop, `~/.motebit/dev-keyring.json` — an owner-only (mode `0600` on Unix; Windows is best-effort) file, access-controlled rather than application-encrypted; the OS keychain is not used yet (its enablement is a separate arc gated on real-device testing, because keychain providers differ in ways that can lose a key). On CLI, PBKDF2-encrypted as `cli_encrypted_key` in `~/.motebit/config.json`. On mobile, `expo-secure-store` (iOS Keychain / Android Keystore, no fallback). The private key never appears in the non-secret `config.json` and never crosses the network; on desktop the key file is access-controlled but not application-encrypted (moving it into the OS keychain is tracked as its own arc — see [security boundaries](https://github.com/motebit/motebit/blob/main/docs/doctrine/security-boundaries.md)).
-3. **Generate a UUID v7** `motebit_id` (time-ordered, sortable) and a `device_id`.
+3. **Derive the `motebit_id` from the public key** — a UUIDv8 (RFC 9562) built from the first 16 bytes of `SHA-256(public_key)` with the version and variant bits set (`deriveSovereignMotebitId` in `@motebit/crypto`). The id is a self-certifying commitment to the genesis key: anyone can recompute it offline, and it is recoverable from the key's seed. A random `device_id` is generated alongside it. Identities minted before this default carry a random UUID v7 `motebit_id` that is not bound to any key; they remain valid identifiers.
 4. **Register the device** against the identity, binding the device's public key to the `motebit_id`.
 5. **Write config** — the `motebit_id`, `device_id`, and public key are persisted to `~/.motebit/config.json` (non-secret metadata only).
 
@@ -92,15 +92,17 @@ import { verify } from "@motebit/crypto";
 import fs from "node:fs";
 
 const result = await verify(fs.readFileSync("motebit.md", "utf-8"));
-if (result.valid) {
-  console.log("Verified:", result.identity.motebit_id);
+// `verify` auto-detects the artifact and returns a union discriminated on
+// `type`; narrow to "identity" before reading identity-file fields.
+if (result.type === "identity" && result.valid) {
+  console.log("Verified:", result.identity?.motebit_id);
 }
 ```
 
-A valid result includes a `did` field — the W3C `did:key` derived from the Ed25519 public key. This bridges motebit to ecosystems that use Decentralized Identifiers (Verifiable Credentials, DIDComm, MCP-Identity).
+A valid identity result includes a `did` field — the W3C `did:key` derived from the Ed25519 public key. This bridges motebit to ecosystems that use Decentralized Identifiers (Verifiable Credentials, DIDComm, MCP-Identity).
 
 ```typescript
-if (result.valid) {
+if (result.type === "identity" && result.valid) {
   console.log(result.did); // "did:key:z6Mk..."
 }
 ```

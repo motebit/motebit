@@ -113,6 +113,47 @@ describe("create-motebit", () => {
     expect(stdout).toContain("MOTEBIT_PASSPHRASE");
   });
 
+  // -- no TTY, no --yes --
+
+  // execFileSync gives the child a pipe for stdin, never a TTY. Without the
+  // gate the first prompt printed, stdin closed unanswered, and the process
+  // exited 0 having created nothing.
+  it("refuses the interactive scaffold without a TTY and points at --yes", () => {
+    const { stdout, stderr, exitCode } = run(["my-agent"], testDir, {
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("--yes");
+    expect(stderr).toContain("MOTEBIT_PASSPHRASE");
+    expect(stdout).not.toContain("?");
+    expect(existsSync(join(testDir, "my-agent"))).toBe(false);
+  });
+
+  it("refuses the interactive --agent scaffold without a TTY", () => {
+    const { stderr, exitCode } = run(["my-agent", "--agent"], testDir, {
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("--yes");
+    expect(existsSync(join(testDir, "my-agent"))).toBe(false);
+  });
+
+  it("refuses interactive rotate without a TTY", () => {
+    const subDir = "no-tty-rotate";
+    run([subDir, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-notty",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    const identityPath = join(testDir, subDir, "motebit.md");
+    const before = readFileSync(identityPath, "utf-8");
+    const { stderr, exitCode } = run(["rotate", identityPath], testDir, {
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("--yes");
+    expect(readFileSync(identityPath, "utf-8")).toBe(before);
+  });
+
   // -- scaffold with --yes --
 
   it("scaffolds project with --yes and MOTEBIT_PASSPHRASE", () => {

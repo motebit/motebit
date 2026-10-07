@@ -64,7 +64,8 @@ cd my-agent && npm install && node verify.js
 
 # Install the full operator console
 npm install -g motebit
-motebit
+motebit                           # uses ANTHROPIC_API_KEY
+motebit --provider local-server   # no API key: Ollama, LM Studio, or any OpenAI-compatible local server
 
 # Run your own relay — sovereign, local, one command
 motebit relay up

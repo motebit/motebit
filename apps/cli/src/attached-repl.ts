@@ -18,6 +18,7 @@ import {
   writeLine,
   writeOutput,
 } from "./terminal.js";
+import { isExitInput } from "./args.js";
 import { renderModeRow } from "./mode-render.js";
 import { detectShellInvocation } from "./slash-commands.js";
 import { startStatus, type StatusHandle } from "./statusline.js";
@@ -243,7 +244,7 @@ export async function runAttachedRepl(client: RuntimeHostClient, motebitId: stri
     }
     const trimmed = line.trim();
     if (trimmed === "") continue;
-    if (trimmed === "/exit" || trimmed === "/quit" || trimmed === "exit" || trimmed === "quit") {
+    if (isExitInput(trimmed)) {
       writeOutput("Goodbye! (coordinator keeps running)\n");
       break;
     }
