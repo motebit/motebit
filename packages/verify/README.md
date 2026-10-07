@@ -63,9 +63,12 @@ motebit-verify <file>                     # auto-detect, print human-readable
 motebit-verify <file> --json              # structured JSON output
 motebit-verify <file> --expect credential # pin expected artifact type
 motebit-verify <file> --clock-skew 30     # allow N seconds of clock drift
-motebit-verify <file> --strict            # also verify an ExecutionReceipt's result_hash
-                                          #   equals SHA-256(result) — reject a signed
-                                          #   receipt whose hash doesn't bind its own result
+motebit-verify <file> --lenient           # receipts: signature only (result_hash NOT checked; warns)
+```
+
+**Strict by default.** For an `ExecutionReceipt`, `motebit-verify` checks the signature AND that `result_hash` equals `hex(SHA-256(UTF-8(result)))`; a validly signed receipt whose hash does not bind its own `result` is `INVALID` (exit 1), naming `result_hash`. `--lenient` restores signature-only checking and prints a one-line warning on stderr that the result is not bound. `--strict` is accepted as a no-op. (The `@motebit/verifier` library default is unchanged — signature-only unless `strictHashBinding: true`.)
+
+```bash
 
 # Platform overrides (defaults match motebit's canonical identifiers)
 motebit-verify <file> \

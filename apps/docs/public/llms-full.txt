@@ -3615,10 +3615,10 @@ If the receipt delegated sub-tasks, each nested receipt is independently signed 
 
 There are two CLI entry points. The difference is **who you are**, not what you verify:
 
-| You are…                                                                            | Use                                                  | Why                                                                                                                                                                                                                                              |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Verifying someone else's artifact** — auditor, counterparty, a non-motebit CI     | `npx @motebit/verify <path>` (binary `motebit-verify`) | The canonical **standalone** verifier: Apache-2.0, **no runtime**, smallest install, independently auditable and forkable. You verify the claim _without installing the software that made it_ — the point of an independently-verifiable system. |
-| **Already running the motebit runtime**                                             | `motebit verify <kind> <path>`                       | The same check as a subcommand of the CLI you already have (`receipt` / `token` / `listing` / `identity`). Convenience for operators and devs already in the runtime.                                                                            |
+| You are…                                                                        | Use                                                    | Why                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Verifying someone else's artifact** — auditor, counterparty, a non-motebit CI | `npx @motebit/verify <path>` (binary `motebit-verify`) | The canonical **standalone** verifier: Apache-2.0, **no runtime**, smallest install, independently auditable and forkable. You verify the claim _without installing the software that made it_ — the point of an independently-verifiable system. |
+| **Already running the motebit runtime**                                         | `motebit verify <kind> <path>`                         | The same check as a subcommand of the CLI you already have (`receipt` / `token` / `listing` / `identity`). Convenience for operators and devs already in the runtime.                                                                             |
 
 ```bash
 # Stranger / auditor — no install, no runtime:
@@ -3628,7 +3628,19 @@ npx @motebit/verify ./receipt_9f4c.json        # binary is `motebit-verify`
 motebit verify receipt ./receipt_9f4c.json
 ```
 
-`motebit-verify` is the **fuller** surface — it wires the canonical hardware-attestation leaves (App Attest, TPM, Android Keystore, WebAuthn) for credentials that carry them, and covers `content-artifact`. Both binaries bottom out in `@motebit/crypto`'s canonical verify, so a receipt that verifies in one verifies in the other; only `motebit-verify` (via `@motebit/verifier`) computes and reports the binding-ladder rung — `motebit verify receipt` checks schema, suite and signature and prints no rung. Same receipt — no second implementation to drift. Why two namespaces at all: keeping `motebit-verify` standalone (and Apache-2.0) is what lets a verifier run without adopting the BSL runtime — verification independence is a trust property, not a CLI-ergonomics one. For the _library_ axis (which package to import), see [Choosing a Verify Surface](/docs/developer/choosing-a-verify-surface).
+### Both CLIs are strict by default
+
+A valid signature proves the bytes are authentic, not that the receipt is self-consistent. Both `motebit-verify` and `motebit verify receipt` also recompute `hex(SHA-256(UTF-8(result)))` and require it to equal `result_hash`: a signed receipt whose `result_hash` does not bind its own `result` is **INVALID** (exit 1), with the mismatch named (`result_hash`).
+
+```bash
+npx @motebit/verify receipt.json              # strict (default): signature + result_hash binding
+npx @motebit/verify receipt.json --lenient    # signature only; prints a warning that the result is not bound
+motebit verify receipt receipt.json --lenient # same, in the runtime CLI
+```
+
+`--lenient` restores signature-only checking and prints a one-line warning on stderr that the result is not bound to the signature. `--strict` is still accepted, as a no-op. The **library** default is unchanged: `@motebit/verifier`'s `verifyFile` / `verifyArtifact` check the signature only unless you pass `{ strictHashBinding: true }` — for a mismatched-but-signed receipt they return `valid: true` without it, and `valid: false` with an error at path `result_hash` with it.
+
+`motebit-verify` is the **fuller** surface — it wires the canonical hardware-attestation leaves (App Attest, TPM, Android Keystore, WebAuthn) for credentials that carry them, and covers `content-artifact`. Both binaries bottom out in `@motebit/crypto`'s canonical verify, so a receipt that verifies in one verifies in the other; only `motebit-verify` (via `@motebit/verifier`) computes and reports the binding-ladder rung — `motebit verify receipt` checks schema, suite, signature and `result_hash` binding and prints no rung. Same receipt — no second implementation to drift. Why two namespaces at all: keeping `motebit-verify` standalone (and Apache-2.0) is what lets a verifier run without adopting the BSL runtime — verification independence is a trust property, not a CLI-ergonomics one. For the _library_ axis (which package to import), see [Choosing a Verify Surface](/docs/developer/choosing-a-verify-surface).
 
 ## No web page, no install — see it work
 
@@ -6055,59 +6067,59 @@ motebit \
 
 ### CLI flags
 
-| Flag | Description |
-|---|---|
-| `--provider <name>` | `anthropic`, `openai`, `google`, `groq`, `deepseek`, `local-server`, or `proxy` (`ollama` is a deprecated alias for `local-server`) |
-| `--model <name>` | Model identifier |
-| `--db-path <path>` | Custom SQLite database path |
-| `--no-stream` | Disable streaming (wait for full response) |
-| `--sync-url <url>` | Opt in to relay sync with this relay (or set `MOTEBIT_SYNC_URL`) |
-| `--sync` | Opt in to relay sync with the public relay (`https://relay.motebit.com`) |
-| `--sync-token <token>` | Sync relay master token |
-| `--operator` | Start with operator mode enabled |
-| `--allowed-paths <paths>` | Comma-separated paths for file tools |
-| `--version` | Print version |
-| `--help` | Print help |
+| Flag                      | Description                                                                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `--provider <name>`       | `anthropic`, `openai`, `google`, `groq`, `deepseek`, `local-server`, or `proxy` (`ollama` is a deprecated alias for `local-server`) |
+| `--model <name>`          | Model identifier                                                                                                                    |
+| `--db-path <path>`        | Custom SQLite database path                                                                                                         |
+| `--no-stream`             | Disable streaming (wait for full response)                                                                                          |
+| `--sync-url <url>`        | Opt in to relay sync with this relay (or set `MOTEBIT_SYNC_URL`)                                                                    |
+| `--sync`                  | Opt in to relay sync with the public relay (`https://relay.motebit.com`)                                                            |
+| `--sync-token <token>`    | Sync relay master token                                                                                                             |
+| `--operator`              | Start with operator mode enabled                                                                                                    |
+| `--allowed-paths <paths>` | Comma-separated paths for file tools                                                                                                |
+| `--version`               | Print version                                                                                                                       |
+| `--help`                  | Print help                                                                                                                          |
 
 ## Slash commands
 
-| Command | Action |
-|---|---|
-| `/help` | Show available commands |
-| `/model <name>` | Switch model |
-| `/memories` | List stored memories (type, half-life, edge count, compounding status) |
-| `/graph` | Memory graph health — node/edge counts, compounding stats, curiosity targets, intelligence gradient |
-| `/curious` | Show decaying memories the agent is curious about (score, decay info, content) |
-| `/state` | Show current state vector |
-| `/forget <nodeId>` | Delete a memory by ID |
-| `/export` | Export all data (memories, events, identity) |
-| `/clear` | Clear conversation history |
-| `/tools` | List registered tools |
-| `/sync` | Trigger manual sync cycle |
-| `/summarize` | Summarize current conversation |
-| `/conversations` | List recent conversations |
-| `/conversation <id>` | Load a past conversation |
-| `/goals` | List all scheduled goals |
-| `/goal add "<prompt>" --every <interval> [--once]` | Add a scheduled goal |
-| `/goal remove <id>` | Remove a goal |
-| `/goal pause <id>` | Pause a goal |
-| `/goal resume <id>` | Resume a paused goal |
-| `/goal outcomes <id>` | Show execution history for a goal |
-| `/approvals` | Show pending approval queue |
-| `/reflect` | Trigger reflection -- see what the agent learned |
-| `/mcp list` | List connected MCP servers |
-| `/mcp trust <name>` | Trust an MCP server (skip approval for its tools) |
-| `/mcp untrust <name>` | Remove trust from an MCP server |
-| `/mcp add <name> <url> [--motebit]` | Add an HTTP MCP server (live, no restart) |
-| `/mcp remove <name>` | Remove an MCP server (live, no restart) |
-| `/discover [capability]` | Discover agents on the relay (optional capability filter) |
-| `/agents` | List known agents with trust levels and reputation scores |
-| `/agents info <id>` | Full trust record detail for an agent |
-| `/agents trust <id> <level>` | Set trust level (first_contact, verified, trusted, blocked) |
-| `/agents block <id>` | Block an agent |
-| `/result [task_id] [owner_id]` | Fetch a delegated task's result by id. Free and read-only: one `task:query` read, never a new hire, never a payment. With no id, lists the paid tasks whose results never arrived; startup shows one line when any are waiting. `/result dismiss <task_id>` clears an entry after the relay has reaped the task. |
-| `/operator` | Show operator mode status |
-| `quit` / `exit` | Exit the CLI (a leading slash also works) |
+| Command                                            | Action                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/help`                                            | Show available commands                                                                                                                                                                                                                                                                                          |
+| `/model <name>`                                    | Switch model                                                                                                                                                                                                                                                                                                     |
+| `/memories`                                        | List stored memories (type, half-life, edge count, compounding status)                                                                                                                                                                                                                                           |
+| `/graph`                                           | Memory graph health — node/edge counts, compounding stats, curiosity targets, intelligence gradient                                                                                                                                                                                                              |
+| `/curious`                                         | Show decaying memories the agent is curious about (score, decay info, content)                                                                                                                                                                                                                                   |
+| `/state`                                           | Show current state vector                                                                                                                                                                                                                                                                                        |
+| `/forget <nodeId>`                                 | Delete a memory by ID                                                                                                                                                                                                                                                                                            |
+| `/export`                                          | Export all data (memories, events, identity)                                                                                                                                                                                                                                                                     |
+| `/clear`                                           | Clear conversation history                                                                                                                                                                                                                                                                                       |
+| `/tools`                                           | List registered tools                                                                                                                                                                                                                                                                                            |
+| `/sync`                                            | Trigger manual sync cycle                                                                                                                                                                                                                                                                                        |
+| `/summarize`                                       | Summarize current conversation                                                                                                                                                                                                                                                                                   |
+| `/conversations`                                   | List recent conversations                                                                                                                                                                                                                                                                                        |
+| `/conversation <id>`                               | Load a past conversation                                                                                                                                                                                                                                                                                         |
+| `/goals`                                           | List all scheduled goals                                                                                                                                                                                                                                                                                         |
+| `/goal add "<prompt>" --every <interval> [--once]` | Add a scheduled goal                                                                                                                                                                                                                                                                                             |
+| `/goal remove <id>`                                | Remove a goal                                                                                                                                                                                                                                                                                                    |
+| `/goal pause <id>`                                 | Pause a goal                                                                                                                                                                                                                                                                                                     |
+| `/goal resume <id>`                                | Resume a paused goal                                                                                                                                                                                                                                                                                             |
+| `/goal outcomes <id>`                              | Show execution history for a goal                                                                                                                                                                                                                                                                                |
+| `/approvals`                                       | Show pending approval queue                                                                                                                                                                                                                                                                                      |
+| `/reflect`                                         | Trigger reflection -- see what the agent learned                                                                                                                                                                                                                                                                 |
+| `/mcp list`                                        | List connected MCP servers                                                                                                                                                                                                                                                                                       |
+| `/mcp trust <name>`                                | Trust an MCP server (skip approval for its tools)                                                                                                                                                                                                                                                                |
+| `/mcp untrust <name>`                              | Remove trust from an MCP server                                                                                                                                                                                                                                                                                  |
+| `/mcp add <name> <url> [--motebit]`                | Add an HTTP MCP server (live, no restart)                                                                                                                                                                                                                                                                        |
+| `/mcp remove <name>`                               | Remove an MCP server (live, no restart)                                                                                                                                                                                                                                                                          |
+| `/discover [capability]`                           | Discover agents on the relay (optional capability filter)                                                                                                                                                                                                                                                        |
+| `/agents`                                          | List known agents with trust levels and reputation scores                                                                                                                                                                                                                                                        |
+| `/agents info <id>`                                | Full trust record detail for an agent                                                                                                                                                                                                                                                                            |
+| `/agents trust <id> <level>`                       | Set trust level (first_contact, verified, trusted, blocked)                                                                                                                                                                                                                                                      |
+| `/agents block <id>`                               | Block an agent                                                                                                                                                                                                                                                                                                   |
+| `/result [task_id] [owner_id]`                     | Fetch a delegated task's result by id. Free and read-only: one `task:query` read, never a new hire, never a payment. With no id, lists the paid tasks whose results never arrived; startup shows one line when any are waiting. `/result dismiss <task_id>` clears an entry after the relay has reaped the task. |
+| `/operator`                                        | Show operator mode status                                                                                                                                                                                                                                                                                        |
+| `quit` / `exit`                                    | Exit the CLI (a leading slash also works)                                                                                                                                                                                                                                                                        |
 
 ## Tool approval flow
 
@@ -6134,11 +6146,11 @@ The CLI uses the same identity system as the desktop app:
 
 With no relay named, the CLI is fully local: it makes no network call to any relay — no device registration, no sync push, no heartbeat, no websocket — and `motebit doctor` reports `info  Sync  off (opt in with --sync-url)`. Name a relay one of these ways:
 
-| Opt-in | Scope |
-|---|---|
-| `--sync-url <url>` | This process |
-| `--sync` | This process, against the public relay `https://relay.motebit.com` |
-| `MOTEBIT_SYNC_URL=<url>` | Every process in that environment |
+| Opt-in                      | Scope                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `--sync-url <url>`          | This process                                                                                                       |
+| `--sync`                    | This process, against the public relay `https://relay.motebit.com`                                                 |
+| `MOTEBIT_SYNC_URL=<url>`    | Every process in that environment                                                                                  |
 | `motebit sync enable [url]` | Persisted as `sync_url` in `~/.motebit/config.json` (default: the public relay); `motebit sync disable` removes it |
 
 `motebit register` with a relay named also persists it. Commands whose whole purpose is the relay (`register`, `delegate`, `market`, `discover`, `rotate`, `machines`, `smoke x402`, `skills install/publish` from the registry, `verify-release`, and the relay slash commands) refuse with a one-line message naming the opt-in when none is set — they never pick the public relay on their own. An existing `sync_url` in `config.json` keeps working unchanged.
@@ -6160,41 +6172,42 @@ Use `--no-stream` to wait for the complete response before printing.
 
 The CLI supports several subcommands beyond the default interactive REPL:
 
-| Subcommand | Description |
-|---|---|
-| `motebit id` | Show your identity card (motebit_id, did:key, public key) |
-| `motebit verify <path>` | Verify a signed `motebit.md` identity file or exported bundle directory |
-| `motebit export` | Export full bundle (identity, credentials, presentation, budget, gradient, memories, events) |
-| `motebit credentials` | List earned verifiable credentials (gradient, reputation, trust) |
-| `motebit credentials --presentation` | Generate a verifiable credential presentation |
-| `motebit ledger <goalId>` | Show the signed execution ledger for a goal |
-| `motebit run --identity <path>` | Start daemon mode with goal scheduling |
-| `motebit serve [flags]` | Start MCP server mode (see [MCP Server](/docs/developer/mcp-server)) |
-| `motebit doctor` | Diagnose configuration and connectivity issues |
-| `motebit goal add/list/remove/pause/resume` | Manage scheduled goals |
-| `motebit approvals list/show/approve/deny` | Manage the tool approval queue |
-| `motebit halt [goal <id>] [--reason "..."] [--remote]` | Withdraw the permission to act unattended; `--remote` signs a command to the running runtime and returns its acknowledgement |
-| `motebit resume [<halt_id>\|all] [--remote]` | Give that permission back |
-| `motebit halt-status [--remote]` | What is stopped, and whether the motebit has acknowledged it |
+| Subcommand                                                           | Description                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `motebit id`                                                         | Show your identity card (motebit_id, did:key, public key)                                                                                                                                                                                                                                                                                                                                                           |
+| `motebit verify <path>`                                              | Verify a signed `motebit.md` identity file or exported bundle directory                                                                                                                                                                                                                                                                                                                                             |
+| `motebit verify receipt <path> [--lenient]`                          | Verify an `ExecutionReceipt`: schema, suite, signature and — by default — that `result_hash` equals `SHA-256(result)` (a mismatch is INVALID, exit 1). `--lenient` checks the signature only and warns that the result is not bound; `--strict` is an accepted no-op                                                                                                                                                |
+| `motebit export`                                                     | Export full bundle (identity, credentials, presentation, budget, gradient, memories, events)                                                                                                                                                                                                                                                                                                                        |
+| `motebit credentials`                                                | List earned verifiable credentials (gradient, reputation, trust)                                                                                                                                                                                                                                                                                                                                                    |
+| `motebit credentials --presentation`                                 | Generate a verifiable credential presentation                                                                                                                                                                                                                                                                                                                                                                       |
+| `motebit ledger <goalId>`                                            | Show the signed execution ledger for a goal                                                                                                                                                                                                                                                                                                                                                                         |
+| `motebit run --identity <path>`                                      | Start daemon mode with goal scheduling                                                                                                                                                                                                                                                                                                                                                                              |
+| `motebit serve [flags]`                                              | Start MCP server mode (see [MCP Server](/docs/developer/mcp-server))                                                                                                                                                                                                                                                                                                                                                |
+| `motebit doctor`                                                     | Diagnose configuration and connectivity issues                                                                                                                                                                                                                                                                                                                                                                      |
+| `motebit goal add/list/remove/pause/resume`                          | Manage scheduled goals                                                                                                                                                                                                                                                                                                                                                                                              |
+| `motebit approvals list/show/approve/deny`                           | Manage the tool approval queue                                                                                                                                                                                                                                                                                                                                                                                      |
+| `motebit halt [goal <id>] [--reason "..."] [--remote]`               | Withdraw the permission to act unattended; `--remote` signs a command to the running runtime and returns its acknowledgement                                                                                                                                                                                                                                                                                        |
+| `motebit resume [<halt_id>\|all] [--remote]`                         | Give that permission back                                                                                                                                                                                                                                                                                                                                                                                           |
+| `motebit halt-status [--remote]`                                     | What is stopped, and whether the motebit has acknowledged it                                                                                                                                                                                                                                                                                                                                                        |
 | `motebit runs [list\|show <run_id>\|ack <run_id> --allow-fresh-run]` | Goal-run ledger: runs holding their goal (paused on you, or interrupted with side effects) and recent runs; `show` opens one run — what it produced and whether that result is signed, what its tools reported, and the evidence pointers a stranger could re-check against the original source; `ack --allow-fresh-run` releases a reviewed interrupted run, accepting that its goal's next run may repeat effects |
-| `motebit rotate [--reason "..."]` | Rotate Ed25519 keypair with signed succession record |
-| `motebit machines [--json]` | The machines this motebit runs unattended work on — reduced on this machine under a key chain it verified, never by the relay; a count only when nothing suppressed it, citing the chain head |
-| `motebit machines retire <device_id>` | Sign a retirement for every standing entry of a machine (undo with `machines enroll`) |
-| `motebit machines enroll <device_id> [--force]` | Rejoin a retired line, or enrol an id explicitly; refuses an id that could never answer unless `--force` |
+| `motebit rotate [--reason "..."]`                                    | Rotate Ed25519 keypair with signed succession record                                                                                                                                                                                                                                                                                                                                                                |
+| `motebit machines [--json]`                                          | The machines this motebit runs unattended work on — reduced on this machine under a key chain it verified, never by the relay; a count only when nothing suppressed it, citing the chain head                                                                                                                                                                                                                       |
+| `motebit machines retire <device_id>`                                | Sign a retirement for every standing entry of a machine (undo with `machines enroll`)                                                                                                                                                                                                                                                                                                                               |
+| `motebit machines enroll <device_id> [--force]`                      | Rejoin a retired line, or enrol an id explicitly; refuses an id that could never answer unless `--force`                                                                                                                                                                                                                                                                                                            |
 
 ### Serve flags
 
 `motebit serve` exposes your motebit as an MCP server — other agents and tools can call it over stdio or HTTP.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--serve-transport <mode>` | `stdio` | Transport: `stdio` or `http` |
-| `--serve-port <port>` | `3100` | HTTP port (only with `--serve-transport http`) |
-| `--identity <path>` | — | Path to `motebit.md` (loads governance thresholds) |
-| `--tools <path>` | — | JS module exporting tool definitions (array of `{definition, handler}`) |
-| `--direct` | off | Direct tool execution — no AI loop, maps prompt to tool input |
-| `--self-test` | off | Run self-test task via relay after registration |
-| `--operator` | off | Enable operator mode for high-risk tools |
+| Flag                       | Default | Description                                                             |
+| -------------------------- | ------- | ----------------------------------------------------------------------- |
+| `--serve-transport <mode>` | `stdio` | Transport: `stdio` or `http`                                            |
+| `--serve-port <port>`      | `3100`  | HTTP port (only with `--serve-transport http`)                          |
+| `--identity <path>`        | —       | Path to `motebit.md` (loads governance thresholds)                      |
+| `--tools <path>`           | —       | JS module exporting tool definitions (array of `{definition, handler}`) |
+| `--direct`                 | off     | Direct tool execution — no AI loop, maps prompt to tool input           |
+| `--self-test`              | off     | Run self-test task via relay after registration                         |
+| `--operator`               | off     | Enable operator mode for high-risk tools                                |
 
 ```bash
 # Stdio transport — for MCP host integration (Claude Desktop, etc.)

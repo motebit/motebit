@@ -91,10 +91,10 @@ If the receipt delegated sub-tasks, each nested receipt is independently signed 
 
 There are two CLI entry points. The difference is **who you are**, not what you verify:
 
-| You are…                                                                            | Use                                                  | Why                                                                                                                                                                                                                                              |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Verifying someone else's artifact** — auditor, counterparty, a non-motebit CI     | `npx @motebit/verify <path>` (binary `motebit-verify`) | The canonical **standalone** verifier: Apache-2.0, **no runtime**, smallest install, independently auditable and forkable. You verify the claim _without installing the software that made it_ — the point of an independently-verifiable system. |
-| **Already running the motebit runtime**                                             | `motebit verify <kind> <path>`                       | The same check as a subcommand of the CLI you already have (`receipt` / `token` / `listing` / `identity`). Convenience for operators and devs already in the runtime.                                                                            |
+| You are…                                                                        | Use                                                    | Why                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Verifying someone else's artifact** — auditor, counterparty, a non-motebit CI | `npx @motebit/verify <path>` (binary `motebit-verify`) | The canonical **standalone** verifier: Apache-2.0, **no runtime**, smallest install, independently auditable and forkable. You verify the claim _without installing the software that made it_ — the point of an independently-verifiable system. |
+| **Already running the motebit runtime**                                         | `motebit verify <kind> <path>`                         | The same check as a subcommand of the CLI you already have (`receipt` / `token` / `listing` / `identity`). Convenience for operators and devs already in the runtime.                                                                             |
 
 ```bash
 # Stranger / auditor — no install, no runtime:
@@ -104,7 +104,19 @@ npx @motebit/verify ./receipt_9f4c.json        # binary is `motebit-verify`
 motebit verify receipt ./receipt_9f4c.json
 ```
 
-`motebit-verify` is the **fuller** surface — it wires the canonical hardware-attestation leaves (App Attest, TPM, Android Keystore, WebAuthn) for credentials that carry them, and covers `content-artifact`. Both binaries bottom out in `@motebit/crypto`'s canonical verify, so a receipt that verifies in one verifies in the other; only `motebit-verify` (via `@motebit/verifier`) computes and reports the binding-ladder rung — `motebit verify receipt` checks schema, suite and signature and prints no rung. Same receipt — no second implementation to drift. Why two namespaces at all: keeping `motebit-verify` standalone (and Apache-2.0) is what lets a verifier run without adopting the BSL runtime — verification independence is a trust property, not a CLI-ergonomics one. For the _library_ axis (which package to import), see [Choosing a Verify Surface](/docs/developer/choosing-a-verify-surface).
+### Both CLIs are strict by default
+
+A valid signature proves the bytes are authentic, not that the receipt is self-consistent. Both `motebit-verify` and `motebit verify receipt` also recompute `hex(SHA-256(UTF-8(result)))` and require it to equal `result_hash`: a signed receipt whose `result_hash` does not bind its own `result` is **INVALID** (exit 1), with the mismatch named (`result_hash`).
+
+```bash
+npx @motebit/verify receipt.json              # strict (default): signature + result_hash binding
+npx @motebit/verify receipt.json --lenient    # signature only; prints a warning that the result is not bound
+motebit verify receipt receipt.json --lenient # same, in the runtime CLI
+```
+
+`--lenient` restores signature-only checking and prints a one-line warning on stderr that the result is not bound to the signature. `--strict` is still accepted, as a no-op. The **library** default is unchanged: `@motebit/verifier`'s `verifyFile` / `verifyArtifact` check the signature only unless you pass `{ strictHashBinding: true }` — for a mismatched-but-signed receipt they return `valid: true` without it, and `valid: false` with an error at path `result_hash` with it.
+
+`motebit-verify` is the **fuller** surface — it wires the canonical hardware-attestation leaves (App Attest, TPM, Android Keystore, WebAuthn) for credentials that carry them, and covers `content-artifact`. Both binaries bottom out in `@motebit/crypto`'s canonical verify, so a receipt that verifies in one verifies in the other; only `motebit-verify` (via `@motebit/verifier`) computes and reports the binding-ladder rung — `motebit verify receipt` checks schema, suite, signature and `result_hash` binding and prints no rung. Same receipt — no second implementation to drift. Why two namespaces at all: keeping `motebit-verify` standalone (and Apache-2.0) is what lets a verifier run without adopting the BSL runtime — verification independence is a trust property, not a CLI-ergonomics one. For the _library_ axis (which package to import), see [Choosing a Verify Surface](/docs/developer/choosing-a-verify-surface).
 
 ## No web page, no install — see it work
 

@@ -88,6 +88,10 @@ const CONTENT_ARTIFACT_SUBCOMMAND = "content-artifact";
  */
 const APPROVAL_DECISION_SUBCOMMAND = "approval-decision";
 
+/** What `--lenient` prints (stderr) for a receipt: its result is not bound to its signature. */
+export const LENIENT_WARNING =
+  "motebit-verify: warning: --lenient — result_hash was not checked; the receipt's result is NOT bound to its signature";
+
 interface ParsedArgs {
   readonly mode:
     "verify" | "verify-content-artifact" | "verify-approval-decision" | "help" | "version";
@@ -95,7 +99,13 @@ interface ParsedArgs {
   readonly json: boolean;
   readonly expectedType?: ArtifactType;
   readonly clockSkewSeconds?: number;
+  /**
+   * Verify an ExecutionReceipt's `result_hash` equals `hex(SHA-256(result))`.
+   * TRUE BY DEFAULT in this CLI; `--lenient` turns it off (signature-only).
+   */
   readonly strictHashBinding?: boolean;
+  /** `--lenient`: signature-only receipt checking, with a one-line warning. */
+  readonly lenient?: boolean;
   readonly bundleId?: string;
   readonly androidAttestationApplicationIdPath?: string;
   readonly rpId?: string;
@@ -126,7 +136,9 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let json = false;
   let expectedType: ArtifactType | undefined;
   let clockSkewSeconds: number | undefined;
-  let strictHashBinding = false;
+  // Strict (result_hash binding) is the default; `--strict` is a no-op alias.
+  let strict = false;
+  let lenient = false;
   let bundleId: string | undefined;
   let androidAttestationApplicationIdPath: string | undefined;
   let rpId: string | undefined;
@@ -152,7 +164,11 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         i++;
         break;
       case "--strict":
-        strictHashBinding = true;
+        strict = true;
+        i++;
+        break;
+      case "--lenient":
+        lenient = true;
         i++;
         break;
       case "--expect":
@@ -222,6 +238,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 
   if (help) return { mode: "help", json };
   if (version) return { mode: "version", json };
+  if (strict && lenient) return usage("--strict and --lenient are mutually exclusive");
   if (file === undefined) return usage("missing file argument");
 
   return {
@@ -230,7 +247,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     json,
     ...(expectedType !== undefined && { expectedType }),
     ...(clockSkewSeconds !== undefined && { clockSkewSeconds }),
-    ...(strictHashBinding && { strictHashBinding }),
+    strictHashBinding: !lenient,
+    ...(lenient && { lenient }),
     ...(bundleId !== undefined && { bundleId }),
     ...(androidAttestationApplicationIdPath !== undefined && {
       androidAttestationApplicationIdPath,
@@ -467,9 +485,11 @@ function renderHelp(): string {
     "  --json                    Print structured JSON instead of human-readable.",
     "  --expect <type>           Require the artifact to be of the named type.",
     "  --clock-skew <seconds>    Allow N seconds of clock skew.",
-    "  --strict                  Also verify an ExecutionReceipt's result_hash",
-    "                            equals SHA-256(result) — reject a signed receipt",
-    "                            whose hash doesn't bind its own result.",
+    "  --lenient                 Signature-only: do NOT check an ExecutionReceipt's",
+    "                            result_hash. By default the CLI is strict — a",
+    "                            signed receipt whose result_hash != SHA-256(result)",
+    "                            is INVALID (exit 1). Prints a one-line warning.",
+    "  --strict                  Accepted no-op (strict is the default).",
     "  --bundle-id <id>          Override the expected iOS bundle ID for App Attest",
     "                            (default: com.motebit.mobile).",
     "  --android-attestation-application-id <path>",
@@ -991,7 +1011,9 @@ async function main(): Promise<number> {
     result = await verifyFile(args.file, {
       ...(args.expectedType !== undefined && { expectedType: args.expectedType }),
       ...(args.clockSkewSeconds !== undefined && { clockSkewSeconds: args.clockSkewSeconds }),
-      ...(args.strictHashBinding && { strictHashBinding: true }),
+      // Strict by default: result_hash must bind result. Only --lenient
+      // (parsed as strictHashBinding:false) asks for signature-only.
+      strictHashBinding: args.strictHashBinding !== false,
       hardwareAttestation,
     });
   } catch (err) {
@@ -1000,6 +1022,8 @@ async function main(): Promise<number> {
     return 2;
   }
 
+  if (args.lenient === true && result.type === "receipt")
+    process.stderr.write(`${LENIENT_WARNING}\n`);
   if (args.json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } else {

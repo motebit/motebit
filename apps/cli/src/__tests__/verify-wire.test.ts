@@ -12,7 +12,8 @@
  * a Python worker checking their output) would invoke, and what
  * external users invoke must use the real verification path.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,7 +25,9 @@ import {
   signExecutionReceipt,
 } from "@motebit/encryption";
 
-import { verifyWire } from "../subcommands/verify-wire.js";
+import { handleVerifyWire, LENIENT_WARNING, verifyWire } from "../subcommands/verify-wire.js";
+
+const sha256Hex = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 
 let tmp: string;
 beforeEach(() => {
@@ -59,7 +62,7 @@ describe("verify receipt", () => {
         tools_used: [],
         memories_formed: 0,
         prompt_hash: "a".repeat(64),
-        result_hash: "b".repeat(64),
+        result_hash: sha256Hex("hello"),
       },
       kp.privateKey,
       kp.publicKey,
@@ -155,6 +158,90 @@ describe("verify receipt", () => {
 // ---------------------------------------------------------------------------
 // DelegationToken — round-trip + window checks
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// result_hash binding — strict by default, --lenient is signature-only
+// ---------------------------------------------------------------------------
+
+describe("verify receipt — result_hash binding", () => {
+  async function signed(resultHash: string): Promise<string> {
+    const kp = await generateKeypair();
+    const receipt = await signExecutionReceipt(
+      {
+        task_id: "task-hash",
+        motebit_id: "019cd9d4-3275-7b24-8265-61ebee41d9d0",
+        device_id: "019cd9d4-3275-7b24-8265-61ebee41d9d1",
+        submitted_at: 1_713_456_000_000,
+        completed_at: 1_713_456_001_000,
+        status: "completed",
+        result: "the answer",
+        tools_used: [],
+        memories_formed: 0,
+        prompt_hash: "a".repeat(64),
+        result_hash: resultHash,
+      },
+      kp.privateKey,
+      kp.publicKey,
+    );
+    return writeJson("receipt-hash.json", receipt);
+  }
+
+  it("a validly signed receipt whose result_hash != SHA-256(result) is INVALID by default", async () => {
+    const report = await verifyWire("receipt", await signed("b".repeat(64)));
+    expect(report.ok).toBe(false);
+    expect(report.checks.find((c) => c.name === "signature")?.ok).toBe(true);
+    const bind = report.checks.find((c) => c.name === "result_hash");
+    expect(bind?.ok).toBe(false);
+    expect(bind?.detail).toMatch(/^mismatch: result_hash b{64} != hex\(SHA-256\(result\)\)/);
+    expect(bind?.detail).toContain(sha256Hex("the answer"));
+  });
+
+  it("--lenient restores signature-only checking: the mismatch reads VALID, marked unbound", async () => {
+    const report = await verifyWire("receipt", await signed("b".repeat(64)), Date.now(), {
+      lenient: true,
+    });
+    expect(report.ok).toBe(true);
+    const bind = report.checks.find((c) => c.name === "result_hash");
+    expect(bind?.detail).toMatch(/not checked \(--lenient\)/);
+  });
+
+  it("the CLI entry: mismatch exits 1 by default; --lenient exits 0 with the one-line warning", async () => {
+    const path = await signed("b".repeat(64));
+    const errors: string[] = [];
+    const out: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.map(String).join(" "));
+    });
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      out.push(String(chunk));
+      return true;
+    }) as never);
+    const exit = vi.spyOn(process, "exit").mockImplementation(((code?: unknown) => {
+      throw new Error(`process.exit(${String(code)})`);
+    }) as never);
+    try {
+      await expect(handleVerifyWire("receipt", path, { json: false })).rejects.toThrow(
+        "process.exit(1)",
+      );
+      expect(out.join("")).toMatch(/result_hash.*mismatch/);
+      expect(errors).toEqual([]);
+
+      out.length = 0;
+      await handleVerifyWire("receipt", path, { json: false, lenient: true });
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(errors).toEqual([LENIENT_WARNING]);
+      expect(out.join("")).toMatch(/OK/);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a good receipt is VALID both ways", async () => {
+    const path = await signed(sha256Hex("the answer"));
+    expect((await verifyWire("receipt", path)).ok).toBe(true);
+    expect((await verifyWire("receipt", path, Date.now(), { lenient: true })).ok).toBe(true);
+  });
+});
 
 describe("verify token", () => {
   it("verifies a freshly-signed delegation token", async () => {
