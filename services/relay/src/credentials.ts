@@ -31,6 +31,7 @@ import {
 } from "./identity-binding.js";
 import type { AuthEvent } from "./auth-events.js";
 import { createLogger } from "./logger.js";
+import { admitHardwareClaim, hardwareClaimOf } from "./hardware-claim-anchor.js";
 
 const logger = createLogger({ service: "credentials" });
 
@@ -595,6 +596,27 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
           correlationId: c.req.header("x-correlation-id") ?? null,
         });
         continue;
+      }
+
+      // A hardware-attestation claim must be one the subject itself published
+      // (hardware-claim-anchor.ts) — the issuer's signature proves who vouches,
+      // never that the subject's hardware said so.
+      const hwClaim = hardwareClaimOf(vc);
+      if (hwClaim !== undefined) {
+        const hw = admitHardwareClaim(db, motebitId, hwClaim);
+        if ("refused" in hw) {
+          refuse(`hardware_attestation claim not admitted (${hw.refused})`, hw.refused);
+          recordAuthEvent({
+            kind: "agent_token_rejected",
+            method: c.req.method,
+            path: c.req.path,
+            motebitId: null,
+            audience: null,
+            reason: hw.refused,
+            correlationId: c.req.header("x-correlation-id") ?? null,
+          });
+          continue;
+        }
       }
 
       // Check for revocation
