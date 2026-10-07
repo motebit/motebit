@@ -158,6 +158,37 @@ async function main(): Promise<void> {
     );
   }
 
+  // 4. NEGATIVE vectors (fixtures/negative/) — receipts every surface MUST
+  // reject, default and strict. A surface that reads one VALID substituted or
+  // skipped where the spec says reject (e.g. a lone UTF-16 surrogate in
+  // `result`: UTF-8 is undefined for it, spec/execution-ledger-v1.md §11.4).
+  const negativeDir = join(fixturesDir, "negative");
+  const negatives = readdirSync(negativeDir)
+    .filter((f) => f.endsWith(".json"))
+    .sort();
+  if (negatives.length === 0) failures.push("negative/: no negative vectors found");
+  for (const file of negatives) {
+    const raw = readFileSync(join(negativeDir, file), "utf8");
+    const verdicts: Record<string, boolean | null> = {
+      verifier: (await verifier.verifyArtifact(raw)).valid,
+      "verifier-strict": (await verifier.verifyArtifact(raw, { strictHashBinding: true })).valid,
+      crypto: (await crypto.verifyReceipt(JSON.parse(raw))).valid,
+      "crypto-strict": (await crypto.verifyReceipt(JSON.parse(raw), { strictHashBinding: true }))
+        .valid,
+      sec: (await sec.verifyReceiptDocument(raw)).integrity,
+      python: pyValid(join("negative", file)),
+    };
+    const accepted = Object.entries(verdicts).filter(([, v]) => v === true);
+    if (accepted.length > 0) {
+      failures.push(
+        `negative/${file}: NOT rejected by ${accepted.map(([k]) => k).join(", ")} — every surface must reject it`,
+      );
+    }
+    console.log(
+      `  ${`negative/${file}`.padEnd(42)} ${accepted.length === 0 ? `rejected by all${verdicts.python === null ? "" : " (incl. python)"} ✓` : "ACCEPTED ✗"}`,
+    );
+  }
+
   if (failures.length > 0) {
     console.error(`\n✗ check-receipt-conformance: ${failures.length} failure(s):`);
     for (const f of failures) console.error(`  - ${f}`);
@@ -176,7 +207,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   console.log(
-    `\n✓ check-receipt-conformance: all ${fixtures.length} vectors agree on integrity${pythonOk ? " (incl. Python reference)" : ""}, verifier sovereign rungs pinned, tamper rejected by all surfaces.`,
+    `\n✓ check-receipt-conformance: all ${fixtures.length} vectors agree on integrity${pythonOk ? " (incl. Python reference)" : ""}, verifier sovereign rungs pinned, tamper rejected by all surfaces; ${negatives.length} negative vector(s) rejected by all surfaces.`,
   );
 }
 
