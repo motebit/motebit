@@ -207,7 +207,10 @@ async function main(): Promise<void> {
     if (first === "identity") {
       await handleVerify(second ?? "motebit.md");
     } else if (first != null && isVerifyKind(first)) {
-      await handleVerifyWire(first, second, { json: config.json });
+      await handleVerifyWire(first, second, {
+        json: config.json,
+        lenient: config.lenient === true,
+      });
     } else {
       await handleVerify(first ?? "motebit.md");
     }

@@ -24,6 +24,7 @@
  * not JSON wire format), handled by `./verify.ts`.
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -63,6 +64,19 @@ export interface VerifyReport {
   ok: boolean;
 }
 
+/** What `--lenient` prints: the receipt's result is not bound to its signature. */
+export const LENIENT_WARNING =
+  "warning: --lenient — result_hash was not checked; the receipt's result is NOT bound to its signature";
+
+export interface VerifyWireOptions {
+  /**
+   * Receipts: skip the `result_hash` binding check (signature-only). Off by
+   * default — a receipt whose `result_hash` is not `hex(SHA-256(result))`
+   * is INVALID even when its signature verifies.
+   */
+  lenient?: boolean;
+}
+
 /**
  * Pure verification — no IO except reading the file at `filePath`. The
  * caller decides how to render (text or JSON) and what to do with the
@@ -72,6 +86,7 @@ export async function verifyWire(
   kind: VerifyKind,
   filePath: string,
   now: number = Date.now(),
+  opts: VerifyWireOptions = {},
 ): Promise<VerifyReport> {
   const checks: VerifyCheck[] = [];
   const absPath = resolve(filePath);
@@ -123,6 +138,27 @@ export async function verifyWire(
         const msg = err instanceof Error ? err.message : String(err);
         checks.push({ name: "signature", ok: false, detail: `verifier threw: ${msg}` });
       }
+    }
+    // (5) result_hash binds result — strict by default. A valid signature
+    // proves the bytes are authentic, not that result_hash commits to the
+    // result field; a receipt whose hash a third party cannot recompute from
+    // its own result is INVALID unless --lenient asks for signature-only.
+    if (opts.lenient === true) {
+      checks.push({
+        name: "result_hash",
+        ok: true,
+        detail: "not checked (--lenient) — the result is not bound to the signature",
+      });
+    } else {
+      const expected = createHash("sha256").update(parsed.data.result, "utf8").digest("hex");
+      const ok = expected === parsed.data.result_hash;
+      checks.push({
+        name: "result_hash",
+        ok,
+        detail: ok
+          ? "equals hex(SHA-256(result)) — the result is bound to the signature"
+          : `mismatch: result_hash ${parsed.data.result_hash} != hex(SHA-256(result)) ${expected}`,
+      });
     }
     return finalize(kind, absPath, checks);
   }
@@ -233,6 +269,8 @@ export function formatReportJson(report: VerifyReport): string {
 
 export interface HandleVerifyWireOpts {
   json: boolean;
+  /** `--lenient`: receipts are checked signature-only, with a one-line warning. */
+  lenient?: boolean;
 }
 
 export async function handleVerifyWire(
@@ -241,14 +279,18 @@ export async function handleVerifyWire(
   opts: HandleVerifyWireOpts,
 ): Promise<void> {
   if (kindArg == null || !isVerifyKind(kindArg)) {
-    console.error(`Usage: motebit verify <receipt|token|listing|identity> <path> [--json]`);
+    console.error(
+      `Usage: motebit verify <receipt|token|listing|identity> <path> [--json] [--lenient]`,
+    );
     process.exit(2);
   }
   if (pathArg == null || pathArg === "") {
-    console.error(`Usage: motebit verify ${kindArg} <path> [--json]`);
+    console.error(`Usage: motebit verify ${kindArg} <path> [--json] [--lenient]`);
     process.exit(2);
   }
-  const report = await verifyWire(kindArg, pathArg);
+  const lenient = opts.lenient === true && kindArg === "receipt";
+  const report = await verifyWire(kindArg, pathArg, Date.now(), { lenient });
+  if (lenient) console.error(LENIENT_WARNING);
   const out = opts.json ? formatReportJson(report) : formatReportText(report);
   process.stdout.write(out + "\n");
   if (!report.ok) process.exit(1);
