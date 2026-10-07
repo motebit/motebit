@@ -1,5 +1,6 @@
 import { RelationType, SensitivityLevel } from "@motebit/sdk";
-import type { MemoryNode, MemoryEdge, DeletionCertificate } from "../index";
+import type { DeletionCertificate } from "@motebit/sdk";
+import type { MemoryNode, MemoryEdge } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 import {
@@ -623,8 +624,8 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
         if (confirmTimeout) clearTimeout(confirmTimeout);
         void memoryCtrl.deleteMemory(mem.node_id).then((cert) => {
           if (cert) {
-            // Controller returns an opaque Record<string, unknown>; cast
-            // back to the runtime's concrete encryption cert for render.
+            // Controller returns an opaque Record<string, unknown>; the
+            // runtime's `deleteMemory` returns the SIGNED protocol cert.
             showDeletionCertificate(item, cert as unknown as DeletionCertificate);
           } else {
             refreshMemoryData();
@@ -672,17 +673,37 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
 
   // === Deletion Certificate Display ===
 
+  /**
+   * A short reference to a signed deletion certificate: the first present
+   * signature (subject for a user forget; operator / delegate / guardian
+   * otherwise) — a real field of the cert, verifiable against it.
+   */
+  function deletionCertificateRef(cert: DeletionCertificate): string {
+    if (cert.kind === "append_only_horizon") return cert.signature;
+    const sig =
+      cert.subject_signature ??
+      cert.operator_signature ??
+      cert.delegate_signature ??
+      cert.guardian_signature;
+    return sig?.signature ?? "";
+  }
+
   function showDeletionCertificate(item: HTMLElement, cert: DeletionCertificate): void {
     // Replace the item content with a brief certificate confirmation
     item.classList.add("mem-item-deleted");
-    const shortHash = cert.tombstone_hash.slice(0, 12);
+    const ref = deletionCertificateRef(cert);
     item.innerHTML = "";
 
     const certDiv = document.createElement("div");
     certDiv.className = "mem-cert-notice";
-    certDiv.innerHTML =
-      `<span class="mem-cert-label">Deleted</span>` +
-      `<span class="mem-cert-hash" title="${cert.tombstone_hash}">cert: ${shortHash}...</span>`;
+    const label = document.createElement("span");
+    label.className = "mem-cert-label";
+    label.textContent = "Deleted";
+    const hash = document.createElement("span");
+    hash.className = "mem-cert-hash";
+    hash.title = ref;
+    hash.textContent = `cert: ${ref.slice(0, 12)}...`;
+    certDiv.append(label, hash);
     item.appendChild(certDiv);
 
     // Fade out and refresh after a brief display
@@ -895,10 +916,8 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
 
         const hashSpan = document.createElement("span");
         hashSpan.className = "mem-cert-hash";
-        hashSpan.title = cert.tombstoneHash || "No hash recorded";
-        hashSpan.textContent = cert.tombstoneHash
-          ? `${cert.tombstoneHash.slice(0, 16)}...`
-          : "no hash";
+        hashSpan.title = cert.certRef || "No hash recorded";
+        hashSpan.textContent = cert.certRef ? `${cert.certRef.slice(0, 16)}...` : "no hash";
 
         const idSpan = document.createElement("span");
         idSpan.className = "mem-cert-target";

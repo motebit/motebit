@@ -396,9 +396,6 @@ export class DeleteManager {
 
 // Re-export the new wire types so downstream consumers (runtime, cli,
 // tests) import the cert union from a single product-vocabulary path.
-// The legacy unsigned `DeletionCertificate` in `@motebit/encryption`
-// remains available for migration but is the deprecated shape; new
-// consumers should import from here.
 export type { DeletionCertificate, DeletionReason } from "@motebit/protocol";
 export {
   MAX_RETENTION_DAYS_BY_SENSITIVITY,

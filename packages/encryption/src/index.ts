@@ -279,34 +279,12 @@ export function isEncryptedField(value: unknown): value is string {
   return typeof value === "string" && value.startsWith(ENCRYPTED_FIELD_PREFIX);
 }
 
-/**
- * Legacy unsigned deletion certificate. Pre-dates the
- * `DeletionCertificate` discriminated union in `@motebit/protocol`,
- * which carries `kind`, `suite`, and signatures (subject / operator /
- * delegate / guardian per the reason × signer × mode table).
- *
- * @deprecated Use `DeletionCertificate` from `@motebit/protocol` (the
- *   `mutable_pruning` arm is the direct successor for memory deletions).
- *   Sign + verify primitives live in `@motebit/crypto`
- *   (`signCertAsSubject`, `signCertAsOperator`,
- *   `verifyDeletionCertificate`).
- *   Reason: the legacy shape carries no `suite` or signature, failing
- *   the self-attesting three-test check
- *   (docs/doctrine/self-attesting-system.md). See
- *   docs/doctrine/retention-policy.md for the replacement contract.
- */
-export interface DeletionCertificate {
-  target_id: string;
-  target_type: "memory" | "event" | "identity";
-  deleted_at: number;
-  deleted_by: string;
-  tombstone_hash: string;
-}
-
 // ── New retention types — re-exported from @motebit/protocol ─────────
 // Phase 2 of the retention-policy doctrine. Consumers that need the
 // signed deletion certificate import from here for backward-compatible
-// vocabulary. Sign + verify primitives live in @motebit/crypto.
+// vocabulary. Sign + verify primitives live in @motebit/crypto. (The
+// legacy unsigned `DeletionCertificate` + `createDeletionCertificate` that
+// lived here were removed once the last caller moved to the signed cert.)
 
 export type {
   DeletionCertificate as SignedDeletionCertificate,
@@ -457,39 +435,6 @@ export async function deriveSyncEncryptionKey(privateKey: Uint8Array): Promise<U
     256,
   );
   return new Uint8Array(bits);
-}
-
-/**
- * Create a legacy (unsigned) deletion certificate for audit-trail purposes.
- *
- * @deprecated Use `DeletionCertificate` from `@motebit/protocol` plus
- *   the sign primitives in `@motebit/crypto` (`signCertAsSubject` etc.) —
- *   the signed union is the direct successor.
- *   Reason: produces an unsigned cert that fails the self-attesting
- *   three-test check; the legacy `tombstone_hash` is not a signature,
- *   so receivers cannot verify the cert's origin or detect tampering.
- *   See docs/doctrine/retention-policy.md §"Decision 6a".
- */
-export async function createDeletionCertificate(
-  targetId: string,
-  targetType: "memory" | "event" | "identity",
-  deletedBy: string,
-): Promise<DeletionCertificate> {
-  const encoder = new TextEncoder();
-  const timestamp = Date.now();
-  const payload = encoder.encode(`${targetId}:${targetType}:${timestamp}:${deletedBy}`);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", payload);
-  const hashArray = new Uint8Array(hashBuffer);
-  const tombstoneHash = Array.from(hashArray)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  return {
-    target_id: targetId,
-    target_type: targetType,
-    deleted_at: timestamp,
-    deleted_by: deletedBy,
-    tombstone_hash: tombstoneHash,
-  };
 }
 
 /**

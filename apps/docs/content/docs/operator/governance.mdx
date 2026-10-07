@@ -99,12 +99,12 @@ These defaults can be overridden in the `motebit.md` privacy section. The `fail_
 
 ### Deletion certificates
 
-When a memory is deleted, the `DeleteManager` produces a `DeletionCertificate`:
+When a memory is deleted, the privacy layer produces a signed `DeletionCertificate` (the `mutable_pruning` arm of the union in `@motebit/protocol`):
 
-- `target_id`, `target_type`, `deleted_at`, `deleted_by`
-- `tombstone_hash` — SHA-256 hash of the deletion metadata, proving the memory existed and was deleted at the recorded time
+- `kind`, `target_id`, `sensitivity`, `reason`, `deleted_at`
+- `subject_signature` — the motebit's Ed25519 signature over the canonical certificate (operator, delegate and guardian signature blocks are admitted per the reason), verifiable with `verifyDeletionCertificate` from `@motebit/crypto`
 
-The certificate is an audit artifact. The memory content is gone; the proof of deletion remains.
+The certificate is an audit artifact. The memory content is gone; the signed proof of deletion remains.
 
 ## Injection defense
 

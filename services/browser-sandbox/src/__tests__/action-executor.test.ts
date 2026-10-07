@@ -718,8 +718,8 @@ describe("executeAction", () => {
       m.setGotoImpl(async (url) => {
         gotoUrl = url;
       });
-      await executeAction(m.session, { kind: "navigate", url: "http://localhost:3000" }, deps);
-      expect(gotoUrl).toBe("http://localhost:3000");
+      await executeAction(m.session, { kind: "navigate", url: "http://example.com:8080/x" }, deps);
+      expect(gotoUrl).toBe("http://example.com:8080/x");
     });
 
     it("returns metadata + inline screenshot bytes on success", async () => {

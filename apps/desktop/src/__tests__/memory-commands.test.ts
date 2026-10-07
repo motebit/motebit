@@ -197,9 +197,33 @@ describe("memory-commands.listDeletionCertificates", () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
       auditId: "a1",
-      tombstoneHash: "h1",
+      certRef: "h1",
       deletedBy: "user",
     });
+  });
+
+  it("projects the signed certificate's signature from current audit rows", async () => {
+    // privacy-layer's deleteMemory records `cert_signature` (the subject
+    // signature of the signed cert); there is no `tombstone_hash` any more.
+    const runtime = makeRuntime({
+      auditLog: {
+        query: vi.fn(async () => [
+          {
+            action: "delete_memory",
+            audit_id: "a1",
+            timestamp: 123,
+            target_id: "n1",
+            details: {
+              deleted_by: "user_request",
+              cert_kind: "mutable_pruning",
+              cert_signature: "c2lnbmF0dXJl",
+            },
+          },
+        ]),
+      },
+    });
+    const result = await listDeletionCertificates(runtime, "m");
+    expect(result[0]?.certRef).toBe("c2lnbmF0dXJl");
   });
 
   it("handles missing details gracefully", async () => {
@@ -217,7 +241,7 @@ describe("memory-commands.listDeletionCertificates", () => {
       },
     });
     const result = await listDeletionCertificates(runtime, "m");
-    expect(result[0]?.tombstoneHash).toBe("");
+    expect(result[0]?.certRef).toBe("");
     expect(result[0]?.deletedBy).toBe("");
   });
 

@@ -102,7 +102,7 @@ export async function deleteMemory(
 
 /**
  * List deletion certificates from the audit log. Each entry is a
- * minimal projection (audit_id, timestamp, target_id, tombstone_hash,
+ * minimal projection (audit_id, timestamp, target_id, cert reference,
  * deleted_by) suitable for the UI's audit-trail panel. Returns `[]` on
  * any failure.
  */
@@ -114,7 +114,7 @@ export async function listDeletionCertificates(
     auditId: string;
     timestamp: number;
     targetId: string;
-    tombstoneHash: string;
+    certRef: string;
     deletedBy: string;
   }>
 > {
@@ -143,7 +143,7 @@ export function projectDeletionCertificates(
   auditId: string;
   timestamp: number;
   targetId: string;
-  tombstoneHash: string;
+  certRef: string;
   deletedBy: string;
 }> {
   return records
@@ -152,7 +152,13 @@ export function projectDeletionCertificates(
       auditId: r.audit_id,
       timestamp: r.timestamp,
       targetId: r.target_id,
-      tombstoneHash: (r.details as Record<string, string>).tombstone_hash ?? "",
+      // The signed certificate's signature (`cert_signature`, recorded by
+      // privacy-layer `deleteMemory`); rows written before signed certs
+      // carry the retired unsigned `tombstone_hash`.
+      certRef:
+        (r.details as Record<string, string>).cert_signature ??
+        (r.details as Record<string, string>).tombstone_hash ??
+        "",
       deletedBy: (r.details as Record<string, string>).deleted_by ?? "",
     }));
 }

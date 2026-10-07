@@ -31,6 +31,7 @@ import { randomUUID } from "node:crypto";
 import type { Browser, BrowserContext, Cookie, Page } from "playwright-core";
 
 import { ServiceError } from "./errors.js";
+import { installSubRequestGuard } from "./url-law.js";
 
 /**
  * Persistent-cookies wire shape — what crosses the sandbox→dispatcher
@@ -106,6 +107,14 @@ export interface BrowserPoolConfig {
   readonly idleMs: number;
   readonly viewportWidth: number;
   readonly viewportHeight: number;
+  /**
+   * The egress proxy (`startEgressProxy` in url-law.ts) every session
+   * context routes through. `<-loopback>` makes Chromium send loopback
+   * through it too instead of its implicit bypass. Required in production
+   * (index.ts refuses to boot without it); unit tests with fake browsers
+   * may omit it.
+   */
+  readonly egressProxyServer?: string;
 }
 
 /**
@@ -243,7 +252,20 @@ export class BrowserPool {
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       locale: "en-US",
       timezoneId: "America/Los_Angeles",
+      ...(this.config.egressProxyServer !== undefined
+        ? { proxy: { server: this.config.egressProxyServer, bypass: "<-loopback>" } }
+        : {}),
     });
+    // The outbound-URL law on every sub-request (url-law.ts). Installed
+    // before the first page exists so nothing the page loads escapes it.
+    // A failure here fails the session open — never a page without the
+    // guard.
+    try {
+      await installSubRequestGuard(context);
+    } catch (err) {
+      await context.close().catch(() => undefined);
+      throw err;
+    }
     // Seed the cookie jar from persisted cookies (Phase 1). Best-
     // effort: a malformed cookie shouldn't break session creation —
     // log and continue. Real-world cookies from prior Playwright

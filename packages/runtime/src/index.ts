@@ -74,7 +74,6 @@ export type {
 } from "@motebit/memory-graph";
 export type { IdentityStorage } from "@motebit/core-identity";
 export type { AuditLogAdapter } from "@motebit/privacy-layer";
-export type { DeletionCertificate } from "@motebit/encryption";
 export type {
   RenderAdapter,
   RenderFrame,

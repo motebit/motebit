@@ -38,6 +38,7 @@ import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { BrowserPool } from "./chromium-pool.js";
 import { loadConfig } from "./env.js";
 import { buildApp } from "./routes.js";
+import { startEgressProxy } from "./url-law.js";
 
 // Apply stealth at module load — once per process. The plugin
 // registers JS evasion modules that run on every newContext via
@@ -57,7 +58,13 @@ const REAPER_INTERVAL_MS = 60_000;
 async function main(): Promise<void> {
   const config = loadConfig();
 
+  // Every Chromium connection egresses through the outbound-URL law
+  // (url-law.ts). Started before the browser; no proxy ⇒ no boot.
+  const egress = await startEgressProxy({ log });
+  log(`egress proxy on ${egress.url}`);
+
   const pool = new BrowserPool({
+    egressProxyServer: egress.url,
     maxConcurrent: config.maxConcurrentSessions,
     idleMs: config.sessionIdleMs,
     viewportWidth: config.viewportWidth,
@@ -100,6 +107,7 @@ async function main(): Promise<void> {
         clearInterval(reaper);
         server.close();
         await pool.shutdown();
+        await egress.close();
         log(`shutdown complete`);
         process.exit(0);
       })();

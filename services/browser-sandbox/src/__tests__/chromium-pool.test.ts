@@ -28,6 +28,7 @@ function makeFakeBrowser(): { browser: Browser; state: FakeBrowserState } {
       state.newContextCalls.push(opts.viewport);
       const context: Partial<BrowserContext> = {
         newPage: vi.fn(async () => ({}) as unknown as Page),
+        route: vi.fn(async () => undefined) as unknown as BrowserContext["route"],
         close: vi.fn(async () => {
           state.contexts.delete(context as BrowserContext);
         }),
