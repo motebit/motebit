@@ -6,6 +6,7 @@
  */
 import { moveAllocationMoney, openAllocation } from "../allocation-escrow.js";
 import { createSyncRelay } from "../index.js";
+import { resolveRelayAuthPosture } from "../auth-posture.js";
 import type { SyncRelay, SyncRelayConfig } from "../index.js";
 import { deriveSolanaAddress, SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 import { PLATFORM_FEE_RATE } from "@motebit/protocol";
@@ -129,6 +130,16 @@ export const inProcessPeerFetch: typeof fetch = (input, init) => {
  * `createSyncRelay({...})` directly spreads it in. The relay suite's network
  * guard (`network-guard.setup.ts`) fails any test that reaches past it.
  */
+/**
+ * The minted insecure-dev posture (MOTEBIT_RELAY_INSECURE_NO_AUTH=1 under
+ * NODE_ENV=test), for tests that exercise a relay with no master token. A
+ * bare `{ kind: "insecure-dev" }` is not one — the relay seals its gates.
+ */
+export const INSECURE_DEV_POSTURE = resolveRelayAuthPosture({
+  NODE_ENV: "test",
+  MOTEBIT_RELAY_INSECURE_NO_AUTH: "1",
+});
+
 export const TEST_RELAY_NETWORK = {
   x402FacilitatorClient: fakeFacilitatorClient,
   depositDetectorRpc: null,

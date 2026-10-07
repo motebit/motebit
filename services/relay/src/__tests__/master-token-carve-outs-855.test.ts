@@ -23,7 +23,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import type { SyncRelay } from "../index.js";
-import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+import { INSECURE_DEV_POSTURE, AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 import { MASTER_TOKEN_CARVE_OUTS, carveOutPattern, isMasterTokenCarveOut } from "../middleware.js";
 import { PUBLIC_AGENT_ROUTES, isPublicAgentRoute } from "../agents.js";
 
@@ -384,7 +384,7 @@ describe("#855 sibling: PUBLIC_AGENT_ROUTES is exact", () => {
 describe("#855 sibling: the agent door refuses every over-match with no token (relay with no master token)", () => {
   let relay: SyncRelay;
   beforeEach(async () => {
-    relay = await createTestRelay({ apiToken: undefined });
+    relay = await createTestRelay({ apiToken: undefined, authPosture: INSECURE_DEV_POSTURE });
   });
   afterEach(async () => {
     await relay.close();

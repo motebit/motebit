@@ -39,16 +39,18 @@ Both verifications must succeed. The first proves the image came from motebit's 
 
 ## Run
 
-The minimal docker-compose stack: see [`docker-compose.example.yml`](docker-compose.example.yml). One relay, one persistent volume for the SQLite database, no external dependencies. Bring it up:
+The minimal docker-compose stack: see [`docker-compose.example.yml`](docker-compose.example.yml). One relay, one persistent volume for the SQLite database, no external dependencies. The relay refuses to start without a master token (`MOTEBIT_API_TOKEN` — every admin, export and sync route is gated by it), and the compose file refuses to start the stack until one is set. Generate one, keep it in a `.env` file beside the compose file, and bring it up:
 
 ```bash
 curl -L https://raw.githubusercontent.com/motebit/motebit/main/docs/operator/docker-compose.example.yml \
      -o docker-compose.yml
+echo "MOTEBIT_API_TOKEN=$(openssl rand -hex 32)" > .env
+chmod 600 .env
 docker compose up -d
 docker compose logs -f motebit-relay
 ```
 
-The relay listens on port 3000. `GET /health` returns `200 OK` once the database is up; `GET /.well-known/motebit-transparency.json` returns the operator's signed transparency declaration.
+The relay listens on port 3000. Operator commands (admin dashboards, state exports, freeze) present that token as `Authorization: Bearer <token>`; `MOTEBIT_RELAY_INSECURE_NO_AUTH` is refused under `NODE_ENV=production`. `GET /health` returns `200 OK` once the database is up; `GET /.well-known/motebit-transparency.json` returns the operator's signed transparency declaration.
 
 ## Federate with motebit
 

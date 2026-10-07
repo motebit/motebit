@@ -34,10 +34,11 @@ env PORT=3199 \
     X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
     NODE_ENV=development \
     MOTEBIT_DB_PATH=":memory:" \
+    MOTEBIT_API_TOKEN=local-dev-token \
     npx tsx services/relay/src/server.ts
 ```
 
-`X402_PAY_TO_ADDRESS` is the only mandatory env var (any 0x-prefixed hex address suffices for local dev — settlement isn't exercised). `MOTEBIT_DB_PATH=":memory:"` keeps each run hermetic; for persistent dev use a path like `./data/relay.db`. Health probe:
+`X402_PAY_TO_ADDRESS` and `MOTEBIT_API_TOKEN` are the mandatory env vars (any 0x-prefixed hex address suffices for local dev — settlement isn't exercised; the relay refuses to start without a master token, and this flow touches only public routes, so any non-empty value works). `MOTEBIT_DB_PATH=":memory:"` keeps each run hermetic; for persistent dev use a path like `./data/relay.db`. Health probe:
 
 ```bash
 curl http://localhost:3199/health

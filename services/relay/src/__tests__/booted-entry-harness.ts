@@ -98,8 +98,15 @@ export function bootRealEntry(
       MOTEBIT_FEDERATION_ENDPOINT_URL: "https://relay-under-test.example/federation",
       PORT: "0", // ephemeral — the entry logs the real bound port
       NODE_ENV: "test",
+      // The relay refuses to boot without a master token; a test that boots
+      // without one says so with an override.
+      MOTEBIT_API_TOKEN: "booted-entry-harness-token",
       ...envOverrides,
     };
+    // The open-relay dev opt-in reaches the child only when a test names it.
+    if (!("MOTEBIT_RELAY_INSECURE_NO_AUTH" in envOverrides)) {
+      delete env.MOTEBIT_RELAY_INSECURE_NO_AUTH;
+    }
     delete env.MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE;
     delete env.MOTEBIT_ENABLE_DEVICE_AUTH;
     delete env.MOTEBIT_FEDERATION_AUTO_ACCEPT;

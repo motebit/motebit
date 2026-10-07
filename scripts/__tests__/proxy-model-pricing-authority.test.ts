@@ -20,6 +20,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../../services/relay/src/index.js";
 import { AUTH_HEADER, createTestRelay } from "../../services/relay/src/__tests__/test-helpers.js";
 import { creditAccount } from "../../services/relay/src/accounts.js";
+import { grantFreeCreditIfEligible } from "../../services/relay/src/free-credit.js";
 import { POST } from "../../services/proxy/src/app/v1/messages/route.js";
 import { calculateCostMicro, CLASSIFIER_MODEL } from "../../services/proxy/src/validation.js";
 import {
@@ -97,7 +98,13 @@ async function mintToken(motebitId: string): Promise<{ token: string; models: st
 /** A welcome-credit-only identity (the free tier's model ceiling). */
 async function freeCreditToken(): Promise<{ token: string; models: string[]; mid: string }> {
   const mid = await createIdentity();
-  process.env.MOTEBIT_FREE_CREDIT_USD = "5";
+  // The production welcome-credit grant, with this identity's knobs (the
+  // relay reads its own from env once, at boot — unset here, so its mint
+  // grants nothing more).
+  const granted = grantFreeCreditIfEligible(relay.moteDb.db, mid, "203.0.113.1", {
+    config: { amountMicro: 5_000_000, ipDailyCap: 1_000_000, dailyBudgetMicro: 1_000_000_000_000 },
+  });
+  expect(granted.granted).toBe(true);
   return { ...(await mintToken(mid)), mid };
 }
 

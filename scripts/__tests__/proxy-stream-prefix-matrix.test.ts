@@ -227,10 +227,6 @@ function providerStream(): Response {
 }
 
 async function fundedIdentityToken(): Promise<{ mid: string; token: string }> {
-  process.env.MOTEBIT_FREE_CREDIT_USD = String(FUNDED / 1_000_000);
-  // One shared relay mints ~120 funded identities: lift the per-IP / daily caps.
-  process.env.MOTEBIT_FREE_CREDIT_IP_DAILY_CAP = "100000";
-  process.env.MOTEBIT_FREE_CREDIT_DAILY_BUDGET_USD = "100000";
   const created = await relay.app.request("/identity", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -329,6 +325,12 @@ async function runCell(
 
 beforeAll(async () => {
   process.env.RELAY_PROXY_SECRET = SECRET;
+  // Every identity is funded through the welcome-credit grant at mint. The
+  // relay reads these knobs once, at boot. One shared relay mints ~120 funded
+  // identities: lift the per-IP / daily caps.
+  process.env.MOTEBIT_FREE_CREDIT_USD = String(FUNDED / 1_000_000);
+  process.env.MOTEBIT_FREE_CREDIT_IP_DAILY_CAP = "100000";
+  process.env.MOTEBIT_FREE_CREDIT_DAILY_BUDGET_USD = "100000";
   relay = await createTestRelay();
   savedDrain = ACCOUNTING_TIMINGS.drainTimeoutMs;
   ACCOUNTING_TIMINGS.drainTimeoutMs = 40;

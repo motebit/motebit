@@ -169,10 +169,7 @@ export const PROBES: ReadonlyArray<Probe> = [
       "flags the relay config builder re-shadowing the federation discover-signature default with a hard-coded literal instead of the canonical DEFAULT_REQUIRE_DISCOVER_SIGNATURE constant (the #346 sunset-inert-in-prod regression)",
     perturb: () =>
       mutateFile("services/relay/src/relay-config.ts", (src) =>
-        src.replace(
-          "DEFAULT_REQUIRE_DISCOVER_SIGNATURE,\n            env,",
-          "false,\n            env,",
-        ),
+        src.replace("DEFAULT_REQUIRE_DISCOVER_SIGNATURE,\n    env,", "false,\n    env,"),
       ),
   },
   {

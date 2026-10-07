@@ -64,6 +64,7 @@ import type {
 import { embedText as defaultEmbedText } from "@motebit/memory-graph";
 import type { ToolRegistry } from "@motebit/tools";
 import { fileTaskSpendLedger, memoryTaskSpendLedger, taskSpendFor } from "./task-spend.js";
+import { parseMicroEnv } from "./money-env.js";
 import type { TaskSpend, TaskSpendLedger } from "./task-spend.js";
 
 // Re-export the receipt builder so molecule authors don't reach into
@@ -79,6 +80,7 @@ export {
 } from "./task-spend.js";
 export type { TaskSpend, TaskSpendHold, TaskSpendLedger } from "./task-spend.js";
 export type { ProviderReadiness, ReadinessVerdict } from "./readiness.js";
+export { parseMicroEnv } from "./money-env.js";
 export { buildServiceReceipt } from "@motebit/mcp-server";
 export type { BuildServiceReceiptInput } from "@motebit/mcp-server";
 export type { ServiceHandle } from "@motebit/mcp-server";
@@ -510,6 +512,16 @@ export async function selfIssueGrant(
   identity: BootstrapAndEmitIdentityResult,
   money: NonNullable<MoleculeConfig["moneyExecution"]>,
 ): Promise<StandingDelegation> {
+  // Never sign a limit the enforcer cannot compare: NaN canonicalizes to
+  // `null` and the grant would still verify.
+  for (const [field, v] of Object.entries(money.spendCeiling)) {
+    if (field === "schema") continue;
+    if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) {
+      throw new Error(
+        `spendCeiling.${field} must be a non-negative safe integer, got ${String(v)} — refusing to sign the self-grant`,
+      );
+    }
+  }
   const now = Date.now();
   return signStandingDelegation(
     {
@@ -1205,7 +1217,10 @@ export async function runMolecule(
     sweepRpcUrl != null &&
     sweepRpcUrl.length > 0
   ) {
-    const minMicro = BigInt(process.env.MOTEBIT_SWEEP_MIN_MICRO ?? "10000"); // $0.01 floor
+    // Strict: "" is not 0 and "-5" is not a floor (`BigInt` reads both).
+    const minMicro = BigInt(
+      parseMicroEnv("MOTEBIT_SWEEP_MIN_MICRO", process.env.MOTEBIT_SWEEP_MIN_MICRO, 10_000),
+    ); // $0.01 floor
     const intervalMs = Number(process.env.MOTEBIT_SWEEP_INTERVAL_MS ?? `${30 * 60 * 1000}`); // 30 min
     // Same mint-must-match-network rule as the money rail above: on devnet the
     // sweep rail must read the devnet-USDC ATA, not the mainnet default. Empty

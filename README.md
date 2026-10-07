@@ -71,7 +71,7 @@ motebit relay up
 # ✓ listening on http://localhost:3000
 ```
 
-`motebit relay up` is the sovereignty one-liner. Your relay, your identity key (Ed25519, generated on first boot, stored in `~/.motebit/relay/relay.db`), your settlement policy. Isolated by default — federation is opt-in via `--federation-url <public-url>`. x402 settlement stays off until you pass `--pay-to-address 0x…`. Nothing peers with `relay.motebit.com` unless you tell it to.
+`motebit relay up` is the sovereignty one-liner. Your relay, your identity key (Ed25519, generated on first boot, stored in `~/.motebit/relay/relay.db`), your settlement policy. Its operator routes (admin, exports, sync) are gated by a master token: `MOTEBIT_API_TOKEN` if set, else one generated on first boot and kept owner-only beside the database (`~/.motebit/relay/relay.db.api-token`). Isolated by default — federation is opt-in via `--federation-url <public-url>`. x402 settlement stays off until you pass `--pay-to-address 0x…`. Nothing peers with `relay.motebit.com` unless you tell it to.
 
 ### Run a signed relay container
 
@@ -224,11 +224,12 @@ if (result.type === "receipt" && result.valid) {
 
 `verify()` in `@motebit/crypto` is the dependency-free floor underneath; its receipt result resolves the key embedded in the receipt (`keySource: "embedded"`), which proves byte-integrity, not who signed.
 
-Verify a relay state export offline, pinned to the relay's transparency-declared key (here against a local `motebit relay up`; a production relay gates these exports behind its operator token):
+Verify a relay state export offline, pinned to the relay's transparency-declared key (here against a local `motebit relay up`; every relay gates these exports behind its operator token):
 
 ```bash
 RELAY=http://localhost:3000
-curl -s -D headers.txt -o audit-trail.json "$RELAY/api/v1/audit/<motebit_id>"
+TOKEN="$(cat ~/.motebit/relay/relay.db.api-token)"
+curl -s -D headers.txt -o audit-trail.json -H "Authorization: Bearer $TOKEN" "$RELAY/api/v1/audit/<motebit_id>"
 npx @motebit/verify content-artifact audit-trail.json \
   --manifest "$(grep -i '^x-motebit-content-manifest:' headers.txt | cut -d' ' -f2 | tr -d '\r')" \
   --producer-key "$(curl -s "$RELAY/.well-known/motebit-transparency.json" | jq -r .relay_public_key)"

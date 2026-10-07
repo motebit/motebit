@@ -418,6 +418,7 @@ describe("paid-spend budget configuration", () => {
     "MOTEBIT_RESEARCH_MARGIN_BPS",
     "MOTEBIT_RESEARCH_LLM_RESERVE_MICRO",
     "MOTEBIT_MAX_TOOL_CALLS",
+    "MOTEBIT_RESEARCH_CEILING_MICRO",
   ] as const;
   const saved: Record<string, string | undefined> = {};
   beforeEach(() => {
@@ -431,6 +432,21 @@ describe("paid-spend budget configuration", () => {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
     }
+  });
+
+  // The lifetime ceiling is signed into the molecule's own grant; `parseInt`
+  // read "" as NaN (canonicalized to null — the grant still verified) and
+  // "12abc" as 12. A set value must be a plain non-negative integer.
+  it.each(["", "NaN", "Infinity", "-1", "1.5", "abc", "12abc", String(2 ** 53)])(
+    "MOTEBIT_RESEARCH_CEILING_MICRO=%j refuses the boot",
+    (raw) => {
+      process.env["MOTEBIT_RESEARCH_CEILING_MICRO"] = raw;
+      expect(() => loadConfig()).toThrow("MOTEBIT_RESEARCH_CEILING_MICRO");
+    },
+  );
+
+  it("the ceiling keeps its $1 default when unset", () => {
+    expect(loadConfig().ceilingMicro).toBe(1_000_000);
   });
 
   it("defaults: 5% margin and the reserve derived from the tool-call cap", () => {

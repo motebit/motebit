@@ -1,3 +1,5 @@
+import { parseMicroEnv } from "@motebit/molecule-runner";
+
 /**
  * claude-sonnet-4-6 list pricing in micro-USD per million tokens — the one
  * table both the per-report cost estimate (research.ts) and the paid-spend
@@ -149,7 +151,12 @@ export function loadConfig() {
     // defaults to mainnet USDC (only correct on a mainnet deployment).
     solanaUsdcMint: process.env["MOTEBIT_SOLANA_USDC_MINT"] ?? null,
     // Lifetime spend ceiling for the self-issued grant (micro-USD). Default $1.
-    ceilingMicro: parseInt(process.env["MOTEBIT_RESEARCH_CEILING_MICRO"] ?? "1000000", 10),
+    // Strict: a malformed or empty value refuses the boot (signed into the grant).
+    ceilingMicro: parseMicroEnv(
+      "MOTEBIT_RESEARCH_CEILING_MICRO",
+      process.env["MOTEBIT_RESEARCH_CEILING_MICRO"],
+      1_000_000,
+    ),
     // Per-task paid-spend budget inputs (micro-units, integer). Margin below
     // 100%; reserve defaults to the structural bound for this tool-call cap.
     marginBps: envNonNegativeInt(

@@ -4,6 +4,8 @@
  * directions gated).
  */
 
+import { parseMicroEnv } from "@motebit/molecule-runner";
+
 export interface ClerkServiceConfig {
   port: number;
   dbPath: string;
@@ -42,7 +44,13 @@ export function loadConfig(): ClerkServiceConfig {
     solanaRpcUrl: process.env["MOTEBIT_SOLANA_RPC_URL"] ?? null,
     relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? null,
     defaultCapability: process.env["MOTEBIT_CLERK_CAPABILITY"] ?? "research",
-    ceilingMicro: parseInt(process.env["MOTEBIT_CLERK_CEILING_MICRO"] ?? "1000000", 10), // $1 lifetime
+    // $1 lifetime by default. Strict: a malformed or empty value refuses the
+    // boot — it is signed into the clerk's own grant.
+    ceilingMicro: parseMicroEnv(
+      "MOTEBIT_CLERK_CEILING_MICRO",
+      process.env["MOTEBIT_CLERK_CEILING_MICRO"],
+      1_000_000,
+    ),
     dryRun: parseDryRun(process.env["DRY_RUN"]),
     unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.01"),
     syncUrl: process.env["MOTEBIT_SYNC_URL"] ?? null,
