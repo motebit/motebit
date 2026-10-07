@@ -27,6 +27,7 @@ import { loadConfig } from "./helpers.js";
 import { parsePrReference, prUrl } from "./github.js";
 import { reviewPrViaMotebit } from "./review-via-motebit.js";
 import type { ReviewConfig } from "./review-via-motebit.js";
+import { LISTING_PRICE } from "./pricing.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -119,8 +120,6 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.20");
-
   await runMolecule(
     {
       dataDir: config.dataDir,
@@ -143,6 +142,8 @@ async function main(): Promise<void> {
       // relay-admitted work (docs/doctrine/task-admission.md). Escape hatch
       // for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
       taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
+      // The listing price — literal data in src/pricing.ts; the runner applies MOTEBIT_UNIT_COST.
+      pricing: LISTING_PRICE,
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;
@@ -241,9 +242,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["review_pr"],
-            pricing: [
-              { capability: "review_pr", unit_cost: unitCost, currency: "USD", per: "review" },
-            ],
             sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
             description:
               "Code review molecule: fetches a public PR patch through the read-url atom and returns structured review findings under a signed receipt with the fetch receipt nested.",

@@ -10,6 +10,9 @@
     "relay-key": "./dist/cli.js"
   },
   "motebit": {
+    "role": "relay",
+    "identity": true,
+    "market": false,
     "implements": [
       "spec/relay-federation-v1.md"
     ]

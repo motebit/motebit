@@ -21,14 +21,10 @@ import {
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
-import {
-  computePaidSpendBudgetMicro,
-  loadConfig,
-  paidSpendBudgetConfigError,
-  parseUnitCostMicro,
-} from "./helpers.js";
+import { loadConfig, paidSpendBudgetConfigError, paidSpendBudgetForListing } from "./helpers.js";
 import { research, researchConfigForTask } from "./research.js";
 import type { ResearchConfig } from "./research.js";
+import { LISTING_PRICE } from "./pricing.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -100,11 +96,11 @@ async function main(): Promise<void> {
   // Default covers worst-case sonnet inference (~$0.26–0.42/report at the
   // 8-tool-call cap) — the per-report cost_estimate_usd log is the tuning
   // signal before any prod price change.
-  // Every budget input is validated at boot: a non-finite / negative value is
-  // an operator error and the service refuses to start (MOTEBIT_UNIT_COST=abc
-  // was a NaN budget that paid every hop).
+  // Every budget input this service owns is validated at boot: a non-finite /
+  // negative value is an operator error and the service refuses to start. The
+  // PRICE is not one of them — the runner resolves and validates it (refusing
+  // a malformed override) and hands the listed price to the builder below.
   const budgetConfigError = paidSpendBudgetConfigError({
-    unitCostRaw: process.env["MOTEBIT_UNIT_COST"],
     maxToolCalls: config.maxToolCalls,
     marginBps: config.marginBps,
     llmReserveMicro: config.llmReserveMicro,
@@ -112,25 +108,6 @@ async function main(): Promise<void> {
   if (budgetConfigError != null) {
     console.error(`[research] refusing to start: ${budgetConfigError}`);
     process.exit(1);
-  }
-  const unitCostMicro = parseUnitCostMicro(process.env["MOTEBIT_UNIT_COST"])!;
-  const unitCost = unitCostMicro / 1_000_000;
-
-  // Per-task paid-spend budget (first-party floor law, clearing-house doctrine):
-  // atoms are paid from what this task earns, so their outflow is capped at
-  // price − thin margin − the inference reserve. Integer micro-units.
-  const paidSpendBudgetMicro = computePaidSpendBudgetMicro({
-    unitCostMicro,
-    marginBps: config.marginBps,
-    llmReserveMicro: config.llmReserveMicro,
-  });
-  console.log(
-    `[research] paid-spend budget ${paidSpendBudgetMicro} micro/task (price ${unitCostMicro} − margin ${config.marginBps}bps − LLM reserve ${config.llmReserveMicro})`,
-  );
-  if (paidSpendBudgetMicro === 0) {
-    console.log(
-      "[research] paid-spend budget is ZERO — refusing to fund any paid sub-hop; running with free tools only. Raise MOTEBIT_UNIT_COST or lower MOTEBIT_RESEARCH_MARGIN_BPS / MOTEBIT_RESEARCH_LLM_RESERVE_MICRO.",
-    );
   }
 
   // Readiness: detected passively from real task failures (free), recovered
@@ -200,9 +177,29 @@ async function main(): Promise<void> {
             },
           }
         : {}),
+      // The listing price — literal data in src/pricing.ts; the runner applies MOTEBIT_UNIT_COST.
+      pricing: LISTING_PRICE,
     },
-    (identity, spend) => {
+    (identity, spend, { listingPrice }) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;
+
+      // Per-task paid-spend budget (first-party floor law, clearing-house
+      // doctrine): atoms are paid from what this task earns, so their outflow
+      // is capped at price − thin margin − the inference reserve. The price is
+      // the one the runner resolved and LISTS (never re-read from the env), so
+      // budget and listing cannot drift. Integer micro-units.
+      const paidSpendBudgetMicro = paidSpendBudgetForListing(listingPrice, {
+        marginBps: config.marginBps,
+        llmReserveMicro: config.llmReserveMicro,
+      });
+      console.log(
+        `[research] paid-spend budget ${paidSpendBudgetMicro} micro/task (listed price ${listingPrice!.unitCostMicro} − margin ${config.marginBps}bps − LLM reserve ${config.llmReserveMicro})`,
+      );
+      if (paidSpendBudgetMicro === 0) {
+        console.log(
+          "[research] paid-spend budget is ZERO — refusing to fund any paid sub-hop; running with free tools only. Raise the listing price or lower MOTEBIT_RESEARCH_MARGIN_BPS / MOTEBIT_RESEARCH_LLM_RESERVE_MICRO.",
+        );
+      }
 
       // Build the ResearchConfig the handler/research turn will use.
       // Closes over the bootstrapped identity (this agent signs the
@@ -411,9 +408,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["research"],
-            pricing: [
-              { capability: "research", unit_cost: unitCost, currency: "USD", per: "task" },
-            ],
             sla: { max_latency_ms: 120_000, availability_guarantee: 0.95 },
             description:
               "Research with receipts: composes web-search and read-url atoms, returns a cited report whose every web claim carries a content digest you can re-verify. The delegation chain arrives as nested signed receipts.",

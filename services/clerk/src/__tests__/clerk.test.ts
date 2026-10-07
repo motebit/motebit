@@ -53,6 +53,19 @@ describe("parseClerkPrompt", () => {
       ClerkRefusal,
     );
   });
+
+  it("JSON with a non-string prompt ⇒ missing_prompt refusal, never a coerced sub-task", () => {
+    for (const body of ['{"prompt":42}', '{"prompt":{"x":1}}', '{"capability":"research"}']) {
+      let caught: unknown;
+      try {
+        parseClerkPrompt(body, "research");
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught, body).toBeInstanceOf(ClerkRefusal);
+      expect((caught as ClerkRefusal).code, body).toBe("request.missing_prompt");
+    }
+  });
 });
 
 describe("runClerkSpend — receipt shaping", () => {
@@ -97,6 +110,14 @@ describe("runClerkSpend — receipt shaping", () => {
     expect(outcome.delegationReceipts).toEqual([receipt]);
     const payload = JSON.parse(outcome.result) as Record<string, unknown>;
     expect(payload.dry_run).toBe(false);
+  });
+
+  it("live OK without settlement or receipt ⇒ settlement:null, no nested receipt", async () => {
+    const spend = spendStub({ ok: true, dryRun: false });
+    const outcome = await runClerkSpend(spend, task, false);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.delegationReceipts).toEqual([]);
+    expect(JSON.parse(outcome.result)).toEqual({ ok: true, dry_run: false, settlement: null });
   });
 
   it("threads dryRun through to the spend handle", async () => {

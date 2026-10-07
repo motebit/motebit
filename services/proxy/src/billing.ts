@@ -26,8 +26,17 @@ export type BillingConfigResult =
   | { ok: true; config: BillingConfig }
   | { ok: false; missing: Array<"RELAY_API_URL" | "RELAY_PROXY_SECRET"> };
 
+/** The env keys billing reads — closed, each supplied as a literal-key read. */
+export interface BillingEnv {
+  RELAY_API_URL?: string | undefined;
+  RELAY_PROXY_SECRET?: string | undefined;
+}
+
 export function resolveBillingConfig(
-  env: Record<string, string | undefined> = process.env,
+  env: BillingEnv = {
+    RELAY_API_URL: process.env.RELAY_API_URL,
+    RELAY_PROXY_SECRET: process.env.RELAY_PROXY_SECRET,
+  },
 ): BillingConfigResult {
   const missing: Array<"RELAY_API_URL" | "RELAY_PROXY_SECRET"> = [];
   const rawUrl = env.RELAY_API_URL?.trim() ?? "";

@@ -24,7 +24,6 @@ export interface ClerkServiceConfig {
    * `DRY_RUN=0` (or `false`) to move real money — a deliberate operator step.
    */
   dryRun: boolean;
-  unitCost: number;
   syncUrl: string | null;
   publicUrl: string | null;
 }
@@ -52,7 +51,6 @@ export function loadConfig(): ClerkServiceConfig {
       1_000_000,
     ),
     dryRun: parseDryRun(process.env["DRY_RUN"]),
-    unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.01"),
     syncUrl: process.env["MOTEBIT_SYNC_URL"] ?? null,
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"] ?? null,
   };

@@ -1,4 +1,4 @@
-import { parseMicroEnv } from "@motebit/molecule-runner";
+import { parseMicroEnv, type MoleculeListingPrice } from "@motebit/molecule-runner";
 
 /**
  * claude-sonnet-4-6 list pricing in micro-USD per million tokens — the one
@@ -61,36 +61,38 @@ export function computePaidSpendBudgetMicro(params: {
   return Number.isFinite(budget) ? Math.max(0, Math.floor(budget)) : 0;
 }
 
-/** Default listed price of a research task, USD (`MOTEBIT_UNIT_COST`). */
-export const DEFAULT_RESEARCH_UNIT_COST = "0.25";
-
 /**
- * Parse `MOTEBIT_UNIT_COST` (USD, decimal) to integer micro-units, or `null`
- * when it is not a finite non-negative decimal — the boot refuses rather than
- * running with a NaN price (`parseFloat("abc")` ⇒ NaN ⇒ a NaN budget).
+ * The per-task paid-spend budget for the price the RUNNER resolved and lists
+ * (`MoleculeBuildContext.listingPrice` — the coded `LISTING_PRICE` with the
+ * operator override applied; the runner alone reads and validates that
+ * override and refuses a malformed one at boot). Deriving from the listed
+ * price rather than re-reading the environment means the budget and the
+ * relay's listing cannot drift. A missing price is a wiring error: research
+ * always lists one, so this refuses rather than inventing a budget.
  */
-export function parseUnitCostMicro(raw: string | undefined): number | null {
-  const v = (raw ?? DEFAULT_RESEARCH_UNIT_COST).trim();
-  if (!/^\d+(\.\d+)?$/.test(v)) return null;
-  const micro = Math.round(Number(v) * 1_000_000);
-  return Number.isSafeInteger(micro) ? micro : null;
+export function paidSpendBudgetForListing(
+  listingPrice: MoleculeListingPrice | undefined,
+  params: { marginBps: number; llmReserveMicro: number },
+): number {
+  if (listingPrice == null)
+    throw new Error(
+      "research: the runner resolved no listing price — pass `pricing: LISTING_PRICE` to runMolecule; refusing to derive a paid-spend budget from nothing",
+    );
+  return computePaidSpendBudgetMicro({ unitCostMicro: listingPrice.unitCostMicro, ...params });
 }
 
 /**
- * Boot validation of every paid-spend budget input. Returns the refusal
+ * Boot validation of every paid-spend budget input the SERVICE owns (the
+ * price is validated by the runner, which refuses a malformed override). Returns the refusal
  * message, or `null` when all inputs are finite, non-negative and in range.
  * The service refuses to start on a message — an invalid budget input is an
  * operator error, never silently a default and never NaN.
  */
 export function paidSpendBudgetConfigError(params: {
-  unitCostRaw: string | undefined;
   maxToolCalls: number;
   marginBps: number;
   llmReserveMicro: number;
 }): string | null {
-  if (parseUnitCostMicro(params.unitCostRaw) == null) {
-    return `MOTEBIT_UNIT_COST=${JSON.stringify(params.unitCostRaw)} is not a non-negative decimal USD price`;
-  }
   if (!Number.isSafeInteger(params.maxToolCalls) || params.maxToolCalls < 1) {
     return "MOTEBIT_MAX_TOOL_CALLS must be a positive integer";
   }
