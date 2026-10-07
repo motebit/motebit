@@ -63,8 +63,10 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
     .replace(/\[\/EXTERNAL_DATA\]/g, "")
     .replace(/\[MEMORY_DATA\]/g, "")
     .replace(/\[\/MEMORY_DATA\]/g, "")
-    .replace(/\*{1,3}/g, "")
-    .replace(/ {2,}/g, " ");
+    // Asterisks are markdown, never deleted (no production path consumes
+    // `*action*` cues — docs/design/out-of-band-interior-channel.md). Only
+    // 3+ newlines fold; this is prefix-stable, so deltas stay append-only.
+    .replace(/\n{3,}/g, "\n\n");
 
   for (const tag of ["<memory", "<thinking", "<parameter", "<narration"]) {
     const lastOpen = clean.lastIndexOf(tag);
@@ -827,7 +829,7 @@ export class StreamingManager {
         this.deps.pushStateUpdate({ processing: 0.3 });
       }
 
-      // Strip state/memory/action tags from text before yielding to UI
+      // Strip internal tags from text before yielding to UI
       if (chunk.type === "text") {
         // trimStart: tags before text leave orphaned newlines
         const clean = stripDisplayTags(accumulated).clean.trimStart();

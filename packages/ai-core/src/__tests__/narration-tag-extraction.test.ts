@@ -107,7 +107,7 @@ describe("stripTags — narration tag stripping", () => {
 
   it("strips a single narration tag from visible text", () => {
     const input = "Hello <narration>Reading the page</narration> world";
-    expect(stripTags(input)).toBe("Hello world");
+    expect(stripTags(input)).toBe("Hello  world");
   });
 
   it("strips multiple narration tags", () => {

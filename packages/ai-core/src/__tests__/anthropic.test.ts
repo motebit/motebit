@@ -157,17 +157,19 @@ describe("stripTags", () => {
   it("removes memory tags from text", () => {
     const text =
       'Hello! <memory confidence="0.9" sensitivity="personal">User likes jazz</memory> How are you?';
-    expect(stripTags(text)).toBe("Hello! How are you?");
+    // Inline tag removal leaves its surrounding spaces; whitespace is not
+    // collapsed (that destroyed markdown newlines and indentation).
+    expect(stripTags(text)).toBe("Hello!  How are you?");
   });
 
   it("removes state tags from text", () => {
     const text = 'Hello! <state field="curiosity" value="0.8"/> How are you?';
-    expect(stripTags(text)).toBe("Hello! How are you?");
+    expect(stripTags(text)).toBe("Hello!  How are you?");
   });
 
-  it("removes action text from asterisks", () => {
+  it("preserves asterisk spans — they are markdown, not action cues", () => {
     const text = "Hello! *drifts slightly closer* How are you?";
-    expect(stripTags(text)).toBe("Hello! How are you?");
+    expect(stripTags(text)).toBe(text);
   });
 
   it("removes both memory and state tags", () => {
@@ -182,10 +184,9 @@ describe("stripTags", () => {
     const text =
       'Hi *smiles* <state field="curiosity" value="0.8"/> How are you? <memory confidence="0.9" sensitivity="none">fact</memory>';
     const result = stripTags(text);
-    expect(result).not.toContain("*");
     expect(result).not.toContain("<state");
     expect(result).not.toContain("<memory");
-    expect(result).toBe("Hi How are you?");
+    expect(result).toBe("Hi *smiles*  How are you?");
   });
 
   it("collapses excessive newlines", () => {

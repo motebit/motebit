@@ -445,6 +445,7 @@ export function extractStateTags(text: string): Partial<MotebitState> {
   return updates;
 }
 
+// No production path calls this; tested API only (docs/design/out-of-band-interior-channel.md).
 export function extractActions(text: string): string[] {
   const regex = /\*([^*]+)\*/g;
   const actions: string[] = [];
@@ -655,6 +656,7 @@ const ACTION_RULES: { pattern: RegExp; updates: Partial<MotebitState> }[] = [
   },
 ];
 
+// No production path calls this; tested API only (docs/design/out-of-band-interior-channel.md).
 export function actionsToStateUpdates(actions: string[]): Partial<MotebitState> {
   const deltas: Record<string, number> = {};
   for (const action of actions) {
@@ -681,9 +683,7 @@ export function stripTags(text: string): string {
     .replace(/\[\/EXTERNAL_DATA\]/g, "")
     .replace(/\[MEMORY_DATA\]/g, "")
     .replace(/\[\/MEMORY_DATA\]/g, "")
-    .replace(/\*[^*]+\*/g, "")
     .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s{2,}/g, " ")
     .trim();
 }
 
@@ -751,6 +751,7 @@ const IMPULSE_MAP: {
   },
 ];
 
+// No production path calls this; tested API only (docs/design/out-of-band-interior-channel.md).
 /** Match action text against IMPULSE_MAP and return all matching impulse specs. */
 export function getImpulsesForAction(
   action: string,
@@ -783,9 +784,8 @@ export function getImpulsesForAction(
  *   - `[MEMORY_DATA]…[/MEMORY_DATA]`       — recalled-memory boundaries
  *   - Any of the above in partial/unclosed form (streaming mid-tag)
  *
- * Does NOT strip the `*action*` asterisk pattern used in creature action
- * syntax — that is a plain-text-surface concern composed on top of this
- * function (see {@link stripPartialActionTag}).
+ * Does NOT touch asterisks — they are markdown (see
+ * {@link stripPartialActionTag} for the plain-text whitespace pass).
  *
  * Before this primitive was centralized, `apps/web/src/ui/chat.ts` had
  * its own copy of the full set while desktop's `stripPartialActionTag`
@@ -812,18 +812,16 @@ export function stripInternalTags(text: string): string {
 }
 
 /**
- * Strip internal tags plus the creature's `*action*` asterisk syntax and
- * normalize whitespace. Used by plain-text chat surfaces (desktop) that
- * render `bubble.textContent` directly — markdown surfaces (web) use
- * `stripInternalTags` alone because their `*italic*` asterisks are
- * rendered by the markdown pass, not stripped.
+ * Strip internal tags and normalize whitespace (fold 3+ newlines to 2,
+ * trim). Used by plain-text chat surfaces (desktop, mobile) that render the
+ * accumulated stream directly. Asterisks are never deleted or held: they are
+ * markdown, and no production path consumes `*action*` cues
+ * (docs/design/out-of-band-interior-channel.md). The name is kept for API
+ * stability.
  */
 export function stripPartialActionTag(text: string): string {
   return stripInternalTags(text)
-    .replace(/\*[^*]+\*/g, "")
-    .replace(/\*[^*]*$/, "")
     .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s{2,}/g, " ")
     .trim();
 }
 

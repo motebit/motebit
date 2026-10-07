@@ -108,6 +108,7 @@ export class BehaviorEngine {
     this._trustContext = ctx;
   }
 
+  // No production path calls this; tested API only (docs/design/out-of-band-interior-channel.md).
   /** Inject a short-lived impulse for immediate visual pop (e.g. from action tags). */
   injectImpulse(field: keyof BehaviorCues, magnitude: number, halfLife: number): void {
     this.impulses.push({ field, magnitude, halfLife, startTime: Date.now() });

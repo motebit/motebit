@@ -388,12 +388,12 @@ describe("AnthropicProvider", () => {
 // ---------------------------------------------------------------------------
 
 describe("stripPartialActionTag", () => {
-  it("strips completed action tags", () => {
-    expect(stripPartialActionTag("Hello *smile* world")).toBe("Hello world");
+  it("preserves asterisk spans — they are markdown, not action cues", () => {
+    expect(stripPartialActionTag("Hello *smile* world")).toBe("Hello *smile* world");
   });
 
-  it("strips trailing unclosed action tags during streaming", () => {
-    expect(stripPartialActionTag("Hello *smi")).toBe("Hello");
+  it("never holds a trailing unclosed asterisk during streaming", () => {
+    expect(stripPartialActionTag("Hello *smi")).toBe("Hello *smi");
   });
 
   it("preserves text without tags", () => {
