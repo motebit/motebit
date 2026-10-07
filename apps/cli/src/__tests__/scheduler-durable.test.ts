@@ -20,6 +20,7 @@ import { RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 function turnResult(): TurnResult {
   return {
@@ -161,6 +162,7 @@ function mockRuntime(
     }),
     stop: vi.fn(),
     consolidationCycle: vi.fn().mockResolvedValue(undefined),
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
   return m;
 }

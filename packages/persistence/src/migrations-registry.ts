@@ -715,4 +715,18 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE plans ADD COLUMN sensitivity TEXT DEFAULT NULL",
     ],
   },
+  {
+    version: 52,
+    description:
+      "goals.sensitivity + goal_outcomes.sensitivity — the tier goal text and run outcomes were produced at",
+    statements: [
+      // A scheduled run's prompt carries the goal's text and the saved
+      // outcomes of earlier runs; each enters a run only at a send tier
+      // that permits its stamp (runtime goal-run.ts). NULL is a legacy row:
+      // an outcome is held at secret, a sub-goal at secret, a top-level goal
+      // at personal. Local, never on a wire.
+      "ALTER TABLE goals ADD COLUMN sensitivity TEXT DEFAULT NULL",
+      "ALTER TABLE goal_outcomes ADD COLUMN sensitivity TEXT DEFAULT NULL",
+    ],
+  },
 ];

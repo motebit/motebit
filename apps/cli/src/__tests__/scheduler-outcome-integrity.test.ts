@@ -4,6 +4,7 @@ import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit
 import { RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 /**
  * What a completed run LEAVES BEHIND, and whether it is true.
@@ -105,6 +106,7 @@ function mockRuntime(opts: { textBeforePause?: string; textAfterResume?: string 
     consolidationCycle: vi.fn(async () => ({})),
     presence: { canStartCycle: () => false },
     policy: { createTurnContext: vi.fn() },
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
   return { runtime, signed };
 }

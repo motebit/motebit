@@ -6,42 +6,60 @@
  * lock proves the list of entry points is complete by finding every place in
  * packages/ and apps/ source that can reach a provider's REQUEST methods
  * (`generate`, `generateStream`). It asks the TypeScript checker about the
- * VALUE's type, never the spelling, so each of these is a site:
+ * VALUE's type, never the spelling.
  *
- *   p.generate(...)              property access (called or not)
+ * WHAT A GREEN LOCK PROVES — every one of these, on a value whose declared
+ * type is a provider type, is a counted site:
+ *
+ *   p.generate(...)              property access (called, bound or aliased:
+ *   const g = p.generate           `p.generate.bind(p)`, `const g = p.generate`)
  *   p["generate"](...), p[k]     element access — a literal egress key, or any
  *                                non-literal key (the key could be one)
  *   const { generate } = p       destructuring (also `...rest`, and a
  *   function f({ generate }: P)  destructured parameter)
- *   const q: any = p             erasure (no-any-provider rule): a provider
- *   p as unknown, q = p          value declared, cast or assigned to `any` /
- *                                `unknown` — after erasure the checker can no
- *                                longer see the provider, so the erasure
- *                                itself is the site
+ *   const q: any = p             erasure: a provider value declared, cast or
+ *   p as unknown, q = p          assigned to `any` / `unknown`
+ *   use(p), Reflect.get(p, k)    narrowing: a provider NAME (`p`, `a.b`,
+ *   const g: { generate } = p    `this.b`) flowing into a slot whose declared
+ *   { gen: p }, return p         type is not a provider — a call argument
+ *                                (the callee's DECLARED parameter type, so a
+ *                                generic `T`, `object`, `unknown`, `any`,
+ *                                `Pick<Provider, "generate">` or an interface
+ *                                declaring only `generate` all count), a typed
+ *                                declaration, an object-literal property, a
+ *                                return, an assignment
  *
  * A value is a provider when its type (or a union / intersection member, or
  * a base type) is named `IntelligenceProvider` / `StreamingProvider`, or
  * structurally carries a provider's request surface (`generate` +
  * `estimateConfidence` + `extractMemoryCandidates`, or `generateStream` +
  * `setModel`) — so a class that implements the interface, an object literal
- * shaped like one and a wrapper all count.
+ * shaped like one and a wrapper all count. Narrowing closes the structural
+ * hole the other rules leave: once a provider is held in a slot typed as
+ * less than a provider, the checker can no longer see it, so the hand-off
+ * itself is the site.
  *
- * APERTURE (what it cannot see, by construction): a provider passed as an
- * ARGUMENT to an `any` / `unknown` parameter (the contextual type of every
- * call argument in the monorepo is a full type-check — minutes, not seconds —
- * so that erasure is not scanned), a provider reached through a value the
- * checker types as something unrelated without an erasure above
- * (`Object.values(p)`, `Reflect.get`, a generic `T` parameter),
- * `eval`/`Function`, and code outside packages/<pkg>/src and apps/<app>/src
- * (tests, scripts, services/). Named here so a green lock is not read as
- * wider than it is.
+ * APERTURE — what it cannot see, by construction (named so a green lock is
+ * not read as wider than it is):
+ *
+ * - a provider that reaches a narrower slot through an EXPRESSION rather
+ *   than a name (`use(cond ? p : q)`, `use(getProvider())`, `[p][0]`,
+ *   spread `use(...[p])`, a rest parameter) — narrowing is checked on names;
+ * - an untyped (implicit-any) parameter in a JavaScript file, `eval` /
+ *   `Function`, and anything the checker cannot type;
+ * - a value built structurally from parts with no provider type at any point
+ *   (`{ generate: (c) => fetch(...) }` written from scratch is not a
+ *   provider; it is a new provider implementation, which the canary's
+ *   provider-call-site table names by file);
+ * - code outside packages/<pkg>/src and apps/<app>/src (tests, scripts,
+ *   services/).
  */
 import ts from "typescript";
 
 const EGRESS_METHODS = new Set(["generate", "generateStream"]);
 const PROVIDER_TYPE_NAMES = new Set(["IntelligenceProvider", "StreamingProvider"]);
 
-export type ProviderSiteKind = "access" | "element" | "destructure" | "erasure";
+export type ProviderSiteKind = "access" | "element" | "destructure" | "erasure" | "narrowing";
 
 export interface ProviderSite {
   file: string;
@@ -98,6 +116,50 @@ function makeIsProvider(checker: ts.TypeChecker): (type: ts.Type) => boolean {
   return (type) => visit(type, 0);
 }
 
+/** A value reached by name: `p`, `a.b`, `this.b` (not a call, literal or operator result). */
+function isNameExpression(node: ts.Node): node is ts.Expression {
+  return (
+    ts.isIdentifier(node) ||
+    (ts.isPropertyAccessExpression(node) && !ts.isCallExpression(node.parent))
+  );
+}
+
+/** Is `node` the whole value of a slot the checker types from context? */
+function flowsIntoSlot(node: ts.Expression): boolean {
+  const parent = node.parent;
+  if (parent == null) return false;
+  if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.arguments != null)
+    return parent.arguments.includes(node);
+  if (ts.isVariableDeclaration(parent)) return parent.initializer === node && parent.type != null;
+  if (ts.isPropertyAssignment(parent)) return parent.initializer === node;
+  if (ts.isShorthandPropertyAssignment(parent)) return parent.name === node;
+  if (ts.isReturnStatement(parent)) return parent.expression === node;
+  if (ts.isArrowFunction(parent)) return parent.body === node;
+  if (ts.isBinaryExpression(parent))
+    return parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && parent.right === node;
+  return false;
+}
+
+/**
+ * The declared type of the slot `node` flows into. A call argument reads the
+ * callee's DECLARED parameter type — a generic `T` stays `T` (the contextual
+ * type would be the inferred instantiation, i.e. the provider itself, which
+ * would hide `Reflect.get(p, k)` and `use<T>(p)`); every other slot reads
+ * the contextual type.
+ */
+function slotType(checker: ts.TypeChecker, node: ts.Expression): ts.Type | undefined {
+  const parent = node.parent;
+  if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.arguments != null) {
+    const decl = checker.getResolvedSignature(parent)?.getDeclaration();
+    const i = parent.arguments.indexOf(node);
+    const params = decl != null && "parameters" in decl ? decl.parameters : undefined;
+    const param = params?.[Math.min(i, params.length - 1)];
+    if (param != null && param.dotDotDotToken == null && i < params!.length)
+      return checker.getTypeAtLocation(param);
+  }
+  return checker.getContextualType(node);
+}
+
 /** Every provider egress site in `files` (absolute paths), per the rules above. */
 export function findProviderSites(files: readonly string[]): ProviderSite[] {
   const program = ts.createProgram({ rootNames: [...files], options: COMPILER_OPTIONS });
@@ -151,6 +213,16 @@ export function findProviderSites(files: readonly string[]): ProviderSite[] {
         typeIsProvider(node.right)
       ) {
         add(node, "erasure");
+      }
+      // Narrowing: a provider-typed NAME (identifier, `a.b`, `this.b`)
+      // flowing into a slot whose declared type is not a provider — a call
+      // argument, a typed declaration, an object-literal property, a return,
+      // an assignment. Past that point the checker sees only the slot's
+      // type (`{ generate }`, `Pick<…>`, `unknown`, a generic `T`), so the
+      // flow itself is the site.
+      if (isNameExpression(node) && flowsIntoSlot(node) && typeIsProvider(node)) {
+        const slot = slotType(checker, node);
+        if (slot != null && !isProvider(slot)) add(node, "narrowing");
       }
       ts.forEachChild(node, visit);
     };

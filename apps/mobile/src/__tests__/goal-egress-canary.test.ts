@@ -205,6 +205,11 @@ async function seedAndRun(withPlans: boolean, target: "byok" | "on-device") {
   expect(sub, "the Secret run wrote a sub-goal").toBeDefined();
   for (const g of store.listGoals("owner")) store.updateLastRun(g.goal_id, 0);
 
+  // Background work the Secret runs started (reflection after a run) finishes
+  // on the provider it was cleared for before the provider changes — in
+  // production a switch installs a different provider object; here one
+  // recording provider plays both, so it must not straddle the switch.
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
   const before = sent.length;
   if (target === "byok") set("byok", SensitivityLevel.Personal);
   await tick();

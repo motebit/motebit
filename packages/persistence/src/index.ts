@@ -1367,6 +1367,12 @@ export interface Goal {
   routine_id?: string | null;
   routine_source?: string | null;
   routine_hash?: string | null;
+  /**
+   * The tier the goal's text was written at (the owner's session tier, or
+   * the run that wrote a sub-goal). A scheduled run sends at no lower tier;
+   * absent = legacy (`goalTextSensitivity` in @motebit/runtime). Migration #52.
+   */
+  sensitivity?: SensitivityLevel | null;
 }
 
 interface GoalRow {
@@ -1388,6 +1394,7 @@ interface GoalRow {
   routine_source: string | null;
   routine_hash: string | null;
   budget_tokens: number | null;
+  sensitivity?: string | null;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -1410,6 +1417,7 @@ function rowToGoal(row: GoalRow): Goal {
     routine_source: row.routine_source ?? null,
     routine_hash: row.routine_hash ?? null,
     budget_tokens: row.budget_tokens ?? null,
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
@@ -1431,8 +1439,8 @@ export class SqliteGoalStore {
 
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
-      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, wall_clock_ms, project_id, routine_id, routine_source, routine_hash, budget_tokens)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, wall_clock_ms, project_id, routine_id, routine_source, routine_hash, budget_tokens, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT sensitivity FROM goals WHERE goal_id = ?)))`,
     );
     this.stmtRemove = db.prepare(`DELETE FROM goals WHERE goal_id = ?`);
     this.stmtList = db.prepare(`SELECT * FROM goals WHERE motebit_id = ? ORDER BY created_at ASC`);
@@ -1484,6 +1492,9 @@ export class SqliteGoalStore {
       goal.routine_source ?? null,
       goal.routine_hash ?? null,
       goal.budget_tokens ?? null,
+      // A re-add without a stamp keeps the stamp on record; never erased.
+      goal.sensitivity ?? null,
+      goal.goal_id,
     );
   }
 
@@ -1598,6 +1609,13 @@ export interface GoalOutcome {
    * imply a signature it does not have.
    */
   signed_manifest?: string;
+  /**
+   * The tier of the run that produced this outcome (`GoalRun.outcomeSensitivity`
+   * in @motebit/runtime). Its summary / error text enters a later run only
+   * at a send tier that permits it; absent = legacy, held at secret.
+   * Migration #52.
+   */
+  sensitivity?: SensitivityLevel;
 }
 
 interface GoalOutcomeRow {
@@ -1614,6 +1632,7 @@ interface GoalOutcomeRow {
   response_full: string | null;
   signed_manifest: string | null;
   run_id: string | null;
+  sensitivity?: string | null;
 }
 
 function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
@@ -1631,6 +1650,7 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
     ...(row.run_id != null ? { run_id: row.run_id } : {}),
     ...(row.response_full != null ? { response_full: row.response_full } : {}),
     ...(row.signed_manifest != null ? { signed_manifest: row.signed_manifest } : {}),
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
@@ -1644,8 +1664,8 @@ export class SqliteGoalOutcomeStore {
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest, run_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest, run_id, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGet = db.prepare(`SELECT * FROM goal_outcomes WHERE outcome_id = ?`);
     this.stmtForRun = db.prepare(
@@ -1674,6 +1694,7 @@ export class SqliteGoalOutcomeStore {
       outcome.response_full ?? null,
       outcome.signed_manifest ?? null,
       outcome.run_id ?? null,
+      outcome.sensitivity ?? null,
     );
   }
 

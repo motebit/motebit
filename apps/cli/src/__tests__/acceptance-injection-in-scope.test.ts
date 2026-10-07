@@ -4,6 +4,7 @@ import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit
 import { RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 /**
  * The adversarial case this arc has always named and never run.
@@ -112,6 +113,7 @@ function mockRuntime() {
     consolidationCycle: vi.fn(async () => ({})),
     presence: { canStartCycle: () => false },
     policy: { createTurnContext: vi.fn() },
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
   return { runtime, executed };
 }

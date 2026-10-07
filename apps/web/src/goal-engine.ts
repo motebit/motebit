@@ -137,6 +137,8 @@ export interface GoalsEngineDeps {
   setInterval?: (handler: () => void, ms: number) => ReturnType<typeof setInterval>;
   clearInterval?: (handle: ReturnType<typeof setInterval>) => void;
   generateId?: () => string;
+  /** The tier a new goal's text is written at (`runtime.goalCreationSensitivity`). */
+  goalSensitivity?: () => string | null | undefined;
 }
 
 export interface GoalsEngine {
@@ -249,6 +251,8 @@ export function createGoalsEngine(
       budget_tokens: input.budget_tokens ?? null,
       spent_tokens: 0,
     };
+    const stamp = deps.goalSensitivity?.();
+    if (stamp != null) goal.sensitivity = stamp;
     state = { ...state, goals: [...state.goals, goal] };
     persistGoals();
     emit();

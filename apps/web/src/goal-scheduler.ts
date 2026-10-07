@@ -29,6 +29,7 @@ import {
   goalAwaitingResultMessage,
 } from "@motebit/runtime";
 import type { ScheduledGoal } from "@motebit/panels";
+import type { GoalRunScope } from "@motebit/runtime";
 import { slabTurnIdForRun } from "@motebit/runtime";
 
 import {
@@ -125,6 +126,32 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
       // the result is retrieved or dismissed.
       if (paidResultsOwed(goal.goal_id) != null) return { outcome: "skipped" };
 
+      // The fire sends at no lower tier than the goal's text: a goal written
+      // at Secret refuses here on an external provider, with the gate's
+      // reason (runtime goal-run.ts). Web's prompt is the goal alone — it
+      // carries no earlier outcomes.
+      const rt = app.getRuntime();
+      let scope: GoalRunScope | null = null;
+      if (rt != null) {
+        try {
+          scope = rt.beginGoalRun(goal);
+        } catch (err) {
+          return { outcome: "error", error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      try {
+        return await fireWithin(goal, onChunk);
+      } finally {
+        scope?.end();
+      }
+    },
+  };
+
+  const fireWithin = async (
+    goal: ScheduledGoal,
+    onChunk: Parameters<GoalsEngineAdapter["fire"]>[1],
+  ): ReturnType<GoalsEngineAdapter["fire"]> => {
+    {
       /**
        * Emit `goal_executed` (spec §5.2) for this fire.
        *
@@ -335,8 +362,11 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
         ...(tokensUsed != null ? { tokensUsed } : {}),
         ...noticeField(),
       };
-    },
+    }
   };
 
-  return createGoalsEngine(adapter);
+  return createGoalsEngine(adapter, {
+    // A goal's text is written at the session's tier (runtime goal-run.ts).
+    goalSensitivity: () => app.getRuntime()?.goalCreationSensitivity(),
+  });
 }

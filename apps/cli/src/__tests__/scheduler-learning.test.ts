@@ -7,6 +7,7 @@ import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
 import type { PlanEngine, PlanStoreAdapter } from "@motebit/planner";
 import { InMemoryPlanStore } from "@motebit/planner";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 function makeMockTurnResult(): TurnResult {
   return {
@@ -172,6 +173,7 @@ function createMockRuntime(
     }),
     stop: vi.fn(),
     consolidationCycle: vi.fn().mockResolvedValue(undefined),
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
 
   return { runtime, registeredTools, eventsAppended, memoryGraph };
@@ -240,7 +242,8 @@ describe("GoalScheduler — learning loop", () => {
       expect(call[0].content).toContain("check system health");
       expect(call[0].content).toContain("System health check passed");
       expect(call[0].confidence).toBe(0.6);
-      expect(call[0].sensitivity).toBe(SensitivityLevel.None);
+      // Stamped at the run's tier — the default (none) session's ceiling.
+      expect(call[0].sensitivity).toBe(SensitivityLevel.Personal);
     });
 
     it("does not form memory when response is empty", async () => {

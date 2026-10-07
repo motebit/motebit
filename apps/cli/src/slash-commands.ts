@@ -1312,6 +1312,9 @@ export async function handleSlashCommand(
           consecutive_failures: 0,
           wall_clock_ms: wallClockMs,
           project_id: projectId,
+          // Written at the session's tier; a scheduled run sends at no
+          // lower tier (runtime goal-run.ts).
+          sensitivity: runtime.goalCreationSensitivity(),
         });
         const modeLabel = once ? " (one-shot)" : "";
         const wallClockLabel = wallClockMs != null ? ` (wall-clock: ${wallClockMatch![1]})` : "";

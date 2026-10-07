@@ -6,6 +6,7 @@ import { verifyEvidenceProvenance } from "@motebit/encryption";
 import { RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 /**
  * The arc's own sentence, walked end to end:
@@ -128,6 +129,7 @@ function mockRuntime(opts: { pause?: boolean } = {}) {
     consolidationCycle: vi.fn(async () => ({})),
     presence: { canStartCycle: () => false },
     policy: { createTurnContext: vi.fn() },
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
   return { runtime, stoppers };
 }

@@ -305,6 +305,8 @@ import { readLatestHardwareAttestationClaim } from "./hardware-attestation-proje
 import { readLatencyStats } from "./latency-stats-projection.js";
 import { scoreAttestation, rankWorkersWithBasis } from "@motebit/semiring";
 import { PlanExecutionManager } from "./plan-execution.js";
+import { createGoalRun } from "./goal-run.js";
+import type { GoalRunScope, GoalRunGoal } from "./goal-run.js";
 import { createGoalsEmitter, type GoalsEmitter, type GoalLifecycleStatus } from "./goals.js";
 import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
 import { createIdleTickController, type IdleTickController } from "./idle-tick.js";
@@ -2358,6 +2360,34 @@ export class MotebitRuntime {
     privateKey?: Uint8Array,
   ): AsyncGenerator<PlanChunk> {
     yield* this.planExecution.executePlan(goalId, goalPrompt, runId, privateKey);
+  }
+
+  /**
+   * Enter a scheduled goal run (`goal-run.ts`): raises the run's content
+   * floor to the goal's stamp — a goal written at Secret runs only
+   * on-device; an external provider refuses with
+   * `SovereignTierRequiredError` — and returns the run, through which the
+   * scheduler admits every earlier outcome and related goal into the
+   * prompt. The caller MUST `end()` it (finally).
+   */
+  beginGoalRun(goal: GoalRunGoal, opts: { inherit?: SensitivityLevel } = {}): GoalRunScope {
+    return createGoalRun({
+      goal,
+      ...(opts.inherit != null ? { inherit: opts.inherit } : {}),
+      effective: () => this.getEffectiveSessionSensitivity(),
+      raise: (tier) => this.raiseContentFloor(tier),
+      assert: () => {
+        if (this.loopDeps) this.assertSensitivityPermitsAiCall("executePlanStep");
+      },
+    });
+  }
+
+  /**
+   * The stamp for goal text written now — a goal the owner creates, or a
+   * sub-goal the model writes outside a run (`goal-run.ts`).
+   */
+  goalCreationSensitivity(): SensitivityLevel {
+    return derivedSensitivity(this.getEffectiveSessionSensitivity());
   }
 
   /** Return the execution manifest produced by the last `executePlan()` call. */

@@ -25,7 +25,9 @@
  * computed from what it was derived from when that is knowable
  * (`maxStampedSensitivity`), else it is withheld from every request.
  * `egress-canary.test.ts` (@motebit/runtime) seeds every store and drives
- * every provider entry point against this.
+ * every provider entry point against this. Scheduled goal runs (goal text,
+ * earlier runs' outcomes, sub-goals) apply the same rule through
+ * `goal-run.ts` (@motebit/runtime), which every surface's scheduler uses.
  */
 import {
   ALL_SENSITIVITY_LEVELS,

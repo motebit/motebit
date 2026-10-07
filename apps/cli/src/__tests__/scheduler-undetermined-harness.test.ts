@@ -48,6 +48,7 @@ import { PaidIntentLedger, InMemoryPaidIntentStore } from "@motebit/runtime";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import { PlanEngine, DelegationUndeterminedError, PlanDriverLocks } from "@motebit/planner";
 import type { StepDelegationAdapter } from "@motebit/planner";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 const MOTE = "mote-890";
 const GOAL = "goal-890";
@@ -167,6 +168,7 @@ function mockRuntime(
     }),
     stop: vi.fn(),
     consolidationCycle: vi.fn().mockResolvedValue(undefined),
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
 }
 

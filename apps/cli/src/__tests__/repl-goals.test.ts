@@ -28,7 +28,9 @@ function makeGoal(overrides: Partial<Goal> = {}): Goal {
 }
 
 // Stub runtime — goal/approval commands don't use it
-const stubRuntime = null as unknown as MotebitRuntime;
+const stubRuntime = {
+  goalCreationSensitivity: () => "personal",
+} as unknown as MotebitRuntime;
 const stubConfig = {
   provider: "anthropic" as const,
   model: "test",

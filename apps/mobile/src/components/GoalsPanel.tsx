@@ -124,6 +124,9 @@ function createMobileGoalsAdapter(app: MobileApp): GoalsFetchAdapter {
           input.interval_ms,
           input.mode,
           input.budget_tokens ?? null,
+          // Written at the session's tier; a scheduled run sends at no
+          // lower tier (runtime goal-run.ts).
+          app.getRuntime()?.goalCreationSensitivity() ?? null,
         );
       return Promise.resolve();
     },

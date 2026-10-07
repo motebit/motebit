@@ -151,9 +151,15 @@ async function seedAndRun(withPlans: boolean, target: "byok" | "on-device") {
 
   set("on-device", SensitivityLevel.Secret);
   db.goalStore.add(
-    goal({ goal_id: "g-secret", prompt: `goal ${CANARY.goal}`, sensitivity: "secret" }),
+    goal({
+      goal_id: "g-secret",
+      prompt: `goal ${CANARY.goal}`,
+      sensitivity: SensitivityLevel.Secret,
+    }),
   );
-  db.goalStore.add(goal({ goal_id: "g-plain", prompt: "tidy the desk", sensitivity: "personal" }));
+  db.goalStore.add(
+    goal({ goal_id: "g-plain", prompt: "tidy the desk", sensitivity: SensitivityLevel.Personal }),
+  );
   // A child the owner wrote at Personal under the Secret goal: its run reads
   // its parent's prompt and results and its siblings' (the Secret sub-goal).
   db.goalStore.add(
@@ -161,7 +167,7 @@ async function seedAndRun(withPlans: boolean, target: "byok" | "on-device") {
       goal_id: "g-child",
       prompt: "water the plants",
       parent_goal_id: "g-secret",
-      sensitivity: "personal",
+      sensitivity: SensitivityLevel.Personal,
     }),
   );
   await scheduler.tickOnce();
@@ -179,6 +185,11 @@ async function seedAndRun(withPlans: boolean, target: "byok" | "on-device") {
   const sub = db.goalStore.listChildren("g-secret").find((g) => g.goal_id !== "g-child");
   expect(sub, "the Secret run wrote a sub-goal").toBeDefined();
 
+  // Background work the Secret runs started (reflection after a run) finishes
+  // on the provider it was cleared for before the provider changes — in
+  // production a switch installs a different provider object; here one
+  // recording provider plays both, so it must not straddle the switch.
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
   const before = sent.length;
   if (target === "byok") set("byok", SensitivityLevel.Personal);
   await scheduler.tickOnce();

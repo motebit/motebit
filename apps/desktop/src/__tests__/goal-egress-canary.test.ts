@@ -244,6 +244,11 @@ async function seedAndRun(withPlans: boolean, target: "byok" | "on-device") {
   const sub = h.db.goals.find((g) => g.parent_goal_id === "g-secret");
   expect(sub, "the Secret run wrote a sub-goal").toBeDefined();
 
+  // Background work the Secret runs started (reflection after a run) finishes
+  // on the provider it was cleared for before the provider changes — in
+  // production a switch installs a different provider object; here one
+  // recording provider plays both, so it must not straddle the switch.
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
   const before = h.sent.length;
   if (target === "byok") h.set("byok", SensitivityLevel.Personal);
   for (const g of [...h.db.goals]) await h.scheduler.runNow(h.db.invoke, String(g.goal_id));

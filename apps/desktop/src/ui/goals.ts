@@ -146,6 +146,15 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         mode: input.mode,
         budgetTokens: input.budget_tokens ?? null,
       });
+      // The goal's text is written at the session's tier; a scheduled run
+      // sends at no lower tier (runtime goal-run.ts).
+      const stamp = ctx.app.getRuntime()?.goalCreationSensitivity();
+      if (stamp != null) {
+        await config.invoke("db_execute", {
+          sql: "UPDATE goals SET sensitivity = ? WHERE goal_id = ?",
+          params: [stamp, goalId],
+        });
+      }
     },
     setEnabled: async (goalId, _enabled) => {
       const config = ctx.getConfig();

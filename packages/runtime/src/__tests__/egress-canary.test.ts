@@ -35,8 +35,9 @@
  * Entry points (`ENTRY_POINTS`) — every runtime method that can reach a
  * provider. The static lock at the bottom enumerates every provider call
  * site in packages/ and apps/ — TYPE-AWARE (`provider-egress-lock.ts`: any
- * access, element access, destructuring or any/unknown erasure of a
- * provider-typed value) — and fails when one is not listed in
+ * access, element access, destructuring, any/unknown erasure, or narrowing
+ * into a slot not typed as a provider, of a provider-typed value; its header
+ * names the aperture) — and fails when one is not listed in
  * `COVERED_CALL_SITES` with the entry point(s) that drive it here.
  *
  * Built-in tools that read the interior (list_events, search_conversations,
@@ -86,7 +87,7 @@ import {
 import type { InMemoryPlanStore } from "@motebit/planner";
 import { InMemoryPlanStore as InMemoryPlanStoreImpl, PlanEngine } from "@motebit/planner";
 import { createSubGoalDefinition } from "@motebit/tools/web-safe";
-import type { GoalRun } from "../index";
+import type { GoalRunScope } from "../index";
 import { generateKeypair } from "@motebit/encryption";
 import { findProviderSites } from "./provider-egress-lock";
 
@@ -447,7 +448,7 @@ interface HarnessOutcome {
 function goalBook(runtime: MotebitRuntime) {
   const goals: HarnessGoal[] = [];
   const outcomes: HarnessOutcome[] = [];
-  let current: { goalId: string; run: GoalRun } | null = null;
+  let current: { goalId: string; run: GoalRunScope } | null = null;
   runtime.getToolRegistry().register(
     { ...createSubGoalDefinition, riskHint: { risk: RiskLevel.R0_READ } },
     vi.fn(async (args: Record<string, unknown>) => {
@@ -470,7 +471,7 @@ function goalBook(runtime: MotebitRuntime) {
         .filter((o) => o.goal_id === goal.goal_id)
         .sort((a, b) => b.ran_at - a.ran_at)
         .slice(0, 3);
-      let run: GoalRun;
+      let run: GoalRunScope;
       try {
         run = runtime.beginGoalRun(goal);
       } catch (err) {
@@ -1082,11 +1083,18 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 
 /**
  * Provider egress sites per file (`provider-egress-lock.ts`: type-aware —
- * property access, element access, destructuring and any/unknown erasure of
- * a provider-typed value), over every packages/<pkg>/src and apps/<app>/src
- * non-test source file under `root`.
+ * property access, element access, destructuring, any/unknown erasure and
+ * narrowing of a provider-typed value), over every packages/<pkg>/src and
+ * apps/<app>/src non-test source file under `root`.
  */
 export function scanProviderCallSites(root: string): Record<string, number> {
+  return scanProviderCallSitesWithAperture(root).counts;
+}
+
+function scanProviderCallSitesWithAperture(root: string): {
+  counts: Record<string, number>;
+  scanned: number;
+} {
   const files: string[] = [];
   for (const top of ["packages", "apps"]) {
     for (const pkg of readdirSync(join(root, top))) {
@@ -1104,7 +1112,7 @@ export function scanProviderCallSites(root: string): Record<string, number> {
     const rel = relative(root, site.file);
     counts[rel] = (counts[rel] ?? 0) + 1;
   }
-  return counts;
+  return { counts, scanned: files.length };
 }
 
 describe("egress canary: static completeness lock", () => {
@@ -1112,7 +1120,7 @@ describe("egress canary: static completeness lock", () => {
     "every provider call site in packages/ and apps/ is covered by an entry point above",
     { timeout: 120_000 },
     () => {
-      const found = scanProviderCallSites(ROOT);
+      const { counts: found, scanned } = scanProviderCallSitesWithAperture(ROOT);
       const problems: string[] = [];
       for (const [file, n] of Object.entries(found)) {
         const covered = COVERED_CALL_SITES[file];
@@ -1133,7 +1141,11 @@ describe("egress canary: static completeness lock", () => {
       }
       expect(
         problems,
-        `examined ${Object.keys(found).length} files with provider call sites`,
+        // Aperture (gate-repair-instructions.md): what this green covers —
+        // and, in provider-egress-lock.ts's header, what it cannot see.
+        `examined ${scanned} source files under packages/*/src and apps/*/src; ` +
+          `${Object.keys(found).length} carry provider sites (access, element, destructure, ` +
+          `erasure, narrowing). Not seen: names-only narrowing, untyped JS, tests/scripts/services`,
       ).toEqual([]);
     },
   );
@@ -1165,6 +1177,23 @@ export interface StreamingProvider extends IntelligenceProvider {
     "as-any.ts": `export async function f(p: StreamingProvider) { return (p as unknown as { generate(c: object): unknown }).generate({}); }`,
     "class-impl.ts": `class P implements IntelligenceProvider { async generate() { return { text: "" }; } async estimateConfidence() { return 1; } async extractMemoryCandidates() { return []; } }
 export async function f(p: P) { return p.generate(); }`,
+    // Narrowing: the provider flows into a slot not typed as one; past it
+    // the checker sees only the slot's type, so the flow is the site.
+    "narrow-interface.ts": `interface Gen { generate(c: ContextPack): Promise<AIResponse> }
+function use(g: Gen) { return g.generate({}); }
+export function f(p: IntelligenceProvider) { return use(p); }`,
+    "narrow-pick.ts": `function use(g: Pick<IntelligenceProvider, "generate">) { return g.generate({}); }
+export function f(p: IntelligenceProvider) { return use(p); }`,
+    "narrow-unknown-param.ts": `function use(g: unknown) { return (g as { generate(c: object): unknown }).generate({}); }
+export function f(p: StreamingProvider) { return use(p); }`,
+    "narrow-generic.ts": `function use<T extends object>(g: T) { return g; }
+export function f(p: IntelligenceProvider) { return use(p); }`,
+    "narrow-reflect.ts": `export function f(p: IntelligenceProvider) { return Reflect.get(p, "gen" + "erate"); }`,
+    "narrow-object-values.ts": `export function f(p: IntelligenceProvider) { return Object.values(p); }`,
+    "narrow-typed-decl.ts": `export function f(p: IntelligenceProvider) { const g: { generate(c: object): unknown } = p; return g.generate({}); }`,
+    "narrow-object-prop.ts": `export function f(p: IntelligenceProvider) { const deps: { gen: { generate(c: object): unknown } } = { gen: p }; return deps; }`,
+    "narrow-shorthand.ts": `export function f(gen: IntelligenceProvider) { const deps: { gen: { generate(c: object): unknown } } = { gen }; return deps; }`,
+    "narrow-return.ts": `export function f(p: IntelligenceProvider): { generate(c: object): unknown } { return p; }`,
   };
 
   it("counts every probe as a provider call site", { timeout: 60_000 }, () => {
@@ -1174,10 +1203,15 @@ export async function f(p: P) { return p.generate(); }`,
     mkdirSync(join(root, "apps"));
     for (const [name, body] of Object.entries(PROBES))
       writeFileSync(join(src, name), `${PROVIDER_DECL}\n${body}\n`);
-    // A benign file: a non-provider \`.generate(\` is not a call site.
+    // Benign files: a non-provider \`.generate(\` is not a call site, and a
+    // provider passed to a slot typed as a provider is not a narrowing.
     writeFileSync(
       join(src, "benign.ts"),
       `const ids = { generate: () => "id" };\nexport const x = ids.generate();\n`,
+    );
+    writeFileSync(
+      join(src, "benign-provider-slot.ts"),
+      `${PROVIDER_DECL}\nfunction keep(p: IntelligenceProvider) { return p.estimateConfidence(); }\nexport function f(p: StreamingProvider) { const q: IntelligenceProvider = p; return [keep(p), keep(q), { inner: p as IntelligenceProvider }]; }\n`,
     );
     const found = scanProviderCallSites(root);
     const missed = Object.keys(PROBES).filter(
@@ -1185,5 +1219,9 @@ export async function f(p: P) { return p.generate(); }`,
     );
     expect(missed, "probes the lock did not see").toEqual([]);
     expect(found["packages/probe/src/benign.ts"] ?? 0, "a non-provider generate()").toBe(0);
+    expect(
+      found["packages/probe/src/benign-provider-slot.ts"] ?? 0,
+      "a provider passed to a provider-typed slot",
+    ).toBe(0);
   });
 });

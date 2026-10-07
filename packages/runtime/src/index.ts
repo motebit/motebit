@@ -110,6 +110,16 @@ export {
 } from "./gradient.js";
 export { AgentGraphManager } from "./agent-graph.js";
 export { createGoalsEmitter, checkGoalBudget } from "./goals.js";
+export {
+  createGoalRun,
+  goalTextSensitivity,
+  goalOutcomeSensitivity,
+  goalTextPermittedAt,
+  goalOutcomesPermittedAt,
+  goalOutcomeLines,
+  goalPlanOutcomes,
+} from "./goal-run.js";
+export type { GoalRunScope, GoalRunGoal, GoalRunOutcome } from "./goal-run.js";
 export type {
   GoalsEmitter,
   GoalsEmitterDeps,

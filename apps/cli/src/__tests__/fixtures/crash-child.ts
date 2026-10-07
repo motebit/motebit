@@ -16,6 +16,7 @@ import { createMotebitDatabase } from "@motebit/persistence";
 import { RiskLevel } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import { GoalScheduler } from "../../scheduler.js";
+import { goalRunFakes } from "../goal-run-fakes.js";
 
 const [dbPathArg, markerPathArg] = process.argv.slice(2);
 if (!dbPathArg || !markerPathArg) throw new Error("usage: crash-child <dbPath> <markerPath>");
@@ -73,6 +74,7 @@ function mockRuntime(opts: {
     getToolRegistry: () => ({ register: () => undefined, replace: () => undefined }),
     stop: () => undefined,
     consolidationCycle: noop,
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
 }
 

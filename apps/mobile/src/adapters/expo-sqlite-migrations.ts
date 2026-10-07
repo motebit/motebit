@@ -542,4 +542,18 @@ export const MOBILE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE plans ADD COLUMN sensitivity TEXT DEFAULT NULL",
     ],
   },
+  {
+    version: 30,
+    description:
+      "goals.sensitivity + goal_outcomes.sensitivity — the tier goal text and run outcomes were produced at",
+    statements: [
+      // Sibling of persistence v52 + desktop v10. A scheduled run's prompt
+      // carries the goal's text and earlier runs' outcomes; each enters a
+      // run only at a send tier that permits its stamp (runtime goal-run.ts).
+      // NULL is a legacy row (outcome / sub-goal: secret; top-level goal:
+      // personal).
+      "ALTER TABLE goals ADD COLUMN sensitivity TEXT DEFAULT NULL",
+      "ALTER TABLE goal_outcomes ADD COLUMN sensitivity TEXT DEFAULT NULL",
+    ],
+  },
 ];

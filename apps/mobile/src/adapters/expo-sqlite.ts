@@ -1100,6 +1100,9 @@ export interface Goal {
    *  `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment
    *  is multi-dimensional." `null` = no cap. */
   budget_tokens: number | null;
+  /** The tier the goal's text was written at (migration v30); absent = legacy
+   *  (`goalTextSensitivity` in @motebit/runtime). */
+  sensitivity?: SensitivityLevel;
 }
 
 export interface GoalOutcome {
@@ -1139,6 +1142,9 @@ export interface GoalOutcome {
    *  the "signed" indicator (same wire shape as web + desktop per
    *  `docs/doctrine/goal-results.md` §"Phase-3 deferral close"). */
   signed_manifest: string | null;
+  /** The tier of the run that produced it (migration v30); absent = legacy,
+   *  held at secret (`GoalRunScope.outcomeSensitivity` in @motebit/runtime). */
+  sensitivity?: SensitivityLevel;
 }
 
 interface GoalRow {
@@ -1155,6 +1161,7 @@ interface GoalRow {
   max_retries: number;
   consecutive_failures: number;
   budget_tokens: number | null;
+  sensitivity?: string | null;
 }
 
 interface GoalOutcomeRow {
@@ -1170,6 +1177,7 @@ interface GoalOutcomeRow {
   tokens_used: number | null;
   response_full: string | null;
   signed_manifest: string | null;
+  sensitivity?: string | null;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -1187,6 +1195,7 @@ function rowToGoal(row: GoalRow): Goal {
     max_retries: row.max_retries ?? 3,
     consecutive_failures: row.consecutive_failures ?? 0,
     budget_tokens: row.budget_tokens ?? null,
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
@@ -1204,6 +1213,7 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
     error_message: row.error_message,
     response_full: row.response_full,
     signed_manifest: row.signed_manifest,
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
@@ -1243,8 +1253,8 @@ export class ExpoGoalStore {
   insertOutcome(outcome: GoalOutcome): void {
     this.db.runSync(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         outcome.outcome_id,
         outcome.goal_id,
@@ -1258,6 +1268,7 @@ export class ExpoGoalStore {
         outcome.tokens_used,
         outcome.response_full,
         outcome.signed_manifest,
+        outcome.sensitivity ?? null,
       ],
     );
   }
@@ -1342,13 +1353,15 @@ export class ExpoGoalStore {
     intervalMs: number,
     mode: GoalMode = "recurring",
     budgetTokens: number | null = null,
+    /** The tier the text was written at (`runtime.goalCreationSensitivity`). */
+    sensitivity: SensitivityLevel | null = null,
   ): string {
     const goalId = crypto.randomUUID();
     const now = Date.now();
     this.db.runSync(
-      `INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, budget_tokens)
-       VALUES (?, ?, ?, ?, NULL, 1, ?, ?, 'active', NULL, 3, 0, ?)`,
-      [goalId, motebitId, prompt, intervalMs, now, mode, budgetTokens],
+      `INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, budget_tokens, sensitivity)
+       VALUES (?, ?, ?, ?, NULL, 1, ?, ?, 'active', NULL, 3, 0, ?, ?)`,
+      [goalId, motebitId, prompt, intervalMs, now, mode, budgetTokens, sensitivity],
     );
     return goalId;
   }
