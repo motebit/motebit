@@ -49,6 +49,7 @@
   "devDependencies": {
     "@motebit/browser-persistence": "workspace:*",
     "@motebit/persistence": "workspace:*",
+    "@motebit/tools": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "@types/node": "^22.20.1",
     "fake-indexeddb": "^6.0.0",

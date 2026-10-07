@@ -36,7 +36,15 @@
  * `COVERED_CALL_SITES` with the entry point(s) that drive it here.
  */
 import { describe, it, expect, vi } from "vitest";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 // Deterministic, offline embeddings (no model load).
@@ -50,8 +58,10 @@ import {
   MotebitRuntime,
   NullRenderer,
   SovereignTierRequiredError,
+  TurnPrincipal,
   createInMemoryStorage,
 } from "../index";
+import { registerBrowserSafeBuiltins } from "@motebit/tools/web-safe";
 import type { StreamingProvider } from "@motebit/ai-core";
 import { buildSystemPrompt } from "@motebit/ai-core";
 import { embedTextHash } from "@motebit/memory-graph";
@@ -109,6 +119,17 @@ const EXT_WRITE: ToolDefinition = {
   riskHint: { risk: RiskLevel.R2_WRITE },
 };
 
+/**
+ * The built-in tools that READ the owner interior, with the args the model
+ * calls them with — each query is aimed at the seeded canaries.
+ */
+const BUILTIN_TOOL_ARGS: Record<string, Record<string, unknown>> = {
+  list_events: { limit: 500 },
+  search_conversations: { query: "my code is pin vault", limit: 50 },
+  recall_memories: { query: "door code vault consolidated fading pin", limit: 50 },
+  self_reflect: {},
+};
+
 interface Sent {
   mode: string;
   entry: string;
@@ -122,6 +143,7 @@ function recordingProvider(
   sent: Sent[],
   mode: () => string,
   entry: () => string,
+  aboveContextSafe: () => boolean = () => true,
 ): StreamingProvider {
   const plain = (text: string, extra: Partial<AIResponse> = {}): AIResponse => ({
     text,
@@ -139,9 +161,10 @@ function recordingProvider(
     }
     sent.push({ mode: mode(), entry: entry(), seen: `${JSON.stringify(ctx)}\n${prompt}` });
     const um = ctx.user_message ?? "";
-    // Canaries are produced only on-device at the seeding tier: a BYOK
-    // response never mints one, so any canary in a BYOK request leaked.
-    const live = mode() === "on-device";
+    // Canaries are produced only on-device at a seeding tier (medical+): a
+    // BYOK or context-safe-tier response never mints one, so any canary in
+    // such a request leaked.
+    const live = mode() === "on-device" && aboveContextSafe();
     const c = (k: CanaryKey) => (live ? CANARY[k] : "plain");
     const history = JSON.stringify(ctx.conversation_history ?? []);
     if (um.includes("Generate a very short title")) return plain(`Title ${c("title")}`);
@@ -180,6 +203,12 @@ function recordingProvider(
             args: { v: um.includes(CANARY.approvalArgs) ? CANARY.approvalArgs : "x" },
           },
         ],
+      });
+    // Built-in interior-reading tools: one call, then answer from the result.
+    const builtin = /^use tool ([a-z_]+)$/.exec(um)?.[1];
+    if (builtin != null && !history.includes(`t-${builtin}`))
+      return plain("", {
+        tool_calls: [{ id: `t-${builtin}`, name: builtin, args: BUILTIN_TOOL_ARGS[builtin] ?? {} }],
       });
     if (um === "look it up" && !history.includes("tool_result"))
       return plain("", { tool_calls: [{ id: "p1", name: "probe", args: {} }] });
@@ -302,6 +331,7 @@ async function makeRuntime() {
   let mode = "on-device";
   let entry = "seed";
   const store = conversationStore();
+  let rt: MotebitRuntime | null = null;
   const runtime = new MotebitRuntime(
     {
       motebitId: "owner",
@@ -320,9 +350,12 @@ async function makeRuntime() {
         sent,
         () => mode,
         () => entry,
+        () =>
+          rt == null || ![SensitivityLevel.None, SensitivityLevel.Personal].includes(tierOf(rt)),
       ),
     },
   );
+  rt = runtime;
   runtime.getToolRegistry().register(
     PROBE,
     vi.fn(async () => ({
@@ -330,6 +363,27 @@ async function makeRuntime() {
       data: `result ${tierOf(runtime) === SensitivityLevel.Secret ? CANARY.tool : "plain"}`,
     })),
   );
+  // The built-in tools, wired EXACTLY as the surfaces wire them
+  // (apps/desktop/src/desktop-tools.ts, web-app.ts, mobile-app.ts, cli
+  // runtime-factory.ts) — the harness drives the real handlers.
+  registerBrowserSafeBuiltins(runtime.getToolRegistry(), {
+    memorySearchFn: (query, opts) =>
+      runtime.recallMemoriesForTool(query, opts, TurnPrincipal.OWNER),
+    eventQueryFn: async (limit, eventType) => {
+      const events = await runtime.events.query({
+        motebit_id: runtime.motebitId,
+        limit,
+        event_types: eventType != null && eventType !== "" ? [eventType as EventType] : undefined,
+      });
+      return events.map((e) => ({
+        event_type: e.event_type,
+        timestamp: e.timestamp,
+        payload: e.payload,
+      }));
+    },
+    reflectFn: () => runtime.reflect(),
+    conversationSearchFn: (query, limit) => runtime.searchConversations(query, limit),
+  });
   runtime.getToolRegistry().register(
     EXT_WRITE,
     vi.fn(async () => ({ ok: true, data: "stored" })),
@@ -509,6 +563,21 @@ const ENTRY_POINTS: Record<string, (h: Harness) => Promise<void>> = {
     expect(planId).not.toBe("");
     await drain(runtime.resumePlan(planId));
   },
+  ...Object.fromEntries(
+    Object.keys(BUILTIN_TOOL_ARGS).map((tool) => [
+      `built-in tool: ${tool}`,
+      async (h: Harness) => {
+        const before = h.sent.length;
+        await drain(h.runtime.sendMessageStreaming(`use tool ${tool}`));
+        // The tool ran and its result reached the provider (the request after it).
+        const toolResultId = JSON.stringify(`t-${tool}`);
+        expect(
+          h.sent.slice(before).some((s) => s.seen.includes(`"tool_call_id":${toolResultId}`)),
+          `${tool}'s result never reached a request — the tool did not run`,
+        ).toBe(true);
+      },
+    ]),
+  ),
   "handleAgentTask (foreign principal)": async ({ runtime }) => {
     const kp = await generateKeypair();
     const task: AgentTask = {
@@ -573,6 +642,29 @@ describe("egress canary: every entry point on BYOK at Personal carries no Secret
         ).toBeGreaterThan(0);
       }
       expect(leaked, `${name} sent these Secret canaries to BYOK`).toEqual([]);
+    });
+  }
+});
+
+describe("egress canary: an interior-reading tool returns only what the CURRENT send tier permits", () => {
+  // On-device below Secret: the request is not external, but everything it
+  // carries can come back in the reply, which is stamped at the turn's tier
+  // and then rides history into a later BYOK request. So the tool's result is
+  // held to the send tier, not to the provider — the same rule as the
+  // context pack.
+  for (const tool of Object.keys(BUILTIN_TOOL_ARGS)) {
+    it(`${tool} on-device at Personal carries no Secret canary`, async () => {
+      const h = await makeRuntime();
+      await seedAtSecret(h);
+      h.setMode("on-device");
+      h.runtime.setSessionSensitivity(SensitivityLevel.Personal);
+      h.setEntry(`tier:${tool}`);
+      const before = h.sent.length;
+      await drain(h.runtime.sendMessageStreaming(`use tool ${tool}`));
+      const sends = h.sent.slice(before);
+      expect(sends.some((s) => s.seen.includes(`"tool_call_id":"t-${tool}"`))).toBe(true);
+      const leaked = CANARY_KEYS.filter((k) => sends.some((s) => s.seen.includes(CANARY[k])));
+      expect(leaked, `${tool} at Personal returned Secret canaries`).toEqual([]);
     });
   }
 });
@@ -649,6 +741,54 @@ describe("egress canary: a legacy (unstamped) derived artifact fails closed", ()
     h.store.appendMessage(id, "owner", { role: "user", content: "pre-floor message" });
     h.store.updateSummary(id, `legacy ${LEGACY}`);
     expect(await trimmedTurnSees(h, LEGACY)).toBe(false);
+  });
+
+  it("an unstamped history message (pre-floor row, older sync peer) is withheld from BYOK; sent on-device at Secret", async () => {
+    for (const [mode, tier, expected] of [
+      ["byok", SensitivityLevel.Personal, false],
+      ["on-device", SensitivityLevel.Personal, false],
+      ["on-device", SensitivityLevel.Secret, true],
+    ] as const) {
+      const h = await makeRuntime();
+      const id = h.store.createConversation("owner");
+      h.store.appendMessage(id, "owner", { role: "user", content: `old ${LEGACY}` });
+      h.store.appendMessage(id, "owner", {
+        role: "assistant",
+        content: "stamped reply",
+        sensitivity: SensitivityLevel.Personal,
+      });
+      h.runtime.loadConversation(id);
+      h.setMode(mode);
+      h.runtime.setSessionSensitivity(tier);
+      const before = h.sent.length;
+      await drain(h.runtime.sendMessageStreaming("hello"));
+      const sends = h.sent.slice(before);
+      expect(
+        sends.some((s) => s.seen.includes(LEGACY)),
+        `${mode} at ${tier}`,
+      ).toBe(expected);
+      // A Personal-stamped message is context-safe: it rides every request.
+      expect(
+        sends.some((s) => s.seen.includes("stamped reply")),
+        `${mode} at ${tier}`,
+      ).toBe(true);
+    }
+  });
+
+  it("a Personal-stamped message rides a request at the default (none) tier — the ceiling, not the raw tier", async () => {
+    const h = await makeRuntime();
+    const id = h.store.createConversation("owner");
+    h.store.appendMessage(id, "owner", {
+      role: "user",
+      content: "earlier PERSONALCTX",
+      sensitivity: SensitivityLevel.Personal,
+    });
+    h.runtime.loadConversation(id);
+    h.setMode("byok");
+    h.runtime.setSessionSensitivity(SensitivityLevel.None);
+    const before = h.sent.length;
+    await drain(h.runtime.sendMessageStreaming("hello"));
+    expect(h.sent.slice(before).some((s) => s.seen.includes("PERSONALCTX"))).toBe(true);
   });
 
   it("an unstamped plan is refused on BYOK and runs on-device", async () => {
@@ -842,5 +982,54 @@ describe("egress canary: static completeness lock", () => {
       problems,
       `examined ${Object.keys(found).length} files with provider call sites`,
     ).toEqual([]);
+  });
+});
+
+describe("egress canary: the static lock sees through syntax", () => {
+  // Every way to reach a provider's request methods must count as a call
+  // site — the lock is about the value's TYPE, not the spelling.
+  const PROVIDER_DECL = `
+interface ContextPack { user_message?: string }
+interface AIResponse { text: string }
+export interface IntelligenceProvider {
+  generate(contextPack: ContextPack): Promise<AIResponse>;
+  estimateConfidence(): Promise<number>;
+  extractMemoryCandidates(response: AIResponse): Promise<unknown[]>;
+}
+export interface StreamingProvider extends IntelligenceProvider {
+  readonly model: string;
+  generateStream(contextPack: ContextPack): AsyncGenerator<unknown>;
+}
+`;
+  const PROBES: Record<string, string> = {
+    "dot.ts": `export async function f(p: IntelligenceProvider) { return p.generate({}); }`,
+    "element.ts": `export async function f(p: IntelligenceProvider) { return p["generate"]({}); }`,
+    "element-dynamic.ts": `export async function f(p: StreamingProvider, k: "generate") { return p[k]({}); }`,
+    "destructure.ts": `export async function f(p: IntelligenceProvider) { const { generate } = p; return generate({}); }`,
+    "destructure-param.ts": `export async function f({ generateStream }: StreamingProvider) { return generateStream({}); }`,
+    "any-alias.ts": `export async function f(p: IntelligenceProvider) { const q: any = p; return q.generate({}); }`,
+    "as-any.ts": `export async function f(p: StreamingProvider) { return (p as unknown as { generate(c: object): unknown }).generate({}); }`,
+    "class-impl.ts": `class P implements IntelligenceProvider { async generate() { return { text: "" }; } async estimateConfidence() { return 1; } async extractMemoryCandidates() { return []; } }
+export async function f(p: P) { return p.generate(); }`,
+  };
+
+  it("counts every probe as a provider call site", () => {
+    const root = mkdtempSync(join(tmpdir(), "egress-lock-"));
+    const src = join(root, "packages", "probe", "src");
+    mkdirSync(src, { recursive: true });
+    mkdirSync(join(root, "apps"));
+    for (const [name, body] of Object.entries(PROBES))
+      writeFileSync(join(src, name), `${PROVIDER_DECL}\n${body}\n`);
+    // A benign file: a non-provider \`.generate(\` is not a call site.
+    writeFileSync(
+      join(src, "benign.ts"),
+      `const ids = { generate: () => "id" };\nexport const x = ids.generate();\n`,
+    );
+    const found = scanProviderCallSites(root);
+    const missed = Object.keys(PROBES).filter(
+      (name) => !(found[`packages/probe/src/${name}`] ?? 0),
+    );
+    expect(missed, "probes the lock did not see").toEqual([]);
+    expect(found["packages/probe/src/benign.ts"] ?? 0, "a non-provider generate()").toBe(0);
   });
 });
