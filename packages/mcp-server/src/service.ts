@@ -22,7 +22,10 @@ import type {
   TurnContext,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
-import { verifySignedToken as defaultVerifySignedToken } from "@motebit/encryption";
+import {
+  verifySignedToken as defaultVerifySignedToken,
+  verifySuccessionChain,
+} from "@motebit/encryption";
 import type { TokenAudience } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
@@ -327,6 +330,48 @@ export function wireServerDeps(
     // Track relay-confirmed callers so local FirstContact records get upgraded
     const relayConfirmedCallers = new Set<string>();
 
+    // Short-lived cache of the relay's served identity, so a known caller's
+    // every request does not cost a relay round trip. Bounded staleness: a
+    // retired key keeps authenticating for at most this long after rotation.
+    const SERVED_IDENTITY_TTL_MS = 30_000;
+    const servedCache = new Map<string, { at: number; value: ServedIdentity }>();
+    const servedIdentity = async (callerMotebitId: string): Promise<ServedIdentity | null> => {
+      if (!syncUrl) return null;
+      const hit = servedCache.get(callerMotebitId);
+      if (hit && Date.now() - hit.at < SERVED_IDENTITY_TTL_MS) return hit.value;
+      let value: ServedIdentity | null = null;
+      try {
+        const resp = await fetch(`${syncUrl}/api/v1/identity/${callerMotebitId}`, {
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (resp.ok) {
+          const raw = (await resp.json()) as {
+            current_public_key?: unknown;
+            succession?: unknown;
+            guardian_public_key?: unknown;
+          };
+          if (typeof raw.current_public_key === "string" && raw.current_public_key !== "") {
+            value = {
+              currentKey: raw.current_public_key,
+              succession: Array.isArray(raw.succession)
+                ? (raw.succession as KeySuccessionRecord[])
+                : [],
+              ...(typeof raw.guardian_public_key === "string"
+                ? { guardianPublicKey: raw.guardian_public_key }
+                : {}),
+            };
+          }
+        }
+      } catch {
+        // Relay unreachable — not cached, so the next request asks again.
+        return null;
+      }
+      // Only a served key is cached: a caller the relay does not know yet may
+      // register at any moment, so a miss is asked again next time.
+      if (value) servedCache.set(callerMotebitId, { at: Date.now(), value });
+      return value;
+    };
+
     if (getAgentTrust || syncUrl) {
       deps.resolveCallerKey = async (callerMotebitId: string) => {
         // 1. Try local trust store first
@@ -348,10 +393,35 @@ export function wireServerDeps(
             ) {
               trustLevel = AgentTrustLevel.Verified;
             }
-            return {
-              publicKey: record.public_key,
-              trustLevel,
-            };
+            const local = { publicKey: record.public_key, trustLevel };
+            if (!syncUrl) return local;
+
+            // 1b. The stored key is the key FIRST seen for this caller; it is
+            // never preferred over a newer succession. The relay's identity
+            // bundle is the authority on the current key — after a rotation
+            // the stored key is retired and must stop authenticating (and the
+            // successor must start). Relay unreachable / caller unknown there
+            // ⇒ the stored key stands (availability; nothing says it moved).
+            const served = await servedIdentity(callerMotebitId);
+            if (!served || sameKey(served.currentKey, record.public_key)) return local;
+            if (trustLevel === AgentTrustLevel.Blocked) {
+              return { publicKey: served.currentKey, trustLevel };
+            }
+            // Earned trust carries over only across a succession PROVEN by the
+            // retired key's own signature; a key change the relay asserts
+            // without that proof authenticates at most as relay-Verified.
+            const proven = await successionLinks(
+              served.succession,
+              record.public_key,
+              served.currentKey,
+              served.guardianPublicKey,
+            );
+            relayConfirmedCallers.add(callerMotebitId);
+            const carried =
+              !proven && trustLevel === AgentTrustLevel.Trusted
+                ? AgentTrustLevel.Verified
+                : trustLevel;
+            return { publicKey: served.currentKey, trustLevel: carried };
           }
         }
 
@@ -376,19 +446,11 @@ export function wireServerDeps(
           // registries: the relay assembles it from agent_registry + the
           // succession chain, and it is the same surface an external verifier
           // resolves a receipt's producer through.
-          try {
-            const resp = await fetch(`${syncUrl}/api/v1/identity/${callerMotebitId}`, {
-              signal: AbortSignal.timeout(10_000),
-            });
-            if (resp.ok) {
-              const raw = (await resp.json()) as { current_public_key?: unknown };
-              if (typeof raw.current_public_key === "string" && raw.current_public_key !== "") {
-                relayConfirmedCallers.add(callerMotebitId);
-                return { publicKey: raw.current_public_key, trustLevel: AgentTrustLevel.Verified };
-              }
-            }
-          } catch {
-            // Relay unreachable — try the registry reads next, then fail closed
+          // Relay unreachable ⇒ fall through to the registry reads, then fail closed.
+          const served = await servedIdentity(callerMotebitId);
+          if (served) {
+            relayConfirmedCallers.add(callerMotebitId);
+            return { publicKey: served.currentKey, trustLevel: AgentTrustLevel.Verified };
           }
 
           // 2b. Agent registry via public discovery (`/api/v1/agents/discover`
@@ -927,4 +989,43 @@ export async function startServiceServer(
   process.on("SIGTERM", onSignal);
 
   return { shutdown, server: mcpServer };
+}
+
+// ---------------------------------------------------------------------------
+// Caller key succession
+// ---------------------------------------------------------------------------
+
+type KeySuccessionRecord = Parameters<typeof verifySuccessionChain>[0][number];
+
+interface ServedIdentity {
+  currentKey: string;
+  succession: KeySuccessionRecord[];
+  guardianPublicKey?: string;
+}
+
+function sameKey(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * True iff `succession` contains a verified run of records leading from
+ * `fromKey` to `toKey` — i.e. the retired key (or the guardian) signed the
+ * hand-off. Only then does trust earned under `fromKey` carry to `toKey`.
+ */
+async function successionLinks(
+  succession: KeySuccessionRecord[],
+  fromKey: string,
+  toKey: string,
+  guardianPublicKey?: string,
+): Promise<boolean> {
+  const start = succession.findIndex(
+    (r) => typeof r?.old_public_key === "string" && sameKey(r.old_public_key, fromKey),
+  );
+  if (start === -1) return false;
+  try {
+    const result = await verifySuccessionChain(succession.slice(start), guardianPublicKey);
+    return result.valid && sameKey(result.current_public_key, toKey);
+  } catch {
+    return false;
+  }
 }

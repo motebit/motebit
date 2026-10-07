@@ -51,7 +51,7 @@ afterEach(async () => {
   while (closers.length) await closers.pop()!();
 });
 
-async function fakeRelay(bundle: () => unknown | null): Promise<string> {
+async function fakeRelay(bundle: () => unknown): Promise<string> {
   const srv = http.createServer((req, res) => {
     if (req.url === `/api/v1/identity/${CALLER}`) {
       const b = bundle();
@@ -76,7 +76,7 @@ function runtimeWithStoredKey(publicKey: string, trustLevel: AgentTrustLevel): S
   return {
     getToolRegistry: () => ({ list: () => [], execute: async () => ({ ok: true }) }),
     policy: {
-      filterTools: (t) => t,
+      filterTools: (t: unknown[]) => t,
       validate: () => ({ allowed: true, requiresApproval: false }),
       createTurnContext: () => ({}),
     },

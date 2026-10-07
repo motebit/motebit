@@ -7,7 +7,15 @@ module.exports = {
   str: (s) => s,
   stringify: JSON.stringify,
   nil: "",
-  Name: class Name { constructor(s) { this.str = s; } },
-  Code: class Code { constructor(s) { this.str = s; } },
+  Name: class Name {
+    constructor(s) {
+      this.str = s;
+    }
+  },
+  Code: class Code {
+    constructor(s) {
+      this.str = s;
+    }
+  },
   KeywordCxt: class KeywordCxt {},
 };
