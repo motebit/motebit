@@ -17,6 +17,7 @@ import { loadFullConfig, saveFullConfig } from "../config.js";
 import { loadActiveSigningKey, IdentityKeyError } from "../identity.js";
 import { requireMotebitId, NO_IDENTITY_MESSAGE } from "./_helpers.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
+import { signedBootstrapBody } from "../relay-registration.js";
 
 const DEFAULT_SYNC_URL = "https://relay.motebit.com";
 
@@ -46,11 +47,11 @@ export async function handleRegister(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
-  // Decrypt the private key so we can sign the registration token. If
-  // unavailable (no key, wrong passphrase, public-key mismatch), fall back
-  // to unsigned registration with a clear warning — the relay's bootstrap
-  // endpoint accepts unsigned bootstrap for fresh identities.
-  let privateKeyBytes: Uint8Array | undefined;
+  // Decrypt the private key: the relay admits a bootstrap only when it is
+  // signed by the key it introduces (#875 — proof of possession), so there
+  // is no unsigned fallback. Without the key, registration stops here and
+  // says why and what to do.
+  let privateKeyBytes: Uint8Array;
   try {
     const loaded = await loadActiveSigningKey(fullConfig, {
       promptLabel: "Passphrase (to sign registration): ",
@@ -58,29 +59,30 @@ export async function handleRegister(config: CliConfig): Promise<void> {
     privateKeyBytes = loaded.privateKey;
   } catch (err) {
     if (err instanceof IdentityKeyError) {
-      console.warn(
-        `Warning: registration proceeds unsigned (${err.kind}: ${sanitizeRelayText(err.message)}).\n  → ${err.remedy}`,
+      console.error(
+        `Error: registration needs this identity's signing key — the relay requires proof of possession of the key it registers (${err.kind}: ${sanitizeRelayText(err.message)}).\n  → ${err.remedy}`,
       );
     } else {
-      console.warn(
-        `Warning: could not decrypt private key — registration proceeds unsigned (${sanitizeRelayText(err instanceof Error ? err.message : String(err))})`,
+      console.error(
+        `Error: could not decrypt the private key — the relay requires a registration signed by it (${sanitizeRelayText(err instanceof Error ? err.message : String(err))})`,
       );
     }
+    process.exit(1);
   }
 
-  // Step 1: Bootstrap identity + device on relay (creates identity if new, idempotent if same key)
-  const bootstrapBody = {
-    motebit_id: motebitId,
-    device_id: deviceId,
-    public_key: publicKeyHex,
-  };
-
+  // Step 1: Bootstrap identity + device on relay (creates identity if new,
+  // idempotent if same key) — signed by the key it introduces.
   let registerResp: Response;
   try {
     registerResp = await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(bootstrapBody),
+      body: await signedBootstrapBody({
+        motebitId,
+        deviceId,
+        publicKeyHex,
+        privateKey: privateKeyBytes,
+      }),
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -100,7 +102,7 @@ export async function handleRegister(config: CliConfig): Promise<void> {
   const registered = true;
 
   // Step 2: Verify registration succeeded by minting a signed token and calling /health
-  if (registered && privateKeyBytes) {
+  if (registered) {
     try {
       const { token } = await mintAudienceToken(
         { mid: motebitId, did: deviceId, aud: "sync" },
@@ -137,7 +139,7 @@ export async function handleRegister(config: CliConfig): Promise<void> {
   await pinRelayKey(syncUrl, fullConfig);
 
   // Erase temporary private key bytes
-  if (privateKeyBytes) secureErase(privateKeyBytes);
+  secureErase(privateKeyBytes);
 }
 
 /**

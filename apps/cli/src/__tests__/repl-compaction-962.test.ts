@@ -47,6 +47,7 @@ import {
   buildStorageAdapters,
   InMemoryToolRegistry,
 } from "../runtime-factory.js";
+import { signedBootstrapBody } from "../relay-registration.js";
 import { parseCliArgs } from "../args.js";
 
 const MASTER = "test-token-962";
@@ -96,7 +97,13 @@ async function bootstrap(mid: string, deviceId: string, kp: KeyPair): Promise<vo
   const resp = await fetch(`${BASE}/api/v1/agents/bootstrap`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ motebit_id: mid, device_id: deviceId, public_key: hex(kp) }),
+    // Signed by the key it introduces (#875).
+    body: await signedBootstrapBody({
+      motebitId: mid,
+      deviceId,
+      publicKeyHex: hex(kp),
+      privateKey: kp.privateKey,
+    }),
   });
   expect(resp.ok).toBe(true);
 }
@@ -217,7 +224,13 @@ describe("#962 C1 — the default REPL's push is accepted by a relay with device
     await startRelay();
     const { mid, deviceId, kp } = await identity();
     expect(
-      await bootstrapReplDevice({ syncUrl: BASE, motebitId: mid, deviceId, publicKeyHex: hex(kp) }),
+      await bootstrapReplDevice({
+        syncUrl: BASE,
+        motebitId: mid,
+        deviceId,
+        publicKeyHex: hex(kp),
+        privateKey: kp.privateKey,
+      }),
     ).toBeNull();
     const db = createMotebitDatabase(":memory:");
     cleanups.push(() => db.close());

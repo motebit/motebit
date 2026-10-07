@@ -5,7 +5,13 @@
 
 import { describe, it, expect, vi } from "vitest";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
-import { generateKeypair, bytesToHex, verifySignedToken } from "@motebit/encryption";
+import {
+  generateKeypair,
+  bytesToHex,
+  verifySignedToken,
+  verifyDeviceRegistration,
+  type SignableDeviceRegistration,
+} from "@motebit/encryption";
 import { registerWithRelay } from "../relay-registration.js";
 
 interface Call {
@@ -65,11 +71,14 @@ describe("registerWithRelay — the daemon's relay credential is its own key", (
     // Bootstrap first, unauthenticated, introducing the public key.
     expect(calls[0]!.url).toBe("http://relay.test/api/v1/agents/bootstrap");
     expect(bearer(calls[0]!)).toBeUndefined();
-    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+    // …signed by the key it introduces (#875): the relay refuses it unsigned.
+    const boot = JSON.parse(calls[0]!.init.body as string) as SignableDeviceRegistration;
+    expect(boot).toMatchObject({
       motebit_id: "mote-daemon",
       device_id: "dev-1",
       public_key: id.publicKeyHex,
     });
+    expect(await verifyDeviceRegistration(boot)).toEqual({ valid: true });
 
     // Register + listing carry tokens signed by OUR key, bound per audience.
     const reg = await verifySignedToken(bearer(byUrl("/agents/register")[0]!)!, id.publicKey);
