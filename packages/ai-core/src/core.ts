@@ -847,37 +847,43 @@ export function applyTagChain(text: string, patterns: readonly RegExp[]): string
 }
 
 /**
- * Internal block markers, as two readings of an opener: a bare prefix
- * (`<memory`, `[EXTERNAL_DATA` — so a malformed opener with no `>` is still
- * internal), and the whole tag through its own `>` / `]` (so a closer
- * written inside its attributes closes nothing). Closers are exact: a
- * malformed closer ends nothing. A text offset is internal under either
- * reading — both fail closed.
+ * Internal block markers, derived from origin/main's own chain: every
+ * `OPENER[\s\S]*?CLOSER` block pattern of {@link STRIP_TAG_PATTERNS}
+ * contributes its opener and closer, byte-for-byte in grammar (`<memory\s+[^>]*>`,
+ * `<thinking>`, `<narration\s*>`, `\[EXTERNAL_DATA[^\]]*\]`, `\[MEMORY_DATA\]`).
+ * An opener also reads as one when the text ends before its final `>` / `]`
+ * (main's stream chain holds such a partial opener). Nothing else is ever an
+ * opener — `<memory>`, `<parameter …>`, `<vector>` are text. An opener's
+ * `[^>]*` consumes a closer written inside its attributes, so that closer
+ * closes nothing. Closers are exact: a malformed closer ends nothing.
  */
-const BLOCK_MARKER_READINGS: readonly RegExp[] = [
-  /(<thinking)|(<\/thinking>)|(<memory)|(<\/memory>)|(<narration)|(<\/narration\s*>)|(<parameter)|(<\/parameter>)|(\[EXTERNAL_DATA)|(\[\/EXTERNAL_DATA\])|(\[MEMORY_DATA)|(\[\/MEMORY_DATA\])/g,
-  /(<thinking[^>]*(?:>|$))|(<\/thinking>)|(<memory[^>]*(?:>|$))|(<\/memory>)|(<narration[^>]*(?:>|$))|(<\/narration\s*>)|(<parameter[^>]*(?:>|$))|(<\/parameter>)|(\[EXTERNAL_DATA[^\]]*(?:\]|$))|(\[\/EXTERNAL_DATA\])|(\[MEMORY_DATA[^\]]*(?:\]|$))|(\[\/MEMORY_DATA\])/g,
-];
+const BLOCK_MARKER = ((): RegExp => {
+  const groups: string[] = [];
+  for (const { source } of STRIP_TAG_PATTERNS) {
+    const parts = source.split("[\\s\\S]*?");
+    if (parts.length !== 2) continue;
+    const [open, close] = parts as [string, string];
+    const tail = /(?:>|\\\])$/.exec(open)!;
+    groups.push(`(${open}|${open.slice(0, tail.index)}$)`, `(${close})`);
+  }
+  return new RegExp(groups.join("|"), "g");
+})();
 
 /**
  * Call `mark` with every offset of `text` that lies inside an internal
- * block, markers included. Innermost blocks — an opener whose next marker
- * is its own closer — are removed first and the text rescanned, until none
+ * block, markers included. Innermost blocks — an opener whose next opener
+ * or same-type marker is its own closer — are removed first and the text rescanned, until none
  * is left: removing a block splices its neighbours, and a marker that splice
- * forms (`<pa<parameter …>x</parameter>rameter …>`) is found on the next
- * pass; with no block left, stray closers are spliced out the same way. An
- * opener still standing after that hides to the end of the text.
+ * forms (`<thi<memory a>x</memory>nking>`) is found on the next pass. A
+ * closer outside every block is text, never hidden alone. An opener still
+ * standing once no block is left hides to the end of the text.
  */
 function markInternal(text: string, mark: (offset: number) => void): void {
-  for (const reading of BLOCK_MARKER_READINGS) markInternalAs(text, reading, mark);
-}
-
-function markInternalAs(text: string, marker: RegExp, mark: (offset: number) => void): void {
   let cur = text;
   let at: number[] | null = null; // cur offset -> text offset; null: identity
   const textOf = (i: number): number => (at === null ? i : at[i]!);
   for (;;) {
-    const markers = [...cur.matchAll(marker)].map((m) => {
+    const markers = [...cur.matchAll(BLOCK_MARKER)].map((m) => {
       const group = m.findIndex((g, i) => i > 0 && g !== undefined);
       return {
         start: m.index,
@@ -887,22 +893,18 @@ function markInternalAs(text: string, marker: RegExp, mark: (offset: number) => 
       };
     });
     const blocks: Array<[number, number]> = [];
-    for (let k = 0; k + 1 < markers.length; k++) {
+    for (let k = 0; k < markers.length; k++) {
       const o = markers[k]!;
-      const c = markers[k + 1]!;
-      if (o.opener && !c.opener && c.type === o.type) {
+      if (!o.opener) continue;
+      // Innermost: the next opener-or-own-closer after `o` is its closer. A
+      // closer of another type is text inside the block (main never matches
+      // a lone `</memory>` / `</thinking>` — they are never hidden alone).
+      let j = k + 1;
+      while (j < markers.length && !markers[j]!.opener && markers[j]!.type !== o.type) j++;
+      const c = markers[j];
+      if (c !== undefined && !c.opener) {
         blocks.push([o.start, c.end]);
-        k++;
-      }
-    }
-    if (blocks.length === 0) {
-      // No block left: a closer with no opener of its type before it is a
-      // stray marker. Splice the strays out (main's chain drops stray
-      // `[/…_DATA]` the same way) and rescan — the splice can form an opener.
-      const opened = new Set<number>();
-      for (const m of markers) {
-        if (m.opener) opened.add(m.type);
-        else if (!opened.has(m.type)) blocks.push([m.start, m.end]);
+        k = j;
       }
     }
     if (blocks.length === 0) {

@@ -12,7 +12,10 @@
  *       of a block main's own TAG CHAIN shows (main reads a stray closer
  *       spliced into another tag's name as a real closer) that main hides
  *       only by its `\*[^*]+\*` markdown strip or its never-released `<`
- *       hold — the two behaviours this branch removes by design.
+ *       hold — the two behaviours this branch removes by design. Tokens
+ *       main's stream hides only by holding from an unclosed `<parameter`
+ *       forever, and tokens off the stream that main's chain shows (its
+ *       chains never match `<parameter …>` there), are not counted.
  *   (2) STREAM == FINAL — the concatenated stream deltas equal the final
  *       display text exactly, at every split.
  *   (3) markdown with no tags and no cues is byte-preserved (trimmed).
@@ -33,6 +36,7 @@ import { DisplayStream, STREAM_TAG_PATTERNS } from "../streaming.js";
 import {
   generateFuzzCorpus,
   generateMarkdownCorpus,
+  MAIN_HOLD_TAGS,
   mainStream,
   mainStripInternalTags,
   mainStripPartialActionTag,
@@ -69,6 +73,20 @@ function finalDisplay(text: string): string {
 }
 
 /**
+ * The input's secret tokens `text` shows. A token followed by digits from
+ * adjacent text (`SECRET12` + `1. step` reads `SECRET121`) is still the
+ * input's token: trailing digits are dropped until it names one.
+ */
+function tokensIn(text: string, known: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>();
+  for (let token of secretsIn(text)) {
+    while (!known.has(token) && /\d\d$/.test(token)) token = token.slice(0, -1);
+    out.add(token);
+  }
+  return out;
+}
+
+/**
  * Secrets in `input` that `mainOut` hides but `out` shows, plus any
  * unclosed-block secret `out` shows; `exempt` collects closed-block secrets
  * main's own tag chain (`mainChain`) shows.
@@ -80,9 +98,10 @@ function leaks(
   out: string,
   exempt: Set<string>,
 ): string[] {
-  const mainShown = new Set(secretsIn(mainOut));
-  const chainShown = new Set(secretsIn(mainChain));
-  const shown = new Set(secretsIn(out));
+  const known = new Set(secretsIn(input));
+  const mainShown = tokensIn(mainOut, known);
+  const chainShown = tokensIn(mainChain, known);
+  const shown = tokensIn(out, known);
   const found = new Set(unclosedSecretsIn(out));
   for (const s of secretsIn(input)) {
     if (mainShown.has(s) || !shown.has(s) || found.has(s)) continue;
@@ -172,8 +191,25 @@ describe("differential display fuzz", () => {
 
     corpus.forEach((input, i) => {
       const exempt = new Set<string>();
-      const leak = (path: string, mainOut: string, mainChain: string, out: string): void => {
-        const l = leaks(input, mainOut, mainChain, out, exempt);
+      // Off the stream, main's chains never match `<parameter …>`, so a
+      // token their chain shows there is shown by definition (the bar is
+      // main's tag chain): exempt, but not counted toward the bound.
+      const uncounted = new Set<string>();
+      const leak = (
+        path: string,
+        mainOut: string,
+        mainChain: string,
+        out: string,
+        explained = "",
+      ): void => {
+        const counted = path === "stream" || path === "desktop";
+        const found = new Set<string>();
+        const l = leaks(input, mainOut, mainChain, out, found);
+        // A token main's stream hides only by holding from an unclosed
+        // `<parameter` forever — not an opener in main's chain grammar —
+        // is shown by the chain by definition: uncounted.
+        const shownWithoutHold = tokensIn(explained, new Set(secretsIn(input)));
+        for (const s of found) (counted && !shownWithoutHold.has(s) ? exempt : uncounted).add(s);
         if (l.length > 0) failures.push({ property: "hiding", path, input, detail: { out, l } });
       };
       const internalChain = mainStripInternalTags(input);
@@ -201,13 +237,18 @@ describe("differential display fuzz", () => {
       // accident, not hidden. Its baseline is what main shows on the split
       // OR on the whole text.
       const mainWhole = mainStream([input]);
+      const noParamHold = MAIN_HOLD_TAGS.filter((t) => t !== "<parameter");
       for (const pieces of splits) {
         const out = stream(pieces);
         const mainSplit = mainStream(pieces);
-        leak("stream", `${mainSplit}\n${mainWhole}`, streamChain, out);
+        const unheldSplit = mainStream(pieces, noParamHold);
+        const unheldWhole = mainStream([input], noParamHold);
+        const explained = `${unheldSplit}\n${unheldWhole}`;
+        leak("stream", `${mainSplit}\n${mainWhole}`, streamChain, out, explained);
         // Desktop renders stripPartialActionTag over the stream's deltas.
         const mainDesktop = `${mainStripPartialActionTag(mainSplit)}\n${mainStripPartialActionTag(mainWhole)}`;
-        leak("desktop", mainDesktop, streamChain, stripPartialActionTag(out));
+        const explainedDesktop = `${mainStripPartialActionTag(unheldSplit)}\n${mainStripPartialActionTag(unheldWhole)}`;
+        leak("desktop", mainDesktop, streamChain, stripPartialActionTag(out), explainedDesktop);
         if (out !== final) {
           failures.push({
             property: "stream==final",

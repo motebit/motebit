@@ -36,33 +36,52 @@ function stream(pieces: readonly string[]): string {
   return out + display.finish(accumulated);
 }
 
-/** Main's tag chain output, then the markdown steps (cues, folds); trimmed. */
+/**
+ * Main's tag chain output, then the markdown steps (cues, folds); trimmed.
+ * Where the chain removed nothing that is exact; where it removed a block,
+ * the branch also folds the whitespace the removal left, so the comparison
+ * there ignores whitespace — nothing main's chain keeps may be missing.
+ */
 function expected(chainOut: string, partial = false): string {
   return renderDisplayText(chainOut, [], { partial }).trim();
 }
 
-/** [path, branch output, expected] for every display path. */
-function paths(input: string): Array<[string, string, string]> {
+const squash = (s: string): string => s.replace(/\s+/g, "");
+
+/** [path, branch output, main's chain output, expected] for every display path. */
+function paths(input: string): Array<[string, string, string, string]> {
   const rand = mulberry32(input.length);
-  const streamWant = expected(mainStreamChainOnly(input));
+  const streamChain = mainStreamChainOnly(input);
+  const streamWant = expected(streamChain);
+  const stripChain = mainStripTagsChainOnly(input);
+  const internalChain = mainStripInternalTags(input);
   return [
-    ["stripTags", stripTags(input), expected(mainStripTagsChainOnly(input))],
-    ["stripInternalTags", stripInternalTags(input).trim(), mainStripInternalTags(input).trim()],
+    ["stripTags", stripTags(input), stripChain, expected(stripChain)],
+    ["stripInternalTags", stripInternalTags(input).trim(), internalChain, internalChain.trim()],
     [
       "stripInternalTagsForDisplay",
       stripInternalTagsForDisplay(input),
-      expected(mainStripInternalTags(input)),
+      internalChain,
+      expected(internalChain),
     ],
     [
       "stripPartialActionTag",
       stripPartialActionTag(input),
-      expected(mainStripInternalTags(input), true),
+      internalChain,
+      expected(internalChain, true),
     ],
-    ["final", renderDisplayText(input, STREAM_TAG_PATTERNS).trim(), streamWant],
-    ["stream whole", stream([input]), streamWant],
-    ["stream per-char", stream([...input]), streamWant],
-    ["stream random", stream(randomSplit(input, rand)), streamWant],
+    ["final", renderDisplayText(input, STREAM_TAG_PATTERNS).trim(), streamChain, streamWant],
+    ["stream whole", stream([input]), streamChain, streamWant],
+    ["stream per-char", stream([...input]), streamChain, streamWant],
+    ["stream random", stream(randomSplit(input, rand)), streamChain, streamWant],
   ];
+}
+
+function check(input: string): void {
+  for (const [path, out, chain, want] of paths(input)) {
+    if (chain === input) expect({ path, out }).toEqual({ path, out: want });
+    else expect({ path, out: squash(out) }).toEqual({ path, out: squash(want) });
+  }
 }
 
 describe("realistic answers", () => {
@@ -73,17 +92,15 @@ describe("realistic answers", () => {
   it.each(REALISTIC_ANSWERS.map((a) => [a]))(
     "displays as main's tag chain keeps it: %j",
     (input) => {
-      for (const [path, out, want] of paths(input)) {
-        expect({ path, out }).toEqual({ path, out: want });
-      }
+      check(input);
     },
   );
 
   it.each(REALISTIC_ANSWERS.flatMap((a) => TRAILING_INTERNAL.map((t) => [a + t])))(
     "still hides a real trailing internal tag: %j",
     (input) => {
-      for (const [path, out, want] of paths(input)) {
-        expect({ path, out }).toEqual({ path, out: want });
+      check(input);
+      for (const [, out] of paths(input)) {
         expect(out).not.toContain("SECRET_MEM");
         expect(out).not.toContain("<state ");
       }

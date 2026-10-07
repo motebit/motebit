@@ -53,10 +53,21 @@ function stripInternalTagsMain(text: string): string {
 
 const CORPUS = generateSpliceCorpus(3000);
 
-/** Secrets present in `input` that `hidden` (main's chain output) does not show. */
+/**
+ * Secrets present in `input` that `hidden` (main's chain output) does not
+ * show. A token followed by digits from adjacent text (`SECRET12` + `1. step`
+ * reads `SECRET121`) is still the input's token: trailing digits are dropped
+ * until it names one.
+ */
 function hiddenSecrets(input: string, hidden: string): string[] {
-  const shown = new Set(secretsIn(hidden));
-  return secretsIn(input).filter((s) => !shown.has(s));
+  const inInput = secretsIn(input);
+  const known = new Set(inInput);
+  const shown = new Set<string>();
+  for (let token of secretsIn(hidden)) {
+    while (!known.has(token) && /\d\d$/.test(token)) token = token.slice(0, -1);
+    shown.add(token);
+  }
+  return inInput.filter((s) => !shown.has(s));
 }
 
 describe("tag splice: the review repros", () => {

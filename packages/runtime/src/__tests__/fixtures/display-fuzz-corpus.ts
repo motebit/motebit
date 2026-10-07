@@ -41,13 +41,16 @@ const BLOCKS: ReadonlyArray<readonly [string, string]> = [
   ['<parameter name="q">', "</parameter>"],
 ];
 
-/** Openers left unclosed: everything after them is internal. */
+/**
+ * Openers left unclosed: everything after them is internal. Only opener
+ * shapes origin/main's own chain grammar matches — `<parameter …>` is not
+ * one (main's stream holds it but its chains never hide it unclosed).
+ */
 const UNCLOSED_OPENERS: readonly string[] = [
   "<thinking>",
   '<memory confidence="0.9" sensitivity="none">',
   '<memory confidence="0.5"',
   "<narration>",
-  '<parameter name="q">',
   "[MEMORY_DATA]",
   '[EXTERNAL_DATA source="w"]',
 ];
@@ -290,8 +293,11 @@ export function mainStripPartialActionTag(text: string): string {
     .trim();
 }
 
-/** origin/main streaming.ts `stripDisplayTags`. */
-function mainStripDisplayTags(text: string): { clean: string; pending: string } {
+/** origin/main streaming.ts `stripDisplayTags`; `holdTags` defaults to main's own list. */
+function mainStripDisplayTags(
+  text: string,
+  holdTags: readonly string[] = MAIN_HOLD_TAGS,
+): { clean: string; pending: string } {
   const clean = text
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
     .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
@@ -308,7 +314,7 @@ function mainStripDisplayTags(text: string): { clean: string; pending: string } 
     .replace(/\*{1,3}/g, "")
     .replace(/ {2,}/g, " ");
 
-  for (const tag of ["<memory", "<thinking", "<parameter", "<narration"]) {
+  for (const tag of holdTags) {
     const lastOpen = clean.lastIndexOf(tag);
     if (lastOpen !== -1) {
       const closeTag = `</${tag.slice(1)}>`;
@@ -326,14 +332,25 @@ function mainStripDisplayTags(text: string): { clean: string; pending: string } 
   return { clean, pending: "" };
 }
 
+/** origin/main streaming.ts's never-released hold list. */
+export const MAIN_HOLD_TAGS: readonly string[] = [
+  "<memory",
+  "<thinking",
+  "<parameter",
+  "<narration",
+];
+
 /** origin/main's live stream: the concatenated text deltas for `pieces`. */
-export function mainStream(pieces: readonly string[]): string {
+export function mainStream(
+  pieces: readonly string[],
+  holdTags: readonly string[] = MAIN_HOLD_TAGS,
+): string {
   let accumulated = "";
   let yieldedCleanLength = 0;
   let out = "";
   for (const piece of pieces) {
     accumulated += piece;
-    const clean = mainStripDisplayTags(accumulated).clean.trimStart();
+    const clean = mainStripDisplayTags(accumulated, holdTags).clean.trimStart();
     const delta = clean.slice(yieldedCleanLength);
     if (delta) {
       yieldedCleanLength += clean.slice(yieldedCleanLength).length;
