@@ -13,7 +13,7 @@
  * Driven end to end: REAL Ed25519 keys, a REAL signed succession record, a
  * REAL HTTP MCP server and a fake relay serving the identity bundle.
  */
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -55,6 +55,11 @@ async function fakeRelay(bundle: () => unknown): Promise<string> {
   const srv = http.createServer((req, res) => {
     if (req.url === `/api/v1/identity/${CALLER}`) {
       const b = bundle();
+      if (b === "down") {
+        res.writeHead(503);
+        res.end();
+        return;
+      }
       if (b == null) {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "not_found" }));
@@ -91,7 +96,10 @@ function runtimeWithStoredKey(publicKey: string, trustLevel: AgentTrustLevel): S
   } as unknown as ServiceRuntime;
 }
 
-async function serve(resolveCallerKey: MotebitServerDeps["resolveCallerKey"]): Promise<number> {
+async function serve(
+  resolveCallerKey: MotebitServerDeps["resolveCallerKey"],
+  onCallerVerified?: MotebitServerDeps["onCallerVerified"],
+): Promise<number> {
   process.env["MOTEBIT_SELF_WATCHDOG"] = "off";
   const deps: MotebitServerDeps = {
     motebitId: SERVER,
@@ -105,6 +113,7 @@ async function serve(resolveCallerKey: MotebitServerDeps["resolveCallerKey"]): P
     logToolCall: () => {},
     verifySignedToken,
     resolveCallerKey,
+    ...(onCallerVerified ? { onCallerVerified } : {}),
   };
   const adapter = new McpServerAdapter({ transport: "http", port: 0 }, deps);
   await adapter.start();
@@ -229,6 +238,7 @@ describe("caller key succession — the retired key never authenticates", () => 
       publicKey: bytesToHex(k.publicKey),
       trustLevel: AgentTrustLevel.Trusted,
     });
+    // Unknown to the relay: the stored key stands, but no longer above Verified.
     served = null;
     const deps2 = wireServerDeps(
       runtimeWithStoredKey(bytesToHex(k.publicKey), AgentTrustLevel.Trusted),
@@ -236,7 +246,169 @@ describe("caller key succession — the retired key never authenticates", () => 
     );
     expect(await deps2.resolveCallerKey!(CALLER)).toEqual({
       publicKey: bytesToHex(k.publicKey),
+      trustLevel: AgentTrustLevel.Verified,
+    });
+  });
+});
+
+/**
+ * A runtime whose trust store is live: `recordAgentInteraction` follows the
+ * runtime's contract — a stored key changes only with `provenSuccession`.
+ */
+function liveRuntime(publicKey: string, trustLevel: AgentTrustLevel) {
+  const record = { trust_level: trustLevel, public_key: publicKey };
+  const calls: Array<{ key?: string; proven?: boolean }> = [];
+  const runtime = {
+    ...(runtimeWithStoredKey(publicKey, trustLevel) as unknown as Record<string, unknown>),
+    getAgentTrust: async (id: string) => (id === CALLER ? { ...record } : null),
+    recordAgentInteraction: async (
+      _id: string,
+      key?: string,
+      _type?: string,
+      opts?: { provenSuccession?: boolean },
+    ) => {
+      calls.push({ key, proven: opts?.provenSuccession });
+      if (key && (record.public_key === "" || opts?.provenSuccession === true)) {
+        record.public_key = key;
+      }
+      return { ...record };
+    },
+  } as unknown as ServiceRuntime;
+  return { runtime, record, calls };
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 20));
+
+describe("caller key succession — trust never rides an unproven key change", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("an unproven key change stays at Verified on every request, and the stored key is not replaced", async () => {
+    const { oldKey, newKey } = await rotated();
+    const syncUrl = await fakeRelay(() => ({
+      motebit_id: CALLER,
+      created_at: new Date().toISOString(),
+      current_public_key: bytesToHex(newKey.publicKey),
+      succession: [],
+      anchored: null,
+    }));
+    const { runtime, record, calls } = liveRuntime(
+      bytesToHex(oldKey.publicKey),
+      AgentTrustLevel.Trusted,
+    );
+    const deps = wireServerDeps(runtime, { motebitId: SERVER, syncUrl });
+    const port = await serve(deps.resolveCallerKey, deps.onCallerVerified);
+
+    expect(await status(port, newKey.privateKey)).toBe(200);
+    await tick();
+    expect(calls.at(-1)).toEqual({ key: bytesToHex(newKey.publicKey), proven: false });
+    expect(record.public_key).toBe(bytesToHex(oldKey.publicKey));
+    expect(record.trust_level).toBe(AgentTrustLevel.Trusted);
+
+    // 2nd request: still capped.
+    expect(await deps.resolveCallerKey!(CALLER)).toEqual({
+      publicKey: bytesToHex(newKey.publicKey),
+      trustLevel: AgentTrustLevel.Verified,
+    });
+    expect(await status(port, newKey.privateKey)).toBe(200);
+    await tick();
+    expect(await deps.resolveCallerKey!(CALLER)).toEqual({
+      publicKey: bytesToHex(newKey.publicKey),
+      trustLevel: AgentTrustLevel.Verified,
+    });
+  });
+
+  it("a proven succession is recorded as proven, so the successor keeps the earned level", async () => {
+    const { oldKey, newKey, record: succ } = await rotated();
+    const syncUrl = await fakeRelay(() => ({
+      motebit_id: CALLER,
+      created_at: new Date().toISOString(),
+      current_public_key: bytesToHex(newKey.publicKey),
+      succession: [succ],
+      anchored: null,
+    }));
+    const { runtime, record, calls } = liveRuntime(
+      bytesToHex(oldKey.publicKey),
+      AgentTrustLevel.Trusted,
+    );
+    const deps = wireServerDeps(runtime, { motebitId: SERVER, syncUrl });
+    const port = await serve(deps.resolveCallerKey, deps.onCallerVerified);
+    expect(await status(port, newKey.privateKey)).toBe(200);
+    await tick();
+    expect(calls.at(-1)).toEqual({ key: bytesToHex(newKey.publicKey), proven: true });
+    expect(record.public_key).toBe(bytesToHex(newKey.publicKey));
+    expect(await deps.resolveCallerKey!(CALLER)).toEqual({
+      publicKey: bytesToHex(newKey.publicKey),
       trustLevel: AgentTrustLevel.Trusted,
     });
+  });
+
+  it("a blocked caller stays blocked through an unproven key change and a later request", async () => {
+    const { oldKey, newKey } = await rotated();
+    const syncUrl = await fakeRelay(() => ({
+      motebit_id: CALLER,
+      created_at: new Date().toISOString(),
+      current_public_key: bytesToHex(newKey.publicKey),
+      succession: [],
+      anchored: null,
+    }));
+    const { runtime } = liveRuntime(bytesToHex(oldKey.publicKey), AgentTrustLevel.Blocked);
+    const deps = wireServerDeps(runtime, { motebitId: SERVER, syncUrl });
+    for (let i = 0; i < 2; i++) {
+      const r = await deps.resolveCallerKey!(CALLER);
+      expect(r?.trustLevel).toBe(AgentTrustLevel.Blocked);
+    }
+  });
+});
+
+describe("caller key resolution — relay unavailable", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("accepts the stored key at most at Verified while the relay is down", async () => {
+    const k = await generateKeypair();
+    const syncUrl = await fakeRelay(() => "down");
+    for (const level of [AgentTrustLevel.Trusted, AgentTrustLevel.Verified]) {
+      const deps = wireServerDeps(runtimeWithStoredKey(bytesToHex(k.publicKey), level), {
+        motebitId: SERVER,
+        syncUrl,
+      });
+      expect(await deps.resolveCallerKey!(CALLER)).toEqual({
+        publicKey: bytesToHex(k.publicKey),
+        trustLevel: AgentTrustLevel.Verified,
+      });
+    }
+    const blocked = wireServerDeps(
+      runtimeWithStoredKey(bytesToHex(k.publicKey), AgentTrustLevel.Blocked),
+      { motebitId: SERVER, syncUrl },
+    );
+    expect((await blocked.resolveCallerKey!(CALLER))?.trustLevel).toBe(AgentTrustLevel.Blocked);
+  });
+
+  it("never falls back to the stored key for a caller whose rotation was observed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { oldKey, newKey } = await rotated();
+    let up = true;
+    const syncUrl = await fakeRelay(() =>
+      up
+        ? {
+            motebit_id: CALLER,
+            created_at: new Date().toISOString(),
+            current_public_key: bytesToHex(newKey.publicKey),
+            succession: [],
+            anchored: null,
+          }
+        : "down",
+    );
+    const deps = wireServerDeps(
+      runtimeWithStoredKey(bytesToHex(oldKey.publicKey), AgentTrustLevel.Trusted),
+      { motebitId: SERVER, syncUrl },
+    );
+    expect((await deps.resolveCallerKey!(CALLER))?.publicKey).toBe(bytesToHex(newKey.publicKey));
+    up = false;
+    vi.setSystemTime(Date.now() + 60_000);
+    expect(await deps.resolveCallerKey!(CALLER)).toBeNull();
   });
 });

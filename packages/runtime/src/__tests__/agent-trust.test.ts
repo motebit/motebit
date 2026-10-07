@@ -62,6 +62,36 @@ describe("MotebitRuntime Agent Trust", () => {
     expect(record!.public_key).toBe("ed25519:pubkey123");
   });
 
+  it("never adopts a changed public key without a proven succession — the stored key and level stand", async () => {
+    await runtime.recordAgentInteraction("remote-mote-1", "aa".repeat(32));
+    await runtime.setAgentTrustLevel("remote-mote-1", AgentTrustLevel.Trusted);
+    // An unproven key change (the relay merely asserts K1): the record keeps K0.
+    const r = await runtime.recordAgentInteraction("remote-mote-1", "bb".repeat(32));
+    expect(r!.public_key).toBe("aa".repeat(32));
+    expect(r!.trust_level).toBe(AgentTrustLevel.Trusted);
+    expect(r!.interaction_count).toBe(2);
+    const stored = await runtime.getAgentTrust("remote-mote-1");
+    expect(stored!.public_key).toBe("aa".repeat(32));
+  });
+
+  it("adopts a changed public key only when the succession is proven", async () => {
+    await runtime.recordAgentInteraction("remote-mote-1", "aa".repeat(32));
+    await runtime.setAgentTrustLevel("remote-mote-1", AgentTrustLevel.Trusted);
+    const r = await runtime.recordAgentInteraction("remote-mote-1", "bb".repeat(32), undefined, {
+      provenSuccession: true,
+    });
+    expect(r!.public_key).toBe("bb".repeat(32));
+    expect(r!.trust_level).toBe(AgentTrustLevel.Trusted);
+  });
+
+  it("a key spelled in another case is the same key, and a record with no key takes the first one", async () => {
+    await runtime.recordAgentInteraction("remote-mote-1");
+    const first = await runtime.recordAgentInteraction("remote-mote-1", "aa".repeat(32));
+    expect(first!.public_key).toBe("aa".repeat(32));
+    const same = await runtime.recordAgentInteraction("remote-mote-1", "AA".repeat(32));
+    expect(same!.public_key).toBe("aa".repeat(32));
+  });
+
   it("getAgentTrust retrieves existing record", async () => {
     await runtime.recordAgentInteraction("remote-mote-1");
     const found = await runtime.getAgentTrust("remote-mote-1");

@@ -174,3 +174,95 @@ describe("federation — a peer id's key is not re-proposable", () => {
     expect(again.status).toBe(409);
   });
 });
+
+describe("federation — an unconfirmed re-proposal never touches a known peer's row", () => {
+  let relay: SyncRelay;
+  let peerId: string;
+  let peer: Keys;
+
+  const row = (): PeerRow | undefined =>
+    relay.moteDb.db
+      .prepare(
+        "SELECT public_key, state, trust_score, endpoint_url FROM relay_peers WHERE peer_relay_id = ?",
+      )
+      .get(peerId) as PeerRow | undefined;
+
+  beforeEach(async () => {
+    relay = await createTestRelay({ federation: { endpointUrl: HOME_URL, displayName: "Home" } });
+    peerId = `relay-${crypto.randomUUID()}`;
+    peer = await keys();
+    const p = await propose(relay, peerId, peer, PEER_URL);
+    expect(p.status).toBe(200);
+    const c = await confirm(relay, peerId, (p.body as { nonce: string }).nonce, peer);
+    expect(c.status).toBe(200);
+    relay.moteDb.db
+      .prepare("UPDATE relay_peers SET trust_score = 0.9 WHERE peer_relay_id = ?")
+      .run(peerId);
+  });
+
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  for (const state of ["suspended", "removed"] as const) {
+    it(`a stranger re-proposing a ${state} peer under its own public key cannot park it, and the peer still re-peers`, async () => {
+      relay.moteDb.db
+        .prepare("UPDATE relay_peers SET state = ?, last_heartbeat_at = 1 WHERE peer_relay_id = ?")
+        .run(state, peerId);
+      const before = row()!;
+
+      // The stranger holds only the victim's PUBLIC key; it proposes and never confirms.
+      const squat = await fed(relay, "/federation/v1/peer/propose", {
+        relay_id: peerId,
+        public_key: peer.publicKeyHex,
+        endpoint_url: ATTACKER_URL,
+        nonce: rand(),
+      });
+      expect(squat.status).toBe(200);
+      // The stored row is exactly as before: state, key, endpoint, trust.
+      expect(row()).toEqual(before);
+
+      // A failed confirm leaves it exactly as before too.
+      const attacker = await keys();
+      const bad = await confirm(relay, peerId, (squat.body as { nonce: string }).nonce, attacker);
+      expect(bad.status).toBe(403);
+      expect(row()).toEqual(before);
+
+      // The legitimate peer re-peers — not blocked by a parked 'pending' row,
+      // and a second squat in between does not invalidate its challenge.
+      const p = await propose(relay, peerId, peer, PEER_URL);
+      expect(p.status).toBe(200);
+      const squat2 = await fed(relay, "/federation/v1/peer/propose", {
+        relay_id: peerId,
+        public_key: peer.publicKeyHex,
+        endpoint_url: ATTACKER_URL,
+        nonce: rand(),
+      });
+      expect(squat2.status).toBe(200);
+      const c = await confirm(relay, peerId, (p.body as { nonce: string }).nonce, peer);
+      expect(c.status).toBe(200);
+      const after = row()!;
+      expect(after.state).toBe("active");
+      expect(after.public_key).toBe(peer.publicKeyHex);
+      expect(after.endpoint_url).toBe(PEER_URL);
+      expect(after.trust_score).toBe(0.9);
+    });
+  }
+
+  it("an expired proposal cannot be confirmed and leaves the row as before", async () => {
+    relay.moteDb.db
+      .prepare(
+        "UPDATE relay_peers SET state = 'suspended', last_heartbeat_at = 1 WHERE peer_relay_id = ?",
+      )
+      .run(peerId);
+    const before = row()!;
+    const p = await propose(relay, peerId, peer, PEER_URL);
+    expect(p.status).toBe(200);
+    relay.moteDb.db
+      .prepare("UPDATE relay_peer_proposals SET expires_at = 1 WHERE peer_relay_id = ?")
+      .run(peerId);
+    const c = await confirm(relay, peerId, (p.body as { nonce: string }).nonce, peer);
+    expect(c.status).toBe(404);
+    expect(row()).toEqual(before);
+  });
+});
