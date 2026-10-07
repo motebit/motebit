@@ -69,6 +69,8 @@ export {
   verifyExecutionReceipt,
   verifyExecutionReceiptDetailed,
   type ReceiptVerifyDetail,
+  // Receipt-chain verifier with optional strict result_hash binding at every depth.
+  verifyReceipt,
   signSovereignPaymentReceipt,
   verifyReceiptChain,
   verifyReceiptSequence,

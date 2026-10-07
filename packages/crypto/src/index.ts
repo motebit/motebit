@@ -1877,6 +1877,22 @@ export async function verifyReceipt(
   receipt: ExecutionReceipt,
   options?: VerifyOptions,
 ): Promise<ReceiptVerifyResult> {
+  return verifyReceiptAtDepth(receipt, options, 0);
+}
+
+/**
+ * `verifyReceipt` at a known nesting depth (0 = the outer receipt). Strict
+ * hash binding (`options.strictHashBinding`) is carried into every
+ * `delegation_receipts` entry at every depth, and its failures name the depth
+ * and `task_id` of the offending child. Without strict mode the options are
+ * not forwarded and every message is unchanged.
+ */
+async function verifyReceiptAtDepth(
+  receipt: ExecutionReceipt,
+  options: VerifyOptions | undefined,
+  depth: number,
+): Promise<ReceiptVerifyResult> {
+  const strict = options?.strictHashBinding === true;
   // Resolve public key: embedded in receipt, or fail
   let publicKey: Uint8Array | null = null;
   let signerDid: string | undefined;
@@ -1896,7 +1912,7 @@ export async function verifyReceipt(
 
   if (!publicKey) {
     // Recursively verify delegations even if root can't be verified
-    const delegations = await verifyReceiptDelegations(receipt);
+    const delegations = await verifyReceiptDelegations(receipt, strict, depth);
     return {
       type: "receipt",
       valid: false,
@@ -1920,11 +1936,18 @@ export async function verifyReceipt(
   }
 
   // Recursively verify delegation receipts
-  const delegations = await verifyReceiptDelegations(receipt);
+  const delegations = await verifyReceiptDelegations(receipt, strict, depth);
   const delegationErrors = delegations.filter((d) => !d.valid);
   for (const d of delegationErrors) {
+    const base = `§11.5 violation: delegation ${d.receipt?.task_id ?? "unknown"} verification failed`;
+    // Strict mode surfaces the child's own reasons so a nested result_hash
+    // mismatch is named (depth + task_id) at the top level.
+    const detail =
+      strict && d.errors && d.errors.length > 0
+        ? `: ${d.errors.map((e) => e.message).join("; ")}`
+        : "";
     errors.push({
-      message: `§11.5 violation: delegation ${d.receipt?.task_id ?? "unknown"} verification failed`,
+      message: `${base}${detail}`,
       path: `delegation_receipts`,
     });
   }
@@ -1933,13 +1956,14 @@ export async function verifyReceipt(
   // the result field. Recompute it per spec and reject a self-inconsistent
   // receipt (one whose result_hash a third party can't reproduce from result).
   let resultHashOk = true;
-  if (options?.strictHashBinding) {
+  if (strict) {
     const expected = await hash(new TextEncoder().encode(receipt.result));
     resultHashOk = expected === receipt.result_hash;
     if (!resultHashOk) {
+      const where =
+        depth === 0 ? "" : ` (delegation depth ${depth}, task_id ${receipt.task_id ?? "unknown"})`;
       errors.push({
-        message:
-          "result_hash does not equal hex(SHA-256(result)) — receipt is not self-consistent (strict mode)",
+        message: `result_hash does not equal hex(SHA-256(result))${where} — receipt is not self-consistent (strict mode)`,
         path: "result_hash",
       });
     }
@@ -2429,11 +2453,22 @@ async function verifyToolInvocation(
   };
 }
 
-async function verifyReceiptDelegations(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult[]> {
+async function verifyReceiptDelegations(
+  receipt: ExecutionReceipt,
+  strictHashBinding: boolean,
+  depth: number,
+): Promise<ReceiptVerifyResult[]> {
   if (!receipt.delegation_receipts || receipt.delegation_receipts.length === 0) {
     return [];
   }
-  return Promise.all(receipt.delegation_receipts.map((dr) => verifyReceipt(dr)));
+  // Only strict binding propagates; the default (signature-only) path stays
+  // byte-identical to its pre-recursion behaviour.
+  const childOptions: VerifyOptions | undefined = strictHashBinding
+    ? { strictHashBinding: true }
+    : undefined;
+  return Promise.all(
+    receipt.delegation_receipts.map((dr) => verifyReceiptAtDepth(dr, childOptions, depth + 1)),
+  );
 }
 
 // ===========================================================================
