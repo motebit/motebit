@@ -889,7 +889,7 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
         msg.toolCallId ?? null,
         now,
         tokenEstimate,
-        msg.sensitivity ?? null,
+        msg.sensitivity ?? null, // write-tier-gate: exempt own stamp; NULL reads as secret
       ],
     );
     this.db.runSync(
@@ -1509,7 +1509,7 @@ export class ExpoPlanStore implements PlanStoreAdapter {
         plan.total_steps,
         plan.proposal_id ?? null,
         plan.collaborative ? 1 : 0,
-        plan.sensitivity ?? null,
+        plan.sensitivity ?? null, // write-tier-gate: exempt own stamp; NULL plan reads as secret
         plan.plan_id,
       ],
     );
@@ -2373,7 +2373,7 @@ export class ExpoToolAuditSink implements AuditLogSink {
         entry.injection ? JSON.stringify(entry.injection) : null,
         entry.costUnits ?? 0,
         entry.timestamp,
-        entry.sensitivity ?? null,
+        entry.sensitivity ?? null, // write-tier-gate: exempt own stamp; NULL classified on read
       ],
     );
   }
@@ -2640,7 +2640,7 @@ export class ExpoSqliteSkillAuditSink {
         // Only `skill_consent_granted` carries sensitivity + surface;
         // null for the trust/remove variants. Discriminated-union
         // narrowing handles the access.
-        event.type === "skill_consent_granted" ? event.sensitivity : null,
+        event.type === "skill_consent_granted" ? event.sensitivity : null, // write-tier-gate: exempt non-consent variant carries no tier
         event.type === "skill_consent_granted" ? event.surface : null,
         event.at,
         JSON.stringify(event),

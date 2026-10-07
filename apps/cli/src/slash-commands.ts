@@ -2690,7 +2690,7 @@ export async function handleSlashCommand(
       for (const r of records) {
         const badge = renderProvenanceBadge(r);
         const enabledTag = r.index.enabled ? "" : dim(" [disabled]");
-        const sensitivity = r.manifest.motebit.sensitivity ?? "none";
+        const sensitivity = r.manifest.motebit.sensitivity ?? "none"; // write-tier-gate: exempt skill manifest display
         const sensTag = sensitivity === "none" ? "" : dim(` [${sensitivity}]`);
         console.log(
           `  ${cyan(r.manifest.name)} ${dim(`v${r.manifest.version}`)} ${badge}${sensTag}${enabledTag}`,

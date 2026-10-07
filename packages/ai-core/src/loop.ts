@@ -262,7 +262,7 @@ export interface ProjectionContext {
 
 const DEFAULT_PROJECTION_CONTEXT: ProjectionContext = {
   providerMode: null,
-  sensitivity: SensitivityLevel.None,
+  sensitivity: SensitivityLevel.None, // write-tier-gate: exempt read-side projection default
   pixelConsent: "denied",
 };
 

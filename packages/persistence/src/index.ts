@@ -3024,7 +3024,7 @@ export class SqliteConversationStore {
         msg.toolCallId,
         msg.createdAt,
         msg.tokenEstimate,
-        msg.sensitivity ?? null,
+        msg.sensitivity ?? null, // write-tier-gate: exempt own stamp; NULL reads as secret
       );
   }
 

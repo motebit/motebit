@@ -171,7 +171,7 @@ export function readDerivedText(stored: string): {
   if (m != null && isSensitivityLevel(m[1])) {
     return { text: stored.slice(m[0].length), sensitivity: m[1] };
   }
-  return { text: stored, sensitivity: null };
+  return { text: stored, sensitivity: null }; // write-tier-gate: exempt parse: null = unstamped legacy
 }
 
 /**

@@ -141,7 +141,7 @@ function summarize(record: SkillRecord): SkillSummary {
     enabled: record.index.enabled,
     trusted: record.index.trusted,
     provenance_status: record.provenance_status,
-    sensitivity: record.manifest.motebit?.sensitivity ?? "none",
+    sensitivity: record.manifest.motebit?.sensitivity ?? "none", // write-tier-gate: exempt skill manifest display
     installed_at: record.index.installed_at,
     source: record.index.source,
   };
@@ -228,7 +228,7 @@ export class RegistryBackedSkillsPanelAdapter implements SkillsPanelAdapter {
       );
     }
     const bundle = await this.options.fetchBundle(source.url);
-    const sensitivity = bundle.envelope.manifest.motebit?.sensitivity ?? "none";
+    const sensitivity = bundle.envelope.manifest.motebit?.sensitivity ?? "none"; // write-tier-gate: exempt skill manifest tier (spec default)
     let consentFired = false;
     if (this.options.requestInstallConsent !== undefined && requiresInstallConsent(sensitivity)) {
       const approved = await this.options.requestInstallConsent({

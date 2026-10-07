@@ -388,7 +388,7 @@ export async function handleSkillsList(config: CliConfig): Promise<void> {
           enabled: r.index.enabled,
           trusted: r.index.trusted,
           provenance_status: r.provenance_status,
-          sensitivity: r.manifest.motebit.sensitivity ?? "none",
+          sensitivity: r.manifest.motebit.sensitivity ?? "none", // write-tier-gate: exempt skill manifest display
           installed_at: r.index.installed_at,
         })),
         null,
@@ -410,7 +410,7 @@ export async function handleSkillsList(config: CliConfig): Promise<void> {
   console.log();
   for (const record of records) {
     const enabled = record.index.enabled ? "" : dim(" [disabled]");
-    const sensitivity = record.manifest.motebit.sensitivity ?? "none";
+    const sensitivity = record.manifest.motebit.sensitivity ?? "none"; // write-tier-gate: exempt skill manifest display
     const sensTag = sensitivity === "none" ? "" : dim(` [${sensitivity}]`);
     console.log(
       `  ${bold(record.manifest.name)} ${dim(`v${record.manifest.version}`)} ${provenanceBadge(record)}${sensTag}${enabled}`,
