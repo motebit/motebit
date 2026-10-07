@@ -89,7 +89,7 @@ motebit restore [motebit.md]         # Recover an identity — full-bundle from 
                                      #   or seed-only (re-derives a sovereign id); also
                                      #   resets a forgotten passphrase when the seed
                                      #   matches the key already on this machine
-motebit register                     # Register identity with relay
+motebit register --sync              # Register identity with the public relay (relay sync is opt-in)
 motebit credentials                  # List earned credentials
 motebit ledger <goal-id>             # Show execution ledger for a goal
 ```
@@ -169,7 +169,7 @@ subdirectories. Audit events (trust grants, removals) append to
 - **MCP** — Connect to any MCP server for tool discovery
 - **Operator mode** — Gated write/exec tools with per-call approval
 - **Memory** — Semantic graph with confidence decay and sensitivity governance
-- **Sync** — Multi-device sync via HTTP/WebSocket relay
+- **Sync** — Multi-device sync via HTTP/WebSocket relay — opt-in (`--sync-url <url>`, `--sync`, or `motebit sync enable`); off, the CLI makes no relay call
 - **Earning** — Run as a paid service with `--price`, earn from delegated tasks
 
 ## Providers

@@ -23,7 +23,7 @@ import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { loadActiveSigningKey } from "../identity.js";
 import { cliRosterPorts, remedyText } from "../machine-roster.js";
-import { requireMotebitId, resolveRelayUrl } from "./_helpers.js";
+import { getRelayUrl, requireMotebitId } from "./_helpers.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 
 const USAGE =
@@ -271,7 +271,7 @@ export async function handleMachines(config: CliConfig): Promise<void> {
     cliRosterPorts({
       motebitId,
       deviceId: full.device_id,
-      syncUrl: resolveRelayUrl(config, full),
+      syncUrl: getRelayUrl(config),
       privateKey: () => key,
       ...(config.identity ? { identityPaths: [config.identity] } : {}),
     }),

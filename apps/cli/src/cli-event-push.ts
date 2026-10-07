@@ -338,6 +338,13 @@ export interface ReplIdentityOptions {
   dbPath: string;
   fullConfig: FullConfig;
   passphrase: string;
+  /**
+   * Whether this REPL names a relay (flag, env, config.json). Relay sync is
+   * opt-in (`sync-opt-in.ts`): with none, no sync intent is recorded, so
+   * compaction is never floored on a relay the identity was never given.
+   * Default true (the pre-opt-in behaviour).
+   */
+  syncConfigured?: boolean;
 }
 
 /**
@@ -352,16 +359,18 @@ export async function bootstrapReplIdentity(
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
   const db = await openMotebitDatabase(opts.dbPath);
   try {
-    // #962 round 5: the REPL always syncs (its default relay applies), so
+    // #962 round 5: a REPL that names a relay syncs, so
     // this identity's sync intent is recorded in the DATABASE — before the
     // bootstrap appends when the identity already exists, and for a new one
     // right after it is minted, before any other process can compact. A
     // daemon that holds the runtime socket and names no relay then floors
     // compaction on it. A failed write aborts the launch (fail closed).
+    // Relay sync off (opt-in): nothing is recorded.
+    const syncs = opts.syncConfigured !== false;
     const known = opts.fullConfig.motebit_id;
-    if (known != null && known !== "") await recordSyncIntent(db.eventStore, known);
+    if (syncs && known != null && known !== "") await recordSyncIntent(db.eventStore, known);
     const result = await bootstrapIdentity(db, opts.fullConfig, opts.passphrase);
-    await recordSyncIntent(db.eventStore, result.motebitId);
+    if (syncs) await recordSyncIntent(db.eventStore, result.motebitId);
     return result;
   } finally {
     db.close();

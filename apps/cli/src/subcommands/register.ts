@@ -4,10 +4,9 @@
  * to it. Saves the sync URL to `~/.motebit/config.json` so daemon and
  * REPL modes can skip the flag on subsequent runs.
  *
- * DEFAULT_SYNC_URL is private to this handler because it is the only
- * command that can run against the default production relay without
- * a pre-configured sync URL — every other handler routes through
- * `getRelayUrl`, which requires one.
+ * Relay sync is opt-in (`../sync-opt-in.ts`): register never picks a
+ * relay for the user. With nothing named (flag, `--sync`, env,
+ * config.json) it exits with the one-line opt-in message.
  */
 
 import { mintAudienceToken, secureErase } from "@motebit/encryption";
@@ -17,17 +16,16 @@ import { loadFullConfig, saveFullConfig } from "../config.js";
 import { loadActiveSigningKey, IdentityKeyError } from "../identity.js";
 import { requireMotebitId, NO_IDENTITY_MESSAGE } from "./_helpers.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
+import { namedRelayUrl, SYNC_OFF_MESSAGE } from "../sync-opt-in.js";
 import { signedBootstrapBody } from "../relay-registration.js";
 
-const DEFAULT_SYNC_URL = "https://relay.motebit.com";
-
 export async function handleRegister(config: CliConfig): Promise<void> {
-  const syncUrl = (config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? DEFAULT_SYNC_URL).replace(
-    /\/+$/,
-    "",
-  );
-
   const fullConfig = loadFullConfig();
+  const syncUrl = namedRelayUrl(config, fullConfig);
+  if (syncUrl == null) {
+    console.error(SYNC_OFF_MESSAGE);
+    process.exit(1);
+  }
 
   // Require identity to exist (user must have launched the REPL at least once)
   const motebitId = requireMotebitId(fullConfig);

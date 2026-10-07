@@ -802,8 +802,8 @@ export async function createRuntime(
   // `runtimeRef`; the assignment after construction wires it up. The
   // closure only fires per-turn, well after construction — no TDZ.
   let runtimeRef: MotebitRuntime | null = null;
-  // One resolver for every command that talks to a relay (#702: `rotate`
-  // resolved it differently and stranded the default-relay case).
+  // One resolver for every command that talks to a relay (#702). Undefined
+  // when relay sync is off (opt-in; `sync-opt-in.ts`).
   const syncUrl = resolveRelayUrl(config);
   const runtime = new MotebitRuntime(
     // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
@@ -867,38 +867,43 @@ export async function createRuntime(
     },
   );
 
-  // Wire sync — default relay is always available (`syncUrl` above).
-  // Accept both env var names — they have been aliases for the life of the
-  // CLI; see subcommands/_helpers.ts:getRelayAuthHeaders for the canonical
-  // fallback order. create-motebit's scaffold writes MOTEBIT_API_TOKEN, so
-  // reading only MOTEBIT_SYNC_TOKEN here would silently drop the token on
-  // `npm run dev` from a fresh scaffold.
-  const syncToken =
-    config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
+  // Wire sync — only when a relay is named. Relay sync is opt-in
+  // (`sync-opt-in.ts`): with none, this process makes no relay call.
+  if (syncUrl) {
+    // Accept both env var names — they have been aliases for the life of the
+    // CLI; see subcommands/_helpers.ts:getRelayAuthHeaders for the canonical
+    // fallback order. create-motebit's scaffold writes MOTEBIT_API_TOKEN, so
+    // reading only MOTEBIT_SYNC_TOKEN here would silently drop the token on
+    // `npm run dev` from a fresh scaffold.
+    const syncToken =
+      config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
 
-  // E2E with the sync key (#928); raw only when there is no key to encrypt with.
-  const { remote: remoteStore } = createReplEventRemote({
-    syncUrl,
-    motebitId,
-    syncToken,
-    encKey,
-    ...(device ? { deviceId: device.deviceId, privateKey: device.privateKey } : {}),
-  });
-  runtime.connectSync(remoteStore);
-  console.log(dim(`Sync: ${syncUrl}${encKey ? " (encrypted)" : ""}`));
+    // E2E with the sync key (#928); raw only when there is no key to encrypt with.
+    const { remote: remoteStore } = createReplEventRemote({
+      syncUrl,
+      motebitId,
+      syncToken,
+      encKey,
+      ...(device ? { deviceId: device.deviceId, privateKey: device.privateKey } : {}),
+    });
+    runtime.connectSync(remoteStore);
+    console.log(dim(`Sync: ${syncUrl}${encKey ? " (encrypted)" : ""}`));
 
-  // Hardware-attestation peer flow — production wiring. Without these
-  // two setters the runtime hook in `bumpTrustFromReceipt` is dormant
-  // (it gates on `getRemoteHardwareAttestations && updated.public_key`).
-  // With them, every successful delegation pulls the worker's
-  // self-issued hardware-attestation credential, verifies the embedded
-  // claim against the bundled platform adapters, and issues a peer
-  // AgentTrustCredential carrying the verified claim — which is what
-  // makes the `HW_ATTESTATION_HARDWARE` (1.0) score visible to routing.
-  // See `packages/runtime/src/agent-trust.ts:258` for the hook body and
-  // `services/relay/src/__tests__/hardware-peer-flow-e2e.test.ts` for the
-  // protocol-loop assertion.
-  runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
+    // Hardware-attestation peer flow — production wiring. Without these
+    // two setters the runtime hook in `bumpTrustFromReceipt` is dormant
+    // (it gates on `getRemoteHardwareAttestations && updated.public_key`).
+    // With them, every successful delegation pulls the worker's
+    // self-issued hardware-attestation credential, verifies the embedded
+    // claim against the bundled platform adapters, and issues a peer
+    // AgentTrustCredential carrying the verified claim — which is what
+    // makes the `HW_ATTESTATION_HARDWARE` (1.0) score visible to routing.
+    // See `packages/runtime/src/agent-trust.ts:258` for the hook body and
+    // `services/relay/src/__tests__/hardware-peer-flow-e2e.test.ts` for the
+    // protocol-loop assertion.
+    runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
+  } else {
+    console.log(dim("Sync: off (opt in with --sync-url)"));
+  }
   runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
   // Declare the provider mode so the runtime's privacy gate can fail-

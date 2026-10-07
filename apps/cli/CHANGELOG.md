@@ -1,5 +1,24 @@
 # motebit CLI Changelog
 
+## 2.1.0
+
+### Minor Changes
+
+- 2018c11: Relay sync is now opt-in. With no `--sync-url`, no `MOTEBIT_SYNC_URL` and no `sync_url` in `~/.motebit/config.json`, the CLI names no relay and makes no relay call: first run, the REPL and the daemons do no device registration, no sync push, no heartbeat, no websocket and no agent discovery (previously the REPL silently fell back to `https://relay.motebit.com`). Opt in with `--sync-url <url>`, the new `--sync` flag (the public relay), `MOTEBIT_SYNC_URL`, or the new `motebit sync enable [url]` (persists `sync_url`; `motebit sync disable` removes it). Relay-only commands (`register`, `delegate`, `market`, `discover`, `rotate`, `machines`, `smoke x402`, registry `skills install`/`publish`, `verify-release`, and the relay slash commands) now refuse with a one-line message naming the opt-in instead of picking the public relay. `motebit doctor` reports `info  Sync  off (opt in with --sync-url)` instead of a FAIL. An existing `sync_url` in config.json keeps working unchanged.
+
+### Patch Changes
+
+- 29f9eeb: Relay bootstrap is signed by the key it introduces (#875 — proof of possession, client half).
+
+  Every CLI caller of `POST /api/v1/agents/bootstrap` now sends a device-registration request signed by the key it names (`signDeviceRegistration`: JCS + Ed25519 over {motebit_id, device_id, public_key, timestamp, suite}, the `register-self` construction), built by one helper, `signedBootstrapBody` in `relay-registration.ts`: the daemon's relay registration, the REPL's startup device registration and the #962 push loop's re-introduction (`bootstrapReplDevice`, used by the REPL, `run`, `serve` and `delegate`), `/connect`, `motebit register` and `smoke-x402`.
+
+  This ships ahead of the relay enforcement (make-before-break): a relay that does not yet require the signature ignores the extra fields, so the signed body is accepted by both the current relay and the enforcing one.
+
+  `motebit register` no longer falls back to an unsigned registration when it cannot load the signing key (no key, wrong passphrase, key mismatch). It exits with the key error and its remedy, because the enforcing relay refuses an unsigned bootstrap.
+
+- 67574f9: The REPL now accepts `/quit` and `/exit` as aliases for `quit` and `exit`. Previously the slash forms reported "Unknown command". The attached REPL uses the same exit check.
+  - @motebit/state-export-client@0.6.2
+
 ## 2.0.1
 
 ### Patch Changes

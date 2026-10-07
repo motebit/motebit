@@ -45,7 +45,8 @@ motebit \
 | `--model <name>` | Model identifier |
 | `--db-path <path>` | Custom SQLite database path |
 | `--no-stream` | Disable streaming (wait for full response) |
-| `--sync-url <url>` | Sync relay server URL |
+| `--sync-url <url>` | Opt in to relay sync with this relay (or set `MOTEBIT_SYNC_URL`) |
+| `--sync` | Opt in to relay sync with the public relay (`https://relay.motebit.com`) |
 | `--sync-token <token>` | Sync relay master token |
 | `--operator` | Start with operator mode enabled |
 | `--allowed-paths <paths>` | Comma-separated paths for file tools |
@@ -111,7 +112,20 @@ The CLI uses the same identity system as the desktop app:
 1. First launch generates an Ed25519 keypair
 2. Private key is encrypted with PBKDF2 (AES-256-GCM) and stored in `~/.motebit/config.json`
 3. Identity and device are registered in the local SQLite database
-4. Optional: register with a sync relay using `--sync-url` and `--sync-token`
+4. Optional: register with a sync relay using `--sync-url` (or `--sync`) and `--sync-token`
+
+## Relay sync is opt-in
+
+With no relay named, the CLI is fully local: it makes no network call to any relay — no device registration, no sync push, no heartbeat, no websocket — and `motebit doctor` reports `info  Sync  off (opt in with --sync-url)`. Name a relay one of these ways:
+
+| Opt-in | Scope |
+|---|---|
+| `--sync-url <url>` | This process |
+| `--sync` | This process, against the public relay `https://relay.motebit.com` |
+| `MOTEBIT_SYNC_URL=<url>` | Every process in that environment |
+| `motebit sync enable [url]` | Persisted as `sync_url` in `~/.motebit/config.json` (default: the public relay); `motebit sync disable` removes it |
+
+`motebit register` with a relay named also persists it. Commands whose whole purpose is the relay (`register`, `delegate`, `market`, `discover`, `rotate`, `machines`, `smoke x402`, `skills install/publish` from the registry, `verify-release`, and the relay slash commands) refuse with a one-line message naming the opt-in when none is set — they never pick the public relay on their own. An existing `sync_url` in `config.json` keeps working unchanged.
 
 ## Streaming output
 

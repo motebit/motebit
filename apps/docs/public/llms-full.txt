@@ -205,17 +205,17 @@ Your PIN hash is stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`
 
 ## Connect to the network
 
-Your motebit starts local. To connect it to other agents — for delegation, sync, and multi-device — you register with a relay.
+Your motebit starts local, and stays local: relay sync is opt-in, so until you name a relay the CLI makes no relay call at all. To connect it to other agents — for delegation, sync, and multi-device — you opt in and register with a relay.
 
 ### Register
 
 ```bash
-motebit register
+motebit register --sync
 ```
 
-This registers your device with the default relay (`relay.motebit.com`). The relay stores your public key and device ID. Your private key never leaves your machine.
+`--sync` names the public relay (`relay.motebit.com`). This registers your device there; the relay stores your public key and device ID. Your private key never leaves your machine.
 
-After registration, the CLI saves the relay URL to `~/.motebit/config.json`. Future REPL and daemon sessions connect automatically — no need to pass `--sync-url` each time.
+After registration, the CLI saves the relay URL to `~/.motebit/config.json`. Future REPL and daemon sessions connect automatically — no need to pass `--sync-url` each time. (`motebit sync enable [url]` saves it without registering; `motebit sync disable` turns sync off again.)
 
 To use a different relay (or your own):
 
@@ -1771,7 +1771,7 @@ Agent registration is a two-step process: bootstrap the identity, then register 
 
 ### 1. Bootstrap the identity
 
-Bootstrap takes no bearer token, but the relay admits it only with proof of possession of the key it introduces. The body is a device-registration request signed by that key (`signDeviceRegistration` from `@motebit/crypto`, the same construction as `POST /api/v1/devices/register-self` — see the [device self-registration spec](https://github.com/motebit/motebit/blob/main/spec/device-self-registration-v1.md)). An unsigned body is refused with `400 KEY_PROOF_REQUIRED`. The signature carries a timestamp and must reach the relay within 5 minutes of signing.
+Bootstrap takes no bearer token; instead it proves possession of the key it introduces. The body is a device-registration request signed by that key (`signDeviceRegistration` from `@motebit/crypto`, the same construction as `POST /api/v1/devices/register-self` — see the [device self-registration spec](https://github.com/motebit/motebit/blob/main/spec/device-self-registration-v1.md)). A relay that enforces it (#875) refuses an unsigned body with `400 KEY_PROOF_REQUIRED`; an older relay ignores the signature fields, so the signed body works against both. The signature carries a timestamp and must reach the relay within 5 minutes of signing.
 
 With a CLI identity, `motebit register --sync-url http://localhost:3000` signs and sends it for you. To bootstrap a throwaway test agent by hand, sign it in a short script. Run it where `@motebit/crypto` resolves. The repository root does not depend on it, so use a scratch directory (`mkdir alice && cd alice && npm init -y && npm i @motebit/crypto tsx`) or a workspace package that depends on `@motebit/crypto`:
 
@@ -1807,7 +1807,7 @@ The relay returns:
 }
 ```
 
-The `public_key` must be a 64-character lowercase hex string (32 bytes). The script mints a new keypair on every run, so running it again against the same relay returns `409`: `agent-alice` already holds the first run's key, and the relay admits only a key the identity already holds. Use a fresh `motebit_id`, or reset the relay's database, to run it again. Save the keypair if you want the agent to sign tokens or receipts later. A `motebit_id` shaped like a sovereign id (a UUIDv8) must be the commitment to the key (`deriveSovereignMotebitId`), or the relay refuses it with `409`.
+The `public_key` must be a 64-character lowercase hex string (32 bytes). The script mints a new keypair on every run, so running it again against the same relay returns `409`: `agent-alice` already holds the first run's key, and the relay admits only a key the identity already holds. Use a fresh `motebit_id`, or reset the relay's database, to run it again. Save the keypair if you want the agent to sign tokens or receipts later. On a relay that enforces #875, a `motebit_id` shaped like a sovereign id (a UUIDv8) must be the commitment to the key (`deriveSovereignMotebitId`), or the relay refuses it with `409`.
 
 ### 2. Register capabilities
 
@@ -6078,7 +6078,8 @@ motebit \
 | `--model <name>` | Model identifier |
 | `--db-path <path>` | Custom SQLite database path |
 | `--no-stream` | Disable streaming (wait for full response) |
-| `--sync-url <url>` | Sync relay server URL |
+| `--sync-url <url>` | Opt in to relay sync with this relay (or set `MOTEBIT_SYNC_URL`) |
+| `--sync` | Opt in to relay sync with the public relay (`https://relay.motebit.com`) |
 | `--sync-token <token>` | Sync relay master token |
 | `--operator` | Start with operator mode enabled |
 | `--allowed-paths <paths>` | Comma-separated paths for file tools |
@@ -6144,7 +6145,20 @@ The CLI uses the same identity system as the desktop app:
 1. First launch generates an Ed25519 keypair
 2. Private key is encrypted with PBKDF2 (AES-256-GCM) and stored in `~/.motebit/config.json`
 3. Identity and device are registered in the local SQLite database
-4. Optional: register with a sync relay using `--sync-url` and `--sync-token`
+4. Optional: register with a sync relay using `--sync-url` (or `--sync`) and `--sync-token`
+
+## Relay sync is opt-in
+
+With no relay named, the CLI is fully local: it makes no network call to any relay — no device registration, no sync push, no heartbeat, no websocket — and `motebit doctor` reports `info  Sync  off (opt in with --sync-url)`. Name a relay one of these ways:
+
+| Opt-in | Scope |
+|---|---|
+| `--sync-url <url>` | This process |
+| `--sync` | This process, against the public relay `https://relay.motebit.com` |
+| `MOTEBIT_SYNC_URL=<url>` | Every process in that environment |
+| `motebit sync enable [url]` | Persisted as `sync_url` in `~/.motebit/config.json` (default: the public relay); `motebit sync disable` removes it |
+
+`motebit register` with a relay named also persists it. Commands whose whole purpose is the relay (`register`, `delegate`, `market`, `discover`, `rotate`, `machines`, `smoke x402`, `skills install/publish` from the registry, `verify-release`, and the relay slash commands) refuse with a one-line message naming the opt-in when none is set — they never pick the public relay on their own. An existing `sync_url` in `config.json` keeps working unchanged.
 
 ## Streaming output
 
