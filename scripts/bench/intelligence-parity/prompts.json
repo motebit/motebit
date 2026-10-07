@@ -1,0 +1,392 @@
+{
+  "version": 1,
+  "prompts": [
+    {
+      "id": "fact-boiling-altitude",
+      "category": "factual",
+      "prompt": "At roughly what temperature does water boil at the summit of Mount Everest, and why is it lower than at sea level?",
+      "reference_notes": "About 70-71 °C (~160 °F); lower atmospheric pressure (~1/3 atm) lowers the boiling point.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "fact-tcp-handshake",
+      "category": "factual",
+      "prompt": "How many packets are exchanged in a TCP three-way handshake, and what flags does each carry?",
+      "reference_notes": "Three: SYN; SYN-ACK; ACK.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "fact-unix-epoch",
+      "category": "factual",
+      "prompt": "What date and time does Unix time 0 correspond to, and in which year does a signed 32-bit time_t overflow?",
+      "reference_notes": "1970-01-01 00:00:00 UTC; overflow 2038-01-19 03:14:07 UTC.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "explain-cap-theorem",
+      "category": "explanation",
+      "prompt": "Explain the CAP theorem to a backend engineer who keeps hearing 'pick two'. Where is that framing misleading?",
+      "reference_notes": "Partitions are not optional, so the real choice is C vs A during a partition; PACELC; consistency here means linearizability; availability means every non-failing node responds.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "explain-bayes-test",
+      "category": "explanation",
+      "prompt": "A disease affects 1 in 1,000 people. A test is 99% sensitive and 95% specific. I tested positive. What's the chance I have it? Walk me through the reasoning.",
+      "reference_notes": "≈1.9% (0.99*0.001 / (0.99*0.001 + 0.05*0.999) ≈ 0.0194).",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "explain-rust-borrow",
+      "category": "explanation",
+      "prompt": "Why does Rust reject having a mutable reference and an immutable reference to the same value alive at the same time? What bug class does that prevent?",
+      "reference_notes": "Aliasing XOR mutability; prevents data races and iterator invalidation / use-after-free style bugs; enforced at compile time via lifetimes.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "code-lru-cache",
+      "category": "coding",
+      "prompt": "Write a TypeScript LRU cache class with get/set in O(1), a fixed capacity, and an optional onEvict callback. Include a short usage example.",
+      "reference_notes": "Map insertion order or hashmap + doubly linked list; get refreshes recency; set evicts least-recent at capacity and calls onEvict.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "code-debug-async",
+      "category": "coding",
+      "prompt": "This function is supposed to return the total size of all files but always returns 0. Fix it and explain the bug.\n\n```js\nasync function totalSize(paths) {\n  let total = 0;\n  paths.forEach(async (p) => {\n    const s = await fs.promises.stat(p);\n    total += s.size;\n  });\n  return total;\n}\n```",
+      "reference_notes": "forEach does not await async callbacks; return happens before stats resolve. Use for...of with await or Promise.all + reduce.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "code-sql-window",
+      "category": "coding",
+      "prompt": "Given a table orders(customer_id, order_id, amount, created_at), write a PostgreSQL query that returns each customer's most recent order and their running total of spend up to and including that order.",
+      "reference_notes": "Window functions: SUM() OVER (PARTITION BY customer_id ORDER BY created_at) plus ROW_NUMBER()/DISTINCT ON to pick latest; tie-breaking on order_id.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "arch-rate-limiter",
+      "category": "architecture",
+      "prompt": "Design a distributed rate limiter for a public API (per API key, 1,000 requests/minute, ~50 gateway nodes). Compare at least two algorithms and say which you'd ship and why.",
+      "reference_notes": "Token bucket / sliding window log / sliding window counter; central store (Redis) with atomic ops or local + sync; trade-offs on accuracy, latency, failure mode (fail-open vs closed).",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "arch-event-sourcing",
+      "category": "architecture",
+      "prompt": "We're considering event sourcing for an order-management system. What are the real costs that teams underestimate, and when is it clearly worth it?",
+      "reference_notes": "Schema evolution/upcasting, projections rebuild, eventual consistency in reads, GDPR deletion, tooling/debugging; worth it with audit needs, temporal queries, complex domain.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "arch-offline-sync",
+      "category": "architecture",
+      "prompt": "A mobile notes app must work offline on several devices per user and sync later. Outline a sync design that avoids losing edits, and name the conflict-resolution strategy you'd pick.",
+      "reference_notes": "Per-op log or CRDTs; vector clocks / HLC; last-writer-wins pitfalls; CRDT (e.g. RGA/Yjs) for text; tombstones; idempotent replay.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "write-decline-email",
+      "category": "writing",
+      "prompt": "Write a short, warm email declining a job offer from a startup I really liked, keeping the door open for the future. I'm going with a larger company for family-stability reasons.",
+      "reference_notes": "Brief, grateful, specific reason without oversharing, keep door open; no excessive apology.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "write-release-notes",
+      "category": "writing",
+      "prompt": "Turn these raw changes into user-facing release notes for a note-taking app:\n- fix: crash when pasting images >20MB\n- feat: offline search (sqlite fts5)\n- perf: cold start 1.8s -> 0.9s on Android\n- chore: bump deps\n- feat: export to Markdown with front-matter",
+      "reference_notes": "Group new / improved / fixed; plain language; drop chore; quantify perf.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "write-tighten-paragraph",
+      "category": "writing",
+      "prompt": "Tighten this paragraph without losing meaning:\n\n\"In order to be able to make sure that we are able to deliver the project on time, it is absolutely essential and important that all of the members of the team are making an effort to communicate with each other on a regular and frequent basis about any and all issues that may possibly come up.\"",
+      "reference_notes": "Something like: 'To deliver on time, the team must communicate regularly about any issues.'",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "synth-db-choice",
+      "category": "synthesis",
+      "prompt": "My team is choosing between PostgreSQL, DynamoDB and MongoDB for a new multi-tenant SaaS with relational billing data, unpredictable per-tenant document shapes, and a 3-person team. Synthesize a recommendation with the deciding factors.",
+      "reference_notes": "Likely Postgres with JSONB for flexible docs; ops burden; transactions for billing; Dynamo access-pattern rigidity; small team.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "synth-research-summary",
+      "category": "synthesis",
+      "prompt": "Summarize the main arguments for and against a four-day work week from the perspective of (a) employees, (b) employers, (c) economists, then give your overall take in two sentences.",
+      "reference_notes": "Balanced: wellbeing/retention vs coverage/costs; productivity evidence from trials (mixed, some positive); sector dependence.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "synth-tradeoff-matrix",
+      "category": "synthesis",
+      "prompt": "Compare gRPC, REST/JSON and GraphQL for an internal service mesh of ~40 services owned by 8 teams. Give a compact comparison and a clear recommendation.",
+      "reference_notes": "gRPC for internal service-to-service (schemas, perf, streaming) with tooling caveats; REST simplicity; GraphQL for client aggregation not mesh.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "longctx-turn1-recall",
+      "category": "long-context",
+      "history": [
+        {
+          "role": "user",
+          "content": "Before anything else, remember this: our project codename is BLUEHERON, the hard launch date is 14 March, and the one non-negotiable constraint is that customer data never leaves the EU region. I'm going to ask you a series of planning questions."
+        },
+        {
+          "role": "assistant",
+          "content": "Noted: codename BLUEHERON, hard launch 14 March, and customer data must stay in the EU region. Go ahead with your planning questions."
+        },
+        {
+          "role": "user",
+          "content": "Here's the last month of incidents from our staging cluster as a CSV export, so you have context for the planning questions:\n\nts,service,level,region,message\n2026-02-01T00:00:00Z,api-gateway,ERROR,eu-central-1,TLS handshake timeout to object storage\n2026-02-01T07:13:00Z,export-worker,WARN,eu-west-1,connection pool exhausted (max=50)\n2026-02-01T14:26:00Z,export-worker,INFO,eu-west-1,rate limit 429 burst from single key\n2026-02-01T21:39:00Z,export-worker,INFO,us-east-1,connection pool exhausted (max=50)\n2026-02-01T04:52:00Z,auth,ERROR,eu-west-1,OOMKilled container restarted\n2026-02-01T11:05:00Z,ingest,WARN,eu-west-1,cache hit ratio dropped below 60%\n2026-02-01T18:18:00Z,billing,ERROR,eu-west-1,retrying upstream call after 503\n2026-02-01T01:31:00Z,api-gateway,WARN,eu-west-1,disk usage 87% on volume data-1\n2026-02-01T08:44:00Z,auth,WARN,eu-west-1,TLS handshake timeout to object storage\n2026-02-01T15:57:00Z,billing,INFO,us-east-1,disk usage 87% on volume data-1\n2026-02-01T22:10:00Z,notes-sync,ERROR,eu-west-1,connection pool exhausted (max=50)\n2026-02-01T05:23:00Z,search,ERROR,eu-west-1,retrying upstream call after 503\n2026-02-02T12:36:00Z,ingest,WARN,us-east-1,cache hit ratio dropped below 60%\n2026-02-02T19:49:00Z,export-worker,ERROR,eu-west-1,rate limit 429 burst from single key\n2026-02-02T02:02:00Z,search,ERROR,us-east-1,TLS handshake timeout to object storage\n2026-02-02T09:15:00Z,search,WARN,eu-west-1,connection pool exhausted (max=50)\n2026-02-02T16:28:00Z,ingest,WARN,eu-west-1,TLS handshake timeout to object storage\n2026-02-02T23:41:00Z,api-gateway,WARN,eu-central-1,slow query >2s on orders_by_customer\n2026-02-02T06:54:00Z,api-gateway,ERROR,eu-west-1,slow query >2s on orders_by_customer\n2026-02-02T13:07:00Z,notes-sync,ERROR,us-east-1,rate limit 429 burst from single key\n2026-02-02T20:20:00Z,auth,INFO,us-east-1,slow query >2s on orders_by_customer\n2026-02-02T03:33:00Z,notes-sync,ERROR,eu-west-1,TLS handshake timeout to object storage\n2026-02-02T10:46:00Z,notes-sync,INFO,eu-central-1,rate limit 429 burst from single key\n2026-02-02T17:59:00Z,ingest,ERROR,us-east-1,connection pool exhausted (max=50)\n2026-02-03T00:12:00Z,search,ERROR,us-east-1,TLS handshake timeout to object storage\n2026-02-03T07:25:00Z,search,INFO,eu-west-1,slow query >2s on orders_by_customer\n2026-02-03T14:38:00Z,notes-sync,WARN,eu-west-1,disk usage 87% on volume data-1\n2026-02-03T21:51:00Z,auth,INFO,eu-west-1,OOMKilled container restarted\n2026-02-03T04:04:00Z,auth,ERROR,eu-central-1,p95 latency above 800ms for 5m\n2026-02-03T11:17:00Z,export-worker,ERROR,us-east-1,TLS handshake timeout to object storage\n2026-02-03T18:30:00Z,api-gateway,INFO,eu-west-1,p95 latency above 800ms for 5m\n2026-02-03T01:43:00Z,billing,WARN,eu-west-1,p95 latency above 800ms for 5m\n2026-02-03T08:56:00Z,search,ERROR,eu-west-1,cache hit ratio dropped below 60%\n2026-02-03T15:09:00Z,ingest,WARN,eu-west-1,connection pool exhausted (max=50)\n2026-02-03T22:22:00Z,api-gateway,ERROR,eu-central-1,p95 latency above 800ms for 5m\n2026-02-03T05:35:00Z,billing,WARN,eu-west-1,retrying upstream call after 503\n2026-02-04T12:48:00Z,billing,ERROR,eu-west-1,TLS handshake timeout to object storage\n2026-02-04T19:01:00Z,export-worker,WARN,eu-west-1,cache hit ratio dropped below 60%\n2026-02-04T02:14:00Z,search,ERROR,eu-central-1,OOMKilled container restarted\n2026-02-04T09:27:00Z,notes-sync,INFO,eu-central-1,slow query >2s on orders_by_customer\n2026-02-04T16:40:00Z,search,ERROR,eu-west-1,rate limit 429 burst from single key\n2026-02-04T23:53:00Z,search,WARN,eu-central-1,slow query >2s on orders_by_customer\n2026-02-04T06:06:00Z,notes-sync,WARN,eu-west-1,TLS handshake timeout to object storage\n2026-02-04T13:19:00Z,ingest,WARN,eu-central-1,job queue depth 12k, consumers lagging\n2026-02-04T20:32:00Z,api-gateway,ERROR,eu-central-1,TLS handshake timeout to object storage\n2026-02-04T03:45:00Z,notes-sync,INFO,eu-central-1,cache hit ratio dropped below 60%\n2026-02-04T10:58:00Z,notes-sync,WARN,eu-west-1,TLS handshake timeout to object storage\n2026-02-04T17:11:00Z,export-worker,WARN,us-east-1,slow query >2s on orders_by_customer\n2026-02-05T00:24:00Z,billing,INFO,eu-central-1,connection pool exhausted (max=50)\n2026-02-05T07:37:00Z,billing,ERROR,eu-central-1,p95 latency above 800ms for 5m\n2026-02-05T14:50:00Z,export-worker,ERROR,eu-west-1,disk usage 87% on volume data-1\n2026-02-05T21:03:00Z,export-worker,ERROR,eu-west-1,disk usage 87% on volume data-1\n2026-02-05T04:16:00Z,notes-sync,INFO,eu-west-1,rate limit 429 burst from single key\n2026-02-05T11:29:00Z,auth,WARN,eu-west-1,p95 latency above 800ms for 5m\n2026-02-05T18:42:00Z,export-worker,ERROR,eu-west-1,connection pool exhausted (max=50)\n2026-02-05T01:55:00Z,notes-sync,WARN,eu-west-1,retrying upstream call after 503\n2026-02-05T08:08:00Z,api-gateway,WARN,eu-west-1,p95 latency above 800ms for 5m\n2026-02-05T15:21:00Z,billing,INFO,eu-central-1,p95 latency above 800ms for 5m\n2026-02-05T22:34:00Z,notes-sync,INFO,us-east-1,cache hit ratio dropped below 60%\n2026-02-05T05:47:00Z,api-gateway,WARN,eu-west-1,TLS handshake timeout to object storage\n2026-02-06T12:00:00Z,billing,WARN,eu-west-1,cache hit ratio dropped below 60%\n2026-02-06T19:13:00Z,ingest,ERROR,eu-west-1,OOMKilled container restarted\n2026-02-06T02:26:00Z,api-gateway,WARN,us-east-1,slow query >2s on orders_by_customer\n2026-02-06T09:39:00Z,notes-sync,WARN,eu-west-1,OOMKilled container restarted\n2026-02-06T16:52:00Z,api-gateway,WARN,eu-central-1,TLS handshake timeout to object storage\n2026-02-06T23:05:00Z,search,WARN,eu-central-1,cache hit ratio dropped below 60%\n2026-02-06T06:18:00Z,search,INFO,eu-west-1,connection pool exhausted (max=50)\n2026-02-06T13:31:00Z,notes-sync,WARN,us-east-1,disk usage 87% on volume data-1\n2026-02-06T20:44:00Z,notes-sync,WARN,us-east-1,job queue depth 12k, consumers lagging\n2026-02-06T03:57:00Z,ingest,WARN,us-east-1,rate limit 429 burst from single key\n2026-02-06T10:10:00Z,billing,INFO,eu-west-1,job queue depth 12k, consumers lagging\n2026-02-06T17:23:00Z,ingest,ERROR,eu-central-1,TLS handshake timeout to object storage\n2026-02-07T00:36:00Z,ingest,WARN,eu-central-1,connection pool exhausted (max=50)\n2026-02-07T07:49:00Z,notes-sync,ERROR,eu-west-1,p95 latency above 800ms for 5m\n2026-02-07T14:02:00Z,billing,ERROR,eu-west-1,slow query >2s on orders_by_customer\n2026-02-07T21:15:00Z,notes-sync,ERROR,eu-west-1,connection pool exhausted (max=50)\n2026-02-07T04:28:00Z,export-worker,ERROR,eu-west-1,rate limit 429 burst from single key\n2026-02-07T11:41:00Z,export-worker,ERROR,us-east-1,connection pool exhausted (max=50)\n2026-02-07T18:54:00Z,search,WARN,us-east-1,job queue depth 12k, consumers lagging\n2026-02-07T01:07:00Z,ingest,WARN,eu-west-1,rate limit 429 burst from single key\n2026-02-07T08:20:00Z,search,WARN,eu-west-1,retrying upstream call after 503\n2026-02-07T15:33:00Z,search,INFO,eu-central-1,TLS handshake timeout to object storage\n2026-02-07T22:46:00Z,notes-sync,WARN,eu-west-1,retrying upstream call after 503\n2026-02-07T05:59:00Z,api-gateway,ERROR,eu-west-1,TLS handshake timeout to object storage\n2026-02-08T12:12:00Z,notes-sync,WARN,eu-west-1,OOMKilled container restarted\n2026-02-08T19:25:00Z,export-worker,ERROR,eu-central-1,p95 latency above 800ms for 5m\n2026-02-08T02:38:00Z,billing,ERROR,eu-west-1,retrying upstream call after 503\n2026-02-08T09:51:00Z,search,ERROR,eu-west-1,slow query >2s on orders_by_customer\n2026-02-08T16:04:00Z,search,INFO,eu-west-1,retrying upstream call after 503\n2026-02-08T23:17:00Z,auth,ERROR,eu-west-1,OOMKilled container restarted\n2026-02-08T06:30:00Z,ingest,ERROR,us-east-1,connection pool exhausted (max=50)\n2026-02-08T13:43:00Z,api-gateway,WARN,eu-west-1,TLS handshake timeout to object storage\n2026-02-08T20:56:00Z,billing,WARN,eu-central-1,job queue depth 12k, consumers lagging\n2026-02-08T03:09:00Z,api-gateway,ERROR,eu-central-1,slow query >2s on orders_by_customer\n2026-02-08T10:22:00Z,auth,ERROR,us-east-1,connection pool exhausted (max=50)\n2026-02-08T17:35:00Z,notes-sync,WARN,us-east-1,disk usage 87% on volume data-1\n2026-02-09T00:48:00Z,ingest,WARN,eu-central-1,p95 latency above 800ms for 5m\n2026-02-09T07:01:00Z,search,ERROR,eu-central-1,cache hit ratio dropped below 60%\n2026-02-09T14:14:00Z,search,ERROR,us-east-1,job queue depth 12k, consumers lagging\n2026-02-09T21:27:00Z,search,WARN,eu-central-1,OOMKilled container restarted\n2026-02-09T04:40:00Z,ingest,INFO,eu-west-1,connection pool exhausted (max=50)\n2026-02-09T11:53:00Z,ingest,WARN,eu-central-1,job queue depth 12k, consumers lagging\n2026-02-09T18:06:00Z,api-gateway,ERROR,us-east-1,cache hit ratio dropped below 60%\n2026-02-09T01:19:00Z,notes-sync,WARN,us-east-1,cache hit ratio dropped below 60%\n2026-02-09T08:32:00Z,api-gateway,WARN,eu-west-1,cache hit ratio dropped below 60%\n2026-02-09T15:45:00Z,auth,WARN,eu-central-1,rate limit 429 burst from single key\n2026-02-09T22:58:00Z,notes-sync,WARN,eu-west-1,p95 latency above 800ms for 5m\n2026-02-09T05:11:00Z,search,INFO,eu-west-1,p95 latency above 800ms for 5m\n2026-02-10T12:24:00Z,ingest,WARN,us-east-1,job queue depth 12k, consumers lagging\n2026-02-10T19:37:00Z,billing,ERROR,eu-west-1,OOMKilled container restarted\n2026-02-10T02:50:00Z,search,ERROR,eu-west-1,slow query >2s on orders_by_customer\n2026-02-10T09:03:00Z,api-gateway,ERROR,eu-west-1,slow query >2s on orders_by_customer\n2026-02-10T16:16:00Z,export-worker,WARN,us-east-1,job queue depth 12k, consumers lagging\n2026-02-10T23:29:00Z,search,INFO,eu-central-1,cache hit ratio dropped below 60%\n2026-02-10T06:42:00Z,search,INFO,eu-west-1,job queue depth 12k, consumers lagging\n2026-02-10T13:55:00Z,ingest,WARN,eu-central-1,retrying upstream call after 503\n2026-02-10T20:08:00Z,export-worker,WARN,eu-west-1,job queue depth 12k, consumers lagging\n2026-02-10T03:21:00Z,search,WARN,eu-central-1,retrying upstream call after 503\n2026-02-10T10:34:00Z,billing,INFO,eu-west-1,connection pool exhausted (max=50)\n2026-02-10T17:47:00Z,billing,ERROR,eu-west-1,job queue depth 12k, consumers lagging\n2026-02-11T00:00:00Z,export-worker,WARN,eu-west-1,TLS handshake timeout to object storage\n2026-02-11T07:13:00Z,search,ERROR,eu-central-1,OOMKilled container restarted\n2026-02-11T14:26:00Z,billing,ERROR,eu-west-1,TLS handshake timeout to object storage\n2026-02-11T21:39:00Z,ingest,ERROR,eu-west-1,cache hit ratio dropped below 60%\n2026-02-11T04:52:00Z,ingest,INFO,eu-west-1,rate limit 429 burst from single key\n2026-02-11T11:05:00Z,notes-sync,ERROR,eu-west-1,rate limit 429 burst from single key\n2026-02-11T18:18:00Z,billing,INFO,eu-central-1,TLS handshake timeout to object storage\n2026-02-11T01:31:00Z,billing,ERROR,eu-west-1,connection pool exhausted (max=50)\n2026-02-11T08:44:00Z,notes-sync,INFO,eu-west-1,rate limit 429 burst from single key\n2026-02-11T15:57:00Z,search,WARN,us-east-1,OOMKilled container restarted\n2026-02-11T22:10:00Z,auth,ERROR,eu-west-1,cache hit ratio dropped below 60%\n2026-02-11T05:23:00Z,api-gateway,WARN,eu-west-1,connection pool exhausted (max=50)\n2026-02-12T12:36:00Z,billing,ERROR,eu-central-1,rate limit 429 burst from single key\n2026-02-12T19:49:00Z,auth,INFO,us-east-1,slow query >2s on orders_by_customer\n2026-02-12T02:02:00Z,ingest,INFO,eu-west-1,slow query >2s on orders_by_customer\n2026-02-12T09:15:00Z,search,ERROR,eu-west-1,TLS handshake timeout to object storage\n2026-02-12T16:28:00Z,api-gateway,ERROR,eu-central-1,cache hit ratio dropped below 60%\n2026-02-12T23:41:00Z,notes-sync,INFO,us-east-1,OOMKilled container restarted\n2026-02-12T06:54:00Z,auth,INFO,us-east-1,TLS handshake timeout to object storage\n2026-02-12T13:07:00Z,notes-sync,WARN,eu-west-1,retrying upstream call after 503\n2026-02-12T20:20:00Z,api-gateway,ERROR,eu-west-1,connection pool exhausted (max=50)\n2026-02-12T03:33:00Z,notes-sync,INFO,eu-west-1,job queue depth 12k, consumers lagging\n2026-02-12T10:46:00Z,notes-sync,WARN,eu-west-1,retrying upstream call after 503\n2026-02-12T17:59:00Z,notes-sync,ERROR,eu-central-1,retrying upstream call after 503\n2026-02-13T00:12:00Z,notes-sync,WARN,eu-central-1,TLS handshake timeout to object storage\n2026-02-13T07:25:00Z,billing,WARN,eu-west-1,OOMKilled container restarted\n2026-02-13T14:38:00Z,api-gateway,ERROR,eu-central-1,p95 latency above 800ms for 5m\n2026-02-13T21:51:00Z,api-gateway,WARN,eu-west-1,job queue depth 12k, consumers lagging\n2026-02-13T04:04:00Z,search,INFO,eu-central-1,p95 latency above 800ms for 5m\n2026-02-13T11:17:00Z,auth,WARN,us-east-1,disk usage 87% on volume data-1\n2026-02-13T18:30:00Z,notes-sync,ERROR,eu-west-1,cache hit ratio dropped below 60%\n2026-02-13T01:43:00Z,notes-sync,WARN,eu-west-1,p95 latency above 800ms for 5m\n2026-02-13T08:56:00Z,api-gateway,INFO,eu-central-1,disk usage 87% on volume data-1\n2026-02-13T15:09:00Z,search,WARN,eu-central-1,connection pool exhausted (max=50)\n2026-02-13T22:22:00Z,auth,WARN,eu-west-1,p95 latency above 800ms for 5m\n2026-02-13T05:35:00Z,search,ERROR,us-east-1,OOMKilled container restarted\n2026-02-14T12:48:00Z,billing,ERROR,eu-west-1,TLS handshake timeout to object storage\n2026-02-14T19:01:00Z,ingest,INFO,us-east-1,job queue depth 12k, consumers lagging\n2026-02-14T02:14:00Z,notes-sync,ERROR,eu-central-1,disk usage 87% on volume data-1\n2026-02-14T09:27:00Z,notes-sync,ERROR,eu-west-1,rate limit 429 burst from single key\n2026-02-14T16:40:00Z,billing,WARN,eu-west-1,slow query >2s on orders_by_customer\n2026-02-14T23:53:00Z,auth,INFO,eu-central-1,retrying upstream call after 503\n2026-02-14T06:06:00Z,ingest,ERROR,us-east-1,OOMKilled container restarted\n2026-02-14T13:19:00Z,export-worker,WARN,us-east-1,cache hit ratio dropped below 60%\n2026-02-14T20:32:00Z,auth,WARN,eu-west-1,OOMKilled container restarted\n2026-02-14T03:45:00Z,api-gateway,ERROR,eu-central-1,p95 latency above 800ms for 5m\n2026-02-14T10:58:00Z,search,WARN,eu-west-1,OOMKilled container restarted\n2026-02-14T17:11:00Z,api-gateway,ERROR,eu-central-1,OOMKilled container restarted\n2026-02-15T00:24:00Z,search,INFO,us-east-1,slow query >2s on orders_by_customer\n2026-02-15T07:37:00Z,search,ERROR,eu-west-1,slow query >2s on orders_by_customer\n2026-02-15T14:50:00Z,billing,WARN,eu-central-1,cache hit ratio dropped below 60%\n2026-02-15T21:03:00Z,notes-sync,INFO,eu-central-1,TLS handshake timeout to object storage\n2026-02-15T04:16:00Z,api-gateway,WARN,eu-west-1,disk usage 87% on volume data-1\n2026-02-15T11:29:00Z,auth,ERROR,eu-west-1,cache hit ratio dropped below 60%\n2026-02-15T18:42:00Z,auth,INFO,eu-central-1,p95 latency above 800ms for 5m\n2026-02-15T01:55:00Z,export-worker,ERROR,us-east-1,connection pool exhausted (max=50)\n2026-02-15T08:08:00Z,notes-sync,WARN,us-east-1,slow query >2s on orders_by_customer\n2026-02-15T15:21:00Z,auth,WARN,eu-west-1,connection pool exhausted (max=50)\n2026-02-15T22:34:00Z,auth,ERROR,eu-west-1,job queue depth 12k, consumers lagging\n2026-02-15T05:47:00Z,ingest,WARN,eu-west-1,rate limit 429 burst from single key\n2026-02-16T12:00:00Z,export-worker,INFO,eu-west-1,TLS handshake timeout to object storage\n2026-02-16T19:13:00Z,search,WARN,eu-west-1,cache hit ratio dropped below 60%\n2026-02-16T02:26:00Z,billing,WARN,eu-west-1,TLS handshake timeout to object storage\n2026-02-16T09:39:00Z,export-worker,INFO,eu-west-1,connection pool exhausted (max=50)\n2026-02-16T16:52:00Z,notes-sync,INFO,eu-west-1,p95 latency above 800ms for 5m\n2026-02-16T23:05:00Z,auth,INFO,eu-west-1,OOMKilled container restarted\n2026-02-16T06:18:00Z,export-worker,ERROR,eu-central-1,connection pool exhausted (max=50)\n2026-02-16T13:31:00Z,auth,ERROR,eu-central-1,job queue depth 12k, consumers lagging\n2026-02-16T20:44:00Z,ingest,INFO,eu-central-1,cache hit ratio dropped below 60%\n2026-02-16T03:57:00Z,notes-sync,WARN,us-east-1,slow query >2s on orders_by_customer\n2026-02-16T10:10:00Z,auth,WARN,eu-west-1,cache hit ratio dropped below 60%\n2026-02-16T17:23:00Z,search,INFO,eu-west-1,connection pool exhausted (max=50)\n2026-02-17T00:36:00Z,billing,INFO,eu-central-1,slow query >2s on orders_by_customer\n2026-02-17T07:49:00Z,notes-sync,WARN,eu-west-1,OOMKilled container restarted\n2026-02-17T14:02:00Z,search,WARN,us-east-1,slow query >2s on orders_by_customer\n2026-02-17T21:15:00Z,export-worker,INFO,eu-west-1,TLS handshake timeout to object storage\n2026-02-17T04:28:00Z,notes-sync,INFO,eu-central-1,TLS handshake timeout to object storage\n2026-02-17T11:41:00Z,export-worker,ERROR,us-east-1,slow query >2s on orders_by_customer\n2026-02-17T18:54:00Z,export-worker,INFO,us-east-1,TLS handshake timeout to object storage\n2026-02-17T01:07:00Z,billing,WARN,us-east-1,TLS handshake timeout to object storage\n2026-02-17T08:20:00Z,billing,WARN,eu-central-1,p95 latency above 800ms for 5m\n2026-02-17T15:33:00Z,ingest,WARN,eu-central-1,disk usage 87% on volume data-1\n2026-02-17T22:46:00Z,ingest,WARN,eu-central-1,connection pool exhausted (max=50)\n2026-02-17T05:59:00Z,search,ERROR,us-east-1,job queue depth 12k, consumers lagging\n2026-02-18T12:12:00Z,search,ERROR,eu-central-1,p95 latency above 800ms for 5m\n2026-02-18T19:25:00Z,notes-sync,WARN,eu-central-1,p95 latency above 800ms for 5m\n2026-02-18T02:38:00Z,search,INFO,us-east-1,disk usage 87% on volume data-1\n2026-02-18T09:51:00Z,api-gateway,ERROR,eu-west-1,rate limit 429 burst from single key\n2026-02-18T16:04:00Z,billing,ERROR,eu-central-1,OOMKilled container restarted\n2026-02-18T23:17:00Z,notes-sync,WARN,eu-central-1,retrying upstream call after 503\n2026-02-18T06:30:00Z,auth,WARN,us-east-1,TLS handshake timeout to object storage\n2026-02-18T13:43:00Z,search,ERROR,us-east-1,TLS handshake timeout to object storage\n2026-02-18T20:56:00Z,ingest,ERROR,eu-west-1,OOMKilled container restarted\n2026-02-18T03:09:00Z,search,ERROR,eu-west-1,p95 latency above 800ms for 5m\n2026-02-18T10:22:00Z,billing,INFO,us-east-1,disk usage 87% on volume data-1\n2026-02-18T17:35:00Z,auth,WARN,eu-west-1,cache hit ratio dropped below 60%\n2026-02-19T00:48:00Z,api-gateway,INFO,us-east-1,rate limit 429 burst from single key\n2026-02-19T07:01:00Z,ingest,ERROR,eu-central-1,connection pool exhausted (max=50)\n2026-02-19T14:14:00Z,auth,INFO,eu-west-1,retrying upstream call after 503\n2026-02-19T21:27:00Z,auth,INFO,eu-west-1,disk usage 87% on volume data-1\n2026-02-19T04:40:00Z,auth,INFO,eu-west-1,p95 latency above 800ms for 5m\n2026-02-19T11:53:00Z,api-gateway,INFO,eu-west-1,p95 latency above 800ms for 5m\n2026-02-19T18:06:00Z,notes-sync,ERROR,eu-west-1,cache hit ratio dropped below 60%\n2026-02-19T01:19:00Z,billing,WARN,eu-west-1,rate limit 429 burst from single key\n2026-02-19T08:32:00Z,billing,WARN,eu-west-1,retrying upstream call after 503\n2026-02-19T15:45:00Z,export-worker,WARN,eu-west-1,OOMKilled container restarted\n2026-02-19T22:58:00Z,ingest,ERROR,eu-west-1,connection pool exhausted (max=50)\n2026-02-19T05:11:00Z,billing,ERROR,us-east-1,slow query >2s on orders_by_customer\n2026-02-20T12:24:00Z,search,INFO,eu-west-1,TLS handshake timeout to object storage\n2026-02-20T19:37:00Z,search,ERROR,us-east-1,connection pool exhausted (max=50)\n2026-02-20T02:50:00Z,search,ERROR,eu-west-1,connection pool exhausted (max=50)\n2026-02-20T09:03:00Z,export-worker,WARN,eu-central-1,disk usage 87% on volume data-1\n2026-02-20T16:16:00Z,auth,ERROR,eu-west-1,rate limit 429 burst from single key\n2026-02-20T23:29:00Z,api-gateway,INFO,eu-west-1,cache hit ratio dropped below 60%\n2026-02-20T06:42:00Z,billing,ERROR,eu-central-1,slow query >2s on orders_by_customer\n2026-02-20T13:55:00Z,api-gateway,ERROR,eu-west-1,p95 latency above 800ms for 5m\n2026-02-20T20:08:00Z,export-worker,ERROR,eu-west-1,cache hit ratio dropped below 60%\n2026-02-20T03:21:00Z,billing,ERROR,eu-central-1,connection pool exhausted (max=50)\n2026-02-20T10:34:00Z,billing,ERROR,eu-central-1,disk usage 87% on volume data-1\n2026-02-20T17:47:00Z,billing,WARN,eu-west-1,disk usage 87% on volume data-1\n2026-02-21T00:00:00Z,notes-sync,ERROR,eu-central-1,p95 latency above 800ms for 5m\n2026-02-21T07:13:00Z,api-gateway,INFO,eu-west-1,slow query >2s on orders_by_customer\n2026-02-21T14:26:00Z,ingest,WARN,us-east-1,connection pool exhausted (max=50)\n2026-02-21T21:39:00Z,ingest,INFO,us-east-1,rate limit 429 burst from single key\n2026-02-21T04:52:00Z,auth,WARN,eu-west-1,job queue depth 12k, consumers lagging\n2026-02-21T11:05:00Z,search,WARN,eu-central-1,OOMKilled container restarted\n2026-02-21T18:18:00Z,auth,WARN,us-east-1,job queue depth 12k, consumers lagging\n2026-02-21T01:31:00Z,search,INFO,eu-west-1,cache hit ratio dropped below 60%\n2026-02-21T08:44:00Z,ingest,WARN,eu-central-1,p95 latency above 800ms for 5m\n2026-02-21T15:57:00Z,api-gateway,ERROR,eu-central-1,connection pool exhausted (max=50)"
+        },
+        {
+          "role": "assistant",
+          "content": "Thanks — I've read the export. The dominant patterns are connection-pool exhaustion and latency spikes on the API gateway and billing services, recurring OOM restarts, and slow order queries. A few rows show traffic in us-east-1, which is worth checking against your data-residency constraint. I'll keep these in mind for the planning questions."
+        },
+        {
+          "role": "user",
+          "content": "What should the first two weeks of the plan focus on?"
+        },
+        {
+          "role": "assistant",
+          "content": "For the first two weeks I'd focus on three things. First, lock the scope: write a one-page launch definition listing the features that must ship, the ones that are explicitly deferred, and the success metric you'll check on launch day. Second, de-risk the infrastructure early: stand up the production environment, the deployment pipeline and observability before feature work piles up, because environment problems found in week eight are the ones that move dates. Third, establish a weekly rhythm: a short planning meeting, a written status update and a visible risk register, so that slippage is noticed while it is still cheap. A useful rule of thumb is that anything you cannot demo end-to-end by the end of week two is a risk to name explicitly, not a task to keep quietly working on. I'd also pick an owner for each workstream so that nobody has to ask who decides."
+        },
+        {
+          "role": "user",
+          "content": "How should we structure the team of six engineers?"
+        },
+        {
+          "role": "assistant",
+          "content": "With six engineers I'd avoid splitting into too many micro-teams. Two pods of three tends to work: one pod owns the customer-facing product surface (web app, onboarding, billing flows) and the other owns the platform (APIs, data pipeline, infrastructure, security). Each pod gets a tech lead who is still writing code at least half the time. Rotate one person between pods every few weeks to avoid knowledge silos, and keep a shared on-call rotation so both pods feel production. Make code review cross-pod for anything touching the API contract between them, because that boundary is where integration surprises come from. Keep a single backlog with clear labels rather than two backlogs, so prioritisation stays one conversation. Finally, protect one engineer-day a week for paying down the debt you will inevitably take on while racing to launch."
+        },
+        {
+          "role": "user",
+          "content": "What's a sensible testing strategy given the timeline?"
+        },
+        {
+          "role": "assistant",
+          "content": "Given the timeline I'd invest in a thin but reliable pyramid. Unit tests where logic is genuinely tricky (pricing, permissions, data transformations), not for every getter. A small suite of integration tests around the API contract between the two pods, run on every merge. A handful of end-to-end smoke tests that cover the critical user journeys: sign up, do the core action, pay, and export data. Those smoke tests should run against a staging environment that mirrors production configuration, including region settings. Add contract tests if you have external integrations, and a load test before launch sized to two or three times your expected launch-week traffic. Flaky tests are worse than missing ones under deadline pressure, so quarantine nothing silently: fix it or delete it with a ticket. Track test runtime too; a fifteen-minute pipeline quietly costs you a day a week."
+        },
+        {
+          "role": "user",
+          "content": "How do we handle observability?"
+        },
+        {
+          "role": "assistant",
+          "content": "For observability, start with the three signals and make them boring. Structured logs with a correlation id that follows a request across services. Metrics for the golden signals per service: latency, traffic, errors and saturation, with dashboards a tired person can read at 2am. Distributed tracing on the request paths that cross the pod boundary, because that is where you will spend debugging time. Define a small set of service-level objectives early, perhaps availability and p95 latency for the core API, and alert on burn rate rather than on raw thresholds to keep pages meaningful. Make sure your logging and tracing vendors' data storage is configured consistently with your data-residency requirements, since telemetry often contains identifiers. Write a short runbook for each alert so the on-call engineer knows the first three things to check."
+        },
+        {
+          "role": "user",
+          "content": "What about security reviews?"
+        },
+        {
+          "role": "assistant",
+          "content": "For security I'd schedule two lightweight reviews rather than one big one at the end. The first, around week four, is a threat-modelling session on the architecture: walk through data flows, trust boundaries, authentication and authorisation, secrets handling and third-party integrations, and record the top risks with owners. The second, about three weeks before launch, is a focused review of the implementation against those risks, plus dependency scanning and a basic penetration test of the public endpoints. In between, enforce the cheap controls continuously: secret scanning in CI, dependency update automation, least-privilege IAM roles and mandatory review for changes to authentication code. Keep an explicit list of accepted risks signed off by someone with authority, so the launch decision is informed rather than hopeful."
+        },
+        {
+          "role": "user",
+          "content": "How should we plan the beta?"
+        },
+        {
+          "role": "assistant",
+          "content": "I'd run a closed beta of roughly four weeks starting about six weeks before launch. Recruit fifteen to thirty design-partner customers who represent your target segments and who agree to give weekly feedback. Give them a direct channel to the team and instrument the product so you can see where they get stuck without relying on surveys alone. Freeze scope at the start of the beta except for fixes and polish, and triage feedback twice a week into must-fix-before-launch, fix-after-launch and won't-fix. Pay particular attention to onboarding drop-off and to any data import problems, which are the most common beta surprises. End the beta with a short go/no-go review against the launch definition from week one."
+        },
+        {
+          "role": "user",
+          "content": "What documentation do we need for launch?"
+        },
+        {
+          "role": "assistant",
+          "content": "For launch you need less documentation than people fear, but it must be accurate. A getting-started guide that takes a new customer from sign-up to first value in under ten minutes. Reference documentation for the public API, generated from the schema so it cannot drift. A short FAQ seeded from beta questions. Internally, runbooks for on-call, a deployment and rollback guide, and an architecture overview that a new engineer can read in an hour. Add a data-processing description for customers' compliance teams, covering what data you store, where it is stored and for how long, because enterprise buyers will ask for it during procurement. Assign each document an owner and a review date so it does not rot after launch."
+        },
+        {
+          "role": "user",
+          "content": "How do we decide what to cut if we fall behind?"
+        },
+        {
+          "role": "assistant",
+          "content": "When you fall behind, cut by protecting the launch definition rather than by shaving quality everywhere. Rank remaining work by how directly it serves the success metric and by its risk to the core user journey. Cut whole features rather than finishing several features badly; a missing feature can be announced later, a broken one damages trust. Defer internal tooling and nice-to-have admin screens before customer-facing reliability work. Never cut the security review, the smoke tests or the rollback plan; those are what make a fast launch survivable. Make every cut explicit in writing with the date it was decided, so stakeholders are not surprised. If cutting is not enough, have the conversation about the date early, with options, not the week before."
+        },
+        {
+          "role": "user",
+          "content": "What should the launch-day runbook include?"
+        },
+        {
+          "role": "assistant",
+          "content": "The launch-day runbook should be a checklist people can follow under stress. It should list who is on point for each area and how to reach them, the exact deployment steps with expected outputs, the feature flags you will flip and in what order, and the dashboards to watch with the thresholds that trigger a rollback. Include the rollback procedure itself, rehearsed at least once in staging. Prepare customer communication templates for a delay, a partial outage and a successful launch. Schedule the launch early in the working day and in the middle of the week, never on a Friday, and keep the team's calendar clear for the following two days. Finish with a short internal announcement and a time for the retrospective."
+        },
+        {
+          "role": "user",
+          "content": "How should we measure success in the first month?"
+        },
+        {
+          "role": "assistant",
+          "content": "In the first month I'd track a small number of measures tied to the launch definition. Activation: the share of new sign-ups who reach the first meaningful action within a day. Retention: whether those users come back in week two and week four. Reliability: availability and latency against the SLOs, and the number of customer-impacting incidents. Support load: tickets per active customer and the top three ticket reasons, which double as your backlog for the next cycle. Revenue or pipeline, if that is part of the goal. Review these weekly with the whole team, and resist adding new metrics until you have acted on the ones you have. Write a one-page summary at the end of the month comparing outcomes with the expectations you set before launch."
+        },
+        {
+          "role": "user",
+          "content": "Anything about hiring we should think about now?"
+        },
+        {
+          "role": "assistant",
+          "content": "On hiring, start now even though new people will not help before launch. The post-launch period is when the team is most stretched by support, fixes and the next roadmap, and hiring typically takes two to three months end to end. Decide which gap hurts most; for many teams that is a second platform engineer or someone who can own customer support and success. Write role descriptions that reflect the real work after launch, not the work before it. Keep the interview loop short and consistent, and involve both pods. Avoid hiring a manager too early for a team of six; a strong tech lead structure usually scales to about ten people. Budget onboarding time explicitly, because each new hire temporarily slows the people who teach them."
+        }
+      ],
+      "prompt": "Pulling this all together: restate the project codename, the launch date and the one non-negotiable constraint I gave you at the very beginning, and tell me which single item from everything we've discussed is most at risk of violating that constraint.",
+      "reference_notes": "Must state BLUEHERON, 14 March, customer data must stay in the EU region. A good answer names an item with residency risk, e.g. observability/telemetry vendors storing identifiers outside the EU, or third-party integrations.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "longctx-goal-followup",
+      "category": "long-context",
+      "history": [
+        {
+          "role": "user",
+          "content": "I'm learning Spanish. My goal is to hold a 20-minute conversation with my partner's grandmother in Oaxaca by December. I study 30 minutes a day."
+        },
+        {
+          "role": "assistant",
+          "content": "Great goal. With 30 minutes a day until December, focus on listening and speaking over grammar drills. Would you like a weekly plan?"
+        },
+        {
+          "role": "user",
+          "content": "Yes, but I hate flashcards."
+        },
+        {
+          "role": "assistant",
+          "content": "No flashcards, then. Use short comprehensible-input videos, shadowing, and conversation practice with a tutor twice a week instead."
+        },
+        {
+          "role": "user",
+          "content": "Which variety of Spanish should I focus on?"
+        },
+        {
+          "role": "assistant",
+          "content": "Mexican Spanish, since you'll be speaking in Oaxaca. Use Mexican creators for listening, and ask your tutor to use Mexican vocabulary."
+        },
+        {
+          "role": "user",
+          "content": "What topics should I practice?"
+        },
+        {
+          "role": "assistant",
+          "content": "Family, food, daily routines, where you're from, and stories about the past — grandparents often enjoy telling and hearing stories."
+        },
+        {
+          "role": "user",
+          "content": "How do I practise the past tenses without drills?"
+        },
+        {
+          "role": "assistant",
+          "content": "Tell your tutor a short story about your weekend each session, then retell it after corrections. That exercises preterite versus imperfect naturally."
+        },
+        {
+          "role": "user",
+          "content": "Can you suggest how to split my 30 minutes?"
+        },
+        {
+          "role": "assistant",
+          "content": "Roughly: 15 minutes of listening with shadowing, 10 minutes of speaking out loud (narrating your day or retelling a video), 5 minutes reviewing phrases from tutor sessions."
+        }
+      ],
+      "prompt": "Given my goal, my deadline and my constraints from earlier, what should I do differently in the final month before the trip?",
+      "reference_notes": "Must respect: 20-minute conversation with partner's grandmother in Oaxaca, December deadline, 30 min/day, no flashcards, Mexican Spanish. Good: shift to longer conversation simulations, family/story topics, regional vocabulary.",
+      "tools_expected": false,
+      "memory_expected": false
+    },
+    {
+      "id": "mem-dietary",
+      "category": "memory",
+      "memory_expected": true,
+      "seed_memories": [
+        {
+          "content": "The user is vegetarian and allergic to peanuts.",
+          "sensitivity": "personal",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "The user cooks for a family of four on weeknights.",
+          "sensitivity": "personal",
+          "memory_type": "semantic"
+        }
+      ],
+      "prompt": "Suggest three quick weeknight dinners I could make this week.",
+      "reference_notes": "Should be vegetarian, peanut-free, family-of-four sized, quick. Penalize meat or peanut suggestions.",
+      "tools_expected": false
+    },
+    {
+      "id": "mem-stack",
+      "category": "memory",
+      "memory_expected": true,
+      "seed_memories": [
+        {
+          "content": "The user's backend is written in Go and deployed on Kubernetes on GCP.",
+          "sensitivity": "none",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "The user prefers concise answers with code over long prose.",
+          "sensitivity": "none",
+          "memory_type": "semantic"
+        }
+      ],
+      "prompt": "How should I add graceful shutdown to my service?",
+      "reference_notes": "Go: signal.NotifyContext for SIGTERM, http.Server.Shutdown with timeout, Kubernetes terminationGracePeriodSeconds / preStop; concise with code.",
+      "tools_expected": false
+    },
+    {
+      "id": "mem-name-pet",
+      "category": "memory",
+      "memory_expected": true,
+      "seed_memories": [
+        {
+          "content": "The user's dog is a 9-year-old border collie named Biscuit with hip dysplasia.",
+          "sensitivity": "personal",
+          "memory_type": "semantic"
+        }
+      ],
+      "prompt": "What kind of exercise routine would be good for my dog?",
+      "reference_notes": "Should account for senior border collie with hip dysplasia: low-impact (swimming, short walks), mental stimulation, vet consult; mentioning Biscuit is a plus.",
+      "tools_expected": false
+    },
+    {
+      "id": "tool-current-time",
+      "category": "tool",
+      "tools_expected": true,
+      "prompt": "What is the current date and time in UTC right now? Use your clock rather than guessing.",
+      "reference_notes": "Must give a concrete current UTC date/time obtained from a tool, not a refusal or a training-cutoff guess.",
+      "memory_expected": false
+    },
+    {
+      "id": "tool-self-knowledge",
+      "category": "tool",
+      "tools_expected": true,
+      "prompt": "Look it up rather than answering from general knowledge: how does motebit decide which memories are allowed to be sent to an external AI provider?",
+      "reference_notes": "Sensitivity levels (none/personal/medical/financial/secret); medical/financial/secret never reach external AI; fail-closed. Route answering without the tool may be vaguer.",
+      "memory_expected": false
+    }
+  ]
+}
