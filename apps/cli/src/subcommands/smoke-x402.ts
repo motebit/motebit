@@ -269,7 +269,7 @@ export function loadOrCreateEoaKeyFile(
 // Motebit identity bootstrap
 // ---------------------------------------------------------------------------
 
-interface BootstrappedMotebit {
+export interface BootstrappedMotebit {
   motebitId: string;
   deviceId: string;
   publicKey: Uint8Array;
@@ -479,13 +479,18 @@ async function submitPaidTask(args: {
 // Worker receipt construction + signing
 // ---------------------------------------------------------------------------
 
-async function submitWorkerReceipt(args: {
-  relayUrl: string;
+/**
+ * Build + sign the worker's ExecutionReceipt for the smoke task. Exported so
+ * the receipt's self-consistency (result_hash binds result) is unit-testable
+ * without a live relay.
+ */
+export async function buildSmokeWorkerReceipt(args: {
   worker: BootstrappedMotebit;
   taskId: string;
   submittedAtMs: number;
-}): Promise<void> {
-  const completedAt = Date.now();
+  completedAt: number;
+}): Promise<Awaited<ReturnType<typeof signExecutionReceipt>>> {
+  const completedAt = args.completedAt;
   const result = `echo-ack-${args.taskId.slice(0, 8)}`;
 
   // Hashes are SHA-256 hex of canonical bytes — the protocol contract is
@@ -514,7 +519,21 @@ async function submitWorkerReceipt(args: {
     invocation_origin: "agent-to-agent" as const,
   };
 
-  const signed = await signExecutionReceipt(receiptBody, args.worker.privateKey);
+  return signExecutionReceipt(receiptBody, args.worker.privateKey);
+}
+
+async function submitWorkerReceipt(args: {
+  relayUrl: string;
+  worker: BootstrappedMotebit;
+  taskId: string;
+  submittedAtMs: number;
+}): Promise<void> {
+  const signed = await buildSmokeWorkerReceipt({
+    worker: args.worker,
+    taskId: args.taskId,
+    submittedAtMs: args.submittedAtMs,
+    completedAt: Date.now(),
+  });
 
   const token = await mintSignedToken({
     motebitId: args.worker.motebitId,
