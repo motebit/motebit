@@ -1,5 +1,11 @@
 # motebit CLI Changelog
 
+## 2.0.1
+
+### Patch Changes
+
+- @motebit/state-export-client@0.6.1
+
 ## 2.0.0
 
 ### Major Changes
