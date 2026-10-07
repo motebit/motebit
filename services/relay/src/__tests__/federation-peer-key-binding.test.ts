@@ -249,6 +249,27 @@ describe("federation — an unconfirmed re-proposal never touches a known peer's
     });
   }
 
+  it("a row an earlier build parked 'pending' is re-peerable by its own key and untouched by a stranger", async () => {
+    relay.moteDb.db
+      .prepare("UPDATE relay_peers SET state = 'pending', nonce = ? WHERE peer_relay_id = ?")
+      .run(rand(), peerId);
+    const before = row()!;
+    const squat = await fed(relay, "/federation/v1/peer/propose", {
+      relay_id: peerId,
+      public_key: peer.publicKeyHex,
+      endpoint_url: ATTACKER_URL,
+      nonce: rand(),
+    });
+    expect(squat.status).toBe(200);
+    expect(row()).toEqual(before);
+    const p = await propose(relay, peerId, peer, PEER_URL);
+    expect(p.status).toBe(200);
+    const c = await confirm(relay, peerId, (p.body as { nonce: string }).nonce, peer);
+    expect(c.status).toBe(200);
+    expect(row()!.state).toBe("active");
+    expect(row()!.trust_score).toBe(0.9);
+  });
+
   it("an expired proposal cannot be confirmed and leaves the row as before", async () => {
     relay.moteDb.db
       .prepare(

@@ -515,12 +515,21 @@ export async function bumpTrustFromReceipt(
 /**
  * Record or update trust for a remote motebit after an MCP interaction.
  * If no record exists, creates one at FirstContact level.
+ *
+ * The stored `public_key` is the key the record's trust level was earned
+ * under. It is written once (a record with no key takes the first one seen)
+ * and changes only when `opts.provenSuccession` says the hand-off from the
+ * stored key to `publicKey` is signed (a verified key succession). Any other
+ * key change is counted as an interaction but leaves the stored key in place,
+ * so an unproven key never inherits the stored level — every caller of this
+ * function is covered here, not at its call sites.
  */
 export async function recordAgentInteraction(
   deps: AgentTrustDeps,
   remoteMotebitId: string,
   publicKey?: string,
   motebitType?: string,
+  opts?: { provenSuccession?: boolean },
 ): Promise<AgentTrustRecord | null> {
   const { motebitId, agentTrustStore, agentGraph } = deps;
 
@@ -532,7 +541,7 @@ export async function recordAgentInteraction(
       ...existing,
       last_seen_at: now,
       interaction_count: existing.interaction_count + 1,
-      public_key: publicKey ?? existing.public_key,
+      public_key: adoptedKey(existing.public_key, publicKey, opts?.provenSuccession === true),
       notes: motebitType ? `type:${motebitType}` : existing.notes,
     };
     await agentTrustStore.setAgentTrust(updated);
@@ -552,4 +561,19 @@ export async function recordAgentInteraction(
   await agentTrustStore.setAgentTrust(record);
   agentGraph.invalidate();
   return record;
+}
+
+/**
+ * The key a trust record keeps: the stored key, unless there is none yet or
+ * the change to `offered` is a proven succession. Case-insensitive (hex).
+ */
+function adoptedKey(
+  stored: string | undefined,
+  offered: string | undefined,
+  provenSuccession: boolean,
+): string | undefined {
+  if (offered == null || offered === "") return stored;
+  if (stored == null || stored === "") return offered;
+  if (stored.toLowerCase() === offered.toLowerCase()) return stored;
+  return provenSuccession ? offered : stored;
 }

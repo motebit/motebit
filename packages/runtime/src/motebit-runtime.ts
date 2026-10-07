@@ -5852,8 +5852,10 @@ export class MotebitRuntime {
     remoteMotebitId: string,
     publicKey?: string,
     motebitType?: string,
+    /** `provenSuccession`: the change from the stored key to `publicKey` is a verified succession. */
+    opts?: { provenSuccession?: boolean },
   ): Promise<AgentTrustRecord | null> {
-    return _recordAgentInteraction(this.trustDeps, remoteMotebitId, publicKey, motebitType);
+    return _recordAgentInteraction(this.trustDeps, remoteMotebitId, publicKey, motebitType, opts);
   }
 
   /** Get trust record for a specific remote motebit. */

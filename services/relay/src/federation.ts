@@ -44,6 +44,11 @@ import { persistWitnessOmissionDispute, resolveHorizonCertBySignature } from "./
 // dispatcher). The `suite` literal below is the stable contract between
 // services and the registry in @motebit/protocol.
 const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
+
+/** How long a known peer's re-proposal waits for its confirm. */
+const PEER_PROPOSAL_TTL_MS = 10 * 60 * 1000;
+/** Live re-proposals held per known peer id (oldest evicted). */
+const MAX_PEER_PROPOSALS_PER_ID = 8;
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 /**
@@ -278,6 +283,26 @@ export function createFederationTables(db: DatabaseDriver): void {
         trust_score       REAL NOT NULL DEFAULT 0.5,
         nonce             TEXT
       );
+  `);
+
+  // A re-proposal for a KNOWN peer id (a row that already peered) is held
+  // here, never written over the row: an unconfirmed proposal must not change
+  // the row's state, key, endpoint or trust. Keyed by our nonce, so several
+  // proposals for one id coexist (a stranger's cannot displace the peer's own),
+  // and each expires (PEER_PROPOSAL_TTL_MS). Only a confirm that proves the
+  // stored key applies one.
+  db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_peer_proposals (
+        nonce                 TEXT PRIMARY KEY,
+        peer_relay_id         TEXT NOT NULL,
+        endpoint_url          TEXT NOT NULL,
+        display_name          TEXT,
+        peer_protocol_version TEXT,
+        created_at            INTEGER NOT NULL,
+        expires_at            INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_relay_peer_proposals_peer
+        ON relay_peer_proposals (peer_relay_id, created_at);
   `);
 
   // Migration: Phase 5 trust tracking columns + Phase 6 protocol version
@@ -1787,11 +1812,26 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     const existing = db
       .prepare(
-        "SELECT state, last_heartbeat_at, public_key FROM relay_peers WHERE peer_relay_id = ?",
+        "SELECT state, last_heartbeat_at, public_key, peered_at FROM relay_peers WHERE peer_relay_id = ?",
       )
       .get(relay_id) as
-      { state: string; last_heartbeat_at: number | null; public_key: string } | undefined;
-    if (existing && (existing.state === "active" || existing.state === "pending")) {
+      | {
+          state: string;
+          last_heartbeat_at: number | null;
+          public_key: string;
+          peered_at: number | null;
+        }
+      | undefined;
+    // An existing row that is not live is KNOWN: `suspended`, `removed`, or a
+    // `pending` row with `peered_at` set (one an earlier build parked by an
+    // unconfirmed re-proposal — treated as known so its peer can re-peer).
+    // A known row is never written by a propose.
+    const known =
+      existing != null &&
+      (existing.state === "suspended" ||
+        existing.state === "removed" ||
+        (existing.state === "pending" && existing.peered_at != null));
+    if (existing && !known && (existing.state === "active" || existing.state === "pending")) {
       throw new HTTPException(409, { message: `Peer already exists in ${existing.state} state` });
     }
     // A known peer id is bound to the key it peered under, in EVERY state.
@@ -1834,8 +1874,36 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const challengeMsg = new TextEncoder().encode(`${relay_id}:${nonce}:${FEDERATION_SUITE}`);
     const challengeSig = await sign(challengeMsg, relayIdentity.privateKey);
 
-    db.prepare(
-      `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
+    if (known) {
+      // Held beside the row, never on it: until a confirm proves the stored
+      // key, the row's state, key, endpoint and trust stay exactly as they are.
+      const now = Date.now();
+      db.transaction(() => {
+        db.prepare("DELETE FROM relay_peer_proposals WHERE expires_at <= ?").run(now);
+        db.prepare(
+          `INSERT INTO relay_peer_proposals (nonce, peer_relay_id, endpoint_url, display_name, peer_protocol_version, created_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          ourNonce,
+          relay_id,
+          endpoint_url,
+          display_name ?? null,
+          spec_version ?? null,
+          now,
+          now + PEER_PROPOSAL_TTL_MS,
+        );
+        // Bounded per id: the oldest goes first. A stranger must out-propose
+        // the peer between its own propose and confirm to displace it, and
+        // the per-peer rate limit bounds that.
+        db.prepare(
+          `DELETE FROM relay_peer_proposals WHERE peer_relay_id = ? AND nonce NOT IN (
+             SELECT nonce FROM relay_peer_proposals WHERE peer_relay_id = ?
+             ORDER BY created_at DESC, rowid DESC LIMIT ?)`,
+        ).run(relay_id, relay_id, MAX_PEER_PROPOSALS_PER_ID);
+      });
+    } else {
+      db.prepare(
+        `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
        VALUES (?, ?, ?, ?, 'pending', ?, 0, 0, 0.5, ?)
        ON CONFLICT(peer_relay_id) DO UPDATE SET
          public_key = excluded.public_key, endpoint_url = excluded.endpoint_url,
@@ -1843,7 +1911,15 @@ export function registerFederationRoutes(deps: FederationDeps): void {
          nonce = excluded.nonce, missed_heartbeats = 0,
          peer_protocol_version = excluded.peer_protocol_version
          WHERE relay_peers.state NOT IN ('active', 'pending')`,
-    ).run(relay_id, public_key, endpoint_url, display_name ?? null, ourNonce, spec_version ?? null);
+      ).run(
+        relay_id,
+        public_key,
+        endpoint_url,
+        display_name ?? null,
+        ourNonce,
+        spec_version ?? null,
+      );
+    }
 
     return c.json({
       relay_id: relayIdentity.relayMotebitId,
@@ -1868,6 +1944,66 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     checkPeerPolicy(relay_id);
     checkPeerLimit(relay_id);
 
+    // A known peer's re-proposal: verify against the STORED key over each
+    // live proposal's nonce. Success applies that proposal; failure or expiry
+    // changes nothing — no row write, no proposal removed (a stranger's bad
+    // confirm cannot cancel the peer's own proposal).
+    const proposals = db
+      .prepare(
+        "SELECT nonce, endpoint_url, display_name, peer_protocol_version FROM relay_peer_proposals WHERE peer_relay_id = ? AND expires_at > ? ORDER BY created_at DESC",
+      )
+      .all(relay_id, Date.now()) as Array<{
+      nonce: string;
+      endpoint_url: string;
+      display_name: string | null;
+      peer_protocol_version: string | null;
+    }>;
+    const knownRow =
+      proposals.length > 0
+        ? (db
+            .prepare(
+              "SELECT public_key FROM relay_peers WHERE peer_relay_id = ? AND (state IN ('suspended', 'removed') OR (state = 'pending' AND peered_at IS NOT NULL))",
+            )
+            .get(relay_id) as { public_key: string } | undefined)
+        : undefined;
+    if (knownRow) {
+      let response: Uint8Array;
+      try {
+        response = hexToBytes(challenge_response);
+      } catch {
+        throw new HTTPException(403, { message: "Challenge response verification failed" });
+      }
+      for (const p of proposals) {
+        const ok = await verify(
+          response,
+          new TextEncoder().encode(`${relay_id}:${p.nonce}:${FEDERATION_SUITE}`),
+          hexToBytes(knownRow.public_key),
+        );
+        if (!ok) continue;
+        const now = Date.now();
+        db.transaction(() => {
+          db.prepare(
+            `UPDATE relay_peers SET state = 'active', endpoint_url = ?, display_name = ?,
+               peer_protocol_version = ?, missed_heartbeats = 0, nonce = NULL,
+               peered_at = ?, last_heartbeat_at = ?
+             WHERE peer_relay_id = ? AND public_key = ?`,
+          ).run(
+            p.endpoint_url,
+            p.display_name,
+            p.peer_protocol_version,
+            now,
+            now,
+            relay_id,
+            knownRow.public_key,
+          );
+          db.prepare("DELETE FROM relay_peer_proposals WHERE peer_relay_id = ?").run(relay_id);
+        });
+        logger.info("federation.peer.active", { peerId: relay_id });
+        return c.json({ status: "active", peered_at: now });
+      }
+      throw new HTTPException(403, { message: "Challenge response verification failed" });
+    }
+
     const peer = db
       .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state = 'pending'")
       .get(relay_id) as
@@ -1890,17 +2026,12 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       hexToBytes(peer.public_key),
     );
     if (!valid) {
-      // A never-established proposal is junk and goes. An ESTABLISHED peer's
-      // row (it re-proposed after suspension/removal) is kept — key, trust and
-      // history — and parked `removed`: deleting it would free the id for a
-      // fresh proposal under any key, which is the takeover the key binding
-      // in /peer/propose refuses.
+      // A never-established proposal is junk and goes. A row that once peered
+      // (only an earlier build parked one `pending`) is left exactly as it is:
+      // deleting it would free the id for a fresh proposal under any key, and
+      // its owner re-peers through the proposal overlay above.
       if (peer.peered_at == null) {
         db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(relay_id);
-      } else {
-        db.prepare(
-          "UPDATE relay_peers SET state = 'removed', nonce = NULL WHERE peer_relay_id = ?",
-        ).run(relay_id);
       }
       throw new HTTPException(403, { message: "Challenge response verification failed" });
     }

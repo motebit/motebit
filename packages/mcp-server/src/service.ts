@@ -103,8 +103,17 @@ export interface ServiceRuntime {
   getAgentTrust?(
     remoteMotebitId: string,
   ): Promise<{ trust_level: string; public_key?: string } | null>;
-  /** Optional: record an interaction with a remote motebit. */
-  recordAgentInteraction?(remoteMotebitId: string, publicKey?: string): Promise<unknown>;
+  /**
+   * Optional: record an interaction with a remote motebit. The stored key
+   * changes only when `opts.provenSuccession` is true (a verified succession
+   * from the stored key to `publicKey`).
+   */
+  recordAgentInteraction?(
+    remoteMotebitId: string,
+    publicKey?: string,
+    motebitType?: string,
+    opts?: { provenSuccession?: boolean },
+  ): Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +330,11 @@ export function wireServerDeps(
   // for tests and alternative verifiers.
   deps.verifySignedToken = opts.verifySignedToken ?? defaultVerifySignedToken;
 
+  // The successor key each caller PROVED (a signed succession from its stored
+  // key), so the trust-store write in onCallerVerified may adopt exactly that
+  // key. Written by resolveCallerKey, read by onCallerVerified.
+  const provenSuccessors = new Map<string, string>();
+
   // Caller key resolution: local trust store → relay fallback
   {
     const getAgentTrust = runtime.getAgentTrust?.bind(runtime);
@@ -329,6 +343,10 @@ export function wireServerDeps(
 
     // Track relay-confirmed callers so local FirstContact records get upgraded
     const relayConfirmedCallers = new Set<string>();
+    // Callers whose relay-served key differed from the stored one. Once seen,
+    // the stored key never authenticates on relay unavailability.
+    const rotationObserved = new Set<string>();
+    const failOpenLogged = new Set<string>();
 
     // Short-lived cache of the relay's served identity, so a known caller's
     // every request does not cost a relay round trip. Bounded staleness: a
@@ -403,7 +421,28 @@ export function wireServerDeps(
             // successor must start). Relay unreachable / caller unknown there
             // ⇒ the stored key stands (availability; nothing says it moved).
             const served = await servedIdentity(callerMotebitId);
-            if (!served || sameKey(served.currentKey, record.public_key)) return local;
+            if (!served) {
+              // Relay unavailable or the caller unknown there: nothing says the
+              // key moved, so the stored key stands — but at most Verified
+              // (relay-confirmed trust needs the relay), and never once a
+              // rotation away from it has been seen.
+              if (trustLevel === AgentTrustLevel.Blocked) return local;
+              if (!failOpenLogged.has(callerMotebitId)) {
+                failOpenLogged.add(callerMotebitId);
+                // eslint-disable-next-line no-console -- no logger in wireServerDeps scope; stderr is the fail-loud sink (matches the package default logger)
+                console.warn(
+                  `[motebit] relay identity unavailable for ${callerMotebitId}: ${
+                    rotationObserved.has(callerMotebitId)
+                      ? "a rotation was observed, the stored key is refused"
+                      : "stored key accepted at most at Verified"
+                  }`,
+                );
+              }
+              if (rotationObserved.has(callerMotebitId)) return null;
+              return { publicKey: record.public_key, trustLevel: capAtVerified(trustLevel) };
+            }
+            if (sameKey(served.currentKey, record.public_key)) return local;
+            rotationObserved.add(callerMotebitId);
             if (trustLevel === AgentTrustLevel.Blocked) {
               return { publicKey: served.currentKey, trustLevel };
             }
@@ -417,11 +456,14 @@ export function wireServerDeps(
               served.guardianPublicKey,
             );
             relayConfirmedCallers.add(callerMotebitId);
-            const carried =
-              !proven && trustLevel === AgentTrustLevel.Trusted
-                ? AgentTrustLevel.Verified
-                : trustLevel;
-            return { publicKey: served.currentKey, trustLevel: carried };
+            if (proven) provenSuccessors.set(callerMotebitId, served.currentKey);
+            else provenSuccessors.delete(callerMotebitId);
+            // Unproven: the stored record keeps its key (recordAgentInteraction
+            // refuses the change), so this cap applies on EVERY request.
+            return {
+              publicKey: served.currentKey,
+              trustLevel: proven ? trustLevel : capAtVerified(trustLevel),
+            };
           }
         }
 
@@ -514,7 +556,10 @@ export function wireServerDeps(
       publicKey: string,
       _trustLevel: AgentTrustLevel,
     ) => {
-      void recordInteraction(callerMotebitId, publicKey);
+      const successor = provenSuccessors.get(callerMotebitId);
+      void recordInteraction(callerMotebitId, publicKey, undefined, {
+        provenSuccession: successor != null && sameKey(successor, publicKey),
+      });
     };
   }
 
@@ -1001,6 +1046,11 @@ interface ServedIdentity {
   currentKey: string;
   succession: KeySuccessionRecord[];
   guardianPublicKey?: string;
+}
+
+/** Relay-confirmed trust at most: Trusted → Verified; every other level unchanged. */
+function capAtVerified(level: AgentTrustLevel): AgentTrustLevel {
+  return level === AgentTrustLevel.Trusted ? AgentTrustLevel.Verified : level;
 }
 
 function sameKey(a: string, b: string): boolean {

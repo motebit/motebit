@@ -269,7 +269,10 @@ describe("wireServerDeps", () => {
 
     expect(deps.onCallerVerified).toBeDefined();
     deps.onCallerVerified!("remote-mote", "ed25519:key", AgentTrustLevel.FirstContact);
-    expect(recordSpy).toHaveBeenCalledWith("remote-mote", "ed25519:key");
+    // No succession was proven for this caller, so the stored key may not change.
+    expect(recordSpy).toHaveBeenCalledWith("remote-mote", "ed25519:key", undefined, {
+      provenSuccession: false,
+    });
   });
 
   it("does NOT wire resolveCallerKey without getAgentTrust", () => {
