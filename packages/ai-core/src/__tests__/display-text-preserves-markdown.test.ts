@@ -302,3 +302,35 @@ describe("action grammar edges", () => {
     expect(stripPartialActionTag("see [MEMORY_D")).toBe("see");
   });
 });
+
+describe("internal tag names need a delimiter — hyphenated / underscored lookalikes survive", () => {
+  // `\b` treats `-` as a word boundary, so an unclosed-block rule keyed on
+  // `<memory\b` swallowed `<memory-card>` and everything after it.
+  const lookalikes = [
+    "```html\n<memory-card>hi</memory-card>\n```\nEnd text here.",
+    "Use <thinking-mode> to toggle.\n\nEnd text here.",
+    "A <state-machine/> drives it.\n\nEnd text here.",
+    "Tag <memory_x>v</memory_x> stays.\n\nEnd text here.",
+    "Write <narration-box>x</narration-box> there.",
+    "See <parameter-list> here.",
+  ];
+  for (const text of lookalikes) {
+    it(`keeps ${JSON.stringify(text.slice(0, 32))} intact`, () => {
+      expect(stripTags(text)).toBe(text);
+      expect(stripPartialActionTag(text)).toBe(text);
+      expect(stripInternalTags(text)).toBe(text);
+    });
+  }
+
+  it("still removes the real internal tags", () => {
+    expect(stripTags('A <memory confidence="0.9">x</memory> B')).toBe("A B");
+    expect(stripTags("A <thinking>x</thinking> B")).toBe("A B");
+    expect(stripTags('A <state attention="0.5"/> B')).toBe("A B");
+    expect(stripTags("A <state/> B")).toBe("A B");
+    expect(stripTags("A <memory>x</memory> B")).toBe("A B");
+    expect(stripTags("Answer.\n<thinking>never closed")).toBe("Answer.");
+    expect(stripTags('Answer.\n<memory confidence="0.9">never closed')).toBe("Answer.");
+    expect(stripPartialActionTag("Answer. <memory")).toBe("Answer.");
+    expect(stripPartialActionTag('Answer. <state attention="0.')).toBe("Answer.");
+  });
+});

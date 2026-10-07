@@ -776,23 +776,33 @@ function forEachProseLine(
   return out;
 }
 
+// Every tag-name pattern requires a delimiter after the name — `\b` treats
+// `-` as a boundary, so `<memory\b` would match `<memory-card>` (or
+// `<state-machine/>`) and an unclosed-block rule would delete the rest of the
+// answer. `(?=[\s>/]|$)`: whitespace, `>`, `/`, or the end of streamed text.
+const D = String.raw`(?=[\s>/]|$)`;
+const BLOCK_NAMES = "thinking|memory|narration|parameter";
+/** Tool-call markup a model may echo into its prose (never shown). */
+const TOOL_MARKUP = String.raw`(?:artifact|function_calls|invoke|antml:[a-z_]+)`;
 const INTERNAL_PAIRS: RegExp[] = [
   /<thinking\s*>[\s\S]*?<\/thinking\s*>/g,
   /<memory(?:\s[^>]*)?>[\s\S]*?<\/memory\s*>/g,
   /<narration\s*>[\s\S]*?<\/narration\s*>/g,
-  /<state\b[^>]*\/>/g,
+  /<parameter(?:\s[^>]*)?>[\s\S]*?<\/parameter\s*>/g,
+  new RegExp(String.raw`<state${D}[^>]*\/>`, "g"),
+  new RegExp(String.raw`<\/?${TOOL_MARKUP}${D}[^>]*>`, "g"),
   /\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g,
   /\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g,
 ];
 const INTERNAL_SINGLES: RegExp[] = [
   // Unclosed interior block — never shown, fail-closed (the stream may not
   // have delivered the closer yet, or the model never wrote one).
-  /<(?:thinking|memory|narration)\b[^>]*>[\s\S]*$/g,
+  new RegExp(String.raw`<(?:${BLOCK_NAMES})${D}[^>]*>[\s\S]*$`, "g"),
   /\[EXTERNAL_DATA[^\]]*\][\s\S]*$/g,
   /\[MEMORY_DATA\][\s\S]*$/g,
   // Opener still being streamed: `<state field="cur`.
-  /<(?:state|thinking|memory|narration)\b[^>]*$/g,
-  /<\/(?:thinking|memory|narration)\s*>/g,
+  new RegExp(String.raw`<\/?(?:state|${BLOCK_NAMES}|${TOOL_MARKUP})${D}[^>]*$`, "g"),
+  new RegExp(String.raw`<\/(?:${BLOCK_NAMES})\s*>`, "g"),
   /\[EXTERNAL_DATA[^\]]*$/g,
   /\[\/EXTERNAL_DATA\]/g,
   /\[\/MEMORY_DATA\]/g,
@@ -802,9 +812,19 @@ const INTERNAL_NAMES = [
   "thinking",
   "memory",
   "narration",
+  "parameter",
+  "artifact",
+  "function_calls",
+  "invoke",
+  "antml:",
   "/thinking",
   "/memory",
   "/narration",
+  "/parameter",
+  "/artifact",
+  "/function_calls",
+  "/invoke",
+  "/antml:",
 ];
 const MARKER_NAMES = ["EXTERNAL_DATA", "MEMORY_DATA", "/EXTERNAL_DATA", "/MEMORY_DATA"];
 
@@ -827,11 +847,14 @@ function cutInternal(text: string, streaming: boolean): string {
   for (const re of INTERNAL_PAIRS) out = out.replace(re, SENTINEL);
   for (const re of INTERNAL_SINGLES) out = out.replace(re, SENTINEL);
   if (streaming) {
-    // A tag/marker name still arriving at the chunk edge: `<sta`, `[MEMORY_D`.
-    out = out.replace(/<(\/?[a-z]+)$/, (m, name: string) =>
-      INTERNAL_NAMES.some((n) => n.startsWith(name)) ? SENTINEL : m,
+    // A tag/marker name still arriving at the chunk edge (`<`, `<sta`,
+    // `[MEMORY_D`) is held until it resolves, so frames only ever extend.
+    out = out.replace(/<(\/?[a-z_:]*)$/, (m, name: string) =>
+      INTERNAL_NAMES.some((n) => n.startsWith(name) || (n.endsWith(":") && name.startsWith(n)))
+        ? SENTINEL
+        : m,
     );
-    out = out.replace(/\[(\/?[A-Z_]+)$/, (m, name: string) =>
+    out = out.replace(/\[(\/?[A-Z_]*)$/, (m, name: string) =>
       MARKER_NAMES.some((n) => n.startsWith(name)) ? SENTINEL : m,
     );
   }

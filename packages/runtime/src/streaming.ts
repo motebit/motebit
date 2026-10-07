@@ -15,7 +15,12 @@ import type {
 } from "@motebit/sdk";
 import type { BehaviorCues, SensitivityCleared, SensitivityGateEntry } from "@motebit/sdk";
 import type { AgenticChunk, TurnResult } from "@motebit/ai-core";
-import { extractStateTags, runTurnStreaming } from "@motebit/ai-core";
+import {
+  extractStateTags,
+  runTurnStreaming,
+  stripPartialActionTag,
+  stripTags,
+} from "@motebit/ai-core";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 import type { SignableToolInvocationReceipt } from "@motebit/crypto";
 import { signToolInvocationReceipt, hashToolPayload, signApprovalDecision } from "@motebit/crypto";
@@ -26,8 +31,6 @@ import { OWNER_ACT } from "./turn-delegation-receipts.js";
 import type { ToolCall } from "./turn-principal.js";
 import type { TurnConversation } from "./conversation.js";
 
-// Re-import the helper — it's file-local in index.ts, so we duplicate it here.
-// Exact copy of the function from index.ts.
 /**
  * Stable identity for "the human refused THIS action" (#433). Tool name plus
  * the exact arguments, key-sorted so object-key order can't mint a fresh
@@ -43,45 +46,6 @@ function deniedIntentKey(toolName: string, args: Record<string, unknown>): strin
     Object.fromEntries(Object.entries(args).sort(([a], [b]) => a.localeCompare(b))),
   );
   return `${toolName}:${canonical}`;
-}
-
-function stripDisplayTags(text: string): { clean: string; pending: string } {
-  const clean = text
-    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-    // The narration contract (prompt.ts, task_step_narration) PROMISES the
-    // tag never leaks into the chat register — the typed chunk is its only
-    // carrier. Witnessed leaking verbatim 2026-07-29 on the first live
-    // Opus round: promised in the prompt, missing from this list.
-    .replace(/<narration>[\s\S]*?<\/narration>/g, "")
-    .replace(/<state\s+[^>]*\/>/g, "")
-    .replace(/<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g, "")
-    .replace(/<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
-    .replace(/\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\]/g, "")
-    .replace(/\[\/MEMORY_DATA\]/g, "")
-    .replace(/\*{1,3}/g, "")
-    .replace(/ {2,}/g, " ");
-
-  for (const tag of ["<memory", "<thinking", "<parameter", "<narration"]) {
-    const lastOpen = clean.lastIndexOf(tag);
-    if (lastOpen !== -1) {
-      const closeTag = `</${tag.slice(1)}>`;
-      const afterOpen = clean.slice(lastOpen);
-      if (!afterOpen.includes(closeTag)) {
-        return { clean: clean.slice(0, lastOpen), pending: clean.slice(lastOpen) };
-      }
-    }
-  }
-
-  const lastOpen = clean.lastIndexOf("<");
-  if (lastOpen !== -1 && !clean.includes(">", lastOpen)) {
-    return { clean: clean.slice(0, lastOpen), pending: clean.slice(lastOpen) };
-  }
-  return { clean, pending: "" };
 }
 
 /** Dependencies injected by the runtime. */
@@ -500,7 +464,22 @@ export class StreamingManager {
     const convo = this.deps.conversationFor(principal);
     let result: TurnResult | null = null;
     let accumulated = "";
-    let yieldedCleanLength = 0;
+    let yieldedClean = "";
+
+    // The live display is ai-core's display strip — the same primitive the
+    // final answer goes through, never a local copy (a duplicated regex set
+    // here once deleted markdown bold and collapsed code-block spacing on
+    // every streamed chunk). Mid-stream frames hold back a partial tag or
+    // `*action` at the edge; the final frame is `stripTags(accumulated)`.
+    // Only the new suffix is yielded, so a frame that does not extend what
+    // was already shown is withheld rather than emitted garbled.
+    const displayDelta = (final: boolean): string => {
+      const clean = final ? stripTags(accumulated) : stripPartialActionTag(accumulated);
+      if (!clean.startsWith(yieldedClean)) return "";
+      const delta = clean.slice(yieldedClean.length);
+      yieldedClean = clean;
+      return delta;
+    };
 
     // State tags are collected during streaming but applied once at the end.
     // The creature's only visible change while speaking is the processing glow
@@ -828,18 +807,15 @@ export class StreamingManager {
       }
 
       // Strip state/memory/action tags from text before yielding to UI
-      if (chunk.type === "text") {
-        // trimStart: tags before text leave orphaned newlines
-        const clean = stripDisplayTags(accumulated).clean.trimStart();
-        let delta = clean.slice(yieldedCleanLength);
+      if (chunk.type === "text" || chunk.type === "result") {
+        const delta = displayDelta(chunk.type === "result");
         if (delta) {
           // Defense-in-depth: redact secrets from AI text at the streaming
           // boundary. Pattern-based redaction works on partial text fragments.
-          delta = this.deps.redactText(delta);
-          yieldedCleanLength += clean.slice(yieldedCleanLength).length;
-          yield { type: "text" as const, text: delta };
+          yield { type: "text" as const, text: this.deps.redactText(delta) };
         }
-      } else {
+      }
+      if (chunk.type !== "text") {
         yield chunk;
       }
       if (chunk.type === "result") {

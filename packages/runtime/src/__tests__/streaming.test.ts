@@ -370,8 +370,10 @@ describe("sendMessageStreaming", () => {
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("hello"));
     expect(chunks).toHaveLength(3);
-    expect(chunks[0]).toEqual({ type: "text", text: "Streamed " });
-    expect(chunks[1]).toEqual({ type: "text", text: "response" });
+    // Trailing whitespace at a frame edge is held until the next word lands
+    // (ai-core's display strip), so the boundary shifts but the text doesn't.
+    expect(chunks[0]).toEqual({ type: "text", text: "Streamed" });
+    expect(chunks[1]).toEqual({ type: "text", text: " response" });
     expect(chunks[2]).toEqual({ type: "result", result });
   });
 
