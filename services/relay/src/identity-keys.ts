@@ -187,39 +187,223 @@ export function keysHeldBy(db: DatabaseDriver, motebitId: string): Set<string> {
 }
 
 /**
+ * A sovereign `motebit_id` is a UUIDv8 (`deriveSovereignMotebitId`): the
+ * version nibble is 8. Matched case-INSENSITIVELY on purpose — an upper-case
+ * spelling of V's sovereign id is a distinct row that a case-insensitive
+ * reader (`verifySovereignBinding`) would still read as V's, so it claims
+ * sovereignty too (and, the commitment being lower-case, never equals one).
+ * Legacy ids are UUIDv7 and never match.
+ */
+const SOVEREIGN_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Whether `motebitId` claims to be the sovereign commitment to some key. */
+export function claimsSovereignId(motebitId: string): boolean {
+  return SOVEREIGN_ID_SHAPE.test(motebitId) || motebitId.startsWith("did:key:");
+}
+
+/**
+ * The keys that may stand as a SOVEREIGN-shaped identity's key (#875 review
+ * F1), or `null` for an id that claims no sovereignty (any proven key may
+ * stand — a legacy id is first-come by construction).
+ *
+ * For a sovereign id a key is the identity's only when the id commits to it
+ * (`proveSovereignFirstKey` — the genesis), or it is reached from a key that
+ * stands by a link this relay RECORDED (each link's signatures were verified
+ * from the departing key before it was recorded, `applySuccession`), or it is
+ * a holder whose evidence was itself sovereign: E-sov (`register`,
+ * `register-self` — the arithmetic, re-checked here anyway) or E-mig (an
+ * arrival whose sovereign binding, possibly through a chain this relay never
+ * saw, verified) — and, after an E-mig, the holder E-link moved on from it.
+ * Proof of possession is NOT standing: before #875 any presenter could plant
+ * its own key K_X under V's `deriveSovereignMotebitId(K_V)`, and a bearer that
+ * planted row verifies proves only that K_X is X's. Every other key on file —
+ * a device row, the registry column, a recorded evidence row, an E-main
+ * (`backfill:registry`) or E-op holder, a chain rooted anywhere else — is a
+ * squat for a sovereign id, never served and never an owner.
+ *
+ * `presented` adds a candidate genesis the caller is about to write.
+ */
+export async function sovereignLineage(
+  db: DatabaseDriver,
+  motebitId: string,
+  presented?: string,
+): Promise<Set<string> | null> {
+  if (!claimsSovereignId(motebitId)) return null;
+  const links = db
+    .prepare(
+      "SELECT old_public_key, new_public_key FROM relay_key_successions WHERE motebit_id = ?",
+    )
+    .all(motebitId) as Array<{ old_public_key: string; new_public_key: string }>;
+  const candidates = new Set<string>(keysHeldBy(db, motebitId));
+  for (const l of links) {
+    candidates.add(l.old_public_key);
+    candidates.add(l.new_public_key);
+  }
+  if (presented !== undefined && presented !== "") candidates.add(presented);
+
+  const lineage = new Set<string>();
+  for (const k of candidates) {
+    if ((await proveSovereignFirstKey(motebitId, k)) !== null) lineage.add(k);
+  }
+  const held = readHolder(db, motebitId);
+  if (held && (held.source === "migration" || held.source === "succession")) {
+    // E-mig roots a chain this relay may never have seen; E-link moved the
+    // holder only from the key it held. A succession holder stands when its
+    // chain is rooted at a standing key (walked below) OR the identity
+    // arrived by migration here (the arrival's key then E-linked onward).
+    const arrived =
+      held.source === "migration" ||
+      db
+        .prepare("SELECT 1 FROM relay_accepted_migrations WHERE motebit_id = ? LIMIT 1")
+        .get(motebitId) != null;
+    if (arrived) lineage.add(held.public_key);
+  }
+  // Forward over recorded links from every standing key.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const l of links) {
+      if (lineage.has(l.old_public_key) && !lineage.has(l.new_public_key)) {
+        lineage.add(l.new_public_key);
+        grew = true;
+      }
+    }
+  }
+  return lineage;
+}
+
+/** Whether `key` may stand as `motebitId`'s key (`sovereignLineage`; always true for a non-sovereign id). */
+export async function keyStandsFor(
+  db: DatabaseDriver,
+  motebitId: string,
+  key: string,
+): Promise<boolean> {
+  const lineage = await sovereignLineage(db, motebitId, key);
+  return lineage === null || lineage.has(key);
+}
+
+/** A served candidate stands: present, and in the lineage when the id is sovereign. */
+function standsIn(lineage: Set<string> | null, k: string | null): k is string {
+  return k !== null && (lineage === null || lineage.has(k));
+}
+
+/**
  * The key a relay route SERVES as this identity's (#875 review round 3): the
- * proven holder; else a key on file that the id is the sovereign commitment
- * to (arithmetic, true whoever wrote the row); else null. Never the bare
- * registry column, which a relay before #875 wrote without proof, and never
- * an arbitrary device row, which `/pairing/claim` writes unsigned. Every
- * route that hands an identity's key to a third party — discover, the agent
- * record, capabilities, the A2A card, a relay-issued credential's subject —
- * reads it here, so they cannot disagree.
+ * proven holder; else a registry key some request proved; else a key on file
+ * that the id is the sovereign commitment to (arithmetic, true whoever wrote
+ * the row); else null. Never the bare registry column, which a relay before
+ * #875 wrote without proof, and never an arbitrary device row, which
+ * `/pairing/claim` writes unsigned. Every route that hands an identity's key
+ * to a third party — discover, the agent record, capabilities, the A2A card,
+ * a relay-issued credential's subject — reads it here, so they cannot
+ * disagree.
+ *
+ * For a SOVEREIGN-shaped id every candidate must also stand
+ * (`sovereignLineage`, #875 review F1): a pre-#875 squat that a post-#875
+ * request "proved" (X's own key, verified by X's own planted row) is never
+ * served as V's. This is the one place the served key is decided, so an
+ * evidence row — whoever wrote it, whenever — cannot serve a squat.
  */
 export async function servedIdentityKey(
   db: DatabaseDriver,
   motebitId: string,
 ): Promise<string | null> {
+  const lineage = await sovereignLineage(db, motebitId);
   // 1. The proven holder.
   const holder = holderKeyOf(db, motebitId);
-  if (holder !== null) return holder;
+  if (standsIn(lineage, holder)) return holder;
   // 2. A registry key some request PROVED (round 4): a legacy id registering
   //    with its own proven key after #875 is served it — serving ≠ binding,
   //    no holder is written. Served only while the registry still equals it.
   const proven = provenRegistryKeyOf(db, motebitId);
-  if (proven !== null) return proven;
+  if (standsIn(lineage, proven)) return proven;
   // 3. The sovereign commitment — only for an identity that has NEVER
-  //    rotated (no recorded succession). After a rotation the genesis key a
-  //    device row may still carry is stale; a rotated identity is served its
-  //    holder or proven registry key, else nothing (round 4, C2).
-  if (chainHeadOf(db, motebitId) !== null) return null;
+  //    rotated. After a rotation the genesis key a device row may still carry
+  //    is stale; a rotated identity is served its holder or proven registry
+  //    key, else nothing (round 4, C2). A sovereign id's rotation is a link
+  //    departing from its lineage; a chain a squatter rooted at its own key
+  //    is no rotation of the identity (F1).
+  if (lineage === null) return null;
+  const rotated = (
+    db
+      .prepare("SELECT old_public_key FROM relay_key_successions WHERE motebit_id = ?")
+      .all(motebitId) as Array<{ old_public_key: string }>
+  ).some((l) => lineage.has(l.old_public_key));
+  if (rotated) return null;
   for (const key of keysHeldBy(db, motebitId)) {
     if ((await proveSovereignFirstKey(motebitId, key)) !== null) return key;
   }
   return null;
 }
 
-/** The evidence that proved a registry key (closed set; migration v46). */
+/**
+ * Park a pre-#875 squat of a SOVEREIGN id (#875 review F1) — called by a
+ * public door (bootstrap, register-self) that has just proven CURRENT
+ * possession of `provenKey` AND that `provenKey` stands for the id
+ * (`keyStandsFor`), while the identity has no standing key on file. Every
+ * key on file then is a squat (none can be the identity's), so, in one
+ * transaction: the keyed device rows that do not stand are removed (each one
+ * verified tokens AS the identity), a registry key that does not stand is
+ * cleared and the listing delisted (its endpoint is the squatter's), its
+ * evidence row dropped, and a holder that does not stand (an E-main or E-op
+ * transplant of the squat) is removed. Returns what it parked, for the
+ * caller's log and socket reconcile. Writes nothing for a non-sovereign id.
+ */
+export interface ParkedSquat {
+  devices: Array<{ device_id: string; public_key: string }>;
+  registryKey: string | null;
+  holderKey: string | null;
+}
+
+export async function parkSovereignSquat(
+  db: DatabaseDriver,
+  motebitId: string,
+  provenKey: string,
+  now: number,
+): Promise<ParkedSquat | null> {
+  const lineage = await sovereignLineage(db, motebitId, provenKey);
+  if (lineage === null || !lineage.has(provenKey)) return null;
+  // Compared case-insensitively, as the door's held-key guard compares: a
+  // legacy UPPER(K) row of the owner's own key is the owner's, never parked.
+  const standing = new Set([...lineage].map((k) => k.toLowerCase()));
+  return db.transaction(() => {
+    // Re-read inside the transaction: park only while no standing key is on
+    // file (a concurrent owner write makes this a no-op).
+    for (const k of keysHeldBy(db, motebitId)) {
+      if (standing.has(k.toLowerCase())) return null;
+    }
+    const devices = (
+      db
+        .prepare(
+          "SELECT device_id, public_key FROM devices WHERE motebit_id = ? AND public_key != ''",
+        )
+        .all(motebitId) as Array<{ device_id: string; public_key: string }>
+    ).filter((d) => !standing.has(d.public_key.toLowerCase()));
+    for (const d of devices) {
+      db.prepare("DELETE FROM devices WHERE device_id = ? AND motebit_id = ?").run(
+        d.device_id,
+        motebitId,
+      );
+    }
+    const reg = registryKeyOf(db, motebitId);
+    const registryKey = reg !== null && !standing.has(reg.toLowerCase()) ? reg : null;
+    if (registryKey !== null) {
+      db.prepare(
+        "UPDATE agent_registry SET public_key = '', delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]' WHERE motebit_id = ?",
+      ).run(now, motebitId);
+      db.prepare("DELETE FROM relay_registry_key_evidence WHERE motebit_id = ?").run(motebitId);
+    }
+    const holder = holderKeyOf(db, motebitId);
+    const holderKey = holder !== null && !standing.has(holder.toLowerCase()) ? holder : null;
+    if (holderKey !== null) {
+      db.prepare("DELETE FROM identity_keys WHERE motebit_id = ?").run(motebitId);
+    }
+    if (devices.length === 0 && registryKey === null && holderKey === null) return null;
+    return { devices, registryKey, holderKey };
+  });
+}
+
+/** The evidence that proved a registry key (closed set; migration v58). */
 export const REGISTRY_KEY_EVIDENCE = [
   "bearer",
   "holder",

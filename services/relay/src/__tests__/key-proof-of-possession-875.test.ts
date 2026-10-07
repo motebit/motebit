@@ -936,37 +936,65 @@ describe("the served key: holder > proven registry > sovereign commitment (#875 
   });
 
   it("C3: precedence — holder over proven registry over sovereign commitment", async () => {
-    const s = await sovereign(); // the id commits to s.kp
-    const reg = await generateKeypair();
-    const holder = await generateKeypair();
-    plantIdentity(s.mid);
-    plantDevice(s.mid, "s-dev", hex(s.kp));
-    plantRegistry(s.mid, hex(reg));
-    const served = async () =>
+    const served = async (mid: string) =>
       (
-        (await (await relay.app.request(`/agent/${s.mid}/capabilities`)).json()) as {
+        (await (await relay.app.request(`/agent/${mid}/capabilities`)).json()) as {
           public_key: string;
         }
       ).public_key;
 
-    // Sovereign commitment only (the registry row has no provenance).
-    expect(await served()).toBe(hex(s.kp));
-    // A proven registry key outranks the sovereign commitment.
+    // A legacy id: holder over proven registry over nothing.
+    const legacy = `legacy-${crypto.randomUUID()}`;
+    const reg = await generateKeypair();
+    const holder = await generateKeypair();
+    plantIdentity(legacy);
+    plantRegistry(legacy, hex(reg));
+    expect(await served(legacy)).toBe("");
+    recordRegistryKeyEvidence(relay.moteDb.db, {
+      motebitId: legacy,
+      publicKey: hex(reg),
+      evidence: "key_proof",
+      now: 1,
+    });
+    expect(await served(legacy)).toBe(hex(reg));
+    recordIdentityKey(relay.moteDb.db, {
+      motebitId: legacy,
+      publicKey: hex(holder),
+      source: "succession",
+      now: 1,
+    });
+    expect(await served(legacy)).toBe(hex(holder));
+
+    // A sovereign id: the commitment is served, and a proven registry key or
+    // a holder that does not STAND for the id (no recorded succession from
+    // the genesis reaches it) never outranks it (#875 review F1).
+    const s = await sovereign(); // the id commits to s.kp
+    plantIdentity(s.mid);
+    plantDevice(s.mid, "s-dev", hex(s.kp));
+    plantRegistry(s.mid, hex(reg));
+    expect(await served(s.mid)).toBe(hex(s.kp));
     recordRegistryKeyEvidence(relay.moteDb.db, {
       motebitId: s.mid,
       publicKey: hex(reg),
       evidence: "key_proof",
       now: 1,
     });
-    expect(await served()).toBe(hex(reg));
-    // The holder outranks both.
+    expect(await served(s.mid)).toBe(hex(s.kp));
     recordIdentityKey(relay.moteDb.db, {
       motebitId: s.mid,
       publicKey: hex(holder),
-      source: "succession",
+      source: "backfill:registry",
       now: 1,
     });
-    expect(await served()).toBe(hex(holder));
+    expect(await served(s.mid)).toBe(hex(s.kp));
+    // A holder at the genesis stands and outranks the rest.
+    recordIdentityKey(relay.moteDb.db, {
+      motebitId: s.mid,
+      publicKey: hex(s.kp),
+      source: "register",
+      now: 1,
+    });
+    expect(await served(s.mid)).toBe(hex(s.kp));
   });
 });
 

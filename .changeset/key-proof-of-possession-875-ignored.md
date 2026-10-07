@@ -11,7 +11,7 @@ The relay's key writers demand proof of possession (#875) — the relay half. Th
     - A keyless registration never introduces a key. It writes the holder, else the registry key on file (unchanged), else `""`. It no longer writes main's first-listed device row, nor the caller's own key. The exception is keyless E-sov, whose proven key becomes the holder.
     - Every served identity key (discover by id, the discover list, the federation discover response, `GET /api/v1/agents/:id`, capabilities, the A2A card, and a relay-issued credential's subject) comes from `servedIdentityKey`. The order is:
       1. the proven holder;
-      2. else the registry key while it equals the key a request PROVED, recorded as provenance in the new `relay_registry_key_evidence` table (migration v46) and never recorded as the holder;
+      2. else the registry key while it equals the key a request PROVED, recorded as provenance in the new `relay_registry_key_evidence` table (migration v58) and never recorded as the holder;
       3. else, for a never-rotated identity only, a key on file that the id is the sovereign commitment to;
       4. else `""`.
 
@@ -22,3 +22,5 @@ The relay's key writers demand proof of possession (#875) — the relay half. Th
   - **Pairing approve.** A `key_transfer` is kept only when its `identity_pubkey_check` is the approver's own verified key. `/pairing/claim` still takes an unsigned key; that is a named residual.
   - **Stated cost.** A sovereign identity that rotated away from its genesis key cannot first-register its current key on a relay that has never seen it (`409 SOVEREIGN_ID_KEY_MISMATCH`). It needs migration from a source relay, or registration with its genesis key followed by a rotation.
   - **Sovereign ids.** For an identity holding no key, every registration door refuses a UUIDv8-shaped id that is not exactly `deriveSovereignMotebitId(public_key)` (`409 SOVEREIGN_ID_KEY_MISMATCH`). That closes the pre-registration squat of a sovereign id.
+  - **A pre-#875 squat of a sovereign id is never upgraded to proven.** For a sovereign-shaped id only keys that stand count as the identity's: the genesis key the id commits to, a key reached from it by a recorded succession, or a verified migration's key. A squat key is never served, never re-proven by the squatter's own bearer, and never blocks the owner, whose signed bootstrap or register-self parks it (device rows removed, registry key cleared and delisted, logged).
+  - **An accepted proof of possession is accepted once.** The relay records each accepted bootstrap, register-self and `key_proof` body (migration v59, 11-minute retention); an exact replay writes nothing. Cross-relay replay within the 5-minute window is a stated limitation until a future version adds an audience.

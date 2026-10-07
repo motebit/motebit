@@ -45,6 +45,17 @@ Observable:
 
 Retention window: indefinite — device rows carry no TTL and are never reaped for silence; there is no automatic removal.
 
+### Accepted proofs of possession
+
+Tables: `relay_key_proofs_accepted`.
+
+Observable:
+- the motebit_id and Ed25519 public key a proof of possession named
+- the proof's signature
+- which registration door accepted it, and when
+
+Retention window: 11 minutes — long enough to cover the proof's ±5-minute validity window, pruned on the next accepted proof after that.
+
 ### Operational
 
 Tables: `relay_tasks`, `relay_allocations`, `relay_settlements`, `relay_settlement_proofs`, `relay_receipts`, `relay_pending_withdrawals`, `relay_credentials`, `relay_credential_anchor_batches`, `relay_revocation_events`, `relay_revoked_credentials`, `relay_agent_revocations`, `relay_identity_revocations`, `relay_disputes`, `relay_dispute_evidence`, `relay_dispute_resolutions`, `relay_dispute_fund_actions`, `relay_peers`, `relay_federation_settlements`, `relay_execution_ledgers`, `relay_delegation_edges`, `relay_service_listings`, `relay_accounts`, `relay_subscriptions`, `relay_deposit_log`, `relay_refund_log`, `relay_accepted_migrations`, `relay_treasury_reconciliations`, `relay_p2p_proof_claims`, `relay_settlement_payee_corrections`, `relay_x402_settlements`, `relay_withdrawal_chain_claims`, `relay_withdrawal_payout_attempts`, `relay_withdrawal_payout_queue`.

@@ -34,7 +34,7 @@ import {
 } from "@motebit/crypto";
 import type { SyncRelay } from "../index.js";
 import { recordRegistryKeyEvidence, servedIdentityKey } from "../identity-keys.js";
-import { createTestRelay, signedBootstrapBody } from "./test-helpers.js";
+import { createTestRelay, keyProof, signedBootstrapBody } from "./test-helpers.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
@@ -96,7 +96,7 @@ const registryRow = (mid: string) =>
 
 async function served(mid: string) {
   const get = async (path: string) =>
-    ((await (await relay.app.request(path)).json()) as { public_key?: string }).public_key;
+    ((await (await relay.app.request(path)).json()) as { public_key?: string }).public_key ?? "";
   return {
     discover: await get(`/api/v1/discover/${mid}`),
     helper: (await servedIdentityKey(db(), mid)) ?? "",
@@ -171,7 +171,7 @@ describe("F1 — a pre-#875 squat of a sovereign id is never upgraded to proven"
     const vb = await bootstrap(v, "v-dev", vKp);
     expect(vb.status).toBeLessThan(300);
     const reg = registryRow(v);
-    expect(reg?.public_key).toBe(hex(vKp));
+    expect(reg?.public_key).toBe("");
     expect(reg?.delisted_at).not.toBeNull();
     // X's made-up-device bearer no longer verifies under the registry fallback.
     expect((await registerAs(v, "made-up-device", xKp)).status).toBe(401);
@@ -250,5 +250,47 @@ describe("F2 — an exact replay of an accepted proof-of-possession body is idem
       .prepare("SELECT COUNT(*) AS n FROM relay_key_proofs_accepted WHERE motebit_id = ?")
       .get(mid) as { n: number };
     expect(seen.n).toBe(1);
+  });
+
+  it("a register-self body replayed at bootstrap is the same proof: answered, nothing written", async () => {
+    const kp = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(kp));
+    const body = await signedBootstrapBody(
+      { motebit_id: mid, device_id: "dev-1", public_key: hex(kp) },
+      kp.privateKey,
+    );
+    const first = await relay.app.request("/api/v1/devices/register-self", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(first.status).toBe(201);
+    const before = db().prepare("SELECT * FROM devices WHERE motebit_id = ?").all(mid);
+    const replay = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(replay.status).toBe(200);
+    expect(db().prepare("SELECT * FROM devices WHERE motebit_id = ?").all(mid)).toEqual(before);
+  });
+
+  it("/agents/register: a replayed key_proof re-asserts the key it wrote, and never writes one the registry no longer holds", async () => {
+    const aKp = await generateKeypair();
+    const bKp = await generateKeypair();
+    const mid = `legacy-${crypto.randomUUID()}`;
+    expect((await bootstrap(mid, "a-dev", aKp)).status).toBe(201);
+    const proof = await keyProof({ motebit_id: mid, public_key: hex(bKp) }, bKp.privateKey);
+    const reg = () => registerAs(mid, "a-dev", aKp, { public_key: hex(bKp), key_proof: proof });
+    expect((await reg()).status).toBe(200);
+    expect(registryRow(mid)?.public_key).toBe(hex(bKp));
+    // Same proof again while the registry still holds K_B: a repeat.
+    expect((await reg()).status).toBe(200);
+    // The registry no longer holds K_B: the replayed proof is not fresh evidence.
+    plant("UPDATE agent_registry SET public_key = '' WHERE motebit_id = ?", mid);
+    const replay = await reg();
+    expect(replay.status).toBe(409);
+    expect(replay.json.code).toBe("KEY_PROOF_REPLAYED");
+    expect(registryRow(mid)?.public_key).toBe("");
   });
 });

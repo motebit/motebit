@@ -604,7 +604,15 @@ describe("the three withdrawn attacks (#794, #796) are all lifted by the owner's
     const stranger = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(owner));
     await plantSovereignSquat(mid, "evil", stranger);
-    expect(await tokenRegister(mid, "evil", stranger)).toBe(200);
+    // Since the #875 review (F1) the squatter cannot re-prove its planted key
+    // through its own bearer: the keyed registration is refused. The registry
+    // squat is planted as a relay before #875 admitted it.
+    expect(await tokenRegister(mid, "evil", stranger)).toBe(409);
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, '[]', 1, 1, ?)",
+      )
+      .run(mid, hex(stranger), "http://localhost:9999/mcp", Date.now() + 86_400_000);
     expect((await revokeAs(mid, "evil", stranger)).status).toBe(200);
     expect(await syncStatusAs(mid, "evil", stranger)).toBe(403);
 

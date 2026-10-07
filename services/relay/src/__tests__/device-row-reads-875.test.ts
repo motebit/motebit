@@ -55,10 +55,9 @@ const DEVICE_ROW_SITES: Registered[] = [
   {
     file: "agents.ts",
     fn: "/api/v1/agents/register",
-    snippet:
-      "const heldBefore = new Set([...keysHeldBy(moteDb.db, motebitId)].map((k) => k.toLowerCase()));",
+    snippet: "[...keysHeldBy(moteDb.db, motebitId)]",
     verdict:
-      "PER-DEVICE / GUARD: the bearer's own device row (callerDeviceKey, E-sov possession); keysHeldBy only decides whether the identity holds NO key (the sovereign-squat check) — never an exemption",
+      "PER-DEVICE / GUARD: the bearer's own device row (callerDeviceKey, E-sov possession); keysHeldBy, filtered to keys that STAND for a sovereign id, only decides whether the identity holds NO standing key (the sovereign-squat check) — never an exemption",
   },
   {
     file: "auth.ts",
@@ -75,8 +74,7 @@ const DEVICE_ROW_SITES: Registered[] = [
   {
     file: "device-registration-guard.ts",
     fn: "refusePublicDeviceRegistration",
-    snippet:
-      "const held = new Set([...keysHeldBy(deps.db, req.motebitId)].map((k) => k.toLowerCase()));",
+    snippet: "[...keysHeldBy(deps.db, req.motebitId)]",
     verdict: "GUARD: conflict on the claimed device_id's own row; the held-key SET only blocks",
   },
   {
@@ -123,6 +121,34 @@ const DEVICE_ROW_SITES: Registered[] = [
     fn: "add",
     snippet: "for (const k of readDeviceKeys(db, motebitId)) add(k);",
     verdict: "DEFINITION: keysHeldBy's device-row members",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "sovereignLineage",
+    snippet: "const candidates = new Set<string>(keysHeldBy(db, motebitId));",
+    verdict:
+      "SOVEREIGN LINEAGE (#875 review F1): device-row keys are CANDIDATES only — one stands solely when the id is its sovereign commitment (arithmetic) or a recorded succession / verified migration reaches it, never on a row's word",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "parkSovereignSquat",
+    snippet: "for (const k of keysHeldBy(db, motebitId)) {",
+    verdict: "GUARD: parks only while NO key on file stands — a standing key blocks the park",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "parkSovereignSquat",
+    snippet:
+      "\"SELECT device_id, public_key FROM devices WHERE motebit_id = ? AND public_key != ''\",",
+    verdict:
+      "PARK (#875 review F1): reached only after the door proved current possession of a key that STANDS for the sovereign id; device rows here are the ones that do NOT stand — read to remove them (a squat), never read as the identity's key",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "parkSovereignSquat",
+    snippet: 'db.prepare("DELETE FROM devices WHERE device_id = ? AND motebit_id = ?").run(',
+    verdict:
+      "PARK (#875 review F1): reached only after the door proved current possession of a key that STANDS for the sovereign id; device rows here are the ones that do NOT stand — read to remove them (a squat), never read as the identity's key",
   },
   {
     file: "identity-keys.ts",

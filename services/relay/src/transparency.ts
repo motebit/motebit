@@ -106,6 +106,19 @@ export const DECLARATION_CONTENT = {
       retention_window:
         "indefinite — device rows carry no TTL and are never reaped for silence; there is no automatic removal",
     },
+    // Accepted proofs of possession (#875 review F2): the signature of each
+    // accepted device-registration body, so an exact replay inside its
+    // 5-minute window writes nothing. Pruned past the window.
+    key_proofs_accepted: {
+      tables: ["relay_key_proofs_accepted"],
+      observable: [
+        "the motebit_id and Ed25519 public key a proof of possession named",
+        "the proof's signature",
+        "which registration door accepted it, and when",
+      ],
+      retention_window:
+        "11 minutes — long enough to cover the proof's ±5-minute validity window, pruned on the next accepted proof after that",
+    },
     operational: {
       tables: [
         "relay_tasks",
@@ -671,6 +684,18 @@ export function renderMarkdown(): string {
   for (const item of c.retention.device_registry.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.device_registry.retention_window}.`);
+  lines.push("");
+
+  lines.push("### Accepted proofs of possession");
+  lines.push("");
+  lines.push(
+    `Tables: ${c.retention.key_proofs_accepted.tables.map((t) => `\`${t}\``).join(", ")}.`,
+  );
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.key_proofs_accepted.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.key_proofs_accepted.retention_window}.`);
   lines.push("");
 
   lines.push("### Operational");

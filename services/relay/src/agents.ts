@@ -47,7 +47,9 @@ import {
   recordIdentityGuardian,
   recordOperatorServiceKey,
   registryKeyOf,
+  parkSovereignSquat,
   servedIdentityKey,
+  sovereignLineage,
   withServedKeys,
   recordRegistryKeyEvidence,
   type RegistryKeyEvidence,
@@ -153,6 +155,13 @@ import {
   buildSignedRevocationFeed,
 } from "./agent-revocation.js";
 import { createLogger } from "./logger.js";
+import {
+  keyProofAccepted,
+  keyProofOf,
+  recordKeyProofAccepted,
+  type AcceptedKeyProof,
+} from "./key-proof-replay.js";
+import type { ReconcileKeyConnections } from "./connection-ports.js";
 import {
   OPERATOR_PRESENTED,
   recordMasterTokenOnce,
@@ -461,6 +470,12 @@ export interface AgentsDeps {
    * had already admitted must not outlive it. Required, like the other ports.
    */
   closeIdentityConnections: CloseIdentityConnections;
+  /**
+   * Closes the sockets a parked pre-#875 sovereign-id squat admitted (#875
+   * review F1): the owner's signed bootstrap removes the squatter's device
+   * rows and registry key, so a socket one of them verified no longer would.
+   */
+  reconcileKeyConnections: ReconcileKeyConnections;
   /**
    * Durable auth-event record (auth-events.ts) for the register door's
    * succession refusals (#775). Required for the reason `/rotate-key`'s is:
@@ -1221,12 +1236,35 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // registration under a brand-new motebit_id that reused a known
     // device_id replaced that row and carried another identity's device
     // away with it.
+    // An exact replay of a proof this relay already accepted (#875 review
+    // F2) is answered as the repeat it is and writes nothing: the body has no
+    // audience or nonce, so within its window the same bytes are not fresh
+    // evidence for anything the first acceptance did not already do.
+    const proof = keyProofOf(body, motebitId, body.public_key);
+    if (proof !== null && keyProofAccepted(moteDb.db, proof)) {
+      logger.info("agent.bootstrap.replay_idempotent", { motebitId, deviceId });
+      return c.json({ motebit_id: motebitId, device_id: deviceId, registered: false }, 200);
+    }
+
     const refusal = await refusePublicDeviceRegistration(
       { identityManager, db: moteDb.db },
       { motebitId, deviceId, publicKey: body.public_key },
     );
     if (refusal) {
       throw new HTTPException(409, { message: `${refusal.error} — ${refusal.remediation}` });
+    }
+    // A sovereign id whose key STANDS (the guard admitted it) on an identity
+    // holding no standing key: every key on file is a pre-#875 squat. The
+    // owner's signed bootstrap wins and the squat is parked (#875 review F1).
+    const parked = await parkSovereignSquat(moteDb.db, motebitId, body.public_key, Date.now());
+    if (parked !== null) {
+      logger.warn("agent.bootstrap.parked_sovereign_squat", {
+        motebitId,
+        devices: parked.devices,
+        registryKey: parked.registryKey,
+        holderKey: parked.holderKey,
+      });
+      deps.reconcileKeyConnections(motebitId);
     }
 
     // Idempotent for an identity that exists; a new identity is saved with the
@@ -1246,6 +1284,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       body.public_key,
       deviceId,
     );
+    if (proof !== null) recordKeyProofAccepted(moteDb.db, proof, "bootstrap", Date.now());
     // Bootstrap writes NOTHING to the holder (§5f, DB1). Since #875 it proves
     // current possession of the key it names, but possession of a key is not
     // evidence that the key is THE identity's (§5e E-device), and a legacy id
@@ -1429,9 +1468,20 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // request signed by that key (`verifyKeyPossession`, register-self's
     // verifier and window).
     let registryEvidence: RegistryKeyEvidence | null = null;
+    let acceptedKeyProof: AcceptedKeyProof | null = null;
     if (keyFromBody) {
       const lowered = publicKey.toLowerCase();
-      const heldBefore = new Set([...keysHeldBy(moteDb.db, motebitId)].map((k) => k.toLowerCase()));
+      // The keys on file that STAND as the identity's (#875 review F1): for a
+      // sovereign-shaped id, a key a relay before #875 let X plant under V's
+      // id is a squat — it does not turn the squat check below off, and X's
+      // bearer verifying under it proves only that the key is X's.
+      const lineage = await sovereignLineage(moteDb.db, motebitId);
+      const standing = lineage === null ? null : new Set([...lineage].map((k) => k.toLowerCase()));
+      const heldBefore = new Set(
+        [...keysHeldBy(moteDb.db, motebitId)]
+          .map((k) => k.toLowerCase())
+          .filter((k) => standing === null || standing.has(k)),
+      );
       // The key the bearer's token verified under — its device row, else the
       // middleware's fallback for a `did` with no row (holder, else
       // registry) — as the middleware recorded it (`callerVerifiedKey`).
@@ -1469,7 +1519,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // the table directly. It still answers the sovereign-squat check below.
       const operatorPresented = c.get(OPERATOR_PRESENTED) === true;
       if (!operatorPresented && !provenByRequest && !carriedBySuccession) {
-        const possession = await verifyKeyPossession((body as Record<string, unknown>).key_proof, {
+        const keyProofBody = (body as Record<string, unknown>).key_proof;
+        const possession = await verifyKeyPossession(keyProofBody, {
           motebitId,
           publicKey,
         });
@@ -1479,6 +1530,23 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
             400,
             `public_key requires proof of possession (key_proof: ${possession.reason})`,
             KEY_PROOF_REMEDIATION,
+          );
+        }
+        // An exact replay of an accepted `key_proof` (#875 review F2) is
+        // idempotent-only: it may re-assert the key its first acceptance
+        // wrote, never write a key the registry does not already hold.
+        acceptedKeyProof = keyProofOf(keyProofBody, motebitId, publicKey);
+        if (
+          acceptedKeyProof !== null &&
+          keyProofAccepted(moteDb.db, acceptedKeyProof) &&
+          registryKeyOf(moteDb.db, motebitId) !== publicKey
+        ) {
+          return refuse(
+            "key_proof_replayed",
+            409,
+            "key_proof was already accepted; a replay writes nothing new",
+            KEY_PROOF_REMEDIATION,
+            "KEY_PROOF_REPLAYED",
           );
         }
       }
@@ -1815,6 +1883,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         evidence: evidenceForWrite,
         now,
       });
+    }
+    if (acceptedKeyProof !== null) {
+      recordKeyProofAccepted(moteDb.db, acceptedKeyProof, "register", now);
     }
 
     // Every verified guardian attestation reaches the holder, whatever the key

@@ -34,7 +34,12 @@
 import type { IdentityManager } from "@motebit/core-identity";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { verifyDeviceRegistration, type SignableDeviceRegistration } from "@motebit/encryption";
-import { keysHeldBy, proveSovereignFirstKey } from "./identity-keys.js";
+import {
+  claimsSovereignId,
+  keysHeldBy,
+  proveSovereignFirstKey,
+  sovereignLineage,
+} from "./identity-keys.js";
 
 /**
  * What a client must do when a key arrives without proof of possession —
@@ -103,20 +108,7 @@ export interface DeviceRegistrationRefusal {
   remediation: string;
 }
 
-/**
- * A sovereign `motebit_id` is a UUIDv8 (`deriveSovereignMotebitId`): the
- * version nibble is 8. Matched case-INSENSITIVELY on purpose — an upper-case
- * spelling of V's sovereign id is a distinct row that a case-insensitive
- * reader (`verifySovereignBinding`) would still read as V's, so it claims
- * sovereignty too (and, the commitment being lower-case, never equals one).
- * Legacy ids are UUIDv7 and never match.
- */
-const SOVEREIGN_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-/** Whether `motebitId` claims to be the sovereign commitment to some key. */
-export function claimsSovereignId(motebitId: string): boolean {
-  return SOVEREIGN_ID_SHAPE.test(motebitId) || motebitId.startsWith("did:key:");
-}
+export { claimsSovereignId };
 
 /**
  * The pre-registration squat (#875): an id that CLAIMS to be the sovereign
@@ -125,8 +117,10 @@ export function claimsSovereignId(motebitId: string): boolean {
  * arithmetic E-sov uses). Proof of possession alone does not close the
  * squat: X proves possession of X's OWN key, and would otherwise take V's
  * not-yet-registered `deriveSovereignMotebitId(K_V)` under it. `null` when
- * the first key may proceed. Asked only of an identity that holds no key —
- * once one does, `refusePublicDeviceRegistration`'s held-key rule answers.
+ * the first key may proceed. Asked of an identity that holds no STANDING
+ * key (`sovereignLineage`) — once one does, the held-key rule answers. A
+ * pre-#875 squat row is not a standing key, so it never turns this check off
+ * (#875 review F1).
  */
 export async function refuseSovereignIdSquat(
   motebitId: string,
@@ -186,7 +180,26 @@ export async function refusePublicDeviceRegistration(
   // not "no owner yet"), the chain head's, and every keyed device row's. The first build left
   // the holder out of this set (§5a A1), so a stranger's key passed for an
   // identity whose registry key was blank while its holder still answered.
-  const held = new Set([...keysHeldBy(deps.db, req.motebitId)].map((k) => k.toLowerCase()));
+  //
+  // For a SOVEREIGN-shaped id only keys that STAND are owners
+  // (`sovereignLineage`, #875 review F1): a key a relay before #875 let X
+  // plant under V's `deriveSovereignMotebitId(K_V)` is a squat, not an owner,
+  // so it neither admits X's own registration nor blocks V's. The presented
+  // key must itself stand; with no standing key on file the identity is
+  // fresh, and the door parks the squat rows (`parkSovereignSquat`).
+  const lineage = await sovereignLineage(deps.db, req.motebitId, req.publicKey);
+  const standing = lineage === null ? null : new Set([...lineage].map((k) => k.toLowerCase()));
+  const held = new Set(
+    [...keysHeldBy(deps.db, req.motebitId)]
+      .map((k) => k.toLowerCase())
+      .filter((k) => standing === null || standing.has(k)),
+  );
+
+  if (lineage !== null && !lineage.has(req.publicKey)) {
+    return held.size === 0
+      ? refuseSovereignIdSquat(req.motebitId, req.publicKey)
+      : identityKeyConflict();
+  }
 
   // A fresh identity: nothing is on file, so the one question left is
   // whether the id itself names a DIFFERENT key (#875).
@@ -194,13 +207,15 @@ export async function refusePublicDeviceRegistration(
     return refuseSovereignIdSquat(req.motebitId, req.publicKey);
   }
 
-  if (!held.has(key)) {
-    return {
-      code: "IDENTITY_KEY_CONFLICT",
-      error: "identity is already registered under a different public key",
-      remediation:
-        "link this device from one that already holds the identity (pairing), or rotate the key via /api/v1/agents/:motebit_id/rotate-key",
-    };
-  }
+  if (!held.has(key)) return identityKeyConflict();
   return null;
+}
+
+function identityKeyConflict(): DeviceRegistrationRefusal {
+  return {
+    code: "IDENTITY_KEY_CONFLICT",
+    error: "identity is already registered under a different public key",
+    remediation:
+      "link this device from one that already holds the identity (pairing), or rotate the key via /api/v1/agents/:motebit_id/rotate-key",
+  };
 }

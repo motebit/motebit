@@ -190,6 +190,54 @@ const WRITERS: readonly Writer[] = [
   },
   {
     file: R + "identity-keys.ts",
+    verb: "DELETE",
+    table: "devices",
+    count: 1,
+    principal:
+      "`parkSovereignSquat` (#875 review F1), reached only by the two public doors (bootstrap, register-self) AFTER they verified a signature by the presented key over the request (current possession) AND that the key STANDS for the sovereign-shaped id (`sovereignLineage`: the id is the commitment to it, or a recorded succession / verified migration reaches it), and only while NO standing key is on file, re-read inside its one transaction — so every row it parks is a pre-#875 squat no request ever proved to be the identity's. Proven by the owner's own signature over the id that commits to its key; this function proves nothing itself (removes the squatter's keyed device rows, which verified tokens AS the identity)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "UPDATE",
+    table: "agent_registry",
+    count: 1,
+    principal:
+      "`parkSovereignSquat` (#875 review F1), reached only by the two public doors (bootstrap, register-self) AFTER they verified a signature by the presented key over the request (current possession) AND that the key STANDS for the sovereign-shaped id (`sovereignLineage`: the id is the commitment to it, or a recorded succession / verified migration reaches it), and only while NO standing key is on file, re-read inside its one transaction — so every row it parks is a pre-#875 squat no request ever proved to be the identity's. Proven by the owner's own signature over the id that commits to its key; this function proves nothing itself (clears the squatted registry key and delists the listing — the row is kept, never deleted)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "DELETE",
+    table: "relay_registry_key_evidence",
+    count: 1,
+    principal:
+      "`parkSovereignSquat` (#875 review F1), reached only by the two public doors (bootstrap, register-self) AFTER they verified a signature by the presented key over the request (current possession) AND that the key STANDS for the sovereign-shaped id (`sovereignLineage`: the id is the commitment to it, or a recorded succession / verified migration reaches it), and only while NO standing key is on file, re-read inside its one transaction — so every row it parks is a pre-#875 squat no request ever proved to be the identity's. Proven by the owner's own signature over the id that commits to its key; this function proves nothing itself (drops the provenance row of the squatted registry key it cleared)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "DELETE",
+    table: "identity_keys",
+    count: 1,
+    principal:
+      "`parkSovereignSquat` (#875 review F1), reached only by the two public doors (bootstrap, register-self) AFTER they verified a signature by the presented key over the request (current possession) AND that the key STANDS for the sovereign-shaped id (`sovereignLineage`: the id is the commitment to it, or a recorded succession / verified migration reaches it), and only while NO standing key is on file, re-read inside its one transaction — so every row it parks is a pre-#875 squat no request ever proved to be the identity's. Proven by the owner's own signature over the id that commits to its key; this function proves nothing itself (removes a holder that does not stand — an E-main/E-op transplant of the squat)",
+  },
+  {
+    file: R + "key-proof-replay.ts",
+    verb: "INSERT",
+    table: "relay_key_proofs_accepted",
+    count: 1,
+    principal:
+      "`recordKeyProofAccepted` (#875 review F2), called by bootstrap, register-self and /agents/register's `key_proof` only AFTER the proof verified (a signature by the named key over the named id) and the door accepted it; it records that acceptance so an exact replay writes nothing — it authorizes nothing",
+  },
+  {
+    file: R + "key-proof-replay.ts",
+    verb: "DELETE",
+    table: "relay_key_proofs_accepted",
+    count: 1,
+    principal:
+      "the relay itself — `recordKeyProofAccepted` prunes accepted proofs past their validity window (KEY_PROOF_RETENTION_MS); no request chooses which rows",
+  },
+  {
+    file: R + "identity-keys.ts",
     verb: "INSERT",
     table: "identity_keys",
     count: 2,

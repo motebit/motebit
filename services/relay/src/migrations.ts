@@ -2695,4 +2695,30 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 59,
+    name: "key_proofs_accepted",
+    up: (db) => {
+      // Every proof of possession this relay ACCEPTED (#875 review F2):
+      // bootstrap's and register-self's signed body, `/agents/register`'s
+      // `key_proof`. The body carries no audience or nonce (the wire is not
+      // changed while released clients send it), so an exact replay inside
+      // its ±5-minute window is answered idempotently and writes nothing
+      // (`key-proof-replay.ts`). Keyed by the signature (Ed25519 is
+      // deterministic: the same body is the same signature). Rows are pruned
+      // once past the window they guard (KEY_PROOF_RETENTION_MS, 11 minutes).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_key_proofs_accepted (
+          motebit_id TEXT NOT NULL,
+          public_key TEXT NOT NULL,
+          signature TEXT NOT NULL,
+          door TEXT NOT NULL,
+          accepted_at INTEGER NOT NULL,
+          PRIMARY KEY (motebit_id, public_key, signature)
+        );
+        CREATE INDEX IF NOT EXISTS idx_relay_key_proofs_accepted_at
+          ON relay_key_proofs_accepted(accepted_at);
+      `);
+    },
+  },
 ];

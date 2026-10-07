@@ -1598,6 +1598,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     identityManager,
     connections,
     recordAuthEvent: authEvents.record,
+    reconcileKeyConnections,
     relayIdentity,
   });
 
@@ -2249,6 +2250,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isAgentRevoked,
     retireKeyConnections,
     closeIdentityConnections,
+    reconcileKeyConnections,
     recordAuthEvent: authEvents.record,
   });
 

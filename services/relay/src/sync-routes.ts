@@ -30,7 +30,14 @@ import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { ConnectedDevice } from "./index.js";
 import { sendToEach } from "./ws-send.js";
-import { admitKey, proveSovereignFirstKey, recordFirstIdentityKey } from "./identity-keys.js";
+import {
+  admitKey,
+  parkSovereignSquat,
+  proveSovereignFirstKey,
+  recordFirstIdentityKey,
+} from "./identity-keys.js";
+import { keyProofAccepted, keyProofOf, recordKeyProofAccepted } from "./key-proof-replay.js";
+import type { ReconcileKeyConnections } from "./connection-ports.js";
 import type { AuthEvent } from "./auth-events.js";
 import { appendBoundEvent, bindSyncEntries } from "./identity-binding.js";
 import { parseSeqCursor, readEventsAfterSeq } from "./event-seq.js";
@@ -51,6 +58,11 @@ export interface SyncRoutesDeps {
   connections: Map<string, ConnectedDevice[]>;
   /** Relay rule 6: a refused cross-identity push is recorded (#846). */
   recordAuthEvent: (event: AuthEvent) => void;
+  /**
+   * Closes the sockets a parked pre-#875 sovereign-id squat admitted (#875
+   * review F1) — register-self parks it exactly as bootstrap does.
+   */
+  reconcileKeyConnections: ReconcileKeyConnections;
   /**
    * Signs the `hold_receipt` beside every push acknowledgment and seq pull
    * page (`sync-hold-receipt.ts`). The relay server always passes it; a
@@ -355,6 +367,25 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       );
     }
 
+    // An exact replay of an accepted proof (#875 review F2 — shared with
+    // bootstrap: the same signed body is the same proof) writes nothing.
+    const proof = keyProofOf(body, body.motebit_id, body.public_key);
+    if (proof !== null && keyProofAccepted(deps.moteDb.db, proof)) {
+      logger.info("device.self_register.replay_idempotent", {
+        motebitId: body.motebit_id,
+        deviceId: body.device_id,
+      });
+      return c.json(
+        {
+          motebit_id: body.motebit_id,
+          device_id: body.device_id,
+          registered_at: Date.now(),
+          created: false,
+        },
+        200,
+      );
+    }
+
     // Who may add a device to an identity that already exists — the one
     // rule this door shares with `/agents/bootstrap`. See the guard for
     // why a per-device conflict check was not enough.
@@ -369,6 +400,23 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
         code: refusal.code,
       });
       return c.json(refusal, 409);
+    }
+    // The owner's proven sovereign key on an identity holding only a pre-#875
+    // squat: park the squat, as bootstrap does (#875 review F1).
+    const parked = await parkSovereignSquat(
+      deps.moteDb.db,
+      body.motebit_id,
+      body.public_key,
+      Date.now(),
+    );
+    if (parked !== null) {
+      logger.warn("device.self_register.parked_sovereign_squat", {
+        motebitId: body.motebit_id,
+        devices: parked.devices,
+        registryKey: parked.registryKey,
+        holderKey: parked.holderKey,
+      });
+      deps.reconcileKeyConnections(body.motebit_id);
     }
     const existingDevice = await identityManager.loadDeviceById(body.device_id, body.motebit_id);
 
@@ -403,6 +451,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
     // re-read in one transaction, nothing else is on file (DA2). A paired
     // device's own key is not sovereign-bound to the id and records nothing;
     // a legacy (non-sovereign) id never fills through this door.
+    if (proof !== null) recordKeyProofAccepted(deps.moteDb.db, proof, "register-self", Date.now());
     const sovereignProof = await proveSovereignFirstKey(body.motebit_id, body.public_key);
     if (sovereignProof) {
       recordFirstIdentityKey(deps.moteDb.db, sovereignProof, {
