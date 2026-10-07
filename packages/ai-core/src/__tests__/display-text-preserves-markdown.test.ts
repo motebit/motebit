@@ -348,8 +348,10 @@ describe("internal tag names need a delimiter — hyphenated / underscored looka
     expect(stripTags("A <memory>x</memory> B")).toBe("A B");
     expect(stripTagsLive("Answer.\n<thinking>never closed")).toBe("Answer.");
     expect(stripTagsLive('Answer.\n<memory confidence="0.9">never closed')).toBe("Answer.");
-    // The finished answer keeps an opener that never closed (a mention).
-    expect(stripTags("Answer.\n<thinking>never closed")).toBe("Answer.\n<thinking>never closed");
+    // An opener that never closed is REAL at a line start (hidden to the
+    // end), a mention mid-line (kept).
+    expect(stripTags("Answer.\n<thinking>never closed")).toBe("Answer.");
+    expect(stripTags("Answer. <thinking>never closed")).toBe("Answer. <thinking>never closed");
     expect(stripPartialActionTag("Answer. <memory")).toBe("Answer.");
     expect(stripPartialActionTag('Answer. <state attention="0.')).toBe("Answer.");
   });

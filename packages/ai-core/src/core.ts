@@ -867,32 +867,23 @@ function isPartialName(text: string, i: number): boolean {
   return marker !== null && MARKER_NAMES.some((n) => n.startsWith(marker[1]!));
 }
 
-/**
- * Where the paragraph holding `from` ends: the start of the next blank line
- * or fence-opening line, else the end of the text. An inline code span never
- * crosses it.
- */
-function paragraphEnd(text: string, from: number): number {
-  let nl = text.indexOf("\n", from);
-  while (nl !== -1) {
-    const start = nl + 1;
-    const end = text.indexOf("\n", start);
-    const line = text.slice(start, end === -1 ? text.length : end);
-    if (end !== -1 && /^[ \t]*$/.test(line)) return start;
-    if (FENCE.test(line)) return start;
-    nl = end;
-  }
-  return text.length;
-}
+/** A `<state` opener that never self-closed: `<state curiosity="0.8`. */
+const STATE_OPENER = new RegExp(String.raw`<state${D}`, "y");
 
 /**
  * Remove motebit's internal markup, scanning the text the way markdown reads
  * it: inside a fenced code block or an inline code span a tag is only
  * MENTIONED (an example the model is showing), so it is never touched.
  *
- * Final text never truncates: an opener with no closer is a mention (or a
- * block the model never finished) and stays — only a lone EXTERNAL_DATA /
- * MEMORY_DATA marker is dropped. In the live stream, anything whose meaning
+ * An inline code span is opaque only when it opens and closes on ONE line.
+ * A backtick whose partner is on a later line is a literal backtick: a
+ * stray `` ` `` must never pair with a backtick inside a real block below it
+ * and turn that block into "code" that is shown.
+ *
+ * An opener with no closer is REAL when it begins its line (only
+ * whitespace or removed markup before it) — a turn cut off mid-`<thinking>`
+ * — and everything from it to the end of the text is hidden. Mid-line, it
+ * is a mention and stays. In the live stream, anything whose meaning
  * the next chunk could still change is held back instead of shown — an
  * unclosed block opener, a partial tag name, internal-looking markup after a
  * backtick that may yet open a code span — so every frame is a prefix of
@@ -905,15 +896,17 @@ function cutInternal(text: string, mode: CutMode): string {
   let i = 0;
   let lineStart = true;
   let fence: string | null = null;
-  // Live only: past an unpaired backtick whose paragraph is still open,
+  // Live only: past an unpaired backtick whose line is still open,
   // so whether what follows is code is not yet known.
   let undecided = false;
-  // Drop src[i, end). A line holding only removed markup (and indentation)
-  // so far is still at its start — it reads that way once the cut closes.
+  // A line holding only removed markup (and indentation) so far is still at
+  // its start — it reads that way once the cut closes.
+  const atLineStart = () => /(?:^|\n)[ \t\uE000]*$/.test(out);
+  // Drop src[i, end).
   const cut = (end: number) => {
     out += SENTINEL;
     i = end;
-    lineStart = /(?:^|\n)[ \t\uE000]*$/.test(out);
+    lineStart = atLineStart();
   };
 
   scan: while (i < src.length) {
@@ -943,7 +936,8 @@ function cutInternal(text: string, mode: CutMode): string {
 
     if (ch === "`") {
       const n = matchAt(/`+/y, src, i)![0].length;
-      const limit = paragraphEnd(src, i);
+      const nl = src.indexOf("\n", i);
+      const limit = nl === -1 ? src.length : nl;
       const runs = /`+/g;
       runs.lastIndex = i + n;
       let closeEnd = -1;
@@ -973,6 +967,10 @@ function cutInternal(text: string, mode: CutMode): string {
         rule.close.lastIndex = i + open[0].length;
         const close = rule.close.exec(src);
         if (undecided || (live && !close)) break scan;
+        if (!close && atLineStart()) {
+          cut(src.length);
+          continue scan;
+        }
         if (close || rule.loneMarker) {
           cut(close ? close.index + close[0].length : i + open[0].length);
           continue scan;
@@ -986,6 +984,11 @@ function cutInternal(text: string, mode: CutMode): string {
         if (!m) continue;
         if (undecided) break scan;
         cut(i + m[0].length);
+        continue scan;
+      }
+      if (ch === "<" && matchAt(STATE_OPENER, src, i) && atLineStart()) {
+        if (undecided) break scan;
+        cut(src.length);
         continue scan;
       }
       if (live && (PARTIAL_OPENERS.some((re) => matchAt(re, src, i)) || isPartialName(src, i)))
@@ -1159,11 +1162,13 @@ export function getImpulsesForAction(
  *   - `[MEMORY_DATA]…[/MEMORY_DATA]`       — recalled-memory boundaries
  *   - A lone EXTERNAL_DATA / MEMORY_DATA marker, and a `<state` /
  *     `<thinking` / `<memory` opener still arriving on the last line
+ *   - An opener with no closer that begins its line (a turn cut off
+ *     mid-block), from the opener to the end of the text
  *
- * Markdown, newlines and indentation are never touched. A tag inside inline
- * code or a fenced block is a mention and stays; so does an opener with no
- * closer — this runs on finished answers too, so it never truncates. (The
- * runtime's live stream holds unclosed blocks back itself — see
+ * Markdown, newlines and indentation are never touched. A tag inside a
+ * one-line inline code span or a fenced block is a mention and stays; so
+ * does an unclosed opener mid-line. (The runtime's live stream also holds
+ * a mid-line unclosed block back until it resolves — see
  * {@link stripTagsLive}.)
  *
  * Does NOT strip the `*action*` asterisk pattern used in creature action
@@ -1184,8 +1189,8 @@ export function stripInternalTags(text: string): string {
  * Plain-text counterpart of {@link stripTags} for surfaces that re-render the
  * accumulated text after every chunk (desktop, mobile streaming): the same
  * display text, additionally holding back an `*action` still arriving at
- * the chunk edge (`*smi`). Like `stripInternalTags` it never truncates an
- * unclosed block, so it is safe on the finished answer.
+ * the chunk edge (`*smi`). Like `stripInternalTags` it is a fixed point on
+ * the finished answer.
  * Markdown surfaces (web) use `stripInternalTags` alone.
  */
 export function stripPartialActionTag(text: string): string {
