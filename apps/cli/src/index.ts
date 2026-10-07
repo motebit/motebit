@@ -1018,8 +1018,8 @@ async function main(): Promise<void> {
     console.log();
   }
 
-  // Standing-grant presentation (`motebit --grant <id>`): artifacts are
-  // loaded once; each turn presents the currently-due pre-minted tick.
+  // Standing-grant presentation (`motebit --grant <id>`): each turn re-reads
+  // the stored grant + its revocations and presents the currently-due tick.
   // The runtime derives (or refuses) authority per turn — a null
   // presentation is an honestly grantless turn, never an error.
   const grantPresenter = config.grant != null ? await createGrantPresenter(config.grant) : null;
@@ -1141,7 +1141,7 @@ async function main(): Promise<void> {
         }
       } else {
         writeOutput("\n" + promptColor("mote>") + " ");
-        const grantOptions = grantPresenter?.delegationForTurn() ?? undefined;
+        const grantOptions = (await grantPresenter?.delegationForTurn()) ?? undefined;
         if (grantPresenter != null && grantOptions == null) {
           console.log(dim("  [no grant tick due this turn — running grantless]"));
         }

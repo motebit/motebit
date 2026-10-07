@@ -36,8 +36,21 @@ import {
 } from "@motebit/crypto";
 import type { DelegationToken, StandingDelegation, DelegationRevocation } from "@motebit/protocol";
 import { InMemoryGrantSpendStore } from "@motebit/policy";
-import { verifyGrantForTurn } from "../grant-verifier.js";
+import { verifyGrantForTurn as verifyGrantForTurnAs } from "../grant-verifier.js";
 import { createMoneyMeter } from "../money-meter.js";
+
+// Every presentation here is by the grant's own delegate (the presenter
+// binding itself is pinned in grant-presenter-binding.test.ts).
+const verifyGrantForTurn = (
+  token: Parameters<typeof verifyGrantForTurnAs>[0],
+  grant: Parameters<typeof verifyGrantForTurnAs>[1],
+  revocations: Parameters<typeof verifyGrantForTurnAs>[2],
+  options?: { now?: number },
+) =>
+  verifyGrantForTurnAs(token, grant, revocations, {
+    presenter: { motebitId: grant.delegate_id, publicKeyHex: grant.delegate_public_key },
+    ...options,
+  });
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;

@@ -259,7 +259,8 @@ import {
   PaidIntentLedger,
   type UnretrievedPayment,
 } from "./paid-intent-ledger.js";
-import { verifyGrantForTurn } from "./grant-verifier.js";
+import { verifyGrantForTurn, grantDelegateIs } from "./grant-verifier.js";
+import type { GrantPresenterIdentity } from "./grant-verifier.js";
 import {
   SOVEREIGN_PAY_FORWARD_ENABLED,
   SovereignPayForwardDisabledError,
@@ -3207,6 +3208,12 @@ export class MotebitRuntime {
         token: import("@motebit/protocol").DelegationToken;
         grant: import("@motebit/protocol").StandingDelegation;
         revocations?: readonly import("@motebit/protocol").DelegationRevocation[];
+        /**
+         * A FOREIGN turn's presenter: the caller identity its transport
+         * verified (id + key). An owner turn always presents as this
+         * motebit and ignores this; a foreign turn without it is grantless.
+         */
+        presenter?: GrantPresenterIdentity;
       };
     },
   ): AsyncGenerator<StreamChunk> {
@@ -3286,11 +3293,7 @@ export class MotebitRuntime {
       // just means R4 stays behind live approval this turn.
       const presentedGrant =
         options?.delegation != null
-          ? await verifyGrantForTurn(
-              options.delegation.token,
-              options.delegation.grant,
-              options.delegation.revocations ?? [],
-            )
+          ? await this.verifyPresentedForTurn(options.delegation, principal)
           : null;
       // The active turn's standing authority, readable by the rail seam
       // (wrapP2pPaymentWithMeter reads it at broadcast time — late-bound
@@ -6261,7 +6264,12 @@ export class MotebitRuntime {
    *     waits) — a verified in-scope grant clears R4 at the gate's step 8c;
    *   - a granted call serializes under `_isProcessing` and binds the grant to
    *     the rail seam (`_activeTurnGrant`) only for its own execution, so the
-   *     blast-radius meter bounds the spend exactly as on the loop path.
+   *     blast-radius meter bounds the spend exactly as on the loop path;
+   *   - a FOREIGN call (another party's task) executes as a foreign principal
+   *     and presents a grant only as its transport-verified caller: the grant
+   *     clears R4 only when its delegate IS that caller (id + key), so the
+   *     owner's grant never authorizes a stranger and a caller with no
+   *     verified identity is authorized by no grant.
    *
    * Doctrine: docs/doctrine/memory-never-confers-authority.md. Gate:
    * check-money-authority (no raw registry execute outside the gated paths).
@@ -6270,22 +6278,47 @@ export class MotebitRuntime {
     name: string,
     args: Record<string, unknown>,
     options: {
+      /**
+       * Whose call this is — decided by the TRANSPORT, never by task content.
+       * A task from another party (serve --direct: MCP `motebit_task`, relay
+       * dispatch) is `foreign`, carrying the caller identity the transport
+       * verified, or `null` when it verified none (relay dispatch, a shared
+       * bearer). Required: there is no default principal on this path.
+       */
+      caller:
+        { principal: "owner" } | { principal: "foreign"; identity: GrantPresenterIdentity | null };
       delegation?: {
         token: import("@motebit/protocol").DelegationToken;
         grant: import("@motebit/protocol").StandingDelegation;
         revocations?: readonly import("@motebit/protocol").DelegationRevocation[];
       };
-    } = {},
+    },
   ): Promise<ToolResult> {
     const toolDef = this.toolRegistry.list().find((t) => t.name === name);
     if (!toolDef) return { ok: false, error: `Tool "${name}" is not available` };
 
+    const foreign = options.caller.principal === "foreign";
+    if (foreign && toolDef.localOnly === true) {
+      return { ok: false, error: foreignLocalOnlyRefusal(name) };
+    }
+
+    // The presenter is WHO the transport says is calling. A foreign caller
+    // presents only as itself, and only with a verified key — so the owner's
+    // grant (delegate = this motebit) never authorizes another principal, and
+    // a caller with no verified identity can be authorized by no grant.
+    const presenter: GrantPresenterIdentity | null =
+      options.caller.principal === "owner"
+        ? this.selfGrantPresenter()
+        : options.caller.identity?.publicKeyHex != null
+          ? options.caller.identity
+          : null;
     const presentedGrant =
-      options.delegation != null
+      options.delegation != null && presenter != null
         ? await verifyGrantForTurn(
             options.delegation.token,
             options.delegation.grant,
             options.delegation.revocations ?? [],
+            { presenter },
           )
         : null;
     const turnCtx = this.policy.createTurnContext();
@@ -6299,17 +6332,28 @@ export class MotebitRuntime {
             delegationScope: options.delegation?.grant.scope,
           }
         : turnCtx,
+      // A foreign call has no approval channel (#880): what would pause is denied.
+      foreign ? { noApprovalChannel: true } : undefined,
     );
-    if (!decision.allowed) {
-      return { ok: false, error: `Policy denied: ${decision.reason ?? "denied by policy"}` };
-    }
-    if (decision.requiresApproval) {
-      return {
-        ok: false,
-        error: `Governance: tool "${name}" requires approval from the motebit owner — a direct (no-loop) execution carries no approval channel.`,
-      };
+    if (!decision.allowed || decision.requiresApproval) {
+      const why = !decision.allowed
+        ? `Policy denied: ${decision.reason ?? "denied by policy"}`
+        : `Governance: tool "${name}" requires approval from the motebit owner — a direct (no-loop) execution carries no approval channel.`;
+      const binding =
+        foreign && options.delegation != null && presentedGrant == null
+          ? presenter == null
+            ? " This task's caller is a foreign principal with no verified identity on its transport, so no standing grant can authorize it."
+            : !grantDelegateIs(options.delegation.grant, presenter)
+              ? ` This task's caller (${presenter.motebitId}) is a foreign principal and the presented grant's delegate is not that caller — a grant authorizes only its delegate; the owner's grant never authorizes another principal's call.`
+              : ""
+          : "";
+      return { ok: false, error: why + binding };
     }
 
+    const call: ToolCall = {
+      destination: OWNER_ACT,
+      principal: TurnPrincipal.of(foreign),
+    };
     const startedAt = Date.now();
     let result: ToolResult;
     if (presentedGrant != null) {
@@ -6319,7 +6363,7 @@ export class MotebitRuntime {
       this._isProcessing = true;
       this._activeTurnGrant = presentedGrant;
       try {
-        result = await this.toolRegistry.execute(name, args);
+        result = await this.toolRegistry.execute(name, args, call);
       } catch (err) {
         result = { ok: false, error: err instanceof Error ? err.message : String(err) };
       } finally {
@@ -6328,13 +6372,50 @@ export class MotebitRuntime {
       }
     } else {
       try {
-        result = await this.toolRegistry.execute(name, args);
+        result = await this.toolRegistry.execute(name, args, call);
       } catch (err) {
         result = { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     }
     this.policy.recordResult(turnCtx, decision, name, args, result.ok, Date.now() - startedAt);
     return result;
+  }
+
+  /**
+   * Verify a turn's presented grant as its presenter: this motebit on an
+   * owner turn, the transport-verified caller on a foreign one (none ⇒ null).
+   */
+  private async verifyPresentedForTurn(
+    delegation: {
+      token: import("@motebit/protocol").DelegationToken;
+      grant: import("@motebit/protocol").StandingDelegation;
+      revocations?: readonly import("@motebit/protocol").DelegationRevocation[];
+      presenter?: GrantPresenterIdentity;
+    },
+    principal: TurnPrincipal,
+  ): Promise<import("./grant-verifier.js").VerifiedGrant | null> {
+    const presenter = !principal.foreign
+      ? this.selfGrantPresenter()
+      : delegation.presenter?.publicKeyHex != null
+        ? delegation.presenter
+        : null;
+    if (presenter == null) return null;
+    return verifyGrantForTurn(delegation.token, delegation.grant, delegation.revocations ?? [], {
+      presenter,
+    });
+  }
+
+  /**
+   * This runtime as the presenter of a grant on an OWNER path: its own
+   * motebit_id and, while the signing keys are held, its public key. A grant
+   * verifies here only when it was issued TO this motebit.
+   */
+  private selfGrantPresenter(): GrantPresenterIdentity {
+    const keys = this._signingKeysErased ? null : this._signingKeys;
+    return {
+      motebitId: this.motebitId,
+      ...(keys != null ? { publicKeyHex: cryptoBytesToHex(keys.publicKey) } : {}),
+    };
   }
 
   /**
@@ -6412,6 +6493,7 @@ export class MotebitRuntime {
         params.delegation.token,
         params.delegation.grant,
         params.delegation.revocations ?? [],
+        { presenter: this.selfGrantPresenter() },
       );
       if (presentedGrant == null) return { ok: false, code: "requires_verified_grant" };
 

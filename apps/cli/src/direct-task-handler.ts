@@ -22,7 +22,11 @@ export interface DirectTaskRuntime {
   executeToolGated(
     name: string,
     args: Record<string, unknown>,
-    options?: {
+    options: {
+      caller: {
+        principal: "foreign";
+        identity: { motebitId: string; publicKeyHex: string } | null;
+      };
       delegation?: {
         token: DelegationToken;
         grant: StandingDelegation;
@@ -43,21 +47,41 @@ export interface DirectTaskHandlerDeps {
   log: (msg: string) => void;
   /**
    * The standing grant presented to each execution (`serve --direct --grant`),
-   * as signed artifacts — verified per task by the runtime, never trusted here.
+   * as signed artifacts — re-read and verified per task by the runtime, never
+   * trusted here. It authorizes a task only when its delegate is that task's
+   * verified caller (the task submitter is a foreign principal).
    */
-  delegationForTask?: () => {
-    delegation: {
-      token: DelegationToken;
-      grant: StandingDelegation;
-      revocations: readonly DelegationRevocation[];
-    };
-  } | null;
+  delegationForTask?: () =>
+    | {
+        delegation: {
+          token: DelegationToken;
+          grant: StandingDelegation;
+          revocations: readonly DelegationRevocation[];
+        };
+      }
+    | null
+    | Promise<{
+        delegation: {
+          token: DelegationToken;
+          grant: StandingDelegation;
+          revocations: readonly DelegationRevocation[];
+        };
+      } | null>;
 }
 
 export function createDirectTaskHandler(deps: DirectTaskHandlerDeps) {
   return async function* (
     prompt: string,
-    options?: { delegatedScope?: string; relayTaskId?: string },
+    options?: {
+      delegatedScope?: string;
+      relayTaskId?: string;
+      /**
+       * The caller the transport VERIFIED (MCP caller-signed bearer: `mid` +
+       * the key it verified under). Absent for relay WebSocket dispatch and
+       * any transport that verified no caller. Never read from the prompt.
+       */
+      caller?: { motebitId: string; publicKeyHex: string };
+    },
   ) {
     const taskId = crypto.randomUUID();
     const submittedAt = Date.now();
@@ -105,14 +129,19 @@ export function createDirectTaskHandler(deps: DirectTaskHandlerDeps) {
     // R4_MONEY tool runs only under a verified in-scope standing grant
     // presented as signed artifacts; with none it is refused, never queued
     // (no human is on this path). docs/doctrine/memory-never-confers-authority.md.
-    const presented = deps.delegationForTask?.() ?? null;
+    //
+    // The task's submitter is a FOREIGN principal: the prompt (and so the
+    // tool's argument) is theirs. The grant clears R4 only when its delegate
+    // IS the caller the transport verified — so the owner's own grant never
+    // lets a stranger choose where the owner's money goes, and a task with no
+    // verified caller (relay dispatch) is authorized by no grant.
     let result: { ok: boolean; data?: unknown; error?: string };
     try {
-      result = await deps.runtime.executeToolGated(
-        tool.name,
-        args,
-        presented != null ? { delegation: presented.delegation } : {},
-      );
+      const presented = (await deps.delegationForTask?.()) ?? null;
+      result = await deps.runtime.executeToolGated(tool.name, args, {
+        caller: { principal: "foreign", identity: options?.caller ?? null },
+        ...(presented != null ? { delegation: presented.delegation } : {}),
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       result = { ok: false, error: msg };

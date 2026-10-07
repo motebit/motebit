@@ -71,6 +71,8 @@ async function grantFor(scope: string): Promise<{
   delegator: Kp;
   grant: StandingDelegation;
   token: DelegationToken;
+  /** The grant's delegate as the transport-verified task caller. */
+  caller: { motebitId: string; publicKeyHex: string };
 }> {
   const delegator = await generateKeypair();
   const delegate = await generateKeypair();
@@ -106,12 +108,18 @@ async function grantFor(scope: string): Promise<{
     },
     delegator.privateKey,
   );
-  return { delegator, grant, token };
+  return {
+    delegator,
+    grant,
+    token,
+    caller: { motebitId: grant.delegate_id, publicKeyHex: grant.delegate_public_key },
+  };
 }
 
 async function runTask(
   runtime: MotebitRuntime,
   delegationForTask?: Parameters<typeof createDirectTaskHandler>[0]["delegationForTask"],
+  caller?: { motebitId: string; publicKeyHex: string },
 ): Promise<Record<string, unknown>> {
   const worker = await generateKeypair();
   const handler = createDirectTaskHandler({
@@ -127,6 +135,7 @@ async function runTask(
   let receipt: Record<string, unknown> | undefined;
   for await (const chunk of handler("AttackerAddr9999999999999999999999999999999", {
     relayTaskId: "relay-task-m2",
+    ...(caller != null ? { caller } : {}),
   })) {
     if (chunk.type === "task_result") receipt = chunk.receipt;
   }
@@ -143,29 +152,33 @@ describe("M2: serve --direct / relay task path — R4 needs a verified grant", (
     expect(String(receipt.result)).toMatch(/approval/i);
   });
 
-  it("with a valid in-scope grant presented, the R4 tool proceeds", async () => {
+  it("with a valid in-scope grant whose delegate is the verified caller, the R4 tool proceeds", async () => {
     const { runtime, moved } = runtimeServing(TRANSFER);
-    const { grant, token } = await grantFor("transfer_funds");
-    const receipt = await runTask(runtime, () => ({
-      delegation: { token, grant, revocations: [] },
-    }));
+    const { grant, token, caller } = await grantFor("transfer_funds");
+    const receipt = await runTask(
+      runtime,
+      () => ({ delegation: { token, grant, revocations: [] } }),
+      caller,
+    );
     expect(moved).toHaveBeenCalledTimes(1);
     expect(receipt.status).toBe("completed");
   });
 
   it("a grant whose signed scope does not cover the tool is refused", async () => {
     const { runtime, moved } = runtimeServing(TRANSFER);
-    const { grant, token } = await grantFor("web_search");
-    const receipt = await runTask(runtime, () => ({
-      delegation: { token, grant, revocations: [] },
-    }));
+    const { grant, token, caller } = await grantFor("web_search");
+    const receipt = await runTask(
+      runtime,
+      () => ({ delegation: { token, grant, revocations: [] } }),
+      caller,
+    );
     expect(moved).not.toHaveBeenCalled();
     expect(receipt.status).toBe("failed");
   });
 
   it("a revoked grant is refused", async () => {
     const { runtime, moved } = runtimeServing(TRANSFER);
-    const { delegator, grant, token } = await grantFor("transfer_funds");
+    const { delegator, grant, token, caller } = await grantFor("transfer_funds");
     const revocation = await signDelegationRevocation(
       {
         grant_id: grant.grant_id,
@@ -175,20 +188,24 @@ describe("M2: serve --direct / relay task path — R4 needs a verified grant", (
       },
       delegator.privateKey,
     );
-    const receipt = await runTask(runtime, () => ({
-      delegation: { token, grant, revocations: [revocation] },
-    }));
+    const receipt = await runTask(
+      runtime,
+      () => ({ delegation: { token, grant, revocations: [revocation] } }),
+      caller,
+    );
     expect(moved).not.toHaveBeenCalled();
     expect(receipt.status).toBe("failed");
   });
 
   it("a forged grant (signature broken) confers nothing", async () => {
     const { runtime, moved } = runtimeServing(TRANSFER);
-    const { grant, token } = await grantFor("transfer_funds");
+    const { grant, token, caller } = await grantFor("transfer_funds");
     const forged = { ...grant, scope: "*" };
-    const receipt = await runTask(runtime, () => ({
-      delegation: { token, grant: forged, revocations: [] },
-    }));
+    const receipt = await runTask(
+      runtime,
+      () => ({ delegation: { token, grant: forged, revocations: [] } }),
+      caller,
+    );
     expect(moved).not.toHaveBeenCalled();
     expect(receipt.status).toBe("failed");
   });

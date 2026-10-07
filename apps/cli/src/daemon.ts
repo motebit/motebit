@@ -1394,9 +1394,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
     }
   }
   // `serve --direct --grant <id>`: the stored standing grant whose due tick is
-  // presented to each direct execution. Artifacts only — the runtime's
-  // `verifyGrantForTurn` derives (or refuses) the authority per task; without
-  // it an R4_MONEY tool is refused on this path (no human to approve).
+  // presented to each direct execution, re-read (with its revocations) per
+  // task. Artifacts only — the runtime's `verifyGrantForTurn` derives (or
+  // refuses) the authority per task, and only for a caller who IS the grant's
+  // delegate (the task submitter is a foreign principal); without it an
+  // R4_MONEY tool is refused on this path (no human to approve).
   const serveGrant =
     config.direct && config.grant != null ? await createGrantPresenter(config.grant) : null;
   if (servePrivateKey) {

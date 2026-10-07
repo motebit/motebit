@@ -11,9 +11,22 @@
  */
 import { describe, it, expect } from "vitest";
 import { generateKeypair, bytesToHex } from "@motebit/crypto";
-import { verifyGrantForTurn } from "@motebit/runtime";
+import { verifyGrantForTurn as verifyGrantForTurnAs } from "@motebit/runtime";
 import { selfIssueGrant, mintTick, makeAuthTokenMinter } from "../index.js";
 import type { BootstrapAndEmitIdentityResult } from "@motebit/mcp-server";
+
+// Every presentation here is by the grant's own delegate (the presenter
+// binding itself is pinned in grant-presenter-binding.test.ts).
+const verifyGrantForTurn = (
+  token: Parameters<typeof verifyGrantForTurnAs>[0],
+  grant: Parameters<typeof verifyGrantForTurnAs>[1],
+  revocations: Parameters<typeof verifyGrantForTurnAs>[2],
+  options?: { now?: number },
+) =>
+  verifyGrantForTurnAs(token, grant, revocations, {
+    presenter: { motebitId: grant.delegate_id, publicKeyHex: grant.delegate_public_key },
+    ...options,
+  });
 
 async function realIdentity(): Promise<BootstrapAndEmitIdentityResult> {
   const kp = await generateKeypair();

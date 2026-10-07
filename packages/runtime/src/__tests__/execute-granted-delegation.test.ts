@@ -26,6 +26,7 @@ import {
   bytesToHex,
   signDelegation,
   signStandingDelegation,
+  verifyStandingDelegation,
   signDelegationRevocation,
   verifyRoutingTranscript,
 } from "@motebit/crypto";
@@ -91,7 +92,7 @@ async function makeGrant(
       grant_id: "grant-clerk-1",
       delegator_id: "did:motebit:operator",
       delegator_public_key: bytesToHex(delegator.publicKey),
-      delegate_id: "did:motebit:clerk",
+      delegate_id: "clerk-001",
       delegate_public_key: bytesToHex(delegate.publicKey),
       scope: opts?.scope ?? "delegate_to_agent",
       subject: "market:capability=research",
@@ -245,6 +246,29 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       expect(result.settlement.mode).toBe("p2p");
       expect(result.settlement.paidMicro).toBe(50_000); // $0.05
     }
+  });
+
+  it("a valid grant issued to ANOTHER delegate ⇒ requires_verified_grant (presenter binding)", async () => {
+    const operator = await generateKeypair();
+    const other = await generateKeypair();
+    const { signature: _sig, suite: _suite, ...body } = await makeGrant(operator, other);
+    const forOther = await signStandingDelegation(
+      { ...body, delegate_id: "someone-else" },
+      operator.privateKey,
+    );
+    // Control: the grant itself is genuine — only its delegate differs.
+    expect(await verifyStandingDelegation(forOther, { now: NOW + 1 })).toBe(true);
+    const token = await mintTick(forOther, operator);
+    const runtime = clerkRuntime();
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant: forOther },
+      dryRun: true,
+    });
+
+    expect(result).toEqual({ ok: false, code: "requires_verified_grant" });
   });
 
   it("pins the sub-worker via targetWorkerId ⇒ discovery honors the pin (happy path)", async () => {

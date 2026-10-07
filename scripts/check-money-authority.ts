@@ -6,7 +6,7 @@
  * Doctrine: `docs/doctrine/memory-never-confers-authority.md`. Shape:
  * ordered source-marker scan, same family as `check-affordance-routing`.
  *
- * Three assertions:
+ * Assertions:
  *
  *   1. **The gate step exists and is ordered.** `policy-gate.ts`
  *      contains the R4 standing-authority block (`profile.risk >=
@@ -31,11 +31,24 @@
  *      threading (`verifiedGrant: options?.verifiedGrant` and the
  *      `ctx` spread) is permitted; minting the object literal anywhere
  *      else is an unverified authority claim.
+ *
+ *   4. **The deterministic granted-spend path re-composes the R4 AND**
+ *      (`executeGrantedDelegation`: fail-closed verify + scope + meter).
+ *
+ *   5. **No raw registry execute outside the gated paths — type-aware.**
+ *      Every reference the TypeScript checker resolves to a tool registry's
+ *      `execute` (or a registry class's private handler storage) is held to a
+ *      closed set of sanctioned scopes with exact site counts; a built-in
+ *      self-test plants every aliasing form and fails if one goes unseen.
+ *      Aperture: all `.ts`/`.tsx` under packages/<pkg>/src, apps/<app>/src,
+ *      services/<svc>/src in one program (tests excluded); see the assertion's
+ *      own comment for what a type cannot show.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createScanProgram, scanFile, workspaceSourceFiles } from "./lib/registry-execute-refs.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -286,96 +299,231 @@ function fail(message: string): void {
 // the MCP `motebit_task` tool and the relay WebSocket dispatch) executed tools
 // straight from the registry: an R4_MONEY tool reached through a task moved
 // money with no policy decision and no grant, while the same tool called over
-// MCP said "requires approval" (M2). Every registry `execute(` call site in
-// workspace source is therefore a CLOSED set: each must be a sanctioned site —
-// either preceded (in the same function window) by the policy decision it
-// executes under, or an adapter whose gate lives in its only caller, or a
-// fixed read-class tool named by literal. A new call site is a gate failure
-// until it is routed through a gated path (`MotebitRuntime.executeToolGated`,
-// `invokeLocalTool`, the AI loop) or argued into this list in review.
+// MCP said "requires approval" (M2). Every REFERENCE to a tool registry's
+// `execute` (and to a registry class's private handler storage) in workspace
+// source is therefore a CLOSED set, located by the TypeScript checker — not by
+// spelling — so aliasing (`const e = r.execute`), destructuring, bracket
+// access, `.call/.apply/.bind`, passing the method as a callback, casting
+// through a registry type, computed access and private-member access all
+// count (scripts/lib/registry-execute-refs.ts). Each site must be SANCTIONED
+// by file + enclosing named scope with an exact site count; a new site, or a
+// second site in a sanctioned scope, fails until it is routed through a gated
+// path (`MotebitRuntime.executeToolGated`, `invokeLocalTool`, the AI loop) or
+// argued into this list in review. A built-in self-test plants every aliasing
+// form (virtual files, same program) and fails the gate if any goes unseen.
+//
+// Aperture: every `.ts`/`.tsx` under packages/*/src, apps/*/src,
+// services/*/src (tests, `.test`/`.spec`/`.probe` files and `.d.ts`
+// excluded), resolved in ONE program with workspace packages mapped to their
+// src. Not seen: values typed so that no registry type is ever in the chain
+// (e.g. a registry stored into a `Record<string, Function>` then called), and
+// object-destructuring ASSIGNMENT (`({ execute } = r)`); `execute` on an `any`
+// receiver is flagged precisely because its type is gone.
 {
-  const EXECUTE_CALL = /(?:getToolRegistry\(\)|\b[\w$]*[Rr]egistry|\btools)\??\.execute\(/g;
-  const WINDOW_LINES = 80;
   interface Sanctioned {
     file: string;
-    /** The call line itself must match (adapter / literal sites). */
+    /** The reference's enclosing named scope chain, exactly (`RegistryRef.container`). */
+    container: string;
+    /** Exact number of references allowed in that scope. */
+    sites: number;
+    /** Each site's line must match (literal-tool sites). */
     line?: RegExp;
-    /** A policy decision must appear within WINDOW_LINES before the call. */
+    /** Must appear in the scope's text before each site (the decision it executes under). */
     precededBy?: RegExp;
     why: string;
   }
   const SANCTIONED: Sanctioned[] = [
     {
       file: "packages/ai-core/src/loop.ts",
+      container: "runTurnStreaming",
+      sites: 2,
       precededBy: /policyGate/,
       why: "the AI loop — every tool call is decided by the policy gate (R4 step 8b/8c) first",
     },
     {
       file: "packages/runtime/src/motebit-runtime.ts",
+      container: "MotebitRuntime.invokeLocalTool",
+      sites: 1,
       precededBy: /this\.policy\.validate\(/,
-      why: "invokeLocalTool / executeToolGated — after policy.validate; requiresApproval refuses",
+      why: "invokeLocalTool — after policy.validate; requiresApproval refuses",
     },
     {
       file: "packages/runtime/src/motebit-runtime.ts",
+      container: "MotebitRuntime.executeToolGated",
+      sites: 2,
+      precededBy:
+        /verifyGrantForTurn\([\s\S]*this\.policy\.validate\([\s\S]*decision\.requiresApproval/,
+      why: "executeToolGated — presenter-bound verifyGrantForTurn, policy.validate, requiresApproval refuses",
+    },
+    {
+      file: "packages/runtime/src/motebit-runtime.ts",
+      container: "MotebitRuntime.toolsForTurn > execute",
+      sites: 1,
+      why: "the turn-scoped registry handed ONLY to the AI loop (whose every call the gate decides), forwarding the turn's call context",
+    },
+    {
+      file: "packages/runtime/src/motebit-runtime.ts",
+      container: "MotebitRuntime.wrapToolRegistryForSensitivity > execute",
+      sites: 1,
+      why: "sensitivity wrapper around the loop's registry — adds a fail-closed outbound check, forwards otherwise",
+    },
+    {
+      file: "packages/runtime/src/motebit-runtime.ts",
+      container: "MotebitRuntime.registerExternalTools",
+      sites: 1,
       line: /registerOwnerConnectedTool\(def, \(args\) => registry\.execute\(def\.name, args\)\)/,
       why: "re-registers an owner-connected tool INTO the runtime registry (reached only through a gated path)",
     },
     {
+      file: "packages/runtime/src/streaming.ts",
+      container: "StreamingManager.resumeAfterApproval",
+      sites: 1,
+      precededBy: /recordApprovalSatisfied/,
+      why: "approval resume — executes exactly the paused, gate-decided call after a human approved it",
+    },
+    {
       file: "packages/runtime/src/attached-surface.ts",
+      container: "resolveAttachedAct",
+      sites: 1,
       precededBy: /runtime\.policy\.validate\(/,
       why: "attached-frontend tool_execute — after policy.validate; requiresApproval refuses",
     },
     {
       file: "packages/mcp-server/src/service.ts",
-      precededBy: /executeTool: async \(name, args\) =>/,
+      container: "wireServerDeps > executeTool",
+      sites: 1,
       why: "McpServerAdapter executeTool dep — reached only after handleToolCall's validateTool decision",
     },
     {
       file: "apps/cli/src/daemon.ts",
+      container: "handleServe > executeTool",
+      sites: 1,
       line: /executeTool: \(name, args\) => runtime\.getToolRegistry\(\)\.execute\(name, args\)/,
       why: "McpServerAdapter executeTool dep — reached only after handleToolCall's validateTool decision",
     },
     ...["read-url", "summarize", "web-search"].map((svc) => ({
       file: `services/${svc}/src/index.ts`,
+      container: "main > handleAgentTask",
+      sites: 1,
       line: /registry\.execute\("(?:read_url|summarize_search|web_search)",/,
       why: "a first-party service executing its own fixed read-class tool, named by literal",
     })),
   ];
 
-  const unsanctioned: string[] = [];
-  let scanned = 0;
-  let sites = 0;
-  for (const srcDir of workspaceSrcDirs()) {
-    for (const rel of walkTsFiles(srcDir)) {
-      if (rel.includes("__tests__") || /\.(test|probe)\.ts$/.test(rel)) continue;
-      const content = readFile(rel);
-      if (content === null) continue;
-      scanned++;
-      const lines = content.split("\n");
-      for (const m of content.matchAll(EXECUTE_CALL)) {
-        sites++;
-        const lineNo = content.slice(0, m.index).split("\n").length;
-        const lineText = lines[lineNo - 1] ?? "";
-        const window = lines.slice(Math.max(0, lineNo - 1 - WINDOW_LINES), lineNo).join("\n");
-        const ok = SANCTIONED.some(
-          (s) =>
-            s.file === rel &&
-            (s.line == null || s.line.test(lineText)) &&
-            (s.precededBy == null || s.precededBy.test(window)),
-        );
-        if (!ok) unsanctioned.push(`${rel}:${lineNo}  ${lineText.trim()}`);
+  // Self-test: every aliasing form, planted as virtual files in the SAME
+  // program the real scan uses. A form the analysis stops seeing fails here.
+  const SELFTEST_DIR = resolve(ROOT, "packages/runtime/src/__money_authority_selftest__");
+  const SELFTEST_HEADER =
+    'import type { ToolRegistry } from "@motebit/protocol";\n' +
+    'import { SimpleToolRegistry } from "../simple-tool-registry.js";\n' +
+    "void SimpleToolRegistry;\n";
+  const SELFTEST_FORMS: Record<string, string> = {
+    direct: 'export const p = (r: ToolRegistry) => r.execute("t", {});\n',
+    alias:
+      'export function p(r: ToolRegistry) {\n  const e = r.execute;\n  return e("t", {});\n}\n',
+    destructure:
+      'export function p(r: ToolRegistry) {\n  const { execute } = r;\n  return execute("t", {});\n}\n',
+    destructure_param:
+      'export function p({ execute }: SimpleToolRegistry) {\n  return execute("t", {});\n}\n',
+    bracket: 'export function p(r: ToolRegistry) {\n  return r["execute"]("t", {});\n}\n',
+    computed: 'export function p(r: ToolRegistry, k: "execute") {\n  return r[k]("t", {});\n}\n',
+    call: 'export function p(r: ToolRegistry) {\n  return r.execute.call(r, "t", {});\n}\n',
+    apply: 'export function p(r: ToolRegistry) {\n  return r.execute.apply(r, ["t", {}]);\n}\n',
+    bind_callback:
+      'function run(f: (n: string, a: Record<string, unknown>) => unknown) {\n  return f("t", {});\n}\n' +
+      "export function p(r: ToolRegistry) {\n  return run(r.execute.bind(r));\n}\n",
+    callback:
+      'function run(f: (n: string, a: Record<string, unknown>) => unknown) {\n  return f("t", {});\n}\n' +
+      "export function p(r: ToolRegistry) {\n  return run(r.execute);\n}\n",
+    cast:
+      "export function p(r: unknown) {\n" +
+      '  return (r as SimpleToolRegistry as unknown as { execute(n: string, a: object): unknown }).execute("t", {});\n}\n',
+    any_receiver: 'export function p(r: any) {\n  return r.execute("t", {});\n}\n',
+    handler_map:
+      'export function p(r: SimpleToolRegistry) {\n  return r["tools"].get("t")?.handler({});\n}\n',
+    concrete_class: 'export const p = (r: SimpleToolRegistry) => r.execute("t", {});\n',
+  };
+  const virtual = new Map<string, string>();
+  for (const [form, body] of Object.entries(SELFTEST_FORMS)) {
+    virtual.set(join(SELFTEST_DIR, `${form}.ts`), SELFTEST_HEADER + body);
+  }
+
+  const files = workspaceSourceFiles(ROOT);
+  const program = createScanProgram(
+    ROOT,
+    files.map((f) => resolve(ROOT, f)),
+    virtual,
+  );
+
+  const unseen: string[] = [];
+  for (const [path] of virtual) {
+    const sf = program.getSourceFile(path);
+    const refs = sf == null ? [] : scanFile(program, sf, path);
+    if (refs.filter((r) => !r.internal).length === 0) unseen.push(path.slice(ROOT.length + 1));
+  }
+  if (unseen.length > 0) {
+    fail(
+      "assertion 5 self-test: the type-aware registry-execute scan no longer sees these planted " +
+        "aliasing forms:\n" +
+        unseen.map((u) => `  - ${u}`).join("\n") +
+        "\nA form the scan cannot see is a raw execute that bypasses the policy gate unseen. " +
+        "Fix scripts/lib/registry-execute-refs.ts until every SELFTEST_FORMS entry is reported.",
+    );
+  }
+
+  const violations: string[] = [];
+  const perEntry = new Map<Sanctioned, number>();
+  let refs = 0;
+  let internal = 0;
+  let unresolved = 0;
+  for (const rel of files) {
+    const sf = program.getSourceFile(resolve(ROOT, rel));
+    if (sf == null) {
+      unresolved++;
+      violations.push(`${rel}  (not loaded into the program — cannot be proven clean)`);
+      continue;
+    }
+    for (const r of scanFile(program, sf, rel)) {
+      refs++;
+      if (r.internal) {
+        internal++;
+        continue;
       }
+      const entry = SANCTIONED.find(
+        (e) =>
+          e.file === r.file &&
+          e.container === r.container &&
+          (e.line == null || e.line.test(r.lineText)) &&
+          (e.precededBy == null || e.precededBy.test(r.containerPrefix)),
+      );
+      if (entry == null) {
+        violations.push(`${r.file}:${r.line}  [${r.kind} in ${r.container}]  ${r.lineText.trim()}`);
+        continue;
+      }
+      perEntry.set(entry, (perEntry.get(entry) ?? 0) + 1);
     }
   }
-  if (unsanctioned.length > 0) {
+  for (const e of SANCTIONED) {
+    const n = perEntry.get(e) ?? 0;
+    if (n !== e.sites) {
+      violations.push(
+        `${e.file} [${e.container}]: ${n} sanctioned site(s), expected exactly ${e.sites} — ` +
+          (n > e.sites
+            ? "a new raw execute was added inside a sanctioned scope"
+            : "the sanctioned site moved or its gate marker no longer precedes it; update SANCTIONED"),
+      );
+    }
+  }
+  if (violations.length > 0) {
     fail(
-      "tool-registry execute outside the gated paths:\n" +
-        unsanctioned.map((v) => `  - ${v}`).join("\n") +
+      "tool-registry execute reference outside the gated paths:\n" +
+        violations.map((v) => `  - ${v}`).join("\n") +
         "\nA raw registry execute skips the policy gate, so an R4_MONEY tool runs with no verified " +
-        "grant (the serve --direct / motebit_task bypass). Fix: execute through " +
-        "`MotebitRuntime.executeToolGated(name, args, { delegation })` (policy.validate + " +
-        "verifyGrantForTurn + metering), or add the site to SANCTIONED in " +
-        "scripts/check-money-authority.ts with the gate it runs under. " +
+        "grant (the serve --direct / motebit_task bypass) — whatever its spelling (alias, " +
+        "destructure, bracket, .call/.apply/.bind, callback, cast, private handler map). Fix: " +
+        "execute through `MotebitRuntime.executeToolGated(name, args, { caller, delegation })` " +
+        "(policy.validate + presenter-bound verifyGrantForTurn + metering), or add the scope to " +
+        "SANCTIONED in scripts/check-money-authority.ts with the gate it runs under. " +
         "docs/doctrine/memory-never-confers-authority.md.",
     );
   }
@@ -395,18 +543,27 @@ function fail(message: string): void {
         "sanctioned in assertion 5 depend on that order — restore it or remove them from SANCTIONED.",
     );
   }
-  // The serve --direct handler must execute through the gated runtime path.
+  // The serve --direct handler must execute through the gated runtime path,
+  // as a FOREIGN principal (the task submitter is never the owner).
   const direct = readFile("apps/cli/src/direct-task-handler.ts");
-  if (direct === null || !/deps\.runtime\.executeToolGated\(/.test(direct)) {
+  if (
+    direct === null ||
+    !/deps\.runtime\.executeToolGated\(/.test(direct) ||
+    !/caller: \{ principal: "foreign", identity: options\?\.caller \?\? null \}/.test(direct)
+  ) {
     fail(
       "apps/cli/src/direct-task-handler.ts (serve --direct: motebit_task + relay dispatch) does not " +
-        "execute through `runtime.executeToolGated` — the R4 bypass the gate exists to prevent.",
+        "execute through `runtime.executeToolGated` as a FOREIGN principal bound to the " +
+        'transport-verified caller (`caller: { principal: "foreign", identity: options?.caller ?? null }`) — ' +
+        "the R4 bypass the gate exists to prevent: a task submitter riding the owner's grant.",
     );
   }
   console.log(
-    `check-money-authority: scanned ${scanned} source files under packages/*/src, apps/*/src, ` +
-      `services/*/src (tests excluded) for registry execute calls — ${sites} site(s), all sanctioned ` +
-      `unless listed above.`,
+    `check-money-authority: type-aware scan of ${files.length} source files (.ts/.tsx under ` +
+      `packages/*/src, apps/*/src, services/*/src; tests excluded; ${unresolved} unloaded) — ` +
+      `${refs} registry execute/private-member reference(s): ${internal} internal to a registry ` +
+      `class, ${refs - internal} checked against ${SANCTIONED.length} sanctioned scopes; ` +
+      `self-test ${Object.keys(SELFTEST_FORMS).length - unseen.length}/${Object.keys(SELFTEST_FORMS).length} aliasing forms seen.`,
   );
 }
 

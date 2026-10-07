@@ -402,8 +402,8 @@ export type {
 // gate's standing-authority invariant. Memory may point at a grant_id;
 // only this verification IS authority. Gate: check-money-authority.
 // Doctrine: docs/doctrine/memory-never-confers-authority.md.
-export { verifyGrantForTurn } from "./grant-verifier.js";
-export type { VerifiedGrant } from "./grant-verifier.js";
+export { verifyGrantForTurn, grantDelegateIs } from "./grant-verifier.js";
+export type { VerifiedGrant, GrantPresenterIdentity } from "./grant-verifier.js";
 // The R4 AND-composition's enforcer half — the only sanctioned
 // composition of the blast-radius enforcer with live dispatch
 // (gate check-ceiling-from-grant, #136).

@@ -48,7 +48,20 @@ import {
   type DelegationToken,
   type StandingDelegation,
 } from "@motebit/protocol";
-import { verifyGrantForTurn } from "../grant-verifier.js";
+import { verifyGrantForTurn as verifyGrantForTurnAs } from "../grant-verifier.js";
+
+// Every presentation here is by the grant's own delegate (the presenter
+// binding itself is pinned in grant-presenter-binding.test.ts).
+const verifyGrantForTurn = (
+  token: Parameters<typeof verifyGrantForTurnAs>[0],
+  grant: Parameters<typeof verifyGrantForTurnAs>[1],
+  revocations: Parameters<typeof verifyGrantForTurnAs>[2],
+  options?: { now?: number },
+) =>
+  verifyGrantForTurnAs(token, grant, revocations, {
+    presenter: { motebitId: grant.delegate_id, publicKeyHex: grant.delegate_public_key },
+    ...options,
+  });
 
 type Kp = { publicKey: Uint8Array; privateKey: Uint8Array };
 const HOUR = 3_600_000;

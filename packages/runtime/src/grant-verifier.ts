@@ -77,18 +77,53 @@ export interface VerifiedGrantBody {
 }
 
 /**
- * Verify a token + grant pair against held revocations. Returns the
- * `verifiedGrant` value for the TurnContext, or `null` when any step
- * fails — wrong signature, expired, revoked, token not a valid tick of
- * the grant, scope/TTL violation.
+ * WHO is presenting a grant: the identity the presenting path authenticated
+ * — the runtime's own identity for an owner turn, the transport-verified
+ * caller for a foreign one. Never derived from prompt or task content.
+ */
+export interface GrantPresenterIdentity {
+  motebitId: string;
+  /**
+   * The presenter's Ed25519 public key, hex. When present it must equal the
+   * grant's `delegate_public_key` (case-insensitive); a foreign presenter
+   * without a verified key is refused upstream (`executeToolGated`).
+   */
+  publicKeyHex?: string;
+}
+
+/**
+ * Is `presenter` the grant's delegate? Exact `motebit_id` match, and — when
+ * the presenter's key is known — the same key. Pure; exported so a refusing
+ * caller can name WHY a presentation conferred nothing.
+ */
+export function grantDelegateIs(
+  grant: Pick<StandingDelegation, "delegate_id" | "delegate_public_key">,
+  presenter: GrantPresenterIdentity,
+): boolean {
+  if (presenter.motebitId === "" || grant.delegate_id !== presenter.motebitId) return false;
+  if (presenter.publicKeyHex == null) return true;
+  return grant.delegate_public_key.toLowerCase() === presenter.publicKeyHex.toLowerCase();
+}
+
+/**
+ * Verify a token + grant pair against held revocations, presented by
+ * `options.presenter`. Returns the `verifiedGrant` value for the
+ * TurnContext, or `null` when any step fails — presenter is not the
+ * grant's delegate, wrong signature, expired, revoked, token not a valid
+ * tick of the grant, scope/TTL violation.
  */
 export async function verifyGrantForTurn(
   token: DelegationToken,
   grant: StandingDelegation,
   revocations: readonly DelegationRevocation[],
-  options?: { now?: number },
+  options: { presenter: GrantPresenterIdentity; now?: number },
 ): Promise<VerifiedGrant | null> {
-  const now = options?.now ?? Date.now();
+  const now = options.now ?? Date.now();
+
+  // Presenter binding first: a grant authorizes its delegate and nobody
+  // else. A valid grant presented by anyone but its delegate is a stolen
+  // capability, so it confers nothing — whatever its signature says.
+  if (!grantDelegateIs(grant, options.presenter)) return null;
 
   // Revocation check first — build the isRevoked seam from the held
   // feed via the binding-safe helper (matches grant_id AND the

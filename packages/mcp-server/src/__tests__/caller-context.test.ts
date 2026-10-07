@@ -178,7 +178,15 @@ describe("per-request caller context (#880 F)", () => {
 
     const a = seen.find((s) => s.who === "A");
     const b = seen.find((s) => s.who === "B");
-    expect(a?.caller).toEqual({ motebitId: "caller-a", trustLevel: AgentTrustLevel.Trusted });
-    expect(b?.caller).toEqual({ motebitId: "caller-b", trustLevel: AgentTrustLevel.Verified });
+    expect(a?.caller).toEqual({
+      motebitId: "caller-a",
+      trustLevel: AgentTrustLevel.Trusted,
+      publicKeyHex: KEY_A,
+    });
+    expect(b?.caller).toEqual({
+      motebitId: "caller-b",
+      trustLevel: AgentTrustLevel.Verified,
+      publicKeyHex: KEY_B,
+    });
   });
 });
