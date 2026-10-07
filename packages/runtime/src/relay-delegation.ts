@@ -184,11 +184,14 @@ export type DelegationErrorCode =
   /** Pre-flight. No agent advertises the capability. */
   | "no_routing"
   /**
-   * Pre-flight, BEFORE broadcast. A FEDERATED (peer-hosted) worker's discovered
-   * settlement address is not cryptographically bound to the worker's identity
-   * — a malicious peer could be redirecting the worker's payments. The client
-   * refuses to broadcast rather than pay a peer-asserted address it cannot
-   * verify. No funds move. docs/doctrine/settlement-authority-binding.md.
+   * Pre-flight, BEFORE broadcast. A worker's discovered settlement address is
+   * not bound to the worker: a FEDERATED (peer-hosted) address not
+   * cryptographically bound to its identity, a peer-listed entry with no
+   * direct-peer key (unbindable), or a LOCAL address that is not the one the
+   * worker registered on the relay — a malicious peer could be redirecting the
+   * worker's payments. The client refuses to broadcast rather than pay an
+   * address it cannot bind. No funds move.
+   * docs/doctrine/settlement-authority-binding.md.
    */
   | "worker_settlement_unbound"
   /**
@@ -1777,12 +1780,28 @@ export async function resolveP2pPaymentRequest(
         /** Relay-verified commitment bond (backing RPC-confirmed) — an
          * exploration-PRIORITY signal for the selector, never a gate. */
         bonded?: boolean | null;
+        /** 0 ⇔ the origin's OWN agent; ≥ 1 ⇔ returned by a federation peer. */
+        hop_distance?: number | null;
       }>;
     };
     // HARD gates: not self, declares a settlement address, advertises p2p, and
     // — when pinned — is exactly that worker. These filter WHO is eligible.
+    // Locality is the ORIGIN's mark, never inferred from a missing peer key: the
+    // origin stamps its own agents `hop_distance: 0` and every peer entry ≥ 1
+    // (absent = an older relay, which served local agents only under that
+    // shape). A NON-local entry without a direct-peer key is unpriceable and
+    // unbindable — a multi-hop listing or a peer speaking for a worker it does
+    // not host (M1) — so it is never a P2P candidate: treating "no peer key" as
+    // LOCAL skipped every binding check and paid the peer's address.
+    let droppedUnbindable = 0;
+    const isNonLocal = (a: { hop_distance?: number | null }): boolean =>
+      a.hop_distance != null && a.hop_distance !== 0;
     const admissible = (data.agents ?? []).filter((a) => {
       if (a.motebit_id === motebitId || a.settlement_address == null) return false;
+      if (isNonLocal(a) && a.source_relay_public_key == null) {
+        droppedUnbindable++;
+        return false;
+      }
       // Pinned hire: only the worker the user tapped is eligible — never
       // substitute another candidate for the same capability.
       if (params.targetWorkerId != null && a.motebit_id !== params.targetWorkerId) return false;
@@ -1821,6 +1840,12 @@ export async function resolveP2pPaymentRequest(
       }
     }
     if (candidate?.settlement_address == null) {
+      if (droppedUnbindable > 0) {
+        return fail(
+          "worker_settlement_unbound",
+          `No candidate for "${capability}" has a settlement address this client can bind (peer-listed without a direct-peer key); refusing to pay an unbound destination.`,
+        );
+      }
       return fail(
         "no_routing",
         params.targetWorkerId != null
@@ -1975,9 +2000,27 @@ export async function resolveP2pPaymentRequest(
           reason?: string;
           expected_amount_micro?: number;
           expected_fee_micro?: number;
+          /** The worker's OWN registered (write-authorized) settlement address. */
+          settlement_address?: string | null;
         };
         if (data.allowed !== true) {
           return fail("p2p_ineligible", data.reason ?? "Not P2P-eligible for this worker");
+        }
+        // SETTLEMENT-AUTHORITY BINDING for a LOCAL candidate: its address is
+        // bound by the worker's own authed write on this relay, so the relay's
+        // registry read (not the merged discover shelf) is the evidence. A
+        // discovered address the registry does not hold is never paid —
+        // custody separation stays legal (the address need not derive from the
+        // key; it must be the one the worker registered). An older relay omits
+        // the field; the locality gate above already refused every peer entry.
+        if (
+          typeof data.settlement_address === "string" &&
+          data.settlement_address !== worker.settlement_address
+        ) {
+          return fail(
+            "worker_settlement_unbound",
+            `Discovered settlement address for "${worker.motebit_id}" is not the one the worker registered; refusing to pay an unbound destination.`,
+          );
         }
         preflightAllowed = true;
         preflightAmountMicro = data.expected_amount_micro;

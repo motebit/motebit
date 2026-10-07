@@ -6246,6 +6246,98 @@ export class MotebitRuntime {
   }
 
   /**
+   * Execute ONE tool directly — no AI loop — behind the SAME policy gate the
+   * loop composes. The deterministic worker path (`motebit serve --direct`,
+   * and the relay task dispatch that reaches it) used to call the registry
+   * raw, so an R4_MONEY tool reached through `motebit_task` moved money with
+   * no gate while the same tool called over MCP said "owner approval
+   * required" (M2). Here:
+   *
+   *   - the decision is `policy.validate` over a fresh turn context (audited);
+   *   - standing authority enters ONLY as signed artifacts verified by the
+   *     sole producer `verifyGrantForTurn`; a failed verification is a
+   *     grantless call, never authority — so R4 stays behind approval;
+   *   - there is no human on this path, so `requiresApproval` REFUSES (never
+   *     waits) — a verified in-scope grant clears R4 at the gate's step 8c;
+   *   - a granted call serializes under `_isProcessing` and binds the grant to
+   *     the rail seam (`_activeTurnGrant`) only for its own execution, so the
+   *     blast-radius meter bounds the spend exactly as on the loop path.
+   *
+   * Doctrine: docs/doctrine/memory-never-confers-authority.md. Gate:
+   * check-money-authority (no raw registry execute outside the gated paths).
+   */
+  async executeToolGated(
+    name: string,
+    args: Record<string, unknown>,
+    options: {
+      delegation?: {
+        token: import("@motebit/protocol").DelegationToken;
+        grant: import("@motebit/protocol").StandingDelegation;
+        revocations?: readonly import("@motebit/protocol").DelegationRevocation[];
+      };
+    } = {},
+  ): Promise<ToolResult> {
+    const toolDef = this.toolRegistry.list().find((t) => t.name === name);
+    if (!toolDef) return { ok: false, error: `Tool "${name}" is not available` };
+
+    const presentedGrant =
+      options.delegation != null
+        ? await verifyGrantForTurn(
+            options.delegation.token,
+            options.delegation.grant,
+            options.delegation.revocations ?? [],
+          )
+        : null;
+    const turnCtx = this.policy.createTurnContext();
+    const decision = this.policy.validate(
+      toolDef,
+      args,
+      presentedGrant != null
+        ? {
+            ...turnCtx,
+            verifiedGrant: presentedGrant,
+            delegationScope: options.delegation?.grant.scope,
+          }
+        : turnCtx,
+    );
+    if (!decision.allowed) {
+      return { ok: false, error: `Policy denied: ${decision.reason ?? "denied by policy"}` };
+    }
+    if (decision.requiresApproval) {
+      return {
+        ok: false,
+        error: `Governance: tool "${name}" requires approval from the motebit owner — a direct (no-loop) execution carries no approval channel.`,
+      };
+    }
+
+    const startedAt = Date.now();
+    let result: ToolResult;
+    if (presentedGrant != null) {
+      if (this._isProcessing) {
+        return { ok: false, error: "Busy: a granted execution must not share a turn" };
+      }
+      this._isProcessing = true;
+      this._activeTurnGrant = presentedGrant;
+      try {
+        result = await this.toolRegistry.execute(name, args);
+      } catch (err) {
+        result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      } finally {
+        this._activeTurnGrant = null;
+        this._isProcessing = false;
+      }
+    } else {
+      try {
+        result = await this.toolRegistry.execute(name, args);
+      } catch (err) {
+        result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    this.policy.recordResult(turnCtx, decision, name, args, result.ok, Date.now() - startedAt);
+    return result;
+  }
+
+  /**
    * Execute a paid sub-delegation autonomously under a signed standing grant —
    * the DETERMINISTIC (human-absent) money path that a first-party spending
    * molecule (the Clerk archetype) drives. Unlike the AI loop (whose R4 spend

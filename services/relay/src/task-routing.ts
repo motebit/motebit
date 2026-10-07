@@ -622,6 +622,19 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
 
         const MAX_CANDIDATES_PER_PEER = 50;
         const agents = (data.agents ?? []).slice(0, MAX_CANDIDATES_PER_PEER);
+        const locallyHosted = new Set(
+          agents.length === 0
+            ? []
+            : (
+                db
+                  .prepare(
+                    `SELECT motebit_id FROM agent_registry
+                     WHERE motebit_id IN (${agents.map(() => "?").join(",")})
+                       AND (revoked IS NULL OR revoked = 0)${ON_SHELF}`,
+                  )
+                  .all(...agents.map((a) => a.motebit_id)) as Array<{ motebit_id: string }>
+              ).map((r) => r.motebit_id),
+        );
 
         const peerTrust = peer.trust_score ?? 0.5;
 
@@ -647,6 +660,12 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           }
           // Skip agents that are local (already covered by local candidate search)
           if (agent.source_relay === relayIdentity.relayMotebitId) continue;
+          // A peer never speaks for an agent hosted HERE (on the shelf, not
+          // revoked — rule 9's locality), whatever host it
+          // claims: forwarding a local worker's task (and budget) to the peer,
+          // or validating its peer-asserted settlement address, would let the
+          // peer redirect it (M1; docs/doctrine/settlement-authority-binding.md).
+          if (locallyHosted.has(agent.motebit_id)) continue;
 
           // Create peerRelayId → agentId edge for the semiring graph.
           // Default agent trust 0.5 since peer relay doesn't expose per-agent trust in discovery.

@@ -281,11 +281,141 @@ function fail(message: string): void {
   }
 }
 
+// === 5. No raw registry execute outside the gated paths ================
+// The deterministic worker path (`motebit serve --direct`, which answers both
+// the MCP `motebit_task` tool and the relay WebSocket dispatch) executed tools
+// straight from the registry: an R4_MONEY tool reached through a task moved
+// money with no policy decision and no grant, while the same tool called over
+// MCP said "requires approval" (M2). Every registry `execute(` call site in
+// workspace source is therefore a CLOSED set: each must be a sanctioned site —
+// either preceded (in the same function window) by the policy decision it
+// executes under, or an adapter whose gate lives in its only caller, or a
+// fixed read-class tool named by literal. A new call site is a gate failure
+// until it is routed through a gated path (`MotebitRuntime.executeToolGated`,
+// `invokeLocalTool`, the AI loop) or argued into this list in review.
+{
+  const EXECUTE_CALL = /(?:getToolRegistry\(\)|\b[\w$]*[Rr]egistry|\btools)\??\.execute\(/g;
+  const WINDOW_LINES = 80;
+  interface Sanctioned {
+    file: string;
+    /** The call line itself must match (adapter / literal sites). */
+    line?: RegExp;
+    /** A policy decision must appear within WINDOW_LINES before the call. */
+    precededBy?: RegExp;
+    why: string;
+  }
+  const SANCTIONED: Sanctioned[] = [
+    {
+      file: "packages/ai-core/src/loop.ts",
+      precededBy: /policyGate/,
+      why: "the AI loop — every tool call is decided by the policy gate (R4 step 8b/8c) first",
+    },
+    {
+      file: "packages/runtime/src/motebit-runtime.ts",
+      precededBy: /this\.policy\.validate\(/,
+      why: "invokeLocalTool / executeToolGated — after policy.validate; requiresApproval refuses",
+    },
+    {
+      file: "packages/runtime/src/motebit-runtime.ts",
+      line: /registerOwnerConnectedTool\(def, \(args\) => registry\.execute\(def\.name, args\)\)/,
+      why: "re-registers an owner-connected tool INTO the runtime registry (reached only through a gated path)",
+    },
+    {
+      file: "packages/runtime/src/attached-surface.ts",
+      precededBy: /runtime\.policy\.validate\(/,
+      why: "attached-frontend tool_execute — after policy.validate; requiresApproval refuses",
+    },
+    {
+      file: "packages/mcp-server/src/service.ts",
+      precededBy: /executeTool: async \(name, args\) =>/,
+      why: "McpServerAdapter executeTool dep — reached only after handleToolCall's validateTool decision",
+    },
+    {
+      file: "apps/cli/src/daemon.ts",
+      line: /executeTool: \(name, args\) => runtime\.getToolRegistry\(\)\.execute\(name, args\)/,
+      why: "McpServerAdapter executeTool dep — reached only after handleToolCall's validateTool decision",
+    },
+    ...["read-url", "summarize", "web-search"].map((svc) => ({
+      file: `services/${svc}/src/index.ts`,
+      line: /registry\.execute\("(?:read_url|summarize_search|web_search)",/,
+      why: "a first-party service executing its own fixed read-class tool, named by literal",
+    })),
+  ];
+
+  const unsanctioned: string[] = [];
+  let scanned = 0;
+  let sites = 0;
+  for (const srcDir of workspaceSrcDirs()) {
+    for (const rel of walkTsFiles(srcDir)) {
+      if (rel.includes("__tests__") || /\.(test|probe)\.ts$/.test(rel)) continue;
+      const content = readFile(rel);
+      if (content === null) continue;
+      scanned++;
+      const lines = content.split("\n");
+      for (const m of content.matchAll(EXECUTE_CALL)) {
+        sites++;
+        const lineNo = content.slice(0, m.index).split("\n").length;
+        const lineText = lines[lineNo - 1] ?? "";
+        const window = lines.slice(Math.max(0, lineNo - 1 - WINDOW_LINES), lineNo).join("\n");
+        const ok = SANCTIONED.some(
+          (s) =>
+            s.file === rel &&
+            (s.line == null || s.line.test(lineText)) &&
+            (s.precededBy == null || s.precededBy.test(window)),
+        );
+        if (!ok) unsanctioned.push(`${rel}:${lineNo}  ${lineText.trim()}`);
+      }
+    }
+  }
+  if (unsanctioned.length > 0) {
+    fail(
+      "tool-registry execute outside the gated paths:\n" +
+        unsanctioned.map((v) => `  - ${v}`).join("\n") +
+        "\nA raw registry execute skips the policy gate, so an R4_MONEY tool runs with no verified " +
+        "grant (the serve --direct / motebit_task bypass). Fix: execute through " +
+        "`MotebitRuntime.executeToolGated(name, args, { delegation })` (policy.validate + " +
+        "verifyGrantForTurn + metering), or add the site to SANCTIONED in " +
+        "scripts/check-money-authority.ts with the gate it runs under. " +
+        "docs/doctrine/memory-never-confers-authority.md.",
+    );
+  }
+
+  // The MCP adapter's executeTool sites above are sanctioned only because the
+  // adapter decides first: validateTool → refuse on requiresApproval → execute.
+  const adapter = readFile("packages/mcp-server/src/index.ts");
+  if (
+    adapter === null ||
+    !/const decision = await this\.deps\.validateTool\([\s\S]{0,1500}if \(decision\.requiresApproval\) \{[\s\S]{0,800}const result = await this\.deps\.executeTool\(/.test(
+      adapter,
+    )
+  ) {
+    fail(
+      "McpServerAdapter.handleToolCall no longer decides before it executes " +
+        "(validateTool → requiresApproval refusal → executeTool). The executeTool adapters " +
+        "sanctioned in assertion 5 depend on that order — restore it or remove them from SANCTIONED.",
+    );
+  }
+  // The serve --direct handler must execute through the gated runtime path.
+  const direct = readFile("apps/cli/src/direct-task-handler.ts");
+  if (direct === null || !/deps\.runtime\.executeToolGated\(/.test(direct)) {
+    fail(
+      "apps/cli/src/direct-task-handler.ts (serve --direct: motebit_task + relay dispatch) does not " +
+        "execute through `runtime.executeToolGated` — the R4 bypass the gate exists to prevent.",
+    );
+  }
+  console.log(
+    `check-money-authority: scanned ${scanned} source files under packages/*/src, apps/*/src, ` +
+      `services/*/src (tests excluded) for registry execute calls — ${sites} site(s), all sanctioned ` +
+      `unless listed above.`,
+  );
+}
+
 if (failed) {
   process.exit(1);
 }
 console.log(
   "✓ check-money-authority: R4 standing-authority block present + ordered after the trust switch; " +
     "delegate_to_agent declares explicit riskHint (R4 on payment rail); verifiedGrant has a single " +
-    "audited producer; executeGrantedDelegation re-composes the R4 AND (fail-closed verify + scope + meter-wrapped builder).",
+    "audited producer; executeGrantedDelegation re-composes the R4 AND (fail-closed verify + scope + meter-wrapped builder); " +
+    "every tool-registry execute is a sanctioned gated site.",
 );
