@@ -33,13 +33,22 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { availableParallelism } from "node:os";
-import { readFileSync, unlinkSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireGateLock } from "./lib/probe-lock.js";
+import {
+  TIMING_HINT_FILE,
+  gateArgv,
+  longestFirst,
+  readTimingHint,
+  resolveGateFiles,
+} from "./lib/gate-launch.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
+/** Each gate runs as `tsx <file>` directly (scripts/lib/gate-launch.ts). */
+const TSX_BIN = resolve(ROOT, "node_modules", ".bin", "tsx");
 
 /**
  * Test-fixture marker used by `check-gates-effective`. Probe files
@@ -1092,14 +1101,15 @@ interface Result {
  * capture each gate's output and flush it atomically after the gate
  * completes, preserving the sequential look of the single-gate era.
  */
-function runGateAsync(gate: Gate): Promise<Result> {
+function runGateAsync(gate: Gate, file: string): Promise<Result> {
   return new Promise((resolvePromise) => {
     const started = Date.now();
-    const cmdArgs = ["--silent", "run", gate.script];
-    if (gate.args && gate.args.length > 0) {
-      cmdArgs.push("--", ...gate.args);
-    }
-    const child = spawn("pnpm", cmdArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    // What `pnpm --silent run <script> [-- args]` ran, minus the pnpm → npx
+    // launch chain: the same file, argv and inherited env, from the repo root.
+    const child = spawn(TSX_BIN, gateArgv(file, gate.args), {
+      cwd: ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -1127,17 +1137,31 @@ function runGateAsync(gate: Gate): Promise<Result> {
  * Flushes each gate's captured output as it completes (not strictly in
  * order — operators see "X gate just finished" feedback; the final
  * summary is what's ordered).
+ *
+ * Launch order is longest-first from the committed timing hint
+ * (`scripts/gate-timing-hint.json`; a gate with no hint starts first), so the
+ * slowest gates don't start last and set the wall time alone. Order only —
+ * it never changes which gates run or how they are judged.
  */
-async function runGatesConcurrent(gates: ReadonlyArray<Gate>, limit: number): Promise<Result[]> {
+async function runGatesConcurrent(
+  gates: ReadonlyArray<Gate>,
+  files: ReadonlyMap<string, string>,
+  limit: number,
+): Promise<Result[]> {
   const results: Result[] = new Array(gates.length);
+  const order = longestFirst(
+    gates.map((g) => g.name),
+    readTimingHint(ROOT),
+  );
   let nextIndex = 0;
 
   async function worker(): Promise<void> {
     while (true) {
-      const i = nextIndex++;
-      if (i >= gates.length) return;
+      const k = nextIndex++;
+      if (k >= order.length) return;
+      const i = order[k]!;
       const gate = gates[i]!;
-      const result = await runGateAsync(gate);
+      const result = await runGateAsync(gate, files.get(gate.script)!);
       results[i] = result;
       // Flush the gate's output atomically so parallel gates don't
       // interleave mid-line. Stderr-before-stdout matches the
@@ -1193,14 +1217,23 @@ async function main(): Promise<void> {
   // only in `check-gates-effective`.
   drainStaleProbes();
   assertRegistryCompleteness();
+  // Fail closed before any gate runs: every gate must resolve to a tsx file.
+  const files = resolveGateFiles(
+    ROOT,
+    GATES.map((g) => g.script),
+  );
 
   // Concurrency ceiling — match the runner's reported parallelism but
-  // cap at 8 so a big-ci-box doesn't spawn 32 pnpm processes that
-  // contend for disk I/O. Each gate spawns its own pnpm + tsx, so real
-  // cost scales faster than core count.
+  // cap at 8 so a big-ci-box doesn't spawn 32 tsx processes that
+  // contend for disk I/O.
   const limit = Math.min(8, availableParallelism());
-  const results = await runGatesConcurrent(GATES, limit);
+  const results = await runGatesConcurrent(GATES, files, limit);
   const failed = results.some((r) => !r.ok);
+
+  if (process.argv.includes("--write-timing-hint")) {
+    const hint = Object.fromEntries(results.map((r) => [r.gate.name, r.durationMs]));
+    writeFileSync(resolve(ROOT, TIMING_HINT_FILE), `${JSON.stringify(hint, null, 2)}\n`);
+  }
 
   // Summary
   process.stderr.write("\n─── Drift defense summary ───\n");
