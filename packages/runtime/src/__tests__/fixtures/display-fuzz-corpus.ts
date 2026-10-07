@@ -233,6 +233,38 @@ export function mainStripTags(text: string): string {
     .trim();
 }
 
+/** origin/main `stripTags`, tag-removal steps only (verbatim, in order). */
+export function mainStripTagsChainOnly(text: string): string {
+  return text
+    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
+    .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/<narration\s*>[\s\S]*?<\/narration\s*>/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
+    .replace(/\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\]/g, "")
+    .replace(/\[\/MEMORY_DATA\]/g, "");
+}
+
+/** origin/main streaming.ts `stripDisplayTags`, tag-removal steps only (verbatim, in order). */
+export function mainStreamChainOnly(text: string): string {
+  return text
+    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
+    .replace(/<narration>[\s\S]*?<\/narration>/g, "")
+    .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g, "")
+    .replace(/<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
+    .replace(/\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\]/g, "")
+    .replace(/\[\/MEMORY_DATA\]/g, "");
+}
+
 /** origin/main `stripInternalTags`. */
 export function mainStripInternalTags(text: string): string {
   return text

@@ -449,10 +449,8 @@ describe("stripInternalTags", () => {
     expect(stripInternalTags("Hello <thinking")).toBe("Hello ");
   });
 
-  it("strips partial [EXTERNAL_DATA] opener without closer", () => {
-    expect(stripInternalTags('Hello [EXTERNAL_DATA source="x"]mid-payload')).toBe(
-      "Hello mid-payload",
-    );
+  it("hides an unclosed [EXTERNAL_DATA] block to the end of the text", () => {
+    expect(stripInternalTags('Hello [EXTERNAL_DATA source="x"]mid-payload')).toBe("Hello ");
   });
 
   it("strips orphan [/MEMORY_DATA] closer", () => {

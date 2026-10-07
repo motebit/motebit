@@ -64,30 +64,89 @@ export const STREAM_TAG_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
- * Display text of a stream prefix. Rendering (tag hiding, lexicon action
- * cues, whitespace) is ai-core's `renderDisplayText` — the same rules as the
- * final answer, so markdown streams byte-for-byte. `final` marks the
- * complete text: a cue still forming is resolved instead of held.
+ * Where the rendered settled text's tail could still render differently
+ * once the next char arrives — a trailing `*` (it may close a span or, with
+ * a word char next, open a cue), a bullet with nothing after it yet — or
+ * -1. Holding is always safe: whatever is held is released by the final
+ * render.
  */
-function stripDisplayTags(text: string, final = false): { clean: string; pending: string } {
-  const clean = renderDisplayText(text, STREAM_TAG_PATTERNS, { partial: !final });
+function heldTail(clean: string): number {
+  const stars = /\*+$/.exec(clean);
+  if (stars !== null) return stars.index;
+  const lineStart = clean.lastIndexOf("\n") + 1;
+  if (/^[ \t]*[-*+][ \t]*\r?$/.test(clean.slice(lineStart))) return lineStart;
+  return -1;
+}
 
-  for (const tag of ["<memory", "<thinking", "<parameter", "<narration"]) {
-    const lastOpen = clean.lastIndexOf(tag);
-    if (lastOpen !== -1) {
-      const closeTag = `</${tag.slice(1)}>`;
-      const afterOpen = clean.slice(lastOpen);
-      if (!afterOpen.includes(closeTag)) {
-        return { clean: clean.slice(0, lastOpen), pending: clean.slice(lastOpen) };
+/**
+ * Well-formed tags the stream may render live: a whole internal block whose
+ * content holds no `<` / `[`, or a whole `<state …/>`. Every chain pattern
+ * and every block rule reads one of these the same way however the stream
+ * continues, so the text around them renders as it will in the final answer.
+ */
+const STREAM_ATOM =
+  /<thinking>[^<[]*<\/thinking>|<memory\s+[^<>[]*>[^<[]*<\/memory>|<narration>[^<[]*<\/narration>|<parameter\s+[^<>[]*>[^<[]*<\/parameter>|\[EXTERNAL_DATA[^\]<[]*\][^<[]*\[\/EXTERNAL_DATA\]|\[MEMORY_DATA\][^<[]*\[\/MEMORY_DATA\]|<state\s+[^<>[]*\/>/g;
+
+const BRACKET_NAMES = ["MEMORY_DATA", "EXTERNAL_DATA", "/MEMORY_DATA", "/EXTERNAL_DATA"];
+
+/**
+ * Offset in `text` (a stream prefix) of the first thing that is neither
+ * plain text nor a {@link STREAM_ATOM}: a tag, marker, or fragment of one
+ * whose reading can still change as the stream continues (a malformed or
+ * nested block, a marker a removal splices together, an opener with no
+ * closer yet). The stream renders only what comes before it; the rest is
+ * held until the final render. Atoms are removed first, so a marker their
+ * removal splices together is found.
+ */
+function unsettledFrom(text: string): number {
+  const at: number[] = []; // offset in `rest` -> offset in `text`
+  let rest = "";
+  let pos = 0;
+  for (const m of text.matchAll(STREAM_ATOM)) {
+    for (let i = pos; i < m.index; i++) at.push(i);
+    rest += text.slice(pos, m.index);
+    pos = m.index + m[0].length;
+  }
+  for (let i = pos; i < text.length; i++) at.push(i);
+  rest += text.slice(pos);
+  for (let i = 0; i < rest.length; i++) {
+    const ch = rest[i]!;
+    if (ch === "<") {
+      const next = rest[i + 1];
+      // A tag name, or the end / another marker it may splice with.
+      if (next === undefined || /[A-Za-z/!<[]/.test(next)) return at[i]!;
+    } else if (ch === "[") {
+      // A bracket marker, or a prefix of one ending the text or running
+      // into another marker (`[MEM<…>ORY_DATA]` once the tag is removed).
+      let j = i + 1;
+      while (j < rest.length && /[A-Z_/]/.test(rest[j]!)) j++;
+      const name = rest.slice(i + 1, j);
+      const cut = j === rest.length || rest[j] === "<" || rest[j] === "[";
+      if (BRACKET_NAMES.some((n) => name.startsWith(n) || (cut && n.startsWith(name)))) {
+        return at[i]!;
       }
     }
   }
+  return text.length;
+}
 
-  const lastOpen = clean.lastIndexOf("<");
-  if (lastOpen !== -1 && !clean.includes(">", lastOpen)) {
-    return { clean: clean.slice(0, lastOpen), pending: clean.slice(lastOpen) };
+/**
+ * Display text of the stream. Rendering (tag hiding, lexicon action cues,
+ * whitespace) is ai-core's `renderDisplayText` — the same rules as the
+ * final answer, so markdown streams byte-for-byte. A prefix (`final`
+ * false) renders only its settled part ({@link unsettledFrom}) and also
+ * holds a tail that could still become hidden, so nothing shown is ever
+ * retracted; `final` renders the complete text as the final answer, so the
+ * concatenated deltas equal it exactly.
+ */
+function streamDisplayText(text: string, final: boolean): string {
+  if (final) return renderDisplayText(text, STREAM_TAG_PATTERNS).trim();
+  const settled = text.slice(0, unsettledFrom(text));
+  let clean = renderDisplayText(settled, STREAM_TAG_PATTERNS, { partial: true }).trim();
+  for (let at = heldTail(clean); at !== -1; at = heldTail(clean)) {
+    clean = clean.slice(0, at).trim();
   }
-  return { clean, pending: "" };
+  return clean;
 }
 
 /**
@@ -100,16 +159,16 @@ export class DisplayStream {
   private yielded = 0;
 
   next(accumulated: string): string {
-    // trimStart: tags before text leave orphaned newlines. trimEnd:
-    // trailing whitespace is held until text follows it, so a removal
-    // that folds it away can never retract what was already yielded.
-    return this.advance(stripDisplayTags(accumulated).clean.trim());
+    // Trimmed: tags before text leave orphaned newlines, and trailing
+    // whitespace is held until text follows it, so a removal that folds it
+    // away can never retract what was already yielded.
+    return this.advance(streamDisplayText(accumulated, false));
   }
 
   finish(accumulated: string): string {
-    // The stream is complete: release a trailing cue-shaped span that
-    // was held while it might still have been forming.
-    return this.advance(stripDisplayTags(accumulated, true).clean.trim());
+    // The stream is complete: release whatever was held while it might
+    // still have been forming.
+    return this.advance(streamDisplayText(accumulated, true));
   }
 
   private advance(clean: string): string {

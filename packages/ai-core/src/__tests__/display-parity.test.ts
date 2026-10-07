@@ -76,14 +76,40 @@ const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
 // Tag-heavy inputs for the oracle, including adversarial placements
 // (tags inside code are still hidden — fail-closed, never code-aware).
 const TAG_ORACLE_INPUTS: readonly string[] = [
-  ...TAGGED_ANSWERS.map(([input]) => input),
+  // A narration block is in MORE_HIDDEN_THAN_MAIN: main's internal chain shows it.
+  ...TAGGED_ANSWERS.map(([input]) => input).filter((input) => !input.includes("<narration")),
   '```\n<state field="x" value="1"/>\n```',
   "`<thinking>inline</thinking>` still hidden",
   '<memory confidence="0.5" sensitivity="personal" type="episodic">multi\nline\nmemory</memory>after',
-  '[EXTERNAL_DATA source="a"]unclosed opener then text',
   "text then [/EXTERNAL_DATA] stray closer",
-  "<thinking>a</thinking><thinking>b</thinking>\n\n\n<narration >n</narration >end",
-  'partial at end <memory confidence="0.9"',
+];
+
+/**
+ * Internal blocks main's chains leave visible — an unclosed opener, a
+ * `<narration>` block on the `stripInternalTags` chain (which has no
+ * narration pattern) — are hidden: only ever more than main, never less.
+ * [input, stripTags, stripInternalTags, stripPartialActionTag].
+ */
+const MORE_HIDDEN_THAN_MAIN: readonly (readonly [string, string, string, string])[] = [
+  ['[EXTERNAL_DATA source="a"]unclosed opener then text', "", "", ""],
+  [
+    'partial at end <memory confidence="0.9"',
+    "partial at end",
+    "partial at end ",
+    "partial at end",
+  ],
+  [
+    "Done. <narration>Checking npm</narration>The version is **1.11.0**.",
+    "Done. The version is **1.11.0**.",
+    "Done. The version is **1.11.0**.",
+    "Done. The version is **1.11.0**.",
+  ],
+  [
+    "<thinking>a</thinking><thinking>b</thinking>\n\n\n<narration >n</narration >end",
+    "end",
+    "\n\n\nend",
+    "end",
+  ],
 ];
 
 describe("display parity (i): markdown is byte-preserved", () => {
@@ -124,7 +150,7 @@ describe("display parity (i): markdown is byte-preserved", () => {
   );
 });
 
-describe("display parity (ii): internal-tag removal matches origin/main", () => {
+describe("display parity (ii): internal-tag removal matches origin/main, or hides more", () => {
   it.each(TAG_ORACLE_INPUTS.map((t) => [t] as const))("stripTags ≡ main tags-only: %j", (input) => {
     expect(squash(stripTags(input))).toBe(squash(mainStripTagsTagsOnly(input)));
   });
@@ -140,6 +166,15 @@ describe("display parity (ii): internal-tag removal matches origin/main", () => 
     "stripPartialActionTag ≡ main stripInternalTags (tags only): %j",
     (input) => {
       expect(squash(stripPartialActionTag(input))).toBe(squash(mainStripInternalTags(input)));
+    },
+  );
+
+  it.each(MORE_HIDDEN_THAN_MAIN.map((row) => [...row] as const))(
+    "hides internal blocks main leaves visible: %j",
+    (input, viaStripTags, viaInternal, viaPartial) => {
+      expect(stripTags(input)).toBe(viaStripTags);
+      expect(stripInternalTags(input)).toBe(viaInternal);
+      expect(stripPartialActionTag(input)).toBe(viaPartial);
     },
   );
 });

@@ -8,13 +8,18 @@
  * Properties, for every input:
  *   (1) HIDING SUPERSET — every secret main's output hides, the branch's
  *       final and stream outputs hide; text after an unclosed internal
- *       opener is never shown.
+ *       opener is never shown. One exemption, counted and bounded: a token
+ *       of a block main's own TAG CHAIN shows (main reads a stray closer
+ *       spliced into another tag's name as a real closer) that main hides
+ *       only by its `\*[^*]+\*` markdown strip or its never-released `<`
+ *       hold — the two behaviours this branch removes by design.
  *   (2) STREAM == FINAL — the concatenated stream deltas equal the final
  *       display text exactly, at every split.
  *   (3) markdown with no tags and no cues is byte-preserved (trimmed).
  *
  * Default run: a few thousand inputs. Full run (>=200k):
  *   DISPLAY_FUZZ_COUNT=200000 pnpm --filter @motebit/runtime exec vitest run display-fuzz
+ * (`DISPLAY_FUZZ_SEED=<n>` explores another corpus.)
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -31,7 +36,9 @@ import {
   mainStream,
   mainStripInternalTags,
   mainStripPartialActionTag,
+  mainStreamChainOnly,
   mainStripTags,
+  mainStripTagsChainOnly,
   mulberry32,
   randomSplit,
   secretsIn,
@@ -39,6 +46,8 @@ import {
 } from "./fixtures/display-fuzz-corpus.js";
 
 const COUNT = Number(process.env.DISPLAY_FUZZ_COUNT ?? 4000);
+/** Corpus seed; the default is the committed, deterministic one. */
+const SEED = Number(process.env.DISPLAY_FUZZ_SEED ?? 0xd15e);
 /** Per-character streaming on every Nth input (it is O(n²) per input). */
 const PER_CHAR_EVERY = 8;
 
@@ -59,15 +68,32 @@ function finalDisplay(text: string): string {
   return renderDisplayText(text, STREAM_TAG_PATTERNS).trim();
 }
 
-/** Secrets in `input` that `mainOut` hides but `out` shows. */
-function leaks(input: string, mainOut: string, out: string): string[] {
+/**
+ * Secrets in `input` that `mainOut` hides but `out` shows, plus any
+ * unclosed-block secret `out` shows; `exempt` collects closed-block secrets
+ * main's own tag chain (`mainChain`) shows.
+ */
+function leaks(
+  input: string,
+  mainOut: string,
+  mainChain: string,
+  out: string,
+  exempt: Set<string>,
+): string[] {
   const mainShown = new Set(secretsIn(mainOut));
+  const chainShown = new Set(secretsIn(mainChain));
   const shown = new Set(secretsIn(out));
-  const unclosed = unclosedSecretsIn(out);
-  return [
-    ...new Set([...secretsIn(input).filter((s) => !mainShown.has(s) && shown.has(s)), ...unclosed]),
-  ];
+  const found = new Set(unclosedSecretsIn(out));
+  for (const s of secretsIn(input)) {
+    if (mainShown.has(s) || !shown.has(s) || found.has(s)) continue;
+    if (chainShown.has(s)) exempt.add(s);
+    else found.add(s);
+  }
+  return [...found];
 }
+
+/** Upper bound on inputs carrying an exempt token (see property 1). */
+const MAX_EXEMPT_RATE = 0.002;
 
 interface Failure {
   property: string;
@@ -122,6 +148,14 @@ describe("display repros (review of b80928a8d)", () => {
     }
   });
 
+  it.each([
+    ['[x]*<memory confidence="0.9">m *nods*</memory>[y]*tilts head*', "[x]*[y]"],
+    ["** star item\n*[not a marker]*nods*", "** star item\n*[not a marker]"],
+  ])("a `*` that ends a prefix can still open a cue: %j", (input, expected) => {
+    expect(finalDisplay(input)).toBe(expected);
+    expect(stream([...input])).toBe(expected);
+  });
+
   it("(C) a `<` that never becomes a tag is released at end of stream", () => {
     expect(stream(["if x < y", " then"])).toBe("if x < y then");
     expect(stream([..."if x < y then"])).toBe("if x < y then");
@@ -131,39 +165,49 @@ describe("display repros (review of b80928a8d)", () => {
 
 describe("differential display fuzz", () => {
   it(`tagged corpus (${COUNT} inputs): hiding superset of main, stream == final`, () => {
-    const corpus = generateFuzzCorpus(COUNT);
+    const corpus = generateFuzzCorpus(COUNT, SEED);
     const rand = mulberry32(0xf1a7);
     const failures: Failure[] = [];
-    const leak = (path: string, input: string, mainOut: string, out: string): void => {
-      const l = leaks(input, mainOut, out);
-      if (l.length > 0) failures.push({ property: "hiding", path, input, detail: { out, l } });
-    };
+    let exemptInputs = 0;
 
     corpus.forEach((input, i) => {
-      leak("stripTags", input, mainStripTags(input), stripTags(input));
+      const exempt = new Set<string>();
+      const leak = (path: string, mainOut: string, mainChain: string, out: string): void => {
+        const l = leaks(input, mainOut, mainChain, out, exempt);
+        if (l.length > 0) failures.push({ property: "hiding", path, input, detail: { out, l } });
+      };
+      const internalChain = mainStripInternalTags(input);
+      const streamChain = mainStreamChainOnly(input);
+      leak("stripTags", mainStripTags(input), mainStripTagsChainOnly(input), stripTags(input));
       leak(
         "stripPartialActionTag",
-        input,
         mainStripPartialActionTag(input),
+        internalChain,
         stripPartialActionTag(input),
       );
-      leak("stripInternalTags", input, mainStripInternalTags(input), stripInternalTags(input));
+      leak("stripInternalTags", internalChain, internalChain, stripInternalTags(input));
       leak(
         "stripInternalTagsForDisplay",
-        input,
-        mainStripInternalTags(input),
+        internalChain,
+        internalChain,
         stripInternalTagsForDisplay(input),
       );
 
       const final = finalDisplay(input);
       const splits: string[][] = [[input], randomSplit(input, rand), randomSplit(input, rand)];
       if (i % PER_CHAR_EVERY === 0) splits.push([...input]);
+      // Main's split stream yields `clean.slice(yielded)` of a string that
+      // can change behind the cursor, so text it drops there is lost by
+      // accident, not hidden. Its baseline is what main shows on the split
+      // OR on the whole text.
+      const mainWhole = mainStream([input]);
       for (const pieces of splits) {
         const out = stream(pieces);
-        const mainOut = mainStream(pieces);
-        leak("stream", input, mainOut, out);
+        const mainSplit = mainStream(pieces);
+        leak("stream", `${mainSplit}\n${mainWhole}`, streamChain, out);
         // Desktop renders stripPartialActionTag over the stream's deltas.
-        leak("desktop", input, mainStripPartialActionTag(mainOut), stripPartialActionTag(out));
+        const mainDesktop = `${mainStripPartialActionTag(mainSplit)}\n${mainStripPartialActionTag(mainWhole)}`;
+        leak("desktop", mainDesktop, streamChain, stripPartialActionTag(out));
         if (out !== final) {
           failures.push({
             property: "stream==final",
@@ -173,8 +217,10 @@ describe("differential display fuzz", () => {
           });
         }
       }
+      if (exempt.size > 0) exemptInputs++;
     });
     report(failures);
+    expect(exemptInputs / COUNT).toBeLessThanOrEqual(MAX_EXEMPT_RATE);
   }, 600_000);
 
   it(`markdown corpus (${COUNT} inputs): byte-preserved on every path`, () => {

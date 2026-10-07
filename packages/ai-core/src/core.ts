@@ -676,9 +676,11 @@ export function actionsToStateUpdates(actions: string[]): Partial<MotebitState> 
 // steps. Step 1 hides tags with origin/main's regex chains, verbatim: each
 // pattern in order, each replaced with "" — so a removal that splices its
 // neighbours into a new tag is hidden by a later pattern exactly as before
-// (fail-closed, even inside code). Step 2 runs on step 1's output only: a
-// cue is a single-asterisk span on one line, outside code, whose text leads
-// with a verb from the ACTION_RULES lexicon (`*smiles*`, `*drifts closer*`)
+// (fail-closed, even inside code). Then everything inside an internal block
+// is hidden too — nested, spliced, or unclosed (an unclosed opener hides to
+// the end of the text) — checked at every stage of the chain. Step 2 runs
+// on step 1's output only: a cue is a single-asterisk span on one line,
+// outside code, whose text leads with a verb from the ACTION_RULES lexicon (`*smiles*`, `*drifts closer*`)
 // — never `**bold**`, never an italic phrase, never `a*b*c`. Whitespace is
 // never collapsed: only the whitespace a removed tag or cue leaves behind is
 // folded (a blank-line run to at most one blank line, never more than was
@@ -834,11 +836,103 @@ function scanActionCues(text: string, partial: boolean): CueScan {
 }
 
 /**
- * Step 1: hide tags exactly as origin/main does — each pattern in order,
- * each match replaced with "". The one shared tag-hiding chain of every
- * display path and the live stream.
+ * Origin/main's tag chain, verbatim — each pattern in order, each match
+ * replaced with "". Display paths hide with {@link hideInternalTags}, which
+ * is this chain plus every internal block it leaves visible.
  */
 export function applyTagChain(text: string, patterns: readonly RegExp[]): string {
+  let out = text;
+  for (const pattern of patterns) out = out.replace(pattern, "");
+  return out;
+}
+
+/**
+ * Internal block markers, as two readings of an opener: a bare prefix
+ * (`<memory`, `[EXTERNAL_DATA` — so a malformed opener with no `>` is still
+ * internal), and the whole tag through its own `>` / `]` (so a closer
+ * written inside its attributes closes nothing). Closers are exact: a
+ * malformed closer ends nothing. A text offset is internal under either
+ * reading — both fail closed.
+ */
+const BLOCK_MARKER_READINGS: readonly RegExp[] = [
+  /(<thinking)|(<\/thinking>)|(<memory)|(<\/memory>)|(<narration)|(<\/narration\s*>)|(<parameter)|(<\/parameter>)|(\[EXTERNAL_DATA)|(\[\/EXTERNAL_DATA\])|(\[MEMORY_DATA)|(\[\/MEMORY_DATA\])/g,
+  /(<thinking[^>]*(?:>|$))|(<\/thinking>)|(<memory[^>]*(?:>|$))|(<\/memory>)|(<narration[^>]*(?:>|$))|(<\/narration\s*>)|(<parameter[^>]*(?:>|$))|(<\/parameter>)|(\[EXTERNAL_DATA[^\]]*(?:\]|$))|(\[\/EXTERNAL_DATA\])|(\[MEMORY_DATA[^\]]*(?:\]|$))|(\[\/MEMORY_DATA\])/g,
+];
+
+/**
+ * Call `mark` with every offset of `text` that lies inside an internal
+ * block, markers included. Innermost blocks — an opener whose next marker
+ * is its own closer — are removed first and the text rescanned, until none
+ * is left: removing a block splices its neighbours, and a marker that splice
+ * forms (`<pa<parameter …>x</parameter>rameter …>`) is found on the next
+ * pass; with no block left, stray closers are spliced out the same way. An
+ * opener still standing after that hides to the end of the text.
+ */
+function markInternal(text: string, mark: (offset: number) => void): void {
+  for (const reading of BLOCK_MARKER_READINGS) markInternalAs(text, reading, mark);
+}
+
+function markInternalAs(text: string, marker: RegExp, mark: (offset: number) => void): void {
+  let cur = text;
+  let at: number[] | null = null; // cur offset -> text offset; null: identity
+  const textOf = (i: number): number => (at === null ? i : at[i]!);
+  for (;;) {
+    const markers = [...cur.matchAll(marker)].map((m) => {
+      const group = m.findIndex((g, i) => i > 0 && g !== undefined);
+      return {
+        start: m.index,
+        end: m.index + m[0].length,
+        type: (group - 1) >> 1,
+        opener: group % 2 === 1,
+      };
+    });
+    const blocks: Array<[number, number]> = [];
+    for (let k = 0; k + 1 < markers.length; k++) {
+      const o = markers[k]!;
+      const c = markers[k + 1]!;
+      if (o.opener && !c.opener && c.type === o.type) {
+        blocks.push([o.start, c.end]);
+        k++;
+      }
+    }
+    if (blocks.length === 0) {
+      // No block left: a closer with no opener of its type before it is a
+      // stray marker. Splice the strays out (main's chain drops stray
+      // `[/…_DATA]` the same way) and rescan — the splice can form an opener.
+      const opened = new Set<number>();
+      for (const m of markers) {
+        if (m.opener) opened.add(m.type);
+        else if (!opened.has(m.type)) blocks.push([m.start, m.end]);
+      }
+    }
+    if (blocks.length === 0) {
+      const first = markers.find((m) => m.opener);
+      if (first !== undefined) for (let i = first.start; i < cur.length; i++) mark(textOf(i));
+      return;
+    }
+    const keep: number[] = [];
+    let rest = "";
+    let pos = 0;
+    for (const [start, end] of blocks) {
+      for (let i = start; i < end; i++) mark(textOf(i));
+      rest += cur.slice(pos, start);
+      for (let i = pos; i < start; i++) keep.push(textOf(i));
+      pos = end;
+    }
+    rest += cur.slice(pos);
+    for (let i = pos; i < cur.length; i++) keep.push(textOf(i));
+    cur = rest;
+    at = keep;
+  }
+}
+
+/**
+ * {@link applyTagChain}, then everything inside an internal block is
+ * hidden — a nested or unclosed block included (an unclosed one hides to
+ * the end of the text). For complete text that is fail-closed; for a
+ * stream prefix it holds the block until its closer arrives.
+ */
+export function hideInternalTags(text: string, patterns: readonly RegExp[]): string {
   return hideTags(text, patterns).text;
 }
 
@@ -868,13 +962,28 @@ function remapCuts(cuts: number[], ranges: Array<[number, number]>): number[] {
 }
 
 /**
- * {@link applyTagChain}, also reporting where text was removed (offsets in
- * the output). The output string is the chain's — positions are observed,
- * never written into the text, so splicing is unchanged.
+ * {@link hideInternalTags}, also reporting where text was removed (offsets
+ * in the output). The chain runs exactly as {@link applyTagChain} —
+ * positions are observed, never written into the text, so splicing is
+ * unchanged. Each surviving char's offset in the input is tracked, and the
+ * internal-block spans of EVERY stage of the chain (a splice can form a
+ * block, a later lone-marker pattern can erase its markers) mark input
+ * chars hidden; the chain's output loses every marked char. Only ever more
+ * hidden than the chain alone, never less.
  */
 function hideTags(text: string, patterns: readonly RegExp[]): { text: string; cuts: number[] } {
   let out = text;
   let cuts: number[] = [];
+  let origin: number[] | null = null; // null: identity
+  const originOf = (i: number): number => (origin === null ? i : origin[i]!);
+  let hidden: Uint8Array | null = null;
+  const markBlocks = (): void => {
+    markInternal(out, (i) => {
+      hidden ??= new Uint8Array(text.length);
+      hidden[originOf(i)] = 1;
+    });
+  };
+  markBlocks();
   for (const pattern of patterns) {
     const ranges: Array<[number, number]> = [];
     const next = out.replace(pattern, (match: string, ...args: unknown[]) => {
@@ -882,8 +991,42 @@ function hideTags(text: string, patterns: readonly RegExp[]): { text: string; cu
       return "";
     });
     if (ranges.length === 0) continue;
+    const kept: number[] = [];
+    let pos = 0;
+    for (const [start, len] of ranges) {
+      for (let i = pos; i < start; i++) kept.push(originOf(i));
+      pos = start + len;
+    }
+    for (let i = pos; i < out.length; i++) kept.push(originOf(i));
+    origin = kept;
     cuts = remapCuts(cuts, ranges);
     out = next;
+    markBlocks();
+  }
+  if (hidden !== null) {
+    const mask: Uint8Array = hidden;
+    const ranges: Array<[number, number]> = [];
+    let i = 0;
+    while (i < out.length) {
+      if (mask[originOf(i)] === 0) {
+        i++;
+        continue;
+      }
+      let j = i;
+      while (j < out.length && mask[originOf(j)] === 1) j++;
+      ranges.push([i, j - i]);
+      i = j;
+    }
+    if (ranges.length > 0) {
+      let next = "";
+      let prev = 0;
+      for (const [start, len] of ranges) {
+        next += out.slice(prev, start);
+        prev = start + len;
+      }
+      out = next + out.slice(prev);
+      cuts = remapCuts(cuts, ranges);
+    }
   }
   return { text: out, cuts };
 }
@@ -950,7 +1093,8 @@ function foldRemovals(text: string, cuts: number[]): string {
 
 /**
  * Render model text for display. Step 1: hide `tagPatterns` with
- * {@link applyTagChain} (origin/main's chain, verbatim). Step 2, on step 1's
+ * {@link hideInternalTags} (origin/main's chain, verbatim, then every
+ * internal block — nested, spliced, unclosed — hidden). Step 2, on step 1's
  * output only: remove lexicon action cues outside code, fold the whitespace
  * removals leave. Never collapses or trims otherwise — callers trim.
  *
@@ -968,8 +1112,10 @@ export function renderDisplayText(
   let cuts = hidden.cuts;
   const { spans, holdFrom } = scanActionCues(out, options.partial === true);
   if (holdFrom !== null) {
+    // A held tail folds like a removal, so a bullet it leaves bare is
+    // dropped exactly as the final text drops it once the cue resolves.
     out = out.slice(0, holdFrom);
-    cuts = cuts.filter((c) => c <= holdFrom);
+    cuts = [...cuts.filter((c) => c < holdFrom), holdFrom];
   }
   if (spans.length > 0) {
     let next = "";
@@ -1111,7 +1257,7 @@ export function getImpulsesForAction(
  * content on desktop. One primitive, one regex set, surfaces converge.
  */
 export function stripInternalTags(text: string): string {
-  return applyTagChain(text, INTERNAL_TAG_PATTERNS);
+  return hideInternalTags(text, INTERNAL_TAG_PATTERNS);
 }
 
 /**

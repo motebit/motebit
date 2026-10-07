@@ -86,8 +86,23 @@ describe("tag splice: differential against origin/main's chains", () => {
   it("step 1 of the internal-tag paths is main's stripInternalTags, byte for byte", () => {
     for (const x of CORPUS) {
       const want = stripInternalTagsMain(x);
-      for (const got of [applyTagChain(x, INTERNAL_TAG_PATTERNS), stripInternalTags(x)]) {
-        if (got !== want) expect({ x, got }).toEqual({ x, got: want });
+      const got = applyTagChain(x, INTERNAL_TAG_PATTERNS);
+      if (got !== want) expect({ x, got }).toEqual({ x, got: want });
+    }
+  });
+
+  it("stripInternalTags only ever hides more than main's chain", () => {
+    // Every char it shows is one main's chain shows, in order: internal
+    // blocks the chain leaves visible (unclosed, nested, spliced) go too.
+    const isSubsequence = (sub: string, of: string): boolean => {
+      let i = 0;
+      for (const ch of of) if (i < sub.length && sub[i] === ch) i++;
+      return i === sub.length;
+    };
+    for (const x of CORPUS) {
+      const got = stripInternalTags(x);
+      if (!isSubsequence(got, stripInternalTagsMain(x))) {
+        expect({ x, got }).toEqual({ x, got: stripInternalTagsMain(x) });
       }
     }
   });
