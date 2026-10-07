@@ -1,6 +1,6 @@
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
-import { deriveSyncEncryptionKey, mintAudienceToken } from "@motebit/encryption";
+import { deriveSyncEncryptionKey } from "@motebit/encryption";
 import type { connectMcpServers } from "@motebit/mcp-client";
 import { paidResultsNotice } from "@motebit/runtime";
 import { MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
@@ -40,7 +40,8 @@ import {
   refuseIdentityWithoutKey,
 } from "./identity.js";
 import { getDbPath, buildToolRegistry, createRuntime, syncFailureLine } from "./runtime-factory.js";
-import { bootstrapReplIdentity, replStartupSync, type CliEventPush } from "./cli-event-push.js";
+import { bootstrapReplIdentity, type CliEventPush } from "./cli-event-push.js";
+import { startReplRelay } from "./repl-relay.js";
 import { connectConfigMcpServers, runtimeMcpServersForRepl } from "./mcp-config-wiring.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { consumeStream } from "./stream.js";
@@ -61,7 +62,6 @@ import {
   meta,
   error as errorColor,
   dim,
-  success,
   bold,
   cyan,
   warn,
@@ -722,6 +722,7 @@ async function main(): Promise<void> {
     dbPath,
     fullConfig,
     passphrase,
+    syncConfigured: resolveRelayUrl(config, fullConfig) != null,
   });
 
   if (isFirstLaunch) {
@@ -896,110 +897,22 @@ async function main(): Promise<void> {
   // once from env keys; the controller owns the enabled flag independently.
   const voiceController = new VoiceController({ enabled: config.voice === true });
 
-  // Enable interactive delegation if relay + signing keys are available
+  // Relay wiring — only when a relay is named. Relay sync is opt-in
+  // (`sync-opt-in.ts`): with none, the REPL makes no relay call at all.
   const syncUrl = resolveRelayUrl(config, reloadedConfig);
-  let replPush: CliEventPush | undefined;
-  // Initial sync — default relay is always available
-  {
-    // Register the device, then the first push, then the periodic push — in
-    // that order (#962; `replStartupSync` is the wiring under test).
-    replPush = await replStartupSync({
-      runtime,
-      syncUrl,
-      motebitId,
-      eventStore: moteDb.eventStore,
-      ...(syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key
-        ? { device: { deviceId, publicKeyHex: reloadedConfig.device_public_key } }
-        : {}),
-      log: (line) => console.log(dim(line)),
-      warn: (line) => console.warn(line),
-    });
-
-    // Enable delegation with audience-scoped device tokens (submit vs query).
-    // Falls back to raw API token only when device keys are unavailable.
-    // `enableInvokeCapability` is wired to the same relay coordinates so
-    // the deterministic `/invoke <cap> <prompt>` path shares transport with
-    // the AI-loop delegation path (surface-determinism doctrine).
-    if (syncUrl) {
-      if (privateKeyBytes && deviceId) {
-        const pk = privateKeyBytes;
-        const did = deviceId;
-        const authToken = async (audience = "task:submit"): Promise<string> => {
-          return (await mintAudienceToken({ mid: motebitId, did, aud: audience }, pk)).token;
-        };
-        const delegationCfg = {
-          syncUrl,
-          authToken,
-          ...(config.routingStrategy !== undefined
-            ? { routingStrategy: config.routingStrategy }
-            : {}),
-          // Cold-start opt-in (`--pay-new-agents`) — admit paid P2P delegation
-          // to a no-history worker (else relay-mode). Shared by both the chat
-          // (delegate_to_agent) and deterministic (invokeCapability) paths.
-          ...(config.payNewAgents ? { acknowledgeNoHistoryRisk: true } : {}),
-          // The PINNED relay operator key (motebit register, TOFU over the
-          // signed transparency declaration). With the sovereign rail
-          // present, this is what unlocks the P2P path — the treasury
-          // address derives FROM the pin, never from a fetched response.
-          ...(fullConfig.relay_public_key ? { relayPublicKey: fullConfig.relay_public_key } : {}),
-        };
-        runtime.enableInteractiveDelegation(delegationCfg);
-        runtime.enableInvokeCapability(delegationCfg);
-      } else {
-        const apiToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-        if (apiToken) {
-          const delegationCfg = {
-            syncUrl,
-            authToken: () => Promise.resolve(apiToken),
-            ...(config.routingStrategy !== undefined
-              ? { routingStrategy: config.routingStrategy }
-              : {}),
-            ...(config.payNewAgents ? { acknowledgeNoHistoryRisk: true } : {}),
-            ...(fullConfig.relay_public_key ? { relayPublicKey: fullConfig.relay_public_key } : {}),
-          };
-          runtime.enableInteractiveDelegation(delegationCfg);
-          runtime.enableInvokeCapability(delegationCfg);
-        }
-      }
-    }
-
-    // Discover remote agents and populate service listings for interactive delegation
-    if (syncUrl) {
-      try {
-        const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-        const headers: Record<string, string> = {};
-        if (token) headers["Authorization"] = `Bearer ${token}`;
-        const resp = await fetch(`${syncUrl}/api/v1/agents/discover`, { headers });
-        if (resp.ok) {
-          const data = (await resp.json()) as {
-            agents: Array<{
-              motebit_id: string;
-              capabilities: string[];
-              endpoint_url?: string;
-            }>;
-          };
-          // Filter out self, populate service listings for agents with capabilities
-          const others = data.agents.filter(
-            (a) => a.motebit_id !== motebitId && a.capabilities.length > 0,
-          );
-          for (const agent of others) {
-            await runtime.registerServiceListing({
-              motebit_id: agent.motebit_id,
-              capabilities: agent.capabilities,
-              pricing: [],
-              sla: { max_latency_ms: 30_000, availability_guarantee: 0.99 },
-              description: agent.capabilities.join(", "),
-            });
-          }
-          if (others.length > 0) {
-            console.log(success(`Discovered ${others.length} agent(s) on the network`));
-          }
-        }
-      } catch {
-        // Discovery is best-effort — offline mode still works
-      }
-    }
-  }
+  const replPush: CliEventPush | undefined = await startReplRelay({
+    runtime,
+    config,
+    syncUrl,
+    motebitId,
+    eventStore: moteDb.eventStore,
+    privateKeyBytes,
+    deviceId,
+    devicePublicKey: reloadedConfig.device_public_key,
+    relayPublicKey: fullConfig.relay_public_key,
+    log: (line) => console.log(line),
+    warn: (line) => console.warn(line),
+  });
 
   const shutdown = async (): Promise<void> => {
     destroyTerminal();
@@ -1009,13 +922,15 @@ async function main(): Promise<void> {
     runtime.stop();
     // Disconnect MCP servers
     await Promise.allSettled(mcpAdapters.map((a) => a.disconnect()));
-    try {
-      const result = await runtime.sync.sync();
-      const failed = syncFailureLine(runtime.sync);
-      if (failed) console.warn(failed);
-      else console.log(`Synced on exit: pushed ${result.pushed}, pulled ${result.pulled}`);
-    } catch {
-      console.warn("Sync on exit failed (changes saved locally)");
+    if (syncUrl) {
+      try {
+        const result = await runtime.sync.sync();
+        const failed = syncFailureLine(runtime.sync);
+        if (failed) console.warn(failed);
+        else console.log(`Synced on exit: pushed ${result.pushed}, pulled ${result.pulled}`);
+      } catch {
+        console.warn("Sync on exit failed (changes saved locally)");
+      }
     }
     moteDb.close();
   };

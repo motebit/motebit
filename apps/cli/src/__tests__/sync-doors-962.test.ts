@@ -368,7 +368,12 @@ describe("#962 round 6 C2 — /sync prints relay text sanitized and capped", () 
         getLastError: () => new Error(`sync push: push refused ${HOSTILE}`),
       },
     } as never;
-    await handleSlashCommand("sync", "", runtime, parseCliArgs([]));
+    await handleSlashCommand(
+      "sync",
+      "",
+      runtime,
+      parseCliArgs(["--sync-url", "https://relay.test"]),
+    );
     const failed = out.find((l) => l.includes("sync failed") || l.includes("Sync failed"));
     expect(failed).toBeDefined();
     expect(FORBIDDEN.test(failed!), JSON.stringify(failed!.slice(0, 60))).toBe(false);
@@ -388,7 +393,12 @@ describe("#962 round 6 C2 — /sync prints relay text sanitized and capped", () 
         getLastError: () => null,
       },
     } as never;
-    await handleSlashCommand("sync", "", runtime, parseCliArgs([]));
+    await handleSlashCommand(
+      "sync",
+      "",
+      runtime,
+      parseCliArgs(["--sync-url", "https://relay.test"]),
+    );
     for (const l of out) {
       expect(FORBIDDEN.test(l), JSON.stringify(l.slice(0, 60))).toBe(false);
       expect(l.length).toBeLessThanOrEqual(260);

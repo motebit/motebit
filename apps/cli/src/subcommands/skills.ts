@@ -56,8 +56,7 @@ import { mkdirOwnerOnly } from "../durable-file.js";
 import { decryptPrivateKey, fromHex, resolveUnlockPassphrase } from "../identity.js";
 import { bold, cyan, dim, error as errorColor, success, warn } from "../colors.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
-
-const DEFAULT_RELAY_URL = "https://relay.motebit.com";
+import { normalizeRelayUrl, SYNC_OFF_MESSAGE } from "../sync-opt-in.js";
 
 /**
  * Pattern for the registry addressing tuple: `did:key:z…/<name>@<version>`.
@@ -84,13 +83,22 @@ function tryParseRegistryAddress(input: string): ParsedRegistryAddress | null {
   };
 }
 
-function resolveRelayUrl(): string {
-  return (
-    process.env["MOTEBIT_RELAY_URL"] ??
-    process.env["MOTEBIT_SYNC_URL"] ??
-    loadFullConfig().sync_url ??
-    DEFAULT_RELAY_URL
-  );
+/**
+ * The registry relay. Relay sync is opt-in (`../sync-opt-in.ts`): with no
+ * relay named (flag, env, config.json) the registry commands exit with the
+ * one-line opt-in message rather than reaching the public relay unasked.
+ */
+function resolveRelayUrl(config: CliConfig): string {
+  const url =
+    normalizeRelayUrl(config.syncUrl) ??
+    normalizeRelayUrl(process.env["MOTEBIT_RELAY_URL"]) ??
+    normalizeRelayUrl(process.env["MOTEBIT_SYNC_URL"]) ??
+    normalizeRelayUrl(loadFullConfig().sync_url);
+  if (url == null) {
+    console.error(SYNC_OFF_MESSAGE);
+    process.exit(1);
+  }
+  return url;
 }
 
 const SKILLS_DIR_NAME = "skills";
@@ -196,7 +204,7 @@ async function installFromRelay(
   rawAddress: string,
   parsed: ParsedRegistryAddress,
 ): Promise<void> {
-  const relayUrl = resolveRelayUrl().replace(/\/$/, "");
+  const relayUrl = resolveRelayUrl(config);
   const submitterPath = encodeURIComponent(parsed.submitter_motebit_id);
   const namePath = encodeURIComponent(parsed.name);
   const versionPath = encodeURIComponent(parsed.version);
@@ -1105,7 +1113,7 @@ export async function handleSkillsPublish(config: CliConfig): Promise<void> {
     ...(Object.keys(filesPayload).length > 0 ? { files: filesPayload } : {}),
   };
 
-  const relayUrl = resolveRelayUrl().replace(/\/$/, "");
+  const relayUrl = resolveRelayUrl(config);
   const submitUrl = `${relayUrl}/api/v1/skills/submit`;
 
   console.log(dim(`  Submitting to ${submitUrl}…`));

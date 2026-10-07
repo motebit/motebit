@@ -16,6 +16,7 @@ import { mkdirOwnerOnly } from "../durable-file.js";
 import { seedBackupStatus } from "./seed.js";
 import { getDbPath } from "../runtime-factory.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
+import { normalizeRelayUrl } from "../sync-opt-in.js";
 
 interface DoctorCheck {
   name: string;
@@ -27,6 +28,12 @@ interface DoctorCheck {
    * seed (#428): urgent for the owner, irrelevant to system readiness.
    */
   warn?: boolean;
+  /**
+   * Informational tier: renders as `info` and never fails the doctor exit
+   * code. For a deliberate posture, not a gap — e.g. relay sync off (it is
+   * opt-in; `sync-opt-in.ts`).
+   */
+  info?: boolean;
   detail: string;
   /**
    * Optional one-line remedy to print on failure. Each P0 first-run gap
@@ -35,6 +42,14 @@ interface DoctorCheck {
    * to read source to know what to do.
    */
   remedy?: string;
+}
+
+/** The doctor's relay-sync line: INFO when off (opt-in), ok when a relay is named. */
+export function syncCheck(syncUrl: string | undefined): DoctorCheck {
+  if (syncUrl == null) {
+    return { name: "Sync", ok: true, info: true, detail: "off (opt in with --sync-url)" };
+  }
+  return { name: "Sync", ok: true, detail: sanitizeRelayText(syncUrl) };
 }
 
 export async function handleDoctor(): Promise<void> {
@@ -279,19 +294,10 @@ export async function handleDoctor(): Promise<void> {
     }
   }
 
-  // sync_url configured.
-  const syncUrl = fullCfg.sync_url ?? process.env["MOTEBIT_SYNC_URL"];
-  if (syncUrl == null || syncUrl === "") {
-    checks.push({
-      name: "Sync URL",
-      ok: false,
-      detail: "not set in config or env",
-      remedy:
-        "run `motebit register` to register with the default relay (https://relay.motebit.com) and persist the URL",
-    });
-  } else {
-    checks.push({ name: "Sync URL", ok: true, detail: syncUrl });
-  }
+  // Relay sync is opt-in: no sync_url is a posture, not a failure.
+  const syncUrl =
+    normalizeRelayUrl(process.env["MOTEBIT_SYNC_URL"]) ?? normalizeRelayUrl(fullCfg.sync_url);
+  checks.push(syncCheck(syncUrl));
 
   // Relay reachable + identity registered + balance reachable. These
   // three only run if sync_url is set (otherwise nothing to probe).
@@ -622,7 +628,13 @@ export async function handleDoctor(): Promise<void> {
 function printChecks(checks: readonly DoctorCheck[]): void {
   console.log("\nmotebit doctor\n");
   for (const check of checks) {
-    const icon = check.ok ? (check.warn === true ? "warn" : "ok") : "FAIL";
+    const icon = check.ok
+      ? check.info === true
+        ? "info"
+        : check.warn === true
+          ? "warn"
+          : "ok"
+      : "FAIL";
     console.log(`  ${icon.padEnd(6)} ${check.name.padEnd(20)} ${check.detail}`);
     if (check.remedy != null && check.remedy !== "") {
       console.log(`         ${" ".repeat(20)} → ${check.remedy}`);
