@@ -43,8 +43,8 @@ function deniedIntentKey(toolName: string, args: Record<string, unknown>): strin
   return `${toolName}:${canonical}`;
 }
 
-/** Tags hidden from the live chat stream. */
-const STREAM_TAG_PATTERNS: readonly RegExp[] = [
+/** origin/main's stream tag chain, in order (hidden from the live chat stream). */
+export const STREAM_TAG_PATTERNS: readonly RegExp[] = [
   /<memory\s+[^>]*>[\s\S]*?<\/memory>/g,
   /<thinking>[\s\S]*?<\/thinking>/g,
   // The narration contract (prompt.ts, task_step_narration) PROMISES the

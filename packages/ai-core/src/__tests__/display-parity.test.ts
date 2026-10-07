@@ -217,6 +217,14 @@ describe("action cue boundaries", () => {
     ).toBe("**Yes**:\n\n- a\n    - b");
   });
 
+  it("folds only the whitespace a removal left, keeping hard breaks the model wrote", () => {
+    expect(stripTags("a\n- *nods*\n- b")).toBe("a\n- b");
+    expect(stripTags('Hi <state a="1"/>  \nnext')).toBe("Hi  \nnext");
+    expect(stripTags("Hi *nods*\nnext")).toBe("Hi\nnext");
+    expect(stripTags("x\n\n<thinking>t</thinking>\n\n\ny")).toBe("x\n\ny");
+    expect(stripTags("x\n\n\ny")).toBe("x\n\n\ny");
+  });
+
   it("removal never collides with private-use characters already in the text", () => {
     let all = "";
     for (let c = 0xe000; c <= 0xf8ff; c++) all += String.fromCharCode(c);

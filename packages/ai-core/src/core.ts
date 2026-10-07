@@ -672,16 +672,20 @@ export function actionsToStateUpdates(actions: string[]): Partial<MotebitState> 
 // === Display text ===
 //
 // What the user SEES is the model's markdown, byte-for-byte, minus two
-// things: internal tags (hidden fail-closed — even inside code, by the
-// tag regexes below, unchanged) and `*action cue*` narration. A cue is a
-// single-asterisk span on one line whose text leads with a verb from the
-// ACTION_RULES lexicon (`*smiles*`, `*drifts closer*`) — never `**bold**`,
-// never an italic phrase, never `a*b*c`, never anything in code. Whitespace
-// is never collapsed: only the blank-line run a removed tag or cue leaves
-// behind is folded (to at most one blank line, never more than was there).
+// things: internal tags and `*action cue*` narration. Rendering is two
+// steps. Step 1 hides tags with origin/main's regex chains, verbatim: each
+// pattern in order, each replaced with "" — so a removal that splices its
+// neighbours into a new tag is hidden by a later pattern exactly as before
+// (fail-closed, even inside code). Step 2 runs on step 1's output only: a
+// cue is a single-asterisk span on one line, outside code, whose text leads
+// with a verb from the ACTION_RULES lexicon (`*smiles*`, `*drifts closer*`)
+// — never `**bold**`, never an italic phrase, never `a*b*c`. Whitespace is
+// never collapsed: only the whitespace a removed tag or cue leaves behind is
+// folded (a blank-line run to at most one blank line, never more than was
+// there).
 
-/** Tag patterns hidden from the final answer text (`stripTags`). */
-const STRIP_TAG_PATTERNS: readonly RegExp[] = [
+/** origin/main `stripTags`' tag chain, in order (final answer text). */
+export const STRIP_TAG_PATTERNS: readonly RegExp[] = [
   /<memory\s+[^>]*>[\s\S]*?<\/memory>/g,
   /<thinking>[\s\S]*?<\/thinking>/g,
   /<state\s+[^>]*\/>/g,
@@ -694,8 +698,8 @@ const STRIP_TAG_PATTERNS: readonly RegExp[] = [
   /\[\/MEMORY_DATA\]/g,
 ];
 
-/** Tag patterns of `stripInternalTags` (incl. partial fragments mid-stream). */
-const INTERNAL_TAG_PATTERNS: readonly RegExp[] = [
+/** origin/main `stripInternalTags`' chain, in order (incl. partial fragments mid-stream). */
+export const INTERNAL_TAG_PATTERNS: readonly RegExp[] = [
   /<state\s+[^>]*\/>/g,
   /<thinking>[\s\S]*?<\/thinking>/g,
   /<memory\s+[^>]*>[\s\S]*?<\/memory>/g,
@@ -829,68 +833,125 @@ function scanActionCues(text: string, partial: boolean): CueScan {
   return { spans, holdFrom: null };
 }
 
-/** A private-use char absent from `text`, used to mark removed spans. */
-function pickRemovalMarker(text: string): string {
-  for (let code = 0xe000; code <= 0xf8ff; code++) {
-    const ch = String.fromCharCode(code);
-    if (!text.includes(ch)) return ch;
-  }
-  return "\u0000";
+/**
+ * Step 1: hide tags exactly as origin/main does — each pattern in order,
+ * each match replaced with "". The one shared tag-hiding chain of every
+ * display path and the live stream.
+ */
+export function applyTagChain(text: string, patterns: readonly RegExp[]): string {
+  return hideTags(text, patterns).text;
+}
+
+/** First numeric `replace` callback argument after the captures: the match offset. */
+function matchOffset(args: unknown[]): number {
+  return args.find((a): a is number => typeof a === "number")!;
 }
 
 /**
- * Fold the whitespace a removal left behind, and nothing else. Inline: a
- * mid-line removal keeps one separating space; at line start the
- * indentation is kept; at line end trailing spaces go. Lines emptied by a
- * removal are dropped, and a blank-line run that contained one keeps at
- * most one of its own blank lines.
+ * Delete `ranges` ([start, length], ascending, disjoint) from `cuts`'
+ * coordinate space: positions shift left, positions inside a range move to
+ * its start, and each range's start becomes a cut.
  */
-function foldRemovals(text: string, marker: string): string {
-  if (!text.includes(marker)) return text;
-  const inline = new RegExp(`([ \\t]*)${marker}(?:[ \\t]*${marker})*([ \\t]*)`, "g");
-  const lines = text.split("\n").map((line) => {
-    if (!line.includes(marker)) return { text: line, removed: false };
-    const cleaned = line.replace(
-      inline,
-      (match: string, lead: string, trail: string, offset: number) => {
-        const atStart = offset === 0;
-        const atEnd = offset + match.length === line.length || line[offset + match.length] === "\r";
-        if (atEnd) return "";
-        if (atStart) return lead;
-        return lead !== "" || trail !== "" ? " " : "";
-      },
-    );
-    return { text: cleaned, removed: cleaned.trim() === "" };
-  });
+function remapCuts(cuts: number[], ranges: Array<[number, number]>): number[] {
+  const next: number[] = [];
+  const shiftAt = (pos: number): number => {
+    let shift = 0;
+    for (const [start, len] of ranges) {
+      if (start >= pos) break;
+      shift += Math.min(len, pos - start);
+    }
+    return pos - shift;
+  };
+  for (const c of cuts) next.push(shiftAt(c));
+  for (const [start] of ranges) next.push(shiftAt(start));
+  return [...new Set(next)].sort((a, b) => a - b);
+}
+
+/**
+ * {@link applyTagChain}, also reporting where text was removed (offsets in
+ * the output). The output string is the chain's — positions are observed,
+ * never written into the text, so splicing is unchanged.
+ */
+function hideTags(text: string, patterns: readonly RegExp[]): { text: string; cuts: number[] } {
+  let out = text;
+  let cuts: number[] = [];
+  for (const pattern of patterns) {
+    const ranges: Array<[number, number]> = [];
+    const next = out.replace(pattern, (match: string, ...args: unknown[]) => {
+      ranges.push([matchOffset(args), match.length]);
+      return "";
+    });
+    if (ranges.length === 0) continue;
+    cuts = remapCuts(cuts, ranges);
+    out = next;
+  }
+  return { text: out, cuts };
+}
+
+const EMPTY_BULLET = /^[ \t]*[-*+][ \t]*\r?$/;
+
+/**
+ * Fold the whitespace removals left behind, and nothing else. At a cut that
+ * ends its line, the spaces before it go (spaces the model wrote after it —
+ * a hard break — stay); mid-line or at line start, the spaces after it go
+ * when spaces or the line start already precede it. Lines a removal left
+ * blank (or a bare `-` bullet) are dropped, and a blank-line run that held
+ * one keeps at most one of its own blank lines.
+ */
+function foldRemovals(text: string, cuts: number[]): string {
+  if (cuts.length === 0) return text;
+  const lines: Array<{ text: string; removed: boolean }> = [];
+  let lineStart = 0;
+  let ci = 0;
+  for (const raw of text.split("\n")) {
+    const lineEnd = lineStart + raw.length;
+    const here: number[] = [];
+    while (ci < cuts.length && cuts[ci]! <= lineEnd) here.push(cuts[ci++]! - lineStart);
+    let line = raw;
+    for (let k = here.length - 1; k >= 0; k--) {
+      const c = Math.min(here[k]!, line.length);
+      let b = c;
+      while (b > 0 && (line[b - 1] === " " || line[b - 1] === "\t")) b--;
+      let a = c;
+      while (a < line.length && (line[a] === " " || line[a] === "\t")) a++;
+      const rest = line.slice(a);
+      if (rest === "" || rest === "\r") line = line.slice(0, b) + line.slice(c);
+      else if (b < c || c === 0) line = line.slice(0, c) + line.slice(a);
+    }
+    const emptied = here.length > 0 && (line.trim() === "" || EMPTY_BULLET.test(line));
+    lines.push({ text: emptied ? "" : line, removed: emptied });
+    lineStart = lineEnd + 1;
+  }
   const out: string[] = [];
   let i = 0;
   while (i < lines.length) {
-    if (lines[i]!.text.trim() !== "") {
-      out.push(lines[i]!.text);
-      i++;
+    if (lines[i]!.removed || lines[i]!.text.trim() === "") {
+      let j = i;
+      let kept = 0;
+      let touched = false;
+      while (j < lines.length && (lines[j]!.removed || lines[j]!.text.trim() === "")) {
+        if (lines[j]!.removed) touched = true;
+        else kept++;
+        j++;
+      }
+      if (!touched) {
+        for (let k = i; k < j; k++) out.push(lines[k]!.text);
+      } else if (kept > 0) {
+        out.push(lines.slice(i, j).find((l) => !l.removed)!.text);
+      }
+      i = j;
       continue;
     }
-    let j = i;
-    let kept = 0;
-    let touched = false;
-    while (j < lines.length && lines[j]!.text.trim() === "") {
-      if (lines[j]!.removed) touched = true;
-      else kept++;
-      j++;
-    }
-    if (!touched) {
-      for (let k = i; k < j; k++) out.push(lines[k]!.text);
-    } else if (kept > 0) {
-      out.push(lines.slice(i, j).find((l) => !l.removed)!.text);
-    }
-    i = j;
+    out.push(lines[i]!.text);
+    i++;
   }
   return out.join("\n");
 }
 
 /**
- * Render model text for display: hide `tagPatterns` (fail-closed, applied
- * verbatim), remove lexicon action cues outside code, fold the whitespace
+ * Render model text for display. Step 1: hide `tagPatterns` with
+ * {@link applyTagChain} (origin/main's chain, verbatim). Step 2, on step 1's
+ * output only: remove lexicon action cues outside code, fold the whitespace
  * removals leave. Never collapses or trims otherwise — callers trim.
  *
  * `partial` treats the text as a stream prefix: a cue that may still be
@@ -902,16 +963,28 @@ export function renderDisplayText(
   tagPatterns: readonly RegExp[],
   options: { partial?: boolean } = {},
 ): string {
-  const marker = pickRemovalMarker(text);
-  let out = text;
-  for (const pattern of tagPatterns) out = out.replace(pattern, marker);
+  const hidden = hideTags(text, tagPatterns);
+  let out = hidden.text;
+  let cuts = hidden.cuts;
   const { spans, holdFrom } = scanActionCues(out, options.partial === true);
-  if (holdFrom !== null) out = out.slice(0, holdFrom);
-  for (let k = spans.length - 1; k >= 0; k--) {
-    const [start, end] = spans[k]!;
-    out = out.slice(0, start) + marker + out.slice(end);
+  if (holdFrom !== null) {
+    out = out.slice(0, holdFrom);
+    cuts = cuts.filter((c) => c <= holdFrom);
   }
-  return foldRemovals(out, marker);
+  if (spans.length > 0) {
+    let next = "";
+    let prev = 0;
+    for (const [start, end] of spans) {
+      next += out.slice(prev, start);
+      prev = end;
+    }
+    out = next + out.slice(prev);
+    cuts = remapCuts(
+      cuts,
+      spans.map(([start, end]) => [start, end - start]),
+    );
+  }
+  return foldRemovals(out, cuts);
 }
 
 /**
@@ -1038,21 +1111,7 @@ export function getImpulsesForAction(
  * content on desktop. One primitive, one regex set, surfaces converge.
  */
 export function stripInternalTags(text: string): string {
-  return (
-    text
-      // Completed tag/marker pairs
-      .replace(/<state\s+[^>]*\/>/g, "")
-      .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-      .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-      .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
-      .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
-      // Partial fragments — opener or closer alone, mid-stream
-      .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
-      .replace(/\[\/EXTERNAL_DATA\]/g, "")
-      .replace(/\[MEMORY_DATA\]/g, "")
-      .replace(/\[\/MEMORY_DATA\]/g, "")
-      .replace(/<(?:state|thinking|memory)[^>]*$/g, "")
-  );
+  return applyTagChain(text, INTERNAL_TAG_PATTERNS);
 }
 
 /**
