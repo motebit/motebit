@@ -13,8 +13,12 @@ Requires Node.js >= 20. After install, run `motebit doctor` to verify everything
 ## Quick start
 
 ```bash
-# Interactive REPL — chat with your agent
+# Interactive REPL — chat with your agent (needs ANTHROPIC_API_KEY)
 motebit
+
+# No API key? Run against a local model server instead
+# (Ollama, LM Studio, llama.cpp, vLLM, or any OpenAI-compatible endpoint)
+motebit --provider local-server
 
 # Check system readiness
 motebit doctor

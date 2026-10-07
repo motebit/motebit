@@ -29,12 +29,13 @@ configStore.read()
   └─ no identity                    → first-launch flow
 
 First-launch flow:
-  1. IdentityManager.create(surfaceName) → UUID v7 motebit_id
-  2. generateKeypair()                   → Ed25519 pub/priv
-  3. IdentityManager.registerDevice()    → device_id + device_token
-  4. keyStore.storePrivateKey(hex)        → surface persists key
+  1. generateKeypair()                   → Ed25519 pub/priv
+  2. deriveSovereignMotebitId(pubHex)    → UUIDv8 motebit_id (commits to the key)
+  3. IdentityManager.createWithId(id)    → identity row
+  4. IdentityManager.registerDevice()    → device_id + device_token
   5. configStore.write(metadata)          → surface persists config
-  6. return { motebitId, deviceId, publicKeyHex, isFirstLaunch: true }
+  6. keyStore.storePrivateKey(hex)        → surface persists key
+  7. return { motebitId, deviceId, publicKeyHex, isFirstLaunch: true }
 ```
 
 ## Adapter contracts
@@ -74,7 +75,7 @@ Every surface produces the same shape:
 
 | Field          | Format                | Example                                |
 | -------------- | --------------------- | -------------------------------------- |
-| `motebitId`    | UUID v7               | `019726a3-4f8b-7e12-8a9c-1d2e3f4a5b6c` |
+| `motebitId`    | UUIDv8 (key-derived)  | `3f2a9c1e-7b40-8d15-9e6a-0c4b2d8f1a37` |
 | `deviceId`     | UUID v4               | `a1b2c3d4-e5f6-7890-abcd-ef1234567890` |
 | `publicKeyHex` | 64-char lowercase hex | `aabbccdd...` (32 bytes Ed25519)       |
 
