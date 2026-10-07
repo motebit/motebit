@@ -1,5 +1,0 @@
----
-"motebit": minor
----
-
-Relay sync is now opt-in. With no `--sync-url`, no `MOTEBIT_SYNC_URL` and no `sync_url` in `~/.motebit/config.json`, the CLI names no relay and makes no relay call: first run, the REPL and the daemons do no device registration, no sync push, no heartbeat, no websocket and no agent discovery (previously the REPL silently fell back to `https://relay.motebit.com`). Opt in with `--sync-url <url>`, the new `--sync` flag (the public relay), `MOTEBIT_SYNC_URL`, or the new `motebit sync enable [url]` (persists `sync_url`; `motebit sync disable` removes it). Relay-only commands (`register`, `delegate`, `market`, `discover`, `rotate`, `machines`, `smoke x402`, registry `skills install`/`publish`, `verify-release`, and the relay slash commands) now refuse with a one-line message naming the opt-in instead of picking the public relay. `motebit doctor` reports `info  Sync  off (opt in with --sync-url)` instead of a FAIL. An existing `sync_url` in config.json keeps working unchanged.
