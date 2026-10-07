@@ -3,15 +3,14 @@
  *
  * Every client now sends a SIGNED `POST /api/v1/agents/bootstrap` (a
  * device-registration request: the unsigned fields plus `timestamp`, `suite`,
- * `signature`). This release must not depend on the relay change, so these
- * tests drive the signed bodies through the relay in this tree, which does not
- * yet require the signature: the extra fields must be tolerated, the key must
- * land, and the signed bearer that follows must verify under it.
+ * `signature`). These tests drive the signed bodies through the relay in this
+ * tree: the key must land, and the signed bearer that follows must verify
+ * under it.
  *
- * The last case pins the other half of the deploy order: this relay still
- * admits the UNSIGNED body the published `motebit@2.0.1` sends, so shipping
- * these clients first locks no one out. When the relay starts enforcing, that
- * case is the one that changes (to `400 KEY_PROOF_REQUIRED`).
+ * The last case pins the other half of the deploy order. The clients shipped
+ * first (motebit@2.1.0, #1088); the relay in this tree now enforces, so the
+ * UNSIGNED body the published `motebit@2.0.1` sends is refused with
+ * `400 KEY_PROOF_REQUIRED` and a repair instruction, writing nothing.
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
 
@@ -179,12 +178,16 @@ describe("#875 client half — signed bootstrap bodies are accepted by a relay t
     expect(await deviceKeyHeld(mid, deviceId, kp)).toBe(true);
   });
 
-  it("the published 2.0.1 CLI's UNSIGNED bootstrap is still admitted — the relay enforces only after these clients ship", async () => {
+  it("the published 2.0.1 CLI's UNSIGNED bootstrap is refused now that the relay enforces — 400 KEY_PROOF_REQUIRED, nothing written", async () => {
     await startRelay();
     const { mid, deviceId, kp } = await identity();
     const resp = await postBootstrap(
       JSON.stringify({ motebit_id: mid, device_id: deviceId, public_key: hex(kp) }),
     );
-    expect(resp.status).toBe(201);
+    expect(resp.status).toBe(400);
+    const body = (await resp.json()) as { code: string; remediation: string };
+    expect(body.code).toBe("KEY_PROOF_REQUIRED");
+    expect(body.remediation).toMatch(/signDeviceRegistration/);
+    expect(await deviceKeyHeld(mid, deviceId, kp)).toBe(false);
   });
 });

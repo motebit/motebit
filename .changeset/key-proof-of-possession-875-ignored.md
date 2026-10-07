@@ -2,7 +2,7 @@
 "@motebit/relay": minor
 ---
 
-The relay's key writers demand proof of possession (#875) — the relay half. The client half (every CLI, mcp-server, molecule-runner and spatial caller signs its bootstrap) shipped first in #1088.
+The relay's key writers demand proof of possession (#875) — the relay half. The client half (every CLI, mcp-server, molecule-runner and spatial caller signs its bootstrap) shipped first in #1088 (motebit@2.1.0). An unsigned bootstrap from an older client, such as the published motebit@2.0.1, is now refused with `400 KEY_PROOF_REQUIRED`; the CLI's compat test pins that flip.
 
 - `@motebit/relay`:
   - **Bootstrap.** `POST /api/v1/agents/bootstrap` verifies a device-registration signature by the key it names before any write, using `verifyKeyPossession` over `verifyDeviceRegistration`. It refuses an unsigned body with `400 KEY_PROOF_REQUIRED` and a repair instruction.
