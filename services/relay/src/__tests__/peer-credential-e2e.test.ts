@@ -24,7 +24,12 @@ import {
 } from "@motebit/encryption";
 import type { KeyPair, VerifiableCredential } from "@motebit/encryption";
 import type { MotebitId, DeviceId, ReputationCredentialSubject } from "@motebit/sdk";
-import { buildP2pPaymentProof, HONEST_PAYMENT_CHAIN, TEST_RELAY_NETWORK } from "./test-helpers.js";
+import {
+  buildP2pPaymentProof,
+  HONEST_PAYMENT_CHAIN,
+  signedBootstrapBody,
+  TEST_RELAY_NETWORK,
+} from "./test-helpers.js";
 
 // Paid direct delegation settles P2P (Arc 3.5). Workers declare this
 // settlement address; delegators submit a matching payment_proof.
@@ -129,22 +134,28 @@ describe("Peer Credential E2E — Delegation Loop", () => {
     const resA = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_HEADERS,
-      body: JSON.stringify({
-        motebit_id: motebitIdA,
-        device_id: "alice-device",
-        public_key: bytesToHex(keypairA.publicKey),
-      }),
+      body: await signedBootstrapBody(
+        {
+          motebit_id: motebitIdA,
+          device_id: "alice-device",
+          public_key: bytesToHex(keypairA.publicKey),
+        },
+        keypairA.privateKey,
+      ),
     });
     relayDeviceIdA = ((await resA.json()) as { device_id: string }).device_id;
 
     const resB = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_HEADERS,
-      body: JSON.stringify({
-        motebit_id: motebitIdB,
-        device_id: "bob-device",
-        public_key: bytesToHex(keypairB.publicKey),
-      }),
+      body: await signedBootstrapBody(
+        {
+          motebit_id: motebitIdB,
+          device_id: "bob-device",
+          public_key: bytesToHex(keypairB.publicKey),
+        },
+        keypairB.privateKey,
+      ),
     });
     relayDeviceIdB = ((await resB.json()) as { device_id: string }).device_id;
   });
@@ -558,33 +569,30 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
     const bootAlice = await routingRelay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_HEADERS,
-      body: JSON.stringify({
-        motebit_id: aliceId,
-        device_id: "alice-dev",
-        public_key: bytesToHex(kpAlice.publicKey),
-      }),
+      body: await signedBootstrapBody(
+        { motebit_id: aliceId, device_id: "alice-dev", public_key: bytesToHex(kpAlice.publicKey) },
+        kpAlice.privateKey,
+      ),
     });
     const aliceDevId = ((await bootAlice.json()) as { device_id: string }).device_id;
 
     const bootBob = await routingRelay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_HEADERS,
-      body: JSON.stringify({
-        motebit_id: bobId,
-        device_id: "bob-dev",
-        public_key: bytesToHex(kpBob.publicKey),
-      }),
+      body: await signedBootstrapBody(
+        { motebit_id: bobId, device_id: "bob-dev", public_key: bytesToHex(kpBob.publicKey) },
+        kpBob.privateKey,
+      ),
     });
     const bobDevId = ((await bootBob.json()) as { device_id: string }).device_id;
 
     const bootCarol = await routingRelay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_HEADERS,
-      body: JSON.stringify({
-        motebit_id: carolId,
-        device_id: "carol-dev",
-        public_key: bytesToHex(kpCarol.publicKey),
-      }),
+      body: await signedBootstrapBody(
+        { motebit_id: carolId, device_id: "carol-dev", public_key: bytesToHex(kpCarol.publicKey) },
+        kpCarol.privateKey,
+      ),
     });
     const carolDevId = ((await bootCarol.json()) as { device_id: string }).device_id;
 

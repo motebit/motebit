@@ -69,7 +69,12 @@ export const DECLARATION_CONTENT = {
   },
   retention: {
     presence: {
-      tables: ["agent_registry", "relay_identity", "pairing_sessions"],
+      tables: [
+        "agent_registry",
+        "relay_registry_key_evidence",
+        "relay_identity",
+        "pairing_sessions",
+      ],
       observable: [
         "motebit_id (UUID v7)",
         "Ed25519 public key",
@@ -78,6 +83,7 @@ export const DECLARATION_CONTENT = {
         "registration timestamp",
         "last heartbeat timestamp",
         "expires_at TTL",
+        "which evidence proved the registry public key, and when (relay_registry_key_evidence)",
         "optional device label (claiming_device_name) when set by user during pairing",
       ],
       retention_window:

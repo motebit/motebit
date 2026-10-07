@@ -57,6 +57,8 @@ const C_PRICE = 0.01;
 interface Agent {
   motebitId: string;
   deviceId: string;
+  /** The identity key, registered on the operator's authority (#875: a device row is not the identity's key). */
+  publicKeyHex: string;
   privateKey: Uint8Array;
 }
 
@@ -68,8 +70,9 @@ let X: Agent; // a registered stranger
 
 async function newAgent(): Promise<Agent> {
   const kp = await generateKeypair();
-  const a = await createAgent(relay, bytesToHex(kp.publicKey));
-  return { ...a, privateKey: kp.privateKey };
+  const publicKeyHex = bytesToHex(kp.publicKey);
+  const a = await createAgent(relay, publicKeyHex);
+  return { ...a, publicKeyHex, privateKey: kp.privateKey };
 }
 
 async function register(agent: Agent, addr: string, caps: string[]): Promise<void> {
@@ -80,6 +83,7 @@ async function register(agent: Agent, addr: string, caps: string[]): Promise<voi
       motebit_id: agent.motebitId,
       endpoint_url: "http://localhost:3200/mcp",
       capabilities: caps,
+      public_key: agent.publicKeyHex,
       settlement_address: addr,
       settlement_modes: "relay,p2p",
     }),
@@ -572,7 +576,12 @@ describe("#959 round 3 — a worker hosted here is never 'remote'; remote needs 
         "UPDATE agent_registry SET public_key = ?, settlement_address = NULL WHERE motebit_id = ?",
       )
       .run(bytesToHex(kp.publicKey), a.motebitId);
-    return { ...a, privateKey: kp.privateKey, publicKey: kp.publicKey };
+    return {
+      ...a,
+      publicKeyHex: bytesToHex(kp.publicKey),
+      privateKey: kp.privateKey,
+      publicKey: kp.publicKey,
+    };
   }
 
   async function submitRaw(worker: string, proof: object, extra = {}) {

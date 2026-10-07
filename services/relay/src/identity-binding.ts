@@ -212,9 +212,12 @@ function didKeyHex(did: string): string | null {
  *    — the #703 authority state, written only by evidence: E-sov, E-link,
  *    E-mig, E-op, E-main).
  *
- * The registry column and device rows are NOT evidence: `/agents/bootstrap`
- * and `/agents/register` write any `public_key` without proof of possession,
- * so a key there proves nothing about who holds it. They never bind, and —
+ * The registry column and device rows are NOT evidence: before #875
+ * `/agents/bootstrap` and `/agents/register` wrote any `public_key` without
+ * proof of possession (those rows remain), the operator's master-token doors
+ * still assert keys on the operator's authority, and possession of a key
+ * says nothing about whose identity it is — so a key there proves nothing
+ * about the identity. They never bind, and —
  * because nothing another identity writes can veto — they never block
  * either: there is no "no other identity holds it" check (a squatter's
  * bootstrap under V's key used to refuse every credential about V).

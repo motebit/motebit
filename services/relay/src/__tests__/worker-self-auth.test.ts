@@ -29,7 +29,7 @@ import { generateKeypair, bytesToHex, createSignedToken } from "@motebit/encrypt
 import { deriveSovereignMotebitId } from "@motebit/crypto";
 import type { TokenAudience } from "@motebit/protocol";
 import type { SyncRelay } from "../index.js";
-import { createTestRelay } from "./test-helpers.js";
+import { createTestRelay, signedBootstrapBody } from "./test-helpers.js";
 
 const JSON_ONLY = { "Content-Type": "application/json" };
 
@@ -88,7 +88,10 @@ describe("worker self-auth — a service authenticates to its relay with its own
     const boot = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_ONLY,
-      body: JSON.stringify({ motebit_id: motebitId, device_id: deviceId, public_key: pubKeyHex }),
+      body: await signedBootstrapBody(
+        { motebit_id: motebitId, device_id: deviceId, public_key: pubKeyHex },
+        kp.privateKey,
+      ),
     });
     expect(boot.status).toBe(201);
     expect(((await boot.json()) as { device_id: string }).device_id).toBe(deviceId);
@@ -97,7 +100,10 @@ describe("worker self-auth — a service authenticates to its relay with its own
     const again = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_ONLY,
-      body: JSON.stringify({ motebit_id: motebitId, device_id: deviceId, public_key: pubKeyHex }),
+      body: await signedBootstrapBody(
+        { motebit_id: motebitId, device_id: deviceId, public_key: pubKeyHex },
+        kp.privateKey,
+      ),
     });
     expect(again.status).toBe(200);
 
@@ -175,7 +181,10 @@ describe("worker self-auth — a service authenticates to its relay with its own
     await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_ONLY,
-      body: JSON.stringify({ motebit_id: motebitId, device_id: deviceId, public_key: pubKeyHex }),
+      body: await signedBootstrapBody(
+        { motebit_id: motebitId, device_id: deviceId, public_key: pubKeyHex },
+        kp.privateKey,
+      ),
     });
 
     // A task:submit token replayed against register is refused.
@@ -203,17 +212,19 @@ describe("worker self-auth — a service authenticates to its relay with its own
     await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_ONLY,
-      body: JSON.stringify({ motebit_id: motebitId, device_id: deviceId, public_key: pubKeyHex }),
+      body: await signedBootstrapBody(
+        { motebit_id: motebitId, device_id: deviceId, public_key: pubKeyHex },
+        kp.privateKey,
+      ),
     });
     const other = await generateKeypair();
     const res = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_ONLY,
-      body: JSON.stringify({
-        motebit_id: motebitId,
-        device_id: deviceId,
-        public_key: bytesToHex(other.publicKey),
-      }),
+      body: await signedBootstrapBody(
+        { motebit_id: motebitId, device_id: deviceId, public_key: bytesToHex(other.publicKey) },
+        other.privateKey,
+      ),
     });
     expect(res.status).toBe(409);
   });

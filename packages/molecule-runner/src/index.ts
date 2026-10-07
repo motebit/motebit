@@ -54,7 +54,12 @@ import { MotebitRuntime, NullRenderer, getOrPinRelayKey } from "@motebit/runtime
 import type { RelayKeyPinStorage } from "@motebit/runtime";
 import type { PolicyConfig, StorageAdapters, GrantedDelegationResult } from "@motebit/runtime";
 import { createHash } from "node:crypto";
-import { signStandingDelegation, signDelegation, mintAudienceToken } from "@motebit/crypto";
+import {
+  signStandingDelegation,
+  signDelegation,
+  mintAudienceToken,
+  signDeviceRegistration,
+} from "@motebit/crypto";
 import type {
   StandingDelegation,
   DelegationToken,
@@ -1273,6 +1278,10 @@ export async function runMolecule(
   const relayAuth = {
     deviceId: identity.deviceId,
     mint: makeAuthTokenMinter(identity),
+    // The bootstrap introduction is signed by the identity key (#875: the
+    // relay refuses a key it has no proof of possession for).
+    signRegistration: (body: { motebit_id: string; device_id: string; public_key: string }) =>
+      signDeviceRegistration({ ...body, timestamp: Date.now() }, identity.privateKey),
   };
   if (process.env["MOTEBIT_API_TOKEN"] != null && process.env["MOTEBIT_API_TOKEN"] !== "") {
     log(

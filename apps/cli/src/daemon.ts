@@ -792,6 +792,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
               motebitId,
               deviceId: fullConfig.device_id,
               publicKeyHex: fullConfig.device_public_key,
+              privateKey: privKeyBytes,
             },
           }
         : {}),
@@ -1579,6 +1580,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
               motebitId,
               deviceId: fullConfigForServe.device_id,
               publicKeyHex,
+              privateKey: servePrivateKey,
             },
           }
         : {}),

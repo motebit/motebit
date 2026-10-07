@@ -9,7 +9,7 @@ import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
 import { secretEquals } from "./secret-compare.js";
 import { createLogger } from "./logger.js";
-import { admitKey, isCanonicalKey } from "./identity-keys.js";
+import { admitKey, isCanonicalKey, registryKeyOf, verificationKeyFor } from "./identity-keys.js";
 import { refuseInvalidIds } from "./id-bounds.js";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -126,6 +126,29 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     if (!verified) return null;
 
     return { motebitId: claims.mid, deviceId: claims.did };
+  }
+
+  /**
+   * Whether `key` is the key the approver's `device:auth` token verified
+   * under: its device row, else — for a `did` with no row — the verifier's
+   * fallback (holder, else registry). Compared case-insensitively (a legacy
+   * row may store UPPER(K), #758; the payload is lower-cased by its builder).
+   */
+  async function approverKeyMatches(
+    motebitId: string,
+    deviceId: string,
+    key: string,
+  ): Promise<boolean> {
+    const row = await identityManager.loadDeviceById(deviceId, motebitId);
+    const verifiedUnder =
+      row != null
+        ? row.public_key
+        : verificationKeyFor(db, motebitId, registryKeyOf(db, motebitId));
+    return (
+      verifiedUnder != null &&
+      verifiedUnder !== "" &&
+      verifiedUnder.toLowerCase() === key.toLowerCase()
+    );
   }
 
   // --- Pairing: initiate (Device A, authenticated) ---
@@ -304,7 +327,18 @@ export function registerPairingRoutes(deps: PairingDeps): void {
             // The key update-key will later write onto the device row: canonical
             // or exactly a key already on file (DB4). Unvalidated, it was
             // written verbatim.
-            admitKey(db, session.motebit_id as string, kt.identity_pubkey_check)
+            admitKey(db, session.motebit_id as string, kt.identity_pubkey_check) &&
+            // The seed a key transfer carries is the APPROVER's own (every
+            // shipped client builds it from its signing key), so the key
+            // update-key will write must be the key that verified this
+            // approver's token (#875 review): otherwise an approver could
+            // name any key — a stranger's — and have it written onto a
+            // device row with no proof anyone holds it.
+            (await approverKeyMatches(
+              session.motebit_id as string,
+              device.deviceId,
+              kt.identity_pubkey_check,
+            ))
           ) {
             keyTransferJson = JSON.stringify(kt);
           }

@@ -91,6 +91,7 @@ import { mkdirOwnerOnly } from "./durable-file.js";
 import { resolveRelayUrl } from "./subcommands/_helpers.js";
 import { createRelayEventTransport } from "./relay-sync-socket.js";
 import { cliRuntimeConfig } from "./sync-configured.js";
+import { signedBootstrapBody } from "./relay-registration.js";
 
 export function getApiKey(
   provider: "anthropic" | "openai" | "google" | "deepseek" | "groq" = "anthropic",
@@ -987,7 +988,8 @@ export function createReplEventRemote(opts: {
 }
 
 /**
- * Introduce this device's key to the relay (`POST /api/v1/agents/bootstrap`)
+ * Introduce this device's key to the relay (`POST /api/v1/agents/bootstrap`,
+ * signed by that key — `signedBootstrapBody`, #875)
  * so its signed device tokens verify (#962). Runs BEFORE the REPL's first
  * push: it used to run after, so a fresh identity's first sync was refused.
  * Idempotent; best-effort — returns the line to print when the relay
@@ -999,6 +1001,8 @@ export async function bootstrapReplDevice(opts: {
   motebitId: string;
   deviceId: string;
   publicKeyHex: string;
+  /** The key `publicKeyHex` names — the relay refuses an unsigned bootstrap (#875). */
+  privateKey: Uint8Array;
   fetchImpl?: typeof fetch;
 }): Promise<string | null> {
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -1006,11 +1010,7 @@ export async function bootstrapReplDevice(opts: {
     const resp = await fetchImpl(`${opts.syncUrl}/api/v1/agents/bootstrap`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        motebit_id: opts.motebitId,
-        device_id: opts.deviceId,
-        public_key: opts.publicKeyHex,
-      }),
+      body: await signedBootstrapBody(opts),
     });
     if (resp.ok || resp.status === 409) return null;
     const body = await resp.text();

@@ -31,6 +31,7 @@ import {
 } from "./identity-binding.js";
 import type { AuthEvent } from "./auth-events.js";
 import { createLogger } from "./logger.js";
+import { holderKeyOf, servedIdentityKey } from "./identity-keys.js";
 
 const logger = createLogger({ service: "credentials" });
 
@@ -110,14 +111,7 @@ export function insertSubmittedCredential(
 
 /** Register all credential endpoints on the Hono app. */
 export function registerCredentialRoutes(deps: CredentialDeps): void {
-  const {
-    db,
-    app,
-    relayIdentity,
-    identityManager,
-    issueCredentials = false,
-    recordAuthEvent,
-  } = deps;
+  const { db, app, relayIdentity, issueCredentials = false, recordAuthEvent } = deps;
 
   // POST /api/v1/credentials/:motebitId/reputation — compute reputation, issue VC
   // Only available when relay credential issuance is enabled.
@@ -193,13 +187,14 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     // (Beta-binomial prior, coefficient-of-variation consistency, exponential recency decay)
     const reputation = computeServiceReputation(motebitId, samples, trustRecord);
 
-    // Look up agent's public key for did:key subject
-    const identity = await identityManager.load(motebitId);
-    const devices = identity ? await identityManager.listDevices(motebitId) : [];
-    const agentPubKeyHex = devices[0]?.public_key;
-    const subjectDid = agentPubKeyHex
-      ? hexPublicKeyToDidKey(agentPubKeyHex)
-      : `did:motebit:${motebitId}`;
+    // The subject is named by evidence only (#875 review): the identity's
+    // served key (`servedIdentityKey` — holder, else a key the id commits to)
+    // as `did:key`, else `did:motebit:<id>`. Never a device row —
+    // `/pairing/claim` writes any key unsigned, and `devices[0]` let X make
+    // the relay issue X's reputation about V's key.
+    const servedKey = await servedIdentityKey(db, motebitId);
+    const subjectDid =
+      servedKey !== null ? hexPublicKeyToDidKey(servedKey) : `did:motebit:${motebitId}`;
 
     const relayKeys = getRelayKeypair(relayIdentity);
     const avgLatency =
@@ -305,20 +300,17 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     if (!isOperator && credRow !== undefined) {
       isSubject = callerMotebitId === credRow.subject_motebit_id;
       if (!isSubject) {
-        // Every device of the caller, not the first row of an unordered
-        // query. `listDevices` is `SELECT * FROM devices WHERE motebit_id = ?`
-        // with no ORDER BY, so `devices[0]` was an arbitrary choice among a
-        // multi-device identity's keys — a legitimate issuer whose issuing
-        // key sat in any other row got a nondeterministic refusal.
-        const identity = await identityManager.load(asMotebitId(callerMotebitId));
-        const devices = identity
-          ? await identityManager.listDevices(asMotebitId(callerMotebitId))
-          : [];
-        isIssuer = devices.some(
-          (d) =>
-            d.public_key !== undefined &&
-            d.public_key !== "" &&
-            hexPublicKeyToDidKey(d.public_key) === credRow.issuer_did,
+        // The caller is the issuer when the issuer's `did:key` is a key THIS
+        // request proves the caller holds: the key its bearer verified under
+        // (`callerVerifiedKey`, set by the agent-route middleware), or the
+        // caller's proven holder key. Never "any device row of the caller"
+        // (#875 review): `/pairing/claim` writes any key unsigned, so X could
+        // pair itself claiming V's key and then revoke every credential V
+        // issued, relay-wide.
+        const verifiedKey = c.get("callerVerifiedKey" as never) as string | undefined;
+        const callerHolder = holderKeyOf(db, callerMotebitId);
+        isIssuer = [verifiedKey, callerHolder].some(
+          (k) => k != null && k !== "" && hexPublicKeyToDidKey(k) === credRow.issuer_did,
         );
       }
     }

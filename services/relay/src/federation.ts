@@ -23,6 +23,7 @@ import {
   bytesToHex,
   fromBase64Url,
   hexToBytes,
+  hexPublicKeyToDidKey,
 } from "@motebit/encryption";
 import {
   signAdjudicatorVote,
@@ -45,6 +46,7 @@ import { persistWitnessOmissionDispute, resolveHorizonCertBySignature } from "./
 // services and the registry in @motebit/protocol.
 const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
+import { withServedKeys } from "./identity-keys.js";
 
 /**
  * Wire-reported relay-federation spec version. Single source of truth for the
@@ -2477,11 +2479,17 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     if (visitedSet.has(relayIdentity.relayMotebitId)) return c.json({ agents: [] });
 
     // Local results — exclude agents that opted out of federation visibility
-    const localAgents = deps.queryLocalAgents(
-      body.query.capability,
-      body.query.motebit_id,
-      body.query.limit ?? 20,
-      true, // federatedOnly: respect federation_visible opt-out
+    // Each row's key as SERVED (#875 review round 3) — never the bare
+    // registry column a relay before #875 wrote without proof.
+    const localAgents = await withServedKeys(
+      db,
+      deps.queryLocalAgents(
+        body.query.capability,
+        body.query.motebit_id,
+        body.query.limit ?? 20,
+        true, // federatedOnly: respect federation_visible opt-out
+      ),
+      hexPublicKeyToDidKey,
     );
     const results = localAgents.map((a) => ({
       ...a,

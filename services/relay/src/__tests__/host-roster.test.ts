@@ -21,7 +21,7 @@ import {
 } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
 import type { HostEnrollment, HostRetirement, TokenAudience } from "@motebit/protocol";
-import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+import { AUTH_HEADER, createTestRelay, signedBootstrapBody } from "./test-helpers.js";
 import {
   HOST_LIVENESS_RETENTION_MS,
   MAX_FOREIGN_ENTRIES_PER_MOTEBIT,
@@ -48,11 +48,10 @@ async function bootstrap(mid: string, deviceId: string, kp: KeyPair) {
   const res = await relay.app.request("/api/v1/agents/bootstrap", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({
-      motebit_id: mid,
-      device_id: deviceId,
-      public_key: bytesToHex(kp.publicKey),
-    }),
+    body: await signedBootstrapBody(
+      { motebit_id: mid, device_id: deviceId, public_key: bytesToHex(kp.publicKey) },
+      kp.privateKey,
+    ),
   });
   expect(res.status).toBeLessThan(300);
 }

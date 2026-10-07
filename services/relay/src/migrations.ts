@@ -2669,4 +2669,30 @@ export const relayMigrations: Migration[] = [
       createAnchorBroadcastsTable(db);
     },
   },
+  {
+    version: 58,
+    name: "registry_key_evidence",
+    up: (db) => {
+      // The PROVENANCE of an `agent_registry.public_key` (#875 review round 4).
+      // One row per identity naming the registry key a request PROVED and the
+      // evidence that proved it: `bearer` (the key the caller's token verified
+      // under), `holder`, `key_proof`, `succession` (a verified link's new
+      // key), `sovereign` (E-sov), `receipt_signature` (the receipt heal: a
+      // signature under the key over a receipt naming the identity) or
+      // `operator` (E-op / the master token's own
+      // authority). The served key (`servedIdentityKey`) reads the registry
+      // only while it still EQUALS the proven key here — serving ≠ binding: a
+      // proven registry key is served, never recorded as the holder (#703
+      // §5e/§5j, the #875 (b) ruling). Not backfilled: a pre-#875 registry row
+      // carries no proof, so it is not served.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_registry_key_evidence (
+          motebit_id TEXT PRIMARY KEY,
+          public_key TEXT NOT NULL,
+          evidence TEXT NOT NULL,
+          recorded_at INTEGER NOT NULL
+        );
+      `);
+    },
+  },
 ];

@@ -51,7 +51,7 @@ import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import type { SyncRelay } from "../index.js";
 import { generateKeypair, bytesToHex, mintAudienceToken } from "@motebit/crypto";
-import { createTestRelay, API_TOKEN } from "./test-helpers.js";
+import { createTestRelay, API_TOKEN, signedBootstrapBody } from "./test-helpers.js";
 
 // ── the real client, from source ────────────────────────────────────────────
 interface CursorStore {
@@ -437,11 +437,10 @@ describe("#914 a re-push is harmless — under E2E envelopes and #846 identity b
     const res = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        motebit_id: id,
-        device_id: device,
-        public_key: bytesToHex(kp.publicKey),
-      }),
+      body: await signedBootstrapBody(
+        { motebit_id: id, device_id: device, public_key: bytesToHex(kp.publicKey) },
+        kp.privateKey,
+      ),
     });
     expect(res.status).toBeLessThan(300);
     const tok = (await mintAudienceToken({ mid: id, did: device, aud: "sync" }, kp.privateKey))

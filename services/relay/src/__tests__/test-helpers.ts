@@ -10,6 +10,7 @@ import { resolveRelayAuthPosture } from "../auth-posture.js";
 import type { SyncRelay, SyncRelayConfig } from "../index.js";
 import { deriveSolanaAddress, SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 import { PLATFORM_FEE_RATE } from "@motebit/protocol";
+import { signDeviceRegistration } from "@motebit/crypto";
 import type { AgentTask } from "@motebit/sdk";
 import { AgentTaskStatus, asMotebitId, asAllocationId, asGoalId } from "@motebit/sdk";
 import { allocateBudget, computeGrossAmount } from "@motebit/market";
@@ -75,6 +76,34 @@ export const HONEST_PAYMENT_CHAIN: P2pPaymentChain = createFakePaymentChain("hon
 /** The Solana address an Ed25519 public key (hex) derives — identity key = address. */
 export function walletOf(publicKeyHex: string): string {
   return deriveSolanaAddress(Uint8Array.from(Buffer.from(publicKeyHex, "hex")));
+}
+
+// === Proof of possession (#875) ===
+
+/**
+ * A `POST /api/v1/agents/bootstrap` body, signed by the key it names — the
+ * device-registration construction register-self uses. Unsigned bootstrap is
+ * refused (#875). Extra fields ride along and are covered by the signature.
+ */
+export async function signedBootstrapBody(
+  body: { motebit_id: string; device_id: string; public_key: string } & Record<string, unknown>,
+  privateKey: Uint8Array,
+): Promise<string> {
+  return JSON.stringify(await keyProof(body, privateKey));
+}
+
+/**
+ * A `key_proof` for `/agents/register` (or a bootstrap body): a
+ * device-registration request signed by `privateKey`, timestamped now.
+ */
+export async function keyProof(
+  body: { motebit_id: string; device_id?: string; public_key: string } & Record<string, unknown>,
+  privateKey: Uint8Array,
+): Promise<Record<string, unknown>> {
+  return signDeviceRegistration(
+    { device_id: "key-proof", ...body, timestamp: Date.now() },
+    privateKey,
+  );
 }
 
 // === Auth constants ===

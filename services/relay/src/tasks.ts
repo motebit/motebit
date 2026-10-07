@@ -177,7 +177,12 @@ function x402SettlementRef(
 }
 import { isGrantRevokedBy } from "./delegation-revocations.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
-import { identityGuardianFor, verificationKeyFor } from "./identity-keys.js";
+import {
+  identityGuardianFor,
+  recordRegistryKeyEvidence,
+  registryKeyOf,
+  verificationKeyFor,
+} from "./identity-keys.js";
 import type { ReconcileKeyConnections } from "./connection-ports.js";
 
 const logger = createLogger({ service: "tasks" });
@@ -847,6 +852,19 @@ function localAnswerDeps(deps: {
       moteDb.db
         .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
         .run(keyHex, signer);
+      // The heal's key is PROVEN by this request: a signature under it over
+      // a receipt naming this identity verified before the chokepoint calls
+      // this. Record the registry key's provenance (#875 review round 4) so
+      // it is SERVED as main serves it — serving ≠ binding: no holder is
+      // written.
+      if (registryKeyOf(moteDb.db, signer) === keyHex) {
+        recordRegistryKeyEvidence(moteDb.db, {
+          motebitId: signer,
+          publicKey: keyHex,
+          evidence: "receipt_signature",
+          now: Date.now(),
+        });
+      }
       // The registry key is the fallback a socket with no device row was
       // admitted under; a socket the previous value admitted is no longer
       // admitted and is closed (#776).

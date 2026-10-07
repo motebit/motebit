@@ -26,7 +26,7 @@ import {
 } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
 import type { SyncRelay } from "../index.js";
-import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+import { AUTH_HEADER, createTestRelay, signedBootstrapBody } from "./test-helpers.js";
 
 const stripeCalls: Array<{ id: string; args: unknown }> = [];
 vi.mock("stripe", () => {
@@ -56,11 +56,10 @@ async function ident(device: string): Promise<Ident> {
   await relay.app.request("/api/v1/agents/bootstrap", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      motebit_id: id,
-      device_id: device,
-      public_key: bytesToHex(kp.publicKey),
-    }),
+    body: await signedBootstrapBody(
+      { motebit_id: id, device_id: device, public_key: bytesToHex(kp.publicKey) },
+      kp.privateKey,
+    ),
   });
   const reg = await relay.app.request("/api/v1/agents/register", {
     method: "POST",

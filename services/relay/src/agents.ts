@@ -6,7 +6,12 @@ import type { Hono, Context } from "hono";
 import { relayRouteAudience, type TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
 import { secretEquals } from "./secret-compare.js";
-import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
+import {
+  KEY_PROOF_REMEDIATION,
+  refusePublicDeviceRegistration,
+  refuseSovereignIdSquat,
+  verifyKeyPossession,
+} from "./device-registration-guard.js";
 import { routeTableMatcher, type MasterTokenCarveOut } from "./middleware.js";
 import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
@@ -36,11 +41,16 @@ import {
   holderKeyOf,
   identityGuardianFor,
   isCanonicalKey,
+  keysHeldBy,
   proveSovereignFirstKey,
   recordFirstIdentityKey,
   recordIdentityGuardian,
   recordOperatorServiceKey,
   registryKeyOf,
+  servedIdentityKey,
+  withServedKeys,
+  recordRegistryKeyEvidence,
+  type RegistryKeyEvidence,
   verificationKeyFor,
 } from "./identity-keys.js";
 
@@ -119,7 +129,7 @@ import {
   sign as ed25519Sign,
   bytesToHex,
 } from "@motebit/encryption";
-import type { KeySuccessionRecord } from "@motebit/encryption";
+import type { KeySuccessionRecord, SignableDeviceRegistration } from "@motebit/encryption";
 import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { getAccountBalanceDetailed } from "./accounts.js";
@@ -143,7 +153,11 @@ import {
   buildSignedRevocationFeed,
 } from "./agent-revocation.js";
 import { createLogger } from "./logger.js";
-import { recordMasterTokenOnce, recordRefusalBeforeVerify } from "./auth-events.js";
+import {
+  OPERATOR_PRESENTED,
+  recordMasterTokenOnce,
+  recordRefusalBeforeVerify,
+} from "./auth-events.js";
 import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
 
 const logger = createLogger({ service: "agents" });
@@ -860,9 +874,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const onlinePeers = connections.get(motebitId);
     const onlineCount = onlinePeers ? onlinePeers.length : 0;
 
-    // Find the first device with a public key for capabilities
-    const deviceWithKey = devices.find((d) => d.public_key);
-    const publicKey = deviceWithKey ? deviceWithKey.public_key : "";
+    // The identity's key as this route SERVES it (`servedIdentityKey`): the
+    // proven holder, else a key on file the id commits to, else ''. Never a
+    // device row (`/pairing/claim` writes any key unsigned) and never the bare
+    // registry column (a relay before #875 wrote it unproven) — #875 review.
+    // The per-device list below is a list of rows, each attested by its own
+    // credential, not an identity key.
+    const publicKey = (await servedIdentityKey(moteDb.db, motebitId)) ?? "";
 
     let did: string | undefined;
     try {
@@ -1127,11 +1145,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   // Idempotent for same motebit_id + same public_key. Rejects attempts to re-register with a different key.
   /** @internal */
   app.post("/api/v1/agents/bootstrap", async (c) => {
-    const body = await c.req.json<{
-      motebit_id: string;
-      device_id?: string;
-      public_key: string;
-    }>();
+    const body = (await c.req.json().catch(() => null)) as
+      (Partial<SignableDeviceRegistration> & Record<string, unknown>) | null;
+    if (body == null || typeof body !== "object" || Array.isArray(body)) {
+      throw new HTTPException(400, { message: "Body must be a JSON object" });
+    }
 
     if (!body.motebit_id || typeof body.motebit_id !== "string" || body.motebit_id.trim() === "") {
       throw new HTTPException(400, { message: "Missing or empty 'motebit_id' field" });
@@ -1139,7 +1157,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     if (!body.public_key || typeof body.public_key !== "string") {
       throw new HTTPException(400, { message: "Missing 'public_key' field" });
     }
-    const motebitId = body.motebit_id.trim();
+    // The id exactly as signed — never trimmed: the signature covers these
+    // bytes, and a padded id is refused below as non-canonical (#853).
+    const motebitId = body.motebit_id;
     // Both ids enter durable state here; one past its bound would make a
     // roster entry the relay can hold and never retire (#814).
     // Outside the canonical charset, an id could be a percent-encoded
@@ -1153,6 +1173,33 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       });
       throw new HTTPException(400, { message: overlong.error });
     }
+    // Proof of possession (#875), BEFORE any read decides anything and before
+    // any write: the body is a device-registration request signed by the key
+    // it names (register-self's construction, verifier and ±5-minute window).
+    // Unsigned, this door let anyone create an identity row claiming any
+    // key — including V's key, or V's not-yet-registered sovereign id under
+    // X's own key.
+    const possession = await verifyKeyPossession(body, {
+      motebitId,
+      publicKey: body.public_key,
+    });
+    if (!possession.proven) {
+      logger.warn("agent.bootstrap.refused_key_proof", { reason: possession.reason });
+      return c.json(
+        {
+          error: `bootstrap requires proof of possession of public_key (${possession.reason})`,
+          code: "KEY_PROOF_REQUIRED",
+          reason: possession.reason,
+          remediation: KEY_PROOF_REMEDIATION,
+        },
+        400,
+      );
+    }
+    if (typeof body.device_id !== "string" || body.device_id === "") {
+      // Signed, so present — but an empty id would write a nameless row.
+      throw new HTTPException(400, { message: "Missing or empty 'device_id' field" });
+    }
+    const deviceId = body.device_id;
     // A NEW key must arrive canonical — lowercase hex (DA1/DB4); a key already
     // on file for this identity is admitted in its stored spelling (continuity).
     // `hexToBytes` is lenient, so an alternate spelling of a key is not refused
@@ -1176,7 +1223,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // away with it.
     const refusal = await refusePublicDeviceRegistration(
       { identityManager, db: moteDb.db },
-      { motebitId, deviceId: body.device_id, publicKey: body.public_key },
+      { motebitId, deviceId, publicKey: body.public_key },
     );
     if (refusal) {
       throw new HTTPException(409, { message: `${refusal.error} — ${refusal.remediation}` });
@@ -1195,14 +1242,16 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     }
     const device = await identityManager.registerDevice(
       motebitId,
-      body.device_id ?? "bootstrap-device",
+      deviceId,
       body.public_key,
-      body.device_id,
+      deviceId,
     );
-    // Bootstrap writes NOTHING to the holder (§5f, DB1): it takes no
-    // signature, so it proves nothing — not even current possession of the
-    // key it names. The rebuild let it record a first key and anyone could
-    // plant one for an id this relay had not seen (#750 round 2, W1).
+    // Bootstrap writes NOTHING to the holder (§5f, DB1). Since #875 it proves
+    // current possession of the key it names, but possession of a key is not
+    // evidence that the key is THE identity's (§5e E-device), and a legacy id
+    // never fills (§5j). A sovereign id's first key is filled by register-self
+    // or a keyed `/agents/register` (E-sov); whether bootstrap should join
+    // them is a #703 design decision, not this door's to take.
 
     return c.json(
       {
@@ -1302,24 +1351,55 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
           "Invalid 'public_key' — must be a 64-char LOWERCASE hex string (32 bytes Ed25519 public key)",
       });
     }
-    // Keyless: the holder when the identity has proven one; otherwise EXACTLY
-    // main's value — the first-listed keyed device row, else ''. Build 4 (§5i):
-    // the registry is never SERVED (the holder is), so main's first-listed
-    // write no longer mints a served key (R3's harm); and departure for an
-    // unfilled identity is main's rule, so its INPUT must be main's too — a
-    // different registry value here (DA5's '') refused an owner main admits
-    // (build-4 differential, G1a).
+    // The key that verified this bearer, when a device row verified it: the
+    // row its `did` names. (The middleware falls back to the holder, else the
+    // registry, only when no row exists for that did — and then this stays
+    // undefined.) It is the one key this request proves CURRENT possession of
+    // without a signature in the body — read by #875's possession law below
+    // and by E-sov (DB1), whose soundness also rests on
+    // recordFirstIdentityKey's predicate (DA2).
+    let callerDeviceKey: string | undefined;
+    const bearer = c.req.header("authorization")?.slice(7);
+    const bearerClaims =
+      bearer != null && c.get("callerMotebitId" as never) != null
+        ? parseTokenPayloadUnsafe(bearer)
+        : null;
+    if (bearerClaims?.mid === motebitId && typeof bearerClaims.did === "string") {
+      const signer = await identityManager.loadDeviceById(bearerClaims.did, motebitId);
+      if (signer?.public_key) callerDeviceKey = signer.public_key;
+    }
+    // The key the agent-route middleware verified this bearer under
+    // (lowercased; the device row, or its holder-else-registry fallback for a
+    // `did` with no row — auth.ts `onVerified`). Set only for a verified
+    // device token, never for the master token.
+    const callerVerifiedKey = c.get("callerVerifiedKey" as never) as string | undefined;
+
+    // Keyless (#875 review rounds 2–3): a keyless registration NEVER
+    // introduces a key. It writes the proven holder, else the registry key
+    // already on file UNCHANGED, else '' — never a device row (`/pairing/claim`
+    // writes any canonical key unsigned; main's "first-listed keyed device
+    // row" let X launder V's key into X's registry), and never the bearer's
+    // own key (round 3: a paired device B registering keyless first would
+    // pin the registry to K_B, and the owner A's keyed registration would
+    // then be refused forever for want of a K_B→K_A succession). Keys enter
+    // only through a keyed, proven registration — or E-sov below, which fills
+    // the holder (and so this value) from the bearer's proven sovereign key.
+    //
+    // G1a / departure (§5i build 4 wanted main's INPUTS for an unfilled
+    // identity's departure). Departure reads holder → registry → chain →
+    // device row. With a registry key on file the value is main's (main either
+    // wrote the same key or refused for want of a succession). With none,
+    // main wrote whichever row happened to be listed first — a choice any
+    // device can steer by re-registering its own row — and '' leaves
+    // departure to the device rung: every device row departs from its own
+    // key, exactly as main does for a device-only identity. A later KEYED
+    // registration by the bearer's own key sets the registry on proof, as on
+    // main. No departure main allows is refused because of this value.
     let publicKey: string;
     if (keyFromBody) {
       publicKey = rawBodyKey;
     } else {
-      const held = holderKeyOf(moteDb.db, motebitId);
-      if (held !== null) {
-        publicKey = held;
-      } else {
-        const devices = await identityManager.listDevices(motebitId);
-        publicKey = devices.find((d) => d.public_key)?.public_key ?? "";
-      }
+      publicKey = holderKeyOf(moteDb.db, motebitId) ?? registryKeyOf(moteDb.db, motebitId) ?? "";
     }
 
     // --- Succession chain validation on re-registration ---
@@ -1330,6 +1410,107 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // unfilled identity keeps exactly main's protection (and '' is none, A5).
     const keyOnFileForRegister =
       holderKeyOf(moteDb.db, motebitId) ?? registryKeyOf(moteDb.db, motebitId);
+
+    // --- Proof of possession (#875), before any write ---
+    // No key reaches the registry on this door without evidence. A body key
+    // needs no `key_proof` only when this request already proves it: it IS
+    // the key that verified the bearer (the bearer's device row, or — when no
+    // row exists for its `did` — the auth fallback's holder-else-registry
+    // key, which the bearer's signature verified under), or it is the
+    // identity's PROVEN holder key (#703). Never merely "a key the identity
+    // holds": a device row is not evidence — `/pairing/claim` writes any
+    // canonical key unsigned, so X could pair itself claiming K_V, approve,
+    // and register K_V as its registry key (the #875 review's laundering,
+    // and `task-routing`'s registry-key lookup would then read V's
+    // credentials' issuer as X). A key that differs from the key on file is
+    // carried by the succession record the block below demands, whose
+    // `new_key_signature` is verified before any write. Any other key — above
+    // all an identity's FIRST key — carries `key_proof`: a device-registration
+    // request signed by that key (`verifyKeyPossession`, register-self's
+    // verifier and window).
+    let registryEvidence: RegistryKeyEvidence | null = null;
+    if (keyFromBody) {
+      const lowered = publicKey.toLowerCase();
+      const heldBefore = new Set([...keysHeldBy(moteDb.db, motebitId)].map((k) => k.toLowerCase()));
+      // The key the bearer's token verified under — its device row, else the
+      // middleware's fallback for a `did` with no row (holder, else
+      // registry) — as the middleware recorded it (`callerVerifiedKey`).
+      const holderKey = holderKeyOf(moteDb.db, motebitId);
+      const provenByRequest =
+        (callerVerifiedKey !== undefined && callerVerifiedKey === lowered) ||
+        (holderKey !== null && holderKey.toLowerCase() === lowered);
+      const carriedBySuccession =
+        keyOnFileForRegister !== null && keyOnFileForRegister !== publicKey;
+      const refuse = (
+        reason: string,
+        status: 400 | 409,
+        error: string,
+        remediation: string,
+        code = "KEY_PROOF_REQUIRED",
+      ) => {
+        logger.warn("agent.register.refused_key_proof", {
+          reason,
+          caller: callerMotebitId ?? null,
+        });
+        deps.recordAuthEvent({
+          kind: "agent_token_rejected",
+          method: "POST",
+          path: c.req.path,
+          motebitId: callerMotebitId ?? null,
+          reason: `register:${reason}`,
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
+        return c.json({ error, code, reason, remediation }, status);
+      };
+      // The operator's master token (marked POSITIVELY by
+      // recordMasterTokenOnce — never inferred from an unset caller id) is
+      // the one principal that asserts a key on its own authority, exactly
+      // as at `/device/register` and E-op (§5g): the operator could write
+      // the table directly. It still answers the sovereign-squat check below.
+      const operatorPresented = c.get(OPERATOR_PRESENTED) === true;
+      if (!operatorPresented && !provenByRequest && !carriedBySuccession) {
+        const possession = await verifyKeyPossession((body as Record<string, unknown>).key_proof, {
+          motebitId,
+          publicKey,
+        });
+        if (!possession.proven) {
+          return refuse(
+            `key_proof_${possession.reason}`,
+            400,
+            `public_key requires proof of possession (key_proof: ${possession.reason})`,
+            KEY_PROOF_REMEDIATION,
+          );
+        }
+      }
+      // The pre-registration squat: an identity's FIRST key may not be one
+      // its sovereign id is not the commitment to — proof of possession of
+      // X's own key does not make V's derive(K_V) X's.
+      if (heldBefore.size === 0) {
+        const squat = await refuseSovereignIdSquat(motebitId, publicKey);
+        if (squat) {
+          return refuse(
+            "sovereign_id_key_mismatch",
+            409,
+            squat.error,
+            squat.remediation,
+            squat.code,
+          );
+        }
+      }
+      // The evidence this request carried for the key, recorded beside the
+      // registry write (round 4): it is what lets the SERVED key include a
+      // proven registry key without writing a holder.
+      registryEvidence =
+        callerVerifiedKey !== undefined && callerVerifiedKey === lowered
+          ? "bearer"
+          : holderKey !== null && holderKey.toLowerCase() === lowered
+            ? "holder"
+            : carriedBySuccession
+              ? "succession"
+              : operatorPresented
+                ? "operator"
+                : "key_proof";
+    }
 
     if (keyOnFileForRegister && publicKey && keyOnFileForRegister !== publicKey) {
       const succession = (body as Record<string, unknown>).succession as
@@ -1489,24 +1670,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     // E-sov's arithmetic, computed now (it is async); its write re-reads every
     // condition in one transaction just before the registry upsert (DA2). The
-    // possession half (DB1): the bearer was verified by the device row that
-    // holds exactly this key — an operator bearer or a fallback proves none.
-    // The key that verified this bearer, when a device row verified it: the
-    // row its `did` names. (The middleware falls back to the holder, else the
-    // registry, only when no row exists for that did — and then this stays
-    // undefined.) E-sov needs CURRENT possession of the key it records (DB1);
-    // its soundness also rests on recordFirstIdentityKey's predicate (DA2),
-    // which refuses any identity already holding a different key.
-    let callerDeviceKey: string | undefined;
-    const bearer = c.req.header("authorization")?.slice(7);
-    const bearerClaims =
-      bearer != null && c.get("callerMotebitId" as never) != null
-        ? parseTokenPayloadUnsafe(bearer)
-        : null;
-    if (bearerClaims?.mid === motebitId && typeof bearerClaims.did === "string") {
-      const signer = await identityManager.loadDeviceById(bearerClaims.did, motebitId);
-      if (signer?.public_key) callerDeviceKey = signer.public_key;
-    }
+    // possession half (DB1) is `callerDeviceKey`, read above.
     // The key possession is proven for: the bearer's own device key. A body
     // key counts only when it IS that key; a keyless registration (the CLI
     // daemon's, which bootstraps and then registers without a key) presents
@@ -1518,6 +1682,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const sovereignProof =
       possessedKey !== undefined ? await proveSovereignFirstKey(motebitId, possessedKey) : null;
     const isOperatorBearer = c.get("callerMotebitId" as never) == null;
+    // A keyless registration that is E-sov (the bearer proved the key its
+    // sovereign id commits to) publishes that key for discovery: the holder
+    // write below makes it the identity's key in this same request, so the
+    // registry is discovery's copy of a PROVEN key, not a device row's word.
+    if (!keyFromBody && publicKey === "" && sovereignProof !== null) {
+      publicKey = sovereignProof.publicKey;
+    }
 
     const federationVisible = (body as Record<string, unknown>).federation_visible;
     const fedVisibleVal = federationVisible === false ? 0 : 1;
@@ -1625,6 +1796,26 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         settlementModes ?? "relay",
         sweepThreshold,
       );
+
+    // The registry key's provenance (#875 review round 4): recorded only when
+    // this request carried evidence for the key it WROTE — a keyed, proven
+    // key, or, for a keyless E-sov registration, the proven sovereign key and
+    // only when that is the key the registry now holds. A keyless call that
+    // kept a different key on file (one a relay before #875 wrote without
+    // proof) never re-labels it: the request proved K_S, not the column
+    // (round 5). The registry is left as it was; it is simply not evidence.
+    const sovereignEvidence =
+      !keyFromBody && sovereignProof !== null && publicKey === sovereignProof.publicKey;
+    const evidenceForWrite: RegistryKeyEvidence | null =
+      registryEvidence ?? (sovereignEvidence ? "sovereign" : null);
+    if (evidenceForWrite !== null && publicKey !== "") {
+      recordRegistryKeyEvidence(moteDb.db, {
+        motebitId,
+        publicKey,
+        evidence: evidenceForWrite,
+        now,
+      });
+    }
 
     // Every verified guardian attestation reaches the holder, whatever the key
     // evidence (DA6): the registry just took it, and a holder left on an older
@@ -1826,9 +2017,15 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // the record is never erased, only the default shelf is curated.
     const includeAll = c.req.query("include") === "all";
 
-    const localAgents = taskRouter
-      .queryLocalAgents(capability ?? undefined, motebitId ?? undefined, limit, false, includeAll)
-      .filter((a) => includeAll || a.motebit_id !== relayIdentity.relayMotebitId);
+    // Each row's key as SERVED (#875 review round 3): holder, else a key the
+    // id commits to — never the bare registry column.
+    const localAgents = await withServedKeys(
+      moteDb.db,
+      taskRouter
+        .queryLocalAgents(capability ?? undefined, motebitId ?? undefined, limit, false, includeAll)
+        .filter((a) => includeAll || a.motebit_id !== relayIdentity.relayMotebitId),
+      hexPublicKeyToDidKey,
+    );
 
     // Add source_relay metadata to local results
     const localResults = localAgents.map((a) => ({
@@ -2219,7 +2416,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
   // GET /api/v1/agents/:motebitId — get specific agent
   /** @spec motebit/identity@1.0 */
-  app.get("/api/v1/agents/:motebitId", (c) => {
+  app.get("/api/v1/agents/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
 
     // A KEY reader, not a shelf reader: public-key lookups for receipt
@@ -2241,7 +2438,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     return c.json({
       motebit_id: row.motebit_id,
-      public_key: row.public_key,
+      // The SERVED key (#875 review round 3), never the bare registry column.
+      public_key: (await servedIdentityKey(moteDb.db, motebitId)) ?? "",
       endpoint_url: row.endpoint_url,
       capabilities: JSON.parse(row.capabilities as string) as string[],
       // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- DB row field is untyped

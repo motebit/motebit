@@ -99,6 +99,7 @@ const AUTHORITY_TABLES = [
   "relay_revoked_credentials",
   "identity_keys",
   "relay_identity_revocations",
+  "relay_registry_key_evidence",
 ] as const;
 
 /** A column naming an identity, at the start of a column definition. */
@@ -178,6 +179,14 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       "`liftRevocation`, reached by exactly two doors: a verified migration arrival (after its sovereign binding verifies) and the operator's restore-listing (master token)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "INSERT",
+    table: "relay_registry_key_evidence",
+    count: 1,
+    principal:
+      "`recordRegistryKeyEvidence` — the PROVENANCE of a registry key (#875 review round 4), recorded only beside a registry write that carried evidence for exactly that key: /agents/register's keyed key when it is the bearer's verified key, the proven holder, the new key of the verified succession, a verified `key_proof`, or the operator's master token (E-op authority), and a keyless E-sov's proven sovereign key; `applySuccession` after a verified link moved the registry; the receipt heal (tasks.ts) after a signature under the embedded key over a receipt naming this identity verified (`receipt_signature`). It makes a key SERVED (servedIdentityKey), never the holder; this function proves nothing itself",
   },
   {
     file: R + "identity-keys.ts",

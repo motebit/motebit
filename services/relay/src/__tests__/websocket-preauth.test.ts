@@ -21,7 +21,7 @@ import WebSocket from "ws";
 import { generateKeypair, bytesToHex, mintAudienceToken } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
 import type { SyncRelay } from "../index.js";
-import { createTestRelay } from "./test-helpers.js";
+import { createTestRelay, signedBootstrapBody } from "./test-helpers.js";
 
 let relay: SyncRelay;
 let server: ReturnType<typeof serve>;
@@ -93,11 +93,10 @@ beforeEach(async () => {
   const res = await relay.app.request("/api/v1/agents/bootstrap", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      motebit_id: motebitId,
-      device_id: "laptop",
-      public_key: bytesToHex(owner.publicKey),
-    }),
+    body: await signedBootstrapBody(
+      { motebit_id: motebitId, device_id: "laptop", public_key: bytesToHex(owner.publicKey) },
+      owner.privateKey,
+    ),
   });
   expect(res.status).toBeLessThan(300);
 });

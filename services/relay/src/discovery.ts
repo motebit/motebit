@@ -12,6 +12,7 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
 import { createLogger } from "./logger.js";
 import { ON_SHELF } from "./registry-delist.js";
+import { servedIdentityKey } from "./identity-keys.js";
 
 const logger = createLogger({ service: "relay", module: "discovery" });
 
@@ -206,7 +207,10 @@ async function resolveAgent(
         relay_id: ownRelayId,
         relay_url: federationConfig?.endpointUrl ?? "",
         capabilities: caps,
-        public_key: localAgent.public_key,
+        // The SERVED key (#875 review round 3): holder, else a key the id
+        // commits to — never the bare registry column (a relay before #875
+        // wrote it without proof).
+        public_key: (await servedIdentityKey(db, motebitId)) ?? "",
         ...(localAgent.settlement_address
           ? { settlement_address: localAgent.settlement_address }
           : {}),

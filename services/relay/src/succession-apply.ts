@@ -46,6 +46,7 @@ import {
   holderKeyOf,
   identityKey,
   recordIdentityKey,
+  recordRegistryKeyEvidence,
   registryKeyOf,
 } from "./identity-keys.js";
 
@@ -413,6 +414,17 @@ export function applySuccession(
     db.prepare(
       "UPDATE agent_registry SET public_key = ? WHERE motebit_id = ? AND (public_key = ? OR COALESCE(public_key, '') = '')",
     ).run(record.new_public_key, motebitId, record.old_public_key);
+    // The registry now carries a key the verified link's `new_key_signature`
+    // PROVED (#875 review round 4): record its provenance so the served key
+    // follows the rotation (never the stale genesis a device row may keep).
+    if (registryKeyOf(db, motebitId) === record.new_public_key) {
+      recordRegistryKeyEvidence(db, {
+        motebitId,
+        publicKey: record.new_public_key,
+        evidence: "succession",
+        now: Date.now(),
+      });
+    }
 
     // A pay-to destination follows the key it is derived from. A worker's
     // settlement address is, by default, its identity key's Solana address;

@@ -41,7 +41,7 @@ import {
 } from "../identity-keys.js";
 import { departureFrom } from "../succession-apply.js";
 import { readIdentityBindings } from "../identity-transparency.js";
-import { createTestRelay, JSON_AUTH } from "./test-helpers.js";
+import { createTestRelay, JSON_AUTH, signedBootstrapBody } from "./test-helpers.js";
 
 const A = "a".repeat(64);
 const B = "b".repeat(64);
@@ -116,11 +116,27 @@ describe("identity-keys", () => {
     });
     return res.status;
   }
-  async function bootstrap(mid: string, deviceId: string, publicKey: string) {
+  /**
+   * A bootstrap signed by `key` (#875), naming `spelling` (default: the key's
+   * canonical hex). A bare string is sent UNSIGNED — refused since #875.
+   */
+  async function bootstrap(
+    mid: string,
+    deviceId: string,
+    key: KeyPair | string,
+    spelling?: string,
+  ) {
+    const body =
+      typeof key === "string"
+        ? JSON.stringify({ motebit_id: mid, device_id: deviceId, public_key: key })
+        : await signedBootstrapBody(
+            { motebit_id: mid, device_id: deviceId, public_key: spelling ?? hex(key) },
+            key.privateKey,
+          );
     const res = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_HEADERS,
-      body: JSON.stringify({ motebit_id: mid, device_id: deviceId, public_key: publicKey }),
+      body,
     });
     return res.status;
   }
@@ -365,18 +381,18 @@ describe("identity-keys", () => {
   });
 
   describe("the doors", () => {
-    it("W1 — unsigned bootstrap writes NOTHING to the holder, for any id", async () => {
+    it("W1 — bootstrap writes NOTHING to the holder, for any id (signed since #875; unsigned is refused)", async () => {
       const { mid, kp } = await sovereign();
-      expect(await bootstrap(mid, "boot-1", hex(kp))).toBe(201);
+      expect(await bootstrap(mid, "boot-1", kp)).toBe(201);
       expect(holderRow(db, mid)).toBeUndefined();
       expect((await bundleKey(mid)).status).toBe(404);
-      expect(await bootstrap("legacy-x", "boot-2", A)).toBe(201);
+      expect(await bootstrap("legacy-x", "boot-2", A)).toBe(400); // unsigned: refused since #875
       expect(holderRow(db, "legacy-x")).toBeUndefined();
     });
 
     it("W2 — a non-canonical spelling of a key is refused at the public doors, so it cannot lock the owner out", async () => {
       const { mid, kp } = await sovereign();
-      expect(await bootstrap(mid, "up-1", hex(kp).toUpperCase())).toBe(400);
+      expect(await bootstrap(mid, "up-1", kp, hex(kp).toUpperCase())).toBe(400);
       expect(await registerSelf(mid, "up-2", kp, hex(kp).toUpperCase())).toBe(400);
       expect(holderRow(db, mid)).toBeUndefined();
       // The owner then fills normally and can rotate.
@@ -405,21 +421,21 @@ describe("identity-keys", () => {
 
     it("DB1 — /agents/register fills E-sov only when the bearer's OWN device key is the body key", async () => {
       const { mid, kp } = await sovereign();
-      expect(await bootstrap(mid, "dev", hex(kp))).toBe(201);
+      expect(await bootstrap(mid, "dev", kp)).toBe(201);
       expect(holderRow(db, mid)).toBeUndefined();
       expect((await registerAsDevice(mid, "dev", kp, { public_key: hex(kp) })).status).toBe(200);
       expect(identityKey(db, mid)).toMatchObject({ publicKey: hex(kp), source: "register" });
       // The operator naming a sovereign key proves no possession: not E-sov, and
       // not E-op either (the identity has a device row).
       const s2 = await sovereign();
-      expect(await bootstrap(s2.mid, "dev2", hex(s2.kp))).toBe(201);
+      expect(await bootstrap(s2.mid, "dev2", s2.kp)).toBe(201);
       expect((await registerAsOperator(s2.mid, { public_key: hex(s2.kp) })).status).toBe(200);
       expect(holderRow(db, s2.mid)).toBeUndefined();
     });
 
     it("the CLI daemon's shape — unsigned bootstrap, then a KEYLESS register under its own device token — fills a sovereign identity (§5f build-time)", async () => {
       const { mid, kp } = await sovereign();
-      expect(await bootstrap(mid, "daemon", hex(kp))).toBe(201);
+      expect(await bootstrap(mid, "daemon", kp)).toBe(201);
       expect((await registerAsDevice(mid, "daemon", kp, {})).status).toBe(200);
       expect(identityKey(db, mid)).toMatchObject({ publicKey: hex(kp), source: "register" });
       expect(await bundleKey(mid)).toEqual({ status: 200, key: hex(kp) });
@@ -431,37 +447,50 @@ describe("identity-keys", () => {
       expect(holderRow(db, s2.mid)).toBeUndefined();
     });
 
-    it("W3 — a body key nothing proves never reaches the holder; the registry takes it (discovery), served stays ''", async () => {
+    it("W3 — a body key nothing proves reaches neither the holder nor, since #875, the registry", async () => {
       const { mid, kp } = await sovereign();
       const paired = await generateKeypair();
       plantDevice(db, mid, "genesis", hex(kp));
       plantDevice(db, mid, "paired", hex(paired));
       const x = await generateKeypair();
-      expect((await registerAsDevice(mid, "paired", paired, { public_key: hex(x) })).status).toBe(
-        200,
-      );
+      const res = await registerAsDevice(mid, "paired", paired, { public_key: hex(x) });
+      // #875: X's key is not the bearer's, not held, and carries no key_proof.
+      // On main (and before #875) the registry took it — and the owner's
+      // rotation from genesis was then refused, main's §5i cost.
+      expect(res.status).toBe(400);
       expect(holderRow(db, mid)).toBeUndefined();
-      expect(registryKey(db, mid)).toBe(hex(x));
-      expect(await bundleKey(mid)).toEqual({ status: 200, key: "" });
-      // Departure for an identity with no holder is main's rule (§5i, build 4):
-      // the registry now names X, so — exactly as on main — the owner's
-      // rotation from genesis is refused. Stated cost; X is never SERVED.
+      expect(registryKey(db, mid)).toBeUndefined();
+      // With nothing planted in the registry, the owner departs from genesis
+      // through the device rung, as main does for a device-only identity.
       const next = await generateKeypair();
-      expect(await rotateOwn(mid, "genesis", kp, next)).toBe(400);
+      expect(await rotateOwn(mid, "genesis", kp, next)).toBe(200);
     });
 
-    it("keyless /agents/register writes main's exact registry value (first-listed keyed device) and no holder (build 4, §5i)", async () => {
+    it("keyless /agents/register never writes a device row's key (#875 review): holder, else the registry on file, else the bearer's own verified key, else ''", async () => {
+      // The operator's keyless registration proves no key: a device row is
+      // not evidence (pairing claims write unproven rows), so '' — never
+      // main's first-listed row.
       plantDevice(db, "kl-agree", "d1", A);
       expect((await registerAsOperator("kl-agree", {})).status).toBe(200);
-      expect(registryKey(db, "kl-agree")).toBe(A);
+      expect(registryKey(db, "kl-agree")).toBe("");
       expect(holderRow(db, "kl-agree")).toBeUndefined();
       plantDevice(db, "kl-dis", "kd1", A);
       plantDevice(db, "kl-dis", "kd2", B);
       expect((await registerAsOperator("kl-dis", {})).status).toBe(200);
-      // Main's first-listed row (not DA5's ''): the registry is discovery and
-      // departure input, never served, so it must equal main's exactly.
-      expect(registryKey(db, "kl-dis")).toBe(A);
+      expect(registryKey(db, "kl-dis")).toBe("");
       expect(holderRow(db, "kl-dis")).toBeUndefined();
+      // A registry key already on file is kept, whoever registers keyless.
+      plantRegistry(db, "kl-keep", B);
+      plantDevice(db, "kl-keep", "kk1", A);
+      expect((await registerAsOperator("kl-keep", {})).status).toBe(200);
+      expect(registryKey(db, "kl-keep")).toBe(B);
+      // A device's keyless registration introduces no key either — not even its
+      // own (#875 review round 3): keys enter only on a keyed, proven registration.
+      const own = await generateKeypair();
+      plantDevice(db, "kl-own", "stranger-row", A);
+      plantDevice(db, "kl-own", "own", hex(own));
+      expect((await registerAsDevice("kl-own", "own", own, {})).status).toBe(200);
+      expect(registryKey(db, "kl-own")).toBe("");
       // "" is absent, not malformed (DB4); a malformed non-empty key is refused.
       expect((await registerAsOperator("kl-dis", { public_key: "" })).status).toBe(200);
       expect((await registerAsOperator("kl-dis", { public_key: "zz" })).status).toBe(400);
@@ -543,20 +572,22 @@ describe("identity-keys", () => {
       const k = await generateKeypair();
       const upper = hex(k).toUpperCase();
       plantDevice(db, "legacy-up", "d1", upper);
-      expect(await bootstrap("legacy-up", "d1", upper)).toBeLessThan(300);
-      expect(await bootstrap("legacy-up", "d2", hex(k))).toBeLessThan(300);
+      expect(await bootstrap("legacy-up", "d1", k, upper)).toBeLessThan(300);
+      expect(await bootstrap("legacy-up", "d2", k)).toBeLessThan(300);
     });
   });
 
   describe("G1 — 'no key on file' is not ownerless", () => {
-    it("(a) exactly main's outcome, and nothing unproven is SERVED: the owner's key (first-listed) blocks X; the owner rotates", async () => {
+    it("(a) nothing unproven reaches the registry or is SERVED: X is refused without proof; the owner rotates", async () => {
       const owner = await generateKeypair();
       const paired = await generateKeypair();
       plantDevice(db, "g1a", "owner", hex(owner));
       plantDevice(db, "g1a", "paired", hex(paired));
-      // Keyless: main's first-listed keyed row — here the owner's (build 4, §5i).
+      // Keyless under the operator: no key is proven, so '' (#875 review) —
+      // never main's first-listed row, which any device can steer by
+      // re-registering its own row.
       expect((await registerAsOperator("g1a", {})).status).toBe(200);
-      expect(registryKey(db, "g1a")).toBe(hex(owner));
+      expect(registryKey(db, "g1a")).toBe("");
       const x = await generateKeypair();
       expect((await registerAsDevice("g1a", "paired", paired, { public_key: hex(x) })).status).toBe(
         400,
@@ -677,7 +708,7 @@ describe("identity-keys", () => {
   describe("DB1 / F-A — a genesis key is never installed from public keys alone", () => {
     it("bootstrapping a known genesis key of an id this relay has not seen serves nothing (main: 404)", async () => {
       const { mid, kp } = await sovereign();
-      expect(await bootstrap(mid, "planted", hex(kp))).toBe(201);
+      expect(await bootstrap(mid, "planted", kp)).toBe(201);
       expect((await bundleKey(mid)).status).toBe(404);
       const res = await relay.app.request(`/api/v1/agents/${mid}/succession`);
       expect(

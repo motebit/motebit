@@ -17,7 +17,7 @@ import {
 } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
 import type { TokenAudience } from "@motebit/protocol";
-import { createTestRelay } from "./test-helpers.js";
+import { createTestRelay, signedBootstrapBody } from "./test-helpers.js";
 import { recordIdentityKey } from "../identity-keys.js";
 
 let relay: SyncRelay;
@@ -50,11 +50,10 @@ async function bootstrap(mid: string, deviceId: string, kp: KeyPair) {
   const res = await relay.app.request("/api/v1/agents/bootstrap", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({
-      motebit_id: mid,
-      device_id: deviceId,
-      public_key: bytesToHex(kp.publicKey),
-    }),
+    body: await signedBootstrapBody(
+      { motebit_id: mid, device_id: deviceId, public_key: bytesToHex(kp.publicKey) },
+      kp.privateKey,
+    ),
   });
   return { status: res.status, json: (await res.json()) as Record<string, unknown> };
 }

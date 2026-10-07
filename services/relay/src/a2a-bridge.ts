@@ -18,6 +18,7 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { ON_SHELF } from "./registry-delist.js";
+import { servedIdentityKey } from "./identity-keys.js";
 
 // ---------------------------------------------------------------------------
 // A2A Types (subset of the spec, enough for the bridge)
@@ -194,7 +195,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
 
   // --- Per-agent Agent Card ---
   /** @internal */
-  app.get("/a2a/agents/:motebitId/agent.json", (c) => {
+  app.get("/a2a/agents/:motebitId/agent.json", async (c) => {
     const motebitId = c.req.param("motebitId");
 
     // Look up agent in registry
@@ -237,11 +238,17 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
       : [];
     const allCaps = [...new Set([...capabilities, ...listingCaps])];
 
-    let did: string;
-    try {
-      did = hexPublicKeyToDidKey(agent.public_key);
-    } catch {
-      did = `did:key:${agent.public_key.slice(0, 16)}`;
+    // The SERVED key (#875 review round 3): holder, else a key the id
+    // commits to — never the bare registry column; no served key ⇒ the
+    // card names the identity by did:motebit.
+    const servedKey = (await servedIdentityKey(db, motebitId)) ?? "";
+    let did = `did:motebit:${motebitId}`;
+    if (servedKey !== "") {
+      try {
+        did = hexPublicKeyToDidKey(servedKey);
+      } catch {
+        // keep did:motebit
+      }
     }
 
     const card: A2AAgentCard = {
@@ -270,7 +277,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
       "x-motebit": {
         motebit_id: motebitId,
         did,
-        public_key: agent.public_key,
+        public_key: servedKey,
         spec: "motebit/identity@1.0",
       },
     };

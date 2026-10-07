@@ -45,6 +45,7 @@ describe("#962 round 5 C2 — relay text reaches the terminal sanitized and trun
       motebitId: "m",
       deviceId: "d",
       publicKeyHex: "00",
+      privateKey: new Uint8Array(32),
       fetchImpl: () => Promise.resolve(new Response(HOSTILE, { status: 400 })),
     });
     expect(line).not.toBeNull();

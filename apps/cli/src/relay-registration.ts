@@ -21,7 +21,7 @@
  * is deliberately no shared-secret fallback.
  */
 
-import { mintAudienceToken } from "@motebit/encryption";
+import { mintAudienceToken, signDeviceRegistration } from "@motebit/encryption";
 import type { TokenAudience } from "@motebit/sdk";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 
@@ -60,6 +60,32 @@ export interface RelayRegistrationHandle {
 
 const DEFAULT_HEARTBEAT_MS = 5 * 60 * 1000;
 
+/**
+ * The `POST /api/v1/agents/bootstrap` body, signed by the key it introduces.
+ * The relay refuses an unsigned introduction (#875 — proof of possession):
+ * the body is a device-registration request (`signDeviceRegistration`,
+ * JCS + Ed25519 over {motebit_id, device_id, public_key, timestamp, suite}),
+ * the same construction register-self verifies, fresh within ±5 minutes.
+ * Every CLI bootstrap caller builds its body here.
+ */
+export async function signedBootstrapBody(
+  identity: Pick<
+    RelayRegistrationIdentity,
+    "motebitId" | "deviceId" | "publicKeyHex" | "privateKey"
+  >,
+): Promise<string> {
+  const signed = await signDeviceRegistration(
+    {
+      motebit_id: identity.motebitId,
+      device_id: identity.deviceId,
+      public_key: identity.publicKeyHex,
+      timestamp: Date.now(),
+    },
+    identity.privateKey,
+  );
+  return JSON.stringify(signed);
+}
+
 /** Bearer headers signed by the agent's own key for `audience`, minted fresh per call. */
 export async function signedRelayHeaders(
   identity: Pick<RelayRegistrationIdentity, "motebitId" | "deviceId" | "privateKey">,
@@ -96,11 +122,7 @@ export async function registerWithRelay(
     const boot = await fetchImpl(`${syncUrl}/api/v1/agents/bootstrap`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        motebit_id: identity.motebitId,
-        device_id: identity.deviceId,
-        public_key: identity.publicKeyHex,
-      }),
+      body: await signedBootstrapBody(identity),
       signal: AbortSignal.timeout(10_000),
     });
     if (boot.status === 409) {

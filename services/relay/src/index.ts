@@ -52,7 +52,7 @@
  *   GET  /api/v1/credentials/:credentialId/status            — credential revocation status (public)
  *   POST /api/v1/credentials/verify                        — verify a VerifiableCredential (public)
  *   GET  /api/v1/market/candidates?capability=&max_budget=&limit= — scored candidate list (max_budget filters, x402 handles payment)
- *   POST /api/v1/agents/bootstrap                       — register identity + device in one unauthenticated call (rate-limited)
+ *   POST /api/v1/agents/bootstrap                       — register identity + device in one call with no bearer, signed by the key it names (#875; rate-limited)
  *
  * WebSocket protocol:
  *   Client → Server:  { type: "push", events: EventLogEntry[], push_id?: string }

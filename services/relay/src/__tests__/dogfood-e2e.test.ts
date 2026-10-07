@@ -37,7 +37,12 @@ import {
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
-import { buildP2pPaymentProof, HONEST_PAYMENT_CHAIN, TEST_RELAY_NETWORK } from "./test-helpers.js";
+import {
+  buildP2pPaymentProof,
+  HONEST_PAYMENT_CHAIN,
+  signedBootstrapBody,
+  TEST_RELAY_NETWORK,
+} from "./test-helpers.js";
 
 // Arc 3.5: paid A→B delegation settles P2P. B declares this settlement address
 // and A submits a matching payment_proof.
@@ -165,11 +170,14 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     const res = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        motebit_id: motebitIdA,
-        device_id: "a-primary",
-        public_key: pubKeyHexA,
-      }),
+      body: await signedBootstrapBody(
+        {
+          motebit_id: motebitIdA,
+          device_id: "a-primary",
+          public_key: pubKeyHexA,
+        },
+        keypairA.privateKey,
+      ),
     });
 
     expect(res.status).toBe(201);
@@ -190,11 +198,14 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     const res = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        motebit_id: motebitIdB,
-        device_id: "b-primary",
-        public_key: pubKeyHexB,
-      }),
+      body: await signedBootstrapBody(
+        {
+          motebit_id: motebitIdB,
+          device_id: "b-primary",
+          public_key: pubKeyHexB,
+        },
+        keypairB.privateKey,
+      ),
     });
 
     expect(res.status).toBe(201);
@@ -214,11 +225,14 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     const res = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        motebit_id: motebitIdA,
-        device_id: "a-primary",
-        public_key: pubKeyHexA,
-      }),
+      body: await signedBootstrapBody(
+        {
+          motebit_id: motebitIdA,
+          device_id: "a-primary",
+          public_key: pubKeyHexA,
+        },
+        keypairA.privateKey,
+      ),
     });
 
     expect(res.status).toBe(200);
@@ -563,10 +577,14 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     const bootstrapC = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        motebit_id: `agent-c-${crypto.randomUUID()}`,
-        public_key: pubKeyHexC,
-      }),
+      body: await signedBootstrapBody(
+        {
+          motebit_id: `agent-c-${crypto.randomUUID()}`,
+          device_id: "c-primary",
+          public_key: pubKeyHexC,
+        },
+        keypairC.privateKey,
+      ),
     });
     expect(bootstrapC.status).toBe(201);
     const { device_id: relayDeviceIdC, motebit_id: motebitIdC } = (await bootstrapC.json()) as {
@@ -589,11 +607,14 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     const res = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        motebit_id: motebitIdA, // A's established sovereign identity
-        device_id: "attacker-device",
-        public_key: attackerPubKeyHex, // Different key — must be rejected
-      }),
+      body: await signedBootstrapBody(
+        {
+          motebit_id: motebitIdA, // A's established sovereign identity
+          device_id: "attacker-device",
+          public_key: attackerPubKeyHex, // Different key — must be rejected
+        },
+        attackerKeypair.privateKey,
+      ),
     });
 
     expect(res.status).toBe(409);
@@ -1004,11 +1025,14 @@ describe("x402 Payment Gate", () => {
     const resA = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        motebit_id: crypto.randomUUID(),
-        device_id: crypto.randomUUID(),
-        public_key: pubKeyHexA,
-      }),
+      body: await signedBootstrapBody(
+        {
+          motebit_id: crypto.randomUUID(),
+          device_id: crypto.randomUUID(),
+          public_key: pubKeyHexA,
+        },
+        keypairA.privateKey,
+      ),
     });
     const bodyA = (await resA.json()) as { motebit_id: string; device_id: string };
     motebitIdA = bodyA.motebit_id;
@@ -1017,11 +1041,14 @@ describe("x402 Payment Gate", () => {
     const resB = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        motebit_id: crypto.randomUUID(),
-        device_id: crypto.randomUUID(),
-        public_key: pubKeyHexB,
-      }),
+      body: await signedBootstrapBody(
+        {
+          motebit_id: crypto.randomUUID(),
+          device_id: crypto.randomUUID(),
+          public_key: pubKeyHexB,
+        },
+        keypairB.privateKey,
+      ),
     });
     const bodyB = (await resB.json()) as { motebit_id: string; device_id: string };
     motebitIdB = bodyB.motebit_id;

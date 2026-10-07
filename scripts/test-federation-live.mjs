@@ -497,11 +497,21 @@ async function phase3() {
       `${RELAY_B_URL}/api/v1/agents/bootstrap`,
       {
         method: "POST",
-        body: JSON.stringify({
-          motebit_id: testAgentId,
-          device_id: "fed-test-device",
-          public_key: testAgentKeypair.publicKeyHex,
-        }),
+        // Signed by the key it introduces (#875 — the relay refuses it
+        // unsigned): a device-registration request, JCS + Ed25519, base64url.
+        body: JSON.stringify(
+          (() => {
+            const req = {
+              motebit_id: testAgentId,
+              device_id: "fed-test-device",
+              public_key: testAgentKeypair.publicKeyHex,
+              timestamp: Date.now(),
+              suite: "motebit-jcs-ed25519-b64-v1",
+            };
+            const sig = signBytes(canonicalJson(req), testAgentKeypair._privKey);
+            return { ...req, signature: Buffer.from(sig).toString("base64url") };
+          })(),
+        ),
       },
     );
     if (!bootOk) {
@@ -826,8 +836,7 @@ async function phase6() {
   function buildCertBody(opts = {}) {
     return {
       kind: "append_only_horizon",
-      subject:
-        opts.subject ?? { kind: "operator", operator_id: syntheticRelayId },
+      subject: opts.subject ?? { kind: "operator", operator_id: syntheticRelayId },
       store_id: opts.storeId ?? "relay_revocation_events",
       horizon_ts: opts.horizonTs ?? Date.now() - 7 * 24 * 60 * 60 * 1000,
       issued_at: opts.issuedAt ?? Date.now(),
@@ -851,17 +860,14 @@ async function phase6() {
     const issuerSig = signBytes(canonicalBytes, syntheticPrivKey);
     const issuerSignatureB64 = toBase64Url(issuerSig);
 
-    const { ok, status, body } = await fetchJSON(
-      `${RELAY_B_URL}/federation/v1/horizon/witness`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          cert_body: certBody,
-          issuer_id: syntheticRelayId,
-          issuer_signature: issuerSignatureB64,
-        }),
-      },
-    );
+    const { ok, status, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/horizon/witness`, {
+      method: "POST",
+      body: JSON.stringify({
+        cert_body: certBody,
+        issuer_id: syntheticRelayId,
+        issuer_signature: issuerSignatureB64,
+      }),
+    });
 
     if (!ok) {
       fail(`solicitation rejected (status ${status}): ${JSON.stringify(body)}`);
@@ -870,8 +876,7 @@ async function phase6() {
       // motebit_id MUST be Relay B's own relay_motebit_id; signature MUST be
       // base64url Ed25519 over the same canonical bytes.
       const motebitMatches = body.motebit_id === identityB.relay_motebit_id;
-      const sigShape =
-        typeof body.signature === "string" && body.signature.length > 0;
+      const sigShape = typeof body.signature === "string" && body.signature.length > 0;
       expect(
         motebitMatches && sigShape,
         `unexpected response shape (motebit_id match: ${motebitMatches}, sig present: ${sigShape}): ${JSON.stringify(body)}`,
@@ -1002,8 +1007,7 @@ async function phase7() {
       disputant_motebit_id: syntheticRelayId,
       evidence: {
         kind: "inclusion_proof",
-        leaf_hash:
-          "0000000000000000000000000000000000000000000000000000000000000000",
+        leaf_hash: "0000000000000000000000000000000000000000000000000000000000000000",
         proof: { siblings: [], leaf_index: 0, layer_sizes: [] },
       },
       filed_at: Date.now(),
@@ -1043,20 +1047,14 @@ async function phase7() {
   try {
     const dispute = signDispute(buildDisputeBody(), syntheticPrivKey);
 
-    const { status, body } = await fetchJSON(
-      `${RELAY_B_URL}/federation/v1/horizon/dispute`,
-      {
-        method: "POST",
-        body: JSON.stringify(dispute),
-      },
-    );
+    const { status, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/horizon/dispute`, {
+      method: "POST",
+      body: JSON.stringify(dispute),
+    });
 
     // Could be 404 (cert_not_found_in_local_store) — the most likely path
     // since the random signature won't match any persisted cert.
-    expect(
-      status === 404,
-      `expected 404 (cert not found), got ${status}: ${JSON.stringify(body)}`,
-    );
+    expect(status === 404, `expected 404 (cert not found), got ${status}: ${JSON.stringify(body)}`);
   } catch (err) {
     fail(err.message);
   }
@@ -1248,9 +1246,7 @@ async function phase8() {
     pass();
     round1Vote = round1Res.body;
   } else {
-    fail(
-      `status=${round1Res.status}, body=${JSON.stringify(round1Res.body).slice(0, 150)}`,
-    );
+    fail(`status=${round1Res.status}, body=${JSON.stringify(round1Res.body).slice(0, 150)}`);
   }
 
   // 8.4 — Verify stg-b vote signature against stg-b's stored public key
@@ -1267,10 +1263,7 @@ async function phase8() {
       const voteCanonical = Buffer.from(canonicalJson(voteBody));
       const voteSig = Buffer.from(voteSigB64, "base64url");
       const pubKeyObj = crypto.createPublicKey({
-        key: Buffer.concat([
-          Buffer.from("302a300506032b6570032100", "hex"),
-          fromHex(stgBPubHex),
-        ]),
+        key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), fromHex(stgBPubHex)]),
         format: "der",
         type: "spki",
       });
@@ -1290,16 +1283,10 @@ async function phase8() {
       body: JSON.stringify(round2Req),
     },
   );
-  if (
-    round2Res.ok &&
-    round2Res.body.round === 2 &&
-    round2Res.body.dispute_id === disputeId
-  ) {
+  if (round2Res.ok && round2Res.body.round === 2 && round2Res.body.dispute_id === disputeId) {
     pass();
   } else {
-    fail(
-      `status=${round2Res.status}, round=${round2Res.body?.round ?? "<missing>"}`,
-    );
+    fail(`status=${round2Res.status}, round=${round2Res.body?.round ?? "<missing>"}`);
   }
 
   // 8.6 — Vote outcome matches MOTEBIT_TEST_VOTE_POLICY (upheld)

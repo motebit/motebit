@@ -187,6 +187,112 @@ export function keysHeldBy(db: DatabaseDriver, motebitId: string): Set<string> {
 }
 
 /**
+ * The key a relay route SERVES as this identity's (#875 review round 3): the
+ * proven holder; else a key on file that the id is the sovereign commitment
+ * to (arithmetic, true whoever wrote the row); else null. Never the bare
+ * registry column, which a relay before #875 wrote without proof, and never
+ * an arbitrary device row, which `/pairing/claim` writes unsigned. Every
+ * route that hands an identity's key to a third party — discover, the agent
+ * record, capabilities, the A2A card, a relay-issued credential's subject —
+ * reads it here, so they cannot disagree.
+ */
+export async function servedIdentityKey(
+  db: DatabaseDriver,
+  motebitId: string,
+): Promise<string | null> {
+  // 1. The proven holder.
+  const holder = holderKeyOf(db, motebitId);
+  if (holder !== null) return holder;
+  // 2. A registry key some request PROVED (round 4): a legacy id registering
+  //    with its own proven key after #875 is served it — serving ≠ binding,
+  //    no holder is written. Served only while the registry still equals it.
+  const proven = provenRegistryKeyOf(db, motebitId);
+  if (proven !== null) return proven;
+  // 3. The sovereign commitment — only for an identity that has NEVER
+  //    rotated (no recorded succession). After a rotation the genesis key a
+  //    device row may still carry is stale; a rotated identity is served its
+  //    holder or proven registry key, else nothing (round 4, C2).
+  if (chainHeadOf(db, motebitId) !== null) return null;
+  for (const key of keysHeldBy(db, motebitId)) {
+    if ((await proveSovereignFirstKey(motebitId, key)) !== null) return key;
+  }
+  return null;
+}
+
+/** The evidence that proved a registry key (closed set; migration v46). */
+export const REGISTRY_KEY_EVIDENCE = [
+  "bearer",
+  "holder",
+  "key_proof",
+  "succession",
+  "sovereign",
+  "operator",
+  "receipt_signature",
+] as const;
+export type RegistryKeyEvidence = (typeof REGISTRY_KEY_EVIDENCE)[number];
+
+/**
+ * Record that `publicKey` was written to the registry on `evidence` a request
+ * carried (#875 review round 4). The caller holds the evidence; this proves
+ * nothing itself. Upsert: the latest proven registry key per identity.
+ */
+export function recordRegistryKeyEvidence(
+  db: DatabaseDriver,
+  input: { motebitId: string; publicKey: string; evidence: RegistryKeyEvidence; now: number },
+): void {
+  if (!HEX_64_ANY_CASE.test(input.publicKey)) {
+    throw new Error(`recordRegistryKeyEvidence: not a 32-byte hex public key (${input.evidence})`);
+  }
+  db.prepare(
+    `INSERT INTO relay_registry_key_evidence (motebit_id, public_key, evidence, recorded_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(motebit_id) DO UPDATE SET
+       public_key = excluded.public_key,
+       evidence = excluded.evidence,
+       recorded_at = excluded.recorded_at`,
+  ).run(input.motebitId, input.publicKey, input.evidence, input.now);
+}
+
+/**
+ * The registry key, when a request PROVED it and the registry still holds
+ * exactly that key; else null. A pre-#875 row, or one a later unproven write
+ * moved, has no matching evidence.
+ */
+export function provenRegistryKeyOf(db: DatabaseDriver, motebitId: string): string | null {
+  const row = db
+    .prepare(
+      `SELECT e.public_key AS k FROM relay_registry_key_evidence e
+         JOIN agent_registry r ON r.motebit_id = e.motebit_id
+        WHERE e.motebit_id = ? AND r.public_key = e.public_key`,
+    )
+    .get(motebitId) as { k: string } | undefined;
+  return keyOrNull(row?.k);
+}
+
+/**
+ * A discovery listing's rows with `public_key` (and `did`) replaced by the
+ * SERVED key (`servedIdentityKey`) — the listing is assembled from registry
+ * rows, whose column a relay before #875 wrote without proof. An identity
+ * with no served key lists `''` and no `did`.
+ */
+export async function withServedKeys<
+  T extends { motebit_id: string; public_key: string; did?: string },
+>(db: DatabaseDriver, agents: T[], toDid: (publicKeyHex: string) => string): Promise<T[]> {
+  const out: T[] = [];
+  for (const a of agents) {
+    const served = (await servedIdentityKey(db, a.motebit_id)) ?? "";
+    let did: string | undefined;
+    try {
+      if (served !== "") did = toDid(served);
+    } catch {
+      did = undefined;
+    }
+    out.push({ ...a, public_key: served, did });
+  }
+  return out;
+}
+
+/**
  * DA1/DB4 — may this key ENTER through a door? Canonical lowercase hex, or a
  * key that EXACTLY equals one already on file for the identity (holder,
  * registry, chain head, a device row) — continuity, so a legacy identity

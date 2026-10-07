@@ -30,6 +30,12 @@ import {
   memoryTaskSpendLedger,
   runMolecule,
 } from "../index.js";
+import {
+  bytesToHex,
+  generateKeypair,
+  verifyDeviceRegistration,
+  type SignableDeviceRegistration,
+} from "@motebit/crypto";
 import { deriveSolanaAddress } from "@motebit/wallet-solana";
 
 // ---------------------------------------------------------------------------
@@ -705,6 +711,37 @@ describe("runMolecule", () => {
     expect(typeof relayAuth.deviceId).toBe("string");
     const token = await relayAuth.mint("admin:query");
     expect(token.split(".").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("signs the relay bootstrap with the molecule's OWN identity key (#875: proof of possession)", async () => {
+    const kp = await generateKeypair();
+    const publicKeyHex = bytesToHex(kp.publicKey);
+    const adapters = baseAdapters();
+    adapters.bootstrapIdentity = () =>
+      Promise.resolve(
+        fakeIdentity({ publicKey: kp.publicKey, privateKey: kp.privateKey, publicKeyHex }),
+      );
+    await runMolecule(
+      { ...baseConfig(), syncUrl: "https://relay.example" },
+      () => ({ toolRegistry: new InMemoryToolRegistry() }),
+      adapters,
+    );
+    const serverCfg = (adapters.startCalls[0] as { cfg: Record<string, unknown> }).cfg;
+    const relayAuth = serverCfg.relayAuth as {
+      signRegistration: (b: {
+        motebit_id: string;
+        device_id: string;
+        public_key: string;
+      }) => Promise<Record<string, unknown>>;
+    };
+    const signed = await relayAuth.signRegistration({
+      motebit_id: "mot_test_12345678",
+      device_id: "dev_test",
+      public_key: publicKeyHex,
+    });
+    expect(await verifyDeviceRegistration(signed as unknown as SignableDeviceRegistration)).toEqual(
+      { valid: true },
+    );
   });
 
   it("omits optional server-config fields when config leaves them unset", async () => {

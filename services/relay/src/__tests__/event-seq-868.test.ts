@@ -17,7 +17,7 @@ import type { SyncRelay } from "../index.js";
 import { relayMigrations, runMigrations } from "../migrations.js";
 import { readEventsAfterSeq } from "../event-seq.js";
 import type { BoundIdentity } from "../identity-binding.js";
-import { createTestRelay, AUTH_HEADER, JSON_AUTH } from "./test-helpers.js";
+import { createTestRelay, AUTH_HEADER, JSON_AUTH, signedBootstrapBody } from "./test-helpers.js";
 
 type Ev = {
   event_id: string;
@@ -309,11 +309,10 @@ describe("#868 relay ingest sequence", () => {
       const r = await relay.app.request(`/api/v1/agents/bootstrap`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          motebit_id: id,
-          device_id: device,
-          public_key: bytesToHex(kp.publicKey),
-        }),
+        body: await signedBootstrapBody(
+          { motebit_id: id, device_id: device, public_key: bytesToHex(kp.publicKey) },
+          kp.privateKey,
+        ),
       });
       expect(r.status).toBeLessThan(300);
       const tok = (await mintAudienceToken({ mid: id, did: device, aud: "sync" }, kp.privateKey))
