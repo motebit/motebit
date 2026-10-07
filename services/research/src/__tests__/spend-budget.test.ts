@@ -10,8 +10,8 @@
  * over-budget hop is skipped, never a failed report.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { computeP2pFeeMicro } from "@motebit/sdk";
-import { memoryTaskSpend } from "@motebit/molecule-runner";
+import { computeP2pFeeMicro, toMicro } from "@motebit/sdk";
+import { listingPriceOf, memoryTaskSpend, resolveListingPricing } from "@motebit/molecule-runner";
 import type { TaskSpend } from "@motebit/molecule-runner";
 
 const mockCreate = vi.fn();
@@ -34,9 +34,10 @@ import {
   deriveLlmReserveMicro,
   loadConfig,
   paidSpendBudgetConfigError,
-  parseUnitCostMicro,
+  paidSpendBudgetForListing,
   DEFAULT_RESEARCH_MARGIN_BPS,
 } from "../helpers.js";
+import { LISTING_PRICE } from "../pricing.js";
 
 /** web-search's coded default listing: $0.05/request = 50,000 micro net. */
 const SEARCH_NET_MICRO = 50_000;
@@ -487,34 +488,28 @@ describe("paid-spend budget configuration", () => {
     process.env["MOTEBIT_RESEARCH_LLM_RESERVE_MICRO"] = "-5";
     process.env["MOTEBIT_RESEARCH_MARGIN_BPS"] = "lots";
     const c = loadConfig();
-    expect(paidSpendBudgetConfigError({ unitCostRaw: undefined, ...c })).toMatch(
-      /MOTEBIT_RESEARCH_MARGIN_BPS/,
-    );
+    expect(paidSpendBudgetConfigError({ ...c })).toMatch(/MOTEBIT_RESEARCH_MARGIN_BPS/);
     process.env["MOTEBIT_RESEARCH_MARGIN_BPS"] = "500";
-    expect(paidSpendBudgetConfigError({ unitCostRaw: undefined, ...loadConfig() })).toMatch(
+    expect(paidSpendBudgetConfigError({ ...loadConfig() })).toMatch(
       /MOTEBIT_RESEARCH_LLM_RESERVE_MICRO/,
     );
   });
 
   it("a margin of 100% or more refuses the boot", () => {
     process.env["MOTEBIT_RESEARCH_MARGIN_BPS"] = "10000";
-    expect(paidSpendBudgetConfigError({ unitCostRaw: undefined, ...loadConfig() })).toMatch(
-      /MARGIN_BPS/,
-    );
+    expect(paidSpendBudgetConfigError({ ...loadConfig() })).toMatch(/MARGIN_BPS/);
   });
 
   it("an empty reserve override means the derived default (the .env.example shape)", () => {
     process.env["MOTEBIT_RESEARCH_LLM_RESERVE_MICRO"] = "";
     const c = loadConfig();
     expect(c.llmReserveMicro).toBe(deriveLlmReserveMicro(8));
-    expect(paidSpendBudgetConfigError({ unitCostRaw: undefined, ...c })).toBeNull();
+    expect(paidSpendBudgetConfigError({ ...c })).toBeNull();
   });
 
   it("a non-numeric MOTEBIT_MAX_TOOL_CALLS refuses the boot (it fed a NaN reserve)", () => {
     process.env["MOTEBIT_MAX_TOOL_CALLS"] = "many";
-    expect(paidSpendBudgetConfigError({ unitCostRaw: undefined, ...loadConfig() })).toMatch(
-      /MAX_TOOL_CALLS/,
-    );
+    expect(paidSpendBudgetConfigError({ ...loadConfig() })).toMatch(/MAX_TOOL_CALLS/);
   });
 
   it("a budget that would go negative clamps to zero (zero paid calls)", () => {
@@ -696,19 +691,13 @@ describe("paid-spend budget — money that left the wallet is bounded", () => {
     expect(result.report).toBe(REPORT);
   });
 
-  it("probe 3: the budget computation never yields NaN, and boot refuses a non-numeric unit cost", () => {
-    expect(parseUnitCostMicro("abc")).toBeNull();
-    expect(parseUnitCostMicro("-0.25")).toBeNull();
-    expect(parseUnitCostMicro(undefined)).toBe(250_000);
-    expect(parseUnitCostMicro("0.25")).toBe(250_000);
+  it("probe 3: the budget computation never yields NaN, and boot refuses a non-numeric budget input", () => {
+    // A non-numeric price never reaches the budget: the runner refuses the boot
+    // (molecule-runner listing-pricing.test.ts) and research reads only the
+    // runner-resolved listing price. Research's own inputs are still validated.
     expect(
-      paidSpendBudgetConfigError({
-        unitCostRaw: "abc",
-        maxToolCalls: 8,
-        marginBps: 500,
-        llmReserveMicro: 171_300,
-      }),
-    ).toMatch(/MOTEBIT_UNIT_COST/);
+      paidSpendBudgetConfigError({ maxToolCalls: 8, marginBps: Number.NaN, llmReserveMicro: 0 }),
+    ).toMatch(/MARGIN_BPS/);
     expect(
       computePaidSpendBudgetMicro({
         unitCostMicro: Number.NaN,
@@ -907,16 +896,40 @@ describe("paid-spend budget — ledger and seam failures degrade conservatively"
     expect(settle).not.toHaveBeenCalled();
   });
 
-  it("a unit cost too large for an exact integer micro amount refuses the boot", () => {
+  it("a unit cost too large for an exact integer micro amount refuses the boot (runner)", () => {
     // 1e11 USD ⇒ 1e17 micro, past Number.MAX_SAFE_INTEGER: not representable exactly.
-    expect(parseUnitCostMicro("100000000000")).toBeNull();
-    expect(
-      paidSpendBudgetConfigError({
-        unitCostRaw: "100000000000",
-        maxToolCalls: 8,
-        marginBps: 500,
-        llmReserveMicro: 171_300,
-      }),
-    ).toMatch(/MOTEBIT_UNIT_COST/);
+    expect(() => listingPriceOf(resolveListingPricing(LISTING_PRICE, "100000000000"))).toThrow(
+      /exact integer micro/,
+    );
   });
+
+  it("a missing listing price refuses rather than inventing a budget", () => {
+    expect(() =>
+      paidSpendBudgetForListing(undefined, { marginBps: 500, llmReserveMicro: 0 }),
+    ).toThrow(/no listing price/);
+  });
+
+  // The budget derives from the EXACT price the runner lists — the coded
+  // LISTING_PRICE with the operator override applied — so the two cannot drift.
+  it.each([
+    [undefined, 250_000],
+    ["0.25", 250_000],
+    ["0.30", 300_000],
+  ] as const)(
+    "MOTEBIT_UNIT_COST=%s: budget = runner-resolved listed price − margin − reserve",
+    (raw, listedMicro) => {
+      const listed = resolveListingPricing(LISTING_PRICE, raw);
+      const price = listingPriceOf(listed)!;
+      expect(price).toEqual({ unitCostMicro: listedMicro, per: "task" });
+      expect(price.unitCostMicro).toBe(toMicro(listed[0]!.unit_cost));
+      const c = { marginBps: DEFAULT_RESEARCH_MARGIN_BPS, llmReserveMicro: 171_300 };
+      const margin = Math.ceil((listedMicro * c.marginBps) / 10_000);
+      expect(paidSpendBudgetForListing(price, c)).toBe(
+        Math.max(0, listedMicro - margin - c.llmReserveMicro),
+      );
+      expect(paidSpendBudgetForListing(price, c)).toBe(
+        computePaidSpendBudgetMicro({ unitCostMicro: listedMicro, ...c }),
+      );
+    },
+  );
 });

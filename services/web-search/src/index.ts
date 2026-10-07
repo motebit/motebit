@@ -42,6 +42,7 @@ import {
   subDelegateCircuitState,
   subDelegateClientConfig,
 } from "./sub-delegate.js";
+import { LISTING_PRICE } from "./pricing.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -145,7 +146,6 @@ async function subDelegate(
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.05");
 
   // Provider stack (outer → inner):
   //   BiasedSearchProvider     — rewrites first-party queries to include
@@ -200,6 +200,8 @@ async function main(): Promise<void> {
       // promise that the work is bought — run only relay-admitted work. Escape
       // hatch for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
       taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
+      // The listing price — literal data in src/pricing.ts; the runner applies MOTEBIT_UNIT_COST.
+      pricing: LISTING_PRICE,
     },
     (identity) => {
       const { motebitId, publicKey, privateKey } = identity;
@@ -374,10 +376,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["web_search", "read_url"],
-            pricing: [
-              { capability: "web_search", unit_cost: unitCost, currency: "USD", per: "request" },
-              { capability: "read_url", unit_cost: unitCost, currency: "USD", per: "request" },
-            ],
             sla: { max_latency_ms: 30_000, availability_guarantee: 0.99 },
             description:
               "Web search atom: query the live web (Tavily, Brave, DuckDuckGo provider chain) and fetch pages, each result bound into a signed execution receipt.",

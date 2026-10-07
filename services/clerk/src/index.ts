@@ -28,6 +28,7 @@ import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
 import { loadConfig } from "./helpers.js";
 import { parseClerkPrompt, ClerkRefusal, runClerkSpend, type SpendOutcome } from "./clerk.js";
+import { LISTING_PRICE } from "./pricing.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -99,6 +100,8 @@ async function main(): Promise<void> {
           lifetime_limit_micro: config.ceilingMicro,
         },
       },
+      // The listing price — literal data in src/pricing.ts; the runner applies MOTEBIT_UNIT_COST.
+      pricing: LISTING_PRICE,
     },
     (identity, spend) => {
       if (spend == null) {
@@ -182,14 +185,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["execute_delegation"],
-            pricing: [
-              {
-                capability: "execute_delegation",
-                unit_cost: config.unitCost,
-                currency: "USD",
-                per: "task" as const,
-              },
-            ],
             sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
             description:
               "Executes paid sub-delegations under a signed standing grant, within a self-imposed spend ceiling — the fail-closed proof of the R4 money spine. Over-ceiling or out-of-scope spends are refused with a signed denial; no payment.",

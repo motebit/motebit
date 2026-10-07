@@ -38,7 +38,13 @@ const kvLimiter: RateLimiter = {
 
 function deps(): SolanaRpcDeps {
   return {
-    env: process.env,
+    // Literal-key reads only (check-service-truth: env access is deny-by-default).
+    env: {
+      SOLANA_RPC_ALLOWED_ORIGINS: process.env.SOLANA_RPC_ALLOWED_ORIGINS,
+      SOLANA_RPC_GLOBAL_PER_MINUTE: process.env.SOLANA_RPC_GLOBAL_PER_MINUTE,
+      SOLANA_RPC_UPSTREAM_URL: process.env.SOLANA_RPC_UPSTREAM_URL,
+      VERCEL_ENV: process.env.VERCEL_ENV,
+    },
     fetch: (input, init) => fetch(input, init),
     limiter: kvLimiter,
     // Edge log sink; every line is pre-redacted (host only, never the query).

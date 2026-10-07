@@ -39,7 +39,7 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import { getOrCreateAccount, creditAccount, FREE_CREDIT_REFERENCE_PREFIX } from "./accounts.js";
 import { createLogger } from "./logger.js";
 import { isEmergencyFrozenAbort } from "./freeze.js";
-import { parseIntEnv, parseUsdMicroEnv, type EnvSource } from "./env.js";
+import { parseIntEnv, parseUsdMicroEnv, relayEnv, type EnvSource } from "./env.js";
 
 const logger = createLogger({ service: "free-credit" });
 
@@ -66,7 +66,7 @@ export const FREE_CREDIT_IP_DAILY_CAP_BOUNDS = { min: 0, max: 1_000_000 } as con
  * and `createSyncRelay`), so a malformed knob refuses to boot rather than
  * granting a number `Number()` happened to accept (`0x10` ⇒ $16).
  */
-export function freeCreditConfigFromEnv(env: EnvSource = process.env): FreeCreditConfig {
+export function freeCreditConfigFromEnv(env: EnvSource = relayEnv()): FreeCreditConfig {
   return {
     amountMicro: parseUsdMicroEnv("MOTEBIT_FREE_CREDIT_USD", 0, FREE_CREDIT_MAX_USD, env),
     ipDailyCap: parseIntEnv(

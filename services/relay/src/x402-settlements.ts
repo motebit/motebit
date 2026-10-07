@@ -47,6 +47,7 @@ import { creditAccount } from "./accounts.js";
 import { createLogger } from "./logger.js";
 import { isEmergencyFrozenAbort } from "./freeze.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
+import { relayEnv, type EnvSource } from "./env.js";
 
 const logger = createLogger({ service: "x402-settlements" });
 
@@ -737,7 +738,7 @@ export class HttpX402ChainReader implements X402ChainReader {
 export function x402RpcUrlFor(
   network: string,
   defaults: Record<string, string>,
-  env: NodeJS.ProcessEnv = process.env,
+  env: EnvSource = relayEnv(),
 ): string | undefined {
   const key = "X402_RPC_URL_" + network.toUpperCase().replace(/[^A-Z0-9]/g, "_");
   const override = env[key];
@@ -755,7 +756,7 @@ export function x402ReconcilerCanRead(
   network: string,
   defaults: Record<string, string>,
   confirmationsByChain: Record<string, number>,
-  env: NodeJS.ProcessEnv = process.env,
+  env: EnvSource = relayEnv(),
 ): boolean {
   return x402RpcUrlFor(network, defaults, env) != null && confirmationsByChain[network] != null;
 }
