@@ -79,11 +79,9 @@ describe("full history for every job that runs a base-ref-dependent gate", () =>
     >[0];
 
   it("RED on b9a1738's ci.yml (#1062's first run: gate-self-tests + the probe shards were shallow)", () => {
-    const old = execFileSync("git", ["show", "b9a1738:.github/workflows/ci.yml"], {
-      cwd: ROOT,
-      env: cleanEnv(),
-      encoding: "utf8",
-    });
+    // Byte-identical copy of `git show b9a1738:.github/workflows/ci.yml` — that
+    // commit is reachable only from a side branch, absent from a main-only clone.
+    const old = readFileSync(join(ROOT, "scripts/__tests__/fixtures/ci-b9a1738.yml"), "utf8");
     const r = historyViolations(jobsOf(old));
     expect(r.violations).toEqual([
       expect.stringMatching(

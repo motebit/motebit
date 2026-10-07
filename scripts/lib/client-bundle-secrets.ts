@@ -1349,11 +1349,18 @@ export function scanOutputForEnvValues(
   }
   const findings: string[] = [];
   let count = 0;
+  // One pass per file over every needle at once (not one `includes` per
+  // needle): `present[i]` is exactly `text.includes(needles[i].needle)`, and
+  // the report below walks needles in the same order, so findings are
+  // unchanged.
+  const index = buildNeedleIndex(needles.map((n) => n.needle));
   for (const { label, text } of files) {
     count++;
     const reported = new Set<string>();
-    for (const n of needles) {
-      if (reported.has(n.name) || !text.includes(n.needle)) continue;
+    const present = findNeedles(index, text);
+    for (let i = 0; i < needles.length; i++) {
+      const n = needles[i]!;
+      if (reported.has(n.name) || present[i] !== 1) continue;
       reported.add(n.name);
       findings.push(
         `${label} carries the value of ${n.name} (${n.encoding}; from ${n.source}; value redacted, ${n.length} chars)`,
@@ -1361,6 +1368,87 @@ export function scanOutputForEnvValues(
     }
   }
   return { findings, files: count, scannedVars: scannedNames.size, excluded };
+}
+
+/** Every needle is at least this long (`valueNeedles` drops shorter forms). */
+const NEEDLE_WINDOW = OUTPUT_SCAN_MIN_LENGTH;
+const HASH_BASE = 0x01000193;
+const FILTER_BITS = 22;
+
+/** A Rabin–Karp index over needles' first `NEEDLE_WINDOW` chars. */
+export interface NeedleIndex {
+  readonly needles: readonly string[];
+  /** Window hash → indices of the needles whose prefix hashes to it. */
+  readonly byHash: ReadonlyMap<number, readonly number[]>;
+  /** A one-byte-per-slot prefilter over the window hashes. */
+  readonly filter: Uint8Array;
+  /** HASH_BASE^(window-1) mod 2^32, to roll the outgoing char off. */
+  readonly topPow: number;
+}
+
+function windowHash(s: string, start: number): number {
+  let h = 0;
+  for (let k = 0; k < NEEDLE_WINDOW; k++)
+    h = (Math.imul(h, HASH_BASE) + s.charCodeAt(start + k)) | 0;
+  return h >>> 0;
+}
+
+function filterSlot(h: number): number {
+  return (h ^ (h >>> FILTER_BITS)) & ((1 << FILTER_BITS) - 1);
+}
+
+/** Builds the index `findNeedles` searches with. Every needle must be ≥ NEEDLE_WINDOW chars. */
+export function buildNeedleIndex(needles: readonly string[]): NeedleIndex {
+  const byHash = new Map<number, number[]>();
+  const filter = new Uint8Array(1 << FILTER_BITS);
+  needles.forEach((needle, i) => {
+    if (needle.length < NEEDLE_WINDOW) {
+      throw new Error(`needle shorter than ${NEEDLE_WINDOW} chars cannot be indexed`);
+    }
+    const h = windowHash(needle, 0);
+    const list = byHash.get(h);
+    if (list == null) byHash.set(h, [i]);
+    else list.push(i);
+    filter[filterSlot(h)] = 1;
+  });
+  let topPow = 1;
+  for (let k = 1; k < NEEDLE_WINDOW; k++) topPow = Math.imul(topPow, HASH_BASE);
+  return { needles, byHash, filter, topPow };
+}
+
+/**
+ * Which needles occur in `text`, in a single left-to-right pass: a rolling
+ * hash of every `NEEDLE_WINDOW`-char window is checked against the needles'
+ * prefix hashes, and each hash hit is confirmed by an exact comparison — so
+ * `result[i] === 1` iff `text.includes(index.needles[i])`.
+ */
+export function findNeedles(index: NeedleIndex, text: string): Uint8Array {
+  const { needles, byHash, filter, topPow } = index;
+  const present = new Uint8Array(needles.length);
+  if (needles.length === 0 || text.length < NEEDLE_WINDOW) return present;
+  let remaining = needles.length;
+  let h = windowHash(text, 0) | 0;
+  const last = text.length - NEEDLE_WINDOW;
+  for (let i = 0; ; i++) {
+    const u = h >>> 0;
+    if (filter[filterSlot(u)] === 1) {
+      const candidates = byHash.get(u);
+      if (candidates != null) {
+        for (const c of candidates) {
+          if (present[c] === 0 && text.startsWith(needles[c]!, i)) {
+            present[c] = 1;
+            if (--remaining === 0) return present;
+          }
+        }
+      }
+    }
+    if (i === last) break;
+    h =
+      (Math.imul(h - Math.imul(text.charCodeAt(i), topPow), HASH_BASE) +
+        text.charCodeAt(i + NEEDLE_WINDOW)) |
+      0;
+  }
+  return present;
 }
 
 /** Reads each path as latin1 (byte-exact) for `scanOutputForEnvValues`. */
