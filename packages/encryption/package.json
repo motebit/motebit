@@ -23,8 +23,8 @@
   "dependencies": {
     "@motebit/protocol": "workspace:*",
     "@motebit/crypto": "workspace:*",
-    "@noble/curves": "^2.3.0",
-    "@noble/ed25519": "~3.1.0"
+    "@noble/curves": "^2.4.0",
+    "@noble/ed25519": "~3.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
