@@ -14,14 +14,18 @@
  * Steps:
  *   1. `pnpm pack` this package (workspace ranges rewritten exactly as on
  *      publish) into a scratch dir.
- *   2. Read the PACKED manifest; for every declared `dependencies` /
- *      `peerDependencies` entry, pack that workspace package too (hermetic:
- *      the consumer gets the types this tree would publish, no registry).
- *      A declared non-workspace dependency is a failure — the package
- *      promises zero runtime dependencies.
- *   3. Install the tarballs into a scratch consumer (offline) and run `tsc
- *      --noEmit` with `skipLibCheck: false` over a file that imports both
- *      export-map entries.
+ *   2. Read the PACKED manifest. The consumer installs ONLY this package's
+ *      tarball; peers are left to the package manager. npm >= 7 and pnpm
+ *      auto-install every NON-optional peer and never install an optional
+ *      one, so a peer marked `optional` in `peerDependenciesMeta` is absent
+ *      from a plain `npm i @motebit/crypto`. The scan is hermetic (offline,
+ *      no registry), so auto-install is simulated exactly: each
+ *      non-optional peer (and every `dependencies` entry) is packed from the
+ *      workspace and installed; optional peers are not installed, and the
+ *      script asserts they are absent. A declared non-workspace dependency
+ *      is a failure — the package promises zero runtime dependencies.
+ *   3. Run `tsc --noEmit` with `skipLibCheck: false` over a file that
+ *      imports both export-map entries.
  *
  * Exit 0 on a clean typecheck, 1 otherwise (with the compiler output).
  */
@@ -80,7 +84,15 @@ try {
   const packed = JSON.parse(
     run("tar", ["-xzOf", own, "package/package.json"], scratch),
   );
-  const declared = { ...packed.dependencies, ...packed.peerDependencies };
+  const optionalMeta = packed.peerDependenciesMeta ?? {};
+  const peers = Object.keys(packed.peerDependencies ?? {});
+  const optionalPeers = peers.filter((name) => optionalMeta[name]?.optional === true);
+  // What `npm i <this package>` actually installs next to it: runtime deps
+  // plus every non-optional peer. Optional peers are never auto-installed.
+  const autoInstalled = [
+    ...Object.keys(packed.dependencies ?? {}),
+    ...peers.filter((name) => !optionalPeers.includes(name)),
+  ];
 
   if (Object.keys(packed.dependencies ?? {}).length > 0) {
     console.error(
@@ -91,7 +103,7 @@ try {
   }
 
   const consumerDeps = { [packed.name]: `file:${own}` };
-  for (const name of Object.keys(declared)) {
+  for (const name of autoInstalled) {
     const dir = workspacePackageDir(name);
     if (dir === null) {
       console.error(`consumer-typecheck: declared dependency ${name} is not a workspace package`);
@@ -137,25 +149,39 @@ try {
     ["install", "--offline", "--no-audit", "--no-fund", "--ignore-scripts", "--loglevel=error"],
     consumer,
   );
+  for (const name of optionalPeers) {
+    let present = true;
+    try {
+      readFileSync(join(consumer, "node_modules", name, "package.json"));
+    } catch {
+      present = false;
+    }
+    if (present) {
+      console.error(`consumer-typecheck: optional peer ${name} was installed — simulation is wrong`);
+      failed = true;
+    }
+  }
 
   try {
     run(process.execPath, [tsc, "-p", "tsconfig.json"], consumer);
     if (!failed) {
       console.log(
         `consumer-typecheck: ${packed.name}@${packed.version} type-checks standalone ` +
-          `(skipLibCheck: false) with declared deps [${Object.keys(declared).join(", ")}]`,
+          `(skipLibCheck: false) with auto-installed deps [${autoInstalled.join(", ")}]`,
       );
     }
   } catch (err) {
     failed = true;
     console.error(
       `consumer-typecheck: ${packed.name} does not type-check for a standalone consumer ` +
-        `(skipLibCheck: false, installed deps [${Object.keys(declared).join(", ")}]):`,
+        `(skipLibCheck: false, auto-installed deps [${autoInstalled.join(", ")}], ` +
+        `optional peers NOT installed [${optionalPeers.join(", ")}]):`,
     );
     console.error(String(err.stdout ?? "") + String(err.stderr ?? ""));
     console.error(
       "Repair: every package a published .d.ts imports must be declared in package.json " +
-        "(type-only imports included) — see the peerDependencies note in packages/crypto/CLAUDE.md.",
+        "(type-only imports included) as a dependency or a NON-optional peer — npm never " +
+        "installs an optional peer. See the peerDependencies note in packages/crypto/CLAUDE.md.",
     );
   }
 } finally {
