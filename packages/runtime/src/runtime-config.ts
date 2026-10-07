@@ -150,7 +150,31 @@ export interface RuntimeConfig {
    */
   onToolActivity?: (event: import("./streaming.js").ToolActivityEvent) => void;
   tickRateHz?: number;
+  /**
+   * Optional message-count cap on the in-memory conversation. Absent (the
+   * default) ⇒ no count cap: history is sized by tokens against the current
+   * model's window (docs/design/context-trimming-parity.md). When set it
+   * applies identically to live, loaded and resumed conversations.
+   */
   maxConversationHistory?: number;
+  /**
+   * The context window of the model this runtime talks to, in tokens, when
+   * the operator knows it — a local server's configured window (`num_ctx`,
+   * `--ctx-size`), or a hosted model the SDK table does not list. Overrides
+   * the SDK's per-model table (`contextWindowForModel`). Absent and not in
+   * the table ⇒ the fixed history floor (6,976 tokens).
+   */
+  contextWindowTokens?: number;
+  /**
+   * Policy ceiling on history tokens per turn, by model capability tier
+   * (`modelCapabilityTier`), or one number for every tier. Default 64,000 for
+   * each tier. Bounds cost and time-to-first-token on large windows; the
+   * floor (6,976) still wins over a ceiling set below it.
+   */
+  historyCeilingTokens?:
+    number | Partial<Record<import("@motebit/sdk").ModelCapabilityTier, number>>;
+  /** Tokens held back for the response when sizing history (default 8,192). */
+  outputReserveTokens?: number;
   /** Compact events when count exceeds this threshold (0 = disabled, default 1000) */
   compactionThreshold?: number;
   /**

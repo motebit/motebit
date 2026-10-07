@@ -14,14 +14,12 @@ import type {
 } from "@motebit/sdk";
 import { SensitivityLevel, maxSensitivity, sensitivityPermits } from "@motebit/sdk";
 import type { TurnPrincipal } from "./turn-principal.js";
-import type {
-  StreamingProvider,
-  ContextBudget,
-  TaskType,
-  MotebitLoopDependencies,
-} from "@motebit/ai-core";
+import type { StreamingProvider, TaskType, MotebitLoopDependencies } from "@motebit/ai-core";
 import {
   trimConversation,
+  estimateTokens,
+  historyBudgetForWindow,
+  DEFAULT_HISTORY_CEILING_TOKENS,
   summarizeConversation,
   shouldSummarize,
   projectProviderClearance,
@@ -63,7 +61,33 @@ function deriveHeuristicTitle(history: readonly ConversationMessage[]): string |
 /** Dependencies injected by the runtime. */
 export interface ConversationDeps {
   motebitId: string;
-  maxHistory: number;
+  /**
+   * Optional message-count cap on the in-memory history. Absent ⇒ no count
+   * cap: the token bound below and the per-turn budget in `trimmed()` decide.
+   * When set it applies on every path (`load`, `resumeActiveConversation`,
+   * `pushExchange`, `pushActivation`), so a resumed conversation and a live
+   * one hold the same messages.
+   */
+  maxHistory?: number;
+  /**
+   * The current model's context window, or `undefined` when not known
+   * (unknown ⇒ the fixed history floor). Read per call: the model can change
+   * mid-session.
+   */
+  getContextWindowTokens?: () => number | undefined;
+  /** Policy ceiling on history tokens for the current model. Default 64,000. */
+  getHistoryCeilingTokens?: () => number;
+  /** Tokens held back for the response when sizing history. Default 8,192. */
+  outputReserveTokens?: number;
+  /**
+   * Token bound on the in-memory history: the oldest messages beyond the
+   * newest `historyBoundTokens` are released (the newest exchange always
+   * stays). Must be at least every
+   * ceiling `getHistoryCeilingTokens` can return, so the bound never
+   * removes a message the per-turn budget would send. Applied on every path
+   * like `maxHistory`. Default {@link DEFAULT_HISTORY_BOUND_TOKENS}.
+   */
+  historyBoundTokens?: number;
   summarizeAfterMessages: number;
   store: ConversationStoreAdapter | null;
   /**
@@ -132,15 +156,27 @@ export interface ConversationDeps {
   getEffectiveSensitivity?: () => SensitivityLevel;
 }
 
-/** Default context window budget — conservative to fit most models. */
-const CONVERSATION_BUDGET: ContextBudget = {
-  maxTokens: 8000,
-  reserveForResponse: 1024,
-};
+/**
+ * Non-history tokens assumed when a caller asks for trimmed history without
+ * measuring its turn: system prompt + tool schemas + context pack + current
+ * message (~9.5k witnessed in intelligence-pluggability-contract.md, rounded
+ * up). The turn path measures instead — see `TurnOptions.budgetConversationHistory`.
+ */
+export const UNMEASURED_NON_HISTORY_TOKENS = 12_000;
+
+/**
+ * Default token bound on the in-memory history: twice the default history
+ * ceiling, so skip-not-stop trimming still has older permitted messages to
+ * reach past a skipped paste or a filtered message.
+ */
+export const DEFAULT_HISTORY_BOUND_TOKENS = 2 * DEFAULT_HISTORY_CEILING_TOKENS;
+
+/** The token bound never releases the newest exchange. */
+const MIN_BOUND_MESSAGES = 2;
 
 /** The conversation as one turn sees it — see {@link ConversationManager.forTurn}. */
 export interface TurnConversation {
-  trimmed(): ConversationMessage[];
+  trimmed(nonHistoryTokens?: number): ConversationMessage[];
   liveHistory(): ConversationMessage[];
   getSessionInfo(): { continued: boolean; lastActiveAt: number } | null;
   clearSessionInfo(): void;
@@ -191,7 +227,7 @@ export class ConversationManager {
   forTurn(principal: TurnPrincipal): TurnConversation {
     if (principal.foreign) return FOREIGN_TURN_CONVERSATION;
     return {
-      trimmed: () => this.trimmed(),
+      trimmed: (n) => this.trimmed(n),
       liveHistory: () => this.liveHistory,
       getSessionInfo: () => this.getSessionInfo(),
       clearSessionInfo: () => this.clearSessionInfo(),
@@ -232,6 +268,7 @@ export class ConversationManager {
         this.history.push({ role: msg.role, content: msg.content, sensitivity: msg.sensitivity });
       }
     }
+    this.boundHistory();
     if (this.history.length > 0) {
       this.sessionInfo = { continued: true, lastActiveAt: active.lastActiveAt };
     }
@@ -272,6 +309,7 @@ export class ConversationManager {
         this.history.push({ role: msg.role, content: msg.content, sensitivity: msg.sensitivity });
       }
     }
+    this.boundHistory();
     this.currentId = conversationId;
   }
 
@@ -325,14 +363,52 @@ export class ConversationManager {
    * low-tier session whose pre-call gate passes (None × None → None);
    * trimmed history would carry those persisted-at-Secret messages
    * into BYOK without this filter.
+   *
+   * Budget (docs/design/context-trimming-parity.md, P1): the filter runs
+   * FIRST and is independent of the model; the budget then sizes the
+   * permitted messages to the current model's window —
+   * `clamp(window − nonHistoryTokens − outputReserve, 6,976, ceiling)`,
+   * the floor when the window is unknown. A larger window changes how many
+   * permitted messages fit, never which are permitted. `nonHistoryTokens`
+   * is what the turn measured for its system prompt, tools and message;
+   * absent ⇒ {@link UNMEASURED_NON_HISTORY_TOKENS}.
    */
-  trimmed(): ConversationMessage[] {
+  trimmed(nonHistoryTokens: number = UNMEASURED_NON_HISTORY_TOKENS): ConversationMessage[] {
     const summary = this.getStoredSummary();
     const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
     const filtered = this.history.filter(
       (msg) => msg.sensitivity == null || sensitivityPermits(effective, msg.sensitivity),
     );
-    return trimConversation(filtered, CONVERSATION_BUDGET, summary);
+    const budget = historyBudgetForWindow({
+      contextWindowTokens: this.deps.getContextWindowTokens?.(),
+      nonHistoryTokens,
+      outputReserveTokens: this.deps.outputReserveTokens,
+      ceilingTokens: this.deps.getHistoryCeilingTokens?.(),
+    });
+    return trimConversation(filtered, budget, summary);
+  }
+
+  /**
+   * Release what no turn can send: the count cap when configured, then the
+   * token bound (a newest-first suffix that always keeps the newest
+   * exchange). Same function on every path that fills the history, so live
+   * and resumed conversations hold the same messages. Never reorders or
+   * rewrites what it keeps.
+   */
+  private boundHistory(): void {
+    const { maxHistory } = this.deps;
+    if (maxHistory != null && this.history.length > maxHistory) {
+      this.history = this.history.slice(-maxHistory);
+    }
+    const bound = this.deps.historyBoundTokens ?? DEFAULT_HISTORY_BOUND_TOKENS;
+    let total = 0;
+    let start = this.history.length;
+    while (start > 0) {
+      total += estimateTokens(this.history[start - 1]!.content);
+      if (total > bound && this.history.length - start >= MIN_BOUND_MESSAGES) break;
+      start--;
+    }
+    if (start > 0) this.history = this.history.slice(start);
   }
 
   // --- Push + auto-summarize ---
@@ -343,9 +419,7 @@ export class ConversationManager {
     const cleaned = stripInternalTags(assistantResponse).trim();
     const sensitivity = this.resolveMessageSensitivity();
     this.history.push({ role: "assistant", content: cleaned, sensitivity });
-    if (this.history.length > this.deps.maxHistory) {
-      this.history = this.history.slice(-this.deps.maxHistory);
-    }
+    this.boundHistory();
     const { store } = this.deps;
     if (store != null) {
       if (this.currentId == null || this.currentId === "") {
@@ -366,9 +440,7 @@ export class ConversationManager {
       { role: "user", content: userMessage, sensitivity },
       { role: "assistant", content: cleaned, sensitivity },
     );
-    if (this.history.length > this.deps.maxHistory) {
-      this.history = this.history.slice(-this.deps.maxHistory);
-    }
+    this.boundHistory();
 
     const { store } = this.deps;
     if (store != null) {

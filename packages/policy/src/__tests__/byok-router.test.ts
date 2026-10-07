@@ -12,6 +12,7 @@
  * discriminator values.
  */
 import { describe, it, expect } from "vitest";
+import { contextWindowForModel } from "@motebit/sdk";
 
 import {
   ALL_TASK_SHAPES,
@@ -85,6 +86,18 @@ describe("BYOK_MODEL_CATALOG", () => {
       }
     }
     expect(cnEntries).toEqual(["deepseek-chat"]);
+  });
+});
+
+describe("BYOK_MODEL_CATALOG — context windows", () => {
+  it("every row carries the sdk table's window (undefined = not known)", () => {
+    for (const vendor of ALL_BYOK_VENDORS) {
+      for (const cap of BYOK_MODEL_CATALOG[vendor]) {
+        expect(cap.contextWindowTokens, cap.modelName).toBe(contextWindowForModel(cap.modelName));
+      }
+    }
+    const pro = BYOK_MODEL_CATALOG.google.find((c) => c.modelName === "gemini-2.5-pro");
+    expect(pro?.contextWindowTokens).toBe(1_048_576);
   });
 });
 

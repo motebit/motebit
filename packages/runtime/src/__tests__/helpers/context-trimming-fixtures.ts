@@ -23,62 +23,38 @@ import {
   GROQ_MODELS,
   LOCAL_SERVER_SUGGESTED_MODELS,
   OPENAI_MODELS,
+  contextWindowForModel,
 } from "@motebit/sdk";
 import type { ModelWindow, TrimFixture } from "./context-trimming-harness.js";
 
 // === Model windows ==========================================================
 
 /**
- * Context windows for every model the SDK registry lists.
- *
- * The repo has NO production registry of context windows:
- * `ProviderCapability.contextWindowTokens` (@motebit/protocol routing.ts) is
- * optional and unpopulated, and the runtime never reads a window. These are
- * the vendors' published figures, taken at their CONSERVATIVE (standard-tier)
- * value, as harness fixtures only. Local servers' windows are whatever the
- * server is configured with (`num_ctx` / `--ctx-size`); 8,192 is a typical
- * local default and deliberately the one row where the full long conversation
- * does NOT fit.
+ * A typical local server's configured window (`num_ctx` / `--ctx-size`),
+ * supplied the way production takes it: `RuntimeConfig.contextWindowTokens`.
+ * Deliberately the one configured window that does NOT hold the long
+ * conversations.
  */
-const WINDOW_BY_PROVIDER = {
-  anthropic: 200_000,
-  openai: 400_000,
-  google: 1_048_576,
-  deepseek: 128_000,
-  groq: 131_072,
-  "local-server": 8_192,
-} as const;
+export const LOCAL_CONFIGURED_WINDOW = 8_192;
 
+/**
+ * Every model the SDK registry lists, with the window PRODUCTION resolves for
+ * it: the SDK's per-model table (`contextWindowForModel`) for hosted models —
+ * `undefined` where the table records the window as not known — and the
+ * operator-configured window for local servers.
+ */
 export const MODEL_WINDOWS: ModelWindow[] = [
-  ...ANTHROPIC_MODELS.map((model) => ({
-    provider: "anthropic",
-    model,
-    contextWindowTokens: WINDOW_BY_PROVIDER.anthropic,
-  })),
-  ...OPENAI_MODELS.map((model) => ({
-    provider: "openai",
-    model,
-    contextWindowTokens: WINDOW_BY_PROVIDER.openai,
-  })),
-  ...GOOGLE_MODELS.map((model) => ({
-    provider: "google",
-    model,
-    contextWindowTokens: WINDOW_BY_PROVIDER.google,
-  })),
-  ...DEEPSEEK_MODELS.map((model) => ({
-    provider: "deepseek",
-    model,
-    contextWindowTokens: WINDOW_BY_PROVIDER.deepseek,
-  })),
-  ...GROQ_MODELS.map((model) => ({
-    provider: "groq",
-    model,
-    contextWindowTokens: WINDOW_BY_PROVIDER.groq,
-  })),
+  ...[
+    ...ANTHROPIC_MODELS.map((model) => ({ provider: "anthropic", model })),
+    ...OPENAI_MODELS.map((model) => ({ provider: "openai", model })),
+    ...GOOGLE_MODELS.map((model) => ({ provider: "google", model })),
+    ...DEEPSEEK_MODELS.map((model) => ({ provider: "deepseek", model })),
+    ...GROQ_MODELS.map((model) => ({ provider: "groq", model })),
+  ].map((m) => ({ ...m, contextWindowTokens: contextWindowForModel(m.model) })),
   ...LOCAL_SERVER_SUGGESTED_MODELS.map((model) => ({
     provider: "local-server",
     model,
-    contextWindowTokens: WINDOW_BY_PROVIDER["local-server"],
+    contextWindowTokens: LOCAL_CONFIGURED_WINDOW,
   })),
 ];
 

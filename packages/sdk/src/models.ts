@@ -594,6 +594,77 @@ export type LocalServerSuggestedModel = (typeof LOCAL_SERVER_SUGGESTED_MODELS)[n
 export type OllamaSuggestedModel = LocalServerSuggestedModel;
 export type ProxyModel = (typeof PROXY_MODELS)[number];
 
+// === Context windows ===
+
+/** Every hosted model id the per-vendor lists above name. */
+export type HostedModel =
+  | AnthropicModel
+  | OpenAIModel
+  | GoogleModel
+  | (typeof DEEPSEEK_MODELS)[number]
+  | (typeof GROQ_MODELS)[number];
+
+/**
+ * Context window (max input tokens) per hosted model id, from each vendor's
+ * published model documentation. Closed: a `Record` over {@link HostedModel},
+ * so a model added to a list above is a compile error here until someone
+ * records its window or records that it is not known.
+ *
+ * `null` means NOT KNOWN — no vendor figure was confirmed when the row was
+ * written. Consumers treat `null` exactly like an unlisted id: the runtime
+ * falls back to its fixed history floor, so an unknown window can never
+ * widen what a turn sends. Never fill a row from memory or by analogy with a
+ * sibling model; leave it `null` until the vendor's page is read.
+ *
+ * Sources (standard tier, no beta header or long-context add-on):
+ *   - anthropic: Claude models overview (platform.claude.com), 2026-09-25 —
+ *     1M for the Claude 5 family and Opus/Sonnet 4.6+, 200K for Haiku 4.5,
+ *     Opus 4.5 and Sonnet 4.5.
+ *   - google: Gemini API models page — 1,048,576 input tokens for 2.5
+ *     pro / flash / flash-lite.
+ *   - groq: GroqCloud models page — 131,072 for both hosted ids.
+ *   - openai, deepseek: not confirmed → `null`.
+ *
+ * Local servers are absent on purpose: their window is whatever the server
+ * was started with (`num_ctx`, `--ctx-size`), never a property of the model
+ * family. The runtime takes it from configuration
+ * (`RuntimeConfig.contextWindowTokens`).
+ */
+export const MODEL_CONTEXT_WINDOW_TOKENS: Readonly<Record<HostedModel, number | null>> = {
+  "claude-fable-5-1": 1_000_000,
+  "claude-opus-5-5": 1_000_000,
+  "claude-fable-5": 1_000_000,
+  "claude-opus-5": 1_000_000,
+  "claude-opus-4-8": 1_000_000,
+  "claude-opus-4-7": 1_000_000,
+  "claude-opus-4-6": 1_000_000,
+  "claude-sonnet-5-5": 1_000_000,
+  "claude-sonnet-5": 1_000_000,
+  "claude-sonnet-4-6": 1_000_000,
+  "claude-haiku-4-5-20251001": 200_000,
+  "claude-opus-4-5-20251101": 200_000,
+  "claude-sonnet-4-5-20250929": 200_000,
+  "gpt-5.4": null,
+  "gpt-5.4-mini": null,
+  "gpt-5.4-nano": null,
+  "gemini-2.5-pro": 1_048_576,
+  "gemini-2.5-flash": 1_048_576,
+  "gemini-2.5-flash-lite": 1_048_576,
+  "deepseek-chat": null,
+  "llama-3.3-70b-versatile": 131_072,
+  "openai/gpt-oss-120b": 131_072,
+};
+
+/**
+ * The context window for a model id, or `undefined` when it is not known
+ * (an unlisted id, a local-server model, or a `null` row). Exact-id match
+ * only: an alias or a dated variant is not assumed to share a window.
+ */
+export function contextWindowForModel(model: string): number | undefined {
+  const row = (MODEL_CONTEXT_WINDOW_TOKENS as Readonly<Record<string, number | null>>)[model];
+  return typeof row === "number" ? row : undefined;
+}
+
 // === Provider ↔ model coherence ===
 //
 // Born live, 2026-07-06: `--provider anthropic` with a config-resident

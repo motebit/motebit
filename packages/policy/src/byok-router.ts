@@ -53,7 +53,7 @@
  * but may override.
  */
 
-import { pickerModelForTier, type ByokVendor } from "@motebit/sdk";
+import { contextWindowForModel, pickerModelForTier, type ByokVendor } from "@motebit/sdk";
 import type {
   ProviderCapability,
   RoutingConstraint,
@@ -90,6 +90,10 @@ export const REFERENCE_BYOK_ROUTING_POLICY: Readonly<Record<TaskShape, string>> 
  * Anthropic's published first-party per-token rates — BYOK models the
  * proxy does not host, so they are priced here, not in MODEL_CONFIG.
  *
+ * `contextWindowTokens` comes from the sdk's per-model window table
+ * (`contextWindowForModel`); `undefined` where the vendor figure is not
+ * recorded there — consumers treat that as "not known", never as unbounded.
+ *
  * Catalog ordering is the consumer's preference signal — earlier
  * entries are preferred when the dispatcher falls back. Each vendor's
  * entries are ordered tier-strong-to-fast (matching the convention
@@ -107,6 +111,7 @@ export const BYOK_MODEL_CATALOG = {
   anthropic: [
     {
       modelName: pickerModelForTier("strongest"),
+      contextWindowTokens: contextWindowForModel(pickerModelForTier("strongest")),
       host: "anthropic",
       lab: "anthropic",
       jurisdiction: "US",
@@ -115,6 +120,7 @@ export const BYOK_MODEL_CATALOG = {
     },
     {
       modelName: pickerModelForTier("default"),
+      contextWindowTokens: contextWindowForModel(pickerModelForTier("default")),
       host: "anthropic",
       lab: "anthropic",
       jurisdiction: "US",
@@ -123,6 +129,7 @@ export const BYOK_MODEL_CATALOG = {
     },
     {
       modelName: pickerModelForTier("fast"),
+      contextWindowTokens: contextWindowForModel(pickerModelForTier("fast")),
       host: "anthropic",
       lab: "anthropic",
       jurisdiction: "US",
@@ -133,6 +140,7 @@ export const BYOK_MODEL_CATALOG = {
   openai: [
     {
       modelName: "gpt-5.4",
+      contextWindowTokens: contextWindowForModel("gpt-5.4"),
       host: "openai",
       lab: "openai",
       jurisdiction: "US",
@@ -141,6 +149,7 @@ export const BYOK_MODEL_CATALOG = {
     },
     {
       modelName: "gpt-5.4-mini",
+      contextWindowTokens: contextWindowForModel("gpt-5.4-mini"),
       host: "openai",
       lab: "openai",
       jurisdiction: "US",
@@ -149,6 +158,7 @@ export const BYOK_MODEL_CATALOG = {
     },
     {
       modelName: "gpt-5.4-nano",
+      contextWindowTokens: contextWindowForModel("gpt-5.4-nano"),
       host: "openai",
       lab: "openai",
       jurisdiction: "US",
@@ -159,6 +169,7 @@ export const BYOK_MODEL_CATALOG = {
   google: [
     {
       modelName: "gemini-2.5-pro",
+      contextWindowTokens: contextWindowForModel("gemini-2.5-pro"),
       host: "google",
       lab: "google",
       jurisdiction: "US",
@@ -167,6 +178,7 @@ export const BYOK_MODEL_CATALOG = {
     },
     {
       modelName: "gemini-2.5-flash",
+      contextWindowTokens: contextWindowForModel("gemini-2.5-flash"),
       host: "google",
       lab: "google",
       jurisdiction: "US",
@@ -175,6 +187,7 @@ export const BYOK_MODEL_CATALOG = {
     },
     {
       modelName: "gemini-2.5-flash-lite",
+      contextWindowTokens: contextWindowForModel("gemini-2.5-flash-lite"),
       host: "google",
       lab: "google",
       jurisdiction: "US",
@@ -185,6 +198,7 @@ export const BYOK_MODEL_CATALOG = {
   groq: [
     {
       modelName: "llama-3.3-70b-versatile",
+      contextWindowTokens: contextWindowForModel("llama-3.3-70b-versatile"),
       host: "groq",
       lab: "meta",
       jurisdiction: "US",
@@ -193,6 +207,7 @@ export const BYOK_MODEL_CATALOG = {
     },
     {
       modelName: "openai/gpt-oss-120b",
+      contextWindowTokens: contextWindowForModel("openai/gpt-oss-120b"),
       host: "groq",
       lab: "openai",
       jurisdiction: "US",
@@ -210,6 +225,7 @@ export const BYOK_MODEL_CATALOG = {
   deepseek: [
     {
       modelName: "deepseek-chat",
+      contextWindowTokens: contextWindowForModel("deepseek-chat"),
       host: "openai", // OpenAI-compatible wire protocol
       lab: "openai", // (Lab field is uninformative for DeepSeek today;
       // adding "deepseek" as a ModelLab is a separate

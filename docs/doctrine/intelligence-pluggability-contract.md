@@ -59,7 +59,7 @@ System prompt assembly takes the provider's capability profile as input:
 
 - Doctrine teaching blocks (PERCEPTION_DOCTRINE et al.) can compress under a declared `promptVerbosity` budget without dropping wire-field semantics.
 - Tool schemas can prune to the consumer's active tier set when total budget pressure demands it.
-- `trimConversation` in `packages/ai-core/src/context-window.ts` reserves the system-prompt + tool budget instead of treating them as free.
+- History is budgeted against the model's window with the system-prompt + tool budget reserved, not treated as free. **Shipped for history:** the loop measures the turn's assembled system prompt, tool schemas and current message (`measureNonHistoryTokens`, `packages/ai-core/src/loop.ts`) and the conversation manager sizes history to `clamp(window − measured − outputReserve, 6,976, per-tier ceiling)` (`historyBudgetForWindow`, `packages/ai-core/src/context-window.ts`); windows come from the SDK's closed per-model table (`contextWindowForModel`) or `RuntimeConfig.contextWindowTokens`. `trimConversation` skips a message that does not fit instead of stopping at it. See [`docs/design/context-trimming-parity.md`](../design/context-trimming-parity.md). Prompt compression and tool pruning (the two bullets above) remain unbuilt.
 
 The shape of "compression" is not arbitrary truncation — it is removing rule-shaped conformance clauses (per `runtime-invariants-over-prompt-rules.md`) while preserving the typed-truth wire-field teachings that the runtime cannot enforce. This is the same five-question audit, parameterized by model.
 

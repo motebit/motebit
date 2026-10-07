@@ -49,6 +49,7 @@ import {
   CONTEXT_SAFE_SENSITIVITY,
   RiskLevel,
   modelCapabilityTier,
+  contextWindowForModel,
 } from "@motebit/sdk";
 import type { SensitivityCleared } from "@motebit/sdk";
 import type {
@@ -223,6 +224,7 @@ import type {
   TaskType,
 } from "@motebit/ai-core";
 import { OWNER_ACT, TurnDelegationReceipts } from "./turn-delegation-receipts.js";
+import { historyBoundForCeilings, historyCeilingForTier } from "./history-budget.js";
 import { TurnPrincipal, foreignLocalOnlyRefusal } from "./turn-principal.js";
 import type { ToolCall } from "./turn-principal.js";
 import type { TurnReceiptScope } from "./turn-delegation-receipts.js";
@@ -1385,7 +1387,19 @@ export class MotebitRuntime {
   ): ConstructorParameters<typeof ConversationManager>[0] {
     return {
       motebitId: this.motebitId,
-      maxHistory: config.maxConversationHistory ?? 40,
+      maxHistory: config.maxConversationHistory,
+      // Window, ceiling and reserve are read per call: the model can change
+      // mid-session (`setModel` / `setProvider`).
+      getContextWindowTokens: () =>
+        config.contextWindowTokens ??
+        (this.provider != null ? contextWindowForModel(this.provider.model) : undefined),
+      getHistoryCeilingTokens: () =>
+        historyCeilingForTier(
+          config.historyCeilingTokens,
+          modelCapabilityTier(this.provider?.model ?? ""),
+        ),
+      outputReserveTokens: config.outputReserveTokens,
+      historyBoundTokens: historyBoundForCeilings(config.historyCeilingTokens),
       summarizeAfterMessages: config.summarizeAfterMessages ?? 20,
       store: this.conversationStore,
       getProvider: () => this.provider,
@@ -2713,11 +2727,12 @@ export class MotebitRuntime {
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
 
     try {
-      const trimmed = convo.trimmed();
       // #943: none of the owner's interior for a foreign turn.
       const interior = await this.ownerInteriorForTurn(text, runId, principal);
       const result = await runTurn(this.loopDepsForTurn(clearedLoopDeps, principal), text, {
-        conversationHistory: trimmed,
+        // Sized by the loop once it has measured this turn's prompt + tools.
+        // A foreign turn's view returns [] and the option itself is floored.
+        budgetConversationHistory: (nonHistoryTokens) => convo.trimmed(nonHistoryTokens),
         previousCues: this.latestCues,
         runId,
         sessionInfo: convo.getSessionInfo() ?? undefined,
@@ -3276,7 +3291,6 @@ export class MotebitRuntime {
         yield { type: "approval_voided" as const, tool_name: voidedApproval.toolName };
       }
 
-      const trimmed = convo.trimmed();
       // #943: none of the owner's interior for a foreign turn.
       const interior = await this.ownerInteriorForTurn(text, runId, principal);
 
@@ -3300,7 +3314,9 @@ export class MotebitRuntime {
       this._activeTurnGrant = presentedGrant ?? options?.verifiedGrant ?? null;
 
       const stream = runTurnStreaming(this.loopDepsForTurn(clearedLoopDeps, principal), text, {
-        conversationHistory: trimmed,
+        // Sized by the loop once it has measured this turn's prompt + tools.
+        // A foreign turn's view returns [] and the option itself is floored.
+        budgetConversationHistory: (nonHistoryTokens) => convo.trimmed(nonHistoryTokens),
         previousCues: this.latestCues,
         runId,
         sessionInfo: convo.getSessionInfo() ?? undefined,

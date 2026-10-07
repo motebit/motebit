@@ -258,6 +258,7 @@ describe("#943 — floorForeignTurnOptions / foreignSessionState", () => {
       [
         "activationPrompt",
         "agentCapabilities",
+        "budgetConversationHistory",
         "curiosityHints",
         "firstConversation",
         "knownAgents",

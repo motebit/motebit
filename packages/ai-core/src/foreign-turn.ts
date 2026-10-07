@@ -57,6 +57,7 @@ export const TURN_OPTION_FOREIGN_CLASS = {
   sessionState: "projected",
   // The turn's own inputs and control.
   conversationHistory: "turn_own", // foreign: [] (#904) or the resume's private pair
+  budgetConversationHistory: "owner_interior", // reads the owner's history; foreign keeps []
   previousCues: "owner_interior", // the owner's last turn's body cues (#943 round 5)
   runId: "turn_own",
   delegationScope: "turn_own",

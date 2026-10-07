@@ -1,8 +1,30 @@
 # Context trimming: recall parity
 
-Status: design (no production change). Harness:
+Status: **P1 + skip-not-stop implemented** (branch `feat/context-budget-from-window`).
+Acceptance step 1 (harness) is green; step 2 (bench parity, paid model calls)
+and step 3 (cost/latency deltas) have not been run. Harness:
 [`packages/runtime/src/__tests__/context-trimming-parity.test.ts`](../../packages/runtime/src/__tests__/context-trimming-parity.test.ts)
 (helpers in `packages/runtime/src/__tests__/helpers/context-trimming-*.ts`).
+
+## What shipped
+
+| piece         | where                                                                                  | what it does                                                                                                                                                                                                                                                                                        |
+| ------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| window table  | `MODEL_CONTEXT_WINDOW_TOKENS` / `contextWindowForModel` (`packages/sdk/src/models.ts`) | Closed `Record` over every hosted model id. Vendor-published standard-tier windows; `null` = not known (OpenAI `gpt-5.4*`, `deepseek-chat` today). Feeds `ProviderCapability.contextWindowTokens` in the BYOK catalog. Local servers: `RuntimeConfig.contextWindowTokens` (the server's `num_ctx`). |
+| measurement   | `measureNonHistoryTokens` (`packages/ai-core/src/loop.ts`)                             | Per turn, after recall: assembled system prompt (context pack rendered in) + tool schemas + current message. Passed to `TurnOptions.budgetConversationHistory`.                                                                                                                                     |
+| budget        | `historyBudgetForWindow` (`packages/ai-core/src/context-window.ts`)                    | `clamp(window − measured − outputReserve (8,192), 6,976, ceiling)`; unknown window ⇒ 6,976. Ceiling per capability tier, default 64,000 (`RuntimeConfig.historyCeilingTokens`).                                                                                                                     |
+| skip-not-stop | `trimConversation`                                                                     | Newest → oldest, skips a message (or a tool call with its results, as one unit) that does not fit; order and object identity of kept messages unchanged; the trim note is unchanged.                                                                                                                |
+| no count cap  | `ConversationManager` (`packages/runtime/src/conversation.ts`)                         | The 40-message cap is gone (`maxConversationHistory` is now opt-in). In-memory history has a token bound (2 × the largest ceiling) applied identically by `load`, `resumeActiveConversation` and the push paths, so live and resumed conversations hold the same messages.                          |
+
+Governance is unchanged: the sensitivity filter in `trimmed()` runs before the
+budget; a foreign turn's view is empty and `budgetConversationHistory` is
+classified owner-interior (floored away for a foreign turn);
+`assertSensitivityPermitsAiCall` is untouched.
+
+Known limits: the approval-continuation path (`streaming.ts`) still sends the
+live in-memory history unbudgeted, now bounded by the token bound rather than
+40 messages; a small local window should be configured
+(`contextWindowTokens`) and still trims at the 6,976 floor.
 
 ## Problem
 
@@ -13,9 +35,9 @@ and route B (neutral system prompt + the **full** conversation) scored **9.00**.
 The system-prompt contrast (B′ ↔ B″) was not significant. The loss comes from
 trimming, not from the prompt.
 
-## Current policy
+## Policy before this change
 
-There is exactly one history budget, and it never looks at the model.
+There was exactly one history budget, and it never looked at the model.
 
 | step                  | where                                                                                                      | what it does                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | --------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -40,7 +62,7 @@ What does **not** exist:
   `check-prompt-budget` measures static prompt bytes in `prompt.ts` only; it
   does not touch history.
 
-## What the harness shows
+## What the harness showed (before)
 
 Offline, deterministic, no model calls. For each fixture × every model in the
 SDK registry (13 Anthropic, 3 OpenAI, 3 Google, 1 DeepSeek, 2 Groq, 7 local

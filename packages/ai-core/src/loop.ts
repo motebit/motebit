@@ -25,6 +25,8 @@ import type { StateVectorEngine } from "@motebit/state-vector";
 import type { BehaviorEngine } from "@motebit/behavior-engine";
 import type { StreamingProvider } from "./index.js";
 import { inferStateFromText } from "./infer-state.js";
+import { buildSystemPrompt } from "./prompt.js";
+import { estimateTokens } from "./context-window.js";
 import { isSelfReferential, withStageTimeout, STAGE_TIMEOUTS_MS } from "./core.js";
 import { detectDishonestClosing } from "./dishonest-closing.js";
 import type { ToolResultLogEntry } from "./dishonest-closing.js";
@@ -645,6 +647,17 @@ export interface TurnResult {
 
 export interface TurnOptions {
   conversationHistory?: ConversationMessage[];
+  /**
+   * The owner's history, sized for THIS turn. When present it supersedes
+   * `conversationHistory`: the loop measures everything the turn sends
+   * besides history — the assembled system prompt (context pack rendered
+   * in), the tool schemas and the current message — and passes that token
+   * count here; the callee returns its history trimmed to the window that is
+   * left (intelligence-pluggability-contract commitment 2). Which messages
+   * may be sent is the callee's decision, made before budgeting; this only
+   * sizes them. A foreign turn never receives it (owner interior).
+   */
+  budgetConversationHistory?: (nonHistoryTokens: number) => ConversationMessage[];
   previousCues?: BehaviorCues;
   runId?: string;
   /** Session resumption info — set when the runtime loaded a persisted conversation. */
@@ -938,6 +951,20 @@ export function projectProviderClearance(
 
 // === Orchestrator ===
 
+/**
+ * Tokens one turn sends besides history: the system prompt assembled from
+ * this turn's context pack (memories, events, state, skills, the [Now]
+ * block — everything the provider renders into it), the tool schemas, and
+ * the current user message. Same ~4 chars/token estimate as
+ * `trimConversation`. Personality config is not visible here; its notes are
+ * a few hundred characters at most and the output reserve absorbs them.
+ */
+export function measureNonHistoryTokens(pack: ContextPack, model?: string): number {
+  const system = buildSystemPrompt(pack, undefined, model != null ? { model } : undefined);
+  const tools = pack.tools != null && pack.tools.length > 0 ? JSON.stringify(pack.tools) : "";
+  return estimateTokens(system) + estimateTokens(tools) + estimateTokens(pack.user_message);
+}
+
 export async function runTurn(
   deps: SensitivityCleared<MotebitLoopDependencies>,
   userMessage: string,
@@ -1196,7 +1223,33 @@ export async function* runTurnStreaming(
       ? deps.policyGate.filterTools(rawToolDefs, turnCtx)
       : rawToolDefs;
 
-  const conversationHistory: ConversationMessage[] = [...(options?.conversationHistory ?? [])];
+  const conversationHistory: ConversationMessage[] = [
+    ...(options?.budgetConversationHistory != null
+      ? options.budgetConversationHistory(
+          measureNonHistoryTokens(
+            packFor({
+              recent_events: recentEvents,
+              relevant_memories: relevantMemories,
+              current_state: currentState,
+              user_message: userMessage,
+              behavior_cues: options.previousCues,
+              tools: toolDefs,
+              sessionInfo: options.sessionInfo,
+              curiosityHints: options.curiosityHints,
+              knownAgents: options.knownAgents,
+              agentCapabilities: options.agentCapabilities,
+              precisionContext: options.precisionContext,
+              firstConversation: options.firstConversation,
+              activationPrompt: options.activationPrompt,
+              memoryIndex,
+              selectedSkills: options.selectedSkills,
+              sessionState: options.sessionState,
+            }),
+            provider.model,
+          ),
+        )
+      : (options?.conversationHistory ?? [])),
+  ];
 
   let finalText = "";
   let finalResponse;

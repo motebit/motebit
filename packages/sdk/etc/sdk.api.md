@@ -242,6 +242,9 @@ export interface ContextPack {
 }
 
 // @public
+export function contextWindowForModel(model: string): number | undefined;
+
+// @public
 export type ConversationMessage = {
     role: "user";
     content: string;
@@ -464,6 +467,9 @@ export const GROQ_CANONICAL_URL = "https://api.groq.com/openai/v1";
 export const GROQ_MODELS: readonly ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"];
 
 // @public
+export type HostedModel = AnthropicModel | OpenAIModel | GoogleModel | (typeof DEEPSEEK_MODELS)[number] | (typeof GROQ_MODELS)[number];
+
+// @public
 export function inferenceIsFreeToUser(mode: ProviderMode): boolean;
 
 // @public (undocumented)
@@ -624,6 +630,9 @@ export interface MlxProviderSpec {
     // (undocumented)
     model?: string;
 }
+
+// @public
+export const MODEL_CONTEXT_WINDOW_TOKENS: Readonly<Record<HostedModel, number | null>>;
 
 // @public
 export const MODEL_DEFAULT_REVIEW_BY: Record<string, string>;

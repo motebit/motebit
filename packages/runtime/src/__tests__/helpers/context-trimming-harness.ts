@@ -1,39 +1,43 @@
 /**
- * Context-trimming characterization harness (offline, deterministic).
+ * Context-trimming harness (offline, deterministic).
  *
  * Drives the PRODUCTION history path — `ConversationManager.load()` then
- * `ConversationManager.trimmed()` (the exact call `sendMessage*` makes before
- * `runTurn`) — over a conversation fixture, and reports, per model:
+ * `ConversationManager.trimmed(nonHistoryTokens)` (the call the turn loop
+ * makes through `TurnOptions.budgetConversationHistory`) — over a
+ * conversation fixture, with the deps wired the way `MotebitRuntime` wires
+ * them for a model, and reports, per model:
  *
  *   - which history indices survive and which are dropped,
- *   - the history-token budget used vs. the budget production allows vs. the
- *     model's real context window,
+ *   - the history-token budget used vs. allowed vs. the model's window,
  *   - a recall probe: for every planted fact, whether its message survives.
  *
- * It also evaluates a CANDIDATE policy (`windowDerivedBudget`) by calling the
- * real `trimConversation` with a budget derived from the model's window. The
- * candidate is simulation only — production trimming is untouched. See
- * docs/design/context-trimming-parity.md.
+ * It also reproduces the policy that shipped before the window was consulted
+ * (`legacyTrimmed`: a fixed 8,000 − 1,024 budget, drop-oldest that stops at
+ * the first message that does not fit) so the floor case can be checked as
+ * "no worse than before". See docs/design/context-trimming-parity.md.
  *
  * No model, network or tokenizer calls: token counts use the same ~4 chars per
- * token estimate `trimConversation` uses (`packages/ai-core/src/context-window.ts`).
+ * token estimate production uses (`estimateTokens`, @motebit/ai-core).
  */
 
 import { vi } from "vitest";
-import { trimConversation, type ContextBudget } from "@motebit/ai-core";
+import {
+  estimateTokens,
+  historyBudgetForWindow,
+  DEFAULT_OUTPUT_RESERVE_TOKENS,
+  HISTORY_BUDGET_FLOOR_TOKENS,
+  type ContextBudget,
+} from "@motebit/ai-core";
 import type { ConversationMessage, ConversationStoreAdapter } from "@motebit/sdk";
 import { SensitivityLevel, sensitivityPermits } from "@motebit/sdk";
 import { ConversationManager, type ConversationDeps } from "../../conversation.js";
 
-/** The estimator `trimConversation` uses (private there; mirrored, not reimplemented differently). */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
+export { estimateTokens };
 
-/** `CONVERSATION_BUDGET` in packages/runtime/src/conversation.ts, as shipped. */
-export const PRODUCTION_BUDGET: ContextBudget = { maxTokens: 8000, reserveForResponse: 1024 };
+/** The budget that shipped before the window was consulted. */
+export const LEGACY_BUDGET: ContextBudget = { maxTokens: 8000, reserveForResponse: 1024 };
 
-/** The trim note `trimConversation` prepends when it drops and no summary exists. */
+/** The trim note production prepends when it drops and no summary exists. */
 export const GENERIC_TRIM_NOTE =
   "[This conversation continues from earlier. Some messages have been trimmed for context.]";
 
@@ -58,18 +62,17 @@ export interface TrimFixture {
 export interface ModelWindow {
   provider: string;
   model: string;
-  /** Prompt+completion tokens the model accepts — see MODEL_WINDOWS for provenance. */
-  contextWindowTokens: number;
+  /** The window production resolves for the model; `undefined` = not known. */
+  contextWindowTokens: number | undefined;
 }
 
 /**
  * Tokens the rest of a turn needs besides history: system prompt + tool schemas
  * + rendered context pack (~9.5k witnessed in intelligence-pluggability-contract.md
- * "Pre-doctrine", rounded up) and the current user message.
+ * "Pre-doctrine", rounded up) and the current user message. Stands in for the
+ * value the loop measures per turn (`measureNonHistoryTokens`).
  */
 export const NON_HISTORY_OVERHEAD_TOKENS = 12_000;
-/** Output reserve for the candidate policy (matches the order of A's max_tokens). */
-export const CANDIDATE_OUTPUT_RESERVE_TOKENS = 8_192;
 
 export interface FactProbe {
   id: string;
@@ -81,32 +84,19 @@ export interface TrimReport {
   fixture: string;
   provider: string;
   model: string;
-  policy: "production" | "window-derived";
+  policy: "production" | "legacy";
   historyMessages: number;
   survivingIndices: number[];
   droppedIndices: number[];
   trimNote: string | null;
   fullHistoryTokens: number;
   keptHistoryTokens: number;
-  /** History tokens the policy allows (maxTokens − reserveForResponse). */
+  /** History tokens the policy allows. */
   historyBudgetTokens: number;
-  contextWindowTokens: number;
+  contextWindowTokens: number | undefined;
   /** Whether the full conversation + overhead + output reserve fits the real window. */
   fullConversationFitsWindow: boolean;
   facts: FactProbe[];
-}
-
-/**
- * Candidate: history budget = window − non-history overhead − output reserve,
- * floored at today's history budget (a small window never trims harder than
- * production does). Output reserve is already subtracted, so `reserveForResponse`
- * is 0 here.
- */
-export function windowDerivedBudget(window: ModelWindow): ContextBudget {
-  const productionHistory = PRODUCTION_BUDGET.maxTokens - PRODUCTION_BUDGET.reserveForResponse;
-  const fromWindow =
-    window.contextWindowTokens - NON_HISTORY_OVERHEAD_TOKENS - CANDIDATE_OUTPUT_RESERVE_TOKENS;
-  return { maxTokens: Math.max(productionHistory, fromWindow), reserveForResponse: 0 };
 }
 
 function fixtureStore(fixture: TrimFixture, summary: string | null): ConversationStoreAdapter {
@@ -135,15 +125,17 @@ function fixtureStore(fixture: TrimFixture, summary: string | null): Conversatio
   } as ConversationStoreAdapter;
 }
 
+/** Deps as `MotebitRuntime.buildConversationDeps` builds them, minus the runtime. */
 export function harnessDeps(
   store: ConversationStoreAdapter | null,
   overrides: Partial<ConversationDeps> = {},
 ): ConversationDeps {
   return {
     motebitId: "mb-harness",
-    maxHistory: 40,
     summarizeAfterMessages: 20,
     store,
+    // The runtime stamps persisted messages at None (buildConversationDeps).
+    defaultSensitivity: SensitivityLevel.None,
     // No provider: nothing in the harness can reach a model.
     getProvider: () => null,
     getTaskRouter: () => null,
@@ -164,40 +156,62 @@ export interface RunOptions {
   effectiveSensitivity?: SensitivityLevel;
 }
 
-/** History as the production path hands it to `runTurn`. */
+/** History as the production path hands it to the turn, for one model. */
 export function productionTrimmed(
   fixture: TrimFixture,
+  window: ModelWindow,
   options: RunOptions = {},
 ): { history: ConversationMessage[]; trimmed: ConversationMessage[] } {
   const cm = new ConversationManager(
     harnessDeps(fixtureStore(fixture, options.summary ?? null), {
       getEffectiveSensitivity: () => options.effectiveSensitivity ?? SensitivityLevel.None,
+      getContextWindowTokens: () => window.contextWindowTokens,
     }),
   );
   cm.load(`conv-${fixture.id}`);
-  return { history: cm.getHistory(), trimmed: cm.trimmed() };
+  return { history: cm.getHistory(), trimmed: cm.trimmed(NON_HISTORY_OVERHEAD_TOKENS) };
 }
 
 /**
- * The candidate policy over the same read path: the sensitivity filter exactly
- * as `ConversationManager.trimmed()` applies it (same predicate, same effective
- * tier — a larger window never loosens it), then the real `trimConversation`
- * with the window-derived budget.
+ * The policy that shipped before this change, reproduced for comparison: the
+ * same sensitivity filter, then a fixed 6,976-token budget walked newest →
+ * oldest that STOPS at the first message that does not fit.
  */
-export function candidateTrimmed(
+export function legacyTrimmed(
   fixture: TrimFixture,
-  window: ModelWindow,
   options: RunOptions = {},
 ): { history: ConversationMessage[]; trimmed: ConversationMessage[] } {
   const effective = options.effectiveSensitivity ?? SensitivityLevel.None;
-  const { history } = productionTrimmed(fixture, options);
+  const history = fixture.history.map((m) => ({ ...m }));
   const filtered = history.filter(
     (m) => m.sensitivity == null || sensitivityPermits(effective, m.sensitivity),
   );
-  return {
-    history,
-    trimmed: trimConversation(filtered, windowDerivedBudget(window), options.summary ?? null),
-  };
+  const available = LEGACY_BUDGET.maxTokens - LEGACY_BUDGET.reserveForResponse;
+  let total = 0;
+  let cutoff = 0;
+  for (let i = filtered.length - 1; i >= 0; i--) {
+    const t = estimateTokens(filtered[i]!.content);
+    if (total + t > available) {
+      cutoff = i + 1;
+      break;
+    }
+    total += t;
+  }
+  const kept = filtered.slice(cutoff);
+  if (cutoff === 0) return { history, trimmed: kept };
+  const note =
+    options.summary != null && options.summary !== ""
+      ? `[Earlier in this conversation: ${options.summary}]`
+      : GENERIC_TRIM_NOTE;
+  return { history, trimmed: [{ role: "user", content: note }, ...kept] };
+}
+
+/** The budget production computes for this model at the harness overhead. */
+export function productionBudget(window: ModelWindow): ContextBudget {
+  return historyBudgetForWindow({
+    contextWindowTokens: window.contextWindowTokens,
+    nonHistoryTokens: NON_HISTORY_OVERHEAD_TOKENS,
+  });
 }
 
 function report(
@@ -229,11 +243,12 @@ function report(
     historyBudgetTokens: budget.maxTokens - budget.reserveForResponse,
     contextWindowTokens: window.contextWindowTokens,
     fullConversationFitsWindow:
+      window.contextWindowTokens != null &&
       fullHistoryTokens +
         estimateTokens(fixture.question) +
         NON_HISTORY_OVERHEAD_TOKENS +
-        CANDIDATE_OUTPUT_RESERVE_TOKENS <=
-      window.contextWindowTokens,
+        DEFAULT_OUTPUT_RESERVE_TOKENS <=
+        window.contextWindowTokens,
     facts: fixture.facts.map((f) => ({
       id: f.id,
       messageIndex: f.messageIndex,
@@ -243,33 +258,35 @@ function report(
   };
 }
 
-/** Production behaviour for one fixture × model. The model is reported, not consulted. */
+/** Production behaviour for one fixture × model. */
 export function analyzeProduction(
   fixture: TrimFixture,
   window: ModelWindow,
   options: RunOptions = {},
 ): TrimReport {
-  const { history, trimmed } = productionTrimmed(fixture, options);
-  return report(fixture, window, "production", PRODUCTION_BUDGET, history, trimmed);
+  const { history, trimmed } = productionTrimmed(fixture, window, options);
+  return report(fixture, window, "production", productionBudget(window), history, trimmed);
 }
 
-/** Candidate (window-derived budget) behaviour for one fixture × model. */
-export function analyzeCandidate(
+/** The pre-change policy for one fixture × model (the model is reported, not consulted). */
+export function analyzeLegacy(
   fixture: TrimFixture,
   window: ModelWindow,
   options: RunOptions = {},
 ): TrimReport {
-  const { history, trimmed } = candidateTrimmed(fixture, window, options);
-  return report(fixture, window, "window-derived", windowDerivedBudget(window), history, trimmed);
+  const { history, trimmed } = legacyTrimmed(fixture, options);
+  return report(fixture, window, "legacy", LEGACY_BUDGET, history, trimmed);
 }
+
+export { HISTORY_BUDGET_FLOOR_TOKENS };
 
 /** One line per report — printed by the test so the matrix is readable in CI logs. */
 export function formatRow(r: TrimReport): string {
   const facts = r.facts.map((f) => `${f.id}@${f.messageIndex}:${f.survives ? "kept" : "LOST"}`);
   return [
-    r.policy.padEnd(14),
+    r.policy.padEnd(11),
     `${r.provider}/${r.model}`.padEnd(44),
-    `window=${r.contextWindowTokens}`.padEnd(15),
+    `window=${r.contextWindowTokens ?? "unknown"}`.padEnd(15),
     `budget=${r.historyBudgetTokens}`.padEnd(14),
     `kept=${r.keptHistoryTokens}/${r.fullHistoryTokens}`.padEnd(16),
     `msgs=${r.survivingIndices.length}/${r.historyMessages}`.padEnd(10),
