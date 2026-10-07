@@ -46,7 +46,13 @@ export async function startReplRelay(opts: ReplRelayOptions): Promise<CliEventPu
     motebitId,
     eventStore: opts.eventStore,
     ...(privateKeyBytes && deviceId && opts.devicePublicKey
-      ? { device: { deviceId, publicKeyHex: opts.devicePublicKey } }
+      ? {
+          device: {
+            deviceId,
+            publicKeyHex: opts.devicePublicKey,
+            privateKey: privateKeyBytes,
+          },
+        }
       : {}),
     log: (line) => opts.log(dim(line)),
     warn: opts.warn,

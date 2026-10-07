@@ -75,6 +75,8 @@ export interface PushDevice {
   motebitId: string;
   deviceId: string;
   publicKeyHex: string;
+  /** The key `publicKeyHex` names: the bootstrap is signed by it (#875). */
+  privateKey: Uint8Array;
 }
 
 interface PushLoop extends CliEventPush {
@@ -180,7 +182,7 @@ export interface ReplStartupSyncOptions {
   syncUrl: string;
   motebitId: string;
   /** Present when the identity key opened: the device is bootstrapped first. */
-  device?: { deviceId: string; publicKeyHex: string };
+  device?: { deviceId: string; publicKeyHex: string; privateKey: Uint8Array };
   log: (line: string) => void;
   warn: (line: string) => void;
   /** The periodic push interval (ms). Default `PUSH_INTERVAL_MS`. */

@@ -34,6 +34,7 @@ import {
   deriveSovereignMotebitId,
   getPublicKeyBySuite,
   mintAudienceToken,
+  signDeviceRegistration,
 } from "../../packages/crypto/src/index.js";
 import type { TokenAudience } from "../../packages/protocol/src/index.js";
 
@@ -121,11 +122,19 @@ export async function bootstrapProbeDelegator(
   const res = await fetchImpl(`${relayUrl}/api/v1/agents/bootstrap`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      motebit_id: d.motebitId,
-      device_id: d.deviceId,
-      public_key: d.publicKeyHex,
-    }),
+    // Signed by the key it introduces: the relay refuses an unsigned
+    // bootstrap (#875 — proof of possession).
+    body: JSON.stringify(
+      await signDeviceRegistration(
+        {
+          motebit_id: d.motebitId,
+          device_id: d.deviceId,
+          public_key: d.publicKeyHex,
+          timestamp: Date.now(),
+        },
+        d.privateKey,
+      ),
+    ),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");

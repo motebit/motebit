@@ -82,7 +82,7 @@ import type { MotebitDatabase } from "../runtime-factory.js";
 import { parseCliArgs } from "../args.js";
 import { cliRuntimeConfig, daemonRelay } from "../sync-configured.js";
 import { createDaemonRelaySync } from "../daemon-relay-sync.js";
-import { registerWithRelay } from "../relay-registration.js";
+import { registerWithRelay, signedBootstrapBody } from "../relay-registration.js";
 import { decryptPrivateKey, fromHex } from "../identity.js";
 import {
   bootstrapReplIdentity,
@@ -208,7 +208,13 @@ async function bootstrap(base: string, mid: string, deviceId: string, kp: KeyPai
   const resp = await fetch(`${base}/api/v1/agents/bootstrap`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ motebit_id: mid, device_id: deviceId, public_key: hex(kp) }),
+    // Signed by the key it introduces (#875).
+    body: await signedBootstrapBody({
+      motebitId: mid,
+      deviceId,
+      publicKeyHex: hex(kp),
+      privateKey: kp.privateKey,
+    }),
   });
   expect(resp.ok).toBe(true);
 }
@@ -248,6 +254,7 @@ const device = (ctx: CellCtx) => ({
   motebitId: ctx.mid,
   deviceId: ctx.deviceId,
   publicKeyHex: hex(ctx.kp),
+  privateKey: ctx.kp.privateKey,
 });
 
 async function startDaemon(ctx: CellCtx, which: "run" | "serve"): Promise<Started> {
@@ -319,7 +326,7 @@ const ENTRIES: Record<Entry, (ctx: CellCtx) => Promise<Started>> = {
       syncUrl: ctx.base,
       motebitId: ctx.mid,
       eventStore: moteDb.eventStore,
-      device: { deviceId: ctx.deviceId, publicKeyHex: hex(ctx.kp) },
+      device: { deviceId: ctx.deviceId, publicKeyHex: hex(ctx.kp), privateKey: ctx.kp.privateKey },
       log: (l) => ctx.lines.push(l),
       warn: (l) => ctx.lines.push(l),
       pushIntervalMs: PUSH_MS,
