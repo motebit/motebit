@@ -16,7 +16,11 @@ import type {
   ContextPack,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, RiskLevel, rankSensitivity } from "@motebit/sdk";
-import { CONTEXT_SAFE_SENSITIVITY as CANONICAL_CONTEXT_SAFE_SENSITIVITY } from "@motebit/sdk";
+import {
+  interiorEgressPermits,
+  interiorEgressSensitivities,
+  interiorEventsPermittedAt,
+} from "./interior-egress.js";
 import type { SensitivityCleared } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
@@ -1038,9 +1042,11 @@ async function recallOwnerInterior(
   // stuck remote embed, or wedged memory graph must surface as a specific
   // `StageTimeoutError` in seconds rather than hang the turn silently. See
   // `STAGE_TIMEOUTS_MS` in core.ts for deadlines (single source of truth).
-  // The egress-safe tiers (< medical) — canonical, derived from the rank ceiling
-  // in @motebit/protocol so auto-injection and the recall tool share one source.
-  const CONTEXT_SAFE_SENSITIVITY = [...CANONICAL_CONTEXT_SAFE_SENSITIVITY];
+  // The tiers this turn's request may carry — the one interior-egress rule
+  // (`interior-egress.ts`): context-safe at any tier (so every tier an
+  // external provider ever sends at), up to the send tier on-device.
+  const sendTier = deps.getEffectiveSensitivity?.();
+  const permitted = interiorEgressSensitivities(sendTier);
 
   // Emptiness probe BEFORE the context batch. A brand-new / anonymous motebit
   // has no memory, so embedding the user message (~450ms remote call — the
@@ -1091,7 +1097,7 @@ async function recallOwnerInterior(
   // 2. Similarity retrieval depends on the embedding — runs after parallel batch.
   // Skipped entirely on an empty graph (no embedding was computed).
   const pinnedMemories = pinnedMemoriesRaw.filter((m) =>
-    CONTEXT_SAFE_SENSITIVITY.includes(m.sensitivity),
+    interiorEgressPermits(sendTier, m.sensitivity),
   );
   const similarityMemories = hasMemory
     ? await withStageTimeout(
@@ -1100,7 +1106,7 @@ async function recallOwnerInterior(
         memoryGraph.recallRelevant(queryEmbedding, {
           limit: 5,
           strengthenCoRetrieved: true,
-          sensitivityFilter: CONTEXT_SAFE_SENSITIVITY,
+          sensitivityFilter: permitted,
         }),
         (ms) => {
           timings.memoryRetrieveMs = ms;
@@ -1117,7 +1123,7 @@ async function recallOwnerInterior(
   // turn. The agent still gets Layer-2 retrieval via `relevant_memories`.
   let memoryIndex: string | undefined;
   try {
-    const maybe = await memoryGraph.getMemoryIndex?.();
+    const maybe = await memoryGraph.getMemoryIndex?.({ sensitivityFilter: permitted });
     if (typeof maybe === "string" && maybe.length > 0) memoryIndex = maybe;
   } catch {
     // Index is a pure projection; a store error is the deps' problem, not
@@ -1125,33 +1131,12 @@ async function recallOwnerInterior(
   }
 
   return {
-    recentEvents: eventsPermittedAt(recentEvents, deps.getEffectiveSensitivity?.()),
+    recentEvents: interiorEventsPermittedAt(recentEvents, sendTier),
     queryEmbedding,
     relevantMemories,
     memoryIndex,
     timings,
   };
-}
-
-/**
- * A `state_updated` event carries the exchange verbatim (`user_message`,
- * `response`) and renders into `[Recent Events]`, so it is conversation
- * history by another channel: it gets the history's read-side filter. The
- * write stamps the tier the exchange ran at; an event stamped above the
- * tier this turn sends at is withheld. Unstamped (pre-stamp) events pass,
- * as untagged history messages do.
- */
-function eventsPermittedAt(
-  events: EventLogEntry[],
-  tier: SensitivityLevel | undefined,
-): EventLogEntry[] {
-  const sendTier = rankSensitivity(tier ?? SensitivityLevel.None);
-  return events.filter((e) => {
-    if (e.event_type !== EventType.StateUpdated) return true;
-    const stamped = (e.payload as { sensitivity?: unknown }).sensitivity;
-    if (typeof stamped !== "string") return true;
-    return rankSensitivity(stamped as SensitivityLevel) <= sendTier;
-  });
 }
 
 export async function* runTurnStreaming(
@@ -2222,7 +2207,7 @@ export async function* runTurnStreaming(
       user_message: userMessage,
       response: finalText,
       memories_formed: memoriesFormed.length,
-      // Read back by `eventsPermittedAt` — the exchange's tier.
+      // Read back by `interiorEventsPermittedAt` — the exchange's tier.
       sensitivity: deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
     },
     tombstoned: false,

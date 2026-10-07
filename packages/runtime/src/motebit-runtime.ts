@@ -2571,7 +2571,9 @@ export class MotebitRuntime {
     const selectedSkills = await this.resolveSkillsForTurn(text);
     await this.emitSkillLoadEvents(selectedSkills, runId);
     return {
-      curiosityHints: this.gradientManager.buildCuriosityHints(),
+      curiosityHints: this.gradientManager.buildCuriosityHints(
+        this.getEffectiveSessionSensitivity(),
+      ),
       knownAgents,
       agentCapabilities,
       precisionContext: selfAwareness || undefined,
@@ -3943,6 +3945,9 @@ export class MotebitRuntime {
       getConversationSummary: () => this.conversation.getStoredSummary(),
       // Reflection sends this to a provider — the tier-filtered view.
       getConversationHistory: () => this.conversation.egressHistory(),
+      // The tier reflection sends at — filters its memories and past
+      // reflections, and stamps the reflection it records.
+      getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
     };
   }
 
@@ -3998,6 +4003,8 @@ export class MotebitRuntime {
         payload: {
           prompt_preview: prompt.slice(0, 100),
           result_preview: result.slice(0, 100),
+          // Read back by `interiorEventsPermittedAt`.
+          sensitivity: this.getEffectiveSessionSensitivity(),
         },
         tombstoned: false,
       });
@@ -5146,7 +5153,13 @@ export class MotebitRuntime {
         motebit_id: this.motebitId,
         timestamp: Date.now(),
         event_type: EventType.ToolUsed,
-        payload: { tool: toolName, result_summary: String(result).slice(0, 500) },
+        payload: {
+          tool: toolName,
+          result_summary: String(result).slice(0, 500),
+          // The tier the result was produced at — read back by
+          // `interiorEventsPermittedAt` before it enters [Recent Events].
+          sensitivity: this.getEffectiveSessionSensitivity(),
+        },
         tombstoned: false,
       });
     } catch {

@@ -6,12 +6,13 @@
  * wiring rather than gradient bookkeeping.
  */
 
-import type { PrecisionWeights, MemoryNode } from "@motebit/sdk";
+import type { PrecisionWeights, MemoryNode, SensitivityLevel } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, CuriosityTarget } from "@motebit/memory-graph";
 import type { StateVectorEngine } from "@motebit/state-vector";
 import type { ReflectionResult } from "@motebit/ai-core";
+import { interiorEgressPermits } from "@motebit/ai-core";
 import type { AuditLogSink } from "@motebit/policy";
 import {
   computeGradient,
@@ -277,11 +278,21 @@ export class GradientManager {
   // --- Self-Awareness Context ---
 
   /** Convert curiosity targets to lightweight hints for the context pack. */
-  buildCuriosityHints(): Array<{ content: string; daysSinceDiscussed: number }> | undefined {
-    if (this._curiosityTargets.length === 0) return undefined;
+  /**
+   * Curiosity hints carry memory content into the turn's request, so only
+   * targets the interior-egress rule permits at `sendTier` (the tier the
+   * turn sends at) are hinted.
+   */
+  buildCuriosityHints(
+    sendTier: SensitivityLevel | undefined,
+  ): Array<{ content: string; daysSinceDiscussed: number }> | undefined {
+    const targets = this._curiosityTargets.filter((t) =>
+      interiorEgressPermits(sendTier, t.node.sensitivity),
+    );
+    if (targets.length === 0) return undefined;
     const DAY = 86_400_000;
     const now = Date.now();
-    return this._curiosityTargets.slice(0, 2).map((t) => ({
+    return targets.slice(0, 2).map((t) => ({
       content: t.node.content,
       daysSinceDiscussed: Math.round((now - t.node.last_accessed) / DAY),
     }));

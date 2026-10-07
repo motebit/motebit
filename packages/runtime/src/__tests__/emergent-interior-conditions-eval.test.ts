@@ -139,16 +139,21 @@ describe("Condition 2 — context about what would fill the gaps", () => {
       {
         node: {
           content: "the user's home automation project",
+          sensitivity: "none",
           last_accessed: Date.now() - 5 * 86_400_000,
         },
         score: 0.9,
       },
       {
-        node: { content: "TypeScript strictness migration", last_accessed: Date.now() },
+        node: {
+          content: "TypeScript strictness migration",
+          sensitivity: "none",
+          last_accessed: Date.now(),
+        },
         score: 0.5,
       },
     ] as never);
-    const hints = manager.buildCuriosityHints();
+    const hints = manager.buildCuriosityHints(undefined);
     expect(hints).toBeDefined();
     expect(hints![0]!.content).toContain("home automation");
     expect(hints![0]!.daysSinceDiscussed).toBe(5);

@@ -100,7 +100,9 @@ async function seededDeps(contexts: ContextPack[]): Promise<MotebitLoopDependenc
     motebit_id: asMotebitId("owner-mote"),
     timestamp: Date.now(),
     event_type: EventType.StateUpdated,
-    payload: { note: `${MARK}-event` },
+    // Stamped as the loop stamps it — an unstamped content event is
+    // withheld from every request (interior-egress.ts).
+    payload: { note: `${MARK}-event`, sensitivity: SensitivityLevel.None },
     tombstoned: false,
   });
   return {

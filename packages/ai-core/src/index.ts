@@ -34,4 +34,12 @@ export type {
 
 // loadConfig is Node-only (node:fs) — import directly from @motebit/ai-core/dist/config-loader.js
 export { turnFormationMode } from "./foreign-turn.js";
+// The one rule for owner-interior content entering a provider request.
+export {
+  interiorEgressCeiling,
+  interiorEgressPermits,
+  interiorEgressSensitivities,
+  interiorEventsPermittedAt,
+  METADATA_ONLY_EVENT_TYPES,
+} from "./interior-egress.js";
 export type { TurnFormationMode } from "./foreign-turn.js";

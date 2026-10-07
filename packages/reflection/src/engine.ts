@@ -14,7 +14,7 @@ import type {
   ReflectionResult,
   PastReflection,
 } from "@motebit/ai-core";
-import { reflect } from "@motebit/ai-core";
+import { reflect, interiorEgressPermits, interiorEventsPermittedAt } from "@motebit/ai-core";
 import {
   embedText,
   textSimilarity,
@@ -52,6 +52,13 @@ export interface ReflectionDeps {
   getConversationSummary(): string | null;
   /** Get current conversation history. */
   getConversationHistory(): ConversationMessage[];
+  /**
+   * The tier the reflection request is sent at. Its memories, audit and
+   * past reflections pass the interior-egress rule at this tier
+   * (`interiorEgressPermits`), and the reflection it records — and the
+   * insights it persists — are stamped with it.
+   */
+  getEffectiveSensitivity(): SensitivityLevel;
 }
 
 /**
@@ -73,19 +80,26 @@ export async function performReflection(
   goals?: Array<{ description: string; status: string }>,
 ): Promise<ReflectionResult> {
   const summary = deps.getConversationSummary();
+  const sendTier = deps.getEffectiveSensitivity();
 
-  const recentMemories = await deps.memory.exportAll();
+  // Only the memories the request may carry at its tier — [Relevant
+  // Memories] and [Memory Audit] both render node content. Edges into a
+  // withheld node go too, so the audit cannot surface it as a neighbor.
+  const exported = await deps.memory.exportAll();
+  const nodes = exported.nodes.filter((n) => interiorEgressPermits(sendTier, n.sensitivity));
+  const kept = new Set(nodes.map((n) => n.node_id));
+  const edges = exported.edges.filter((e) => kept.has(e.source_id) && kept.has(e.target_id));
   // The same slice fed to the LLM is the insight's source observations —
   // kept as full nodes (not just content) so persisted insights can link
   // back to their antecedents via `DerivedFrom` (provenance).
-  const sourceNodes = recentMemories.nodes.slice(0, 10);
+  const sourceNodes = nodes.slice(0, 10);
   const memories = sourceNodes.map((n) => ({ content: n.content }));
 
   // Query past reflections for trajectory — the creature sees its own reflection history
-  const pastReflections = await loadPastReflections(deps, 5);
+  const pastReflections = await loadPastReflections(deps, 5, sendTier);
 
   // Run memory audit — surface phantom certainties, conflicts, near-death nodes
-  const auditSummary = buildAuditSummary(recentMemories.nodes, recentMemories.edges);
+  const auditSummary = buildAuditSummary(nodes, edges);
 
   // Use summary when available to keep reflection context bounded.
   // Raw history is only needed when no summary exists (short conversations).
@@ -106,9 +120,9 @@ export async function performReflection(
   // Selective persistence: store high-signal insights as semantic memories.
   // Generic self-talk stays in the event log only. High-signal insights
   // reference concrete entities, pass a novelty check, and aren't repeated.
-  void persistHighSignalInsights(deps, result.insights, pastReflections, sourceNodes);
+  void persistHighSignalInsights(deps, result.insights, pastReflections, sourceNodes, sendTier);
 
-  void logReflectionCompleted(deps, result);
+  void logReflectionCompleted(deps, result, sendTier);
 
   // Single state pulse: reflection completed → brief confidence + warmth spike
   const cur = deps.state.getState();
@@ -146,6 +160,7 @@ export async function runReflectionSafe(
 async function logReflectionCompleted(
   deps: ReflectionDeps,
   result: ReflectionResult,
+  sendTier: SensitivityLevel,
 ): Promise<void> {
   try {
     await deps.events.appendWithClock({
@@ -164,6 +179,9 @@ async function logReflectionCompleted(
         plan_adjustments: result.planAdjustments,
         patterns: result.patterns,
         self_assessment: result.selfAssessment,
+        // The tier the reflection ran at — read back by
+        // `interiorEventsPermittedAt` (past reflections, [Recent Events]).
+        sensitivity: sendTier,
       },
       tombstoned: false,
     });
@@ -176,7 +194,11 @@ async function logReflectionCompleted(
  * Load past reflection results from the event log for trajectory analysis.
  * Returns most recent first, capped at `limit`.
  */
-async function loadPastReflections(deps: ReflectionDeps, limit: number): Promise<PastReflection[]> {
+async function loadPastReflections(
+  deps: ReflectionDeps,
+  limit: number,
+  sendTier: SensitivityLevel,
+): Promise<PastReflection[]> {
   try {
     const events = await deps.events.query({
       motebit_id: deps.motebitId,
@@ -184,7 +206,9 @@ async function loadPastReflections(deps: ReflectionDeps, limit: number): Promise
       limit,
     });
 
-    return events
+    // A past reflection's insights derive from what it was sent: only the
+    // ones stamped at a tier this request may carry (unstamped: withheld).
+    return interiorEventsPermittedAt(events, sendTier)
       .filter((e) => Array.isArray(e.payload.insights) || Array.isArray(e.payload.plan_adjustments))
       .map((e) => ({
         timestamp: e.timestamp,
@@ -299,7 +323,8 @@ async function persistHighSignalInsights(
   deps: ReflectionDeps,
   insights: string[],
   pastReflections: PastReflection[],
-  sourceNodes: MemoryNode[] = [],
+  sourceNodes: MemoryNode[],
+  sendTier: SensitivityLevel,
 ): Promise<number> {
   if (insights.length === 0) return 0;
 
@@ -338,7 +363,11 @@ async function persistHighSignalInsights(
       const candidate = {
         content: insight,
         confidence: REFLECTION_CONFIDENCE,
-        sensitivity: SensitivityLevel.None,
+        // The insight derives from what the reflection was sent, so it
+        // carries the tier it ran at (the turn's candidate floor, applied
+        // here) — a Secret-tier reflection's insight is never stored as
+        // `none` and recalled into a later external request.
+        sensitivity: sendTier,
         memory_type: MemoryType.Semantic,
       };
 
