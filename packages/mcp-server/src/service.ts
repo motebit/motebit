@@ -123,6 +123,19 @@ export interface RelayAuth {
   deviceId: string;
   /** Mint a signed bearer bound to `audience`. Called per request; tokens are short-lived. */
   mint: (audience: TokenAudience) => Promise<string>;
+  /**
+   * Sign the bootstrap introduction with the identity key — the relay refuses
+   * an unsigned `POST /api/v1/agents/bootstrap` (#875: proof of possession of
+   * the key it names). Returns the device-registration request
+   * (`signDeviceRegistration` from `@motebit/crypto` over `body` plus a fresh
+   * `timestamp`). Absent ⇒ bootstrap is skipped and said so; a service whose
+   * key the relay already holds still registers with its signed bearer.
+   */
+  signRegistration?: (body: {
+    motebit_id: string;
+    device_id: string;
+    public_key: string;
+  }) => Promise<Record<string, unknown>>;
 }
 
 export interface WireServerDepsOptions {
@@ -659,16 +672,32 @@ export async function startServiceServer(
      * it means this identity is bound to someone else's key on this relay.
      */
     let bootstrapped = false;
+    let bootstrapUnsignedLogged = false;
     const bootstrap = async (): Promise<void> => {
       if (bootstrapped) return;
+      // The relay admits an introduction only when it is signed by the key it
+      // names (#875). Without a signer there is nothing to send: an unsigned
+      // bootstrap is refused, so say so once and let the signed-bearer
+      // register proceed (it succeeds when the relay already holds our key).
+      if (relayAuth.signRegistration == null) {
+        if (!bootstrapUnsignedLogged) {
+          bootstrapUnsignedLogged = true;
+          log(
+            `Relay bootstrap skipped: the relay requires proof of possession of the key ` +
+              `(a device-registration signature) and relayAuth.signRegistration is not wired.`,
+          );
+        }
+        return;
+      }
+      const signed = await relayAuth.signRegistration({
+        motebit_id: deps.motebitId,
+        device_id: relayAuth.deviceId,
+        public_key: deps.publicKeyHex ?? "",
+      });
       const resp = await fetch(`${config.syncUrl}/api/v1/agents/bootstrap`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          motebit_id: deps.motebitId,
-          device_id: relayAuth.deviceId,
-          public_key: deps.publicKeyHex ?? "",
-        }),
+        body: JSON.stringify(signed),
         signal: AbortSignal.timeout(10_000),
       });
       if (resp.ok) {

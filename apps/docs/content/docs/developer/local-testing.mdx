@@ -65,13 +65,30 @@ Agent registration is a two-step process: bootstrap the identity, then register 
 
 ### 1. Bootstrap the identity
 
-```bash
-curl -X POST http://localhost:3000/api/v1/agents/bootstrap \
-  -H "Content-Type: application/json" \
-  -d '{
-    "motebit_id": "agent-alice",
-    "public_key": "0000000000000000000000000000000000000000000000000000000000000001"
-  }'
+Bootstrap takes no bearer token; instead it proves possession of the key it introduces. The body is a device-registration request signed by that key (`signDeviceRegistration` from `@motebit/crypto`, the same construction as `POST /api/v1/devices/register-self` — see the [device self-registration spec](https://github.com/motebit/motebit/blob/main/spec/device-self-registration-v1.md)). A relay that enforces it (#875) refuses an unsigned body with `400 KEY_PROOF_REQUIRED`; an older relay ignores the signature fields, so the signed body works against both. The signature carries a timestamp and must reach the relay within 5 minutes of signing.
+
+With a CLI identity, `motebit register --sync-url http://localhost:3000` signs and sends it for you. To bootstrap a throwaway test agent by hand, sign it in a short script. Run it where `@motebit/crypto` resolves. The repository root does not depend on it, so use a scratch directory (`mkdir alice && cd alice && npm init -y && npm i @motebit/crypto tsx`) or a workspace package that depends on `@motebit/crypto`:
+
+```ts
+// bootstrap-alice.mts — run with: npx tsx bootstrap-alice.mts
+import { generateKeypair, bytesToHex, signDeviceRegistration } from "@motebit/crypto";
+
+const kp = await generateKeypair();
+const body = await signDeviceRegistration(
+  {
+    motebit_id: "agent-alice",
+    device_id: "alice-laptop",
+    public_key: bytesToHex(kp.publicKey),
+    timestamp: Date.now(),
+  },
+  kp.privateKey,
+);
+const res = await fetch("http://localhost:3000/api/v1/agents/bootstrap", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+console.log(res.status, await res.json());
 ```
 
 The relay returns:
@@ -79,12 +96,12 @@ The relay returns:
 ```json
 {
   "motebit_id": "agent-alice",
-  "device_id": "bootstrap-device",
+  "device_id": "alice-laptop",
   "registered": true
 }
 ```
 
-The `public_key` must be a 64-character hex string (32 bytes). For real agents, this is the Ed25519 public key from `generateKeypair()`. For quick manual testing, any valid hex string works — signature verification will fail on receipt delivery, but the registration and task submission paths still exercise correctly.
+The `public_key` must be a 64-character lowercase hex string (32 bytes). The script mints a new keypair on every run, so running it again against the same relay returns `409`: `agent-alice` already holds the first run's key, and the relay admits only a key the identity already holds. Use a fresh `motebit_id`, or reset the relay's database, to run it again. Save the keypair if you want the agent to sign tokens or receipts later. On a relay that enforces #875, a `motebit_id` shaped like a sovereign id (a UUIDv8) must be the commitment to the key (`deriveSovereignMotebitId`), or the relay refuses it with `409`.
 
 ### 2. Register capabilities
 
