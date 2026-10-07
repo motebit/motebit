@@ -21,6 +21,8 @@ import {
   stripPartialActionTag,
   stripInternalTags,
   stripActionCues,
+  stripInternalTagsForDisplay,
+  isActionCue,
   extractActions,
   actionsToStateUpdates,
 } from "../core.js";
@@ -157,10 +159,68 @@ describe("display parity (iii): cue extraction is unchanged", () => {
 
   it("every stripped cue is one that drives creature state", () => {
     for (const [input] of CUED_ANSWERS) {
-      const removed = extractActions(input).filter((a) => !stripTags(input).includes(`*${a}*`));
+      const output = stripTags(input);
+      const removed = [...input.matchAll(/(?<!\*)\*([^*\n]+)\*(?!\*)/g)]
+        .filter((m) => !output.includes(m[0]))
+        .map((m) => m[1]!);
+      expect(removed.length > 0).toBe(output !== input.trim());
       for (const cue of removed) {
         expect(Object.keys(actionsToStateUpdates([cue])).length).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+describe("action cue boundaries", () => {
+  it("isActionCue: lexicon lead verb, short, single line", () => {
+    expect(isActionCue("smiles")).toBe(true);
+    expect(isActionCue("gently nods")).toBe(true);
+    expect(isActionCue("eyes widen")).toBe(true);
+    expect(isActionCue("")).toBe(false);
+    expect(isActionCue("smiles\nagain")).toBe(false);
+    expect(isActionCue("smiles `x`")).toBe(false);
+    expect(isActionCue("smiles at the user for a very long while now")).toBe(false);
+    expect(isActionCue("really")).toBe(false);
+    expect(isActionCue("happily ever after")).toBe(false);
+  });
+
+  it("never strips across a space-padded closer, a word-bound closer, or code", () => {
+    for (const text of [
+      "*smiles *",
+      "*smiles*ly",
+      "a *nods `x`* b",
+      "``code *nods* still code`` and `x`",
+      "* nods*",
+    ]) {
+      expect(stripActionCues(text)).toBe(text);
+    }
+  });
+
+  it("an unmatched backtick opens code to the end of its paragraph only", () => {
+    expect(stripActionCues("`open *nods*\n\n*nods* after")).toBe("`open *nods*\n\nafter");
+  });
+
+  it("partial mode holds a cue that may still be forming", () => {
+    expect(stripPartialActionTag("Okay. *")).toBe("Okay.");
+    expect(stripPartialActionTag("Okay. *smi")).toBe("Okay.");
+    expect(stripPartialActionTag("Okay. *smiles*")).toBe("Okay.");
+    expect(stripPartialActionTag("Okay. *smiles* now")).toBe("Okay. now");
+    // too long to be a cue — not held
+    expect(stripPartialActionTag("x *a b c d e f g h i j")).toBe("x *a b c d e f g h i j");
+    // not at the end of the text — a closed line is settled
+    expect(stripPartialActionTag("x *smi\nnext")).toBe("x *smi\nnext");
+  });
+
+  it("stripInternalTagsForDisplay hides tags and cues, keeps markdown", () => {
+    expect(
+      stripInternalTagsForDisplay("<thinking>t</thinking>*nods* **Yes**:\n\n- a\n    - b"),
+    ).toBe("**Yes**:\n\n- a\n    - b");
+  });
+
+  it("removal never collides with private-use characters already in the text", () => {
+    let all = "";
+    for (let c = 0xe000; c <= 0xf8ff; c++) all += String.fromCharCode(c);
+    const text = `${all} *nods* **ok**`;
+    expect(stripActionCues(text)).toBe(`${all} **ok**`);
   });
 });

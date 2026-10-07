@@ -669,22 +669,266 @@ export function actionsToStateUpdates(actions: string[]): Partial<MotebitState> 
   return deltas;
 }
 
+// === Display text ===
+//
+// What the user SEES is the model's markdown, byte-for-byte, minus two
+// things: internal tags (hidden fail-closed — even inside code, by the
+// tag regexes below, unchanged) and `*action cue*` narration. A cue is a
+// single-asterisk span on one line whose text leads with a verb from the
+// ACTION_RULES lexicon (`*smiles*`, `*drifts closer*`) — never `**bold**`,
+// never an italic phrase, never `a*b*c`, never anything in code. Whitespace
+// is never collapsed: only the blank-line run a removed tag or cue leaves
+// behind is folded (to at most one blank line, never more than was there).
+
+/** Tag patterns hidden from the final answer text (`stripTags`). */
+const STRIP_TAG_PATTERNS: readonly RegExp[] = [
+  /<memory\s+[^>]*>[\s\S]*?<\/memory>/g,
+  /<thinking>[\s\S]*?<\/thinking>/g,
+  /<state\s+[^>]*\/>/g,
+  /<narration\s*>[\s\S]*?<\/narration\s*>/g,
+  /\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g,
+  /\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g,
+  /\[EXTERNAL_DATA[^\]]*\]/g,
+  /\[\/EXTERNAL_DATA\]/g,
+  /\[MEMORY_DATA\]/g,
+  /\[\/MEMORY_DATA\]/g,
+];
+
+/** Tag patterns of `stripInternalTags` (incl. partial fragments mid-stream). */
+const INTERNAL_TAG_PATTERNS: readonly RegExp[] = [
+  /<state\s+[^>]*\/>/g,
+  /<thinking>[\s\S]*?<\/thinking>/g,
+  /<memory\s+[^>]*>[\s\S]*?<\/memory>/g,
+  /\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g,
+  /\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g,
+  /\[EXTERNAL_DATA[^\]]*\]/g,
+  /\[\/EXTERNAL_DATA\]/g,
+  /\[MEMORY_DATA\]/g,
+  /\[\/MEMORY_DATA\]/g,
+  /<(?:state|thinking|memory)[^>]*$/g,
+];
+
+/** A cue is short narration, not a sentence. */
+const MAX_CUE_WORDS = 8;
+
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+/**
+ * True when `inner` (the text between single asterisks) is an action cue:
+ * at most {@link MAX_CUE_WORDS} words, leading — after at most one `-ly`
+ * adverb — with a verb from the ACTION_RULES lexicon that drives creature
+ * state.
+ */
+export function isActionCue(inner: string): boolean {
+  const text = inner.trim();
+  if (text === "" || /[\n*`]/.test(text)) return false;
+  const words = text.split(/\s+/);
+  if (words.length > MAX_CUE_WORDS) return false;
+  const leads = [text];
+  if (words.length > 1 && /ly$/i.test(words[0]!)) leads.push(words.slice(1).join(" "));
+  return leads.some((lead) =>
+    ACTION_RULES.some((rule) => {
+      const m = rule.pattern.exec(lead);
+      return m !== null && m.index === 0;
+    }),
+  );
+}
+
+interface CueScan {
+  /** [start, end) spans of action cues, in order. */
+  spans: Array<[number, number]>;
+  /** In partial mode: offset of a cue that may still be forming; text from here is held. */
+  holdFrom: number | null;
+}
+
+/**
+ * Locate action cues outside code. Fenced blocks (``` / ~~~, unclosed runs
+ * to the end) and inline code spans (an unmatched backtick run opens code
+ * to the end of its paragraph) are skipped. `partial` marks the text as a
+ * stream prefix: a cue whose closing `*` is the last char, or an opener
+ * with no closer yet on the last line, reports `holdFrom` instead.
+ */
+function scanActionCues(text: string, partial: boolean): CueScan {
+  const spans: Array<[number, number]> = [];
+  let fence: { char: string; len: number } | null = null;
+  let tickLen = 0;
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    const nl = text.indexOf("\n", lineStart);
+    const lineEnd = nl === -1 ? text.length : nl;
+    const isLast = nl === -1;
+    const line = text.slice(lineStart, lineEnd);
+
+    if (fence !== null) {
+      const close = /^[ \t]*(`{3,}|~{3,})[ \t]*\r?$/.exec(line);
+      if (close && close[1]![0] === fence.char && close[1]!.length >= fence.len) fence = null;
+    } else if (tickLen === 0 && /^[ \t]*(`{3,}|~{3,})/.test(line)) {
+      const run = /^[ \t]*(`{3,}|~{3,})/.exec(line)![1]!;
+      fence = { char: run[0]!, len: run.length };
+    } else if (line.trim() === "") {
+      tickLen = 0; // a blank line ends the paragraph — and any unmatched code span
+    } else {
+      let i = 0;
+      while (i < line.length) {
+        const ch = line[i]!;
+        if (ch === "`") {
+          let r = 1;
+          while (line[i + r] === "`") r++;
+          if (tickLen === 0) tickLen = r;
+          else if (r === tickLen) tickLen = 0;
+          i += r;
+          continue;
+        }
+        if (tickLen > 0 || ch !== "*") {
+          i++;
+          continue;
+        }
+        const prev = i > 0 ? line[i - 1]! : "";
+        const next = line[i + 1];
+        const opener = prev !== "*" && !WORD_CHAR.test(prev) && next !== "*";
+        if (!opener) {
+          i++;
+          continue;
+        }
+        if (next === undefined || /\s/.test(next)) {
+          // A lone `*` at the very end of a stream prefix may still open a cue.
+          if (partial && isLast && next === undefined) return { spans, holdFrom: lineStart + i };
+          i++;
+          continue;
+        }
+        const j = line.indexOf("*", i + 1);
+        if (j === -1) {
+          const tail = line.slice(i + 1);
+          const couldForm = !tail.includes("`") && tail.split(/\s+/).length <= MAX_CUE_WORDS;
+          if (partial && isLast && couldForm) return { spans, holdFrom: lineStart + i };
+          i++;
+          continue;
+        }
+        const inner = line.slice(i + 1, j);
+        if (inner.includes("`")) {
+          i++;
+          continue;
+        }
+        const after = line[j + 1];
+        const closer = !/\s/.test(line[j - 1]!) && after !== "*";
+        if (!closer || (after !== undefined && WORD_CHAR.test(after))) {
+          i++;
+          continue;
+        }
+        if (isActionCue(inner)) {
+          // At the end of a stream prefix the next char could still be `*`.
+          if (partial && isLast && after === undefined) return { spans, holdFrom: lineStart + i };
+          spans.push([lineStart + i, lineStart + j + 1]);
+        }
+        i = j + 1;
+      }
+    }
+    if (isLast) break;
+    lineStart = lineEnd + 1;
+  }
+  return { spans, holdFrom: null };
+}
+
+/** A private-use char absent from `text`, used to mark removed spans. */
+function pickRemovalMarker(text: string): string {
+  for (let code = 0xe000; code <= 0xf8ff; code++) {
+    const ch = String.fromCharCode(code);
+    if (!text.includes(ch)) return ch;
+  }
+  return "\u0000";
+}
+
+/**
+ * Fold the whitespace a removal left behind, and nothing else. Inline: a
+ * mid-line removal keeps one separating space; at line start the
+ * indentation is kept; at line end trailing spaces go. Lines emptied by a
+ * removal are dropped, and a blank-line run that contained one keeps at
+ * most one of its own blank lines.
+ */
+function foldRemovals(text: string, marker: string): string {
+  if (!text.includes(marker)) return text;
+  const inline = new RegExp(`([ \\t]*)${marker}(?:[ \\t]*${marker})*([ \\t]*)`, "g");
+  const lines = text.split("\n").map((line) => {
+    if (!line.includes(marker)) return { text: line, removed: false };
+    const cleaned = line.replace(
+      inline,
+      (match: string, lead: string, trail: string, offset: number) => {
+        const atStart = offset === 0;
+        const atEnd = offset + match.length === line.length || line[offset + match.length] === "\r";
+        if (atEnd) return "";
+        if (atStart) return lead;
+        return lead !== "" || trail !== "" ? " " : "";
+      },
+    );
+    return { text: cleaned, removed: cleaned.trim() === "" };
+  });
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i]!.text.trim() !== "") {
+      out.push(lines[i]!.text);
+      i++;
+      continue;
+    }
+    let j = i;
+    let kept = 0;
+    let touched = false;
+    while (j < lines.length && lines[j]!.text.trim() === "") {
+      if (lines[j]!.removed) touched = true;
+      else kept++;
+      j++;
+    }
+    if (!touched) {
+      for (let k = i; k < j; k++) out.push(lines[k]!.text);
+    } else if (kept > 0) {
+      out.push(lines.slice(i, j).find((l) => !l.removed)!.text);
+    }
+    i = j;
+  }
+  return out.join("\n");
+}
+
+/**
+ * Render model text for display: hide `tagPatterns` (fail-closed, applied
+ * verbatim), remove lexicon action cues outside code, fold the whitespace
+ * removals leave. Never collapses or trims otherwise — callers trim.
+ *
+ * `partial` treats the text as a stream prefix: a cue that may still be
+ * forming is cut off (held) rather than flashed. Shared by every display
+ * path (final answer, live stream, plain-text and markdown surfaces).
+ */
+export function renderDisplayText(
+  text: string,
+  tagPatterns: readonly RegExp[],
+  options: { partial?: boolean } = {},
+): string {
+  const marker = pickRemovalMarker(text);
+  let out = text;
+  for (const pattern of tagPatterns) out = out.replace(pattern, marker);
+  const { spans, holdFrom } = scanActionCues(out, options.partial === true);
+  if (holdFrom !== null) out = out.slice(0, holdFrom);
+  for (let k = spans.length - 1; k >= 0; k--) {
+    const [start, end] = spans[k]!;
+    out = out.slice(0, start) + marker + out.slice(end);
+  }
+  return foldRemovals(out, marker);
+}
+
+/**
+ * `stripInternalTags` plus lexicon action cues, whitespace folded only where
+ * a removal was; trimmed. For complete stored text (e.g. history reload).
+ */
+export function stripInternalTagsForDisplay(text: string): string {
+  return renderDisplayText(text, INTERNAL_TAG_PATTERNS).trim();
+}
+
+/** Remove lexicon action cues (outside code) from already tag-free text; trims. */
+export function stripActionCues(text: string): string {
+  return renderDisplayText(text, []).trim();
+}
+
 export function stripTags(text: string): string {
-  return text
-    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-    .replace(/<state\s+[^>]*\/>/g, "")
-    .replace(/<narration\s*>[\s\S]*?<\/narration\s*>/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
-    .replace(/\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\]/g, "")
-    .replace(/\[\/MEMORY_DATA\]/g, "")
-    .replace(/\*[^*]+\*/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  return renderDisplayText(text, STRIP_TAG_PATTERNS).trim();
 }
 
 // === Impulse Map ===
@@ -812,19 +1056,13 @@ export function stripInternalTags(text: string): string {
 }
 
 /**
- * Strip internal tags plus the creature's `*action*` asterisk syntax and
- * normalize whitespace. Used by plain-text chat surfaces (desktop) that
- * render `bubble.textContent` directly — markdown surfaces (web) use
- * `stripInternalTags` alone because their `*italic*` asterisks are
- * rendered by the markdown pass, not stripped.
+ * Display text for plain-text and streaming surfaces: internal tags (incl.
+ * partial fragments) hidden, lexicon `*action*` cues removed — a cue still
+ * forming at the end is held, never flashed — and markdown preserved
+ * byte-for-byte. Whitespace is never collapsed; the answer is trimmed.
  */
 export function stripPartialActionTag(text: string): string {
-  return stripInternalTags(text)
-    .replace(/\*[^*]+\*/g, "")
-    .replace(/\*[^*]*$/, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  return renderDisplayText(text, INTERNAL_TAG_PATTERNS, { partial: true }).trim();
 }
 
 function parseSensitivity(raw: string): SensitivityLevel {

@@ -9,6 +9,7 @@ import {
   InworldSTTProvider,
   FallbackTTSProvider,
   StreamingTTSQueue,
+  speechText,
   computeSpeechEnergy,
   createWaveformState,
   renderVoiceWaveform,
@@ -770,7 +771,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
 
   function speakAssistantResponse(text: string): void {
     if (!voiceResponseEnabled) return;
-    const clean = stripTags(text).trim();
+    const clean = speechText(stripTags(text));
     if (clean) speakText(clean);
   }
 

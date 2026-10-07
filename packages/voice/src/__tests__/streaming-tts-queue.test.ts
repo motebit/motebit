@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { StreamingTTSQueue } from "../streaming-tts-queue.js";
+import { StreamingTTSQueue, speechText } from "../streaming-tts-queue.js";
 
 function createQueue(opts?: { onDrainStart?: () => void; onDrainEnd?: () => void }) {
   const spoken: string[] = [];
@@ -115,5 +115,21 @@ describe("StreamingTTSQueue", () => {
     queue.push("respond.");
     await vi.waitFor(() => expect(spoken).toHaveLength(1));
     expect(spoken[0]).toBe("Let me think about this,");
+  });
+});
+
+describe("speechText", () => {
+  it("drops markdown emphasis asterisks but keeps the words", () => {
+    expect(speechText("  **Install** the *latest* build. ")).toBe("Install the latest build.");
+  });
+
+  it("never speaks asterisks streamed through the queue", async () => {
+    const { queue, spoken } = createQueue();
+    queue.push("Here is **the plan**, step one. ");
+    queue.push("Then ***ship*** it");
+    queue.flush();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(spoken.join(" ")).not.toContain("*");
+    expect(spoken.join(" ")).toContain("the plan");
   });
 });

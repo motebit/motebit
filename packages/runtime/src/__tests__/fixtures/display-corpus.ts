@@ -1,8 +1,8 @@
 /**
  * Display-parity corpus — real-shaped assistant answers carrying markdown,
- * internal tags, and action cues. Mirrored by the runtime's live-stream
- * parity test (`packages/runtime/src/__tests__/fixtures/display-corpus.ts`);
- * extend both together.
+ * internal tags, and action cues, for the live-stream parity test. Mirror
+ * of `packages/ai-core/src/__tests__/fixtures/display-corpus.ts` (packages
+ * may not import each other's tests); extend both together.
  *
  * `MARKDOWN_ANSWERS` contain no internal tags and no action cues: every
  * display path must return them byte-for-byte (modulo the whole-answer

@@ -370,8 +370,10 @@ describe("sendMessageStreaming", () => {
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("hello"));
     expect(chunks).toHaveLength(3);
-    expect(chunks[0]).toEqual({ type: "text", text: "Streamed " });
-    expect(chunks[1]).toEqual({ type: "text", text: "response" });
+    // Trailing whitespace is held until text follows it (a removal may fold
+    // it away), so the delta boundary moves; the joined text is unchanged.
+    expect(chunks[0]).toEqual({ type: "text", text: "Streamed" });
+    expect(chunks[1]).toEqual({ type: "text", text: " response" });
     expect(chunks[2]).toEqual({ type: "result", result });
   });
 

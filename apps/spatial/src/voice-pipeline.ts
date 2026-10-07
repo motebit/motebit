@@ -18,6 +18,7 @@ import {
   OpenAITTSProvider,
   ElevenLabsTTSProvider,
   FallbackTTSProvider,
+  speechText,
   type STTProvider,
   type TTSProvider,
   type OpenAITTSVoice,
@@ -249,8 +250,8 @@ export class SpatialVoicePipeline {
   async speak(text: string): Promise<void> {
     if (!this.tts) return;
 
-    const clean = stripTags(text);
-    if (!clean.trim()) return;
+    const clean = speechText(stripTags(text));
+    if (!clean) return;
 
     // Pause STT while speaking to avoid feedback loop
     if (this.stt?.listening === true) {

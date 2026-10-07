@@ -591,6 +591,18 @@ describe("isConfigReachable", () => {
 // === cleanConversationHistory ===
 
 describe("cleanConversationHistory", () => {
+  it("preserves markdown and whitespace; removes tags and lexicon action cues", () => {
+    const content =
+      '*smiles* Here is **the plan**:\n\n1. One  \n   - *nested*\n<state field="x" value="1"/>\n\n```\na  *  b\n```';
+    const result = cleanConversationHistory([{ role: "assistant", content }]);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: "Here is **the plan**:\n\n1. One  \n   - *nested*\n\n```\na  *  b\n```",
+      },
+    ]);
+  });
+
   it("passes through clean user/assistant messages", () => {
     const messages = [
       { role: "user", content: "Hello" },
@@ -637,10 +649,10 @@ describe("cleanConversationHistory", () => {
     expect(result).toEqual([{ role: "assistant", content: "Response text more text." }]);
   });
 
-  it("collapses multiple spaces", () => {
+  it("preserves runs of spaces (markdown / code indentation is content)", () => {
     const messages = [{ role: "assistant", content: "Hello    world" }];
     const result = cleanConversationHistory(messages);
-    expect(result).toEqual([{ role: "assistant", content: "Hello world" }]);
+    expect(result).toEqual([{ role: "assistant", content: "Hello    world" }]);
   });
 
   it("filters out system messages", () => {

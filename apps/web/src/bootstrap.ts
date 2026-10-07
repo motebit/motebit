@@ -4,7 +4,7 @@
  *
  * These live here (not in main.ts) so they can be tested without DOM side effects.
  */
-import { stripInternalTags } from "@motebit/ai-core";
+import { stripInternalTagsForDisplay } from "@motebit/ai-core";
 import type { ProviderConfig } from "./storage";
 
 // === Local Inference Probing ===
@@ -379,7 +379,8 @@ export interface ConversationMessage {
 
 /**
  * Clean conversation history for display — strip leaked internal tags
- * (thinking, memory, state) and collapse whitespace.
+ * (thinking, memory, state) and action cues; markdown and whitespace are
+ * preserved.
  */
 export function cleanConversationHistory(
   messages: ConversationMessage[],
@@ -387,7 +388,7 @@ export function cleanConversationHistory(
   const result: Array<{ role: "user" | "assistant"; content: string }> = [];
   for (const msg of messages) {
     if (msg.role !== "user" && msg.role !== "assistant") continue;
-    const clean = stripInternalTags(msg.content).replace(/ {2,}/g, " ").trim();
+    const clean = stripInternalTagsForDisplay(msg.content);
     if (clean) {
       result.push({ role: msg.role, content: clean });
     }

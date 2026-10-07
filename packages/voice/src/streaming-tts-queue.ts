@@ -10,6 +10,14 @@
  * UI side effects (mic state, animation, audio flags) stay in surface code
  * via the optional `onDrainStart` / `onDrainEnd` hooks.
  */
+/**
+ * Text as it should be spoken: markdown emphasis asterisks (`**bold**`,
+ * `*italic*`) are display syntax, never read aloud. Trimmed.
+ */
+export function speechText(text: string): string {
+  return text.replace(/\*+/g, "").trim();
+}
+
 export class StreamingTTSQueue {
   private buffer = "";
   private queue: string[] = [];
@@ -43,7 +51,7 @@ export class StreamingTTSQueue {
       : /^([\s\S]{12,}?[.!?:;,])\s+([\s\S]*)$/;
     const match = this.buffer.match(pattern);
     if (match) {
-      const clause = match[1]!.trim();
+      const clause = speechText(match[1]!);
       this.buffer = match[2]!;
       if (clause) {
         this.queue.push(clause);
@@ -54,7 +62,7 @@ export class StreamingTTSQueue {
 
   /** Flush remaining buffer (call at end of stream). */
   flush(): void {
-    const remaining = this.buffer.trim();
+    const remaining = speechText(this.buffer);
     this.buffer = "";
     if (remaining) {
       this.queue.push(remaining);

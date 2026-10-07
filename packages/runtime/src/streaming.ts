@@ -15,7 +15,7 @@ import type {
 } from "@motebit/sdk";
 import type { BehaviorCues, SensitivityCleared, SensitivityGateEntry } from "@motebit/sdk";
 import type { AgenticChunk, TurnResult } from "@motebit/ai-core";
-import { extractStateTags, runTurnStreaming } from "@motebit/ai-core";
+import { extractStateTags, renderDisplayText, runTurnStreaming } from "@motebit/ai-core";
 import type { MotebitLoopDependencies } from "@motebit/ai-core";
 import type { SignableToolInvocationReceipt } from "@motebit/crypto";
 import { signToolInvocationReceipt, hashToolPayload, signApprovalDecision } from "@motebit/crypto";
@@ -26,8 +26,6 @@ import { OWNER_ACT } from "./turn-delegation-receipts.js";
 import type { ToolCall } from "./turn-principal.js";
 import type { TurnConversation } from "./conversation.js";
 
-// Re-import the helper — it's file-local in index.ts, so we duplicate it here.
-// Exact copy of the function from index.ts.
 /**
  * Stable identity for "the human refused THIS action" (#433). Tool name plus
  * the exact arguments, key-sorted so object-key order can't mint a fresh
@@ -45,26 +43,34 @@ function deniedIntentKey(toolName: string, args: Record<string, unknown>): strin
   return `${toolName}:${canonical}`;
 }
 
-function stripDisplayTags(text: string): { clean: string; pending: string } {
-  const clean = text
-    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-    // The narration contract (prompt.ts, task_step_narration) PROMISES the
-    // tag never leaks into the chat register — the typed chunk is its only
-    // carrier. Witnessed leaking verbatim 2026-07-29 on the first live
-    // Opus round: promised in the prompt, missing from this list.
-    .replace(/<narration>[\s\S]*?<\/narration>/g, "")
-    .replace(/<state\s+[^>]*\/>/g, "")
-    .replace(/<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g, "")
-    .replace(/<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
-    .replace(/\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\]/g, "")
-    .replace(/\[\/MEMORY_DATA\]/g, "")
-    .replace(/\*{1,3}/g, "")
-    .replace(/ {2,}/g, " ");
+/** Tags hidden from the live chat stream. */
+const STREAM_TAG_PATTERNS: readonly RegExp[] = [
+  /<memory\s+[^>]*>[\s\S]*?<\/memory>/g,
+  /<thinking>[\s\S]*?<\/thinking>/g,
+  // The narration contract (prompt.ts, task_step_narration) PROMISES the
+  // tag never leaks into the chat register — the typed chunk is its only
+  // carrier. Witnessed leaking verbatim 2026-07-29 on the first live
+  // Opus round: promised in the prompt, missing from this list.
+  /<narration>[\s\S]*?<\/narration>/g,
+  /<state\s+[^>]*\/>/g,
+  /<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g,
+  /<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g,
+  /\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g,
+  /\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g,
+  /\[EXTERNAL_DATA[^\]]*\]/g,
+  /\[\/EXTERNAL_DATA\]/g,
+  /\[MEMORY_DATA\]/g,
+  /\[\/MEMORY_DATA\]/g,
+];
+
+/**
+ * Display text of a stream prefix. Rendering (tag hiding, lexicon action
+ * cues, whitespace) is ai-core's `renderDisplayText` — the same rules as the
+ * final answer, so markdown streams byte-for-byte. `final` marks the
+ * complete text: a cue still forming is resolved instead of held.
+ */
+function stripDisplayTags(text: string, final = false): { clean: string; pending: string } {
+  const clean = renderDisplayText(text, STREAM_TAG_PATTERNS, { partial: !final });
 
   for (const tag of ["<memory", "<thinking", "<parameter", "<narration"]) {
     const lastOpen = clean.lastIndexOf(tag);
@@ -829,17 +835,29 @@ export class StreamingManager {
 
       // Strip state/memory/action tags from text before yielding to UI
       if (chunk.type === "text") {
-        // trimStart: tags before text leave orphaned newlines
-        const clean = stripDisplayTags(accumulated).clean.trimStart();
+        // trimStart: tags before text leave orphaned newlines. trimEnd:
+        // trailing whitespace is held until text follows it, so a removal
+        // that folds it away can never retract what was already yielded.
+        const clean = stripDisplayTags(accumulated).clean.trim();
         let delta = clean.slice(yieldedCleanLength);
         if (delta) {
           // Defense-in-depth: redact secrets from AI text at the streaming
           // boundary. Pattern-based redaction works on partial text fragments.
           delta = this.deps.redactText(delta);
-          yieldedCleanLength += clean.slice(yieldedCleanLength).length;
+          yieldedCleanLength = clean.length;
           yield { type: "text" as const, text: delta };
         }
       } else {
+        if (chunk.type === "result") {
+          // The stream is complete: release a trailing cue-shaped span that
+          // was held while it might still have been forming.
+          const clean = stripDisplayTags(accumulated, true).clean.trim();
+          const delta = clean.slice(yieldedCleanLength);
+          if (delta) {
+            yieldedCleanLength = clean.length;
+            yield { type: "text" as const, text: this.deps.redactText(delta) };
+          }
+        }
         yield chunk;
       }
       if (chunk.type === "result") {

@@ -22,7 +22,8 @@ let mockTTS: {
   cancel: ReturnType<typeof vi.fn>;
 };
 
-vi.mock("@motebit/voice", () => ({
+vi.mock("@motebit/voice", async () => ({
+  speechText: (await vi.importActual<typeof import("@motebit/voice")>("@motebit/voice")).speechText,
   WebSpeechSTTProvider: vi.fn(function () {
     return mockSTT;
   }),
