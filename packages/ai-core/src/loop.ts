@@ -1124,7 +1124,34 @@ async function recallOwnerInterior(
     // the turn's. Swallow and continue.
   }
 
-  return { recentEvents, queryEmbedding, relevantMemories, memoryIndex, timings };
+  return {
+    recentEvents: eventsPermittedAt(recentEvents, deps.getEffectiveSensitivity?.()),
+    queryEmbedding,
+    relevantMemories,
+    memoryIndex,
+    timings,
+  };
+}
+
+/**
+ * A `state_updated` event carries the exchange verbatim (`user_message`,
+ * `response`) and renders into `[Recent Events]`, so it is conversation
+ * history by another channel: it gets the history's read-side filter. The
+ * write stamps the tier the exchange ran at; an event stamped above the
+ * tier this turn sends at is withheld. Unstamped (pre-stamp) events pass,
+ * as untagged history messages do.
+ */
+function eventsPermittedAt(
+  events: EventLogEntry[],
+  tier: SensitivityLevel | undefined,
+): EventLogEntry[] {
+  const sendTier = rankSensitivity(tier ?? SensitivityLevel.None);
+  return events.filter((e) => {
+    if (e.event_type !== EventType.StateUpdated) return true;
+    const stamped = (e.payload as { sensitivity?: unknown }).sensitivity;
+    if (typeof stamped !== "string") return true;
+    return rankSensitivity(stamped as SensitivityLevel) <= sendTier;
+  });
 }
 
 export async function* runTurnStreaming(
@@ -2195,6 +2222,8 @@ export async function* runTurnStreaming(
       user_message: userMessage,
       response: finalText,
       memories_formed: memoriesFormed.length,
+      // Read back by `eventsPermittedAt` — the exchange's tier.
+      sensitivity: deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
     },
     tombstoned: false,
   });

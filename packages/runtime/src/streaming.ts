@@ -1091,16 +1091,17 @@ export class StreamingManager {
       }
 
       // #904: the continuation's history. An OWNER resume records the pair
-      // in the owner's conversation and continues over it. A FOREIGN resume
-      // continues over a private copy — the pair is that principal's turn,
-      // never the owner's history (the conversation manager refuses the
-      // write anyway; this keeps the continuation's own context whole).
+      // in the owner's conversation and continues over it — through the
+      // same `trimmed` a normal turn uses: filtered to the tier at send
+      // time, then budgeted. A FOREIGN resume continues over the pair
+      // alone — that principal's turn, never the owner's history (the
+      // conversation manager refuses the write anyway).
       let continuationHistory: ConversationMessage[];
       if (principal.foreign) {
-        continuationHistory = [...convo.liveHistory(), ...continuationPair];
+        continuationHistory = [...continuationPair];
       } else {
         convo.injectIntermediateMessages(continuationPair[0], continuationPair[1]);
-        continuationHistory = convo.liveHistory();
+        continuationHistory = convo.trimmed();
       }
 
       // Run continuation turn with updated history. `priorTurnActions`

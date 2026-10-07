@@ -438,7 +438,7 @@ function main(): void {
   //         member is inert (no history, no summary, no session facts, every
   //         write a no-op); `conversation.ts` reads no foreign state itself;
   //   (iii) no non-test runtime file reaches the turn-facing members
-  //         (`trimmed`, `liveHistory`, `getSessionInfo`, `clearSessionInfo`,
+  //         (`trimmed`, `getSessionInfo`, `clearSessionInfo`,
   //         `pushExchange`, `pushActivation`, `injectIntermediateMessages`)
   //         except through `.forTurn(…)`, and StreamingManager is wired only
   //         with `conversationFor: (principal) => this.conversation.forTurn(principal)`;
@@ -468,7 +468,7 @@ function main(): void {
       const line = lines[i] as string;
       if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
       if (
-        /\.conversation\.(trimmed|liveHistory|getSessionInfo|clearSessionInfo|pushExchange|pushActivation|injectIntermediateMessages)\b/.test(
+        /\.conversation\.(trimmed|getSessionInfo|clearSessionInfo|pushExchange|pushActivation|injectIntermediateMessages)\b/.test(
           line,
         ) ||
         /this\.deps\.(pushExchange|pushActivation|injectIntermediateMessages|getLiveHistory)\b/.test(
@@ -517,7 +517,6 @@ function main(): void {
   );
   const INERT = [
     "trimmed: () => [],",
-    "liveHistory: () => [],",
     "getSessionInfo: () => null,",
     "clearSessionInfo: () => {},",
     "pushExchange: () => {},",
@@ -573,12 +572,12 @@ function main(): void {
     );
   }
   if (
-    !/if \(principal\.foreign\) \{\s*continuationHistory = \[\.\.\.convo\.liveHistory\(\), \.\.\.continuationPair\];/.test(
+    !/if \(principal\.foreign\) \{\s*continuationHistory = \[\.\.\.continuationPair\];/.test(
       streamingSrc,
     )
   ) {
     historyViolations.push(
-      "packages/runtime/src/streaming.ts: a foreign resume must continue over a private copy (`continuationHistory = [...convo.liveHistory(), ...continuationPair]`), never inject into the owner's history",
+      "packages/runtime/src/streaming.ts: a foreign resume must continue over its own pair alone (`continuationHistory = [...continuationPair]`), never inject into or read the owner's history",
     );
   }
   if (historyViolations.length > 0) {

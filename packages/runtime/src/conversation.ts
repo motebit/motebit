@@ -141,7 +141,6 @@ const CONVERSATION_BUDGET: ContextBudget = {
 /** The conversation as one turn sees it — see {@link ConversationManager.forTurn}. */
 export interface TurnConversation {
   trimmed(): ConversationMessage[];
-  liveHistory(): ConversationMessage[];
   getSessionInfo(): { continued: boolean; lastActiveAt: number } | null;
   clearSessionInfo(): void;
   pushExchange(userMessage: string, assistantResponse: string): void;
@@ -152,7 +151,6 @@ export interface TurnConversation {
 /** A foreign principal's view: nothing of the owner's, nothing written. */
 const FOREIGN_TURN_CONVERSATION: TurnConversation = Object.freeze({
   trimmed: () => [],
-  liveHistory: () => [],
   getSessionInfo: () => null,
   clearSessionInfo: () => {},
   pushExchange: () => {},
@@ -185,14 +183,13 @@ export class ConversationManager {
    *
    * The OWNER's view is this manager. The manager itself no longer reads
    * any "is a foreign turn in flight" state: the owner's own concurrent
-   * reads (a surface rendering `liveHistory`, a reflection) are never
+   * reads (a surface rendering `getHistory`, a reflection) are never
    * blanked because a stranger's task happens to be running.
    */
   forTurn(principal: TurnPrincipal): TurnConversation {
     if (principal.foreign) return FOREIGN_TURN_CONVERSATION;
     return {
       trimmed: () => this.trimmed(),
-      liveHistory: () => this.liveHistory,
       getSessionInfo: () => this.getSessionInfo(),
       clearSessionInfo: () => this.clearSessionInfo(),
       pushExchange: (u, a) => this.pushExchange(u, a),
@@ -239,6 +236,11 @@ export class ConversationManager {
 
   // --- Accessors ---
 
+  /**
+   * Every message in the live history, every tier — for local rendering and
+   * counts. Never hand this to a provider: egress reads `egressHistory` /
+   * `trimmed` (enforced by `egress-history-gate.test.ts`).
+   */
   getHistory(): ConversationMessage[] {
     return [...this.history];
   }
@@ -328,11 +330,22 @@ export class ConversationManager {
    */
   trimmed(): ConversationMessage[] {
     const summary = this.getStoredSummary();
+    return trimConversation(this.egressHistory(), CONVERSATION_BUDGET, summary);
+  }
+
+  /**
+   * The history a provider may receive: the live history filtered to the
+   * session's effective tier AT SEND TIME (read per call — the tier and the
+   * provider can change between turns). Every path that sends conversation
+   * history off this manager reads through here: `trimmed` (turns, the
+   * approval resume) budgets it; summarization, the AI title and reflection
+   * send it whole. `getHistory` is for local rendering and counts only.
+   */
+  egressHistory(): ConversationMessage[] {
     const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
-    const filtered = this.history.filter(
+    return this.history.filter(
       (msg) => msg.sensitivity == null || sensitivityPermits(effective, msg.sensitivity),
     );
-    return trimConversation(filtered, CONVERSATION_BUDGET, summary);
   }
 
   // --- Push + auto-summarize ---
@@ -412,7 +425,7 @@ export class ConversationManager {
     const { store } = this.deps;
     if (provider == null || store == null || this.currentId == null || this.currentId === "")
       return null;
-    const history = this.getHistory();
+    const history = this.egressHistory();
     if (history.length < 2) return null;
     const existingSummary = this.getStoredSummary();
     // Fire the privacy gate before bytes leave for the
@@ -468,7 +481,7 @@ export class ConversationManager {
       // writes — every conversation ends this call with a title.
       const provider = this.deps.getProvider();
       if (provider) {
-        const aiTitle = await this.tryAiTitle(history);
+        const aiTitle = await this.tryAiTitle(this.egressHistory());
         if (aiTitle != null) {
           store.updateTitle(this.currentId, aiTitle);
           return aiTitle;
@@ -623,12 +636,13 @@ export class ConversationManager {
    * pushExchange().
    */
   injectIntermediateMessages(...messages: ConversationMessage[]): void {
-    this.history.push(...messages);
-  }
-
-  /** Return the raw live history reference for continuation turns. */
-  get liveHistory(): ConversationMessage[] {
-    return this.history;
+    // Stamped like an exchange, so a tool result read at a high tier is
+    // filtered out of later turns once the tier drops.
+    const sensitivity = this.resolveMessageSensitivity();
+    this.history.push(...messages.map((m) => (m.sensitivity != null ? m : { ...m, sensitivity })));
+    if (this.history.length > this.deps.maxHistory) {
+      this.history = this.history.slice(-this.deps.maxHistory);
+    }
   }
 
   // --- Internal helpers ---
@@ -657,7 +671,7 @@ export class ConversationManager {
         this.deps.assertSensitivityPermitsAiCall("summarizeConversation"),
       );
       const summary = await summarizeConversation(
-        this.history,
+        this.egressHistory(),
         existingSummary,
         clearedProvider,
         this.deps.getTaskRouter() ?? undefined,

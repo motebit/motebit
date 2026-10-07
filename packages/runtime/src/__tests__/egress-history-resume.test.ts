@@ -142,37 +142,33 @@ function historyText(ctx: ContextPack): string {
   return JSON.stringify(ctx.conversation_history ?? []);
 }
 
-// it.fails: each case reproduces the leak on this commit; the fix flips them to it.
 describe("approval resume sends filtered, budgeted history", () => {
   for (const n of [1, 5]) {
-    it.fails(
-      `a Secret exchange never reaches the BYOK provider on the continuation (N=${n})`,
-      async () => {
-        const { runtime, sent, setMode, extWrite } = makeRuntime();
-        setMode("on-device");
-        runtime.setSessionSensitivity(SensitivityLevel.Secret);
-        await drain(runtime.sendMessageStreaming(`my code is ${SECRET}`));
-        expect(sent.length).toBeGreaterThan(0);
+    it(`a Secret exchange never reaches the BYOK provider on the continuation (N=${n})`, async () => {
+      const { runtime, sent, setMode, extWrite } = makeRuntime();
+      setMode("on-device");
+      runtime.setSessionSensitivity(SensitivityLevel.Secret);
+      await drain(runtime.sendMessageStreaming(`my code is ${SECRET}`));
+      expect(sent.length).toBeGreaterThan(0);
 
-        setMode("byok");
-        runtime.setSessionSensitivity(SensitivityLevel.Personal);
-        for (let i = 0; i < n; i++) await drain(runtime.sendMessageStreaming(`ordinary ${i}`));
+      setMode("byok");
+      runtime.setSessionSensitivity(SensitivityLevel.Personal);
+      for (let i = 0; i < n; i++) await drain(runtime.sendMessageStreaming(`ordinary ${i}`));
 
-        const before = sent.length;
-        const chunks = await drain(runtime.sendMessageStreaming("store x"));
-        expect(chunks.some((c) => c.type === "approval_request")).toBe(true);
-        await drain(runtime.resumeAfterApproval(true));
-        expect(extWrite).toHaveBeenCalledTimes(1);
+      const before = sent.length;
+      const chunks = await drain(runtime.sendMessageStreaming("store x"));
+      expect(chunks.some((c) => c.type === "approval_request")).toBe(true);
+      await drain(runtime.resumeAfterApproval(true));
+      expect(extWrite).toHaveBeenCalledTimes(1);
 
-        const continuation = sent
-          .slice(before)
-          .filter((s) => historyText(s.ctx).includes("tool_result"));
-        expect(continuation.length).toBeGreaterThan(0);
-        for (const s of sent.filter((x) => x.mode === "byok")) {
-          expect(historyText(s.ctx)).not.toContain(SECRET);
-        }
-      },
-    );
+      const continuation = sent
+        .slice(before)
+        .filter((s) => historyText(s.ctx).includes("tool_result"));
+      expect(continuation.length).toBeGreaterThan(0);
+      for (const s of sent.filter((x) => x.mode === "byok")) {
+        expect(historyText(s.ctx)).not.toContain(SECRET);
+      }
+    });
   }
 });
 
@@ -188,7 +184,7 @@ describe("history-reading completions send filtered history", () => {
     return r;
   }
 
-  it.fails("summarization never sends a Secret exchange to the BYOK provider", async () => {
+  it("summarization never sends a Secret exchange to the BYOK provider", async () => {
     const { runtime, sent } = await secretThenByok();
     const before = sent.length;
     await runtime.summarizeCurrentConversation();
@@ -198,7 +194,7 @@ describe("history-reading completions send filtered history", () => {
     }
   });
 
-  it.fails("reflection never sends a Secret exchange to the BYOK provider", async () => {
+  it("reflection never sends a Secret exchange to the BYOK provider", async () => {
     const { runtime, sent } = await secretThenByok();
     const before = sent.length;
     await runtime.reflect();
@@ -208,7 +204,7 @@ describe("history-reading completions send filtered history", () => {
     }
   });
 
-  it.fails("the AI title never sends a Secret exchange to the BYOK provider", async () => {
+  it("the AI title never sends a Secret exchange to the BYOK provider", async () => {
     const { sent } = await secretThenByok();
     // Allow the fire-and-forget autoTitle from the last exchange to settle.
     await new Promise((r) => setTimeout(r, 0));
@@ -219,20 +215,17 @@ describe("history-reading completions send filtered history", () => {
     for (const s of titles) expect(JSON.stringify(s.ctx)).not.toContain(SECRET);
   });
 
-  it.fails(
-    "a normal turn's recent events withhold the Secret exchange, and return it at Secret tier",
-    async () => {
-      const { runtime, sent, setMode } = await secretThenByok();
-      await drain(runtime.sendMessageStreaming("another"));
-      const lastByok = sent.find((x) => x.ctx.user_message === "another")!;
-      expect(JSON.stringify(lastByok.ctx.recent_events)).not.toContain(SECRET);
-      expect(JSON.stringify(lastByok.ctx.recent_events)).toContain("ordinary");
+  it("a normal turn's recent events withhold the Secret exchange, and return it at Secret tier", async () => {
+    const { runtime, sent, setMode } = await secretThenByok();
+    await drain(runtime.sendMessageStreaming("another"));
+    const lastByok = sent.find((x) => x.ctx.user_message === "another")!;
+    expect(JSON.stringify(lastByok.ctx.recent_events)).not.toContain(SECRET);
+    expect(JSON.stringify(lastByok.ctx.recent_events)).toContain("ordinary");
 
-      setMode("on-device");
-      runtime.setSessionSensitivity(SensitivityLevel.Secret);
-      await drain(runtime.sendMessageStreaming("back on device"));
-      const back = sent.find((x) => x.ctx.user_message === "back on device")!;
-      expect(JSON.stringify(back.ctx.recent_events)).toContain(SECRET);
-    },
-  );
+    setMode("on-device");
+    runtime.setSessionSensitivity(SensitivityLevel.Secret);
+    await drain(runtime.sendMessageStreaming("back on device"));
+    const back = sent.find((x) => x.ctx.user_message === "back on device")!;
+    expect(JSON.stringify(back.ctx.recent_events)).toContain(SECRET);
+  });
 });

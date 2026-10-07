@@ -3941,7 +3941,8 @@ export class MotebitRuntime {
       memoryGovernor: this.memoryGovernor,
       getTaskRouter: () => this.taskRouter,
       getConversationSummary: () => this.conversation.getStoredSummary(),
-      getConversationHistory: () => this.conversation.getHistory(),
+      // Reflection sends this to a provider — the tier-filtered view.
+      getConversationHistory: () => this.conversation.egressHistory(),
     };
   }
 
