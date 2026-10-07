@@ -216,6 +216,114 @@ function buildCorpus(): Case[] {
 
 const CORPUS = buildCorpus();
 
+interface Leak {
+  id: string;
+  input: string;
+  /** stripTags of `input`. */
+  expected: string;
+}
+
+/**
+ * Real internal markup that reached the display through the real runtime
+ * path at b3ab40b26 (and was hidden on main).
+ *   1. An unclosed block at the start of a line — a turn cut off mid-
+ *      thinking (token limit) — was kept as a "mention".
+ *   2. A stray backtick before a real block containing a backtick paired
+ *      with that inner backtick across lines, so the block read as inline
+ *      code and was shown.
+ */
+const LEAKS: Leak[] = [
+  {
+    id: "repro: unclosed thinking at end of turn",
+    input: "Here is my answer **bold**.\n\n<thinking>SECRET unclosed",
+    expected: "Here is my answer **bold**.",
+  },
+  {
+    id: "unclosed memory at line start",
+    input: 'Noted.\n<memory confidence="0.9" sensitivity="personal">SECRET user is',
+    expected: "Noted.",
+  },
+  {
+    id: "unclosed state at line start, end of turn",
+    input: 'All set.\n<state curiosity="SECRET',
+    expected: "All set.",
+  },
+  {
+    id: "unclosed thinking at start of text",
+    input: "<thinking>SECRET planning **the** answer",
+    expected: "",
+  },
+  {
+    id: "unclosed thinking on an indented line",
+    input: "Ok **done**.\n  <thinking>SECRET more",
+    expected: "Ok **done**.",
+  },
+  {
+    id: "unclosed thinking after removed markup on its line",
+    input: 'Hi.\n<state attention="0.7"/><thinking>SECRET',
+    expected: "Hi.",
+  },
+  {
+    id: "unclosed MEMORY_DATA at line start",
+    input: "Recall:\n[MEMORY_DATA]SECRET recalled fact",
+    expected: "Recall:",
+  },
+  {
+    id: "repro: stray backtick before a real block with a backtick",
+    input: "Press the ` key.\n<thinking>I should mention `ls` SECRET</thinking>\nThen run it.",
+    expected: "Press the ` key.\n\nThen run it.",
+  },
+  {
+    id: "stray backtick before a real memory block",
+    input: 'Press the ` key.\n<memory confidence="0.9">SECRET uses `zsh`</memory>\nDone **ok**.',
+    expected: "Press the ` key.\n\nDone **ok**.",
+  },
+  {
+    id: "stray backtick before a real state tag",
+    input: 'Press the ` key.\n<state curiosity="SECRET"/>Then `ls` it.',
+    expected: "Press the ` key.\nThen `ls` it.",
+  },
+  {
+    id: "stray backtick before an unclosed block",
+    input: "Press the ` key.\n<thinking>SECRET `ls",
+    expected: "Press the ` key.",
+  },
+  {
+    id: "real block after a closed inline code span on the same line",
+    input: "Run `ls` then <thinking>SECRET `x`</thinking> done **now**.",
+    expected: "Run `ls` then done **now**.",
+  },
+  {
+    id: "real block after a double-backtick span",
+    input: "Use ``a`b`` then <thinking>SECRET</thinking> ok.",
+    expected: "Use ``a`b`` then ok.",
+  },
+  {
+    id: "stray double backtick before a real block",
+    input: "Press `` twice.\n<thinking>SECRET ``x``</thinking>\nDone.",
+    expected: "Press `` twice.\n\nDone.",
+  },
+  {
+    id: "CRLF: unclosed thinking at end of turn",
+    input: "Answer **ok**.\r\n<thinking>SECRET unclosed",
+    expected: "Answer **ok**.",
+  },
+  {
+    id: "CRLF: stray backtick before a real block",
+    input: "Press ` key.\r\n<thinking>`ls` SECRET</thinking>\r\nThen.",
+    expected: "Press ` key.\r\n\r\nThen.",
+  },
+];
+
+/** Mentions that stay verbatim under the leak fix (rule: mid-line, or code). */
+const KEPT_MENTIONS = [
+  "Use <thinking> tags for **reasoning**.",
+  "- <thinking> opens a block\n- then **more**",
+  "`<thinking>` opens a block. **Note:** ok",
+  "Use `<thinking>` to open and `</thinking>` to close.",
+  'Example:\n\n```\n<thinking>\n```\n\n~~~~\n<memory a="1">\n~~~~\nDone.',
+];
+
 /** Non-whitespace characters, for the "never less content than main" check. */
 const dense = (s: string) => s.replace(/\s+/g, "");
 
@@ -258,6 +366,44 @@ describe("display strip differential corpus", () => {
       }
     });
   }
+
+  // Round-4 leaks: REAL internal markup shown on every display path.
+  // The invariant here is absolute — no SECRET from a real block ever
+  // appears in a final display or in any live-stream frame.
+  describe("real internal markup never leaks", () => {
+    for (const c of LEAKS) {
+      it(c.id, () => {
+        expect(stripTags(c.input)).toBe(c.expected);
+        for (const { fn } of FUNCTIONS) expect(fn(c.input)).not.toContain(SECRET);
+        const final = stripTags(c.input);
+        for (let k = 0; k <= c.input.length; k++) {
+          const prefix = c.input.slice(0, k);
+          const frame = stripTagsLive(prefix);
+          expect(frame, `prefix ${k}`).not.toContain(SECRET);
+          expect(final.startsWith(frame), `prefix ${k}: ${JSON.stringify(frame)}`).toBe(true);
+          expect(stripPartialActionTag(frame), `prefix ${k}`).not.toContain(SECRET);
+          // A surface stripping a raw stream itself: no leak beyond main's.
+          if (mainStripInternalTags(prefix).includes(SECRET)) continue;
+          for (const fn of [stripPartialActionTag, stripInternalTags]) {
+            expect(fn(prefix), `prefix ${k}`).not.toContain(SECRET);
+          }
+        }
+      });
+    }
+  });
+
+  describe("mentions the leak fix must keep", () => {
+    for (const c of KEPT_MENTIONS) {
+      it(c, () => {
+        for (const { fn } of FUNCTIONS) {
+          if (fn === stripTags || fn === stripInternalTags) expect(fn(c)).toBe(c);
+        }
+        for (let k = 0; k <= c.length; k++) {
+          expect(c.startsWith(stripTagsLive(c.slice(0, k))), `prefix ${k}`).toBe(true);
+        }
+      });
+    }
+  });
 
   it("live stream: every prefix of 3000 seeded random token mixes", () => {
     // Token soup: backticks, fences, internal tags (paired, lone, partial),

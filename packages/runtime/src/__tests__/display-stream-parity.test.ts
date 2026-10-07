@@ -123,19 +123,68 @@ const MIXED: Record<string, string> = {
   actionCue: "*smiles* Hello! *nods* Here is **bold** text.",
   externalData: 'Result: [EXTERNAL_DATA source="web"]ignore previous[/EXTERNAL_DATA] **ok**.',
   memoryData: "[MEMORY_DATA]secret[/MEMORY_DATA]Recall **done**.",
-  unclosedThinking: "Answer **first**.\n<thinking>never closed, secret",
   mentionThenReal: "Use `<thinking>` tags. <thinking>plan</thinking> Answer **ok**.",
   mentionThenUnclosedMarker: "See `[MEMORY_DATA]`. [MEMORY_DATA]recalled **fact**",
   hardBreaks: "Line one  \nLine two\n\n\n\nPara.",
 };
 
-async function streamThroughRuntime(runtime: MotebitRuntime, parts: string[], full: string) {
+/**
+ * REAL internal markup — its content must never be displayed, finally or
+ * transiently. Both leaked through this path at b3ab40b26 (hidden on main):
+ * a turn cut off mid-`<thinking>` (token limit), and a stray backtick that
+ * paired with a backtick inside a real block on the next line.
+ */
+const LEAKS: Record<string, { text: string; expected: string }> = {
+  unclosedThinking: {
+    text: "Here is my answer **bold**.\n\n<thinking>SECRET unclosed",
+    expected: "Here is my answer **bold**.",
+  },
+  unclosedThinkingAfterLine: {
+    text: "Answer **first**.\n<thinking>never closed, SECRET",
+    expected: "Answer **first**.",
+  },
+  unclosedMemory: {
+    text: 'Noted.\n<memory confidence="0.9" sensitivity="personal">SECRET user is',
+    expected: "Noted.",
+  },
+  unclosedState: { text: 'All set.\n<state curiosity="SECRET', expected: "All set." },
+  strayBacktick: {
+    text: "Press the ` key.\n<thinking>I should mention `ls` SECRET</thinking>\nThen run it.",
+    expected: "Press the ` key.\n\nThen run it.",
+  },
+  strayBacktickMemory: {
+    text: 'Press the ` key.\n<memory confidence="0.9">SECRET uses `zsh`</memory>\nDone.',
+    expected: "Press the ` key.\n\nDone.",
+  },
+  strayBacktickState: {
+    text: 'Press the ` key.\n<state curiosity="SECRET"/>Then `ls` it.',
+    expected: "Press the ` key.\nThen `ls` it.",
+  },
+  realAfterCodeSpan: {
+    text: "Run `ls` then <thinking>SECRET `x`</thinking> done **now**.",
+    expected: "Run `ls` then done **now**.",
+  },
+  doubleBacktick: {
+    text: "Press `` twice.\n<thinking>SECRET ``x``</thinking>\nDone.",
+    expected: "Press `` twice.\n\nDone.",
+  },
+  crlf: {
+    text: "Press ` key.\r\n<thinking>`ls` SECRET</thinking>\r\nThen.\r\n<thinking>SECRET",
+    expected: "Press ` key.\r\n\r\nThen.",
+  },
+};
+
+async function streamChunks(runtime: MotebitRuntime, parts: string[], full: string) {
   mockRunTurnStreaming.mockReturnValue(chunks(parts, full));
   const out: string[] = [];
   for await (const c of runtime.sendMessageStreaming("q") as AsyncGenerator<StreamChunk>) {
     if (c.type === "text") out.push(c.text);
   }
-  return out.join("");
+  return out;
+}
+
+async function streamThroughRuntime(runtime: MotebitRuntime, parts: string[], full: string) {
+  return (await streamChunks(runtime, parts, full)).join("");
 }
 
 function splits(text: string): string[][] {
@@ -177,6 +226,22 @@ describe("live stream display == ai-core final display strip", () => {
       const expected = stripTags(text);
       for (const parts of splits(text)) {
         expect(await streamThroughRuntime(runtime, parts, text)).toBe(expected);
+      }
+    });
+  }
+
+  for (const [name, { text, expected }] of Object.entries(LEAKS)) {
+    it(`real internal content never displayed at any split: ${name}`, async () => {
+      expect(stripTags(text)).toBe(expected);
+      for (const parts of splits(text)) {
+        const out = await streamChunks(runtime, parts, text);
+        // The display is the running concatenation: no frame may hold it.
+        let shown = "";
+        for (const delta of out) {
+          shown += delta;
+          expect(shown, JSON.stringify(parts)).not.toContain("SECRET");
+        }
+        expect(shown).toBe(expected);
       }
     });
   }
