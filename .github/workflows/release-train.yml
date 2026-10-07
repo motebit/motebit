@@ -214,8 +214,8 @@ jobs:
               echo "Resolution paths:"
               echo "  1. Accidental — fix the changeset on main, push correction,"
               echo "     wait for next Tuesday's window."
-              echo "  2. Intentional — merge manually with a named migration path:"
-              echo "       gh pr merge ${{ steps.find.outputs.number }} --squash --delete-branch"
+              echo "  2. Intentional — enqueue manually with a named migration path:"
+              echo "       gh pr merge ${{ steps.find.outputs.number }} --squash --auto"
               echo "  3. Out-of-window emergency major — workflow_dispatch this"
               echo "     same workflow with reason=other-emergency and a recorded"
               echo "     justification in the run notes."
@@ -244,15 +244,19 @@ jobs:
             exit 1
           fi
 
-          # --squash matches the project's branch protection policy and
-          # keeps the main-branch commit history reading as one release =
-          # one commit, which is what the npm version page mirrors.
+          # main is protected by a merge queue, so the PR is enqueued rather
+          # than merged directly. gh refuses --delete-branch on queued repos
+          # ("Cannot use -d or --delete-branch when merge queue enabled"); the
+          # queue deletes the head branch per repo settings. --auto enqueues
+          # whether or not required checks have finished yet. --squash keeps
+          # the main-branch history reading as one release = one commit,
+          # which is what the npm version page mirrors.
           gh pr merge "$PR" \
             --repo "$GITHUB_REPOSITORY" \
             --squash \
-            --delete-branch
-          echo "Merged PR #${PR}. release.yml will fire on the resulting"
-          echo "push to main and publish to npm."
+            --auto
+          echo "Enqueued #${PR} in the merge queue; release.yml publishes"
+          echo "when the queue merges it."
 
       - name: Annotate hotfix runs
         if: github.event_name == 'workflow_dispatch'
