@@ -1150,10 +1150,8 @@ export interface ReceiptChainEntry {
 // @public
 export interface ReceiptTreeError {
     depth: number;
-    // (undocumented)
     message: string;
     path?: string;
-    // (undocumented)
     task_id: string | undefined;
 }
 
