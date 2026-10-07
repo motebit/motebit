@@ -100,9 +100,17 @@ export interface ServiceRuntime {
   events: ServiceEventStore;
 
   /** Optional: look up trust record for a remote motebit. */
-  getAgentTrust?(
-    remoteMotebitId: string,
-  ): Promise<{ trust_level: string; public_key?: string } | null>;
+  getAgentTrust?(remoteMotebitId: string): Promise<{
+    trust_level: string;
+    public_key?: string;
+    /**
+     * The caller's guardian key as PINNED by this store from a source the
+     * caller itself signed under its earlier key (its identity record at
+     * first contact). The only guardian a recovery succession is checked
+     * against — a guardian named by the relay never carries trust.
+     */
+    guardian_public_key?: string;
+  } | null>;
   /**
    * Optional: record an interaction with a remote motebit. The stored key
    * changes only when `opts.provenSuccession` is true (a verified succession
@@ -366,7 +374,6 @@ export function wireServerDeps(
           const raw = (await resp.json()) as {
             current_public_key?: unknown;
             succession?: unknown;
-            guardian_public_key?: unknown;
           };
           if (typeof raw.current_public_key === "string" && raw.current_public_key !== "") {
             value = {
@@ -374,9 +381,6 @@ export function wireServerDeps(
               succession: Array.isArray(raw.succession)
                 ? (raw.succession as KeySuccessionRecord[])
                 : [],
-              ...(typeof raw.guardian_public_key === "string"
-                ? { guardianPublicKey: raw.guardian_public_key }
-                : {}),
             };
           }
         }
@@ -449,11 +453,18 @@ export function wireServerDeps(
             // Earned trust carries over only across a succession PROVEN by the
             // retired key's own signature; a key change the relay asserts
             // without that proof authenticates at most as relay-Verified.
+            // A guardian RECOVERY is checked only against the guardian this
+            // store pinned from the caller's own signed record — never one
+            // the relay answer names (a relay, or whoever controls its
+            // answer, could otherwise sign a recovery to its own key with its
+            // own "guardian"). No pinned guardian ⇒ a recovery is unproven.
             const proven = await successionLinks(
               served.succession,
               record.public_key,
               served.currentKey,
-              served.guardianPublicKey,
+              typeof record.guardian_public_key === "string" && record.guardian_public_key !== ""
+                ? record.guardian_public_key
+                : undefined,
             );
             relayConfirmedCallers.add(callerMotebitId);
             if (proven) provenSuccessors.set(callerMotebitId, served.currentKey);
@@ -1045,7 +1056,8 @@ type KeySuccessionRecord = Parameters<typeof verifySuccessionChain>[0][number];
 interface ServedIdentity {
   currentKey: string;
   succession: KeySuccessionRecord[];
-  guardianPublicKey?: string;
+  // No guardian: the relay's answer never names the guardian a recovery is
+  // checked against (see resolveCallerKey).
 }
 
 /** Relay-confirmed trust at most: Trusted → Verified; every other level unchanged. */
@@ -1059,8 +1071,8 @@ function sameKey(a: string, b: string): boolean {
 
 /**
  * True iff `succession` contains a verified run of records leading from
- * `fromKey` to `toKey` — i.e. the retired key (or the guardian) signed the
- * hand-off. Only then does trust earned under `fromKey` carry to `toKey`.
+ * `fromKey` to `toKey` — i.e. the retired key (or the caller's PINNED
+ * guardian) signed the hand-off. Only then does trust earned under `fromKey` carry to `toKey`.
  */
 async function successionLinks(
   succession: KeySuccessionRecord[],
