@@ -428,6 +428,11 @@ function hits(rel: string, source: string): Hit[] {
   return out;
 }
 
+/** Sensitivity-bearing SQL sites the parser could not map (stub: harness first). */
+function unexamined(_rel: string, _source: string): string[] {
+  return [];
+}
+
 /** Violations in one file: unmarked hits, unregistered / stray markers, registry count ≠ 1. */
 function scan(rel: string, source: string): string[] {
   const bad: string[] = [];
@@ -570,6 +575,59 @@ const PLANTED: Array<{ form: string; rel: string; source: () => string }> = [
     source: () =>
       `export function put({ content, sensitivity = "none" }: Row): void {\n  write(content, sensitivity);\n}\n`,
   },
+  // R7: None on the LEFT of a logical operator, and in the result arm of `&&`.
+  {
+    form: "None on the left of ||",
+    rel: "packages/planted/src/a.ts",
+    source: () => `export const row = { sensitivity: "none" || run.tier() };\n`,
+  },
+  {
+    form: "None on the left of ??",
+    rel: "packages/planted/src/a.ts",
+    source: () => `export const row = { sensitivity: SensitivityLevel.None ?? run.tier() };\n`,
+  },
+  {
+    form: "None in the result arm of &&",
+    rel: "packages/planted/src/a.ts",
+    source: () => `const sensitivity = synced && SensitivityLevel.None;\n`,
+  },
+  // R7: SQL INSERT forms the gate now parses.
+  {
+    form: "null bound to a double-quoted sensitivity column",
+    rel: "packages/planted/src/a.ts",
+    source: () =>
+      `db.prepare('INSERT INTO goals (goal_id, "sensitivity") VALUES (?, ?)').run(id, null);\n`,
+  },
+  {
+    form: "null bound to a backtick-quoted sensitivity column",
+    rel: "packages/planted/src/a.ts",
+    source: () =>
+      "db.prepare('INSERT INTO goals (goal_id, `sensitivity`) VALUES (?, ?)').run(id, null);\n",
+  },
+  {
+    form: "null bound through a $n placeholder",
+    rel: "packages/planted/src/a.ts",
+    source: () =>
+      `await pg.query("INSERT INTO goals (goal_id, prompt, sensitivity) VALUES ($1, $2, $3)", [id, prompt, null]);\n`,
+  },
+  {
+    form: "null bound through out-of-order $n placeholders",
+    rel: "packages/planted/src/a.ts",
+    source: () =>
+      `await pg.query("INSERT INTO goals (sensitivity, goal_id) VALUES ($2, $1)", [id, null]);\n`,
+  },
+  {
+    form: "null in the second VALUES row",
+    rel: "packages/planted/src/a.ts",
+    source: () =>
+      `db.prepare("INSERT INTO goals (goal_id, sensitivity) VALUES (?, ?), (?, ?)").run(a, run.tier(), b, null);\n`,
+  },
+  {
+    form: "inline NULL in the second VALUES row",
+    rel: "packages/planted/src/a.ts",
+    source: () =>
+      `db.prepare("INSERT INTO goals (goal_id, sensitivity) VALUES (?, ?), (?, NULL)").run(a, run.tier(), b);\n`,
+  },
   {
     form: "a marker on a line with no hit",
     rel: "packages/planted/src/a.ts",
@@ -586,6 +644,43 @@ describe("write-tier gate: the gate flags every planted form", () => {
       expect(scan(p.rel, readFileSync(file, "utf8"))).not.toEqual([]);
     });
   }
+});
+
+/**
+ * SQL forms OUTSIDE the gate's aperture: a sensitivity-bearing INSERT the
+ * parser cannot map to columns. It must be counted as "not examined" — never
+ * silently passed as clean.
+ */
+const UNPARSED: Array<{ form: string; source: string }> = [
+  {
+    form: "schema-qualified table",
+    source: `db.prepare("INSERT INTO main.goals (goal_id, sensitivity) VALUES (?, ?)").run(id, null);\n`,
+  },
+  {
+    form: "table name interpolated in a template",
+    source:
+      "db.prepare(`INSERT INTO ${tbl} (goal_id, sensitivity) VALUES (?, ?)`).run(id, null);\n",
+  },
+  {
+    form: "INSERT … SELECT",
+    source: `db.prepare("INSERT INTO goals (goal_id, sensitivity) SELECT ?, ?").run(id, null);\n`,
+  },
+];
+
+describe("write-tier gate: an unparsed SQL form is reported as not examined", () => {
+  for (const u of UNPARSED) {
+    it(`counts as not examined: ${u.form}`, () => {
+      expect(unexamined("packages/planted/src/a.ts", u.source)).toHaveLength(1);
+    });
+  }
+  it("a parsed INSERT is not counted as not examined", () => {
+    expect(
+      unexamined(
+        "packages/planted/src/a.ts",
+        `db.prepare("INSERT INTO goals (goal_id, sensitivity) VALUES (?, ?)").run(id, t);\n`,
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("write-tier gate: the gate passes a stamped write", () => {
