@@ -1,5 +1,12 @@
 # create-motebit Changelog
 
+## 1.2.9
+
+### Patch Changes
+
+- 67574f9: Refuse the interactive path when stdin is not a terminal. Running `create-motebit` (scaffold, `--agent`, or `rotate`) without a TTY and without `--yes` used to print the first prompt, create nothing, and exit 0. It now exits 1 with a one-line message pointing at `--yes` and `MOTEBIT_PASSPHRASE`.
+- 67574f9: Refuse the interactive path when stdin is not a terminal. Previously a CI or piped run printed the first prompt and exited 0 having created nothing; it now exits 1 with a message pointing to `--yes` and `MOTEBIT_PASSPHRASE`.
+
 ## 1.2.8
 
 ### Patch Changes
