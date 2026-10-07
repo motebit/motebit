@@ -389,11 +389,15 @@ describe("AnthropicProvider", () => {
 
 describe("stripPartialActionTag", () => {
   it("strips completed action tags", () => {
-    expect(stripPartialActionTag("Hello *smile* world")).toBe("Hello world");
+    expect(stripPartialActionTag("Hello. *smiles* world")).toBe("Hello. world");
+  });
+
+  it("keeps mid-sentence emphasis — indistinguishable from markdown italics", () => {
+    expect(stripPartialActionTag("Hello *smile* world")).toBe("Hello *smile* world");
   });
 
   it("strips trailing unclosed action tags during streaming", () => {
-    expect(stripPartialActionTag("Hello *smi")).toBe("Hello");
+    expect(stripPartialActionTag("Hello. *smi")).toBe("Hello.");
   });
 
   it("preserves text without tags", () => {
@@ -446,13 +450,11 @@ describe("stripInternalTags", () => {
   });
 
   it("strips partial opener mid-stream (unclosed <thinking)", () => {
-    expect(stripInternalTags("Hello <thinking")).toBe("Hello ");
+    expect(stripInternalTags("Hello <thinking")).toBe("Hello");
   });
 
-  it("strips partial [EXTERNAL_DATA] opener without closer", () => {
-    expect(stripInternalTags('Hello [EXTERNAL_DATA source="x"]mid-payload')).toBe(
-      "Hello mid-payload",
-    );
+  it("hides an unclosed [EXTERNAL_DATA] payload (fail-closed mid-stream)", () => {
+    expect(stripInternalTags('Hello [EXTERNAL_DATA source="x"]mid-payload')).toBe("Hello");
   });
 
   it("strips orphan [/MEMORY_DATA] closer", () => {

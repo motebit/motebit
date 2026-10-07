@@ -180,12 +180,12 @@ describe("stripTags", () => {
 
   it("removes all tag types together", () => {
     const text =
-      'Hi *smiles* <state field="curiosity" value="0.8"/> How are you? <memory confidence="0.9" sensitivity="none">fact</memory>';
+      'Hi! *smiles* <state field="curiosity" value="0.8"/> How are you? <memory confidence="0.9" sensitivity="none">fact</memory>';
     const result = stripTags(text);
     expect(result).not.toContain("*");
     expect(result).not.toContain("<state");
     expect(result).not.toContain("<memory");
-    expect(result).toBe("Hi How are you?");
+    expect(result).toBe("Hi! How are you?");
   });
 
   it("collapses excessive newlines", () => {

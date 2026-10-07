@@ -379,7 +379,8 @@ export interface ConversationMessage {
 
 /**
  * Clean conversation history for display — strip leaked internal tags
- * (thinking, memory, state) and collapse whitespace.
+ * (thinking, memory, state). Markdown and whitespace are the model's own —
+ * collapsing spaces would flatten code indentation.
  */
 export function cleanConversationHistory(
   messages: ConversationMessage[],
@@ -387,7 +388,7 @@ export function cleanConversationHistory(
   const result: Array<{ role: "user" | "assistant"; content: string }> = [];
   for (const msg of messages) {
     if (msg.role !== "user" && msg.role !== "assistant") continue;
-    const clean = stripInternalTags(msg.content).replace(/ {2,}/g, " ").trim();
+    const clean = stripInternalTags(msg.content).trim();
     if (clean) {
       result.push({ role: msg.role, content: clean });
     }

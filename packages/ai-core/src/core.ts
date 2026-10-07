@@ -445,13 +445,16 @@ export function extractStateTags(text: string): Partial<MotebitState> {
   return updates;
 }
 
+/**
+ * Read the creature's `*action*` narration, under the same narrow grammar the
+ * display strip removes (see {@link stripTags}) — so a cue is read from
+ * exactly the spans the owner never sees, and never from markdown emphasis.
+ */
 export function extractActions(text: string): string[] {
-  const regex = /\*([^*]+)\*/g;
   const actions: string[] = [];
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    actions.push(match[1]!.trim());
-  }
+  forEachProseLine(text, (line) => {
+    for (const span of findActionSpans(line)) actions.push(span.action);
+  });
   return actions;
 }
 
@@ -669,22 +672,215 @@ export function actionsToStateUpdates(actions: string[]): Partial<MotebitState> 
   return deltas;
 }
 
+// === Display text ===
+//
+// The displayed answer is the model's text byte-for-byte, minus motebit's own
+// internal markup. The earlier strip (`*[^*]+*` → "", `\s{2,}` → " ") deleted
+// markdown bold and flattened every list, paragraph and code block — the
+// intelligence-parity bench measured the model at 7.73/10 replayed directly
+// and motebit's displayed text at 4.23 for the same requests.
+//
+// Action narration (`*smiles*`) is a legacy convention — the system prompt now
+// says "Do not use *asterisks*" and teaches `<state/>` instead — and it is not
+// separable from markdown italics in general (`*smiles*` IS valid italics).
+// So the action grammar is deliberately the narrowest safe rule:
+//
+//   - a single-asterisk span on ONE line, not adjacent to another `*` or a
+//     word character (never `**bold**`, `***x***`, `a*b`);
+//   - content is lowercase letters, spaces, `,'-` only, 1–60 chars, starting
+//     and ending with a letter (never `a * b`, never markdown/code inside);
+//   - it LEADS its line (only whitespace before it) or follows sentence
+//     punctuation (`Hello! *nods* …`) — never mid-sentence italics, never a
+//     list item (`- *x*`, `1. *x*`);
+//   - its text matches the action lexicon (ACTION_RULES / IMPULSE_MAP), so
+//     `*really*` at a line start stays italics;
+//   - it is outside fenced code and inline code spans.
+//
+// Whitespace: runs of blank lines collapse to one and trailing spaces drop —
+// in prose only. Fenced code is never touched.
+
+const ACTION_SPAN = /(?<![*\w])\*([a-z](?:[a-z ,'-]{0,58}[a-z])?)\*(?![*\w])/g;
+/** Text before an action that ends a sentence: `Hello! ` (not `1. `). */
+const ACTION_AFTER_SENTENCE = /[^\s\d][.!?]["')\]]?[ \t]+$/;
+/** A trailing `*` / `*smi` that may still become an action span mid-stream. */
+const PARTIAL_ACTION = /(?<![*\w])\*(?:[a-z][a-z ,'-]{0,59})?$/;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const SENTINEL = "\uE000";
+
+function isActionText(action: string): boolean {
+  return (
+    ACTION_RULES.some((rule) => rule.pattern.test(action)) ||
+    IMPULSE_MAP.some((entry) => entry.pattern.test(action))
+  );
+}
+
+function isActionPosition(prefix: string): boolean {
+  return prefix.trim() === "" || ACTION_AFTER_SENTENCE.test(prefix);
+}
+
+/** [start, end) ranges of inline code spans on one line. */
+function codeSpanRanges(line: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const re = /(`+)[\s\S]*?[^`]\1(?!`)|(`+)(?!`)/g;
+  let m;
+  while ((m = re.exec(line)) !== null) {
+    if (m[1] !== undefined) ranges.push([m.index, m.index + m[0].length]);
+  }
+  return ranges;
+}
+
+function findActionSpans(line: string): Array<{ start: number; end: number; action: string }> {
+  const code = codeSpanRanges(line);
+  const spans: Array<{ start: number; end: number; action: string }> = [];
+  ACTION_SPAN.lastIndex = 0;
+  let m;
+  while ((m = ACTION_SPAN.exec(line)) !== null) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (code.some(([a, b]) => start < b && end > a)) continue;
+    // A preceding removed action counts as "leading" (`*smiles* *nods* Hi`).
+    const prefix = spans.reduceRight(
+      (p, s) => p.slice(0, s.start) + " ".repeat(s.end - s.start) + p.slice(s.end),
+      line.slice(0, start),
+    );
+    if (!isActionPosition(prefix)) continue;
+    const action = m[1]!;
+    if (!isActionText(action)) continue;
+    spans.push({ start, end, action });
+  }
+  return spans;
+}
+
+/** Call `fn` for every line outside fenced code; returns lines with fence flags. */
+function forEachProseLine(
+  text: string,
+  fn: (line: string, index: number) => void,
+): Array<{ line: string; code: boolean }> {
+  const out: Array<{ line: string; code: boolean }> = [];
+  let fence: string | null = null;
+  text.split("\n").forEach((line, i) => {
+    const m = FENCE.exec(line);
+    if (fence === null && m) {
+      fence = m[1]!;
+      out.push({ line, code: true });
+    } else if (fence !== null) {
+      if (m && m[1]![0] === fence[0] && m[1]!.length >= fence.length && line.trim() === m[1]) {
+        fence = null;
+      }
+      out.push({ line, code: true });
+    } else {
+      out.push({ line, code: false });
+      fn(line, i);
+    }
+  });
+  return out;
+}
+
+const INTERNAL_PAIRS: RegExp[] = [
+  /<thinking\s*>[\s\S]*?<\/thinking\s*>/g,
+  /<memory(?:\s[^>]*)?>[\s\S]*?<\/memory\s*>/g,
+  /<narration\s*>[\s\S]*?<\/narration\s*>/g,
+  /<state\b[^>]*\/>/g,
+  /\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g,
+  /\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g,
+];
+const INTERNAL_SINGLES: RegExp[] = [
+  // Unclosed interior block — never shown, fail-closed (the stream may not
+  // have delivered the closer yet, or the model never wrote one).
+  /<(?:thinking|memory|narration)\b[^>]*>[\s\S]*$/g,
+  /\[EXTERNAL_DATA[^\]]*\][\s\S]*$/g,
+  /\[MEMORY_DATA\][\s\S]*$/g,
+  // Opener still being streamed: `<state field="cur`.
+  /<(?:state|thinking|memory|narration)\b[^>]*$/g,
+  /<\/(?:thinking|memory|narration)\s*>/g,
+  /\[EXTERNAL_DATA[^\]]*$/g,
+  /\[\/EXTERNAL_DATA\]/g,
+  /\[\/MEMORY_DATA\]/g,
+];
+const INTERNAL_NAMES = [
+  "state",
+  "thinking",
+  "memory",
+  "narration",
+  "/thinking",
+  "/memory",
+  "/narration",
+];
+const MARKER_NAMES = ["EXTERNAL_DATA", "MEMORY_DATA", "/EXTERNAL_DATA", "/MEMORY_DATA"];
+
+/**
+ * Replace every SENTINEL run (plus the horizontal whitespace around it) with
+ * one space when it sat between two words on a line, else nothing.
+ */
+function closeSentinels(text: string): string {
+  return text.replace(/[ \t]*\uE000(?:[ \t]*\uE000)*[ \t]*/g, (run, offset: number) => {
+    const before = text[offset - 1];
+    const after = text[offset + run.length];
+    const atEdge = before === undefined || before === "\n" || after === undefined || after === "\n";
+    if (atEdge) return "";
+    return /[ \t]/.test(run) ? " " : "";
+  });
+}
+
+function cutInternal(text: string, streaming: boolean): string {
+  let out = text.replace(/\uE000/g, "");
+  for (const re of INTERNAL_PAIRS) out = out.replace(re, SENTINEL);
+  for (const re of INTERNAL_SINGLES) out = out.replace(re, SENTINEL);
+  if (streaming) {
+    // A tag/marker name still arriving at the chunk edge: `<sta`, `[MEMORY_D`.
+    out = out.replace(/<(\/?[a-z]+)$/, (m, name: string) =>
+      INTERNAL_NAMES.some((n) => n.startsWith(name)) ? SENTINEL : m,
+    );
+    out = out.replace(/\[(\/?[A-Z_]+)$/, (m, name: string) =>
+      MARKER_NAMES.some((n) => n.startsWith(name)) ? SENTINEL : m,
+    );
+  }
+  return closeSentinels(out);
+}
+
+function formatDisplay(text: string, streaming: boolean): string {
+  const lines = forEachProseLine(text, () => {});
+  const out: string[] = [];
+  let blank = 0;
+  lines.forEach(({ line, code }, i) => {
+    if (code) {
+      blank = 0;
+      out.push(line);
+      return;
+    }
+    let l = line;
+    const spans = findActionSpans(l);
+    for (let k = spans.length - 1; k >= 0; k--) {
+      const s = spans[k]!;
+      l = l.slice(0, s.start) + SENTINEL + l.slice(s.end);
+    }
+    if (streaming && i === lines.length - 1) {
+      const m = PARTIAL_ACTION.exec(l);
+      if (m && isActionPosition(l.slice(0, m.index))) l = l.slice(0, m.index) + SENTINEL;
+    }
+    l = closeSentinels(l).replace(/[ \t]+$/, "");
+    // A line that held only narration disappears rather than becoming blank.
+    if (l === "" && line.trim() !== "") return;
+    if (l === "") {
+      blank++;
+      if (blank > 1) return;
+    } else {
+      blank = 0;
+    }
+    out.push(l);
+  });
+  return out.join("\n").replace(/^\s+/, "").replace(/\s+$/, "");
+}
+
+/**
+ * The displayed answer: the model's text minus motebit's internal markup
+ * (`<memory>`, `<thinking>`, `<state/>`, `<narration>`, EXTERNAL_DATA /
+ * MEMORY_DATA markers) and genuine `*action*` narration under the narrow
+ * grammar above. Markdown, newlines and indentation are preserved; fenced
+ * code is byte-for-byte.
+ */
 export function stripTags(text: string): string {
-  return text
-    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-    .replace(/<state\s+[^>]*\/>/g, "")
-    .replace(/<narration\s*>[\s\S]*?<\/narration\s*>/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
-    .replace(/\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\]/g, "")
-    .replace(/\[\/MEMORY_DATA\]/g, "")
-    .replace(/\*[^*]+\*/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  return formatDisplay(cutInternal(text, false), false);
 }
 
 // === Impulse Map ===
@@ -779,9 +975,14 @@ export function getImpulsesForAction(
  *   - `<state key="value" />`              — state update narration
  *   - `<thinking>…</thinking>`             — model reasoning traces
  *   - `<memory key="…">…</memory>`         — memory-formation narration
+ *   - `<narration>…</narration>`           — task-step chrome narration
  *   - `[EXTERNAL_DATA source="…"]…[/EXTERNAL_DATA]` — tool-result boundaries
  *   - `[MEMORY_DATA]…[/MEMORY_DATA]`       — recalled-memory boundaries
- *   - Any of the above in partial/unclosed form (streaming mid-tag)
+ *   - Any of the above in partial/unclosed form (streaming mid-tag); an
+ *     unclosed interior block (`<thinking>…` with no closer yet) is hidden
+ *     through the end of the text, fail-closed
+ *
+ * Markdown, newlines and indentation are never touched.
  *
  * Does NOT strip the `*action*` asterisk pattern used in creature action
  * syntax — that is a plain-text-surface concern composed on top of this
@@ -794,37 +995,19 @@ export function getImpulsesForAction(
  * content on desktop. One primitive, one regex set, surfaces converge.
  */
 export function stripInternalTags(text: string): string {
-  return (
-    text
-      // Completed tag/marker pairs
-      .replace(/<state\s+[^>]*\/>/g, "")
-      .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-      .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-      .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
-      .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
-      // Partial fragments — opener or closer alone, mid-stream
-      .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
-      .replace(/\[\/EXTERNAL_DATA\]/g, "")
-      .replace(/\[MEMORY_DATA\]/g, "")
-      .replace(/\[\/MEMORY_DATA\]/g, "")
-      .replace(/<(?:state|thinking|memory)[^>]*$/g, "")
-  );
+  return cutInternal(text, true);
 }
 
 /**
- * Strip internal tags plus the creature's `*action*` asterisk syntax and
- * normalize whitespace. Used by plain-text chat surfaces (desktop) that
- * render `bubble.textContent` directly — markdown surfaces (web) use
- * `stripInternalTags` alone because their `*italic*` asterisks are
- * rendered by the markdown pass, not stripped.
+ * Streaming counterpart of {@link stripTags}: the same display text, applied
+ * to the accumulated text after every chunk. Additionally holds back a tag
+ * name or `*action` still arriving at the chunk edge (`<sta`, `*smi`), so a
+ * partial never leaks; once the stream completes the result equals
+ * `stripTags(fullText)`. Used by plain-text chat surfaces (desktop, mobile
+ * streaming) — markdown surfaces (web) use `stripInternalTags` alone.
  */
 export function stripPartialActionTag(text: string): string {
-  return stripInternalTags(text)
-    .replace(/\*[^*]+\*/g, "")
-    .replace(/\*[^*]*$/, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  return formatDisplay(cutInternal(text, true), true);
 }
 
 function parseSensitivity(raw: string): SensitivityLevel {

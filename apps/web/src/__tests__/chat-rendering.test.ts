@@ -149,23 +149,23 @@ describe("stripInternalTags (via renderMarkdown)", () => {
 
   it("strips <state .../> tags", () => {
     const result = renderMarkdown('before <state attention="0.8" /> after');
-    expect(result).toBe("before  after");
+    expect(result).toBe("before after");
   });
 
   it("strips <thinking>...</thinking> tags", () => {
     const result = renderMarkdown("visible <thinking>internal reasoning</thinking> text");
-    expect(result).toBe("visible  text");
+    expect(result).toBe("visible text");
   });
 
   it("strips <memory ...>...</memory> tags", () => {
     const result = renderMarkdown('ok <memory confidence="0.9">fact</memory> done');
-    expect(result).toBe("ok  done");
+    expect(result).toBe("ok done");
   });
 
   it("strips multiple different tags in one string", () => {
     const input = 'start <state x="1" /> middle <thinking>thought</thinking> end';
     const result = renderMarkdown(input);
-    expect(result).toBe("start  middle  end");
+    expect(result).toBe("start middle end");
   });
 
   it("strips incomplete streaming fragment at end of string", () => {

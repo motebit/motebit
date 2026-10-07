@@ -637,10 +637,10 @@ describe("cleanConversationHistory", () => {
     expect(result).toEqual([{ role: "assistant", content: "Response text more text." }]);
   });
 
-  it("collapses multiple spaces", () => {
-    const messages = [{ role: "assistant", content: "Hello    world" }];
-    const result = cleanConversationHistory(messages);
-    expect(result).toEqual([{ role: "assistant", content: "Hello world" }]);
+  it("preserves markdown, newlines and code indentation", () => {
+    const content = "Steps:\n\n1. **SYN**\n\n```py\ndef f(a, b):\n    return a * b\n```";
+    const result = cleanConversationHistory([{ role: "assistant", content }]);
+    expect(result).toEqual([{ role: "assistant", content }]);
   });
 
   it("filters out system messages", () => {
