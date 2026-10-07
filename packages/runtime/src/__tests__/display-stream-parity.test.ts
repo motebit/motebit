@@ -13,6 +13,9 @@ import type { AgenticChunk, StreamingProvider, TurnResult } from "@motebit/ai-co
 import type { AIResponse } from "@motebit/sdk";
 import { TrustMode, BatteryMode } from "@motebit/sdk";
 import { MARKDOWN_ANSWERS, TAGGED_ANSWERS, CUED_ANSWERS } from "./fixtures/display-corpus.js";
+import { SPLICE_REPROS, generateSpliceCorpus, secretsIn } from "./fixtures/tag-splice-corpus.js";
+import { applyTagChain } from "@motebit/ai-core";
+import { STREAM_TAG_PATTERNS } from "../streaming.js";
 
 const mockRunTurnStreaming = vi.fn();
 
@@ -144,5 +147,51 @@ describe("live stream display parity", () => {
     TAGGED_ANSWERS.filter(([input]) => input.includes("_DATA")).map(([i, o]) => [i, o] as const),
   )("bracket-marker answer streamed whole: %j", async (input, expected) => {
     expect(await streamed([input])).toBe(expected);
+  });
+});
+
+/** origin/main's stream `stripDisplayTags`, tag-removal steps only (verbatim, in order). */
+function streamMainTagChainOnly(text: string): string {
+  return text
+    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
+    .replace(/<narration>[\s\S]*?<\/narration>/g, "")
+    .replace(/<state\s+[^>]*\/>/g, "")
+    .replace(/<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g, "")
+    .replace(/<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
+    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
+    .replace(/\[\/EXTERNAL_DATA\]/g, "")
+    .replace(/\[MEMORY_DATA\]/g, "")
+    .replace(/\[\/MEMORY_DATA\]/g, "");
+}
+
+describe("live stream tag splice: differential against origin/main", () => {
+  const corpus = generateSpliceCorpus(400);
+
+  it.each(SPLICE_REPROS.map(([i, o]) => [i, o] as const))(
+    "%j streams as main hides it",
+    async (input, expected) => {
+      expect(await streamed([input])).toBe(expected);
+    },
+  );
+
+  it("step 1 of the stream is main's tag chain, byte for byte", () => {
+    for (const x of generateSpliceCorpus(3000)) {
+      const want = streamMainTagChainOnly(x);
+      const got = applyTagChain(x, STREAM_TAG_PATTERNS);
+      if (got !== want) expect({ x, got }).toEqual({ x, got: want });
+    }
+  });
+
+  it("the streamed answer never shows a secret main hides", async () => {
+    for (const x of corpus) {
+      const shown = new Set(secretsIn(streamMainTagChainOnly(x)));
+      const hidden = secretsIn(x).filter((s) => !shown.has(s));
+      const out = await streamed([x]);
+      const leaked = hidden.filter((s) => secretsIn(out).includes(s));
+      if (leaked.length > 0) expect({ x, out, leaked }).toEqual({ x, out, leaked: [] });
+    }
   });
 });
