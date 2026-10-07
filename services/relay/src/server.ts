@@ -22,7 +22,7 @@ import { serve } from "@hono/node-server";
 import type { Hono } from "hono";
 import { createSyncRelay } from "./index.js";
 import { createLogger } from "./logger.js";
-import { parseBoolEnv } from "./env.js";
+import { parseBoolEnv, relayEnv } from "./env.js";
 import { buildRelayConfigFromEnv } from "./relay-config.js";
 
 if (process.env.NODE_ENV === "production" && !process.env.MOTEBIT_DB_PATH) {
@@ -78,7 +78,7 @@ if (testVotePolicyRaw !== undefined) {
 // on the constant is now a test on production). The boot entry supplies only
 // the runtime closures the pure builder cannot produce.
 const relay = await createSyncRelay(
-  buildRelayConfigFromEnv(process.env, {
+  buildRelayConfigFromEnv(relayEnv(), {
     getShuttingDown: () => shuttingDown,
     testVotePolicy,
   }),

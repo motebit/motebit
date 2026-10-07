@@ -117,16 +117,16 @@ motebit/
 │
 ├── services/
 │   ├── relay/                 [relay]       Sync, settlement, federation, discovery, disputes.
-│   ├── research/              [molecule]    $0.25/report. Claude + web search, signed citation chain.
+│   ├── research/              [molecule]    $0.25/task. Claude + web search, signed citation chain.
 │   ├── code-review/           [molecule]    $0.20/review. Claude-powered, signed receipts.
-│   ├── auditor/               [molecule]    $0.01/audit. LLM-free — measures an agent's public verification surface, signs an eval attestation.
+│   ├── auditor/               [molecule]    $0.01/task. LLM-free — measures an agent's public verification surface, signs an eval attestation.
 │   ├── clerk/                 [molecule]    $0.01/task. Money-execution pole — metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first.
-│   ├── web-search/            [atom]        $0.003/request. Priced + p2p now the multi-hop settlement arc landed; single-hop + multi-hop delegation proof.
-│   ├── read-url/              [atom]        Minimal read-url service. Second hop in multi-hop proof.
-│   ├── summarize/             [atom]        Conversation summarization.
-│   ├── embed/                 [atom]        ONNX embedding service.
-│   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer.
-│   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
+│   ├── web-search/            [atom]        $0.05/request. Priced + p2p; single-hop + multi-hop delegation proof.
+│   ├── read-url/              [atom]        Unpriced. Minimal read-url service. Second hop in multi-hop proof.
+│   ├── summarize/             [atom]        Unpriced. Conversation summarization.
+│   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer; no identity or listing of its own.
+│   ├── embed/                 [infrastructure] ONNX embedding service — no identity, no MCP listing.
+│   └── proxy/                 [infrastructure] Vercel edge CORS proxy for the web app — no identity, no MCP listing.
 │
 ├── spec/                      # 36 open specifications, each motebit/<name>@1.0
 │   ├── README.md                            Admission rule + class index of every spec (enforced by check-spec-coverage).
@@ -241,14 +241,14 @@ Every structured-data module registers its kind via `registerSpatialDataModule<K
 
 ## Services
 
-Eleven services in four roles. All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
+Eleven services in four roles; seven list on the market (an identity plus a priced listing). All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
 
 | Role          | Services                                                       | Pattern                                                                                                                                                            |
 | ------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Relay**     | `relay`                                                        | The only function with a legitimate centralization premium — multi-device sync. Also: settlement, federation, discovery, 5-tier rate limiting, dispute resolution. |
-| **Molecules** | `research` ($0.25/report), `code-review` ($0.20/review), `auditor` ($0.01/audit), `clerk` ($0.01/task) | Agents that reason and compose. `research`/`code-review` are Claude-powered and emit signed delegation receipt chains; `auditor` is LLM-free — it measures another agent's public verification surface and signs an eval attestation (subject ≠ signer); `clerk` is the money-execution pole — it runs a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first.          |
-| **Atoms**     | `web-search` ($0.003/request), `read-url` ($0.002/request), `summarize`, `embed`, `browser-sandbox` — priced + p2p now the multi-hop settlement arc landed | Capability providers. Single-hop reference implementations of the delegation spec; `browser-sandbox` is per-session rather than stateless.      |
-| **Glue**      | `proxy`                                                        | Vercel edge CORS proxy for the web app (Anthropic API, fetch, embed).                                                                                              |
+| **Molecules** | `research` ($0.25/task), `code-review` ($0.20/review), `auditor` ($0.01/task), `clerk` ($0.01/task) | Agents that reason and compose. `research`/`code-review` are Claude-powered and emit signed delegation receipt chains; `auditor` is LLM-free — it measures another agent's public verification surface and signs an eval attestation (subject ≠ signer); `clerk` is the money-execution pole — it runs a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first.          |
+| **Atoms**     | `web-search` ($0.05/request), `read-url` (unpriced), `summarize` (unpriced), `browser-sandbox` | Capability providers. Single-hop reference implementations of the delegation spec; `browser-sandbox` is per-session rather than stateless, with no identity or listing of its own.      |
+| **Infrastructure** | `proxy`, `embed`                                          | Not marketplace participants — no identity, no MCP listing. `proxy` is the Vercel edge CORS proxy for the web app (Anthropic API, fetch, embed); `embed` is plain HTTP embedding compute.                       |
 
 Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to the worker's wallet when trust is high enough — the same 5% fee rides along as a direct delegator→treasury leg in one atomic Solana transaction, so the relay records the audit but never custodies the funds.
 

@@ -3117,6 +3117,158 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-service-truth",
+    proves:
+      "flags a services inventory whose stated price disagrees with the price the service codes (its literal `LISTING_PRICE`, which the runner lists by construction) — the 2026-10-05 class where README.md and architecture.mdx quoted different web-search/read-url prices than the code. Perturbs by PREDICATE: bumps whatever dollar amount README.md's `research` bullet carries by one cent, never a literal price, so a future price change cannot make the probe vacuous; byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile("README.md", (src) => {
+        const re = /(`research` \(\$)(\d+)\.(\d+)/;
+        const m = re.exec(src);
+        if (m == null) {
+          throw new Error(
+            "probe vacuous: README.md no longer prices `research` as `research` ($X.YY/… — retarget the probe",
+          );
+        }
+        const cents = Number(m[2]) * 100 + Number(m[3]!.padEnd(2, "0").slice(0, 2)) + 1;
+        return src.replace(
+          re,
+          `$1${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`,
+        );
+      }),
+  },
+  {
+    script: "check-service-truth",
+    proves:
+      "flags a market:true service whose main() stops handing runMolecule its price — the runner lists ONLY config `pricing` (and refuses a getServiceListing carrying its own), so a dropped `pricing: LISTING_PRICE` would publish the auditor unpriced. Perturbs by deleting that property from services/auditor/src/index.ts; the AST call-site check is red.",
+    perturb: () =>
+      mutateFile("services/auditor/src/index.ts", (src) => {
+        const site = "      pricing: LISTING_PRICE,\n";
+        if (src.split(site).length !== 2) {
+          throw new Error(
+            "probe vacuous: services/auditor/src/index.ts no longer has exactly one `pricing: LISTING_PRICE,` config line — retarget the probe",
+          );
+        }
+        return src.replace(site, "");
+      }),
+  },
+  {
+    script: "check-service-truth",
+    proves:
+      "reads the price from the service's literal LISTING_PRICE, not the docs — bumps the `unit_cost` in services/auditor/src/pricing.ts by one cent (predicate: whatever `unit_cost: X.YY` it carries), so README.md and architecture.mdx no longer state the coded price and the gate is red.",
+    perturb: () =>
+      mutateFile("services/auditor/src/pricing.ts", (src) => {
+        const re = /(unit_cost: )(\d+)\.(\d+)(,)/;
+        const m = re.exec(src);
+        if (m == null) {
+          throw new Error(
+            "probe vacuous: services/auditor/src/pricing.ts no longer codes `unit_cost: X.YY,` — retarget the probe",
+          );
+        }
+        const cents = Number(m[2]) * 100 + Number(m[3]!.padEnd(2, "0").slice(0, 2)) + 1;
+        return src.replace(
+          re,
+          `$1${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}$4`,
+        );
+      }),
+  },
+  {
+    script: "check-service-truth",
+    proves:
+      "flags a price module that reads the environment — cold review R5 (2026-10-05): a `listingPricing(env)` reading a second override key, an env-chosen `per`, or `process.env` stayed green because the gate only called it with `{}` and a sentinel. Now pricing.ts is literal data and the runner alone reads MOTEBIT_UNIT_COST; the probe makes services/auditor/src/pricing.ts's `unit_cost` branch on `process.env` (keeping the docs' price when unset) and the AST check is red.",
+    perturb: () =>
+      mutateFile("services/auditor/src/pricing.ts", (src) => {
+        const re = /(unit_cost: )(\d+(?:\.\d+)?)(,)/;
+        if (re.exec(src) == null) {
+          throw new Error(
+            "probe vacuous: services/auditor/src/pricing.ts no longer codes `unit_cost: <number>,` — retarget the probe",
+          );
+        }
+        return src.replace(re, '$1process.env["MOTEBIT_PROBE"] ? 9 : $2$3');
+      }),
+  },
+  // Cold review after R7 (2026-10-06): env writes through ordinary idioms
+  // stayed green while the gate matched write spellings. The gate is now
+  // deny-by-default (process.env only as a direct literal-key read); each
+  // probe plants one formerly-green handle in a fixture under
+  // services/research/src and the gate must go red.
+  ...(
+    [
+      ["loadEnvFile", `process.loadEnvFile(".env");\nexport {};\n`],
+      [
+        '`import { env } from "node:process"` + write',
+        `import { env } from "node:process";\nenv.MOTEBIT_PROBE = "1";\n`,
+      ],
+      [
+        '`import process from "node:process"` + `const e = process.env`',
+        `import process from "node:process";\nexport const e = process.env;\n`,
+      ],
+      [
+        "`const e = process.env; e.X = 1`",
+        `const e = process.env;\ne.MOTEBIT_PROBE = "1";\nexport {};\n`,
+      ],
+      [
+        "`const { env: en } = process`",
+        `const { env: en } = process;\nen.MOTEBIT_PROBE = "1";\nexport {};\n`,
+      ],
+      [
+        "`Object.assign(env, …)`",
+        `import { env } from "node:process";\nObject.assign(env, { MOTEBIT_PROBE: "1" });\n`,
+      ],
+      ['`import "dotenv/config"`', `import "dotenv/config";\nexport {};\n`],
+      [
+        "`fn(process.env)`",
+        `declare function fn(e: unknown): void;\nfn(process.env);\nexport {};\n`,
+      ],
+      ["`{ ...process.env }`", `export const o = { ...process.env };\n`],
+    ] as const
+  ).map(([label, body], i): Probe => ({
+    script: "check-service-truth",
+    proves: `env access in a service is deny-by-default (process.env only as a direct literal-key read) — refuses ${label}, a handle on the env object that stayed green while the gate matched write spellings (cold review after R7, 2026-10-06). Drops a fixture under services/research/src; the gate's AST env check is red.`,
+    perturb: () => writeFixture(`services/research/src/${PROBE_PREFIX}env_handle_${i}.ts`, body),
+  })),
+  // R9 (2026-10-06): the source scan read only some extensions, so a price
+  // default or env write in a .cts/.cjs/.jsx file was invisible. The gate now
+  // enumerates every file under each service's src/ and refuses any
+  // extension it neither scans nor knows to be inert.
+  {
+    script: "check-service-truth",
+    proves:
+      "fails CLOSED on a source form it does not scan — drops a `.cjs` canary (an env write + a price default) under services/research/src; the old extension filter skipped it and stayed green, now the enumeration names the file with a scan-it-or-move-it repair and the gate is red.",
+    perturb: () =>
+      writeFixture(
+        `services/research/src/${PROBE_PREFIX}unscanned_price.cjs`,
+        `process.env.MOTEBIT_UNIT_COST = "9";\nmodule.exports = { unit_cost: 9 };\n`,
+      ),
+  },
+  // R10 (2026-10-06): the price/env scans skip test files, and nothing stopped
+  // production code from importing one; and motebit.identity was never
+  // compared with the docs.
+  ...(
+    [
+      ["`./boot.test.js`", "boot_import.ts", `import "./boot.test.js";\nexport {};\n`],
+      ["`./__tests__/boot.js`", "tests_import.ts", `import "./__tests__/boot.js";\nexport {};\n`],
+    ] as const
+  ).map(([label, file, body]): Probe => ({
+    script: "check-service-truth",
+    proves: `production code never imports test code — a non-test source under services/research/src importing ${label} (the R10 repro: a boot.test.ts / __tests__/boot.ts that set MOTEBIT_UNIT_COST stayed green because the env scan skips test files). Drops the importing fixture; the specifier resolves to a test path and the gate is red.`,
+    perturb: () => writeFixture(`services/research/src/${PROBE_PREFIX}${file}`, body),
+  })),
+  {
+    script: "check-service-truth",
+    proves:
+      'compares each service\'s declared motebit.identity with what README.md and architecture.mdx state — flips services/proxy/package.json `"identity": false` to true (both docs say proxy has no identity); before R10 (2026-10-06) the declaration was never compared and the gate stayed green.',
+    perturb: () =>
+      mutateFile("services/proxy/package.json", (src) => {
+        const re = /("identity":\s*)false/;
+        if (src.match(new RegExp(re.source, "g"))?.length !== 1) {
+          throw new Error(
+            'probe vacuous: services/proxy/package.json no longer declares exactly one `"identity": false` — retarget the probe',
+          );
+        }
+        return src.replace(re, "$1true");
+      }),
+  },
+  {
     script: "check-relay-frame-origin",
     proves:
       "flags a surface that handles a relay `command_request` and executes it through `executeCommand` without saying where the command came from — the 2026-09-16 class where five surfaces forwarded a relay frame with no origin, so a command that arrived over the wire answered as if typed on the machine and the return view's credential membrane never closed. Drops a fixture handler that reads a `command_request` frame and calls `executeCommand` bare; the gate finds the frame marker and no door and no explicit origin.",

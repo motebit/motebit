@@ -94,22 +94,28 @@ export function loadConfig(): BrowserSandboxConfig {
 
   return {
     trustedRelayPublicKeyHex,
-    port: parseIntEnv("MOTEBIT_PORT", DEFAULT_PORT),
-    maxConcurrentSessions: parseIntEnv("BROWSER_SANDBOX_MAX_SESSIONS", DEFAULT_MAX_SESSIONS),
-    sessionIdleMs: parseIntEnv("BROWSER_SANDBOX_IDLE_MS", DEFAULT_IDLE_MS),
-    viewportWidth: parseIntEnv("BROWSER_SANDBOX_VIEWPORT_WIDTH", DEFAULT_VIEWPORT_WIDTH),
-    viewportHeight: parseIntEnv("BROWSER_SANDBOX_VIEWPORT_HEIGHT", DEFAULT_VIEWPORT_HEIGHT),
+    port: parseIntEnv(process.env.MOTEBIT_PORT, DEFAULT_PORT),
+    maxConcurrentSessions: parseIntEnv(
+      process.env.BROWSER_SANDBOX_MAX_SESSIONS,
+      DEFAULT_MAX_SESSIONS,
+    ),
+    sessionIdleMs: parseIntEnv(process.env.BROWSER_SANDBOX_IDLE_MS, DEFAULT_IDLE_MS),
+    viewportWidth: parseIntEnv(process.env.BROWSER_SANDBOX_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_WIDTH),
+    viewportHeight: parseIntEnv(
+      process.env.BROWSER_SANDBOX_VIEWPORT_HEIGHT,
+      DEFAULT_VIEWPORT_HEIGHT,
+    ),
   };
 }
 
 /**
- * Read an integer env var, returning `fallback` when absent / empty /
- * non-positive. Same name-first shape as `services/relay/src/env.ts`'s
- * helpers — `check-deploy-parity` recognises this signature and binds
- * the named env var to the service's source-walk inventory.
+ * Parse an integer env value, returning `fallback` when absent / empty /
+ * non-positive. Callers pass a direct literal-key read
+ * (`process.env.<NAME>`) — check-service-truth denies env access by any other
+ * shape, and `check-deploy-parity` binds that read to the service's
+ * source-walk inventory.
  */
-function parseIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
+function parseIntEnv(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw === "") return fallback;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;

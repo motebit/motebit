@@ -38,6 +38,7 @@ import {
 } from "@motebit/tools";
 import type { ToolResult } from "@motebit/sdk";
 import { loadConfig } from "./helpers.js";
+import { LISTING_PRICE } from "./pricing.js";
 
 function log(msg: string): void {
   const ts = new Date().toISOString();
@@ -69,6 +70,8 @@ async function main(): Promise<void> {
       // call it), so every first-party hop binds through the relay at zero cost
       // and carries the token. MOTEBIT_TASK_ADMISSION=open is the escape hatch.
       taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
+      // The listing price — literal data in src/pricing.ts; the runner applies MOTEBIT_UNIT_COST.
+      pricing: LISTING_PRICE,
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;
@@ -159,14 +162,6 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["read_url"],
-            pricing: [
-              {
-                capability: "read_url",
-                unit_cost: config.unitCost,
-                currency: "USD",
-                per: "request",
-              },
-            ],
             sla: { max_latency_ms: 30_000, availability_guarantee: 0.95 },
             description:
               "Read-URL atom: fetches a page and returns its text with a content digest of the raw bytes, so downstream citations stay re-verifiable to the primary record.",

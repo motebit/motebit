@@ -15,7 +15,9 @@
  *      service expect" document. Missing it = silent deploy-time bug for
  *      the next person who touches the service.
  *
- *   3. Every var named in .env.example must be read by service source.
+ *   3. Every var named in .env.example must be read by service source
+ *      (or, for a service that depends on @motebit/molecule-runner, by the
+ *      runner's source — it reads MOTEBIT_UNIT_COST on the service's behalf).
  *      Catches stale .env.example files that reference env vars the
  *      service stopped reading (the exact shape of the web-search drift
  *      that motivated this gate: MOTEBIT_IDENTITY_PATH and
@@ -116,6 +118,18 @@ function parseEnvExample(path: string): Set<string> {
  * gate's correctness depends on knowing every shape. Better to false-positive
  * (flag a stale var) than false-negative (let a real stale var pass).
  */
+/** The runner every molecule service boots through (its env reads count for rule 3). */
+const RUNNER_SRC = resolve(ROOT, "packages", "molecule-runner", "src");
+
+function runsOnMoleculeRunner(serviceDir: string): boolean {
+  const pkgPath = join(serviceDir, "package.json");
+  if (!existsSync(pkgPath)) return false;
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
+    dependencies?: Record<string, string>;
+  };
+  return pkg.dependencies?.["@motebit/molecule-runner"] != null;
+}
+
 function envVarsReadInSource(serviceDir: string): Set<string> {
   const names = new Set<string>();
   const directEnv = /process\.env(?:\.([A-Z][A-Z0-9_]*)|\[["']([A-Z][A-Z0-9_]*)["']\])/g;
@@ -219,11 +233,21 @@ function main(): void {
     // Invariant 3: every var in .env.example is actually read.
     const declared = parseEnvExample(envExample);
     const read = envVarsReadInSource(join(serviceDir, "src"));
+    // A molecule's process also runs @motebit/molecule-runner, which owns some
+    // operator env on the service's behalf (MOTEBIT_UNIT_COST: the listing
+    // price override, read and validated by the runner alone so a service's
+    // price module cannot read the env — check-service-truth, R5). Such a var
+    // documented in the service's .env.example is live, not stale. Rule 5
+    // stays service-src-only: the runner's other knobs are not every
+    // molecule's to document.
+    const readAtRuntime = runsOnMoleculeRunner(serviceDir)
+      ? new Set([...read, ...envVarsReadInSource(RUNNER_SRC)])
+      : read;
     for (const name of declared) {
-      if (!read.has(name)) {
+      if (!readAtRuntime.has(name)) {
         violations.push({
           service: svc,
-          detail: `${relative(ROOT, envExample)} declares "${name}" but nothing in src reads process.env.${name} — stale doc`,
+          detail: `${relative(ROOT, envExample)} declares "${name}" but nothing in src${readAtRuntime !== read ? " (or the @motebit/molecule-runner it runs on)" : ""} reads process.env.${name} — stale doc`,
         });
       }
     }
