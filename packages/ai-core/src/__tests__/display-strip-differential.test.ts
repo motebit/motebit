@@ -105,8 +105,13 @@ interface Placement {
   template: string;
   /** The display when the slot is removed (only for prose placements). */
   removed?: string;
-  /** Code placements: the slot is always a mention. */
+  /** Fenced code: the slot is always a mention. */
   code?: boolean;
+  /**
+   * Inline code: opaque only to a mention. A real closed pair or self-closing
+   * tag is removed even here (inline code never shields real markup).
+   */
+  inline?: boolean;
 }
 
 const PLACEMENTS: Placement[] = [
@@ -118,12 +123,14 @@ const PLACEMENTS: Placement[] = [
   {
     name: "inline code span",
     template: "Claude can reason in a `{X}` block before answering. **Tips:**\n\n1. Keep it short",
-    code: true,
+    removed: "Claude can reason in a `` block before answering. **Tips:**\n\n1. Keep it short",
+    inline: true,
   },
   {
     name: "double-backtick code span",
     template: "Write ``{X}`` literally, then *italic* and **bold**.",
-    code: true,
+    removed: "Write ```` literally, then *italic* and **bold**.",
+    inline: true,
   },
   {
     name: "fenced code block",
@@ -184,12 +191,20 @@ function buildCorpus(): Case[] {
         const x = form === "closed" ? tag.closed : tag.unclosed;
         const input = p.template.replace("{X}", x);
         const isReal =
-          !p.code && tag.internal && (form === "closed" || tag.loneIsInternal === true);
+          !p.code &&
+          tag.internal &&
+          (form === "closed" || (tag.loneIsInternal === true && !p.inline));
         const kind = isReal ? "real" : "mentioned";
+        let expected = isReal ? p.removed! : input;
+        // The mentioned `<thinking>` and the real block's closer form a real
+        // closed pair; inline code does not shield it, so the cut starts at
+        // the mention (hide when ambiguous).
+        if (isReal && p.name === "mention in code then real in prose" && tag.name === "thinking")
+          expected = "Use ` Answer **ok**.";
         cases.push({
           id: `${tag.name} × ${p.name} × ${form} (${kind})`,
           input,
-          expected: isReal ? p.removed! : input,
+          expected,
           real: isReal ? x : undefined,
         });
       }
@@ -313,6 +328,61 @@ const LEAKS: Leak[] = [
     input: "Press ` key.\r\n<thinking>`ls` SECRET</thinking>\r\nThen.",
     expected: "Press ` key.\r\n\r\nThen.",
   },
+  // Round 5: a stray backtick paired with a backtick inside a real block on
+  // the SAME line, so the block read as inline code and was shown (hidden on
+  // main). Rule: inline code never shields a real closed pair, a real
+  // self-closing tag or a data block; only fences are opaque.
+  {
+    id: "repro: stray backtick pairs with a backtick at the block's end",
+    input: "Use the ` key. <thinking>SECRET user means `</thinking> Done.",
+    expected: "Use the ` key. Done.",
+  },
+  {
+    id: "repro: stray backtick pairs with an inner code span",
+    input: "It's 5` long. <thinking>SECRET maybe use `ls`</thinking> Use ls.",
+    expected: "It's 5` long. Use ls.",
+  },
+  {
+    id: "repro: stray backtick shields a state tag",
+    input: 'Press ` then go. <state curiosity="SECRET"/> ok `x` ',
+    expected: "Press ` then go. ok `x`",
+  },
+  {
+    id: "repro: stray backtick shields a memory block",
+    input: 'Press ` then <memory type="f">SECRET `name`</memory> ok',
+    expected: "Press ` then ok",
+  },
+  {
+    id: "same line: stray double backtick before a real block",
+    input: "Hit `` here. <thinking>SECRET use ``x``</thinking> Done.",
+    expected: "Hit `` here. Done.",
+  },
+  {
+    id: "same line: backtick inside the block only",
+    input: "Plain. <thinking>SECRET ` stray</thinking> after `code` end.",
+    expected: "Plain. after `code` end.",
+  },
+  {
+    id: "same line: backtick after the block only",
+    input: "Before <thinking>SECRET</thinking> then ` stray.",
+    expected: "Before then ` stray.",
+  },
+  {
+    id: "same line: several real blocks between stray backticks",
+    input:
+      'A ` b <thinking>SECRET `</thinking> c ` d <memory type="f">SECRET `</memory> e ` f <state x="SECRET"/> g',
+    expected: "A ` b c ` d e ` f g",
+  },
+  {
+    id: "same line: data block shielded by a stray backtick",
+    input: "See ` here [MEMORY_DATA]SECRET `x`[/MEMORY_DATA] done.",
+    expected: "See ` here done.",
+  },
+  {
+    id: "accepted: a closed pair quoted in one inline code span is hidden",
+    input: "`<thinking>SECRET</thinking>` is the syntax.",
+    expected: "`` is the syntax.",
+  },
 ];
 
 /** Mentions that stay verbatim under the leak fix (rule: mid-line, or code). */
@@ -320,7 +390,7 @@ const KEPT_MENTIONS = [
   "Use <thinking> tags for **reasoning**.",
   "- <thinking> opens a block\n- then **more**",
   "`<thinking>` opens a block. **Note:** ok",
-  "Use `<thinking>` to open and `</thinking>` to close.",
+  "Use `<thinking>` alone to open a block.",
   'Example:\n\n```\n<thinking>\n```\n\n~~~~\n<memory a="1">\n~~~~\nDone.',
 ];
 

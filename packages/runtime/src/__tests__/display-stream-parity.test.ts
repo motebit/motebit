@@ -172,6 +172,31 @@ const LEAKS: Record<string, { text: string; expected: string }> = {
     text: "Press ` key.\r\n<thinking>`ls` SECRET</thinking>\r\nThen.\r\n<thinking>SECRET",
     expected: "Press ` key.\r\n\r\nThen.",
   },
+  // Same-line stray backtick: inline code never shields a real block.
+  sameLineThinking: {
+    text: "Use the ` key. <thinking>SECRET user means `</thinking> Done.",
+    expected: "Use the ` key. Done.",
+  },
+  sameLineInnerSpan: {
+    text: "It's 5` long. <thinking>SECRET maybe use `ls`</thinking> Use ls.",
+    expected: "It's 5` long. Use ls.",
+  },
+  sameLineState: {
+    text: 'Press ` then go. <state curiosity="SECRET"/> ok `x` ',
+    expected: "Press ` then go. ok `x`",
+  },
+  sameLineMemory: {
+    text: 'Press ` then <memory type="f">SECRET `name`</memory> ok',
+    expected: "Press ` then ok",
+  },
+  sameLineDoubleBacktick: {
+    text: "Hit `` here. <thinking>SECRET use ``x``</thinking> Done.",
+    expected: "Hit `` here. Done.",
+  },
+  sameLineSeveral: {
+    text: 'A ` b <thinking>SECRET `</thinking> c ` d <memory type="f">SECRET `</memory> e ` f <state x="SECRET"/> g',
+    expected: "A ` b c ` d e ` f g",
+  },
 };
 
 async function streamChunks(runtime: MotebitRuntime, parts: string[], full: string) {
