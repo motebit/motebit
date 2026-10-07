@@ -37,6 +37,8 @@ import {
   publicValueViolation,
   scanOutputForEnvValues,
   valueNeedles,
+  buildNeedleIndex,
+  findNeedles,
   isSecretShapedEnvName,
   localOnlyApps,
   localOnlyPremiseViolations,
@@ -1848,5 +1850,43 @@ describe("LOCAL_OPERATOR_TOKEN premise (never deployed) is checked, not assumed"
     expect(
       localOnlyPremiseViolations(root).findings.some((x) => x.startsWith("vercel.json —")),
     ).toBe(true);
+  });
+});
+
+describe("findNeedles — the single-pass multi-needle search the output scan uses", () => {
+  // Deterministic PRNG so a failure reproduces.
+  let seed = 0x9e3779b9;
+  const rand = (n: number): number => {
+    seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) | 0;
+    return (seed >>> 0) % n;
+  };
+  const ALPHABET = 'ab\u00ff=/+_-\\"0';
+  const randomText = (len: number): string =>
+    Array.from({ length: len }, () => ALPHABET[rand(ALPHABET.length)]).join("");
+
+  it("reports exactly the needles `includes` finds (overlapping, repeated, shared-prefix, at both ends)", () => {
+    for (let round = 0; round < 200; round++) {
+      const text = randomText(rand(400));
+      const needles: string[] = [];
+      for (let k = 0; k < 30; k++) {
+        const len = OUTPUT_SCAN_MIN_LENGTH + rand(20);
+        if (text.length >= len && rand(2) === 0) {
+          const at = rand(text.length - len + 1);
+          needles.push(text.slice(at, at + len));
+        } else {
+          needles.push(randomText(len));
+        }
+      }
+      if (text.length >= OUTPUT_SCAN_MIN_LENGTH) {
+        needles.push(text.slice(0, OUTPUT_SCAN_MIN_LENGTH), text.slice(-OUTPUT_SCAN_MIN_LENGTH));
+      }
+      needles.push(needles[0]!); // a duplicate needle is reported at both indices
+      const present = findNeedles(buildNeedleIndex(needles), text);
+      expect([...present].map((b) => b === 1)).toEqual(needles.map((n) => text.includes(n)));
+    }
+  });
+
+  it("refuses a needle shorter than the scan's minimum (it could not be windowed)", () => {
+    expect(() => buildNeedleIndex(["x".repeat(OUTPUT_SCAN_MIN_LENGTH - 1)])).toThrow(/shorter/);
   });
 });

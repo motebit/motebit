@@ -1,0 +1,912 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # The merge queue (docs/ops/merge-queue.md). Every required check (check,
+  # format, e2e, sibling-audit, changeset) must REPORT on this event or the
+  # queue waits forever — and must run for real: the queue exists to test the
+  # COMBINED commit (main + the queued PRs), which no PR run ever saw.
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Turbo remote cache — restores build/typecheck/lint/lint:pack outputs for
+# packages whose inputs haven't changed since the last passing run. Each
+# job exports TURBO_TOKEN + TURBO_TEAM automatically via env inheritance.
+# Secrets live in repo settings (TURBO_TOKEN) and repo variables (TURBO_TEAM);
+# when absent the cache silently no-ops and CI falls back to local build,
+# so forks / first-boot runs degrade gracefully.
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+
+jobs:
+  # `check` is a REQUIRED status check (branch protection + the merge queue,
+  # docs/ops/merge-queue.md). It was one serial job (audit, build, drift
+  # gates, typecheck, lint, lint:pack, check-unused, then every suite with
+  # coverage) that took 16–25 min against its 30-min wall and timed out four
+  # times on 2026-10-04 — each time ejecting a PR from the merge queue.
+  # SHARDED (2026-10-05): `check-static` and the `test-coverage` matrix run in
+  # parallel on their own runners, and `check` below is only the fail-closed
+  # verdict over them, under the name the rulesets require.
+  #
+  # Timeout history of the serial job: 15 → 20 (the suite alone reached
+  # ~14–15 min cold); 20 → 30 (2026-09-28: 8.8–17.8 min green, crossed 20 six
+  # times in a day with runners shared); 30 timed out ×4 on 2026-10-04 → shard.
+  check-static:
+    runs-on: ubuntu-latest
+    # Install + audit + build (~3 min cold) + `pnpm check` + typecheck + lint
+    # + lint:pack + check-unused: the serial job minus the suites. 20 leaves
+    # headroom for a cold turbo cache with runners shared.
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: check-cli-surface judges a breaking CLI change against
+          # the baseline at the merge-base with the PR base (origin/<base_ref>)
+          # or the merge-queue base_sha, and fails closed when it can't resolve one.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit
+        # `pnpm audit` (v9.15) hits npm's legacy `/security/audits` endpoint,
+        # which npm intermittently 410/500/429-s as it pushes clients to the
+        # bulk advisory endpoint. The real fix is pnpm PR #10652 (switches to
+        # the quick endpoint with fallback) — merged 2026-02-19, only landed
+        # in v11.0.0-alpha, not backported to v10.x or v9.x.
+        # `--ignore-registry-errors` is the documented, intended workaround:
+        # the audit still runs and reports findings, only the exit code is
+        # tolerant of registry-side errors. Revisit when we upgrade pnpm or
+        # the endpoint stabilises.
+        #
+        # Threshold is HIGH (raised from critical, 2026-09-13). Advisories with
+        # no fix anywhere are accepted explicitly in package.json
+        # `pnpm.auditConfig.ignoreCves`, each with a reachability argument and
+        # a lift trigger in docs/security/dependency-triage.md — a documented
+        # exception, never a bare count threshold.
+        run: pnpm audit --prod --audit-level=high --ignore-registry-errors
+
+      - name: Build
+        # Must run before drift defenses because check-api-surface shells out
+        # to api-extractor, which reads from each package's dist/index.d.ts.
+        run: pnpm build
+
+      - name: Drift defenses (deps, specs, service/app primitives, API surface, changeset discipline)
+        run: pnpm check
+
+      - name: No provider credentials in built client bundles
+        # Arm (b) of check-no-secrets-in-client-bundles against the bundles just
+        # built — --require-dist makes a missing web/verify dist RED, so the scan
+        # can never pass by looking at nothing (incident 2026-09-30, #170).
+        run: pnpm check-no-secrets-in-client-bundles --require-dist web,verify
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Publish-integrity (publint + attw on every published package)
+        # Validates that package.json `files`/`exports` match what's actually
+        # shipped in dist/, and that TypeScript consumers can resolve types
+        # under Node16/Bundler/etc. resolution modes. Catches dual-package-
+        # hazard before it reaches npm.
+        run: pnpm lint:pack
+
+      - name: Dead code detection
+        if: always()
+        continue-on-error: true
+        run: pnpm run check-unused
+
+      - name: Upload build artifacts for E2E
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: web-build
+          path: apps/web/dist/
+          retention-days: 1
+
+  test-coverage:
+    # Every workspace suite with coverage, split into disjoint shards by
+    # scripts/test-coverage-shards.ts: services/relay (the dominant suite)
+    # alone in shard 1, the rest bin-packed over the others by the measured
+    # weights committed there. The assignment is computed — a package with a
+    # test:coverage script and no weight fails every shard, never drops out —
+    # and the partition is re-proven by check-prepush-subset (`pnpm check`),
+    # by each shard before it runs, and by `check` from the uploaded
+    # manifests. Coverage thresholds stay per package (each vitest.config).
+    # Each shard builds for itself (turbo remote cache restores most of it):
+    # the suites then see exactly what `pnpm build` makes, as before.
+    # Adding a shard = one matrix entry here + the pinned strategy in
+    # scripts/check-prepush-subset.ts (which proves the list is 1/N..N/N).
+    runs-on: ubuntu-latest
+    # Sized by the relay leg, the irreducible floor of this split: relay's
+    # suite alone ran 998s inside the serial run of 2026-10-05 (and 928s
+    # alone on a 4-core box), so setup + install + build + relay ≈ 18–20 min
+    # on a cold cache. The other legs measure ~7–8 min. 30 keeps the relay leg
+    # near 60% of its wall; the next lever, if it trends up, is splitting
+    # relay's own suite (vitest --shard + merged coverage), not this timeout.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Stamp this shard's start
+        # Before install, build or any suite: every vitest results file this
+        # shard uploads must carry a startTime at or after this stamp, so a
+        # results file from an earlier run (committed, cached, restored) is
+        # RED in `check` (scripts/verify-test-outcomes.ts SHARD_STAMP_FILE).
+        # Written by the job itself, never by the shard runner.
+        run: |
+          mkdir -p coverage
+          echo "{\"startedAt\": $(date +%s%3N)}" > coverage/shard-started-at.json
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test with coverage (this shard)
+        # --concurrency=4 (inside the script's turbo invocation) matches the
+        # GitHub runner's CPU count. Turbo's default concurrency=10
+        # oversubscribes 4-core runners: each test package spawns its own
+        # vitest worker pool, so 10 parallel packages can balloon to 40+
+        # competing workers and surface as timing-sensitive test flakes.
+        run: pnpm test:coverage:shard --shard ${{ matrix.shard }} --manifest coverage/test-coverage-shard.json
+
+      - name: Coverage summary
+        if: always()
+        run: node scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage reports
+        # The root coverage/ (the shard manifest) keeps every path relative to
+        # the repo root, so the `check` job can merge the shards back into one
+        # tree. Named per shard; `check` re-uploads the union as coverage-reports.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-shard-${{ strategy.job-index }}
+          path: |
+            coverage/
+            packages/*/coverage/
+            apps/*/coverage/
+            services/*/coverage/
+          retention-days: 14
+
+  check:
+    # The verdict, under the required-check name. A cancelled, skipped or
+    # failed leg must never read as success: `if: always()` makes this job run
+    # whatever its needs concluded, and it passes only when check-static and
+    # EVERY test-coverage shard SUCCEEDED, the shard manifests prove each
+    # package with a test:coverage script ran exactly once, AND vitest's own
+    # results prove every such package ran tests that all passed with its
+    # coverage floors met (scripts/verify-test-outcomes.ts — independent of the
+    # shard runner's exit code and its package list).
+    needs: [check-static, test-coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Fail closed unless the static job and every shard succeeded
+        env:
+          STATIC: ${{ needs.check-static.result }}
+          TESTS: ${{ needs.test-coverage.result }}
+        run: |
+          echo "check-static=$STATIC test-coverage=$TESTS"
+          if [ "$STATIC" != "success" ] || [ "$TESTS" != "success" ]; then
+            echo "::error::check-static '$STATIC', test-coverage '$TESTS' — a cancelled, skipped or failed leg is not a pass"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download the shards' coverage
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          pattern: coverage-shard-*
+          path: /tmp/coverage-shards
+
+      - name: Prove the shards ran every suite exactly once
+        run: pnpm test:coverage:shard --verify-manifests /tmp/coverage-shards
+
+      - name: Prove every suite passed, from vitest's own results
+        # The proof that does not trust the shard runner: every package with a
+        # test:coverage script — enumerated from pnpm-workspace.yaml here, not
+        # from the runner's list — must have vitest's own results (written by
+        # MOTEBIT_TEST_REPORTERS in vitest.shared.ts) in exactly one shard
+        # artifact: tests passed > 0 and at least its run-share floor of the
+        # declared tests (a `-t` filter or blanket skip is RED), none failed,
+        # no unhandled error, results dated after their shard's start stamp,
+        # nothing under coverage/ tracked in git, coverage at or above the
+        # package's own thresholds. A runner whose exit code lies (B1) or
+        # whose enumeration skips a package (B2) is RED here.
+        run: pnpm test:outcomes:verify --artifacts /tmp/coverage-shards
+
+      - name: Merge the shards' coverage
+        run: |
+          for d in /tmp/coverage-shards/*/; do cp -R "$d". .; done
+
+      - name: Coverage summary
+        run: node scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-reports
+          path: |
+            packages/*/coverage/
+            apps/*/coverage/
+            services/*/coverage/
+          retention-days: 14
+
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format:check
+
+  e2e:
+    # Needs only the job that builds web (its artifact), not the suites: e2e
+    # starts as soon as the static job is green instead of after every shard.
+    needs: check-static
+    runs-on: ubuntu-latest
+    # Playwright Chromium download (~150 MB) + artifact download + 14 tests
+    # have historically run in 2m56s–3m21s, leaving only ~1.5m of headroom
+    # under the prior 5m ceiling. Run 25372469696 hit 5m6s during cleanup
+    # despite all 14 tests passing in 2.0m — the variance is normal CI
+    # behavior, not a test regression. 10m matches the build job's safety
+    # margin and absorbs runner-side fluctuation without masking real hangs.
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright (Chromium only)
+        run: pnpm --filter @motebit/web exec playwright install --with-deps chromium
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          name: web-build
+          path: apps/web/dist/
+
+      - name: Run E2E smoke tests
+        run: pnpm --filter @motebit/web test:e2e --project=chromium
+
+      # Golden-frame visual regression (docs/doctrine/creature-canon.md
+      # §proof contract). WebGL via SwiftShader — deterministic CPU
+      # rasterization; reference frames are linux-only and CI-authoritative.
+      # On intentional visual changes, refresh via the failure artifact's
+      # -actual.png files or `pnpm --filter @motebit/web golden:update`.
+      # golden-matrix.ts imports the TrustMode enum (a runtime value) from
+      # @motebit/sdk at Playwright config time, so this small dist chain must
+      # exist here even though the app itself runs from the web-build artifact.
+      - name: Build golden-matrix import chain
+        run: pnpm --filter @motebit/render-engine... build
+      - name: Run golden-frame visual regression
+        run: pnpm --filter @motebit/web test:e2e --project=golden
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: e2e-screenshots
+          # test-results/ carries -actual/-diff PNGs on mismatch; the golden
+          # snapshots dir carries the freshly WRITTEN references when they
+          # didn't exist yet (the first-linux-run bootstrap: commit these).
+          path: |
+            apps/web/test-results/
+            apps/web/e2e/golden/*-snapshots/
+          retention-days: 7
+
+  changes:
+    # Real changed-files detection feeding the gate-effectiveness trigger.
+    # The prior `contains(toJson(github.event.pull_request), 'scripts/')`
+    # matched the PR title/body TEXT (pull_request is metadata, not the diff),
+    # so gate-effectiveness silently skipped on PRs that genuinely touched
+    # scripts/ (#115). This job ALWAYS runs (so the `needs` below is always
+    # satisfied — a skipped need would otherwise cascade-skip gate-effectiveness
+    # even on push) and emits a `scripts` output; on push the value is unused
+    # (gate-effectiveness runs unconditionally). git diff vs the base ref is the
+    # same idiom the sibling-audit job uses.
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      scripts: ${{ steps.filter.outputs.scripts }}
+      relay: ${{ steps.filter.outputs.relay }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        name: Detect scripts/ and services/relay/ changes vs base
+        run: |
+          scripts=false
+          relay=false
+          # The diff base: the PR's base branch, or — in the merge queue — the
+          # group's parent commit (main, or the queue entry ahead of it), so
+          # the group's own changes decide, exactly as the PR's did.
+          base=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="origin/${{ github.base_ref }}"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            base="${{ github.event.merge_group.base_sha }}"
+          fi
+          if [ -n "$base" ]; then
+            changed=$(git diff --name-only "$base...HEAD")
+            # Probes read repo data outside scripts/ (coverage-graduation.json
+            # is the live example: #589 moved a date there, the probe keyed on
+            # that literal went vacuous, and gate-effectiveness never ran on
+            # the PR because scripts/ was untouched — main went red on push).
+            # A change to a gate INPUT must trigger the same proof as a change
+            # to the gate.
+            # examples/interop/ is a gate input too: the APS vector and the pins
+            # in INTEROP.md are read by scripts/__tests__/interop-aps-vector.test.ts.
+            if echo "$changed" | grep -qE '^scripts/|^coverage-graduation\.json$|^examples/interop/'; then
+              scripts=true
+            fi
+            # activation-effectiveness must fire on a relay refactor (the exact
+            # regression it guards: a source change making a booted suite go
+            # vacuous), not only on gate edits.
+            if echo "$changed" | grep -qE '^services/relay/'; then
+              relay=true
+            fi
+          fi
+          echo "scripts=$scripts" >> "$GITHUB_OUTPUT"
+          echo "relay=$relay" >> "$GITHUB_OUTPUT"
+          echo "scripts/ touched vs '$base': $scripts; services/relay/ touched: $relay"
+
+  gate-effectiveness-shard:
+    # Probe every drift-defense gate with a known-violating fixture to prove
+    # each one actually fires. Scoped to scripts/* changes + pushes to main
+    # so the expense (every gate runs under a perturbation) isn't paid on
+    # unrelated PRs — but any change to a gate or the gate list triggers it.
+    # Trigger uses the `changes` job's real diff detection, not a text match
+    # on PR metadata (#115).
+    #
+    # SHARDED (2026-10-02). One serial job outgrew its 10-min wall: setup ~0.5
+    # + install ~0.2 + build ~2.1 min, then ~181 probes — and GitHub CANCELLED
+    # the job rather than failing it (main 8427e59, #1017, #1008), so nothing
+    # proved the gates bite. Each shard runs on its own runner and checkout, so
+    # the probes (which rewrite real files) cannot cross-talk between shards.
+    # `--shard i/N` assigns probes by a stable hash of the gate name; the
+    # partition (union = every probe, disjoint) is re-proven by every shard and
+    # by the `gate-effectiveness` job below from the uploaded manifests. Each
+    # shard builds for itself: cheaper in wall-clock than a build job + dist
+    # artifact hand-off, and the probes see exactly what `pnpm build` makes.
+    # Budget: 15 min; a shard measured ~5 min (setup+install+build ~3 +
+    # probes ~1.5) — under 60%. check-gates-effective prints a ::warning:: when
+    # a shard's probe run passes 75% of SHARD_PROBE_BUDGET_SECONDS (6 min).
+    # Adding a shard = one matrix entry here + the pinned strategy in
+    # scripts/check-prepush-subset.ts (which proves the list is 1/N..N/N).
+    needs: changes
+    if: |
+      github.event_name == 'push' ||
+      needs.changes.outputs.scripts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/4", "2/4", "3/4", "4/4"]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        # The check-api-surface probe perturbs the committed baseline and
+        # expects api-extractor to produce an etc/temp/ surface that diverges —
+        # which requires dist/*.d.ts to exist for protocol/crypto/sdk. Without
+        # this, the gate errors on missing input and the probe would pass for
+        # the wrong reason.
+        run: pnpm build
+
+      - name: Prove every gate in this shard actually fires
+        run: pnpm check-gates-effective --shard ${{ matrix.shard }} --manifest /tmp/gate-shard.json
+
+      - name: Upload the shard manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gate-shard-${{ strategy.job-index }}
+          path: /tmp/gate-shard.json
+          if-no-files-found: error
+          retention-days: 1
+
+  gate-self-tests:
+    # The gate-script unit tests (fixture round-trips that assert each gate
+    # both bites on violations AND stays silent on correct code) are not a
+    # workspace package, so `turbo run test` skips them. Run them here, in a
+    # scripts/-scoped job beside the probe shards — without this they never
+    # execute in CI, and a check that never runs can't protect you.
+    # Its own job (it ran after the probes in one 10-min job, and was never
+    # reached once that job was cancelled). Measured 2026-10-02: ~4.8 min on
+    # 4 cores, the wall set by scripts/__tests__/tamper-runner.causation.test.ts
+    # (~4.4 min); with setup + install + build (~3 min) ~8 min = 40% of 20.
+    needs: changes
+    if: |
+      github.event_name == 'push' ||
+      needs.changes.outputs.scripts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Run gate self-tests (scripts/__tests__)
+        run: pnpm test:gates
+
+  gate-effectiveness:
+    # The verdict of the gate proof, under the job name it always had. A
+    # cancelled, skipped or failed shard (or self-test job) must never read as
+    # success: `if: always()` makes this job run whatever they concluded, and
+    # it passes only when (a) the proof was not required (a PR that touches no
+    # gate input, with `changes` itself green) or (b) every shard and the
+    # self-tests SUCCEEDED and the shard manifests prove that all probes ran,
+    # each exactly once (`check-gates-effective --verify-shards`).
+    needs: [changes, gate-effectiveness-shard, gate-self-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - id: decide
+        name: Fail closed unless every shard and the self-tests completed
+        env:
+          EVENT: ${{ github.event_name }}
+          SCRIPTS: ${{ needs.changes.outputs.scripts }}
+          CHANGES: ${{ needs.changes.result }}
+          SHARDS: ${{ needs.gate-effectiveness-shard.result }}
+          SELF_TESTS: ${{ needs.gate-self-tests.result }}
+        run: |
+          echo "changes=$CHANGES shards=$SHARDS self-tests=$SELF_TESTS (event=$EVENT scripts=$SCRIPTS)"
+          if [ "$CHANGES" != "success" ]; then
+            echo "::error::the changes job concluded '$CHANGES' — whether the gate proof was required is unknown, so it is not proven"
+            exit 1
+          fi
+          if [ "$EVENT" != "push" ] && [ "$SCRIPTS" != "true" ]; then
+            if [ "$SHARDS" = "skipped" ] && [ "$SELF_TESTS" = "skipped" ]; then
+              echo "No gate input changed on this PR: the gate proof is not required."
+              echo "required=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if [ "$SHARDS" != "success" ] || [ "$SELF_TESTS" != "success" ]; then
+            echo "::error::gate-effectiveness shards '$SHARDS', self-tests '$SELF_TESTS' — a cancelled, skipped or failed proof is not a proof"
+            exit 1
+          fi
+          echo "required=true" >> "$GITHUB_OUTPUT"
+
+      - if: steps.decide.outputs.required == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - if: steps.decide.outputs.required == 'true'
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - if: steps.decide.outputs.required == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - if: steps.decide.outputs.required == 'true'
+        name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - if: steps.decide.outputs.required == 'true'
+        name: Download the shard manifests
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
+        with:
+          pattern: gate-shard-*
+          path: /tmp/gate-shards
+
+      - if: steps.decide.outputs.required == 'true'
+        name: Prove the shards ran every probe exactly once
+        run: pnpm check-gates-effective --verify-shards /tmp/gate-shards
+
+  activation-effectiveness:
+    # Prove every booted-*-activation suite still DISCRIMINATES: reintroduce a
+    # real severing into the relay source, rebuild the compiled artifact, and
+    # require the booted suite to red. A suite that stays green under its own
+    # severing is vacuous and no longer guards composition-preserves-enforcement
+    # (docs/doctrine/composition-preserves-enforcement.md). This is the durable,
+    # continuous form of the manual severing runs the ladder PRs recorded once.
+    # Heavier than gate-effectiveness (a dist rebuild per probe), so it's its
+    # own job scoped to relay + gate-script changes (and every push to main) —
+    # a relay refactor is exactly what can make a suite go vacuous.
+    needs: changes
+    if: |
+      github.event_name == 'push' ||
+      needs.changes.outputs.scripts == 'true' ||
+      needs.changes.outputs.relay == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        # The gate rebuilds @motebit/relay per probe; its workspace deps
+        # (@motebit/* the relay imports) must be built first so `tsc -b` on the
+        # relay resolves them.
+        run: pnpm build
+
+      - name: Prove every booted activation suite discriminates its severing
+        run: pnpm check-activation-effective
+
+  sibling-audit:
+    # A required check: runs on the PR and again in the merge queue, where the
+    # diff base is the group's parent commit (main, or the entry ahead of it).
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Sibling boundary audit
+        env:
+          DIFF_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}
+        run: |
+          set -o pipefail
+          git diff --name-only "$DIFF_BASE...HEAD" | npx tsx scripts/check-sibling-boundaries.ts
+
+  python-conformance:
+    # Smoke-test that the Python reference implementation of
+    # `motebit/device-self-registration@1.0` (examples/python-device-register/)
+    # still works end-to-end against the TypeScript relay. Boots the relay in
+    # the background, runs the Python client + conformance assertions on the
+    # §5.2 response, captures both sides' output as artifacts.
+    #
+    # This is the load-bearing automation for motebit's protocol-portability
+    # claim — without it, a spec change that introduces a TypeScript-specific
+    # assumption would silently break the third-party-implementer pathway and
+    # nobody would notice. The Python client running here is built against
+    # the published spec alone (no motebit imports); a successful 201 + §5.2
+    # response shape proves the spec is what the relay actually enforces.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python dependencies
+        run: pip install --quiet --requirement examples/python-device-register/requirements.txt
+
+      - name: Build relay and its workspace dependencies
+        # services/relay depends on workspace packages whose `main` points to
+        # ./dist/index.js. Running `npx tsx services/relay/src/server.ts`
+        # without a prior build fails at module resolution because the dist/
+        # outputs don't exist yet. Filter to `@motebit/relay...` so we only
+        # build the relay's transitive workspace deps, not the entire
+        # monorepo.
+        run: pnpm --filter @motebit/relay... build
+
+      - name: Boot relay in background
+        # Minimal env: X402_PAY_TO_ADDRESS is the only required var; :memory:
+        # DB keeps each CI run hermetic. server.ts is the executable boot
+        # entry (index.ts is the library entry — side-effect-free at module
+        # load so embedders can import without binding ports).
+        env:
+          PORT: "3199"
+          X402_PAY_TO_ADDRESS: "0x0000000000000000000000000000000000000000"
+          NODE_ENV: "development"
+          MOTEBIT_DB_PATH: ":memory:"
+        run: |
+          npx tsx services/relay/src/server.ts > /tmp/relay.out 2> /tmp/relay.err &
+          echo $! > /tmp/relay.pid
+
+      - name: Wait for /health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3199/health > /dev/null 2>&1; then
+              echo "relay healthy after ${i}s"
+              curl -s http://localhost:3199/health
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "relay never became healthy; last log:"
+          tail -n 50 /tmp/relay.out /tmp/relay.err
+          exit 1
+
+      - name: Run Python conformance test
+        run: python examples/python-device-register/conformance_test.py http://localhost:3199
+
+      - name: Capture relay log line for the success
+        if: success()
+        run: |
+          echo "==== device.self_register.ok log line ===="
+          grep "device.self_register.ok" /tmp/relay.out | tail -1 || echo "(not found)"
+
+      - name: Tear down relay
+        if: always()
+        run: |
+          if [ -f /tmp/relay.pid ]; then
+            kill "$(cat /tmp/relay.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload relay logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-conformance-relay-logs
+          path: |
+            /tmp/relay.out
+            /tmp/relay.err
+          retention-days: 7
+
+  python-receipt-verifier-conformance:
+    # Smoke-test that the Python reference verifier for
+    # `motebit/execution-ledger@1.0` §11 ExecutionReceipt
+    # (examples/python-receipt-verifier/) still agrees with the TypeScript
+    # relay's verifier on the JCS + Ed25519 + base64url envelope.
+    #
+    # Sibling to python-conformance: same boot recipe, different protocol
+    # surface. This job is the load-bearing automation for the receipt
+    # half of motebit's protocol-portability claim. The Python client signs
+    # a fresh ExecutionReceipt with pynacl, posts it to the relay's
+    # /agent/:motebitId/verify-receipt endpoint, and asserts on the body's
+    # `valid` field — never on `response.ok` alone, per the dead-drop
+    # lesson (memory/lesson_hardware_attestation_self_issued_dead_drop.md).
+    # A successful pass means the spec is what the relay enforces; a failure
+    # localizes the regression to §11.1 / §11.2 / §11.4 / §11.5.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python dependencies
+        run: pip install --quiet --requirement examples/python-receipt-verifier/requirements.txt
+
+      - name: Build relay and its workspace dependencies
+        # See sibling python-conformance job for rationale; same boot recipe,
+        # same tsx-resolves-dist requirement.
+        run: pnpm --filter @motebit/relay... build
+
+      - name: Boot relay in background
+        env:
+          PORT: "3199"
+          X402_PAY_TO_ADDRESS: "0x0000000000000000000000000000000000000000"
+          NODE_ENV: "development"
+          MOTEBIT_DB_PATH: ":memory:"
+        run: |
+          npx tsx services/relay/src/server.ts > /tmp/relay.out 2> /tmp/relay.err &
+          echo $! > /tmp/relay.pid
+
+      - name: Wait for /health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3199/health > /dev/null 2>&1; then
+              echo "relay healthy after ${i}s"
+              curl -s http://localhost:3199/health
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "relay never became healthy; last log:"
+          tail -n 50 /tmp/relay.out /tmp/relay.err
+          exit 1
+
+      - name: Run Python receipt-verifier conformance test
+        run: python examples/python-receipt-verifier/conformance_test.py http://localhost:3199
+
+      - name: Verify the committed fixture offline
+        # Sanity check: the fixture under fixtures/ must remain a valid receipt
+        # any third-party Python verifier can re-verify without relay contact.
+        # If a spec drift breaks this, the committed fixture would silently rot.
+        run: python examples/python-receipt-verifier/verify.py examples/python-receipt-verifier/fixtures/example-receipt.json
+
+      - name: Cross-implementation receipt conformance
+        # Every committed receipt vector must verify to the same INTEGRITY verdict
+        # across @motebit/verifier, @motebit/crypto, @motebit/state-export-client,
+        # and the Python reference — and every tampered byte must be rejected by
+        # all of them. The platform owns this (all impls live here); REQUIRE_PYTHON
+        # makes the Python leg mandatory in this job, where pynacl is installed.
+        run: |
+          pnpm --filter @motebit/verifier... --filter @motebit/state-export-client... build
+          REQUIRE_PYTHON=1 npx tsx scripts/check-receipt-conformance.ts
+
+      - name: Cross-implementation evidence-provenance conformance
+        # Every committed evidence-provenance vector must produce the same structured
+        # result across @motebit/crypto's verifyEvidenceProvenance and the stdlib-only
+        # Python reference — proving evidence-provenance (and the agency.html-text.v1
+        # recipe it resolves) is a real cross-language protocol, not a TypeScript
+        # feature. No pynacl needed: evidence-provenance is sha-256 + substring.
+        run: |
+          pnpm --filter @motebit/crypto --filter @motebit/tools build
+          REQUIRE_PYTHON=1 npx tsx scripts/check-evidence-provenance-conformance.ts
+
+      - name: Capture relay log lines for the round-trip
+        if: success()
+        run: |
+          echo "==== device.self_register.ok log line (receipt-verifier registration) ===="
+          grep "device.self_register.ok" /tmp/relay.out | tail -1 || echo "(not found)"
+          echo "==== receipt.verified / receipt.verification_failed log lines ===="
+          grep -E "receipt\.(verified|verification_failed)" /tmp/relay.out | tail -5 || echo "(not found)"
+
+      - name: Tear down relay
+        if: always()
+        run: |
+          if [ -f /tmp/relay.pid ]; then
+            kill "$(cat /tmp/relay.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload relay logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-receipt-verifier-conformance-relay-logs
+          path: |
+            /tmp/relay.out
+            /tmp/relay.err
+          retention-days: 7
+
+  changeset:
+    # A required check: runs on the PR and again in the merge queue (diff base
+    # = the group's parent commit), never skipped there.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Require a changeset when a published package's source changed
+        # Fails (exit 1) only when a non-private package's `src/` changed without
+        # a changeset — docs/test/service/CI-only PRs pass. Derives the published
+        # set from package.json (no hardcoded list). See the script header.
+        env:
+          CHANGESET_BASE_REF: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}
+        run: npx tsx scripts/check-changeset-required.ts

@@ -55,9 +55,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { failWithRepair, hasRepairInstruction } from "./lib/gate-report.js";
 import { acquireGateLock } from "./lib/probe-lock.js";
+import { gateArgv, resolveGateFiles } from "./lib/gate-launch.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
+/**
+ * Each gate runs as `tsx <file>` directly (scripts/lib/gate-launch.ts). Probes
+ * stay SERIAL: each one rewrites real files in this one working tree, so a
+ * gate running beside another probe would read that probe's plant.
+ */
+const TSX_BIN = resolve(ROOT, "node_modules", ".bin", "tsx");
 
 /** Distinctive prefix — any stray fixture file is easy to find and remove. */
 const PROBE_PREFIX = "__gate_probe__";
@@ -3862,6 +3869,17 @@ function main(): void {
   acquireGateLock(ROOT, "check-gates-effective (mutating probes)");
   drainStalePerturbations();
   assertProbeCoverage();
+  // Fail closed before any probe perturbs: every probed gate must resolve to a tsx file.
+  let gateFiles: Map<string, string>;
+  try {
+    gateFiles = resolveGateFiles(
+      ROOT,
+      PROBES.map((p) => p.script),
+    );
+  } catch (err) {
+    console.error(`check-gates-effective: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(2);
+  }
 
   // Shard selection. The partition is re-proven on every run (not only in the
   // unit test), so a shard never silently runs a subset of a broken partition.
@@ -3946,11 +3964,10 @@ function main(): void {
     try {
       cleanup = probe.perturb();
       activeCleanup = cleanup;
-      const cmdArgs = ["--silent", "run", probe.script];
-      if (probe.args && probe.args.length > 0) {
-        cmdArgs.push("--", ...probe.args);
-      }
-      const result = spawnSync("pnpm", cmdArgs, {
+      // What `pnpm --silent run <script> [-- args]` ran, minus the pnpm → npx
+      // launch chain: the same file, argv and inherited env, from the repo root.
+      const result = spawnSync(TSX_BIN, gateArgv(gateFiles.get(probe.script)!, probe.args), {
+        cwd: ROOT,
         stdio: "pipe",
         encoding: "utf-8",
       });

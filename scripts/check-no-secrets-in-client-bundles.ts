@@ -48,6 +48,22 @@
  *       Removing `publicBuildEnvGuard` from the plugins turns this red (a
  *       check-gates-effective probe does exactly that).
  *
+ * Environment: the output-scan arm judges against THIS process's env
+ * (`checkBuildOutput` → `collectBuildEnv(process.env, …)` plus every `.env*`
+ * in the app dir), so its input is whatever env it is launched with.
+ * `pnpm check` / `check-gates-effective` launch it as `tsx <file>` and pass
+ * their own env through unfiltered, so it sees every var the runner sees.
+ * What a `pnpm run` wrapper adds on top (measured 2026-10-07: 308 vars) is
+ * `npm_package_*` (the root package.json's own fields — name, version,
+ * scripts, deps — committed public text), `npm_config_*` (pnpm's resolved
+ * config), `npm_lifecycle_*` / `npm_command` / `npm_execpath` / `npm_node_*`
+ * / `PNPM_SCRIPT` / `INIT_CWD` / `NODE` (the invocation) and `COLOR` /
+ * `EDITOR`: none carries a secret, and none is a var a client bundler
+ * inlines. A real build's own env is not this process's (each surface's build
+ * script runs the same scan over that env: `check-client-build-output`).
+ * Each emitted file is searched once for every needle (`findNeedles`), not
+ * once per needle, so the cost of the env's size is one index build.
+ *
  * Flags: `--root <dir>` scans a fixture tree instead of the repo;
  * `--require-dist <a,b>` fails when those apps have no dist (CI runs this after
  * `pnpm build` so arm (b) can never be vacuous there); `--json` prints findings.
