@@ -871,14 +871,50 @@ function isPartialName(text: string, i: number): boolean {
 const STATE_OPENER = new RegExp(String.raw`<state${D}`, "y");
 
 /**
+ * Whether an inline code span's content `src[from, to)` holds the start of
+ * REAL internal markup: a pair opener whose closer follows, or a
+ * self-contained tag. Live, an opener whose closer (or tag end) has not
+ * arrived yet is "pending" — the next chunk decides it.
+ */
+function realInSpan(
+  src: string,
+  from: number,
+  to: number,
+  live: boolean,
+): "real" | "pending" | null {
+  let pending = false;
+  for (let k = from; k < to; k++) {
+    const c = src[k];
+    if (c !== "<" && c !== "[") continue;
+    for (const rule of PAIR_RULES) {
+      const open = matchAt(rule.open, src, k);
+      if (!open) continue;
+      rule.close.lastIndex = k + open[0].length;
+      if (rule.close.exec(src)) return "real";
+      pending = true;
+    }
+    if (SINGLE_RULES.some((re) => matchAt(re, src, k))) return "real";
+    if (c === "<" && matchAt(STATE_OPENER, src, k)) pending = true;
+    // A tag whose `>` / `]` has not arrived may yet close past the span.
+    if (PARTIAL_OPENERS.some((re) => matchAt(re, src, k))) pending = true;
+  }
+  return live && pending ? "pending" : null;
+}
+
+/**
  * Remove motebit's internal markup, scanning the text the way markdown reads
- * it: inside a fenced code block or an inline code span a tag is only
- * MENTIONED (an example the model is showing), so it is never touched.
+ * it: inside a fenced code block a tag is only MENTIONED (an example the
+ * model is showing), so it is never touched.
  *
- * An inline code span is opaque only when it opens and closes on ONE line.
- * A backtick whose partner is on a later line is a literal backtick: a
- * stray `` ` `` must never pair with a backtick inside a real block below it
- * and turn that block into "code" that is shown.
+ * Inline code is opaque only to mentions. It never shields REAL markup — a
+ * closed pair (exact name + delimiter + its closer), a self-contained tag
+ * (`<state .../>`), a closed data block — wherever its backticks fall: a
+ * stray `` ` `` must never pair with a backtick inside or past a real block
+ * and turn that block into "code" that is shown. A span holding real markup
+ * reads as a literal backtick and the markup is cut. So a closed pair quoted
+ * in inline code (`` `<thinking>x</thinking>` ``) is hidden — the cost of
+ * hiding when ambiguous; a lone `` `<thinking>` `` stays. Spans open and
+ * close on one line.
  *
  * An opener with no closer is REAL when it begins its line (only
  * whitespace or removed markup before it) — a turn cut off mid-`<thinking>`
@@ -950,9 +986,15 @@ function cutInternal(text: string, mode: CutMode): string {
       }
       // A closing run at the very end of streamed text may still grow.
       if (closeEnd !== -1 && !(live && closeEnd === src.length)) {
-        out += src.slice(i, closeEnd);
-        i = closeEnd;
-        continue;
+        const inside = realInSpan(src, i + n, closeEnd - n, live);
+        if (inside === "pending") break scan;
+        // Real markup inside: the run is a literal backtick, and the scan
+        // goes on to cut the markup.
+        if (inside === null) {
+          out += src.slice(i, closeEnd);
+          i = closeEnd;
+          continue;
+        }
       }
       if (live && limit === src.length) undecided = true;
       out += src.slice(i, i + n);
