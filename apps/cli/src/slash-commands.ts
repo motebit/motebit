@@ -45,6 +45,7 @@ import { join } from "node:path";
 import { SkillRegistry, type SkillRecord } from "@motebit/skills";
 import { NodeFsSkillStorageAdapter } from "@motebit/skills/node-fs";
 import { formatMs, formatTimeAgo } from "./utils.js";
+import { signedBootstrapBody } from "./relay-registration.js";
 import { green, yellow, red, dim, cyan, command, success, warn } from "./colors.js";
 import {
   SqliteConversationSyncStoreAdapter,
@@ -926,13 +927,20 @@ export async function handleSlashCommand(
 
       // 1. Register device with relay (bootstrap)
       try {
+        const devicePublicKey = fullConfig?.device_public_key;
+        if (devicePublicKey == null || devicePublicKey === "") {
+          console.log("Error: no device public key in config — cannot register with relay.");
+          break;
+        }
         const resp = await fetch(`${connectUrl}/api/v1/agents/bootstrap`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            motebit_id: repl.motebitId,
-            device_id: repl.deviceId,
-            public_key: fullConfig?.device_public_key,
+          // Signed by the key it introduces (#875 — the relay refuses it unsigned).
+          body: await signedBootstrapBody({
+            motebitId: repl.motebitId,
+            deviceId: repl.deviceId,
+            publicKeyHex: devicePublicKey,
+            privateKey: repl.privateKeyBytes,
           }),
         });
         if (!resp.ok && resp.status !== 409) {

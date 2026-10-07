@@ -173,6 +173,7 @@ async function handleDelegatePlan(
             motebitId,
             deviceId: syncCfg.device_id,
             publicKeyHex: syncCfg.device_public_key,
+            privateKey: pushKey,
           },
         }
       : {}),

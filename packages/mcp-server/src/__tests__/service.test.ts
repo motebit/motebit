@@ -298,6 +298,14 @@ describe("startServiceServer", () => {
   const testRelayAuth = {
     deviceId: "test-device",
     mint: (audience: string) => Promise.resolve(`signed.${audience}`),
+    // Stands in for `signDeviceRegistration` — the relay verifies it (#875).
+    signRegistration: (body: { motebit_id: string; device_id: string; public_key: string }) =>
+      Promise.resolve({
+        ...body,
+        timestamp: 1,
+        suite: "motebit-jcs-ed25519-b64-v1",
+        signature: "sig",
+      }),
   };
 
   function makeDeps(overrides: Partial<ReturnType<typeof wireServerDeps>> = {}) {
@@ -599,10 +607,14 @@ describe("startServiceServer", () => {
     expect(bootstrapIdx).toBeGreaterThanOrEqual(0);
     expect(bootstrapIdx).toBeLessThan(registerIdx);
     expect(bearer("/agents/bootstrap")).toBeUndefined();
+    // Signed by our own key (#875): the relay refuses an unsigned introduction.
     expect(JSON.parse(calls[bootstrapIdx]!.init.body as string)).toEqual({
       motebit_id: "test-svc",
       device_id: "test-device",
       public_key: "ab".repeat(32),
+      timestamp: 1,
+      suite: "motebit-jcs-ed25519-b64-v1",
+      signature: "sig",
     });
 
     expect(bearer("/agents/register")).toBe("Bearer signed.admin:query");
@@ -647,6 +659,27 @@ describe("startServiceServer", () => {
     handle = await startServiceServer(makeDeps(), { port: 0, syncUrl: "http://fake-relay", log });
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("no relayAuth"));
+    fetchSpy.mockRestore();
+  });
+
+  it("never sends an unsigned bootstrap (#875): without a signer it says so once and still registers with its bearer", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const log = vi.fn();
+    handle = await startServiceServer(makeDeps({ publicKeyHex: "ab".repeat(32) } as never), {
+      port: 0,
+      syncUrl: "http://fake-relay",
+      relayAuth: { deviceId: testRelayAuth.deviceId, mint: testRelayAuth.mint },
+      onStart: vi.fn(),
+      log,
+    });
+    await handle.shutdown();
+    handle = null;
+    const urls = fetchSpy.mock.calls.map((c) => c[0] as string);
+    expect(urls.some((u) => u.endsWith("/api/v1/agents/bootstrap"))).toBe(false);
+    expect(urls.some((u) => u.endsWith("/api/v1/agents/register"))).toBe(true);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("proof of possession"));
     fetchSpy.mockRestore();
   });
 

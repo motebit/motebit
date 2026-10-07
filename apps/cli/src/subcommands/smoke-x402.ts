@@ -47,6 +47,7 @@ import type { CliConfig } from "../args.js";
 import { CONFIG_DIR } from "../config.js";
 import { isTrulyAbsent, mkdirOwnerOnly, narrowOnLoad, writeFileAtomic } from "../durable-file.js";
 import { getRelayUrl } from "./_helpers.js";
+import { signedBootstrapBody } from "../relay-registration.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -288,10 +289,12 @@ async function bootstrapMotebitIdentity(relayUrl: string): Promise<BootstrappedM
   const res = await fetch(`${relayUrl}/api/v1/agents/bootstrap`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      motebit_id: motebitId,
-      device_id: deviceId,
-      public_key: publicKeyHex,
+    // Signed by the key it introduces (#875 — the relay refuses it unsigned).
+    body: await signedBootstrapBody({
+      motebitId,
+      deviceId,
+      publicKeyHex,
+      privateKey: keypair.privateKey,
     }),
   });
   if (!res.ok) {

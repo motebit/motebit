@@ -909,7 +909,13 @@ async function main(): Promise<void> {
       motebitId,
       eventStore: moteDb.eventStore,
       ...(syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key
-        ? { device: { deviceId, publicKeyHex: reloadedConfig.device_public_key } }
+        ? {
+            device: {
+              deviceId,
+              publicKeyHex: reloadedConfig.device_public_key,
+              privateKey: privateKeyBytes,
+            },
+          }
         : {}),
       log: (line) => console.log(dim(line)),
       warn: (line) => console.warn(line),
