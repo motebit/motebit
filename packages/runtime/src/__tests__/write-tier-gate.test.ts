@@ -19,10 +19,10 @@
  *
  * Rule (TypeScript AST, not line regexes): a NONE value — `SensitivityLevel.None`
  * (or `SensitivityLevelEnum.None`), the string `"none"`, `null` or
- * `undefined` — must not be the value, or a fallback branch of the value,
- * of a sensitivity slot. A fallback branch is either arm of a ternary and
- * the right side of `??` / `||`, recursively, through parentheses and
- * `as` / `satisfies` / `!`.
+ * `undefined` — must not be the value, or a reachable branch of the value,
+ * of a sensitivity slot. A reachable branch is either arm of a ternary,
+ * EITHER side of `??` / `||`, and the result (right) arm of `&&`,
+ * recursively, through parentheses and `as` / `satisfies` / `!`.
  *
  * Sensitivity slots seen:
  *   - an object-literal property, shorthand default (`{ sensitivity = x }`)
@@ -30,23 +30,37 @@
  *   - a parameter, destructured binding or variable named `sensitivity`
  *     with an initializer (default parameter / `const sensitivity = …`);
  *   - an assignment to `sensitivity` or `<expr>.sensitivity`;
- *   - a positional SQL param: an array of params next to a SQL string
- *     literal (`{ sql, params|args: [...] }`, `fn(sql, [...])`,
- *     `prepare(sql).run|get|all(...)`). Placeholders are mapped to
- *     columns (`INSERT … (cols) VALUES (…)`, `col = ?`); the param bound
- *     to a `sensitivity` column is a slot. Any `SensitivityLevel.None`
+ *   - a positional SQL param, where the SQL is a string / template literal
+ *     AT the call that binds it (`{ sql, params|args|bindings|values: [...] }`,
+ *     `fn(sql, [...])`, `prepare(sql).run|get|all|iterate|execute(...)`).
+ *     The SQL forms parsed are exactly:
+ *       `INSERT [OR x] INTO <table> (<cols>) VALUES (…)[, (…)]*` — every row;
+ *       `<col> = ?` / `<col> IS ?` anywhere else in the statement;
+ *       `UPDATE … SET sensitivity = 'none' | NULL` inline;
+ *     with `?` (positional) or `$n` (numbered) placeholders, and table /
+ *     column identifiers bare or quoted (`"x"`, `` `x` ``, `[x]`). The param
+ *     bound to a `sensitivity` column is a slot; any `SensitivityLevel.None`
  *     param of a sensitivity-bearing statement is flagged whatever its
- *     position, and so is an inline `'none'` / `NULL` VALUES entry for a
- *     sensitivity column.
+ *     position, and so is an inline `'none'` / `NULL` for that column.
+ *
+ * NOT EXAMINED (counted and printed on every run, never passed as clean):
+ * a string / template literal mentioning INSERT and `sensitivity` that is
+ * either not in a parsed form — schema-qualified table (`main.goals`), a
+ * table name interpolated in a template (`${tbl}`), `INSERT … SELECT`,
+ * `DEFAULT VALUES` — or not at a recognized binding call (SQL held in a
+ * variable or a field and bound elsewhere). Those sites are covered only by
+ * the runtime egress canaries above.
  *
  * Aperture: every non-test `.ts` / `.tsx` file under packages/<pkg>/src
- * and apps/<app>/src (the count is printed in the first test's name).
- * NOT seen: a NONE value reached through a variable or helper not named
- * `sensitivity` (`const t = SensitivityLevel.None; … sensitivity: t`), a
- * positional call argument of a non-SQL function (`insert(row, None)`), a
- * SQL string held in a variable or built across calls, Rust / SQL files,
- * and properties named anything other than exactly `sensitivity`. The
- * typed write APIs and the egress canaries are the guard there.
+ * and apps/<app>/src. The gate prints one aperture line per run (files
+ * scanned, forms examined, not-examined SQL site count, each site listed)
+ * and uses it as a test name. NOT seen at all: a NONE value reached through
+ * a variable or helper not named `sensitivity` (`const t =
+ * SensitivityLevel.None; … sensitivity: t`), a positional argument of a
+ * non-SQL function (`insert(row, None)`), SQL built across calls without an
+ * INSERT literal, Rust / SQL files, and properties named anything other
+ * than exactly `sensitivity`. The typed write APIs and the egress canaries
+ * are the guard there.
  *
  * Exemptions: a read / display site carries `// write-tier-gate: exempt
  * <reason>` on the exact line, AND is registered in EXEMPT below by file,
@@ -225,7 +239,10 @@ function isNoneValue(e: ts.Expression): boolean {
   );
 }
 
-/** The NONE values `e` can yield: itself, either ternary arm, the right of `??` / `||`. */
+/**
+ * The NONE values `e` can yield: itself, either ternary arm, EITHER side of
+ * `??` / `||`, and the result (right) arm of `&&`.
+ */
 function noneLeaves(e: ts.Expression, via: string[] = []): Array<{ node: ts.Node; via: string[] }> {
   e = unwrap(e);
   if (ts.isConditionalExpression(e))
@@ -233,12 +250,13 @@ function noneLeaves(e: ts.Expression, via: string[] = []): Array<{ node: ts.Node
       ...noneLeaves(e.whenTrue, [...via, "ternary"]),
       ...noneLeaves(e.whenFalse, [...via, "ternary"]),
     ];
-  if (
-    ts.isBinaryExpression(e) &&
-    (e.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
-      e.operatorToken.kind === ts.SyntaxKind.BarBarToken)
-  )
-    return noneLeaves(e.right, [...via, ts.tokenToString(e.operatorToken.kind) ?? "?"]);
+  if (ts.isBinaryExpression(e)) {
+    const op = e.operatorToken.kind;
+    const tag = [...via, ts.tokenToString(op) ?? "?"];
+    if (op === ts.SyntaxKind.QuestionQuestionToken || op === ts.SyntaxKind.BarBarToken)
+      return [...noneLeaves(e.left, tag), ...noneLeaves(e.right, tag)];
+    if (op === ts.SyntaxKind.AmpersandAmpersandToken) return noneLeaves(e.right, tag);
+  }
   return isNoneValue(e) ? [{ node: e, via }] : [];
 }
 
@@ -272,43 +290,66 @@ function splitTop(s: string): string[] {
   return out;
 }
 
-const count = (s: string, ch: string): number => s.split(ch).length - 1;
+/** An identifier, bare or quoted (`"x"`, `` `x` ``, `[x]`). */
+const IDENT = '(?:\\w+|"\\w+"|`\\w+`|\\[\\w+\\])';
+const PLACEHOLDER = /\?|\$(\d+)/g;
+const bare = (col: string | undefined): string | undefined =>
+  col?.replace(/^["`[]|["`\]]$/g, "").toLowerCase();
 
-/** Which `?` placeholders bind a sensitivity column, and whether VALUES inlines a NONE. */
-function sqlSensitivitySlots(sql: string): { params: number[]; inlineNone: boolean } {
+/**
+ * Which params bind a sensitivity column, whether the statement inlines a
+ * NONE for it, and whether a sensitivity-bearing INSERT was PARSED at all.
+ * Parsed INSERT form: `INSERT [OR x] INTO <ident> (<idents>) VALUES (…)[, (…)]*`
+ * with `?` (positional) or `$n` (numbered) placeholders. Anything else
+ * mentioning INSERT (schema-qualified or interpolated table, INSERT … SELECT,
+ * DEFAULT VALUES) is reported as not examined.
+ */
+function sqlSensitivitySlots(sql: string): {
+  params: number[];
+  inlineNone: boolean;
+  parsed: boolean;
+} {
   const params: number[] = [];
   let inlineNone = false;
   let q = 0;
+  const bind = (v: string): number[] =>
+    [...v.matchAll(PLACEHOLDER)].map((m) => (m[1] != null ? Number(m[1]) - 1 : q++));
   let rest = sql;
-  const ins = /INSERT\s+(?:OR\s+\w+\s+)?INTO\s+\w+\s*\(([^)]*)\)\s*VALUES\s*\(/i.exec(sql);
+  const ins = new RegExp(
+    String.raw`INSERT\s+(?:OR\s+\w+\s+)?INTO\s+${IDENT}\s*\(([^)]*)\)\s*VALUES\s*\(`,
+    "i",
+  ).exec(sql);
   if (ins) {
-    q += count(sql.slice(0, ins.index), "?");
-    let depth = 1;
+    bind(sql.slice(0, ins.index));
+    const cols = splitTop(ins[1]!).map(bare);
     let i = ins.index + ins[0].length;
-    const open = i;
-    for (; i < sql.length && depth > 0; i++) {
-      if (sql[i] === "(") depth++;
-      if (sql[i] === ")") depth--;
-    }
-    const cols = splitTop(ins[1]!);
-    const vals = splitTop(sql.slice(open, i - 1));
-    vals.forEach((v, k) => {
-      if (cols[k]?.toLowerCase() === SLOT_NAME) {
-        if (v.includes("?")) params.push(q);
-        if (/^(?:'none'|NULL)$/i.test(v)) inlineNone = true;
+    for (;;) {
+      const open = i;
+      for (let depth = 1; i < sql.length && depth > 0; i++) {
+        if (sql[i] === "(") depth++;
+        if (sql[i] === ")") depth--;
       }
-      q += count(v, "?");
-    });
+      splitTop(sql.slice(open, i - 1)).forEach((v, k) => {
+        const idx = bind(v);
+        if (cols[k] !== SLOT_NAME) return;
+        params.push(...idx);
+        if (/^(?:'none'|NULL)$/i.test(v)) inlineNone = true;
+      });
+      const next = /^\s*,\s*\(/.exec(sql.slice(i));
+      if (next == null) break;
+      i += next[0].length;
+    }
     rest = sql.slice(i);
   }
-  const re = /(\w+)\s*(?:=|IS)\s*\?|\?/gi;
+  const re = new RegExp(String.raw`(?:(${IDENT})\s*(?:=|IS)\s*)?(?:\?|\$(\d+))`, "gi");
   for (let m = re.exec(rest); m; m = re.exec(rest)) {
-    if (m[1]?.toLowerCase() === SLOT_NAME) params.push(q);
-    q++;
+    const idx = m[2] != null ? Number(m[2]) - 1 : q++;
+    if (bare(m[1]) === SLOT_NAME) params.push(idx);
   }
   const set = /\bUPDATE\b[\s\S]*?\bSET\b([\s\S]*?)(?:\bWHERE\b|$)/i.exec(sql);
-  if (set && /\bsensitivity\s*=\s*(?:'none'|NULL)\b/i.test(set[1]!)) inlineNone = true;
-  return { params, inlineNone };
+  if (set && /["`[]?\bsensitivity\b["`\]]?\s*=\s*(?:'none'|NULL)\b/i.test(set[1]!))
+    inlineNone = true;
+  return { params, inlineNone, parsed: ins != null || !/\bINSERT\b/i.test(sql) };
 }
 
 function scopeOf(n: ts.Node): string {
@@ -340,8 +381,11 @@ interface Hit {
   form: string;
 }
 
-/** Every NONE value in a sensitivity slot of `source`. */
-function hits(rel: string, source: string): Hit[] {
+/**
+ * Every NONE value in a sensitivity slot of `source`, and every
+ * sensitivity-bearing SQL INSERT the parser could not map (not examined).
+ */
+function examine(rel: string, source: string): { hits: Hit[]; unexamined: string[] } {
   const sf = ts.createSourceFile(
     rel,
     source,
@@ -351,6 +395,13 @@ function hits(rel: string, source: string): Hit[] {
   );
   const lines = source.split("\n");
   const out: Hit[] = [];
+  const skipped: string[] = [];
+  const sqlSeen = new Set<ts.Node>();
+  const sqlLiterals: ts.Node[] = [];
+  const skip = (n: ts.Node, why: string): void => {
+    const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line;
+    skipped.push(`${rel}:${line + 1} (${why}) ${lines[line]!.trim()}`);
+  };
   const seen = new Set<ts.Node>();
   const add = (node: ts.Node, form: string): void => {
     if (seen.has(node)) return;
@@ -365,12 +416,22 @@ function hits(rel: string, source: string): Hit[] {
   const sqlParams = (sqlNode: ts.Expression, args: readonly ts.Expression[]): void => {
     const sql = sqlText(sqlNode);
     if (sql == null || !/\bsensitivity\b/i.test(sql)) return;
-    const { params, inlineNone } = sqlSensitivitySlots(sql);
+    sqlSeen.add(unwrap(sqlNode));
+    const { params, inlineNone, parsed } = sqlSensitivitySlots(sql);
+    if (!parsed) skip(sqlNode, "unparsed INSERT form");
     for (const i of params) if (args[i] != null) slot(args[i], "positional SQL param");
     for (const a of args) if (isNoneEnum(a)) add(unwrap(a), "SQL param of a sensitivity statement");
     if (inlineNone) add(sqlNode, "inline SQL none / NULL");
   };
   const visit = (n: ts.Node): void => {
+    if (
+      (ts.isStringLiteral(n) ||
+        ts.isNoSubstitutionTemplateLiteral(n) ||
+        ts.isTemplateExpression(n)) &&
+      /\bINSERT\b/i.test(sqlText(n) ?? "") &&
+      /\bsensitivity\b/i.test(sqlText(n) ?? "")
+    )
+      sqlLiterals.push(n);
     if (ts.isPropertyAssignment(n) && nameText(n.name) === SLOT_NAME)
       slot(n.initializer, "property");
     else if (ts.isShorthandPropertyAssignment(n) && n.name.text === SLOT_NAME)
@@ -425,18 +486,19 @@ function hits(rel: string, source: string): Hit[] {
     ts.forEachChild(n, visit);
   };
   visit(sf);
-  return out;
+  for (const n of sqlLiterals) if (!sqlSeen.has(n)) skip(n, "INSERT not at a recognized call site");
+  return { hits: out, unexamined: [...new Set(skipped)] };
 }
 
-/** Sensitivity-bearing SQL sites the parser could not map (stub: harness first). */
-function unexamined(_rel: string, _source: string): string[] {
-  return [];
+/** Sensitivity-bearing SQL INSERT sites outside the parsed form: counted, never passed. */
+function unexamined(rel: string, source: string): string[] {
+  return examine(rel, source).unexamined;
 }
 
 /** Violations in one file: unmarked hits, unregistered / stray markers, registry count ≠ 1. */
-function scan(rel: string, source: string): string[] {
+function scan(rel: string, source: string, ex = examine(rel, source)): string[] {
   const bad: string[] = [];
-  const found = hits(rel, source);
+  const found = ex.hits;
   const registered = EXEMPT.filter((e) => e.file === rel);
   const marked = found.filter((h) => MARKER.test(h.text));
   for (const h of found) {
@@ -665,6 +727,10 @@ const UNPARSED: Array<{ form: string; source: string }> = [
     form: "INSERT … SELECT",
     source: `db.prepare("INSERT INTO goals (goal_id, sensitivity) SELECT ?, ?").run(id, null);\n`,
   },
+  {
+    form: "SQL held in a variable, bound elsewhere",
+    source: `const SQL = "INSERT INTO goals (goal_id, sensitivity) VALUES (?, ?)";\nstmt(SQL).bind(id, null);\n`,
+  },
 ];
 
 describe("write-tier gate: an unparsed SQL form is reported as not examined", () => {
@@ -693,8 +759,31 @@ describe("write-tier gate: the gate passes a stamped write", () => {
   });
 });
 
+const FORMS_EXAMINED =
+  "property, shorthand default, class field, default parameter, destructuring default, " +
+  "variable, assignment (each through ternary arms, either side of ??/||, the && result arm); " +
+  "SQL `INSERT [OR x] INTO <table> (cols) VALUES (…)[, (…)]` and `col = ?` with ?/$n " +
+  "placeholders and bare/quoted identifiers";
+
 describe("write-tier gate: no write path defaults its sensitivity", () => {
-  it(`scanned ${FILES.length} source files under packages/*/src and apps/*/src`, () => {
+  const bad: string[] = [];
+  const notExamined: string[] = [];
+  for (const path of FILES) {
+    const rel = relative(ROOT, path);
+    const source = readFileSync(path, "utf8");
+    const ex = examine(rel, source);
+    bad.push(...scan(rel, source, ex));
+    notExamined.push(...ex.unexamined);
+  }
+  const aperture =
+    `write-tier gate aperture: ${FILES.length} files scanned (non-test .ts/.tsx under ` +
+    `packages/*/src, apps/*/src); forms examined: ${FORMS_EXAMINED}; ` +
+    `${notExamined.length} sensitivity-bearing SQL INSERT site(s) NOT examined ` +
+    `(covered only by the runtime egress canaries)`;
+  // eslint-disable-next-line no-console -- the gate prints its aperture on every run (gate-repair-instructions.md)
+  console.log([aperture, ...notExamined.map((u) => `  not examined: ${u}`)].join("\n"));
+
+  it(aperture, () => {
     expect(FILES.length).toBeGreaterThan(500);
   });
 
@@ -704,11 +793,9 @@ describe("write-tier gate: no write path defaults its sensitivity", () => {
   });
 
   it("no sensitivity slot takes a none / null value outside the marked, registered read sites", () => {
-    const bad: string[] = [];
-    for (const path of FILES) bad.push(...scan(relative(ROOT, path), readFileSync(path, "utf8")));
     expect(
       bad,
-      `examined ${FILES.length} files. Repair: pass the tier the content was produced at — ` +
+      `${aperture}. Repair: pass the tier the content was produced at — ` +
         `the run's \`outcomeSensitivity()\`, the turn's effective tier, ` +
         `\`runtime.goalCreationSensitivity()\`, or \`sessionlessGoalSensitivity()\` for owner-authored ` +
         `text written outside a session (@motebit/runtime goal-run.ts). A read / display site gets a ` +
