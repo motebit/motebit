@@ -2,6 +2,9 @@
  * Text embeddings — semantic (async, model-backed) and hash-based (sync, deterministic fallback).
  */
 
+import { CONTEXT_SAFE_SENSITIVITY } from "@motebit/sdk";
+import type { SensitivityLevel } from "@motebit/sdk";
+
 // === Semantic embeddings via @xenova/transformers (or remote proxy) ===
 
 export const EMBEDDING_DIMENSIONS = 384;
@@ -11,8 +14,9 @@ export const EMBEDDING_DIMENSIONS = 384;
 let remoteEmbedUrl: string | null = null;
 
 /**
- * Configure a remote embedding backend. When set, embedText() POSTs to this URL
- * instead of loading @xenova/transformers locally. Pass null to disable.
+ * Configure a remote embedding backend. When set, embedText() POSTs CONTEXT-SAFE
+ * text (see `embedText`) to this URL instead of loading @xenova/transformers
+ * locally. Pass null to disable.
  */
 export function setRemoteEmbedUrl(url: string | null): void {
   remoteEmbedUrl = url;
@@ -65,18 +69,33 @@ export function resetPipeline(): void {
 }
 
 /**
+ * May text tagged `sensitivity` be sent to the remote embedding backend? The
+ * backend is an EXTERNAL service (the proxy's /v1/embed), so it is held to the
+ * ceiling for any external request: context-safe tiers only (none / personal).
+ * An untagged input fails closed — it stays on the device.
+ */
+export function remoteEmbedPermits(sensitivity: SensitivityLevel | undefined): boolean {
+  return sensitivity != null && CONTEXT_SAFE_SENSITIVITY.includes(sensitivity);
+}
+
+/**
  * Produce a 384-dimension L2-normalized embedding using all-MiniLM-L6-v2.
  * Lazy-loads the ONNX model on first call.
  * Falls back to hash-based embedding if the model can't be loaded
  * (e.g., in a Tauri WebView where HF CDN may be unreachable).
+ *
+ * `sensitivity` is the tier of `text`. With a remote backend configured, the
+ * text is POSTed off the device only when `remoteEmbedPermits(sensitivity)`;
+ * medical / financial / secret text — and text whose tier the caller does not
+ * state — is embedded locally (the model, else the hash fallback).
  */
-export async function embedText(text: string): Promise<number[]> {
+export async function embedText(text: string, sensitivity?: SensitivityLevel): Promise<number[]> {
   if (text === "") {
     return new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
   }
 
-  // Remote backend (browser via proxy)
-  if (remoteEmbedUrl) {
+  // Remote backend (browser via proxy) — egress, so context-safe text only.
+  if (remoteEmbedUrl && remoteEmbedPermits(sensitivity)) {
     try {
       return await remoteEmbed(text);
     } catch {

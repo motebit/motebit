@@ -7,6 +7,7 @@ import {
   setRemoteEmbedUrl,
 } from "../embeddings";
 import { cosineSimilarity } from "../index";
+import { SensitivityLevel } from "@motebit/sdk";
 
 // Mock the @xenova/transformers load to FAIL — declared ONCE at top level (the
 // idiomatic placement). The prior version scattered four identical `vi.mock`
@@ -126,7 +127,7 @@ describe("remoteEmbed error response", () => {
 
     setRemoteEmbedUrl("https://example.com/v1/embed");
     // Remote fails with ok:false, falls through to local/hash fallback
-    const vec = await embedText("hello");
+    const vec = await embedText("hello", SensitivityLevel.Personal);
     expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
   });
 
@@ -138,7 +139,7 @@ describe("remoteEmbed error response", () => {
     );
 
     setRemoteEmbedUrl("https://example.com/v1/embed");
-    const vec = await embedText("hello");
+    const vec = await embedText("hello", SensitivityLevel.Personal);
     expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
   });
 });
@@ -159,7 +160,9 @@ describe("setRemoteEmbedUrl (remote backend)", () => {
     );
 
     setRemoteEmbedUrl("https://example.com/v1/embed");
-    const vec = await embedText("hello");
+    // Context-safe text only — the remote backend is external egress
+    // (embeddings-egress.test.ts).
+    const vec = await embedText("hello", SensitivityLevel.Personal);
 
     expect(fetchSpy).toHaveBeenCalledOnce();
     expect(vec).toEqual(mockEmbedding);
@@ -169,7 +172,7 @@ describe("setRemoteEmbedUrl (remote backend)", () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network error"));
 
     setRemoteEmbedUrl("https://example.com/v1/embed");
-    const vec = await embedText("hello");
+    const vec = await embedText("hello", SensitivityLevel.Personal);
 
     // Should still return a valid embedding from local model/hash fallback
     expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);

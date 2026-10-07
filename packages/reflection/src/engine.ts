@@ -348,7 +348,8 @@ async function persistHighSignalInsights(
       // 3. Novelty check against existing memories
       let embedding: number[];
       try {
-        embedding = await embedText(insight);
+        // The insight carries the reflection's send tier (stamped below).
+        embedding = await embedText(insight, sendTier);
       } catch {
         continue; // Embedding unavailable — skip rather than crash
       }

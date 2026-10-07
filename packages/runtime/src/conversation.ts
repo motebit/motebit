@@ -12,7 +12,7 @@ import type {
   SensitivityCleared,
   SensitivityGateEntry,
 } from "@motebit/sdk";
-import { SensitivityLevel, maxSensitivity, sensitivityPermits } from "@motebit/sdk";
+import { SensitivityLevel, maxSensitivity } from "@motebit/sdk";
 import type { TurnPrincipal } from "./turn-principal.js";
 import type {
   StreamingProvider,
@@ -29,6 +29,7 @@ import {
   derivedTextPermittedAt,
   maxStampedSensitivity,
   stampDerivedText,
+  interiorEgressPermits,
 } from "@motebit/ai-core";
 import type { TaskRouter } from "@motebit/ai-core";
 import {
@@ -311,14 +312,12 @@ export class ConversationManager {
   // --- Context window ---
 
   /**
-   * Return history trimmed to fit within the token budget. When the
-   * runtime supplies an effective tier, messages tagged above it are
-   * filtered out before trimming — the read-side companion to the
-   * write-side floor in `pushExchange` / `pushActivation`.
+   * Return history trimmed to fit within the token budget, read through
+   * `egressHistory` (the interior-egress rule at the send tier) — the
+   * read-side companion to the write-side floor in `pushExchange` /
+   * `pushActivation`.
    *
-   * Untagged messages (legacy data persisted before the v1 floor, or
-   * fixtures without a runtime) flow through unchanged for backward
-   * compat. Filter is dynamic by current effective tier (not a static
+   * Filter is dynamic by current effective tier (not a static
    * `CONTEXT_SAFE_SENSITIVITY` constant) so a session whose tier
    * elevates mid-conversation (e.g., a Secret-tier slab item arrives
    * via `classifyToolResult`) regains access to its own elevated
@@ -349,9 +348,15 @@ export class ConversationManager {
    * send it whole. `getHistory` is for local rendering and counts only.
    */
   egressHistory(): ConversationMessage[] {
-    const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
-    return this.history.filter(
-      (msg) => msg.sensitivity == null || sensitivityPermits(effective, msg.sensitivity),
+    const sendTier = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
+    // The one rule (`interiorEgressPermits`): the send tier's CEILING, so a
+    // Personal-stamped message rides a request at the default `none` tier.
+    // An UNSTAMPED message — a row persisted before the write-side floor, or
+    // synced from a peer that predates the (optional) sync field — has no
+    // knowable tier, so it fails closed: held to Secret, it rides only an
+    // on-device request at Secret.
+    return this.history.filter((msg) =>
+      interiorEgressPermits(sendTier, msg.sensitivity ?? SensitivityLevel.Secret),
     );
   }
 

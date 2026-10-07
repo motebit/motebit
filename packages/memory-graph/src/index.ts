@@ -13,6 +13,7 @@ import { embedText } from "./embeddings.js";
 export {
   embedText,
   embedTextHash,
+  remoteEmbedPermits,
   EMBEDDING_DIMENSIONS,
   resetPipeline,
   setRemoteEmbedUrl,
@@ -633,7 +634,7 @@ export class MemoryGraph {
      * ONNX model, which otherwise makes `supersedeMemoryByNodeId` a
      * contention-flaky unit test (a 30s+ model load under a starved CI runner).
      */
-    private embed: (text: string) => Promise<number[]> = embedText,
+    private embed: (text: string, sensitivity?: SensitivityLevel) => Promise<number[]> = embedText,
   ) {
     this.scoringConfig = { ...DEFAULT_SCORING_CONFIG, ...scoringConfig };
   }
@@ -1367,7 +1368,7 @@ export class MemoryGraph {
     // sensitivity can only keep it at or above the old floor). Provenance
     // does NOT inherit: see the doc comment. Uses the injected embedder
     // (defaults to the model-backed `embedText`).
-    const embedding = await this.embed(newContent);
+    const embedding = await this.embed(newContent, oldNode.sensitivity);
 
     // Stamp once, BEFORE forming the new node, so the new node's `valid_from`
     // equals the old node's `valid_until` exactly — intervals abut with no

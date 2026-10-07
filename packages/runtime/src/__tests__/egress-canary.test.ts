@@ -32,18 +32,18 @@
  *
  * Entry points (`ENTRY_POINTS`) — every runtime method that can reach a
  * provider. The static lock at the bottom enumerates every provider call
- * site in packages/ and apps/ and fails when one is not listed in
+ * site in packages/ and apps/ — TYPE-AWARE (`provider-egress-lock.ts`: any
+ * access, element access, destructuring or any/unknown erasure of a
+ * provider-typed value) — and fails when one is not listed in
  * `COVERED_CALL_SITES` with the entry point(s) that drive it here.
+ *
+ * Built-in tools that read the interior (list_events, search_conversations,
+ * recall_memories, self_reflect) are registered exactly as the surfaces wire
+ * them and driven as entry points; remote embeddings are covered by
+ * `egress-embed-canary.test.ts`.
  */
 import { describe, it, expect, vi } from "vitest";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -83,6 +83,7 @@ import {
 } from "@motebit/sdk";
 import type { InMemoryPlanStore } from "@motebit/planner";
 import { generateKeypair } from "@motebit/encryption";
+import { findProviderSites } from "./provider-egress-lock";
 
 const CANARY = {
   message: "CNRYMESSAGE01",
@@ -369,18 +370,7 @@ async function makeRuntime() {
   registerBrowserSafeBuiltins(runtime.getToolRegistry(), {
     memorySearchFn: (query, opts) =>
       runtime.recallMemoriesForTool(query, opts, TurnPrincipal.OWNER),
-    eventQueryFn: async (limit, eventType) => {
-      const events = await runtime.events.query({
-        motebit_id: runtime.motebitId,
-        limit,
-        event_types: eventType != null && eventType !== "" ? [eventType as EventType] : undefined,
-      });
-      return events.map((e) => ({
-        event_type: e.event_type,
-        timestamp: e.timestamp,
-        payload: e.payload,
-      }));
-    },
+    eventQueryFn: (limit, eventType) => runtime.queryEventsForTool(limit, eventType),
     reflectFn: () => runtime.reflect(),
     conversationSearchFn: (query, limit) => runtime.searchConversations(query, limit),
   });
@@ -881,6 +871,11 @@ const COVERED_CALL_SITES: Record<string, { count: number; coveredBy: string }> =
   },
   "packages/ai-core/src/summarizer.ts": { count: 1, coveredBy: "summarizeCurrentConversation" },
   "packages/ai-core/src/reflection.ts": { count: 1, coveredBy: "reflect" },
+  "packages/ai-core/src/task-router.ts": {
+    count: 2,
+    coveredBy:
+      "erasure in the isConfigurable type guard — reads only setModel / model, never a request method",
+  },
   "packages/planner/src/decompose.ts": { count: 1, coveredBy: "executePlan (new goal)" },
   "packages/planner/src/reflect.ts": {
     count: 1,
@@ -888,22 +883,13 @@ const COVERED_CALL_SITES: Record<string, { count: number; coveredBy: string }> =
   },
   "packages/runtime/src/consolidation-cycle.ts": { count: 1, coveredBy: "consolidationCycle" },
   "packages/runtime/src/motebit-runtime.ts": {
-    count: 3,
+    count: 2,
     coveredBy:
-      "generateCompletion; the conversation's title dep (autoTitle); memory consolidation classify (memory-formation turn)",
+      "generateCompletion (also the conversation's title dep: autoTitle; spatial heartbeat); memory consolidation classify (memory-formation turn)",
   },
-  "packages/runtime/src/conversation.ts": { count: 1, coveredBy: "autoTitle" },
   "packages/runtime/src/secret-redacting-provider.ts": {
     count: 2,
     coveredBy: "provider wrapper — forwards the caller's pack; covered by its callers",
-  },
-  "apps/desktop/src/conversation-manager.ts": {
-    count: 0,
-    coveredBy: "desktop /summarize routes to summarizeCurrentConversation",
-  },
-  "apps/spatial/src/heartbeat.ts": {
-    count: 1,
-    coveredBy: "generateCompletion (a fixed prompt: no interior)",
   },
   "apps/web/src/providers.ts": {
     count: 1,
@@ -919,7 +905,6 @@ const COVERED_CALL_SITES: Record<string, { count: number; coveredBy: string }> =
   },
 };
 
-const CALL_SITE = /\.(generate|generateStream|generateCompletion)\(/g;
 const ROOT = join(__dirname, "../../../..");
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
@@ -934,9 +919,14 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Call sites per file, comments stripped. */
+/**
+ * Provider egress sites per file (`provider-egress-lock.ts`: type-aware —
+ * property access, element access, destructuring and any/unknown erasure of
+ * a provider-typed value), over every packages/<pkg>/src and apps/<app>/src
+ * non-test source file under `root`.
+ */
 export function scanProviderCallSites(root: string): Record<string, number> {
-  const counts: Record<string, number> = {};
+  const files: string[] = [];
   for (const top of ["packages", "apps"]) {
     for (const pkg of readdirSync(join(root, top))) {
       const src = join(root, top, pkg, "src");
@@ -945,44 +935,47 @@ export function scanProviderCallSites(root: string): Record<string, number> {
       } catch {
         continue;
       }
-      for (const file of sourceFiles(src)) {
-        const code = readFileSync(file, "utf8")
-          .replace(/\/\*[\s\S]*?\*\//g, "")
-          .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
-        const n = (code.match(CALL_SITE) ?? []).length;
-        if (n > 0) counts[relative(root, file)] = n;
-      }
+      sourceFiles(src, files);
     }
+  }
+  const counts: Record<string, number> = {};
+  for (const site of findProviderSites(files)) {
+    const rel = relative(root, site.file);
+    counts[rel] = (counts[rel] ?? 0) + 1;
   }
   return counts;
 }
 
 describe("egress canary: static completeness lock", () => {
-  it("every provider call site in packages/ and apps/ is covered by an entry point above", () => {
-    const found = scanProviderCallSites(ROOT);
-    const problems: string[] = [];
-    for (const [file, n] of Object.entries(found)) {
-      const covered = COVERED_CALL_SITES[file];
-      if (covered == null || covered.count !== n) {
-        problems.push(
-          `${file}: ${n} provider call site(s), table lists ${covered?.count ?? 0}. ` +
-            `Repair: drive the new call site's runtime entry point in ENTRY_POINTS of ` +
-            `packages/runtime/src/__tests__/egress-canary.test.ts (seeded canaries must not reach BYOK), ` +
-            `then record it in COVERED_CALL_SITES with the entry point that covers it.`,
-        );
+  it(
+    "every provider call site in packages/ and apps/ is covered by an entry point above",
+    { timeout: 120_000 },
+    () => {
+      const found = scanProviderCallSites(ROOT);
+      const problems: string[] = [];
+      for (const [file, n] of Object.entries(found)) {
+        const covered = COVERED_CALL_SITES[file];
+        if (covered == null || covered.count !== n) {
+          problems.push(
+            `${file}: ${n} provider call site(s), table lists ${covered?.count ?? 0}. ` +
+              `Repair: drive the new call site's runtime entry point in ENTRY_POINTS of ` +
+              `packages/runtime/src/__tests__/egress-canary.test.ts (seeded canaries must not reach BYOK), ` +
+              `then record it in COVERED_CALL_SITES with the entry point that covers it.`,
+          );
+        }
       }
-    }
-    for (const [file, c] of Object.entries(COVERED_CALL_SITES)) {
-      if (c.count > 0 && found[file] == null)
-        problems.push(
-          `${file}: listed with ${c.count} call site(s) but none found — update COVERED_CALL_SITES.`,
-        );
-    }
-    expect(
-      problems,
-      `examined ${Object.keys(found).length} files with provider call sites`,
-    ).toEqual([]);
-  });
+      for (const [file, c] of Object.entries(COVERED_CALL_SITES)) {
+        if (c.count > 0 && found[file] == null)
+          problems.push(
+            `${file}: listed with ${c.count} call site(s) but none found — update COVERED_CALL_SITES.`,
+          );
+      }
+      expect(
+        problems,
+        `examined ${Object.keys(found).length} files with provider call sites`,
+      ).toEqual([]);
+    },
+  );
 });
 
 describe("egress canary: the static lock sees through syntax", () => {
@@ -1013,7 +1006,7 @@ export interface StreamingProvider extends IntelligenceProvider {
 export async function f(p: P) { return p.generate(); }`,
   };
 
-  it("counts every probe as a provider call site", () => {
+  it("counts every probe as a provider call site", { timeout: 60_000 }, () => {
     const root = mkdtempSync(join(tmpdir(), "egress-lock-"));
     const src = join(root, "packages", "probe", "src");
     mkdirSync(src, { recursive: true });

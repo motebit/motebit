@@ -92,7 +92,7 @@ export async function formMemoriesFromCandidates(
   //    so pay one round trip (or one CPU batch) instead of N. On
   //    mobile this is the difference between a UI stall per candidate
   //    and one stall per batch.
-  const embeddings = await Promise.all(candidates.map((c) => embedText(c.content)));
+  const embeddings = await Promise.all(candidates.map((c) => embedText(c.content, c.sensitivity)));
 
   // 2. Sequential form: consolidation decisions depend on graph state
   //    (the previous candidate may have merged into a cluster the

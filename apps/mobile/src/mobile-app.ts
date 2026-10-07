@@ -97,7 +97,7 @@ import {
   completeGoalDefinition,
   reportProgressDefinition,
 } from "@motebit/tools/web-safe";
-import type { EventFilter, EventStoreAdapter } from "@motebit/event-log";
+import type { EventStoreAdapter } from "@motebit/event-log";
 import {
   generate as generateIdentityFile,
   importIdentityFile as importIdentityFileFromContent,
@@ -1204,18 +1204,9 @@ export class MobileApp {
       // turn's registry ever runs it (#943).
       memorySearchFn: (query, opts) =>
         runtime.recallMemoriesForTool(query, opts, TurnPrincipal.OWNER),
-      eventQueryFn: async (limit, eventType) => {
-        const filter: EventFilter = { motebit_id: runtime.motebitId, limit };
-        if (eventType != null && eventType !== "") {
-          filter.event_types = [eventType as EventType];
-        }
-        const events = await runtime.events.query(filter);
-        return events.map((e) => ({
-          event_type: e.event_type,
-          timestamp: e.timestamp,
-          payload: e.payload,
-        }));
-      },
+      // Event reads route through queryEventsForTool — the interior-egress
+      // rule at the tool send tier (check-sensitivity-routing).
+      eventQueryFn: (limit, eventType) => runtime.queryEventsForTool(limit, eventType),
       reflectFn: () => runtime.reflect(),
       rewriteMemoryDeps: {
         resolveNodeId: (shortIdOrUuid) => runtime.memory.resolveNodeIdPrefix(shortIdOrUuid),

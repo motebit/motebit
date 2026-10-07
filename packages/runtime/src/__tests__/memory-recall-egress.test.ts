@@ -7,8 +7,8 @@
  * on all four surfaces — so the model could pull a stored medical/financial/
  * secret memory on a `none`-tier session with a BYOK/cloud provider and it would
  * reach the external LLM. `recallMemoriesForTool` centralizes that boundary: the
- * tier ceiling is keyed on the provider (external ⇒ context-safe only; sovereign
- * on-device ⇒ every tier stays local). These tests pin that property end-to-end.
+ * recall is held to the tool send tier (external ⇒ context-safe only; on-device
+ * ⇒ the session's tier, every tier at Secret). These tests pin that end-to-end.
  *
  * `embedText` is mocked (module-wide, this file only) to a fixed vector so the
  * seeded memories are all maximally similar to the query and the ONLY variable
@@ -92,10 +92,11 @@ describe("recallMemoriesForTool — sensitivity egress boundary", () => {
     expect(contents).toContain("user likes TypeScript");
   });
 
-  it("a SOVEREIGN (on-device) provider recalls every tier — the content never leaves the device", async () => {
+  it("a SOVEREIGN (on-device) provider at Secret recalls every tier — the content never leaves the device", async () => {
     const r = makeRuntime();
     await seedTiered(r);
     r.setProviderMode("on-device");
+    r.setSessionSensitivity(SensitivityLevel.Secret);
     const contents = (await r.recallMemoriesForTool("q", { limit: 10 }, TurnPrincipal.OWNER)).map(
       (m) => m.content,
     );
@@ -103,6 +104,28 @@ describe("recallMemoriesForTool — sensitivity egress boundary", () => {
     expect(contents).toContain("user takes lisinopril daily");
     expect(contents).toContain("user card ends 4242");
     expect(contents).toContain("recovery phrase is alpha bravo");
+  });
+
+  it("on-device recall is held to the session's send tier (its reply is stamped at that tier)", async () => {
+    // An on-device turn at the default tier writes its reply at Personal;
+    // that reply rides history into a later external request, so the recall
+    // that feeds it is held to the same rule as the context pack.
+    const r = makeRuntime();
+    await seedTiered(r);
+    r.setProviderMode("on-device");
+    const atDefault = (await r.recallMemoriesForTool("q", { limit: 10 }, TurnPrincipal.OWNER)).map(
+      (m) => m.content,
+    );
+    expect(atDefault).toContain("user likes TypeScript");
+    expect(atDefault).not.toContain("user takes lisinopril daily");
+    expect(atDefault).not.toContain("recovery phrase is alpha bravo");
+    r.setSessionSensitivity(SensitivityLevel.Medical);
+    const atMedical = (await r.recallMemoriesForTool("q", { limit: 10 }, TurnPrincipal.OWNER)).map(
+      (m) => m.content,
+    );
+    expect(atMedical).toContain("user takes lisinopril daily");
+    expect(atMedical).not.toContain("user card ends 4242");
+    expect(atMedical).not.toContain("recovery phrase is alpha bravo");
   });
 
   it("maps supersededAt from valid_until (bi-temporal history still works through the boundary)", async () => {

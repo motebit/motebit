@@ -393,7 +393,7 @@ export async function resolveAttachedAct(
         throw bad(kind, `memory rejected by governance: ${decision?.reason ?? "unknown"}`);
       }
       const governed = decision.candidate;
-      const embedding = await embedText(governed.content);
+      const embedding = await embedText(governed.content, governed.sensitivity);
       const node = await runtime.memory.formMemory(
         { ...governed, source: "peer_agent" },
         embedding,

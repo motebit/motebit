@@ -47,7 +47,6 @@ import {
   SensitivityLevel,
   rankSensitivity,
   maxSensitivity,
-  CONTEXT_SAFE_SENSITIVITY,
   RiskLevel,
   modelCapabilityTier,
 } from "@motebit/sdk";
@@ -223,6 +222,8 @@ import {
   StageTimeoutError,
   projectProviderClearance,
   derivedSensitivity,
+  interiorEgressSensitivities,
+  interiorEventsPermittedAt,
 } from "@motebit/ai-core";
 import type {
   StreamingProvider,
@@ -453,6 +454,13 @@ export interface ToolRecallResult {
   content: string;
   confidence: number;
   supersededAt?: number;
+}
+
+/** One event as the `list_events` tool consumes it ({@link MotebitRuntime.queryEventsForTool}). */
+export interface ToolEventResult {
+  event_type: string;
+  timestamp: number;
+  payload: Record<string, unknown>;
 }
 
 /**
@@ -4088,15 +4096,36 @@ export class MotebitRuntime {
    * logic.
    */
   searchConversations(query: string, limit = 5) {
-    // Provider-keyed egress ceiling — the same boundary `recallMemoriesForTool`
-    // applies, at the whole-message grain: an EXTERNAL provider searches only
-    // context-safe (< medical) messages, a SOVEREIGN (on-device) one searches
-    // every tier (the content never leaves the device). Fail-closed: an unset
-    // provider mode is non-sovereign, so it filters. Past transcripts may hold
-    // medical/financial/secret content the user typed on a sovereign session;
-    // this keeps that content from surfacing into an external one.
-    const sensitivityFilter = this.providerIsSovereign() ? undefined : CONTEXT_SAFE_SENSITIVITY;
+    // The `search_conversations` tool's backend: its hits enter the next
+    // request, so they are held to the tool send tier
+    // (`interiorToolSendTier`) at the whole-message grain — the same rule as
+    // `recallMemoriesForTool` and `queryEventsForTool`. Past transcripts may
+    // hold medical/financial/secret content typed on a sovereign session; an
+    // unstamped (legacy) message is never returned (`searchHistory`).
+    const sensitivityFilter = interiorEgressSensitivities(this.interiorToolSendTier());
     return this.conversation.searchHistory(query, limit, sensitivityFilter);
+  }
+
+  /**
+   * The `list_events` tool's backend — the ONE sanctioned path for the agent's
+   * explicit event-log read (surfaces wire it as `eventQueryFn`; a raw
+   * `events.query` closure returned every payload, Secret ones included, into
+   * a BYOK request). Same window as before (`limit` events of the query),
+   * minus every event the interior-egress rule withholds at the tool send tier
+   * (`interiorEventsPermittedAt`: metadata-only types always; content-bearing
+   * types only with a permitted stamp) — so it may return fewer than `limit`.
+   */
+  async queryEventsForTool(limit: number, eventType?: string): Promise<ToolEventResult[]> {
+    const events = await this.events.query({
+      motebit_id: this.motebitId,
+      limit,
+      event_types: eventType != null && eventType !== "" ? [eventType as EventType] : undefined,
+    });
+    return interiorEventsPermittedAt(events, this.interiorToolSendTier()).map((e) => ({
+      event_type: e.event_type,
+      timestamp: e.timestamp,
+      payload: e.payload,
+    }));
   }
 
   /**
@@ -5658,6 +5687,28 @@ export class MotebitRuntime {
   }
 
   /**
+   * The send tier an owner-interior TOOL result is held to — the tier of the
+   * request the result enters next. Every interior-reading tool backend
+   * (`recallMemoriesForTool`, `searchConversations`, `queryEventsForTool`)
+   * filters through `interiorEgressPermits` at this tier, the same rule as the
+   * context pack:
+   *
+   *   - SOVEREIGN (on-device): the session's effective tier. The request stays
+   *     on the device, but its reply is stamped at that tier and can ride
+   *     history into a later external request — so an on-device turn at
+   *     Personal recalls only what Personal permits, and at Secret everything.
+   *   - EXTERNAL (or unset — fail-closed): Personal. An external provider only
+   *     ever sends at a context-safe tier (medical+ is refused by
+   *     `assertSensitivityPermitsAiCall`), so a tier raised mid-turn never
+   *     widens what its tools return.
+   */
+  private interiorToolSendTier(): SensitivityLevel {
+    return this.providerIsSovereign()
+      ? this.getEffectiveSessionSensitivity()
+      : SensitivityLevel.Personal;
+  }
+
+  /**
    * The `recall_memories` tool's search backend — the ONE sanctioned path for
    * the agent's explicit memory recall, so the egress boundary lives here and
    * cannot be forgotten per-surface (it was, on all four; that leak is what this
@@ -5688,15 +5739,17 @@ export class MotebitRuntime {
     // and a foreign turn's registry (`toolsForTurn`) never offers or runs it.
     // So the owner's own recall during a stranger's task is never blanked.
     if (principal.foreign) return [];
-    const queryEmbedding = await embedText(query);
+    const sendTier = this.interiorToolSendTier();
+    // The query is text at the send tier: a remote embed backend receives it
+    // only when that tier is context-safe (`embedText`).
+    const queryEmbedding = await embedText(query, sendTier);
     const nodes = await this.memory.recallRelevant(queryEmbedding, {
       limit: opts.limit,
       ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
       ...(opts.includeExpired ? { includeExpired: true } : {}),
-      // Egress ceiling: undefined ⇒ no filter (sovereign, all tiers stay local);
-      // otherwise restrict to the context-safe tiers before anything can reach
-      // an external provider.
-      ...(this.providerIsSovereign() ? {} : { sensitivityFilter: [...CONTEXT_SAFE_SENSITIVITY] }),
+      // Egress ceiling: only the tiers the interior-egress rule permits at the
+      // tool send tier, before anything can enter the next request.
+      sensitivityFilter: interiorEgressSensitivities(sendTier),
     });
     return nodes.map((n) => ({
       content: n.content,

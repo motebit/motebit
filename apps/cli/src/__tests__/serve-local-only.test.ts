@@ -101,7 +101,6 @@ describe("/serve --operator never serves the owner's interior (#880)", () => {
     const registry = buildToolRegistry(
       { operator: true, allowedPaths: [cwd] } as unknown as CliConfig,
       { current: null },
-      OWNER,
     );
     const registered = registry.list().map((t) => t.name);
     // The builder DID register them — this is about serving, not absence.

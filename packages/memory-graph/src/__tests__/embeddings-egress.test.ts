@@ -20,7 +20,7 @@ const URL = "https://embed.example/v1/embed";
 function captureRemote(): string[] {
   const bodies: string[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-    bodies.push(String(init?.body ?? ""));
+    bodies.push(typeof init?.body === "string" ? init.body : "");
     return new Response(
       JSON.stringify({ ok: true, embeddings: [new Array<number>(384).fill(0.05)] }),
       { headers: { "Content-Type": "application/json" } },

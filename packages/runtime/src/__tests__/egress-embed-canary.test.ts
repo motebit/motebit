@@ -87,8 +87,8 @@ async function drain(gen: AsyncGenerator<unknown>): Promise<void> {
 function captureEmbedRequests(): string[] {
   const bodies: string[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const body = String(init?.body ?? "");
-    if (String(input) === EMBED_URL) bodies.push(body);
+    const body = typeof init?.body === "string" ? init.body : "";
+    if (typeof input === "string" && input === EMBED_URL) bodies.push(body);
     // A distinct vector per text (the hash embedding, padded to 384), so
     // memory formation does not merge unrelated texts.
     const text = (JSON.parse(body || "{}") as { texts?: string[] }).texts?.[0] ?? "";

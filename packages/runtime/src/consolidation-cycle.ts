@@ -594,7 +594,7 @@ async function consolidatePhase(
       const [decision] = deps.memoryGovernor.evaluate([candidate]);
       if (decision && decision.memoryClass === MemoryClass.REJECTED) continue;
 
-      const embedding = await embedText(summary);
+      const embedding = await embedText(summary, clusterSensitivity);
 
       if (consolidationProvider) {
         // Conflict-aware path: route the summary through the same

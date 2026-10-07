@@ -114,6 +114,7 @@ function dualStore(motebitId: string) {
         tool_call_id: null,
         created_at: Date.now(),
         token_estimate: 0,
+        ...(msg.sensitivity != null ? { sensitivity: msg.sensitivity } : {}),
       });
       const c = conversations.find((x) => x.conversation_id === conversationId);
       if (c) c.message_count++;
@@ -131,6 +132,7 @@ function dualStore(motebitId: string) {
           toolCallId: null,
           createdAt: m.created_at,
           tokenEstimate: 0,
+          ...(m.sensitivity != null ? { sensitivity: m.sensitivity as SensitivityLevel } : {}),
         })),
     getActiveConversation: () => {
       const c = conversations[conversations.length - 1];
@@ -393,10 +395,15 @@ function seededStore() {
   const id = store.conv.createConversation("owner-mote");
   // An early exchange past the context budget, so the owner's turn carries
   // the stored summary in place of what was trimmed.
-  store.conv.appendMessage(id, "owner-mote", { role: "user", content: "earlier ".repeat(6000) });
-  store.conv.appendMessage(id, "owner-mote", { role: "assistant", content: "ok" });
-  store.conv.appendMessage(id, "owner-mote", { role: "user", content: SECRET });
-  store.conv.appendMessage(id, "owner-mote", { role: "assistant", content: "Understood." });
+  // Stamped as the runtime persists them (an unstamped row fails closed).
+  const personal = SensitivityLevel.Personal;
+  for (const [role, content] of [
+    ["user", "earlier ".repeat(6000)],
+    ["assistant", "ok"],
+    ["user", SECRET],
+    ["assistant", "Understood."],
+  ] as const)
+    store.conv.appendMessage(id, "owner-mote", { role, content, sensitivity: personal });
   // Stored with the stamp a summary is persisted with (interior-egress.ts).
   store.conv.updateSummary(id, stampDerivedText(SUMMARY, SensitivityLevel.Personal));
   return store;

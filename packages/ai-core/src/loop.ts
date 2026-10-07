@@ -1076,7 +1076,9 @@ async function recallOwnerInterior(
       ? withStageTimeout(
           "embed_user_message",
           STAGE_TIMEOUTS_MS.embed_user_message,
-          embedText(userMessage),
+          // The turn is the recall query — text at the send tier (a remote
+          // embed backend receives it only when that tier is context-safe).
+          embedText(userMessage, sendTier),
           (ms) => {
             timings.embedMs = ms;
           },

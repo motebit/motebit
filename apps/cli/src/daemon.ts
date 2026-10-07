@@ -178,7 +178,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
   // Build tool registry
   const runtimeRef: { current: MotebitRuntime | null } = { current: null };
-  const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
+  const toolRegistry = buildToolRegistry(config, runtimeRef);
 
   // Runtime-host election — single-instance enforcement (daemon-desktop
   // unification, increment 2). The daemon is a coordinator by role: if
@@ -1111,7 +1111,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
   // Build tool registry
   const runtimeRef: { current: MotebitRuntime | null } = { current: null };
-  const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
+  const toolRegistry = buildToolRegistry(config, runtimeRef);
 
   // Runtime-host election — `motebit serve` serves both roles: first
   // process coordinates (full runtime below); with a live coordinator it

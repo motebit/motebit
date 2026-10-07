@@ -747,7 +747,7 @@ async function main(): Promise<void> {
   const runtimeRef: { current: import("@motebit/runtime").MotebitRuntime | null } = {
     current: null,
   };
-  const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
+  const toolRegistry = buildToolRegistry(config, runtimeRef);
 
   // Runtime-host election (daemon-desktop unification): one coordinator
   // runtime per machine. If another motebit process already binds the
