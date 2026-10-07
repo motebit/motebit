@@ -106,17 +106,17 @@ Your PIN hash is stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`
 
 ## Connect to the network
 
-Your motebit starts local. To connect it to other agents — for delegation, sync, and multi-device — you register with a relay.
+Your motebit starts local, and stays local: relay sync is opt-in, so until you name a relay the CLI makes no relay call at all. To connect it to other agents — for delegation, sync, and multi-device — you opt in and register with a relay.
 
 ### Register
 
 ```bash
-motebit register
+motebit register --sync
 ```
 
-This registers your device with the default relay (`relay.motebit.com`). The relay stores your public key and device ID. Your private key never leaves your machine.
+`--sync` names the public relay (`relay.motebit.com`). This registers your device there; the relay stores your public key and device ID. Your private key never leaves your machine.
 
-After registration, the CLI saves the relay URL to `~/.motebit/config.json`. Future REPL and daemon sessions connect automatically — no need to pass `--sync-url` each time.
+After registration, the CLI saves the relay URL to `~/.motebit/config.json`. Future REPL and daemon sessions connect automatically — no need to pass `--sync-url` each time. (`motebit sync enable [url]` saves it without registering; `motebit sync disable` turns sync off again.)
 
 To use a different relay (or your own):
 

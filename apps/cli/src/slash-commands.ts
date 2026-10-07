@@ -1,6 +1,7 @@
 // --- REPL slash command handler ---
 
 import { disconnectMcpServer } from "./mcp-config-wiring.js";
+import { namedRelayUrl, SYNC_OPT_IN_HINT } from "./sync-opt-in.js";
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import {
@@ -185,14 +186,16 @@ function formatState(state: Record<string, unknown>): string {
 // had never named `write_file`, so `/serve --operator` served it (#880).
 let isServing = false;
 
-/** Resolve the relay sync URL from config, env, or saved config. */
-function getRelaySyncUrl(
-  config: CliConfig,
-  fullConfig?: FullConfig,
-  fallback?: string,
-): string | undefined {
-  return config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig?.sync_url ?? fallback;
+/**
+ * Resolve the relay sync URL from config, env, or saved config — or
+ * undefined: relay sync is opt-in (`sync-opt-in.ts`), never defaulted.
+ */
+function getRelaySyncUrl(config: CliConfig, fullConfig?: FullConfig): string | undefined {
+  return namedRelayUrl(config, fullConfig ?? {});
 }
+
+/** What a relay slash command prints when relay sync is off. */
+const SYNC_OFF_LINE = `Relay sync is off — ${SYNC_OPT_IN_HINT} (or /connect <url>).`;
 
 /** Get an auth token for relay API calls — prefers master token, falls back to signed device token. */
 async function getRelayToken(
@@ -825,6 +828,10 @@ export async function handleSlashCommand(
     }
 
     case "sync": {
+      if (!getRelaySyncUrl(config, fullConfig)) {
+        console.log(SYNC_OFF_LINE);
+        break;
+      }
       try {
         console.log("Syncing events...");
         const result = await runtime.sync.sync();
@@ -1679,7 +1686,7 @@ export async function handleSlashCommand(
       // Relay-based discovery: no argument or capability filter
       const syncUrl = getRelaySyncUrl(config, fullConfig);
       if (!syncUrl) {
-        console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
+        console.log(SYNC_OFF_LINE);
         break;
       }
       try {
@@ -1861,7 +1868,11 @@ export async function handleSlashCommand(
         break;
       }
 
-      const syncUrl = getRelaySyncUrl(config, fullConfig, "https://relay.motebit.com");
+      const syncUrl = getRelaySyncUrl(config, fullConfig);
+      if (!syncUrl) {
+        console.log(SYNC_OFF_LINE);
+        break;
+      }
 
       // Resolve prefix to full motebit ID if needed (UUID is 36 chars)
       let targetMotebitId = rawTargetId;
@@ -1872,7 +1883,7 @@ export async function handleSlashCommand(
         try {
           const discoverHeaders = await makeRelayHeaders(config, repl);
           const discoverResult = await relayFetch<{ agents: DiscoveredListing[] }>(
-            syncUrl!,
+            syncUrl,
             `/api/v1/agents/discover`,
             { headers: discoverHeaders },
           );
@@ -1906,7 +1917,7 @@ export async function handleSlashCommand(
       // (task:submit for the POST, task:query for the poll — the relay
       // rejects cross-audience replay) and carries the Idempotency-Key
       // the relay requires on submission.
-      const relayClient = makeRelayClient(config, syncUrl!, repl);
+      const relayClient = makeRelayClient(config, syncUrl, repl);
 
       // Submit the task
       let taskId: string;
@@ -1927,7 +1938,7 @@ export async function handleSlashCommand(
           const worker = targetMotebitId === repl.motebitId ? "self" : "other";
           const p2p = isP2pRefusal(err.body ?? "", worker);
           if (p2p && targetListing == null) {
-            targetListing = await lookupListing(config, repl, syncUrl!, targetMotebitId);
+            targetListing = await lookupListing(config, repl, syncUrl, targetMotebitId);
           }
           const remedy = describeDelegateSubmit402(
             err.body ?? "",
@@ -2048,7 +2059,11 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposeSyncUrl = getRelaySyncUrl(config, fullConfig, "https://relay.motebit.com");
+      const proposeSyncUrl = getRelaySyncUrl(config, fullConfig);
+      if (!proposeSyncUrl) {
+        console.log(SYNC_OFF_LINE);
+        break;
+      }
 
       const proposeHeaders = await makeRelayHeaders(config, repl, { aud: "proposal", json: true });
 
@@ -2094,7 +2109,7 @@ export async function handleSlashCommand(
 
       try {
         const proposeResult = await relayFetch<{ proposal_id: string; status: string }>(
-          proposeSyncUrl!,
+          proposeSyncUrl,
           `/api/v1/proposals`,
           {
             method: "POST",
@@ -2138,7 +2153,11 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposalsSyncUrl = getRelaySyncUrl(config, fullConfig, "https://relay.motebit.com");
+      const proposalsSyncUrl = getRelaySyncUrl(config, fullConfig);
+      if (!proposalsSyncUrl) {
+        console.log(SYNC_OFF_LINE);
+        break;
+      }
 
       const proposalsHeaders = await makeRelayHeaders(config, repl, { aud: "proposal" });
 
@@ -2152,7 +2171,7 @@ export async function handleSlashCommand(
             created_at: number;
             expires_at: number;
           }>;
-        }>(proposalsSyncUrl!, `/api/v1/proposals`, { headers: proposalsHeaders });
+        }>(proposalsSyncUrl, `/api/v1/proposals`, { headers: proposalsHeaders });
         if (!listResult.ok) {
           console.log(`Failed to fetch proposals (${listResult.status}): ${listResult.text}`);
           break;
@@ -2198,7 +2217,11 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposalSyncUrl = getRelaySyncUrl(config, fullConfig, "https://relay.motebit.com");
+      const proposalSyncUrl = getRelaySyncUrl(config, fullConfig);
+      if (!proposalSyncUrl) {
+        console.log(SYNC_OFF_LINE);
+        break;
+      }
 
       const proposalHeaders = await makeRelayHeaders(config, repl, { aud: "proposal", json: true });
 
@@ -2223,7 +2246,7 @@ export async function handleSlashCommand(
 
       try {
         const detailResult = await relayFetch<ProposalDetail>(
-          proposalSyncUrl!,
+          proposalSyncUrl,
           `/api/v1/proposals/${proposalId}`,
           { headers: proposalHeaders },
         );
@@ -2232,7 +2255,7 @@ export async function handleSlashCommand(
         } else if (detailResult.status === 404) {
           // Try prefix match by listing proposals
           const listResult = await relayFetch<{ proposals: Array<{ proposal_id: string }> }>(
-            proposalSyncUrl!,
+            proposalSyncUrl,
             `/api/v1/proposals`,
             { headers: proposalHeaders },
           );
@@ -2242,7 +2265,7 @@ export async function handleSlashCommand(
             );
             if (match) {
               const fullResult = await relayFetch<ProposalDetail>(
-                proposalSyncUrl!,
+                proposalSyncUrl,
                 `/api/v1/proposals/${match.proposal_id}`,
                 { headers: proposalHeaders },
               );
@@ -2342,7 +2365,7 @@ export async function handleSlashCommand(
 
       try {
         const respondResult = await relayFetch<{ status: string; all_responded: boolean }>(
-          proposalSyncUrl!,
+          proposalSyncUrl,
           `/api/v1/proposals/${proposalData.proposal_id}/respond`,
           { method: "POST", headers: proposalHeaders, body: responseBody },
         );
@@ -2413,7 +2436,7 @@ export async function handleSlashCommand(
       }
       const ledgerSyncUrl = getRelaySyncUrl(config, fullConfig);
       if (!ledgerSyncUrl) {
-        console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
+        console.log(SYNC_OFF_LINE);
         break;
       }
       if (!repl) {
@@ -2442,7 +2465,7 @@ export async function handleSlashCommand(
     case "balance": {
       const balSyncUrl = getRelaySyncUrl(config, fullConfig);
       if (!balSyncUrl) {
-        console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
+        console.log(SYNC_OFF_LINE);
         break;
       }
       if (!repl) {
@@ -2474,7 +2497,7 @@ export async function handleSlashCommand(
     case "withdraw": {
       const wdSyncUrl = getRelaySyncUrl(config, fullConfig);
       if (!wdSyncUrl) {
-        console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
+        console.log(SYNC_OFF_LINE);
         break;
       }
       if (!repl) {
@@ -2524,7 +2547,7 @@ export async function handleSlashCommand(
     case "deposits": {
       const depSyncUrl = getRelaySyncUrl(config, fullConfig);
       if (!depSyncUrl) {
-        console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
+        console.log(SYNC_OFF_LINE);
         break;
       }
       if (!repl) {

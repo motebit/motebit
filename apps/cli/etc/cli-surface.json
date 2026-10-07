@@ -318,6 +318,11 @@
       "type": "string"
     },
     {
+      "name": "sync",
+      "type": "boolean",
+      "default": false
+    },
+    {
       "name": "sync-token",
       "type": "string"
     },
