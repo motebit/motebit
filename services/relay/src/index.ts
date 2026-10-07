@@ -67,13 +67,15 @@
  */
 
 import { createNodeWebSocket } from "@hono/node-ws";
+import { isInsecureDevPosture, type RelayAuthPosture } from "./auth-posture.js";
 import { Hono } from "hono";
 import { EventStore } from "@motebit/event-log";
 import { IdentityManager } from "@motebit/core-identity";
 import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
-import { parseBoolEnv, parseFloatEnv, parseIntEnv } from "./env.js";
+import { parseBoolEnv, parseFloatEnv, parseIntEnv, RECONCILIATION_INTERVAL_BOUNDS } from "./env.js";
+import { freeCreditConfigFromEnv, type FreeCreditConfig } from "./free-credit.js";
 import { buildOutboundPolicy } from "./outbound-policy.js";
 import { createRelaySchema } from "./schema.js";
 import {
@@ -222,6 +224,15 @@ import { gatePaymentChainOnNetwork, paymentChainFromEnv } from "./p2p-payer.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
 
+export {
+  resolveRelayAuthPosture,
+  isInsecureDevPosture,
+  RelayAuthRefusal,
+  type RelayAuthPosture,
+  type RelayTokenPosture,
+  type RelayInsecureDevPosture,
+  type ResolveRelayAuthPostureOptions,
+} from "./auth-posture.js";
 export { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 export type { TokenPayload } from "./auth.js";
 export type { ConnectedDevice } from "./websocket.js";
@@ -501,7 +512,23 @@ export function refundExhaustedForward(
 
 export interface SyncRelayConfig {
   dbPath?: string;
-  apiToken?: string; // Legacy single token (still supported as admin/master token)
+  /**
+   * The operator's master token (`MOTEBIT_API_TOKEN`). REQUIRED unless
+   * `authPosture` carries one or is the minted insecure-dev posture: every
+   * master-token gate is installed from it. `createSyncRelay` throws without
+   * one, and a hand-wired middleware with no token installs SEALED gates
+   * (401), never open ones (auth-posture.ts `masterGateToken`).
+   */
+  apiToken?: string;
+  /**
+   * The posture `resolveRelayAuthPosture(env)` decided — the ONE decision
+   * every entry point (server.ts, library embedders, `motebit relay up`)
+   * makes. A `token` posture supplies the token when `apiToken` is unset.
+   * Only the insecure-dev posture it MINTS (opt-in + NODE_ENV development /
+   * test) lets a relay run with the master-token routes open; a hand-built
+   * object or a bare boolean never does.
+   */
+  authPosture?: RelayAuthPosture;
   corsOrigin?: string;
   enableDeviceAuth?: boolean; // When true, validates per-device tokens (default: true)
   /**
@@ -596,6 +623,17 @@ export interface SyncRelayConfig {
   };
   /** Platform fee rate for settlement (0–1). Default: 0.05 (5%). Protocol supports any value. */
   platformFeeRate?: number;
+  /**
+   * Free "first taste" credit knobs, read ONCE at boot (strictly) — never
+   * per grant from `process.env`. Default: `freeCreditConfigFromEnv()`.
+   */
+  freeCredit?: FreeCreditConfig;
+  /** EVM treasury reconciliation cadence. Default: `MOTEBIT_TREASURY_RECONCILIATION_INTERVAL_MS` or 15 min. */
+  treasuryReconciliationIntervalMs?: number;
+  /** x402 settlement reconciliation cadence. Default: `MOTEBIT_X402_RECONCILIATION_INTERVAL_MS` or 60 s. */
+  x402ReconciliationIntervalMs?: number;
+  /** Solana treasury reconciliation cadence. Default: `MOTEBIT_SOLANA_TREASURY_RECONCILIATION_INTERVAL_MS` or 15 min. */
+  solanaTreasuryReconciliationIntervalMs?: number;
   /**
    * Passphrase for encrypting the relay's identity key at rest. When set,
    * the relay's Ed25519 private key is AES-GCM encrypted with a key derived
@@ -820,10 +858,49 @@ function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
   });
 }
 
+/**
+ * The master token is a boot requirement, not a mode (fail-closed config).
+ * Returns the token every master-token gate is installed from, or
+ * `undefined` ONLY for an insecure-dev posture minted by
+ * `resolveRelayAuthPosture` (announced at warn level). Throws otherwise.
+ */
+export function assertMasterTokenConfigured(
+  config: Pick<SyncRelayConfig, "apiToken" | "authPosture">,
+): string | undefined {
+  if (config.apiToken != null && config.apiToken.trim() !== "") return config.apiToken;
+  const posture: unknown = config.authPosture;
+  if (
+    typeof posture === "object" &&
+    posture !== null &&
+    (posture as { kind?: unknown }).kind === "token" &&
+    typeof (posture as { token?: unknown }).token === "string" &&
+    (posture as { token: string }).token.trim() !== ""
+  ) {
+    return (posture as { token: string }).token;
+  }
+  if (isInsecureDevPosture(posture)) {
+    createLogger({ service: "relay" }).warn("relay.insecure_no_auth", {
+      reason:
+        "MOTEBIT_RELAY_INSECURE_NO_AUTH is set and no MOTEBIT_API_TOKEN is configured: " +
+        "every master-token route (admin, state/memory/audit export, sync) is UNAUTHENTICATED. " +
+        `Local development only (NODE_ENV=${posture.nodeEnv}).`,
+    });
+    return undefined;
+  }
+  throw new Error(
+    "MOTEBIT_API_TOKEN is required: the relay refuses to start without a master token, " +
+      "because every admin, export and sync route is gated by it. Set MOTEBIT_API_TOKEN " +
+      "(config `apiToken`) to a non-empty secret. For local development only, " +
+      "MOTEBIT_RELAY_INSECURE_NO_AUTH=1 with NODE_ENV=development (config `authPosture` from " +
+      "`resolveRelayAuthPosture`) starts the relay with those routes open.",
+  );
+}
+
 export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRelay> {
+  const apiToken = assertMasterTokenConfigured(config);
   const {
     dbPath = ":memory:",
-    apiToken,
+    authPosture,
     corsOrigin = "*",
     enableDeviceAuth = true,
     allowPrivateEndpoints = parseBoolEnv("MOTEBIT_ALLOW_PRIVATE_ENDPOINTS", false),
@@ -841,6 +918,25 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     offramp: offrampOverride,
     operatorSolanaTransfer: operatorSolanaTransferOverride,
     platformFeeRate = parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
+    // Every money knob is parsed HERE, at boot, strictly — a malformed value
+    // throws `RelayEnvConfigError` before the relay opens its database, never
+    // on the first grant or the first loop tick.
+    freeCredit: freeCreditConfig = freeCreditConfigFromEnv(),
+    treasuryReconciliationIntervalMs = parseIntEnv(
+      "MOTEBIT_TREASURY_RECONCILIATION_INTERVAL_MS",
+      15 * 60_000,
+      RECONCILIATION_INTERVAL_BOUNDS,
+    ),
+    x402ReconciliationIntervalMs = parseIntEnv(
+      "MOTEBIT_X402_RECONCILIATION_INTERVAL_MS",
+      60_000,
+      RECONCILIATION_INTERVAL_BOUNDS,
+    ),
+    solanaTreasuryReconciliationIntervalMs = parseIntEnv(
+      "MOTEBIT_SOLANA_TREASURY_RECONCILIATION_INTERVAL_MS",
+      15 * 60_000,
+      RECONCILIATION_INTERVAL_BOUNDS,
+    ),
   } = config;
 
   // Async work boot starts but does not await (a warm-up read, a first loop
@@ -1208,6 +1304,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const { allLimiters, wsLimiter } = registerMiddleware({
     app,
     apiToken,
+    authPosture,
     corsOrigin,
     enableDeviceAuth,
     identityManager,
@@ -1513,6 +1610,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerAuthMiddleware({
     app,
     apiToken,
+    authPosture,
     corsOrigin,
     enableDeviceAuth,
     identityManager,
@@ -1676,6 +1774,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
     subscriptionEventAdapter,
     authEvents.record,
+    freeCreditConfig,
   );
 
   // --- Credential routes ---
@@ -2381,7 +2480,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const usdcContractAddress = USDC_CONTRACTS[x402Config.network];
     const rpcUrl = DEFAULT_RPC_URLS[x402Config.network];
     if (x402Config.testnet === false && x402Config.payToAddress && usdcContractAddress && rpcUrl) {
-      const intervalMs = parseIntEnv("MOTEBIT_TREASURY_RECONCILIATION_INTERVAL_MS", 15 * 60_000);
+      const intervalMs = treasuryReconciliationIntervalMs;
       const { HttpJsonRpcEvmAdapter } = await import("@motebit/evm-rpc");
       const evmRpc = new HttpJsonRpcEvmAdapter({ rpcUrl });
       treasuryReconciliationInterval = startTreasuryReconciliationLoop({
@@ -2435,7 +2534,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       x402ReconciliationInterval = startX402ReconciliationLoop({
         db: moteDb.db,
         reader: x402ChainReader,
-        intervalMs: parseIntEnv("MOTEBIT_X402_RECONCILIATION_INTERVAL_MS", 60_000),
+        intervalMs: x402ReconciliationIntervalMs,
         isFrozen: () => getEmergencyFreeze(),
         supervisor: loopSupervisor,
       });
@@ -2557,10 +2656,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // whether recorded `platform_fee` accumulation matches the wallet's
     // onchain USDC balance after the verifier confirmed both legs of
     // each Arc 2 atomic multi-output tx.
-    const solanaReconciliationIntervalMs = parseIntEnv(
-      "MOTEBIT_SOLANA_TREASURY_RECONCILIATION_INTERVAL_MS",
-      15 * 60_000,
-    );
+    const solanaReconciliationIntervalMs = solanaTreasuryReconciliationIntervalMs;
     solanaTreasuryReconciliationInterval = startSolanaTreasuryReconciliationLoop({
       db: moteDb.db,
       rpcUrl: solanaRpcUrl,

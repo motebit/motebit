@@ -25,7 +25,7 @@ flyctl secrets set \
   MOTEBIT_DB_PATH="/data/motebit.db"
 ```
 
-`MOTEBIT_API_TOKEN` is the master token — gates admin endpoints and device registration. Generate with `openssl rand -hex 32` or similar.
+`MOTEBIT_API_TOKEN` is the master token — gates admin endpoints and device registration. Generate with `openssl rand -hex 32` or similar. The relay refuses to start when it is unset or empty (`MOTEBIT_API_TOKEN is required…` on stderr, exit 1): every master-token route is installed from it, so a relay without it would serve them unauthenticated.
 
 ### 3. Deploy
 
@@ -50,14 +50,22 @@ The workflow at `.github/workflows/deploy-sync.yml` auto-deploys on push to `mai
 
 ## Environment Variables
 
-| Variable                     | Required | Default      | Purpose                              |
-| ---------------------------- | -------- | ------------ | ------------------------------------ |
-| `PORT`                       | No       | `3000`       | HTTP/WS listen port                  |
-| `NODE_ENV`                   | No       | `production` | Runtime environment                  |
-| `MOTEBIT_DB_PATH`            | Yes      | `:memory:`   | SQLite database file path            |
-| `MOTEBIT_API_TOKEN`          | Yes      | —            | Master bearer token for admin routes |
-| `MOTEBIT_CORS_ORIGIN`        | No       | `*`          | CORS origin whitelist                |
-| `MOTEBIT_ENABLE_DEVICE_AUTH` | No       | `true`       | Require per-device signed tokens     |
+| Variable                               | Required | Default      | Purpose                                                                                                                                                                                                                    |
+| -------------------------------------- | -------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                                 | No       | `3000`       | HTTP/WS listen port                                                                                                                                                                                                        |
+| `NODE_ENV`                             | No       | `production` | Runtime environment                                                                                                                                                                                                        |
+| `MOTEBIT_DB_PATH`                      | Yes      | `:memory:`   | SQLite database file path                                                                                                                                                                                                  |
+| `MOTEBIT_API_TOKEN`                    | Yes      | —            | Master bearer token for admin routes; boot is refused without it                                                                                                                                                           |
+| `MOTEBIT_RELAY_INSECURE_NO_AUTH`       | No       | unset        | Local development only: `1` starts with no master token, every master-token route open (warns at boot). Honoured only when `NODE_ENV` is exactly `development` or `test`; any other value, unset included, refuses to boot |
+| `MOTEBIT_CORS_ORIGIN`                  | No       | `*`          | CORS origin whitelist                                                                                                                                                                                                      |
+| `MOTEBIT_ENABLE_DEVICE_AUTH`           | No       | `true`       | Require per-device signed tokens                                                                                                                                                                                           |
+| `MOTEBIT_EMERGENCY_FREEZE`             | No       | `false`      | Kill switch: `true` boots frozen (every money write refused)                                                                                                                                                               |
+| `MOTEBIT_PLATFORM_FEE_RATE`            | No       | `0.05`       | Settlement fee rate in [0, 1)                                                                                                                                                                                              |
+| `MOTEBIT_FREE_CREDIT_USD`              | No       | `0` (off)    | One-time free credit per new motebit, USD                                                                                                                                                                                  |
+| `MOTEBIT_FREE_CREDIT_IP_DAILY_CAP`     | No       | `10`         | Max free-credit grants per source IP per UTC day                                                                                                                                                                           |
+| `MOTEBIT_FREE_CREDIT_DAILY_BUDGET_USD` | No       | `25`         | Global free-credit budget per UTC day, USD                                                                                                                                                                                 |
+
+**Strict parsing (money and safety settings).** Every relay variable that moves, prices or caps money, paces a money loop, or is a safety/security switch is parsed exactly at boot; a SET value outside its form refuses to boot with `RelayEnvConfigError` naming the variable and the accepted form — never a silent default. Booleans (`MOTEBIT_EMERGENCY_FREEZE`, `MOTEBIT_ENABLE_DEVICE_AUTH`, `MOTEBIT_ALLOW_PRIVATE_ENDPOINTS`, `MOTEBIT_RELAY_ISSUE_CREDENTIALS`, `MOTEBIT_RELAY_INSECURE_NO_AUTH`, `X402_TESTNET`, `MOTEBIT_FEDERATION_ENABLED`, `MOTEBIT_FEDERATION_AUTO_ACCEPT`, `MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE`): `true`/`1` or `false`/`0` (case-insensitive, trimmed); empty means the default; `yes`, `on`, `y`, `ture` refuse. USD amounts (`MOTEBIT_FREE_CREDIT_USD` ≤ 1000, `MOTEBIT_FREE_CREDIT_DAILY_BUDGET_USD` ≤ 1000000): digits with an optional `.` and up to 6 decimals — no sign, exponent, hex or separators. Rate (`MOTEBIT_PLATFORM_FEE_RATE`): `0` or `0.` plus up to 6 digits, in [0, 1). Counts (`MOTEBIT_FREE_CREDIT_IP_DAILY_CAP` 0–1000000, `MOTEBIT_FEDERATION_MAX_PEERS` 0–10000, `MOTEBIT_*RECONCILIATION_INTERVAL_MS` 1–86400000): digits only. An unset variable keeps its documented default.
 
 ## Architecture
 

@@ -719,7 +719,7 @@ jobs:
         run: pnpm --filter @motebit/relay... build
 
       - name: Boot relay in background
-        # Minimal env: X402_PAY_TO_ADDRESS is the only required var; :memory:
+        # Minimal env: X402_PAY_TO_ADDRESS and MOTEBIT_API_TOKEN are the required vars; :memory:
         # DB keeps each CI run hermetic. server.ts is the executable boot
         # entry (index.ts is the library entry — side-effect-free at module
         # load so embedders can import without binding ports).
@@ -728,6 +728,11 @@ jobs:
           X402_PAY_TO_ADDRESS: "0x0000000000000000000000000000000000000000"
           NODE_ENV: "development"
           MOTEBIT_DB_PATH: ":memory:"
+          # The relay refuses to boot without a master token. A fixed,
+          # non-secret test value: the suite exercises only public routes
+          # and sends no bearer, so it also proves they stay public on an
+          # authenticated relay.
+          MOTEBIT_API_TOKEN: "conformance-test-token"
         run: |
           npx tsx services/relay/src/server.ts > /tmp/relay.out 2> /tmp/relay.err &
           echo $! > /tmp/relay.pid
@@ -822,6 +827,11 @@ jobs:
           X402_PAY_TO_ADDRESS: "0x0000000000000000000000000000000000000000"
           NODE_ENV: "development"
           MOTEBIT_DB_PATH: ":memory:"
+          # The relay refuses to boot without a master token. A fixed,
+          # non-secret test value: the suite exercises only public routes
+          # and sends no bearer, so it also proves they stay public on an
+          # authenticated relay.
+          MOTEBIT_API_TOKEN: "conformance-test-token"
         run: |
           npx tsx services/relay/src/server.ts > /tmp/relay.out 2> /tmp/relay.err &
           echo $! > /tmp/relay.pid

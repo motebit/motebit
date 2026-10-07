@@ -104,7 +104,7 @@ function parseEnvExample(path: string): Set<string> {
  * Recognizes four shapes:
  *   - process.env.FOO
  *   - process.env["FOO"]
- *   - parseBoolEnv("FOO", ...) / parseIntEnv / parseFloatEnv (services/relay/src/env.ts helpers)
+ *   - parseBoolEnv("FOO", ...) / parseIntEnv / parseFloatEnv / parseUsdMicroEnv (services/relay/src/env.ts helpers)
  *   - env.FOO / env["FOO"] — the INJECTED env source in a pure config builder
  *     (relay-config.ts `buildRelayConfigFromEnv(env, …)`). The builder reads
  *     the env through a parameter (default process.env) so effective config is
@@ -119,7 +119,7 @@ function parseEnvExample(path: string): Set<string> {
 function envVarsReadInSource(serviceDir: string): Set<string> {
   const names = new Set<string>();
   const directEnv = /process\.env(?:\.([A-Z][A-Z0-9_]*)|\[["']([A-Z][A-Z0-9_]*)["']\])/g;
-  const helperEnv = /\bparse(?:Bool|Int|Float)Env\s*\(\s*["']([A-Z][A-Z0-9_]*)["']/g;
+  const helperEnv = /\bparse(?:Bool|Int|Float|UsdMicro)Env\s*\(\s*["']([A-Z][A-Z0-9_]*)["']/g;
   const injectedEnv = /\benv(?:\.([A-Z][A-Z0-9_]*)|\[["']([A-Z][A-Z0-9_]*)["']\])/g;
 
   function walk(dir: string): void {

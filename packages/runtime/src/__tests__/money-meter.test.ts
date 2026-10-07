@@ -32,6 +32,22 @@ describe("createMoneyMeter", () => {
     });
   });
 
+  it("denies invalid_ceiling for a grant whose signed limit is NaN / Infinity / negative / fractional", async () => {
+    // canonicalJson writes NaN as null, so a grant signed over a NaN ceiling
+    // still verifies — the meter must refuse the value, never treat it as a
+    // bound nothing exceeds.
+    for (const bad of [NaN, Infinity, -1, 1.5, 2 ** 53]) {
+      const grant = {
+        ...GRANT,
+        spend_ceiling: { schema: "motebit.spend-ceiling.v1" as const, lifetime_limit_micro: bad },
+      };
+      expect(await meterWith()(grant, "pay_invoice", ARGS)).toEqual({
+        allowed: false,
+        denial: "invalid_ceiling",
+      });
+    }
+  });
+
   it("denies unmeterable_action when money facts are not extractable from args", async () => {
     for (const bad of [
       {},

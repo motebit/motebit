@@ -36,14 +36,10 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
-import {
-  getOrCreateAccount,
-  creditAccount,
-  toMicro,
-  FREE_CREDIT_REFERENCE_PREFIX,
-} from "./accounts.js";
+import { getOrCreateAccount, creditAccount, FREE_CREDIT_REFERENCE_PREFIX } from "./accounts.js";
 import { createLogger } from "./logger.js";
 import { isEmergencyFrozenAbort } from "./freeze.js";
+import { parseIntEnv, parseUsdMicroEnv, type EnvSource } from "./env.js";
 
 const logger = createLogger({ service: "free-credit" });
 
@@ -56,19 +52,35 @@ export interface FreeCreditConfig {
   dailyBudgetMicro: number;
 }
 
-function envNum(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw === "") return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
+/** Largest accepted per-motebit grant, USD (`MOTEBIT_FREE_CREDIT_USD`). */
+export const FREE_CREDIT_MAX_USD = 1_000;
+/** Largest accepted global daily budget, USD (`MOTEBIT_FREE_CREDIT_DAILY_BUDGET_USD`). */
+export const FREE_CREDIT_DAILY_BUDGET_MAX_USD = 1_000_000;
+/** Accepted range of `MOTEBIT_FREE_CREDIT_IP_DAILY_CAP`. */
+export const FREE_CREDIT_IP_DAILY_CAP_BOUNDS = { min: 0, max: 1_000_000 } as const;
 
-/** Read the free-credit config from env. Defaults keep the feature OFF (amount 0). */
-export function freeCreditConfigFromEnv(): FreeCreditConfig {
+/**
+ * Read the free-credit config from env. Defaults keep the feature OFF
+ * (amount 0). Strict: a SET value that is not an exact USD amount / count in
+ * range throws `RelayEnvConfigError` — read once at boot (`buildRelayConfigFromEnv`
+ * and `createSyncRelay`), so a malformed knob refuses to boot rather than
+ * granting a number `Number()` happened to accept (`0x10` ⇒ $16).
+ */
+export function freeCreditConfigFromEnv(env: EnvSource = process.env): FreeCreditConfig {
   return {
-    amountMicro: toMicro(envNum("MOTEBIT_FREE_CREDIT_USD", 0)),
-    ipDailyCap: Math.floor(envNum("MOTEBIT_FREE_CREDIT_IP_DAILY_CAP", 10)),
-    dailyBudgetMicro: toMicro(envNum("MOTEBIT_FREE_CREDIT_DAILY_BUDGET_USD", 25)),
+    amountMicro: parseUsdMicroEnv("MOTEBIT_FREE_CREDIT_USD", 0, FREE_CREDIT_MAX_USD, env),
+    ipDailyCap: parseIntEnv(
+      "MOTEBIT_FREE_CREDIT_IP_DAILY_CAP",
+      10,
+      FREE_CREDIT_IP_DAILY_CAP_BOUNDS,
+      env,
+    ),
+    dailyBudgetMicro: parseUsdMicroEnv(
+      "MOTEBIT_FREE_CREDIT_DAILY_BUDGET_USD",
+      25_000_000,
+      FREE_CREDIT_DAILY_BUDGET_MAX_USD,
+      env,
+    ),
   };
 }
 

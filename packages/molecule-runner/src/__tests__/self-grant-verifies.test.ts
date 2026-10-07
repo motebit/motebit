@@ -90,3 +90,19 @@ describe("self-grant verifies end-to-end through verifyGrantForTurn", () => {
     expect(await verifyGrantForTurn(t1, grant, [])).not.toBeNull();
   });
 });
+
+describe("selfIssueGrant refuses to sign a malformed ceiling", () => {
+  // canonicalJson writes NaN as null, so a grant signed over
+  // `lifetime_limit_micro: NaN` verified — with a bound nothing exceeds.
+  for (const bad of [NaN, Infinity, -1, 1.5, 2 ** 53]) {
+    it(`lifetime_limit_micro = ${String(bad)} ⇒ rejects before signing`, async () => {
+      const identity = await realIdentity();
+      await expect(
+        selfIssueGrant(identity, {
+          ...MONEY,
+          spendCeiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: bad },
+        }),
+      ).rejects.toThrow(/lifetime_limit_micro/);
+    });
+  }
+});

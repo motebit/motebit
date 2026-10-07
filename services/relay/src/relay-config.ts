@@ -36,7 +36,16 @@
  */
 
 import type { SyncRelayConfig, X402Config, ShutdownStateGetter } from "./index.js";
-import { parseBoolEnv, parseIntEnv, parseFloatEnv, type EnvSource } from "./env.js";
+import { resolveRelayAuthPosture } from "./auth-posture.js";
+import {
+  parseBoolEnv,
+  parseIntEnv,
+  parseFloatEnv,
+  FEDERATION_MAX_PEERS_BOUNDS,
+  RECONCILIATION_INTERVAL_BOUNDS,
+  type EnvSource,
+} from "./env.js";
+import { freeCreditConfigFromEnv } from "./free-credit.js";
 import { DEFAULT_REQUIRE_DISCOVER_SIGNATURE } from "./federation.js";
 
 /**
@@ -56,7 +65,10 @@ export interface RelayConfigRuntimeDeps {
  * port binding. `server.ts` is the only production caller; the effective-
  * config test drives it with crafted env maps.
  *
- * Throws `X402ConfigError`-shaped `Error` when the required
+ * Throws when `resolveRelayAuthPosture` refuses the env (a missing or blank
+ * `MOTEBIT_API_TOKEN`, or the dev opt-in outside NODE_ENV development /
+ * test), and an
+ * `X402ConfigError`-shaped `Error` when the required
  * `X402_PAY_TO_ADDRESS` is absent — the one config-validation invariant that
  * belongs in the pure builder (every task settlement flows through x402).
  */
@@ -67,45 +79,78 @@ export function buildRelayConfigFromEnv(
   if (env.X402_PAY_TO_ADDRESS == null || env.X402_PAY_TO_ADDRESS === "") {
     throw new Error("X402_PAY_TO_ADDRESS is required. Set it to the platform USDC wallet address.");
   }
+  // The ONE auth decision every entry point makes (auth-posture.ts): throws
+  // on a missing token, and on the insecure opt-in outside NODE_ENV
+  // development / test.
+  const authPosture = resolveRelayAuthPosture(env);
+  // Every money / safety knob is parsed strictly, UNCONDITIONALLY (a
+  // federation switch is read even when federation is off), so a malformed
+  // value refuses to boot (`RelayEnvConfigError`) instead of lying dormant.
   const x402: X402Config = {
     payToAddress: env.X402_PAY_TO_ADDRESS,
     network: env.X402_NETWORK ?? "eip155:84532",
     facilitatorUrl: env.X402_FACILITATOR_URL,
-    testnet: env.X402_TESTNET !== "false",
+    testnet: parseBoolEnv("X402_TESTNET", true, env),
   };
+  const federationEnabled = parseBoolEnv("MOTEBIT_FEDERATION_ENABLED", true, env);
+  const federationMaxPeers =
+    env.MOTEBIT_FEDERATION_MAX_PEERS !== undefined
+      ? parseIntEnv("MOTEBIT_FEDERATION_MAX_PEERS", 50, FEDERATION_MAX_PEERS_BOUNDS, env)
+      : undefined;
+  // Anti-sybil safe default: do NOT auto-accept peering proposals.
+  const federationAutoAccept = parseBoolEnv("MOTEBIT_FEDERATION_AUTO_ACCEPT", false, env);
+  // Strict per-hop discover signing. The default is the canonical
+  // constant (flipped strict by the #188 sunset), never a literal —
+  // that shadowing is exactly what made #346 inert in production.
+  const federationRequireDiscoverSignature = parseBoolEnv(
+    "MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE",
+    DEFAULT_REQUIRE_DISCOVER_SIGNATURE,
+    env,
+  );
 
   return {
     dbPath: env.MOTEBIT_DB_PATH,
-    apiToken: env.MOTEBIT_API_TOKEN,
+    apiToken: authPosture.kind === "token" ? authPosture.token : undefined,
+    authPosture,
     corsOrigin: env.MOTEBIT_CORS_ORIGIN,
     // Opt-out boolean (device auth): safe default ON — an operator disables it
     // explicitly. A shadowing literal here would silently drop device-token
     // verification, so it is a registered security boundary.
     enableDeviceAuth: parseBoolEnv("MOTEBIT_ENABLE_DEVICE_AUTH", true, env),
     allowPrivateEndpoints: parseBoolEnv("MOTEBIT_ALLOW_PRIVATE_ENDPOINTS", false, env),
+    issueCredentials: parseBoolEnv("MOTEBIT_RELAY_ISSUE_CREDENTIALS", false, env),
     emergencyFreeze: parseBoolEnv("MOTEBIT_EMERGENCY_FREEZE", false, env),
     getShuttingDown: deps.getShuttingDown,
     x402,
     relayKeyPassphrase: env.MOTEBIT_RELAY_KEY_PASSPHRASE,
     platformFeeRate: parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05, env),
+    freeCredit: freeCreditConfigFromEnv(env),
+    treasuryReconciliationIntervalMs: parseIntEnv(
+      "MOTEBIT_TREASURY_RECONCILIATION_INTERVAL_MS",
+      15 * 60_000,
+      RECONCILIATION_INTERVAL_BOUNDS,
+      env,
+    ),
+    x402ReconciliationIntervalMs: parseIntEnv(
+      "MOTEBIT_X402_RECONCILIATION_INTERVAL_MS",
+      60_000,
+      RECONCILIATION_INTERVAL_BOUNDS,
+      env,
+    ),
+    solanaTreasuryReconciliationIntervalMs: parseIntEnv(
+      "MOTEBIT_SOLANA_TREASURY_RECONCILIATION_INTERVAL_MS",
+      15 * 60_000,
+      RECONCILIATION_INTERVAL_BOUNDS,
+      env,
+    ),
     federation: env.MOTEBIT_FEDERATION_ENDPOINT_URL
       ? {
           endpointUrl: env.MOTEBIT_FEDERATION_ENDPOINT_URL,
           displayName: env.MOTEBIT_FEDERATION_DISPLAY_NAME,
-          enabled: parseBoolEnv("MOTEBIT_FEDERATION_ENABLED", true, env),
-          maxPeers: env.MOTEBIT_FEDERATION_MAX_PEERS
-            ? parseIntEnv("MOTEBIT_FEDERATION_MAX_PEERS", 50, env)
-            : undefined,
-          // Anti-sybil safe default: do NOT auto-accept peering proposals.
-          autoAcceptPeers: parseBoolEnv("MOTEBIT_FEDERATION_AUTO_ACCEPT", false, env),
-          // Strict per-hop discover signing. The default is the canonical
-          // constant (flipped strict by the #188 sunset), never a literal —
-          // that shadowing is exactly what made #346 inert in production.
-          requireDiscoverSignature: parseBoolEnv(
-            "MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE",
-            DEFAULT_REQUIRE_DISCOVER_SIGNATURE,
-            env,
-          ),
+          enabled: federationEnabled,
+          maxPeers: federationMaxPeers,
+          autoAcceptPeers: federationAutoAccept,
+          requireDiscoverSignature: federationRequireDiscoverSignature,
           allowedPeers: env.MOTEBIT_FEDERATION_ALLOWED_PEERS
             ? env.MOTEBIT_FEDERATION_ALLOWED_PEERS.split(",").map((s) => s.trim())
             : undefined,
@@ -234,6 +279,7 @@ export const SECURITY_BOUNDARY_DEFAULTS: readonly SecurityBoundaryDefault[] = [
  */
 export const MINIMAL_VALID_RELAY_ENV: EnvSource = {
   X402_PAY_TO_ADDRESS: "0x0000000000000000000000000000000000000000",
+  MOTEBIT_API_TOKEN: "minimal-valid-relay-env-token",
 };
 
 /**

@@ -80,9 +80,20 @@ async function createIdentity(): Promise<string> {
   return ((await res.json()) as { motebit_id: string }).motebit_id;
 }
 
-/** Fund the next mint through the production welcome-credit grant. */
-function fund(usd: number): void {
+/** Every relay boots granting this welcome credit at mint (read once, at boot). */
+const DEFAULT_FUND_USD = 5;
+
+/**
+ * Fund the next mint through the production welcome-credit grant. The relay
+ * reads `MOTEBIT_FREE_CREDIT_USD` once, at boot, so another amount re-boots
+ * the relay with it — call before creating the identity it funds.
+ */
+async function fund(usd: number): Promise<void> {
+  if (process.env.MOTEBIT_FREE_CREDIT_USD === String(usd)) return;
+  await relay.close();
   process.env.MOTEBIT_FREE_CREDIT_USD = String(usd);
+  relay = await createTestRelay();
+  process.env.RELAY_PUBLIC_KEY = relay.relayIdentity.publicKeyHex;
 }
 
 async function mintToken(motebitId: string): Promise<string> {
@@ -148,6 +159,7 @@ const EXPECTED_COST = calculateCostMicro(MODEL, INPUT, OUTPUT, 0, 0);
 
 beforeEach(async () => {
   process.env.RELAY_PROXY_SECRET = SECRET;
+  process.env.MOTEBIT_FREE_CREDIT_USD = String(DEFAULT_FUND_USD);
   relay = await createTestRelay();
   process.env.RELAY_PUBLIC_KEY = relay.relayIdentity.publicKeyHex;
   process.env.RELAY_API_URL = RELAY_URL;
@@ -205,8 +217,8 @@ afterEach(async () => {
 
 describe("proxy debit lands in the relay ledger (production auth config)", () => {
   it("a served turn records a `fee` of the metered cost, keyed by the request id, before the stream ends", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
 
     const res = await turn(await mintToken(mid));
     expect(res.status).toBe(200);
@@ -223,8 +235,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("a client that disconnects mid-stream is still billed", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
 
     const res = await turn(await mintToken(mid));
     expect(res.status).toBe(200);
@@ -241,8 +253,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("refuses motebit-cloud (503, zero provider calls) when RELAY_PROXY_SECRET is unset at the proxy", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
     const token = await mintToken(mid);
     delete process.env.RELAY_PROXY_SECRET;
 
@@ -254,8 +266,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("refuses motebit-cloud when RELAY_API_URL is unset (no silent default)", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
     const token = await mintToken(mid);
     delete process.env.RELAY_API_URL;
 
@@ -266,8 +278,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("refuses motebit-cloud on a deployed environment with no spend store (no per-isolate fallback)", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
     const token = await mintToken(mid);
     setSpendStoreForTests(undefined);
     delete process.env.KV_REST_API_URL;
@@ -279,8 +291,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("a secret mismatch is a counted failure (proxy.debit_failed unauthorized/401), never a silent drop", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
     const token = await mintToken(mid);
     process.env.RELAY_PROXY_SECRET = "not-the-relay-secret";
 
@@ -295,8 +307,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("a debit above the spendable balance drains it (fee lands, shortfall reported) so the next token is refused", async () => {
+    await fund(0.001); // 1_000 micro — below one turn's cost
     const mid = await createIdentity();
-    fund(0.001); // 1_000 micro — below one turn's cost
     expect(EXPECTED_COST).toBeGreaterThan(1_000);
 
     const res = await turn(await mintToken(mid));
@@ -315,8 +327,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("a 200 stream carrying only a provider error event (no message_start) is not billed for the provider", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
     providerSse = [
       `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } })}\n\n`,
     ];
@@ -335,8 +347,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("an empty 200 body is not billed for the provider", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
     providerSse = [];
 
     const res = await turn(await mintToken(mid));
@@ -351,8 +363,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("a stream that started (message_start) and then lost usage is still billed the upper bound", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
     providerSse = [SSE[0]!, SSE[1]!];
 
     const res = await turn(await mintToken(mid));
@@ -366,8 +378,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("refuses a server tool (web_search) with 400 unsupported_feature before the provider is called", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
 
     const res = await turn(await mintToken(mid), {
       tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
@@ -382,8 +394,8 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
   });
 
   it("refuses an unknown top-level request feature (mcp_servers) before the provider is called", async () => {
+    await fund(5);
     const mid = await createIdentity();
-    fund(5);
 
     const res = await turn(await mintToken(mid), {
       mcp_servers: [{ type: "url", url: "https://mcp.example", name: "x" }],

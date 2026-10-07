@@ -72,6 +72,7 @@ env PORT=3199 \
     X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
     NODE_ENV=development \
     MOTEBIT_DB_PATH=":memory:" \
+    MOTEBIT_API_TOKEN=local-dev-token \
     npx tsx services/relay/src/server.ts
 
 # Terminal B — run the conformance test

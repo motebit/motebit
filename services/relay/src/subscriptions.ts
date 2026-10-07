@@ -18,7 +18,7 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import { canonicalJson, sign, toBase64Url } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
-import { grantFreeCreditIfEligible } from "./free-credit.js";
+import { grantFreeCreditIfEligible, type FreeCreditConfig } from "./free-credit.js";
 import { getClientIp } from "./middleware.js";
 import { DEPOSIT_MODELS, modelsForFunding } from "./proxy-token-models.js";
 import { EmergencyFrozenError } from "./errors.js";
@@ -351,6 +351,11 @@ export function registerProxyTokenRoutes(
   subscriptionEventAdapter: SubscriptionEventAdapter | null = null,
   /** Relay rule 6: a refused cancel/resubscribe is recorded (#846). */
   recordAuthEvent?: (event: AuthEvent) => void,
+  /**
+   * The free-credit knobs `createSyncRelay` parsed at boot. Omitted ⇒ each
+   * grant reads them from env (library callers of this function only).
+   */
+  freeCreditConfig?: FreeCreditConfig,
 ): void {
   // ── POST /api/v1/agents/:motebitId/proxy-token ────────────────────────
   // Issue a signed proxy token carrying the agent's current balance.
@@ -389,7 +394,12 @@ export function registerProxyTokenRoutes(
     // grant the emergency freeze refused is stated in the body (`free_credit`)
     // rather than silently minted as a zero balance; nothing was recorded, so
     // the next mint after unfreeze grants it.
-    const freeCredit = grantFreeCreditIfEligible(db, motebitId, getClientIp(c));
+    const freeCredit = grantFreeCreditIfEligible(
+      db,
+      motebitId,
+      getClientIp(c),
+      freeCreditConfig ? { config: freeCreditConfig } : undefined,
+    );
     const freeCreditDeferred = !freeCredit.granted && freeCredit.reason === "frozen";
 
     const account = getAccountBalance(db, motebitId);

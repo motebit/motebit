@@ -8,6 +8,7 @@ export {
   freshGrantSpendState,
   canonicalizeCounterparty,
   spendCeilingFromGrant,
+  InvalidSpendCeilingError,
   extractMoneyAction,
   InMemoryGrantSpendStore,
 } from "./grant-blast-radius.js";
