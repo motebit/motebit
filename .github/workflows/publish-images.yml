@@ -128,8 +128,11 @@ jobs:
           # (NODE_ENV=production, PORT=3000, MOTEBIT_DB_PATH=/data/motebit.db)
           # with NO security-boundary overrides — docker env is explicit, so
           # nothing ambient can leak in. Federation enabled so the #359
-          # cross-org boundary is reachable.
+          # cross-org boundary is reachable. The relay refuses to boot without
+          # a master token (#1077), so the probe gets a throwaway one per run;
+          # the probe itself only makes unauthenticated requests.
           docker run -d --name relay-under-probe \
+            -e MOTEBIT_API_TOKEN="probe-$(openssl rand -hex 16)" \
             -e X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
             -e MOTEBIT_FEDERATION_ENDPOINT_URL=https://relay-under-probe.example/federation \
             motebit-relay-probe:candidate
