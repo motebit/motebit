@@ -90,6 +90,35 @@ function stripDisplayTags(text: string, final = false): { clean: string; pending
   return { clean, pending: "" };
 }
 
+/**
+ * The live chat stream's display cursor: given the model text accumulated so
+ * far, return the next display delta. `next` treats the text as a stream
+ * prefix (a tag or cue still forming is held); `finish` takes the complete
+ * text and releases whatever was held.
+ */
+export class DisplayStream {
+  private yielded = 0;
+
+  next(accumulated: string): string {
+    // trimStart: tags before text leave orphaned newlines. trimEnd:
+    // trailing whitespace is held until text follows it, so a removal
+    // that folds it away can never retract what was already yielded.
+    return this.advance(stripDisplayTags(accumulated).clean.trim());
+  }
+
+  finish(accumulated: string): string {
+    // The stream is complete: release a trailing cue-shaped span that
+    // was held while it might still have been forming.
+    return this.advance(stripDisplayTags(accumulated, true).clean.trim());
+  }
+
+  private advance(clean: string): string {
+    const delta = clean.slice(this.yielded);
+    if (delta) this.yielded = clean.length;
+    return delta;
+  }
+}
+
 /** Dependencies injected by the runtime. */
 export interface StreamingDeps {
   /** Push partial state updates into the state vector. */
@@ -506,7 +535,7 @@ export class StreamingManager {
     const convo = this.deps.conversationFor(principal);
     let result: TurnResult | null = null;
     let accumulated = "";
-    let yieldedCleanLength = 0;
+    const display = new DisplayStream();
 
     // State tags are collected during streaming but applied once at the end.
     // The creature's only visible change while speaking is the processing glow
@@ -835,28 +864,16 @@ export class StreamingManager {
 
       // Strip state/memory/action tags from text before yielding to UI
       if (chunk.type === "text") {
-        // trimStart: tags before text leave orphaned newlines. trimEnd:
-        // trailing whitespace is held until text follows it, so a removal
-        // that folds it away can never retract what was already yielded.
-        const clean = stripDisplayTags(accumulated).clean.trim();
-        let delta = clean.slice(yieldedCleanLength);
+        const delta = display.next(accumulated);
         if (delta) {
           // Defense-in-depth: redact secrets from AI text at the streaming
           // boundary. Pattern-based redaction works on partial text fragments.
-          delta = this.deps.redactText(delta);
-          yieldedCleanLength = clean.length;
-          yield { type: "text" as const, text: delta };
+          yield { type: "text" as const, text: this.deps.redactText(delta) };
         }
       } else {
         if (chunk.type === "result") {
-          // The stream is complete: release a trailing cue-shaped span that
-          // was held while it might still have been forming.
-          const clean = stripDisplayTags(accumulated, true).clean.trim();
-          const delta = clean.slice(yieldedCleanLength);
-          if (delta) {
-            yieldedCleanLength = clean.length;
-            yield { type: "text" as const, text: this.deps.redactText(delta) };
-          }
+          const delta = display.finish(accumulated);
+          if (delta) yield { type: "text" as const, text: this.deps.redactText(delta) };
         }
         yield chunk;
       }
