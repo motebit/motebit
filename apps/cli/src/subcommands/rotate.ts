@@ -27,7 +27,7 @@ import {
   setAsidePendingRotation,
 } from "../pending-rotation.js";
 import { performRotation, RotationUnlockError, type RotationNote } from "../rotation.js";
-import { resolveRelayUrl } from "./_helpers.js";
+import { getRelayUrl } from "./_helpers.js";
 import { DEFAULT_SOLANA_RPC_URL } from "./wallet.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 
@@ -84,6 +84,10 @@ export async function handleRotate(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
+  // A rotation is announced to the relay (#702), so it needs one named;
+  // relay sync is opt-in and never defaulted (`../sync-opt-in.ts`).
+  const syncUrl = getRelayUrl(config);
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -98,7 +102,6 @@ export async function handleRotate(config: CliConfig): Promise<void> {
           encryptedKey: fullConfig.cli_encrypted_key,
         });
 
-  const syncUrl = resolveRelayUrl(config);
   console.log(`  Relay: ${syncUrl}`);
 
   // R21 option (a): capture this machine's roster status under the OLD

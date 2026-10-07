@@ -13,6 +13,7 @@ import type { TokenAudience } from "@motebit/sdk";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, type FullConfig } from "../config.js";
 import { loadActiveSigningKey } from "../identity.js";
+import { namedRelayUrl, PUBLIC_RELAY_URL, SYNC_OFF_MESSAGE } from "../sync-opt-in.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 
 /**
@@ -73,38 +74,35 @@ export async function fetchRelayJson(
 }
 
 /**
- * Resolve the relay base URL from CLI config, env, or persisted config.
- * Exits the process with a helpful error if no URL is configured.
- * Trailing slashes are trimmed.
+ * Resolve the relay base URL for a command whose whole purpose is the relay.
+ * Relay sync is opt-in (`sync-opt-in.ts`): when no relay is named (flag,
+ * env, config.json), exits with the one-line opt-in message — never picks
+ * the public relay silently. Trailing slashes are trimmed.
  */
 export function getRelayUrl(config: CliConfig): string {
-  const url = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? loadFullConfig().sync_url;
-  if (!url) {
-    console.error("Error: no relay URL. Use --sync-url or run `motebit register` first.");
+  const url = namedRelayUrl(config, loadFullConfig());
+  if (url == null) {
+    console.error(SYNC_OFF_MESSAGE);
     process.exit(1);
   }
-  return url.replace(/\/+$/, "");
+  return url;
 }
 
-/** The relay every surface falls back to when nothing names one. The ONE declaration; `runtime-factory.ts` and `index.ts` consume it. */
-export const DEFAULT_SYNC_URL = "https://relay.motebit.com";
+/**
+ * The public relay. Re-exported for the opt-ins that name it (`--sync`,
+ * `motebit sync enable`); never a fallback.
+ */
+export const DEFAULT_SYNC_URL = PUBLIC_RELAY_URL;
 
 /**
  * The relay this machine talks to, resolved the ONE way `motebit up` does:
- * flag, env, persisted config, then the default. `getRelayUrl` above exits
- * when nothing is configured, which is right for commands that only make
- * sense against a relay someone chose; a rotation is not one of them —
- * `motebit rotate` used to read only the persisted value, so an identity
- * registered against the DEFAULT relay was told "not configured" and rotated
- * locally into exactly the split state a rotation must never leave (#702).
+ * flag, env, persisted config — or undefined when relay sync is off (it is
+ * opt-in; there is no default). `motebit rotate` reads it too, so an
+ * identity registered against a relay named on the flag or env rotates
+ * there, not only against the persisted value (#702).
  */
-export function resolveRelayUrl(config: CliConfig, fullConfig?: FullConfig): string {
-  const url =
-    config.syncUrl ??
-    process.env["MOTEBIT_SYNC_URL"] ??
-    (fullConfig ?? loadFullConfig()).sync_url ??
-    DEFAULT_SYNC_URL;
-  return url.replace(/\/+$/, "");
+export function resolveRelayUrl(config: CliConfig, fullConfig?: FullConfig): string | undefined {
+  return namedRelayUrl(config, fullConfig ?? loadFullConfig());
 }
 
 /**

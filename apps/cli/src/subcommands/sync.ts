@@ -2,6 +2,8 @@
  * `motebit sync …` and `motebit status` — the operator's doors onto the
  * compaction floor (#962 round 6).
  *
+ *   motebit sync enable [url]                    opt in: persist the relay (default: the public relay)
+ *   motebit sync disable                         opt out: remove the persisted relay
  *   motebit sync status [--json]                 each relay stream behind the floor
  *   motebit sync retire <relay-url> [--force]    remove a stream from the floor
  *   motebit sync clear-intent [--force]          clear "this identity syncs"
@@ -39,19 +41,20 @@ import {
   type SyncFloorReport,
 } from "@motebit/sync-engine";
 import type { CliConfig } from "../args.js";
-import { loadFullConfig } from "../config.js";
+import { loadFullConfig, saveFullConfig, type FullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
+import { PUBLIC_RELAY_URL, normalizeRelayUrl } from "../sync-opt-in.js";
 import { requireMotebitId, resolveRelayUrl } from "./_helpers.js";
 
 const USAGE =
-  "Usage: motebit sync status [--json] | motebit sync retire <relay-url> [--force] [--yes] | motebit sync clear-intent [--force] [--yes]";
+  "Usage: motebit sync enable [url] | motebit sync disable | motebit sync status [--json] | motebit sync retire <relay-url> [--force] [--yes] | motebit sync clear-intent [--force] [--yes]";
 
 /** What a sync door acts on, and how it talks to the operator. */
 export interface SyncCommandContext {
   /** The database the doors act on (`motebit.db`). */
   dbPath: string;
   motebitId: string;
-  /** The relay this identity is configured for (flag > env > config.json > default). */
+  /** The relay this identity is configured for (flag > env > config.json), or undefined: sync is off. */
   configuredUrl: string | undefined;
   /** Act even where the door refuses (the configured relay; unacked events). */
   force: boolean;
@@ -394,9 +397,76 @@ function cliContext(config: CliConfig): SyncCommandContext {
   };
 }
 
+/** What `motebit sync enable | disable` read and write: `~/.motebit/config.json`. */
+export interface SyncOptInContext {
+  load: () => FullConfig;
+  save: (config: FullConfig) => void;
+  print: (line: string) => void;
+}
+
+/**
+ * `motebit sync enable [url]` — the persisted opt-in to relay sync
+ * (`sync-opt-in.ts`): writes `sync_url` to config.json. With no url, the
+ * public relay. Only http(s) URLs are accepted.
+ */
+export function syncEnable(urlArg: string | undefined, ctx: SyncOptInContext): number {
+  const url = normalizeRelayUrl(urlArg) ?? PUBLIC_RELAY_URL;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    ctx.print(`Error: not a URL: ${shown(url)}`);
+    return 2;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    ctx.print(`Error: relay URL must be http(s): ${shown(url)}`);
+    return 2;
+  }
+  const config = ctx.load();
+  config.sync_url = url;
+  ctx.save(config);
+  ctx.print(`Relay sync on: ${shown(url)}`);
+  return 0;
+}
+
+/**
+ * `motebit sync disable` — remove the persisted `sync_url`. A flag or
+ * `MOTEBIT_SYNC_URL` still names a relay for the process that passes it.
+ */
+export function syncDisable(ctx: SyncOptInContext): number {
+  const config = ctx.load();
+  if (config.sync_url == null) {
+    ctx.print("Relay sync is already off in config.json.");
+    return 0;
+  }
+  delete config.sync_url;
+  ctx.save(config);
+  ctx.print("Relay sync off.");
+  if (process.env["MOTEBIT_SYNC_URL"]) {
+    ctx.print("Note: MOTEBIT_SYNC_URL is set and still names a relay for this shell.");
+  }
+  return 0;
+}
+
 /** `motebit sync …` from the command line. */
 export async function handleSync(config: CliConfig): Promise<void> {
   const [, sub = "", ...rest] = config.positionals;
+  // enable/disable act on config.json only — no identity or database needed.
+  const optIn: SyncOptInContext = {
+    load: loadFullConfig,
+    save: (c) => {
+      saveFullConfig(c);
+    },
+    print: (l) => console.log(l),
+  };
+  if (sub === "enable") {
+    process.exitCode = syncEnable(rest[0], optIn);
+    return;
+  }
+  if (sub === "disable") {
+    process.exitCode = syncDisable(optIn);
+    return;
+  }
   process.exitCode = await runSyncCommand(sub, rest, cliContext(config));
 }
 

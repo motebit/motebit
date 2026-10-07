@@ -25,6 +25,7 @@ import { verifyTransparencyDeclaration } from "@motebit/state-export-client";
 import { loadFullConfig } from "../config.js";
 import { VERSION } from "../config.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
+import { normalizeRelayUrl, SYNC_OFF_MESSAGE } from "../sync-opt-in.js";
 
 interface WitnessRelease {
   version: string;
@@ -35,7 +36,12 @@ interface WitnessRelease {
 
 export async function handleVerifyRelease(options: { bundlePath?: string } = {}): Promise<void> {
   const fullConfig = loadFullConfig();
-  const relayUrl = (fullConfig.sync_url ?? "https://relay.motebit.com").replace(/\/+$/, "");
+  // Relay sync is opt-in: the witness lives on the relay the operator named.
+  const relayUrl = normalizeRelayUrl(fullConfig.sync_url);
+  if (relayUrl == null) {
+    console.error(SYNC_OFF_MESSAGE);
+    process.exit(1);
+  }
   const pinned = fullConfig.relay_public_key;
 
   // 1. Hash our own bytes — the running bundle.
