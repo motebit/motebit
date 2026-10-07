@@ -72,11 +72,6 @@
   "peerDependencies": {
     "@motebit/protocol": "workspace:^"
   },
-  "peerDependenciesMeta": {
-    "@motebit/protocol": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@motebit/protocol": "workspace:*",
     "@noble/curves": "^2.3.0",
