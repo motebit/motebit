@@ -1,5 +1,12 @@
 # @motebit/sdk Changelog
 
+## 2.10.1
+
+### Patch Changes
+
+- Updated dependencies [796deb8]
+  - @motebit/protocol@3.20.0
+
 ## 2.10.0
 
 ### Minor Changes

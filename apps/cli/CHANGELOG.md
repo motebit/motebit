@@ -1,5 +1,16 @@
 # motebit CLI Changelog
 
+## 2.1.1
+
+### Patch Changes
+
+- 796deb8: Scheduled goal runs obey the send tier. A goal written at a medical, financial or secret tier runs only on an on-device provider; on an external provider the run is refused with the reason, like a plan or paused approval produced at that tier. A run's prompt carries the saved summaries of earlier runs, the parent / sibling / sub-goal / project context, the memories recalled for its plan and the memory-maintenance check's fading memories only when the send tier permits the tier they were produced at. Run outcomes, sub-goals the model writes and the memory formed from a run's outcome are stamped with the tier of the run that produced them (previously the outcome memory was always `none`). `/goal add` stamps the goal at the session's tier. A legacy (unstamped) run summary is withheld below `secret`; a legacy sub-goal is held at `secret`; a legacy top-level goal is held at `personal`.
+- 796deb8: The `list_events` tool now returns only the events the current send tier permits. Previously it returned every event payload, including tool results, memory content and reflections recorded at a medical, financial or secret tier, to whichever provider the session was using. An unstamped event that can carry content is withheld.
+- 796deb8: Every memory, goal and goal-outcome write carries the tier its content was produced at. A plan reflection's learnings are stamped with the tier of the run that reflected (previously always `none`, so a learning from a secret run could be recalled into a later request on an external provider). Goals created by `motebit goal add`, `motebit up` routines and the daemon's memory-maintenance goal are stamped at `personal` (owner-authored text written outside a session); only goals that pre-date the stamp column keep the legacy rule. A memory a remote caller stores without declaring a tier is stamped at the session's tier instead of `none`. Two goal runs that overlap no longer lower each other's tier when one finishes first.
+
+  On desktop, a sub-goal the model creates during a run is now written in one step with its tier. Previously the sub-goal tool called `goals_create` with snake_case argument keys (`motebit_id`, `goal_id`, `interval_ms`) where the Tauri command expects camelCase, so every call was rejected and the tool returned an error without creating the goal; and a goal created before the runtime was up was left unstamped. A memory written from the desktop's first-run greeting, or stored by an attached surface or remote caller, carries the session's tier.
+  - @motebit/state-export-client@0.6.3
+
 ## 2.1.0
 
 ### Minor Changes
