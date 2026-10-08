@@ -16,7 +16,7 @@ MCP defines capability but not identity. A2A defines communication but has no tr
 
 ## Architecture
 
-pnpm monorepo, Turborepo, TypeScript. Node ≥ 22, pnpm 9.15. 53 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 6 supporting apps, 11 services, 37 open protocol specs.
+pnpm monorepo, Turborepo, TypeScript. Node ≥ 22, pnpm 9.15. 53 packages on a 7-layer DAG enforced by `pnpm check-deps` (52 workspace libraries + the standalone `github-action`). 5 surfaces + 6 supporting apps, 11 services, 37 open protocol specs. 74 workspace packages in total (52 libraries + 11 apps + 11 services): 12 publish to npm, the other 62 are workspace-private.
 
 Layout and per-package roles: [`README.md`](README.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (canonical; enforced by `check-docs-tree`).
 
