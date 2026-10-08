@@ -38,9 +38,10 @@ const FORMS: Record<string, string> = {
   cast:
     "export function p(r: unknown) {\n" +
     '  return (r as SimpleToolRegistry as unknown as { execute(n: string, a: object): unknown }).execute("t", {});\n}\n',
-  handler_map:
-    "export function p(r: SimpleToolRegistry) {\n" +
-    '  return r["tools"].get("t")?.handler({});\n}\n',
+  // The handler map is ECMAScript-private (`#tools`, unreachable by
+  // construction); the private-member form is planted on a TS-private one.
+  private_member:
+    "export function p(r: SimpleToolRegistry) {\n" + '  return r["receiptRouter"];\n}\n',
 };
 
 describe("check-money-authority assertion 5 (type-aware)", () => {
