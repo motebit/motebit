@@ -15,7 +15,8 @@ vector_sha256: 4918125741234d749e4ab23cb6ec98c12f6b86b951147eca984b04a76bb53d31
 
 ## APS → Motebit (APS verifies Motebit artifacts)
 
-- **Level:** L3. External consumer test in the counterparty's repository.
+- **Level:** L4. External consumer test in the counterparty's repository, run in their CI by
+  `npm run test:interop` (APS `main` CI run 37351561578, 2026-10-05, passed).
 - **Their test:** [`tests/interop/motebit-receipts.test.ts`](https://github.com/agent-passport-system/agent-passport-system/blob/a8bdf52571c7e72035c8bb3a58e56059376e867f/tests/interop/motebit-receipts.test.ts)
   at agent-passport-system `a8bdf52`.
 - **Pins:** Motebit fixtures at `fed97862`, with fixture hashes and expected verdicts
@@ -28,7 +29,7 @@ vector_sha256: 4918125741234d749e4ab23cb6ec98c12f6b86b951147eca984b04a76bb53d31
 
 ## Motebit → APS (Motebit verifies an APS artifact)
 
-- **Level:** L3 once this test is on `main`.
+- **Level:** L4. On `main` since #1045 (2026-10-04) and run in CI.
 - **Our test:** [`scripts/__tests__/interop-aps-vector.test.ts`](../../../scripts/__tests__/interop-aps-vector.test.ts),
   run in CI by `pnpm test:gates`. It imports no APS code: JCS, SHA-256 and Ed25519 come from
   `@motebit/crypto`.
@@ -56,4 +57,6 @@ vector_sha256: 4918125741234d749e4ab23cb6ec98c12f6b86b951147eca984b04a76bb53d31
 
 ## Status
 
-Bidirectional at the claim ceilings above once the Motebit → APS test is on `main`.
+Bidirectional at the claim ceilings above. Each direction is a second implementation (each side
+verifies the other's artifact with its own code), not an independent record: no third party has run
+either direction.
