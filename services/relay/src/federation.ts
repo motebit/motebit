@@ -1837,7 +1837,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 1: Identity ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.get("/federation/v1/identity", (c) => {
     return c.json({
       spec: RELAY_SPEC_VERSION,
@@ -2203,7 +2203,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // — witnesses are portable across compositions of the same body. The
   // issuer's eventual final cert.signature binds the assembled witness
   // array.
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/horizon/witness", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessSolicitationRequestSchema.safeParse(rawBody);
@@ -2282,7 +2282,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // Cert remains TERMINAL per retention-policy.md decision 5 — a
   // sustained dispute is a reputation hit on the issuer, not a cert
   // invalidation.
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/horizon/dispute", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessOmissionDisputeSchema.safeParse(rawBody);
@@ -2403,7 +2403,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
    * MUST switch on `error_code`, not `message`. The rest of §3–15
    * still uses plain `{message}`; aligning is a follow-up arc.
    */
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/disputes/:disputeId/vote-request", async (c) => {
     const disputeIdParam = c.req.param("disputeId");
 
@@ -2547,7 +2547,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json(signedVote);
   });
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/peer/remove", async (c) => {
     const body = await c.req.json<{ relay_id?: string; signature?: string }>();
     const { relay_id, signature: sig } = body;
@@ -2649,7 +2649,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.get("/federation/v1/peers", (c) => {
     const rows = db
       .prepare(
@@ -2675,7 +2675,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 3: Federated Discovery ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/discover", async (c) => {
     const body = await c.req.json<{
       query: { capability?: string; motebit_id?: string; limit?: number };
@@ -2827,7 +2827,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 4: Task Forwarding ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/task/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2919,7 +2919,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     );
   });
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/task/result", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2967,7 +2967,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/settlement/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -3016,7 +3016,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.get("/federation/v1/settlements", (c) => {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
     const rows = db
@@ -3027,7 +3027,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement Proof (§7.6.6) ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.get("/federation/v1/settlement/proof", async (c) => {
     const settlementId = c.req.query("settlement_id");
     if (!settlementId) {

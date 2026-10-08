@@ -52,6 +52,10 @@ async function boot(op: typeof A): Promise<{ relay: SyncRelay; close: () => void
       testnet: true,
     },
     platformFeeRate: 0.05,
+    // Both relays live on loopback — the local-development allowance of the
+    // outbound URL law (services/relay/CLAUDE.md rule 1); without it every
+    // peer endpoint_url is refused 400 before the handshake starts.
+    allowPrivateEndpoints: true,
     federation: {
       displayName: op.name,
       endpointUrl: url(op.port),
