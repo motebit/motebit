@@ -205,9 +205,14 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Architecture banner",
       },
       {
-        regex: /\(\[`packages\/`\]\(packages\/\)\) — (\d+) packages on a strict layer DAG/,
+        regex: /\(\[`packages\/`\]\(packages\/\)\) — (\d+) directories under `packages\/`/,
         key: "packages",
-        label: "Packages section",
+        label: "Packages section — directory count",
+      },
+      {
+        regex: /directories under `packages\/`: (\d+) workspace libraries on the 7-layer DAG/,
+        key: "workspaceLibraries",
+        label: "Packages section — workspace-library count",
       },
       {
         regex: /— (\d+) open specifications, each `motebit\/<name>@1\.0`/,
@@ -312,7 +317,16 @@ const DOCS: ReadonlyArray<DocFile> = [
   {
     path: "CLAUDE.md",
     probes: [
-      { regex: /(\d+) packages on a 7-layer DAG/, key: "packages", label: "Architecture line" },
+      {
+        regex: /(\d+) directories under `packages\/`: (?:\d+) workspace libraries/,
+        key: "packages",
+        label: "Architecture line — directory count",
+      },
+      {
+        regex: /directories under `packages\/`: (\d+) workspace libraries on the 7-layer DAG/,
+        key: "workspaceLibraries",
+        label: "Architecture line — workspace-library count",
+      },
       { regex: /(\d+) open protocol specs/, key: "specs", label: "Architecture line" },
       {
         regex: /(\d+) surfaces \+ (\d+) supporting apps, (?:\d+) services/,
@@ -334,6 +348,16 @@ const DOCS: ReadonlyArray<DocFile> = [
         regex: /\*\*(\d+) packages · 7 architectural layers/,
         key: "packages",
         label: "Shape banner",
+      },
+      {
+        regex: /The (\d+) directories under `packages\/` are (?:\d+) workspace libraries/,
+        key: "packages",
+        label: "Shape paragraph — directory count",
+      },
+      {
+        regex: /directories under `packages\/` are (\d+) workspace libraries on the 7-layer DAG/,
+        key: "workspaceLibraries",
+        label: "Shape paragraph — workspace-library count",
       },
       { regex: /(\d+) open specs\*\*/, key: "specs", label: "Shape banner" },
       {
@@ -459,7 +483,7 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Project structure — apps count",
       },
       {
-        regex: /packages\/\s+(\d+) packages on a 7-layer DAG/,
+        regex: /packages\/\s+(\d+) directories under `packages\/`/,
         key: "packages",
         label: "Project structure — packages count",
       },
@@ -498,7 +522,7 @@ const DOCS: ReadonlyArray<DocFile> = [
 // The sweep closes that class for the spec and package nouns. In every
 // SWEPT file, EVERY occurrence of
 //
-//     <integer> [up to two qualifier words] specs|specifications|packages|libraries
+//     <integer> [up to two qualifier words] specs|specifications|packages|libraries|directories
 //
 // is classified by its qualifiers into a canonical key and compared against
 // the filesystem. A claim the classifier cannot place is itself a failure
@@ -530,7 +554,7 @@ const EXEMPT: ReadonlyArray<{ file: string; needle: string; reason: string }> = 
 ];
 
 const SWEEP_CLAIM =
-  /(?<![\w.-])(\d+)((?:\s+[\w`.-]+){0,2}?)\s+(specs|specifications|packages|libraries)\b/g;
+  /(?<![\w.-])(\d+)((?:\s+[\w`.-]+){0,2}?)\s+(specs|specifications|packages|libraries|directories)\b/g;
 
 /** Map a swept claim to its canonical key, or null when no rule places it. */
 function classifyClaim(qualifiers: string[], noun: string, after: string): CountKey | null {
@@ -540,6 +564,9 @@ function classifyClaim(qualifiers: string[], noun: string, after: string): Count
     return only(["open", "protocol"]) ? "specs" : null;
   }
   if (noun === "libraries") return only(["workspace"]) ? "workspaceLibraries" : null;
+  if (noun === "directories") {
+    return q.length === 0 && /^\s+under `packages\/`/.test(after) ? "packages" : null;
+  }
   // noun === "packages"
   if (q.length === 0) {
     if (/^\s+publish\b/.test(after)) return "publishedTotal";
@@ -748,7 +775,7 @@ function main(): void {
 
   process.stderr.write(
     `  ✓ check-doc-counts: ${probesRun} probed count claim(s) across ${DOCS.length} doc surface(s), plus ` +
-      `${swept.claims} spec/package count claim(s) swept (every digit-form "<N> [≤2 qualifiers] specs|specifications|packages|libraries" ` +
+      `${swept.claims} spec/package count claim(s) swept (every digit-form "<N> [≤2 qualifiers] specs|specifications|packages|libraries|directories" ` +
       `in ${SWEPT.join(", ")}; ${swept.exempted} exempted; spelled-out numbers not examined) match the filesystem ` +
       `(${canonical.specs} specs; ${canonical.packages} dirs under packages/ = ${canonical.workspaceLibraries} workspace libraries + github-action; ` +
       `${canonical.workspacePackages} workspace packages = ${canonical.publishedTotal} published + ${canonical.privatePackages} private; ` +

@@ -10,7 +10,7 @@
  * table never sees the next sentence.
  *
  * This test enumerates the claims INDEPENDENTLY of the gate — a broad
- * `<digits> [≤2 qualifier words] specs|specifications|packages|libraries` sweep over
+ * `<digits> [≤2 qualifier words] specs|specifications|packages|libraries|directories` sweep over
  * README.md and CLAUDE.md — then, one location at a time, plants a wrong
  * number there and asserts the real gate goes RED naming that file. A new
  * count sentence added to either doc is picked up here automatically; if the
@@ -39,7 +39,7 @@ const SWEPT = ["README.md", "CLAUDE.md"] as const;
  * written separately from the gate's own scanner so the two can disagree.
  */
 const CLAIM =
-  /(?<![\w.~-])(\d+)(?=((?:\s+[\w`.-]+){0,2}?)\s+(?:specs|specifications|packages|libraries)\b)/g;
+  /(?<![\w.~-])(\d+)(?=((?:\s+[\w`.-]+){0,2}?)\s+(?:specs|specifications|packages|libraries|directories)\b)/g;
 
 interface Location {
   file: string;

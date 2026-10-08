@@ -6480,7 +6480,7 @@ Source: https://docs.motebit.com/docs/operator/architecture
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 22+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 37 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build. The 53 packages under `packages/` are 52 workspace libraries plus one (`github-action`) is a standalone GitHub Action; with the 11 apps and 11 services that makes 74 workspace packages in total — 12 publish to npm, the other 62 are workspace-private.
+The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 37 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build. The 53 directories under `packages/` are 52 workspace libraries on the 7-layer DAG (enforced by `pnpm check-deps`) plus the standalone `github-action` (no `package.json`, outside the DAG); with the 11 apps and 11 services that makes 74 workspace packages in total — 12 publish to npm, the other 62 are workspace-private.
 
 <DiagramFigure
   src="protocol-stack"
