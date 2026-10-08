@@ -66,6 +66,8 @@
  * - code outside packages/<pkg>/src and apps/<app>/src (tests, scripts,
  *   services/).
  */
+import { readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import ts from "typescript";
 
 const EGRESS_METHODS = new Set(["generate", "generateStream"]);
@@ -311,4 +313,45 @@ export function findProviderSites(files: readonly string[]): ProviderSite[] {
     visit(sf);
   }
   return sites;
+}
+
+function sourceFiles(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    if (name === "node_modules" || name === "dist" || name === "__tests__" || name.startsWith("."))
+      continue;
+    const p = join(dir, name);
+    const st = statSync(p);
+    if (st.isDirectory()) sourceFiles(p, out);
+    else if (/\.(ts|tsx)$/.test(name) && !/\.(test|spec|d)\.tsx?$/.test(name)) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Provider egress sites per file over every packages/<pkg>/src and
+ * apps/<app>/src non-test source file under `root`, keyed by `root`-relative
+ * path, plus the aperture: how many files were examined.
+ */
+export function scanProviderSites(root: string): {
+  counts: Record<string, number>;
+  scanned: number;
+} {
+  const files: string[] = [];
+  for (const top of ["packages", "apps"]) {
+    for (const pkg of readdirSync(join(root, top))) {
+      const src = join(root, top, pkg, "src");
+      try {
+        if (!statSync(src).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      sourceFiles(src, files);
+    }
+  }
+  const counts: Record<string, number> = {};
+  for (const site of findProviderSites(files)) {
+    const rel = relative(root, site.file);
+    counts[rel] = (counts[rel] ?? 0) + 1;
+  }
+  return { counts, scanned: files.length };
 }

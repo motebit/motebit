@@ -47,9 +47,10 @@
  * `egress-embed-canary.test.ts`.
  */
 import { describe, it, expect, vi } from "vitest";
-import { mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 
 // Deterministic, offline embeddings (no model load).
 vi.mock("@motebit/memory-graph", async () => {
@@ -90,7 +91,6 @@ import { InMemoryPlanStore as InMemoryPlanStoreImpl, PlanEngine } from "@motebit
 import { createSubGoalDefinition } from "@motebit/tools/web-safe";
 import type { GoalRunScope } from "../index";
 import { generateKeypair } from "@motebit/encryption";
-import { findProviderSites } from "./provider-egress-lock";
 
 const CANARY = {
   message: "CNRYMESSAGE01",
@@ -1070,24 +1070,18 @@ const COVERED_CALL_SITES: Record<string, { count: number; coveredBy: string }> =
 
 const ROOT = join(__dirname, "../../../..");
 
-function sourceFiles(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name === "dist" || name === "__tests__" || name.startsWith("."))
-      continue;
-    const p = join(dir, name);
-    const st = statSync(p);
-    if (st.isDirectory()) sourceFiles(p, out);
-    else if (/\.(ts|tsx)$/.test(name) && !/\.(test|spec|d)\.tsx?$/.test(name)) out.push(p);
-  }
-  return out;
-}
-
 /**
  * Provider egress sites per file (`provider-egress-lock.ts`: type-aware —
  * property access, element access, destructuring, any/unknown erasure and
  * narrowing of a provider-typed value, and erasure of a container that
  * carries one), over every packages/<pkg>/src and
  * apps/<app>/src non-test source file under `root`.
+ *
+ * The scan runs in a CHILD process (`provider-egress-lock-run.ts`), not this
+ * worker: under `test:coverage` v8 precise coverage instruments every
+ * function in this isolate — the TypeScript checker included — which made
+ * the same scan ~3.4x slower (27 s → 91 s locally, past 120 s in CI). The
+ * child runs the identical `scanProviderSites`, so the aperture is the same.
  */
 export function scanProviderCallSites(root: string): Record<string, number> {
   return scanProviderCallSitesWithAperture(root).counts;
@@ -1097,24 +1091,20 @@ function scanProviderCallSitesWithAperture(root: string): {
   counts: Record<string, number>;
   scanned: number;
 } {
-  const files: string[] = [];
-  for (const top of ["packages", "apps"]) {
-    for (const pkg of readdirSync(join(root, top))) {
-      const src = join(root, top, pkg, "src");
-      try {
-        if (!statSync(src).isDirectory()) continue;
-      } catch {
-        continue;
-      }
-      sourceFiles(src, files);
-    }
-  }
-  const counts: Record<string, number> = {};
-  for (const site of findProviderSites(files)) {
-    const rel = relative(root, site.file);
-    counts[rel] = (counts[rel] ?? 0) + 1;
-  }
-  return { counts, scanned: files.length };
+  const out = execFileSync(
+    process.execPath,
+    ["--import", "tsx", join(__dirname, "provider-egress-lock-run.ts"), root],
+    // `tsx` resolves from the repo root (a root devDependency).
+    { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: childEnv() },
+  );
+  return JSON.parse(out) as { counts: Record<string, number>; scanned: number };
+}
+
+/** The parent's env minus anything that would instrument the child for coverage. */
+function childEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.NODE_V8_COVERAGE;
+  return env;
 }
 
 describe("egress canary: static completeness lock", () => {
