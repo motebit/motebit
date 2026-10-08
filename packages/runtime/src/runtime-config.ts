@@ -308,6 +308,15 @@ export interface RuntimeConfig {
   /** Ed25519 signing keys for issuing verifiable credentials (gradient, trust). */
   signingKeys?: { privateKey: Uint8Array; publicKey: Uint8Array };
   /**
+   * This motebit's identity public key (Ed25519, hex) for a runtime built
+   * WITHOUT `signingKeys` (a surface that keeps the private key out of the
+   * runtime). A standing grant authorizes spending only when its delegator is
+   * this runtime's own identity — id AND key — so a runtime that knows
+   * neither key confers no grant authority (fail closed). Must equal
+   * `signingKeys.publicKey` when both are given.
+   */
+  identityPublicKeyHex?: string;
+  /**
    * The sovereign wallet rail, constructed by the caller and injected.
    *
    * The runtime consumes the `SovereignWalletRail` PORT (`@motebit/protocol`);

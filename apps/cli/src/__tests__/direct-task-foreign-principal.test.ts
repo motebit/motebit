@@ -43,7 +43,7 @@ const TRANSFER: ToolDefinition = {
   riskHint: { risk: RiskLevel.R4_MONEY },
 };
 
-async function setup() {
+async function setup(tool: ToolDefinition = TRANSFER) {
   const worker = await generateKeypair();
   const runtime = new MotebitRuntime(
     {
@@ -66,7 +66,7 @@ async function setup() {
       return { ok: true, data: "moved 5 USDC" };
     },
   );
-  runtime.getToolRegistry().register(TRANSFER, moved as never);
+  runtime.getToolRegistry().register(tool, moved as never);
   return { runtime, worker, moved, calls };
 }
 
@@ -175,7 +175,9 @@ describe("finding 1: serve --direct task submitter is a foreign principal", () =
   });
 
   it("a grant whose delegate IS the verified caller authorizes — and the call runs foreign", async () => {
-    const ctx = await setup();
+    // Late-binding: metered at its rail seam, so this case is purely about
+    // whose call it is (an early-binding tool is priced first — r4-gate test).
+    const ctx = await setup({ ...TRANSFER, moneyBinding: "late" });
     const b = await generateKeypair();
     const grantToB = await grantFrom(ctx.worker, "caller-b", b);
     const receipt = await runTask(ctx, grantToB, {

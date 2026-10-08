@@ -1,0 +1,5 @@
+---
+"@motebit/runtime": patch
+---
+
+An R4_MONEY tool's handler is now unreachable without a runtime capability. The runtime's tool registry refuses a money tool unless the call carries a single-use capability bound to that tool name and its exact arguments, minted by the runtime's ECMAScript-private minter only on a gate-decided path: `executeToolGated` (presenter-bound `verifyGrantForTurn`, the policy gate, and now the blast-radius meter for an early-binding tool), the AI loop (a call the gate allowed under a grant `verifyGrantForTurn` produced, then metered), and the approval resume (the exact call the gate paused). Calling `execute` directly, through an alias, wrapper, structural interface, `bind`/`call`/`apply`, callback or merged registry fails at runtime. `verifyGrantForTurn` takes a required `delegator` and refuses a grant not signed by the verifying runtime's identity (id and key); new `grantDelegatorIs`, and `RuntimeConfig.identityPublicKeyHex` for a runtime built without `signingKeys`.

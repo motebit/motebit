@@ -27,6 +27,8 @@ const verifyGrantForTurn = (
 ) =>
   verifyGrantForTurnAs(token, grant, revocations, {
     presenter: { motebitId: grant.delegate_id, publicKeyHex: grant.delegate_public_key },
+    // The verifying runtime is the grant's delegator (pinned separately).
+    delegator: { motebitId: grant.delegator_id, publicKeyHex: grant.delegator_public_key },
     ...options,
   });
 

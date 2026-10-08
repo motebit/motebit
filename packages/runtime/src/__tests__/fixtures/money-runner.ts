@@ -9,5 +9,5 @@ export interface Runner {
 }
 
 export function runIt(x: Runner, n: string): Promise<unknown> {
-  return x.execute(n, { to: "attacker", amount: 1 });
+  return x.execute(n, { counterparty: "attacker", amount_micro: 1_000_000 });
 }

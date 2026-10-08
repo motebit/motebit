@@ -42,7 +42,14 @@
  *      self-test plants every aliasing form and fails if one goes unseen.
  *      Aperture: all `.ts`/`.tsx` under packages/<pkg>/src, apps/<app>/src,
  *      services/<svc>/src in one program (tests excluded); see the assertion's
- *      own comment for what a type cannot show.
+ *      own comment for what a type cannot show. An early warning only: a
+ *      structural interface in another file routes around any reference scan.
+ *
+ *   6. **The R4 handler is unreachable without the runtime capability** —
+ *      the enforcement assertion 5 cannot be: the registry consumes a
+ *      single-use, name+args-bound capability minted only on gate-decided
+ *      runtime paths (`money-capability.ts`); the grant's delegator is pinned
+ *      to this runtime's identity.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -316,9 +323,13 @@ function fail(message: string): void {
 // services/*/src (tests, `.test`/`.spec`/`.probe` files and `.d.ts`
 // excluded), resolved in ONE program with workspace packages mapped to their
 // src. Not seen: values typed so that no registry type is ever in the chain
-// (e.g. a registry stored into a `Record<string, Function>` then called), and
-// object-destructuring ASSIGNMENT (`({ execute } = r)`); `execute` on an `any`
-// receiver is flagged precisely because its type is gone.
+// — a STRUCTURAL interface in another file (`interface Runner { execute(…) }`
+// called with the registry), a registry stored into a `Record<string,
+// Function>` — and object-destructuring ASSIGNMENT (`({ execute } = r)`).
+// Structural typing means a reference scan can always be routed around, so
+// this assertion is an EARLY WARNING, not the enforcement: an R4_MONEY tool's
+// handler is unreachable without the runtime money capability (assertion 6),
+// which fails such a call AT RUNTIME whatever its spelling.
 {
   interface Sanctioned {
     file: string;
@@ -439,8 +450,9 @@ function fail(message: string): void {
       "export function p(r: unknown) {\n" +
       '  return (r as SimpleToolRegistry as unknown as { execute(n: string, a: object): unknown }).execute("t", {});\n}\n',
     any_receiver: 'export function p(r: any) {\n  return r.execute("t", {});\n}\n',
-    handler_map:
-      'export function p(r: SimpleToolRegistry) {\n  return r["tools"].get("t")?.handler({});\n}\n',
+    // The handler map itself is ECMAScript-private (`#tools`) — unreachable by
+    // construction, so the private-member form is planted on a TS-private one.
+    private_member: 'export function p(r: SimpleToolRegistry) {\n  return r["receiptRouter"];\n}\n',
     concrete_class: 'export const p = (r: SimpleToolRegistry) => r.execute("t", {});\n',
   };
   const virtual = new Map<string, string>();
@@ -563,8 +575,89 @@ function fail(message: string): void {
       `packages/*/src, apps/*/src, services/*/src; tests excluded; ${unresolved} unloaded) — ` +
       `${refs} registry execute/private-member reference(s): ${internal} internal to a registry ` +
       `class, ${refs - internal} checked against ${SANCTIONED.length} sanctioned scopes; ` +
-      `self-test ${Object.keys(SELFTEST_FORMS).length - unseen.length}/${Object.keys(SELFTEST_FORMS).length} aliasing forms seen.`,
+      `self-test ${Object.keys(SELFTEST_FORMS).length - unseen.length}/${Object.keys(SELFTEST_FORMS).length} aliasing forms seen. ` +
+      `NOT seen by this scan: structural/cross-file wrappers (an interface with an execute method, ` +
+      `a Function-typed holder) — those are refused AT RUNTIME by the money capability (assertion 6), not here.`,
   );
+}
+
+// === 6. The R4 handler is unreachable without the runtime capability =====
+// A static scan cannot see every route to `execute` (structural typing; see
+// assertion 5's aperture). The enforcement is a RUNTIME object: the runtime's
+// registry refuses an R4_MONEY tool unless the call carries a single-use
+// capability bound to its name + exact args, minted only by the runtime's
+// ECMAScript-private minter, and only on the gate-decided paths below. This
+// locks that structure in place (packages/runtime/src/money-capability.ts):
+//   - the registry's handler map is `#tools` and `execute` consumes the
+//     capability before any handler runs; the guard installs once;
+//   - the runtime constructs the authority, installs its guard, and keeps the
+//     minter `#mintMoney` — called at exactly three sites: executeToolGated
+//     (after verify + gate + meter), the loop registry wrapper (a decision the
+//     loop's gate view recorded under a PRODUCED grant, metered), and the
+//     approval resume (the exact call the gate paused);
+//   - `verifyGrantForTurn` pins the delegator to this runtime's identity and
+//     registers each value it produces (the runtime twin of the type brand).
+// Aperture: these four files, by source marker; the behaviour is proven by
+// packages/runtime/src/__tests__/money-capability-{runtime,loop}.test.ts.
+{
+  const registry = readFile("packages/runtime/src/simple-tool-registry.ts") ?? "";
+  const runtime = readFile("packages/runtime/src/motebit-runtime.ts") ?? "";
+  const verifier = readFile("packages/runtime/src/grant-verifier.ts") ?? "";
+  const capability = readFile("packages/runtime/src/money-capability.ts") ?? "";
+  const checks: Array<[boolean, string]> = [
+    [
+      /readonly #tools = new Map/.test(registry) && !/private tools\b/.test(registry),
+      "SimpleToolRegistry's handler map must be ECMAScript-private (`readonly #tools`) — a TS `private` map is readable by bracket access, handing out the money handler",
+    ],
+    [
+      /guard\.isMoney\(entry\.definition\)[\s\S]{0,200}guard\.consume\([\s\S]{0,400}entry\.handler as CallAwareToolHandler/.test(
+        registry,
+      ),
+      "SimpleToolRegistry.execute must consume the money capability (guard.isMoney → guard.consume) BEFORE the handler runs",
+    ],
+    [
+      /if \(this\.#moneyGuard != null\) throw/.test(registry),
+      "SimpleToolRegistry.installMoneyGuard must refuse a second install (code holding the registry must not replace the runtime's guard)",
+    ],
+    [
+      /readonly #mintMoney:/.test(runtime) &&
+        /this\.toolRegistry\.installMoneyGuard\(money\.guard\)/.test(runtime),
+      "MotebitRuntime must build the money authority, install its guard on its registry, and keep the minter in the ECMAScript-private `#mintMoney`",
+    ],
+    [
+      (runtime.match(/this\.#mintMoney\(/g) ?? []).length === 3,
+      `MotebitRuntime must mint the money capability at exactly 3 gate-decided sites (executeToolGated, the loop wrapper, the approval resume) — found ${(runtime.match(/this\.#mintMoney\(/g) ?? []).length}`,
+    ],
+    [
+      /isProducedGrant\(ctx\.verifiedGrant\)/.test(runtime) &&
+        /if \(!isProducedGrant\(grant\)\)/.test(runtime),
+      "the loop's gate view and meter view must require a grant verifyGrantForTurn PRODUCED (isProducedGrant) — the VerifiedGrant brand is type-only and forgeable at runtime",
+    ],
+    [
+      /if \(!grantDelegatorIs\(grant, options\.delegator\)\) return null;/.test(verifier) &&
+        /produced\.add\(body\)/.test(verifier),
+      "verifyGrantForTurn must pin the grant's delegator to the verifying runtime (grantDelegatorIs) and register what it produces",
+    ],
+    [
+      /live\.delete\(cap\)/.test(capability),
+      "the money capability must be single-use (consume deletes it)",
+    ],
+  ];
+  for (const [ok, why] of checks) {
+    if (!ok) {
+      fail(
+        `${why}. An R4_MONEY handler reachable without the runtime capability runs money with no ` +
+          "verified grant (the structural-wrapper bypass). docs/doctrine/memory-never-confers-authority.md.",
+      );
+    }
+  }
+  if (checks.every(([ok]) => ok)) {
+    console.log(
+      "check-money-authority: runtime capability — 4 files checked (simple-tool-registry, " +
+        "motebit-runtime, grant-verifier, money-capability): #tools private, capability consumed " +
+        "before the handler, guard install-once, 3 mint sites, produced-grant + delegator pinning.",
+    );
+  }
 }
 
 if (failed) {
@@ -574,5 +667,6 @@ console.log(
   "✓ check-money-authority: R4 standing-authority block present + ordered after the trust switch; " +
     "delegate_to_agent declares explicit riskHint (R4 on payment rail); verifiedGrant has a single " +
     "audited producer; executeGrantedDelegation re-composes the R4 AND (fail-closed verify + scope + meter-wrapped builder); " +
-    "every tool-registry execute is a sanctioned gated site.",
+    "every tool-registry execute is a sanctioned gated site; an R4_MONEY handler is unreachable " +
+    "without the runtime money capability.",
 );

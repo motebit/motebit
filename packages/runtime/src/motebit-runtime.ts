@@ -223,7 +223,7 @@ import type {
   TaskType,
 } from "@motebit/ai-core";
 import { OWNER_ACT, TurnDelegationReceipts } from "./turn-delegation-receipts.js";
-import { TurnPrincipal, foreignLocalOnlyRefusal } from "./turn-principal.js";
+import { TurnPrincipal, foreignLocalOnlyRefusal, OWNER_CALL } from "./turn-principal.js";
 import type { ToolCall } from "./turn-principal.js";
 import type { TurnReceiptScope } from "./turn-delegation-receipts.js";
 import { connectMcpServers } from "@motebit/mcp-client";
@@ -259,7 +259,9 @@ import {
   PaidIntentLedger,
   type UnretrievedPayment,
 } from "./paid-intent-ledger.js";
-import { verifyGrantForTurn, grantDelegateIs } from "./grant-verifier.js";
+import { verifyGrantForTurn, grantDelegateIs, isProducedGrant } from "./grant-verifier.js";
+import { createMoneyCapabilityAuthority, MoneyDecisionLedger } from "./money-capability.js";
+import type { MoneyCapability } from "./money-capability.js";
 import type { GrantPresenterIdentity } from "./grant-verifier.js";
 import {
   SOVEREIGN_PAY_FORWARD_ENABLED,
@@ -650,6 +652,22 @@ export class MotebitRuntime {
   private readonly syncIntentWrite: Promise<void>;
   private running = false;
   private toolRegistry: SimpleToolRegistry;
+  /**
+   * Mints the single-use money capability the registry demands for an
+   * R4_MONEY tool. ECMAScript-private: no code outside this class can reach
+   * it (not by bracket access, not by subclassing), and every caller below
+   * mints only after a decision for THAT call. See `money-capability.ts`.
+   */
+  readonly #mintMoney: (name: string, args: Record<string, unknown>) => MoneyCapability;
+  /**
+   * This runtime's identity public key (hex), captured from the configured
+   * signing keys and dropped by `clearSigningKeys`. A grant verifies here only
+   * when its delegator IS this identity — id and key — so without it no grant
+   * confers authority (fail closed).
+   */
+  #identityPublicKeyHex: string | null = null;
+  /** The loop's gate decisions on money calls, keyed by exact call. */
+  readonly #moneyDecisions = new MoneyDecisionLedger();
   /** Presence-scoped view onto `toolRegistry`. Filters tool visibility +
    *  execution when presence ≠ responsive. The AI loop reads this; the
    *  underlying registry is mutated through `toolRegistry` directly. */
@@ -950,6 +968,18 @@ export class MotebitRuntime {
           publicKey: new Uint8Array(config.signingKeys.publicKey),
         }
       : null;
+    {
+      const fromKeys =
+        config.signingKeys != null ? cryptoBytesToHex(config.signingKeys.publicKey) : null;
+      const declared =
+        config.identityPublicKeyHex != null && config.identityPublicKeyHex !== ""
+          ? config.identityPublicKeyHex.toLowerCase()
+          : null;
+      if (fromKeys != null && declared != null && fromKeys.toLowerCase() !== declared) {
+        throw new Error("identityPublicKeyHex does not match signingKeys.publicKey");
+      }
+      this.#identityPublicKeyHex = fromKeys ?? declared;
+    }
     // Sovereign Solana wallet rail. The runtime owns at most one instance but
     // never CONSTRUCTS it — the interior consumes the injected `SovereignWalletRail`
     // port and stays free of any settlement-rail provider dependency (the adapter
@@ -977,6 +1007,14 @@ export class MotebitRuntime {
 
     // Tool registry: merge platform-provided tools if any
     this.toolRegistry = new SimpleToolRegistry();
+    // The money guard: the registry refuses an R4_MONEY tool (as the policy
+    // gate classifies it — the same classification step 8b/8c decides on)
+    // unless the call carries a capability `#mintMoney` minted for it.
+    const money = createMoneyCapabilityAuthority(
+      (def) => this.policy.classify(def).risk >= RiskLevel.R4_MONEY,
+    );
+    this.#mintMoney = (name, args) => money.mint(name, args);
+    this.toolRegistry.installMoneyGuard(money.guard);
     // #943: the one place a hire's carried receipt is recorded — for the
     // destination the caller named (a turn's key), default the owner.
     this.toolRegistry.setDelegationReceiptRouter((destination, receipt, trustCredited) =>
@@ -1453,6 +1491,11 @@ export class MotebitRuntime {
       // #943: the approval resume runs AS its turn — its direct execute
       // names that turn as the receipt destination.
       turnReceiptDestination: () => this._turnReceiptKey ?? undefined,
+      // The approved call's money capability: minted only for a call the
+      // policy gate itself paused (recorded by `policyForLoop`), once.
+      approvedCallCapability: (name, args) =>
+        this.#moneyDecisions.takePaused(name, args) ? this.#mintMoney(name, args) : undefined,
+      discardPausedMoneyCalls: () => this.#moneyDecisions.discardPaused(),
       loopDepsForTurn: (deps, principal) => this.loopDepsForTurn(deps, principal),
       sanitizeToolResult: (result, toolName) => {
         if (typeof this.policy.sanitizeAndCheck === "function") {
@@ -1672,6 +1715,7 @@ export class MotebitRuntime {
       this._signingKeysErased = true;
     }
     this._signingKeys = null;
+    this.#identityPublicKeyHex = null;
   }
 
   get isRunning(): boolean {
@@ -1749,7 +1793,7 @@ export class MotebitRuntime {
     const tools = this.toolsForTurn(deps.tools, principal);
     const turnTools = tools !== undefined ? { tools } : {};
     if (!foreignPrincipal) return { ...deps, foreignPrincipal, ...turnTools };
-    const policyGate = this.policy.withoutApprovalChannel();
+    const policyGate = this.policyForLoop(this.policy.withoutApprovalChannel());
     return { ...deps, foreignPrincipal, policyGate, ...turnTools };
   }
 
@@ -5054,12 +5098,13 @@ export class MotebitRuntime {
         // `getToolRegistry().register(...)` with no re-wire hook) → a toolless
         // AI loop. See toolless-loop-regression.test.ts.
         tools: this.wrapToolRegistryForSensitivity(this.scopedToolRegistry),
-        policyGate: this.policy,
+        policyGate: this.policyForLoop(this.policy),
         // R4 AND-composition: the loop invokes this before executing any
         // grant-cleared R4_MONEY tool. Fail-closed in the loop when
         // absent — wiring it here is what makes metered auto-money
-        // possible at all.
-        meterMoneyAction: this.moneyMeter,
+        // possible at all. The loop's view records the meter's allow so
+        // the registry wrapper may mint for exactly that call.
+        meterMoneyAction: this.meterForLoop(),
         memoryGovernor: this.memoryGovernor,
         consolidationProvider,
         // Memory-candidate sensitivity floor. The loop reads this at
@@ -5086,6 +5131,49 @@ export class MotebitRuntime {
   }
 
   /**
+   * The AI loop's view of a policy gate: every method is the gate's; only
+   * `validate` additionally RECORDS its decision on a money call, so the
+   * loop's registry wrapper can mint the money capability for exactly the
+   * call the gate decided — the loop itself (ai-core) never holds a minter.
+   *
+   *   - allowed, no approval, AND the turn's `verifiedGrant` is a value
+   *     `verifyGrantForTurn` produced (`isProducedGrant` — a runtime check, so
+   *     an object merely shaped like a grant records nothing) ⇒ `decided`
+   *     (a late-binding tool enters metered: its rail seam meters);
+   *   - allowed but paused for approval ⇒ `paused` (the approval resume
+   *     mints for it after a human approves).
+   */
+  private policyForLoop(gate: PolicyGate): PolicyGate {
+    const view = Object.create(gate) as PolicyGate;
+    const ledger = this.#moneyDecisions;
+    view.validate = (tool, args, ctx, opts) => {
+      const decision = gate.validate(tool, args, ctx, opts);
+      if (decision.allowed && gate.classify(tool).risk >= RiskLevel.R4_MONEY) {
+        if (decision.requiresApproval) {
+          ledger.recordPaused(tool.name, args);
+        } else if (isProducedGrant(ctx.verifiedGrant)) {
+          ledger.recordDecided(tool.name, args, tool.moneyBinding === "late");
+        }
+      }
+      return decision;
+    };
+    return view;
+  }
+
+  /**
+   * The loop's blast-radius meter: refuses a grant `verifyGrantForTurn` did
+   * not produce, and records the meter's allow for the exact call.
+   */
+  private meterForLoop(): MoneyMeter {
+    return async (grant, toolName, args) => {
+      if (!isProducedGrant(grant)) return { allowed: false, denial: "grant_unverified" };
+      const verdict = await this.moneyMeter(grant, toolName, args);
+      if (verdict.allowed) this.#moneyDecisions.recordMetered(toolName, args);
+      return verdict;
+    };
+  }
+
+  /**
    * Wrap a tool registry so `execute(name, args)` fail-closes on
    * outbound tools when session sensitivity is high and the provider
    * is not sovereign. Pure forwarding for every other method
@@ -5098,6 +5186,15 @@ export class MotebitRuntime {
     const assertGate = (name: string): void => this.assertSensitivityPermitsOutboundTool(name);
     const contentFree = (foreign: boolean, gate: () => void): void =>
       this.contentFreeIfForeign(foreign, gate);
+    const mintForDecided = (
+      tool: ToolDefinition,
+      name: string,
+      args: Record<string, unknown>,
+    ): MoneyCapability | undefined =>
+      this.policy.classify(tool).risk >= RiskLevel.R4_MONEY &&
+      this.#moneyDecisions.takeDecided(name, args)
+        ? this.#mintMoney(name, args)
+        : undefined;
     return {
       list: () => inner.list(),
       register: (tool, handler) => inner.register(tool, handler),
@@ -5111,12 +5208,19 @@ export class MotebitRuntime {
           // principal — an owner's concurrent call keeps the descriptive error.
           contentFree(call?.principal.foreign === true, () => assertGate(name));
         }
-        // #943: the call context is forwarded untouched.
+        // #943: the call context is forwarded — with the money capability
+        // for a money call the loop's gate allowed under a produced grant
+        // and the meter passed (never otherwise: no record, no capability).
+        const capability = tool != null ? mintForDecided(tool, name, args) : undefined;
         return (
           inner as {
             execute(n: string, a: Record<string, unknown>, c?: ToolCall): Promise<ToolResult>;
           }
-        ).execute(name, args, call);
+        ).execute(
+          name,
+          args,
+          capability != null ? { ...(call ?? OWNER_CALL), moneyCapability: capability } : call,
+        );
       },
     };
   }
@@ -6318,7 +6422,7 @@ export class MotebitRuntime {
             options.delegation.token,
             options.delegation.grant,
             options.delegation.revocations ?? [],
-            { presenter },
+            { presenter, delegator: this.selfGrantPresenter() },
           )
         : null;
     const turnCtx = this.policy.createTurnContext();
@@ -6353,7 +6457,13 @@ export class MotebitRuntime {
     // CALL ENTRY: the principal is decided here, once, from the transport's
     // `caller` option — never from args — and threaded on the call.
     const principal = TurnPrincipal.of(options.caller.principal === "foreign");
-    const call: ToolCall = { destination: OWNER_ACT, principal };
+    const money = this.policy.classify(toolDef).risk >= RiskLevel.R4_MONEY;
+    // A money call cleared the gate only under the grant verified above
+    // (step 8c); anything else is refused here, never executed unminted.
+    if (money && presentedGrant == null) {
+      return { ok: false, error: `Governance: tool "${name}" requires a verified standing grant.` };
+    }
+    let call: ToolCall = { destination: OWNER_ACT, principal };
     const startedAt = Date.now();
     let result: ToolResult;
     if (presentedGrant != null) {
@@ -6363,6 +6473,25 @@ export class MotebitRuntime {
       this._isProcessing = true;
       this._activeTurnGrant = presentedGrant;
       try {
+        if (money) {
+          // The R4 AND, exactly as the loop composes it: verified grant +
+          // gate (above) + the blast-radius meter for THIS call before it
+          // runs (a late-binding tool is metered at its rail seam instead,
+          // under `_activeTurnGrant`). Only then is the capability minted —
+          // bound to this name and these args, consumed by the registry.
+          if (toolDef.moneyBinding !== "late") {
+            const verdict = await this.moneyMeter(presentedGrant, name, args);
+            if (!verdict.allowed) {
+              const refused: ToolResult = {
+                ok: false,
+                error: `Money action denied by grant blast-radius meter: ${verdict.denial ?? "denied"}`,
+              };
+              this.policy.recordResult(turnCtx, decision, name, args, false, 0);
+              return refused;
+            }
+          }
+          call = { ...call, moneyCapability: this.#mintMoney(name, args) };
+        }
         result = await this.toolRegistry.execute(name, args, call);
       } catch (err) {
         result = { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -6402,6 +6531,7 @@ export class MotebitRuntime {
     if (presenter == null) return null;
     return verifyGrantForTurn(delegation.token, delegation.grant, delegation.revocations ?? [], {
       presenter,
+      delegator: this.selfGrantPresenter(),
     });
   }
 
@@ -6411,10 +6541,10 @@ export class MotebitRuntime {
    * verifies here only when it was issued TO this motebit.
    */
   private selfGrantPresenter(): GrantPresenterIdentity {
-    const keys = this._signingKeysErased ? null : this._signingKeys;
+    const publicKeyHex = this._signingKeysErased ? null : this.#identityPublicKeyHex;
     return {
       motebitId: this.motebitId,
-      ...(keys != null ? { publicKeyHex: cryptoBytesToHex(keys.publicKey) } : {}),
+      ...(publicKeyHex != null ? { publicKeyHex } : {}),
     };
   }
 
@@ -6493,7 +6623,7 @@ export class MotebitRuntime {
         params.delegation.token,
         params.delegation.grant,
         params.delegation.revocations ?? [],
-        { presenter: this.selfGrantPresenter() },
+        { presenter: this.selfGrantPresenter(), delegator: this.selfGrantPresenter() },
       );
       if (presentedGrant == null) return { ok: false, code: "requires_verified_grant" };
 

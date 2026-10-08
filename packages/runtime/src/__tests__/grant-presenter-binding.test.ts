@@ -64,6 +64,7 @@ describe("verifyGrantForTurn — presenter binding (finding 3)", () => {
     const { grant, token } = await grantTo(owner, "agent-a", a);
     const v = await verifyGrantForTurn(token, grant, [], {
       presenter: { motebitId: "agent-b", publicKeyHex: bytesToHex(b.publicKey) },
+      delegator: { motebitId: "owner-x", publicKeyHex: bytesToHex(owner.publicKey) },
     });
     expect(v).toBeNull();
   });
@@ -75,6 +76,7 @@ describe("verifyGrantForTurn — presenter binding (finding 3)", () => {
     const { grant, token } = await grantTo(owner, "agent-a", a);
     const v = await verifyGrantForTurn(token, grant, [], {
       presenter: { motebitId: "agent-a", publicKeyHex: bytesToHex(b.publicKey) },
+      delegator: { motebitId: "owner-x", publicKeyHex: bytesToHex(owner.publicKey) },
     });
     expect(v).toBeNull();
   });
@@ -85,8 +87,52 @@ describe("verifyGrantForTurn — presenter binding (finding 3)", () => {
     const { grant, token } = await grantTo(owner, "agent-a", a);
     const v = await verifyGrantForTurn(token, grant, [], {
       presenter: { motebitId: "agent-a", publicKeyHex: bytesToHex(a.publicKey).toUpperCase() },
+      delegator: { motebitId: "owner-x", publicKeyHex: bytesToHex(owner.publicKey) },
     });
     expect(v).not.toBeNull();
     expect(v?.grant_id).toBe(grant.grant_id);
+  });
+});
+
+describe("verifyGrantForTurn — delegator binding", () => {
+  it("a grant whose delegator is not the verifying runtime confers nothing", async () => {
+    const owner = await generateKeypair();
+    const a = await generateKeypair();
+    const { grant, token } = await grantTo(owner, "agent-a", a);
+    const presenter = { motebitId: "agent-a", publicKeyHex: bytesToHex(a.publicKey) };
+    const self = await generateKeypair();
+    // Another runtime's identity: the grant spends owner-x's money, not ours.
+    expect(
+      await verifyGrantForTurn(token, grant, [], {
+        presenter,
+        delegator: { motebitId: "self-y", publicKeyHex: bytesToHex(self.publicKey) },
+      }),
+    ).toBeNull();
+    // Our id, but signed under a key that is not ours.
+    expect(
+      await verifyGrantForTurn(token, grant, [], {
+        presenter,
+        delegator: { motebitId: "owner-x", publicKeyHex: bytesToHex(self.publicKey) },
+      }),
+    ).toBeNull();
+    // No key to check against: refused, never an id-only match.
+    expect(
+      await verifyGrantForTurn(token, grant, [], {
+        presenter,
+        delegator: { motebitId: "owner-x" },
+      }),
+    ).toBeNull();
+  });
+
+  it("the produced value is frozen, its ceiling a frozen copy", async () => {
+    const owner = await generateKeypair();
+    const a = await generateKeypair();
+    const { grant, token } = await grantTo(owner, "agent-a", a);
+    const v = await verifyGrantForTurn(token, grant, [], {
+      presenter: { motebitId: "agent-a", publicKeyHex: bytesToHex(a.publicKey) },
+      delegator: { motebitId: "owner-x", publicKeyHex: bytesToHex(owner.publicKey) },
+    });
+    expect(v).not.toBeNull();
+    expect(Object.isFrozen(v)).toBe(true);
   });
 });

@@ -44,6 +44,9 @@ const TRANSFER: ToolDefinition = {
     required: ["destination"],
   },
   riskHint: { risk: RiskLevel.R4_MONEY },
+  // Metered at its rail seam: every refusal below is the delegator binding's,
+  // never the blast-radius meter's (which would price an early-binding call).
+  moneyBinding: "late",
 };
 
 async function setup() {

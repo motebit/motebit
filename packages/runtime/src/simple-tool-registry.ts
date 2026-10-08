@@ -14,6 +14,7 @@ import { takeCarriedReceipt } from "./turn-delegation-receipts.js";
 import type { ReceiptDestination } from "./turn-delegation-receipts.js";
 import { OWNER_CALL } from "./turn-principal.js";
 import type { ToolCall } from "./turn-principal.js";
+import type { MoneyCapabilityGuard } from "./money-capability.js";
 
 /**
  * A handler registered in the runtime's registry receives the call's
@@ -26,7 +27,16 @@ export type CallAwareToolHandler = (
 ) => Promise<ToolResult>;
 
 export class SimpleToolRegistry implements ToolRegistry {
-  private tools = new Map<string, { definition: ToolDefinition; handler: ToolHandler }>();
+  // ECMAScript-private: the handlers are reachable only through `execute`,
+  // never by reading the map (`registry["tools"]` is undefined at runtime).
+  readonly #tools = new Map<string, { definition: ToolDefinition; handler: ToolHandler }>();
+  /**
+   * The money guard (installed once, by the runtime that owns this
+   * registry): an R4_MONEY tool runs only with a capability that guard's
+   * authority minted for THIS call. Without a guard the registry is a plain
+   * in-memory registry (tests, services' own fixed tools).
+   */
+  #moneyGuard: MoneyCapabilityGuard | null = null;
   /**
    * #943: where a hire's receipt goes. The ONE place a tool result's carried
    * `delegation_receipt` is taken off and recorded — for the destination the
@@ -46,9 +56,18 @@ export class SimpleToolRegistry implements ToolRegistry {
     this.receiptRouter = router;
   }
 
+  /**
+   * Install the money guard. Once only — a second install throws, so code
+   * holding the registry can neither remove nor replace the runtime's guard.
+   */
+  installMoneyGuard(guard: MoneyCapabilityGuard): void {
+    if (this.#moneyGuard != null) throw new Error("money guard already installed");
+    this.#moneyGuard = guard;
+  }
+
   register(tool: ToolDefinition, handler: ToolHandler): void {
-    if (this.tools.has(tool.name)) throw new Error(`Tool "${tool.name}" already registered`);
-    this.tools.set(tool.name, { definition: tool, handler });
+    if (this.#tools.has(tool.name)) throw new Error(`Tool "${tool.name}" already registered`);
+    this.#tools.set(tool.name, { definition: tool, handler });
   }
 
   /**
@@ -60,7 +79,7 @@ export class SimpleToolRegistry implements ToolRegistry {
    * (see file header).
    */
   list(): ToolDefinition[] {
-    const entries = [...this.tools.values()].map((t, i) => ({ def: t.definition, i }));
+    const entries = [...this.#tools.values()].map((t, i) => ({ def: t.definition, i }));
     entries.sort((a, b) => {
       const diff = toolModePriority(a.def.mode) - toolModePriority(b.def.mode);
       return diff !== 0 ? diff : a.i - b.i;
@@ -68,10 +87,10 @@ export class SimpleToolRegistry implements ToolRegistry {
     return entries.map(({ def }) => def);
   }
   has(name: string): boolean {
-    return this.tools.has(name);
+    return this.#tools.has(name);
   }
   get(name: string): ToolDefinition | undefined {
-    return this.tools.get(name)?.definition;
+    return this.#tools.get(name)?.definition;
   }
 
   /**
@@ -85,8 +104,23 @@ export class SimpleToolRegistry implements ToolRegistry {
     args: Record<string, unknown>,
     call: ToolCall = OWNER_CALL,
   ): Promise<ToolResult> {
-    const entry = this.tools.get(name);
+    const entry = this.#tools.get(name);
     if (!entry) return { ok: false, error: `Unknown tool: ${name}` };
+    // The runtime capability check: however this method was reached (alias,
+    // wrapper, structural interface, bind/call/apply, callback, a registry
+    // that merged this one), a money tool's handler runs only under a
+    // capability minted for exactly this call — consumed here, single use.
+    const guard = this.#moneyGuard;
+    if (
+      guard != null &&
+      guard.isMoney(entry.definition) &&
+      !guard.consume((call as Partial<ToolCall> | undefined)?.moneyCapability, name, args)
+    ) {
+      return {
+        ok: false,
+        error: `Governance: tool "${name}" moves money and runs only through the runtime's gated path (a verified standing grant or a human approval for this exact call).`,
+      };
+    }
     let result: ToolResult;
     try {
       result = await (entry.handler as CallAwareToolHandler)(args, call);
@@ -102,8 +136,8 @@ export class SimpleToolRegistry implements ToolRegistry {
 
   merge(other: ToolRegistry): void {
     for (const def of other.list()) {
-      if (!this.tools.has(def.name)) {
-        this.tools.set(def.name, {
+      if (!this.#tools.has(def.name)) {
+        this.#tools.set(def.name, {
           definition: def,
           handler: (args, call?: ToolCall) =>
             (
@@ -118,7 +152,7 @@ export class SimpleToolRegistry implements ToolRegistry {
 
   /** Replace the handler for an existing tool, or register if new. */
   replace(tool: ToolDefinition, handler: ToolHandler): void {
-    this.tools.set(tool.name, { definition: tool, handler });
+    this.#tools.set(tool.name, { definition: tool, handler });
   }
 
   /**
@@ -126,17 +160,17 @@ export class SimpleToolRegistry implements ToolRegistry {
    * owner-connected floor applied to an entry that got here first.
    */
   markLocalOnly(name: string): void {
-    const entry = this.tools.get(name);
+    const entry = this.#tools.get(name);
     if (entry != null && entry.definition.localOnly !== true) {
-      this.tools.set(name, { ...entry, definition: { ...entry.definition, localOnly: true } });
+      this.#tools.set(name, { ...entry, definition: { ...entry.definition, localOnly: true } });
     }
   }
 
   unregister(name: string): boolean {
-    return this.tools.delete(name);
+    return this.#tools.delete(name);
   }
 
   get size(): number {
-    return this.tools.size;
+    return this.#tools.size;
   }
 }

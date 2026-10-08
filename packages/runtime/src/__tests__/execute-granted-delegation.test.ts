@@ -81,6 +81,12 @@ function createAdapters(): PlatformAdapters {
   };
 }
 
+// The Clerk's identity. A standing grant verifies only when its delegator IS
+// the runtime spending under it (id + key): the shipped shape is the
+// molecule's self-grant (delegator == delegate == the Clerk), so every
+// runtime below carries these keys and every grant is self-issued.
+const CLERK = await generateKeypair();
+
 /** A signed grant authorizing `delegate_to_agent` with a given lifetime ceiling. */
 async function makeGrant(
   delegator: Kp,
@@ -90,7 +96,7 @@ async function makeGrant(
   return signStandingDelegation(
     {
       grant_id: "grant-clerk-1",
-      delegator_id: "did:motebit:operator",
+      delegator_id: "clerk-001",
       delegator_public_key: bytesToHex(delegator.publicKey),
       delegate_id: "clerk-001",
       delegate_public_key: bytesToHex(delegate.publicKey),
@@ -199,6 +205,7 @@ function clerkRuntime(wallet?: SovereignWalletRail, opts?: { ack?: boolean }) {
     {
       motebitId: "clerk-001",
       tickRateHz: 0,
+      signingKeys: CLERK,
       policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
       ...(wallet ? { solanaWallet: wallet } : {}),
     },
@@ -228,8 +235,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("dry-run happy path: verified in-scope grant under ceiling ⇒ metered, no broadcast", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const runtime = clerkRuntime();
@@ -249,7 +256,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("a valid grant issued to ANOTHER delegate ⇒ requires_verified_grant (presenter binding)", async () => {
-    const operator = await generateKeypair();
+    const operator = CLERK;
     const other = await generateKeypair();
     const { signature: _sig, suite: _suite, ...body } = await makeGrant(operator, other);
     const forOther = await signStandingDelegation(
@@ -275,8 +282,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     // Inc 2: a delegating molecule (the Researcher) pins its atom by motebit_id
     // instead of letting discovery pick by capability. The pin narrows discovery;
     // grant / scope / meter are unchanged.
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const runtime = clerkRuntime();
@@ -301,8 +308,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     // selector reads a ledger nothing fills. Verify-before-bump: only a receipt
     // that self-verifies against its embedded public_key earns credit, and the
     // competence lands in the capability's bucket (not just the aggregate).
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const worker = await generateKeypair();
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
@@ -389,8 +396,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     // Honesty gate: a receipt we cannot verify against its own key must not
     // fabricate a trust edge. fakeReceipt() has signature:"sig" and no
     // public_key ⇒ the bump is skipped, the ledger stays empty.
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const { wallet } = mockWallet(async (r) => ({
@@ -419,8 +426,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("a targetWorkerId discovery cannot match ⇒ fail-closed, no settlement", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const runtime = clerkRuntime();
@@ -449,8 +456,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     // is off (strength 0) and this is a DETERMINISTIC pure-exploit hire. The
     // low-stakes exploration path is covered separately below.
     const ALICE_ADDR = "AliceWorkerAddr2222222222222222222222222222";
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
 
@@ -482,6 +489,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       {
         motebitId: "clerk-001",
         tickRateHz: 0,
+        signingKeys: CLERK,
         policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
         solanaWallet: wallet,
       },
@@ -549,8 +557,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     // then checked: integrity (verifyRoutingTranscript) and faithfulness
     // (recomputeRoutingDecision) — the accept-on-proof loop closed end to end.
     const ALICE_ADDR = "AliceWorkerAddr2222222222222222222222222222";
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
 
@@ -677,8 +685,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     // the producer mint without keys, or made the happy-path assertion pass
     // vacuously, THIS test would fail — that is its whole job.
     const ALICE_ADDR = "AliceWorkerAddr2222222222222222222222222222";
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
 
@@ -712,10 +720,14 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
         tickRateHz: 0,
         policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
         solanaWallet: wallet,
-        // signingKeys DELIBERATELY OMITTED — this is the #357 dormancy condition.
+        // The identity keys are configured (a grant verifies only for the
+        // runtime that issued it), then the SIGNING half is withdrawn below —
+        // the #357 dormancy condition is the producer running without keys.
+        signingKeys: CLERK,
       },
       { ...createAdapters(), storage },
     );
+    (runtime as unknown as { _signingKeys: unknown })._signingKeys = null;
     runtime.enableInteractiveDelegation({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
@@ -782,8 +794,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     // exploration — the routing decision is surfaced with strength 1 over BOTH
     // candidates, seeded from the signed tick token.
     const ALICE_ADDR = "AliceWorkerAddr2222222222222222222222222222";
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const logger = { warn: vi.fn() };
@@ -816,6 +828,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       {
         motebitId: "clerk-001",
         tickRateHz: 0,
+        signingKeys: CLERK,
         policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
         solanaWallet: wallet,
         logger,
@@ -875,8 +888,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("null grant (revoked) ⇒ fail-closed, requires_verified_grant, no broadcast", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const revocation = await signDelegationRevocation(
@@ -904,8 +917,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("out-of-scope grant ⇒ missing_scope, no broadcast", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk, { scope: "pay_invoice" }); // NOT delegate_to_agent
     const token = await mintTick(grant, operator);
     const { wallet, buildP2pPayment } = mockWallet(async () => {
@@ -924,8 +937,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("dry-run over-ceiling ⇒ refuses with the BlastRadius code, live store untouched", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk, { lifetimeMicro: 1 }); // $0.000001
     const token = await mintTick(grant, operator);
     const runtime = clerkRuntime();
@@ -946,8 +959,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("dry-run does NOT consume the live ceiling: a same-amount live spend after still settles", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     // Ceiling admits exactly ONE $0.05-plus-fee spend, not two.
     const grant = await makeGrant(operator, clerk, { lifetimeMicro: 60_000 });
     const runtime = (() => {
@@ -985,8 +998,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("live over-ceiling ⇒ money_meter_denied surfaces the code, submit never reached", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk, { lifetimeMicro: 1 });
     const token = await mintTick(grant, operator);
     const { wallet, buildP2pPayment } = mockWallet(async (r) => ({
@@ -1016,8 +1029,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     // The human-absent #433 shape: payment settles onchain, result delivery
     // fails. Before this fix the granted path flattened it to a bare code —
     // byte-identical to never-hired — and nothing stopped an immediate re-pay.
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk, { lifetimeMicro: 10_000_000 });
     const { wallet, buildP2pPayment } = mockWallet(async (r) => ({
       tx_hash: "tx-settled",
@@ -1096,8 +1109,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   it("threads acknowledgeNoHistoryRisk ⇒ cold-start pair is eligible (happy path reachable)", async () => {
     // The eligibility mock allows ONLY when the ack query is present. This
     // dry-run succeeds ⇒ executeGrantedDelegation sent the ack (Finding #1).
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const result = await clerkRuntime(undefined, { ack: true }).executeGrantedDelegation({
@@ -1110,8 +1123,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("WITHOUT the ack ⇒ a no-history worker fail-closes p2p_ineligible (never silently pays)", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const result = await clerkRuntime(undefined, { ack: false }).executeGrantedDelegation({
@@ -1124,8 +1137,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("no relay coordinates ⇒ sync_not_enabled (fail-closed wiring)", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     // enableInteractiveDelegation NOT called → no coords stashed.
@@ -1141,8 +1154,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
   });
 
   it("serializes: a second granted spend while one is in flight throws", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const runtime = clerkRuntime();
 
@@ -1198,8 +1211,8 @@ describe("executeGrantedDelegation — lost send, own tx landed (#885)", () => {
   });
 
   it("confirms the hire's OWN signed transaction and proceeds with it", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const submitted: string[] = [];
@@ -1265,8 +1278,8 @@ describe("executeGrantedDelegation — failure carries the money facts (#885)", 
   });
 
   it("unconfirmed payment + an unwritten record reach the human-absent caller", async () => {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     globalThis.fetch = (async (input: string | URL | Request) => {
@@ -1302,6 +1315,7 @@ describe("executeGrantedDelegation — failure carries the money facts (#885)", 
       {
         motebitId: "clerk-001",
         tickRateHz: 0,
+        signingKeys: CLERK,
         policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
         solanaWallet: wallet,
       },
@@ -1373,8 +1387,8 @@ describe("executeGrantedDelegation — per-call ceiling maxTotalMicro, enforced 
 
   /** The resolved total outflow (worker + fees) of the mock listing, from a quote. */
   async function quotedTotal(): Promise<{ total: number; worker?: string }> {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const q = await clerkRuntime().executeGrantedDelegation({
@@ -1391,8 +1405,8 @@ describe("executeGrantedDelegation — per-call ceiling maxTotalMicro, enforced 
   }
 
   async function live(maxTotalMicro?: number) {
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const { wallet, buildP2pPayment } = payingWallet();
@@ -1451,8 +1465,8 @@ describe("executeGrantedDelegation — per-call ceiling maxTotalMicro, enforced 
 
   it("dry-run ABOVE the cap refuses with the same code (the quote obeys the pay's ceiling)", async () => {
     const { total } = await quotedTotal();
-    const operator = await generateKeypair();
-    const clerk = await generateKeypair();
+    const operator = CLERK;
+    const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
     const result = await clerkRuntime().executeGrantedDelegation({

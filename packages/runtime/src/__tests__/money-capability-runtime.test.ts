@@ -110,7 +110,9 @@ async function grant(
 }
 
 type Exec = (n: string, a: Record<string, unknown>) => Promise<{ ok: boolean }>;
-const ARGS = { to: "attacker", amount: 1 };
+// Meterable (the blast-radius meter prices `amount_micro` to `counterparty`),
+// so a refusal below is the capability's, never the meter's.
+const ARGS = { counterparty: "attacker", amount_micro: 1_000_000 };
 
 describe("R4_MONEY handler unreachable without the runtime capability", () => {
   const forms: Record<string, (r: SimpleToolRegistry) => Promise<unknown>> = {
@@ -243,5 +245,68 @@ describe("a grant's delegator must be this runtime's own identity", () => {
     });
     expect(result.ok).toBe(true);
     expect(moved).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a runtime that holds only its identity PUBLIC key (the CLI's shape)", () => {
+  function keyless(pubHex: string | undefined) {
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: ID,
+        tickRateHz: 0,
+        ...(pubHex != null ? { identityPublicKeyHex: pubHex } : {}),
+        policy: {
+          operatorMode: true,
+          maxRiskLevel: RiskLevel.R4_MONEY,
+          requireApprovalAbove: RiskLevel.R3_EXECUTE,
+          denyAbove: RiskLevel.R4_MONEY,
+        },
+      },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer() },
+    );
+    const moved = vi.fn(async () => ({ ok: true, data: "moved" }));
+    runtime.getToolRegistry().register(TRANSFER, moved as never);
+    return { runtime, moved };
+  }
+
+  it("its own self-grant verifies via identityPublicKeyHex", async () => {
+    const keys = await generateKeypair();
+    const { runtime, moved } = keyless(bytesToHex(keys.publicKey).toUpperCase());
+    const g = await grant(keys, ID, keys, ID);
+    const result = await runtime.executeToolGated("transfer_funds", ARGS, {
+      caller: { principal: "owner" },
+      delegation: { token: g.token, grant: g.grant, revocations: [] },
+    });
+    expect(result.ok).toBe(true);
+    expect(moved).toHaveBeenCalledTimes(1);
+  });
+
+  it("knowing no identity key, no grant confers authority (fail closed)", async () => {
+    const keys = await generateKeypair();
+    const { runtime, moved } = keyless(undefined);
+    const g = await grant(keys, ID, keys, ID);
+    const result = await runtime.executeToolGated("transfer_funds", ARGS, {
+      caller: { principal: "owner" },
+      delegation: { token: g.token, grant: g.grant, revocations: [] },
+    });
+    expect(result.ok).toBe(false);
+    expect(moved).not.toHaveBeenCalled();
+  });
+
+  it("a declared key that contradicts signingKeys is refused at construction", async () => {
+    const keys = await generateKeypair();
+    const other = await generateKeypair();
+    expect(
+      () =>
+        new MotebitRuntime(
+          {
+            motebitId: ID,
+            tickRateHz: 0,
+            signingKeys: keys,
+            identityPublicKeyHex: bytesToHex(other.publicKey),
+          },
+          { storage: createInMemoryStorage(), renderer: new NullRenderer() },
+        ),
+    ).toThrow(/identityPublicKeyHex/);
   });
 });

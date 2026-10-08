@@ -41,6 +41,12 @@ export class TurnPrincipal {
 export interface ToolCall {
   readonly destination: ReceiptDestination;
   readonly principal: TurnPrincipal;
+  /**
+   * The single-use money capability a gate-decided runtime path minted for
+   * THIS call (name + exact args). Required by the runtime's registry for an
+   * R4_MONEY tool; absent on every other call. See `money-capability.ts`.
+   */
+  readonly moneyCapability?: import("./money-capability.js").MoneyCapability;
 }
 
 /** Every caller that names no turn is an owner door. */

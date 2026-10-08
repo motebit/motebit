@@ -62,7 +62,8 @@ describe("finding 2: grant revoked after the session started", () => {
       first!.delegation.token,
       first!.delegation.grant,
       first!.delegation.revocations,
-      { presenter: presenterId } as never,
+      // The self-grant: this motebit is both delegator and presenter.
+      { presenter: presenterId, delegator: presenterId },
     );
     expect(before).not.toBeNull();
 
@@ -86,7 +87,8 @@ describe("finding 2: grant revoked after the session started", () => {
             second.delegation.token,
             second.delegation.grant,
             second.delegation.revocations,
-            { presenter: presenterId } as never,
+            // The self-grant: this motebit is both delegator and presenter.
+            { presenter: presenterId, delegator: presenterId },
           );
     expect(after).toBeNull();
   });

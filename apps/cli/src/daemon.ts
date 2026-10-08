@@ -219,6 +219,11 @@ export async function handleRun(config: CliConfig): Promise<void> {
         },
         memoryGovernance: governance.memoryGovernance,
         taskRouter: PLANNING_TASK_ROUTER,
+        // This motebit's identity key: a standing grant authorizes spending
+        // only when this identity signed it.
+        ...(fullConfig.device_public_key
+          ? { identityPublicKeyHex: fullConfig.device_public_key }
+          : {}),
       },
       relay,
     ),
@@ -1184,6 +1189,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
         },
         memoryGovernance: governance.memoryGovernance,
         taskRouter: PLANNING_TASK_ROUTER,
+        // This motebit's identity key: a standing grant (`serve --direct
+        // --grant`) authorizes spending only when this identity signed it.
+        ...(publicKeyHex != null && publicKeyHex !== ""
+          ? { identityPublicKeyHex: publicKeyHex }
+          : {}),
       },
       relay,
     ),

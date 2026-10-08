@@ -821,6 +821,12 @@ export async function createRuntime(
         // delegator's total bound on every restart). The CLI hosts the
         // canonical local runtime, so it always wires the durable store.
         grantSpendStore: moteDb.grantSpendStore,
+        // This motebit's identity key (the registered device key the active
+        // signing key is verified against): a standing grant (`motebit
+        // --grant`) authorizes spending only when this identity signed it.
+        ...(loadFullConfig().device_public_key
+          ? { identityPublicKeyHex: loadFullConfig().device_public_key }
+          : {}),
         // The sovereign Solana rail, constructed by the caller from the
         // decrypted identity seed. Its presence is what makes
         // delegate_to_agent a REAL money tool: R4 risk hint, late-bound

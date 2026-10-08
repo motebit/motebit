@@ -39,6 +39,12 @@ const TRANSFER: ToolDefinition = {
   },
   riskHint: { risk: RiskLevel.R4_MONEY },
 };
+/**
+ * The same tool declared `moneyBinding: "late"` — its spend is metered at its
+ * rail seam under the call's grant, so the gated path does not price its
+ * args. The binding tests below use it: they are about WHO may call.
+ */
+const TRANSFER_LATE: ToolDefinition = { ...TRANSFER, moneyBinding: "late" };
 
 const ECHO: ToolDefinition = {
   name: "echo",
@@ -48,11 +54,17 @@ const ECHO: ToolDefinition = {
   riskHint: { risk: RiskLevel.R0_READ },
 };
 
+// The worker's identity. A standing grant authorizes spending only when its
+// delegator IS the runtime it spends from — so every grant below is signed by
+// the worker (to the caller as delegate), and the runtime carries its keys.
+const WORKER = await generateKeypair();
+
 function runtimeServing(tool: ToolDefinition) {
   const runtime = new MotebitRuntime(
     {
       motebitId: "worker-m2",
       tickRateHz: 0,
+      signingKeys: WORKER,
       policy: {
         operatorMode: true,
         maxRiskLevel: RiskLevel.R4_MONEY,
@@ -74,13 +86,13 @@ async function grantFor(scope: string): Promise<{
   /** The grant's delegate as the transport-verified task caller. */
   caller: { motebitId: string; publicKeyHex: string };
 }> {
-  const delegator = await generateKeypair();
+  const delegator = WORKER;
   const delegate = await generateKeypair();
   const now = Date.now();
   const grant = await signStandingDelegation(
     {
       grant_id: `grant-m2-${crypto.randomUUID()}`,
-      delegator_id: "did:motebit:owner",
+      delegator_id: "worker-m2",
       delegator_public_key: bytesToHex(delegator.publicKey),
       delegate_id: "did:motebit:worker-m2",
       delegate_public_key: bytesToHex(delegate.publicKey),
@@ -153,7 +165,7 @@ describe("M2: serve --direct / relay task path — R4 needs a verified grant", (
   });
 
   it("with a valid in-scope grant whose delegate is the verified caller, the R4 tool proceeds", async () => {
-    const { runtime, moved } = runtimeServing(TRANSFER);
+    const { runtime, moved } = runtimeServing(TRANSFER_LATE);
     const { grant, token, caller } = await grantFor("transfer_funds");
     const receipt = await runTask(
       runtime,
@@ -162,6 +174,22 @@ describe("M2: serve --direct / relay task path — R4 needs a verified grant", (
     );
     expect(moved).toHaveBeenCalledTimes(1);
     expect(receipt.status).toBe("completed");
+  });
+
+  it("an early-binding R4 tool is metered first: an unpriceable call is refused under a valid grant", async () => {
+    // The R4 AND is verify ∧ gate ∧ METER, on this path as in the loop: the
+    // task maps only a destination, so the blast-radius meter cannot price
+    // the action against the grant's ceiling — and an unmetered spend never
+    // runs (the handler is not reached).
+    const { runtime, moved } = runtimeServing(TRANSFER);
+    const { grant, token, caller } = await grantFor("transfer_funds");
+    const receipt = await runTask(
+      runtime,
+      () => ({ delegation: { token, grant, revocations: [] } }),
+      caller,
+    );
+    expect(moved).not.toHaveBeenCalled();
+    expect(receipt.status).toBe("failed");
   });
 
   it("a grant whose signed scope does not cover the tool is refused", async () => {

@@ -52,6 +52,9 @@ import {
   isRelayMetadataUrl,
   relayMetadataResponse,
 } from "./helpers/signed-relay-metadata.js";
+// delegate_to_agent is R4_MONEY: the registry refuses it without the runtime's
+// money capability, so these handler tests drive the handler directly.
+import { runToolHandler } from "./helpers/money-tool-handler.js";
 
 const RELAY = "https://mock-relay.test";
 const ME = "alice-885";
@@ -918,7 +921,7 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
       acknowledgeNoHistoryRisk: true,
     });
     vi.useFakeTimers();
-    const pending = runtime.getToolRegistry().execute("delegate_to_agent", {
+    const pending = runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "research X",
       required_capabilities: ["web_search"],
     });
@@ -962,7 +965,7 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
       acknowledgeNoHistoryRisk: true,
     });
     vi.useFakeTimers();
-    const pending = runtime.getToolRegistry().execute("delegate_to_agent", {
+    const pending = runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "research X",
       required_capabilities: ["web_search"],
     });

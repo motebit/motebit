@@ -41,6 +41,9 @@ import {
   isRelayMetadataUrl,
   relayMetadataResponse,
 } from "./helpers/signed-relay-metadata.js";
+// delegate_to_agent is R4_MONEY: the registry refuses it without the runtime's
+// money capability, so these handler tests drive the handler directly.
+import { runToolHandler } from "./helpers/money-tool-handler.js";
 
 const RELAY = "https://mock-relay.test";
 const ME = "alice-001";
@@ -669,7 +672,7 @@ describe("paid, undelivered, restarted (#874 end to end)", () => {
     vi.useFakeTimers();
     const session1 = makeRuntime(store);
     session1.enableInteractiveDelegation(cfg);
-    const hire = session1.getToolRegistry().execute("delegate_to_agent", {
+    const hire = runToolHandler(session1.getToolRegistry(), "delegate_to_agent", {
       prompt: "research X",
       required_capabilities: ["web_search"],
     });
@@ -690,7 +693,7 @@ describe("paid, undelivered, restarted (#874 end to end)", () => {
     );
 
     // "Hire again" is refused BEFORE broadcast, across the session boundary.
-    const rehire = await session2.getToolRegistry().execute("delegate_to_agent", {
+    const rehire = await runToolHandler(session2.getToolRegistry(), "delegate_to_agent", {
       prompt: "research X",
       required_capabilities: ["web_search"],
     });
@@ -764,7 +767,7 @@ describe("paid, then killed mid-poll (#874 review: record at settle time)", () =
     });
     expect(next.outstandingPaidResults().map((e) => e.txHash)).toEqual(["XaMuKuMCtx"]);
     // …the re-hire is refused before broadcast…
-    const rehire = await next.getToolRegistry().execute("delegate_to_agent", {
+    const rehire = await runToolHandler(next.getToolRegistry(), "delegate_to_agent", {
       prompt: "research X",
       required_capabilities: ["web_search"],
     });
@@ -913,7 +916,7 @@ describe("one task, one body — undetermined and expired are their own outcomes
       acknowledgeNoHistoryRisk: true,
       timeoutMs: 10_000,
     });
-    const hire = runtime.getToolRegistry().execute("delegate_to_agent", {
+    const hire = runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "research X",
       required_capabilities: ["web_search"],
     });
