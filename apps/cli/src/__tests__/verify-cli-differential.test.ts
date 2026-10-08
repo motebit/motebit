@@ -18,7 +18,18 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..", "..");
 const MOTEBIT_VERIFY_WIRE = resolve(HERE, "helpers", "run-verify-wire.ts");
 const MOTEBIT_VERIFY_CLI = join(REPO, "packages", "verify", "src", "cli.ts");
-const NEGATIVE_DIR = join(REPO, "examples", "python-receipt-verifier", "fixtures", "negative");
+const FIXTURES = join(REPO, "examples", "python-receipt-verifier", "fixtures");
+
+/** `.json` vectors under `fixtures/<sub>/`, or none when the directory is absent. */
+function vectors(sub: string): string[] {
+  try {
+    return readdirSync(join(FIXTURES, sub))
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => join(FIXTURES, sub, f));
+  } catch {
+    return [];
+  }
+}
 
 function exitOf(script: string, args: readonly string[]): Promise<number | null> {
   return new Promise((resolveExit) => {
@@ -69,21 +80,27 @@ describe("motebit verify receipt ≡ motebit-verify (exit codes)", () => {
     }
   }, 600_000);
 
-  it("committed negative conformance fixtures: both CLIs exit 1, strict and --lenient", async () => {
-    const negatives = readdirSync(NEGATIVE_DIR).filter((f) => f.endsWith(".json"));
-    expect(negatives.length).toBeGreaterThan(0);
-    const runs = negatives.flatMap((n) =>
-      [[], ["--lenient"]].map(async (flag) => {
-        const f = join(NEGATIVE_DIR, n);
+  it("committed conformance vectors: negative/ exit 1 both modes; strict-negative/ exit 1 strict, 0 --lenient", async () => {
+    const cases = [
+      ...vectors("negative").map((f) => ({ f, strict: 1, lenient: 1 })),
+      ...vectors("strict-negative").map((f) => ({ f, strict: 1, lenient: 0 })),
+    ];
+    expect(cases.length).toBeGreaterThan(0);
+    const runs = cases.flatMap((c) =>
+      [false, true].map(async (lenient) => {
+        const flag = lenient ? ["--lenient"] : [];
         const [motebit, motebitVerify] = await Promise.all([
-          exitOf(MOTEBIT_VERIFY_WIRE, ["receipt", f, ...flag]),
-          exitOf(MOTEBIT_VERIFY_CLI, [...flag, f]),
+          exitOf(MOTEBIT_VERIFY_WIRE, ["receipt", c.f, ...flag]),
+          exitOf(MOTEBIT_VERIFY_CLI, [...flag, c.f]),
         ]);
-        return { n, flag, motebit, motebitVerify };
+        return {
+          got: { f: c.f, lenient, motebit, motebitVerify },
+          want: lenient ? c.lenient : c.strict,
+        };
       }),
     );
-    for (const r of await Promise.all(runs)) {
-      expect(r).toEqual({ ...r, motebit: 1, motebitVerify: 1 });
+    for (const { got, want } of await Promise.all(runs)) {
+      expect(got).toEqual({ ...got, motebit: want, motebitVerify: want });
     }
   }, 300_000);
 });

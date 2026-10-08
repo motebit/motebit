@@ -1,9 +1,10 @@
 /**
- * Regenerates the NEGATIVE conformance vectors under `negative/` — receipts
- * every implementation MUST reject (scripts/check-receipt-conformance.ts runs
- * them through @motebit/verifier, @motebit/crypto, @motebit/state-export-client
- * and the Python reference, strict and default). Never hand-edit the output:
- * re-run this script.
+ * Regenerates the STRICT-NEGATIVE conformance vectors under `strict-negative/`
+ * — receipts every strict (result_hash-binding) implementation MUST reject and
+ * every signature-only reference check MUST still accept
+ * (scripts/check-receipt-conformance.ts runs them through @motebit/verifier,
+ * @motebit/crypto, @motebit/state-export-client and the Python reference).
+ * Never hand-edit the output: re-run this script.
  *
  *   node mint-negative-fixtures.mjs   # after `pnpm build` of crypto
  *
@@ -13,11 +14,14 @@
  *
  * result-lone-surrogate.json — `result` holds an unpaired UTF-16 surrogate
  * (U+D800). UTF-8(result) is undefined for it (spec/execution-ledger-v1.md
- * §11.4), so the receipt is invalid however it was signed. It is signed over
- * the JCS bytes a JavaScript signer produces (the surrogate escaped as
- * `\ud800`) with result_hash = hex(SHA-256(UTF-8 with U+FFFD substituted)) —
- * exactly what a lenient JS verifier would accept — so a verifier that
- * substitutes instead of rejecting reads it VALID and fails the gate.
+ * §11.4), so strict verification rejects it. It is signed the way receipts
+ * were signed before the producers stopped emitting one — over the JCS bytes
+ * a JavaScript signer produces (the surrogate escaped as `\ud800`) with
+ * result_hash = hex(SHA-256(UTF-8 with U+FFFD substituted)) — so a strict
+ * verifier that substitutes instead of rejecting reads it VALID and fails the
+ * gate, and a signature-only check that stopped accepting legacy receipts
+ * fails it too. Today's `signExecutionReceipt` replaces the surrogate before
+ * signing, so this script reproduces the legacy signer's recipe explicitly.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -49,9 +53,16 @@ const body = {
   // Node's "utf8" encoding substitutes U+FFFD for the lone surrogate.
   result_hash: createHash("sha256").update(result, "utf8").digest("hex"),
 };
-const signed = await crypto.signExecutionReceipt(body, SEED, pub);
+// The pre-fix signer, verbatim: embed the key, stamp the suite, sign JCS bytes.
+const unsigned = { ...body, public_key: crypto.bytesToHex(pub), suite: SUITE };
+const sig = await crypto.signBySuite(
+  SUITE,
+  new TextEncoder().encode(crypto.canonicalJson(unsigned)),
+  SEED,
+);
+const signed = { ...unsigned, signature: crypto.toBase64Url(sig) };
 
-const outDir = join(HERE, "negative");
+const outDir = join(HERE, "strict-negative");
 mkdirSync(outDir, { recursive: true });
 const out = join(outDir, "result-lone-surrogate.json");
 // JSON.stringify escapes the lone surrogate as \ud800 — the file is valid JSON.

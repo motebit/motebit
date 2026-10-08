@@ -6,6 +6,13 @@
  */
 import { createHash } from "node:crypto";
 
+import {
+  EXECUTION_RECEIPT_SUITE,
+  bytesToHex,
+  canonicalJson,
+  ed25519Sign,
+  toBase64Url,
+} from "@motebit/crypto";
 import { generateKeypair, signExecutionReceipt } from "@motebit/encryption";
 
 export const sha256Hex = (s: string): string =>
@@ -36,6 +43,36 @@ export async function mint(
     kp.privateKey,
     kp.publicKey,
   )) as unknown as Record<string, unknown>;
+}
+
+/**
+ * A receipt signed the way every producer signed before `signExecutionReceipt`
+ * stopped emitting unpaired surrogates: no sanitising, the surrogate signed in
+ * its JCS-escaped form. The signature verifies; only strict binding rejects.
+ */
+export async function mintLegacy(
+  taskId: string,
+  result: string,
+  resultHash: string,
+): Promise<Record<string, unknown>> {
+  const kp = await generateKeypair();
+  const body = {
+    task_id: taskId,
+    motebit_id: "019cd9d4-3275-7b24-8265-61ebee41d9d0",
+    device_id: "019cd9d4-3275-7b24-8265-61ebee41d9d1",
+    submitted_at: 1_713_456_000_000,
+    completed_at: 1_713_456_001_000,
+    status: "completed",
+    result,
+    tools_used: [],
+    memories_formed: 0,
+    prompt_hash: "a".repeat(64),
+    result_hash: resultHash,
+    public_key: bytesToHex(kp.publicKey),
+    suite: EXECUTION_RECEIPT_SUITE,
+  };
+  const sig = await ed25519Sign(new TextEncoder().encode(canonicalJson(body)), kp.privateKey);
+  return { ...body, signature: toBase64Url(sig) };
 }
 
 export type KeyDefect = "missing" | "malformed-short" | "malformed-nonhex";
@@ -114,19 +151,42 @@ export async function adversarialCorpus(): Promise<CorpusEntry[]> {
     lenientOk: false,
   });
   // Lone UTF-16 surrogate: UTF-8(result) is undefined (spec/execution-ledger-v1.md
-  // §11.4), so the receipt is rejected in BOTH modes — no U+FFFD substitution.
+  // §11.4). A legacy-signed one (main's signer) is rejected strict and still
+  // verifies signature-only — the relay and runtime accept it, so --lenient does.
   out.push({
     name: "result-lone-surrogate",
-    receipt: await mint("task-outer", "ok \ud800", sha256Hex("ok �")),
+    receipt: await mintLegacy("task-outer", "ok \ud800", sha256Hex("ok \ufffd")),
     strictOk: false,
-    lenientOk: false,
+    lenientOk: true,
   });
-  const nestedSurrogate = await mint("task-depth-1", "\udc00", sha256Hex("�"));
+  const nestedSurrogate = await mintLegacy("task-depth-1", "\udc00", sha256Hex("\ufffd"));
   out.push({
     name: "child-lone-surrogate-depth1",
     receipt: await mint("task-outer", "o", sha256Hex("o"), [nestedSurrogate]),
     strictOk: false,
-    lenientOk: false,
+    lenientOk: true,
   });
+  // Today's signer replaces the surrogate with U+FFFD before signing: valid.
+  out.push({
+    name: "signer-repaired-lone-surrogate",
+    receipt: await mint("task-outer", "cut \ud83d", sha256Hex("cut \ufffd")),
+    strictOk: true,
+    lenientOk: true,
+  });
+  // Malformed delegation entries: no receipt, no verdict — INVALID (exit 1) in
+  // both CLIs and both modes, never a crash (exit 2).
+  for (const [label, bad] of [
+    ["null", null],
+    ["string", "x"],
+    ["number", 7],
+    ["array", []],
+  ] as const) {
+    out.push({
+      name: `child-${label}`,
+      receipt: await mint("task-outer", "o", sha256Hex("o"), [bad]),
+      strictOk: false,
+      lenientOk: false,
+    });
+  }
   return out;
 }
