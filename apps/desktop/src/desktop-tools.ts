@@ -23,7 +23,6 @@
 
 import { SimpleToolRegistry, TurnPrincipal } from "@motebit/runtime";
 import type { MotebitRuntime } from "@motebit/runtime";
-import type { EventType } from "@motebit/sdk";
 import {
   registerBrowserSafeBuiltins,
   BraveSearchProvider,
@@ -85,18 +84,9 @@ export function registerDesktopTools(
     // turn's registry ever runs it (#943).
     memorySearchFn: (query, opts) =>
       runtime.recallMemoriesForTool(query, opts, TurnPrincipal.OWNER),
-    eventQueryFn: async (limit, eventType) => {
-      const events = await runtime.events.query({
-        motebit_id: runtime.motebitId,
-        limit,
-        event_types: eventType != null && eventType !== "" ? [eventType as EventType] : undefined,
-      });
-      return events.map((e) => ({
-        event_type: e.event_type,
-        timestamp: e.timestamp,
-        payload: e.payload,
-      }));
-    },
+    // Event reads route through queryEventsForTool — the interior-egress
+    // rule at the tool send tier (check-sensitivity-routing).
+    eventQueryFn: (limit, eventType) => runtime.queryEventsForTool(limit, eventType),
     reflectFn: () => runtime.reflect(),
     rewriteMemoryDeps: {
       resolveNodeId: (shortIdOrUuid) => runtime.memory.resolveNodeIdPrefix(shortIdOrUuid),

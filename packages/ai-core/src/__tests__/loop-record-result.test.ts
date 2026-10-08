@@ -1,3 +1,4 @@
+import { SensitivityLevel } from "@motebit/sdk";
 /**
  * The loop closes the gate's audit row after execution — the completion
  * half of the durable execution ledger. `validate` opened the row (intent)
@@ -72,6 +73,7 @@ function deps(provider: StreamingProvider, tools: ToolRegistry, gate: unknown) {
     provider,
     tools,
     policyGate: gate,
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 }
 

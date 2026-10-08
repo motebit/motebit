@@ -97,7 +97,7 @@ import {
   completeGoalDefinition,
   reportProgressDefinition,
 } from "@motebit/tools/web-safe";
-import type { EventFilter, EventStoreAdapter } from "@motebit/event-log";
+import type { EventStoreAdapter } from "@motebit/event-log";
 import {
   generate as generateIdentityFile,
   importIdentityFile as importIdentityFileFromContent,
@@ -614,25 +614,6 @@ export interface MobileBootstrapResult {
 
 // Goal event types (GoalCompleteEvent, GoalApprovalEvent) live in ./goal-scheduler
 // and are re-exported from the top of this file. formatTimeAgo is also in the scheduler.
-
-/** Parse interval strings like "1h", "30m", "1d", "1w" to milliseconds. */
-function parseInterval(s: string): number {
-  const match = s.match(/^(\d+)\s*(m|h|d|w)$/i);
-  if (!match) return 3_600_000;
-  const n = parseInt(match[1]!, 10);
-  switch (match[2]!.toLowerCase()) {
-    case "m":
-      return n * 60_000;
-    case "h":
-      return n * 3_600_000;
-    case "d":
-      return n * 86_400_000;
-    case "w":
-      return n * 604_800_000;
-    default:
-      return 3_600_000;
-  }
-}
 
 // === MobileApp ===
 
@@ -1204,18 +1185,9 @@ export class MobileApp {
       // turn's registry ever runs it (#943).
       memorySearchFn: (query, opts) =>
         runtime.recallMemoriesForTool(query, opts, TurnPrincipal.OWNER),
-      eventQueryFn: async (limit, eventType) => {
-        const filter: EventFilter = { motebit_id: runtime.motebitId, limit };
-        if (eventType != null && eventType !== "") {
-          filter.event_types = [eventType as EventType];
-        }
-        const events = await runtime.events.query(filter);
-        return events.map((e) => ({
-          event_type: e.event_type,
-          timestamp: e.timestamp,
-          payload: e.payload,
-        }));
-      },
+      // Event reads route through queryEventsForTool — the interior-egress
+      // rule at the tool send tier (check-sensitivity-routing).
+      eventQueryFn: (limit, eventType) => runtime.queryEventsForTool(limit, eventType),
       reflectFn: () => runtime.reflect(),
       rewriteMemoryDeps: {
         resolveNodeId: (shortIdOrUuid) => runtime.memory.resolveNodeIdPrefix(shortIdOrUuid),
@@ -1229,22 +1201,10 @@ export class MobileApp {
     // Read currentGoalId through the scheduler so the tool handlers stay
     // in sync with the active goal even though the state lives there now.
     const goalStore = this.storage?.goalStore;
-    registry.register(createSubGoalDefinition, (args: Record<string, unknown>) => {
-      const currentGoalId = this.goals.currentGoalId;
-      if (currentGoalId == null || currentGoalId === "" || goalStore == null) {
-        return Promise.resolve({ ok: false, error: "No active goal context" });
-      }
-      const prompt = args.prompt as string;
-      const interval = args.interval as string | undefined;
-      const once = args.once as boolean | undefined;
-      const intervalMs = interval != null && interval !== "" ? parseInterval(interval) : 3_600_000;
-      const mode = once === true ? "once" : "recurring";
-      const subGoalId = goalStore.addGoal(this.motebitId, prompt, intervalMs, mode);
-      return Promise.resolve({
-        ok: true,
-        data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs },
-      });
-    });
+    // The scheduler stamps the sub-goal at the run's tier (runtime goal-run.ts).
+    registry.register(createSubGoalDefinition, (args: Record<string, unknown>) =>
+      this.goals.createSubGoal(args),
+    );
 
     registry.register(completeGoalDefinition, (args: Record<string, unknown>) => {
       const currentGoalId = this.goals.currentGoalId;

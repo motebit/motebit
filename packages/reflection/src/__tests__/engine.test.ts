@@ -87,6 +87,7 @@ function makeDeps(opts: {
   responseText: string;
   history?: ConversationMessage[];
   summary?: string | null;
+  tier?: SensitivityLevel;
 }): {
   deps: ReflectionDeps;
   /**
@@ -113,6 +114,7 @@ function makeDeps(opts: {
     getTaskRouter: () => null,
     getConversationSummary: () => opts.summary ?? null,
     getConversationHistory: () => opts.history ?? [],
+    getEffectiveSensitivity: () => opts.tier ?? SensitivityLevel.None,
   };
   return { deps, provider, eventStore, memory, state };
 }
@@ -312,6 +314,7 @@ Fine.`;
       timestamp: Date.now() - 60_000,
       event_type: EventType.ReflectionCompleted,
       payload: {
+        sensitivity: SensitivityLevel.None,
         insights: ["Prior insight about user preferences"],
         plan_adjustments: ["Prior adjustment"],
         self_assessment: "Earlier assessment",
@@ -420,6 +423,7 @@ Test.`;
         timestamp: Date.now() - (i + 1) * 60_000,
         event_type: EventType.ReflectionCompleted,
         payload: {
+          sensitivity: SensitivityLevel.None,
           insights: [seedInsight],
           plan_adjustments: [],
           self_assessment: "",
@@ -479,6 +483,7 @@ Test.`;
       timestamp: Date.now() - 60_000,
       event_type: EventType.ReflectionCompleted,
       payload: {
+        sensitivity: SensitivityLevel.None,
         insights: ["one insight"],
         // No plan_adjustments, no self_assessment
       },
@@ -516,6 +521,7 @@ Test.`;
       timestamp: Date.now() - 60_000,
       event_type: EventType.ReflectionCompleted,
       payload: {
+        sensitivity: SensitivityLevel.None,
         plan_adjustments: ["adjust something"],
         // No `insights` field, no `self_assessment` → exercise the ?? "" fallback
       },
@@ -662,5 +668,111 @@ Surfaced a recurring binding question.`;
       (e) => e.source_id === insightId && e.relation_type === RelationType.DerivedFrom,
     );
     expect(provenanceEdges).toHaveLength(0);
+  });
+
+  describe("interior-egress rule at the reflection's send tier", () => {
+    const MED = "MEDSECRET7";
+
+    async function seedMedical(memory: MemoryGraph) {
+      await memory.formMemory(
+        {
+          content: `diagnosis is ${MED}`,
+          confidence: 0.95,
+          sensitivity: SensitivityLevel.Medical,
+          source: "user_stated",
+        },
+        new Array<number>(8).fill(0.1),
+      );
+    }
+
+    function sentPrompt(provider: SensitivityCleared<StreamingProvider>): string {
+      const call = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as ContextPack;
+      return call.user_message;
+    }
+
+    it("withholds a Medical memory from [Relevant Memories] and [Memory Audit] at a context-safe tier", async () => {
+      const { deps, provider, memory } = makeDeps({
+        responseText: CANONICAL_REFLECTION,
+        tier: SensitivityLevel.Personal,
+      });
+      await seedMedical(memory);
+      await performReflection(deps, provider);
+      expect(sentPrompt(provider)).not.toContain(MED);
+    });
+
+    it("drops edges into a withheld memory and keeps edges between permitted ones", async () => {
+      const { deps, provider, memory } = makeDeps({
+        responseText: CANONICAL_REFLECTION,
+        tier: SensitivityLevel.Personal,
+      });
+      const embedding = new Array<number>(8).fill(0.1);
+      const form = (content: string, sensitivity: SensitivityLevel) =>
+        memory.formMemory(
+          { content, confidence: 0.6, sensitivity, source: "user_stated" },
+          embedding,
+        );
+      const med = await form(`diagnosis is ${MED}`, SensitivityLevel.Medical);
+      const a = await form("likes hiking", SensitivityLevel.None);
+      const b = await form("hikes on weekends", SensitivityLevel.None);
+      await memory.link(a.node_id, med.node_id, RelationType.Related);
+      await memory.link(a.node_id, b.node_id, RelationType.Related);
+      const exportAll = vi.spyOn(memory, "exportAll");
+      await performReflection(deps, provider);
+      expect(exportAll).toHaveBeenCalled();
+      expect(sentPrompt(provider)).not.toContain(MED);
+      expect(sentPrompt(provider)).toContain("likes hiking");
+    });
+
+    it("carries it at Medical tier (on-device)", async () => {
+      const { deps, provider, memory } = makeDeps({
+        responseText: CANONICAL_REFLECTION,
+        tier: SensitivityLevel.Medical,
+      });
+      await seedMedical(memory);
+      await performReflection(deps, provider);
+      expect(sentPrompt(provider)).toContain(MED);
+    });
+
+    it("withholds an unstamped or above-tier past reflection", async () => {
+      const { deps, provider, eventStore } = makeDeps({ responseText: CANONICAL_REFLECTION });
+      for (const [insight, sensitivity] of [
+        ["unstamped insight", undefined],
+        ["secret insight", SensitivityLevel.Secret],
+        ["plain insight", SensitivityLevel.None],
+      ] as const) {
+        await eventStore.appendWithClock({
+          event_id: crypto.randomUUID(),
+          motebit_id: MOTEBIT_ID,
+          timestamp: Date.now() - 60_000,
+          event_type: EventType.ReflectionCompleted,
+          payload: { insights: [insight], ...(sensitivity ? { sensitivity } : {}) },
+          tombstoned: false,
+        });
+      }
+      await performReflection(deps, provider);
+      const prompt = sentPrompt(provider);
+      expect(prompt).toContain("plain insight");
+      expect(prompt).not.toContain("unstamped insight");
+      expect(prompt).not.toContain("secret insight");
+    });
+
+    it("stamps the recorded reflection and its persisted insights with the send tier", async () => {
+      const { deps, provider, eventStore, memory } = makeDeps({
+        responseText: CANONICAL_REFLECTION,
+        tier: SensitivityLevel.Personal,
+      });
+      await performReflection(deps, provider);
+      await new Promise((r) => setTimeout(r, 50));
+      const recorded = await eventStore.query({
+        motebit_id: MOTEBIT_ID,
+        event_types: [EventType.ReflectionCompleted],
+      });
+      expect(recorded[0]!.payload.sensitivity).toBe(SensitivityLevel.Personal);
+      const insights = (await memory.exportAll()).nodes.filter(
+        (n) => n.source === "agent_inferred",
+      );
+      expect(insights.length).toBeGreaterThan(0);
+      for (const n of insights) expect(n.sensitivity).toBe(SensitivityLevel.Personal);
+    });
   });
 });

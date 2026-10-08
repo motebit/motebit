@@ -1,5 +1,11 @@
 import type { MemoryNode, MemoryEdge, AttributedMemoryCandidate, RelationType } from "@motebit/sdk";
-import { EventType, MemoryType, RelationType as RT, rankSensitivity } from "@motebit/sdk";
+import {
+  EventType,
+  MemoryType,
+  RelationType as RT,
+  isSensitivityLevel,
+  rankSensitivity,
+} from "@motebit/sdk";
 import type { SensitivityLevel } from "@motebit/sdk";
 import { ConsolidationAction } from "./consolidation.js";
 import type { ConsolidationProvider, ConsolidationDecision } from "./consolidation.js";
@@ -13,6 +19,7 @@ import { embedText } from "./embeddings.js";
 export {
   embedText,
   embedTextHash,
+  remoteEmbedPermits,
   EMBEDDING_DIMENSIONS,
   resetPipeline,
   setRemoteEmbedUrl,
@@ -615,6 +622,21 @@ export class InMemoryMemoryStorage implements MemoryStorageAdapter {
 
 // === Memory Graph Manager ===
 
+/**
+ * Formation takes the tier the content was produced at by type
+ * (`MemoryCandidate.sensitivity`); this refuses a candidate whose stamp was
+ * erased by a cast or arrived malformed. A memory stored without a real
+ * tier would be recalled into every later request whatever it derived
+ * from — there is no default to fall back to.
+ */
+export function assertFormationTier(candidate: { sensitivity?: unknown }): void {
+  if (!isSensitivityLevel(candidate.sensitivity)) {
+    throw new Error(
+      `Cannot form memory without a sensitivity stamp (got ${String(candidate.sensitivity)})`,
+    );
+  }
+}
+
 export class MemoryGraph {
   private scoringConfig: ScoringConfig;
   private _retrievalScores: number[] = [];
@@ -633,7 +655,7 @@ export class MemoryGraph {
      * ONNX model, which otherwise makes `supersedeMemoryByNodeId` a
      * contention-flaky unit test (a 30s+ model load under a starved CI runner).
      */
-    private embed: (text: string) => Promise<number[]> = embedText,
+    private embed: (text: string, sensitivity?: SensitivityLevel) => Promise<number[]> = embedText,
   ) {
     this.scoringConfig = { ...DEFAULT_SCORING_CONFIG, ...scoringConfig };
   }
@@ -743,6 +765,7 @@ export class MemoryGraph {
     ) {
       throw new Error("Cannot form memory from redacted content");
     }
+    assertFormationTier(candidate);
 
     const nodeId = crypto.randomUUID();
     // Accept an injected stamp so a supersede can make the new node's `valid_from`
@@ -846,6 +869,7 @@ export class MemoryGraph {
       sensitivityCeiling?: SensitivityLevel;
     },
   ): Promise<{ node: MemoryNode | null; decision: ConsolidationDecision }> {
+    assertFormationTier(candidate);
     // Retrieve top-5 similar existing memories
     let similar = await this.recallRelevant(embedding, { limit: 5 });
     if (options?.sensitivityCeiling !== undefined) {
@@ -1367,7 +1391,7 @@ export class MemoryGraph {
     // sensitivity can only keep it at or above the old floor). Provenance
     // does NOT inherit: see the doc comment. Uses the injected embedder
     // (defaults to the model-backed `embedText`).
-    const embedding = await this.embed(newContent);
+    const embedding = await this.embed(newContent, oldNode.sensitivity);
 
     // Stamp once, BEFORE forming the new node, so the new node's `valid_from`
     // equals the old node's `valid_until` exactly — intervals abut with no

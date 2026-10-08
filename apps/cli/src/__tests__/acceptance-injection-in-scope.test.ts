@@ -1,9 +1,15 @@
+import { SensitivityLevel } from "@motebit/sdk";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GoalScheduler } from "../scheduler.js";
-import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
+import {
+  createMotebitDatabase,
+  type MotebitDatabase,
+  type StampedGoal,
+} from "@motebit/persistence";
 import { RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 /**
  * The adversarial case this arc has always named and never run.
@@ -112,12 +118,14 @@ function mockRuntime() {
     consolidationCycle: vi.fn(async () => ({})),
     presence: { canStartCycle: () => false },
     policy: { createTurnContext: vi.fn() },
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
   return { runtime, executed };
 }
 
-function goal(): Goal {
+function goal(): StampedGoal {
   return {
+    sensitivity: SensitivityLevel.Personal,
     goal_id: "goal-mail",
     motebit_id: "mote-test",
     prompt: "read my mail and summarise it",

@@ -46,7 +46,7 @@ import {
   AgentTrustLevel,
   SensitivityLevel,
   rankSensitivity,
-  CONTEXT_SAFE_SENSITIVITY,
+  maxSensitivity,
   RiskLevel,
   modelCapabilityTier,
 } from "@motebit/sdk";
@@ -94,13 +94,21 @@ export class SovereignTierRequiredError extends Error {
     readonly sessionSensitivity: SensitivityLevel,
     readonly providerMode: ProviderMode | "unset",
     effectiveSensitivity?: SensitivityLevel,
+    /**
+     * The elevation came from the content being sent — a paused approval
+     * or a plan produced at a higher tier (`raiseContentFloor`) — not
+     * from a slab item.
+     */
+    elevatedByContent = false,
   ) {
     const effective = effectiveSensitivity ?? sessionSensitivity;
     const elevatedBySlab = effective !== sessionSensitivity;
     super(
-      elevatedBySlab
-        ? `Effective sensitivity "${effective}" (elevated from session "${sessionSensitivity}" by a tier-bounded-by-source slab item) requires sovereign (on-device) provider; current provider is "${providerMode}". Dismiss the offending slab item or switch to an on-device provider to continue.`
-        : `Session sensitivity "${sessionSensitivity}" requires sovereign (on-device) provider; current provider is "${providerMode}". Switch to an on-device provider or de-escalate session sensitivity to continue.`,
+      elevatedBySlab && elevatedByContent
+        ? `Effective sensitivity "${effective}" (elevated from session "${sessionSensitivity}" by the content being sent — a paused approval or plan produced at that tier) requires sovereign (on-device) provider; current provider is "${providerMode}". Switch to an on-device provider to continue.`
+        : elevatedBySlab
+          ? `Effective sensitivity "${effective}" (elevated from session "${sessionSensitivity}" by a tier-bounded-by-source slab item) requires sovereign (on-device) provider; current provider is "${providerMode}". Dismiss the offending slab item or switch to an on-device provider to continue.`
+          : `Session sensitivity "${sessionSensitivity}" requires sovereign (on-device) provider; current provider is "${providerMode}". Switch to an on-device provider or de-escalate session sensitivity to continue.`,
     );
     this.name = "SovereignTierRequiredError";
     this.effectiveSensitivity = effective;
@@ -213,6 +221,9 @@ import {
   STAGE_TIMEOUTS_MS,
   StageTimeoutError,
   projectProviderClearance,
+  derivedSensitivity,
+  interiorEgressSensitivities,
+  interiorEventsPermittedAt,
 } from "@motebit/ai-core";
 import type {
   StreamingProvider,
@@ -294,6 +305,8 @@ import { readLatestHardwareAttestationClaim } from "./hardware-attestation-proje
 import { readLatencyStats } from "./latency-stats-projection.js";
 import { scoreAttestation, rankWorkersWithBasis } from "@motebit/semiring";
 import { PlanExecutionManager } from "./plan-execution.js";
+import { createGoalRun } from "./goal-run.js";
+import type { GoalRunScope, GoalRunGoal } from "./goal-run.js";
 import { createGoalsEmitter, type GoalsEmitter, type GoalLifecycleStatus } from "./goals.js";
 import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
 import { createIdleTickController, type IdleTickController } from "./idle-tick.js";
@@ -443,6 +456,13 @@ export interface ToolRecallResult {
   content: string;
   confidence: number;
   supersededAt?: number;
+}
+
+/** One event as the `list_events` tool consumes it ({@link MotebitRuntime.queryEventsForTool}). */
+export interface ToolEventResult {
+  event_type: string;
+  timestamp: number;
+  payload: Record<string, unknown>;
 }
 
 /**
@@ -1232,6 +1252,8 @@ export class MotebitRuntime {
       logger: this._logger,
       assertSensitivityPermitsAiCall: (entry, toolName) =>
         this.assertSensitivityPermitsAiCall(entry, toolName),
+      getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
+      raiseContentFloor: (tier) => this.raiseContentFloor(tier),
       getLocalCapabilities: () => this._localCapabilities,
       getTaskRouter: () => this.taskRouter,
       // #885: lazy — interactiveDelegation is constructed just below.
@@ -1469,6 +1491,8 @@ export class MotebitRuntime {
       },
       assertSensitivityPermitsAiCall: (entry, toolName) =>
         this.assertSensitivityPermitsAiCall(entry, toolName),
+      getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
+      raiseContentFloor: (tier) => this.raiseContentFloor(tier),
       getLatestCues: () => this.latestCues,
       getApprovalStore: () => this.approvalStore,
       recordApprovalSatisfied: (p) =>
@@ -2338,6 +2362,44 @@ export class MotebitRuntime {
     yield* this.planExecution.executePlan(goalId, goalPrompt, runId, privateKey);
   }
 
+  /**
+   * Enter a scheduled goal run (`goal-run.ts`): raises the run's content
+   * floor to the goal's stamp — a goal written at Secret runs only
+   * on-device; an external provider refuses with
+   * `SovereignTierRequiredError` — and returns the run, through which the
+   * scheduler admits every earlier outcome and related goal into the
+   * prompt. The caller MUST `end()` it (finally).
+   */
+  beginGoalRun(goal: GoalRunGoal, opts: { inherit?: SensitivityLevel } = {}): GoalRunScope {
+    return createGoalRun({
+      goal,
+      ...(opts.inherit != null ? { inherit: opts.inherit } : {}),
+      effective: () => this.getEffectiveSessionSensitivity(),
+      raise: (tier) => this.raiseContentFloor(tier),
+      assert: () => {
+        if (this.loopDeps) this.assertSensitivityPermitsAiCall("executePlanStep");
+      },
+    });
+  }
+
+  /**
+   * The stamp for goal text written now — a goal the owner creates, or a
+   * sub-goal the model writes outside a run (`goal-run.ts`).
+   */
+  goalCreationSensitivity(): SensitivityLevel {
+    return this.interiorWriteSensitivity();
+  }
+
+  /**
+   * The stamp for interior content written NOW outside a goal run — a
+   * memory a surface or a remote caller stores directly, a goal the owner
+   * creates: the effective tier (session × slab × content floor) at the
+   * context-safe ceiling. Writers pass it; there is no default to `none`.
+   */
+  interiorWriteSensitivity(): SensitivityLevel {
+    return derivedSensitivity(this.getEffectiveSessionSensitivity());
+  }
+
   /** Return the execution manifest produced by the last `executePlan()` call. */
   getLastExecutionManifest(): GoalExecutionManifest | null {
     return this.planExecution.getLastExecutionManifest();
@@ -2351,10 +2413,16 @@ export class MotebitRuntime {
   /** Recover delegated steps that were orphaned (e.g. tab closed during delegation). */
   async *recoverDelegatedSteps(): AsyncGenerator<PlanChunk> {
     if (!this.loopDeps) return;
-    // Recovery IS a bytes-leave moment — gate fires before passing
-    // branded deps into the plan-execution manager.
-    const clearedLoopDeps = this.assertSensitivityPermitsAiCall("sendMessageStreaming");
-    yield* this.planExecution.recoverDelegatedSteps(clearedLoopDeps);
+    // Recovery resumes the active plans — a send at their stamp.
+    const restore = this.raiseContentFloor(this.planExecution.activePlansSensitivity());
+    try {
+      // Recovery IS a bytes-leave moment — gate fires before passing
+      // branded deps into the plan-execution manager.
+      const clearedLoopDeps = this.assertSensitivityPermitsAiCall("sendMessageStreaming");
+      yield* this.planExecution.recoverDelegatedSteps(clearedLoopDeps);
+    } finally {
+      restore();
+    }
   }
 
   /** Reconstruct a complete execution manifest for a goal from the event log. */
@@ -2558,7 +2626,9 @@ export class MotebitRuntime {
       STAGE_TIMEOUTS_MS.build_agent_context,
       this.buildAgentContext(),
     );
-    const selfAwareness = this.gradientManager.buildSelfAwareness();
+    const selfAwareness = this.gradientManager.buildSelfAwareness(
+      this.getEffectiveSessionSensitivity(),
+    );
     // When background formation is enabled, ensure any prior turn's
     // queued formation has drained before we rebuild the retrieval
     // context — otherwise `recallRelevant` (inside runTurnStreaming)
@@ -2571,7 +2641,9 @@ export class MotebitRuntime {
     const selectedSkills = await this.resolveSkillsForTurn(text);
     await this.emitSkillLoadEvents(selectedSkills, runId);
     return {
-      curiosityHints: this.gradientManager.buildCuriosityHints(),
+      curiosityHints: this.gradientManager.buildCuriosityHints(
+        this.getEffectiveSessionSensitivity(),
+      ),
       knownAgents,
       agentCapabilities,
       precisionContext: selfAwareness || undefined,
@@ -3905,8 +3977,10 @@ export class MotebitRuntime {
     const clearedProvider = projectProviderClearance(
       this.assertSensitivityPermitsAiCall("runReflection"),
     );
+    // A reflection is derived from the interior sent at this tier.
+    const stamp = derivedSensitivity(this.getEffectiveSessionSensitivity());
     const result = await performReflection(this.reflectionDeps, clearedProvider, goals);
-    this.gradientManager.setLastReflection(result);
+    this.gradientManager.setLastReflection(result, stamp);
     return result;
   }
 
@@ -3925,8 +3999,9 @@ export class MotebitRuntime {
       const clearedProvider = projectProviderClearance(
         this.assertSensitivityPermitsAiCall("runReflection"),
       );
+      const stamp = derivedSensitivity(this.getEffectiveSessionSensitivity());
       const result = await performReflection(this.reflectionDeps, clearedProvider);
-      this.gradientManager.setLastReflection(result);
+      this.gradientManager.setLastReflection(result, stamp);
     } catch {
       // Reflection is best-effort — don't crash the runtime
     }
@@ -3940,8 +4015,13 @@ export class MotebitRuntime {
       state: this.state,
       memoryGovernor: this.memoryGovernor,
       getTaskRouter: () => this.taskRouter,
-      getConversationSummary: () => this.conversation.getStoredSummary(),
-      getConversationHistory: () => this.conversation.getHistory(),
+      // Derived from the conversation — the stamp-filtered view.
+      getConversationSummary: () => this.conversation.egressSummary()?.text ?? null,
+      // Reflection sends this to a provider — the tier-filtered view.
+      getConversationHistory: () => this.conversation.egressHistory(),
+      // The tier reflection sends at — filters its memories and past
+      // reflections, and stamps the reflection it records.
+      getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
     };
   }
 
@@ -3997,6 +4077,8 @@ export class MotebitRuntime {
         payload: {
           prompt_preview: prompt.slice(0, 100),
           result_preview: result.slice(0, 100),
+          // Read back by `interiorEventsPermittedAt`.
+          sensitivity: this.getEffectiveSessionSensitivity(),
         },
         tombstoned: false,
       });
@@ -4054,15 +4136,36 @@ export class MotebitRuntime {
    * logic.
    */
   searchConversations(query: string, limit = 5) {
-    // Provider-keyed egress ceiling — the same boundary `recallMemoriesForTool`
-    // applies, at the whole-message grain: an EXTERNAL provider searches only
-    // context-safe (< medical) messages, a SOVEREIGN (on-device) one searches
-    // every tier (the content never leaves the device). Fail-closed: an unset
-    // provider mode is non-sovereign, so it filters. Past transcripts may hold
-    // medical/financial/secret content the user typed on a sovereign session;
-    // this keeps that content from surfacing into an external one.
-    const sensitivityFilter = this.providerIsSovereign() ? undefined : CONTEXT_SAFE_SENSITIVITY;
+    // The `search_conversations` tool's backend: its hits enter the next
+    // request, so they are held to the tool send tier
+    // (`interiorToolSendTier`) at the whole-message grain — the same rule as
+    // `recallMemoriesForTool` and `queryEventsForTool`. Past transcripts may
+    // hold medical/financial/secret content typed on a sovereign session; an
+    // unstamped (legacy) message is never returned (`searchHistory`).
+    const sensitivityFilter = interiorEgressSensitivities(this.interiorToolSendTier());
     return this.conversation.searchHistory(query, limit, sensitivityFilter);
+  }
+
+  /**
+   * The `list_events` tool's backend — the ONE sanctioned path for the agent's
+   * explicit event-log read (surfaces wire it as `eventQueryFn`; a raw
+   * `events.query` closure returned every payload, Secret ones included, into
+   * a BYOK request). Same window as before (`limit` events of the query),
+   * minus every event the interior-egress rule withholds at the tool send tier
+   * (`interiorEventsPermittedAt`: metadata-only types always; content-bearing
+   * types only with a permitted stamp) — so it may return fewer than `limit`.
+   */
+  async queryEventsForTool(limit: number, eventType?: string): Promise<ToolEventResult[]> {
+    const events = await this.events.query({
+      motebit_id: this.motebitId,
+      limit,
+      event_types: eventType != null && eventType !== "" ? [eventType as EventType] : undefined,
+    });
+    return interiorEventsPermittedAt(events, this.interiorToolSendTier()).map((e) => ({
+      event_type: e.event_type,
+      timestamp: e.timestamp,
+      payload: e.payload,
+    }));
   }
 
   /**
@@ -5145,7 +5248,13 @@ export class MotebitRuntime {
         motebit_id: this.motebitId,
         timestamp: Date.now(),
         event_type: EventType.ToolUsed,
-        payload: { tool: toolName, result_summary: String(result).slice(0, 500) },
+        payload: {
+          tool: toolName,
+          result_summary: String(result).slice(0, 500),
+          // The tier the result was produced at — read back by
+          // `interiorEventsPermittedAt` before it enters [Recent Events].
+          sensitivity: this.getEffectiveSessionSensitivity(),
+        },
         tombstoned: false,
       });
     } catch {
@@ -5304,6 +5413,42 @@ export class MotebitRuntime {
    * deserves its own deliberation pass.
    */
   private _sessionSensitivity: SensitivityLevel = SensitivityLevel.None;
+
+  /**
+   * The stamp of a DERIVED artifact being sent right now — a paused
+   * approval resumed, a plan executed or resumed (`interior-egress.ts`).
+   * Sending such an artifact IS a send at its tier: while it is in flight
+   * the effective tier is at least its stamp, so the gate refuses an
+   * external provider for medical+ content, and everything the call
+   * writes (messages, events, memories) is stamped at that tier rather
+   * than laundered down to the session's. Held only through
+   * `raiseContentFloor`.
+   *
+   * A SET of raises, not a stack: runs overlap (two goal runs, a goal run
+   * and a plan resume) and finish in any order. The floor is the max over
+   * the raises still held, and a release drops only its own raise — a run
+   * that finishes first never lowers the floor under one still in flight.
+   */
+  private readonly _contentRaises = new Set<{ readonly tier: SensitivityLevel }>();
+
+  private get _contentFloor(): SensitivityLevel | null {
+    let floor: SensitivityLevel | null = null;
+    for (const r of this._contentRaises)
+      floor = floor == null ? r.tier : maxSensitivity(floor, r.tier);
+    return floor;
+  }
+
+  /**
+   * Raise the effective tier to at least `tier` until the returned release
+   * is called. The release drops this raise only, and is idempotent.
+   */
+  private raiseContentFloor(tier: SensitivityLevel): () => void {
+    const raise = { tier };
+    this._contentRaises.add(raise);
+    return () => {
+      this._contentRaises.delete(raise);
+    };
+  }
 
   /**
    * Provider mode the surface used when constructing this runtime's
@@ -5594,6 +5739,28 @@ export class MotebitRuntime {
   }
 
   /**
+   * The send tier an owner-interior TOOL result is held to — the tier of the
+   * request the result enters next. Every interior-reading tool backend
+   * (`recallMemoriesForTool`, `searchConversations`, `queryEventsForTool`)
+   * filters through `interiorEgressPermits` at this tier, the same rule as the
+   * context pack:
+   *
+   *   - SOVEREIGN (on-device): the session's effective tier. The request stays
+   *     on the device, but its reply is stamped at that tier and can ride
+   *     history into a later external request — so an on-device turn at
+   *     Personal recalls only what Personal permits, and at Secret everything.
+   *   - EXTERNAL (or unset — fail-closed): Personal. An external provider only
+   *     ever sends at a context-safe tier (medical+ is refused by
+   *     `assertSensitivityPermitsAiCall`), so a tier raised mid-turn never
+   *     widens what its tools return.
+   */
+  private interiorToolSendTier(): SensitivityLevel {
+    return this.providerIsSovereign()
+      ? this.getEffectiveSessionSensitivity()
+      : SensitivityLevel.Personal;
+  }
+
+  /**
    * The `recall_memories` tool's search backend — the ONE sanctioned path for
    * the agent's explicit memory recall, so the egress boundary lives here and
    * cannot be forgotten per-surface (it was, on all four; that leak is what this
@@ -5624,15 +5791,17 @@ export class MotebitRuntime {
     // and a foreign turn's registry (`toolsForTurn`) never offers or runs it.
     // So the owner's own recall during a stranger's task is never blanked.
     if (principal.foreign) return [];
-    const queryEmbedding = await embedText(query);
+    const sendTier = this.interiorToolSendTier();
+    // The query is text at the send tier: a remote embed backend receives it
+    // only when that tier is context-safe (`embedText`).
+    const queryEmbedding = await embedText(query, sendTier);
     const nodes = await this.memory.recallRelevant(queryEmbedding, {
       limit: opts.limit,
       ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
       ...(opts.includeExpired ? { includeExpired: true } : {}),
-      // Egress ceiling: undefined ⇒ no filter (sovereign, all tiers stay local);
-      // otherwise restrict to the context-safe tiers before anything can reach
-      // an external provider.
-      ...(this.providerIsSovereign() ? {} : { sensitivityFilter: [...CONTEXT_SAFE_SENSITIVITY] }),
+      // Egress ceiling: only the tiers the interior-egress rule permits at the
+      // tool send tier, before anything can enter the next request.
+      sensitivityFilter: interiorEgressSensitivities(sendTier),
     });
     return nodes.map((n) => ({
       content: n.content,
@@ -5688,9 +5857,12 @@ export class MotebitRuntime {
     effective: SensitivityLevel;
     /** Slab item that contributed the elevated tier; null when session itself is the highest. */
     elevatedByItem: { id: string } | null;
+    /** The content floor (`raiseContentFloor`) set the effective tier. */
+    elevatedByContent: boolean;
   } {
     let effective = this._sessionSensitivity;
     let elevatedByItem: { id: string } | null = null;
+    let elevatedByContent = false;
     const slabState = this.slab.getState();
     for (const item of slabState.items.values()) {
       if (item.sensitivity === undefined) continue;
@@ -5701,7 +5873,13 @@ export class MotebitRuntime {
         elevatedByItem = { id: item.id };
       }
     }
-    return { effective, elevatedByItem };
+    const contentFloor = this._contentFloor;
+    if (contentFloor != null && rankSensitivity(contentFloor) > rankSensitivity(effective)) {
+      effective = contentFloor;
+      elevatedByItem = null;
+      elevatedByContent = true;
+    }
+    return { effective, elevatedByItem, elevatedByContent };
   }
 
   /**
@@ -5765,7 +5943,8 @@ export class MotebitRuntime {
     entry: SensitivityGateEntry,
     toolName?: string,
   ): SensitivityCleared<MotebitLoopDependencies> {
-    const { effective, elevatedByItem } = this.computeEffectiveSensitivityContext();
+    const { effective, elevatedByItem, elevatedByContent } =
+      this.computeEffectiveSensitivityContext();
     // The doctrine threshold: medical/financial/secret never reach
     // external AI. Expressed via the protocol's rank ordering rather
     // than enum equality so a future tier insertion remains a
@@ -5786,7 +5965,7 @@ export class MotebitRuntime {
         provider_mode: providerMode,
         ...(elevatedByItem !== null
           ? { elevated_by: { via: "slab_item" as const, slab_item_id: elevatedByItem.id } }
-          : effective !== this._sessionSensitivity
+          : effective !== this._sessionSensitivity && !elevatedByContent
             ? { elevated_by: { via: "session" as const } }
             : {}),
         ...(toolName !== undefined ? { tool_name: toolName } : {}),
@@ -5806,7 +5985,12 @@ export class MotebitRuntime {
       // turn in flight" state (round 9). A foreign CALL's refusal is made
       // content-free on its own path: the turn doors and the turn's
       // outbound-tool calls wrap it in `contentFreeIfForeign`.
-      throw new SovereignTierRequiredError(this._sessionSensitivity, providerMode, effective);
+      throw new SovereignTierRequiredError(
+        this._sessionSensitivity,
+        providerMode,
+        effective,
+        elevatedByContent,
+      );
     }
     // Single authorized production site for `SensitivityCleared`. The
     // brand is type-level only — no runtime field added. Throws if the

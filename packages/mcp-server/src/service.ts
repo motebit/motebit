@@ -21,7 +21,13 @@ import type {
   EventLogEntry,
   TurnContext,
 } from "@motebit/sdk";
-import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
+import {
+  EventType,
+  SensitivityLevel,
+  AgentTrustLevel,
+  isSensitivityLevel,
+  maxSensitivity,
+} from "@motebit/sdk";
 import { verifySignedToken as defaultVerifySignedToken } from "@motebit/encryption";
 import type { TokenAudience } from "@motebit/sdk";
 
@@ -95,6 +101,12 @@ export interface ServiceRuntime {
   getState(): unknown;
   memory: ServiceMemoryGraph;
   events: ServiceEventStore;
+  /**
+   * The tier interior content written now is stamped at
+   * (`MotebitRuntime.interiorWriteSensitivity`). A memory a remote caller
+   * stores is never stamped below it.
+   */
+  interiorWriteSensitivity(): SensitivityLevel;
 
   /** Optional: look up trust record for a remote motebit. */
   getAgentTrust?(
@@ -299,7 +311,12 @@ export function wireServerDeps(
         {
           content,
           confidence: 0.7,
-          sensitivity: sensitivity ?? SensitivityLevel.None,
+          // The caller's declared tier, never below the session's write
+          // tier (`interiorWriteSensitivity`); undeclared or malformed =
+          // the write tier, never a default `none`.
+          sensitivity: isSensitivityLevel(sensitivity)
+            ? maxSensitivity(runtime.interiorWriteSensitivity(), sensitivity)
+            : runtime.interiorWriteSensitivity(),
           // Provenance: a remote caller's write is ALWAYS peer_agent —
           // hard-coded, never caller-derived. A peer that could
           // self-declare user_stated would mint trusted memories

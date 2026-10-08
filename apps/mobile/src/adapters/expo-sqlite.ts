@@ -36,7 +36,7 @@ import type {
   ApprovalStoreAdapter,
   AuditLogSink,
 } from "@motebit/sdk";
-import { StepStatus, AgentTrustLevel, isMemorySource } from "@motebit/sdk";
+import { StepStatus, AgentTrustLevel, isMemorySource, isSensitivityLevel } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
@@ -889,7 +889,7 @@ export class ExpoSqliteConversationStore implements ConversationStoreAdapter {
         msg.toolCallId ?? null,
         now,
         tokenEstimate,
-        msg.sensitivity ?? null,
+        msg.sensitivity ?? null, // write-tier-gate: exempt own stamp; NULL reads as secret
       ],
     );
     this.db.runSync(
@@ -1100,6 +1100,9 @@ export interface Goal {
    *  `docs/doctrine/panel-temporal-registers.md` §"Bounded commitment
    *  is multi-dimensional." `null` = no cap. */
   budget_tokens: number | null;
+  /** The tier the goal's text was written at (migration v30); absent = legacy
+   *  (`goalTextSensitivity` in @motebit/runtime). */
+  sensitivity?: SensitivityLevel;
 }
 
 export interface GoalOutcome {
@@ -1139,6 +1142,9 @@ export interface GoalOutcome {
    *  the "signed" indicator (same wire shape as web + desktop per
    *  `docs/doctrine/goal-results.md` §"Phase-3 deferral close"). */
   signed_manifest: string | null;
+  /** The tier of the run that produced it (migration v30); absent = legacy,
+   *  held at secret (`GoalRunScope.outcomeSensitivity` in @motebit/runtime). */
+  sensitivity?: SensitivityLevel;
 }
 
 interface GoalRow {
@@ -1155,6 +1161,7 @@ interface GoalRow {
   max_retries: number;
   consecutive_failures: number;
   budget_tokens: number | null;
+  sensitivity?: string | null;
 }
 
 interface GoalOutcomeRow {
@@ -1170,6 +1177,7 @@ interface GoalOutcomeRow {
   tokens_used: number | null;
   response_full: string | null;
   signed_manifest: string | null;
+  sensitivity?: string | null;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -1187,6 +1195,7 @@ function rowToGoal(row: GoalRow): Goal {
     max_retries: row.max_retries ?? 3,
     consecutive_failures: row.consecutive_failures ?? 0,
     budget_tokens: row.budget_tokens ?? null,
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
@@ -1204,10 +1213,19 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
     error_message: row.error_message,
     response_full: row.response_full,
     signed_manifest: row.signed_manifest,
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
 // === GoalStore ===
+
+function assertWriteStamp(what: string, stamp: unknown): void {
+  if (!isSensitivityLevel(stamp)) {
+    throw new Error(
+      `Cannot write a ${what} row without a sensitivity stamp (got ${String(stamp)})`,
+    );
+  }
+}
 
 export class ExpoGoalStore {
   constructor(private db: SQLite.SQLiteDatabase) {}
@@ -1240,11 +1258,17 @@ export class ExpoGoalStore {
     this.db.runSync("UPDATE goals SET last_run_at = ? WHERE goal_id = ?", [timestamp, goalId]);
   }
 
-  insertOutcome(outcome: GoalOutcome): void {
+  /**
+   * Write an outcome row, stamped with the tier of the run that produced it
+   * — required by type and checked here (unknown provenance is stamped
+   * `secret` by the caller, never left absent).
+   */
+  insertOutcome(outcome: GoalOutcome & { sensitivity: SensitivityLevel }): void {
+    assertWriteStamp("goal outcome", outcome.sensitivity);
     this.db.runSync(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         outcome.outcome_id,
         outcome.goal_id,
@@ -1258,6 +1282,7 @@ export class ExpoGoalStore {
         outcome.tokens_used,
         outcome.response_full,
         outcome.signed_manifest,
+        outcome.sensitivity,
       ],
     );
   }
@@ -1336,19 +1361,29 @@ export class ExpoGoalStore {
     this.db.runSync("UPDATE goals SET consecutive_failures = 0 WHERE goal_id = ?", [goalId]);
   }
 
+  /**
+   * Write a goal row. The tier its text was written at is required (no
+   * default): an unstamped row would take the legacy rule meant only for
+   * rows that pre-date migration v30 (`goalTextSensitivity` in
+   * @motebit/runtime).
+   */
   addGoal(
     motebitId: string,
     prompt: string,
     intervalMs: number,
-    mode: GoalMode = "recurring",
-    budgetTokens: number | null = null,
+    mode: GoalMode,
+    budgetTokens: number | null,
+    /** `runtime.goalCreationSensitivity()`, a run's `outcomeSensitivity()`,
+     *  or `sessionlessGoalSensitivity()`. */
+    sensitivity: SensitivityLevel,
   ): string {
+    assertWriteStamp("goal", sensitivity);
     const goalId = crypto.randomUUID();
     const now = Date.now();
     this.db.runSync(
-      `INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, budget_tokens)
-       VALUES (?, ?, ?, ?, NULL, 1, ?, ?, 'active', NULL, 3, 0, ?)`,
-      [goalId, motebitId, prompt, intervalMs, now, mode, budgetTokens],
+      `INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, budget_tokens, sensitivity)
+       VALUES (?, ?, ?, ?, NULL, 1, ?, ?, 'active', NULL, 3, 0, ?, ?)`,
+      [goalId, motebitId, prompt, intervalMs, now, mode, budgetTokens, sensitivity],
     );
     return goalId;
   }
@@ -1380,6 +1415,7 @@ interface PlanRow {
   total_steps: number;
   proposal_id: string | null;
   collaborative: number;
+  sensitivity?: string | null;
 }
 
 interface PlanStepRow {
@@ -1416,6 +1452,7 @@ function rowToPlan(row: PlanRow): Plan {
     total_steps: row.total_steps,
     proposal_id: row.proposal_id ?? undefined,
     collaborative: row.collaborative === 1,
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
@@ -1455,9 +1492,11 @@ export class ExpoPlanStore implements PlanStoreAdapter {
   constructor(private db: SQLite.SQLiteDatabase) {}
 
   savePlan(plan: Plan): void {
+    // A plan saved without a stamp (a sync import — the stamp is local)
+    // keeps the stamp already on record; it is never erased.
     this.db.runSync(
-      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT sensitivity FROM plans WHERE plan_id = ?)))`,
       [
         plan.plan_id,
         plan.goal_id,
@@ -1470,6 +1509,8 @@ export class ExpoPlanStore implements PlanStoreAdapter {
         plan.total_steps,
         plan.proposal_id ?? null,
         plan.collaborative ? 1 : 0,
+        plan.sensitivity ?? null, // write-tier-gate: exempt own stamp; NULL plan reads as secret
+        plan.plan_id,
       ],
     );
   }
@@ -1509,6 +1550,10 @@ export class ExpoPlanStore implements PlanStoreAdapter {
     if (updates.total_steps !== undefined) {
       fields.push("total_steps = ?");
       values.push(updates.total_steps);
+    }
+    if (updates.sensitivity !== undefined) {
+      fields.push("sensitivity = ?");
+      values.push(updates.sensitivity);
     }
     if (updates.proposal_id !== undefined) {
       fields.push("proposal_id = ?");
@@ -2328,7 +2373,7 @@ export class ExpoToolAuditSink implements AuditLogSink {
         entry.injection ? JSON.stringify(entry.injection) : null,
         entry.costUnits ?? 0,
         entry.timestamp,
-        entry.sensitivity ?? null,
+        entry.sensitivity ?? null, // write-tier-gate: exempt own stamp; NULL classified on read
       ],
     );
   }
@@ -2595,7 +2640,7 @@ export class ExpoSqliteSkillAuditSink {
         // Only `skill_consent_granted` carries sensitivity + surface;
         // null for the trust/remove variants. Discriminated-union
         // narrowing handles the access.
-        event.type === "skill_consent_granted" ? event.sensitivity : null,
+        event.type === "skill_consent_granted" ? event.sensitivity : null, // write-tier-gate: exempt non-consent variant carries no tier
         event.type === "skill_consent_granted" ? event.surface : null,
         event.at,
         JSON.stringify(event),

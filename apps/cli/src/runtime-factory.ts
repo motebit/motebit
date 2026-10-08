@@ -38,7 +38,6 @@ import type {
   ResolverEnv,
 } from "@motebit/sdk";
 import {
-  EventType,
   RiskLevel,
   resolveProviderSpec,
   UnsupportedBackendError,
@@ -333,7 +332,6 @@ export function createProvider(
 export function buildToolRegistry(
   config: CliConfig,
   runtimeRef: { current: MotebitRuntime | null },
-  motebitId: string,
 ): InMemoryToolRegistry {
   const registry = new InMemoryToolRegistry();
 
@@ -388,25 +386,11 @@ export function buildToolRegistry(
     // turn's registry ever runs it (#943).
     return runtimeRef.current.recallMemoriesForTool(query, opts, TurnPrincipal.OWNER);
   };
+  // Event reads route through the runtime's `queryEventsForTool` — the
+  // interior-egress rule at the tool send tier (check-sensitivity-routing).
   const eventQueryFn = async (limit: number, eventType?: string) => {
     if (!runtimeRef.current) return [];
-    const filter: {
-      motebit_id: string;
-      limit: number;
-      event_types?: import("@motebit/sdk").EventType[];
-    } = {
-      motebit_id: motebitId,
-      limit,
-    };
-    if (eventType != null && eventType !== "") {
-      filter.event_types = [eventType as EventType];
-    }
-    const events = await runtimeRef.current.events.query(filter);
-    return events.map((e) => ({
-      event_type: e.event_type,
-      timestamp: e.timestamp,
-      payload: e.payload,
-    }));
+    return runtimeRef.current.queryEventsForTool(limit, eventType);
   };
 
   registry.register(recallMemoriesDefinition, createRecallMemoriesHandler(memorySearchFn));

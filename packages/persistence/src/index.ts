@@ -26,7 +26,13 @@ import type {
   SettlementRecord,
   StoredCredential,
 } from "@motebit/sdk";
-import { PlanStatus, StepStatus, AgentTrustLevel, isMemorySource } from "@motebit/sdk";
+import {
+  PlanStatus,
+  StepStatus,
+  AgentTrustLevel,
+  isMemorySource,
+  isSensitivityLevel,
+} from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
@@ -1361,6 +1367,29 @@ export interface Goal {
   routine_id?: string | null;
   routine_source?: string | null;
   routine_hash?: string | null;
+  /**
+   * The tier the goal's text was written at (the owner's session tier, or
+   * the run that wrote a sub-goal). A scheduled run sends at no lower tier;
+   * absent = legacy (`goalTextSensitivity` in @motebit/runtime). Migration #52.
+   */
+  sensitivity?: SensitivityLevel | null;
+}
+
+/**
+ * A goal as WRITTEN: the tier its text was written at is required. `Goal`
+ * keeps `sensitivity` optional because a legacy row read back has none.
+ */
+export type StampedGoal = Goal & { sensitivity: SensitivityLevel };
+
+/** An outcome as WRITTEN: the tier of the run that produced it is required. */
+export type StampedGoalOutcome = GoalOutcome & { sensitivity: SensitivityLevel };
+
+function assertWriteStamp(what: string, stamp: unknown): void {
+  if (!isSensitivityLevel(stamp)) {
+    throw new Error(
+      `Cannot write a ${what} row without a sensitivity stamp (got ${String(stamp)})`,
+    );
+  }
 }
 
 interface GoalRow {
@@ -1382,6 +1411,7 @@ interface GoalRow {
   routine_source: string | null;
   routine_hash: string | null;
   budget_tokens: number | null;
+  sensitivity?: string | null;
 }
 
 function rowToGoal(row: GoalRow): Goal {
@@ -1404,6 +1434,7 @@ function rowToGoal(row: GoalRow): Goal {
     routine_source: row.routine_source ?? null,
     routine_hash: row.routine_hash ?? null,
     budget_tokens: row.budget_tokens ?? null,
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
@@ -1425,8 +1456,8 @@ export class SqliteGoalStore {
 
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
-      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, wall_clock_ms, project_id, routine_id, routine_source, routine_hash, budget_tokens)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO goals (goal_id, motebit_id, prompt, interval_ms, last_run_at, enabled, created_at, mode, status, parent_goal_id, max_retries, consecutive_failures, wall_clock_ms, project_id, routine_id, routine_source, routine_hash, budget_tokens, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT sensitivity FROM goals WHERE goal_id = ?)))`,
     );
     this.stmtRemove = db.prepare(`DELETE FROM goals WHERE goal_id = ?`);
     this.stmtList = db.prepare(`SELECT * FROM goals WHERE motebit_id = ? ORDER BY created_at ASC`);
@@ -1458,7 +1489,14 @@ export class SqliteGoalStore {
     );
   }
 
-  add(goal: Goal): void {
+  /**
+   * Write a goal row. The stamp is required by type (`StampedGoal`) and
+   * checked here: an unstamped row would take the legacy rule meant only
+   * for rows that pre-date migration #52 (`goalTextSensitivity` in
+   * @motebit/runtime).
+   */
+  add(goal: StampedGoal): void {
+    assertWriteStamp("goal", goal.sensitivity);
     this.stmtAdd.run(
       goal.goal_id,
       goal.motebit_id,
@@ -1478,6 +1516,8 @@ export class SqliteGoalStore {
       goal.routine_source ?? null,
       goal.routine_hash ?? null,
       goal.budget_tokens ?? null,
+      goal.sensitivity,
+      goal.goal_id,
     );
   }
 
@@ -1592,6 +1632,13 @@ export interface GoalOutcome {
    * imply a signature it does not have.
    */
   signed_manifest?: string;
+  /**
+   * The tier of the run that produced this outcome (`GoalRun.outcomeSensitivity`
+   * in @motebit/runtime). Its summary / error text enters a later run only
+   * at a send tier that permits it; absent = legacy, held at secret.
+   * Migration #52.
+   */
+  sensitivity?: SensitivityLevel;
 }
 
 interface GoalOutcomeRow {
@@ -1608,6 +1655,7 @@ interface GoalOutcomeRow {
   response_full: string | null;
   signed_manifest: string | null;
   run_id: string | null;
+  sensitivity?: string | null;
 }
 
 function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
@@ -1625,6 +1673,7 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
     ...(row.run_id != null ? { run_id: row.run_id } : {}),
     ...(row.response_full != null ? { response_full: row.response_full } : {}),
     ...(row.signed_manifest != null ? { signed_manifest: row.signed_manifest } : {}),
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
@@ -1638,8 +1687,8 @@ export class SqliteGoalOutcomeStore {
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest, run_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest, run_id, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGet = db.prepare(`SELECT * FROM goal_outcomes WHERE outcome_id = ?`);
     this.stmtForRun = db.prepare(
@@ -1653,7 +1702,13 @@ export class SqliteGoalOutcomeStore {
     );
   }
 
-  add(outcome: GoalOutcome): void {
+  /**
+   * Write an outcome row, stamped with the tier of the run that produced it
+   * (`StampedGoalOutcome`; checked here). Unknown provenance is stamped
+   * `secret` by the caller, never left absent.
+   */
+  add(outcome: StampedGoalOutcome): void {
+    assertWriteStamp("goal outcome", outcome.sensitivity);
     this.stmtAdd.run(
       outcome.outcome_id,
       outcome.goal_id,
@@ -1668,6 +1723,7 @@ export class SqliteGoalOutcomeStore {
       outcome.response_full ?? null,
       outcome.signed_manifest ?? null,
       outcome.run_id ?? null,
+      outcome.sensitivity,
     );
   }
 
@@ -2968,7 +3024,7 @@ export class SqliteConversationStore {
         msg.toolCallId,
         msg.createdAt,
         msg.tokenEstimate,
-        msg.sensitivity ?? null,
+        msg.sensitivity ?? null, // write-tier-gate: exempt own stamp; NULL reads as secret
       );
   }
 
@@ -2996,6 +3052,7 @@ interface PlanRow {
   total_steps: number;
   proposal_id: string | null;
   collaborative: number;
+  sensitivity?: string | null;
 }
 
 function rowToPlan(row: PlanRow): Plan {
@@ -3011,6 +3068,7 @@ function rowToPlan(row: PlanRow): Plan {
     total_steps: row.total_steps,
     proposal_id: row.proposal_id ?? undefined,
     collaborative: row.collaborative === 1,
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
 }
 
@@ -3074,9 +3132,11 @@ export class SqlitePlanStore {
   private stmtListStepsSince: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
+    // A plan saved without a stamp (a sync import — the stamp is local)
+    // keeps the stamp already on record; it is never erased.
     this.stmtSavePlan = db.prepare(
-      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT sensitivity FROM plans WHERE plan_id = ?)))`,
     );
     this.stmtGetPlan = db.prepare(`SELECT * FROM plans WHERE plan_id = ?`);
     this.stmtGetPlanForGoal = db.prepare(
@@ -3117,6 +3177,8 @@ export class SqlitePlanStore {
       plan.total_steps,
       plan.proposal_id ?? null,
       plan.collaborative ? 1 : 0,
+      plan.sensitivity ?? null,
+      plan.plan_id,
     );
   }
 
@@ -3163,6 +3225,8 @@ export class SqlitePlanStore {
       merged.total_steps,
       merged.proposal_id ?? null,
       merged.collaborative ? 1 : 0,
+      merged.sensitivity ?? null,
+      merged.plan_id,
     );
   }
 

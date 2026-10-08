@@ -27,6 +27,7 @@ import {
   StepStatus,
   AgentTrustLevel,
   isMemorySource,
+  isSensitivityLevel,
   asMotebitId,
   asGoalId,
   asAllocationId,
@@ -1326,6 +1327,7 @@ interface PlanRow {
   updated_at: number;
   current_step_index: number;
   total_steps: number;
+  sensitivity?: string | null;
 }
 
 interface PlanStepRow {
@@ -1359,7 +1361,31 @@ function rowToPlan(row: PlanRow): Plan {
     updated_at: row.updated_at,
     current_step_index: row.current_step_index,
     total_steps: row.total_steps,
+    ...(isSensitivityLevel(row.sensitivity) ? { sensitivity: row.sensitivity } : {}),
   };
+}
+
+/**
+ * Plan upsert. A plan saved without a stamp (a sync import — the stamp is
+ * local) keeps the stamp already on record; it is never erased.
+ */
+const UPSERT_PLAN_SQL = `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, sensitivity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT sensitivity FROM plans WHERE plan_id = ?)))`;
+
+function planUpsertParams(plan: Plan): unknown[] {
+  return [
+    plan.plan_id,
+    plan.goal_id,
+    plan.motebit_id,
+    plan.title,
+    plan.status,
+    plan.created_at,
+    plan.updated_at,
+    plan.current_step_index,
+    plan.total_steps,
+    plan.sensitivity ?? null,
+    plan.plan_id,
+  ];
 }
 
 function rowToPlanStep(row: PlanStepRow): PlanStep {
@@ -1422,23 +1448,10 @@ export class TauriPlanStore implements PlanStoreAdapter {
   }
 
   savePlan(plan: Plan): void {
-    this.plans.set(plan.plan_id, { ...plan });
-    void dbExecute(
-      this.invoke,
-      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        plan.plan_id,
-        plan.goal_id,
-        plan.motebit_id,
-        plan.title,
-        plan.status,
-        plan.created_at,
-        plan.updated_at,
-        plan.current_step_index,
-        plan.total_steps,
-      ],
-    );
+    const kept = plan.sensitivity ?? this.plans.get(plan.plan_id)?.sensitivity;
+    const stored: Plan = kept != null ? { ...plan, sensitivity: kept } : { ...plan };
+    this.plans.set(plan.plan_id, stored);
+    void dbExecute(this.invoke, UPSERT_PLAN_SQL, planUpsertParams(stored));
   }
 
   getPlan(planId: string): Plan | null {
@@ -1464,22 +1477,7 @@ export class TauriPlanStore implements PlanStoreAdapter {
     if (!existing) return;
     const merged = { ...existing, ...updates };
     this.plans.set(planId, merged);
-    void dbExecute(
-      this.invoke,
-      `INSERT OR REPLACE INTO plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        merged.plan_id,
-        merged.goal_id,
-        merged.motebit_id,
-        merged.title,
-        merged.status,
-        merged.created_at,
-        merged.updated_at,
-        merged.current_step_index,
-        merged.total_steps,
-      ],
-    );
+    void dbExecute(this.invoke, UPSERT_PLAN_SQL, planUpsertParams(merged));
   }
 
   saveStep(step: PlanStep): void {

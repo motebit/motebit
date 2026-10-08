@@ -12,7 +12,7 @@ import type {
   SensitivityCleared,
   SensitivityGateEntry,
 } from "@motebit/sdk";
-import { SensitivityLevel, maxSensitivity, sensitivityPermits } from "@motebit/sdk";
+import { SensitivityLevel, maxSensitivity } from "@motebit/sdk";
 import type { TurnPrincipal } from "./turn-principal.js";
 import type {
   StreamingProvider,
@@ -25,6 +25,11 @@ import {
   summarizeConversation,
   shouldSummarize,
   projectProviderClearance,
+  derivedSensitivity,
+  derivedTextPermittedAt,
+  maxStampedSensitivity,
+  stampDerivedText,
+  interiorEgressPermits,
 } from "@motebit/ai-core";
 import type { TaskRouter } from "@motebit/ai-core";
 import {
@@ -141,7 +146,6 @@ const CONVERSATION_BUDGET: ContextBudget = {
 /** The conversation as one turn sees it — see {@link ConversationManager.forTurn}. */
 export interface TurnConversation {
   trimmed(): ConversationMessage[];
-  liveHistory(): ConversationMessage[];
   getSessionInfo(): { continued: boolean; lastActiveAt: number } | null;
   clearSessionInfo(): void;
   pushExchange(userMessage: string, assistantResponse: string): void;
@@ -152,7 +156,6 @@ export interface TurnConversation {
 /** A foreign principal's view: nothing of the owner's, nothing written. */
 const FOREIGN_TURN_CONVERSATION: TurnConversation = Object.freeze({
   trimmed: () => [],
-  liveHistory: () => [],
   getSessionInfo: () => null,
   clearSessionInfo: () => {},
   pushExchange: () => {},
@@ -185,14 +188,13 @@ export class ConversationManager {
    *
    * The OWNER's view is this manager. The manager itself no longer reads
    * any "is a foreign turn in flight" state: the owner's own concurrent
-   * reads (a surface rendering `liveHistory`, a reflection) are never
+   * reads (a surface rendering `getHistory`, a reflection) are never
    * blanked because a stranger's task happens to be running.
    */
   forTurn(principal: TurnPrincipal): TurnConversation {
     if (principal.foreign) return FOREIGN_TURN_CONVERSATION;
     return {
       trimmed: () => this.trimmed(),
-      liveHistory: () => this.liveHistory,
       getSessionInfo: () => this.getSessionInfo(),
       clearSessionInfo: () => this.clearSessionInfo(),
       pushExchange: (u, a) => this.pushExchange(u, a),
@@ -239,6 +241,11 @@ export class ConversationManager {
 
   // --- Accessors ---
 
+  /**
+   * Every message in the live history, every tier — for local rendering and
+   * counts. Never hand this to a provider: egress reads `egressHistory` /
+   * `trimmed` (enforced by `egress-history-gate.test.ts`).
+   */
   getHistory(): ConversationMessage[] {
     return [...this.history];
   }
@@ -305,14 +312,12 @@ export class ConversationManager {
   // --- Context window ---
 
   /**
-   * Return history trimmed to fit within the token budget. When the
-   * runtime supplies an effective tier, messages tagged above it are
-   * filtered out before trimming — the read-side companion to the
-   * write-side floor in `pushExchange` / `pushActivation`.
+   * Return history trimmed to fit within the token budget, read through
+   * `egressHistory` (the interior-egress rule at the send tier) — the
+   * read-side companion to the write-side floor in `pushExchange` /
+   * `pushActivation`.
    *
-   * Untagged messages (legacy data persisted before the v1 floor, or
-   * fixtures without a runtime) flow through unchanged for backward
-   * compat. Filter is dynamic by current effective tier (not a static
+   * Filter is dynamic by current effective tier (not a static
    * `CONTEXT_SAFE_SENSITIVITY` constant) so a session whose tier
    * elevates mid-conversation (e.g., a Secret-tier slab item arrives
    * via `classifyToolResult`) regains access to its own elevated
@@ -327,12 +332,58 @@ export class ConversationManager {
    * into BYOK without this filter.
    */
   trimmed(): ConversationMessage[] {
-    const summary = this.getStoredSummary();
-    const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
-    const filtered = this.history.filter(
-      (msg) => msg.sensitivity == null || sensitivityPermits(effective, msg.sensitivity),
+    return trimConversation(
+      this.egressHistory(),
+      CONVERSATION_BUDGET,
+      this.egressSummary()?.text ?? null,
     );
-    return trimConversation(filtered, CONVERSATION_BUDGET, summary);
+  }
+
+  /**
+   * The history a provider may receive: the live history filtered to the
+   * session's effective tier AT SEND TIME (read per call — the tier and the
+   * provider can change between turns). Every path that sends conversation
+   * history off this manager reads through here: `trimmed` (turns, the
+   * approval resume) budgets it; summarization, the AI title and reflection
+   * send it whole. `getHistory` is for local rendering and counts only.
+   */
+  egressHistory(): ConversationMessage[] {
+    const sendTier = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
+    // The one rule (`interiorEgressPermits`): the send tier's CEILING, so a
+    // Personal-stamped message rides a request at the default `none` tier.
+    // An UNSTAMPED message — a row persisted before the write-side floor, or
+    // synced from a peer that predates the (optional) sync field — has no
+    // knowable tier, so it fails closed: held to Secret, it rides only an
+    // on-device request at Secret.
+    return this.history.filter((msg) =>
+      interiorEgressPermits(sendTier, msg.sensitivity ?? SensitivityLevel.Secret),
+    );
+  }
+
+  /**
+   * The stored summary a provider may receive at the session's effective
+   * tier AT SEND TIME — the summary is derived from the conversation, so it
+   * carries the stamp it was created at (`interior-egress.ts`) and passes
+   * only where that stamp is permitted. A legacy unstamped summary is held
+   * to the max tier of the conversation's stored messages, and withheld
+   * when that is unknowable. `trimmed` (turns, the approval resume),
+   * re-summarization and reflection read the summary through here only.
+   */
+  egressSummary(): { text: string; sensitivity: SensitivityLevel } | null {
+    const { store } = this.deps;
+    if (this.currentId == null || this.currentId === "" || store == null) return null;
+    const conversationId = this.currentId;
+    return derivedTextPermittedAt(
+      store.getActiveConversation(this.deps.motebitId)?.summary,
+      this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
+      () =>
+        maxStampedSensitivity(
+          store
+            .loadMessages(conversationId)
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => m.sensitivity),
+        ),
+    );
   }
 
   // --- Push + auto-summarize ---
@@ -408,13 +459,24 @@ export class ConversationManager {
   // --- Summarization ---
 
   async summarize(): Promise<string | null> {
+    return this.summarizeAndStore();
+  }
+
+  /**
+   * Summarize the tier-filtered history (and the stored summary, where the
+   * send tier permits it) and persist the result stamped with the max tier
+   * of its inputs — a summary is a derived artifact and inherits their
+   * taint (`derivedSensitivity`). Returns the summary text.
+   */
+  private async summarizeAndStore(): Promise<string | null> {
     const provider = this.deps.getProvider();
     const { store } = this.deps;
     if (provider == null || store == null || this.currentId == null || this.currentId === "")
       return null;
-    const history = this.getHistory();
+    const history = this.egressHistory();
     if (history.length < 2) return null;
-    const existingSummary = this.getStoredSummary();
+    const sendTier = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
+    const existing = this.egressSummary();
     // Fire the privacy gate before bytes leave for the
     // summarization completion. The unbranded `provider` above is
     // only used for the nullability check; the actual AI call
@@ -425,12 +487,17 @@ export class ConversationManager {
     );
     const summary = await summarizeConversation(
       history,
-      existingSummary,
+      existing?.text ?? null,
       clearedProvider,
       this.deps.getTaskRouter() ?? undefined,
     );
     if (summary && this.currentId) {
-      store.updateSummary(this.currentId, summary);
+      const stamp = derivedSensitivity(
+        sendTier,
+        existing?.sensitivity,
+        ...history.map((m) => m.sensitivity),
+      );
+      store.updateSummary(this.currentId, stampDerivedText(summary, stamp));
     }
     return summary;
   }
@@ -468,7 +535,7 @@ export class ConversationManager {
       // writes — every conversation ends this call with a title.
       const provider = this.deps.getProvider();
       if (provider) {
-        const aiTitle = await this.tryAiTitle(history);
+        const aiTitle = await this.tryAiTitle(this.egressHistory());
         if (aiTitle != null) {
           store.updateTitle(this.currentId, aiTitle);
           return aiTitle;
@@ -623,48 +690,25 @@ export class ConversationManager {
    * pushExchange().
    */
   injectIntermediateMessages(...messages: ConversationMessage[]): void {
-    this.history.push(...messages);
-  }
-
-  /** Return the raw live history reference for continuation turns. */
-  get liveHistory(): ConversationMessage[] {
-    return this.history;
+    // Stamped like an exchange, so a tool result read at a high tier is
+    // filtered out of later turns once the tier drops.
+    const sensitivity = this.resolveMessageSensitivity();
+    this.history.push(...messages.map((m) => (m.sensitivity != null ? m : { ...m, sensitivity })));
+    if (this.history.length > this.deps.maxHistory) {
+      this.history = this.history.slice(-this.deps.maxHistory);
+    }
   }
 
   // --- Internal helpers ---
 
-  /** Get stored summary for the current conversation. */
-  getStoredSummary(): string | null {
-    const { store } = this.deps;
-    if (this.currentId == null || this.currentId === "" || store == null) return null;
-    return store.getActiveConversation(this.deps.motebitId)?.summary ?? null;
-  }
-
   private async runSummarization(): Promise<void> {
-    const provider = this.deps.getProvider();
-    const { store } = this.deps;
-    if (provider == null || store == null || this.currentId == null || this.currentId === "")
-      return;
     try {
-      const existingSummary = this.getStoredSummary();
-      // Gate-then-project — see `summarize()` comment. The outer
-      // try/catch covers both the gate's `SovereignTierRequiredError`
-      // (sensitivity blocked the egress) and downstream provider
-      // failures; the audit event still emits before the throw so a
-      // blocked background summarization is observable in the
-      // SensitivityGateFired log.
-      const clearedProvider = projectProviderClearance(
-        this.deps.assertSensitivityPermitsAiCall("summarizeConversation"),
-      );
-      const summary = await summarizeConversation(
-        this.history,
-        existingSummary,
-        clearedProvider,
-        this.deps.getTaskRouter() ?? undefined,
-      );
-      if (summary && this.currentId) {
-        store.updateSummary(this.currentId, summary);
-      }
+      // The outer try/catch covers both the gate's
+      // `SovereignTierRequiredError` (sensitivity blocked the egress) and
+      // downstream provider failures; the audit event still emits before
+      // the throw so a blocked background summarization is observable in
+      // the SensitivityGateFired log.
+      await this.summarizeAndStore();
     } catch {
       // Summarization is best-effort — don't crash the runtime
     }

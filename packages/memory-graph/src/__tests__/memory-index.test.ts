@@ -215,3 +215,31 @@ describe("buildMemoryIndex — rendered output", () => {
     expect(DEFAULT_INDEX_BYTE_BUDGET).toBe(2048);
   });
 });
+
+describe("buildMemoryIndex — sensitivity filter", () => {
+  const tiers = [
+    SensitivityLevel.None,
+    SensitivityLevel.Personal,
+    SensitivityLevel.Medical,
+    SensitivityLevel.Financial,
+    SensitivityLevel.Secret,
+  ];
+  const nodes = tiers.map((s) => makeNode({ content: `tier-${s}`, sensitivity: s }));
+
+  it("defaults to the context-safe tiers (fail-closed)", () => {
+    const rendered = buildMemoryIndex(nodes, [], { nowMs: NOW });
+    expect(rendered).toContain("tier-none");
+    expect(rendered).toContain("tier-personal");
+    for (const s of ["medical", "financial", "secret"]) expect(rendered).not.toContain(`tier-${s}`);
+  });
+
+  it("carries exactly the tiers the caller permits", () => {
+    const rendered = buildMemoryIndex(nodes, [], { nowMs: NOW, sensitivityFilter: tiers });
+    for (const s of tiers) expect(rendered).toContain(`tier-${s}`);
+    expect(
+      rankIndexEntries(nodes, [], { nowMs: NOW, sensitivityFilter: [SensitivityLevel.Secret] }).map(
+        (e) => e.node.content,
+      ),
+    ).toEqual(["tier-secret"]);
+  });
+});

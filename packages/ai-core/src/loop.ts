@@ -16,7 +16,11 @@ import type {
   ContextPack,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, RiskLevel, rankSensitivity } from "@motebit/sdk";
-import { CONTEXT_SAFE_SENSITIVITY as CANONICAL_CONTEXT_SAFE_SENSITIVITY } from "@motebit/sdk";
+import {
+  interiorEgressPermits,
+  interiorEgressSensitivities,
+  interiorEventsPermittedAt,
+} from "./interior-egress.js";
 import type { SensitivityCleared } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
@@ -258,7 +262,7 @@ export interface ProjectionContext {
 
 const DEFAULT_PROJECTION_CONTEXT: ProjectionContext = {
   providerMode: null,
-  sensitivity: SensitivityLevel.None,
+  sensitivity: SensitivityLevel.None, // write-tier-gate: exempt read-side projection default
   pixelConsent: "denied",
 };
 
@@ -511,10 +515,13 @@ export interface MotebitLoopDependencies {
    *
    * Doctrine: `motebit-computer.md` §"Mode contract" + the closure of
    * the `sensitivity` ALLOWLIST entry in `check-mode-contract-readers`.
-   * Optional because in-tree tests fixture the loop without a runtime;
-   * production wiring threads `runtime.getEffectiveSessionSensitivity`.
+   * Required: every memory the turn forms, the exchange event it logs and
+   * the pixel projection read it — a turn with no tier would write its
+   * interior at `none`. Production wiring threads
+   * `runtime.getEffectiveSessionSensitivity`; a test fixture declares the
+   * tier it runs at.
    */
-  getEffectiveSensitivity?: () => SensitivityLevel;
+  getEffectiveSensitivity: () => SensitivityLevel;
   /**
    * Provider mode at projection time — composed into `projectForAi`'s
    * pixel gate. `on-device` bypasses pixel stripping entirely (bytes
@@ -1038,9 +1045,11 @@ async function recallOwnerInterior(
   // stuck remote embed, or wedged memory graph must surface as a specific
   // `StageTimeoutError` in seconds rather than hang the turn silently. See
   // `STAGE_TIMEOUTS_MS` in core.ts for deadlines (single source of truth).
-  // The egress-safe tiers (< medical) — canonical, derived from the rank ceiling
-  // in @motebit/protocol so auto-injection and the recall tool share one source.
-  const CONTEXT_SAFE_SENSITIVITY = [...CANONICAL_CONTEXT_SAFE_SENSITIVITY];
+  // The tiers this turn's request may carry — the one interior-egress rule
+  // (`interior-egress.ts`): context-safe at any tier (so every tier an
+  // external provider ever sends at), up to the send tier on-device.
+  const sendTier = deps.getEffectiveSensitivity();
+  const permitted = interiorEgressSensitivities(sendTier);
 
   // Emptiness probe BEFORE the context batch. A brand-new / anonymous motebit
   // has no memory, so embedding the user message (~450ms remote call — the
@@ -1070,7 +1079,9 @@ async function recallOwnerInterior(
       ? withStageTimeout(
           "embed_user_message",
           STAGE_TIMEOUTS_MS.embed_user_message,
-          embedText(userMessage),
+          // The turn is the recall query — text at the send tier (a remote
+          // embed backend receives it only when that tier is context-safe).
+          embedText(userMessage, sendTier),
           (ms) => {
             timings.embedMs = ms;
           },
@@ -1091,7 +1102,7 @@ async function recallOwnerInterior(
   // 2. Similarity retrieval depends on the embedding — runs after parallel batch.
   // Skipped entirely on an empty graph (no embedding was computed).
   const pinnedMemories = pinnedMemoriesRaw.filter((m) =>
-    CONTEXT_SAFE_SENSITIVITY.includes(m.sensitivity),
+    interiorEgressPermits(sendTier, m.sensitivity),
   );
   const similarityMemories = hasMemory
     ? await withStageTimeout(
@@ -1100,7 +1111,7 @@ async function recallOwnerInterior(
         memoryGraph.recallRelevant(queryEmbedding, {
           limit: 5,
           strengthenCoRetrieved: true,
-          sensitivityFilter: CONTEXT_SAFE_SENSITIVITY,
+          sensitivityFilter: permitted,
         }),
         (ms) => {
           timings.memoryRetrieveMs = ms;
@@ -1117,14 +1128,20 @@ async function recallOwnerInterior(
   // turn. The agent still gets Layer-2 retrieval via `relevant_memories`.
   let memoryIndex: string | undefined;
   try {
-    const maybe = await memoryGraph.getMemoryIndex?.();
+    const maybe = await memoryGraph.getMemoryIndex?.({ sensitivityFilter: permitted });
     if (typeof maybe === "string" && maybe.length > 0) memoryIndex = maybe;
   } catch {
     // Index is a pure projection; a store error is the deps' problem, not
     // the turn's. Swallow and continue.
   }
 
-  return { recentEvents, queryEmbedding, relevantMemories, memoryIndex, timings };
+  return {
+    recentEvents: interiorEventsPermittedAt(recentEvents, sendTier),
+    queryEmbedding,
+    relevantMemories,
+    memoryIndex,
+    timings,
+  };
 }
 
 export async function* runTurnStreaming(
@@ -1594,7 +1611,7 @@ export async function* runTurnStreaming(
         // chunk path (yielded above) still gets the raw `result.data`.
         const projectionCtx: ProjectionContext = {
           providerMode: deps.getProviderMode?.() ?? null,
-          sensitivity: deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
+          sensitivity: deps.getEffectiveSensitivity(),
           pixelConsent: deps.getPixelConsent?.() ?? "denied",
         };
         const aiProjectedResult: ToolResult = {
@@ -1816,7 +1833,7 @@ export async function* runTurnStreaming(
       // through the three pixel gates before the AI sees them.
       const fallbackProjectionCtx: ProjectionContext = {
         providerMode: deps.getProviderMode?.() ?? null,
-        sensitivity: deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None,
+        sensitivity: deps.getEffectiveSensitivity(),
         pixelConsent: deps.getPixelConsent?.() ?? "denied",
       };
       const aiProjectedData = projectForAi(
@@ -2058,7 +2075,7 @@ export async function* runTurnStreaming(
   // none-tier session retrieves the leaked memory. Conservative
   // by design — over-restricting forms recoverable by re-elevating
   // and re-forming, while under-restricting leaks structurally.
-  const effectiveTier = deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
+  const effectiveTier = deps.getEffectiveSensitivity();
   if (effectiveTier !== SensitivityLevel.None) {
     // Floor each candidate at the effective tier — keep candidates already
     // at or above the floor; raise the rest. Direct rank comparison reads
@@ -2195,6 +2212,8 @@ export async function* runTurnStreaming(
       user_message: userMessage,
       response: finalText,
       memories_formed: memoriesFormed.length,
+      // Read back by `interiorEventsPermittedAt` — the exchange's tier.
+      sensitivity: deps.getEffectiveSensitivity(),
     },
     tombstoned: false,
   });

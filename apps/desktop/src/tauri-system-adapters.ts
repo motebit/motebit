@@ -71,7 +71,7 @@ export class TauriToolAuditSink implements AuditLogSink {
         entry.injection ? JSON.stringify(entry.injection) : null,
         entry.costUnits ?? 0,
         entry.timestamp,
-        entry.sensitivity ?? null,
+        entry.sensitivity ?? null, // write-tier-gate: exempt own stamp; NULL classified on read
       ],
     });
   }
@@ -101,7 +101,7 @@ export class TauriToolAuditSink implements AuditLogSink {
           entry.injection ? JSON.stringify(entry.injection) : null,
           entry.costUnits ?? 0,
           entry.timestamp,
-          entry.sensitivity ?? null,
+          entry.sensitivity ?? null, // write-tier-gate: exempt own stamp; NULL classified on read
         ],
       });
     })();

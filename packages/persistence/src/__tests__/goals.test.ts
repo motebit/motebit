@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   createMotebitDatabase,
   type MotebitDatabase,
-  type Goal,
-  type GoalOutcome,
+  type StampedGoal,
+  type StampedGoalOutcome,
 } from "../index.js";
+import { SensitivityLevel } from "@motebit/sdk";
 
 describe("SqliteGoalStore", () => {
   let moteDb: MotebitDatabase;
@@ -13,7 +14,7 @@ describe("SqliteGoalStore", () => {
     moteDb = createMotebitDatabase(":memory:");
   });
 
-  function makeGoal(overrides: Partial<Goal> = {}): Goal {
+  function makeGoal(overrides: Partial<StampedGoal> = {}): StampedGoal {
     return {
       goal_id: "goal-001",
       motebit_id: "mote-abc",
@@ -30,6 +31,7 @@ describe("SqliteGoalStore", () => {
       wall_clock_ms: null,
       project_id: null,
       budget_tokens: null,
+      sensitivity: SensitivityLevel.Personal,
       ...overrides,
     };
   }
@@ -172,6 +174,7 @@ describe("SqliteGoalStore", () => {
     moteDb.goalStore.add(makeGoal({ goal_id: "g1" }));
     expect(moteDb.goalStore.getSpentTokens("g1")).toBe(0);
     moteDb.goalOutcomeStore.add({
+      sensitivity: SensitivityLevel.Personal,
       outcome_id: "o1",
       goal_id: "g1",
       motebit_id: "mote-abc",
@@ -184,6 +187,7 @@ describe("SqliteGoalStore", () => {
       tokens_used: 1_200,
     });
     moteDb.goalOutcomeStore.add({
+      sensitivity: SensitivityLevel.Personal,
       outcome_id: "o2",
       goal_id: "g1",
       motebit_id: "mote-abc",
@@ -201,6 +205,7 @@ describe("SqliteGoalStore", () => {
   it("getSpentTokens treats outcomes with NULL tokens_used as 0 (pre-#11 rows)", () => {
     moteDb.goalStore.add(makeGoal({ goal_id: "g1" }));
     moteDb.goalOutcomeStore.add({
+      sensitivity: SensitivityLevel.Personal,
       outcome_id: "legacy",
       goal_id: "g1",
       motebit_id: "mote-abc",
@@ -213,6 +218,7 @@ describe("SqliteGoalStore", () => {
       // tokens_used omitted → NULL in the row
     });
     moteDb.goalOutcomeStore.add({
+      sensitivity: SensitivityLevel.Personal,
       outcome_id: "newer",
       goal_id: "g1",
       motebit_id: "mote-abc",
@@ -236,7 +242,7 @@ describe("SqliteGoalOutcomeStore", () => {
     moteDb = createMotebitDatabase(":memory:");
   });
 
-  function makeOutcome(overrides: Partial<GoalOutcome> = {}): GoalOutcome {
+  function makeOutcome(overrides: Partial<StampedGoalOutcome> = {}): StampedGoalOutcome {
     return {
       outcome_id: "out-001",
       goal_id: "goal-001",
@@ -247,6 +253,7 @@ describe("SqliteGoalOutcomeStore", () => {
       tool_calls_made: 2,
       memories_formed: 1,
       error_message: null,
+      sensitivity: SensitivityLevel.Personal,
       ...overrides,
     };
   }

@@ -1,11 +1,17 @@
+import { SensitivityLevel } from "@motebit/sdk";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GoalScheduler } from "../scheduler.js";
-import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
+import {
+  createMotebitDatabase,
+  type MotebitDatabase,
+  type StampedGoal,
+} from "@motebit/persistence";
 import { PolicyGate } from "@motebit/policy";
 import { verifyEvidenceProvenance } from "@motebit/encryption";
 import { RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 /**
  * The arc's own sentence, walked end to end:
@@ -128,12 +134,14 @@ function mockRuntime(opts: { pause?: boolean } = {}) {
     consolidationCycle: vi.fn(async () => ({})),
     presence: { canStartCycle: () => false },
     policy: { createTurnContext: vi.fn() },
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
   return { runtime, stoppers };
 }
 
-function goal(over: Partial<Goal> = {}): Goal {
+function goal(over: Partial<StampedGoal> = {}): StampedGoal {
   return {
+    sensitivity: SensitivityLevel.Personal,
     goal_id: "goal-filings",
     motebit_id: "mote-test",
     prompt: "read the quarterly filing and summarise it",

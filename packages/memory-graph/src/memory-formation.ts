@@ -21,7 +21,7 @@
 import type { AttributedMemoryCandidate, MemoryNode, SensitivityLevel } from "@motebit/sdk";
 import { RelationType } from "@motebit/sdk";
 import { embedText } from "./embeddings.js";
-import { cosineSimilarity } from "./index.js";
+import { assertFormationTier, cosineSimilarity } from "./index.js";
 import type { MemoryGraph } from "./index.js";
 import type { ConsolidationProvider } from "./consolidation.js";
 
@@ -87,12 +87,14 @@ export async function formMemoriesFromCandidates(
   relevantMemories: readonly MemoryNode[],
 ): Promise<MemoryFormationResult> {
   if (candidates.length === 0) return { memoriesFormed: [] };
+  // Every candidate carries its tier before anything is embedded or stored.
+  for (const c of candidates) assertFormationTier(c);
 
   // 1. Parallel embed: candidate content is independent across items,
   //    so pay one round trip (or one CPU batch) instead of N. On
   //    mobile this is the difference between a UI stall per candidate
   //    and one stall per batch.
-  const embeddings = await Promise.all(candidates.map((c) => embedText(c.content)));
+  const embeddings = await Promise.all(candidates.map((c) => embedText(c.content, c.sensitivity)));
 
   // 2. Sequential form: consolidation decisions depend on graph state
   //    (the previous candidate may have merged into a cluster the

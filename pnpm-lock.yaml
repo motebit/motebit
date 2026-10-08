@@ -1976,6 +1976,9 @@ importers:
       '@motebit/persistence':
         specifier: workspace:*
         version: link:../persistence
+      '@motebit/tools':
+        specifier: workspace:*
+        version: link:../tools
       '@motebit/wallet-solana':
         specifier: workspace:*
         version: link:../wallet-solana

@@ -35,6 +35,7 @@ import {
   computePrecision,
 } from "@motebit/gradient";
 import type { GradientSnapshot } from "@motebit/sdk";
+import { SensitivityLevel } from "@motebit/sdk";
 import { GradientManager } from "../gradient-manager.js";
 import { InMemoryGradientStore } from "../gradient.js";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
@@ -126,7 +127,7 @@ describe("Condition 1 — the creature must see its own gaps", () => {
   it("the weakness narration reaches the assembled self-awareness (the REAL producer)", () => {
     const manager = makeManager([WEAK]);
     manager.applyStartupBaseline();
-    const awareness = manager.buildSelfAwareness();
+    const awareness = manager.buildSelfAwareness(SensitivityLevel.None);
     expect(awareness).toContain("Weaknesses:");
     expect(awareness).toContain("[Self-Model");
   });
@@ -139,16 +140,21 @@ describe("Condition 2 — context about what would fill the gaps", () => {
       {
         node: {
           content: "the user's home automation project",
+          sensitivity: "none",
           last_accessed: Date.now() - 5 * 86_400_000,
         },
         score: 0.9,
       },
       {
-        node: { content: "TypeScript strictness migration", last_accessed: Date.now() },
+        node: {
+          content: "TypeScript strictness migration",
+          sensitivity: "none",
+          last_accessed: Date.now(),
+        },
         score: 0.5,
       },
     ] as never);
-    const hints = manager.buildCuriosityHints();
+    const hints = manager.buildCuriosityHints(undefined);
     expect(hints).toBeDefined();
     expect(hints![0]!.content).toContain("home automation");
     expect(hints![0]!.daysSinceDiscussed).toBe(5);
@@ -156,13 +162,16 @@ describe("Condition 2 — context about what would fill the gaps", () => {
 
   it("reflection insights persist and re-enter the self-awareness block", () => {
     const manager = makeManager([WEAK]);
-    manager.setLastReflection({
-      insights: ["user is building a home automation system"],
-      planAdjustments: ["ask before assuming device topology"],
-      patterns: [],
-      selfAssessment: "thin coverage of the user's actual stack",
-    } as never);
-    const awareness = manager.buildSelfAwareness();
+    manager.setLastReflection(
+      {
+        insights: ["user is building a home automation system"],
+        planAdjustments: ["ask before assuming device topology"],
+        patterns: [],
+        selfAssessment: "thin coverage of the user's actual stack",
+      } as never,
+      SensitivityLevel.Personal,
+    );
+    const awareness = manager.buildSelfAwareness(SensitivityLevel.None);
     expect(awareness).toContain("[Last Reflection");
     expect(awareness).toContain("home automation system");
   });

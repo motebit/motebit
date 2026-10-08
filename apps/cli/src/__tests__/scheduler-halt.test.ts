@@ -1,3 +1,4 @@
+import { SensitivityLevel } from "@motebit/sdk";
 /**
  * Halt at the scheduler — where the word becomes the fact.
  *
@@ -10,11 +11,16 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GoalScheduler } from "../scheduler.js";
-import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
+import {
+  createMotebitDatabase,
+  type MotebitDatabase,
+  type StampedGoal,
+} from "@motebit/persistence";
 import { RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { HaltRequest, ToolDefinition, ToolHandler } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 function turnResult(): TurnResult {
   return {
@@ -177,12 +183,14 @@ function mockRuntime(
     consolidationCycle: vi.fn().mockImplementation(async () => {
       m.consolidations++;
     }),
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
   return m;
 }
 
-function goal(over: Partial<Goal> = {}): Goal {
+function goal(over: Partial<StampedGoal> = {}): StampedGoal {
   return {
+    sensitivity: SensitivityLevel.Personal,
     goal_id: "goal-001",
     motebit_id: "mote-test",
     prompt: "tidy the inbox",

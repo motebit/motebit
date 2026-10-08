@@ -107,6 +107,7 @@ function makeDeps(
     behaviorEngine,
     provider,
     consolidationProvider,
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   } as SensitivityCleared<MotebitLoopDependencies>;
 }
 

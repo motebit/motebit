@@ -30,7 +30,7 @@
  * `runtime.resumeAfterApproval` and phase 2 via `planEngine.resumePlan`.
  */
 
-import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import type { GoalRunGoal, GoalRunScope, MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import {
   paymentNoticeCopy,
   paidResultsOwedByRuns,
@@ -40,7 +40,8 @@ import {
 import type { PlanChunk, PlanEngine } from "@motebit/planner";
 import { isDelegationUndetermined } from "@motebit/planner";
 import { PlanStatus } from "@motebit/sdk";
-import type { ExpoGoalStore } from "./adapters/expo-sqlite";
+import { SensitivityLevel } from "@motebit/sdk";
+import type { ExpoGoalStore, GoalOutcome } from "./adapters/expo-sqlite";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
 
 export interface GoalCompleteEvent {
@@ -64,11 +65,31 @@ export interface GoalApprovalEvent {
   riskLevel?: number;
 }
 
-function formatTimeAgo(ms: number): string {
-  if (ms < 60_000) return "just now";
-  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
-  return `${Math.round(ms / 86_400_000)}d ago`;
+/** The goal fields a run reads. */
+type RunGoal = {
+  goal_id: string;
+  prompt: string;
+  mode: string;
+  budget_tokens?: number | null;
+} & GoalRunGoal;
+
+/** Parse interval strings like "1h", "30m", "1d", "1w" to milliseconds. */
+export function parseInterval(s: string): number {
+  const match = s.match(/^(\d+)\s*(m|h|d|w)$/i);
+  if (!match) return 3_600_000;
+  const n = parseInt(match[1]!, 10);
+  switch (match[2]!.toLowerCase()) {
+    case "m":
+      return n * 60_000;
+    case "h":
+      return n * 3_600_000;
+    case "d":
+      return n * 86_400_000;
+    case "w":
+      return n * 604_800_000;
+    default:
+      return 3_600_000;
+  }
 }
 
 export interface GoalSchedulerDeps {
@@ -76,6 +97,11 @@ export interface GoalSchedulerDeps {
   getMotebitId: () => string;
   getPlanEngine: () => PlanEngine | null;
   getStorage: () => ExpoStorageResult | null;
+}
+
+/** The plan store the scheduler's runs read and stamp. */
+function planStore(deps: GoalSchedulerDeps): ExpoStorageResult["planStore"] | null {
+  return deps.getStorage()?.planStore ?? null;
 }
 
 export class MobileGoalScheduler {
@@ -91,7 +117,17 @@ export class MobileGoalScheduler {
     prompt: string;
     mode: string;
     planId?: string;
+    /** The paused run: its goal (to re-enter at its stamp) and its tier so far. */
+    goal: RunGoal;
+    scope: GoalRunScope;
   } | null = null;
+
+  /**
+   * The run in flight (`runtime.beginGoalRun`): every interior item in its
+   * prompt passes through it, and what it produces — the outcome row, a
+   * plan, a sub-goal — is stamped from it.
+   */
+  private _scope: GoalRunScope | null = null;
 
   /**
    * The run in flight: its outcome id and start (#890). The start row is
@@ -112,6 +148,51 @@ export class MobileGoalScheduler {
 
   getGoalStore(): ExpoGoalStore | null {
     return this.deps.getStorage()?.goalStore ?? null;
+  }
+
+  /**
+   * The stamp for what the current run produces (no run: the session's
+   * write tier; no runtime either: unknowable, `secret`). Never absent.
+   */
+  private outcomeStamp(): SensitivityLevel {
+    return (
+      this._scope?.outcomeSensitivity() ??
+      this.deps.getRuntime()?.interiorWriteSensitivity() ??
+      SensitivityLevel.Secret
+    );
+  }
+
+  /**
+   * The `create_sub_goal` tool (wired by MobileApp): the model writes the
+   * sub-goal's text during the run, so it is stamped at the run's tier.
+   */
+  createSubGoal(
+    args: Record<string, unknown>,
+  ): Promise<
+    | { ok: true; data: { goal_id: string; prompt: string; mode: string; interval_ms: number } }
+    | { ok: false; error: string }
+  > {
+    const goalStore = this.getGoalStore();
+    if (this._currentGoalId == null || this._currentGoalId === "" || goalStore == null) {
+      return Promise.resolve({ ok: false, error: "No active goal context" });
+    }
+    const prompt = args.prompt as string;
+    const interval = args.interval as string | undefined;
+    const once = args.once as boolean | undefined;
+    const intervalMs = interval != null && interval !== "" ? parseInterval(interval) : 3_600_000;
+    const mode = once === true ? "once" : "recurring";
+    const subGoalId = goalStore.addGoal(
+      this.deps.getMotebitId(),
+      prompt,
+      intervalMs,
+      mode,
+      null,
+      this.outcomeStamp(),
+    );
+    return Promise.resolve({
+      ok: true,
+      data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs },
+    });
   }
 
   /**
@@ -200,9 +281,16 @@ export class MobileGoalScheduler {
     const goalStore = this.deps.getStorage()?.goalStore;
     if (!goalStore) throw new Error("Goal store not available");
 
-    const { goalId, prompt, mode, planId } = this._pendingGoalApproval;
+    const { goalId, prompt, mode, planId, goal } = this._pendingGoalApproval;
+    let scope: GoalRunScope | null = null;
 
     try {
+      // The continuation is the same run: re-entered at the goal's stamp,
+      // carrying the paused run's tier into what it produces.
+      scope = runtime.beginGoalRun(goal, {
+        inherit: this._pendingGoalApproval.scope.outcomeSensitivity(),
+      });
+      this._scope = scope;
       let accumulated = "";
 
       // Phase 1: Complete the current step via runtime approval resume
@@ -218,11 +306,15 @@ export class MobileGoalScheduler {
       if (planId != null && planId !== "" && planEngine != null) {
         const loopDeps = runtime.getLoopDeps();
         if (loopDeps) {
+          // Resuming the plan sends its steps: a send at its stamp.
+          const ps = planStore(this.deps);
+          scope.enterPlan(ps?.getPlan(planId) ?? {});
           const planResult = await this.consumePlanStream(
             planEngine.resumePlan(planId, loopDeps),
-            { goal_id: goalId, prompt, mode },
+            goal,
             planId,
           );
+          if (ps != null) scope.stampPlan(ps, planId);
           accumulated += planResult.responseFull;
           if (planResult.suspended) return; // Another approval needed
         }
@@ -245,6 +337,8 @@ export class MobileGoalScheduler {
       this.finishGoalFailure({ goal_id: goalId, prompt, mode }, msg, Date.now());
       throw err;
     } finally {
+      scope?.end();
+      this._scope = null;
       this._goalExecuting = false;
       this._currentGoalId = null;
       this._goalStatusCallback?.(false);
@@ -315,6 +409,9 @@ export class MobileGoalScheduler {
             tokens_used: null,
             response_full: null,
             signed_manifest: null,
+            // Replaced by the final outcome; a row left behind by a dead
+            // run carries no text and has no knowable taint.
+            sensitivity: SensitivityLevel.Secret,
           });
         } catch {
           continue;
@@ -331,12 +428,18 @@ export class MobileGoalScheduler {
             .getRecentOutcomes(goal.goal_id, 4)
             .filter((o) => o.status !== "running" && o.outcome_id !== runId)
             .slice(0, 3);
+          // The run sends at no lower tier than the goal's text — a goal
+          // written at Secret refuses here on an external provider — and
+          // its prompt carries only what that tier permits (runtime
+          // goal-run.ts).
+          const scope = runtime.beginGoalRun(goal);
+          this._scope = scope;
           const loopDeps = runtime.getLoopDeps();
           const planEngine = this.deps.getPlanEngine();
 
           // Plan-based execution when PlanEngine is available
           if (planEngine && loopDeps) {
-            const result = await this.executePlanGoal(goal, outcomes);
+            const result = await this.executePlanGoal(goal, outcomes, scope);
             if (result.suspended) return; // Waiting for approval
             await this.finishGoalSuccess(
               goal,
@@ -347,7 +450,7 @@ export class MobileGoalScheduler {
             );
           } else {
             // Fallback: single-turn streaming
-            const result = await this.executeSingleTurnGoal(goal, outcomes, now);
+            const result = await this.executeSingleTurnGoal(goal, outcomes, now, scope);
             if (result.suspended) return;
             await this.finishGoalSuccess(
               goal,
@@ -365,7 +468,11 @@ export class MobileGoalScheduler {
           if (isDelegationUndetermined(err)) this.finishGoalAwaitingResult(goal, msg, now);
           else this.finishGoalFailure(goal, msg, now);
         } finally {
+          // Released even when the run pauses for approval: the paused
+          // turn carries its own stamp, and the resume re-enters the run.
+          this._scope?.end();
           if (!this._pendingGoalApproval) {
+            this._scope = null;
             this._goalExecuting = false;
             this._currentGoalId = null;
             this._goalStatusCallback?.(false);
@@ -382,13 +489,9 @@ export class MobileGoalScheduler {
 
   /** Execute a goal with PlanEngine multi-step decomposition. */
   private async executePlanGoal(
-    goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
-    outcomes: Array<{
-      ran_at: number;
-      status: string;
-      summary: string | null;
-      error_message: string | null;
-    }>,
+    goal: RunGoal,
+    outcomes: GoalOutcome[],
+    scope: GoalRunScope,
   ): Promise<{
     suspended: boolean;
     summary: string;
@@ -410,6 +513,8 @@ export class MobileGoalScheduler {
     let planStream: AsyncGenerator<PlanChunk>;
 
     if (plan && plan.status === PlanStatus.Active) {
+      // Resuming the plan sends its steps: a send at its stamp.
+      scope.enterPlan(plan);
       planStream = planEngine.resumePlan(plan.plan_id, loopDeps);
     } else {
       const created = await planEngine.createPlan(
@@ -417,26 +522,28 @@ export class MobileGoalScheduler {
         this.deps.getMotebitId(),
         {
           goalPrompt: goal.prompt,
-          previousOutcomes: outcomes.map((o) =>
-            o.status === "failed"
-              ? `failed: ${o.error_message ?? "unknown"}`
-              : `${o.status}: ${o.summary ?? "no summary"}`,
-          ),
+          previousOutcomes: scope.planOutcomes(outcomes),
           availableTools: registry.list().map((t) => t.name),
         },
         loopDeps,
       );
       plan = created.plan;
+      scope.stampPlan(planStore, plan.plan_id);
       planStream = planEngine.executePlan(created.plan.plan_id, loopDeps);
     }
 
-    return this.consumePlanStream(planStream, goal, plan.plan_id);
+    try {
+      return await this.consumePlanStream(planStream, goal, plan.plan_id);
+    } finally {
+      // The plan's steps now carry what this run produced.
+      scope.stampPlan(planStore, plan.plan_id);
+    }
   }
 
   /** Consume a PlanEngine stream, handling approval requests. */
   private async consumePlanStream(
     stream: AsyncGenerator<PlanChunk>,
-    goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
+    goal: RunGoal,
     planId: string,
   ): Promise<{
     suspended: boolean;
@@ -459,6 +566,8 @@ export class MobileGoalScheduler {
             prompt: goal.prompt,
             mode: goal.mode,
             planId,
+            goal,
+            scope: this._scope!,
           };
           this._goalApprovalCallback?.({
             goalId: goal.goal_id,
@@ -501,14 +610,10 @@ export class MobileGoalScheduler {
 
   /** Execute a goal with simple single-turn streaming (fallback). */
   private async executeSingleTurnGoal(
-    goal: { goal_id: string; prompt: string; mode: string; budget_tokens?: number | null },
-    outcomes: Array<{
-      ran_at: number;
-      status: string;
-      summary: string | null;
-      error_message: string | null;
-    }>,
+    goal: RunGoal,
+    outcomes: GoalOutcome[],
     now: number,
+    scope: GoalRunScope,
   ): Promise<{
     suspended: boolean;
     summary: string;
@@ -516,23 +621,9 @@ export class MobileGoalScheduler {
     tokensUsed: number | null;
   }> {
     const runtime = this.deps.getRuntime()!;
-    let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
-    if (outcomes.length > 0) {
-      context += "\n\nPrevious executions (most recent first):";
-      for (const o of outcomes) {
-        const ago = formatTimeAgo(now - o.ran_at);
-        if (o.status === "failed" && o.error_message != null && o.error_message !== "") {
-          context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
-        } else if (o.summary != null && o.summary !== "") {
-          context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
-        } else {
-          context += `\n- ${ago}: ${o.status}`;
-        }
-      }
-    }
-    if (goal.mode === "once") {
-      context += "\n\nThis is a one-time goal. Complete it fully in this execution.";
-    }
+    // The goal and the earlier outcomes the run's tier permits — the one
+    // shared assembly (runtime goal-run.ts).
+    const context = scope.prompt(goal, outcomes, now);
 
     let accumulated = "";
     let tokensUsed: number | null = null;
@@ -557,6 +648,8 @@ export class MobileGoalScheduler {
           goalId: goal.goal_id,
           prompt: goal.prompt,
           mode: goal.mode,
+          goal,
+          scope,
         };
         this._goalApprovalCallback?.({
           goalId: goal.goal_id,
@@ -629,6 +722,7 @@ export class MobileGoalScheduler {
       // close).
       response_full: responseFull,
       signed_manifest: signedManifestJson,
+      sensitivity: this.outcomeStamp(),
     });
 
     if (goal.mode === "once") {
@@ -716,6 +810,7 @@ export class MobileGoalScheduler {
         tokens_used: null,
         response_full: null,
         signed_manifest: null,
+        sensitivity: this.outcomeStamp(),
       });
       goalStore.updateLastRun(goal.goal_id, now);
     } catch {
@@ -765,6 +860,7 @@ export class MobileGoalScheduler {
         // projection's `last_manifest_signed` resolve to NULL on the
         // card, hiding the indicator cleanly.
         signed_manifest: null,
+        sensitivity: this.outcomeStamp(),
       });
     } catch {
       /* non-fatal */

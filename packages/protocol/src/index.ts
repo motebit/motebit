@@ -1398,6 +1398,14 @@ export interface Plan {
   total_steps: number;
   proposal_id?: ProposalId;
   collaborative?: boolean;
+  /**
+   * The highest sensitivity tier the plan's content (its steps' prompts and
+   * results, derived from the goal and the turns that ran them) was produced
+   * at. A plan is executed or resumed at no lower tier; an unstamped plan is
+   * treated as `secret` (fail-closed). Local to the device: not on the sync
+   * wire, so a plan first seen through sync is unstamped.
+   */
+  sensitivity?: SensitivityLevel;
 }
 
 // === Plan Sync ===

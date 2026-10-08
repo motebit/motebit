@@ -114,6 +114,11 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
         motebit_id TEXT NOT NULL,
         content TEXT NOT NULL
       );
+      CREATE TABLE plans (
+        plan_id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL,
+        title TEXT NOT NULL
+      );
     `);
   });
 
@@ -165,6 +170,19 @@ describe("tauri-migrations — runDesktopMigrations over Tauri IPC mock", () => 
     }>;
     expect(nodeCols.some((c) => c.name === "source")).toBe(true);
     expect(nodeCols.some((c) => c.name === "source_turn_id")).toBe(true);
+
+    // v9 column — the tier a plan's derived content was produced at
+    const planCols = db.prepare("PRAGMA table_info(plans)").all() as Array<{ name: string }>;
+    expect(planCols.some((c) => c.name === "sensitivity")).toBe(true);
+
+    // v10 columns — the tier goal text and run outcomes were produced at
+    for (const table of ["goals", "goal_outcomes"]) {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      expect(
+        cols.some((c) => c.name === "sensitivity"),
+        table,
+      ).toBe(true);
+    }
 
     const version = db.prepare("PRAGMA user_version").get() as { user_version: number };
     expect(version.user_version).toBe(latest);

@@ -1,12 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GoalScheduler } from "../scheduler.js";
-import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
+import {
+  createMotebitDatabase,
+  type MotebitDatabase,
+  type StampedGoal,
+} from "@motebit/persistence";
 import { EventType, RiskLevel, SensitivityLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { ToolDefinition, ToolHandler, MemoryNode } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
 import type { PlanEngine, PlanStoreAdapter } from "@motebit/planner";
 import { InMemoryPlanStore } from "@motebit/planner";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 function makeMockTurnResult(): TurnResult {
   return {
@@ -172,13 +177,15 @@ function createMockRuntime(
     }),
     stop: vi.fn(),
     consolidationCycle: vi.fn().mockResolvedValue(undefined),
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
 
   return { runtime, registeredTools, eventsAppended, memoryGraph };
 }
 
-function makeGoal(overrides: Partial<Goal> = {}): Goal {
+function makeGoal(overrides: Partial<StampedGoal> = {}): StampedGoal {
   return {
+    sensitivity: SensitivityLevel.Personal,
     goal_id: "goal-001",
     motebit_id: "mote-test",
     prompt: "check system health",
@@ -240,7 +247,8 @@ describe("GoalScheduler — learning loop", () => {
       expect(call[0].content).toContain("check system health");
       expect(call[0].content).toContain("System health check passed");
       expect(call[0].confidence).toBe(0.6);
-      expect(call[0].sensitivity).toBe(SensitivityLevel.None);
+      // Stamped at the run's tier — the default (none) session's ceiling.
+      expect(call[0].sensitivity).toBe(SensitivityLevel.Personal);
     });
 
     it("does not form memory when response is empty", async () => {
@@ -345,7 +353,9 @@ describe("GoalScheduler — learning loop", () => {
       expect(memoryGraph.formMemory.mock.calls[0]![0]).toMatchObject({
         content: "[goal_learning] All API endpoints respond under 200ms",
         confidence: 0.7,
-        sensitivity: SensitivityLevel.None,
+        // Stamped with the tier of the run that reflected (a calm run:
+        // the context-safe ceiling) — never a default `none`.
+        sensitivity: SensitivityLevel.Personal,
       });
       expect(memoryGraph.formMemory.mock.calls[1]![0]).toMatchObject({
         content: "[goal_learning] Database connection pool is healthy",

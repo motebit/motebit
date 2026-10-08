@@ -13,6 +13,19 @@ import type { GoalRunRecord } from "../goal-engine.js";
 import { createWebGoalsScheduler } from "../goal-scheduler.js";
 import { latestPaymentNotice } from "../goal-engine.js";
 import type { WebApp } from "../web-app.js";
+import { createGoalRun } from "@motebit/runtime";
+import type { GoalRunGoal } from "@motebit/runtime";
+import { SensitivityLevel } from "@motebit/sdk";
+
+/** A goal run on a runtime at the default tier with no gate (the fake runtime). */
+function passthroughRun(goal: GoalRunGoal) {
+  return createGoalRun({
+    goal,
+    effective: () => SensitivityLevel.None,
+    raise: () => () => {},
+    assert: () => {},
+  });
+}
 
 const HOURLY = 3_600_000;
 const DAILY = 86_400_000;
@@ -279,6 +292,8 @@ describe("createWebGoalsScheduler — goal_executed emission (#594 Inc 3b prereq
         },
         signGoalArtifact: () => Promise.resolve(null),
         outstandingPaidResults: () => [],
+        beginGoalRun: passthroughRun,
+        goalCreationSensitivity: () => SensitivityLevel.Personal,
       },
     };
   }
@@ -397,6 +412,8 @@ describe("createWebGoalsScheduler — goal_executed emission (#594 Inc 3b prereq
         goals: { executed: () => Promise.reject(new Error("ledger unavailable")) },
         signGoalArtifact: () => Promise.resolve(null),
         outstandingPaidResults: () => [],
+        beginGoalRun: passthroughRun,
+        goalCreationSensitivity: () => SensitivityLevel.Personal,
       }),
       async *sendMessageStreaming() {
         yield { type: "text", text: "ok" };
@@ -418,6 +435,8 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
         goals: { executed: () => Promise.resolve() },
         signGoalArtifact: () => Promise.resolve(null),
         outstandingPaidResults: () => owed,
+        beginGoalRun: passthroughRun,
+        goalCreationSensitivity: () => SensitivityLevel.Personal,
       }),
       async *sendMessageStreaming() {
         turns++;
@@ -459,6 +478,8 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
           },
         },
         outstandingPaidResults: () => [],
+        beginGoalRun: passthroughRun,
+        goalCreationSensitivity: () => SensitivityLevel.Personal,
       }),
       async *executeGoal() {
         yield { type: "plan_created", plan: { title: "Hire", total_steps: 1 } };
@@ -489,6 +510,8 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
       getRuntime: () => ({
         goals: { executed: () => Promise.resolve() },
         outstandingPaidResults: () => [],
+        beginGoalRun: passthroughRun,
+        goalCreationSensitivity: () => SensitivityLevel.Personal,
       }),
       async *executeGoal() {
         yield { type: "plan_busy", plan: {} };
@@ -517,6 +540,8 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
         goals: { executed: () => Promise.resolve() },
         signGoalArtifact: () => Promise.resolve(null),
         outstandingPaidResults: () => owed,
+        beginGoalRun: passthroughRun,
+        goalCreationSensitivity: () => SensitivityLevel.Personal,
       }),
       async *sendMessageStreaming() {
         turns.n++;
@@ -557,5 +582,37 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
     const reloaded = createWebGoalsScheduler(appOwing(owed, turns) as unknown as WebApp);
     expect((await reloaded.runNow(goalId)).outcome).toBe("fired");
     expect(turns.n).toBe(1);
+  });
+});
+
+describe("createWebGoalsScheduler — the goal's text obeys the send tier", () => {
+  it("stamps a new goal at the session's tier and refuses a fire the gate refuses, before any send", async () => {
+    const sends: string[] = [];
+    const runtime = {
+      goals: { executed: () => Promise.resolve() },
+      signGoalArtifact: () => Promise.resolve(null),
+      outstandingPaidResults: () => [],
+      goalCreationSensitivity: () => SensitivityLevel.Secret,
+      beginGoalRun: (goal: GoalRunGoal) => {
+        if (goal.sensitivity === SensitivityLevel.Secret)
+          throw new Error('Session sensitivity "secret" requires sovereign (on-device) provider');
+        return passthroughRun(goal);
+      },
+    };
+    const app = makeApp({
+      getRuntime: () => runtime,
+      async *sendMessageStreaming(prompt: string) {
+        sends.push(prompt);
+        yield { type: "text", text: "ok" };
+      },
+    });
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "the vault code", interval_ms: 3_600_000, mode: "recurring" });
+    const goal = engine.getState().goals[0]!;
+    expect(goal.sensitivity).toBe(SensitivityLevel.Secret);
+
+    const result = await engine.runNow(goal.goal_id);
+    expect(result.outcome).toBe("error");
+    expect(sends).toEqual([]);
   });
 });

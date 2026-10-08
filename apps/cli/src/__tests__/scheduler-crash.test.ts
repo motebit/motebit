@@ -18,6 +18,7 @@ import { createMotebitDatabase } from "@motebit/persistence";
 import { RiskLevel } from "@motebit/sdk";
 import { GoalScheduler } from "../scheduler.js";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CHILD = path.join(here, "fixtures", "crash-child.ts");
@@ -99,6 +100,7 @@ describe("durable execution — a real process death after the effect, before th
         getToolRegistry: () => ({ register: () => undefined, replace: () => undefined }),
         stop: () => undefined,
         consolidationCycle: noop,
+        ...goalRunFakes(),
       } as unknown as MotebitRuntime;
       const s = new GoalScheduler(
         runtime,

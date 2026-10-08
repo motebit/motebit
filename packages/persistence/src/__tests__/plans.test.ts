@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { PlanStatus, StepStatus } from "@motebit/sdk";
+import { PlanStatus, SensitivityLevel, StepStatus } from "@motebit/sdk";
 import type { Plan, PlanStep } from "@motebit/sdk";
 import { createMotebitDatabase, type MotebitDatabase } from "../index.js";
 
@@ -188,5 +188,22 @@ describe("SqlitePlanStore", () => {
 
     const found = moteDb.planStore.getPlanForGoal("goal-001");
     expect(found!.plan_id).toBe("plan-new");
+  });
+
+  it("persists a plan's sensitivity stamp; a save without one never erases it", () => {
+    moteDb.planStore.savePlan(makePlan({ sensitivity: SensitivityLevel.Secret }));
+    expect(moteDb.planStore.getPlan("plan-001")?.sensitivity).toBe(SensitivityLevel.Secret);
+    // A sync import carries no stamp (it is local) — the record keeps it.
+    moteDb.planStore.savePlan(makePlan({ title: "synced" }));
+    const synced = moteDb.planStore.getPlan("plan-001");
+    expect(synced?.title).toBe("synced");
+    expect(synced?.sensitivity).toBe(SensitivityLevel.Secret);
+    moteDb.planStore.updatePlan("plan-001", { sensitivity: SensitivityLevel.Personal });
+    expect(moteDb.planStore.getPlan("plan-001")?.sensitivity).toBe(SensitivityLevel.Personal);
+  });
+
+  it("a legacy plan reads back unstamped", () => {
+    moteDb.planStore.savePlan(makePlan());
+    expect(moteDb.planStore.getPlan("plan-001")?.sensitivity).toBeUndefined();
   });
 });

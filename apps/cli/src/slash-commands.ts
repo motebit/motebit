@@ -1319,6 +1319,9 @@ export async function handleSlashCommand(
           consecutive_failures: 0,
           wall_clock_ms: wallClockMs,
           project_id: projectId,
+          // Written at the session's tier; a scheduled run sends at no
+          // lower tier (runtime goal-run.ts).
+          sensitivity: runtime.goalCreationSensitivity(),
         });
         const modeLabel = once ? " (one-shot)" : "";
         const wallClockLabel = wallClockMs != null ? ` (wall-clock: ${wallClockMatch![1]})` : "";
@@ -2687,7 +2690,7 @@ export async function handleSlashCommand(
       for (const r of records) {
         const badge = renderProvenanceBadge(r);
         const enabledTag = r.index.enabled ? "" : dim(" [disabled]");
-        const sensitivity = r.manifest.motebit.sensitivity ?? "none";
+        const sensitivity = r.manifest.motebit.sensitivity ?? "none"; // write-tier-gate: exempt skill manifest display
         const sensTag = sensitivity === "none" ? "" : dim(` [${sensitivity}]`);
         console.log(
           `  ${cyan(r.manifest.name)} ${dim(`v${r.manifest.version}`)} ${badge}${sensTag}${enabledTag}`,

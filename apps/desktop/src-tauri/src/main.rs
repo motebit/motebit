@@ -904,16 +904,35 @@ fn goals_create(
     interval_ms: i64,
     mode: String,
     budget_tokens: Option<i64>,
+    parent_goal_id: Option<String>,
+    // The tier the goal's text was written at. Required: a row written
+    // without it would take the legacy rule meant only for rows that
+    // pre-date the column (runtime goal-run.ts).
+    sensitivity: String,
 ) -> Result<(), String> {
+    const TIERS: [&str; 5] = ["none", "personal", "medical", "financial", "secret"];
+    if !TIERS.contains(&sensitivity.as_str()) {
+        return Err(format!("goals_create: invalid sensitivity {sensitivity:?}"));
+    }
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_millis() as i64;
     db.execute(
-        "INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, mode, status, created_at, budget_tokens) \
-         VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7)",
-        rusqlite::params![goal_id, motebit_id, prompt, interval_ms, mode, now, budget_tokens],
+        "INSERT INTO goals (goal_id, motebit_id, prompt, interval_ms, mode, status, created_at, budget_tokens, parent_goal_id, sensitivity) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            goal_id,
+            motebit_id,
+            prompt,
+            interval_ms,
+            mode,
+            now,
+            budget_tokens,
+            parent_goal_id,
+            sensitivity
+        ],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
