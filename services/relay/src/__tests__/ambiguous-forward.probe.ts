@@ -56,6 +56,7 @@ import {
   createAgent,
   createTestRelay,
   jsonAuthWithIdempotency,
+  establishMutualPeering,
 } from "./test-helpers.js";
 import { toMicro } from "../accounts.js";
 
@@ -433,68 +434,12 @@ function interceptFetch(
   });
 }
 
-/** Peer the two relays: insert each as an ACTIVE peer of the other (federation-e2e's handshake). */
+/** Peer the two relays: v2 handshake both ways (federation-e2e's handshake). */
 async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<void> {
-  const id = async (r: SyncRelay) =>
-    (await (await r.app.request("/federation/v1/identity")).json()) as {
-      relay_motebit_id: string;
-      public_key: string;
-    };
-  const idA = await id(relayA);
-  const idB = await id(relayB);
-  const propose = async (on: SyncRelay, body: Record<string, unknown>) =>
-    (await (
-      await on.app.request("/federation/v1/peer/propose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })
-    ).json()) as { nonce: string; challenge: string };
-  const nB = (
-    await propose(relayB, {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: RELAY_A_URL,
-      display_name: "Relay A",
-      nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
-    })
-  ).nonce;
-  const nA = (
-    await propose(relayA, {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: RELAY_B_URL,
-      display_name: "Relay B",
-      nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
-    })
-  ).nonce;
-  const sigA = (
-    await propose(relayA, {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: RELAY_A_URL,
-      nonce: nB,
-    })
-  ).challenge;
-  const sigB = (
-    await propose(relayB, {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: RELAY_B_URL,
-      nonce: nA,
-    })
-  ).challenge;
-  for (const [on, relayId, challenge] of [
-    [relayB, idA.relay_motebit_id, sigA],
-    [relayA, idB.relay_motebit_id, sigB],
-  ] as const) {
-    const res = await on.app.request("/federation/v1/peer/confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ relay_id: relayId, challenge_response: challenge }),
-    });
-    if (res.status !== 200) throw new Error(`peer confirm failed: ${res.status}`);
-  }
+  await establishMutualPeering(relayA, RELAY_A_URL, relayB, RELAY_B_URL, {
+    a: "Relay A",
+    b: "Relay B",
+  });
 }
 
 async function registerAgent(relay: SyncRelay, name: string, capabilities: string[]) {

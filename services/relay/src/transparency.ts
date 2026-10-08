@@ -199,15 +199,15 @@ export const DECLARATION_CONTENT = {
       retention_window:
         "7 days from the hand-off (a route) or the answer (an answer), swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route or an answer; an answer whose settlement is claimed but not yet written is kept while its task is still queued (a queued task with such an answer is held up to 7 days past its expiry), so the next retry or the settlement-recovery sweep settles it; an owed result is kept while it is still owed, and 7 days from its first attempt once delivered, refused or out of attempts",
     },
-    // A known federation peer's re-proposal, held beside its peer row until a
-    // confirm proves the stored key (an unconfirmed proposal never touches it).
-    peer_proposals: {
-      tables: ["relay_peer_proposals"],
+    // Federation handshake v2 (relay-federation@1.5 §3.1): a propose writes
+    // nothing; a confirm that verified redeems its nonce here, once.
+    peer_handshake_nonces: {
+      tables: ["relay_peer_handshake_nonces"],
       observable: [
-        "for every re-proposal of a federation peer this relay has peered with before: the peer relay id, the endpoint URL and display name it proposed, its protocol version, the nonce this relay issued, and when — applied to the peer row only by a confirm signed by the peer's stored key",
+        "for every federation peering confirm that verified: the nonce this relay issued for it, the peer relay id, and when the nonce would have expired — so a nonce is redeemed once; nothing is recorded for a proposal or for a confirm that did not verify",
       ],
       retention_window:
-        "10 minutes from the proposal (expired rows are deleted at the next proposal), at most 8 per peer id; deleted when a confirm applies one",
+        "until the nonce would have expired (10 minutes from its issue), deleted at the next verified confirm",
     },
     // The machine roster (docs/doctrine/machine-roster.md; design:
     // docs/proposals/machine-roster-relay-v1.md D3/D4). Its own category:
@@ -717,14 +717,16 @@ export function renderMarkdown(): string {
   lines.push(`Retention window: ${c.retention.task_routes.retention_window}.`);
   lines.push("");
 
-  lines.push("### Federation peer re-proposals");
+  lines.push("### Federation peering nonces");
   lines.push("");
-  lines.push(`Tables: ${c.retention.peer_proposals.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push(
+    `Tables: ${c.retention.peer_handshake_nonces.tables.map((t) => `\`${t}\``).join(", ")}.`,
+  );
   lines.push("");
   lines.push("Observable:");
-  for (const item of c.retention.peer_proposals.observable) lines.push(`- ${item}`);
+  for (const item of c.retention.peer_handshake_nonces.observable) lines.push(`- ${item}`);
   lines.push("");
-  lines.push(`Retention window: ${c.retention.peer_proposals.retention_window}.`);
+  lines.push(`Retention window: ${c.retention.peer_handshake_nonces.retention_window}.`);
   lines.push("");
 
   lines.push("### Machine roster");

@@ -270,8 +270,8 @@ async function phase1() {
     // together — federation-e2e.test.ts has a defensive test that catches the constant↔doc
     // drift, but this live-test assertion has no such backstop.
     const specOk =
-      identityA.spec === "motebit/relay-federation@1.3" &&
-      identityB.spec === "motebit/relay-federation@1.3";
+      identityA.spec === "motebit/relay-federation@1.5" &&
+      identityB.spec === "motebit/relay-federation@1.5";
     expect(specOk, `A.spec=${identityA.spec}, B.spec=${identityB.spec}`);
   } else {
     fail("cannot check — identity fetch failed");
@@ -334,11 +334,13 @@ async function phase2() {
   // Step 1: Propose — synthetic peer proposes to Relay B
   test("Peering proposal accepted by Relay B");
   let peerNonce = null;
+  let verifierRelayId = null;
   try {
     const nonce = crypto.randomUUID();
     const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/propose`, {
       method: "POST",
       body: JSON.stringify({
+        handshake_version: "v2",
         relay_id: syntheticRelayId,
         public_key: syntheticPeer.publicKeyHex,
         endpoint_url: `https://synthetic-test-peer.invalid`,
@@ -362,6 +364,7 @@ async function phase2() {
         fail(`missing fields in proposal response: ${JSON.stringify(body)}`);
       } else {
         peerNonce = body.nonce;
+        verifierRelayId = body.relay_id;
         pass();
       }
     }
@@ -373,20 +376,24 @@ async function phase2() {
   test("Peering confirmation completes handshake");
   if (peerNonce) {
     try {
-      // Sign: ${relay_id}:${nonce}:${FEDERATION_SUITE}. The suite suffix
-      // binds the handshake to a specific cryptosuite per
-      // services/relay/src/federation.ts (FEDERATION_SUITE constant on
-      // line 27). The script was written before the suite-binding
-      // landed during the 2026-04-13 cryptosuite-agility pass; updating
-      // here closes that drift.
+      // Handshake v2 (relay-federation@1.5 §3.1.1): the role-bound CONFIRM
+      // message names prover, verifier, the verifier's nonce, the suite and
+      // the endpoint the verifier will store.
       const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";
-      const confirmMsg = Buffer.from(`${syntheticRelayId}:${peerNonce}:${FEDERATION_SUITE}`);
+      const endpointUrl = `https://synthetic-test-peer.invalid`;
+      const confirmMsg = Buffer.from(
+        `motebit-federation-confirm:v2:${syntheticRelayId}:${verifierRelayId}:${peerNonce}:${FEDERATION_SUITE}:${endpointUrl}`,
+      );
       const challengeResponse = signBytes(confirmMsg, syntheticPrivKey);
 
       const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/confirm`, {
         method: "POST",
         body: JSON.stringify({
+          handshake_version: "v2",
           relay_id: syntheticRelayId,
+          public_key: syntheticPeer.publicKeyHex,
+          endpoint_url: endpointUrl,
+          nonce: peerNonce,
           challenge_response: toHex(challengeResponse),
         }),
       });
@@ -446,6 +453,7 @@ async function phase2() {
     const { status, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/propose`, {
       method: "POST",
       body: JSON.stringify({
+        handshake_version: "v2",
         relay_id: identityA.relay_motebit_id,
         public_key: identityA.public_key,
         endpoint_url: RELAY_A_URL,
@@ -1151,11 +1159,11 @@ async function phase8() {
   }
 
   // 8.1 — stg-c identity check
-  test("Phase 8.1: stg-c reports motebit/relay-federation@1.3 + vote_policy_configured");
+  test("Phase 8.1: stg-c reports motebit/relay-federation@1.5 + vote_policy_configured");
   const idC = await fetchJSON(`${RELAY_C_URL}/federation/v1/identity`);
   if (
     idC.ok &&
-    idC.body.spec === "motebit/relay-federation@1.3" &&
+    idC.body.spec === "motebit/relay-federation@1.5" &&
     idC.body.vote_policy_configured === true
   ) {
     pass();
@@ -1166,11 +1174,11 @@ async function phase8() {
   }
 
   // 8.2 — stg-d identity check
-  test("Phase 8.2: stg-d reports motebit/relay-federation@1.3 + vote_policy_configured");
+  test("Phase 8.2: stg-d reports motebit/relay-federation@1.5 + vote_policy_configured");
   const idD = await fetchJSON(`${RELAY_D_URL}/federation/v1/identity`);
   if (
     idD.ok &&
-    idD.body.spec === "motebit/relay-federation@1.3" &&
+    idD.body.spec === "motebit/relay-federation@1.5" &&
     idD.body.vote_policy_configured === true
   ) {
     pass();

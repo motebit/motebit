@@ -14,7 +14,7 @@
  * and a failed confirm never erases an established peer's row (which would
  * free the id for a fresh proposal under any key).
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { createTestRelay } from "./test-helpers.js";
 // eslint-disable-next-line no-restricted-imports -- the attacker needs raw key material
@@ -35,7 +35,8 @@ async function fed(
   const res = await relay.app.request(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    // Handshake v2 on every call; the cases here are about the row, not the wire.
+    body: JSON.stringify({ handshake_version: "v2", ...(body as Record<string, unknown>) }),
   });
   const text = await res.text();
   return { status: res.status, body: text ? (JSON.parse(text) as Record<string, unknown>) : null };
@@ -60,13 +61,24 @@ async function propose(relay: SyncRelay, relayId: string, k: Keys, url: string) 
   });
 }
 
-async function confirm(relay: SyncRelay, relayId: string, nonce: string, k: Keys) {
+async function confirm(
+  relay: SyncRelay,
+  relayId: string,
+  nonce: string,
+  k: Keys,
+  url: string = PEER_URL,
+) {
   const challenge = await sign(
-    new TextEncoder().encode(`${relayId}:${nonce}:${FEDERATION_SUITE}`),
+    new TextEncoder().encode(
+      `motebit-federation-confirm:v2:${relayId}:${relay.relayIdentity.relayMotebitId}:${nonce}:${FEDERATION_SUITE}:${url}`,
+    ),
     k.privateKey,
   );
   return fed(relay, "/federation/v1/peer/confirm", {
     relay_id: relayId,
+    public_key: k.publicKeyHex,
+    endpoint_url: url,
+    nonce,
     challenge_response: bytesToHex(challenge),
   });
 }
@@ -279,11 +291,14 @@ describe("federation — an unconfirmed re-proposal never touches a known peer's
     const before = row()!;
     const p = await propose(relay, peerId, peer, PEER_URL);
     expect(p.status).toBe(200);
-    relay.moteDb.db
-      .prepare("UPDATE relay_peer_proposals SET expires_at = 1 WHERE peer_relay_id = ?")
-      .run(peerId);
-    const c = await confirm(relay, peerId, (p.body as { nonce: string }).nonce, peer);
-    expect(c.status).toBe(404);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+      const c = await confirm(relay, peerId, (p.body as { nonce: string }).nonce, peer);
+      expect(c.status).toBe(403);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(row()).toEqual(before);
   });
 });

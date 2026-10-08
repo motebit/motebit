@@ -123,6 +123,7 @@ import {
   createTestRelay,
   fakeSolanaTxHash,
   jsonAuthWithIdempotency,
+  establishMutualPeering,
 } from "./test-helpers.js";
 import { toMicro } from "../accounts.js";
 import { forwardTaskViaMcp } from "../task-routing.js";
@@ -878,67 +879,7 @@ async function mcpCell(env: CellEnv, c: Cell, ip: string): Promise<Record<string
 let fedSeq = 0;
 
 async function peer(a: SyncRelay, aUrl: string, b: SyncRelay, bUrl: string): Promise<void> {
-  const id = async (r: SyncRelay) =>
-    (await (await r.app.request("/federation/v1/identity")).json()) as {
-      relay_motebit_id: string;
-      public_key: string;
-    };
-  const idA = await id(a);
-  const idB = await id(b);
-  const propose = async (on: SyncRelay, body: Record<string, unknown>) =>
-    (await (
-      await on.app.request("/federation/v1/peer/propose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })
-    ).json()) as { nonce: string; challenge: string };
-  const nonce = () => bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-  const nB = (
-    await propose(b, {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: aUrl,
-      display_name: "A",
-      nonce: nonce(),
-    })
-  ).nonce;
-  const nA = (
-    await propose(a, {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: bUrl,
-      display_name: "B",
-      nonce: nonce(),
-    })
-  ).nonce;
-  const sigA = (
-    await propose(a, {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: aUrl,
-      nonce: nB,
-    })
-  ).challenge;
-  const sigB = (
-    await propose(b, {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: bUrl,
-      nonce: nA,
-    })
-  ).challenge;
-  for (const [on, relayId, challenge] of [
-    [b, idA.relay_motebit_id, sigA],
-    [a, idB.relay_motebit_id, sigB],
-  ] as const) {
-    const res = await on.app.request("/federation/v1/peer/confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ relay_id: relayId, challenge_response: challenge }),
-    });
-    if (res.status !== 200) throw new Error(`peer confirm failed: ${res.status}`);
-  }
+  await establishMutualPeering(a, aUrl, b, bUrl, { a: "A", b: "B" });
 }
 
 async function fedCell(env: CellEnv, c: Cell): Promise<Record<string, unknown>> {

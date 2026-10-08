@@ -620,6 +620,12 @@ export interface SyncRelayConfig {
      * `FederationConfig.requireDiscoverSignature`.
      */
     requireDiscoverSignature?: boolean;
+    /**
+     * Federation requests per minute per SOURCE, counted before anything is
+     * authenticated (default 300). Passed through to
+     * `FederationConfig.sourceRateLimitPerMinute`.
+     */
+    sourceRateLimitPerMinute?: number;
   };
   /** Platform fee rate for settlement (0–1). Default: 0.05 (5%). Protocol supports any value. */
   platformFeeRate?: number;

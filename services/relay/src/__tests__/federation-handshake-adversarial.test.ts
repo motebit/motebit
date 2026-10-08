@@ -133,7 +133,8 @@ async function vPropose(w: World): Promise<Res> {
 
 async function vConfirm(w: World, proposal: Res): Promise<Res> {
   const nonce = (proposal.body as { nonce: string }).nonce;
-  // V's operator asks V (authenticated) for V's confirm over T's nonce.
+  // V's operator asks V (master token) for V's confirm over T's nonce — the
+  // only producer of V's confirm.
   const signed = await post(
     w.v,
     "/api/v1/admin/federation/peer-confirm-signature",
@@ -141,19 +142,8 @@ async function vConfirm(w: World, proposal: Res): Promise<Res> {
     V_IP,
     AUTH_HEADER,
   );
-  let body: unknown;
-  if (signed.status === 200) {
-    body = signed.body;
-  } else {
-    // v1: V's public self-propose produced the confirm signature.
-    const self = await post(
-      w.v,
-      "/federation/v1/peer/propose",
-      { relay_id: w.vId, public_key: w.vPub, endpoint_url: V_URL, nonce },
-      V_IP,
-    );
-    body = { relay_id: w.vId, challenge_response: (self.body as { challenge: string }).challenge };
-  }
+  expect(signed.status, JSON.stringify(signed.body)).toBe(200);
+  const body = signed.body;
   w.sentConfirms.push(body);
   return post(w.t, "/federation/v1/peer/confirm", body, V_IP);
 }
@@ -420,4 +410,51 @@ describe("federation handshake — adversarial state × action model", () => {
       });
     }
   }
+});
+
+describe("federation handshake — v1 fails closed, by name", () => {
+  const open: SyncRelay[] = [];
+  afterEach(async () => {
+    while (open.length) await open.pop()!.close();
+  });
+
+  it("a v1 propose, a v1 confirm and a self-propose are refused 400 and write nothing", async () => {
+    const t = await createTestRelay({ federation: { endpointUrl: T_URL } });
+    open.push(t);
+    const kp = await generateKeypair();
+    const id = `relay-${crypto.randomUUID()}`;
+    const v1Propose = await post(
+      t,
+      "/federation/v1/peer/propose",
+      { relay_id: id, public_key: bytesToHex(kp.publicKey), endpoint_url: V_URL, nonce: rand() },
+      V_IP,
+    );
+    expect(v1Propose.status).toBe(400);
+    expect(JSON.stringify(v1Propose.body)).toMatch(/handshake_version/);
+    const sig = bytesToHex(
+      await sign(new TextEncoder().encode(`${id}:${rand()}:${SUITE}`), kp.privateKey),
+    );
+    const v1Confirm = await post(
+      t,
+      "/federation/v1/peer/confirm",
+      { relay_id: id, challenge_response: sig },
+      V_IP,
+    );
+    expect(v1Confirm.status).toBe(400);
+    expect(JSON.stringify(v1Confirm.body)).toMatch(/handshake_version/);
+    const self = await post(
+      t,
+      "/federation/v1/peer/propose",
+      {
+        handshake_version: "v2",
+        relay_id: t.relayIdentity.relayMotebitId,
+        public_key: t.relayIdentity.publicKeyHex,
+        endpoint_url: T_URL,
+        nonce: rand(),
+      },
+      V_IP,
+    );
+    expect(self.status).toBe(400);
+    expect(t.moteDb.db.prepare("SELECT COUNT(*) AS n FROM relay_peers").get()).toEqual({ n: 0 });
+  });
 });

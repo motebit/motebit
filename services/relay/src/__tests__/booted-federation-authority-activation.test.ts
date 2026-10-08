@@ -111,10 +111,16 @@ async function becomeActivePeer(baseUrl: string): Promise<HostilePeer> {
   const relayId = `relay-${crypto.randomUUID()}`;
   const headers = { "Content-Type": "application/json" };
 
+  const verifierId = (
+    (await (await fetch(`${baseUrl}/federation/v1/identity`)).json()) as {
+      relay_motebit_id: string;
+    }
+  ).relay_motebit_id;
   const propose = await fetch(`${baseUrl}/federation/v1/peer/propose`, {
     method: "POST",
     headers,
     body: JSON.stringify({
+      handshake_version: "v2",
       relay_id: relayId,
       public_key: bytesToHex(kp.publicKey),
       endpoint_url: PEER_ENDPOINT,
@@ -125,13 +131,22 @@ async function becomeActivePeer(baseUrl: string): Promise<HostilePeer> {
   const { nonce } = (await propose.json()) as { nonce: string };
 
   const challenge = await sign(
-    new TextEncoder().encode(`${relayId}:${nonce}:${FEDERATION_SUITE}`),
+    new TextEncoder().encode(
+      `motebit-federation-confirm:v2:${relayId}:${verifierId}:${nonce}:${FEDERATION_SUITE}:${PEER_ENDPOINT}`,
+    ),
     kp.privateKey,
   );
   const confirm = await fetch(`${baseUrl}/federation/v1/peer/confirm`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ relay_id: relayId, challenge_response: bytesToHex(challenge) }),
+    body: JSON.stringify({
+      handshake_version: "v2",
+      relay_id: relayId,
+      public_key: bytesToHex(kp.publicKey),
+      endpoint_url: PEER_ENDPOINT,
+      nonce,
+      challenge_response: bytesToHex(challenge),
+    }),
   });
   expect(confirm.status, "arrange: confirm is accepted with no authorization").toBe(200);
   const confirmBody = (await confirm.json()) as { status: string };

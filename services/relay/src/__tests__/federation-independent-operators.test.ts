@@ -8,8 +8,9 @@
  * would make federation a single-trust-domain shortcut.
  *
  * This is the in-process, deterministic CI guard for that invariant: two relays
- * with DISTINCT admin tokens complete the signed peering handshake, and the
- * `/federation/v1/*` routes are NOT gated by the admin token (they are
+ * with DISTINCT admin tokens complete the signed peering handshake — each
+ * operator authorizing only its OWN relay's confirm, with its own token — and
+ * the `/federation/v1/*` routes are NOT gated by the admin token (they are
  * signature-authed). The regression it forecloses: someone later couples
  * federation auth to the bearer token — this test goes red the moment a peer
  * route starts requiring it.
@@ -59,7 +60,11 @@ async function fed(relay: SyncRelay, method: string, path: string, body?: unknow
   return { status: res.status, body: text ? (JSON.parse(text) as Record<string, unknown>) : null };
 }
 
-/** Bilateral signed handshake (the sequence proven green in scripts/two-operator-e2e.ts). No auth headers. */
+/**
+ * Bilateral signed handshake, v2. Each operator authorizes ITS OWN relay's
+ * confirm with ITS OWN admin token (the only producer of a confirm); the
+ * federation routes themselves carry no auth header. No shared secret.
+ */
 async function handshake(a: SyncRelay, b: SyncRelay) {
   const idA = (await fed(a, "GET", "/federation/v1/identity")).body as {
     relay_motebit_id: string;
@@ -70,49 +75,35 @@ async function handshake(a: SyncRelay, b: SyncRelay) {
     public_key: string;
   };
 
-  const nB = (
-    await fed(b, "POST", "/federation/v1/peer/propose", {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: A_URL,
-      display_name: "Operator A",
-      nonce: rand(),
-    })
-  ).body as { nonce: string };
-  const nA = (
-    await fed(a, "POST", "/federation/v1/peer/propose", {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: B_URL,
-      display_name: "Operator B",
-      nonce: rand(),
-    })
-  ).body as { nonce: string };
-  const sigA = (
-    await fed(a, "POST", "/federation/v1/peer/propose", {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: A_URL,
-      nonce: nB.nonce,
-    })
-  ).body as { challenge: string };
-  const sigB = (
-    await fed(b, "POST", "/federation/v1/peer/propose", {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: B_URL,
-      nonce: nA.nonce,
-    })
-  ).body as { challenge: string };
-  const confirmB = await fed(b, "POST", "/federation/v1/peer/confirm", {
-    relay_id: idA.relay_motebit_id,
-    challenge_response: sigA.challenge,
-  });
-  const confirmA = await fed(a, "POST", "/federation/v1/peer/confirm", {
-    relay_id: idB.relay_motebit_id,
-    challenge_response: sigB.challenge,
-  });
-  return { idA, idB, confirmA: confirmA.status, confirmB: confirmB.status };
+  async function peerOnto(
+    prover: SyncRelay,
+    proverId: { relay_motebit_id: string; public_key: string },
+    proverUrl: string,
+    proverToken: string,
+    verifier: SyncRelay,
+    verifierId: string,
+  ): Promise<number> {
+    const { nonce } = (
+      await fed(verifier, "POST", "/federation/v1/peer/propose", {
+        handshake_version: "v2",
+        relay_id: proverId.relay_motebit_id,
+        public_key: proverId.public_key,
+        endpoint_url: proverUrl,
+        nonce: rand(),
+      })
+    ).body as { nonce: string };
+    const signed = await prover.app.request("/api/v1/admin/federation/peer-confirm-signature", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${proverToken}` },
+      body: JSON.stringify({ verifier_relay_id: verifierId, nonce, endpoint_url: proverUrl }),
+    });
+    expect(signed.status).toBe(200);
+    return (await fed(verifier, "POST", "/federation/v1/peer/confirm", await signed.json())).status;
+  }
+
+  const confirmB = await peerOnto(a, idA, A_URL, TOKEN_A, b, idB.relay_motebit_id);
+  const confirmA = await peerOnto(b, idB, B_URL, TOKEN_B, a, idA.relay_motebit_id);
+  return { idA, idB, confirmA, confirmB };
 }
 
 describe("federation — two independent operators, no shared admin token", () => {
@@ -167,6 +158,7 @@ describe("federation — two independent operators, no shared admin token", () =
         Authorization: "Bearer a-totally-wrong-token",
       },
       body: JSON.stringify({
+        handshake_version: "v2",
         relay_id: idB.relay_motebit_id,
         public_key: idB.public_key,
         endpoint_url: B_URL,
@@ -175,5 +167,14 @@ describe("federation — two independent operators, no shared admin token", () =
     });
     // A wrong token does not change the outcome — the route never consults it.
     expect(proposeNoAuth.status).not.toBe(401);
+  });
+
+  it("one operator's token never mints the other relay's confirm", async () => {
+    const res = await b.app.request("/api/v1/admin/federation/peer-confirm-signature", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN_A}` },
+      body: JSON.stringify({ verifier_relay_id: a.relayIdentity.relayMotebitId, nonce: rand() }),
+    });
+    expect(res.status).toBe(401);
   });
 });

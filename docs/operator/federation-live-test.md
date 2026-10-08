@@ -75,7 +75,7 @@ Without `RELAY_C_URL` + `RELAY_D_URL`, Phase 8 skips with a friendly message and
 ## What it validates
 
 - **Phase 1 — Identity exchange (4 tests):** `GET /federation/v1/identity` on both relays returns `motebit/relay-federation@1.3` payloads with distinct Ed25519 keys. The wire-reported `spec` field is anchored to `RELAY_SPEC_VERSION` in `services/relay/src/federation.ts`, which a defensive test in `federation-identity.test.ts` locks to the H1 of `spec/relay-federation-v1.md` — bumping the spec doc without bumping the constant fails CI.
-- **Phase 2 — Peering handshake (4 tests):** Synthetic peer A proposes to relay B; B challenges with a nonce; A signs `${relay_id}:${nonce}:${FEDERATION_SUITE}`; B verifies and activates the peer record. The `:${FEDERATION_SUITE}` suffix is critical — it binds the handshake to a specific cryptosuite (`motebit-concat-ed25519-hex-v1`) so a peer attesting under a different suite is rejected.
+- **Phase 2 — Peering handshake (4 tests):** Synthetic peer A proposes to relay B (handshake v2, `relay-federation@1.5` §3.1); B answers a nonce; A signs the role-bound CONFIRM `motebit-federation-confirm:v2:{A}:{B}:{nonce}:{suite}:{endpoint_url}`; B verifies and activates the peer record. The suite and both relay ids are inside the signed bytes, so a confirm meant for one relay or suite is rejected by any other.
 - **Phase 3 — Federated discovery (4 tests):** Test agent registered on relay B is discoverable through `GET /api/v1/agents/discover` (local) and `POST /federation/v1/discover` (the cross-relay path).
 - **Phase 4 — Heartbeat (4 tests):** Heartbeat signs `${relay_id}|${timestamp}|${FEDERATION_SUITE}` (note the `|` separator — distinct from the peering `:` separator); relay verifies the signature, records the timestamp, and rejects payloads with wrong signatures or >5min clock drift.
 - **Phase 5 — Cleanup (4 tests):** The synthetic peer is removed via `POST /federation/v1/peer/remove` (also signature-gated); the test agent is left registered. **Note:** the test agent's `expires_at` is 90 days (the relay's standard registration TTL per `services/relay/src/agents.ts:713`), not 15 minutes — earlier versions of this runbook misstated the TTL. Test agents accumulate on staging across runs until the 90-day janitor sweep removes them. For environments where accumulation matters, sign a deregister token with the test agent's keypair before discarding it (current script doesn't; see the inline comment in `scripts/test-federation-live.mjs` Phase 3).
@@ -96,7 +96,7 @@ Without `RELAY_C_URL` + `RELAY_D_URL`, Phase 8 skips with a friendly message and
 
 ### "Challenge response verification failed" (HTTP 403) on Phase 2 confirm
 
-The script's signing payload doesn't match what the relay verifier expects. Most likely cause: the `FEDERATION_SUITE` constant in `services/relay/src/federation.ts` changed and `scripts/test-federation-live.mjs` wasn't updated. Look at lines 1077 and 1125 of `federation.ts` for the canonical signing payload format.
+The script's signing payload doesn't match what the relay verifier expects. Most likely cause: the CONFIRM message format (`federationConfirmMessage` in `services/relay/src/federation.ts`) or `FEDERATION_SUITE` changed and `scripts/test-federation-live.mjs` wasn't updated. A 400 naming `handshake_version` means the caller still speaks the retired v1 handshake.
 
 ### "Heartbeat signature verification failed" (HTTP 403) on Phase 4
 

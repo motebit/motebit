@@ -42,35 +42,37 @@ Peering establishes a bilateral, authenticated relationship between two relays. 
 
 ### Handshake
 
-A 3-step mutual authentication protocol:
+Handshake **v2** (`motebit/relay-federation@1.5`, spec §3.1). One handshake makes the PROVER (relay A) an active peer of the VERIFIER (relay B); mutual peering is one handshake each way, each authorized by the proving relay's own operator.
 
 ```
-Relay A (initiator)                         Relay B (responder)
-    |                                            |
-    |  1. POST /federation/v1/peer/propose       |
-    |  { relay_id, public_key, endpoint_url,     |
-    |    display_name, nonce }                    |
-    | -----------------------------------------> |
-    |                                            |
-    |  2. 200 OK                                 |
-    |  { relay_id, public_key, endpoint_url,     |
-    |    display_name, nonce,                    |
-    |    challenge: Sign(relay_id:nonce:suite, key_b) } |
-    | <----------------------------------------- |
-    |                                            |
-    |  3. POST /federation/v1/peer/confirm       |
-    |  { relay_id,                               |
-    |    challenge_response: Sign(relay_id:nonce:suite, key_a)|
-    |  }                                         |
-    | -----------------------------------------> |
-    |                                            |
-    |  4. 200 OK { status: "active" }            |
-    | <----------------------------------------- |
+Operator of A      Relay A (prover)                      Relay B (verifier)
+    |                  |  1. POST /federation/v1/peer/propose  |
+    |                  |  { handshake_version: "v2", relay_id, |
+    |                  |    public_key, endpoint_url, nonce }  |
+    |                  | ------------------------------------> |
+    |                  |  2. 200 { nonce: nonce_b,             |
+    |                  |    challenge: Sign_B(PROPOSE msg) }   |
+    |                  | <------------------------------------ |
+    |  3. master token |                                       |
+    |  mints A's       |                                       |
+    |  confirm  -----> |                                       |
+    |                  |  4. POST /federation/v1/peer/confirm  |
+    |                  |  { handshake_version: "v2", relay_id, |
+    |                  |    public_key, endpoint_url, nonce_b, |
+    |                  |    challenge_response:                |
+    |                  |      Sign_A(CONFIRM msg) }            |
+    |                  | ------------------------------------> |
+    |                  |  5. 200 { status: "active" }          |
 ```
 
-Step 1: Relay A sends its identity and a 32-byte random `nonce`. Step 2: Relay B signs `${relay_id}:${nonce}:${suite}` (the wire field is `nonce`; the cryptosuite id is part of the signed message) with its private key, proving key possession. Step 3: Relay A verifies B's signature, then signs the same shape over B's `nonce` with its own key. Relay B verifies. Both transition to `active`.
+The two signed strings are role-bound and name both parties:
 
-If any verification fails, the handshake is aborted and the peer record is discarded.
+- PROPOSE (B → A): `motebit-federation-propose:v2:{responder}:{proposer}:{suite}:{proposer_nonce}`
+- CONFIRM (A → B): `motebit-federation-confirm:v2:{prover}:{verifier}:{nonce_b}:{suite}:{endpoint_url}`
+
+A relay produces its CONFIRM only on its operator's authenticated request (`POST /api/v1/admin/federation/peer-confirm-signature`, which returns the whole step-4 body); its public endpoints never sign a CONFIRM, and a propose naming the relay's own id is refused. A propose writes nothing — `nonce_b` is self-authenticating and redeemed once by a confirm that verified — so an unauthenticated propose cannot touch a peer row or another relay's handshake. A peer id that ever completed a confirm stays bound to its key; its endpoint changes only by a confirm under that key whose signed `endpoint_url` is the new one. A request without `handshake_version: "v2"` is refused 400.
+
+`motebit federation peer <url>` and `motebit federation mesh <url…>` run this flow with your operator token.
 
 ### Heartbeat
 
@@ -90,7 +92,7 @@ The signature covers `relay_id || timestamp` to prevent replay. A suspended peer
 
 | State       | Description                                                      |
 | ----------- | ---------------------------------------------------------------- |
-| `pending`   | Handshake initiated, awaiting confirmation                       |
+| `pending`   | Legacy (handshake v1) proposal; v2 writes no row until a confirm |
 | `active`    | Fully authenticated, participating in federation                 |
 | `suspended` | 3+ missed heartbeats, excluded from routing                      |
 | `removed`   | 5+ missed heartbeats or explicit removal, requires new handshake |
@@ -226,11 +228,11 @@ Settlement records may include optional on-chain payment proof fields (`x402_tx_
 
 When a settlement forward fails, the originating relay queues it for exponential backoff retry:
 
-| Parameter    | Value                                                                                   |
-| ------------ | --------------------------------------------------------------------------------------- |
-| Max attempts | `max_attempts` on the retry row (default 5); the policy ceiling is `maxRetries: 8`       |
-| Backoff      | Exponential from 5 s (5 s, 10 s, 20 s, 40 s, …) with ±20% jitter, capped at 1 hour       |
-| Status       | `pending` -> `completed` or `failed`                                                    |
+| Parameter    | Value                                                                              |
+| ------------ | ---------------------------------------------------------------------------------- |
+| Max attempts | `max_attempts` on the retry row (default 5); the policy ceiling is `maxRetries: 8` |
+| Backoff      | Exponential from 5 s (5 s, 10 s, 20 s, 40 s, …) with ±20% jitter, capped at 1 hour |
+| Status       | `pending` -> `completed` or `failed`                                               |
 
 When attempts are exhausted the relay auto-refunds the delegator; nothing waits for manual intervention. Constants live in `services/relay/src/retry-policy.ts` (`DEFAULT_RETRY_POLICY`).
 
@@ -246,11 +248,11 @@ Trust is isolated per-subject. If a peer relay is demoted, only routes through t
 
 Every request to a federation endpoint must include:
 
-| Body field     | Value                                                                                                             |
-| -------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `sender_relay` | The sending relay's `motebit_id` (some routes name it `relay_id`)                                                 |
-| `timestamp`    | Unix epoch milliseconds; requests more than 5 minutes from the receiver's clock are rejected                        |
-| `signature`    | Hex Ed25519 signature over the RFC 8785 canonical JSON of the request body with `signature` removed                |
+| Body field     | Value                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| `sender_relay` | The sending relay's `motebit_id` (some routes name it `relay_id`)                                   |
+| `timestamp`    | Unix epoch milliseconds; requests more than 5 minutes from the receiver's clock are rejected        |
+| `signature`    | Hex Ed25519 signature over the RFC 8785 canonical JSON of the request body with `signature` removed |
 
 Authentication is carried **in the JSON body**, not in HTTP headers: the receiver looks up the sender's registered public key, drops `signature`, canonicalizes the rest and verifies.
 
@@ -282,14 +284,14 @@ Federated responses include only the information necessary for routing: `motebit
 
 Federation is opt-in. All settings have sensible defaults.
 
-| Setting                         | Type     | Default | Description                           |
-| ------------------------------- | -------- | ------- | ------------------------------------- |
-| `federation.enabled`            | boolean  | on when `endpoint_url` is set | Whether federation is active |
-| `federation.max_peers`          | number   | `50`    | Maximum active peer relationships     |
-| `federation.heartbeat_interval` | number   | `60000` | Heartbeat interval (ms)               |
-| `federation.max_hops`           | number   | `3`     | Maximum query forwarding depth        |
-| `federation.platform_fee_rate`  | number   | `0.05`  | Fee rate on forwarded tasks           |
-| `federation.auto_accept_peers`  | boolean  | `false` | Auto-accept incoming proposals        |
-| `federation.allowed_peers`      | string[] | `[]`    | Allowlist of permitted peer relay IDs |
+| Setting                         | Type     | Default                       | Description                           |
+| ------------------------------- | -------- | ----------------------------- | ------------------------------------- |
+| `federation.enabled`            | boolean  | on when `endpoint_url` is set | Whether federation is active          |
+| `federation.max_peers`          | number   | `50`                          | Maximum active peer relationships     |
+| `federation.heartbeat_interval` | number   | `60000`                       | Heartbeat interval (ms)               |
+| `federation.max_hops`           | number   | `3`                           | Maximum query forwarding depth        |
+| `federation.platform_fee_rate`  | number   | `0.05`                        | Fee rate on forwarded tasks           |
+| `federation.auto_accept_peers`  | boolean  | `false`                       | Auto-accept incoming proposals        |
+| `federation.allowed_peers`      | string[] | `[]`                          | Allowlist of permitted peer relay IDs |
 
 When `federation.enabled` is `false`, all `/federation/v1/` endpoints return HTTP 403 (`Federation is disabled on this relay`). When `enabled` is left unset, federation is on whenever `endpoint_url` is configured.

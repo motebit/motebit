@@ -88,7 +88,10 @@ async function j(method: string, base: number, path: string, body?: unknown) {
   return { status: r.status, body: text ? JSON.parse(text) : null };
 }
 
-/** Bilateral signed handshake over real HTTP — NO admin token anywhere. */
+/**
+ * Bilateral signed handshake (v2) over real HTTP — NO SHARED admin token: each
+ * operator authorizes only ITS OWN relay's confirm, with its own token.
+ */
 async function handshake() {
   const idA = (await j("GET", A.port, "/federation/v1/identity")).body as {
     relay_motebit_id: string;
@@ -99,54 +102,44 @@ async function handshake() {
     public_key: string;
   };
 
-  // A proposes to B → B returns its nonce N_B (that A must sign).
-  const nB = (
-    await j("POST", B.port, "/federation/v1/peer/propose", {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: url(A.port),
-      display_name: A.name,
-      nonce: rand(),
-    })
-  ).body as { nonce: string };
-  // B proposes to A → A returns N_A.
-  const nA = (
-    await j("POST", A.port, "/federation/v1/peer/propose", {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: url(B.port),
-      display_name: B.name,
-      nonce: rand(),
-    })
-  ).body as { nonce: string };
-  // A signs "A.id:N_B" (self-propose to A with B's nonce).
-  const sigA = (
-    await j("POST", A.port, "/federation/v1/peer/propose", {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: url(A.port),
-      nonce: nB.nonce,
-    })
-  ).body as { challenge: string };
-  // B signs "B.id:N_A".
-  const sigB = (
-    await j("POST", B.port, "/federation/v1/peer/propose", {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: url(B.port),
-      nonce: nA.nonce,
-    })
-  ).body as { challenge: string };
-  // Confirm each side.
-  const cB = await j("POST", B.port, "/federation/v1/peer/confirm", {
-    relay_id: idA.relay_motebit_id,
-    challenge_response: sigA.challenge,
-  });
-  const cA = await j("POST", A.port, "/federation/v1/peer/confirm", {
-    relay_id: idB.relay_motebit_id,
-    challenge_response: sigB.challenge,
-  });
-  return { idA, idB, confirmA: cA.status, confirmB: cB.status };
+  // `prover` peers onto `verifier`: propose at the verifier, the prover's
+  // operator mints the prover's confirm, confirm at the verifier.
+  async function peerOnto(
+    prover: typeof A,
+    proverId: typeof idA,
+    verifier: typeof B,
+    verifierId: typeof idB,
+  ): Promise<number> {
+    const { nonce } = (
+      await j("POST", verifier.port, "/federation/v1/peer/propose", {
+        handshake_version: "v2",
+        relay_id: proverId.relay_motebit_id,
+        public_key: proverId.public_key,
+        endpoint_url: url(prover.port),
+        display_name: prover.name,
+        nonce: rand(),
+      })
+    ).body as { nonce: string };
+    const signed = await fetch(
+      `${url(prover.port)}/api/v1/admin/federation/peer-confirm-signature`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${prover.token}` },
+        body: JSON.stringify({
+          verifier_relay_id: verifierId.relay_motebit_id,
+          nonce,
+          endpoint_url: url(prover.port),
+        }),
+      },
+    );
+    if (signed.status !== 200) throw new Error(`confirm mint refused: ${await signed.text()}`);
+    return (await j("POST", verifier.port, "/federation/v1/peer/confirm", await signed.json()))
+      .status;
+  }
+
+  const confirmB = await peerOnto(A, idA, B, idB);
+  const confirmA = await peerOnto(B, idB, A, idA);
+  return { idA, idB, confirmA, confirmB };
 }
 
 async function main() {
@@ -178,7 +171,9 @@ async function main() {
         "\n  ✓✓ TWO INDEPENDENT OPERATORS PEERED — no shared secret in the federation path.",
       );
       console.log("     A sees B:", aSeesB, "| B sees A:", bSeesA);
-      console.log("\n  Load-bearing day-1 unknown ANSWERED: peering needs no shared admin token.");
+      console.log(
+        "\n  Load-bearing day-1 unknown ANSWERED: peering needs no shared admin token (each operator mints only its own relay's confirm).",
+      );
       console.log(
         "  Next layer (PHASE 2): cross-operator paid task → settlement → fee → reconcile both treasuries.",
       );

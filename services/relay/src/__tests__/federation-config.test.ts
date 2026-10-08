@@ -30,6 +30,7 @@ async function proposePeer(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      handshake_version: "v2",
       relay_id: relayId,
       public_key: publicKey ?? bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
       endpoint_url: `http://${relayId}.test:3000`,
@@ -64,7 +65,11 @@ describe("Federation configuration enforcement", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          handshake_version: "v2",
           relay_id: "peer-relay-1",
+          public_key: "11".repeat(32),
+          endpoint_url: "http://peer-relay-1.test:3000",
+          nonce: "0.00.00",
           challenge_response: "deadbeef",
         }),
       });
@@ -312,15 +317,13 @@ describe("Federation configuration enforcement", () => {
     });
   });
 
-  // ── Self-propose: signature oracle, no storage ──
+  // ── Self-propose: refused (it was the v1 confirm oracle) ──
   //
-  // The `motebit federation peer` CLI client extracts each relay's
-  // signature over `relay_id:nonce:SUITE` by self-proposing — the
-  // only proposer-id whose challenge will satisfy the peer's
-  // confirm endpoint. The propose handler returns the signature but
-  // MUST NOT persist a row keyed on the relay's own id, otherwise
-  // the second handshake against the same DB would 409. This block
-  // pins that contract.
+  // v1's `motebit federation peer` extracted each relay's confirm signature
+  // by self-proposing to it — a public endpoint that signed exactly what a
+  // verifier's confirm accepted, for any caller. v2 confirms are minted only
+  // by the operator-authenticated admin endpoint; a self-propose is refused
+  // and writes nothing.
 
   describe("self-propose (relay_id == own id)", () => {
     let relay: SyncRelay;
@@ -332,82 +335,37 @@ describe("Federation configuration enforcement", () => {
       });
     });
 
-    it("returns 200 with a fresh nonce + challenge signed over the requested nonce", async () => {
+    it("is refused 400 and persists nothing", async () => {
       const ownId = relay.relayIdentity.relayMotebitId;
-      const ownPk = relay.relayIdentity.publicKeyHex;
-      const requestedNonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-
       const res = await relay.app.request("/federation/v1/peer/propose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          relay_id: ownId,
-          public_key: ownPk,
-          endpoint_url: "http://self.test:3000",
-          nonce: requestedNonce,
-        }),
-      });
-
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as {
-        relay_id: string;
-        public_key: string;
-        nonce: string;
-        challenge: string;
-      };
-      expect(body.relay_id).toBe(ownId);
-      expect(body.public_key).toBe(ownPk);
-      expect(body.nonce).not.toBe(requestedNonce); // server generates its own
-      expect(body.challenge).toMatch(/^[0-9a-f]+$/);
-    });
-
-    it("does NOT persist a relay_peers row keyed on the relay's own id", async () => {
-      const ownId = relay.relayIdentity.relayMotebitId;
-      await relay.app.request("/federation/v1/peer/propose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+          handshake_version: "v2",
           relay_id: ownId,
           public_key: relay.relayIdentity.publicKeyHex,
           endpoint_url: "http://self.test:3000",
           nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
         }),
       });
-
-      const row = relay.moteDb.db
-        .prepare("SELECT peer_relay_id, state FROM relay_peers WHERE peer_relay_id = ?")
-        .get(ownId);
-      expect(row).toBeUndefined();
+      expect(res.status).toBe(400);
+      expect(
+        relay.moteDb.db.prepare("SELECT COUNT(*) AS n FROM relay_peers").get() as { n: number },
+      ).toEqual({ n: 0 });
     });
 
-    it("is idempotent: repeated self-propose succeeds (no 409)", async () => {
-      const ownId = relay.relayIdentity.relayMotebitId;
-      const ownPk = relay.relayIdentity.publicKeyHex;
-
-      for (let i = 0; i < 3; i++) {
-        const res = await relay.app.request("/federation/v1/peer/propose", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            relay_id: ownId,
-            public_key: ownPk,
-            endpoint_url: "http://self.test:3000",
-            nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
-          }),
-        });
-        expect(res.status).toBe(200);
-      }
-    });
-
-    it("non-self propose still creates a pending peer row (regression)", async () => {
+    it("a non-self propose answers a nonce and writes NO row (only a verified confirm does)", async () => {
       const peerId = "peer-not-self";
       const res = await proposePeer(relay, peerId);
       expect(res.status).toBe(200);
+      const body = (await res.json()) as { nonce: string; handshake_version: string };
+      expect(body.handshake_version).toBe("v2");
+      expect(body.nonce).toMatch(/^\d+\.[0-9a-f]{32}\.[0-9a-f]{64}$/);
 
       const row = relay.moteDb.db
-        .prepare("SELECT peer_relay_id, state FROM relay_peers WHERE peer_relay_id = ?")
-        .get(peerId) as { peer_relay_id: string; state: string } | undefined;
-      expect(row?.state).toBe("pending");
+        .prepare("SELECT peer_relay_id FROM relay_peers WHERE peer_relay_id = ?")
+        .get(peerId);
+      expect(row).toBeUndefined();
     });
   });
 });

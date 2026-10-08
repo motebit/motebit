@@ -87,6 +87,7 @@ describe("federation propose — peer endpoint_url must be a public destination"
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          handshake_version: "v2",
           relay_id: "relay-evil",
           public_key: "ab".repeat(32),
           endpoint_url: "http://10.0.0.9:8080",

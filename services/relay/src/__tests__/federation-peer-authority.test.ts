@@ -65,6 +65,7 @@ async function becomePeer(relay: SyncRelay): Promise<Peer> {
   };
 
   const propose = await fed(relay, "POST", "/federation/v1/peer/propose", {
+    handshake_version: "v2",
     relay_id: peer.relayId,
     public_key: peer.publicKeyHex,
     endpoint_url: ATTACKER_URL,
@@ -75,11 +76,17 @@ async function becomePeer(relay: SyncRelay): Promise<Peer> {
 
   // The confirm proves control of the key we just supplied — and nothing else.
   const challenge = await sign(
-    new TextEncoder().encode(`${peer.relayId}:${ourNonce}:${FEDERATION_SUITE}`),
+    new TextEncoder().encode(
+      `motebit-federation-confirm:v2:${peer.relayId}:${relay.relayIdentity.relayMotebitId}:${ourNonce}:${FEDERATION_SUITE}:${ATTACKER_URL}`,
+    ),
     peer.privateKey,
   );
   const confirm = await fed(relay, "POST", "/federation/v1/peer/confirm", {
+    handshake_version: "v2",
     relay_id: peer.relayId,
+    public_key: peer.publicKeyHex,
+    endpoint_url: ATTACKER_URL,
+    nonce: ourNonce,
     challenge_response: bytesToHex(challenge),
   });
   expect(confirm.status).toBe(200);

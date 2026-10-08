@@ -260,7 +260,7 @@ describe("Federation Chaos: Peer Dies Mid-Settlement Retry", () => {
 describe("Federation Chaos: Re-Registration Cooldown", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("rejects re-proposal for pending peer (409), prevents rapid re-registration", async () => {
+  it("re-proposals write nothing, and a removed peer inside its cooldown is refused (429)", async () => {
     const relay = await createSyncRelay({
       allowPrivateEndpoints: true,
       apiToken: "test-token",
@@ -281,34 +281,39 @@ describe("Federation Chaos: Re-Registration Cooldown", () => {
     const peerKeypair = await generateKeypair();
     const peerPubHex = bytesToHex(peerKeypair.publicKey);
     const makeNonce = () => bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+    const propose = () =>
+      relay.app.request("/federation/v1/peer/propose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          handshake_version: "v2",
+          relay_id: peerId,
+          public_key: peerPubHex,
+          endpoint_url: "http://cooldown-peer.test:3001",
+          display_name: "Cooldown Peer",
+          nonce: makeNonce(),
+        }),
+      });
 
-    // First proposal creates peer in pending state
-    const res1 = await relay.app.request("/federation/v1/peer/propose", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        relay_id: peerId,
-        public_key: peerPubHex,
-        endpoint_url: "http://cooldown-peer.test:3001",
-        display_name: "Cooldown Peer",
-        nonce: makeNonce(),
-      }),
-    });
-    expect(res1.status).toBe(200);
+    // A propose holds no state: repeating it is harmless and writes no row.
+    expect((await propose()).status).toBe(200);
+    expect((await propose()).status).toBe(200);
+    const count = () =>
+      (
+        relay.moteDb.db
+          .prepare("SELECT COUNT(*) AS n FROM relay_peers WHERE peer_relay_id = ?")
+          .get(peerId) as { n: number }
+      ).n;
+    expect(count()).toBe(0);
 
-    // Re-propose while pending returns 409 — prevents rapid re-registration
-    const res2 = await relay.app.request("/federation/v1/peer/propose", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        relay_id: peerId,
-        public_key: peerPubHex,
-        endpoint_url: "http://cooldown-peer.test:3001",
-        display_name: "Cooldown Peer",
-        nonce: makeNonce(),
-      }),
-    });
-    expect(res2.status).toBe(409);
+    // A peer removed a moment ago waits out the cooldown before re-peering.
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, missed_heartbeats, agent_count, trust_score, peered_at, last_heartbeat_at)
+         VALUES (?, ?, ?, 'removed', 5, 0, 0.5, ?, ?)`,
+      )
+      .run(peerId, peerPubHex, "http://cooldown-peer.test:3001", Date.now(), Date.now());
+    expect((await propose()).status).toBe(429);
 
     await relay.close();
   });

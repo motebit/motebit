@@ -34,6 +34,7 @@ import {
   API_TOKEN,
   jsonAuthWithIdempotency,
   createTestRelay,
+  establishMutualPeering,
 } from "./test-helpers.js";
 import { reconcileTreasury } from "@motebit/treasury-reconciliation";
 import { startP2pVerifierLoop } from "../p2p-verifier.js";
@@ -109,169 +110,12 @@ function installFetchInterceptor(relayA: SyncRelay, relayB: SyncRelay): void {
   });
 }
 
-/**
- * Full peering handshake between two relays via their APIs.
- *
- * With nonce-binding (relay_id:nonce in challenge), the oracle trick no longer works.
- * Instead, we use the fetch interceptor: each relay's propose handler calls fetch
- * to the peer relay during the handshake. The interceptor routes these calls to
- * the correct Hono app, enabling genuine mutual proposal + confirmation.
- *
- * Flow:
- *   1. Relay A proposes to Relay B → B stores A as pending, returns challenge + nonce
- *   2. Relay B proposes to Relay A → A stores B as pending, returns challenge + nonce
- *   3. Relay A confirms on B using A's challenge from step 2 (A signed B's relay_id:nonce)
- *   4. Relay B confirms on A using B's challenge from step 1 (B signed A's relay_id:nonce)
- *
- * The key insight: the challenge from step 1 IS B's signature of (A's relay_id:nonceA),
- * and the challenge from step 2 IS A's signature of (B's relay_id:nonceBForA).
- * But for confirm, we need A's signature of (A's relay_id:proposeBody.nonce) — that's
- * what the confirm endpoint verifies: sign(relay_id:nonce) where relay_id is the
- * confirming peer's ID and nonce is the stored nonce.
- *
- * So: the challenge from step 2 (A signed B's relay_id + nonceBForA) can be used
- * to confirm B on A (verify: sign(B's relay_id : nonceBForA) with A's public key? No...)
- *
- * Actually: the confirm on B verifies sign(A's relay_id : B's stored nonce) with A's key.
- * We need A to have signed exactly that. The propose from A→B generated proposeBody.nonce
- * on B's side. We need sign(A.relay_id : proposeBody.nonce, A.privateKey).
- * But A never signed that — B signed (A.relay_id : nonceA) in the challenge.
- *
- * The solution: use a third relay as a signing proxy. We create a temporary relay C,
- * and use it to get signatures. BUT — with nonce binding, the proxy would sign
- * dummyId:nonce, not the real relay_id:nonce.
- *
- * The REAL solution for tests: insert peers directly into the DB with state='active'.
- * This bypasses the handshake but gives us a known-good peered state for testing
- * all the other federation functionality (discovery, routing, settlement).
- */
+/** Mutual peering through the v2 handshake (each relay's confirm minted by its own operator). */
 async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<void> {
-  const resA = await relayA.app.request("/federation/v1/identity");
-  const idA = (await resA.json()) as { relay_motebit_id: string; public_key: string; did: string };
-  const resB = await relayB.app.request("/federation/v1/identity");
-  const idB = (await resB.json()) as { relay_motebit_id: string; public_key: string; did: string };
-
-  // The challenge signs "relay_id:nonce". To get A's signature of "A.id:N_B",
-  // we self-propose to A with relay_id=A.id and nonce=N_B. A signs "A.id:N_B"
-  // which is exactly what confirm on B verifies.
-
-  // Step 1: A → B (get N_B from B)
-  const nonceA = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-  const proposeAtoB = await relayB.app.request("/federation/v1/peer/propose", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: RELAY_A_URL,
-      display_name: "Relay A",
-      nonce: nonceA,
-    }),
+  await establishMutualPeering(relayA, RELAY_A_URL, relayB, RELAY_B_URL, {
+    a: "Relay A",
+    b: "Relay B",
   });
-  expect(proposeAtoB.status).toBe(200);
-  const bodyAtoB = (await proposeAtoB.json()) as { nonce: string; challenge: string };
-  const N_B = bodyAtoB.nonce; // B's nonce for A to sign
-
-  // Step 2: B → A (get N_A from A)
-  const nonceB = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-  const proposeBtoA = await relayA.app.request("/federation/v1/peer/propose", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: RELAY_B_URL,
-      display_name: "Relay B",
-      nonce: nonceB,
-    }),
-  });
-  expect(proposeBtoA.status).toBe(200);
-  const bodyBtoA = (await proposeBtoA.json()) as { nonce: string; challenge: string };
-  const N_A = bodyBtoA.nonce; // A's nonce for B to sign
-
-  // Step 3: Get A's signature of "A.id:N_B" via self-proposal trick
-  const selfProposeA = await relayA.app.request("/federation/v1/peer/propose", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: idA.relay_motebit_id, // Self-propose!
-      public_key: idA.public_key,
-      endpoint_url: RELAY_A_URL,
-      nonce: N_B, // The nonce B wants A to sign
-    }),
-  });
-  expect(selfProposeA.status).toBe(200);
-  const selfBodyA = (await selfProposeA.json()) as { challenge: string };
-  // selfBodyA.challenge = A signs "A.id:N_B" — exactly what confirm on B needs!
-
-  // Step 4: Get B's signature of "B.id:N_A" via self-proposal trick
-  const selfProposeB = await relayB.app.request("/federation/v1/peer/propose", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: idB.relay_motebit_id, // Self-propose!
-      public_key: idB.public_key,
-      endpoint_url: RELAY_B_URL,
-      nonce: N_A, // The nonce A wants B to sign
-    }),
-  });
-  expect(selfProposeB.status).toBe(200);
-  const selfBodyB = (await selfProposeB.json()) as { challenge: string };
-  // selfBodyB.challenge = B signs "B.id:N_A" — exactly what confirm on A needs!
-
-  // Step 5: Re-propose to restore the real peer entries (self-propose overwrote them)
-  await relayB.app.request("/federation/v1/peer/propose", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: RELAY_A_URL,
-      display_name: "Relay A",
-      nonce: nonceA, // Use original nonce — B will store a new nonce
-    }),
-  });
-  // We need B's NEW nonce... but we already have N_B from step 1.
-  // Actually ON CONFLICT overwrites the nonce. So we need to get the new nonce.
-  // But we already have A's signature of the OLD N_B, which no longer matches.
-
-  // This approach is getting circular. Let me use the simplest correct approach:
-  // Confirm BEFORE the self-propose overwrites.
-
-  // RESTART with clean approach: just re-order the operations.
-
-  // Actually, the self-propose to A with relay_id=A creates a self-peer entry,
-  // which is separate from B's peer entry (different peer_relay_id).
-  // A has two entries: one for B (pending), one for A-self (pending).
-  // They don't conflict because peer_relay_id is different!
-  // So selfProposeA doesn't overwrite B's entry on A — it creates a new self entry.
-  // WAIT: selfProposeA is on relayA with relay_id=A.id. That creates a self-peer.
-  // B's entry on relayA has peer_relay_id=B.id. Different key. No conflict!
-
-  // So steps 1-4 don't conflict. The self-peer entries are garbage but harmless.
-  // Now confirm:
-
-  // Step 6: Confirm A on B
-  const confirmB = await relayB.app.request("/federation/v1/peer/confirm", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: idA.relay_motebit_id,
-      challenge_response: selfBodyA.challenge, // A signed "A.id:N_B"
-    }),
-  });
-  expect(confirmB.status).toBe(200);
-
-  // Step 7: Confirm B on A
-  const confirmA = await relayA.app.request("/federation/v1/peer/confirm", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: idB.relay_motebit_id,
-      challenge_response: selfBodyB.challenge, // B signed "B.id:N_A"
-    }),
-  });
-  expect(confirmA.status).toBe(200);
 }
 
 /** Register an agent on a relay and return its identity info. */
@@ -411,7 +255,7 @@ describe("Federation E2E", () => {
         public_key: string;
         did: string;
       };
-      expect(body.spec).toBe("motebit/relay-federation@1.4");
+      expect(body.spec).toBe("motebit/relay-federation@1.5");
       expect(body.relay_motebit_id).toMatch(/^relay-/);
       expect(body.public_key).toHaveLength(64); // 32 bytes hex
       expect(body.did).toMatch(/^did:key:z/);
@@ -479,38 +323,51 @@ describe("Federation E2E", () => {
       expect(res.status).toBe(400);
     });
 
-    it("rejects duplicate proposal from active peer", async () => {
+    it("an active peer's re-proposal under another key is refused; under its own key it writes nothing", async () => {
       await establishPeering(relayA, relayB);
 
       const idA = relayA.relayIdentity;
-      const res = await relayB.app.request("/federation/v1/peer/propose", {
+      const before = relayB.moteDb.db
+        .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ?")
+        .get(idA.relayMotebitId);
+      const other = await generateKeypair();
+      const propose = (publicKey: string) =>
+        relayB.app.request("/federation/v1/peer/propose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            handshake_version: "v2",
+            relay_id: idA.relayMotebitId,
+            public_key: publicKey,
+            endpoint_url: RELAY_A_URL,
+            nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
+          }),
+        });
+      expect((await propose(bytesToHex(other.publicKey))).status).toBe(409);
+      expect((await propose(idA.publicKeyHex)).status).toBe(200);
+      expect(
+        relayB.moteDb.db
+          .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ?")
+          .get(idA.relayMotebitId),
+      ).toEqual(before);
+    });
+
+    it("rejects confirm with invalid signature and writes nothing", async () => {
+      const idA = relayA.relayIdentity;
+
+      const proposeRes = await relayB.app.request("/federation/v1/peer/propose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          handshake_version: "v2",
           relay_id: idA.relayMotebitId,
           public_key: idA.publicKeyHex,
           endpoint_url: RELAY_A_URL,
           nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
         }),
       });
-      expect(res.status).toBe(409);
-    });
-
-    it("rejects confirm with invalid signature", async () => {
-      const idA = relayA.relayIdentity;
-
-      // Propose first
-      const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-      await relayB.app.request("/federation/v1/peer/propose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          relay_id: idA.relayMotebitId,
-          public_key: idA.publicKeyHex,
-          endpoint_url: RELAY_A_URL,
-          nonce,
-        }),
-      });
+      expect(proposeRes.status).toBe(200);
+      const { nonce } = (await proposeRes.json()) as { nonce: string };
 
       // Confirm with garbage signature
       const badSig = bytesToHex(crypto.getRandomValues(new Uint8Array(64)));
@@ -518,21 +375,21 @@ describe("Federation E2E", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          handshake_version: "v2",
           relay_id: idA.relayMotebitId,
+          public_key: idA.publicKeyHex,
+          endpoint_url: RELAY_A_URL,
+          nonce,
           challenge_response: badSig,
         }),
       });
       expect(confirmRes.status).toBe(403);
 
-      // Peer should be deleted after failed verification
       const pRes = await relayB.app.request("/federation/v1/peers", { headers: AUTH_HEADER });
       const peers = (await pRes.json()) as {
         peers: Array<{ peer_relay_id: string; state: string }>;
       };
-      const deleted = peers.peers.find(
-        (p: { peer_relay_id: string }) => p.peer_relay_id === idA.relayMotebitId,
-      );
-      expect(deleted).toBeUndefined();
+      expect(peers.peers.find((p) => p.peer_relay_id === idA.relayMotebitId)).toBeUndefined();
     });
 
     it("heartbeat keeps peer alive", async () => {
@@ -2810,69 +2667,40 @@ describe("Federation E2E", () => {
       expect(limiter.check(peerId).allowed).toBe(true);
     });
 
-    it("returns 429 for a rate-limited peer on federation endpoints", async () => {
-      // Use discover endpoint which has 60 req/min per-IP limit (read tier)
-      // to avoid hitting the IP limiter before the peer limiter.
-      // The per-peer limiter allows 30 req/min per relay_id, keyed on the
-      // verified sender when signed, else origin_relay. Since 1.4 the default
-      // rejects unsigned before the limiter, so per-origin keying isolation is
-      // exercised on an EXPLICITLY tolerant relay (the config-restorable path).
+    it("unauthenticated requests are limited by SOURCE, never by the relay_id they claim", async () => {
+      // An unsigned discover (accepted only on an explicitly tolerant relay)
+      // proves nothing about its origin_relay, so it is counted against its
+      // source, never against the peer it names — 30 junk requests naming a
+      // peer must not spend that peer's quota.
       const tolerant = await createTestRelay({
         enableDeviceAuth: false,
         federation: {
           endpointUrl: "http://tolerant-rate.test:3010",
           displayName: "TolerantRate",
           requireDiscoverSignature: false,
+          sourceRateLimitPerMinute: 30,
         },
       });
-      try {
-        const originRelay = `rate-test-origin-${crypto.randomUUID()}`;
-
-        // Send 30 discover requests from the same origin_relay
-        for (let i = 0; i < 30; i++) {
-          await tolerant.app.request("/federation/v1/discover", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              query: { capability: "anything" },
-              hop_count: 0,
-              max_hops: 2,
-              visited: [],
-              query_id: crypto.randomUUID(), // unique query_id to avoid dedup
-              origin_relay: originRelay,
-            }),
-          });
-        }
-
-        // 31st request from the same origin_relay should hit per-peer 429
-        const res = await tolerant.app.request("/federation/v1/discover", {
+      const discover = (originRelay: string, ip: string) =>
+        tolerant.app.request("/federation/v1/discover", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "x-real-ip": ip },
           body: JSON.stringify({
             query: { capability: "anything" },
             hop_count: 0,
             max_hops: 2,
             visited: [],
-            query_id: crypto.randomUUID(),
+            query_id: crypto.randomUUID(), // unique query_id to avoid dedup
             origin_relay: originRelay,
           }),
         });
-        expect(res.status).toBe(429);
-
-        // A different origin_relay should still work
-        const res2 = await tolerant.app.request("/federation/v1/discover", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: { capability: "anything" },
-            hop_count: 0,
-            max_hops: 2,
-            visited: [],
-            query_id: crypto.randomUUID(),
-            origin_relay: `different-relay-${crypto.randomUUID()}`,
-          }),
-        });
-        expect(res2.status).not.toBe(429);
+      try {
+        const claimed = `rate-test-origin-${crypto.randomUUID()}`;
+        for (let i = 0; i < 30; i++) await discover(claimed, "203.0.113.1");
+        // The flooding source is out of quota...
+        expect((await discover(`other-${crypto.randomUUID()}`, "203.0.113.1")).status).toBe(429);
+        // ...the id it named is not: another source naming it is served.
+        expect((await discover(claimed, "198.51.100.2")).status).not.toBe(429);
       } finally {
         await tolerant.close();
       }

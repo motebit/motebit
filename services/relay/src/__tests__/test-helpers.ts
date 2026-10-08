@@ -521,3 +521,71 @@ export function seedP2pSubTask(relay: SyncRelay, args: SeedP2pSubTaskArgs): stri
 
   return taskId;
 }
+
+// === Federation peering (handshake v2) ===
+
+/**
+ * `prover` peers ONTO `verifier` (one direction) through the v2 handshake,
+ * the way an operator does: propose at the verifier (public), ask the
+ * prover's OWN relay for its confirm signature over the verifier's nonce
+ * (master token — the only producer of a confirm), confirm at the verifier.
+ * Returns the confirm response.
+ */
+export async function peerOnto(
+  prover: SyncRelay,
+  proverUrl: string,
+  verifier: SyncRelay,
+  opts: { displayName?: string; expectStatus?: number } = {},
+): Promise<Response> {
+  const propose = await verifier.app.request("/federation/v1/peer/propose", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      handshake_version: "v2",
+      relay_id: prover.relayIdentity.relayMotebitId,
+      public_key: prover.relayIdentity.publicKeyHex,
+      endpoint_url: proverUrl,
+      display_name: opts.displayName,
+      nonce: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"),
+    }),
+  });
+  if (propose.status !== 200) {
+    throw new Error(`propose refused (${propose.status}): ${await propose.text()}`);
+  }
+  const { nonce } = (await propose.json()) as { nonce: string };
+  const signed = await prover.app.request("/api/v1/admin/federation/peer-confirm-signature", {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({
+      verifier_relay_id: verifier.relayIdentity.relayMotebitId,
+      nonce,
+      endpoint_url: proverUrl,
+    }),
+  });
+  if (signed.status !== 200) {
+    throw new Error(`confirm signature refused (${signed.status}): ${await signed.text()}`);
+  }
+  const confirmBody = (await signed.json()) as Record<string, unknown>;
+  if (opts.displayName !== undefined) confirmBody["display_name"] = opts.displayName;
+  const confirm = await verifier.app.request("/federation/v1/peer/confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(confirmBody),
+  });
+  if (confirm.status !== (opts.expectStatus ?? 200)) {
+    throw new Error(`confirm answered ${confirm.status}: ${await confirm.clone().text()}`);
+  }
+  return confirm;
+}
+
+/** Mutual v2 peering: A onto B, then B onto A. */
+export async function establishMutualPeering(
+  a: SyncRelay,
+  aUrl: string,
+  b: SyncRelay,
+  bUrl: string,
+  names: { a?: string; b?: string } = {},
+): Promise<void> {
+  await peerOnto(a, aUrl, b, { displayName: names.a });
+  await peerOnto(b, bUrl, a, { displayName: names.b });
+}

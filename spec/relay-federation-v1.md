@@ -1,13 +1,14 @@
-# motebit/relay-federation@1.4
+# motebit/relay-federation@1.5
 
 ## Relay Federation Specification
 
 **Status:** Stable
-**Version:** 1.4
-**Date:** 2026-07-21
+**Version:** 1.5
+**Date:** 2026-10-08
 
 **Version history:**
 
+- **1.5** (2026-10-08) — **Peering handshake v2 (§3.1); v1 retired, fail-closed.** In v1 the confirm signed the bare `{relay_id}:{nonce}:{suite}` — the same bytes every relay's public `/peer/propose` signed for ANY caller (including a "self-propose" naming the relay's own id), so each relay was a public signing oracle for its own confirm: a stranger could take over a suspended or removed peer's row (key kept, endpoint redirected, trust kept) by carrying the target's nonce to the victim's own propose endpoint. v2 domain-separates every handshake signature by ROLE (`motebit-federation-propose:v2:…` vs `motebit-federation-confirm:v2:…`) and binds BOTH parties plus the prover's `endpoint_url` into the confirm; a relay produces a confirm only on its operator's authenticated request; a self-propose is refused. A propose writes nothing (its nonce is self-authenticating and single-use), so an unauthenticated propose has no power over a row or another party's handshake. A request without `handshake_version: "v2"` is refused 400 by name. §10.3: requests are rate-limited by SOURCE before authentication and per peer only after the peer's signature verifies (keyed on a claimed id, junk requests naming a peer spent that peer's quota). Breaking for the handshake only, deliberately not a major: there are no third-party federation peers yet, both sides ship together, and established `relay_peers` rows are unaffected (heartbeat, discovery, routing and settlement wire unchanged).
 - **1.4** (2026-07-21) — The announced `requireDiscoverSignature` default flip, executed on its 2026-06-21 deprecation-notice schedule: default `false → true`, so an unsigned inbound discover now rejects (403) by default, closing the cold-audit P0-3b fail-open for every relay that has not explicitly opted out. Wire unchanged (the §4.1.1 signature fields are optional since 1.3); config-restorable (`requireDiscoverSignature: false` — an explicit, owned fail-open). Minor, not peering-incompatible: version negotiation compares majors only.
 - **Deprecation notice (2026-06-21):** the `requireDiscoverSignature` config default flips `false → true` on **2026-07-21** (ships as 1.4), ending the 1.3 tolerant-reader window — an unsigned inbound discover then rejects (403) by default. Config-restorable (`requireDiscoverSignature: false`), wire unchanged. See §4.1.1.
 - **1.3** (2026-06-11) — Additive: per-hop sender authentication on `POST /federation/v1/discover` (§4.1). Each forwarding relay signs the request as the immediate `sender_relay` (distinct from the multi-hop `origin_relay`, which carries through for dedup/merge); the receiver verifies that direct neighbor's signature against `relay_peers` (state `active`) and enforces the ±5-minute `timestamp` drift window. Backward-compatible via a tolerant-reader rollout — an unsigned discover is accepted with a warning until an operator sets `requireDiscoverSignature`, after which an unsigned request rejects (403); a PRESENT-but-invalid signature always rejects regardless. Also closes the §10.2 latent fail-open by making `verifyPeerSignature` REQUIRE the in-body `timestamp` (previously the drift check was skipped when the field was absent) across task/forward, task/result, settlement/forward, and discover — every sender already stamps it, so only malformed/replayed requests are affected. Route table unchanged (fifteen entries); peers without 1.3 interoperate through the rollout window.
@@ -91,43 +92,58 @@ Peering establishes a bilateral, authenticated relationship between two relays. 
 
 #### Wire format (foundation law)
 
-The three-step handshake message shape every implementation MUST emit. The propose/respond/confirm endpoints, payload fields, and signature construction below are binding — a peer that signs the wrong bytes cannot authenticate on a conformant federation.
+The handshake message shapes every implementation MUST emit (handshake **v2**, since 1.5). The endpoints, payload fields, and signed byte strings below are binding — a peer that signs the wrong bytes cannot authenticate on a conformant federation. Every request carries `handshake_version: "v2"`; a request without it MUST be refused **400** naming the supported version (v1 — §3.1.3 — is retired and fails closed, never by a signature that merely fails to verify).
 
-The peering handshake is a 3-step mutual authentication protocol:
+A handshake makes the PROVER (relay A) an active peer of the VERIFIER (relay B) — one direction. Mutual peering is two handshakes, one each way, each authorized by the proving relay's own operator.
 
 ```
-Relay A (initiator)                         Relay B (responder)
-    │                                            │
-    │  1. POST /federation/v1/peer/propose       │
-    │  { relay_id, public_key, endpoint_url,     │
-    │    display_name, nonce_a }                  │
-    │ ──────────────────────────────────────────> │
-    │                                            │
-    │  2. 200 OK                                 │
-    │  { relay_id, public_key, endpoint_url,     │
-    │    display_name, nonce_b,                  │
-    │    challenge: Sign(nonce_a, key_b) }       │
-    │ <────────────────────────────────────────── │
-    │                                            │
-    │  3. POST /federation/v1/peer/confirm       │
-    │  { relay_id,                               │
-    │    challenge_response: Sign(nonce_b, key_a)│
-    │  }                                         │
-    │ ──────────────────────────────────────────> │
-    │                                            │
-    │  4. 200 OK { status: "active" }            │
-    │ <────────────────────────────────────────── │
+Operator of A        Relay A (prover)                        Relay B (verifier)
+    │                    │                                         │
+    │                    │  1. POST /federation/v1/peer/propose    │
+    │                    │  { handshake_version: "v2", relay_id,   │
+    │                    │    public_key, endpoint_url,            │
+    │                    │    display_name, nonce: nonce_a }        │
+    │                    │ ──────────────────────────────────────> │
+    │                    │  2. 200 { handshake_version, relay_id,  │
+    │                    │    public_key, nonce: nonce_b,          │
+    │                    │    challenge: Sign_B(PROPOSE msg) }     │
+    │                    │ <────────────────────────────────────── │
+    │  3. (authenticated)│                                         │
+    │  mint A's confirm  │                                         │
+    │  over nonce_b ───> │                                         │
+    │                    │  4. POST /federation/v1/peer/confirm    │
+    │                    │  { handshake_version: "v2", relay_id,   │
+    │                    │    public_key, endpoint_url,            │
+    │                    │    display_name, spec_version, nonce:   │
+    │                    │    nonce_b, challenge_response:         │
+    │                    │    Sign_A(CONFIRM msg) }                │
+    │                    │ ──────────────────────────────────────> │
+    │                    │  5. 200 { status: "active" }            │
+    │                    │ <────────────────────────────────────── │
 ```
 
-**Step 1 — Propose.** Relay A sends its identity and a 32-byte random nonce (`nonce_a`).
+#### 3.1.1 — Signed messages (role-bound)
 
-**Step 2 — Respond.** Relay B validates the proposal, stores A as a pending peer, generates its own nonce (`nonce_b`), and returns a challenge: the Ed25519 signature of `{relay_id}:{nonce_a}:{suite}` (proposer's relay_id, proposer's nonce, and the cryptosuite identifier `motebit-concat-ed25519-hex-v1`, UTF-8 encoded, colon-separated) using B's private key. This proves B holds the private key corresponding to the public key it advertises. The nonce is bound to the relay_id and suite to prevent cross-peering and cross-suite replay.
+Both strings are UTF-8; `{suite}` is `motebit-concat-ed25519-hex-v1` (see `SUITE_REGISTRY` in `@motebit/protocol`). Relay ids MUST be colon- and whitespace-free; the one free-form field (`endpoint_url` / the proposer's nonce) is LAST, so each string parses one way.
 
-**Step 3 — Confirm.** Relay A verifies B's challenge signature against B's public key. If valid, A signs `{relay_id}:{nonce_b}:{suite}` (A's own relay_id, B's nonce, suite identifier) with its own private key and sends the response. Relay B verifies A's signature. Both relays transition the peer to `active` state.
+- **PROPOSE** (step 2, signed by the verifier B, proving to A that B holds the key it answered with):
+  `motebit-federation-propose:v2:{responder_relay_id}:{proposer_relay_id}:{suite}:{nonce_a}`
+- **CONFIRM** (step 4, signed by the prover A, proving to B — and only to B — that A holds its key and is reached at `endpoint_url`):
+  `motebit-federation-confirm:v2:{prover_relay_id}:{verifier_relay_id}:{nonce_b}:{suite}:{endpoint_url}`
 
-The suite identifier for handshake challenges is `motebit-concat-ed25519-hex-v1` (see `SUITE_REGISTRY` in `@motebit/protocol`): UTF-8 concatenation of the template, Ed25519 primitive, hex signature encoding.
+A relay MUST NOT sign a string carrying either prefix except as specified here: the PROPOSE message only as a `/peer/propose` response, the CONFIRM message only on its own operator's authenticated request (the reference relay: `POST /api/v1/admin/federation/peer-confirm-signature`, master-token gated, which returns the complete step-4 body). It MUST refuse a propose naming its own relay id. The verifier MUST check that the CONFIRM names ITS OWN relay id as `verifier_relay_id` (by constructing the expected bytes itself) and the `endpoint_url` it will store.
 
-If any verification fails, the handshake is aborted and the peer record is discarded.
+#### 3.1.2 — Verification and state
+
+**Step 1–2 — Propose.** B validates the proposal (federation enabled, version, peer policy, a routable `endpoint_url`, and — when the id is already ESTABLISHED, i.e. it once completed a confirm — that `public_key` is the stored key; else 409) and returns a fresh `nonce_b` and the PROPOSE challenge. **A propose writes nothing.** `nonce_b` is self-authenticating (the reference relay: `{ts}.{rand}.{HMAC(per-process key, relay_id ‖ public_key ‖ ts ‖ rand)}`, valid 10 minutes), so an unauthenticated proposal has no power over any row or over another party's outstanding handshake.
+
+**Step 4–5 — Confirm.** B verifies, in order: `nonce_b` is one B issued for this (`relay_id`, `public_key`) and unexpired (else 403); for an ESTABLISHED id, `public_key` is the stored key (else 409) and the removed-peer cooldown has passed (else 429); the CONFIRM signature under the STORED key for an established id, else under `public_key` (else 403). Only then is the nonce redeemed (single use; a second redemption is 403) and the row written: an established row becomes `active` with the signed `endpoint_url` (its key and trust unchanged); a new id is inserted `active`. A failed confirm writes nothing. An id that never completed a confirm belongs to no one: the first verified confirm takes it (relay ids are not key-derived; the operator allow-/blocklist is the control).
+
+An endpoint change for an established peer is exactly this: a confirm under its stored key whose signed `endpoint_url` is the new one.
+
+#### 3.1.3 — Retired: handshake v1 (≤ 1.4)
+
+v1's confirm signed `{relay_id}:{nonce}:{suite}`, and `/peer/propose` signed the same construction over any caller-chosen (`relay_id`, `nonce`) — including the responder's own id. Any relay was therefore a public signing oracle for its own confirm. v1 requests (no `handshake_version`) are refused 400.
 
 #### Storage (reference convention — non-binding)
 
@@ -688,7 +704,7 @@ The fifteen routes below are the binding cross-relay contract. Renaming or reloc
 
 - `GET /federation/v1/identity` — return this relay's public identity.
 - `POST /federation/v1/peer/propose` — initiate peering handshake (step 1).
-- `POST /federation/v1/peer/confirm` — complete peering handshake (step 3).
+- `POST /federation/v1/peer/confirm` — complete peering handshake (step 4).
 - `POST /federation/v1/peer/heartbeat` — send heartbeat to peer.
 - `POST /federation/v1/peer/remove` — remove a peer relationship.
 - `GET /federation/v1/peers` — list current federation peers.
@@ -706,8 +722,8 @@ The fifteen routes below are the binding cross-relay contract. Renaming or reloc
 
 | Method | Path                                              | Description                                                                       | Rate Limit      | Since |
 | ------ | ------------------------------------------------- | --------------------------------------------------------------------------------- | --------------- | ----- |
-| POST   | `/federation/v1/peer/propose`                     | Initiate peering handshake (step 1).                                              | 30/min per peer | 1.0   |
-| POST   | `/federation/v1/peer/confirm`                     | Complete peering handshake (step 3).                                              | 30/min per peer | 1.0   |
+| POST   | `/federation/v1/peer/propose`                     | Initiate peering handshake (step 1). Handshake v2 since 1.5.                      | per source      | 1.0   |
+| POST   | `/federation/v1/peer/confirm`                     | Complete peering handshake (step 4). Handshake v2 since 1.5.                      | 30/min per peer | 1.0   |
 | POST   | `/federation/v1/peer/heartbeat`                   | Send heartbeat to peer.                                                           | 30/min per peer | 1.0   |
 | POST   | `/federation/v1/peer/remove`                      | Remove a peer relationship.                                                       | 30/min per peer | 1.0   |
 | POST   | `/federation/v1/discover`                         | Forward a discovery query.                                                        | 30/min per peer | 1.0   |
@@ -726,7 +742,7 @@ Authentication is **in-body and per-endpoint** — there is no transport-header 
 
 | Endpoint(s)                                                            | Authentication                                                                                                                                                                                                                                                                                                                                                                                                           | Failure                                                       |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
-| `peer/propose`, `peer/confirm`                                         | Nonce challenge-response (§3.1). The peer is not yet `active`, so the public key comes from the proposal payload, not `relay_peers`.                                                                                                                                                                                                                                                                                     | 403                                                           |
+| `peer/propose`, `peer/confirm`                                         | Handshake v2 (§3.1): a self-authenticating nonce and the role-bound CONFIRM signature. For an id that ever completed a confirm the key is the stored `relay_peers.public_key`; otherwise it comes from the payload. A propose is unauthenticated and writes nothing.                                                                                                                                                     | 400 (no `handshake_version: "v2"`); 403; 409 (another key)    |
 | `peer/heartbeat`, `peer/remove`                                        | In-body `signature` over the construction the section specifies (§3.2 heartbeat: `{relay_id}\|{timestamp}\|{suite}`), verified against the peer's `relay_peers.public_key`.                                                                                                                                                                                                                                              | 403                                                           |
 | `task/forward`, `task/result`, `settlement/forward`                    | In-body `signature` field: hex-encoded Ed25519 over the RFC 8785 (JCS) canonical JSON of the request body **with the `signature` field removed**. The signer is named by the in-body relay id (`origin_relay`); its public key is looked up in `relay_peers` (state `active`). An in-body `timestamp` is checked for ±5-minute drift.                                                                                    | 403 (unknown/inactive peer or invalid signature); 400 (drift) |
 | `horizon/witness`, `horizon/dispute`, `disputes/:id/vote-request`      | In-body signed payloads per §15–§16; signer key from `relay_peers`.                                                                                                                                                                                                                                                                                                                                                      | 403                                                           |
@@ -742,7 +758,12 @@ The receiving relay, for the signed mutating endpoints:
 
 ### 10.3 — Rate Limiting
 
-Federation endpoints use a dedicated rate limit tier: **30 requests per minute per peer relay**. This is separate from the existing 5-tier rate limiting on agent-facing endpoints. Rate limits are keyed by the in-body sending relay id (e.g. `origin_relay`), not by IP address.
+Federation endpoints use two limits, never one (since 1.5):
+
+1. **Per source, before authentication.** Every `/federation/v1/*` request is counted against its source (client IP) before anything about it is verified (reference default 300/min).
+2. **Per peer, after authentication: 30 requests per minute per peer relay**, counted against a relay id ONLY after the request's signature verified under that peer's key. A request is never counted against the relay id it merely CLAIMS — keyed on a claimed id, a stranger's junk heartbeats naming a peer exhausted that peer's quota, its real heartbeats were refused, and it was suspended for missed heartbeats.
+
+This is separate from the 5-tier rate limiting on agent-facing endpoints.
 
 ---
 
