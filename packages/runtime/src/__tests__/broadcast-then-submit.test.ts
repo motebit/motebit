@@ -218,6 +218,11 @@ class Chain {
     this.releaseHold?.();
   }
 
+  /** Has a `hold` call landed and parked, waiting for `release()`? */
+  get holding(): boolean {
+    return this.releaseHold != null;
+  }
+
   private async sign(hooks: BroadcastHooks | undefined): Promise<string> {
     const sig = `sig${++this.n}`;
     this.sigs.push(sig);
@@ -353,7 +358,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const settle = () => new Promise((res) => setTimeout(res, 5));
+/**
+ * Wait until the chain's `hold` call has landed and parked — a condition,
+ * not a fixed delay: under CPU contention (the pre-push run) a 5 ms sleep
+ * let hire A take the `hold` call instead and wait forever for a release
+ * that only comes after A returns.
+ */
+const settle = async (chain: Chain) => {
+  while (!chain.holding) await new Promise((res) => setTimeout(res, 5));
+};
 
 // ---------------------------------------------------------------------------
 // The reviewer's probes (round 2)
@@ -369,7 +382,7 @@ describe("#885 — a hire's payment is its OWN transaction (reviewer probes)", (
     const ledger = new PaidIntentLedger(store, ME, "s1");
 
     const b = hire(ledger, pay, "prompt B");
-    await settle(); // txB has landed; B's builder is still awaiting
+    await settle(chain); // txB has landed; B's builder is still awaiting
     const a = await hire(ledger, pay, "prompt A");
     chain.release();
     const bResult = await b;
@@ -394,7 +407,7 @@ describe("#885 — a hire's payment is its OWN transaction (reviewer probes)", (
     const ledger = new PaidIntentLedger(store, ME, "s1");
 
     const b = hire(ledger, pay, "prompt B");
-    await settle();
+    await settle(chain);
     // A's submission is refused by the relay, so its entry must stay on record.
     r.failing.set("sig2", "400");
     const a = await hire(ledger, pay, "prompt A");
