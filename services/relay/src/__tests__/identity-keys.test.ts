@@ -439,11 +439,13 @@ describe("identity-keys", () => {
       expect((await registerAsDevice(mid, "daemon", kp, {})).status).toBe(200);
       expect(identityKey(db, mid)).toMatchObject({ publicKey: hex(kp), source: "register" });
       expect(await bundleKey(mid)).toEqual({ status: 200, key: hex(kp) });
-      // …but a paired device's keyless register fills nothing: its key is not sovereign-bound.
+      // …but a device's keyless register fills nothing: its key is not
+      // sovereign-bound. Alone on the id (no standing key on file), it is the
+      // squat shape of the #875 review R2, and is refused outright.
       const s2 = await sovereign();
       const paired = await generateKeypair();
       plantDevice(db, s2.mid, "p-only", hex(paired));
-      expect((await registerAsDevice(s2.mid, "p-only", paired, {})).status).toBe(200);
+      expect((await registerAsDevice(s2.mid, "p-only", paired, {})).status).toBe(409);
       expect(holderRow(db, s2.mid)).toBeUndefined();
     });
 

@@ -38,20 +38,24 @@ import { ON_SHELF, delistRegistration } from "./registry-delist.js";
 import { hasRevocationRecord, liftRevocation } from "./identity-revocation.js";
 import {
   admitKey,
+  claimsSovereignId,
+  currentIdentityKey,
   holderKeyOf,
-  identityGuardianFor,
   isCanonicalKey,
   keysHeldBy,
   proveSovereignFirstKey,
   recordFirstIdentityKey,
+  recordGuardianEvidence,
   recordIdentityGuardian,
   recordOperatorServiceKey,
+  recoveryGuardianFor,
   registryKeyOf,
   parkSovereignSquat,
   servedIdentityKey,
   sovereignLineage,
   withServedKeys,
   recordRegistryKeyEvidence,
+  type GuardianEvidence,
   type RegistryKeyEvidence,
   verificationKeyFor,
 } from "./identity-keys.js";
@@ -1262,7 +1266,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         motebitId,
         devices: parked.devices,
         registryKey: parked.registryKey,
+        guardian: parked.guardian,
         holderKey: parked.holderKey,
+        removed: parked.removed,
       });
       deps.reconcileKeyConnections(motebitId);
     }
@@ -1580,6 +1586,126 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
                 : "key_proof";
     }
 
+    // --- Authority-bearing fields (#875 review R2), before any write ---
+    // The key THIS request proves current possession of: a keyed body key
+    // that passed the evidence check above (or the succession block below,
+    // which verifies its new-key signature before any write), else the key
+    // the bearer's token verified under. The operator asserts on its own
+    // authority (E-op), as at every other door.
+    const operatorAuthority = c.get(OPERATOR_PRESENTED) === true;
+    const requestKey: string | null = keyFromBody
+      ? publicKey
+      : callerVerifiedKey !== undefined
+        ? callerVerifiedKey
+        : null;
+    if (!operatorAuthority && claimsSovereignId(motebitId)) {
+      // (d) A sovereign-shaped id whose key no request has proved — nothing
+      // on file stands — takes a registration only from a request that
+      // proves a key that stands (the genesis key the id commits to, or one a
+      // recorded succession reaches). A squatter's planted device row
+      // verifies only that its token is the squatter's: before this, a
+      // KEYLESS registration it verified wrote a guardian, a settlement
+      // address and a listing onto V's id, and V's later bootstrap kept the
+      // guardian (the R2 takeover).
+      const lineage = await sovereignLineage(moteDb.db, motebitId, requestKey ?? undefined);
+      const standing = new Set([...(lineage ?? [])].map((k) => k.toLowerCase()));
+      const standingOnFile = [...keysHeldBy(moteDb.db, motebitId)].some((k) =>
+        standing.has(k.toLowerCase()),
+      );
+      if (!standingOnFile && (requestKey === null || !standing.has(requestKey.toLowerCase()))) {
+        logger.warn("agent.register.refused_unproven_sovereign_id", {
+          motebitId,
+          caller: callerMotebitId ?? null,
+        });
+        deps.recordAuthEvent({
+          kind: "agent_token_rejected",
+          method: "POST",
+          path: c.req.path,
+          motebitId: callerMotebitId ?? null,
+          reason: "register:sovereign_id_key_unproven",
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
+        return c.json(
+          {
+            error:
+              "this sovereign id's key has not been proven to this relay, and the request does not prove the key it commits to",
+            code: "SOVEREIGN_ID_KEY_UNPROVEN",
+            reason: "sovereign_id_key_unproven",
+            remediation:
+              "register from the key the id is derived from (deriveSovereignMotebitId(public_key)) — sign the bootstrap with it, then register",
+          },
+          409,
+        );
+      }
+    }
+    // (a) The guardian (who may RECOVER the identity) and the settlement
+    // fields (where it is PAID) are written only by a request that proves
+    // the identity's CURRENT key — the key the identity will hold once this
+    // request's own key writes land: a keyed proven body key, a keyless
+    // E-sov's proven sovereign key, else the key already on file
+    // (`currentIdentityKey`; for a legacy id with none, the request's own key
+    // — first-come, as its key is). Never a keyless registration a sibling
+    // or squatted device row verified; never the guardian attestation alone
+    // (it proves the guardian's consent, not the identity's).
+    const rawBody = body as Record<string, unknown>;
+    const presentField = (f: string) => {
+      const v = rawBody[f];
+      return v !== undefined && v !== null && v !== "";
+    };
+    const authorityFields = [
+      "guardian_public_key",
+      "settlement_address",
+      "settlement_modes",
+      "sweep_threshold",
+    ].filter(presentField);
+    let authorityKey: string | null = null;
+    if (!operatorAuthority && authorityFields.length > 0) {
+      const sovereignKeyless =
+        !keyFromBody &&
+        callerDeviceKey !== undefined &&
+        (await proveSovereignFirstKey(motebitId, callerDeviceKey)) !== null
+          ? callerDeviceKey
+          : null;
+      const onFile = await currentIdentityKey(moteDb.db, motebitId);
+      const predicted = keyFromBody ? publicKey : (sovereignKeyless ?? onFile ?? requestKey);
+      const lineage = await sovereignLineage(moteDb.db, motebitId, predicted ?? undefined);
+      const predictedStands =
+        predicted !== null &&
+        (lineage === null || [...lineage].some((k) => k.toLowerCase() === predicted.toLowerCase()));
+      if (
+        requestKey === null ||
+        predicted === null ||
+        !predictedStands ||
+        requestKey.toLowerCase() !== predicted.toLowerCase()
+      ) {
+        logger.warn("agent.register.refused_authority_fields", {
+          motebitId,
+          caller: callerMotebitId ?? null,
+          fields: authorityFields,
+        });
+        deps.recordAuthEvent({
+          kind: "agent_token_rejected",
+          method: "POST",
+          path: c.req.path,
+          motebitId: callerMotebitId ?? null,
+          reason: "register:authority_fields_require_identity_key",
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
+        return c.json(
+          {
+            error: `${authorityFields.join(", ")} may be set only by a request that proves the identity's current key`,
+            code: "IDENTITY_KEY_REQUIRED",
+            reason: "authority_fields_require_identity_key",
+            fields: authorityFields,
+            remediation:
+              "register signed by the identity's current key (its bearer token, or the key in the body with its proof) to set a guardian or settlement fields",
+          },
+          403,
+        );
+      }
+      authorityKey = predicted;
+    }
+
     if (keyOnFileForRegister && publicKey && keyOnFileForRegister !== publicKey) {
       const succession = (body as Record<string, unknown>).succession as
         KeySuccessionRecord | undefined;
@@ -1592,12 +1718,21 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // Verify the succession record signatures
       let guardianPubKeyForVerify: string | undefined;
       if (succession.recovery) {
-        guardianPubKeyForVerify = identityGuardianFor(moteDb.db, motebitId) ?? undefined;
-        if (!guardianPubKeyForVerify) {
+        // A guardian on a sovereign id recovers only when a request proved
+        // the identity's key when it set it (#875 review R2).
+        const recovery = await recoveryGuardianFor(moteDb.db, motebitId);
+        if (recovery.guardian === null) {
           throw new HTTPException(400, {
             message: "Agent has no guardian registered — cannot use guardian recovery",
           });
         }
+        if (!recovery.proven) {
+          throw new HTTPException(400, {
+            message:
+              "Agent's guardian was not set under the identity's proven key — cannot use guardian recovery",
+          });
+        }
+        guardianPubKeyForVerify = recovery.guardian;
       }
       const successionValid = await verifyKeySuccession(succession, guardianPubKeyForVerify);
       if (!successionValid) {
@@ -1896,6 +2031,28 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // because a registration named it (§5d W3).
     if (guardianPublicKey) {
       recordIdentityGuardian(moteDb.db, { motebitId, guardianPublicKey, now });
+      // Its provenance (#875 review R2): the key this request proved as the
+      // identity's current key (checked above, before any write).
+      const guardianEvidence: GuardianEvidence = operatorAuthority
+        ? "operator"
+        : !keyFromBody
+          ? sovereignProof !== null
+            ? "sovereign"
+            : "bearer"
+          : registryEvidence === "bearer" ||
+              registryEvidence === "holder" ||
+              registryEvidence === "succession"
+            ? registryEvidence
+            : "key_proof";
+      recordGuardianEvidence(moteDb.db, {
+        motebitId,
+        guardianPublicKey,
+        setUnderKey: operatorAuthority
+          ? ((await servedIdentityKey(moteDb.db, motebitId)) ?? (publicKey || null))
+          : authorityKey,
+        evidence: guardianEvidence,
+        now,
+      });
     }
 
     // Auto-create a default service listing if one doesn't exist.

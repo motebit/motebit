@@ -414,7 +414,9 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
         motebitId: body.motebit_id,
         devices: parked.devices,
         registryKey: parked.registryKey,
+        guardian: parked.guardian,
         holderKey: parked.holderKey,
+        removed: parked.removed,
       });
       deps.reconcileKeyConnections(body.motebit_id);
     }

@@ -2721,4 +2721,28 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 60,
+    name: "guardian_evidence",
+    up: (db) => {
+      // The PROVENANCE of a guardian (#875 review R2): the key a request
+      // proved — the identity's CURRENT key — when it set this guardian, and
+      // which evidence proved it (`recordGuardianEvidence`). A recovery on a
+      // sovereign-shaped id verifies only under a guardian whose provenance
+      // key stands (`recoveryGuardianFor`, `sovereignLineage`); a guardian a
+      // squatter planted has no such row. One row per guardian ever set, so
+      // a recovery an earlier guardian signed stays verifiable. Nothing is
+      // backfilled: a relay before v60 recorded no proof for any guardian.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_guardian_evidence (
+          motebit_id TEXT NOT NULL,
+          guardian_public_key TEXT NOT NULL,
+          set_under_key TEXT,
+          evidence TEXT NOT NULL,
+          recorded_at INTEGER NOT NULL,
+          PRIMARY KEY (motebit_id, guardian_public_key)
+        );
+      `);
+    },
+  },
 ];

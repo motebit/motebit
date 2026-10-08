@@ -72,6 +72,7 @@ export const DECLARATION_CONTENT = {
       tables: [
         "agent_registry",
         "relay_registry_key_evidence",
+        "relay_guardian_evidence",
         "relay_identity",
         "pairing_sessions",
       ],
@@ -84,6 +85,7 @@ export const DECLARATION_CONTENT = {
         "last heartbeat timestamp",
         "expires_at TTL",
         "which evidence proved the registry public key, and when (relay_registry_key_evidence)",
+        "each guardian public key the identity set, the identity key the setting request proved, which evidence proved it, and when (relay_guardian_evidence)",
         "optional device label (claiming_device_name) when set by user during pairing",
       ],
       retention_window:

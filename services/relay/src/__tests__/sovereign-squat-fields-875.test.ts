@@ -192,6 +192,15 @@ async function servedAll(mid: string) {
   };
 }
 
+/** V is served `key` by the one helper, and no route serves any other key (a delisted row serves ""). */
+async function expectServedOnly(mid: string, key: string) {
+  const s = await servedAll(mid);
+  expect(s.helper).toBe(key);
+  for (const [route, served] of Object.entries(s)) {
+    expect([route, served === key || served === ""]).toEqual([route, true]);
+  }
+}
+
 async function cast() {
   const vKp = await generateKeypair();
   const xKp = await generateKeypair();
@@ -239,7 +248,10 @@ async function xFollowUps(
   // Register keyed (with its own key_proof) and keyless, as X.
   out.register_keyed = await register(v, xDevice, xKp, {
     public_key: hex(xKp),
-    key_proof: await keyProof(v, xDevice, xKp),
+    key_proof: await keyProof(
+      { motebit_id: v, device_id: xDevice, public_key: hex(xKp) },
+      xKp.privateKey,
+    ),
     ...(await guardianFields(v, gX)),
   });
   out.register_keyless = await register(v, xDevice, xKp, await guardianFields(v, gX));
@@ -272,12 +284,7 @@ describe("the reviewer's sequence — V's bootstrap leaves no planted guardian a
     const f = await xFollowUps(c, `${c.v}-x`, carrier);
     for (const [door, status] of Object.entries(f))
       expect([door, ok(status)]).toEqual([door, false]);
-    expect(await servedAll(c.v)).toEqual({
-      helper: hex(c.vKp),
-      discover: hex(c.vKp),
-      agent: hex(c.vKp),
-      succession: hex(c.vKp),
-    });
+    await expectServedOnly(c.v, hex(c.vKp));
     expect(count("SELECT COUNT(*) AS n FROM relay_key_successions WHERE motebit_id = ?", c.v)).toBe(
       0,
     );
@@ -310,12 +317,7 @@ describe("the reviewer's sequence — V's bootstrap leaves no planted guardian a
     const f = await xFollowUps(c, `${c.v}-x`, carrier);
     for (const [door, status] of Object.entries(f))
       expect([door, ok(status)]).toEqual([door, false]);
-    expect(await servedAll(c.v)).toEqual({
-      helper: hex(c.vKp),
-      discover: hex(c.vKp),
-      agent: hex(c.vKp),
-      succession: hex(c.vKp),
-    });
+    await expectServedOnly(c.v, hex(c.vKp));
   });
 
   it("variant B': the keyless guardian write landed before this fix (raw guardian on an empty-key registry row) — still parked", async () => {
@@ -362,12 +364,7 @@ describe("the reviewer's sequence — V's bootstrap leaves no planted guardian a
     // K_Y is not V's key, before or after V arrives.
     expect((await servedAll(c.v)).helper).not.toBe(hex(c.yKp));
     expect(ok(await bootstrap(c.v, `${c.v}-v`, c.vKp))).toBe(true);
-    expect(await servedAll(c.v)).toEqual({
-      helper: hex(c.vKp),
-      discover: hex(c.vKp),
-      agent: hex(c.vKp),
-      succession: hex(c.vKp),
-    });
+    await expectServedOnly(c.v, hex(c.vKp));
     // V can rotate from its own key: no squat link or row blocks departure.
     const next = await generateKeypair();
     const vRot = await signKeySuccession(
@@ -835,12 +832,7 @@ describe("2 — every parked field: planted by X, then V's bootstrap, then every
     for (const [door, status] of Object.entries(f))
       expect([door, ok(status)]).toEqual([door, false]);
     expect(xResidue(c.v, xDevice, hex(c.xKp), hex(c.gX))).toEqual(CLEAN);
-    expect(await servedAll(c.v)).toEqual({
-      helper: hex(c.vKp),
-      discover: hex(c.vKp),
-      agent: hex(c.vKp),
-      succession: hex(c.vKp),
-    });
+    await expectServedOnly(c.v, hex(c.vKp));
     // V's own doors work: keyless register (E-sov) with V's guardian, then V rotates.
     const gV = await generateKeypair();
     expect(await register(c.v, `${c.v}-v`, c.vKp, await guardianFields(c.v, gV))).toBe(200);

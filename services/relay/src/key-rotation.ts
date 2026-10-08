@@ -28,7 +28,7 @@ import { createLogger } from "./logger.js";
 import { openObligationsToKey, type OpenObligation } from "./rotation-obligations.js";
 import type { AuthEvent } from "./auth-events.js";
 import type { CloseIdentityConnections, CloseTokenConnections } from "./connection-ports.js";
-import { admitKey, identityGuardianFor, identityKey, verificationKeyFor } from "./identity-keys.js";
+import { admitKey, identityKey, recoveryGuardianFor, verificationKeyFor } from "./identity-keys.js";
 import { isKnownIdentity, recordIdentityRevocation } from "./identity-revocation.js";
 import { bindCaller, unwrapBound, type BoundIdentity } from "./identity-binding.js";
 
@@ -228,15 +228,27 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       }
       // Look up the guardian public key from agent's identity
       // The one guardian truth (§5a A3), not a registry read of its own.
-      const guardianPubKey = identityGuardianFor(moteDb.db, motebitId);
-      if (!guardianPubKey) {
+      const recovery = await recoveryGuardianFor(moteDb.db, motebitId);
+      if (recovery.guardian === null) {
         throw refuse(
           400,
           "recovery_without_registered_guardian",
           "Agent has no guardian registered — cannot use guardian recovery",
         );
       }
-      const valid = await verifyKeySuccession(body, guardianPubKey);
+      // On a sovereign id the guardian recovers only when a request proved
+      // the identity's key when it set it (#875 review R2): a guardian a
+      // squatter planted — pre-#875, or by a keyless registration its own
+      // device row verified — survived the owner's bootstrap and recovered
+      // the id to the squatter's key.
+      if (!recovery.proven) {
+        throw refuse(
+          400,
+          "recovery_guardian_unproven",
+          "Agent's guardian was not set under the identity's proven key — cannot use guardian recovery",
+        );
+      }
+      const valid = await verifyKeySuccession(body, recovery.guardian);
       if (!valid) {
         throw refuse(400, "recovery_signature_invalid", "Invalid guardian recovery signatures");
       }

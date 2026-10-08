@@ -100,6 +100,7 @@ const AUTHORITY_TABLES = [
   "identity_keys",
   "relay_identity_revocations",
   "relay_registry_key_evidence",
+  "relay_guardian_evidence",
 ] as const;
 
 /** A column naming an identity, at the start of a column definition. */
@@ -162,6 +163,17 @@ const ADAPTER =
  * churn it, and counted so a SECOND door cut in a file that already has one
  * still fails — which is exactly how #713 and #719 were added.
  */
+/**
+ * `parkSovereignSquat` (#875 review F1, R2): reached only by the two public
+ * doors (bootstrap, register-self) AFTER they verified a signature by the
+ * presented key over the request AND that the key STANDS for the
+ * sovereign-shaped id, and only while NO standing key is on file, re-read
+ * inside its one transaction — so nothing it clears was written under a key
+ * any request proved to be the identity's.
+ */
+const PARK =
+  "`parkSovereignSquat` (#875 review F1/R2), reached only by the two public doors (bootstrap, register-self) AFTER they verified a signature by the presented key over the request (current possession) AND that the key STANDS for the sovereign-shaped id (`sovereignLineage`), and only while NO standing key is on file, re-read inside its one transaction — so every row it clears was planted under a key no request ever proved to be the identity's. Proven by the owner's own signature over the id that commits to its key; this function proves nothing itself";
+
 const WRITERS: readonly Writer[] = [
   // ── identity authority ────────────────────────────────────────────────
   {
@@ -219,6 +231,69 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       "`parkSovereignSquat` (#875 review F1), reached only by the two public doors (bootstrap, register-self) AFTER they verified a signature by the presented key over the request (current possession) AND that the key STANDS for the sovereign-shaped id (`sovereignLineage`: the id is the commitment to it, or a recorded succession / verified migration reaches it), and only while NO standing key is on file, re-read inside its one transaction — so every row it parks is a pre-#875 squat no request ever proved to be the identity's. Proven by the owner's own signature over the id that commits to its key; this function proves nothing itself (removes a holder that does not stand — an E-main/E-op transplant of the squat)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "INSERT",
+    table: "relay_guardian_evidence",
+    count: 1,
+    principal:
+      "`recordGuardianEvidence` — the PROVENANCE of a guardian (#875 review R2), recorded only by /agents/register beside a guardian it wrote after the route proved, BEFORE any write, that the request proves the identity's CURRENT key (a keyed proven body key, a keyless E-sov's sovereign key, else the bearer's verified key equal to `currentIdentityKey`), or the operator's master token (E-op authority). It lets that guardian RECOVER a sovereign id (`recoveryGuardianFor`, `sovereignLineage`); this function proves nothing itself",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "DELETE",
+    table: "relay_push_tokens",
+    count: 1,
+    principal: PARK + " (removes the push tokens of the squatter's device rows it removed)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "DELETE",
+    table: "pairing_sessions",
+    count: 1,
+    principal:
+      PARK +
+      " (removes every pairing session: an identity with no standing key had no owner who could open one, and approval writes device rows)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "DELETE",
+    table: "relay_guardian_evidence",
+    count: 1,
+    principal: PARK + " (drops guardian provenance recorded under a key that does not stand)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "DELETE",
+    table: "relay_service_listings",
+    count: 1,
+    principal: PARK + " (removes the squatter's listings — capabilities, pricing, pay-to)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "DELETE",
+    table: "relay_key_successions",
+    count: 1,
+    principal:
+      PARK +
+      " (removes links whose new key does not stand — a squat chain or an unproven recovery; each set departure for the id)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "DELETE",
+    table: "relay_delegation_revocations",
+    count: 1,
+    principal:
+      PARK +
+      " (removes delegation revocations signed in the id's name by a key that does not stand)",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "DELETE",
+    table: "relay_bond_commitments",
+    count: 1,
+    principal: PARK + " (removes bond commitments under a key that does not stand)",
   },
   {
     file: R + "key-proof-replay.ts",

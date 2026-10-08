@@ -130,6 +130,13 @@ const DEVICE_ROW_SITES: Registered[] = [
       "SOVEREIGN LINEAGE (#875 review F1): device-row keys are CANDIDATES only — one stands solely when the id is its sovereign commitment (arithmetic) or a recorded succession / verified migration reaches it, never on a row's word",
   },
   {
+    file: "agents.ts",
+    fn: "/api/v1/agents/register",
+    snippet: "const standingOnFile = [...keysHeldBy(moteDb.db, motebitId)].some((k) =>",
+    verdict:
+      "GUARD (#875 review R2): counts only keys that STAND for the sovereign id (`sovereignLineage`) — when none does and the request proves none, the registration is refused; a device row never makes the request's key the identity's",
+  },
+  {
     file: "identity-keys.ts",
     fn: "parkSovereignSquat",
     snippet: "for (const k of keysHeldBy(db, motebitId)) {",

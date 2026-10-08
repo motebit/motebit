@@ -32,7 +32,12 @@
  * The public-door guard asks a third, per-SET question: `keysHeldBy`.
  */
 
-import { deriveSovereignMotebitId, verifySovereignBinding } from "@motebit/crypto";
+import {
+  KEY_SUCCESSION_SUITE,
+  deriveSovereignMotebitId,
+  verifyKeySuccession,
+  verifySovereignBinding,
+} from "@motebit/crypto";
 import type { DatabaseDriver } from "@motebit/persistence";
 
 /** Which evidence recorded the key on file. Closed set; new evidence adds a name here. */
@@ -231,9 +236,9 @@ export async function sovereignLineage(
   if (!claimsSovereignId(motebitId)) return null;
   const links = db
     .prepare(
-      "SELECT old_public_key, new_public_key FROM relay_key_successions WHERE motebit_id = ?",
+      "SELECT old_public_key, new_public_key, timestamp, reason, new_key_signature, recovery, guardian_signature FROM relay_key_successions WHERE motebit_id = ?",
     )
-    .all(motebitId) as Array<{ old_public_key: string; new_public_key: string }>;
+    .all(motebitId) as SuccessionRow[];
   const candidates = new Set<string>(keysHeldBy(db, motebitId));
   for (const l of links) {
     candidates.add(l.old_public_key);
@@ -258,18 +263,163 @@ export async function sovereignLineage(
         .get(motebitId) != null;
     if (arrived) lineage.add(held.public_key);
   }
-  // Forward over recorded links from every standing key.
+  // Forward over recorded links from every standing key. An ordinary link
+  // carries the departing key's signature (verified before it was recorded);
+  // a guardian RECOVERY carries no signature by the departing key at all, so
+  // it moves the identity only when its guardian is one a standing key set
+  // (#875 review R2: a squatter's planted guardian, kept after the owner's
+  // bootstrap, recovered V's id to a key of its choosing). The guardian is
+  // re-verified here against the provenance record, never the bare column.
+  const guardians = guardianEvidenceRows(db, motebitId);
   let grew = true;
   while (grew) {
     grew = false;
     for (const l of links) {
-      if (lineage.has(l.old_public_key) && !lineage.has(l.new_public_key)) {
-        lineage.add(l.new_public_key);
-        grew = true;
-      }
+      if (!lineage.has(l.old_public_key) || lineage.has(l.new_public_key)) continue;
+      if (l.recovery === 1 && !(await recoveryLinkStands(l, guardians, lineage))) continue;
+      lineage.add(l.new_public_key);
+      grew = true;
     }
   }
   return lineage;
+}
+
+interface SuccessionRow {
+  old_public_key: string;
+  new_public_key: string;
+  timestamp: number;
+  reason: string | null;
+  new_key_signature: string;
+  recovery: number | null;
+  guardian_signature: string | null;
+}
+
+/** A recovery link stands when a guardian set under a standing key (or by the operator) signed it. */
+async function recoveryLinkStands(
+  l: SuccessionRow,
+  guardians: GuardianEvidenceRow[],
+  lineage: Set<string>,
+): Promise<boolean> {
+  if (l.guardian_signature == null) return false;
+  const standing = new Set([...lineage].map((k) => k.toLowerCase()));
+  for (const g of guardians) {
+    if (!guardianRowStands(g, standing)) continue;
+    const ok = await verifyKeySuccession(
+      {
+        old_public_key: l.old_public_key,
+        new_public_key: l.new_public_key,
+        timestamp: l.timestamp,
+        ...(l.reason != null ? { reason: l.reason } : {}),
+        recovery: true,
+        suite: KEY_SUCCESSION_SUITE,
+        new_key_signature: l.new_key_signature,
+        guardian_signature: l.guardian_signature,
+      },
+      g.guardian_public_key,
+    );
+    if (ok) return true;
+  }
+  return false;
+}
+
+// ── Guardian provenance (#875 review R2). ──
+
+/** The evidence a guardian was set under (closed set; migration v60). */
+export const GUARDIAN_EVIDENCE = [
+  "bearer",
+  "key_proof",
+  "holder",
+  "succession",
+  "sovereign",
+  "operator",
+] as const;
+export type GuardianEvidence = (typeof GUARDIAN_EVIDENCE)[number];
+
+interface GuardianEvidenceRow {
+  guardian_public_key: string;
+  set_under_key: string | null;
+  evidence: GuardianEvidence;
+}
+
+function guardianEvidenceRows(db: DatabaseDriver, motebitId: string): GuardianEvidenceRow[] {
+  return db
+    .prepare(
+      "SELECT guardian_public_key, set_under_key, evidence FROM relay_guardian_evidence WHERE motebit_id = ?",
+    )
+    .all(motebitId) as GuardianEvidenceRow[];
+}
+
+/** A guardian record stands when the operator set it, or the key it was set under stands. */
+function guardianRowStands(g: GuardianEvidenceRow, standing: Set<string>): boolean {
+  if (g.evidence === "operator") return true;
+  return g.set_under_key != null && standing.has(g.set_under_key.toLowerCase());
+}
+
+/**
+ * Record that `guardianPublicKey` was set by a request that proved
+ * `setUnderKey` — the identity's CURRENT key (the register door decides; this
+ * proves nothing itself). One row per guardian the identity has ever set, so
+ * a recovery the identity's earlier guardian signed stays verifiable.
+ */
+export function recordGuardianEvidence(
+  db: DatabaseDriver,
+  input: {
+    motebitId: string;
+    guardianPublicKey: string;
+    setUnderKey: string | null;
+    evidence: GuardianEvidence;
+    now: number;
+  },
+): void {
+  if (!HEX_64_ANY_CASE.test(input.guardianPublicKey)) {
+    throw new Error("recordGuardianEvidence: guardian must be a 64-hex Ed25519 public key");
+  }
+  db.prepare(
+    `INSERT INTO relay_guardian_evidence (motebit_id, guardian_public_key, set_under_key, evidence, recorded_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(motebit_id, guardian_public_key) DO UPDATE SET
+       set_under_key = excluded.set_under_key,
+       evidence = excluded.evidence,
+       recorded_at = excluded.recorded_at`,
+  ).run(input.motebitId, input.guardianPublicKey, input.setUnderKey, input.evidence, input.now);
+}
+
+/**
+ * The guardian a RECOVERY may verify under (#875 review R2). For a legacy id,
+ * the one guardian truth (`identityGuardianFor`) — first-come by
+ * construction, as its key is. For a SOVEREIGN-shaped id, that guardian only
+ * when a request proved the identity's key when it set it — a recorded
+ * provenance row whose key stands (`sovereignLineage`), or the operator's.
+ * A guardian a squatter planted (pre-#875, or by a keyless registration a
+ * squatter's device row verified) has no such row, and recovers nothing.
+ */
+export async function recoveryGuardianFor(
+  db: DatabaseDriver,
+  motebitId: string,
+): Promise<{ guardian: string; proven: true } | { guardian: string | null; proven: false }> {
+  const guardian = identityGuardianFor(db, motebitId);
+  if (guardian === null) return { guardian: null, proven: false };
+  const lineage = await sovereignLineage(db, motebitId);
+  if (lineage === null) return { guardian, proven: true };
+  const standing = new Set([...lineage].map((k) => k.toLowerCase()));
+  const proven = guardianEvidenceRows(db, motebitId).some(
+    (g) => g.guardian_public_key === guardian && guardianRowStands(g, standing),
+  );
+  return proven ? { guardian, proven: true } : { guardian, proven: false };
+}
+
+/**
+ * The identity's CURRENT key as an authority-bearing write must prove it
+ * (#875 review R2): for a sovereign id, the served key (`servedIdentityKey` —
+ * standing by construction); for a legacy id, the holder, else the registry
+ * key on file (main's departure rule). Null when the identity holds none.
+ */
+export async function currentIdentityKey(
+  db: DatabaseDriver,
+  motebitId: string,
+): Promise<string | null> {
+  if (claimsSovereignId(motebitId)) return servedIdentityKey(db, motebitId);
+  return holderKeyOf(db, motebitId) ?? registryKeyOf(db, motebitId);
 }
 
 /** Whether `key` may stand as `motebitId`'s key (`sovereignLineage`; always true for a non-sovereign id). */
@@ -321,14 +471,17 @@ export async function servedIdentityKey(
   //    rotated. After a rotation the genesis key a device row may still carry
   //    is stale; a rotated identity is served its holder or proven registry
   //    key, else nothing (round 4, C2). A sovereign id's rotation is a link
-  //    departing from its lineage; a chain a squatter rooted at its own key
-  //    is no rotation of the identity (F1).
+  //    that STANDS (from and to its lineage); a chain a squatter rooted at
+  //    its own key (F1), or a recovery under an unproven guardian (R2), is
+  //    no rotation of the identity.
   if (lineage === null) return null;
   const rotated = (
     db
-      .prepare("SELECT old_public_key FROM relay_key_successions WHERE motebit_id = ?")
-      .all(motebitId) as Array<{ old_public_key: string }>
-  ).some((l) => lineage.has(l.old_public_key));
+      .prepare(
+        "SELECT old_public_key, new_public_key FROM relay_key_successions WHERE motebit_id = ?",
+      )
+      .all(motebitId) as Array<{ old_public_key: string; new_public_key: string }>
+  ).some((l) => lineage.has(l.old_public_key) && lineage.has(l.new_public_key));
   if (rotated) return null;
   for (const key of keysHeldBy(db, motebitId)) {
     if ((await proveSovereignFirstKey(motebitId, key)) !== null) return key;
@@ -337,22 +490,46 @@ export async function servedIdentityKey(
 }
 
 /**
- * Park a pre-#875 squat of a SOVEREIGN id (#875 review F1) — called by a
+ * Park a pre-#875 squat of a SOVEREIGN id (#875 review F1, R2) — called by a
  * public door (bootstrap, register-self) that has just proven CURRENT
  * possession of `provenKey` AND that `provenKey` stands for the id
  * (`keyStandsFor`), while the identity has no standing key on file. Every
- * key on file then is a squat (none can be the identity's), so, in one
- * transaction: the keyed device rows that do not stand are removed (each one
- * verified tokens AS the identity), a registry key that does not stand is
- * cleared and the listing delisted (its endpoint is the squatter's), its
- * evidence row dropped, and a holder that does not stand (an E-main or E-op
- * transplant of the squat) is removed. Returns what it parked, for the
- * caller's log and socket reconcile. Writes nothing for a non-sovereign id.
+ * key on file then is a squat (none can be the identity's), and so is every
+ * authority-bearing field written beside it — nothing on the identity was
+ * ever written under a proven key. In one transaction, every PARKED table
+ * (the schema-derived classification in
+ * `__tests__/sovereign-squat-fields-875.test.ts`) is cleared of what a
+ * squatter could have planted:
+ *
+ *  - `devices`: the keyed rows that do not stand (each verified tokens AS the
+ *    identity), and their `relay_push_tokens`;
+ *  - `pairing_sessions`: every one (an identity with no standing key has no
+ *    owner who could have opened one; approval writes device rows);
+ *  - `agent_registry`: the key, the GUARDIAN, endpoint, capabilities,
+ *    metadata and the settlement address / modes / sweep threshold, and the
+ *    row is delisted (kept, never deleted — rule 22);
+ *  - `relay_registry_key_evidence`, and `relay_guardian_evidence` recorded
+ *    under a key that does not stand;
+ *  - `relay_service_listings`: every listing (pricing, pay-to);
+ *  - `identity_keys`: a holder that does not stand (an E-main / E-op
+ *    transplant of the squat);
+ *  - `relay_key_successions`: every link whose new key does not stand (a
+ *    squat chain, an unproven recovery) — each one set departure;
+ *  - `relay_delegation_revocations` / `relay_bond_commitments` signed by a
+ *    key that does not stand (acts in V's name on X's key).
+ *
+ * Money (accounts, settlements, withdrawals) is never moved here. Returns
+ * what it parked, for the caller's log and socket reconcile; writes nothing
+ * for a non-sovereign id.
  */
 export interface ParkedSquat {
   devices: Array<{ device_id: string; public_key: string }>;
   registryKey: string | null;
+  /** The registry's guardian, when one was planted. */
+  guardian: string | null;
   holderKey: string | null;
+  /** Rows removed per other parked table (zero counts omitted). */
+  removed: Record<string, number>;
 }
 
 export async function parkSovereignSquat(
@@ -370,37 +547,157 @@ export async function parkSovereignSquat(
     // Re-read inside the transaction: park only while no standing key is on
     // file (a concurrent owner write makes this a no-op).
     for (const k of keysHeldBy(db, motebitId)) {
-      if (standing.has(k.toLowerCase())) return null;
+      if (standsAmong(standing, k)) return null;
     }
+    const removed: Record<string, number> = {};
+
     const devices = (
       db
         .prepare(
           "SELECT device_id, public_key FROM devices WHERE motebit_id = ? AND public_key != ''",
         )
         .all(motebitId) as Array<{ device_id: string; public_key: string }>
-    ).filter((d) => !standing.has(d.public_key.toLowerCase()));
+    ).filter((d) => !standsAmong(standing, d.public_key));
     for (const d of devices) {
       db.prepare("DELETE FROM devices WHERE device_id = ? AND motebit_id = ?").run(
         d.device_id,
         motebitId,
       );
+      noteRemoved(
+        removed,
+        "relay_push_tokens",
+        db
+          .prepare("DELETE FROM relay_push_tokens WHERE motebit_id = ? AND device_id = ?")
+          .run(motebitId, d.device_id).changes,
+      );
     }
-    const reg = registryKeyOf(db, motebitId);
-    const registryKey = reg !== null && !standing.has(reg.toLowerCase()) ? reg : null;
-    if (registryKey !== null) {
+    noteRemoved(
+      removed,
+      "pairing_sessions",
+      db.prepare("DELETE FROM pairing_sessions WHERE motebit_id = ?").run(motebitId).changes,
+    );
+
+    const reg = db
+      .prepare(
+        "SELECT public_key, guardian_public_key, endpoint_url, settlement_address FROM agent_registry WHERE motebit_id = ?",
+      )
+      .get(motebitId) as
+      | {
+          public_key: string | null;
+          guardian_public_key: string | null;
+          endpoint_url: string | null;
+          settlement_address: string | null;
+        }
+      | undefined;
+    const registryKey =
+      reg && keyOrNull(reg.public_key) !== null ? keyOrNull(reg.public_key) : null;
+    const guardian = reg ? keyOrNull(reg.guardian_public_key) : null;
+    if (reg) {
       db.prepare(
-        "UPDATE agent_registry SET public_key = '', delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]' WHERE motebit_id = ?",
+        `UPDATE agent_registry SET public_key = '', guardian_public_key = NULL, endpoint_url = '',
+           capabilities = '[]', metadata = NULL, settlement_address = NULL,
+           settlement_modes = 'relay', sweep_threshold = NULL,
+           delisted_at = COALESCE(delisted_at, ?) WHERE motebit_id = ?`,
       ).run(now, motebitId);
-      db.prepare("DELETE FROM relay_registry_key_evidence WHERE motebit_id = ?").run(motebitId);
     }
+    noteRemoved(
+      removed,
+      "relay_registry_key_evidence",
+      db.prepare("DELETE FROM relay_registry_key_evidence WHERE motebit_id = ?").run(motebitId)
+        .changes,
+    );
+    for (const g of guardianEvidenceRows(db, motebitId)) {
+      if (standsAmong(standing, g.set_under_key)) continue;
+      noteRemoved(
+        removed,
+        "relay_guardian_evidence",
+        db
+          .prepare(
+            "DELETE FROM relay_guardian_evidence WHERE motebit_id = ? AND guardian_public_key = ?",
+          )
+          .run(motebitId, g.guardian_public_key).changes,
+      );
+    }
+    noteRemoved(
+      removed,
+      "relay_service_listings",
+      db.prepare("DELETE FROM relay_service_listings WHERE motebit_id = ?").run(motebitId).changes,
+    );
+
     const holder = holderKeyOf(db, motebitId);
-    const holderKey = holder !== null && !standing.has(holder.toLowerCase()) ? holder : null;
+    const holderKey = holder !== null && !standsAmong(standing, holder) ? holder : null;
     if (holderKey !== null) {
       db.prepare("DELETE FROM identity_keys WHERE motebit_id = ?").run(motebitId);
     }
-    if (devices.length === 0 && registryKey === null && holderKey === null) return null;
-    return { devices, registryKey, holderKey };
+
+    const links = db
+      .prepare("SELECT id, new_public_key FROM relay_key_successions WHERE motebit_id = ?")
+      .all(motebitId) as Array<{ id: number; new_public_key: string }>;
+    for (const l of links) {
+      if (standsAmong(standing, l.new_public_key)) continue;
+      noteRemoved(
+        removed,
+        "relay_key_successions",
+        db
+          .prepare("DELETE FROM relay_key_successions WHERE id = ? AND motebit_id = ?")
+          .run(l.id, motebitId).changes,
+      );
+    }
+    const delegationRevocations = db
+      .prepare(
+        "SELECT id, delegator_public_key FROM relay_delegation_revocations WHERE delegator_id = ?",
+      )
+      .all(motebitId) as Array<{ id: number; delegator_public_key: string }>;
+    for (const r of delegationRevocations) {
+      if (standsAmong(standing, r.delegator_public_key)) continue;
+      noteRemoved(
+        removed,
+        "relay_delegation_revocations",
+        db
+          .prepare("DELETE FROM relay_delegation_revocations WHERE id = ? AND delegator_id = ?")
+          .run(r.id, motebitId).changes,
+      );
+    }
+    const bonds = db
+      .prepare("SELECT bond_id, bonded_public_key FROM relay_bond_commitments WHERE motebit_id = ?")
+      .all(motebitId) as Array<{ bond_id: string; bonded_public_key: string }>;
+    for (const b of bonds) {
+      if (standsAmong(standing, b.bonded_public_key)) continue;
+      noteRemoved(
+        removed,
+        "relay_bond_commitments",
+        db
+          .prepare("DELETE FROM relay_bond_commitments WHERE bond_id = ? AND motebit_id = ?")
+          .run(b.bond_id, motebitId).changes,
+      );
+    }
+
+    const plantedRegistry =
+      reg !== undefined &&
+      (registryKey !== null ||
+        guardian !== null ||
+        keyOrNull(reg.endpoint_url) !== null ||
+        reg.settlement_address != null);
+    if (
+      devices.length === 0 &&
+      !plantedRegistry &&
+      holderKey === null &&
+      Object.keys(removed).length === 0
+    ) {
+      return null;
+    }
+    return { devices, registryKey, guardian, holderKey, removed };
   });
+}
+
+/** Whether `k` is among the (lower-cased) standing keys. */
+function standsAmong(standing: Set<string>, k: string | null | undefined): boolean {
+  return k != null && standing.has(k.toLowerCase());
+}
+
+/** Count rows a park removed from `table`. */
+function noteRemoved(removed: Record<string, number>, table: string, n: number): void {
+  if (n > 0) removed[table] = (removed[table] ?? 0) + n;
 }
 
 /** The evidence that proved a registry key (closed set; migration v58). */
