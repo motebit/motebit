@@ -31,7 +31,23 @@ function vectors(sub: string): string[] {
   }
 }
 
-function exitOf(script: string, args: readonly string[]): Promise<number | null> {
+/** At most this many CLI processes at once, so the suite does not starve its neighbours. */
+const MAX_IN_FLIGHT = 6;
+let inFlight = 0;
+const waiting: Array<() => void> = [];
+
+async function exitOf(script: string, args: readonly string[]): Promise<number | null> {
+  if (inFlight >= MAX_IN_FLIGHT) await new Promise<void>((r) => waiting.push(r));
+  inFlight++;
+  try {
+    return await spawnExit(script, args);
+  } finally {
+    inFlight--;
+    waiting.shift()?.();
+  }
+}
+
+function spawnExit(script: string, args: readonly string[]): Promise<number | null> {
   return new Promise((resolveExit) => {
     const child = spawn("npx", ["--yes", "tsx", script, ...args], { cwd: REPO, stdio: "ignore" });
     const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);

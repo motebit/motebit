@@ -40,6 +40,20 @@ function exitOf(cmd: string, args: readonly string[]): Promise<number | null> {
   });
 }
 
+/** Run `tasks` with at most `limit` in flight — each spawns a tsx process. */
+async function pooled<T>(tasks: Array<() => Promise<T>>, limit = 4): Promise<T[]> {
+  const out: T[] = new Array(tasks.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < tasks.length) {
+      const i = next++;
+      out[i] = await tasks[i]!();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return out;
+}
+
 const pythonAvailable = (() => {
   const r = spawnSync("python3", ["-c", "import nacl"], { encoding: "utf8" });
   return r.status === 0;
@@ -53,10 +67,12 @@ describe("receipt result truncated at every index → strict-valid in both CLIs 
     dir = mkdtempSync(join(tmpdir(), "verify-truncation-"));
     const kp = await generateKeypair();
     for (let i = 0; i <= SAMPLE.length; i++) {
-      for (const [how, result] of [
-        ["safe", truncateWellFormed(SAMPLE, i)],
-        ["naive", SAMPLE.slice(0, i)],
-      ] as const) {
+      // The naive cut differs from the safe one only where it splits a pair;
+      // elsewhere it is the same text, so it is minted only where it differs.
+      const naive = SAMPLE.slice(0, i);
+      const cuts: Array<readonly [string, string]> = [["safe", truncateWellFormed(SAMPLE, i)]];
+      if (naive !== truncateWellFormed(SAMPLE, i)) cuts.push(["naive", naive]);
+      for (const [how, result] of cuts) {
         const receipt = await buildServiceReceipt({
           motebitId: "019cd9d4-3275-7b24-8265-61ebee41d9d0",
           deviceId: "truncation-test",
@@ -90,21 +106,22 @@ describe("receipt result truncated at every index → strict-valid in both CLIs 
   });
 
   it("motebit verify receipt and motebit-verify: exit 0 (strict default) for every index", async () => {
-    const results = await Promise.all(
-      files.map(async (f) => ({
+    const results = await pooled(
+      files.map((f) => async () => ({
         name: f.name,
         motebit: await exitOf("npx", ["--yes", "tsx", MOTEBIT_VERIFY_WIRE, "receipt", f.path]),
         motebitVerify: await exitOf("npx", ["--yes", "tsx", MOTEBIT_VERIFY_CLI, f.path]),
       })),
     );
+    expect(results.some((r) => r.name.startsWith("naive-"))).toBe(true);
     for (const r of results) expect(r).toEqual({ name: r.name, motebit: 0, motebitVerify: 0 });
   }, 600_000);
 
   it.runIf(pythonAvailable || process.env.REQUIRE_PYTHON === "1")(
     "Python reference verifier: valid for every index",
     async () => {
-      const results = await Promise.all(
-        files.map(async (f) => ({
+      const results = await pooled(
+        files.map((f) => async () => ({
           name: f.name,
           python: await exitOf("python3", [VERIFY_PY, f.path]),
         })),
