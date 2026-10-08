@@ -336,6 +336,12 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // no I/O, no decision; signature verification lives in @motebit/crypto.
     "isHostEnrollment",
     "isHostRetirement",
+    // Well-formed Unicode for signed artifacts (spec/execution-ledger-v1.md
+    // §11.4): pure string repair / code-point-safe truncation, no decision —
+    // the canonical-bytes family beside canonical JSON. Producers call them
+    // before hashing and signing so no receipt carries an unpaired surrogate.
+    "toWellFormedText",
+    "truncateWellFormed",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

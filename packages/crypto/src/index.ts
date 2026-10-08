@@ -1823,9 +1823,6 @@ async function verifyReceiptSignature(
   // section), phrased to match the Python reference verifier byte-for-byte —
   // the cross-language conformance story depends on both verifiers reporting
   // the same spec violation for the same artifact.
-  if (hasUnpairedSurrogate(body)) {
-    return { valid: false, error: UNPAIRED_SURROGATE_ERROR };
-  }
   if (!signature || signature.trim() === "") {
     return { valid: false, error: "§11.2 violation: receipt signature is empty" };
   }
@@ -1966,14 +1963,30 @@ async function verifyReceiptAtDepth(
   // the result field. Recompute it per spec and reject a self-inconsistent
   // receipt (one whose result_hash a third party can't reproduce from result).
   // Independent of the key: a node whose signature cannot be checked still
-  // has its binding checked. A result with an unpaired surrogate has no UTF-8
-  // form (§11.4), so it binds nothing.
+  // has its binding checked.
+  //
+  // A string with an unpaired UTF-16 surrogate has no UTF-8 form (§11.4), so
+  // strict mode rejects the node outright (one reason, no hash comparison).
+  // Signature-only verification keeps main's behaviour: receipts signed before
+  // producers stopped emitting one verify over their JCS-escaped bytes, which
+  // the runtime and relay signature checks (`verifyExecutionReceipt`) accept.
   let resultHashOk = true;
+  let unicodeOk = true;
   if (strict) {
+    const { signature: _signature, ...unsignedBody } = receipt;
+    unicodeOk = !hasUnpairedSurrogate(unsignedBody);
+    // A binding failure, not a signature one: the signature over the escaped
+    // JCS bytes may well verify; what fails is that result_hash can bind them.
+    if (!unicodeOk) {
+      const where =
+        depth === 0 ? "" : ` (delegation depth ${depth}, task_id ${receipt.task_id ?? "unknown"})`;
+      errors.push({ message: `${UNPAIRED_SURROGATE_ERROR}${where}`, path: "result_hash" });
+    }
+  }
+  if (strict && unicodeOk) {
     const result: unknown = receipt.result;
     resultHashOk =
       typeof result === "string" &&
-      !hasUnpairedSurrogate(result) &&
       (await hash(new TextEncoder().encode(result))) === receipt.result_hash;
     if (!resultHashOk) {
       const where =
@@ -1987,7 +2000,7 @@ async function verifyReceiptAtDepth(
 
   return {
     type: "receipt",
-    valid: sigValid && delegationErrors.length === 0 && resultHashOk && serviceHashOk,
+    valid: sigValid && delegationErrors.length === 0 && resultHashOk && serviceHashOk && unicodeOk,
     receipt,
     ...(signerDid !== undefined ? { signer: signerDid, keySource: "embedded" as const } : {}),
     ...(delegations.length > 0 ? { delegations } : {}),
@@ -2006,7 +2019,8 @@ export interface ReceiptTreeError {
   /** The failing node's `task_id`, as carried by the receipt. */
   task_id: string | undefined;
   /**
-   * The failing field: `"result_hash"` for a strict binding failure,
+   * The failing field: `"result_hash"` for a strict binding failure (a
+   * mismatch, or a string with no UTF-8 form — §11.4),
    * `"service_result_hash"` for a malformed service hash; absent for a
    * signature / key failure (the node could not be authenticated).
    */
@@ -2546,7 +2560,21 @@ async function verifyReceiptDelegations(
     ? { strictHashBinding: true }
     : undefined;
   return Promise.all(
-    receipt.delegation_receipts.map((dr) => verifyReceiptAtDepth(dr, childOptions, depth + 1)),
+    receipt.delegation_receipts.map((dr) =>
+      // A JSON tree can hold anything here; an entry that is not a receipt
+      // object is a §11.5 shape failure, never a TypeError out of the verifier.
+      dr !== null && typeof dr === "object" && !Array.isArray(dr)
+        ? verifyReceiptAtDepth(dr, childOptions, depth + 1)
+        : Promise.resolve<ReceiptVerifyResult>({
+            type: "receipt",
+            valid: false,
+            receipt: null,
+            // No `path`: the node could not be authenticated at all (the
+            // `delegation_receipts` path marks a parent's aggregate entry,
+            // which collectReceiptTreeErrors skips).
+            errors: [{ message: "§11.5 violation: delegation_receipts entry is not an object" }],
+          }),
+    ),
   );
 }
 

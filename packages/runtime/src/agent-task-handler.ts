@@ -6,7 +6,7 @@
  * receipts, and logs events.
  */
 
-import { EventType, AgentTrustLevel } from "@motebit/sdk";
+import { EventType, AgentTrustLevel, toWellFormedText } from "@motebit/sdk";
 import type {
   AgentTask,
   ExecutionReceipt,
@@ -187,6 +187,12 @@ export async function* handleAgentTask(
   // at owner-record intake (#943) — never through a task.
   // The flag survives from where each hire was made: one credit per hire.
   await absorbDelegationReceipts(deps, delegationEntries);
+
+  // Never sign an unpaired UTF-16 surrogate (spec/execution-ledger-v1.md
+  // §11.4): a stream cut mid-emoji (timeout, provider reset) can end on a lone
+  // high surrogate. Repair it before hashing so result_hash binds the signed
+  // result.
+  responseText = toWellFormedText(responseText);
 
   // Hash prompt and result
   const promptHash = await hash(new TextEncoder().encode(task.prompt));

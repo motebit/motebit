@@ -1174,7 +1174,7 @@ export interface ReceiptVerification {
 export interface ReceiptVerifyDetail {
     canonical_preview: string;
     canonical_sha256: string;
-    reason: "ok" | "wrong_suite" | "bad_base64" | "ed25519_mismatch" | "unpaired_surrogate";
+    reason: "ok" | "wrong_suite" | "bad_base64" | "ed25519_mismatch";
     // (undocumented)
     valid: boolean;
 }

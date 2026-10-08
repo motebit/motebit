@@ -4769,6 +4769,9 @@ export interface ToolRiskProfile {
 }
 
 // @public
+export function toWellFormedText(s: string): string;
+
+// @public
 export interface TranscriptCandidate {
     alpha?: number;
     beta?: number;
@@ -4801,6 +4804,9 @@ export interface TransparencyAnchorRecord {
 
 // @public
 export type TransparencySignedPayload = Pick<SignedTransparencyDeclaration, "spec" | "declared_at" | "relay_id" | "relay_public_key" | "content">;
+
+// @public
+export function truncateWellFormed(s: string, maxUnits: number): string;
 
 // @public
 export const TRUST_LEVEL_SCORES: Record<string, number>;

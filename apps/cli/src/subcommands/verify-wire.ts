@@ -144,7 +144,7 @@ export async function verifyWire(
         ? e.message
         : `delegation depth ${e.depth}, task_id ${e.task_id ?? "unknown"}: ${e.message}`;
     // (4) Signature — every node that could not be authenticated (no key, a
-    // malformed key, a bad signature, an unencodable string).
+    // malformed key, a bad signature, a delegation entry that is no receipt).
     const sigFailures = treeErrors.filter((e) => e.path === undefined);
     checks.push({
       name: "signature",
@@ -192,7 +192,7 @@ export async function verifyWire(
               : "equals hex(SHA-256(result)) — the result is bound to the signature"
             : hashFailures
                 .map((e) =>
-                  e.depth === 0
+                  e.depth === 0 && e.message.startsWith("result_hash does not equal")
                     ? // Display only — the verdict is crypto's. Shows the digest a
                       // conformant receipt would carry.
                       `mismatch: result_hash ${parsed.data.result_hash} != hex(SHA-256(result)) ${createHash("sha256").update(parsed.data.result, "utf8").digest("hex")}`

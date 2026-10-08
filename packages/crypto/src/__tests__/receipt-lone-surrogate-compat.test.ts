@@ -15,7 +15,7 @@
  * `result_hash` computed with TextEncoder (or Node's utf8) unchanged.
  */
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 

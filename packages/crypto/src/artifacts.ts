@@ -111,6 +111,10 @@ export interface SignableReceipt {
 /** The one suite ExecutionReceipts sign under today. */
 export const EXECUTION_RECEIPT_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
 
+/** Every unpaired UTF-16 surrogate (a high not followed by a low, a low not preceded by a high). */
+const UNPAIRED_SURROGATE_G =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 /**
  * Sign an execution receipt. Stamps the cryptosuite discriminator into
  * the receipt body, canonicalizes with JCS, dispatches the primitive
@@ -126,9 +130,19 @@ export async function signExecutionReceipt<T extends Omit<SignableReceipt, "sign
   privateKey: Uint8Array,
   publicKey?: Uint8Array,
 ): Promise<T & { suite: typeof EXECUTION_RECEIPT_SUITE; signature: string }> {
+  // Never emit an unpaired UTF-16 surrogate (spec/execution-ledger-v1.md
+  // §11.4): a `result` cut mid-pair upstream (an LLM stream truncated
+  // mid-emoji) is repaired to U+FFFD. A `result_hash` the caller computed with
+  // a UTF-8 encoder is unchanged by this — the encoder substitutes U+FFFD too —
+  // so the receipt verifies under strict hash binding. Well-formed input (every
+  // receipt main signed without a surrogate) signs byte-identically.
+  const repaired =
+    typeof receipt.result === "string" && hasUnpairedSurrogate(receipt.result)
+      ? { ...receipt, result: receipt.result.replace(UNPAIRED_SURROGATE_G, "\uFFFD") }
+      : receipt;
   // Embed the public key for portable verification (no relay lookup needed)
   // and stamp the suite into the signed body.
-  const withKey = publicKey ? { ...receipt, public_key: bytesToHex(publicKey) } : receipt;
+  const withKey = publicKey ? { ...repaired, public_key: bytesToHex(publicKey) } : repaired;
   const body = { ...withKey, suite: EXECUTION_RECEIPT_SUITE };
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
@@ -187,9 +201,6 @@ export async function verifyExecutionReceipt(
     return false;
   }
   const { signature, ...body } = receipt;
-  // No UTF-8 form exists for an unpaired surrogate (spec/execution-ledger-v1.md
-  // §11.4) — reject rather than verify over substituted bytes.
-  if (hasUnpairedSurrogate(body)) return false;
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
 
@@ -232,7 +243,7 @@ export interface ReceiptVerifyDetail {
   /** First 256 chars of the canonical JSON — enough to spot most field-level diffs. */
   canonical_preview: string;
   /** Reason category if valid is false; `"ok"` if true. */
-  reason: "ok" | "wrong_suite" | "bad_base64" | "ed25519_mismatch" | "unpaired_surrogate";
+  reason: "ok" | "wrong_suite" | "bad_base64" | "ed25519_mismatch";
 }
 
 export async function verifyExecutionReceiptDetailed(
@@ -251,14 +262,6 @@ export async function verifyExecutionReceiptDetailed(
   const { signature, ...body } = receipt;
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
-  if (hasUnpairedSurrogate(body)) {
-    return {
-      valid: false,
-      canonical_sha256: await hash(message),
-      canonical_preview: canonical.slice(0, 256),
-      reason: "unpaired_surrogate",
-    };
-  }
 
   let sigBytes: Uint8Array;
   try {

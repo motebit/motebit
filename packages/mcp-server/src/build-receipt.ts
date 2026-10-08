@@ -15,6 +15,7 @@
 
 import { hash as sha256, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/encryption";
 import type { ExecutionReceipt, IntentOrigin, DigestRef, ProjectionClass } from "@motebit/sdk";
+import { toWellFormedText } from "@motebit/sdk";
 
 export interface BuildServiceReceiptInput {
   /** Service's motebit identity (same for every receipt this service signs). */
@@ -88,8 +89,11 @@ export async function buildServiceReceipt(
   input: BuildServiceReceiptInput,
 ): Promise<ExecutionReceipt> {
   const enc = new TextEncoder();
+  // Never sign an unpaired UTF-16 surrogate (spec/execution-ledger-v1.md
+  // §11.4) — a model output cut mid-emoji is repaired before hashing.
+  const result = toWellFormedText(input.result);
   const promptHash = await sha256(enc.encode(input.prompt));
-  const resultHash = await sha256(enc.encode(input.result));
+  const resultHash = await sha256(enc.encode(result));
 
   const receipt: Record<string, unknown> = {
     task_id: input.taskId,
@@ -98,7 +102,7 @@ export async function buildServiceReceipt(
     submitted_at: input.submittedAt,
     completed_at: input.completedAt ?? Date.now(),
     status: input.ok ? "completed" : "failed",
-    result: input.result,
+    result,
     tools_used: input.toolsUsed,
     memories_formed: input.memoriesFormed ?? 0,
     prompt_hash: promptHash,

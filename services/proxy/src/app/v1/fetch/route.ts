@@ -1,6 +1,11 @@
 export const runtime = "edge";
 
-import { checkOutboundUrl, fetchPublic, OutboundUrlRefusedError } from "@motebit/sdk";
+import {
+  checkOutboundUrl,
+  fetchPublic,
+  OutboundUrlRefusedError,
+  truncateWellFormed,
+} from "@motebit/sdk";
 
 const MAX_RESPONSE_SIZE = 100_000; // 100KB
 const FETCH_TIMEOUT_MS = 15_000;
@@ -162,10 +167,10 @@ export async function POST(request: Request): Promise<Response> {
 
     if (contentType.includes("application/json")) {
       const json: unknown = await res.json();
-      data = JSON.stringify(json, null, 2).slice(0, MAX_RESPONSE_SIZE);
+      data = truncateWellFormed(JSON.stringify(json, null, 2), MAX_RESPONSE_SIZE);
     } else {
       const text = await res.text();
-      data = stripHtml(text).slice(0, MAX_RESPONSE_SIZE);
+      data = truncateWellFormed(stripHtml(text), MAX_RESPONSE_SIZE);
     }
 
     return new Response(JSON.stringify({ ok: true, data }), {

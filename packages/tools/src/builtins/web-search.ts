@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
+import { truncateWellFormed } from "@motebit/sdk";
 import type { SearchProvider } from "../search-provider.js";
 import { SearchProviderError } from "../search-provider.js";
 import { DuckDuckGoSearchProvider } from "../providers/duckduckgo.js";
@@ -51,7 +52,7 @@ export function createWebSearchHandler(provider?: SearchProvider): ToolHandler {
         .join("\n\n");
 
       const output = `Results for "${query}":\n\n${formatted}`;
-      return { ok: true, data: output.slice(0, MAX_RESULT_SIZE) };
+      return { ok: true, data: truncateWellFormed(output, MAX_RESULT_SIZE) };
     } catch (err: unknown) {
       if (err instanceof SearchProviderError) {
         return {

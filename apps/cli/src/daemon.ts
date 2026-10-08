@@ -30,6 +30,7 @@ import {
   SensitivityLevel,
   AgentTaskStatus,
   DeviceCapability,
+  toWellFormedText,
 } from "@motebit/sdk";
 import {
   mintAudienceToken,
@@ -1457,11 +1458,15 @@ export async function handleServe(config: CliConfig): Promise<void> {
           }
           const completedAt = Date.now();
 
-          const resultStr = result.ok
-            ? typeof result.data === "string"
-              ? result.data
-              : JSON.stringify(result.data ?? null)
-            : (result.error ?? "error");
+          // Well-formed before hashing: a tool's text may end on a lone
+          // surrogate (spec/execution-ledger-v1.md §11.4).
+          const resultStr = toWellFormedText(
+            result.ok
+              ? typeof result.data === "string"
+                ? result.data
+                : JSON.stringify(result.data ?? null)
+              : (result.error ?? "error"),
+          );
           const enc = new TextEncoder();
           const promptHash = await sha256(enc.encode(prompt));
           const resultHash = await sha256(enc.encode(resultStr));
