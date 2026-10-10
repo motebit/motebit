@@ -10,7 +10,7 @@ Three signed artifacts describe one gated call:
 | `invocation.json` | `ToolInvocationReceipt` | the agent               | "I ran call `invocation_id`, with args `args_hash`, in task `task_id`" |
 | `receipt.json`    | `ExecutionReceipt`      | the agent               | "Task `task_id` completed"                                             |
 
-There is one control case that matches and five negative cases. Each negative changes exactly one
+There is one control case that matches and six negative cases. Each negative changes exactly one
 thing. Two readers check every case: a standalone Python reader and a TypeScript test in CI. Both
 must reproduce every field of [`expected.json`](expected.json).
 
@@ -39,6 +39,7 @@ n2-verdict            MISMATCH  verdict             pass   pass   pass   pass  p
 n3-ordering           MISMATCH  ordering            pass   pass   pass   pass  pass  pass  pass  FAIL   pass  n/e
 n4-run                MISMATCH  run                 pass   pass   pass   pass  pass  pass  pass  pass   FAIL  n/e
 n5-tampered-approval  INVALID   signature_approval  FAIL   pass   pass   n/e   n/e   n/e   n/e   n/e    n/e   n/e
+n6-tool-name          MISMATCH  tool_name           pass   pass   pass   pass  FAIL  pass  pass  pass   pass  n/e
 ```
 
 ## The claim ceiling
@@ -87,14 +88,15 @@ minted by [`mint-cases.mts`](mint-cases.mts) through Motebit's canonical signers
 each signature is valid and only the relation fails. The exception is N5, which is altered after
 signing. In each negative, any file that is not changed is a byte copy of the control.
 
-| Case                   | One change                                                  | Verdict / code           | Shows                                                                | Does not show                                                                               |
-| ---------------------- | ----------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `control`              | none                                                        | `MATCH`                  | Three intact artifacts that agree on call, tool, args, run and order | Who holds the keys; that the email was sent; what the args were (only their hash is signed) |
-| `n1-args-hash`         | `invocation.args_hash` is a hash of different args          | `MISMATCH` / `args_hash` | The executed call is not the one approved                            | What the different args were (only their hash is signed)                                    |
-| `n2-verdict`           | `approval.verdict` is `denied`, but the call completed      | `MISMATCH` / `verdict`   | The call ran against a signed denial                                 | Whether the denial was delivered to the agent in time                                       |
-| `n3-ordering`          | `approval.resolved_at` is 1 s after `invocation.started_at` | `MISMATCH` / `ordering`  | By the signers' own clocks, the approval came after the act          | Real-world time; the clocks are self-reported                                               |
-| `n4-run`               | `approval.run_id` names another run                         | `MISMATCH` / `run`       | The approval belongs to a different run                              | Whether that other run exists                                                               |
-| `n5-tampered-approval` | `approval.risk_level` changed 2 → 1 after signing           | `INVALID` / `signature`  | The approval bytes are not the bytes the approver key signed         | Anything about the relation; it is not evaluated on altered bytes                           |
+| Case                   | One change                                                      | Verdict / code           | Shows                                                                | Does not show                                                                               |
+| ---------------------- | --------------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `control`              | none                                                            | `MATCH`                  | Three intact artifacts that agree on call, tool, args, run and order | Who holds the keys; that the email was sent; what the args were (only their hash is signed) |
+| `n1-args-hash`         | `invocation.args_hash` is a hash of different args              | `MISMATCH` / `args_hash` | The executed call is not the one approved                            | What the different args were (only their hash is signed)                                    |
+| `n2-verdict`           | `approval.verdict` is `denied`, but the call completed          | `MISMATCH` / `verdict`   | The call ran against a signed denial                                 | Whether the denial was delivered to the agent in time                                       |
+| `n3-ordering`          | `approval.resolved_at` is 1 s after `invocation.started_at`     | `MISMATCH` / `ordering`  | By the signers' own clocks, the approval came after the act          | Real-world time; the clocks are self-reported                                               |
+| `n4-run`               | `approval.run_id` names another run                             | `MISMATCH` / `run`       | The approval belongs to a different run                              | Whether that other run exists                                                               |
+| `n5-tampered-approval` | `approval.risk_level` changed 2 → 1 after signing               | `INVALID` / `signature`  | The approval bytes are not the bytes the approver key signed         | Anything about the relation; it is not evaluated on altered bytes                           |
+| `n6-tool-name`         | `approval.tool_name` names a different tool than the invocation | `MISMATCH` / `tool_name` | The approval was for a different tool than the one that ran          | What that other tool would have done                                                        |
 
 `cases/control/deny-receipt.json` is the frozen deny-band receipt, an agent-signed refusal for a
 separate task with no approval. It sits outside the join. Only its signature is checked

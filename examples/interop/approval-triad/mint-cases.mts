@@ -116,6 +116,8 @@ export async function buildCases(): Promise<Record<string, string>> {
       "approval.json": await reApprove({ run_id: "019dc500-0000-7000-c000-000000000a02" }),
     }),
     "n5-tampered-approval": triad({ "approval.json": serialize(tampered) }),
+    // N6: the approval names a different tool than the one invoked (re-signed by the approver).
+    "n6-tool-name": triad({ "approval.json": await reApprove({ tool_name: "delete_email" }) }),
   };
 
   const out: Record<string, string> = {};

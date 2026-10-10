@@ -161,6 +161,29 @@
       },
       "codes": ["signature"],
       "decisive": "signature_approval"
+    },
+    "n6-tool-name": {
+      "dir": "cases/n6-tool-name",
+      "files": {
+        "approval.json": "3886854fbb25fe5219ce4c94ba14e529ad2ea7b3f05aeb80a7665666b71b83a4",
+        "invocation.json": "d89edbb28f9689d7870625a094eb64c416f6485ad6e1c688e4bec2a3630251c3",
+        "receipt.json": "1ecfecfb8457638be39337d724a508c9fd1bb8cf6bb0a07c0455ca6c5cce5e33"
+      },
+      "verdict": "MISMATCH",
+      "claims": {
+        "signature_approval": "pass",
+        "signature_invocation": "pass",
+        "signature_receipt": "pass",
+        "call_id": "pass",
+        "tool_name": "fail",
+        "args_hash": "pass",
+        "verdict": "pass",
+        "ordering": "pass",
+        "run": "pass",
+        "binding": "not_evaluated"
+      },
+      "codes": ["tool_name"],
+      "decisive": "tool_name"
     }
   }
 }

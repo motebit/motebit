@@ -172,6 +172,20 @@ describe("approval-triad defect/control case", () => {
     );
   });
 
+  it("n6-tool-name exercises the tool_name join with its own negative", () => {
+    const n6 = EXPECTED.cases["n6-tool-name"]!;
+    expect(n6.verdict).toBe("MISMATCH");
+    expect(n6.decisive).toBe("tool_name");
+    expect(n6.codes).toEqual(["tool_name"]);
+    for (const c of [...SIGNATURES, ...RELATIONS]) {
+      expect(n6.claims[c], c).toBe(c === "tool_name" ? "fail" : "pass");
+    }
+    const control = EXPECTED.cases.control!;
+    expect(n6.files["invocation.json"]).toBe(control.files["invocation.json"]);
+    expect(n6.files["receipt.json"]).toBe(control.files["receipt.json"]);
+    expect(n6.files["approval.json"]).not.toBe(control.files["approval.json"]);
+  });
+
   for (const [name, exp] of Object.entries(EXPECTED.cases)) {
     it(`${name}: @motebit/crypto reproduces every field of expected.json`, async () => {
       const dir = join(CASE_ROOT, exp.dir);
