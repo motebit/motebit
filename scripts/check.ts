@@ -1090,6 +1090,12 @@ const GATES: ReadonlyArray<Gate> = [
       'every service\'s role, market exposure and price is stated once and the two hand-written service inventories agree with it. Role/identity/market live in the `motebit` block of each services/<name>/package.json (role ∈ relay | molecule | atom | infrastructure; market ⇒ identity); PRICE is never copied into metadata — it is the literal `LISTING_PRICE = { capabilities, unit_cost, per }` in services/<name>/src/pricing.ts (AST-checked data that cannot read the environment), passed to runMolecule as exactly `pricing: LISTING_PRICE`; the runner alone applies MOTEBIT_UNIT_COST and refuses to boot on a malformed value, and market ⇔ a coded price exists. README.md § Architecture (role bullets + counts) and apps/docs/content/docs/operator/architecture.mdx (services/ tree, § Services table, counts) must name every service exactly once, under its metadata role, with the coded price (`$X/<unit>`, "unpriced" for a 0 default, no price for a non-listing service); counts bound to a role word derive-match; the retired label "glue" is refused. Born 2026-10-05: README said web-search $0.05/request and read-url unpriced, architecture.mdx said $0.003 and $0.002, the code said $0.05 and 0; proxy was "glue" and embed (no identity, no MCP listing) an atom. Aperture: these two docs vs metadata + coded defaults — not deployed listings, prod MOTEBIT_UNIT_COST overrides, or other docs pages. Invariant #173, added 2026-10-05',
     script: "check-service-truth",
   },
+  {
+    name: "check-identity-authority-inventory",
+    defends:
+      "the committed identity-authority census (`docs/design/identity-authority-inventory.generated.md`, produced by `scripts/inventory-identity-authority.ts`) matches the code it describes. The census lists every writer of identity-keyed state, the columns it assigns, and the weakest door that reaches it; a new authority writer must surface as a census diff in review even before `check-identity-authority-writers` names it. A stale census is the one way that diff never appears, so it fails with the changed lines and the re-run command. Proves freshness, never completeness — the aperture is the census's SCAN_ROOTS, printed on success. Design: `docs/design/identity-authority-writers.md` §4 item 5 (Inc 0), invariants I1/I2.",
+    script: "check-identity-authority-inventory",
+  },
 ];
 
 interface Result {
