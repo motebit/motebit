@@ -1,0 +1,166 @@
+{
+  "case": "approval-triad",
+  "question": "did the executed tool call match its approval?",
+  "pinned_keys": {
+    "approver": "e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0",
+    "agent": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664"
+  },
+  "claims": [
+    "signature_approval",
+    "signature_invocation",
+    "signature_receipt",
+    "call_id",
+    "tool_name",
+    "args_hash",
+    "verdict",
+    "ordering",
+    "run",
+    "binding"
+  ],
+  "cases": {
+    "control": {
+      "dir": "cases/control",
+      "files": {
+        "approval.json": "dd1e80627f26d9b5f85ce8fbebb6b9f8f6b563edfa5e236e9482ca9a8f7ea5ba",
+        "deny-receipt.json": "8c019b36788742ee5eb6c64f3bbafe2b41b4ea823677081e4d9bb5caab3b94b0",
+        "invocation.json": "d89edbb28f9689d7870625a094eb64c416f6485ad6e1c688e4bec2a3630251c3",
+        "receipt.json": "1ecfecfb8457638be39337d724a508c9fd1bb8cf6bb0a07c0455ca6c5cce5e33"
+      },
+      "verdict": "MATCH",
+      "claims": {
+        "signature_approval": "pass",
+        "signature_invocation": "pass",
+        "signature_receipt": "pass",
+        "call_id": "pass",
+        "tool_name": "pass",
+        "args_hash": "pass",
+        "verdict": "pass",
+        "ordering": "pass",
+        "run": "pass",
+        "binding": "not_evaluated"
+      },
+      "codes": [],
+      "decisive": null,
+      "unjoined": {
+        "deny-receipt.json": {
+          "signature_receipt": "pass"
+        }
+      }
+    },
+    "n1-args-hash": {
+      "dir": "cases/n1-args-hash",
+      "files": {
+        "approval.json": "dd1e80627f26d9b5f85ce8fbebb6b9f8f6b563edfa5e236e9482ca9a8f7ea5ba",
+        "invocation.json": "f7ab28cfbba53b7ff53efeb3924115a9a8c16242815182653a6e4384a3c472d9",
+        "receipt.json": "1ecfecfb8457638be39337d724a508c9fd1bb8cf6bb0a07c0455ca6c5cce5e33"
+      },
+      "verdict": "MISMATCH",
+      "claims": {
+        "signature_approval": "pass",
+        "signature_invocation": "pass",
+        "signature_receipt": "pass",
+        "call_id": "pass",
+        "tool_name": "pass",
+        "args_hash": "fail",
+        "verdict": "pass",
+        "ordering": "pass",
+        "run": "pass",
+        "binding": "not_evaluated"
+      },
+      "codes": ["args_hash"],
+      "decisive": "args_hash"
+    },
+    "n2-verdict": {
+      "dir": "cases/n2-verdict",
+      "files": {
+        "approval.json": "8e1d41990bae84d397147aea8c6afd7de8ccdc0279cbc10ba8c1804c1ba7db93",
+        "invocation.json": "d89edbb28f9689d7870625a094eb64c416f6485ad6e1c688e4bec2a3630251c3",
+        "receipt.json": "1ecfecfb8457638be39337d724a508c9fd1bb8cf6bb0a07c0455ca6c5cce5e33"
+      },
+      "verdict": "MISMATCH",
+      "claims": {
+        "signature_approval": "pass",
+        "signature_invocation": "pass",
+        "signature_receipt": "pass",
+        "call_id": "pass",
+        "tool_name": "pass",
+        "args_hash": "pass",
+        "verdict": "fail",
+        "ordering": "pass",
+        "run": "pass",
+        "binding": "not_evaluated"
+      },
+      "codes": ["verdict"],
+      "decisive": "verdict"
+    },
+    "n3-ordering": {
+      "dir": "cases/n3-ordering",
+      "files": {
+        "approval.json": "edfc84307ac7a31bbed7fa497afb243fb0afe9d4f62b04ead4f36d027b1022bc",
+        "invocation.json": "d89edbb28f9689d7870625a094eb64c416f6485ad6e1c688e4bec2a3630251c3",
+        "receipt.json": "1ecfecfb8457638be39337d724a508c9fd1bb8cf6bb0a07c0455ca6c5cce5e33"
+      },
+      "verdict": "MISMATCH",
+      "claims": {
+        "signature_approval": "pass",
+        "signature_invocation": "pass",
+        "signature_receipt": "pass",
+        "call_id": "pass",
+        "tool_name": "pass",
+        "args_hash": "pass",
+        "verdict": "pass",
+        "ordering": "fail",
+        "run": "pass",
+        "binding": "not_evaluated"
+      },
+      "codes": ["ordering"],
+      "decisive": "ordering"
+    },
+    "n4-run": {
+      "dir": "cases/n4-run",
+      "files": {
+        "approval.json": "095f6a30d275485e47694c7b5af5f6255bfe2ff8ce6ac403da9f1981de89c119",
+        "invocation.json": "d89edbb28f9689d7870625a094eb64c416f6485ad6e1c688e4bec2a3630251c3",
+        "receipt.json": "1ecfecfb8457638be39337d724a508c9fd1bb8cf6bb0a07c0455ca6c5cce5e33"
+      },
+      "verdict": "MISMATCH",
+      "claims": {
+        "signature_approval": "pass",
+        "signature_invocation": "pass",
+        "signature_receipt": "pass",
+        "call_id": "pass",
+        "tool_name": "pass",
+        "args_hash": "pass",
+        "verdict": "pass",
+        "ordering": "pass",
+        "run": "fail",
+        "binding": "not_evaluated"
+      },
+      "codes": ["run"],
+      "decisive": "run"
+    },
+    "n5-tampered-approval": {
+      "dir": "cases/n5-tampered-approval",
+      "files": {
+        "approval.json": "82ebac28b8aa01a63a1f0c7d350c1e6f913fd9dd88c873902b2357860c615141",
+        "invocation.json": "d89edbb28f9689d7870625a094eb64c416f6485ad6e1c688e4bec2a3630251c3",
+        "receipt.json": "1ecfecfb8457638be39337d724a508c9fd1bb8cf6bb0a07c0455ca6c5cce5e33"
+      },
+      "verdict": "INVALID",
+      "claims": {
+        "signature_approval": "fail",
+        "signature_invocation": "pass",
+        "signature_receipt": "pass",
+        "call_id": "not_evaluated",
+        "tool_name": "not_evaluated",
+        "args_hash": "not_evaluated",
+        "verdict": "not_evaluated",
+        "ordering": "not_evaluated",
+        "run": "not_evaluated",
+        "binding": "not_evaluated"
+      },
+      "codes": ["signature"],
+      "decisive": "signature_approval"
+    }
+  }
+}

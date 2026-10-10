@@ -1,0 +1,17 @@
+{
+  "task_id": "019dc500-0000-7000-c000-000000000a01",
+  "motebit_id": "65b60673-d6ed-884b-b01c-2c222d82ada0",
+  "device_id": "019dc500-0000-7000-a000-0000000000de",
+  "submitted_at": 1777109299000,
+  "completed_at": 1777109334000,
+  "status": "completed",
+  "result": "Sent the Q3 contract to the vendor after you approved the send.",
+  "tools_used": ["send_email"],
+  "memories_formed": 0,
+  "prompt_hash": "8d3e902ca01dccd60e052d209b45c4028fc612d3fdd8ca59165a47dbb47c207d",
+  "result_hash": "4824059811d694758753b8db48ea93d60942b70b07e0f059b3eb2cdf77b0c583",
+  "invocation_origin": "user-tap",
+  "public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "Ln_qQfVh3sNNizgVAJ859z_8m_LRaFhDGohKmok0g7U7x4iI39pOnxqfabOIjmoWmF5Wt6Dn2B-9MhleMKXqAA"
+}
