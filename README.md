@@ -34,7 +34,7 @@ Or open **[receipt.computer](https://receipt.computer)** (it loads a signed samp
 
 ### License in three lines
 
-- **Apache-2.0 floor** — the 36 specs and the protocol, crypto, SDK, verifier, platform-attestation, and scaffold packages: use them for anything.
+- **Apache-2.0 floor** — the 37 specs and the protocol, crypto, SDK, verifier, platform-attestation, and scaffold packages: use them for anything.
 - **BSL-1.1 runtime** — the `motebit` CLI/runtime, engines, apps, and services: source-available, free for personal / research / internal use; each version converts to Apache-2.0 four years after release.
 - **[LICENSING.md](LICENSING.md) is the truth** — this summary is not.
 
@@ -265,7 +265,7 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 
 **The permissive / BSL split is algebra vs. judgment.** The Apache-2.0 protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ "best path" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives on the permissive floor. The `check-spec-permissive-boundary` CI gate enforces this: every callable referenced in a spec must be exported from a permissive-floor package or explicitly waived as reference-implementation convention.
 
-**Packages** ([`packages/`](packages/)) — 53 packages on a strict layer DAG. Layer 0 is the open protocol surface (Apache-2.0, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.
+**Packages** ([`packages/`](packages/)) — 53 directories under `packages/`: 52 workspace libraries on the 7-layer DAG (enforced by `pnpm check-deps`) plus the standalone [`github-action`](packages/github-action/) (no `package.json`, outside the DAG). Layer 0 is the open protocol surface (Apache-2.0, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.
 
 **Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and six supporting (`operator` console, `inspector`, `identity` viewer, `verify` receipt verifier, `docs` site, `vscode` extension).
 
@@ -276,7 +276,7 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 - **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.05/request default), `read-url` (unpriced) and `summarize` (unpriced — $0 by default; their value is priced into the molecules that call them), plus `browser-sandbox` (Playwright-driven Chromium for the `virtual_browser` embodiment; no identity or listing of its own). Defaults are overridable per deployment via `MOTEBIT_UNIT_COST`
 - **Infrastructure** — not marketplace participants (no identity, no MCP listing): `proxy` (Vercel edge CORS for the web app), `embed` (plain HTTP embedding compute)
 
-**Protocol** ([`spec/`](spec/)) — 37 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`, `eval-attestation`, `routing-transcript`, `machine-roster`, `terminology`. By their own headers: 15 are `Status: Stable` and 21 `Draft`.
+**Protocol** ([`spec/`](spec/)) — 37 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`, `eval-attestation`, `routing-transcript`, `machine-roster`, `sync-hold-receipt`, `terminology`. By their own headers: 15 are `Status: Stable` and 22 `Draft`.
 
 → Full directory tree, package-by-package descriptions, layer-by-layer breakdown, and data flow: **[docs.motebit.com/docs/operator/architecture](https://docs.motebit.com/docs/operator/architecture)**.
 
@@ -331,6 +331,8 @@ pnpm run lint          # Lint all packages
 ```
 
 ## Versioning
+
+**74 workspace packages in total: 52 libraries under `packages/`, 11 apps and 11 services. 12 publish to npm; the other 62 are workspace-private.** (The 53 under `packages/` counted above includes `github-action`, which is not an npm package.)
 
 12 packages publish to npm — 11 Apache-2.0 (the permissive floor) and 1 BSL-1.1 (the `motebit` reference runtime). They version independently on their own merit (`updateInternalDependencies: "patch"`, no fixed or linked groups). Breaking changes to a package's public surface require a major bump on that package.
 
