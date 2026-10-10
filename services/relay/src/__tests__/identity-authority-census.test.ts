@@ -14,6 +14,7 @@ import { deriveSovereignMotebitId } from "@motebit/crypto";
 import type { DatabaseDriver } from "@motebit/persistence";
 
 import type { SyncRelay } from "../index.js";
+import { measureIdentityAuthority } from "../identity-authority-census.js";
 import { AUTH_HEADER, createTestRelay, walletOf } from "./test-helpers.js";
 
 const CENSUS = "/api/v1/admin/identity-authority/census";
@@ -270,14 +271,23 @@ describe("identity-authority census (§6 Q1–Q6)", () => {
     holder(db, id, stranger, "register", await key());
     device(db, id, stranger);
 
+    // The measure itself writes nothing (the route's master-token middleware
+    // records the presentation in relay_auth_events — rule 6 — which is the
+    // auth layer's write, not the census's).
     const before = changes(db);
+    await measureIdentityAuthority(db);
+    expect(changes(db)).toBe(before);
     const res = await relay.app.request(CENSUS, { headers: AUTH_HEADER });
     const text = await res.text();
-    expect(changes(db)).toBe(before);
     expect(text).not.toContain(stranger);
     expect(text).not.toContain(stranger.slice(0, 9));
     expect(text).not.toMatch(/tok-dev-/);
     expect(text).not.toMatch(/[0-9a-f]{40,}/i);
+  });
+
+  it("refuses a non-numeric limit", async () => {
+    const res = await relay.app.request(`${CENSUS}?limit=abc`, { headers: AUTH_HEADER });
+    expect(res.status).toBe(400);
   });
 
   it("caps every list at ?limit= while counts stay whole", async () => {

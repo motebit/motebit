@@ -139,6 +139,7 @@ import {
 } from "./credential-anchoring.js";
 import { aggregateFees } from "./fees.js";
 import { aggregateHealthSummary } from "./health-summary.js";
+import { measureIdentityAuthority } from "./identity-authority-census.js";
 import {
   createDepositDetectorTable,
   startDepositDetector,
@@ -2005,6 +2006,22 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       recent_p2p: recentP2p,
       p2p_verifier_enabled: !!solanaRpcUrl,
     });
+  });
+
+  // Admin: identity-authority census — the read-only §6 queries Q1–Q6 of
+  // docs/design/identity-authority-writers.md (planted device rows, sovereign
+  // squats, unbound money destinations, unproven guardians, keyless ids with
+  // device rows, peers on a pre-v2 federation protocol). Counts and ids only:
+  // no key, token, address or signature is served, and nothing is written.
+  // Read by scripts/measure-identity-authority.ts.
+  /** @internal */
+  app.get("/api/v1/admin/identity-authority/census", async (c) => {
+    const raw = c.req.query("limit");
+    const limit = raw === undefined ? undefined : Number(raw);
+    if (limit !== undefined && !Number.isFinite(limit)) {
+      return c.json({ error: "limit must be a number" }, 400);
+    }
+    return c.json(await measureIdentityAuthority(moteDb.db, { limit }));
   });
 
   // Admin: operator health summary — registered motebits + activity
