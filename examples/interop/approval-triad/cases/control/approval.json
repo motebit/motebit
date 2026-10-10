@@ -1,0 +1,15 @@
+{
+  "approval_id": "019dc500-0000-7000-c000-0000000000c1",
+  "motebit_id": "65b60673-d6ed-884b-b01c-2c222d82ada0",
+  "device_id": "019dc500-0000-7000-b000-0000000000ab",
+  "tool_name": "send_email",
+  "args_hash": "02fa90d9e5ac0a4c3d0449fd10dccc24c80031a81376a1b73f3af7cc99e075dd",
+  "risk_level": 2,
+  "verdict": "approved",
+  "requested_at": 1777109300000,
+  "resolved_at": 1777109331000,
+  "run_id": "019dc500-0000-7000-c000-000000000a01",
+  "public_key": "e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "-OQLp4RMqm0pY09AdpH51exQ3xnvrkurfz9YZ2R8ZXRnXCuOCiCu_5OVY9jARY83TeQrtPRNm79OS7onHgrnDw"
+}
