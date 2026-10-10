@@ -85,6 +85,7 @@ function deps(
     behaviorEngine: new BehaviorEngine(),
     provider,
     ...extra,
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 }
 

@@ -1,3 +1,4 @@
+import { readDerivedText } from "@motebit/ai-core";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 import { addMessage, showToast } from "./chat";
@@ -127,11 +128,11 @@ export function initConversations(ctx: DesktopContext): ConversationsAPI {
           conv.title != null && conv.title !== "" ? conv.title : "Untitled conversation";
         item.appendChild(titleDiv);
 
-        if (conv.summary != null && conv.summary !== "") {
+        const summary = conv.summary != null ? readDerivedText(conv.summary).text : "";
+        if (summary !== "") {
           const summaryDiv = document.createElement("div");
           summaryDiv.className = "conv-item-summary";
-          summaryDiv.textContent =
-            conv.summary.length > 120 ? conv.summary.slice(0, 120) + "..." : conv.summary;
+          summaryDiv.textContent = summary.length > 120 ? summary.slice(0, 120) + "..." : summary;
           item.appendChild(summaryDiv);
         }
 

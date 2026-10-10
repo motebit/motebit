@@ -10,6 +10,19 @@ vi.mock("@motebit/tools/web-safe", async () => {
 });
 
 import { GoalScheduler } from "../goal-scheduler";
+import { createGoalRun } from "@motebit/runtime";
+import type { GoalRunGoal } from "@motebit/runtime";
+import { SensitivityLevel } from "@motebit/sdk";
+
+/** A goal run on a runtime at the default tier with no gate (the mock runtime). */
+function passthroughRun(goal: GoalRunGoal) {
+  return createGoalRun({
+    goal,
+    effective: () => SensitivityLevel.None,
+    raise: () => () => {},
+    assert: () => {},
+  });
+}
 import type { GoalSchedulerDeps } from "../goal-scheduler";
 
 // ---------------------------------------------------------------------------
@@ -39,6 +52,8 @@ function makeRuntime(overrides: Record<string, unknown> = {}): any {
     getToolRegistry: vi.fn(() => registry),
     isProcessing: false,
     getLoopDeps: vi.fn(() => ({ someDep: true })),
+    beginGoalRun: vi.fn((goal: GoalRunGoal) => passthroughRun(goal)),
+    goalCreationSensitivity: vi.fn(() => SensitivityLevel.Personal),
     sendMessageStreaming: vi.fn(async function* () {
       yield { type: "text", text: "response" };
     }),
@@ -777,7 +792,7 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
       executePlan: vi.fn(stream),
       resumePlan: vi.fn(stream),
     };
-    const store = { getPlanForGoal: vi.fn(() => null) };
+    const store = { getPlanForGoal: vi.fn(() => null), updatePlan: vi.fn() };
     return {
       runtime,
       engine,

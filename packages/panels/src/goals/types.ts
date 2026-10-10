@@ -61,6 +61,12 @@ export interface ScheduledGoal {
   /** Mobile-only today. Desktop infers enabled from status !== "paused". */
   enabled?: boolean;
 
+  /**
+   * The tier the goal's text was written at. A scheduled run sends at no
+   * lower tier (`beginGoalRun` in @motebit/runtime); absent = legacy.
+   */
+  sensitivity?: string | null;
+
   last_run_at?: number | null;
 
   /**

@@ -90,7 +90,7 @@ export const OWNER_INTERIOR_TURN_OPTIONS = (
 export function foreignSessionState(snapshot: SessionStateSnapshot): SessionStateSnapshot {
   return {
     browser: { status: "closed" },
-    sensitivity: SensitivityLevel.None,
+    sensitivity: SensitivityLevel.None, // write-tier-gate: exempt foreign snapshot hides the owner tier
     pixelConsent: "denied",
     ...(snapshot.substrate != null ? { substrate: { model: snapshot.substrate.model } } : {}),
   };

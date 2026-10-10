@@ -148,6 +148,7 @@ function makeDepsWithProvider(
     policyGate: opts?.policyGate,
     memoryGovernor: opts?.memoryGovernor,
     consolidationProvider: opts?.consolidationProvider,
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   } as SensitivityCleared<MotebitLoopDependencies>;
 }
 

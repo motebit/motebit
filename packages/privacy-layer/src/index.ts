@@ -211,7 +211,7 @@ export class DeleteManager {
    */
   async deleteMemory(nodeId: string, deletedBy: string): Promise<DeletionCertificate> {
     const node = await this.memoryGraph.getNode(nodeId);
-    const sensitivity = node?.sensitivity ?? SensitivityLevel.None;
+    const sensitivity = node?.sensitivity ?? SensitivityLevel.None; // write-tier-gate: exempt tier label on a deletion intent
     const reason = normalizeDeletionReason(deletedBy);
     const deletedAt = Date.now();
 

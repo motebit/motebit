@@ -3045,6 +3045,7 @@ export interface Plan {
     plan_id: PlanId;
     // (undocumented)
     proposal_id?: ProposalId;
+    sensitivity?: SensitivityLevel;
     // (undocumented)
     status: PlanStatus;
     // (undocumented)

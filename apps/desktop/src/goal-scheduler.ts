@@ -48,14 +48,14 @@
  * `planEngine.resumePlan`.
  */
 
-import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import type { GoalRunScope, GoalRunGoal, MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import {
   paymentNoticeCopy,
   paidResultsOwedByRuns,
   goalRunWindows,
   goalAwaitingResultMessage,
 } from "@motebit/runtime";
-import { PlanStatus } from "@motebit/sdk";
+import { PlanStatus, SensitivityLevel } from "@motebit/sdk";
 import type { PlanChunk, PlanEngine, PlanStoreAdapter } from "@motebit/planner";
 import { isDelegationUndetermined } from "@motebit/planner";
 import {
@@ -63,6 +63,7 @@ import {
   completeGoalDefinition,
   reportProgressDefinition,
 } from "@motebit/tools/web-safe";
+import { createGoalRow } from "./goal-rows.js";
 import type { InvokeFn, TauriPlanStore } from "./tauri-storage.js";
 
 /** Maximum tool calls across all turns in a single goal run (default 50). */
@@ -123,6 +124,8 @@ interface GoalRow {
    *  docs/doctrine/panel-temporal-registers.md §"Bounded commitment is
    *  multi-dimensional." */
   budget_tokens: number | null;
+  /** The tier the goal's text was written at (tauri-migrations v10); NULL = legacy. */
+  sensitivity?: string | null;
 }
 
 interface OutcomeRow {
@@ -130,20 +133,18 @@ interface OutcomeRow {
   status: string;
   summary: string | null;
   error_message: string | null;
+  /** The tier of the run that produced it (tauri-migrations v10); NULL = legacy. */
+  sensitivity?: string | null;
 }
+
+/** The goal fields a run reads. */
+type RunGoal = { goal_id: string; prompt: string; mode: string } & GoalRunGoal;
 
 export interface GoalSchedulerDeps {
   getRuntime: () => MotebitRuntime | null;
   getMotebitId: () => string;
   getPlanEngine: () => PlanEngine | null;
   getPlanStore: () => PlanStoreAdapter | TauriPlanStore | null;
-}
-
-function formatTimeAgo(ms: number): string {
-  if (ms < 60_000) return "just now";
-  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
-  return `${Math.round(ms / 86_400_000)}d ago`;
 }
 
 /**
@@ -172,7 +173,15 @@ export class GoalScheduler {
     mode: string;
     planId?: string;
     runId?: string;
+    /** The paused run: its goal (to re-enter at its stamp) and its tier so far. */
+    goal: RunGoal;
+    run: GoalRunScope;
   } | null = null;
+  /**
+   * The run in flight (`runtime.beginGoalRun`): every interior item in its
+   * prompt passes through it, and what it produces is stamped from it.
+   */
+  private _run: GoalRunScope | null = null;
 
   constructor(private deps: GoalSchedulerDeps) {}
 
@@ -245,16 +254,17 @@ export class GoalScheduler {
       const subGoalId = crypto.randomUUID();
 
       try {
-        await invoke("goals_create", {
-          motebit_id: getMotebitId(),
-          goal_id: subGoalId,
+        // The sub-goal's text was written by the model during this run:
+        // stamped at the run's tier (runtime goal-run.ts). With no run in
+        // reach its taint is unknowable: `secret`.
+        await createGoalRow(invoke, {
+          motebitId: getMotebitId(),
+          goalId: subGoalId,
           prompt,
-          interval_ms: intervalMs,
+          intervalMs,
           mode,
-        });
-        await invoke<number>("db_execute", {
-          sql: "UPDATE goals SET parent_goal_id = ? WHERE goal_id = ?",
-          params: [this._currentGoalId, subGoalId],
+          parentGoalId: this._currentGoalId,
+          sensitivity: this._run?.outcomeSensitivity() ?? SensitivityLevel.Secret,
         });
         return { ok: true, data: { goal_id: subGoalId, prompt, mode, interval_ms: intervalMs } };
       } catch (err: unknown) {
@@ -338,10 +348,17 @@ export class GoalScheduler {
     if (!runtime) throw new Error("AI not initialized");
     if (!this._pendingGoalApproval) throw new Error("No pending goal approval");
 
-    const { goalId, prompt, invoke, mode, planId, runId } = this._pendingGoalApproval;
+    const { goalId, prompt, invoke, mode, planId, runId, goal } = this._pendingGoalApproval;
     this._currentGoalId = goalId;
+    let run: GoalRunScope | null = null;
 
     try {
+      // The continuation is the same run: re-entered at the goal's stamp,
+      // carrying the paused run's tier into what it produces.
+      run = runtime.beginGoalRun(goal, {
+        inherit: this._pendingGoalApproval.run.outcomeSensitivity(),
+      });
+      this._run = run;
       let accumulated = "";
       let toolCallsMade = 0;
       let planTitle: string | undefined;
@@ -362,12 +379,16 @@ export class GoalScheduler {
       const planEngine = this.deps.getPlanEngine();
       if (planId != null && planId !== "" && planEngine != null) {
         const loopDeps = runtime.getLoopDeps();
+        const planStore = this.deps.getPlanStore();
         if (loopDeps) {
+          // Resuming the plan sends its steps: a send at its stamp.
+          run.enterPlan(planStore?.getPlan(planId) ?? {});
           const planResult = await this.consumePlanStream(
             planEngine.resumePlan(planId, loopDeps, undefined, runId),
-            { goal_id: goalId, prompt, mode },
+            goal,
             invoke,
           );
+          if (planStore != null) run.stampPlan(planStore, planId);
 
           if (planResult.suspended) {
             return;
@@ -402,8 +423,8 @@ export class GoalScheduler {
       );
 
       await invoke<number>("db_execute", {
-        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, response_full, signed_manifest)
-              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?, ?)`,
+        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, response_full, signed_manifest, sensitivity)
+              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?, ?, ?)`,
         params: [
           outcomeId,
           goalId,
@@ -416,6 +437,7 @@ export class GoalScheduler {
           // accumulated text is the full artifact.
           accumulated.length > 0 ? accumulated : null,
           signedManifestJson,
+          run.outcomeSensitivity(),
         ],
       });
 
@@ -447,7 +469,9 @@ export class GoalScheduler {
       });
       throw err;
     } finally {
+      run?.end();
       if (this._pendingGoalApproval == null || this._pendingGoalApproval.goalId === goalId) {
+        this._run = null;
         this._goalExecuting = false;
         this._currentGoalId = null;
         this._goalStatusCallback?.(false);
@@ -654,9 +678,11 @@ export class GoalScheduler {
     // record, no run — failing closed costs one tick.
     try {
       await invoke<number>("db_execute", {
-        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-              VALUES (?, ?, ?, ?, 'running', NULL, 0, 0, NULL)`,
-        params: [runId, goal.goal_id, motebitId, now],
+        // Stamped `secret` until the final outcome replaces it: a row left
+        // behind by a dead run has no knowable taint (it carries no text).
+        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, sensitivity)
+              VALUES (?, ?, ?, ?, 'running', NULL, 0, 0, NULL, ?)`,
+        params: [runId, goal.goal_id, motebitId, now, SensitivityLevel.Secret],
       });
     } catch {
       this._goalExecuting = false;
@@ -665,11 +691,16 @@ export class GoalScheduler {
       return false;
     }
 
+    let run: GoalRunScope | null = null;
     try {
       const outcomes = await invoke<OutcomeRow[]>("db_query", {
-        sql: "SELECT ran_at, status, summary, error_message FROM goal_outcomes WHERE goal_id = ? AND status != 'running' ORDER BY ran_at DESC LIMIT 3",
+        sql: "SELECT ran_at, status, summary, error_message, sensitivity FROM goal_outcomes WHERE goal_id = ? AND status != 'running' ORDER BY ran_at DESC LIMIT 3",
         params: [goal.goal_id],
       });
+      // The run sends at no lower tier than the goal's text: a goal written
+      // at Secret refuses here on an external provider (runtime goal-run.ts).
+      run = runtime.beginGoalRun(goal);
+      this._run = run;
 
       // Wall-clock limit per goal run.
       const abortController = new AbortController();
@@ -683,6 +714,7 @@ export class GoalScheduler {
           goal,
           outcomes ?? [],
           invoke,
+          run,
           runId,
           abortController.signal,
         );
@@ -716,8 +748,8 @@ export class GoalScheduler {
       );
 
       await invoke<number>("db_execute", {
-        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest)
-              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?, ?, ?)`,
+        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest, sensitivity)
+              VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?, ?, ?, ?)`,
         params: [
           runId,
           goal.goal_id,
@@ -734,6 +766,7 @@ export class GoalScheduler {
           // is the cryptographic attestation on the same row.
           result.responseText.length > 0 ? result.responseText : null,
           signedManifestJson,
+          run.outcomeSensitivity(),
         ],
       });
 
@@ -758,6 +791,9 @@ export class GoalScheduler {
       return false;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      // A refused run's message is the gate's (content-free): stamped at
+      // the session's tier so the next run can read why it failed.
+      const stamp = run?.outcomeSensitivity() ?? runtime.goalCreationSensitivity();
 
       // A delegated step whose paid outcome is unknown (#890): not a
       // failure. `partial`, no failure count, no auto-pause; the next fire
@@ -765,9 +801,9 @@ export class GoalScheduler {
       if (isDelegationUndetermined(err)) {
         const note = `awaiting result — ${msg}`;
         await invoke<number>("db_execute", {
-          sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-                VALUES (?, ?, ?, ?, 'partial', ?, 0, 0, NULL)`,
-          params: [runId, goal.goal_id, motebitId, now, note.slice(0, 500)],
+          sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, sensitivity)
+                VALUES (?, ?, ?, ?, 'partial', ?, 0, 0, NULL, ?)`,
+          params: [runId, goal.goal_id, motebitId, now, note.slice(0, 500), stamp],
         }).catch(() => {});
         await invoke<number>("db_execute", {
           sql: "UPDATE goals SET last_run_at = ? WHERE goal_id = ?",
@@ -784,9 +820,9 @@ export class GoalScheduler {
       }
 
       await invoke<number>("db_execute", {
-        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
-              VALUES (?, ?, ?, ?, 'failed', NULL, 0, 0, ?)`,
-        params: [runId, goal.goal_id, motebitId, now, msg],
+        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, sensitivity)
+              VALUES (?, ?, ?, ?, 'failed', NULL, 0, 0, ?, ?)`,
+        params: [runId, goal.goal_id, motebitId, now, msg, stamp],
       }).catch(() => {});
 
       await invoke<number>("db_execute", {
@@ -811,7 +847,11 @@ export class GoalScheduler {
 
       return false;
     } finally {
+      // The floor is released even when the run pauses for approval: the
+      // paused turn carries its own stamp, and the resume re-enters the run.
+      run?.end();
       if (!this._pendingGoalApproval) {
+        this._run = null;
         this._goalExecuting = false;
         this._currentGoalId = null;
         this._goalStatusCallback?.(false);
@@ -825,14 +865,10 @@ export class GoalScheduler {
    * Falls back to single-turn streaming if PlanEngine is unavailable.
    */
   private async executePlanGoal(
-    goal: { goal_id: string; prompt: string; mode: string },
-    outcomes: Array<{
-      ran_at: number;
-      status: string;
-      summary: string | null;
-      error_message: string | null;
-    }>,
+    goal: RunGoal,
+    outcomes: OutcomeRow[],
     invoke: InvokeFn,
+    run: GoalRunScope,
     runId?: string,
     signal?: AbortSignal,
   ): Promise<{
@@ -853,7 +889,7 @@ export class GoalScheduler {
 
     // If PlanEngine or loopDeps are unavailable, fall back to single-turn execution
     if (!planEngine || !loopDeps || !planStore) {
-      return this.executeSingleTurnGoal(goal, outcomes, invoke, runId, signal);
+      return this.executeSingleTurnGoal(goal, outcomes, invoke, run, runId, signal);
     }
 
     const registry = runtime.getToolRegistry();
@@ -871,6 +907,8 @@ export class GoalScheduler {
     let planStream: AsyncGenerator<PlanChunk>;
 
     if (plan && plan.status === PlanStatus.Active) {
+      // Resuming the plan sends its steps: a send at its stamp.
+      run.enterPlan(plan);
       planStream = planEngine.resumePlan(plan.plan_id, loopDeps, undefined, runId);
     } else {
       const created = await planEngine.createPlan(
@@ -878,15 +916,12 @@ export class GoalScheduler {
         this.deps.getMotebitId(),
         {
           goalPrompt: goal.prompt,
-          previousOutcomes: outcomes.map((o) =>
-            o.status === "failed"
-              ? `failed: ${o.error_message ?? "unknown"}`
-              : `${o.status}: ${o.summary ?? "no summary"}`,
-          ),
+          previousOutcomes: run.planOutcomes(outcomes),
           availableTools: registry.list().map((t) => t.name),
         },
         loopDeps,
       );
+      run.stampPlan(planStore, created.plan.plan_id);
       const newPlan = created.plan;
       plan = newPlan;
       if (created.truncatedFrom != null && created.truncatedFrom > 0) {
@@ -898,21 +933,22 @@ export class GoalScheduler {
       planStream = planEngine.executePlan(newPlan.plan_id, loopDeps, undefined, runId);
     }
 
-    return this.consumePlanStream(planStream, goal, invoke, runId, signal);
+    try {
+      return await this.consumePlanStream(planStream, goal, invoke, runId, signal);
+    } finally {
+      // The plan's steps now carry what this run produced.
+      run.stampPlan(planStore, plan.plan_id);
+    }
   }
 
   /**
    * Fallback: single-turn goal execution (pre-PlanEngine behavior).
    */
   private async executeSingleTurnGoal(
-    goal: { goal_id: string; prompt: string; mode: string },
-    outcomes: Array<{
-      ran_at: number;
-      status: string;
-      summary: string | null;
-      error_message: string | null;
-    }>,
+    goal: RunGoal,
+    outcomes: OutcomeRow[],
     invoke: InvokeFn,
+    run: GoalRunScope,
     runId?: string,
     signal?: AbortSignal,
   ): Promise<{
@@ -922,24 +958,9 @@ export class GoalScheduler {
     tokensUsed?: number;
   }> {
     const runtime = this.deps.getRuntime()!;
-    const now = Date.now();
-    let context = `You are executing a scheduled goal.\n\nGoal: ${goal.prompt}`;
-    if (outcomes.length > 0) {
-      context += "\n\nPrevious executions (most recent first):";
-      for (const o of outcomes) {
-        const ago = formatTimeAgo(now - o.ran_at);
-        if (o.status === "failed" && o.error_message != null && o.error_message !== "") {
-          context += `\n- ${ago}: failed — [error: ${o.error_message}]`;
-        } else if (o.summary != null && o.summary !== "") {
-          context += `\n- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`;
-        } else {
-          context += `\n- ${ago}: ${o.status}`;
-        }
-      }
-    }
-    if (goal.mode === "once") {
-      context += "\n\nThis is a one-time goal. Complete it fully in this execution.";
-    }
+    // The goal and the earlier outcomes the run's tier permits — the one
+    // shared assembly (runtime goal-run.ts).
+    const context = run.prompt(goal, outcomes, Date.now());
 
     let accumulated = "";
     let toolCallsMade = 0;
@@ -983,6 +1004,8 @@ export class GoalScheduler {
           invoke,
           mode: goal.mode,
           runId,
+          goal,
+          run,
         };
         this._goalApprovalCallback?.({
           goalId: goal.goal_id,
@@ -1015,7 +1038,7 @@ export class GoalScheduler {
    */
   private async consumePlanStream(
     stream: AsyncGenerator<PlanChunk>,
-    goal: { goal_id: string; prompt: string; mode: string },
+    goal: RunGoal,
     invoke: InvokeFn,
     runId?: string,
     signal?: AbortSignal,
@@ -1133,6 +1156,8 @@ export class GoalScheduler {
             mode: goal.mode,
             planId: chunk.step.plan_id,
             runId,
+            goal,
+            run: this._run!,
           };
           this._goalApprovalCallback?.({
             goalId: goal.goal_id,

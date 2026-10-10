@@ -373,9 +373,9 @@ function checkRecallEgress(slices: MethodSlice[]): string[] {
     );
   } else {
     const b = method.body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-    if (!/providerIsSovereign/.test(b) || !/sensitivityFilter/.test(b)) {
+    if (!/interiorToolSendTier/.test(b) || !/sensitivityFilter/.test(b)) {
       violations.push(
-        `recallMemoriesForTool (lines ${method.startLine}–${method.endLine}) must key the recall's \`sensitivityFilter\` on the provider (external ⇒ CONTEXT_SAFE_SENSITIVITY only; sovereign ⇒ all tiers). Found providerIsSovereign=${/providerIsSovereign/.test(b)}, sensitivityFilter=${/sensitivityFilter/.test(b)}.`,
+        `recallMemoriesForTool (lines ${method.startLine}–${method.endLine}) must hold the recall's \`sensitivityFilter\` to the tool send tier (\`interiorToolSendTier\` → \`interiorEgressSensitivities\`: external ⇒ context-safe only; on-device ⇒ the session's tier). Found interiorToolSendTier=${/interiorToolSendTier/.test(b)}, sensitivityFilter=${/sensitivityFilter/.test(b)}.`,
       );
     }
   }
@@ -391,9 +391,26 @@ function checkRecallEgress(slices: MethodSlice[]): string[] {
     );
   } else {
     const b = searchMethod.body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-    if (!/providerIsSovereign/.test(b)) {
+    if (!/interiorToolSendTier/.test(b)) {
       violations.push(
-        `searchConversations (lines ${searchMethod.startLine}–${searchMethod.endLine}) must key its message egress filter on the provider (external ⇒ context-safe tiers only) before passing it to \`searchHistory\` — no \`providerIsSovereign\` reference found, so a past medical/financial/secret transcript could reach an external provider.`,
+        `searchConversations (lines ${searchMethod.startLine}–${searchMethod.endLine}) must hold its message egress filter to the tool send tier (\`interiorToolSendTier\`) before passing it to \`searchHistory\` — no reference found, so a past medical/financial/secret transcript could reach an external provider.`,
+      );
+    }
+  }
+
+  // The `list_events` tool is the third sibling: event payloads carry tool
+  // results, memory content, reflections. `queryEventsForTool` must filter
+  // through the interior-egress rule at the tool send tier.
+  const eventsMethod = slices.find((s) => s.name === "queryEventsForTool");
+  if (!eventsMethod) {
+    violations.push(
+      "MotebitRuntime is missing `queryEventsForTool` — the sanctioned backend for the list_events tool, which must filter events through `interiorEventsPermittedAt` at the tool send tier.",
+    );
+  } else {
+    const b = eventsMethod.body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    if (!/interiorEventsPermittedAt/.test(b) || !/interiorToolSendTier/.test(b)) {
+      violations.push(
+        `queryEventsForTool (lines ${eventsMethod.startLine}–${eventsMethod.endLine}) must filter through \`interiorEventsPermittedAt(events, this.interiorToolSendTier())\` — a raw events.query returns every payload, Secret ones included, into the next request.`,
       );
     }
   }
@@ -405,6 +422,15 @@ function checkRecallEgress(slices: MethodSlice[]): string[] {
       continue;
     }
     const src = readFileSync(abs, "utf-8");
+    const evIdx = src.indexOf("eventQueryFn");
+    if (evIdx !== -1) {
+      const evWindow = src.slice(evIdx, evIdx + 300);
+      if (!/queryEventsForTool/.test(evWindow) || /events\.query\s*\(/.test(evWindow)) {
+        violations.push(
+          `${s.surface} (${s.path}): \`eventQueryFn\` does not route through \`runtime.queryEventsForTool\` — a raw \`events.query\` closure returns every event payload (Secret tool results, memories, reflections) into an external request. Repair: \`eventQueryFn: (limit, eventType) => runtime.queryEventsForTool(limit, eventType)\`.`,
+        );
+      }
+    }
     const idx = src.indexOf("memorySearchFn");
     if (idx === -1) continue; // surface doesn't wire recall — nothing to gate
     const window = src.slice(idx, idx + 500);
@@ -452,7 +478,7 @@ function main(): void {
 
   if (violations.length === 0) {
     console.log(
-      `✓ check-sensitivity-routing: AI-call entries (runTurn / runTurnStreaming / direct provider.generate) gate on \`assertSensitivityPermitsAiCall\`, the tool registry is wrapped via \`wrapToolRegistryForSensitivity\`, every registered surface (${SURFACE_AFFORDANCES.map((s) => s.surface).join(", ")}) exposes \`/sensitivity\` routed through the canonical runtime setter, and every surface routes recall_memories through \`recallMemoriesForTool\` (provider-keyed egress ceiling).\n`,
+      `✓ check-sensitivity-routing: AI-call entries (runTurn / runTurnStreaming / direct provider.generate) gate on \`assertSensitivityPermitsAiCall\`, the tool registry is wrapped via \`wrapToolRegistryForSensitivity\`, every registered surface (${SURFACE_AFFORDANCES.map((s) => s.surface).join(", ")}) exposes \`/sensitivity\` routed through the canonical runtime setter, and every surface routes recall_memories / list_events through \`recallMemoriesForTool\` / \`queryEventsForTool\` (held to the tool send tier).\n`,
     );
     return;
   }
@@ -463,7 +489,7 @@ function main(): void {
     console.error(`  ${v}\n`);
   }
   console.error(
-    'Per CLAUDE.md privacy doctrine ("Medical/financial/secret never reach external AI"), the gate has three load-bearing pieces:\n  1. Every runtime AI-call entry MUST call `this.assertSensitivityPermitsAiCall()` before invoking runTurn / runTurnStreaming OR a direct `provider.generate*` call. Housekeeping completions (title generation, summarization, classification) feed user-authored text straight to the provider, so they take the same gate as a turn.\n  2. The runtime\'s tool registry MUST be wrapped through `wrapToolRegistryForSensitivity` so outbound tools (web_search, read_url, delegate_to_agent, MCP) fail-close on high-sensitivity sessions.\n  3. Every user-facing surface with chat/slash dispatch MUST expose `/sensitivity` routed through `runtime.setSessionSensitivity` / `getSessionSensitivity` — without this affordance, the gate is enforced in code but unreachable from any user action.\n  4. The explicit `recall_memories` tool MUST route through `runtime.recallMemoriesForTool`, which applies the same provider-keyed egress ceiling (external ⇒ context-safe tiers only). A hand-rolled `memory.recallRelevant` closure omits `sensitivityFilter` and would return medical/financial/secret memories toward an external provider.\n\nAll four together close the doctrine end-to-end: enforcement at the boundary (turn calls, tool dispatch, AND explicit recall) + a path for users to actually trip the gate.\n',
+    'Per CLAUDE.md privacy doctrine ("Medical/financial/secret never reach external AI"), the gate has three load-bearing pieces:\n  1. Every runtime AI-call entry MUST call `this.assertSensitivityPermitsAiCall()` before invoking runTurn / runTurnStreaming OR a direct `provider.generate*` call. Housekeeping completions (title generation, summarization, classification) feed user-authored text straight to the provider, so they take the same gate as a turn.\n  2. The runtime\'s tool registry MUST be wrapped through `wrapToolRegistryForSensitivity` so outbound tools (web_search, read_url, delegate_to_agent, MCP) fail-close on high-sensitivity sessions.\n  3. Every user-facing surface with chat/slash dispatch MUST expose `/sensitivity` routed through `runtime.setSessionSensitivity` / `getSessionSensitivity` — without this affordance, the gate is enforced in code but unreachable from any user action.\n  4. The explicit `recall_memories` / `search_conversations` / `list_events` tools MUST route through `runtime.recallMemoriesForTool` / `searchConversations` / `queryEventsForTool`, which hold results to the tool send tier (`interiorToolSendTier`: external ⇒ context-safe tiers only). A hand-rolled `memory.recallRelevant` closure omits `sensitivityFilter` and would return medical/financial/secret memories toward an external provider.\n\nAll four together close the doctrine end-to-end: enforcement at the boundary (turn calls, tool dispatch, AND explicit recall) + a path for users to actually trip the gate.\n',
   );
   process.exit(1);
 }

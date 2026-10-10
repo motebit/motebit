@@ -81,7 +81,7 @@ async function handleDelegatePlan(
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
   const provider = createProvider(config);
-  const registry = buildToolRegistry(config, runtimeRef, motebitId);
+  const registry = buildToolRegistry(config, runtimeRef);
   const storage = buildStorageAdapters(moteDb);
   const governance = deriveGovernanceForRuntime(loadFullConfig().governance);
 

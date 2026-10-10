@@ -182,11 +182,12 @@ describe("ConversationManager — sensitivity floor on persisted messages", () =
 });
 
 describe("ConversationManager — read-side trimmed() filter by effective tier", () => {
-  it("untagged legacy messages always pass through (backward compat)", () => {
-    // Pre-floor data: messages persisted before the v1 sensitivity
-    // tag landed have no `sensitivity` field. They MUST flow through
-    // trimmed() regardless of effective tier — otherwise the read
-    // filter retroactively erases the user's history.
+  it("untagged legacy messages fail closed: withheld below Secret, sent at Secret", () => {
+    // Pre-floor data (messages persisted before the v1 sensitivity tag
+    // landed, or synced from a peer predating the optional sync field) has
+    // no `sensitivity`. Its tier is unknowable, so it is held to Secret: it
+    // rides only an on-device request at Secret, never an external one.
+    // (The local transcript is untouched — `getHistory` still renders it.)
     const legacyStore: ConversationStoreAdapter = {
       createConversation: () => "conv-legacy",
       appendMessage() {},
@@ -223,6 +224,7 @@ describe("ConversationManager — read-side trimmed() filter by effective tier",
     const provider = { generate: vi.fn() } as unknown as NonNullable<
       ReturnType<ConversationDeps["getProvider"]>
     >;
+    let tier: SensitivityLevel = SensitivityLevel.Personal;
     const deps: ConversationDeps = {
       motebitId: "mb-1",
       maxHistory: 100,
@@ -233,26 +235,34 @@ describe("ConversationManager — read-side trimmed() filter by effective tier",
       generateCompletion: vi.fn(async () => "AI Title"),
       assertSensitivityPermitsAiCall: () =>
         ({}) as ReturnType<ConversationDeps["assertSensitivityPermitsAiCall"]>,
-      // Non-permissive session tier — would block tagged messages.
-      getEffectiveSensitivity: () => SensitivityLevel.None,
+      getEffectiveSensitivity: () => tier,
     };
     const cm = new ConversationManager(deps);
     cm.load("conv-legacy");
+    expect(cm.trimmed()).toHaveLength(0);
+    expect(cm.getHistory()).toHaveLength(2);
+    tier = SensitivityLevel.Medical;
+    expect(cm.trimmed()).toHaveLength(0);
+    tier = SensitivityLevel.Secret;
     const out = cm.trimmed();
     expect(out).toHaveLength(2);
     expect(out.every((m) => m.sensitivity == null)).toBe(true);
   });
 
-  it("absent getter: defaults to None effective; messages tagged above None excluded", () => {
+  it("absent getter: defaults to None send tier; its ceiling admits context-safe, excludes medical+", () => {
     const store = makeCapturingStore();
-    const deps = makeDeps(store, {
-      defaultSensitivity: SensitivityLevel.Personal,
-      // No getEffectiveSensitivity. trimmed() defaults effective to None,
-      // so Personal-tagged messages are excluded.
-    });
-    const cm = new ConversationManager(deps);
-    cm.pushExchange("hello", "hi");
-    expect(cm.trimmed()).toHaveLength(0);
+    const personal = new ConversationManager(
+      makeDeps(store, { defaultSensitivity: SensitivityLevel.Personal }),
+    );
+    // No getEffectiveSensitivity: the send tier is None, whose ceiling is
+    // Personal (interiorEgressCeiling) — a Personal message rides it.
+    personal.pushExchange("hello", "hi");
+    expect(personal.trimmed()).toHaveLength(2);
+    const medical = new ConversationManager(
+      makeDeps(store, { defaultSensitivity: SensitivityLevel.Medical }),
+    );
+    medical.pushExchange("hello", "hi");
+    expect(medical.trimmed()).toHaveLength(0);
   });
 
   it("effective at or above message tier: included", () => {
