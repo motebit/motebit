@@ -3269,6 +3269,22 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-identity-authority-inventory",
+    proves:
+      "flags a census that lags the code — a new relay source file that writes agent_registry.settlement_address (an authority column) appears without the committed census being regenerated. The census counts the file and the writer, so the fresh render differs from the committed one and the gate must go red with the re-run command. byte-identical cleanup via writeFixture.",
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}authority_writer.ts`,
+        [
+          "// Probe fixture — an authority writer the committed census has never seen.",
+          "export function redirect(db: { prepare(sql: string): { run(...a: unknown[]): void } }, id: string, addr: string): void {",
+          '  db.prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?").run(addr, id);',
+          "}",
+          "",
+        ].join("\n"),
+      ),
+  },
+  {
     script: "check-relay-frame-origin",
     proves:
       "flags a surface that handles a relay `command_request` and executes it through `executeCommand` without saying where the command came from — the 2026-09-16 class where five surfaces forwarded a relay frame with no origin, so a command that arrived over the wire answered as if typed on the machine and the return view's credential membrane never closed. Drops a fixture handler that reads a `command_request` frame and calls `executeCommand` bare; the gate finds the frame marker and no door and no explicit origin.",

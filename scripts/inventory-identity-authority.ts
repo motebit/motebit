@@ -840,12 +840,26 @@ ${[...KEYED]
   .join(", ")}
 `;
 
-async function main(): Promise<void> {
-  const formatted = await prettier.format(md, {
+/** The census exactly as committed: rendered, then prettier-formatted. */
+export async function renderCensus(): Promise<string> {
+  return prettier.format(md, {
     parser: "markdown",
     ...((await prettier.resolveConfig(resolve(ROOT, OUT))) ?? {}),
   });
+}
+
+/** What the census examined — the aperture a freshness verdict is only as wide as. */
+export function censusAperture(): string {
+  return `${FILES.length} files scanned (${SCAN_ROOTS.join(", ")}), ${KEYED.size} identity-keyed tables, ${fieldCount} fields (${authorityFieldCount} authority-bearing), ${WRITERS.length} writers (${authorityWriters.length} write authority; ${unguarded.length} reachable through a door proving at most a device token)`;
+}
+
+export const CENSUS_OUT = OUT;
+
+async function main(): Promise<void> {
+  const formatted = await renderCensus();
   if (process.argv.includes("--check")) {
+    // The gate form is `check-identity-authority-inventory` (pnpm check); this
+    // flag stays for a direct run.
     const current = existsSync(resolve(ROOT, OUT)) ? readFileSync(resolve(ROOT, OUT), "utf-8") : "";
     if (current !== formatted) {
       console.error(
@@ -856,9 +870,9 @@ async function main(): Promise<void> {
   } else {
     writeFileSync(resolve(ROOT, OUT), formatted);
   }
-  console.log(
-    `inventory-identity-authority — ${FILES.length} files, ${KEYED.size} identity-keyed tables, ${fieldCount} fields (${authorityFieldCount} authority-bearing), ${WRITERS.length} writers (${authorityWriters.length} write authority; ${unguarded.length} reachable through a door proving at most a device token) → ${OUT}`,
-  );
+  console.log(`inventory-identity-authority — ${censusAperture()} → ${OUT}`);
 }
 
-void main();
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  void main();
+}
