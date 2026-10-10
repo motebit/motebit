@@ -13,23 +13,28 @@ import { createSyncRelay } from "../index.js";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
+import { ackingFetch } from "./federation-messages.js";
 
 // === Helpers ===
 
 /** Manually insert a peer into the DB. */
-function insertPeer(
+/** Each inserted peer's private key — the v2 ack a stub peer answers with is signed by it. */
+const PEER_KEYS = new Map<string, Uint8Array>();
+
+async function insertPeer(
   db: DatabaseDriver,
   peerId: string,
   endpointUrl: string,
   state: string,
   missed = 0,
   lastHeartbeatAt?: number,
-): void {
-  const keypair = crypto.getRandomValues(new Uint8Array(32));
+): Promise<void> {
+  const keypair = await generateKeypair();
+  PEER_KEYS.set(peerId, keypair.privateKey);
   db.prepare(
     `INSERT OR REPLACE INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, missed_heartbeats, agent_count, trust_score, last_heartbeat_at)
      VALUES (?, ?, ?, ?, ?, 0, 0.5, ?)`,
-  ).run(peerId, bytesToHex(keypair), endpointUrl, state, missed, lastHeartbeatAt ?? null);
+  ).run(peerId, bytesToHex(keypair.publicKey), endpointUrl, state, missed, lastHeartbeatAt ?? null);
 }
 
 function getPeer(
@@ -96,19 +101,9 @@ function getRetry(
     | undefined;
 }
 
-/** Stub fetch to succeed with a valid heartbeat response. */
+/** Stub fetch to answer every heartbeat with the addressed peer's valid signed v2 ack. */
 function stubFetchSuccess(): void {
-  vi.stubGlobal("fetch", async () => {
-    return new Response(
-      JSON.stringify({
-        relay_id: "peer-relay",
-        timestamp: Date.now(),
-        agent_count: 1,
-        signature: bytesToHex(new Uint8Array(64)),
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    );
-  });
+  vi.stubGlobal("fetch", ackingFetch(PEER_KEYS));
 }
 
 /** Stub fetch to fail with connection refused. */
@@ -148,7 +143,7 @@ describe("Federation Chaos: Heartbeat Oscillation Resistance", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("suspended peer does not reactivate on a single success (hysteresis)", async () => {
-    insertPeer(db, "oscillating-peer", "http://oscillating.test", "suspended", 3);
+    await insertPeer(db, "oscillating-peer", "http://oscillating.test", "suspended", 3);
 
     // Success: 3→2, still suspended
     stubFetchSuccess();
@@ -180,7 +175,7 @@ describe("Federation Chaos: Heartbeat Oscillation Resistance", () => {
   });
 
   it("full recovery path: 1 miss, 2 failures to suspended, 3 successes to active", async () => {
-    insertPeer(db, "recovery-peer", "http://recovery.test", "active", 1);
+    await insertPeer(db, "recovery-peer", "http://recovery.test", "active", 1);
 
     // 2 consecutive failures: 1→2→3 (suspended at 3)
     stubFetchFailure();
@@ -220,7 +215,7 @@ describe("Federation Chaos: Peer Dies Mid-Settlement Retry", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("retry completes for suspended peer (uses endpoint lookup, not state check)", async () => {
-    insertPeer(db, "dying-peer", "http://dying.test", "active");
+    await insertPeer(db, "dying-peer", "http://dying.test", "active");
     const retryId = insertRetry(db, { peerRelayId: "dying-peer" });
 
     // Peer becomes suspended between retry insertion and processing
@@ -240,7 +235,7 @@ describe("Federation Chaos: Peer Dies Mid-Settlement Retry", () => {
   });
 
   it("retry fails when peer row is deleted (removed peer)", async () => {
-    insertPeer(db, "vanished-peer", "http://vanished.test", "active");
+    await insertPeer(db, "vanished-peer", "http://vanished.test", "active");
     const retryId = insertRetry(db, { peerRelayId: "vanished-peer" });
 
     // Delete the peer row entirely — simulates full removal
@@ -323,7 +318,7 @@ describe("Federation Chaos: Re-Registration Cooldown", () => {
     const recentTimestamp = Date.now();
 
     // Insert peer as removed with recent heartbeat
-    insertPeer(db, peerId, "http://removed.test", "removed", 5, recentTimestamp);
+    await insertPeer(db, peerId, "http://removed.test", "removed", 5, recentTimestamp);
 
     const peer = getPeer(db, peerId);
     expect(peer).toBeDefined();
@@ -354,7 +349,7 @@ describe("Federation Chaos: Flaky Network (Alternating Success/Failure)", () => 
   afterEach(() => vi.restoreAllMocks());
 
   it("peer never reaches suspended with alternating success/failure over 10 rounds", async () => {
-    insertPeer(db, "flaky-peer", "http://flaky.test", "active", 0);
+    await insertPeer(db, "flaky-peer", "http://flaky.test", "active", 0);
 
     for (let round = 0; round < 10; round++) {
       if (round % 2 === 0) {
@@ -373,7 +368,7 @@ describe("Federation Chaos: Flaky Network (Alternating Success/Failure)", () => 
   });
 
   it("two consecutive failures followed by success keeps peer active", async () => {
-    insertPeer(db, "burst-peer", "http://burst.test", "active", 0);
+    await insertPeer(db, "burst-peer", "http://burst.test", "active", 0);
 
     // 2 failures: 0→1→2
     stubFetchFailure();
@@ -400,7 +395,7 @@ describe("Federation Chaos: Settlement Retry Exhaustion with Auto-Refund", () =>
   afterEach(() => vi.restoreAllMocks());
 
   it("calls onRetryExhausted callback when max_attempts reached", async () => {
-    insertPeer(db, "exhausted-peer", "http://exhausted.test", "active");
+    await insertPeer(db, "exhausted-peer", "http://exhausted.test", "active");
     const retryId = insertRetry(db, {
       peerRelayId: "exhausted-peer",
       attempts: 4, // One attempt away from max (5)
@@ -430,7 +425,7 @@ describe("Federation Chaos: Settlement Retry Exhaustion with Auto-Refund", () =>
   });
 
   it("does not call onRetryExhausted when retry succeeds before max", async () => {
-    insertPeer(db, "recovering-peer", "http://recovering.test", "active");
+    await insertPeer(db, "recovering-peer", "http://recovering.test", "active");
     const retryId = insertRetry(db, {
       peerRelayId: "recovering-peer",
       attempts: 3,
@@ -449,7 +444,7 @@ describe("Federation Chaos: Settlement Retry Exhaustion with Auto-Refund", () =>
   });
 
   it("onRetryExhausted error does not crash the retry processor", async () => {
-    insertPeer(db, "crash-peer", "http://crash.test", "active");
+    await insertPeer(db, "crash-peer", "http://crash.test", "active");
     const retryId = insertRetry(db, {
       peerRelayId: "crash-peer",
       attempts: 4,
@@ -479,7 +474,7 @@ describe("Federation Chaos: Concurrent Heartbeat Recovery from Suspension", () =
   afterEach(() => vi.restoreAllMocks());
 
   it("gradual recovery: 3 consecutive successes transition suspended to active", async () => {
-    insertPeer(db, "gradual-peer", "http://gradual.test", "suspended", 3);
+    await insertPeer(db, "gradual-peer", "http://gradual.test", "suspended", 3);
     stubFetchSuccess();
 
     // Success 1: 3→2, still suspended
@@ -502,7 +497,7 @@ describe("Federation Chaos: Concurrent Heartbeat Recovery from Suspension", () =
   });
 
   it("recovery interrupted by failure resets progress", async () => {
-    insertPeer(db, "interrupted-peer", "http://interrupted.test", "suspended", 3);
+    await insertPeer(db, "interrupted-peer", "http://interrupted.test", "suspended", 3);
 
     // 2 successes: 3→2→1
     stubFetchSuccess();
@@ -533,9 +528,9 @@ describe("Federation Chaos: Concurrent Heartbeat Recovery from Suspension", () =
   });
 
   it("multiple peers recover independently in same heartbeat round", async () => {
-    insertPeer(db, "peer-a", "http://a.test", "suspended", 3);
-    insertPeer(db, "peer-b", "http://b.test", "suspended", 2);
-    insertPeer(db, "peer-c", "http://c.test", "active", 1);
+    await insertPeer(db, "peer-a", "http://a.test", "suspended", 3);
+    await insertPeer(db, "peer-b", "http://b.test", "suspended", 2);
+    await insertPeer(db, "peer-c", "http://c.test", "active", 1);
 
     stubFetchSuccess();
     await sendHeartbeats(db, identity);

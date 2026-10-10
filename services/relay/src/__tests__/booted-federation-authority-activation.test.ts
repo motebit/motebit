@@ -43,6 +43,7 @@ import {
   BOOT_TIMEOUT_MS,
   type BootedEntry,
 } from "./booted-entry-harness.js";
+import { heartbeatRequest } from "./federation-messages.js";
 
 const MASTER_TOKEN = "booted-federation-authority-master";
 const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";
@@ -162,20 +163,21 @@ async function heartbeatWith(
     );
     revocations.push({ ...e, timestamp, signature: bytesToHex(sig) });
   }
-  const beat = await sign(
-    enc.encode(`${peer.relayId}|${timestamp}|${FEDERATION_SUITE}`),
-    peer.privateKey,
-  );
+  // relay-federation@1.5: a v2 `heartbeat` names this relay as its recipient.
+  const identity = (await (await fetch(`${baseUrl}/federation/v1/identity`)).json()) as {
+    relay_motebit_id: string;
+  };
   const res = await fetch(`${baseUrl}/federation/v1/peer/heartbeat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: peer.relayId,
-      timestamp,
-      agent_count: 0,
-      signature: bytesToHex(beat),
-      revocations,
-    }),
+    body: JSON.stringify(
+      await heartbeatRequest({
+        sender: peer.relayId,
+        recipient: identity.relay_motebit_id,
+        privateKey: peer.privateKey,
+        revocations,
+      }),
+    ),
   });
   return res.status;
 }

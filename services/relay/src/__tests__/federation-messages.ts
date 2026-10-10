@@ -7,7 +7,6 @@
 import { signFederationMessage, verifyFederationMessage } from "@motebit/crypto";
 import type { SignedFederationMessage } from "@motebit/crypto";
 import type { SyncRelay } from "../index.js";
-import { AUTH_HEADER } from "./test-helpers.js";
 
 export type { SignedFederationMessage };
 
@@ -81,7 +80,8 @@ export function ackingFetch(
   reply: (peerId: string) => boolean = () => true,
 ): (input: unknown, init?: RequestInit) => Promise<Response> {
   return async (_input, init) => {
-    const body = JSON.parse(String(init?.body ?? "{}")) as {
+    const raw = init?.body;
+    const body = JSON.parse(typeof raw === "string" ? raw : "{}") as {
       message?: { envelope?: { sender: string; recipient: string; nonce: string } };
     };
     const env = body.message?.envelope;
@@ -126,7 +126,8 @@ export async function ackVerifies(
 export async function operatorConfirm(
   relay: SyncRelay,
   nonce: string,
-  headers: Record<string, string> = AUTH_HEADER,
+  /** The relay operator's master-token header (test-helpers' `AUTH_HEADER`). */
+  headers: Record<string, string>,
 ): Promise<string> {
   const res = await relay.app.request("/api/v1/admin/federation/peer-confirm-signature", {
     method: "POST",

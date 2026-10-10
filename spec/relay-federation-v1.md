@@ -1,13 +1,14 @@
-# motebit/relay-federation@1.4
+# motebit/relay-federation@1.5
 
 ## Relay Federation Specification
 
 **Status:** Stable
-**Version:** 1.4
-**Date:** 2026-07-21
+**Version:** 1.5
+**Date:** 2026-10-10
 
 **Version history:**
 
+- **1.5** (2026-10-10) — **Breaking for `peer/heartbeat` and `peer/remove`; no dual-stack window.** Both now carry a v2 signed message (§3.5): a domain-separated envelope that names its kind, its signer, the ONE relay that may accept it, a timestamp and a single-use nonce, and commits to its body by digest. The v1 constructions are refused with 400 by name — the v1 heartbeat (`{relay_id}|{timestamp}|{suite}`) because it named no recipient and no nonce, so a heartbeat harvested from one peer replayed at every peer of the signer for five minutes and moved a suspended peer back to `active`; the v1 removal (the bare `relay_id`) because one signature removed the signer at every relay, forever. A heartbeat is answered by a signed `heartbeat-ack` that commits to the request's nonce, and the sender counts a heartbeat as delivered only when that ack verifies. **Self-propose is refused** (400): a `peer/propose` naming the receiving relay's own id used to return that relay's signature over `{own_id}:{nonce}:{suite}` for any caller-chosen nonce — exactly the §3.1 confirm bytes, a public confirm oracle. A relay's confirm signature is now minted only by its operator (§3.1). The per-peer rate limit on `peer/heartbeat` and `peer/remove` counts only requests whose v2 signature verified. Propose/confirm, discover, forward, result, settlement and vote-request keep their 1.4 constructions; they move to §3.5 kinds in a later version. Deploy both relays of a federated pair together: a 1.5 relay refuses a 1.4 relay's heartbeats, and a 1.4 relay cannot verify 1.5's. Version negotiation still compares majors only, so peering itself is not refused across the two.
 - **1.4** (2026-07-21) — The announced `requireDiscoverSignature` default flip, executed on its 2026-06-21 deprecation-notice schedule: default `false → true`, so an unsigned inbound discover now rejects (403) by default, closing the cold-audit P0-3b fail-open for every relay that has not explicitly opted out. Wire unchanged (the §4.1.1 signature fields are optional since 1.3); config-restorable (`requireDiscoverSignature: false` — an explicit, owned fail-open). Minor, not peering-incompatible: version negotiation compares majors only.
 - **Deprecation notice (2026-06-21):** the `requireDiscoverSignature` config default flips `false → true` on **2026-07-21** (ships as 1.4), ending the 1.3 tolerant-reader window — an unsigned inbound discover then rejects (403) by default. Config-restorable (`requireDiscoverSignature: false`), wire unchanged. See §4.1.1.
 - **1.3** (2026-06-11) — Additive: per-hop sender authentication on `POST /federation/v1/discover` (§4.1). Each forwarding relay signs the request as the immediate `sender_relay` (distinct from the multi-hop `origin_relay`, which carries through for dedup/merge); the receiver verifies that direct neighbor's signature against `relay_peers` (state `active`) and enforces the ±5-minute `timestamp` drift window. Backward-compatible via a tolerant-reader rollout — an unsigned discover is accepted with a warning until an operator sets `requireDiscoverSignature`, after which an unsigned request rejects (403); a PRESENT-but-invalid signature always rejects regardless. Also closes the §10.2 latent fail-open by making `verifyPeerSignature` REQUIRE the in-body `timestamp` (previously the drift check was skipped when the field was absent) across task/forward, task/result, settlement/forward, and discover — every sender already stamps it, so only malformed/replayed requests are affected. Route table unchanged (fifteen entries); peers without 1.3 interoperate through the rollout window.
@@ -125,6 +126,8 @@ Relay A (initiator)                         Relay B (responder)
 
 **Step 3 — Confirm.** Relay A verifies B's challenge signature against B's public key. If valid, A signs `{relay_id}:{nonce_b}:{suite}` (A's own relay_id, B's nonce, suite identifier) with its own private key and sends the response. Relay B verifies A's signature. Both relays transition the peer to `active` state.
 
+**Self-propose is refused (1.5).** A relay MUST refuse, with 400, a `peer/propose` whose `relay_id` is its own id, before any other check and without signing anything. Its response would be its signature over `{own_id}:{caller_nonce}:{suite}` — the step-3 confirm bytes — so any caller could obtain a confirm "from" that relay for a nonce of its choosing and complete a handshake at a third relay with an endpoint the attacker controls. A relay's step-3 signature is produced only on its operator's authority; in the reference relay that is the master-token `POST /api/v1/admin/federation/peer-confirm-signature` (body `{ "nonce": "<hex>" }`, response `{ "relay_id", "challenge_response" }`), which the operator's tooling (`motebit federation peer`) calls once per handshake.
+
 The suite identifier for handshake challenges is `motebit-concat-ed25519-hex-v1` (see `SUITE_REGISTRY` in `@motebit/protocol`): UTF-8 concatenation of the template, Ed25519 primitive, hex signature encoding.
 
 If any verification fails, the handshake is aborted and the peer record is discarded.
@@ -141,17 +144,47 @@ Active peers exchange heartbeats to confirm liveness and synchronize metadata.
 | ---------------- | ------------------------------------------------------------ |
 | **Interval**     | 60 seconds                                                   |
 | **Endpoint**     | `POST /federation/v1/peer/heartbeat`                         |
-| **Payload**      | `{ relay_id, timestamp, agent_count, signature }`            |
+| **Request**      | `{ message, agent_count, revocations? }`                     |
+| **Response**     | `{ message, agent_count }`                                   |
 | **Missed limit** | 3 consecutive missed heartbeats → `suspended`; 5 → `removed` |
 | **Action**       | Peer state transitions to `suspended` at 3, `removed` at 5   |
 
-The `signature` field is the Ed25519 signature of `{relay_id}|{timestamp}|{suite}` (pipe-separated UTF-8 bytes, where `suite` is the cryptosuite identifier `motebit-concat-ed25519-hex-v1`). This prevents replay, spoofing, and cross-suite confusion.
+`message` is a §3.5 signed message of kind `heartbeat`, from the sending relay to the receiving relay, over the body `{ agent_count, revocations }` (`revocations` is `[]` when the request carries none). The receiver verifies it (§3.5) against the sender's `relay_peers.public_key` (state `active` or `suspended`), records its nonce, and only then applies the heartbeat. The response's `message` is a `heartbeat-ack` from the receiver back to the sender over `{ request_nonce, agent_count }`, where `request_nonce` is the request envelope's nonce. The sender MUST verify the ack — kind, recipient = itself, sender = the peer it addressed, the peer's stored key, and `request_nonce` = the nonce it sent — and counts the heartbeat as delivered only when it does; an unverified 2xx is a missed heartbeat.
 
-A suspended peer is excluded from discovery and routing until heartbeats resume. After a single successful heartbeat, the peer transitions back to `active`. A peer that reaches 5 consecutive missed heartbeats is transitioned to `removed` and requires a full handshake to re-establish.
+A request without `message` (the 1.0–1.4 `{ relay_id, timestamp, agent_count, signature }` form, signing `{relay_id}|{timestamp}|{suite}`) is refused with **400** naming the v2 `heartbeat` message, and changes nothing: no row, no counter, no rate-limit slot.
+
+A suspended peer is excluded from discovery and routing until heartbeats resume. Each delivered heartbeat lowers the missed count by one, and the peer returns to `active` when it reaches 0. A peer that reaches 5 consecutive missed heartbeats is transitioned to `removed` and requires a full handshake to re-establish.
 
 ### 3.3 — Peer Removal
 
-Either relay may unilaterally remove a peer by sending `POST /federation/v1/peer/remove` with a signed removal notice. The receiving relay transitions the peer to `removed` state. Removed peers require a full handshake to re-establish.
+Either relay may unilaterally remove a peer by sending `POST /federation/v1/peer/remove` with body `{ message }`: a §3.5 signed message of kind `peer-remove` from the leaving relay to the ONE relay it is leaving, over the body `{ "action": "remove" }`. The receiving relay verifies it (§3.5) against the sender's `relay_peers.public_key`, records its nonce, and transitions the peer to `removed` in the same transaction. Removed peers require a full handshake to re-establish. A removal names its recipient, so it removes the sender at that relay only, and its nonce and timestamp make it single-use within five minutes.
+
+A request without `message` (the 1.0–1.4 `{ relay_id, signature }` form, a signature over the bare `relay_id`) is refused with **400** naming the v2 `peer-remove` message, and changes nothing.
+
+### 3.5 — Signed messages (v2)
+
+A v2 signed message authenticates one relay-to-relay request and is domain-separated by role, signer, verifier and freshness at once. Wire form:
+
+```
+SignedFederationMessage {
+  envelope: {
+    kind:        "heartbeat" | "heartbeat-ack" | "peer-remove"
+    sender:      string   // relay id of the signer
+    recipient:   string   // relay id of the ONE relay that may accept it
+    ts:          number   // Unix ms at signing
+    nonce:       string   // 32 random bytes, lowercase hex; single-use at the recipient
+    body_sha256: string   // lowercase hex SHA-256 of JCS(body)
+    suite:       "motebit-jcs-ed25519-hex-v1"
+  }
+  signature: string       // hex Ed25519 by the sender's relay key
+}
+```
+
+The signed bytes are `"motebit-fed/v2" ‖ 0x00 ‖ kind ‖ 0x00 ‖ JCS(envelope)`. The kind is both in the prefix and under the canonical envelope, so a signature for one kind never verifies as another, and the domain tag keeps it apart from every other JCS artifact signed with the same key. The envelope carries exactly these seven fields; any other field is malformed.
+
+A recipient MUST, in order: parse the envelope (malformed → 400); require the kind it serves at that endpoint; require `recipient` = its own relay id; look up `sender`'s key in `relay_peers` in the state the kind requires; require `|now − ts| ≤ 300 000 ms`; recompute `body_sha256` from the body it received; verify the signature; and refuse a `(sender, nonce)` it has already recorded (409). It records the nonce in the same transaction as the write the message authorizes, and keeps it at least until `ts` + the window has passed. Failures: 400 malformed / wrong recipient / stale / body mismatch; 403 unknown peer or bad signature; 409 replayed nonce. Rate limits count a request only once its signature has verified.
+
+The reference implementation is `signFederationMessage` / `verifyFederationMessage` in `@motebit/crypto` — one producer and one verifier for every kind.
 
 ### 3.4 — `relay_peers` Table
 
@@ -724,14 +757,14 @@ The fifteen routes below are the binding cross-relay contract. Renaming or reloc
 
 Authentication is **in-body and per-endpoint** — there is no transport-header (`X-Relay-*`) scheme. Each endpoint authenticates with the construction its own section specifies; this table is the authoritative map.
 
-| Endpoint(s)                                                            | Authentication                                                                                                                                                                                                                                                                                                                                                                                                           | Failure                                                       |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
-| `peer/propose`, `peer/confirm`                                         | Nonce challenge-response (§3.1). The peer is not yet `active`, so the public key comes from the proposal payload, not `relay_peers`.                                                                                                                                                                                                                                                                                     | 403                                                           |
-| `peer/heartbeat`, `peer/remove`                                        | In-body `signature` over the construction the section specifies (§3.2 heartbeat: `{relay_id}\|{timestamp}\|{suite}`), verified against the peer's `relay_peers.public_key`.                                                                                                                                                                                                                                              | 403                                                           |
-| `task/forward`, `task/result`, `settlement/forward`                    | In-body `signature` field: hex-encoded Ed25519 over the RFC 8785 (JCS) canonical JSON of the request body **with the `signature` field removed**. The signer is named by the in-body relay id (`origin_relay`); its public key is looked up in `relay_peers` (state `active`). An in-body `timestamp` is checked for ±5-minute drift.                                                                                    | 403 (unknown/inactive peer or invalid signature); 400 (drift) |
-| `horizon/witness`, `horizon/dispute`, `disputes/:id/vote-request`      | In-body signed payloads per §15–§16; signer key from `relay_peers`.                                                                                                                                                                                                                                                                                                                                                      | 403                                                           |
-| `discover`                                                             | Per-hop sender signing (§4.1.1, since 1.3): in-body `signature` over the canonical body, signer `sender_relay` (the immediate forwarder, NOT `origin_relay`) keyed against `relay_peers` (active), `timestamp` drift-checked. Unsigned rejects by default since 1.4 (the executed 2026-07-21 sunset); tolerant only under an explicit `requireDiscoverSignature: false`. A present-but-invalid signature always rejects. | 403/400; — while unsigned under an explicit tolerant opt-out  |
-| `GET identity`, `GET peers`, `GET settlements`, `GET settlement/proof` | Unauthenticated by design: identity is public (§2.4) and the settlement proof is self-verifying (§7.6.6).                                                                                                                                                                                                                                                                                                                | —                                                             |
+| Endpoint(s)                                                            | Authentication                                                                                                                                                                                                                                                                                                                                                                                                           | Failure                                                        |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `peer/propose`, `peer/confirm`                                         | Nonce challenge-response (§3.1). The peer is not yet `active`, so the public key comes from the proposal payload, not `relay_peers`.                                                                                                                                                                                                                                                                                     | 403                                                            |
+| `peer/heartbeat`, `peer/remove`                                        | §3.5 signed message (1.5): kind `heartbeat` / `peer-remove`, recipient = this relay, single-use nonce, ±5-minute `ts`, body digest; signer key from `relay_peers`. The 1.0–1.4 constructions are refused by name.                                                                                                                                                                                                        | 400 (v1, malformed, wrong recipient, stale); 403; 409 (replay) |
+| `task/forward`, `task/result`, `settlement/forward`                    | In-body `signature` field: hex-encoded Ed25519 over the RFC 8785 (JCS) canonical JSON of the request body **with the `signature` field removed**. The signer is named by the in-body relay id (`origin_relay`); its public key is looked up in `relay_peers` (state `active`). An in-body `timestamp` is checked for ±5-minute drift.                                                                                    | 403 (unknown/inactive peer or invalid signature); 400 (drift)  |
+| `horizon/witness`, `horizon/dispute`, `disputes/:id/vote-request`      | In-body signed payloads per §15–§16; signer key from `relay_peers`.                                                                                                                                                                                                                                                                                                                                                      | 403                                                            |
+| `discover`                                                             | Per-hop sender signing (§4.1.1, since 1.3): in-body `signature` over the canonical body, signer `sender_relay` (the immediate forwarder, NOT `origin_relay`) keyed against `relay_peers` (active), `timestamp` drift-checked. Unsigned rejects by default since 1.4 (the executed 2026-07-21 sunset); tolerant only under an explicit `requireDiscoverSignature: false`. A present-but-invalid signature always rejects. | 403/400; — while unsigned under an explicit tolerant opt-out   |
+| `GET identity`, `GET peers`, `GET settlements`, `GET settlement/proof` | Unauthenticated by design: identity is public (§2.4) and the settlement proof is self-verifying (§7.6.6).                                                                                                                                                                                                                                                                                                                | —                                                              |
 
 The receiving relay, for the signed mutating endpoints:
 

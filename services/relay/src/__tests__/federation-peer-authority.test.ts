@@ -21,6 +21,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { createTestRelay, createAgent, JSON_AUTH, AUTH_HEADER } from "./test-helpers.js";
+import { heartbeatRequest } from "./federation-messages.js";
 // eslint-disable-next-line no-restricted-imports -- the attacker needs raw key material
 import { generateKeypair, sign, bytesToHex } from "@motebit/encryption";
 
@@ -109,17 +110,17 @@ async function heartbeatWith(
     );
     revocations.push({ ...e, timestamp, signature: bytesToHex(sig) });
   }
-  const beat = await sign(
-    enc.encode(`${peer.relayId}|${timestamp}|${FEDERATION_SUITE}`),
-    peer.privateKey,
+  const res = await fed(
+    relay,
+    "POST",
+    "/federation/v1/peer/heartbeat",
+    await heartbeatRequest({
+      sender: peer.relayId,
+      recipient: relay.relayIdentity.relayMotebitId,
+      privateKey: peer.privateKey,
+      revocations,
+    }),
   );
-  const res = await fed(relay, "POST", "/federation/v1/peer/heartbeat", {
-    relay_id: peer.relayId,
-    timestamp,
-    agent_count: 0,
-    signature: bytesToHex(beat),
-    revocations,
-  });
   return res.status;
 }
 

@@ -25,10 +25,14 @@ import {
   hexToBytes,
 } from "@motebit/encryption";
 import {
+  parseFederationMessage,
   signAdjudicatorVote,
+  signFederationMessage,
   signHorizonWitnessRequestBody,
+  verifyFederationMessage,
   verifyHorizonWitnessRequestSignature,
   verifyWitnessOmissionDispute,
+  type FederationMessageRefusal,
 } from "@motebit/crypto";
 import type { DisputeOutcome, VoteRequest } from "@motebit/protocol";
 import {
@@ -58,7 +62,7 @@ import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
  * 3. Update consumer assertions (`federation-e2e.test.ts`, `scripts/test-federation-live.mjs`)
  * 4. Update `@spec` jsdoc annotations on each endpoint that changed
  */
-export const RELAY_SPEC_VERSION = "motebit/relay-federation@1.4";
+export const RELAY_SPEC_VERSION = "motebit/relay-federation@1.5";
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -277,6 +281,19 @@ export function createFederationTables(db: DatabaseDriver): void {
         agent_count       INTEGER NOT NULL DEFAULT 0,
         trust_score       REAL NOT NULL DEFAULT 0.5,
         nonce             TEXT
+      );
+  `);
+
+  // v2 signed-message replay store (relay-federation@1.5 §3.5): one row per
+  // (sender, nonce) a verified v2 message carried, written in the same
+  // transaction as the write the message authorized, kept until the
+  // message's freshness window has passed (pruned on insert).
+  db.exec(`
+      CREATE TABLE IF NOT EXISTS relay_federation_nonces (
+        sender_relay_id TEXT NOT NULL,
+        nonce           TEXT NOT NULL,
+        expires_at      INTEGER NOT NULL,
+        PRIMARY KEY (sender_relay_id, nonce)
       );
   `);
 
@@ -882,6 +899,55 @@ export function createFederationQueryCache(supervisor?: LoopSupervisor): {
   return { cache, pruneInterval };
 }
 
+// === Federation signed messages v2 (relay-federation@1.5 §3.5) ===
+
+/** How long a recorded v2 nonce is kept: twice the ±5-minute window, past any accepted ts. */
+const FEDERATION_NONCE_RETENTION_MS = 2 * 300_000;
+
+/** True when `(sender, nonce)` is already recorded — a replay. Read-only. */
+function federationNonceSeen(db: DatabaseDriver, sender: string, nonce: string): boolean {
+  return (
+    db
+      .prepare("SELECT 1 FROM relay_federation_nonces WHERE sender_relay_id = ? AND nonce = ?")
+      .get(sender, nonce) !== undefined
+  );
+}
+
+/**
+ * Record a verified v2 message's nonce. Call INSIDE the transaction of the
+ * write the message authorizes; returns false when the nonce was already
+ * recorded (a concurrent replay), and the caller must then throw so the
+ * write rolls back.
+ */
+function consumeFederationNonce(
+  db: DatabaseDriver,
+  sender: string,
+  nonce: string,
+  ts: number,
+): boolean {
+  db.prepare("DELETE FROM relay_federation_nonces WHERE expires_at < ?").run(Date.now());
+  return (
+    db
+      .prepare(
+        "INSERT OR IGNORE INTO relay_federation_nonces (sender_relay_id, nonce, expires_at) VALUES (?, ?, ?)",
+      )
+      .run(sender, nonce, Math.max(ts, Date.now()) + FEDERATION_NONCE_RETENTION_MS).changes === 1
+  );
+}
+
+/** HTTP status for a refused v2 message: a bad signature is 403, every shape/binding fault 400. */
+function federationRefusalStatus(reason: FederationMessageRefusal): 400 | 403 {
+  return reason === "bad_signature" ? 403 : 400;
+}
+
+/** The body a v2 `heartbeat` commits to. */
+function heartbeatBody(agentCount: number, revocations: RevocationEvent[] | undefined) {
+  return { agent_count: agentCount, revocations: revocations ?? [] };
+}
+
+/** The body a v2 `peer-remove` commits to. */
+const PEER_REMOVE_BODY = { action: "remove" } as const;
+
 // === Heartbeat Sender ===
 
 const HEARTBEAT_SUSPEND_THRESHOLD = 3;
@@ -898,10 +964,11 @@ export async function sendHeartbeats(
 ): Promise<void> {
   const peers = db
     .prepare(
-      "SELECT peer_relay_id, endpoint_url, missed_heartbeats, state FROM relay_peers WHERE state IN ('active', 'suspended')",
+      "SELECT peer_relay_id, public_key, endpoint_url, missed_heartbeats, state FROM relay_peers WHERE state IN ('active', 'suspended')",
     )
     .all() as Array<{
     peer_relay_id: string;
+    public_key: string;
     endpoint_url: string;
     missed_heartbeats: number;
     state: string;
@@ -909,20 +976,11 @@ export async function sendHeartbeats(
 
   if (peers.length === 0) return;
 
-  const encoder = new TextEncoder();
-  const timestamp = Date.now();
   const agentCount = (
     db.prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE ${ON_SHELF_PREDICATE}`).get() as {
       cnt: number;
     }
   ).cnt;
-  // Heartbeat signing payload format (FEDERATION_SUITE = motebit-concat-ed25519-hex-v1):
-  //   `{relay_id}|{timestamp}|{suite}`  — UTF-8 concatenation, Ed25519 sign, hex encode
-  const message = encoder.encode(
-    `${relayIdentity.relayMotebitId}|${timestamp}|${FEDERATION_SUITE}`,
-  );
-  const signature = await sign(message, relayIdentity.privateKey);
-  const signatureHex = bytesToHex(signature);
 
   const results = await Promise.allSettled(
     peers.map(async (peer) => {
@@ -933,21 +991,56 @@ export async function sendHeartbeats(
             .prepare("SELECT last_heartbeat_at FROM relay_peers WHERE peer_relay_id = ?")
             .get(peer.peer_relay_id) as { last_heartbeat_at: number | null } | undefined
         )?.last_heartbeat_at ?? 0;
-      const revocations = getRevocationEventsSince(db, lastHb);
+      // The wire form is what the peer hashes, so commit to the JSON round
+      // trip (an absent optional field and an `undefined` one must agree).
+      const revocations = JSON.parse(
+        JSON.stringify(getRevocationEventsSince(db, lastHb)),
+      ) as RevocationEvent[];
 
+      // One v2 `heartbeat` per peer (relay-federation@1.5 §3.2): the message
+      // names its recipient and a single-use nonce, so it is good at this
+      // peer, once, and nowhere else.
+      const message = await signFederationMessage({
+        kind: "heartbeat",
+        sender: relayIdentity.relayMotebitId,
+        recipient: peer.peer_relay_id,
+        body: heartbeatBody(agentCount, revocations),
+        privateKey: relayIdentity.privateKey,
+      });
       const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/peer/heartbeat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          relay_id: relayIdentity.relayMotebitId,
-          timestamp,
+          message,
           agent_count: agentCount,
-          signature: signatureHex,
           ...(revocations.length > 0 ? { revocations } : {}),
         }),
         signal: AbortSignal.timeout(10_000),
       });
-      return { peerId: peer.peer_relay_id, ok: resp.ok, missed: peer.missed_heartbeats };
+      if (!resp.ok)
+        return { peerId: peer.peer_relay_id, ok: false, missed: peer.missed_heartbeats };
+      // Delivered only when the peer's signed `heartbeat-ack` answers THIS
+      // request's nonce under the peer's stored key — a bare 2xx is not
+      // liveness (§3.2; the v1 response was never verified).
+      const ack = (await resp.json().catch(() => null)) as {
+        message?: unknown;
+        agent_count?: unknown;
+      } | null;
+      const ackCount = typeof ack?.agent_count === "number" ? ack.agent_count : -1;
+      const verdict = await verifyFederationMessage(ack?.message, {
+        kind: "heartbeat-ack",
+        self: relayIdentity.relayMotebitId,
+        expectedSender: peer.peer_relay_id,
+        senderPublicKeyHex: peer.public_key,
+        body: { request_nonce: message.envelope.nonce, agent_count: ackCount },
+      });
+      if (!verdict.ok) {
+        logger.warn("federation.heartbeat.ack_refused", {
+          peerId: peer.peer_relay_id,
+          reason: verdict.reason,
+        });
+      }
+      return { peerId: peer.peer_relay_id, ok: verdict.ok, missed: peer.missed_heartbeats };
     }),
   );
 
@@ -1706,7 +1799,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 1: Identity ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.get("/federation/v1/identity", (c) => {
     return c.json({
       spec: RELAY_SPEC_VERSION,
@@ -1725,7 +1818,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 2: Peering Protocol ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/peer/propose", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1739,6 +1832,18 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const { relay_id, public_key, endpoint_url, display_name, nonce, spec_version } = body;
     if (!relay_id || !public_key)
       throw new HTTPException(400, { message: "relay_id and public_key are required" });
+    // Self-propose is refused (relay-federation@1.5 §3.1, G1): its answer was
+    // this relay's signature over `{own_id}:{caller_nonce}:{suite}` — exactly
+    // the step-3 confirm bytes — so any caller could mint a confirm "from"
+    // this relay for a nonce of its choosing and complete a handshake at a
+    // third relay with its own endpoint. Refused before anything is signed or
+    // stored; the confirm is minted only on the operator's authority.
+    if (relay_id === relayIdentity.relayMotebitId) {
+      throw new HTTPException(400, {
+        message:
+          "self-propose is refused (relay-federation@1.5 §3.1): a propose may not name this relay's own id. A relay's confirm signature is minted only by its operator — POST /api/v1/admin/federation/peer-confirm-signature (master token) with { nonce }",
+      });
+    }
     if (!endpoint_url) throw new HTTPException(400, { message: "endpoint_url is required" });
     if (!nonce) throw new HTTPException(400, { message: "nonce is required" });
     // The challenge proves control of the proposed KEY; it says nothing about
@@ -1751,35 +1856,6 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     checkFederationEnabled();
     checkVersionCompatibility(spec_version);
-
-    // Self-propose: a relay signing a (relay_id, nonce) tuple as itself.
-    // Used by the CLI's `motebit federation peer` client and by
-    // federation-e2e tests to extract a confirm-verifiable signature
-    // without a third party. No-op on storage — there is no protocol
-    // path that confirms a self-peer, so a stored row is inert junk
-    // that would 409 every subsequent self-propose against the same DB.
-    // Skips peer-policy / peer-limit / max-peers / 409-existing —
-    // none of those quotas mean anything for self. The signature is
-    // bound to relay_id:nonce:SUITE exactly as a non-self propose,
-    // so this is not a new oracle: the existing handler already signs
-    // any (relay_id, nonce) sent to it; we just no longer persist the
-    // side effect when relay_id is our own id.
-    if (relay_id === relayIdentity.relayMotebitId) {
-      const ourNonceBytes = new Uint8Array(32);
-      crypto.getRandomValues(ourNonceBytes);
-      const ourNonce = bytesToHex(ourNonceBytes);
-      const challengeMsg = new TextEncoder().encode(`${relay_id}:${nonce}:${FEDERATION_SUITE}`);
-      const challengeSig = await sign(challengeMsg, relayIdentity.privateKey);
-      return c.json({
-        relay_id: relayIdentity.relayMotebitId,
-        public_key: relayIdentity.publicKeyHex,
-        endpoint_url: federationConfig?.endpointUrl ?? "self",
-        display_name: federationConfig?.displayName ?? null,
-        nonce: ourNonce,
-        challenge: bytesToHex(challengeSig),
-        spec_version: RELAY_SPEC_VERSION,
-      });
-    }
 
     checkPeerPolicy(relay_id);
     checkPeerLimit(relay_id);
@@ -1841,7 +1917,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/peer/confirm", async (c) => {
     const body = await c.req.json<{ relay_id?: string; challenge_response?: string }>();
     const { relay_id, challenge_response } = body;
@@ -1883,23 +1959,34 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "active", peered_at: now });
   });
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/peer/heartbeat", async (c) => {
     const body = await c.req.json<{
-      relay_id?: string;
-      timestamp?: number;
+      message?: unknown;
       agent_count?: number;
-      signature?: string;
       revocations?: RevocationEvent[];
+      relay_id?: string;
+      signature?: string;
     }>();
-    const { relay_id, timestamp, agent_count, signature: sig, revocations } = body;
-    if (!relay_id || timestamp == null || agent_count == null || !sig) {
+    const { message, agent_count, revocations } = body;
+    // v1 (`{relay_id}|{timestamp}|{suite}`, no recipient, no nonce) is refused
+    // by name before any lookup, counter or rate-limit slot (D4: a replayed
+    // v1 heartbeat moved a suspended peer to active and spent the peer's
+    // rate limit). It changes nothing.
+    if (message === undefined) {
       throw new HTTPException(400, {
-        message: "relay_id, timestamp, agent_count, and signature are required",
+        message:
+          "federation heartbeat v1 is refused (relay-federation@1.5 §3.2): send { message, agent_count, revocations? } where message is a v2 `heartbeat` signed message (§3.5) naming this relay as recipient",
       });
     }
-
-    checkPeerLimit(relay_id);
+    const parsed = parseFederationMessage(message);
+    if (parsed === null)
+      throw new HTTPException(400, { message: "malformed v2 heartbeat message (§3.5)" });
+    if (typeof agent_count !== "number" || !Number.isSafeInteger(agent_count) || agent_count < 0)
+      throw new HTTPException(400, { message: "agent_count is required" });
+    if (revocations !== undefined && !Array.isArray(revocations))
+      throw new HTTPException(400, { message: "revocations must be an array" });
+    const relay_id = parsed.envelope.sender;
 
     const peer = db
       .prepare(
@@ -1910,30 +1997,34 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       | undefined;
     if (!peer) throw new HTTPException(404, { message: "No active or suspended peer found" });
 
-    const encoder = new TextEncoder();
-    const drift = Math.abs(Date.now() - timestamp);
-    if (drift > 300_000) {
-      // ±5 minutes
-      throw new HTTPException(400, {
-        message: "Heartbeat timestamp outside acceptable drift (±5min)",
+    const verdict = await verifyFederationMessage(message, {
+      kind: "heartbeat",
+      self: relayIdentity.relayMotebitId,
+      senderPublicKeyHex: peer.public_key,
+      body: heartbeatBody(agent_count, revocations),
+    });
+    if (!verdict.ok) {
+      throw new HTTPException(federationRefusalStatus(verdict.reason), {
+        message: `Heartbeat refused: ${verdict.reason}`,
       });
     }
+    const env = verdict.envelope;
+    if (federationNonceSeen(db, relay_id, env.nonce))
+      throw new HTTPException(409, { message: "Heartbeat refused: replayed nonce" });
+    // Counted only once the signature verified: an unverified or replayed
+    // request never spends the peer's slot.
+    checkPeerLimit(relay_id);
 
-    const valid = await verify(
-      hexToBytes(sig),
-      encoder.encode(`${relay_id}|${timestamp}|${FEDERATION_SUITE}`),
-      hexToBytes(peer.public_key),
-    );
-    if (!valid)
-      throw new HTTPException(403, { message: "Heartbeat signature verification failed" });
-
-    const now = Date.now();
     // Hysteresis: decrement rather than reset, matching the sending side.
     const newMissed = Math.max(0, peer.missed_heartbeats - 1);
     const newState = newMissed === 0 ? "active" : peer.state;
-    db.prepare(
-      `UPDATE relay_peers SET last_heartbeat_at = ?, missed_heartbeats = ?, agent_count = ?, state = ? WHERE peer_relay_id = ?`,
-    ).run(now, newMissed, agent_count, newState, relay_id);
+    db.transaction(() => {
+      if (!consumeFederationNonce(db, relay_id, env.nonce, env.ts))
+        throw new HTTPException(409, { message: "Heartbeat refused: replayed nonce" });
+      db.prepare(
+        `UPDATE relay_peers SET last_heartbeat_at = ?, missed_heartbeats = ?, agent_count = ?, state = ? WHERE peer_relay_id = ?`,
+      ).run(Date.now(), newMissed, agent_count, newState, relay_id);
+    });
 
     // Process incoming revocation events (best-effort)
     if (revocations && Array.isArray(revocations) && revocations.length > 0) {
@@ -1970,7 +2061,6 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       }
     }
 
-    const ourTimestamp = Date.now();
     const localAgentCount = (
       db
         .prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE ${ON_SHELF_PREDICATE}`)
@@ -1978,17 +2068,17 @@ export function registerFederationRoutes(deps: FederationDeps): void {
         cnt: number;
       }
     ).cnt;
-    const responseSig = await sign(
-      encoder.encode(`${relayIdentity.relayMotebitId}|${ourTimestamp}|${FEDERATION_SUITE}`),
-      relayIdentity.privateKey,
-    );
-
-    return c.json({
-      relay_id: relayIdentity.relayMotebitId,
-      timestamp: ourTimestamp,
-      agent_count: localAgentCount,
-      signature: bytesToHex(responseSig),
+    // The ack answers exactly this request: it commits to the request's nonce
+    // and names its sender as recipient (§3.2) — never the request's bytes.
+    const ack = await signFederationMessage({
+      kind: "heartbeat-ack",
+      sender: relayIdentity.relayMotebitId,
+      recipient: relay_id,
+      body: { request_nonce: env.nonce, agent_count: localAgentCount },
+      privateKey: relayIdentity.privateKey,
     });
+
+    return c.json({ message: ack, agent_count: localAgentCount });
   });
 
   // Phase 4b-3 — federation co-witness solicitation. Issuer relay POSTs
@@ -2010,7 +2100,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // — witnesses are portable across compositions of the same body. The
   // issuer's eventual final cert.signature binds the assembled witness
   // array.
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/horizon/witness", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessSolicitationRequestSchema.safeParse(rawBody);
@@ -2089,7 +2179,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // Cert remains TERMINAL per retention-policy.md decision 5 — a
   // sustained dispute is a reputation hit on the issuer, not a cert
   // invalidation.
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/horizon/dispute", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessOmissionDisputeSchema.safeParse(rawBody);
@@ -2210,7 +2300,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
    * MUST switch on `error_code`, not `message`. The rest of §3–15
    * still uses plain `{message}`; aligning is a follow-up arc.
    */
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/disputes/:disputeId/vote-request", async (c) => {
     const disputeIdParam = c.req.param("disputeId");
 
@@ -2353,57 +2443,101 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json(signedVote);
   });
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/peer/remove", async (c) => {
-    const body = await c.req.json<{ relay_id?: string; signature?: string }>();
-    const { relay_id, signature: sig } = body;
-    if (!relay_id || !sig)
-      throw new HTTPException(400, { message: "relay_id and signature are required" });
-
-    checkPeerLimit(relay_id);
+    const body = await c.req.json<{ message?: unknown; relay_id?: string; signature?: string }>();
+    // v1 (a signature over the bare relay_id — one signature removed the
+    // signer at every relay, forever) is refused by name; it changes nothing.
+    if (body.message === undefined) {
+      throw new HTTPException(400, {
+        message:
+          "federation peer-remove v1 (signature over the bare relay_id) is refused (relay-federation@1.5 §3.3): send { message } where message is a v2 `peer-remove` signed message (§3.5) naming this relay as recipient",
+      });
+    }
+    const parsed = parseFederationMessage(body.message);
+    if (parsed === null)
+      throw new HTTPException(400, { message: "malformed v2 peer-remove message (§3.5)" });
+    const relay_id = parsed.envelope.sender;
 
     const peer = db.prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ?").get(relay_id) as
       { peer_relay_id: string; public_key: string } | undefined;
     if (!peer) throw new HTTPException(404, { message: "Peer not found" });
 
-    const valid = await verify(
-      hexToBytes(sig),
-      new TextEncoder().encode(relay_id),
-      hexToBytes(peer.public_key),
-    );
-    if (!valid) throw new HTTPException(403, { message: "Removal signature verification failed" });
+    const verdict = await verifyFederationMessage(body.message, {
+      kind: "peer-remove",
+      self: relayIdentity.relayMotebitId,
+      senderPublicKeyHex: peer.public_key,
+      body: PEER_REMOVE_BODY,
+    });
+    if (!verdict.ok) {
+      throw new HTTPException(federationRefusalStatus(verdict.reason), {
+        message: `Removal refused: ${verdict.reason}`,
+      });
+    }
+    const env = verdict.envelope;
+    if (federationNonceSeen(db, relay_id, env.nonce))
+      throw new HTTPException(409, { message: "Removal refused: replayed nonce" });
+    checkPeerLimit(relay_id);
 
-    db.prepare("UPDATE relay_peers SET state = 'removed' WHERE peer_relay_id = ?").run(relay_id);
+    db.transaction(() => {
+      if (!consumeFederationNonce(db, relay_id, env.nonce, env.ts))
+        throw new HTTPException(409, { message: "Removal refused: replayed nonce" });
+      db.prepare("UPDATE relay_peers SET state = 'removed' WHERE peer_relay_id = ?").run(relay_id);
+    });
     return c.json({ status: "removed" });
   });
 
-  // Admin signing oracle for federation peer removal — consumed by
+  // Admin signing for federation peer removal — consumed by
   // `motebit federation peer-remove <peer-url>` (apps/cli).
   //
-  // Returns this relay's signature over its own relay_motebit_id raw UTF-8
-  // bytes, the artifact a peer's POST /federation/v1/peer/remove requires
-  // (sibling to lines above — same encoding, same key).
-  //
-  // Behind master-token admin auth (services/relay/CLAUDE.md rule 5), NOT a
-  // public self-mode oracle. /peer/propose self-mode is safe because the
-  // existing handler already signs (relay_id, nonce) for any unauth'd caller
-  // — self-mode adds no new oracle. /peer/remove takes a signature over the
-  // BARE relay_id (no nonce, no suite-binding), so a public self-mode would
-  // create a replayable artifact: any HTTP caller could fetch this and POST
-  // it to every known peer, federation-DoS'ing the relay. Auth required.
+  // Mints a v2 `peer-remove` message (relay-federation@1.5 §3.3) for ONE named
+  // recipient: it removes this relay at that peer only, once, within five
+  // minutes. Behind master-token admin auth (services/relay/CLAUDE.md rule 5)
+  // because only the operator decides to leave a peer.
   /** @internal */
   app.get("/api/v1/admin/federation/peer-removal-signature", async (c) => {
+    const recipient = c.req.query("recipient");
+    if (!recipient || recipient === relayIdentity.relayMotebitId) {
+      throw new HTTPException(400, {
+        message:
+          "recipient is required: the relay_motebit_id of the ONE peer this removal is for (relay-federation@1.5 §3.3)",
+      });
+    }
+    const message = await signFederationMessage({
+      kind: "peer-remove",
+      sender: relayIdentity.relayMotebitId,
+      recipient,
+      body: PEER_REMOVE_BODY,
+      privateKey: relayIdentity.privateKey,
+    });
+    return c.json({ relay_id: relayIdentity.relayMotebitId, message });
+  });
+
+  // Admin signing for the peering handshake's step 3 — consumed by
+  // `motebit federation peer` (apps/cli). The confirm signature
+  // `{own_id}:{nonce}:{suite}` (§3.1) used to be served to ANY caller by a
+  // self-propose; it is now minted only on the operator's authority. The
+  // construction itself is unchanged until propose/confirm move to §3.5
+  // kinds (docs/design/identity-authority-writers.md Inc 6).
+  /** @internal */
+  app.post("/api/v1/admin/federation/peer-confirm-signature", async (c) => {
+    const body: { nonce?: unknown } = await c.req.json<{ nonce?: unknown }>().catch(() => ({}));
+    if (typeof body.nonce !== "string" || !/^[0-9a-f]{64}$/i.test(body.nonce)) {
+      throw new HTTPException(400, {
+        message: "nonce is required: the 32-byte hex nonce the peer's propose response returned",
+      });
+    }
     const sig = await sign(
-      new TextEncoder().encode(relayIdentity.relayMotebitId),
+      new TextEncoder().encode(`${relayIdentity.relayMotebitId}:${body.nonce}:${FEDERATION_SUITE}`),
       relayIdentity.privateKey,
     );
     return c.json({
       relay_id: relayIdentity.relayMotebitId,
-      signature: bytesToHex(sig),
+      challenge_response: bytesToHex(sig),
     });
   });
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.get("/federation/v1/peers", (c) => {
     const rows = db
       .prepare(
@@ -2429,7 +2563,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 3: Federated Discovery ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/discover", async (c) => {
     const body = await c.req.json<{
       query: { capability?: string; motebit_id?: string; limit?: number };
@@ -2579,7 +2713,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 4: Task Forwarding ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/task/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2671,7 +2805,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     );
   });
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/task/result", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2719,7 +2853,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/settlement/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2768,7 +2902,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.get("/federation/v1/settlements", (c) => {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
     const rows = db
@@ -2779,7 +2913,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement Proof (§7.6.6) ──
 
-  /** @spec motebit/relay-federation@1.4 */
+  /** @spec motebit/relay-federation@1.5 */
   app.get("/federation/v1/settlement/proof", async (c) => {
     const settlementId = c.req.query("settlement_id");
     if (!settlementId) {

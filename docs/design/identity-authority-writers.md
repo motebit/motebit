@@ -1,6 +1,6 @@
 # Identity-authority writers — one writer per store, one proof for authority
 
-Status: DESIGN (2026-10-08); owner decisions recorded 2026-10-08. Inc 0 (census freshness gate) and Inc 1 (read-only Q1–Q6 measurement, federation v1 refusals) are in progress on this branch.
+Status: DESIGN (2026-10-08); owner decisions recorded 2026-10-08. Inc 0 (census freshness gate) and Inc 1 (read-only Q1–Q6 measurement §6; federation v1 refusals and v2 heartbeat/remove §5.4) are built on this branch. Inc 2+ is not started.
 Census: [`identity-authority-inventory.generated.md`](identity-authority-inventory.generated.md), produced by [`scripts/inventory-identity-authority.ts`](../../scripts/inventory-identity-authority.ts) (re-run it; `pnpm check` runs `check-identity-authority-inventory`, which fails when the committed census is stale).
 
 ## Owner decision points
@@ -301,6 +301,17 @@ Kinds and how each gap closes:
 Relay-issued artifacts that a third party verifies (anchors, receipts, tokens) adopt the `spec`-tag pattern the transparency family already uses (closes G6). Agent and federation anchors get distinct `spec` values. Horizon witness responses sign `{cert_hash, witness_id}` under their own kind (closes G7).
 
 Migration follows D4 as ruled: **no dual-stack window**. From the first deploy of Inc 1, v1 `heartbeat`, v1 `peer-remove` and self-propose are refused with a fail-closed error naming the v2 message, and the relay signs only `heartbeat` v2 and `peer-remove` v2. Inc 1 ships those two kinds plus the self-propose refusal; the rest of the registry (propose/confirm, discover, forward, result, settlement, vote, revocation) lands in Inc 6 on the same envelope and helper. Both relays of a federated pair must be deployed together, because an Inc-1 relay refuses an older relay's v1 heartbeats and an older relay cannot verify v2.
+
+### 5.4 Shipped in Inc 1b (relay-federation@1.5)
+
+- **The helper.** `signFederationMessage` / `verifyFederationMessage` in `@motebit/crypto` (`packages/crypto/src/federation-message.ts`) are the one producer and the one verifier. Envelope `{ kind, sender, recipient, ts, nonce, body_sha256, suite: "motebit-jcs-ed25519-hex-v1" }`, exactly those seven fields; signed bytes `"motebit-fed/v2\0" ‖ kind ‖ "\0" ‖ JCS(envelope)`; `body_sha256` = hex SHA-256 of JCS(body); ±5 min. The verifier is pure and returns a named refusal; the relay records `(sender, nonce)` in `relay_federation_nonces` inside the same transaction as the write (`consumeFederationNonce`, `federation.ts`), and refuses a seen nonce with 409.
+- **`heartbeat`** (request `{ message, agent_count, revocations? }`, body `{ agent_count, revocations }`) and **`heartbeat-ack`** (response `{ message, agent_count }`, body `{ request_nonce, agent_count }`). The sender counts a heartbeat delivered only when the ack verifies under the peer's stored key and answers its own nonce. Closes G2.
+- **`peer-remove`** (request `{ message }`, body `{ action: "remove" }`), minted by the master-token `GET /api/v1/admin/federation/peer-removal-signature?recipient=<id>` for one recipient. Closes G3.
+- **Self-propose refused** (400) before anything is signed or stored; a relay's step-3 confirm is minted only by its operator on the master-token `POST /api/v1/admin/federation/peer-confirm-signature`. Closes G1 as an oracle.
+- **v1 refused by name.** A heartbeat or removal without `message` is a 400 naming the v2 message, before any lookup, counter or rate-limit slot. The per-peer limit on these two routes counts only requests whose v2 signature verified (replays are 409 before the limit).
+- **Proof.** `services/relay/src/__tests__/federation-v2-messages.test.ts` (three in-process relays: v1 heartbeat/removal/self-propose refused at every relay with the peer table byte-identical, 31 replays spending no per-peer slot; a heartbeat for B refused at C; v2 replay refused; altered body, stale ts and stranger keys refused; legit peering, heartbeat with verified ack, and removal end to end) and `packages/crypto/src/__tests__/federation-message.test.ts` (each separation axis flipped alone).
+- **Still open, by design (Inc 6):** the propose/confirm bytes are still v1 (`{relay_id}:{nonce}:{suite}`, no recipient or endpoint binding — only the public oracle is gone); discover, task forward/result, settlement forward, vote-request and revocation events keep their 1.4 constructions (G4–G8); `PeerProof` and `peer-authority.ts` are not built.
+- **Deploy.** No dual-stack window (D4): a 1.5 relay refuses a 1.4 relay's heartbeats, and a 1.4 relay cannot verify 1.5's, so both staging relays of a pair must be deployed together; a peer left on 1.4 is suspended after three missed heartbeats and removed after five by the existing path (Q6 counts them beforehand). Operator tooling: `motebit federation peer` now needs each relay's own master token for its half (`MOTEBIT_PEER_API_TOKEN`, `MOTEBIT_MESH_TOKENS`).
 
 ## 6. Existing prod data (operator queries only — this lane reads no prod)
 
