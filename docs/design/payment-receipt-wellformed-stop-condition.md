@@ -216,7 +216,7 @@ What fails, in three findings:
    of the other checks. `verifyReceiptVerdict` is origin/main's function verbatim, and the
    `service_result_hash` shape check in `verifyReceipt` runs only under `strictHashBinding`.
    The lenient, runtime and relay paths have no well-formedness branch.
-3. **Static gate.** `check-signed-text-wellformed` (in `pnpm check`, invariant #175) scans
+3. **Static gate.** `check-signed-text-wellformed` (in `pnpm check`, invariant #176) scans
    every call of `ed25519Sign` / `signBySuite` / an imported `sign` alias in `packages/`,
    `services/` and `apps/`; the signing function must call the guard or hand it to a bytes
    helper. Documented non-JCS signers (JWT payload, identity-file YAML) pass. Out-of-fence

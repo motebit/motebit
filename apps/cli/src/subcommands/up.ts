@@ -21,8 +21,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { EventStore } from "@motebit/event-log";
-import { createGoalsEmitter } from "@motebit/runtime";
-import type { Goal } from "@motebit/persistence";
+import { createGoalsEmitter, sessionlessGoalSensitivity } from "@motebit/runtime";
+import type { Goal, StampedGoal } from "@motebit/persistence";
 import { openMotebitDatabase } from "@motebit/persistence";
 
 import type { CliConfig } from "../args.js";
@@ -41,8 +41,8 @@ import {
 import { requireMotebitId } from "./_helpers.js";
 
 export interface Plan {
-  add: Goal[];
-  update: { before: Goal; after: Goal }[];
+  add: StampedGoal[];
+  update: { before: Goal; after: StampedGoal }[];
   prune: Goal[];
   /** Personality / governance / mcp_servers changes to write to config.json. */
   configChanges: Partial<FullConfig>;
@@ -208,19 +208,23 @@ export interface DiffContext {
 
 export function diffPlan(ctx: DiffContext): Plan {
   const now = Date.now();
-  const desiredGoals: Goal[] = (ctx.yaml.routines ?? []).map((r) =>
-    routineToGoal(r, {
+  // A routine's text is the owner's (or operator's) configuration file,
+  // written outside any session — the yaml carries no tier of its own — so
+  // every row `up` writes is stamped `sessionlessGoalSensitivity()`.
+  const desiredGoals: StampedGoal[] = (ctx.yaml.routines ?? []).map((r) => ({
+    ...routineToGoal(r, {
       motebitId: ctx.motebitId,
       sourceFilePath: ctx.yamlPath,
       sourceFileSha: ctx.sourceSha,
       now,
     }),
-  );
+    sensitivity: sessionlessGoalSensitivity(),
+  }));
 
   const desiredByGoalId = new Map(desiredGoals.map((g) => [g.goal_id, g]));
   const existingRoutineGoals = ctx.existingGoals.filter((g) => g.routine_id != null);
 
-  const add: Goal[] = [];
+  const add: StampedGoal[] = [];
   const update: Plan["update"] = [];
   const prune: Goal[] = [];
 
@@ -238,7 +242,7 @@ export function diffPlan(ctx: DiffContext): Plan {
     }
     // Content changed — UPDATE in place, preserving created_at and last_run_at
     // so scheduler history isn't reset by a prompt tweak.
-    const preserved: Goal = {
+    const preserved: StampedGoal = {
       ...desired,
       created_at: existing.created_at,
       last_run_at: existing.last_run_at,

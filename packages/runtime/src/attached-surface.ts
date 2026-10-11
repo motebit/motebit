@@ -22,7 +22,13 @@
 
 import { embedText } from "@motebit/memory-graph";
 import { MemoryClass } from "@motebit/policy";
-import { AgentTrustLevel, EventType, SensitivityLevel, isSensitivityLevel } from "@motebit/sdk";
+import {
+  AgentTrustLevel,
+  EventType,
+  SensitivityLevel,
+  isSensitivityLevel,
+  maxSensitivity,
+} from "@motebit/sdk";
 import type { TurnContext } from "@motebit/sdk";
 import { COMMAND_DEFINITIONS, executeCommand } from "./commands/index.js";
 import type { MotebitRuntime } from "./motebit-runtime.js";
@@ -375,12 +381,14 @@ export async function resolveAttachedAct(
     case "memory_store": {
       const content = reqString(kind, params, "content");
       const sensitivityRaw = params["sensitivity"];
-      let sensitivity: SensitivityLevel = SensitivityLevel.None;
+      // Stamped at the session's write tier, or the frontend's declared tier
+      // when higher — never below the session's, never a default `none`.
+      let sensitivity: SensitivityLevel = runtime.interiorWriteSensitivity();
       if (sensitivityRaw !== undefined) {
         if (typeof sensitivityRaw !== "string" || !isSensitivityLevel(sensitivityRaw)) {
           throw bad(kind, 'param "sensitivity" is not a sensitivity level');
         }
-        sensitivity = sensitivityRaw;
+        sensitivity = maxSensitivity(sensitivity, sensitivityRaw);
       }
       // Same governance choke point as the local serve path; provenance
       // is HARDCODED peer_agent after governance — an external MCP
@@ -393,7 +401,7 @@ export async function resolveAttachedAct(
         throw bad(kind, `memory rejected by governance: ${decision?.reason ?? "unknown"}`);
       }
       const governed = decision.candidate;
-      const embedding = await embedText(governed.content);
+      const embedding = await embedText(governed.content, governed.sensitivity);
       const node = await runtime.memory.formMemory(
         { ...governed, source: "peer_agent" },
         embedding,

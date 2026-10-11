@@ -6,7 +6,9 @@
  */
 
 import { EventType } from "@motebit/sdk";
-import type { SensitivityCleared, SensitivityGateEntry } from "@motebit/sdk";
+import type { SensitivityCleared, SensitivityGateEntry, SensitivityLevel } from "@motebit/sdk";
+import type { Plan } from "@motebit/sdk";
+import { derivedSensitivity, enforcedDerivedSensitivity } from "@motebit/ai-core";
 import type {
   GoalExecutionManifest,
   ExecutionTimelineEntry,
@@ -21,6 +23,11 @@ import type { PlanEngine, PlanChunk, PlanStoreAdapter } from "@motebit/planner";
 import type { AuditLogSink } from "@motebit/policy";
 import type { DeviceCapability } from "@motebit/sdk";
 import { replayGoal, hashString, computeTimelineHash } from "./execution-ledger.js";
+
+/** The tier a plan is sent at: its stamp, or `secret` when unstamped (fail-closed). */
+function planSensitivity(plan: Plan): SensitivityLevel {
+  return enforcedDerivedSensitivity(plan.sensitivity);
+}
 
 export interface PlanExecutionDeps {
   motebitId: string;
@@ -42,6 +49,14 @@ export interface PlanExecutionDeps {
     entry: SensitivityGateEntry,
     toolName?: string,
   ): SensitivityCleared<MotebitLoopDependencies>;
+  /** The runtime's effective tier now — stamps a plan's content. */
+  getEffectiveSensitivity(): SensitivityLevel;
+  /**
+   * Raise the effective tier to a plan's stamp until the returned restore
+   * is called: executing or resuming a plan sends its steps' prompts and
+   * results, so it is a send at the plan's tier (`interior-egress.ts`).
+   */
+  raiseContentFloor(tier: SensitivityLevel): () => void;
   /** Resolve current local capabilities. */
   getLocalCapabilities(): DeviceCapability[];
   /** Resolve task router for model selection (may be null). */
@@ -104,6 +119,28 @@ export class PlanExecutionManager {
     runId?: string,
     privateKey?: Uint8Array,
   ): AsyncGenerator<PlanChunk> {
+    // A goal whose delegated step has an unknown paid outcome is RESUMED,
+    // never re-planned: resuming settles the held step from the relay's
+    // signed receipt or holds it again, where a new plan would delegate —
+    // and pay for — the same work a second time (#890).
+    const held = this.deps.planEngine.findUnresolvedDelegation(goalId, this.deps.motebitId);
+    // A held plan's steps carry the content of the turns that ran them:
+    // resuming it is a send at its stamp.
+    const restore = held != null ? this.deps.raiseContentFloor(planSensitivity(held.plan)) : null;
+    try {
+      yield* this.executePlanInner(goalId, goalPrompt, held?.plan ?? null, runId, privateKey);
+    } finally {
+      restore?.();
+    }
+  }
+
+  private async *executePlanInner(
+    goalId: string,
+    goalPrompt: string,
+    heldPlan: Plan | null,
+    runId?: string,
+    privateKey?: Uint8Array,
+  ): AsyncGenerator<PlanChunk> {
     // Plan execution IS a bytes-leave moment — each step ultimately
     // calls `runTurnStreaming`. Dedicated entry attributes blocked
     // egress to the plan-step site rather than borrowing the
@@ -124,49 +161,40 @@ export class PlanExecutionManager {
     const planningConfig = taskRouter?.resolve("planning") ?? undefined;
     const reflectionConfig = taskRouter?.resolve("plan_reflection") ?? undefined;
 
-    // A goal whose delegated step has an unknown paid outcome is RESUMED,
-    // never re-planned: resuming settles the held step from the relay's
-    // signed receipt or holds it again, where a new plan would delegate —
-    // and pay for — the same work a second time (#890).
-    const held = this.deps.planEngine.findUnresolvedDelegation(goalId, this.deps.motebitId);
+    const held = heldPlan != null;
     const plan =
-      held != null
-        ? held.plan
-        : (
-            await this.deps.planEngine.createPlan(
-              goalId,
-              this.deps.motebitId,
-              {
-                goalPrompt,
-                availableTools,
-                localCapabilities: localCapabilities.length > 0 ? localCapabilities : undefined,
-              },
-              loopDeps,
-              planningConfig,
-            )
-          ).plan;
+      heldPlan ??
+      (
+        await this.deps.planEngine.createPlan(
+          goalId,
+          this.deps.motebitId,
+          {
+            goalPrompt,
+            availableTools,
+            localCapabilities: localCapabilities.length > 0 ? localCapabilities : undefined,
+          },
+          loopDeps,
+          planningConfig,
+        )
+      ).plan;
+    // The decomposition is derived from the goal at this tier.
+    this.stampPlan(plan.plan_id);
 
     const executionStartedAt = Date.now();
     let finalStatus: GoalExecutionManifest["status"] = "active";
 
-    const stream =
-      held != null
-        ? this.deps.planEngine.resumePlan(
-            plan.plan_id,
-            loopDeps,
-            undefined,
-            runId,
-            reflectionConfig,
-          )
-        : this.deps.planEngine.executePlan(
-            plan.plan_id,
-            loopDeps,
-            undefined,
-            runId,
-            reflectionConfig,
-          );
+    const stream = held
+      ? this.deps.planEngine.resumePlan(plan.plan_id, loopDeps, undefined, runId, reflectionConfig)
+      : this.deps.planEngine.executePlan(
+          plan.plan_id,
+          loopDeps,
+          undefined,
+          runId,
+          reflectionConfig,
+        );
     for await (const chunk of stream) {
       this._logPlanChunkEvent(chunk, goalId);
+      this.stampPlanOnStep(chunk, plan.plan_id);
       if (chunk.type === "plan_completed") finalStatus = "completed";
       else if (chunk.type === "plan_failed") finalStatus = "failed";
       yield chunk;
@@ -340,18 +368,57 @@ export class PlanExecutionManager {
    * Streams PlanChunk events starting from where the plan left off.
    */
   async *resumePlan(planId: string, runId?: string): AsyncGenerator<PlanChunk> {
-    // Resume IS a bytes-leave moment; gate again — sensitivity may
-    // have changed during the pause. Same audit entry as initial
-    // execution: both are per-step gate firings for the same
-    // plan-execution category.
-    const loopDeps = this.deps.assertSensitivityPermitsAiCall("executePlanStep");
     const plan = this.deps.planStore.getPlan(planId);
-    const goalId = plan?.goal_id;
-    for await (const chunk of this.deps.planEngine.resumePlan(planId, loopDeps, undefined, runId)) {
-      this._logPlanChunkEvent(chunk, goalId);
-      yield chunk;
+    // Resuming sends the plan's steps — a send at its stamp.
+    const restore = plan != null ? this.deps.raiseContentFloor(planSensitivity(plan)) : null;
+    try {
+      // Resume IS a bytes-leave moment; gate again — sensitivity may
+      // have changed during the pause. Same audit entry as initial
+      // execution: both are per-step gate firings for the same
+      // plan-execution category.
+      const loopDeps = this.deps.assertSensitivityPermitsAiCall("executePlanStep");
+      const goalId = plan?.goal_id;
+      for await (const chunk of this.deps.planEngine.resumePlan(
+        planId,
+        loopDeps,
+        undefined,
+        runId,
+      )) {
+        this._logPlanChunkEvent(chunk, goalId);
+        this.stampPlanOnStep(chunk, planId);
+        yield chunk;
+      }
+      this.flushPaymentNotices();
+    } finally {
+      restore?.();
     }
-    this.flushPaymentNotices();
+  }
+
+  /**
+   * The max stamp over this motebit's active plans — what recovering their
+   * delegated steps sends at. A store that cannot list active plans gives
+   * `secret` (fail-closed).
+   */
+  activePlansSensitivity(): SensitivityLevel {
+    const { planStore } = this.deps;
+    if (planStore.listActivePlans == null) return enforcedDerivedSensitivity(null);
+    return derivedSensitivity(
+      undefined,
+      ...planStore.listActivePlans(this.deps.motebitId).map(planSensitivity),
+    );
+  }
+
+  /** Raise the plan's stamp to the tier its content is being produced at now. */
+  private stampPlan(planId: string): void {
+    const plan = this.deps.planStore.getPlan(planId);
+    if (plan == null) return;
+    const stamp = derivedSensitivity(this.deps.getEffectiveSensitivity(), plan.sensitivity);
+    if (plan.sensitivity !== stamp) this.deps.planStore.updatePlan(planId, { sensitivity: stamp });
+  }
+
+  /** Each step that starts or finishes produces content at the current tier. */
+  private stampPlanOnStep(chunk: PlanChunk, planId: string): void {
+    if (chunk.type === "step_started" || chunk.type === "step_completed") this.stampPlan(planId);
   }
 
   /**

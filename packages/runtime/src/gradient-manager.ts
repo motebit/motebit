@@ -7,11 +7,12 @@
  */
 
 import type { PrecisionWeights, MemoryNode } from "@motebit/sdk";
-import { EventType } from "@motebit/sdk";
+import { EventType, SensitivityLevel, isSensitivityLevel } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, CuriosityTarget } from "@motebit/memory-graph";
 import type { StateVectorEngine } from "@motebit/state-vector";
 import type { ReflectionResult } from "@motebit/ai-core";
+import { interiorEgressPermits } from "@motebit/ai-core";
 import type { AuditLogSink } from "@motebit/policy";
 import {
   computeGradient,
@@ -57,6 +58,12 @@ export class GradientManager {
   private _precision: PrecisionWeights;
   private _curiosityTargets: CuriosityTarget[] = [];
   private _lastReflection: ReflectionResult | null = null;
+  /**
+   * The tier the last reflection was derived at (`derivedSensitivity`) — it
+   * enters a later prompt only where `interiorEgressPermits` allows it. A
+   * reflection restored without a stamp is held at Secret (fail-closed).
+   */
+  private _lastReflectionSensitivity: SensitivityLevel = SensitivityLevel.Secret;
 
   constructor(private readonly deps: GradientManagerDeps) {
     this._precision = NEUTRAL_PRECISION;
@@ -121,9 +128,13 @@ export class GradientManager {
     return this._lastReflection;
   }
 
-  /** Set the last reflection result (called by reflection lifecycle). */
-  setLastReflection(result: ReflectionResult): void {
+  /**
+   * Set the last reflection result (called by reflection lifecycle) with the
+   * tier it was derived at.
+   */
+  setLastReflection(result: ReflectionResult, sensitivity: SensitivityLevel): void {
     this._lastReflection = result;
+    this._lastReflectionSensitivity = sensitivity;
   }
 
   /** Get curiosity targets computed during last housekeeping cycle. */
@@ -277,11 +288,21 @@ export class GradientManager {
   // --- Self-Awareness Context ---
 
   /** Convert curiosity targets to lightweight hints for the context pack. */
-  buildCuriosityHints(): Array<{ content: string; daysSinceDiscussed: number }> | undefined {
-    if (this._curiosityTargets.length === 0) return undefined;
+  /**
+   * Curiosity hints carry memory content into the turn's request, so only
+   * targets the interior-egress rule permits at `sendTier` (the tier the
+   * turn sends at) are hinted.
+   */
+  buildCuriosityHints(
+    sendTier: SensitivityLevel | undefined,
+  ): Array<{ content: string; daysSinceDiscussed: number }> | undefined {
+    const targets = this._curiosityTargets.filter((t) =>
+      interiorEgressPermits(sendTier, t.node.sensitivity),
+    );
+    if (targets.length === 0) return undefined;
     const DAY = 86_400_000;
     const now = Date.now();
-    return this._curiosityTargets.slice(0, 2).map((t) => ({
+    return targets.slice(0, 2).map((t) => ({
       content: t.node.content,
       daysSinceDiscussed: Math.round((now - t.node.last_accessed) / DAY),
     }));
@@ -292,9 +313,11 @@ export class GradientManager {
    *
    * The precision context tells the creature how to behave (cautious/confident).
    * The self-model tells the creature what it knows about itself — trajectory,
-   * strengths, weaknesses, memory stats.
+   * strengths, weaknesses, memory stats. The last reflection is derived
+   * from the owner's interior, so it is included only at a `sendTier` its
+   * stamp is permitted at.
    */
-  buildSelfAwareness(): string {
+  buildSelfAwareness(sendTier: SensitivityLevel): string {
     const parts: string[] = [];
 
     // Active inference posture (existing behavior tier)
@@ -329,7 +352,7 @@ export class GradientManager {
     }
 
     // Last reflection — behavioral learning from previous session or conversation
-    if (this._lastReflection) {
+    if (this._lastReflection && interiorEgressPermits(sendTier, this._lastReflectionSensitivity)) {
       const rLines: string[] = [];
       rLines.push("[Last Reflection — INTERNAL REFERENCE, never discuss mechanics with the user]");
 
@@ -387,6 +410,11 @@ export class GradientManager {
           patterns: patterns ?? [],
           selfAssessment: assessment ?? "",
         };
+        // The stamp the reflection was recorded with; unstamped ⇒ Secret.
+        const stamped = payload.sensitivity;
+        this._lastReflectionSensitivity = isSensitivityLevel(stamped)
+          ? stamped
+          : SensitivityLevel.Secret;
       }
     } catch {
       // Restoration is best-effort — don't crash startup

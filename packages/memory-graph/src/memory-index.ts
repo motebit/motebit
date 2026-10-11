@@ -29,8 +29,12 @@
  * renders.
  */
 
-import type { MemoryNode, MemoryEdge } from "@motebit/sdk";
-import { MEMORY_SOURCE_MARKERS, MEMORY_SOURCE_MARKER_UNKNOWN } from "@motebit/sdk";
+import type { MemoryNode, MemoryEdge, SensitivityLevel } from "@motebit/sdk";
+import {
+  CONTEXT_SAFE_SENSITIVITY,
+  MEMORY_SOURCE_MARKERS,
+  MEMORY_SOURCE_MARKER_UNKNOWN,
+} from "@motebit/sdk";
 import { computeDecayedConfidence } from "./index.js";
 import { isValidAt } from "./retrieval.js";
 
@@ -64,6 +68,13 @@ export interface MemoryIndexOptions {
   readonly nowMs?: number;
   /** Maximum characters per line summary. Defaults to 120. */
   readonly maxSummaryChars?: number;
+  /**
+   * The tiers the index may carry — the index is rendered into a provider
+   * request, so the caller passes the tiers permitted at the tier that
+   * request is sent at. Omitted → `CONTEXT_SAFE_SENSITIVITY` (the tiers that
+   * may reach an external provider): fail-closed.
+   */
+  readonly sensitivityFilter?: readonly SensitivityLevel[];
 }
 
 export interface MemoryIndexEntry {
@@ -78,6 +89,7 @@ const DEFAULT_MAX_SUMMARY_CHARS = 120;
 
 function resolveOptions(options?: MemoryIndexOptions): Required<MemoryIndexOptions> {
   return {
+    sensitivityFilter: options?.sensitivityFilter ?? CONTEXT_SAFE_SENSITIVITY,
     maxBytes: options?.maxBytes ?? DEFAULT_INDEX_BYTE_BUDGET,
     nowMs: options?.nowMs ?? Date.now(),
     maxSummaryChars: options?.maxSummaryChars ?? DEFAULT_MAX_SUMMARY_CHARS,
@@ -129,7 +141,10 @@ export function rankIndexEntries(
   // system prompt. Filter by the same `isValidAt` predicate every retrieval lens
   // uses, never by the tombstone flag alone (which misses live-but-superseded
   // nodes and once masked this leak only because the tool path over-tombstoned).
-  const liveNodes = nodes.filter((n) => !n.tombstoned && isValidAt(n, o.nowMs));
+  // And only the tiers the request it is rendered into may carry.
+  const liveNodes = nodes.filter(
+    (n) => !n.tombstoned && isValidAt(n, o.nowMs) && o.sensitivityFilter.includes(n.sensitivity),
+  );
   const edgeCounts = new Map<string, number>();
   for (const edge of edges) {
     edgeCounts.set(edge.source_id, (edgeCounts.get(edge.source_id) ?? 0) + 1);

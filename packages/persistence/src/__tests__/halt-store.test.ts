@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { createMotebitDatabase, type MotebitDatabase } from "../index.js";
 import type { HaltRequest } from "@motebit/sdk";
+import { SensitivityLevel } from "@motebit/sdk";
 
 function halt(over: Partial<HaltRequest> & { halt_id: string }): HaltRequest {
   return {
@@ -31,6 +32,7 @@ describe("SqliteHaltStore", () => {
   /** A goal-scoped halt is validated against real goals, so make them real. */
   function addGoal(goalId: string, motebitId = "mote-1"): void {
     db.goalStore.add({
+      sensitivity: SensitivityLevel.Personal,
       goal_id: goalId,
       motebit_id: motebitId,
       prompt: "p",

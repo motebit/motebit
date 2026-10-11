@@ -22,6 +22,7 @@ vi.mock("@motebit/memory-graph", async (orig) => {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeRuntime(overrides: Record<string, unknown> = {}): any {
   return {
+    interiorWriteSensitivity: () => "secret",
     memory: {
       exportAll: vi.fn(async () => ({ nodes: [], edges: [] })),
       formMemory: vi.fn(async (input: unknown, _embedding: unknown) => ({
@@ -132,6 +133,8 @@ describe("memory-commands.formMemoryDirect", () => {
     const input = runtime.memory.formMemory.mock.calls[0][0];
     expect(input.content).toBe("hello");
     expect(input.confidence).toBe(0.8);
+    // Stamped at the session's write tier — never a default `none`.
+    expect(input.sensitivity).toBe("secret");
   });
 });
 

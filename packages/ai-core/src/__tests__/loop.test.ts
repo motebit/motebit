@@ -82,6 +82,7 @@ function makeDeps(): SensitivityCleared<MotebitLoopDependencies> {
     stateEngine,
     behaviorEngine,
     provider: cloudProvider,
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 }
 
@@ -514,6 +515,7 @@ describe("runTurn", () => {
     const deps = {
       ...makeDepsWithProvider(provider, toolRegistry),
       policyGate: denyingGate,
+      getEffectiveSensitivity: () => SensitivityLevel.None,
     } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 
     let resultChunk:
@@ -628,6 +630,7 @@ function makeDepsWithProvider(
     behaviorEngine,
     provider,
     tools,
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   } as SensitivityCleared<MotebitLoopDependencies>;
 }
 
@@ -1637,6 +1640,7 @@ describe("runTurnStreaming — pixel gate composition", () => {
       ...makeDepsWithProvider(provider, makeScreenshotRegistry()),
       getProviderMode: () => "on-device",
       getPixelConsent: () => "denied", // even with denied consent
+      getEffectiveSensitivity: () => SensitivityLevel.None,
     } as SensitivityCleared<MotebitLoopDependencies>;
 
     for await (const _ of runTurnStreaming(deps, "shot")) void _;
@@ -1698,8 +1702,8 @@ describe("runTurnStreaming — pixel gate composition", () => {
   it("default (no getters wired): bytes stripped — fail-closed for surfaces that haven't declared", async () => {
     const captured: ContextPack[] = [];
     const provider = makeShotProvider(captured);
-    // No getProviderMode, no getPixelConsent, no getEffectiveSensitivity.
-    // The defaults (null / "denied" / none) compose to: external +
+    // No getProviderMode, no getPixelConsent; the fixture's declared tier
+    // is none. The defaults (null / "denied") compose to: external +
     // sensitivity none + consent denied → bytes stripped, reason
     // `consent_required`.
     const deps = makeDepsWithProvider(provider, makeScreenshotRegistry());
@@ -1891,7 +1895,7 @@ describe("runTurnStreaming — memory candidate sensitivity floor", () => {
         },
       ]),
     );
-    // No getEffectiveSensitivity — older deps shape; floor is a no-op.
+    // The fixture's declared tier is none — the floor is a no-op.
 
     const formed = await collectMemoriesFormed(deps, "I like hiking.");
     expect(formed).toHaveLength(1);
@@ -2203,6 +2207,7 @@ describe("R4 money metering — the AND-composition (gate-allow ∧ meter-allow)
       ...makeDepsWithProvider(provider, payRegistry()),
       policyGate: grantClearedGate,
       ...extraDeps,
+      getEffectiveSensitivity: () => SensitivityLevel.None,
     } as unknown as SensitivityCleared<MotebitLoopDependencies>;
     let result:
       | { toolCallsDenied?: number; toolCallsSucceeded: number; toolCallsBlocked: number }
@@ -2327,6 +2332,7 @@ describe("late-bound money metering (moneyBinding: 'late')", () => {
       ...makeDepsWithProvider(provider, lateRegistry()),
       policyGate: gate,
       ...extraDeps,
+      getEffectiveSensitivity: () => SensitivityLevel.None,
     } as unknown as SensitivityCleared<MotebitLoopDependencies>;
     let result:
       | { toolCallsDenied?: number; toolCallsSucceeded: number; toolCallsBlocked: number }
@@ -2486,6 +2492,7 @@ describe("AuthorityDelta asymmetry — owner channel precise, model channel coar
       provider,
       tools: toolRegistry,
       policyGate: denyingGate,
+      getEffectiveSensitivity: () => SensitivityLevel.None,
     } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 
     let chunkDelta: unknown;

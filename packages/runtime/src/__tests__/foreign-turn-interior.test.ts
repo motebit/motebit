@@ -170,7 +170,9 @@ async function seededRuntime(respond?: (ctx: ContextPack) => AIResponse) {
     motebit_id: asMotebitId(OWNER),
     timestamp: Date.now(),
     event_type: EventType.StateUpdated,
-    payload: { note: `${MARK}-event` },
+    // Stamped as the loop stamps it — an unstamped content event is
+    // withheld from every request (interior-egress.ts).
+    payload: { note: `${MARK}-event`, sensitivity: "none" },
     tombstoned: false,
   });
 

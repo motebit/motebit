@@ -5,6 +5,7 @@
  * the shared package). Drives an injected in-memory adapter + fake fire.
  */
 import { describe, it, expect, vi } from "vitest";
+import { SensitivityLevel } from "@motebit/sdk";
 
 import { createGoalsEngine } from "../goal-engine.js";
 import type { GoalFireResult, GoalRunRecord } from "../goal-engine.js";
@@ -48,10 +49,30 @@ function makeAdapter(
   };
 }
 
+describe("createGoalsEngine — every new goal is stamped", () => {
+  it("stamps each goal at the tier the engine is given; the tier is required", () => {
+    const { adapter, stores } = makeAdapter(async () => ({ outcome: "fired" }));
+    let tier = SensitivityLevel.Personal;
+    const engine = createGoalsEngine(adapter, { goalSensitivity: () => tier, now: () => 0 });
+    engine.addGoal({ prompt: "a", interval_ms: 60_000, mode: "recurring" });
+    tier = SensitivityLevel.Secret;
+    engine.addGoal({ prompt: "b", interval_ms: 60_000, mode: "once" });
+    expect(stores.goals.map((g) => g.sensitivity)).toEqual([
+      SensitivityLevel.Personal,
+      SensitivityLevel.Secret,
+    ]);
+    const unstamped = { now: () => 0 };
+    // @ts-expect-error — `goalSensitivity` is required: no engine writes unstamped goals
+    const bare = createGoalsEngine(adapter, unstamped);
+    expect(() => bare.addGoal({ prompt: "c", interval_ms: 1, mode: "once" })).toThrow();
+  });
+});
+
 describe("createGoalsEngine — addGoal", () => {
   it("creates a recurring goal with next_run_at = created_at + interval", () => {
     const { adapter, stores } = makeAdapter(async () => ({ outcome: "fired" }));
     const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
       now: () => 1_000,
       generateId: () => "g1",
     });
@@ -69,6 +90,7 @@ describe("createGoalsEngine — addGoal", () => {
   it("creates a once goal without next_run_at (requires explicit runNow)", () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
     const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
       now: () => 5_000,
       generateId: () => "g2",
     });
@@ -81,7 +103,11 @@ describe("createGoalsEngine — addGoal", () => {
 
   it("accepts an arbitrary interval_ms for recurring", () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g3" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g3",
+    });
     const goal = engine.addGoal({
       prompt: "x",
       mode: "recurring",
@@ -94,7 +120,11 @@ describe("createGoalsEngine — addGoal", () => {
 describe("createGoalsEngine — setEnabled", () => {
   it("toggles status and enabled together", () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     const goal = engine.addGoal({
       prompt: "x",
       mode: "recurring",
@@ -121,7 +151,7 @@ describe("createGoalsEngine — setEnabled", () => {
       ],
     };
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }), initial);
-    const engine = createGoalsEngine(adapter);
+    const engine = createGoalsEngine(adapter, { goalSensitivity: () => SensitivityLevel.Personal });
     engine.setEnabled("done", false);
     expect(engine.getState().goals[0]?.status).toBe("completed");
   });
@@ -137,6 +167,7 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
     const ids = ["g1", "run1"];
     let i = 0;
     const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
       now: () => n,
       generateId: () => ids[i++] ?? "x",
     });
@@ -158,7 +189,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
       outcome: "fired",
       responsePreview: "done",
     }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", interval_ms: 0, mode: "once" });
     await engine.runNow("g1");
     expect(engine.getState().goals[0]?.status).toBe("completed");
@@ -166,7 +201,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
 
   it("once goal error: status reaches failed and last_error populated", async () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "error", error: "oops" }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", interval_ms: 0, mode: "once" });
     await engine.runNow("g1");
     const goal = engine.getState().goals[0];
@@ -190,7 +229,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
       saveRuns: (): void => {},
       fire: async (): Promise<GoalFireResult> => nextResult,
     };
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
 
     await engine.runNow("g1");
@@ -219,7 +262,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
       responsePreview: full.slice(0, 160),
       responseFull: full,
     }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
     await engine.runNow("g1");
     const goal = engine.getState().goals[0];
@@ -232,7 +279,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
       outcome: "fired",
       responsePreview: "preview only",
     }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
     await engine.runNow("g1");
     const goal = engine.getState().goals[0];
@@ -253,7 +304,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
       saveRuns: (): void => {},
       fire: async (): Promise<GoalFireResult> => nextResult,
     };
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
 
     await engine.runNow("g1");
@@ -274,7 +329,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
       responseFull: "full artifact",
       turnId: "slab-turn-abc-123",
     }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
     await engine.runNow("g1");
     expect(engine.getState().goals[0]?.last_turn_id).toBe("slab-turn-abc-123");
@@ -294,7 +353,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
       saveRuns: (): void => {},
       fire: async (): Promise<GoalFireResult> => nextResult,
     };
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
 
     await engine.runNow("g1");
@@ -312,7 +375,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
       responseFull: "full",
       manifestSigned: true,
     }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
     await engine.runNow("g1");
     expect(engine.getState().goals[0]?.last_manifest_signed).toBe(true);
@@ -324,7 +391,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
       responsePreview: "preview",
       manifestSigned: false,
     }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
     await engine.runNow("g1");
     expect(engine.getState().goals[0]?.last_manifest_signed).toBe(false);
@@ -344,7 +415,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
       saveRuns: (): void => {},
       fire: async (): Promise<GoalFireResult> => nextResult,
     };
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
 
     await engine.runNow("g1");
@@ -358,7 +433,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
   it("skipped: next_run_at unchanged (retried on next tick)", async () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "skipped" }));
     let n = 100;
-    const engine = createGoalsEngine(adapter, { now: () => n, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => n,
+      generateId: () => "g1",
+    });
     const goal = engine.addGoal({ prompt: "p", mode: "recurring", interval_ms: 3_600_000 });
     const originalNext = goal.next_run_at;
     n = 5_000_000;
@@ -371,7 +450,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
     const { adapter } = makeAdapter(async () => {
       throw new Error("boom");
     });
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", interval_ms: 0, mode: "once" });
     const result = await engine.runNow("g1");
     expect(result.outcome).toBe("error");
@@ -380,7 +463,7 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
 
   it("runNow for missing goal returns error without side effects", async () => {
     const { adapter, fireCalls } = makeAdapter(async () => ({ outcome: "fired" }));
-    const engine = createGoalsEngine(adapter);
+    const engine = createGoalsEngine(adapter, { goalSensitivity: () => SensitivityLevel.Personal });
     const result = await engine.runNow("nope");
     expect(result.outcome).toBe("error");
     expect(fireCalls).toHaveLength(0);
@@ -403,7 +486,11 @@ describe("createGoalsEngine — runNow + fire reconciliation", () => {
         return { outcome: "fired", responsePreview: "done" };
       },
     };
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "p", interval_ms: 0, mode: "once" });
     await engine.runNow("g1", (c) => seenChunks.push(c));
     expect(seenChunks).toHaveLength(1);
@@ -419,6 +506,7 @@ describe("createGoalsEngine — tick", () => {
     });
     const tickHolder: { fn: (() => void) | null } = { fn: null };
     const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
       now: () => 10_000_000,
       generateId: () => "once-1",
       setInterval: (h) => {
@@ -439,7 +527,11 @@ describe("createGoalsEngine — tick", () => {
 describe("createGoalsEngine — budget envelope (tokens axis)", () => {
   it("addGoal persists budget_tokens and zeroes spent_tokens", () => {
     const { adapter, stores } = makeAdapter(async () => ({ outcome: "fired" }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     const goal = engine.addGoal({
       prompt: "x",
       mode: "recurring",
@@ -457,7 +549,11 @@ describe("createGoalsEngine — budget envelope (tokens axis)", () => {
       responsePreview: "ok",
       tokensUsed: 7_500,
     }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({
       prompt: "x",
       mode: "recurring",
@@ -472,7 +568,11 @@ describe("createGoalsEngine — budget envelope (tokens axis)", () => {
 
   it("fired without tokensUsed leaves spent_tokens monotonic (no NaN)", async () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({
       prompt: "x",
       mode: "recurring",
@@ -489,7 +589,11 @@ describe("createGoalsEngine — budget envelope (tokens axis)", () => {
       responsePreview: "ok",
       tokensUsed: 60_000,
     }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({
       prompt: "x",
       mode: "recurring",
@@ -509,6 +613,7 @@ describe("createGoalsEngine — budget envelope (tokens axis)", () => {
     const tickHolder: { fn: (() => void) | null } = { fn: null };
     let nowMs = 0;
     const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
       now: () => nowMs,
       generateId: () => "g1",
       setInterval: (h) => {
@@ -536,7 +641,11 @@ describe("createGoalsEngine — budget envelope (tokens axis)", () => {
 
   it("setBudgetTokens raises cap and flips budget_exhausted back to active", () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "x", mode: "recurring", interval_ms: 3_600_000, budget_tokens: 100 });
     // Synthesize exhaustion via setBudgetTokens(0) — same shape as a
     // real exhausted goal after a high-token fire.
@@ -548,7 +657,11 @@ describe("createGoalsEngine — budget envelope (tokens axis)", () => {
 
   it("setBudgetTokens(null) clears the cap and returns to active", () => {
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "x", mode: "recurring", interval_ms: 3_600_000, budget_tokens: 100 });
     engine.setBudgetTokens("g1", 0);
     expect(engine.getState().goals[0]?.status).toBe("budget_exhausted");
@@ -563,7 +676,11 @@ describe("createGoalsEngine — budget envelope (tokens axis)", () => {
       responsePreview: "done",
       tokensUsed: 25,
     }));
-    const engine = createGoalsEngine(adapter, { now: () => 0, generateId: () => "g1" });
+    const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
+      now: () => 0,
+      generateId: () => "g1",
+    });
     engine.addGoal({ prompt: "x", interval_ms: 0, mode: "once", budget_tokens: 50 });
     await engine.runNow("g1");
     expect(engine.getState().goals[0]?.status).toBe("completed");
@@ -577,6 +694,7 @@ describe("createGoalsEngine — dispose + start/stop", () => {
     const clearCalls: unknown[] = [];
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
     const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
       setInterval: () => 42 as unknown as ReturnType<typeof setInterval>,
       clearInterval: (h) => {
         clearCalls.push(h);
@@ -595,6 +713,7 @@ describe("createGoalsEngine — dispose + start/stop", () => {
     const calls: number[] = [];
     const { adapter } = makeAdapter(async () => ({ outcome: "fired" }));
     const engine = createGoalsEngine(adapter, {
+      goalSensitivity: () => SensitivityLevel.Personal,
       setInterval: () => {
         const handle = calls.length;
         calls.push(handle);

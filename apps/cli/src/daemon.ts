@@ -31,6 +31,8 @@ import {
   AgentTaskStatus,
   DeviceCapability,
   toWellFormedText,
+  isSensitivityLevel,
+  maxSensitivity,
 } from "@motebit/sdk";
 import {
   mintAudienceToken,
@@ -179,7 +181,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
   // Build tool registry
   const runtimeRef: { current: MotebitRuntime | null } = { current: null };
-  const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
+  const toolRegistry = buildToolRegistry(config, runtimeRef);
 
   // Runtime-host election — single-instance enforcement (daemon-desktop
   // unification, increment 2). The daemon is a coordinator by role: if
@@ -1113,7 +1115,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
   // Build tool registry
   const runtimeRef: { current: MotebitRuntime | null } = { current: null };
-  const toolRegistry = buildToolRegistry(config, runtimeRef, motebitId);
+  const toolRegistry = buildToolRegistry(config, runtimeRef);
 
   // Runtime-host election — `motebit serve` serves both roles: first
   // process coordinates (full runtime below); with a live coordinator it
@@ -1348,10 +1350,15 @@ export async function handleServe(config: CliConfig): Promise<void> {
     storeMemory: async (content: string, sensitivity?: string) => {
       // Run through MemoryGovernor for injection defense — external callers
       // must not bypass the same governance the agentic loop enforces.
+      // The caller's declared tier, never below the session's write tier;
+      // undeclared or malformed = the write tier, never a default `none`.
+      const writeTier = runtime.interiorWriteSensitivity();
       const candidate = {
         content,
         confidence: 0.7,
-        sensitivity: (sensitivity as SensitivityLevel) ?? SensitivityLevel.None,
+        sensitivity: isSensitivityLevel(sensitivity)
+          ? maxSensitivity(writeTier, sensitivity)
+          : writeTier,
       };
       const decisions = runtime.memoryGovernor.evaluate([candidate]);
       const decision = decisions[0];

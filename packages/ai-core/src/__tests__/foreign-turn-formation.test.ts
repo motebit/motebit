@@ -93,6 +93,7 @@ async function setup(content: string) {
     behaviorEngine: new BehaviorEngine(),
     provider: candidateProvider(content),
     consolidationProvider: { classify },
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   } as unknown as MotebitLoopDependencies;
   return { deps, memoryGraph, owner, classify };
 }
@@ -115,6 +116,7 @@ const cleared = (d: MotebitLoopDependencies, foreign: boolean) =>
   ({
     ...d,
     ...(foreign ? { foreignPrincipal: true } : {}),
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   }) as unknown as SensitivityCleared<MotebitLoopDependencies>;
 
 describe("#943 — a foreign turn's formation never reads or mutates the owner's graph", () => {

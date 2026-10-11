@@ -15,7 +15,6 @@
  */
 
 import type { MemoryNode, MemoryEdge } from "@motebit/sdk";
-import { SensitivityLevel as SensitivityLevelEnum } from "@motebit/sdk";
 import { computeDecayedConfidence, embedText } from "@motebit/memory-graph";
 import type { MotebitRuntime } from "@motebit/runtime";
 import type { DeletionCertificate } from "@motebit/sdk";
@@ -75,7 +74,8 @@ export async function formMemoryDirect(
     {
       content,
       confidence,
-      sensitivity: SensitivityLevelEnum.None,
+      // Written now, outside a goal run: the session's write tier.
+      sensitivity: runtime.interiorWriteSensitivity(),
       // First-run greeting fallback is agent-authored, not a user statement.
       source: "agent_inferred",
     },

@@ -34,7 +34,7 @@ vi.mock("@motebit/memory-graph", async (importOriginal) => {
 
 import { GoalScheduler } from "../scheduler.js";
 import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
-import { RiskLevel } from "@motebit/sdk";
+import { RiskLevel, SensitivityLevel } from "@motebit/sdk";
 import type {
   DelegatedStepResult,
   ExecutionReceipt,
@@ -48,6 +48,7 @@ import { PaidIntentLedger, InMemoryPaidIntentStore } from "@motebit/runtime";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import { PlanEngine, DelegationUndeterminedError, PlanDriverLocks } from "@motebit/planner";
 import type { StepDelegationAdapter } from "@motebit/planner";
+import { goalRunFakes } from "./goal-run-fakes.js";
 
 const MOTE = "mote-890";
 const GOAL = "goal-890";
@@ -167,6 +168,7 @@ function mockRuntime(
     }),
     stop: vi.fn(),
     consolidationCycle: vi.fn().mockResolvedValue(undefined),
+    ...goalRunFakes(),
   } as unknown as MotebitRuntime;
 }
 
@@ -188,6 +190,7 @@ function newScheduler(w: World, runtime: MotebitRuntime): GoalScheduler {
 function newWorld(): World {
   const db = createMotebitDatabase(":memory:");
   db.goalStore.add({
+    sensitivity: SensitivityLevel.Personal,
     goal_id: GOAL,
     motebit_id: MOTE,
     prompt: "buy the report",

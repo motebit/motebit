@@ -135,6 +135,7 @@ describe("sql.js driver (in-memory)", () => {
 
   it("goals add/list round-trip", () => {
     mdb.goalStore.add({
+      sensitivity: SensitivityLevel.Personal,
       goal_id: "g-1",
       motebit_id: "motebit-1",
       prompt: "check emails",

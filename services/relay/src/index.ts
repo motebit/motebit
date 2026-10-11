@@ -139,6 +139,7 @@ import {
 } from "./credential-anchoring.js";
 import { aggregateFees } from "./fees.js";
 import { aggregateHealthSummary } from "./health-summary.js";
+import { measureIdentityAuthority } from "./identity-authority-census.js";
 import {
   createDepositDetectorTable,
   startDepositDetector,
@@ -2005,6 +2006,28 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       recent_p2p: recentP2p,
       p2p_verifier_enabled: !!solanaRpcUrl,
     });
+  });
+
+  // Admin: identity-authority census — the read-only §6 queries Q1–Q6 of
+  // docs/design/identity-authority-writers.md (planted device rows, sovereign
+  // squats, unbound money destinations, unproven guardians, keyless ids with
+  // device rows, peers with no v2 federation evidence). Counts, ids and one
+  // bucket per flagged row (definitely_invalid / suspicious /
+  // legitimate_legacy): no key, token, address or signature is served. The
+  // census writes nothing, and the DATABASE enforces it: every statement runs
+  // through `readOnlyHandle` with `PRAGMA query_only = ON`, so SQLite refuses
+  // a write (SQLITE_READONLY). The only write on this route is the master-
+  // token presentation that bearerAuth records in relay_auth_events (the
+  // auth layer, rule 6) — never the census. Nothing here cleans anything up.
+  // Read by scripts/measure-identity-authority.ts.
+  /** @internal */
+  app.get("/api/v1/admin/identity-authority/census", async (c) => {
+    const raw = c.req.query("limit");
+    const limit = raw === undefined ? undefined : Number(raw);
+    if (limit !== undefined && !Number.isFinite(limit)) {
+      return c.json({ error: "limit must be a number" }, 400);
+    }
+    return c.json(await measureIdentityAuthority(moteDb.db, { limit }));
   });
 
   // Admin: operator health summary — registered motebits + activity

@@ -45,6 +45,7 @@ export function recordingDeps(
     behaviorEngine: new BehaviorEngine(),
     provider,
     foreignPrincipal: true,
+    getEffectiveSensitivity: () => SensitivityLevel.None,
   } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 }
 

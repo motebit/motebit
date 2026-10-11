@@ -26,11 +26,11 @@ function makeRuntime(overrides: Record<string, unknown> = {}): any {
     memory: {
       recallRelevant: vi.fn(async () => []),
     },
-    events: {
-      query: vi.fn(async () => [
-        { event_type: "message", timestamp: 100, payload: { text: "hi" } },
-      ]),
-    },
+    // list_events routes through queryEventsForTool (the interior-egress
+    // rule at the tool send tier), never a raw events.query.
+    queryEventsForTool: vi.fn(async () => [
+      { event_type: "message", timestamp: 100, payload: { text: "hi" } },
+    ]),
     reflect: vi.fn(async () => ({
       selfAssessment: "doing fine",
       insights: [],
@@ -118,7 +118,7 @@ describe("registerDesktopTools", () => {
     const runtime = makeRuntime();
     registerDesktopTools(registry, runtime);
     const result = await registry.execute("list_events", { limit: 10, event_type: "message" });
-    expect(runtime.events.query).toHaveBeenCalled();
+    expect(runtime.queryEventsForTool).toHaveBeenCalledWith(10, "message");
     expect(result.ok).toBe(true);
   });
 
@@ -127,7 +127,7 @@ describe("registerDesktopTools", () => {
     const runtime = makeRuntime();
     registerDesktopTools(registry, runtime);
     const result = await registry.execute("list_events", { limit: 10 });
-    expect(runtime.events.query).toHaveBeenCalled();
+    expect(runtime.queryEventsForTool).toHaveBeenCalledWith(10, undefined);
     expect(result.ok).toBe(true);
   });
 

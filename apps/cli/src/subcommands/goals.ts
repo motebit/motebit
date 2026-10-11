@@ -9,7 +9,7 @@
 
 import { openMotebitDatabase } from "@motebit/persistence";
 import { EventStore } from "@motebit/event-log";
-import { createGoalsEmitter } from "@motebit/runtime";
+import { createGoalsEmitter, sessionlessGoalSensitivity } from "@motebit/runtime";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
@@ -74,6 +74,9 @@ export async function handleGoalAdd(config: CliConfig): Promise<void> {
     consecutive_failures: 0,
     wall_clock_ms: wallClockMs,
     project_id: projectId,
+    // Typed on the command line, outside any session: nothing elevated is in
+    // scope (runtime goal-run.ts `sessionlessGoalSensitivity`).
+    sensitivity: sessionlessGoalSensitivity(),
   });
 
   // Emit goal_created via the shared primitive so every surface writes

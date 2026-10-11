@@ -797,6 +797,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/admin/settlements", rl(expensiveLimiter));
   app.use("/api/v1/admin/fees", rl(expensiveLimiter));
   app.use("/api/v1/admin/health", rl(expensiveLimiter));
+  app.use("/api/v1/admin/identity-authority/*", rl(expensiveLimiter));
   app.use("/api/v1/admin/transparency", rl(expensiveLimiter));
   app.use("/api/v1/admin/auth-events", rl(expensiveLimiter));
   app.use("/api/v1/admin/credential-anchoring", rl(expensiveLimiter));
@@ -1382,6 +1383,8 @@ export function registerAuthMiddleware(
   app.use("/api/v1/admin/settlements", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/fees", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/health", bearerAuth({ token: apiToken }));
+  // Identity-authority census (read-only §6 Q1–Q6) — master token only.
+  app.use("/api/v1/admin/identity-authority/*", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/transparency", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/auth-events", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/credential-anchoring", bearerAuth({ token: apiToken }));

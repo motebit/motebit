@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import type { GoalRunScope, MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import { goalOutcomeLines, sessionlessGoalSensitivity } from "@motebit/runtime";
 import {
   paymentNoticeCopy,
   paidResultsOwedByRuns,
@@ -102,6 +103,13 @@ interface SuspendedTurn {
    *  daemon-coordinated setups "whatever is pending" can be a HUMAN's money
    *  prompt from an attached surface. */
   toolCallId: string;
+  /**
+   * The paused run (in-process only): the live resume re-enters the goal's
+   * stamp carrying this run's tier into what it produces. A turn recovered
+   * after a restart has none — its outcome rows stay unstamped (legacy,
+   * held at secret).
+   */
+  run?: GoalRunScope;
 }
 
 export interface GoalStreamResult {
@@ -128,6 +136,12 @@ export class GoalScheduler {
   /** The run row in flight (fire path or live resume), so a graceful stop can close it. */
   private currentRunId: string | null = null;
   private currentAbort: AbortController | null = null;
+  /**
+   * The run in flight (`runtime.beginGoalRun`): every interior item in its
+   * prompt passes through it, and every outcome row, sub-goal, plan and
+   * outcome memory it produces is stamped from it (`addOutcome`).
+   */
+  private currentRun: GoalRunScope | null = null;
   private foreignPendingLogged = false;
   private planEngine: PlanEngine | null = null;
   private planStore: PlanStoreAdapter | null = null;
@@ -267,6 +281,9 @@ export class GoalScheduler {
       goal_id: crypto.randomUUID(),
       motebit_id: this.motebitId,
       prompt: `${GoalScheduler.MAINTENANCE_PREFIX} Review fading memories and ask the user to confirm or update them.`,
+      // Fixed wording the daemon writes — no session, nothing elevated in
+      // scope (runtime goal-run.ts `sessionlessGoalSensitivity`).
+      sensitivity: sessionlessGoalSensitivity(),
       interval_ms: 24 * 60 * 60 * 1000, // 24 hours
       last_run_at: null,
       enabled: true,
@@ -310,7 +327,7 @@ export class GoalScheduler {
       // Own id, never `run.run_id`: the live paths write their outcome under
       // the run id, and a death between that write and the run-status
       // transition must not let this row REPLACE a genuine outcome.
-      this.goalOutcomeStore.add({
+      this.addOutcome({
         outcome_id: crypto.randomUUID(),
         run_id: run.run_id,
         goal_id: run.goal_id,
@@ -391,7 +408,7 @@ export class GoalScheduler {
       this.currentAbort?.abort(new Error("daemon stopped"));
       this.runStore.setStatus(runId, "failed", { note: "daemon stopped mid-run (graceful)" });
       if (goalId != null) {
-        this.goalOutcomeStore.add({
+        this.addOutcome({
           outcome_id: crypto.randomUUID(),
           run_id: runId,
           goal_id: goalId,
@@ -481,6 +498,9 @@ export class GoalScheduler {
         consecutive_failures: 0,
         wall_clock_ms: wallClockMs,
         project_id: projectId,
+        // The model wrote this text during the run: stamped at its tier.
+        sensitivity:
+          this.currentRun?.outcomeSensitivity() ?? this.runtime.goalCreationSensitivity(),
       });
 
       logLine(`[goal] sub-goal created: ${goalId.slice(0, 8)} — "${prompt.slice(0, 40)}"`);
@@ -543,10 +563,28 @@ export class GoalScheduler {
     registry.unregister?.("report_progress");
   }
 
-  private buildGoalContext(goal: Goal, outcomes: GoalOutcome[], subGoals: Goal[]): string {
+  /**
+   * The run's prompt. Every interior item in it — earlier outcomes, related
+   * goals (sub-goals, parent, siblings, project) and their results — passes
+   * through `run`, so only what the run's send tier permits enters
+   * (runtime goal-run.ts). The goal's own text is the request: `run` was
+   * begun at its stamp.
+   */
+  private buildGoalContext(
+    goal: Goal,
+    allOutcomes: GoalOutcome[],
+    allSubGoals: Goal[],
+    run: GoalRunScope,
+  ): string {
+    const outcomes = run.outcomes(allOutcomes);
+    const subGoals = allSubGoals.filter((sg) => run.permitsGoal(sg));
+    /** The latest result text of a related goal, as this run may carry it. */
+    const resultsOf = (goalId: string, n: number): GoalOutcome[] =>
+      run.outcomes(this.goalOutcomeStore.listForGoal(goalId, n));
+
     // Memory maintenance goals get special context with curiosity targets
     if (goal.prompt.startsWith(GoalScheduler.MAINTENANCE_PREFIX)) {
-      return this.buildMaintenanceContext(outcomes);
+      return this.buildMaintenanceContext(outcomes, run);
     }
 
     const lines: string[] = [];
@@ -566,16 +604,7 @@ export class GoalScheduler {
     if (outcomes.length > 0) {
       lines.push("");
       lines.push("Previous executions (most recent first):");
-      for (const o of outcomes) {
-        const ago = formatTimeAgo(Date.now() - o.ran_at);
-        if (o.status === "failed" && o.error_message != null && o.error_message !== "") {
-          lines.push(`- ${ago}: failed — [error: ${o.error_message}]`);
-        } else if (o.summary != null && o.summary !== "") {
-          lines.push(`- ${ago}: ${o.status} — "${o.summary.slice(0, 100)}"`);
-        } else {
-          lines.push(`- ${ago}: ${o.status}`);
-        }
-      }
+      lines.push(...goalOutcomeLines(outcomes, Date.now()));
     }
 
     if (subGoals.length > 0) {
@@ -592,8 +621,12 @@ export class GoalScheduler {
       const parent = this.goalStore.get(goal.parent_goal_id);
       if (parent) {
         lines.push("");
-        lines.push(`Parent goal: "${parent.prompt.slice(0, 100)}"`);
-        const parentOutcomes = this.goalOutcomeStore.listForGoal(parent.goal_id, 2);
+        lines.push(
+          run.permitsGoal(parent)
+            ? `Parent goal: "${parent.prompt.slice(0, 100)}"`
+            : "Parent goal: (withheld at this sensitivity tier)",
+        );
+        const parentOutcomes = resultsOf(parent.goal_id, 2);
         if (parentOutcomes.length > 0) {
           lines.push("Parent's recent results:");
           for (const po of parentOutcomes) {
@@ -610,12 +643,13 @@ export class GoalScheduler {
         const siblings = this.goalStore
           .listChildren(goal.parent_goal_id)
           .filter((sg) => sg.goal_id !== goal.goal_id && sg.status === "active")
+          .filter((sg) => run.permitsGoal(sg))
           .slice(0, 5);
         if (siblings.length > 0) {
           lines.push("");
           lines.push("Sibling goals (related work under same parent):");
           for (const sib of siblings) {
-            const sibOutcomes = this.goalOutcomeStore.listForGoal(sib.goal_id, 1);
+            const sibOutcomes = resultsOf(sib.goal_id, 1);
             const lastResult = sibOutcomes[0];
             if (lastResult?.summary != null && lastResult.summary !== "") {
               lines.push(`  - "${sib.prompt.slice(0, 60)}": ${lastResult.summary.slice(0, 80)}`);
@@ -632,12 +666,13 @@ export class GoalScheduler {
       const projectGoals = this.goalStore
         .listByProject(goal.project_id, this.motebitId)
         .filter((pg) => pg.goal_id !== goal.goal_id && pg.status === "active")
+        .filter((pg) => run.permitsGoal(pg))
         .slice(0, 5);
       if (projectGoals.length > 0) {
         lines.push("");
         lines.push(`Project "${goal.project_id}" — related goals:`);
         for (const pg of projectGoals) {
-          const pgOutcomes = this.goalOutcomeStore.listForGoal(pg.goal_id, 1);
+          const pgOutcomes = resultsOf(pg.goal_id, 1);
           const lastResult = pgOutcomes[0];
           if (lastResult?.summary != null && lastResult.summary !== "") {
             lines.push(`  - "${pg.prompt.slice(0, 60)}": ${lastResult.summary.slice(0, 80)}`);
@@ -656,8 +691,11 @@ export class GoalScheduler {
     return lines.join("\n");
   }
 
-  private buildMaintenanceContext(outcomes: GoalOutcome[]): string {
-    const targets = this.runtime.getCuriosityTargets();
+  /** `outcomes` are already filtered by `run`; curiosity targets are filtered here. */
+  private buildMaintenanceContext(outcomes: GoalOutcome[], run: GoalRunScope): string {
+    const targets = this.runtime
+      .getCuriosityTargets()
+      .filter((t) => run.permits(t.node.sensitivity));
     const lines: string[] = [];
     lines.push("You are running a memory maintenance check.");
     lines.push("");
@@ -818,10 +856,8 @@ export class GoalScheduler {
 
         logLine(`[goal] executing: "${goal.prompt.slice(0, 60)}"`);
 
-        // Build enriched context
         const outcomes = this.goalOutcomeStore.listForGoal(goal.goal_id, 3);
         const subGoals = this.goalStore.listChildren(goal.goal_id);
-        const enrichedPrompt = this.buildGoalContext(goal, outcomes, subGoals);
 
         this.currentGoalId = goal.goal_id;
         this.registerGoalTools();
@@ -834,6 +870,13 @@ export class GoalScheduler {
 
         try {
           let result: GoalStreamResult;
+          // The run sends at no lower tier than the goal's text — a goal
+          // written at Secret refuses here on an external provider — and
+          // its prompt carries only what that tier permits (runtime
+          // goal-run.ts).
+          const run = this.runtime.beginGoalRun(goal);
+          this.currentRun = run;
+          const enrichedPrompt = this.buildGoalContext(goal, outcomes, subGoals, run);
 
           // Wall-clock limit: per-goal override → scheduler default
           const wallClock = goal.wall_clock_ms ?? this.goalWallClockMs;
@@ -852,7 +895,13 @@ export class GoalScheduler {
 
           try {
             if (this.planEngine && this.planStore) {
-              result = await this.executePlanGoal(goal, outcomes, runId, abortController.signal);
+              result = await this.executePlanGoal(
+                goal,
+                outcomes,
+                run,
+                runId,
+                abortController.signal,
+              );
             } else {
               const stream = this.runtime.sendMessageStreaming(enrichedPrompt, runId);
               result = await this.consumeDaemonStream(
@@ -926,7 +975,7 @@ export class GoalScheduler {
             // stopped is still a run that happened. Only the FAILURE
             // COUNT is skipped: a stop the human asked for must not burn
             // the goal's retry budget.
-            this.goalOutcomeStore.add({
+            this.addOutcome({
               // Fresh id + `run_id` link, like the sibling catch below.
               // A halt aborts before the result is written today, so this
               // cannot overwrite one — but the two rows share a table
@@ -971,7 +1020,7 @@ export class GoalScheduler {
           // manifest with it: the artifact this whole increment exists
           // to preserve, deleted by its own error handler. The resume
           // catch was fixed for this; the primary one was left behind.
-          this.goalOutcomeStore.add({
+          this.addOutcome({
             outcome_id: crypto.randomUUID(),
             run_id: runId,
             goal_id: goal.goal_id,
@@ -982,6 +1031,12 @@ export class GoalScheduler {
             tool_calls_made: 0,
             memories_formed: 0,
             error_message: msg,
+            // A run refused before it began carries only the gate's
+            // (content-free) reason: stamped at the session's tier so the
+            // next run can read why it failed.
+            ...(this.currentRun == null
+              ? { sensitivity: this.runtime.goalCreationSensitivity() }
+              : {}),
           });
 
           // Emit goal_executed (failure variant) — spec §5.2. Every run
@@ -999,6 +1054,10 @@ export class GoalScheduler {
             );
           }
         } finally {
+          // Released even when the run pauses for approval: the paused
+          // turn carries its own stamp, and the resume re-enters the run.
+          this.currentRun?.end();
+          this.currentRun = null;
           this.currentGoalId = null;
           this.currentRunId = null;
           this.currentAbort = null;
@@ -1060,7 +1119,7 @@ export class GoalScheduler {
   ): void {
     const note = `awaiting result — ${reason}`;
     this.runStore.setStatus(runId, "partial", { note });
-    this.goalOutcomeStore.add({
+    this.addOutcome({
       outcome_id: crypto.randomUUID(),
       run_id: runId,
       goal_id: goal.goal_id,
@@ -1155,6 +1214,7 @@ export class GoalScheduler {
             runId,
             createdAt: now,
             toolCallId: chunk.tool_call_id,
+            ...(this.currentRun != null ? { run: this.currentRun } : {}),
             // Carried forward, not overwritten: a resumed turn can pause
             // AGAIN, and this stream holds only the current segment. The
             // first version recorded segment two and lost segment one,
@@ -1182,7 +1242,7 @@ export class GoalScheduler {
           );
 
           // Record suspended outcome
-          this.goalOutcomeStore.add({
+          this.addOutcome({
             outcome_id: crypto.randomUUID(),
             ...(runId != null ? { run_id: runId } : {}),
             goal_id: goalId,
@@ -1224,6 +1284,7 @@ export class GoalScheduler {
   private async executePlanGoal(
     goal: Goal,
     outcomes: GoalOutcome[],
+    run: GoalRunScope,
     runId?: string,
     signal?: AbortSignal,
   ): Promise<GoalStreamResult> {
@@ -1241,27 +1302,26 @@ export class GoalScheduler {
 
     if (plan && plan.status === PlanStatus.Active) {
       logLine(`[plan] resuming: ${plan.title} (${plan.plan_id.slice(0, 8)})`);
+      // Resuming the plan sends its steps: a send at its stamp.
+      run.enterPlan(plan);
       planStream = this.planEngine!.resumePlan(plan.plan_id, loopDeps, undefined, runId);
     } else {
       // Retrieve relevant memories to inform plan decomposition
-      const relevantMemories = await this.retrieveRelevantMemories(goal.prompt);
+      const relevantMemories = await this.retrieveRelevantMemories(goal.prompt, run);
 
       const created = await this.planEngine!.createPlan(
         goal.goal_id,
         this.motebitId,
         {
           goalPrompt: goal.prompt,
-          previousOutcomes: outcomes.map((o) =>
-            o.status === "failed"
-              ? `failed: ${o.error_message ?? "unknown"}`
-              : `${o.status}: ${o.summary ?? "no summary"}`,
-          ),
+          previousOutcomes: run.planOutcomes(outcomes),
           availableTools: registry.list().map((t) => t.name),
           relevantMemories: relevantMemories.length > 0 ? relevantMemories : undefined,
         },
         loopDeps,
       );
       plan = created.plan;
+      run.stampPlan(this.planStore!, plan.plan_id);
       if (created.truncatedFrom != null) {
         warnLine(
           `[plan] truncated from ${created.truncatedFrom} to ${plan.total_steps} steps (max ${plan.total_steps})`,
@@ -1270,7 +1330,12 @@ export class GoalScheduler {
       planStream = this.planEngine!.executePlan(plan.plan_id, loopDeps, undefined, runId);
     }
 
-    return this.consumePlanStream(planStream, goal.goal_id, runId, signal);
+    try {
+      return await this.consumePlanStream(planStream, goal.goal_id, runId, signal);
+    } finally {
+      // The plan's steps now carry what this run produced.
+      run.stampPlan(this.planStore!, plan.plan_id);
+    }
   }
 
   private async consumePlanStream(
@@ -1366,6 +1431,7 @@ export class GoalScheduler {
             runId: runId ?? approvalId,
             createdAt: now,
             toolCallId: innerChunk.tool_call_id,
+            ...(this.currentRun != null ? { run: this.currentRun } : {}),
             // Plan mode carries the pre-pause text AND the counters.
             // Setting only the text left the same tail-presented-as-whole
             // defect in the numbers: a plan goal with three calls before
@@ -1419,9 +1485,11 @@ export class GoalScheduler {
 
         case "reflection": {
           logLine(`[plan] reflection: ${chunk.result.summary}`);
+          // The learnings derive from the plan the run executed: stamped at
+          // the run's tier (the plan's floor is raised while it streams).
           const stored = await this.persistReflectionMemories(
             chunk.result.memoryCandidates,
-            goalId,
+            this.currentRun?.outcomeSensitivity() ?? this.runtime.interiorWriteSensitivity(),
           );
           memoriesFormed += stored;
           void this.logGoalEvent(EventType.ReflectionCompleted, goalId, {
@@ -1554,7 +1622,7 @@ export class GoalScheduler {
               this.runStore.setStatus(expiredRunId, "failed", {
                 note: `expired-approval continuation failed: ${msg}`,
               });
-              this.goalOutcomeStore.add({
+              this.addOutcome({
                 outcome_id: crypto.randomUUID(),
                 run_id: expiredRunId,
                 goal_id: expiredGoalId,
@@ -1616,6 +1684,14 @@ export class GoalScheduler {
           note: approved ? "resuming after approval" : "resuming after denial",
         });
         try {
+          // The continuation is the same run: re-entered at the goal's
+          // stamp, carrying the paused run's tier into what it produces. A
+          // goal no longer on record is held at secret.
+          const resumedGoal = this.goalStore.get(turn.goalId);
+          this.currentRun = this.runtime.beginGoalRun(
+            resumedGoal ?? { prompt: "", sensitivity: SensitivityLevel.Secret },
+            turn.run != null ? { inherit: turn.run.outcomeSensitivity() } : {},
+          );
           const resumeStream = this.runtime.resumeAfterApproval(approved);
           const result = await this.consumeDaemonStream(
             resumeStream,
@@ -1668,7 +1744,7 @@ export class GoalScheduler {
           const msg = err instanceof Error ? err.message : String(err);
           errorLine(`[approval] resume of ${approvalId.slice(0, 8)} failed: ${msg}`);
           this.runStore.setStatus(turn.runId, "failed", { note: `resume failed: ${msg}` });
-          this.goalOutcomeStore.add({
+          this.addOutcome({
             // Fresh id, as the recovery writers use, because this runs
             // in a catch: if `recordCompletedOutcome` already wrote a
             // genuine result and a later statement threw, keying this
@@ -1688,6 +1764,8 @@ export class GoalScheduler {
           });
           this.goalStore.updateLastRun(turn.goalId, Date.now());
         } finally {
+          this.currentRun?.end();
+          this.currentRun = null;
           this.currentGoalId = null;
           this.currentRunId = null;
         }
@@ -1976,7 +2054,7 @@ export class GoalScheduler {
   ): void {
     const status = verdict.ok ? "partial" : "failed";
     this.runStore.setStatus(run.run_id, status, { note: verdict.summary });
-    this.goalOutcomeStore.add({
+    this.addOutcome({
       outcome_id: crypto.randomUUID(),
       run_id: run.run_id,
       goal_id: run.goal_id,
@@ -2010,10 +2088,14 @@ export class GoalScheduler {
   }
 
   /**
-   * Persist memory candidates from plan reflection into the memory graph.
-   * Returns the number of memories successfully formed.
+   * Persist memory candidates from plan reflection into the memory graph,
+   * stamped with the tier of the run that reflected — the learnings derive
+   * from everything the plan read. Returns the number formed.
    */
-  private async persistReflectionMemories(candidates: string[], _goalId: string): Promise<number> {
+  private async persistReflectionMemories(
+    candidates: string[],
+    sensitivity: SensitivityLevel,
+  ): Promise<number> {
     let stored = 0;
     for (const text of candidates) {
       try {
@@ -2022,7 +2104,7 @@ export class GoalScheduler {
           {
             content: `[goal_learning] ${text}`,
             confidence: 0.7,
-            sensitivity: SensitivityLevel.None,
+            sensitivity,
             // Plan-reflection learnings are agent-synthesized, not user statements.
             source: "agent_inferred",
           },
@@ -2061,6 +2143,21 @@ export class GoalScheduler {
    * stays null: an unsigned result recorded honestly is a record; a
    * placeholder signature is a lie with a checksum.
    */
+  /**
+   * Every outcome row goes through here: stamped with the tier of the run
+   * that produced it (`GoalRun.outcomeSensitivity`) unless it carries its
+   * own stamp. A row written with no run in reach (restart recovery) has no
+   * knowable taint: it is stamped `secret`, so a later run below `secret`
+   * never reads its text. Never written unstamped.
+   */
+  private addOutcome(outcome: GoalOutcome): void {
+    this.goalOutcomeStore.add({
+      ...outcome,
+      sensitivity:
+        outcome.sensitivity ?? this.currentRun?.outcomeSensitivity() ?? SensitivityLevel.Secret,
+    });
+  }
+
   private async recordCompletedOutcome(
     goalId: string,
     runId: string,
@@ -2084,7 +2181,7 @@ export class GoalScheduler {
     }
     // runId = outcome_id, so the run, its outcome and its tool-audit rows
     // all join on one id.
-    this.goalOutcomeStore.add({
+    this.addOutcome({
       outcome_id: runId,
       run_id: runId,
       goal_id: goalId,
@@ -2113,7 +2210,10 @@ export class GoalScheduler {
         {
           content,
           confidence: 0.6,
-          sensitivity: SensitivityLevel.None,
+          // Derived from the run: stamped at the run's tier, so a Secret
+          // run's result is never recalled into a lower-tier request.
+          sensitivity:
+            this.currentRun?.outcomeSensitivity() ?? this.runtime.goalCreationSensitivity(),
           // Goal-outcome summaries are agent-synthesized, not user statements.
           source: "agent_inferred",
         },
@@ -2127,10 +2227,14 @@ export class GoalScheduler {
   /**
    * Retrieve memories relevant to a goal prompt for informing plan decomposition.
    */
-  private async retrieveRelevantMemories(goalPrompt: string): Promise<string[]> {
+  private async retrieveRelevantMemories(goalPrompt: string, run: GoalRunScope): Promise<string[]> {
     try {
       const goalEmbedding = await embedText(goalPrompt);
-      const nodes = await this.runtime.memory.recallRelevant(goalEmbedding, { limit: 5 });
+      // Only the memories the run's send tier permits (runtime goal-run.ts).
+      const nodes = await this.runtime.memory.recallRelevant(goalEmbedding, {
+        limit: 5,
+        sensitivityFilter: run.sensitivities(),
+      });
       return nodes.map((n) => n.content);
     } catch {
       return [];

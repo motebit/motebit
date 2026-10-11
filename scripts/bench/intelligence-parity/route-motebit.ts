@@ -32,7 +32,7 @@ import {
   DEFAULT_CONFIG,
   OpenAIProvider,
 } from "../../../packages/ai-core/src/index.js";
-import { resolveProviderSpec } from "../../../packages/sdk/src/index.js";
+import { SensitivityLevel, resolveProviderSpec } from "../../../packages/sdk/src/index.js";
 import type { ConversationStoreAdapter, ResolverEnv } from "../../../packages/sdk/src/index.js";
 import {
   InMemoryToolRegistry,
@@ -83,6 +83,7 @@ export class BenchConversationStore implements ConversationStoreAdapter {
     toolCallId: string | null;
     createdAt: number;
     tokenEstimate: number;
+    sensitivity?: SensitivityLevel;
   }> = [];
   private readonly convos = new Map<
     string,
@@ -99,7 +100,13 @@ export class BenchConversationStore implements ConversationStoreAdapter {
   appendMessage(
     conversationId: string,
     motebitId: string,
-    msg: { role: string; content: string; toolCalls?: string; toolCallId?: string },
+    msg: {
+      role: string;
+      content: string;
+      toolCalls?: string;
+      toolCallId?: string;
+      sensitivity?: SensitivityLevel;
+    },
   ): void {
     this.rows.push({
       messageId: `m${this.rows.length + 1}`,
@@ -111,6 +118,7 @@ export class BenchConversationStore implements ConversationStoreAdapter {
       toolCallId: msg.toolCallId ?? null,
       createdAt: Date.now(),
       tokenEstimate: estimateTokens(msg.content),
+      ...(msg.sensitivity != null ? { sensitivity: msg.sensitivity } : {}),
     });
     const c = this.convos.get(conversationId);
     if (c) c.lastActiveAt = Date.now();
@@ -353,7 +361,14 @@ export async function runMotebitRoute(
   const history = prompt.history ?? [];
   if (history.length > 0) {
     const convoId = conversationStore.createConversation(motebitId);
-    for (const m of history) conversationStore.appendMessage(convoId, motebitId, m);
+    // Stamped as the runtime's write-side floor persists a turn at the
+    // default session tier — an unstamped row fails closed and would never
+    // reach the provider (conversation.ts egressHistory).
+    for (const m of history)
+      conversationStore.appendMessage(convoId, motebitId, {
+        ...m,
+        sensitivity: SensitivityLevel.Personal,
+      });
     runtime.loadConversation(convoId);
   }
 

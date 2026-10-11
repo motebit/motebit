@@ -5,6 +5,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 import { MobileGoalScheduler } from "../goal-scheduler";
+import { createGoalRun } from "@motebit/runtime";
+import type { GoalRunGoal } from "@motebit/runtime";
+import { SensitivityLevel } from "@motebit/sdk";
 import type { GoalSchedulerDeps } from "../goal-scheduler";
 
 // ---------------------------------------------------------------------------
@@ -49,6 +52,15 @@ function makeRuntime(overrides?: Record<string, unknown>) {
     consolidationCycle: vi.fn(() => Promise.resolve()),
     resetConversation: vi.fn(),
     getLoopDeps: vi.fn(() => null),
+    beginGoalRun: vi.fn((goal: GoalRunGoal) =>
+      createGoalRun({
+        goal,
+        effective: () => SensitivityLevel.None,
+        raise: () => () => {},
+        assert: () => {},
+      }),
+    ),
+    goalCreationSensitivity: vi.fn(() => SensitivityLevel.Personal),
     getToolRegistry: vi.fn(() => ({ list: () => [] })),
     outstandingPaidResults: vi.fn((): unknown[] => []),
     sendMessageStreaming: vi.fn(async function* () {
@@ -71,6 +83,7 @@ function makeDeps(overrides?: Partial<GoalSchedulerDeps>): GoalSchedulerDeps & {
     goalStore,
     planStore: {
       getPlanForGoal: vi.fn(() => null),
+      updatePlan: vi.fn(),
     },
   };
   return {
@@ -411,9 +424,30 @@ describe("MobileGoalScheduler executeSingleTurnGoal context", () => {
         status: "completed",
         summary: "found 3 results",
         error_message: null,
+        sensitivity: "personal",
       },
-      { ran_at: now - 3_600_000, status: "failed", summary: null, error_message: "timeout" },
-      { ran_at: now - 86_400_000, status: "completed", summary: "", error_message: null },
+      {
+        ran_at: now - 3_600_000,
+        status: "failed",
+        summary: null,
+        error_message: "timeout",
+        sensitivity: "personal",
+      },
+      {
+        ran_at: now - 86_400_000,
+        status: "completed",
+        summary: "",
+        error_message: null,
+        sensitivity: "personal",
+      },
+      // A legacy (unstamped) row keeps its place in the history; its text
+      // is withheld (runtime goal-run.ts).
+      {
+        ran_at: now - 2 * 86_400_000,
+        status: "completed",
+        summary: "LEGACYTEXT",
+        error_message: null,
+      },
     ]);
     deps._goalStore.setActive([
       {
@@ -442,6 +476,7 @@ describe("MobileGoalScheduler executeSingleTurnGoal context", () => {
     expect(capturedContext).toContain('completed — "found 3 results"');
     // Branch 3: else (summary empty/null, not failed) — no quoted summary, no error tag
     expect(capturedContext).toMatch(/d ago: completed(?!\s+—)/);
+    expect(capturedContext).not.toContain("LEGACYTEXT");
   });
 });
 
