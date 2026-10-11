@@ -1867,8 +1867,24 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     checkMaxPeers();
 
     const existing = db
-      .prepare("SELECT state, last_heartbeat_at FROM relay_peers WHERE peer_relay_id = ?")
-      .get(relay_id) as { state: string; last_heartbeat_at: number | null } | undefined;
+      .prepare(
+        "SELECT state, last_heartbeat_at, public_key FROM relay_peers WHERE peer_relay_id = ?",
+      )
+      .get(relay_id) as
+      { state: string; last_heartbeat_at: number | null; public_key: string } | undefined;
+    // A known peer's key is never replaced by a propose (relay-federation@1.5
+    // §3.1; identity-authority I1 applied to peers). The propose proves
+    // nothing about who holds the row's key, and confirm verifies under
+    // whatever key the row holds — so overwriting it let anyone take over a
+    // suspended or removed peer's relay_id. Refused in every state, before
+    // anything is signed or stored. Re-keying a peer is an operator act that
+    // first deletes the row; there is no route for it.
+    if (existing && existing.public_key.toLowerCase() !== public_key.toLowerCase()) {
+      throw new HTTPException(409, {
+        message:
+          "public_key differs from the key on record for this relay_id (relay-federation@1.5 §3.1): a propose may not replace a known peer's key. Re-peer under the recorded key; re-keying a peer requires its operator to delete the row first",
+      });
+    }
     if (existing && (existing.state === "active" || existing.state === "pending")) {
       throw new HTTPException(409, { message: `Peer already exists in ${existing.state} state` });
     }
@@ -1900,16 +1916,35 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const challengeMsg = new TextEncoder().encode(`${relay_id}:${nonce}:${FEDERATION_SUITE}`);
     const challengeSig = await sign(challengeMsg, relayIdentity.privateKey);
 
-    db.prepare(
-      `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
+    // The upsert never writes `public_key` on conflict, and re-checks the key
+    // in its own WHERE: the check above ran before an await, so a row written
+    // in between is matched here, not overwritten. No row changed ⇒ refused.
+    const upsert = db
+      .prepare(
+        `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
        VALUES (?, ?, ?, ?, 'pending', ?, 0, 0, 0.5, ?)
        ON CONFLICT(peer_relay_id) DO UPDATE SET
-         public_key = excluded.public_key, endpoint_url = excluded.endpoint_url,
+         endpoint_url = excluded.endpoint_url,
          display_name = excluded.display_name, state = 'pending',
          nonce = excluded.nonce, missed_heartbeats = 0,
          peer_protocol_version = excluded.peer_protocol_version
-         WHERE relay_peers.state NOT IN ('active', 'pending')`,
-    ).run(relay_id, public_key, endpoint_url, display_name ?? null, ourNonce, spec_version ?? null);
+         WHERE relay_peers.state NOT IN ('active', 'pending')
+           AND lower(relay_peers.public_key) = lower(excluded.public_key)`,
+      )
+      .run(
+        relay_id,
+        public_key,
+        endpoint_url,
+        display_name ?? null,
+        ourNonce,
+        spec_version ?? null,
+      );
+    if (upsert.changes === 0) {
+      throw new HTTPException(409, {
+        message:
+          "peer row changed during propose (relay-federation@1.5 §3.1): it is now active or pending, or holds a different key; a propose may not replace a known peer's key",
+      });
+    }
 
     return c.json({
       relay_id: relayIdentity.relayMotebitId,
@@ -1937,7 +1972,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const peer = db
       .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state = 'pending'")
       .get(relay_id) as
-      { peer_relay_id: string; public_key: string; nonce: string | null } | undefined;
+      | {
+          peer_relay_id: string;
+          public_key: string;
+          nonce: string | null;
+          peered_at: number | null;
+        }
+      | undefined;
     if (!peer) throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
     if (!peer.nonce) throw new HTTPException(400, { message: "No nonce stored for this peer" });
 
@@ -1950,7 +1991,18 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       hexToBytes(peer.public_key),
     );
     if (!valid) {
-      db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(relay_id);
+      // A row that was once peered holds a key a confirm already proved: a
+      // failed confirm must not erase it, or a same-key propose (the key is
+      // public) plus a bad confirm would clear the way for a propose under a
+      // new key (§3.1). It is parked `removed` with its key kept. A row never
+      // peered holds only a proposer's claim and is dropped as before.
+      if (peer.peered_at != null) {
+        db.prepare(
+          "UPDATE relay_peers SET state = 'removed', nonce = NULL WHERE peer_relay_id = ? AND state = 'pending'",
+        ).run(relay_id);
+      } else {
+        db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(relay_id);
+      }
       throw new HTTPException(403, { message: "Challenge response verification failed" });
     }
 
