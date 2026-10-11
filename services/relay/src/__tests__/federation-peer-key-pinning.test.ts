@@ -95,11 +95,17 @@ async function peer(x: Name, y: Name): Promise<void> {
   ).nonce;
   const atY = await post(y, "/federation/v1/peer/confirm", {
     relay_id: ids[x].relayMotebitId,
-    ...(await operatorConfirm(relays[x], nonceAtY, AUTH_HEADER, ids[y].relayMotebitId)),
+    ...(await operatorConfirm(relays[x], nonceAtY, AUTH_HEADER, {
+      id: ids[y].relayMotebitId,
+      publicKey: ids[y].publicKeyHex,
+    })),
   });
   const atX = await post(x, "/federation/v1/peer/confirm", {
     relay_id: ids[y].relayMotebitId,
-    ...(await operatorConfirm(relays[y], nonceAtX, AUTH_HEADER, ids[x].relayMotebitId)),
+    ...(await operatorConfirm(relays[y], nonceAtX, AUTH_HEADER, {
+      id: ids[x].relayMotebitId,
+      publicKey: ids[x].publicKeyHex,
+    })),
   });
   expect([atY.status, atX.status]).toEqual([200, 200]);
 }
@@ -191,7 +197,10 @@ describe("a propose naming the same key", () => {
       expect(rowOfA()).toEqual(before);
       const confirm = await post("b", "/federation/v1/peer/confirm", {
         relay_id: ids.a.relayMotebitId,
-        ...(await operatorConfirm(relays.a, nonce, AUTH_HEADER, ids.b.relayMotebitId)),
+        ...(await operatorConfirm(relays.a, nonce, AUTH_HEADER, {
+          id: ids.b.relayMotebitId,
+          publicKey: ids.b.publicKeyHex,
+        })),
       });
       expect(confirm.status).toBe(200);
       expect(rowOfA()?.state).toBe("active");
@@ -213,6 +222,7 @@ describe("two-relay takeover attempt on a suspended peer", () => {
     const forged = await signedConfirm({
       sender: ids.a.relayMotebitId,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       nonce,
       endpointUrl: ATTACKER_URL,
       privateKey: attacker.privateKey,
@@ -235,6 +245,7 @@ describe("two-relay takeover attempt on a suspended peer", () => {
     const forged = await signedConfirm({
       sender: ids.a.relayMotebitId,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       nonce,
       endpointUrl: ATTACKER_URL,
       privateKey: attacker.privateKey,

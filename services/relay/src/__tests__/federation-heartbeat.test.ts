@@ -26,9 +26,11 @@ async function insertPeer(
   const keypair = await generateKeypair();
   PEER_KEYS.set(peerId, keypair.privateKey);
   db.prepare(
-    `INSERT OR REPLACE INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, missed_heartbeats, agent_count, trust_score)
-     VALUES (?, ?, ?, ?, ?, 0, 0.5)`,
-  ).run(peerId, bytesToHex(keypair.publicKey), endpointUrl, state, missed);
+    // A peer row is a confirmed handshake (`peered_at` set): a never-confirmed
+    // row confers no authority (relay-federation@1.5 §3.1).
+    `INSERT OR REPLACE INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, missed_heartbeats, agent_count, trust_score, peered_at)
+     VALUES (?, ?, ?, ?, ?, 0, 0.5, ?)`,
+  ).run(peerId, bytesToHex(keypair.publicKey), endpointUrl, state, missed, Date.now() - 60_000);
 }
 
 function getPeer(

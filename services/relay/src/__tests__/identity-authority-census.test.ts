@@ -627,7 +627,10 @@ describe("identity-authority census Q6 — a relay-federation@1.5 handshake is v
     const { nonce } = (await propose.json()) as { nonce: string };
     const confirm = await post(y, "/federation/v1/peer/confirm", {
       relay_id: ids[x].relayMotebitId,
-      ...(await operatorConfirm(relays[x], nonce, AUTH_HEADER, ids[y].relayMotebitId)),
+      ...(await operatorConfirm(relays[x], nonce, AUTH_HEADER, {
+        id: ids[y].relayMotebitId,
+        publicKey: ids[y].publicKeyHex,
+      })),
     });
     expect(confirm.status).toBe(200);
   }
@@ -647,7 +650,7 @@ describe("identity-authority census Q6 — a relay-federation@1.5 handshake is v
     }
   });
 
-  it("a peer proposed but never confirmed carries no v2 evidence and is still counted", async () => {
+  it("a propose writes no row (§3.1); a never-confirmed row an earlier build wrote carries no v2 evidence and is still counted", async () => {
     const propose = await post("b", "/federation/v1/peer/propose", {
       relay_id: ids.a.relayMotebitId,
       public_key: ids.a.publicKeyHex,
@@ -655,6 +658,15 @@ describe("identity-authority census Q6 — a relay-federation@1.5 handshake is v
       nonce: rand(),
     });
     expect(propose.status).toBe(200);
+    expect((await census(relays.b)).q6_v1_peers.ids).toEqual([]);
+
+    // The row a pre-fix build wrote at propose: pending, never confirmed.
+    relays.b.moteDb.db
+      .prepare(
+        `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, nonce, missed_heartbeats, agent_count, trust_score)
+         VALUES (?, ?, ?, 'pending', ?, 0, 0, 0.5)`,
+      )
+      .run(ids.a.relayMotebitId, ids.a.publicKeyHex, URLS.a, rand());
     const c = await census(relays.b);
     expect(c.q6_v1_peers.ids).toEqual([ids.a.relayMotebitId]);
     expect(c.q6_v1_peers.by_state).toEqual({ pending: 1 });

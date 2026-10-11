@@ -85,27 +85,28 @@ const TAMPERS: Tamper[] = [
     filter: "peerRowTransition",
   },
   {
-    name: "propose: a confirmed peer re-handshakes beside its row, not in it",
-    find: "    if (existing?.peered_at != null) {\n      // A confirmed peer re-handshakes",
-    replace: "    if (false as boolean) {\n      // A confirmed peer re-handshakes",
+    name: "propose: a confirmed peer re-handshakes beside its row, never in it",
+    find: "    recordHandshake(relay_id, {",
+    replace:
+      '    if (peer) writePeerRow(db, peer, { op: "update", row: { ...peer, endpoint_url, state: "pending" } }, "peer-key");\n    recordHandshake(relay_id, {',
     filter: "initial suspended",
   },
   {
     name: "propose: the key on record is compared before anything is signed",
-    find: "if (existing && existing.public_key.toLowerCase() !== public_key.toLowerCase()) {",
+    find: "if (peer && peer.public_key.toLowerCase() !== public_key.toLowerCase()) {",
     replace: "if (false as boolean) {",
     tests: [PINNING],
   },
   {
     name: "propose: a confirmed peer's re-handshake spends no per-peer slot",
-    find: "if (existing?.peered_at == null) checkPeerLimit(relay_id);",
-    replace: "checkPeerLimit(relay_id);",
+    find: "if (peer === undefined) checkPeerLimit(relay_id);\n    checkMaxPeers();",
+    replace: "checkPeerLimit(relay_id);\n    checkMaxPeers();",
     filter: "flood",
   },
   {
     name: "confirm: a confirmed peer's failed confirm spends no per-peer slot",
-    find: "if (!confirmed) checkPeerLimit(relay_id);",
-    replace: "checkPeerLimit(relay_id);",
+    find: "if (peer === undefined) checkPeerLimit(relay_id);\n    // The handshake this confirm answers",
+    replace: "checkPeerLimit(relay_id);\n    // The handshake this confirm answers",
     filter: "flood",
   },
   {
@@ -126,9 +127,9 @@ const TAMPERS: Tamper[] = [
   },
   {
     name: "confirm: the endpoint is the pending propose's, never the request's (F1)",
-    find: "body: peerConfirmBody(answered.nonce, answered.endpoint_url),",
+    find: "body: peerConfirmBody(answered.nonce, answered.endpoint_url, relayIdentity.publicKeyHex),",
     replace:
-      "body: peerConfirmBody(answered.nonce, (body as { endpoint_url?: string }).endpoint_url ?? answered.endpoint_url),",
+      "body: peerConfirmBody(answered.nonce, (body as { endpoint_url?: string }).endpoint_url ?? answered.endpoint_url, relayIdentity.publicKeyHex),",
     tests: [BINDING],
     filter: "F1",
   },

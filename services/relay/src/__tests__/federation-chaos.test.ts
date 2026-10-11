@@ -32,9 +32,19 @@ async function insertPeer(
   const keypair = await generateKeypair();
   PEER_KEYS.set(peerId, keypair.privateKey);
   db.prepare(
-    `INSERT OR REPLACE INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, missed_heartbeats, agent_count, trust_score, last_heartbeat_at)
-     VALUES (?, ?, ?, ?, ?, 0, 0.5, ?)`,
-  ).run(peerId, bytesToHex(keypair.publicKey), endpointUrl, state, missed, lastHeartbeatAt ?? null);
+    // A peer row is a confirmed handshake (`peered_at` set): a never-confirmed
+    // row confers no authority (relay-federation@1.5 §3.1).
+    `INSERT OR REPLACE INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, missed_heartbeats, agent_count, trust_score, last_heartbeat_at, peered_at)
+     VALUES (?, ?, ?, ?, ?, 0, 0.5, ?, ?)`,
+  ).run(
+    peerId,
+    bytesToHex(keypair.publicKey),
+    endpointUrl,
+    state,
+    missed,
+    lastHeartbeatAt ?? null,
+    Date.now() - 60_000,
+  );
 }
 
 function getPeer(
@@ -255,7 +265,7 @@ describe("Federation Chaos: Peer Dies Mid-Settlement Retry", () => {
 describe("Federation Chaos: Re-Registration Cooldown", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("rejects re-proposal for pending peer (409), prevents rapid re-registration", async () => {
+  it("a propose for a never-confirmed relay_id records a handshake, never a row; a re-propose records another", async () => {
     const relay = await createSyncRelay({
       allowPrivateEndpoints: true,
       apiToken: "test-token",
@@ -277,7 +287,8 @@ describe("Federation Chaos: Re-Registration Cooldown", () => {
     const peerPubHex = bytesToHex(peerKeypair.publicKey);
     const makeNonce = () => bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 
-    // First proposal creates peer in pending state
+    // A propose records a pending handshake beside relay_peers (§3.1): it is
+    // unauthenticated, so it writes no row.
     const res1 = await relay.app.request("/federation/v1/peer/propose", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -291,7 +302,16 @@ describe("Federation Chaos: Re-Registration Cooldown", () => {
     });
     expect(res1.status).toBe(200);
 
-    // Re-propose while pending returns 409 — prevents rapid re-registration
+    const rowCount = () =>
+      (
+        relay.moteDb.db
+          .prepare("SELECT COUNT(*) AS n FROM relay_peers WHERE peer_relay_id = ?")
+          .get(peerId) as { n: number }
+      ).n;
+    expect(rowCount()).toBe(0);
+
+    // A re-propose is another handshake, not a lockout: a never-confirmed
+    // relay_id is held by no one until a confirm verifies under its key.
     const res2 = await relay.app.request("/federation/v1/peer/propose", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -303,7 +323,8 @@ describe("Federation Chaos: Re-Registration Cooldown", () => {
         nonce: makeNonce(),
       }),
     });
-    expect(res2.status).toBe(409);
+    expect(res2.status).toBe(200);
+    expect(rowCount()).toBe(0);
 
     await relay.close();
   });

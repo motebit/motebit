@@ -96,13 +96,13 @@ async function handshake(a: SyncRelay, b: SyncRelay) {
     a,
     nB.nonce,
     { Authorization: `Bearer ${TOKEN_A}` },
-    idB.relay_motebit_id,
+    { id: idB.relay_motebit_id, publicKey: idB.public_key },
   );
   const sigB = await operatorConfirm(
     b,
     nA.nonce,
     { Authorization: `Bearer ${TOKEN_B}` },
-    idA.relay_motebit_id,
+    { id: idA.relay_motebit_id, publicKey: idA.public_key },
   );
   const confirmB = await fed(b, "POST", "/federation/v1/peer/confirm", sigA);
   const confirmA = await fed(a, "POST", "/federation/v1/peer/confirm", sigB);

@@ -914,8 +914,14 @@ async function peer(a: SyncRelay, aUrl: string, b: SyncRelay, bUrl: string): Pro
     })
   ).nonce;
   // relay-federation@1.5: self-propose is refused; the operator mints each confirm.
-  const sigA = await operatorConfirm(a, nB, AUTH_HEADER, idB.relay_motebit_id);
-  const sigB = await operatorConfirm(b, nA, AUTH_HEADER, idA.relay_motebit_id);
+  const sigA = await operatorConfirm(a, nB, AUTH_HEADER, {
+    id: idB.relay_motebit_id,
+    publicKey: idB.public_key,
+  });
+  const sigB = await operatorConfirm(b, nA, AUTH_HEADER, {
+    id: idA.relay_motebit_id,
+    publicKey: idA.public_key,
+  });
   for (const [on, relayId, challenge] of [
     [b, idA.relay_motebit_id, sigA],
     [a, idB.relay_motebit_id, sigB],

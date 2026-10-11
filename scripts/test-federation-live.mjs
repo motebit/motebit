@@ -395,13 +395,18 @@ async function phase2() {
   if (peerNonce) {
     try {
       // relay-federation@1.5 §3.1: a v2 `peer-confirm` naming Relay B (the
-      // relay that issued the nonce) as recipient, over that nonce and the
-      // endpoint the propose named — never a bare nonce.
+      // relay that issued the nonce) as recipient by id, over that nonce, the
+      // endpoint the propose named and Relay B's public key — never a bare
+      // nonce.
       const message = signFederationV2({
         kind: "peer-confirm",
         sender: syntheticRelayId,
         recipient: identityB.relay_motebit_id,
-        body: { nonce: peerNonce, endpoint_url: "https://synthetic-test-peer.invalid" },
+        body: {
+          nonce: peerNonce,
+          endpoint_url: "https://synthetic-test-peer.invalid",
+          recipient_public_key: identityB.public_key.toLowerCase(),
+        },
         privKeyObj: syntheticPrivKey,
       });
 

@@ -7,8 +7,12 @@
  * The rule: a row write (`UPDATE`, `INSERT … INTO`, `REPLACE INTO`,
  * `DELETE FROM`) naming `relay_peers` is permitted only
  *
- *   - inside `writePeerRow` in `federation.ts` — the one writer, which asks
- *     `peerRowTransition` and writes as a compare-and-set; or
+ *   - inside `writePeerRow` in `services/relay/src/federation.ts` — the one
+ *     writer, which asks `peerRowTransition` and writes as a compare-and-set.
+ *     The writer is identified by its DECLARATION NODE: the top-level
+ *     `function writePeerRow` statement of the file at exactly that
+ *     repo-relative path. A same-named function nested elsewhere, bound as a
+ *     const, or declared in another file (whatever its basename) is not it;
  *   - as an `UPDATE` whose SET list assigns ONLY columns named in
  *     `COUNTER_TRUST_COLUMNS`, each with its stated reason.
  *
@@ -18,11 +22,15 @@
  * column, a row-value target) — what cannot be read is refused, never
  * assumed counter-only. The allowance is by COLUMN, never by file.
  *
- * Aperture: every string literal, template literal and `+` chain of them in
- * the scanned sources, with identifier quoting (`"`, `` ` ``, `[]`) and a
- * `main.` schema prefix folded away. A table name held in a variable and
- * interpolated is not seen; that is outside the accidental-drift threat
- * model this scan guards.
+ * Aperture: every string expression in the scanned sources — string and
+ * template literals, `+` chains of them, `[…].join(sep)` over an array
+ * literal, `.concat(…)`, an identifier bound to a string in the same file
+ * (`const`/`let`/`var`, with every later `x += …` appended), each read as one
+ * text — with SQL comments (`/* … *\/`, `-- …`) stripped, identifier quoting
+ * (`"`, `` ` ``, `[]`) and a `main.` schema prefix folded away. A table name
+ * that reaches the SQL through a function call, another module or a runtime
+ * value is not seen; that is outside the accidental-drift threat model this
+ * scan guards.
  */
 import ts from "typescript";
 
@@ -42,8 +50,11 @@ export const COUNTER_TRUST_COLUMNS: Readonly<Record<string, string>> = {
     "the numeric form of trust_level (trustLevelToScore), a routing weight; never read by peer authority",
 };
 
-/** The one writer: this function in this file. */
-export const PEER_ROW_WRITER = { file: "federation.ts", fn: "writePeerRow" } as const;
+/** The one writer: this top-level function declaration in this file (repo-relative). */
+export const PEER_ROW_WRITER = {
+  file: "services/relay/src/federation.ts",
+  fn: "writePeerRow",
+} as const;
 
 export interface PeerRowWriteSite {
   /** Path as given to the scanner. */
@@ -64,13 +75,13 @@ const HOLE = "\u0000";
 const WRITE_RE =
   /\b(UPDATE(?:\s+OR\s+[a-z]+)?|INSERT(?:\s+OR\s+[a-z]+)?\s+INTO|REPLACE\s+INTO|DELETE\s+FROM)\s+(?:main\s*\.\s*)?relay_peers\b/gi;
 
+/** SQL comments removed (a comment is whitespace to SQL; left in, it can split a verb from its table or end a SET list early). */
+function stripSqlComments(sql: string): string {
+  return sql.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, " ").replace(/--[^\n]*/g, " ");
+}
+
 function literalText(node: ts.Node): string | null {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
-  if (ts.isTemplateExpression(node)) {
-    let s = node.head.text;
-    for (const span of node.templateSpans) s += HOLE + span.literal.text;
-    return s;
-  }
   return null;
 }
 
@@ -78,11 +89,102 @@ function isPlus(node: ts.Node): node is ts.BinaryExpression {
   return ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken;
 }
 
-/** A `+` chain flattened: literal text, anything else a hole. */
-function flatten(node: ts.Node): string {
-  if (isPlus(node)) return flatten(node.left) + flatten(node.right);
-  if (ts.isParenthesizedExpression(node)) return flatten(node.expression);
-  return literalText(node) ?? HOLE;
+/** `[…].join(sep)` over an array literal. */
+function isArrayJoin(node: ts.Node): node is ts.CallExpression {
+  return (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === "join" &&
+    ts.isArrayLiteralExpression(skipParens(node.expression.expression))
+  );
+}
+
+/** `x.concat(…)`. */
+function isConcat(node: ts.Node): node is ts.CallExpression {
+  return (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === "concat"
+  );
+}
+
+function skipParens(node: ts.Expression): ts.Expression {
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  return node;
+}
+
+/** The string expressions the scan reads as one text. */
+function isStringish(node: ts.Node): boolean {
+  return (
+    literalText(node) !== null ||
+    ts.isTemplateExpression(node) ||
+    isPlus(node) ||
+    isArrayJoin(node) ||
+    isConcat(node)
+  );
+}
+
+/**
+ * Identifiers bound to strings in this file: a declaration's initializer, then
+ * every later `name += …` in source order. Same name, any scope — a collision
+ * can only widen what is read (fail-closed: more text, more red).
+ */
+function stringBindings(sf: ts.SourceFile): Map<string, ts.Expression[]> {
+  const out = new Map<string, ts.Expression[]>();
+  const visit = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined) {
+      const init = skipParens(n.initializer);
+      if (isStringish(init) || ts.isIdentifier(init)) out.set(n.name.text, [init]);
+    } else if (
+      ts.isBinaryExpression(n) &&
+      n.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
+      ts.isIdentifier(n.left)
+    ) {
+      out.get(n.left.text)?.push(n.right);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** A string expression flattened to text: literal parts verbatim, anything unknown a hole. */
+function flatten(
+  node: ts.Node,
+  bindings: Map<string, ts.Expression[]>,
+  resolving: Set<string> = new Set(),
+): string {
+  const f = (n: ts.Node): string => flatten(n, bindings, resolving);
+  if (ts.isParenthesizedExpression(node)) return f(node.expression);
+  const lit = literalText(node);
+  if (lit !== null) return lit;
+  if (ts.isTemplateExpression(node)) {
+    let s = node.head.text;
+    for (const span of node.templateSpans) s += f(span.expression) + span.literal.text;
+    return s;
+  }
+  if (isPlus(node)) return f(node.left) + f(node.right);
+  if (isArrayJoin(node)) {
+    const arr = skipParens(
+      (node.expression as ts.PropertyAccessExpression).expression,
+    ) as ts.ArrayLiteralExpression;
+    const sepArg = node.arguments[0];
+    const sep = sepArg === undefined ? "," : f(sepArg);
+    return arr.elements.map((e) => f(e)).join(sep);
+  }
+  if (isConcat(node)) {
+    const recv = (node.expression as ts.PropertyAccessExpression).expression;
+    return f(recv) + node.arguments.map((a) => f(a)).join("");
+  }
+  if (ts.isIdentifier(node)) {
+    const parts = bindings.get(node.text);
+    if (parts === undefined || resolving.has(node.text)) return HOLE;
+    resolving.add(node.text);
+    const text = parts.map((p) => f(p)).join("");
+    resolving.delete(node.text);
+    return text;
+  }
+  return HOLE;
 }
 
 function enclosingFn(node: ts.Node): string | null {
@@ -96,6 +198,20 @@ function enclosingFn(node: ts.Node): string | null {
     }
   }
   return null;
+}
+
+/**
+ * The writer's declaration node: the ONE top-level `function writePeerRow`
+ * statement of the file at exactly `PEER_ROW_WRITER.file`. null anywhere
+ * else, and null when there is not exactly one (fail-closed).
+ */
+function writerDeclaration(file: string, sf: ts.SourceFile): ts.FunctionDeclaration | null {
+  if (file.replace(/\\/g, "/") !== PEER_ROW_WRITER.file) return null;
+  const decls = sf.statements.filter(
+    (st): st is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(st) && st.name?.text === PEER_ROW_WRITER.fn && st.body !== undefined,
+  );
+  return decls.length === 1 ? decls[0]! : null;
 }
 
 /** Split on commas outside parentheses. */
@@ -146,22 +262,53 @@ function setColumns(afterTable: string): string[] | null {
   return cols.length > 0 ? cols : null;
 }
 
-function basename(p: string): string {
-  return p.split(/[\\/]/).pop()!;
-}
-
-/** Every `relay_peers` row write in one source file, each with its verdict. */
+/**
+ * Every `relay_peers` row write in one source file, each with its verdict.
+ * `file` is the repo-relative path (the writer is recognised only at
+ * `PEER_ROW_WRITER.file`).
+ */
 export function scanPeerRowWrites(file: string, source: string): PeerRowWriteSite[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const bindings = stringBindings(sf);
+  const writer = writerDeclaration(file, sf);
   const sites: PeerRowWriteSite[] = [];
+  const inWriterNode = (node: ts.Node): boolean =>
+    writer !== null && node.getStart(sf) >= writer.getStart(sf) && node.getEnd() <= writer.getEnd();
   const visit = (node: ts.Node): void => {
     let up: ts.Node | undefined = node.parent;
     while (up !== undefined && ts.isParenthesizedExpression(up)) up = up.parent;
-    const isRoot =
-      (isPlus(node) || literalText(node) !== null) && !(up !== undefined && isPlus(up));
+    // A root: a string expression not itself part of a larger one (a `+`
+    // operand, a joined array's element, a concat's receiver or argument, a
+    // template span).
+    const partOfLarger =
+      up !== undefined &&
+      (isPlus(up) ||
+        ts.isTemplateSpan(up) ||
+        (ts.isArrayLiteralExpression(up) &&
+          up.parent !== undefined &&
+          ts.isPropertyAccessExpression(up.parent) &&
+          up.parent.parent !== undefined &&
+          isArrayJoin(up.parent.parent)) ||
+        (ts.isPropertyAccessExpression(up) && up.parent !== undefined && isConcat(up.parent)) ||
+        (ts.isCallExpression(up) && isConcat(up) && up.arguments.includes(node as ts.Expression)));
+    // `x += …` builds the binding read at its declaration; it is not a root.
+    const appended =
+      up !== undefined &&
+      ts.isBinaryExpression(up) &&
+      up.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
+      up.right === node;
+    const isBindingRoot =
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined &&
+      (bindings.get(node.name.text)?.length ?? 0) > 1;
+    const isRoot = (isStringish(node) && !partOfLarger && !appended) || isBindingRoot;
     if (isRoot) {
-      // Fold identifier quoting so `"relay_peers"`, `[relay_peers]` read the same.
-      const text = flatten(node).replace(/["`[\]]/g, "");
+      const raw = isBindingRoot
+        ? flatten((node as ts.VariableDeclaration).name, bindings)
+        : flatten(node, bindings);
+      // Comments out; identifier quoting folded so `"relay_peers"`, `[relay_peers]` read the same.
+      const text = stripSqlComments(raw).replace(/["`[\]]/g, "");
       WRITE_RE.lastIndex = 0;
       let m: RegExpExecArray | null;
       while ((m = WRITE_RE.exec(text)) !== null) {
@@ -177,8 +324,7 @@ export function scanPeerRowWrites(file: string, source: string): PeerRowWriteSit
         const fn = enclosingFn(node);
         const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
         let refusal: string | null = null;
-        const inWriter = basename(file) === PEER_ROW_WRITER.file && fn === PEER_ROW_WRITER.fn;
-        if (!inWriter) {
+        if (!inWriterNode(node)) {
           if (verb !== "UPDATE") {
             refusal = `${verb} on relay_peers outside ${PEER_ROW_WRITER.fn}`;
           } else if (columns === null) {

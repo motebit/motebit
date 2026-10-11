@@ -71,9 +71,14 @@ async function becomePeer(relay: SyncRelay): Promise<Peer> {
     nonce: rand(),
   });
   expect(propose.status).toBe(200);
-  const { nonce: ourNonce, relay_id: recipient } = propose.body as {
+  const {
+    nonce: ourNonce,
+    relay_id: recipient,
+    public_key: recipientPublicKey,
+  } = propose.body as {
     nonce: string;
     relay_id: string;
+    public_key: string;
   };
 
   // The confirm proves control of the key we just supplied — and nothing else.
@@ -84,6 +89,7 @@ async function becomePeer(relay: SyncRelay): Promise<Peer> {
     await signedConfirm({
       sender: peer.relayId,
       recipient,
+      recipientPublicKey,
       nonce: ourNonce,
       endpointUrl: ATTACKER_URL,
       privateKey: peer.privateKey,

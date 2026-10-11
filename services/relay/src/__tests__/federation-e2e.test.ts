@@ -164,7 +164,12 @@ async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<v
     method: "POST",
     headers: { "Content-Type": "application/json" },
     // A's operator mints a v2 peer-confirm to B over N_B, for A's endpoint.
-    body: JSON.stringify(await operatorConfirm(relayA, N_B, AUTH_HEADER, idB.relay_motebit_id)),
+    body: JSON.stringify(
+      await operatorConfirm(relayA, N_B, AUTH_HEADER, {
+        id: idB.relay_motebit_id,
+        publicKey: idB.public_key,
+      }),
+    ),
   });
   expect(confirmB.status).toBe(200);
 
@@ -172,7 +177,12 @@ async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<v
     method: "POST",
     headers: { "Content-Type": "application/json" },
     // B's operator mints a v2 peer-confirm to A over N_A, for B's endpoint.
-    body: JSON.stringify(await operatorConfirm(relayB, N_A, AUTH_HEADER, idA.relay_motebit_id)),
+    body: JSON.stringify(
+      await operatorConfirm(relayB, N_A, AUTH_HEADER, {
+        id: idA.relay_motebit_id,
+        publicKey: idA.public_key,
+      }),
+    ),
   });
   expect(confirmA.status).toBe(200);
 }
@@ -425,6 +435,7 @@ describe("Federation E2E", () => {
           await signedConfirm({
             sender: idA.relayMotebitId,
             recipient: relayB.relayIdentity.relayMotebitId,
+            recipientPublicKey: relayB.relayIdentity.publicKeyHex,
             nonce: issued,
             endpointUrl: RELAY_A_URL,
             privateKey: stranger.privateKey,

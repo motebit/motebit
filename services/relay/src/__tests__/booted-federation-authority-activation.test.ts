@@ -122,14 +122,20 @@ async function becomeActivePeer(baseUrl: string): Promise<HostilePeer> {
     }),
   });
   expect(propose.status, "arrange: propose is accepted with no authorization").toBe(200);
-  const { nonce, relay_id: recipient } = (await propose.json()) as {
+  const {
+    nonce,
+    relay_id: recipient,
+    public_key: recipientPublicKey,
+  } = (await propose.json()) as {
     nonce: string;
     relay_id: string;
+    public_key: string;
   };
 
   const confirmRequest = await signedConfirm({
     sender: relayId,
     recipient,
+    recipientPublicKey,
     nonce,
     endpointUrl: PEER_ENDPOINT,
     privateKey: kp.privateKey,

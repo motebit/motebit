@@ -470,8 +470,14 @@ async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<v
     })
   ).nonce;
   // relay-federation@1.5: self-propose is refused; the operator mints each confirm.
-  const sigA = await operatorConfirm(relayA, nB, AUTH_HEADER, idB.relay_motebit_id);
-  const sigB = await operatorConfirm(relayB, nA, AUTH_HEADER, idA.relay_motebit_id);
+  const sigA = await operatorConfirm(relayA, nB, AUTH_HEADER, {
+    id: idB.relay_motebit_id,
+    publicKey: idB.public_key,
+  });
+  const sigB = await operatorConfirm(relayB, nA, AUTH_HEADER, {
+    id: idA.relay_motebit_id,
+    publicKey: idA.public_key,
+  });
   for (const [on, relayId, challenge] of [
     [relayB, idA.relay_motebit_id, sigA],
     [relayA, idB.relay_motebit_id, sigB],

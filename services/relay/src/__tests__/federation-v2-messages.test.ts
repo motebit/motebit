@@ -91,11 +91,17 @@ async function peer(x: Name, y: Name): Promise<void> {
   ).nonce;
   const atY = await post(y, "/federation/v1/peer/confirm", {
     relay_id: ids[x].relayMotebitId,
-    ...(await operatorConfirm(relays[x], nonceAtY, AUTH_HEADER, ids[y].relayMotebitId)),
+    ...(await operatorConfirm(relays[x], nonceAtY, AUTH_HEADER, {
+      id: ids[y].relayMotebitId,
+      publicKey: ids[y].publicKeyHex,
+    })),
   });
   const atX = await post(x, "/federation/v1/peer/confirm", {
     relay_id: ids[y].relayMotebitId,
-    ...(await operatorConfirm(relays[y], nonceAtX, AUTH_HEADER, ids[x].relayMotebitId)),
+    ...(await operatorConfirm(relays[y], nonceAtX, AUTH_HEADER, {
+      id: ids[x].relayMotebitId,
+      publicKey: ids[x].publicKeyHex,
+    })),
   });
   expect([atY.status, atX.status]).toEqual([200, 200]);
 }

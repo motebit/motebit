@@ -92,8 +92,9 @@ interface PeerHandshakeResult {
  *   2. Propose a→b (b stores a as pending, returns b's nonce for a and a v2
  *      `peer-challenge` signed by b's key)
  *   3. Verify the challenge — from b's key, to a, answering a's own nonce,
- *      for a's endpoint — BEFORE minting anything; then a's operator mints a
- *      v2 `peer-confirm` naming b (the relay that issued the nonce) and a's
+ *      for a's endpoint and a's key — BEFORE minting anything; then a's
+ *      operator mints a v2 `peer-confirm` naming b (the relay that issued
+ *      the nonce) by id AND by the key the challenge verified under, and a's
  *      own endpoint; confirm a on b — b now holds a as an active peer.
  *   4. With b's token too: the same for b→a. Without it the result is
  *      `half: true` and b's operator runs the reverse.
@@ -161,7 +162,11 @@ async function runHalf(
   const proposal = await postProposal(peerUrl, selfId, self.url, displayName, ourNonce);
   if (!proposal.ok) return { ok: false, step: "propose", error: proposal.error };
   // The nonce must come from the peer's key, to us, answering OUR nonce, for
-  // OUR endpoint — checked before our operator signs anything over it.
+  // OUR endpoint and OUR key — checked before our operator signs anything
+  // over it. The key it verifies under is the key the confirm commits to:
+  // relay ids are not self-certifying, so a counterparty that claims another
+  // relay's id under its own key gets a confirm only its own key would
+  // accept — never one the relay it impersonates accepts (cold review R2).
   const challenge = await verifyFederationMessage(proposal.challenge, {
     kind: "peer-challenge",
     self: selfId.relay_motebit_id,
@@ -171,6 +176,7 @@ async function runHalf(
       request_nonce: ourNonce,
       nonce: proposal.nonce,
       proposer_endpoint_url: self.url,
+      proposer_public_key: selfId.public_key.toLowerCase(),
     },
   });
   if (!challenge.ok) {
@@ -184,7 +190,7 @@ async function runHalf(
     self.url,
     selfHeaders,
     proposal.nonce,
-    peerId.relay_motebit_id,
+    { id: peerId.relay_motebit_id, publicKey: peerId.public_key },
     self.url,
   );
   if (!minted.ok) return { ok: false, step: "operator-confirm", error: minted.error };
@@ -240,20 +246,26 @@ async function postConfirm(
 
 /**
  * The relay's own step-3 confirm, minted on its operator's authority (§3.1):
- * a v2 `peer-confirm` to `recipient` — the ONE relay that issued `nonce` —
- * confirming `endpointUrl`, which the relay refuses unless it is its own.
+ * a v2 `peer-confirm` to `recipient` — the ONE relay that issued `nonce`, by
+ * id AND by the key its challenge verified under — confirming `endpointUrl`,
+ * which the relay refuses unless it is its own.
  */
 async function postOperatorConfirm(
   relayUrl: string,
   headers: Record<string, string>,
   nonce: string,
-  recipient: string,
+  recipient: { id: string; publicKey: string },
   endpointUrl: string,
 ): Promise<{ ok: true; request: ConfirmRequest } | { ok: false; error: string }> {
   const res = await fetch(`${relayUrl}/api/v1/admin/federation/peer-confirm-signature`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ nonce, recipient, endpoint_url: endpointUrl }),
+    body: JSON.stringify({
+      nonce,
+      recipient: recipient.id,
+      recipient_public_key: recipient.publicKey,
+      endpoint_url: endpointUrl,
+    }),
   });
   if (!res.ok) return { ok: false, error: `${String(res.status)} ${await res.text()}` };
   const body = (await res.json()) as { message: unknown; nonce: string };

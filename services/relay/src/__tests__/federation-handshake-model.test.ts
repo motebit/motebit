@@ -43,7 +43,7 @@
  *                   (the ledger records the id and key it addressed), so a
  *                   confirm minted for an impersonated identity never
  *                   satisfies it, whatever the bytes carry.
- *   I-no-strengthen no step moves A's row (A's key, confirmed) toward active,
+ *   I-no-strengthen no attacker step moves A's row (A's key, confirmed) toward active,
  *                   changes its key, changes its endpoint or deletes it, and
  *                   no step makes a row under A's key confirmed — unless in
  *                   that step A's key holder itself confirmed to B (id + key).
@@ -105,6 +105,7 @@ function challengeBody(args: {
     request_nonce: args.requestNonce,
     nonce: args.nonce,
     proposer_endpoint_url: args.proposerEndpoint,
+    proposer_public_key: args.proposerKey.toLowerCase(),
   };
 }
 
@@ -114,7 +115,11 @@ function confirmBody(args: {
   endpoint: string;
   recipientKey: string;
 }): Record<string, string> {
-  return { nonce: args.nonce, endpoint_url: args.endpoint };
+  return {
+    nonce: args.nonce,
+    endpoint_url: args.endpoint,
+    recipient_public_key: args.recipientKey.toLowerCase(),
+  };
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────
@@ -675,7 +680,13 @@ async function replay(start: Start, seq: Action[]): Promise<Replay> {
     const status = await act(r, action);
     const at = `step ${i + 1} ${action}`;
     if (status !== null && status >= 500) return { violation: `${at}: HTTP ${status}`, run: r };
-    const v = checkAuth(r) ?? checkNoStrengthen(r, before);
+    // I-no-strengthen is over the attacker's steps: A's own (a heartbeat
+    // signed by A, its own peering) may move its row toward active.
+    const v =
+      checkAuth(r) ??
+      ((ATTACKER_ACTIONS as readonly Action[]).includes(action)
+        ? checkNoStrengthen(r, before)
+        : null);
     if (v !== null) return { violation: `${at}: ${v}`, run: r };
   }
   return { violation: null, run: r };
@@ -768,14 +779,6 @@ afterAll(async () => {
 
 // ── The named findings, as cells ────────────────────────────────────────────
 
-/**
- * CHECKPOINT 1 — committed RED. Every cell below and every start state is
- * expected to FAIL against this tree (the counterexamples are printed); `it.fails`
- * keeps the push hook honest without `--no-verify`. The structural fix flips
- * this to `it`.
- */
-const red = it.fails;
-
 describe("the second cold review's findings, as model cells", () => {
   const cells: Array<[string, Start, Action[]]> = [
     ["R1: own-key propose + own-key remove locks A out (absent)", "absent", ["P_MK_ME", "RM_MK"]],
@@ -792,10 +795,39 @@ describe("the second cold review's findings, as model cells", () => {
     ],
   ];
   for (const [name, start, seq] of cells) {
-    red(name, async () => {
+    it(name, async () => {
       const { violation, run } = await replay(start, seq);
       const what = violation ?? (run.squatted ? null : await checkLive(run));
       expect(what, `[${start}] ${seq.join(",")}`).toBeNull();
+    });
+  }
+});
+
+describe("a never-confirmed row is no peer (§3.1, §3.3)", () => {
+  // The choice for a removal naming a never-confirmed row: REFUSE (403), not
+  // delete. The row's key was never proven, so a removal signed under it
+  // proves nothing about any peer; and the row is already inert — a propose
+  // ignores it and a verified confirm replaces it — so there is nothing a
+  // delete would free. Refusing keeps every request on that row a no-op.
+  for (const start of ["removed-unconfirmed", "pending-unconfirmed"] as const) {
+    it(`${start}: a removal or heartbeat signed under its key is 403 and writes nothing`, async () => {
+      clockOffset += 60 * 60 * 1000;
+      seed(start);
+      const before = rowOfA();
+      const key = start === "removed-unconfirmed" ? m.privateKey : idA.privateKey;
+      const rm = await removeRequest({
+        sender: idA.relayMotebitId,
+        recipient: idB.relayMotebitId,
+        privateKey: key,
+      });
+      expect((await request(b, "/federation/v1/peer/remove", { body: rm })).status).toBe(403);
+      const hb = await heartbeatRequest({
+        sender: idA.relayMotebitId,
+        recipient: idB.relayMotebitId,
+        privateKey: key,
+      });
+      expect((await request(b, "/federation/v1/peer/heartbeat", { body: hb })).status).toBe(403);
+      expect(rowOfA()).toEqual(before);
     });
   }
 });
@@ -805,7 +837,7 @@ describe("the second cold review's findings, as model cells", () => {
 describe(`peering handshake model check (6 start states × action sequences ≤ ${MAX_DEPTH})`, () => {
   const totals = { states: 0, transitions: 0, squatExempt: 0 };
   for (const start of START) {
-    red(
+    it(
       `start ${start}`,
       async () => {
         const res = await explore(start, MAX_DEPTH);

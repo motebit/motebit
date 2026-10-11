@@ -93,18 +93,24 @@ async function j(method: string, base: number, path: string, body?: unknown) {
 
 /**
  * A relay's step-3 confirm, minted on ITS operator's token only: a v2
- * `peer-confirm` to `recipient` (the relay that issued `nonce`) for the
+ * `peer-confirm` to `recipient` (the relay that issued `nonce`, by id and
+ * by key — relay ids are not self-certifying) for the
  * relay's own endpoint (relay-federation@1.5 §3.1). Returns the confirm body.
  */
 async function operatorConfirm(
   op: typeof A,
   nonce: string,
-  recipient: string,
+  recipient: { relay_motebit_id: string; public_key: string },
 ): Promise<{ message: unknown; nonce: string }> {
   const r = await fetch(`${url(op.port)}/api/v1/admin/federation/peer-confirm-signature`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${op.token}` },
-    body: JSON.stringify({ nonce, recipient, endpoint_url: url(op.port) }),
+    body: JSON.stringify({
+      nonce,
+      recipient: recipient.relay_motebit_id,
+      recipient_public_key: recipient.public_key,
+      endpoint_url: url(op.port),
+    }),
   });
   if (!r.ok) throw new Error(`operator confirm on :${op.port}: ${r.status} ${await r.text()}`);
   const body = (await r.json()) as { message: unknown; nonce: string };
@@ -145,9 +151,9 @@ async function handshake() {
   // A's operator mints A's confirm over N_B with A's OWN token
   // (relay-federation@1.5 §3.1: self-propose is refused). B's token never
   // touches A, and vice versa — still no shared secret.
-  const sigA = await operatorConfirm(A, nB.nonce, idB.relay_motebit_id);
+  const sigA = await operatorConfirm(A, nB.nonce, idB);
   // B's operator mints B's confirm over N_A.
-  const sigB = await operatorConfirm(B, nA.nonce, idA.relay_motebit_id);
+  const sigB = await operatorConfirm(B, nA.nonce, idA);
   // Confirm each side.
   const cB = await j("POST", B.port, "/federation/v1/peer/confirm", sigA);
   const cA = await j("POST", A.port, "/federation/v1/peer/confirm", sigB);

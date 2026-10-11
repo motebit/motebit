@@ -62,14 +62,18 @@ export const FEDERATION_MESSAGE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
  *                        recipient. Body `{ action: "remove" }`.
  *   - `peer-challenge` — handshake step 2. sender: the relay a propose was
  *                        sent to; verifier: the proposer. Body
- *                        `{ request_nonce, nonce, proposer_endpoint_url }` —
- *                        the proposer's nonce it answers, the nonce it issued
- *                        for the confirm, and the endpoint it recorded for the
- *                        proposer.
+ *                        `{ request_nonce, nonce, proposer_endpoint_url,
+ *                        proposer_public_key }` — the proposer's nonce it
+ *                        answers, the nonce it issued for the confirm, and the
+ *                        endpoint and key it recorded for the proposer.
  *   - `peer-confirm`   — handshake step 3. sender: the proposer; verifier: the
  *                        ONE relay that issued the nonce. Body
- *                        `{ nonce, endpoint_url }` — that nonce, and the
- *                        sender's endpoint being confirmed.
+ *                        `{ nonce, endpoint_url, recipient_public_key }` —
+ *                        that nonce, the sender's endpoint being confirmed,
+ *                        and the recipient's key: relay ids are not
+ *                        self-certifying, so the envelope's `recipient` id
+ *                        alone does not name a relay, and the verifier builds
+ *                        this body from its OWN key.
  */
 export const FEDERATION_MESSAGE_KINDS = {
   heartbeat: { maxSkewMs: 300_000 },

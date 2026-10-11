@@ -362,9 +362,11 @@ describe("Federation configuration enforcement", () => {
           headers: { "Content-Type": "application/json", ...(auth ? AUTH_HEADER : {}) },
           body: JSON.stringify(body),
         });
-      expect((await mint({ nonce, recipient: "relay-b" }, false)).status).toBe(401);
+      const bKey = "bb".repeat(32);
+      const to = { recipient: "relay-b", recipient_public_key: bKey };
+      expect((await mint({ nonce, ...to }, false)).status).toBe(401);
 
-      const res = await mint({ nonce, recipient: "relay-b" });
+      const res = await mint({ nonce, ...to });
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         relay_id: string;
@@ -379,20 +381,43 @@ describe("Federation configuration enforcement", () => {
         self: "relay-b",
         expectedSender: relay.relayIdentity.relayMotebitId,
         senderPublicKeyHex: relay.relayIdentity.publicKeyHex,
-        body: { nonce, endpoint_url: "http://self.test:3000" },
+        body: {
+          nonce,
+          endpoint_url: "http://self.test:3000",
+          recipient_public_key: bKey,
+        },
       });
       expect(v.ok).toBe(true);
 
-      // A bare nonce, no recipient, itself as recipient, a foreign endpoint: refused.
+      // A bare nonce, no recipient, itself as recipient, no recipient key, a
+      // malformed key, its own key, a foreign endpoint: refused.
       expect((await mint({ nonce })).status).toBe(400);
-      expect((await mint({ nonce, recipient: relay.relayIdentity.relayMotebitId })).status).toBe(
+      expect(
+        (
+          await mint({
+            nonce,
+            recipient: relay.relayIdentity.relayMotebitId,
+            recipient_public_key: bKey,
+          })
+        ).status,
+      ).toBe(400);
+      expect((await mint({ nonce, recipient: "relay-b" })).status).toBe(400);
+      expect((await mint({ nonce, recipient: "relay-b", recipient_public_key: "zz" })).status).toBe(
         400,
       );
       expect(
-        (await mint({ nonce, recipient: "relay-b", endpoint_url: "http://attacker.test:3666" }))
-          .status,
+        (
+          await mint({
+            nonce,
+            recipient: "relay-b",
+            recipient_public_key: relay.relayIdentity.publicKeyHex,
+          })
+        ).status,
       ).toBe(400);
-      expect((await mint({ nonce: "not-hex", recipient: "relay-b" })).status).toBe(400);
+      expect((await mint({ nonce, ...to, endpoint_url: "http://attacker.test:3666" })).status).toBe(
+        400,
+      );
+      expect((await mint({ nonce: "not-hex", ...to })).status).toBe(400);
     });
 
     it("does NOT persist a relay_peers row keyed on the relay's own id", async () => {
@@ -414,15 +439,18 @@ describe("Federation configuration enforcement", () => {
       expect(row).toBeUndefined();
     });
 
-    it("non-self propose still creates a pending peer row (regression)", async () => {
+    it("non-self propose is answered and records a handshake, never a row (§3.1)", async () => {
       const peerId = "peer-not-self";
       const res = await proposePeer(relay, peerId);
       expect(res.status).toBe(200);
+      expect(((await res.json()) as { nonce?: string }).nonce).toMatch(/^[0-9a-f]{64}$/);
 
+      // Unauthenticated, so it writes nothing: a relay_id never confirmed has
+      // no row; one is born only from a verified confirm.
       const row = relay.moteDb.db
         .prepare("SELECT peer_relay_id, state FROM relay_peers WHERE peer_relay_id = ?")
-        .get(peerId) as { peer_relay_id: string; state: string } | undefined;
-      expect(row?.state).toBe("pending");
+        .get(peerId);
+      expect(row).toBeUndefined();
     });
   });
 });

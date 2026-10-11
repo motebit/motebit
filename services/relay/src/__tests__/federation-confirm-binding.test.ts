@@ -77,12 +77,17 @@ async function propose(at: Name, as: Name, endpoint: string): Promise<string> {
 async function mint(
   op: Name,
   nonce: string,
-  counterparty: string,
+  counterparty: { id: string; publicKey: string },
 ): Promise<Record<string, unknown>> {
   const res = await post(
     op,
     "/api/v1/admin/federation/peer-confirm-signature",
-    { nonce, recipient: counterparty, endpoint_url: URLS[op] },
+    {
+      nonce,
+      recipient: counterparty.id,
+      recipient_public_key: counterparty.publicKey,
+      endpoint_url: URLS[op],
+    },
     AUTH_HEADER,
   );
   expect(res.status).toBe(200);
@@ -106,7 +111,12 @@ async function confirm(
 /** One half: `from` proposes at `at` and confirms with its operator's mint. */
 async function half(from: Name, at: Name): Promise<void> {
   const n = await propose(at, from, URLS[from]);
-  const res = await confirm(at, from, n, await mint(from, n, ids[at].relayMotebitId));
+  const res = await confirm(
+    at,
+    from,
+    n,
+    await mint(from, n, { id: ids[at].relayMotebitId, publicKey: ids[at].publicKeyHex }),
+  );
   expect(res.status).toBe(200);
 }
 
@@ -152,8 +162,10 @@ describe("F1: A's confirm, obtained by M, is refused at B", () => {
     // A's operator runs `motebit federation peer <M>`: A proposes at M, and M
     // (malicious) answers with N instead of a nonce of its own.
     await propose("m", "a", URLS.a);
+    // Either way M's /identity advertises M's own key — the key A's tooling
+    // verified M's challenge under, so the key A's confirm commits to.
     const recipient = counterparty === "m-id" ? ids.m.relayMotebitId : ids.b.relayMotebitId;
-    const minted = await mint("a", N, recipient);
+    const minted = await mint("a", N, { id: recipient, publicKey: ids.m.publicKeyHex });
     const before = rowAt("b", "a");
     const res = await confirm("b", "a", N, minted); // M forwards it to B
     return { status: res.status, before, after: rowAt("b", "a") };
@@ -192,10 +204,28 @@ describe("F1: A's confirm, obtained by M, is refused at B", () => {
       expect(r.after?.state).not.toBe("active");
     });
 
+    it("A's confirm names B by id AND key, over a nonce M obtained at M's endpoint: the endpoint check alone refuses it", async () => {
+      // Recipient id and key are both right here (as if A's operator minted
+      // without the tooling's challenge check), so only the endpoint binding
+      // — the body built from the endpoint B's pending propose named — stands
+      // between M and A active at M's endpoint.
+      const N = await propose("b", "a", URLS.m);
+      const minted = await mint("a", N, {
+        id: ids.b.relayMotebitId,
+        publicKey: ids.b.publicKeyHex,
+      });
+      const before = rowAt("b", "a");
+      const res = await confirm("b", "a", N, minted);
+      expect(res.status).toBe(400);
+      expect(await res.text()).toMatch(/body_mismatch/);
+      expect(rowAt("b", "a")).toEqual(before);
+    });
+
     it("M claims B's identity: refused, and A is never active at B", async () => {
       const r = await attack("claims-b");
       expect(r.status).toBeGreaterThanOrEqual(400);
-      // A failed confirm discards a never-confirmed claim (§3.1, first-come).
+      // A propose writes no row, so a never-peered id has none — before or
+      // after the refused confirm (§3.1).
       expect(r.after === undefined || r.after.state !== "active").toBe(true);
       expect(r.after?.peered_at ?? null).toBeNull();
     });

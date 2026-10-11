@@ -3,8 +3,10 @@
  * F1): the operator's tooling never has its relay sign a bare nonce. It
  * checks the counterparty's `peer-challenge` (from the counterparty's key,
  * to this relay, answering this relay's own nonce, for this relay's
- * endpoint) before minting, and the mint it asks for names the counterparty
- * as recipient and this relay's own endpoint.
+ * endpoint and key) before minting, and the mint it asks for names the
+ * counterparty as recipient by id AND by the key the challenge verified
+ * under (cold review R2: relay ids are not self-certifying), and this
+ * relay's own endpoint.
  *
  * The two relays are stubbed at the fetch layer; the counterparty's
  * challenge is signed with the real v2 signer.
@@ -22,7 +24,11 @@ const ISSUED = "ab".repeat(32);
 
 interface Stub {
   /** What B's propose answers: its challenge is built from the propose body. */
-  challenge: (propose: { nonce: string; endpoint_url: string }) => Promise<unknown>;
+  challenge: (propose: {
+    nonce: string;
+    endpoint_url: string;
+    public_key: string;
+  }) => Promise<unknown>;
   bPublicKeyHex: string;
 }
 
@@ -48,7 +54,12 @@ beforeEach(async () => {
         kind: "peer-challenge",
         sender: B_ID,
         recipient: A_ID,
-        body: { request_nonce: p.nonce, nonce: ISSUED, proposer_endpoint_url: p.endpoint_url },
+        body: {
+          request_nonce: p.nonce,
+          nonce: ISSUED,
+          proposer_endpoint_url: p.endpoint_url,
+          proposer_public_key: p.public_key,
+        },
         privateKey: bKey.privateKey,
       }),
   };
@@ -61,7 +72,7 @@ beforeEach(async () => {
     if (url === `${B_URL}/federation/v1/identity`)
       return json({ relay_motebit_id: B_ID, public_key: stub.bPublicKeyHex });
     if (url === `${B_URL}/federation/v1/peer/propose`) {
-      const p = body as { nonce: string; endpoint_url: string };
+      const p = body as { nonce: string; endpoint_url: string; public_key: string };
       return json({ relay_id: B_ID, nonce: ISSUED, challenge: await stub.challenge(p) });
     }
     if (url === `${A_URL}/api/v1/admin/federation/peer-confirm-signature`) {
@@ -84,7 +95,14 @@ describe("runPeerHandshake — the confirm is bound before it is minted", () => 
   it("a verified challenge: the mint names the counterparty and this relay's endpoint", async () => {
     const r = await runPeerHandshake({ url: A_URL, headers: {} }, { url: B_URL });
     expect(r).toMatchObject({ ok: true, half: true });
-    expect(mints).toEqual([{ nonce: ISSUED, recipient: B_ID, endpoint_url: A_URL }]);
+    expect(mints).toEqual([
+      {
+        nonce: ISSUED,
+        recipient: B_ID,
+        recipient_public_key: stub.bPublicKeyHex,
+        endpoint_url: A_URL,
+      },
+    ]);
     expect(confirms).toEqual([{ message: { m: 1 }, nonce: ISSUED }]);
   });
 
@@ -111,6 +129,43 @@ describe("runPeerHandshake — the confirm is bound before it is minted", () => 
     const r = await runPeerHandshake({ url: A_URL, headers: {} }, { url: B_URL });
     expect(r).toMatchObject({ ok: false, step: "challenge-a-to-b" });
     expect(mints).toEqual([]);
+  });
+
+  it("a challenge bound to another proposer key (the propose was re-keyed in transit): nothing is minted", async () => {
+    const sign = stub.challenge;
+    stub.challenge = (p) => sign({ ...p, public_key: "cc".repeat(32) });
+    const r = await runPeerHandshake({ url: A_URL, headers: {} }, { url: B_URL });
+    expect(r).toMatchObject({ ok: false, step: "challenge-a-to-b" });
+    expect(mints).toEqual([]);
+  });
+
+  it("R2: a counterparty claiming B's id under its OWN key gets a confirm committed to its own key", async () => {
+    // M's /identity claims B's relay id with M's key, and M signs the
+    // challenge "from B": the tooling verifies under M's key, so the confirm
+    // it mints commits to M's key — and B, which builds the body from its own
+    // key, refuses it.
+    const m = await generateKeypair();
+    stub.bPublicKeyHex = bytesToHex(m.publicKey);
+    stub.challenge = (p) =>
+      signFederationMessage({
+        kind: "peer-challenge",
+        sender: B_ID,
+        recipient: A_ID,
+        body: {
+          request_nonce: p.nonce,
+          nonce: ISSUED,
+          proposer_endpoint_url: p.endpoint_url,
+          proposer_public_key: p.public_key,
+        },
+        privateKey: m.privateKey,
+      });
+    const r = await runPeerHandshake({ url: A_URL, headers: {} }, { url: B_URL });
+    expect(r).toMatchObject({ ok: true });
+    expect(mints).toHaveLength(1);
+    expect(mints[0]).toMatchObject({
+      recipient: B_ID,
+      recipient_public_key: bytesToHex(m.publicKey),
+    });
   });
 
   it("a bare hex challenge (a 1.4 relay): nothing is minted", async () => {

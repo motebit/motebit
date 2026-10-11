@@ -135,8 +135,11 @@ export async function operatorConfirm(
   nonce: string,
   /** The relay operator's master-token header (test-helpers' `AUTH_HEADER`). */
   headers: Record<string, string>,
-  /** The relay that issued `nonce` — the one the confirm is for. */
-  recipient: string,
+  /**
+   * The relay that issued `nonce` — the one the confirm is for — by id AND
+   * key: relay ids are not self-certifying, so the confirm commits to both.
+   */
+  recipient: { id: string; publicKey: string },
   /** The endpoint the propose named, when not the relay's configured one verbatim. */
   endpointUrl?: string,
 ): Promise<ConfirmRequest> {
@@ -145,7 +148,8 @@ export async function operatorConfirm(
     headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify({
       nonce,
-      recipient,
+      recipient: recipient.id,
+      recipient_public_key: recipient.publicKey,
       ...(endpointUrl !== undefined ? { endpoint_url: endpointUrl } : {}),
     }),
   });
@@ -163,6 +167,8 @@ export async function operatorConfirm(
 export async function signedConfirm(args: {
   sender: string;
   recipient: string;
+  /** The recipient's public key, as the signer believes it (hex). */
+  recipientPublicKey: string;
   nonce: string;
   endpointUrl: string;
   privateKey: Uint8Array;
@@ -172,7 +178,11 @@ export async function signedConfirm(args: {
     kind: "peer-confirm",
     sender: args.sender,
     recipient: args.recipient,
-    body: { nonce: args.nonce, endpoint_url: args.endpointUrl },
+    body: {
+      nonce: args.nonce,
+      endpoint_url: args.endpointUrl,
+      recipient_public_key: args.recipientPublicKey.toLowerCase(),
+    },
     privateKey: args.privateKey,
     now: args.now,
   });

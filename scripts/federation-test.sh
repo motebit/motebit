@@ -101,11 +101,12 @@ echo "  -> relay-a returned nonce: ${NONCE_A:0:16}..."
 # 3c. Relay-a's operator mints relay-a's confirm over relay-b's nonce (NONCE_B).
 #     relay-federation@1.5 §3.1: a v2 `peer-confirm` minted only on the
 #     operator's master token, naming relay-b (the relay that issued the
-#     nonce) as recipient and relay-a's own endpoint — never a bare nonce.
+#     nonce) as recipient by id AND public key, and relay-a's own endpoint —
+#     never a bare nonce.
 echo "  Operator confirm: relay-a confirms to relay-b over relay-b's nonce..."
 CONFIRM_REQ_1=$(curl -sf -X POST "$RELAY_A/api/v1/admin/federation/peer-confirm-signature" \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
-  -d "{\"nonce\": \"$NONCE_B\", \"recipient\": \"$RELAY_B_ID\", \"endpoint_url\": \"http://relay-a:3000\"}" \
+  -d "{\"nonce\": \"$NONCE_B\", \"recipient\": \"$RELAY_B_ID\", \"recipient_public_key\": \"$RELAY_B_PK\", \"endpoint_url\": \"http://relay-a:3000\"}" \
   | python3 -c "import sys,json; b=json.load(sys.stdin); print(json.dumps({'message': b['message'], 'nonce': b['nonce']}))") \
   || fail "Operator confirm on relay-a failed"
 echo "  -> relay-a minted its peer-confirm for relay-b"
@@ -114,7 +115,7 @@ echo "  -> relay-a minted its peer-confirm for relay-b"
 echo "  Operator confirm: relay-b confirms to relay-a over relay-a's nonce..."
 CONFIRM_REQ_2=$(curl -sf -X POST "$RELAY_B/api/v1/admin/federation/peer-confirm-signature" \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
-  -d "{\"nonce\": \"$NONCE_A\", \"recipient\": \"$RELAY_A_ID\", \"endpoint_url\": \"http://relay-b:3000\"}" \
+  -d "{\"nonce\": \"$NONCE_A\", \"recipient\": \"$RELAY_A_ID\", \"recipient_public_key\": \"$RELAY_A_PK\", \"endpoint_url\": \"http://relay-b:3000\"}" \
   | python3 -c "import sys,json; b=json.load(sys.stdin); print(json.dumps({'message': b['message'], 'nonce': b['nonce']}))") \
   || fail "Operator confirm on relay-b failed"
 echo "  -> relay-b minted its peer-confirm for relay-a"

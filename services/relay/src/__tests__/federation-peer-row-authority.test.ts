@@ -11,7 +11,8 @@
  * recovers — re-handshakes to `active` at its own endpoint — within a bounded
  * number of steps and at most one cooldown period, whatever an attacker did
  * first, so no attacker action creates or extends a lockout. A relay_id never
- * confirmed keeps first-come semantics and is not asserted on.
+ * confirmed has no row (a propose records only a pending handshake) and is
+ * not asserted on here — `federation-handshake-model.test.ts` model-checks it.
  *
  * Two findings of the same class preceded this harness (an unauthenticated
  * propose replacing a known peer's key; a same-key propose redirecting a
@@ -153,6 +154,7 @@ function attackerConfirm(nonce: string, endpoint = ATTACKER_URL): Promise<Confir
   return signedConfirm({
     sender: idA.relayMotebitId,
     recipient: idB.relayMotebitId,
+    recipientPublicKey: idB.publicKeyHex,
     nonce,
     endpointUrl: endpoint,
     privateKey: attacker.privateKey,
@@ -237,7 +239,10 @@ async function runAction(action: Action, s: CellState): Promise<number | null> {
     case "LC": {
       if (s.legitNonce === null) return null;
       const res = await confirm(
-        await operatorConfirm(a, s.legitNonce, AUTH_HEADER, idB.relayMotebitId),
+        await operatorConfirm(a, s.legitNonce, AUTH_HEADER, {
+          id: idB.relayMotebitId,
+          publicKey: idB.publicKeyHex,
+        }),
       );
       if (res.status === 200) {
         s.legitNonce = null;
@@ -553,6 +558,7 @@ describe("peerRowTransition: every (row, write, authority) against the invariant
     ["id", (r) => ({ ...r, peer_relay_id: "relay-y" })],
     ["endpoint", (r) => ({ ...r, endpoint_url: ATTACKER_URL })],
     ["peered_at", (r) => ({ ...r, peered_at: 2000 })],
+    ["peered_at→null", (r) => ({ ...r, peered_at: null })],
     ...STATES.map((to): [string, (r: PeerRow) => PeerRow] => [
       `state→${to}`,
       (r) => ({ ...r, state: to }),
@@ -565,15 +571,19 @@ describe("peerRowTransition: every (row, write, authority) against the invariant
     write: PeerRowWrite,
     authority: PeerWriteAuthority,
   ): boolean {
-    if (write.op === "insert") return before === undefined;
+    // A row is born only from a confirm verified under its key (§3.1).
+    if (write.op === "insert")
+      return before === undefined && write.row.peered_at !== null && authority === "peer-key";
     if (before === undefined) return false;
+    // A never-confirmed row is inert: only a verified confirm replaces it.
+    if (before.peered_at === null) return write.op === "delete" && authority === "peer-key";
     if (
       write.op === "update" &&
       (write.row.public_key !== before.public_key ||
-        write.row.peer_relay_id !== before.peer_relay_id)
+        write.row.peer_relay_id !== before.peer_relay_id ||
+        write.row.peered_at === null)
     )
       return false;
-    if (before.peered_at === null) return true;
     if (write.op === "delete" || authority === "unauthenticated") return false;
     if (authority === "peer-key") return true;
     const n = write.row;
@@ -587,14 +597,18 @@ describe("peerRowTransition: every (row, write, authority) against the invariant
     const mismatches: string[] = [];
     let cells = 0;
     for (const authority of AUTHORITIES) {
-      const insert: PeerRowWrite = { op: "insert", row: base("pending", false) };
-      for (const before of [undefined, base("pending", false)]) {
-        cells++;
-        if (
-          (peerRowTransition(before, insert, authority) === null) !==
-          allowed(before, insert, authority)
-        )
-          mismatches.push(`${authority} insert over ${before ? "row" : "nothing"}`);
+      for (const born of [base("pending", false), base("active", true)]) {
+        const insert: PeerRowWrite = { op: "insert", row: born };
+        for (const before of [undefined, base("pending", false)]) {
+          cells++;
+          if (
+            (peerRowTransition(before, insert, authority) === null) !==
+            allowed(before, insert, authority)
+          )
+            mismatches.push(
+              `${authority} insert ${born.peered_at === null ? "unconfirmed" : "confirmed"} over ${before ? "row" : "nothing"}`,
+            );
+        }
       }
       for (const peered of [false, true]) {
         for (const state of STATES) {
@@ -630,6 +644,9 @@ describe("peerRowTransition: every (row, write, authority) against the invariant
 // allowed by column, never by file.
 describe("relay_peers writers: only writePeerRow writes authority columns", () => {
   const SRC = fileURLToPath(new URL("..", import.meta.url));
+  // Paths are given to the scanner repo-relative: the writer is recognised
+  // only at exactly `PEER_ROW_WRITER.file`.
+  const REPO = fileURLToPath(new URL("../../../..", import.meta.url));
 
   function sources(dir: string): string[] {
     const out: string[] = [];
@@ -645,7 +662,7 @@ describe("relay_peers writers: only writePeerRow writes authority columns", () =
   it("the relay source tree: every write is the writer or counter/trust-only", () => {
     const files = sources(SRC);
     const sites = files.flatMap((f) =>
-      scanPeerRowWrites(relative(SRC, f), readFileSync(f, "utf8")),
+      scanPeerRowWrites(relative(REPO, f).split("\\").join("/"), readFileSync(f, "utf8")),
     );
     const red = sites.filter((s) => s.refusal !== null);
     expect(
@@ -723,6 +740,76 @@ describe("relay_peers writers: only writePeerRow writes authority columns", () =
       'function writePeerRow() { db.prepare("UPDATE relay_peers SET state = ?"); }',
     ],
     [
+      "a block comment between the verb and the table",
+      "a.ts",
+      "db.prepare(\"UPDATE/**/relay_peers SET state = 'active' WHERE peer_relay_id = ?\");",
+    ],
+    [
+      "a line comment between the verb and the table",
+      "a.ts",
+      "db.prepare(`UPDATE -- a peer\n relay_peers SET state = 'active' WHERE peer_relay_id = ?`);",
+    ],
+    [
+      "a block comment holding a WHERE that ends the SET list early",
+      "a.ts",
+      "db.prepare(\"UPDATE relay_peers SET trust_score = 1 /* WHERE */, state = 'active'\");",
+    ],
+    [
+      "a line comment holding a WHERE that ends the SET list early",
+      "a.ts",
+      "db.prepare(`UPDATE relay_peers SET trust_score = 1 -- WHERE\n, endpoint_url = ?`);",
+    ],
+    [
+      "an array join building the statement",
+      "a.ts",
+      `db.prepare(["UPDATE", "relay_peers SET state = 'active'", "WHERE peer_relay_id = ?"].join(" "));`,
+    ],
+    [
+      "an array join with no separator argument",
+      "a.ts",
+      `db.prepare(["UPDATE relay_peers SET trust_score = 1", " state = ?"].join());`,
+    ],
+    [
+      "a concat building the statement",
+      "a.ts",
+      `db.prepare("UPDATE ".concat("relay_peers SET ", "public_key = ?"));`,
+    ],
+    [
+      "a += accumulation building the statement",
+      "a.ts",
+      `let q = "UPDATE "; q += "relay_peers SET state = ?"; db.prepare(q).run(s);`,
+    ],
+    [
+      "the table name held in a const",
+      "a.ts",
+      'const T = "relay_peers"; db.prepare(`UPDATE ${T} SET endpoint_url = ?`);',
+    ],
+    [
+      "a nested function named writePeerRow inside federation.ts",
+      "services/relay/src/federation.ts",
+      'function outer() { function writePeerRow() { db.prepare("UPDATE relay_peers SET state = ?"); } }',
+    ],
+    [
+      "a const arrow named writePeerRow in federation.ts",
+      "services/relay/src/federation.ts",
+      'export const writePeerRow = () => db.prepare("DELETE FROM relay_peers WHERE 1");',
+    ],
+    [
+      "a top-level writePeerRow in another federation.ts (basename is not identity)",
+      "services/relay/src/sub/federation.ts",
+      'export function writePeerRow() { db.prepare("UPDATE relay_peers SET state = ?"); }',
+    ],
+    [
+      "a top-level writePeerRow in federation.ts, given a relative path",
+      "federation.ts",
+      'export function writePeerRow() { db.prepare("UPDATE relay_peers SET state = ?"); }',
+    ],
+    [
+      "a second top-level writePeerRow in federation.ts (not exactly one declaration)",
+      "services/relay/src/federation.ts",
+      'export function writePeerRow() { db.prepare("UPDATE relay_peers SET state = ?"); }\nexport function writePeerRow() {}',
+    ],
+    [
       "a trigger body",
       "a.ts",
       "db.exec(\"CREATE TRIGGER t AFTER INSERT ON x BEGIN UPDATE relay_peers SET state = 'active'; END\");",
@@ -740,8 +827,20 @@ describe("relay_peers writers: only writePeerRow writes authority columns", () =
     const real = readFileSync(join(SRC, "federation.ts"), "utf8");
     const renamed = real.replace("export function writePeerRow(", "export function writePeerRowX(");
     expect(renamed).not.toBe(real);
-    const red = scanPeerRowWrites("federation.ts", renamed).filter((s) => s.refusal !== null);
+    const red = scanPeerRowWrites(PEER_ROW_WRITER.file, renamed).filter((s) => s.refusal !== null);
     expect(red.map((s) => s.verb).sort()).toEqual(["DELETE", "INSERT", "UPDATE"]);
+  });
+
+  it("the real federation.ts as written: the writer's three statements are recognised, nothing else in it writes", () => {
+    const real = readFileSync(join(SRC, "federation.ts"), "utf8");
+    const sites = scanPeerRowWrites(PEER_ROW_WRITER.file, real);
+    expect(sites.filter((s) => s.refusal !== null)).toEqual([]);
+    expect(
+      sites
+        .filter((s) => s.fn === PEER_ROW_WRITER.fn)
+        .map((s) => s.verb)
+        .sort(),
+    ).toEqual(["DELETE", "INSERT", "UPDATE"]);
   });
 
   it("counter/trust-only updates are allowed by column, with a reason for each", () => {
