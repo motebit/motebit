@@ -21,7 +21,6 @@ import {
   readOnlyHandle,
 } from "../identity-authority-census.js";
 import { AUTH_HEADER, createTestRelay, walletOf } from "./test-helpers.js";
-import { operatorConfirm } from "./federation-messages.js";
 
 const CENSUS = "/api/v1/admin/identity-authority/census";
 
@@ -587,7 +586,11 @@ const URLS = {
 type Name = keyof typeof URLS;
 const rand = (): string => bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 
-describe("identity-authority census Q6 — a relay-federation@1.5 handshake is v2 evidence", () => {
+// Adapted for main: relay-federation@1.5 (which records `handshake_protocol_version`
+// at confirm) is not on this tree, so a completed handshake leaves no v2 evidence and
+// every peer stays counted — the truth here. The source branch's "1.5 handshake is v2
+// evidence" assertion returns with that spec.
+describe("identity-authority census Q6 — a handshake on this relay records no v2 evidence", () => {
   let relays: Record<Name, SyncRelay>;
   let ids: Record<Name, RelayIdentity>;
   let ip = 0;
@@ -614,36 +617,53 @@ describe("identity-authority census Q6 — a relay-federation@1.5 handshake is v
     for (const r of Object.values(relays)) await r.close();
   });
 
-  /** One half exactly as the CLI's runPeerHandshake sends it: no spec_version. */
-  async function half(x: Name, y: Name): Promise<void> {
-    const propose = await post(y, "/federation/v1/peer/propose", {
-      relay_id: ids[x].relayMotebitId,
-      public_key: ids[x].publicKeyHex,
-      endpoint_url: URLS[x],
-      display_name: `Relay ${x}`,
-      nonce: rand(),
+  /** A propose exactly as the CLI's runPeerHandshake sends it: no spec_version. */
+  async function propose(
+    target: Name,
+    from: Name,
+    nonce: string = rand(),
+  ): Promise<{ nonce: string; challenge: string }> {
+    const res = await post(target, "/federation/v1/peer/propose", {
+      relay_id: ids[from].relayMotebitId,
+      public_key: ids[from].publicKeyHex,
+      endpoint_url: URLS[from],
+      nonce,
     });
-    expect(propose.status).toBe(200);
-    const { nonce } = (await propose.json()) as { nonce: string };
-    const confirm = await post(y, "/federation/v1/peer/confirm", {
-      relay_id: ids[x].relayMotebitId,
-      challenge_response: await operatorConfirm(relays[x], nonce, AUTH_HEADER),
-    });
-    expect(confirm.status).toBe(200);
+    expect(res.status).toBe(200);
+    return (await res.json()) as { nonce: string; challenge: string };
   }
 
-  it("a CLI-shaped 1.5 handshake both ways leaves no pre-v2 peer on either relay", async () => {
-    await half("a", "b");
-    await half("b", "a");
+  /** main's runPeerHandshake: cross-propose, self-propose oracle, confirm both ways. */
+  async function handshake(): Promise<void> {
+    const aOnB = await propose("b", "a");
+    const bOnA = await propose("a", "b");
+    const oracleA = await propose("a", "a", aOnB.nonce);
+    const oracleB = await propose("b", "b", bOnA.nonce);
+    for (const [on, from, challenge] of [
+      ["b", "a", oracleA.challenge],
+      ["a", "b", oracleB.challenge],
+    ] as const) {
+      const confirm = await post(on, "/federation/v1/peer/confirm", {
+        relay_id: ids[from].relayMotebitId,
+        challenge_response: challenge,
+      });
+      expect(confirm.status).toBe(200);
+    }
+  }
+
+  it("a CLI-shaped handshake both ways leaves each peer counted, suspicious (no protocol recorded)", async () => {
+    await handshake();
     for (const n of Object.keys(URLS) as Name[]) {
+      const other: Name = n === "a" ? "b" : "a";
       const peers = relays[n].moteDb.db
         .prepare("SELECT state, peer_protocol_version FROM relay_peers")
         .all() as Array<{ state: string; peer_protocol_version: string | null }>;
       // The CLI proposer sends no spec_version: the claim column stays null.
       expect(peers).toEqual([{ state: "active", peer_protocol_version: null }]);
       const c = await census(relays[n]);
-      expect(c.q6_v1_peers.count).toBe(0);
-      expect(c.q6_v1_peers.buckets).toEqual(ZERO);
+      expect(c.q6_v1_peers.ids).toEqual([ids[other].relayMotebitId]);
+      expect(c.q6_v1_peers.by_state).toEqual({ active: 1 });
+      expect(c.q6_v1_peers.buckets).toEqual({ ...ZERO, suspicious: 1 });
     }
   });
 
