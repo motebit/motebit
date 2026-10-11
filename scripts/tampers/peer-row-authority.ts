@@ -21,9 +21,12 @@ const FILE = "services/relay/src/federation.ts";
 const PKG = "services/relay";
 const HARNESS = "src/__tests__/federation-peer-row-authority.test.ts";
 const PINNING = "src/__tests__/federation-peer-key-pinning.test.ts";
+const V2 = "src/__tests__/federation-v2-messages.test.ts";
 
 interface Tamper {
   name: string;
+  /** Source file to tamper (default: federation.ts). */
+  file?: string;
   find: string;
   replace: string;
   /** Test files that must go red (default: the harness). */
@@ -104,6 +107,50 @@ const TAMPERS: Tamper[] = [
     replace: "checkPeerLimit(relay_id);",
     filter: "flood",
   },
+  {
+    name: "writers scan: a raw state write beside a counter outside writePeerRow",
+    file: "services/relay/src/task-routing.ts",
+    find: '"UPDATE relay_peers SET failed_forwards = failed_forwards + 1 WHERE endpoint_url = ?"',
+    replace:
+      "\"UPDATE relay_peers SET failed_forwards = failed_forwards + 1, state = 'suspended' WHERE endpoint_url = ?\"",
+    filter: "relay_peers writers",
+  },
+  {
+    name: "writers scan: the circuit breaker's raw suspend (task-routing.ts:946) put back",
+    file: "services/relay/src/task-routing.ts",
+    find: 'if (cbState.state === "open") {',
+    replace:
+      'if (cbState.state === "open") {\n        db.prepare("UPDATE relay_peers SET state = \'suspended\' WHERE endpoint_url = ?").run(peerEndpoint);',
+    filter: "relay_peers writers",
+  },
+  {
+    name: "§3.5 order: heartbeat checks recipient before the key lookup",
+    find: 'refuseBeforeLookup(parsed.envelope, "heartbeat", relayIdentity.relayMotebitId, "Heartbeat");',
+    replace: "",
+    tests: [V2],
+    filter: "§3.5 order",
+  },
+  {
+    name: "§3.5 order: removal checks recipient before the key lookup",
+    find: 'refuseBeforeLookup(parsed.envelope, "peer-remove", relayIdentity.relayMotebitId, "Removal");',
+    replace: "",
+    tests: [V2],
+    filter: "§3.5 order",
+  },
+  {
+    name: "§3.5: an unknown heartbeat sender is 403",
+    find: 'throw new HTTPException(403, { message: "Heartbeat refused: unknown peer" });',
+    replace: 'throw new HTTPException(404, { message: "Heartbeat refused: unknown peer" });',
+    tests: [V2],
+    filter: "§3.5 order",
+  },
+  {
+    name: "§3.5: an unknown removal sender is 403",
+    find: 'throw new HTTPException(403, { message: "Removal refused: unknown peer" });',
+    replace: 'throw new HTTPException(404, { message: "Removal refused: unknown peer" });',
+    tests: [V2],
+    filter: "§3.5 order",
+  },
 ];
 
 function passes(test: string, filter: string | undefined): boolean {
@@ -118,12 +165,13 @@ function passes(test: string, filter: string | undefined): boolean {
   }
 }
 
-const abs = path.join(ROOT, FILE);
-const original = readFileSync(abs, "utf8");
 let failures = 0;
 for (const t of TAMPERS) {
+  const file = t.file ?? FILE;
+  const abs = path.join(ROOT, file);
+  const original = readFileSync(abs, "utf8");
   if (!original.includes(t.find)) {
-    console.error(`STALE  ${t.name}: text not found in ${FILE}`);
+    console.error(`STALE  ${t.name}: text not found in ${file}`);
     failures++;
     continue;
   }

@@ -32,6 +32,8 @@ import {
   verifyFederationMessage,
   verifyHorizonWitnessRequestSignature,
   verifyWitnessOmissionDispute,
+  type FederationMessageEnvelope,
+  type FederationMessageKind,
   type FederationMessageRefusal,
 } from "@motebit/crypto";
 import type { DisputeOutcome, VoteRequest } from "@motebit/protocol";
@@ -943,6 +945,23 @@ function consumeFederationNonce(
 /** HTTP status for a refused v2 message: a bad signature is 403, every shape/binding fault 400. */
 function federationRefusalStatus(reason: FederationMessageRefusal): 400 | 403 {
   return reason === "bad_signature" ? 403 : 400;
+}
+
+/**
+ * §3.5's checks that come BEFORE the sender's key is looked up, in the spec's
+ * order: the kind this route serves, then recipient = this relay. A message
+ * for another relay is refused (400) the same whether or not this relay knows
+ * its sender; only then is an unknown sender a 403.
+ */
+function refuseBeforeLookup(
+  env: FederationMessageEnvelope,
+  kind: FederationMessageKind,
+  self: string,
+  label: string,
+): void {
+  const reason: FederationMessageRefusal | null =
+    env.kind !== kind ? "kind_mismatch" : env.recipient !== self ? "wrong_recipient" : null;
+  if (reason !== null) throw new HTTPException(400, { message: `${label} refused: ${reason}` });
 }
 
 /** The body a v2 `heartbeat` commits to. */
@@ -2312,11 +2331,12 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, { message: "agent_count is required" });
     if (revocations !== undefined && !Array.isArray(revocations))
       throw new HTTPException(400, { message: "revocations must be an array" });
+    refuseBeforeLookup(parsed.envelope, "heartbeat", relayIdentity.relayMotebitId, "Heartbeat");
     const relay_id = parsed.envelope.sender;
 
     const peer = readPeerRow(db, relay_id);
     if (!peer || (peer.state !== "active" && peer.state !== "suspended"))
-      throw new HTTPException(404, { message: "No active or suspended peer found" });
+      throw new HTTPException(403, { message: "Heartbeat refused: unknown peer" });
 
     const verdict = await verifyFederationMessage(message, {
       kind: "heartbeat",
@@ -2794,10 +2814,11 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const parsed = parseFederationMessage(body.message);
     if (parsed === null)
       throw new HTTPException(400, { message: "malformed v2 peer-remove message (§3.5)" });
+    refuseBeforeLookup(parsed.envelope, "peer-remove", relayIdentity.relayMotebitId, "Removal");
     const relay_id = parsed.envelope.sender;
 
     const peer = readPeerRow(db, relay_id);
-    if (!peer) throw new HTTPException(404, { message: "Peer not found" });
+    if (!peer) throw new HTTPException(403, { message: "Removal refused: unknown peer" });
 
     const verdict = await verifyFederationMessage(body.message, {
       kind: "peer-remove",
