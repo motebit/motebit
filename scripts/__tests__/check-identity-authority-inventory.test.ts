@@ -16,6 +16,7 @@ import {
   singleWriterProblems,
   singleWriterReport,
   staleReport,
+  type AuthorityWriterSite,
 } from "../check-identity-authority-inventory.js";
 import { formatRepair, hasApertureDisclosure, hasRepairInstruction } from "../lib/gate-report.js";
 
@@ -140,6 +141,59 @@ describe("one writer (identity-authority Inc 2, I1)", () => {
       ),
     ).toEqual([
       "NEW authority writer outside the single writer: services/relay/src/a.ts | f | UPDATE agent_registry (2 found, 1 registered)",
+    ]);
+  });
+
+  // F3 (Inc 2 cold review): the exemption is the writer's DECLARATIONS, never
+  // the whole file; and a registered writer is registered with the authority
+  // COLUMNS it writes, so one that starts writing another column fails.
+  const site = (file: string, fn: string, write: string, columns: string[]) =>
+    ({ file, fn, write, columns }) as AuthorityWriterSite;
+
+  it("tamper (a): a NEW raw writer in identity-authority.ts outside writeAuthority/applyChange fails", () => {
+    expect(
+      singleWriterProblems(
+        [
+          site(W, "applyChange", "UPDATE agent_registry", ["sweep_threshold"]),
+          site(W, "sneakySetPayTo", "UPDATE relay_service_listings", ["pay_to_address"]),
+        ],
+        [],
+      ),
+    ).toEqual([
+      "NEW authority writer outside the single writer: services/relay/src/identity-authority.ts | sneakySetPayTo | UPDATE relay_service_listings [pay_to_address]",
+    ]);
+  });
+
+  it("tamper (b): a registered writer that starts writing a NEW authority column fails", () => {
+    const registered = [
+      {
+        file: "services/relay/src/a.ts",
+        fn: "f",
+        write: "UPDATE agent_registry",
+        columns: ["public_key"],
+        count: 1,
+        why: "x",
+      },
+    ];
+    expect(
+      singleWriterProblems(
+        [site("services/relay/src/a.ts", "f", "UPDATE agent_registry", ["public_key"])],
+        registered,
+      ),
+    ).toEqual([]);
+    expect(
+      singleWriterProblems(
+        [
+          site("services/relay/src/a.ts", "f", "UPDATE agent_registry", [
+            "public_key",
+            "settlement_address",
+          ]),
+        ],
+        registered,
+      ),
+    ).toEqual([
+      "NEW authority writer outside the single writer: services/relay/src/a.ts | f | UPDATE agent_registry [public_key, settlement_address]",
+      "STALE entry: services/relay/src/a.ts | f | UPDATE agent_registry [public_key] — 1 registered, 0 found; lower or delete it",
     ]);
   });
 
