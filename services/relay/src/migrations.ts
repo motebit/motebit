@@ -2669,4 +2669,80 @@ export const relayMigrations: Migration[] = [
       createAnchorBroadcastsTable(db);
     },
   },
+  {
+    version: 58,
+    name: "registry_key_evidence",
+    up: (db) => {
+      // The PROVENANCE of an `agent_registry.public_key` (#875 review round 4).
+      // One row per identity naming the registry key a request PROVED and the
+      // evidence that proved it: `bearer` (the key the caller's token verified
+      // under), `holder`, `key_proof`, `succession` (a verified link's new
+      // key), `sovereign` (E-sov), `receipt_signature` (the receipt heal: a
+      // signature under the key over a receipt naming the identity) or
+      // `operator` (E-op / the master token's own
+      // authority). The served key (`servedIdentityKey`) reads the registry
+      // only while it still EQUALS the proven key here — serving ≠ binding: a
+      // proven registry key is served, never recorded as the holder (#703
+      // §5e/§5j, the #875 (b) ruling). Not backfilled: a pre-#875 registry row
+      // carries no proof, so it is not served.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_registry_key_evidence (
+          motebit_id TEXT PRIMARY KEY,
+          public_key TEXT NOT NULL,
+          evidence TEXT NOT NULL,
+          recorded_at INTEGER NOT NULL
+        );
+      `);
+    },
+  },
+  {
+    version: 59,
+    name: "key_proofs_accepted",
+    up: (db) => {
+      // Every proof of possession this relay ACCEPTED (#875 review F2):
+      // bootstrap's and register-self's signed body, `/agents/register`'s
+      // `key_proof`. The body carries no audience or nonce (the wire is not
+      // changed while released clients send it), so an exact replay inside
+      // its ±5-minute window is answered idempotently and writes nothing
+      // (`key-proof-replay.ts`). Keyed by the signature (Ed25519 is
+      // deterministic: the same body is the same signature). Rows are pruned
+      // once past the window they guard (KEY_PROOF_RETENTION_MS, 11 minutes).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_key_proofs_accepted (
+          motebit_id TEXT NOT NULL,
+          public_key TEXT NOT NULL,
+          signature TEXT NOT NULL,
+          door TEXT NOT NULL,
+          accepted_at INTEGER NOT NULL,
+          PRIMARY KEY (motebit_id, public_key, signature)
+        );
+        CREATE INDEX IF NOT EXISTS idx_relay_key_proofs_accepted_at
+          ON relay_key_proofs_accepted(accepted_at);
+      `);
+    },
+  },
+  {
+    version: 60,
+    name: "guardian_evidence",
+    up: (db) => {
+      // The PROVENANCE of a guardian (#875 review R2): the key a request
+      // proved — the identity's CURRENT key — when it set this guardian, and
+      // which evidence proved it (`recordGuardianEvidence`). A recovery on a
+      // sovereign-shaped id verifies only under a guardian whose provenance
+      // key stands (`recoveryGuardianFor`, `sovereignLineage`); a guardian a
+      // squatter planted has no such row. One row per guardian ever set, so
+      // a recovery an earlier guardian signed stays verifiable. Nothing is
+      // backfilled: a relay before v60 recorded no proof for any guardian.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_guardian_evidence (
+          motebit_id TEXT NOT NULL,
+          guardian_public_key TEXT NOT NULL,
+          set_under_key TEXT,
+          evidence TEXT NOT NULL,
+          recorded_at INTEGER NOT NULL,
+          PRIMARY KEY (motebit_id, guardian_public_key)
+        );
+      `);
+    },
+  },
 ];

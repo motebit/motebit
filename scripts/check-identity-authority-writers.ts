@@ -99,6 +99,8 @@ const AUTHORITY_TABLES = [
   "relay_revoked_credentials",
   "identity_keys",
   "relay_identity_revocations",
+  "relay_registry_key_evidence",
+  "relay_guardian_evidence",
 ] as const;
 
 /** A column naming an identity, at the start of a column definition. */
@@ -163,6 +165,39 @@ const ADAPTER =
  */
 const WRITERS: readonly Writer[] = [
   // ── identity authority ────────────────────────────────────────────────
+  // ── #875 provenance + replay stores (ported, identity-authority Inc 2) ──
+  {
+    file: R + "identity-keys.ts",
+    verb: "INSERT",
+    table: "relay_registry_key_evidence",
+    count: 1,
+    principal:
+      "`recordRegistryKeyEvidence` — the PROVENANCE of a registry key (#875 review round 4), recorded only beside a registry write that carried evidence for exactly that key. In this tree its one caller is `writeAuthority` (identity-authority.ts), under a `ProvenKey` that only `proveCurrentKey` mints after a signature by the identity's current key over the change verified; it records the key the request proved, never another. It confers nothing by itself (no reader serves it in Inc 2); this function proves nothing itself",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "INSERT",
+    table: "relay_guardian_evidence",
+    count: 1,
+    principal:
+      "`recordGuardianEvidence` — the PROVENANCE of a guardian (#875 review R2): the key the setting request proved. In this tree its one caller is `writeAuthority` (identity-authority.ts), under a `ProvenKey` that only `proveCurrentKey` mints after a signature by the identity's current key over the change verified. No recovery reads it in Inc 2 (`recoveryGuardianFor` is Inc 3); this function proves nothing itself",
+  },
+  {
+    file: R + "key-proof-replay.ts",
+    verb: "INSERT",
+    table: "relay_key_proofs_accepted",
+    count: 1,
+    principal:
+      "`recordKeyProofAccepted` (#875 review F2), called only AFTER a proof verified (a signature by the named key over the named id — in this tree, the `X-Motebit-Authority` request `writeAuthority` consumes); it records that acceptance so an exact replay writes nothing — it authorizes nothing",
+  },
+  {
+    file: R + "key-proof-replay.ts",
+    verb: "DELETE",
+    table: "relay_key_proofs_accepted",
+    count: 1,
+    principal:
+      "the relay itself — `recordKeyProofAccepted` prunes accepted proofs past their validity window (KEY_PROOF_RETENTION_MS); no request chooses which rows",
+  },
   {
     file: R + "identity-revocation.ts",
     verb: "INSERT",

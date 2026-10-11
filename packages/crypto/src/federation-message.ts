@@ -32,7 +32,13 @@
  * its own peer table) and its own id, and consumes the nonce in the same
  * transaction as the write the message authorizes.
  */
-import { bytesToHex, canonicalJson, canonicalSha256, hexToBytes } from "./signing.js";
+import {
+  bytesToHex,
+  canonicalJson,
+  canonicalJsonForSigning,
+  canonicalSha256,
+  hexToBytes,
+} from "./signing.js";
 import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
 
 /** The byte-prefix domain tag of every v2 federation message. */
@@ -106,10 +112,17 @@ function isKind(k: unknown): k is FederationMessageKind {
   return typeof k === "string" && Object.prototype.hasOwnProperty.call(FEDERATION_MESSAGE_KINDS, k);
 }
 
-/** The exact bytes a v2 message signs. */
-export function federationMessageBytes(envelope: FederationMessageEnvelope): Uint8Array {
+/**
+ * The exact bytes a v2 message signs. `canon` is the JCS canonicalizer: the
+ * producer passes the guarded `canonicalJsonForSigning` (it refuses text with
+ * no UTF-8 form), the verifier the plain one — identical output otherwise.
+ */
+export function federationMessageBytes(
+  envelope: FederationMessageEnvelope,
+  canon: (value: unknown) => string = canonicalJson,
+): Uint8Array {
   return new TextEncoder().encode(
-    `${FEDERATION_MESSAGE_DOMAIN}\0${envelope.kind}\0${canonicalJson(envelope)}`,
+    `${FEDERATION_MESSAGE_DOMAIN}\0${envelope.kind}\0${canon(envelope)}`,
   );
 }
 
@@ -153,9 +166,12 @@ export async function signFederationMessage(args: {
     body_sha256: await federationBodyDigest(args.body),
     suite: FEDERATION_MESSAGE_SUITE,
   };
+  // Signed through the guarded canonicalizer (invariant #176): byte-identical
+  // to the verifier's bytes for every well-formed envelope, and a refusal —
+  // never a repaired signature — for text with no UTF-8 form.
   const sig = await signBySuite(
     FEDERATION_MESSAGE_SUITE,
-    federationMessageBytes(envelope),
+    federationMessageBytes(envelope, canonicalJsonForSigning),
     args.privateKey,
   );
   return { envelope, signature: bytesToHex(sig) };

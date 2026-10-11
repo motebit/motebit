@@ -69,7 +69,13 @@ export const DECLARATION_CONTENT = {
   },
   retention: {
     presence: {
-      tables: ["agent_registry", "relay_identity", "pairing_sessions"],
+      tables: [
+        "agent_registry",
+        "relay_registry_key_evidence",
+        "relay_guardian_evidence",
+        "relay_identity",
+        "pairing_sessions",
+      ],
       observable: [
         "motebit_id (UUID v7)",
         "Ed25519 public key",
@@ -78,6 +84,8 @@ export const DECLARATION_CONTENT = {
         "registration timestamp",
         "last heartbeat timestamp",
         "expires_at TTL",
+        "which evidence proved the registry public key, and when (relay_registry_key_evidence)",
+        "each guardian public key the identity set, the identity key the setting request proved, which evidence proved it, and when (relay_guardian_evidence)",
         "optional device label (claiming_device_name) when set by user during pairing",
       ],
       retention_window:
@@ -99,6 +107,19 @@ export const DECLARATION_CONTENT = {
       ],
       retention_window:
         "indefinite — device rows carry no TTL and are never reaped for silence; there is no automatic removal",
+    },
+    // Accepted proofs of possession (#875 review F2): the signature of each
+    // accepted device-registration body, so an exact replay inside its
+    // 5-minute window writes nothing. Pruned past the window.
+    key_proofs_accepted: {
+      tables: ["relay_key_proofs_accepted"],
+      observable: [
+        "the motebit_id and Ed25519 public key a proof of possession named",
+        "the proof's signature",
+        "which registration door accepted it, and when",
+      ],
+      retention_window:
+        "11 minutes — long enough to cover the proof's ±5-minute validity window, pruned on the next accepted proof after that",
     },
     operational: {
       tables: [
@@ -675,6 +696,18 @@ export function renderMarkdown(): string {
   for (const item of c.retention.device_registry.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.device_registry.retention_window}.`);
+  lines.push("");
+
+  lines.push("### Accepted proofs of possession");
+  lines.push("");
+  lines.push(
+    `Tables: ${c.retention.key_proofs_accepted.tables.map((t) => `\`${t}\``).join(", ")}.`,
+  );
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.key_proofs_accepted.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.key_proofs_accepted.retention_window}.`);
   lines.push("");
 
   lines.push("### Operational");

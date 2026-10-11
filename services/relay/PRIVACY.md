@@ -15,7 +15,7 @@ Doctrine: [`docs/doctrine/operator-transparency.md`](../../docs/doctrine/operato
 
 ### Presence
 
-Tables: `agent_registry`, `relay_identity`, `pairing_sessions`.
+Tables: `agent_registry`, `relay_registry_key_evidence`, `relay_guardian_evidence`, `relay_identity`, `pairing_sessions`.
 
 Observable:
 - motebit_id (UUID v7)
@@ -25,6 +25,8 @@ Observable:
 - registration timestamp
 - last heartbeat timestamp
 - expires_at TTL
+- which evidence proved the registry public key, and when (relay_registry_key_evidence)
+- each guardian public key the identity set, the identity key the setting request proved, which evidence proved it, and when (relay_guardian_evidence)
 - optional device label (claiming_device_name) when set by user during pairing
 
 Retention window: discovery fields (endpoint_url, capabilities) are cleared when the motebit deregisters, is revoked, or 90 days pass without a heartbeat (the lease); the row itself — motebit_id, public key, guardian key, settlement configuration — is retained until revocation, and revocation keeps the row with its revoked mark so the identity's binding and its end stay verifiable (#703, since 2026-09-24).
@@ -43,6 +45,17 @@ Observable:
 - optional self-issued hardware-attestation credential (JSON) for the device
 
 Retention window: indefinite — device rows carry no TTL and are never reaped for silence; there is no automatic removal.
+
+### Accepted proofs of possession
+
+Tables: `relay_key_proofs_accepted`.
+
+Observable:
+- the motebit_id and Ed25519 public key a proof of possession named
+- the proof's signature
+- which registration door accepted it, and when
+
+Retention window: 11 minutes — long enough to cover the proof's ±5-minute validity window, pruned on the next accepted proof after that.
 
 ### Operational
 

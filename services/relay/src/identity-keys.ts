@@ -404,3 +404,134 @@ export const IDENTITY_KEYS_BACKFILL_SQL = `
     )
     AND p.motebit_id NOT IN (SELECT motebit_id FROM identity_keys)
 `;
+
+// ── Ported from #875 (fix/875-key-pop-v2 @ 373221619), identity-authority Inc 2. ──
+// Library pieces only: nothing in this tree's doors calls them to refuse a request
+// (Inc 2 refuses nothing new); Inc 3 wires them. docs/design/identity-authority-writers.md §7.
+
+/**
+ * A sovereign `motebit_id` is a UUIDv8 (`deriveSovereignMotebitId`): the
+ * version nibble is 8. Matched case-INSENSITIVELY on purpose — an upper-case
+ * spelling of V's sovereign id is a distinct row that a case-insensitive
+ * reader (`verifySovereignBinding`) would still read as V's, so it claims
+ * sovereignty too (and, the commitment being lower-case, never equals one).
+ * Legacy ids are UUIDv7 and never match.
+ */
+const SOVEREIGN_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Whether `motebitId` claims to be the sovereign commitment to some key. */
+export function claimsSovereignId(motebitId: string): boolean {
+  return SOVEREIGN_ID_SHAPE.test(motebitId) || motebitId.startsWith("did:key:");
+}
+
+// ── Guardian provenance (#875 review R2). ──
+
+/** The evidence a guardian was set under (closed set; migration v60). */
+export const GUARDIAN_EVIDENCE = [
+  "bearer",
+  "key_proof",
+  "holder",
+  "succession",
+  "sovereign",
+  "operator",
+] as const;
+export type GuardianEvidence = (typeof GUARDIAN_EVIDENCE)[number];
+
+export interface GuardianEvidenceRow {
+  guardian_public_key: string;
+  set_under_key: string | null;
+  evidence: GuardianEvidence;
+}
+
+export function guardianEvidenceRows(db: DatabaseDriver, motebitId: string): GuardianEvidenceRow[] {
+  return db
+    .prepare(
+      "SELECT guardian_public_key, set_under_key, evidence FROM relay_guardian_evidence WHERE motebit_id = ?",
+    )
+    .all(motebitId) as GuardianEvidenceRow[];
+}
+
+/** A guardian record stands when the operator set it, or the key it was set under stands. */
+export function guardianRowStands(g: GuardianEvidenceRow, standing: Set<string>): boolean {
+  if (g.evidence === "operator") return true;
+  return g.set_under_key != null && standing.has(g.set_under_key.toLowerCase());
+}
+
+/**
+ * Record that `guardianPublicKey` was set by a request that proved
+ * `setUnderKey` — the identity's CURRENT key (the register door decides; this
+ * proves nothing itself). One row per guardian the identity has ever set, so
+ * a recovery the identity's earlier guardian signed stays verifiable.
+ */
+export function recordGuardianEvidence(
+  db: DatabaseDriver,
+  input: {
+    motebitId: string;
+    guardianPublicKey: string;
+    setUnderKey: string | null;
+    evidence: GuardianEvidence;
+    now: number;
+  },
+): void {
+  if (!HEX_64_ANY_CASE.test(input.guardianPublicKey)) {
+    throw new Error("recordGuardianEvidence: guardian must be a 64-hex Ed25519 public key");
+  }
+  db.prepare(
+    `INSERT INTO relay_guardian_evidence (motebit_id, guardian_public_key, set_under_key, evidence, recorded_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(motebit_id, guardian_public_key) DO UPDATE SET
+       set_under_key = excluded.set_under_key,
+       evidence = excluded.evidence,
+       recorded_at = excluded.recorded_at`,
+  ).run(input.motebitId, input.guardianPublicKey, input.setUnderKey, input.evidence, input.now);
+}
+
+/** The evidence that proved a registry key (closed set; migration v58). */
+export const REGISTRY_KEY_EVIDENCE = [
+  "bearer",
+  "holder",
+  "key_proof",
+  "succession",
+  "sovereign",
+  "operator",
+  "receipt_signature",
+] as const;
+export type RegistryKeyEvidence = (typeof REGISTRY_KEY_EVIDENCE)[number];
+
+/**
+ * Record that `publicKey` was written to the registry on `evidence` a request
+ * carried (#875 review round 4). The caller holds the evidence; this proves
+ * nothing itself. Upsert: the latest proven registry key per identity.
+ */
+export function recordRegistryKeyEvidence(
+  db: DatabaseDriver,
+  input: { motebitId: string; publicKey: string; evidence: RegistryKeyEvidence; now: number },
+): void {
+  if (!HEX_64_ANY_CASE.test(input.publicKey)) {
+    throw new Error(`recordRegistryKeyEvidence: not a 32-byte hex public key (${input.evidence})`);
+  }
+  db.prepare(
+    `INSERT INTO relay_registry_key_evidence (motebit_id, public_key, evidence, recorded_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(motebit_id) DO UPDATE SET
+       public_key = excluded.public_key,
+       evidence = excluded.evidence,
+       recorded_at = excluded.recorded_at`,
+  ).run(input.motebitId, input.publicKey, input.evidence, input.now);
+}
+
+/**
+ * The registry key, when a request PROVED it and the registry still holds
+ * exactly that key; else null. A pre-#875 row, or one a later unproven write
+ * moved, has no matching evidence.
+ */
+export function provenRegistryKeyOf(db: DatabaseDriver, motebitId: string): string | null {
+  const row = db
+    .prepare(
+      `SELECT e.public_key AS k FROM relay_registry_key_evidence e
+         JOIN agent_registry r ON r.motebit_id = e.motebit_id
+        WHERE e.motebit_id = ? AND r.public_key = e.public_key`,
+    )
+    .get(motebitId) as { k: string } | undefined;
+  return keyOrNull(row?.k);
+}

@@ -590,7 +590,7 @@ export const FEDERATION_SETTLEMENT_RECORD_SUITE: "motebit-jcs-ed25519-b64-v1";
 export function federationBodyDigest(body: unknown): Promise<string>;
 
 // @public
-export function federationMessageBytes(envelope: FederationMessageEnvelope): Uint8Array;
+export function federationMessageBytes(envelope: FederationMessageEnvelope, canon?: (value: unknown) => string): Uint8Array;
 
 // @public
 export interface FederationMessageEnvelope {
