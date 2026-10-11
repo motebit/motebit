@@ -7,8 +7,12 @@
  * services/relay/src/identity-authority-census.ts) and serves it on the
  * master-token `GET /api/v1/admin/identity-authority/census`, because
  * production allows no direct database read. This script only fetches and
- * prints it. Counts and ids only — the route serves no key, token, address
- * or signature.
+ * prints it. Counts, ids and buckets only — the route serves no key, token,
+ * address or signature. Every flagged row carries one bucket:
+ * `definitely_invalid` (the only one that could ever become eligible for
+ * automatic cleanup — none exists), `suspicious` (human review) or
+ * `legitimate_legacy`. The census runs on a handle the database itself keeps
+ * read-only (`PRAGMA query_only`).
  *
  *   RELAY_URL=https://motebit-sync-stg.fly.dev AUTH_TOKEN=… \
  *     npx tsx scripts/measure-identity-authority.ts [--limit 50] [--json]
@@ -30,18 +34,33 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-interface Census {
-  q1_planted_device_rows: { count: number; count_no_current_key: number };
-  q2_sovereign_squats: { count: number };
-  q3_unbound_money_destinations: {
-    settlement_address: { count: number };
-    pay_to_address: { count: number };
-    withdrawal_destination: { count: number };
-  };
-  q4_unproven_guardians: { identity_keys: { count: number }; agent_registry: { count: number } };
-  q5_keyless_with_device_rows: { count: number };
-  q6_v1_peers: { count: number; by_state: Record<string, number> };
+/** One bucket per flagged row or id (docs/design/identity-authority-writers.md §6). */
+interface Buckets {
+  definitely_invalid: number;
+  suspicious: number;
+  legitimate_legacy: number;
 }
+interface Counted {
+  count: number;
+  buckets: Buckets;
+}
+
+interface Census {
+  q1_planted_device_rows: Counted & { count_no_current_key: number };
+  q2_sovereign_squats: Counted;
+  q3_unbound_money_destinations: {
+    settlement_address: Counted;
+    pay_to_address: Counted;
+    withdrawal_destination: Counted;
+  };
+  q4_unproven_guardians: { identity_keys: Counted; agent_registry: Counted };
+  q5_keyless_with_device_rows: Counted;
+  q6_v1_peers: Counted & { by_state: Record<string, number> };
+}
+
+/** `invalid/suspicious/legacy` — only `invalid` could ever be cleaned up automatically. */
+const b = (c: Counted): string =>
+  `[invalid ${c.buckets.definitely_invalid} / suspicious ${c.buckets.suspicious} / legacy ${c.buckets.legitimate_legacy}]`;
 
 async function main(): Promise<void> {
   const limit = arg("--limit");
@@ -80,20 +99,22 @@ async function main(): Promise<void> {
   }
   const q3 = body.q3_unbound_money_destinations;
   console.log(
-    `  Q1 device rows not on the current key:        ${body.q1_planted_device_rows.count} (${body.q1_planted_device_rows.count_no_current_key} of identities with no current key)`,
-  );
-  console.log(`  Q2 sovereign-id squats:                       ${body.q2_sovereign_squats.count}`);
-  console.log(
-    `  Q3 unbound money destinations:                settlement ${q3.settlement_address.count}, pay-to ${q3.pay_to_address.count}, withdrawals (90d) ${q3.withdrawal_destination.count}`,
+    `  Q1 device rows not on the current key:        ${body.q1_planted_device_rows.count} ${b(body.q1_planted_device_rows)} (${body.q1_planted_device_rows.count_no_current_key} of identities with no current key)`,
   );
   console.log(
-    `  Q4 guardians without provenance:              identity_keys ${body.q4_unproven_guardians.identity_keys.count}, agent_registry ${body.q4_unproven_guardians.agent_registry.count}`,
+    `  Q2 sovereign-id squats:                       ${body.q2_sovereign_squats.count} ${b(body.q2_sovereign_squats)}`,
   );
   console.log(
-    `  Q5 keyless ids with keyed device rows:        ${body.q5_keyless_with_device_rows.count}`,
+    `  Q3 unbound money destinations:                settlement ${q3.settlement_address.count} ${b(q3.settlement_address)}, pay-to ${q3.pay_to_address.count} ${b(q3.pay_to_address)}, withdrawals (90d) ${q3.withdrawal_destination.count} ${b(q3.withdrawal_destination)}`,
   );
   console.log(
-    `  Q6 peers on a pre-v2 federation protocol:     ${body.q6_v1_peers.count} ${JSON.stringify(body.q6_v1_peers.by_state)}`,
+    `  Q4 guardians without provenance:              identity_keys ${body.q4_unproven_guardians.identity_keys.count} ${b(body.q4_unproven_guardians.identity_keys)}, agent_registry ${body.q4_unproven_guardians.agent_registry.count} ${b(body.q4_unproven_guardians.agent_registry)}`,
+  );
+  console.log(
+    `  Q5 keyless ids with keyed device rows:        ${body.q5_keyless_with_device_rows.count} ${b(body.q5_keyless_with_device_rows)}`,
+  );
+  console.log(
+    `  Q6 peers with no v2 federation evidence:      ${body.q6_v1_peers.count} ${b(body.q6_v1_peers)} ${JSON.stringify(body.q6_v1_peers.by_state)}`,
   );
   console.log("✓ measure-identity-authority: 6 queries answered. Re-run with --json for the ids.");
 }

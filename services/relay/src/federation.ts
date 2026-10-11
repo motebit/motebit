@@ -303,6 +303,11 @@ export function createFederationTables(db: DatabaseDriver): void {
     "ALTER TABLE relay_peers ADD COLUMN successful_forwards INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE relay_peers ADD COLUMN failed_forwards INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE relay_peers ADD COLUMN peer_protocol_version TEXT",
+    // The protocol this relay ran the peer's handshake under, written at a
+    // completed confirm. `peer_protocol_version` is only the proposer's
+    // claim, and the CLI proposer sends none — so this is the v2 evidence the
+    // identity-authority census (Q6) reads.
+    "ALTER TABLE relay_peers ADD COLUMN handshake_protocol_version TEXT",
   ]) {
     try {
       db.exec(col);
@@ -1951,8 +1956,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     const now = Date.now();
     db.prepare(
-      `UPDATE relay_peers SET state = 'active', peered_at = ?, last_heartbeat_at = ?, nonce = NULL WHERE peer_relay_id = ?`,
-    ).run(now, now, relay_id);
+      `UPDATE relay_peers SET state = 'active', peered_at = ?, last_heartbeat_at = ?, nonce = NULL, handshake_protocol_version = ? WHERE peer_relay_id = ?`,
+    ).run(now, now, RELAY_SPEC_VERSION, relay_id);
 
     logger.info("federation.peer.active", { peerId: relay_id });
 
