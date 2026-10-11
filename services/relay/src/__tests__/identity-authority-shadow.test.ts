@@ -704,4 +704,128 @@ describe("installAuthorityGuards — the census's full authority-column list, re
   });
 });
 
+// ── The doors: X-Motebit-Authority over HTTP (Inc 2, part 2) ────────────
+
+describe("X-Motebit-Authority on the money doors — valid writes through writeAuthority, invalid is 401", () => {
+  const golden = existsSync(GOLDEN)
+    ? (JSON.parse(readFileSync(GOLDEN, "utf8")) as Record<string, unknown>)
+    : {};
+  const refusalsSince = (id: number) =>
+    (
+      db()
+        .prepare(
+          "SELECT reason FROM relay_auth_events WHERE id > ? AND kind = 'agent_token_rejected' AND reason LIKE 'authority:%' ORDER BY id",
+        )
+        .all(id) as Array<{ reason: string }>
+    ).map((r) => r.reason);
+
+  for (const [name, door] of Object.entries(DOORS)) {
+    for (const who of ["owner", "paired"] as const) {
+      it(`${name} — valid header, ${who} device token: main's response, the change written, no shadow event`, async () => {
+        const c = await cast();
+        await door.prepare(c);
+        const value = door.body(c);
+        const beforeValues = JSON.stringify(door.read(c));
+        const before = lastEventId();
+        const res = await callDoor(c, door, {
+          who,
+          authority: await signedHeader(c, door.field, value),
+          body: value,
+        });
+        expect(normalize(res, c, relayId())).toEqual(golden[`${name}/${who}`]);
+        expect(shadowEventsSince(before)).toEqual([]);
+        expect(refusalsSince(before)).toEqual([]);
+        expect(JSON.stringify(door.read(c))).not.toBe(beforeValues);
+      });
+    }
+
+    const INVALID: Array<{
+      variant: string;
+      reason: string;
+      header: (c: Cast, value: Record<string, unknown>) => Promise<string>;
+    }> = [
+      { variant: "malformed", reason: "malformed", header: async () => "!!not-a-header!!" },
+      {
+        variant: "signed by the paired device's key (not the current key)",
+        reason: "bad_signature",
+        header: (c, v) => signedHeader(c, door.field, v, { key: c.paired }),
+      },
+      {
+        variant: "for another field",
+        reason: "field_mismatch",
+        header: (c, v) => signedHeader(c, door.field === "listing" ? "sweep_config" : "listing", v),
+      },
+      {
+        variant: "over another value",
+        reason: "value_mismatch",
+        header: (c, v) => signedHeader(c, door.field, { ...v, tampered: true }),
+      },
+      {
+        variant: "for another relay",
+        reason: "wrong_relay",
+        header: (c, v) => signedHeader(c, door.field, v, { relay: "another-relay" }),
+      },
+      {
+        variant: "stale",
+        reason: "stale",
+        header: (c, v) => signedHeader(c, door.field, v, { now: Date.now() - 6 * 60_000 }),
+      },
+    ];
+    for (const bad of INVALID) {
+      it(`${name} — header ${bad.variant}: 401 ${bad.reason}, nothing written, refusal recorded, no shadow event`, async () => {
+        const c = await cast();
+        await door.prepare(c);
+        const value = door.body(c);
+        const beforeValues = JSON.stringify(door.read(c));
+        const before = lastEventId();
+        const res = await callDoor(c, door, {
+          who: "owner",
+          authority: await bad.header(c, value),
+          body: value,
+        });
+        expect(res.status).toBe(401);
+        expect(JSON.stringify(door.read(c))).toBe(beforeValues);
+        expect(shadowEventsSince(before)).toEqual([]);
+        expect(refusalsSince(before)).toEqual([`authority:${bad.reason}`]);
+      });
+    }
+
+    it(`${name} — the same header replayed: the first writes, the replay is 401 replayed and writes nothing`, async () => {
+      const c = await cast();
+      await door.prepare(c);
+      const value = door.body(c);
+      const header = await signedHeader(c, door.field, value);
+      const first = await callDoor(c, door, { who: "owner", authority: header, body: value });
+      expect(first.status).toBeLessThan(300);
+      const afterFirst = JSON.stringify(door.read(c));
+      const before = lastEventId();
+      const replay = await callDoor(c, door, { who: "owner", authority: header, body: value });
+      expect(replay.status).toBe(401);
+      expect(JSON.stringify(door.read(c))).toBe(afterFirst);
+      expect(shadowEventsSince(before)).toEqual([]);
+      expect(refusalsSince(before)).toEqual(["authority:replayed"]);
+    });
+  }
+
+  it("an identity with no current key presenting a header: 401 no_current_key; without one it still succeeds (D2 freezes nothing in Inc 2)", async () => {
+    const legacy = await generateKeypair();
+    const mid = crypto.randomUUID();
+    await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motebit_id: mid, device_id: "owner-dev", public_key: hex(legacy) }),
+    });
+    const c: Cast = { owner: legacy, paired: legacy, mid, wallet: walletOf(hex(legacy)) };
+    const door = DOORS["register"]!;
+    const value = door.body(c);
+    const refused = await callDoor(c, door, {
+      who: "owner",
+      authority: await signedHeader(c, door.field, value),
+      body: value,
+    });
+    expect(refused.status).toBe(401);
+    const ok = await callDoor(c, door, { who: "owner", body: value });
+    expect(ok.status).toBe(200);
+  });
+});
 void AUTH_HEADER;
