@@ -102,6 +102,14 @@ by the founder / PE:
 - (a) **A producer REFUSES to embed an old child receipt holding an unpaired surrogate** (P1/P3
   `delegation_receipts`): fail closed, rule (1) as written. No exception for a child signed by
   someone else.
+  **REFINED 2026-10-11 by the principal engineer:** refusing to _embed_ the child must not mean
+  refusing to _sign the parent_. The parent must never be lost because a third party's child is
+  malformed. So the embedding producers (`handleAgentTask` in `@motebit/runtime`,
+  `buildServiceReceipt` in `@motebit/mcp-server`) **drop** such a child from
+  `delegation_receipts` (the runtime logs it) and still sign the parent, which is strict-valid.
+  The signing boundary itself is unchanged: `signExecutionReceipt` (P1) still throws
+  `UnpairedSurrogateError` when handed a body that embeds one — the drop happens before it, at
+  the producers that assemble the chain.
 - (b) **`verifyReceiptVerdict`'s default stays byte-identical to origin/main** (pinned public
   contract, re-exported by `@motebit/verifier`). It has no surrogate branch; it has no strict
   mode, so it carries no well-formedness check at all.
@@ -226,6 +234,40 @@ Result: **5,844 cells, 5,844 hold** (python leg required, `REQUIRE_PYTHON=1`), w
 every I5 default-path cell matches it. Public API in default mode: unchanged. Additive
 producer-side exports: `canonicalJsonForSigning`, `UnpairedSurrogateError` (`@motebit/crypto`;
 re-exported with `hasUnpairedSurrogate` from `@motebit/encryption`).
+
+## 7. Cold review round (`fix/payment-receipt-wellformed`, 2026-10-11)
+
+A cold review of §6 found the recurring class again — a DEFAULT-mode verdict diverging from the
+base — so the harness came first:
+
+1. **Differential default-mode harness.** `apps/cli/src/__tests__/default-verdict-differential.test.ts`
+   runs every default-mode verifier path (`crypto.verify` on an object / a JSON string / with
+   `expectedType`, `verifyReceipt` with no options / `{}` / `strictHashBinding: false`,
+   `verifyReceiptVerdict`, `@motebit/verifier`'s `verifyArtifact` / `verifyFile`, and the
+   runtime/relay `verifyExecutionReceipt`) over a 751-receipt corpus — every `public_key`
+   spelling (any-case hex, partially-parseable pairs `"ag"` / `" a"` / `"+a"` / `"-a"` / `"zz"`,
+   short / 65 / 66 characters, non-strings, arrays) × every `delegation_receipts` shape (`[]`,
+   `[null]`, non-objects, bad / keyless / lenient-key / lone-surrogate children, chains to the
+   cap of 10), plus a seeded fast-check sample over malformed text, missing / extra fields,
+   suites, signatures and `result_hash`. Each verdict (valid, every error, every field, or the
+   thrown message) must equal the merge-base `4571d3b42`'s, recorded as a golden by
+   `apps/cli/scripts/default-verdict-base-oracle.ts`. Committed red: **477 of 751 cases
+   diverged.**
+2. **Fix.** `verifyReceipt` dispatches on `strictHashBinding`: the default is the merge-base
+   function verbatim (lenient `hexToBytes` + 32-byte check, keyless early return with no
+   `§11.5` entries, a `null` child throws as it always did); the 64-hex key rule, the full
+   nested walk, the `§11.4` / `§11.5` strictness and the shape errors are strict-only. **0 of
+   751 diverge.** `motebit-verify --lenient` maps a verifier throw to INVALID (exit 1), as
+   `motebit verify receipt` does, instead of "cannot read" (exit 2).
+3. **Gate.** `check-signed-text-wellformed` now sees property-access signers (`C.signBySuite`,
+   `ed.signAsync`, `x["ed25519Sign"]`, re-bound methods, `tx.sign`; not `Math.sign`) and traces
+   the argument carrying the signed bytes to the guard's output within the function (encoders,
+   digests, local variables, buffers built from guarded digests, a helper handed the guard), so
+   a decoy guard no longer passes. Tamper fixtures: the previous gate flagged 0 of the 7 new
+   planted bypasses, this one flags all 7 (10 in total). `create-motebit rotate`'s
+   key-succession signer goes through an inlined guard; Solana `tx.sign` and the motebit.md
+   YAML signers are documented non-JCS; the simulated Secure Enclave test mint is pinned debt.
+4. **P3.** Decision (a) refined (§3): an old malformed child is dropped, the parent signed.
 
 ## Appendix A — failing cells on `0d4497c49`, before the fix (field × path × input)
 
