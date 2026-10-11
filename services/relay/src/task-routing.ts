@@ -969,10 +969,13 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
 
   function resetCircuitBreaker(peerEndpoint: string): void {
     circuitBreaker.reset(peerEndpoint);
-    // Re-activate the peer in DB if it was suspended by the circuit breaker.
-    db.prepare(
-      "UPDATE relay_peers SET state = 'active', failed_forwards = 0 WHERE endpoint_url = ? AND state = 'suspended'",
-    ).run(peerEndpoint);
+    // The breaker only. A suspended peer's row returns to `active` on a
+    // message verified under its stored key (its heartbeat, or this relay's
+    // heartbeat it acknowledges) — never on a local reset
+    // (relay-federation@1.5 §3.1, peer row authority).
+    db.prepare("UPDATE relay_peers SET failed_forwards = 0 WHERE endpoint_url = ?").run(
+      peerEndpoint,
+    );
   }
 
   return {

@@ -13,8 +13,10 @@
  * suspended, removed):
  *   - a propose naming a DIFFERENT key is refused, the row is byte-identical
  *     before and after, and the stored key still verifies the real peer;
- *   - a propose naming the SAME key behaves as before (pending/active: 409
- *     "already exists"; suspended/removed: re-handshake to active).
+ *   - a propose naming the SAME key is refused 409 "already exists" when the
+ *     row is active, and otherwise opens a re-handshake that writes nothing
+ *     to the row until its confirm verifies under the stored key (the
+ *     exhaustive form is federation-peer-row-authority.test.ts).
  * And end to end: an attacker cannot take over a suspended peer's relay_id,
  * neither directly nor by first spending a same-key propose and a failed
  * confirm to erase the row.
@@ -168,24 +170,26 @@ describe("a propose naming a different key for a known relay_id is refused", () 
   }
 });
 
-describe("a propose naming the same key behaves as before", () => {
-  for (const state of ["pending", "active"] as const) {
-    it(`prior state ${state}: 409 already exists, row unchanged`, async () => {
+describe("a propose naming the same key", () => {
+  it("prior state active: 409 already exists, row unchanged", async () => {
+    setStateOfA("active");
+    const before = rowOfA();
+    const res = await propose("b", "a", ids.a.publicKeyHex, URLS.a);
+    expect(res.status).toBe(409);
+    expect(await res.text()).toMatch(/already exists/);
+    expect(rowOfA()).toEqual(before);
+  });
+  // A confirmed peer re-handshakes beside its row (§3.1, peer row authority):
+  // the propose writes nothing; the confirm, verified under the stored key,
+  // moves the row to active.
+  for (const state of ["pending", "suspended", "removed"] as const) {
+    it(`prior state ${state}: re-handshake leaves the row until the confirm, then active`, async () => {
       setStateOfA(state);
       const before = rowOfA();
       const res = await propose("b", "a", ids.a.publicKeyHex, URLS.a);
-      expect(res.status).toBe(409);
-      expect(await res.text()).toMatch(/already exists/);
-      expect(rowOfA()).toEqual(before);
-    });
-  }
-  for (const state of ["suspended", "removed"] as const) {
-    it(`prior state ${state}: re-handshake under the same key reaches active`, async () => {
-      setStateOfA(state);
-      const res = await propose("b", "a", ids.a.publicKeyHex, URLS.a);
       expect(res.status).toBe(200);
       const { nonce } = (await res.json()) as { nonce: string };
-      expect(rowOfA()?.state).toBe("pending");
+      expect(rowOfA()).toEqual(before);
       const confirm = await post("b", "/federation/v1/peer/confirm", {
         relay_id: ids.a.relayMotebitId,
         challenge_response: await operatorConfirm(relays.a, nonce, AUTH_HEADER),

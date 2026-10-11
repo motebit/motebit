@@ -953,6 +953,186 @@ function heartbeatBody(agentCount: number, revocations: RevocationEvent[] | unde
 /** The body a v2 `peer-remove` commits to. */
 const PEER_REMOVE_BODY = { action: "remove" } as const;
 
+// === Peer Row Authority ===
+//
+// relay-federation@1.5 §3.1, "Peer row authority". Every write to a peer's
+// `relay_peers` row goes through `writePeerRow`, which asks
+// `peerRowTransition` first. For a relay_id that was ever confirmed
+// (`peered_at` set) an unauthenticated request writes nothing; this relay's
+// own observation may only move the row away from `active`; and the key,
+// the endpoint and a move to `active`/`pending` follow only a message
+// verified under the row's CURRENT stored key. The public key is never
+// rewritten by any request (re-keying is the operator deleting the row).
+// A relay_id never confirmed is first-come. Every write is a compare-and-set
+// against the row as read, so a write decided before an await never lands
+// on a row that changed during it.
+
+/** The `relay_peers` columns the authority rule reads and the guarded writer writes. */
+export interface PeerRow {
+  peer_relay_id: string;
+  public_key: string;
+  endpoint_url: string;
+  display_name: string | null;
+  state: string;
+  nonce: string | null;
+  peered_at: number | null;
+  last_heartbeat_at: number | null;
+  missed_heartbeats: number;
+  agent_count: number;
+  peer_protocol_version: string | null;
+  handshake_protocol_version: string | null;
+}
+
+/** What a write rests on. */
+export type PeerWriteAuthority =
+  /** No proof under the row's key: a propose, a confirm that did not verify. */
+  | "unauthenticated"
+  /** This relay's own observation of the peer (an outbound heartbeat that failed). */
+  | "observed"
+  /** A message verified under the row's current stored key. */
+  | "peer-key";
+
+export type PeerRowWrite =
+  { op: "insert"; row: PeerRow } | { op: "update"; row: PeerRow } | { op: "delete" };
+
+const PEER_ROW_COLUMNS =
+  "peer_relay_id, public_key, endpoint_url, display_name, state, nonce, peered_at, last_heartbeat_at, missed_heartbeats, agent_count, peer_protocol_version, handshake_protocol_version";
+
+/** The peer's row as it is now, in the shape the guard compares against. */
+export function readPeerRow(db: DatabaseDriver, peerRelayId: string): PeerRow | undefined {
+  return db
+    .prepare(`SELECT ${PEER_ROW_COLUMNS} FROM relay_peers WHERE peer_relay_id = ?`)
+    .get(peerRelayId) as PeerRow | undefined;
+}
+
+/**
+ * The authority rule, pure: `null` when `write` may move `before`, else the
+ * reason it may not.
+ */
+export function peerRowTransition(
+  before: PeerRow | undefined,
+  write: PeerRowWrite,
+  authority: PeerWriteAuthority,
+): string | null {
+  if (write.op === "insert") return before === undefined ? null : "the row exists";
+  if (before === undefined) return "no row";
+  if (write.op === "update") {
+    if (write.row.peer_relay_id !== before.peer_relay_id) return "peer_relay_id is fixed";
+    if (write.row.public_key !== before.public_key) return "a peer's public_key is never rewritten";
+  }
+  // Never confirmed: the row holds only a proposer's claim (first-come).
+  if (before.peered_at == null) return null;
+  if (write.op === "delete") return "a confirmed peer's row is deleted only by its operator";
+  if (authority === "unauthenticated")
+    return "an unauthenticated request never writes a confirmed peer's row";
+  if (authority === "peer-key") return null;
+  // observed: never the endpoint, never the confirmation, never toward active.
+  const next = write.row;
+  if (next.endpoint_url !== before.endpoint_url)
+    return "the endpoint moves only under the peer's key";
+  if (next.peered_at !== before.peered_at) return "peered_at moves only under the peer's key";
+  if (next.state !== before.state && (next.state === "active" || next.state === "pending"))
+    return "a move to active or pending needs the peer's key";
+  return null;
+}
+
+/**
+ * The one writer of a peer's row. Refused by `peerRowTransition`, or the row
+ * no longer what `before` read, ⇒ nothing is written and `false`.
+ */
+export function writePeerRow(
+  db: DatabaseDriver,
+  before: PeerRow | undefined,
+  write: PeerRowWrite,
+  authority: PeerWriteAuthority,
+): boolean {
+  const refused = peerRowTransition(before, write, authority);
+  if (refused !== null) {
+    logger.warn("federation.peer.write_refused", {
+      peerId: write.op === "delete" ? before?.peer_relay_id : write.row.peer_relay_id,
+      op: write.op,
+      authority,
+      reason: refused,
+    });
+    return false;
+  }
+  if (write.op === "insert") {
+    const r = write.row;
+    return (
+      db
+        .prepare(
+          `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, peered_at, last_heartbeat_at, missed_heartbeats, agent_count, peer_protocol_version, handshake_protocol_version, trust_score)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.5)
+           ON CONFLICT(peer_relay_id) DO NOTHING`,
+        )
+        .run(
+          r.peer_relay_id,
+          r.public_key,
+          r.endpoint_url,
+          r.display_name,
+          r.state,
+          r.nonce,
+          r.peered_at,
+          r.last_heartbeat_at,
+          r.missed_heartbeats,
+          r.agent_count,
+          r.peer_protocol_version,
+          r.handshake_protocol_version,
+        ).changes > 0
+    );
+  }
+  const b = before!;
+  const asRead = [
+    b.peer_relay_id,
+    b.public_key,
+    b.endpoint_url,
+    b.state,
+    b.nonce,
+    b.peered_at,
+    b.last_heartbeat_at,
+    b.missed_heartbeats,
+  ];
+  const AS_READ = `peer_relay_id = ? AND public_key = ? AND endpoint_url = ? AND state = ?
+       AND nonce IS ? AND peered_at IS ? AND last_heartbeat_at IS ? AND missed_heartbeats = ?`;
+  if (write.op === "delete") {
+    return db.prepare(`DELETE FROM relay_peers WHERE ${AS_READ}`).run(...asRead).changes > 0;
+  }
+  const r = write.row;
+  return (
+    db
+      .prepare(
+        `UPDATE relay_peers SET endpoint_url = ?, display_name = ?, state = ?, nonce = ?,
+           peered_at = ?, last_heartbeat_at = ?, missed_heartbeats = ?, agent_count = ?,
+           peer_protocol_version = ?, handshake_protocol_version = ?
+         WHERE ${AS_READ}`,
+      )
+      .run(
+        r.endpoint_url,
+        r.display_name,
+        r.state,
+        r.nonce,
+        r.peered_at,
+        r.last_heartbeat_at,
+        r.missed_heartbeats,
+        r.agent_count,
+        r.peer_protocol_version,
+        r.handshake_protocol_version,
+        ...asRead,
+      ).changes > 0
+  );
+}
+
+/** A confirmed peer's re-handshake, pending its confirm (§3.1). */
+interface Rehandshake {
+  nonce: string;
+  endpoint_url: string;
+  display_name: string | null;
+  peer_protocol_version: string | null;
+  expires_at: number;
+}
+const REHANDSHAKE_TTL_MS = 10 * 60 * 1000;
+const REHANDSHAKE_SLOTS = 8;
+
 // === Heartbeat Sender ===
 
 const HEARTBEAT_SUSPEND_THRESHOLD = 3;
@@ -968,16 +1148,8 @@ export async function sendHeartbeats(
   peerFetch: PeerFetch = defaultPeerFetch,
 ): Promise<void> {
   const peers = db
-    .prepare(
-      "SELECT peer_relay_id, public_key, endpoint_url, missed_heartbeats, state FROM relay_peers WHERE state IN ('active', 'suspended')",
-    )
-    .all() as Array<{
-    peer_relay_id: string;
-    public_key: string;
-    endpoint_url: string;
-    missed_heartbeats: number;
-    state: string;
-  }>;
+    .prepare(`SELECT ${PEER_ROW_COLUMNS} FROM relay_peers WHERE state IN ('active', 'suspended')`)
+    .all() as PeerRow[];
 
   if (peers.length === 0) return;
 
@@ -1054,32 +1226,47 @@ export async function sendHeartbeats(
     const result = results[i]!;
     const succeeded = result.status === "fulfilled" && result.value.ok;
 
+    // Each write is against the row as read before the sends: a row that
+    // changed while this tick awaited its peers (a confirm, an inbound
+    // heartbeat, a remove) is left as it now is (§3.1, peer row authority).
     if (succeeded) {
       // Hysteresis: decrement missed count by 1 rather than resetting to 0.
       // A suspended peer (3 misses) needs 3 consecutive successes to reactivate,
       // preventing rapid suspended↔active oscillation on flaky connections.
+      // The ack verified under the stored key, so this is the peer's word.
       const newMissed = Math.max(0, peer.missed_heartbeats - 1);
       const newState = newMissed === 0 ? "active" : peer.state;
-      db.prepare(
-        "UPDATE relay_peers SET missed_heartbeats = ?, state = ?, last_heartbeat_at = ? WHERE peer_relay_id = ?",
-      ).run(newMissed, newState, Date.now(), peer.peer_relay_id);
+      writePeerRow(
+        db,
+        peer,
+        {
+          op: "update",
+          row: {
+            ...peer,
+            missed_heartbeats: newMissed,
+            state: newState,
+            last_heartbeat_at: Date.now(),
+          },
+        },
+        "peer-key",
+      );
     } else {
       const newMissed = peer.missed_heartbeats + 1;
-      if (newMissed >= HEARTBEAT_REMOVE_THRESHOLD) {
-        db.prepare(
-          "UPDATE relay_peers SET missed_heartbeats = ?, state = 'removed' WHERE peer_relay_id = ?",
-        ).run(newMissed, peer.peer_relay_id);
-        logger.warn("federation.peer.suspended", { peerId: peer.peer_relay_id });
-      } else if (newMissed >= HEARTBEAT_SUSPEND_THRESHOLD) {
-        db.prepare(
-          "UPDATE relay_peers SET missed_heartbeats = ?, state = 'suspended' WHERE peer_relay_id = ?",
-        ).run(newMissed, peer.peer_relay_id);
-        logger.warn("federation.peer.suspended", { peerId: peer.peer_relay_id });
+      const newState =
+        newMissed >= HEARTBEAT_REMOVE_THRESHOLD
+          ? "removed"
+          : newMissed >= HEARTBEAT_SUSPEND_THRESHOLD
+            ? "suspended"
+            : peer.state;
+      writePeerRow(
+        db,
+        peer,
+        { op: "update", row: { ...peer, missed_heartbeats: newMissed, state: newState } },
+        "observed",
+      );
+      if (newState !== peer.state) {
+        logger.warn(`federation.peer.${newState}`, { peerId: peer.peer_relay_id });
       } else {
-        db.prepare("UPDATE relay_peers SET missed_heartbeats = ? WHERE peer_relay_id = ?").run(
-          newMissed,
-          peer.peer_relay_id,
-        );
         logger.warn("federation.heartbeat.missed", {
           peerId: peer.peer_relay_id,
           missed: newMissed,
@@ -1823,6 +2010,28 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 2: Peering Protocol ──
 
+  // A confirmed peer's pending re-handshakes (§3.1, peer row authority),
+  // held beside its row — never in it — until a confirm verifies under the
+  // stored key. Several are kept per relay_id, so a caller's proposes cannot
+  // displace the real peer's in-flight handshake short of outnumbering it
+  // inside its TTL; in memory, because each lives minutes and a restart
+  // costs only a re-propose.
+  const rehandshakes = new Map<string, Rehandshake[]>();
+
+  function liveRehandshakes(relayId: string): Rehandshake[] {
+    const now = Date.now();
+    const live = (rehandshakes.get(relayId) ?? []).filter((h) => h.expires_at > now);
+    if (live.length > 0) rehandshakes.set(relayId, live);
+    else rehandshakes.delete(relayId);
+    return live;
+  }
+
+  function recordRehandshake(relayId: string, h: Rehandshake): void {
+    const live = liveRehandshakes(relayId);
+    live.push(h);
+    rehandshakes.set(relayId, live.slice(-REHANDSHAKE_SLOTS));
+  }
+
   /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/peer/propose", async (c) => {
     const body = await c.req.json<{
@@ -1863,15 +2072,15 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     checkVersionCompatibility(spec_version);
 
     checkPeerPolicy(relay_id);
-    checkPeerLimit(relay_id);
+    const existing = readPeerRow(db, relay_id);
+    // A confirmed peer's re-handshake writes nothing until its confirm
+    // verifies under the stored key (below), so it spends no per-peer slot
+    // either: an unauthenticated caller naming the relay_id must not be able
+    // to rate-limit the real peer out of recovering (§3.1). The per-IP limiter
+    // still applies.
+    if (existing?.peered_at == null) checkPeerLimit(relay_id);
     checkMaxPeers();
 
-    const existing = db
-      .prepare(
-        "SELECT state, last_heartbeat_at, public_key FROM relay_peers WHERE peer_relay_id = ?",
-      )
-      .get(relay_id) as
-      { state: string; last_heartbeat_at: number | null; public_key: string } | undefined;
     // A known peer's key is never replaced by a propose (relay-federation@1.5
     // §3.1; identity-authority I1 applied to peers). The propose proves
     // nothing about who holds the row's key, and confirm verifies under
@@ -1885,11 +2094,18 @@ export function registerFederationRoutes(deps: FederationDeps): void {
           "public_key differs from the key on record for this relay_id (relay-federation@1.5 §3.1): a propose may not replace a known peer's key. Re-peer under the recorded key; re-keying a peer requires its operator to delete the row first",
       });
     }
-    if (existing && (existing.state === "active" || existing.state === "pending")) {
+    // Active: nothing to recover. Pending and never confirmed: first-come —
+    // the handshake in flight holds the relay_id until it confirms or fails.
+    if (
+      existing &&
+      (existing.state === "active" || (existing.state === "pending" && existing.peered_at == null))
+    ) {
       throw new HTTPException(409, { message: `Peer already exists in ${existing.state} state` });
     }
     // Cooldown: removed peers must wait 5 minutes before re-peering.
     // Prevents rapid removed→pending oscillation when the root cause persists.
+    // `last_heartbeat_at` moves only under the peer's key, so no caller can
+    // extend it.
     if (
       existing &&
       existing.state === "removed" &&
@@ -1916,34 +2132,59 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const challengeMsg = new TextEncoder().encode(`${relay_id}:${nonce}:${FEDERATION_SUITE}`);
     const challengeSig = await sign(challengeMsg, relayIdentity.privateKey);
 
-    // The upsert never writes `public_key` on conflict, and re-checks the key
-    // in its own WHERE: the check above ran before an await, so a row written
-    // in between is matched here, not overwritten. No row changed ⇒ refused.
-    const upsert = db
-      .prepare(
-        `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
-       VALUES (?, ?, ?, ?, 'pending', ?, 0, 0, 0.5, ?)
-       ON CONFLICT(peer_relay_id) DO UPDATE SET
-         endpoint_url = excluded.endpoint_url,
-         display_name = excluded.display_name, state = 'pending',
-         nonce = excluded.nonce, missed_heartbeats = 0,
-         peer_protocol_version = excluded.peer_protocol_version
-         WHERE relay_peers.state NOT IN ('active', 'pending')
-           AND lower(relay_peers.public_key) = lower(excluded.public_key)`,
-      )
-      .run(
-        relay_id,
-        public_key,
+    if (existing?.peered_at != null) {
+      // A confirmed peer re-handshakes beside its row, never in it (§3.1,
+      // peer row authority): the propose is unauthenticated, so it records
+      // only a pending handshake. The endpoint it names, and the move to
+      // active, land when a confirm verifies under the stored key.
+      recordRehandshake(relay_id, {
+        nonce: ourNonce,
         endpoint_url,
-        display_name ?? null,
-        ourNonce,
-        spec_version ?? null,
-      );
-    if (upsert.changes === 0) {
-      throw new HTTPException(409, {
-        message:
-          "peer row changed during propose (relay-federation@1.5 §3.1): it is now active or pending, or holds a different key; a propose may not replace a known peer's key",
+        display_name: display_name ?? null,
+        peer_protocol_version: spec_version ?? null,
+        expires_at: Date.now() + REHANDSHAKE_TTL_MS,
       });
+    } else {
+      const proposed = {
+        endpoint_url,
+        display_name: display_name ?? null,
+        state: "pending",
+        nonce: ourNonce,
+        missed_heartbeats: 0,
+        peer_protocol_version: spec_version ?? null,
+      };
+      // Written against the row as read: the checks above ran before an
+      // await, so a row written or re-keyed in between is not overwritten.
+      const written = existing
+        ? writePeerRow(
+            db,
+            existing,
+            { op: "update", row: { ...existing, ...proposed } },
+            "unauthenticated",
+          )
+        : writePeerRow(
+            db,
+            undefined,
+            {
+              op: "insert",
+              row: {
+                peer_relay_id: relay_id,
+                public_key,
+                peered_at: null,
+                last_heartbeat_at: null,
+                agent_count: 0,
+                handshake_protocol_version: null,
+                ...proposed,
+              },
+            },
+            "unauthenticated",
+          );
+      if (!written) {
+        throw new HTTPException(409, {
+          message:
+            "peer row changed during propose (relay-federation@1.5 §3.1): it is now active or pending, or holds a different key; a propose may not replace a known peer's key",
+        });
+      }
     }
 
     return c.json({
@@ -1967,49 +2208,77 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     checkFederationEnabled();
     checkPeerPolicy(relay_id);
-    checkPeerLimit(relay_id);
 
-    const peer = db
-      .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state = 'pending'")
-      .get(relay_id) as
-      | {
-          peer_relay_id: string;
-          public_key: string;
-          nonce: string | null;
-          peered_at: number | null;
-        }
-      | undefined;
-    if (!peer) throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
-    if (!peer.nonce) throw new HTTPException(400, { message: "No nonce stored for this peer" });
+    const peer = readPeerRow(db, relay_id);
+    const confirmed = peer?.peered_at != null;
+    // As at propose: a confirmed peer's confirm spends its per-peer slot only
+    // once it verifies, so no caller can rate-limit the real peer out (§3.1).
+    if (!confirmed) checkPeerLimit(relay_id);
+    // The nonces a confirm may answer: a never-confirmed row's own handshake
+    // (first-come); a confirmed peer's pending re-handshakes, and a nonce a
+    // pre-1.5 propose left on its row.
+    const candidates: Array<{ nonce: string; rehandshake: Rehandshake | null }> = [];
+    if (peer?.state === "pending" && peer.nonce)
+      candidates.push({ nonce: peer.nonce, rehandshake: null });
+    if (confirmed)
+      for (const h of liveRehandshakes(relay_id))
+        candidates.push({ nonce: h.nonce, rehandshake: h });
+    if (!peer || candidates.length === 0)
+      throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
 
     // Verify: the peer signed their own relay_id + our nonce + suite
-    // (bound to this specific relationship and cryptosuite).
-    const confirmMsg = new TextEncoder().encode(`${relay_id}:${peer.nonce}:${FEDERATION_SUITE}`);
-    const valid = await verify(
-      hexToBytes(challenge_response),
-      confirmMsg,
-      hexToBytes(peer.public_key),
-    );
-    if (!valid) {
-      // A row that was once peered holds a key a confirm already proved: a
-      // failed confirm must not erase it, or a same-key propose (the key is
-      // public) plus a bad confirm would clear the way for a propose under a
-      // new key (§3.1). It is parked `removed` with its key kept. A row never
-      // peered holds only a proposer's claim and is dropped as before.
-      if (peer.peered_at != null) {
-        db.prepare(
-          "UPDATE relay_peers SET state = 'removed', nonce = NULL WHERE peer_relay_id = ? AND state = 'pending'",
-        ).run(relay_id);
-      } else {
-        db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(relay_id);
+    // (bound to this specific relationship and cryptosuite), under the key
+    // the row holds.
+    let answered: (typeof candidates)[number] | undefined;
+    for (const cand of candidates) {
+      const confirmMsg = new TextEncoder().encode(`${relay_id}:${cand.nonce}:${FEDERATION_SUITE}`);
+      if (await verify(hexToBytes(challenge_response), confirmMsg, hexToBytes(peer.public_key))) {
+        answered = cand;
+        break;
       }
+    }
+    if (!answered) {
+      // A never-confirmed row held only a proposer's claim and is dropped.
+      // A confirmed peer's row is not written: the failed confirm proves
+      // nothing, and parking or erasing the row would hand any caller a
+      // lockout or a way to clear the known key (§3.1).
+      if (!confirmed) writePeerRow(db, peer, { op: "delete" }, "unauthenticated");
       throw new HTTPException(403, { message: "Challenge response verification failed" });
     }
+    if (confirmed) checkPeerLimit(relay_id);
 
     const now = Date.now();
-    db.prepare(
-      `UPDATE relay_peers SET state = 'active', peered_at = ?, last_heartbeat_at = ?, nonce = NULL, handshake_protocol_version = ? WHERE peer_relay_id = ?`,
-    ).run(now, now, RELAY_SPEC_VERSION, relay_id);
+    const h = answered.rehandshake;
+    const written = writePeerRow(
+      db,
+      peer,
+      {
+        op: "update",
+        row: {
+          ...peer,
+          ...(h
+            ? {
+                endpoint_url: h.endpoint_url,
+                display_name: h.display_name ?? peer.display_name,
+                peer_protocol_version: h.peer_protocol_version,
+              }
+            : {}),
+          state: "active",
+          peered_at: now,
+          last_heartbeat_at: now,
+          missed_heartbeats: 0,
+          nonce: null,
+          handshake_protocol_version: RELAY_SPEC_VERSION,
+        },
+      },
+      "peer-key",
+    );
+    if (!written) {
+      throw new HTTPException(409, {
+        message: "peer row changed during confirm (relay-federation@1.5 §3.1); retry the handshake",
+      });
+    }
+    rehandshakes.delete(relay_id);
 
     logger.info("federation.peer.active", { peerId: relay_id });
 
@@ -2045,14 +2314,9 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, { message: "revocations must be an array" });
     const relay_id = parsed.envelope.sender;
 
-    const peer = db
-      .prepare(
-        "SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state IN ('active', 'suspended')",
-      )
-      .get(relay_id) as
-      | { peer_relay_id: string; public_key: string; state: string; missed_heartbeats: number }
-      | undefined;
-    if (!peer) throw new HTTPException(404, { message: "No active or suspended peer found" });
+    const peer = readPeerRow(db, relay_id);
+    if (!peer || (peer.state !== "active" && peer.state !== "suspended"))
+      throw new HTTPException(404, { message: "No active or suspended peer found" });
 
     const verdict = await verifyFederationMessage(message, {
       kind: "heartbeat",
@@ -2078,9 +2342,25 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     db.transaction(() => {
       if (!consumeFederationNonce(db, relay_id, env.nonce, env.ts))
         throw new HTTPException(409, { message: "Heartbeat refused: replayed nonce" });
-      db.prepare(
-        `UPDATE relay_peers SET last_heartbeat_at = ?, missed_heartbeats = ?, agent_count = ?, state = ? WHERE peer_relay_id = ?`,
-      ).run(Date.now(), newMissed, agent_count, newState, relay_id);
+      const written = writePeerRow(
+        db,
+        peer,
+        {
+          op: "update",
+          row: {
+            ...peer,
+            last_heartbeat_at: Date.now(),
+            missed_heartbeats: newMissed,
+            agent_count,
+            state: newState,
+          },
+        },
+        "peer-key",
+      );
+      // The row changed while the signature was verified: refused, and the
+      // nonce is not consumed (the transaction rolls back).
+      if (!written)
+        throw new HTTPException(409, { message: "Heartbeat refused: peer row changed; retry" });
     });
 
     // Process incoming revocation events (best-effort)
@@ -2516,8 +2796,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, { message: "malformed v2 peer-remove message (§3.5)" });
     const relay_id = parsed.envelope.sender;
 
-    const peer = db.prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ?").get(relay_id) as
-      { peer_relay_id: string; public_key: string } | undefined;
+    const peer = readPeerRow(db, relay_id);
     if (!peer) throw new HTTPException(404, { message: "Peer not found" });
 
     const verdict = await verifyFederationMessage(body.message, {
@@ -2539,8 +2818,10 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     db.transaction(() => {
       if (!consumeFederationNonce(db, relay_id, env.nonce, env.ts))
         throw new HTTPException(409, { message: "Removal refused: replayed nonce" });
-      db.prepare("UPDATE relay_peers SET state = 'removed' WHERE peer_relay_id = ?").run(relay_id);
+      if (!writePeerRow(db, peer, { op: "update", row: { ...peer, state: "removed" } }, "peer-key"))
+        throw new HTTPException(409, { message: "Removal refused: peer row changed; retry" });
     });
+    rehandshakes.delete(relay_id);
     return c.json({ status: "removed" });
   });
 

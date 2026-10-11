@@ -29,7 +29,17 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { bytesToHex, generateKeypair, sign } from "@motebit/encryption";
 
 import type { SyncRelay } from "../index.js";
-import { initRelayIdentity, sendHeartbeats, type RelayIdentity } from "../federation.js";
+import {
+  initRelayIdentity,
+  peerRowTransition,
+  readPeerRow,
+  sendHeartbeats,
+  writePeerRow,
+  type PeerRow,
+  type PeerRowWrite,
+  type PeerWriteAuthority,
+  type RelayIdentity,
+} from "../federation.js";
 import { setLogLevel } from "../logger.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 import {
@@ -433,4 +443,161 @@ describe("peer row authority — exhaustive (initial state × action sequences �
       30 * 60 * 1000,
     );
   }
+});
+
+describe("an unauthenticated flood cannot rate-limit the real peer out", () => {
+  for (const initial of ["pending", "active", "suspended", "removed"] as const) {
+    it(`initial ${initial}: 40 attacker proposes + 40 bad confirms, then the peer recovers`, async () => {
+      clockOffset += 60 * 60 * 1000;
+      seed(initial);
+      // A removed row's cooldown is the peer's own, not the attacker's: start past it.
+      if (initial === "removed") clockOffset += COOLDOWN_STEP_MS;
+      const s: CellState = {
+        legitNonce: null,
+        attackerNonce: null,
+        confirmedByLegit: true,
+        attackerOwned: false,
+      };
+      for (let i = 0; i < 40; i++) {
+        await runAction("AP_SAME", s);
+        await runAction("AC_BAD", s);
+      }
+      if (initial === "active") {
+        expect(healthy()).toBe(true);
+        return;
+      }
+      expect(await runAction("LP", s)).toBe(200);
+      expect(await runAction("LC", s)).toBe(200);
+      expect(healthy()).toBe(true);
+    });
+  }
+});
+
+/** Every column the guarded writer compares the row against. */
+const COMPARED: ReadonlyArray<[keyof PeerRow, unknown]> = [
+  ["public_key", "ab".repeat(32)],
+  ["endpoint_url", ATTACKER_URL],
+  ["state", "removed"],
+  ["nonce", "n-other"],
+  ["peered_at", 1],
+  ["last_heartbeat_at", 2],
+  ["missed_heartbeats", 4],
+];
+
+describe("writePeerRow: a write decided on a stale read never lands", () => {
+  for (const [col, value] of COMPARED) {
+    for (const op of ["update", "delete"] as const) {
+      it(`${op} after ${col} changed under it`, () => {
+        clockOffset += 60 * 60 * 1000;
+        seed("suspended");
+        const db = b.moteDb.db;
+        // A never-confirmed read, so authority never refuses: only the compare-and-set can.
+        db.prepare("UPDATE relay_peers SET peered_at = NULL WHERE peer_relay_id = ?").run(
+          idA.relayMotebitId,
+        );
+        const read = readPeerRow(db, idA.relayMotebitId)!;
+        db.prepare(`UPDATE relay_peers SET ${col} = ? WHERE peer_relay_id = ?`).run(
+          value as never,
+          idA.relayMotebitId,
+        );
+        const now = rowOfA();
+        const write: PeerRowWrite =
+          op === "delete" ? { op } : { op, row: { ...read, state: "active", nonce: null } };
+        expect(writePeerRow(db, read, write, "peer-key")).toBe(false);
+        expect(rowOfA()).toEqual(now);
+      });
+    }
+  }
+});
+
+describe("peerRowTransition: every (row, write, authority) against the invariant", () => {
+  const AUTHORITIES: PeerWriteAuthority[] = ["unauthenticated", "observed", "peer-key"];
+  const STATES = ["pending", "active", "suspended", "removed"];
+  const base = (state: string, peered: boolean): PeerRow => ({
+    peer_relay_id: "relay-x",
+    public_key: "aa".repeat(32),
+    endpoint_url: URL_A,
+    display_name: null,
+    state,
+    nonce: null,
+    peered_at: peered ? 1000 : null,
+    last_heartbeat_at: 1000,
+    missed_heartbeats: 0,
+    agent_count: 0,
+    peer_protocol_version: null,
+    handshake_protocol_version: null,
+  });
+  const CHANGES: Array<[string, (r: PeerRow) => PeerRow]> = [
+    ["nothing", (r) => ({ ...r })],
+    ["counters", (r) => ({ ...r, missed_heartbeats: r.missed_heartbeats + 1, agent_count: 7 })],
+    ["key", (r) => ({ ...r, public_key: "bb".repeat(32) })],
+    ["id", (r) => ({ ...r, peer_relay_id: "relay-y" })],
+    ["endpoint", (r) => ({ ...r, endpoint_url: ATTACKER_URL })],
+    ["peered_at", (r) => ({ ...r, peered_at: 2000 })],
+    ...STATES.map((to): [string, (r: PeerRow) => PeerRow] => [
+      `state→${to}`,
+      (r) => ({ ...r, state: to }),
+    ]),
+  ];
+
+  /** The invariant, stated independently of the code under test. */
+  function allowed(
+    before: PeerRow | undefined,
+    write: PeerRowWrite,
+    authority: PeerWriteAuthority,
+  ): boolean {
+    if (write.op === "insert") return before === undefined;
+    if (before === undefined) return false;
+    if (
+      write.op === "update" &&
+      (write.row.public_key !== before.public_key ||
+        write.row.peer_relay_id !== before.peer_relay_id)
+    )
+      return false;
+    if (before.peered_at === null) return true;
+    if (write.op === "delete" || authority === "unauthenticated") return false;
+    if (authority === "peer-key") return true;
+    const n = write.row;
+    const towardLive = n.state !== before.state && (n.state === "active" || n.state === "pending");
+    return (
+      n.endpoint_url === before.endpoint_url && n.peered_at === before.peered_at && !towardLive
+    );
+  }
+
+  it("matches on every cell", () => {
+    const mismatches: string[] = [];
+    let cells = 0;
+    for (const authority of AUTHORITIES) {
+      const insert: PeerRowWrite = { op: "insert", row: base("pending", false) };
+      for (const before of [undefined, base("pending", false)]) {
+        cells++;
+        if (
+          (peerRowTransition(before, insert, authority) === null) !==
+          allowed(before, insert, authority)
+        )
+          mismatches.push(`${authority} insert over ${before ? "row" : "nothing"}`);
+      }
+      for (const peered of [false, true]) {
+        for (const state of STATES) {
+          const before = base(state, peered);
+          const writes: Array<[string, PeerRowWrite]> = [
+            ["delete", { op: "delete" }],
+            ...CHANGES.map(([n, f]): [string, PeerRowWrite] => [
+              n,
+              { op: "update", row: f(before) },
+            ]),
+          ];
+          for (const [name, write] of writes) {
+            cells++;
+            const got = peerRowTransition(before, write, authority) === null;
+            if (got !== allowed(before, write, authority))
+              mismatches.push(
+                `${authority} ${peered ? "confirmed" : "unconfirmed"} ${state} ${name}: code ${got ? "allows" : "refuses"}`,
+              );
+          }
+        }
+      }
+    }
+    expect(mismatches, `${mismatches.length}/${cells} cells`).toEqual([]);
+  });
 });
