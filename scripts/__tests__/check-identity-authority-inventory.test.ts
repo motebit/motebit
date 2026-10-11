@@ -13,6 +13,8 @@ import {
   coverageReport,
   declaredAuthorityColumns,
   guardCoverageDrift,
+  singleWriterProblems,
+  singleWriterReport,
   staleReport,
 } from "../check-identity-authority-inventory.js";
 import { formatRepair, hasApertureDisclosure, hasRepairInstruction } from "../lib/gate-report.js";
@@ -90,6 +92,63 @@ export const OTHER = { x: ["y"] };`;
     const out = formatRepair(coverageReport(drift));
     expect(hasRepairInstruction(out)).toEqual({ ok: true });
     expect(out).toContain("AUTHORITY_COLUMNS");
+  });
+});
+
+describe("one writer (identity-authority Inc 2, I1)", () => {
+  const W = "services/relay/src/identity-authority.ts";
+  const reg = [
+    {
+      file: "services/relay/src/a.ts",
+      fn: "f",
+      write: "UPDATE agent_registry",
+      count: 1,
+      why: "x",
+    },
+  ];
+
+  it("writes inside the single writer never count; registered outside writes pass at their count", () => {
+    expect(
+      singleWriterProblems(
+        [
+          { file: W, fn: "applyChange", write: "UPDATE agent_registry" },
+          { file: W, fn: "applyChange", write: "INSERT relay_service_listings" },
+          { file: "services/relay/src/a.ts", fn: "f", write: "UPDATE agent_registry" },
+        ],
+        reg,
+      ),
+    ).toEqual([]);
+  });
+
+  it("a NEW writer elsewhere, a SECOND writer in a registered function, and a stale entry are each named", () => {
+    expect(
+      singleWriterProblems(
+        [{ file: "services/relay/src/b.ts", fn: "g", write: "UPDATE agent_registry" }],
+        reg,
+      ),
+    ).toEqual([
+      "NEW authority writer outside the single writer: services/relay/src/b.ts | g | UPDATE agent_registry",
+      "STALE entry: services/relay/src/a.ts | f | UPDATE agent_registry — 1 registered, 0 found; lower or delete it",
+    ]);
+    expect(
+      singleWriterProblems(
+        [
+          { file: "services/relay/src/a.ts", fn: "f", write: "UPDATE agent_registry" },
+          { file: "services/relay/src/a.ts", fn: "f", write: "UPDATE agent_registry" },
+        ],
+        reg,
+      ),
+    ).toEqual([
+      "NEW authority writer outside the single writer: services/relay/src/a.ts | f | UPDATE agent_registry (2 found, 1 registered)",
+    ]);
+  });
+
+  it("the failure names writeAuthority and satisfies the repair-instruction contract", () => {
+    const out = formatRepair(
+      singleWriterReport(["NEW authority writer outside the single writer: x"], "3 files"),
+    );
+    expect(hasRepairInstruction(out)).toEqual({ ok: true });
+    expect(out).toContain("writeAuthority");
   });
 });
 

@@ -869,6 +869,15 @@ export function authoritySchemaFields(): string[] {
   return [...schemaAuthorityFields].sort();
 }
 
+/**
+ * Every writer that assigns an authority-bearing column (the census's
+ * "Authority writers" rows), without its line — the input of the single-writer
+ * ratchet in `check-identity-authority-inventory`.
+ */
+export function authorityWriterSites(): Array<{ file: string; fn: string; write: string }> {
+  return authorityWriters.map((w) => ({ file: w.file, fn: w.fn, write: `${w.verb} ${w.table}` }));
+}
+
 async function main(): Promise<void> {
   const formatted = await renderCensus();
   if (process.argv.includes("--check")) {

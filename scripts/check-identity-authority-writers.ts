@@ -288,19 +288,11 @@ const WRITERS: readonly Writer[] = [
   },
   {
     file: R + "agents.ts",
-    verb: "INSERT",
-    table: "agent_registry",
-    count: 1,
-    principal:
-      "the identity itself — /agents/register files under `callerMotebitId` (the verified token's mid) or, for the master token, the body id; behind refusePublicDeviceRegistration (#693)",
-  },
-  {
-    file: R + "agents.ts",
     verb: "UPDATE",
     table: "agent_registry",
-    count: 4,
+    count: 3,
     principal:
-      "four statements. Heartbeat: files under `callerMotebitId` (a device token) or the operator's body id. sweep-config: `callerMotebitId !== :motebitId` → 403. revoke-listing / restore-listing (two strings, one site): operator only (`if (callerMotebitId) 403`), recorded as a signed append-only relay_agent_revocations entry",
+      "three statements. Heartbeat: files under `callerMotebitId` (a device token) or the operator's body id. revoke-listing / restore-listing (two strings, one site): operator only (`if (callerMotebitId) 403`), recorded as a signed append-only relay_agent_revocations entry. (sweep-config's UPDATE moved to the single writer, identity-authority.ts, Inc 2)",
   },
   {
     file: R + "agent-revocation.ts",
@@ -941,27 +933,6 @@ const WRITERS: readonly Writer[] = [
     table: "relay_execution_ledgers",
     count: 1,
     principal: "the operator — /agent/:id/ledger is master-token only",
-  },
-  {
-    file: R + "agents.ts",
-    verb: "INSERT",
-    table: "relay_service_listings",
-    count: 1,
-    principal: "/agents/register's listing, under the registering identity",
-  },
-  {
-    file: R + "listings.ts",
-    verb: "INSERT",
-    table: "relay_service_listings",
-    count: 1,
-    principal: "POST /listing — `callerMotebitId !== :motebitId` → 403",
-  },
-  {
-    file: R + "listings.ts",
-    verb: "DELETE",
-    table: "relay_service_listings",
-    count: 1,
-    principal: "POST /listing's replace of its own listing, after the same check",
   },
   {
     file: R + "bond-store.ts",

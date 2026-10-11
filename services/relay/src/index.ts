@@ -2238,6 +2238,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app,
     moteDb,
     relayIdentity,
+    recordAuthEvent: authEvents.record,
     freezeState,
     stripeClient,
     stripeConfig: stripeConfig ?? null,
@@ -2296,7 +2297,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // the no-token→401 / wrong-agent→403 behavior so ordering can't
   // re-break it. (market/candidates + market/revenue carry their own
   // early-registered middleware, unaffected by this move.)
-  registerListingsRoutes({ app, moteDb, taskRouter });
+  registerListingsRoutes({
+    app,
+    moteDb,
+    taskRouter,
+    relayId: relayIdentity.relayMotebitId,
+    recordAuthEvent: authEvents.record,
+  });
 
   // --- Machine roster (docs/doctrine/machine-roster.md) ---
   // After registerAgentAuthMiddleware, whose `/agents/*` middleware sets

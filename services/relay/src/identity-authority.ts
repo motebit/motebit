@@ -45,7 +45,10 @@
  * A device row is never a current key (D1).
  */
 import type { DatabaseDriver } from "@motebit/persistence";
+import type { Context } from "hono";
+import { HTTPException } from "hono/http-exception";
 import {
+  AUTHORITY_REQUEST_HEADER,
   decodeAuthorityHeader,
   parseAuthorityRequest,
   verifyAuthorityRequest,
@@ -53,6 +56,8 @@ import {
   type AuthorityRequestRefusal,
 } from "@motebit/crypto";
 import { requestContext } from "./request-context.js";
+import type { AuthEvent } from "./auth-events.js";
+import { createLogger } from "./logger.js";
 import { currentKeyOf } from "./identity-authority-census.js";
 import { keyProofAccepted, recordKeyProofAccepted } from "./key-proof-replay.js";
 import {
@@ -64,6 +69,8 @@ import {
   type SovereignFirstKey,
 } from "./identity-keys.js";
 import { requestWithdrawal } from "./accounts.js";
+
+const logger = createLogger({ service: "identity-authority" });
 
 // ── The authority-bearing columns (§2) ──────────────────────────────────
 
@@ -521,6 +528,82 @@ function applyRegistration(
         now: c.now,
       });
     }
+  }
+}
+
+// ── The doors' one entry (Inc 2: optional header) ───────────────────────
+
+/** What a money door hands the writer to decide proven vs unproven. */
+export interface AuthorityDoor {
+  db: DatabaseDriver;
+  relayId: string;
+  recordAuthEvent: (event: AuthEvent) => void;
+}
+
+/**
+ * Read a door's `X-Motebit-Authority` header. ABSENT → `null`: the door's
+ * behaviour is byte-identical to before Inc 2 (it writes through
+ * `writeAuthorityUnproven`, and the shadow guard records the write). PRESENT
+ * → a `ProvenKey`, or a 401 naming why not — recorded in `relay_auth_events`
+ * (rule 6) and written nothing. The header is new, so refusing a bad one
+ * refuses no request a client sent before it existed.
+ */
+export async function authorityFromRequest(
+  c: Context,
+  door: AuthorityDoor,
+  input: { field: AuthorityField; motebitId: string; value: unknown },
+): Promise<ProvenKey | null> {
+  const header = c.req.header(AUTHORITY_REQUEST_HEADER);
+  if (header === undefined) return null;
+  const proven = await proveCurrentKey(door.db, {
+    header,
+    field: input.field,
+    motebitId: input.motebitId,
+    value: input.value,
+    relayId: door.relayId,
+  });
+  if (proven.ok) return proven.cap;
+  return refuseAuthority(c, door, input.motebitId, proven.reason);
+}
+
+function refuseAuthority(
+  c: Context,
+  door: AuthorityDoor,
+  motebitId: string,
+  reason: AuthorityRefusal,
+): never {
+  const caller = c.get("callerMotebitId" as never) as string | undefined;
+  door.recordAuthEvent({
+    kind: "agent_token_rejected",
+    method: c.req.method,
+    path: c.req.path,
+    motebitId: caller ?? null,
+    reason: `authority:${reason}`,
+    correlationId: c.req.header("x-correlation-id") ?? null,
+  });
+  logger.warn("authority.refused", { motebitId, caller: caller ?? null, reason });
+  throw new HTTPException(401, {
+    message: `X-Motebit-Authority refused: ${reason} — sign the change with the identity's current key (signAuthorityRequest in @motebit/crypto), or send no header`,
+  });
+}
+
+/**
+ * Apply a door's change: through `writeAuthority` when the request proved the
+ * current key, else through `writeAuthorityUnproven` (Inc 2's recorded path).
+ * A proven request that lost a replay race is refused 401 like any replay.
+ */
+export function applyAuthorityChange<C extends AuthorityChange>(
+  c: Context,
+  door: AuthorityDoor,
+  cap: ProvenKey | null,
+  change: C,
+): ResultOf<C> {
+  if (cap === null) return writeAuthorityUnproven(door.db, change);
+  try {
+    return writeAuthority(door.db, cap, change);
+  } catch (err) {
+    if (err instanceof AuthorityReplayed) refuseAuthority(c, door, change.motebitId, "replayed");
+    throw err;
   }
 }
 

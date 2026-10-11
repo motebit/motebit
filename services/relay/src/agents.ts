@@ -37,9 +37,6 @@ import {
   identityGuardianFor,
   isCanonicalKey,
   proveSovereignFirstKey,
-  recordFirstIdentityKey,
-  recordIdentityGuardian,
-  recordOperatorServiceKey,
   registryKeyOf,
   verificationKeyFor,
 } from "./identity-keys.js";
@@ -125,6 +122,7 @@ import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { getAccountBalanceDetailed } from "./accounts.js";
 import { listStoredReceipts, getStoredReceiptJson } from "./receipts-store.js";
 import type { AuthEvent } from "./auth-events.js";
+import { applyAuthorityChange, authorityFromRequest } from "./identity-authority.js";
 import type { VerifiedKeySource } from "./auth.js";
 import {
   isAgentRevocationReason,
@@ -1322,6 +1320,21 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       }
     }
 
+    // identity-authority Inc 2: an OPTIONAL `X-Motebit-Authority` proves the
+    // identity's CURRENT key over this exact body (docs/design/
+    // identity-authority-writers.md §3.2). Absent, nothing below changes; a bad
+    // one is 401 before any write.
+    const authorityDoor = {
+      db: moteDb.db,
+      relayId: relayIdentity.relayMotebitId,
+      recordAuthEvent: deps.recordAuthEvent,
+    };
+    const authority = await authorityFromRequest(c, authorityDoor, {
+      field: "registration",
+      motebitId,
+      value: body,
+    });
+
     // --- Succession chain validation on re-registration ---
     // A differing key needs a link from the key on file. Once the identity has
     // a holder that is the only answer (§5f); before it has one, this is
@@ -1570,98 +1583,29 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       sweepThreshold = rawSweepThreshold;
     }
 
-    // The holder's first key — BEFORE the registry upsert, whose write would
-    // otherwise fill the empty registry slot E-sov's predicate requires (DA2;
-    // round-3 prose fix). E-sov for a sovereign identity presenting its own
-    // key; E-op for an operator-registered service identity with no device,
-    // chain or holder (§5f). Each re-reads its conditions in one transaction.
-    if (sovereignProof) {
-      recordFirstIdentityKey(moteDb.db, sovereignProof, {
-        source: "register",
-        guardianPublicKey: guardianPublicKey ?? null,
-        now,
-      });
-    } else if (keyFromBody && isOperatorBearer) {
-      recordOperatorServiceKey(moteDb.db, {
-        motebitId,
-        publicKey,
-        guardianPublicKey: guardianPublicKey ?? null,
-        now,
-      });
-    }
-
-    moteDb.db
-      .prepare(
-        `
-      INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at, guardian_public_key, federation_visible, settlement_address, settlement_modes, sweep_threshold)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(motebit_id) DO UPDATE SET
-        public_key = excluded.public_key,
-        endpoint_url = CASE WHEN agent_registry.revoked = 1 THEN agent_registry.endpoint_url ELSE excluded.endpoint_url END,
-        capabilities = CASE WHEN agent_registry.revoked = 1 THEN agent_registry.capabilities ELSE excluded.capabilities END,
-        metadata = excluded.metadata,
-        last_heartbeat = excluded.last_heartbeat,
-        expires_at = excluded.expires_at,
-        guardian_public_key = COALESCE(excluded.guardian_public_key, agent_registry.guardian_public_key),
-        federation_visible = excluded.federation_visible,
-        settlement_address = COALESCE(excluded.settlement_address, agent_registry.settlement_address),
-        settlement_modes = COALESCE(excluded.settlement_modes, agent_registry.settlement_modes),
-        sweep_threshold = COALESCE(excluded.sweep_threshold, agent_registry.sweep_threshold),
-        delisted_at = CASE WHEN agent_registry.revoked = 1 THEN agent_registry.delisted_at ELSE NULL END
-    `,
-      )
-      .run(
-        motebitId,
-        publicKey,
-        body.endpoint_url,
-        JSON.stringify(body.capabilities),
-        body.metadata ? JSON.stringify(body.metadata) : null,
-        now,
-        now,
-        expiresAt,
-        guardianPublicKey ?? null,
-        fedVisibleVal,
-        settlementAddress ?? null,
-        settlementModes ?? "relay",
-        sweepThreshold,
-      );
-
-    // Every verified guardian attestation reaches the holder, whatever the key
-    // evidence (DA6): the registry just took it, and a holder left on an older
-    // guardian would let the replaced guardian recover the identity (R1).
-    // No other holder write at this door: a key moves through a verified link
-    // (applySuccession, above) or arrives as E-sov / E-op (above) — never
-    // because a registration named it (§5d W3).
-    if (guardianPublicKey) {
-      recordIdentityGuardian(moteDb.db, { motebitId, guardianPublicKey, now });
-    }
-
-    // Auto-create a default service listing if one doesn't exist.
-
-    // Registration populates agent_registry (for discovery); routing reads from
-    // relay_service_listings. Without this, registered agents are discoverable
-    // but never routed to — the scored routing loop finds zero candidates.
-    if (body.capabilities.length > 0) {
-      const existingListing = moteDb.db
-        .prepare("SELECT listing_id FROM relay_service_listings WHERE motebit_id = ?")
-        .get(motebitId) as { listing_id: string } | undefined;
-      if (!existingListing) {
-        const listingId = `ls-${crypto.randomUUID()}`;
-        moteDb.db
-          .prepare(
-            `INSERT INTO relay_service_listings
-             (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, updated_at)
-             VALUES (?, ?, ?, '[]', 30000, 0.95, ?, ?)`,
-          )
-          .run(
-            listingId,
-            motebitId,
-            JSON.stringify(body.capabilities),
-            body.metadata?.name ?? body.capabilities.join(", "),
-            now,
-          );
-      }
-    }
+    // The registration's writes — the holder's first key (E-sov / E-op) BEFORE
+    // the registry upsert (DA2), the upsert, the guardian's holder copy (DA6)
+    // and the default listing routing reads — in that order, through the single
+    // writer (identity-authority.ts): `writeAuthority` when the request proved
+    // the current key, else `writeAuthorityUnproven` (recorded by the guard).
+    applyAuthorityChange(c, authorityDoor, authority, {
+      field: "registration",
+      motebitId,
+      sovereignProof,
+      operatorServiceKey: keyFromBody && isOperatorBearer,
+      publicKey,
+      endpointUrl: body.endpoint_url,
+      capabilities: body.capabilities,
+      metadata: body.metadata ? JSON.stringify(body.metadata) : null,
+      now,
+      expiresAt,
+      guardianPublicKey: guardianPublicKey ?? null,
+      federationVisible: fedVisibleVal,
+      settlementAddress: settlementAddress ?? null,
+      settlementModes: settlementModes ?? "relay",
+      sweepThreshold,
+      listingDescription: body.metadata?.name ?? body.capabilities.join(", "),
+    });
 
     return c.json({ registered: true, motebit_id: motebitId, expires_at: expiresAt });
   });
@@ -1776,26 +1720,27 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       }
     }
 
-    // Build SET clause with only provided fields. Undefined = preserve.
-    const sets: string[] = [];
-    const vals: Array<number | string | null> = [];
-    if (hasThreshold) {
-      sets.push("sweep_threshold = ?");
-      vals.push(body.sweep_threshold ?? null);
-    }
-    if (hasAddress) {
-      sets.push("settlement_address = ?");
-      vals.push(body.settlement_address ?? null);
-    }
-
-    // Empty PATCH is a no-op — return current state, don't error. Matches the
-    // idempotency spirit of PATCH with an empty body.
-    if (sets.length > 0) {
-      vals.push(motebitId);
-      moteDb.db
-        .prepare(`UPDATE agent_registry SET ${sets.join(", ")} WHERE motebit_id = ?`)
-        .run(...vals);
-    }
+    // Only the provided fields are written; undefined = preserve, and an
+    // empty PATCH is a no-op that returns the current state. The write goes
+    // through the single writer (identity-authority.ts): `writeAuthority` under
+    // an optional `X-Motebit-Authority` proving the current key over this
+    // body, else `writeAuthorityUnproven` (Inc 2 — recorded, not refused).
+    const authorityDoor = {
+      db: moteDb.db,
+      relayId: relayIdentity.relayMotebitId,
+      recordAuthEvent: deps.recordAuthEvent,
+    };
+    const authority = await authorityFromRequest(c, authorityDoor, {
+      field: "sweep_config",
+      motebitId,
+      value: body,
+    });
+    applyAuthorityChange(c, authorityDoor, authority, {
+      field: "sweep_config",
+      motebitId,
+      ...(hasThreshold ? { sweepThreshold: body.sweep_threshold ?? null } : {}),
+      ...(hasAddress ? { settlementAddress: body.settlement_address ?? null } : {}),
+    });
 
     const updated = moteDb.db
       .prepare(

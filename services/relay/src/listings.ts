@@ -10,15 +10,26 @@ import { parsePositiveMicro } from "@motebit/protocol";
 import { graphRankCandidates } from "@motebit/market";
 import type { TaskRouter } from "./task-routing.js";
 import { fromMicro } from "./accounts.js";
+import type { AuthEvent } from "./auth-events.js";
+import { applyAuthorityChange, authorityFromRequest } from "./identity-authority.js";
 
 export interface ListingsDeps {
   app: Hono;
   moteDb: MotebitDatabase;
   taskRouter: TaskRouter;
+  /** This relay's id — the one relay an `X-Motebit-Authority` may name. */
+  relayId: string;
+  /** Records a refused authority header (rule 6). */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 export function registerListingsRoutes(deps: ListingsDeps): void {
   const { app, moteDb, taskRouter } = deps;
+  const authorityDoor = {
+    db: moteDb.db,
+    relayId: deps.relayId,
+    recordAuthEvent: deps.recordAuthEvent,
+  };
 
   /** @spec motebit/delegation@1.0 */
 
@@ -55,28 +66,30 @@ export function registerListingsRoutes(deps: ListingsDeps): void {
       }
     }
 
+    // The listing is replaced whole (its pay_to_address arms the x402 gate),
+    // through the single writer (identity-authority.ts): `writeAuthority`
+    // under an optional `X-Motebit-Authority` proving the identity's current
+    // key over this body, else `writeAuthorityUnproven` (Inc 2 — recorded).
+    const authority = await authorityFromRequest(c, authorityDoor, {
+      field: "listing",
+      motebitId,
+      value: body,
+    });
     const now = Date.now();
-    moteDb.db.prepare("DELETE FROM relay_service_listings WHERE motebit_id = ?").run(motebitId);
-
     const listingId = asListingId(`ls-${crypto.randomUUID()}`);
-    moteDb.db
-      .prepare(
-        `INSERT INTO relay_service_listings
-         (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, pay_to_address, regulatory_risk, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        listingId,
-        motebitId,
-        JSON.stringify(body.capabilities ?? []),
-        JSON.stringify(body.pricing ?? []),
-        body.sla?.max_latency_ms ?? 5000,
-        body.sla?.availability_guarantee ?? 0.99,
-        body.description ?? "",
-        body.pay_to_address ?? null,
-        body.regulatory_risk ?? null,
-        now,
-      );
+    applyAuthorityChange(c, authorityDoor, authority, {
+      field: "listing",
+      motebitId,
+      listingId,
+      now,
+      capabilities: JSON.stringify(body.capabilities ?? []),
+      pricing: JSON.stringify(body.pricing ?? []),
+      slaMaxLatencyMs: body.sla?.max_latency_ms ?? 5000,
+      slaAvailability: body.sla?.availability_guarantee ?? 0.99,
+      description: body.description ?? "",
+      payToAddress: body.pay_to_address ?? null,
+      regulatoryRisk: body.regulatory_risk ?? null,
+    });
 
     return c.json({ listing_id: listingId, updated_at: now }, 200);
   });

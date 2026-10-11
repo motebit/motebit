@@ -4,6 +4,8 @@
 
 import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
+import type { AuthEvent } from "./auth-events.js";
+import { applyAuthorityChange, authorityFromRequest } from "./identity-authority.js";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { toCents, parsePositiveMicro } from "@motebit/protocol";
 import type {
@@ -214,6 +216,8 @@ export interface BudgetDeps {
   app: Hono;
   moteDb: MotebitDatabase;
   relayIdentity: RelayIdentity;
+  /** Records a refused `X-Motebit-Authority` on the withdraw door (rule 6). */
+  recordAuthEvent: (event: AuthEvent) => void;
   /** Mutable freeze state — shared with index.ts middleware. */
   freezeState: { frozen: boolean; reason: string | null };
   stripeClient: Stripe | null;
@@ -804,13 +808,42 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
 
     // Pass the header key as the withdrawal-level idempotency key too (backward compat)
     const idempotencyKey = body.idempotency_key ?? idempotencyKeyHeader;
-    const result = requestWithdrawal(
-      moteDb.db,
-      motebitId,
-      amountMicro,
-      body.destination ?? "pending",
-      idempotencyKey,
-    );
+    // The debit and its destination go through the single writer
+    // (identity-authority.ts): `writeAuthority` under an optional
+    // `X-Motebit-Authority` proving the identity's current key over this body,
+    // else `writeAuthorityUnproven` (Inc 2 — recorded, not refused). A refused
+    // header completes the claimed idempotency key as the 401 it is.
+    const authorityDoor = {
+      db: moteDb.db,
+      relayId: relayIdentity.relayMotebitId,
+      recordAuthEvent: deps.recordAuthEvent,
+    };
+    let result: ReturnType<typeof requestWithdrawal>;
+    try {
+      const authority = await authorityFromRequest(c, authorityDoor, {
+        field: "withdrawal",
+        motebitId,
+        value: body,
+      });
+      result = applyAuthorityChange(c, authorityDoor, authority, {
+        field: "withdrawal",
+        motebitId,
+        amountMicro,
+        destination: body.destination ?? "pending",
+        idempotencyKey,
+      });
+    } catch (err) {
+      if (err instanceof HTTPException && err.status === 401) {
+        completeIdempotency(
+          moteDb.db,
+          idempotencyKeyHeader,
+          motebitId,
+          401,
+          JSON.stringify({ error: err.message, status: 401 }),
+        );
+      }
+      throw err;
+    }
     if (result === null) {
       const errBody = JSON.stringify({ error: "Insufficient balance for withdrawal", status: 402 });
       completeIdempotency(moteDb.db, idempotencyKeyHeader, motebitId, 402, errBody);
