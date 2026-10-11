@@ -15,6 +15,12 @@ export interface RequestContext {
   startedAt: number;
   method: string;
   path: string;
+  /**
+   * Assigned server-side on the request's first authority write outside the
+   * single writer (`identity-authority.ts`), so the shadow guard records one
+   * event per request — never keyed by the client-chosen correlation id.
+   */
+  authorityShadowKey?: string;
 }
 
 export const requestContext = new AsyncLocalStorage<RequestContext>();

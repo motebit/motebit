@@ -40,4 +40,13 @@ export interface DatabaseDriver {
    * multi-statement writes without each reinventing BEGIN/COMMIT.
    */
   transaction<T>(fn: () => T): T;
+  /**
+   * Register an application-defined SQL scalar function on this connection,
+   * callable from SQL — TEMP triggers included. Optional: a driver that
+   * cannot (sql.js here) omits it, and a caller degrades without it (the
+   * relay's identity-authority shadow guard records without per-request
+   * grouping). The function must be synchronous and must not touch the
+   * database (better-sqlite3 refuses re-entrant use mid-statement).
+   */
+  function?(name: string, fn: () => string | number | null): void;
 }

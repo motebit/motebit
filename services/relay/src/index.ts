@@ -84,6 +84,7 @@ import {
   loadFreezeState,
   persistFreeze,
 } from "./freeze.js";
+import { installAuthorityGuards } from "./identity-authority.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
 import {
@@ -1762,6 +1763,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const { registerSkillRegistryRoutes, createSkillRegistryTables, parseFeaturedSubmitters } =
     await import("./skill-registry.js");
   createSkillRegistryTables(moteDb.db);
+  // Identity authority, Inc 2 SHADOW (docs/design/identity-authority-writers.md
+  // §4.1): TEMP triggers on every census authority column RECORD a write that
+  // did not come through `writeAuthority` (relay_auth_events,
+  // `authority_write_outside_writer`) and never abort. Installed after the LAST
+  // schema mutation of boot (the skills registry is the last authority table
+  // created), on this one connection — the freeze guards' rule (rule 30).
+  installAuthorityGuards(moteDb.db);
   registerSkillRegistryRoutes({
     db: moteDb.db,
     app,

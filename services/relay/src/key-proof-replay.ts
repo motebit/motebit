@@ -21,8 +21,12 @@
  */
 import type { DatabaseDriver } from "@motebit/persistence";
 
-/** The doors that accept a proof of possession. */
-export type KeyProofDoor = "bootstrap" | "register-self" | "register";
+/**
+ * The doors that accept a proof of possession — and, since identity-authority
+ * Inc 2, `authority`: an `X-Motebit-Authority` request consumed by
+ * `writeAuthority` (identity-authority.ts), keyed the same way.
+ */
+export type KeyProofDoor = "bootstrap" | "register-self" | "register" | "authority";
 
 /**
  * How long an accepted proof is remembered: the verifier's ±5-minute window

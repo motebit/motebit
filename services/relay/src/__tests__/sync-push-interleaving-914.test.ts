@@ -471,7 +471,10 @@ describe("#914 a re-push is harmless — under E2E envelopes and #846 identity b
         expect(again).toEqual(first); // one row each; the first write kept byte for byte
         const refusals = relay.moteDb.db
           .prepare(
-            "SELECT COUNT(*) AS n FROM relay_auth_events WHERE motebit_id = ? AND kind <> 'master_token'",
+            // Refusals only: the identity-authority shadow record
+            // (`authority_write_outside_writer`, Inc 2) of this test's own
+            // device setup is a measurement, never a refusal.
+            "SELECT COUNT(*) AS n FROM relay_auth_events WHERE motebit_id = ? AND kind NOT IN ('master_token', 'authority_write_outside_writer')",
           )
           .get(who.id) as { n: number };
         expect(refusals.n).toBe(0);

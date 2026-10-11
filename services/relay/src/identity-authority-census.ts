@@ -133,7 +133,7 @@ export function readOnlyHandle(db: DatabaseDriver): DatabaseDriver {
   };
 }
 
-type Basis = "sovereign_lineage" | "holder_evidence" | "none";
+export type Basis = "sovereign_lineage" | "holder_evidence" | "none";
 
 interface CurrentKey {
   key: string | null;
@@ -374,6 +374,21 @@ class CurrentKeys {
     const k = key.toLowerCase();
     return cur.basis === "sovereign_lineage" ? cur.lineage.has(k) : cur.key === k;
   }
+}
+
+/**
+ * An identity's CURRENT key as the census reads it (§3.2): a sovereign id's
+ * lineage HEAD from K₀ (never a retired key), a legacy id's evidence-backed
+ * holder, else none. The single writer (`identity-authority.ts`) mints a
+ * `ProvenKey` only under this key, so the measurement and the writer cannot
+ * disagree about whose key is current. Read-only (`readOnlyHandle`).
+ */
+export async function currentKeyOf(
+  db: DatabaseDriver,
+  motebitId: string,
+): Promise<{ key: string | null; basis: Basis }> {
+  const cur = await new CurrentKeys(readOnlyHandle(db)).of(motebitId);
+  return { key: cur.key, basis: cur.basis };
 }
 
 /**

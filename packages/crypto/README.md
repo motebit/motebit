@@ -144,6 +144,41 @@ const verdict = await verifyFederationMessage(message, {
 
 `parseFederationMessage` reads a wire value strictly (exactly the seven envelope fields) so a verifier can look up the sender's key first; `federationMessageBytes` and `federationBodyDigest` expose the signed bytes and the `body_sha256` rule.
 
+### Identity-Authority Requests (`X-Motebit-Authority`)
+
+A signature by an identity's CURRENT key over one change it authorizes (docs/design/identity-authority-writers.md §3.2): a device token proves only that the caller holds SOME registered device key; moving an identity's money or keys needs this. Domain-separated by field (closed set `AUTHORITY_FIELDS`: `registration`, `sweep_config`, `listing`, `withdrawal`), identity, the one accepting relay and freshness (`AUTHORITY_REQUEST_MAX_SKEW_MS`, ±5 min, plus a nonce). Signed bytes are `"motebit/authority/v1\n" ‖ JCS(envelope)` under `motebit-jcs-ed25519-hex-v1` (`AUTHORITY_REQUEST_DOMAIN`, `AUTHORITY_REQUEST_SUITE`); the value is bound by `value_sha256` (`authorityValueDigest`).
+
+```ts
+import {
+  AUTHORITY_REQUEST_HEADER,
+  encodeAuthorityHeader,
+  signAuthorityRequest,
+  verifyAuthorityRequest,
+} from "@motebit/crypto";
+
+const body = { sweep_threshold: 5_000_000, settlement_address };
+const request = await signAuthorityRequest({
+  motebitId,
+  field: "sweep_config",
+  value: body,
+  relayId,
+  privateKey: identityPrivateKey,
+});
+headers[AUTHORITY_REQUEST_HEADER] = encodeAuthorityHeader(request);
+
+// At the relay: refuses another field, identity, relay, value, a stale ts, or another key.
+const verdict = await verifyAuthorityRequest(request, {
+  field: "sweep_config",
+  motebitId,
+  self: relayId,
+  publicKeyHex: currentKeyHex,
+  value: body,
+});
+// verdict.ok → record the signature in the same transaction as the write; refuse it seen.
+```
+
+`decodeAuthorityHeader` reads the header back to a wire value (or `null`), `parseAuthorityRequest` keeps exactly the seven envelope fields, and `authorityRequestBytes` exposes the signed bytes.
+
 ### Credential Issuance
 
 - **`issueGradientCredential(snapshot, privateKey, publicKey)`** — Issue an intelligence gradient VC.

@@ -50,6 +50,7 @@ import {
   writeAuthority,
   type AuthorityChange,
 } from "../identity-authority.js";
+import { requestContext } from "../request-context.js";
 import { AUTH_HEADER, JSON_AUTH, createTestRelay, seedBalance, walletOf } from "./test-helpers.js";
 
 const GOLDEN = join(__dirname, "authority-doors.golden.json");
@@ -586,7 +587,7 @@ describe("ProvenKey is a runtime capability — a forgery throws at the writer a
 // ── The guard itself ────────────────────────────────────────────────────
 
 describe("installAuthorityGuards — the census's full authority-column list, recorded never aborted", () => {
-  it("AUTHORITY_COLUMNS is exactly the census's authority-bearing relay fields", () => {
+  it("AUTHORITY_COLUMNS is exactly the census's authority-bearing relay fields (the worker-side AgentTrustRecord adapter rows are not relay tables)", () => {
     const census = readFileSync(
       join(__dirname, "../../../../docs/design/identity-authority-inventory.generated.md"),
       "utf8",
@@ -595,7 +596,7 @@ describe("installAuthorityGuards — the census's full authority-column list, re
       census.indexOf("## Authority-bearing fields"),
       census.indexOf("## Authority writers"),
     );
-    const fromCensus = [...section.matchAll(/^\| `(\w+)\.(\w+)`\s/gm)]
+    const fromCensus = [...section.matchAll(/^\| `([a-z_0-9]+)\.([a-z_0-9]+)`\s/gm)]
       .map((m) => `${m[1]}.${m[2]}`)
       .sort();
     const declared = Object.entries(AUTHORITY_COLUMNS)
@@ -619,23 +620,89 @@ describe("installAuthorityGuards — the census's full authority-column list, re
         expect(triggers.has(`authority_shadow_${table}_${op}`), `${table} ${op}`).toBe(true);
   });
 
-  it("a raw write outside the writer is RECORDED and still lands; a non-authority column records nothing", async () => {
+  it("a raw write outside any request is RECORDED (grouped per subject per hour) and still lands; a non-authority column records nothing", async () => {
     const c = await cast();
     await registerByOperator(c);
-    let before = lastEventId();
+    const internal = () =>
+      db()
+        .prepare(
+          "SELECT id, reason FROM relay_auth_events WHERE kind = ? AND motebit_id = ? AND path = '(internal)'",
+        )
+        .all(AUTHORITY_SHADOW_KIND, c.mid) as Array<{ id: number; reason: string }>;
+    // cast() planted the paired device row with a raw INSERT, outside any request.
+    expect(internal()).toHaveLength(1);
+    expect(internal()[0]!.reason).toBe("devices:INSERT");
+    const snapshot = JSON.stringify(internal());
     db()
       .prepare("UPDATE agent_registry SET last_heartbeat = ? WHERE motebit_id = ?")
       .run(Date.now(), c.mid);
-    expect(shadowEventsSince(before)).toEqual([]);
-    before = lastEventId();
+    expect(JSON.stringify(internal())).toBe(snapshot);
     db()
       .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
       .run(c.wallet, c.mid);
+    expect(internal()).toHaveLength(1);
+    expect(internal()[0]!.reason.split(",")).toEqual(["devices:INSERT", "agent_registry:UPDATE"]);
+    expect((registryRow(c) as { settlement_address: string }).settlement_address).toBe(c.wallet);
+    // Another subject outside a request is its own event.
+    const other = crypto.randomUUID();
+    const before = lastEventId();
+    db()
+      .prepare(
+        "INSERT INTO relay_service_listings (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, updated_at) VALUES (?, ?, '[]', '[]', 1, 1, '', 1)",
+      )
+      .run(`ls-${crypto.randomUUID()}`, other);
+    expect(shadowEventsSince(before)).toEqual([
+      expect.objectContaining({
+        motebit_id: other,
+        path: "(internal)",
+        reason: "relay_service_listings:INSERT",
+      }),
+    ]);
+  });
+
+  it("never aborts: repeated authority writes in ONE request, under every outer conflict policy, land and record one event", async () => {
+    // A trigger's INSERT OR IGNORE takes the OUTER statement's conflict policy
+    // (SQLite), so a second write in one request once aborted rotate-key with
+    // a UNIQUE violation on the guard's own bookkeeping. Every policy, twice.
+    const c = await cast();
+    await registerByOperator(c);
+    const before = lastEventId();
+    requestContext.run(
+      { correlationId: "corr", startedAt: Date.now(), method: "POST", path: "/probe" },
+      () => {
+        for (const policy of [
+          "",
+          "OR ABORT",
+          "OR FAIL",
+          "OR IGNORE",
+          "OR REPLACE",
+          "OR ROLLBACK",
+        ]) {
+          for (let i = 0; i < 2; i++) {
+            db()
+              .prepare(
+                `UPDATE ${policy} agent_registry SET sweep_threshold = ? WHERE motebit_id = ?`,
+              )
+              .run(i + 1, c.mid);
+            db()
+              .prepare(
+                // Same device_id each round: REPLACE rewrites it; ABORT /
+                // FAIL / ROLLBACK / IGNORE meet the primary key — only
+                // IGNORE and REPLACE may run that second insert.
+                `INSERT ${policy === "" || !["OR IGNORE", "OR REPLACE"].includes(policy) ? "OR REPLACE" : policy} INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)`,
+              )
+              .run(`probe-${i}`, c.mid, `t-${crypto.randomUUID()}`, hex(c.paired), Date.now());
+          }
+        }
+      },
+    );
     const events = shadowEventsSince(before);
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ motebit_id: c.mid, path: "(internal)" });
-    expect(events[0]!.reason).toContain("agent_registry:UPDATE");
-    expect((registryRow(c) as { settlement_address: string }).settlement_address).toBe(c.wallet);
+    expect(events[0]).toMatchObject({ motebit_id: c.mid, path: "/probe" });
+    expect(events[0]!.reason.split(",").sort()).toEqual([
+      "agent_registry:UPDATE",
+      "devices:INSERT",
+    ]);
   });
 
   it("one request touching several authority tables is ONE event naming each table:op", async () => {

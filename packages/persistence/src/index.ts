@@ -4159,6 +4159,10 @@ class BetterSqliteDriver implements DatabaseDriver {
     const wrapped = this.inner.transaction(fn);
     return wrapped() as T;
   }
+
+  function(name: string, fn: () => string | number | null): void {
+    this.inner.function(name, { deterministic: false }, fn);
+  }
 }
 /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
 

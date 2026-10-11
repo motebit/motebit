@@ -163,8 +163,56 @@ const ADAPTER =
  * churn it, and counted so a SECOND door cut in a file that already has one
  * still fails — which is exactly how #713 and #719 were added.
  */
+/**
+ * `identity-authority.ts` — the single writer of an identity's money doors
+ * (docs/design/identity-authority-writers.md §3, Inc 2). Two entries, one
+ * apply: `writeAuthority` under a `ProvenKey` (minted only by
+ * `proveCurrentKey` from a signature by the identity's CURRENT key over this
+ * change), and `writeAuthorityUnproven`, the Inc 2 no-header path that keeps
+ * the door's own binding and is recorded by the shadow guard.
+ */
+const IA_WRITER =
+  "`writeAuthority` (a `ProvenKey`: the identity's current key signed this exact change, field, relay and fresh nonce, consumed once in the same transaction) or, without an `X-Motebit-Authority` header, `writeAuthorityUnproven` under the door's own binding — recorded by the shadow guard as `authority_write_outside_writer` (Inc 2)";
+
 const WRITERS: readonly Writer[] = [
   // ── identity authority ────────────────────────────────────────────────
+  // ── the single authority writer (identity-authority Inc 2) ──
+  {
+    file: R + "identity-authority.ts",
+    verb: "UPDATE",
+    table: "agent_registry",
+    count: 1,
+    principal:
+      IA_WRITER +
+      " (sweep-config: `callerMotebitId !== :motebitId` → 403 at the door before the change is built)",
+  },
+  {
+    file: R + "identity-authority.ts",
+    verb: "INSERT",
+    table: "agent_registry",
+    count: 1,
+    principal:
+      IA_WRITER +
+      " (registration: files under `callerMotebitId` — the verified token's mid — or, for the master token, the body id; behind refusePublicDeviceRegistration (#693))",
+  },
+  {
+    file: R + "identity-authority.ts",
+    verb: "INSERT",
+    table: "relay_service_listings",
+    count: 2,
+    principal:
+      IA_WRITER +
+      " (POST /listing — `callerMotebitId !== :motebitId` → 403 at the door; and the registration's default listing, under the registering identity)",
+  },
+  {
+    file: R + "identity-authority.ts",
+    verb: "DELETE",
+    table: "relay_service_listings",
+    count: 1,
+    principal:
+      IA_WRITER +
+      " (POST /listing's replace of its own listing, after the door's caller = path check)",
+  },
   // ── #875 provenance + replay stores (ported, identity-authority Inc 2) ──
   {
     file: R + "identity-keys.ts",

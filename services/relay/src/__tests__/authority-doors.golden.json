@@ -1,0 +1,92 @@
+{
+  "register/owner": {
+    "status": 200,
+    "body": {
+      "registered": true,
+      "motebit_id": "<V>",
+      "expires_at": "<expires_at>"
+    }
+  },
+  "register/paired": {
+    "status": 200,
+    "body": {
+      "registered": true,
+      "motebit_id": "<V>",
+      "expires_at": "<expires_at>"
+    }
+  },
+  "sweep_config/owner": {
+    "status": 200,
+    "body": {
+      "motebit_id": "<V>",
+      "sweep_threshold": 7000000,
+      "settlement_address": "<WALLET>"
+    }
+  },
+  "sweep_config/paired": {
+    "status": 200,
+    "body": {
+      "motebit_id": "<V>",
+      "sweep_threshold": 7000000,
+      "settlement_address": "<WALLET>"
+    }
+  },
+  "listing/owner": {
+    "status": 200,
+    "body": {
+      "listing_id": "<LISTING_ID>",
+      "updated_at": "<updated_at>"
+    }
+  },
+  "listing/paired": {
+    "status": 200,
+    "body": {
+      "listing_id": "<LISTING_ID>",
+      "updated_at": "<updated_at>"
+    }
+  },
+  "withdraw/owner": {
+    "status": 200,
+    "body": {
+      "motebit_id": "<V>",
+      "withdrawal": {
+        "withdrawal_id": "<UUID>",
+        "motebit_id": "<V>",
+        "amount": 1,
+        "currency": "USD",
+        "destination": "<WALLET>",
+        "status": "pending",
+        "idempotency_key": "<UUID>",
+        "payout_reference": null,
+        "requested_at": "<requested_at>",
+        "completed_at": null,
+        "failure_reason": null,
+        "relay_signature": null,
+        "relay_public_key": null,
+        "relay_id": "<RELAY>"
+      }
+    }
+  },
+  "withdraw/paired": {
+    "status": 200,
+    "body": {
+      "motebit_id": "<V>",
+      "withdrawal": {
+        "withdrawal_id": "<UUID>",
+        "motebit_id": "<V>",
+        "amount": 1,
+        "currency": "USD",
+        "destination": "<WALLET>",
+        "status": "pending",
+        "idempotency_key": "<UUID>",
+        "payout_reference": null,
+        "requested_at": "<requested_at>",
+        "completed_at": null,
+        "failure_reason": null,
+        "relay_signature": null,
+        "relay_public_key": null,
+        "relay_id": "<RELAY>"
+      }
+    }
+  }
+}

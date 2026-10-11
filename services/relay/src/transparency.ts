@@ -203,6 +203,7 @@ export const DECLARATION_CONTENT = {
       observable: [
         "every presentation of the operator master token — HTTP method, route path, request correlation id",
         "every refused signed token — the token's claimed motebit_id, the audience the route expected, the rejection reason, route path, correlation id",
+        "every write of an identity's authority-bearing field (key, guardian, settlement / pay-to, sweep, withdrawal destination, endpoint, listing capabilities / pricing, trust, peer state, revocation) that did not come through the single authority writer — the subject motebit_id, the tables and operations touched, HTTP method, route path, correlation id; one row per request and subject (a write outside any request: per subject per hour) — never the written values",
         "never the token bytes; never the client IP (see ip_addresses below)",
       ],
       retention_window:

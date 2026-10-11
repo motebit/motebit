@@ -11,7 +11,7 @@
  *
  * What is recorded — and what is not:
  *   - kind (master_token | master_token_ws | agent_token_rejected |
- *     device_token_rejected), method, path, the token's CLAIMED motebit_id
+ *     device_token_rejected | authority_write_outside_writer), method, path, the token's CLAIMED motebit_id
  *     when the token parsed, the expected audience, the rejection reason, and
  *     the request's correlation id.
  *   - NEVER the token bytes, NEVER the client IP. The transparency declaration
@@ -27,7 +27,14 @@
 import type { DatabaseDriver } from "@motebit/persistence";
 
 export type AuthEventKind =
-  "master_token" | "master_token_ws" | "agent_token_rejected" | "device_token_rejected";
+  | "master_token"
+  | "master_token_ws"
+  | "agent_token_rejected"
+  | "device_token_rejected"
+  // Written by the identity-authority shadow guard's TEMP triggers
+  // (`identity-authority.ts`), never through `record`: an authority-bearing
+  // column written outside the single writer (Inc 2 — recorded, not refused).
+  | "authority_write_outside_writer";
 
 export interface AuthEvent {
   kind: AuthEventKind;
@@ -70,6 +77,7 @@ const ALL_KINDS: AuthEventKind[] = [
   "master_token_ws",
   "agent_token_rejected",
   "device_token_rejected",
+  "authority_write_outside_writer",
 ];
 
 export interface AuthEventSink {
