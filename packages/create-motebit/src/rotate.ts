@@ -42,6 +42,31 @@ function canonicalJson(obj: unknown): string {
   return "{" + entries.join(",") + "}";
 }
 
+/** True when `value` (string values and object keys, deeply) holds an unpaired UTF-16 surrogate. */
+function hasUnpairedSurrogate(value: unknown): boolean {
+  if (typeof value === "string") return UNPAIRED_SURROGATE.test(value);
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(hasUnpairedSurrogate);
+  return Object.entries(value).some(
+    ([k, v]) => v !== undefined && (UNPAIRED_SURROGATE.test(k) || hasUnpairedSurrogate(v)),
+  );
+}
+const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * The signing boundary, inlined like canonicalJson (mirror of @motebit/crypto's
+ * canonicalJsonForSigning): canonicalJson that refuses a body holding text with
+ * no UTF-8 form (spec/execution-ledger-v1.md §11.4) instead of signing it.
+ */
+function canonicalJsonForSigning(obj: unknown): string {
+  if (hasUnpairedSurrogate(obj)) {
+    throw new Error(
+      "refusing to sign: the body holds an unpaired UTF-16 surrogate (spec/execution-ledger-v1.md §11.4)",
+    );
+  }
+  return canonicalJson(obj);
+}
+
 // ---------------------------------------------------------------------------
 // Key succession signing (inlined from @motebit/crypto)
 // ---------------------------------------------------------------------------
@@ -78,7 +103,7 @@ async function signKeySuccession(
   if (reason !== undefined) {
     obj.reason = reason;
   }
-  const payload = canonicalJson(obj);
+  const payload = canonicalJsonForSigning(obj);
   const message = new TextEncoder().encode(payload);
 
   const oldSig = await ed.signAsync(message, oldPrivateKey);

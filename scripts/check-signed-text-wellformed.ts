@@ -19,20 +19,29 @@
  *   1. Walk `packages/`, `services/`, `apps/` source (`.ts`/`.tsx`/`.mts`),
  *      excluding tests, fixtures, `node_modules`, and build output.
  *   2. Parse each file with the TypeScript compiler API and find every CALL of
- *      a signing primitive: `ed25519Sign(…)`, `signBySuite(…)`, and any local
+ *      a signing primitive: `ed25519Sign(…)`, `signBySuite(…)`, any local
  *      alias of one bound by an import (`import { sign } from
- *      "@motebit/encryption"`, `sign as ed25519Sign`, …). The primitives'
- *      own definitions in `packages/crypto/src/suite-dispatch.ts` are the
- *      dispatch layer, not signers.
- *   3. For each call, read the innermost enclosing function:
- *        - it calls `canonicalJsonForSigning(…)`, or hands it to a bytes
- *          helper as an argument → GUARDED;
- *        - it calls (or hands over) `canonicalJson` / `canonicalSha256`
- *          without the guard → VIOLATION (signs canonical JSON past the
- *          boundary);
- *        - it calls neither → the signed bytes cannot be traced to the guard
- *          from the call site. VIOLATION unless the (file, function) pair is a
- *          documented NON_JCS_SIGNER (bytes that are not canonical JSON).
+ *      "@motebit/encryption"`, `sign as ed25519Sign`, …) or re-bound
+ *      (`const s = C.ed25519Sign`), and any PROPERTY-ACCESS call of a signing
+ *      method on any receiver — `C.signBySuite`, `x["ed25519Sign"]`,
+ *      `ed.signAsync`, `tx.sign` (everything but `Math.sign`). The
+ *      primitives' own definitions in `packages/crypto/src/suite-dispatch.ts`
+ *      are the dispatch layer, not signers.
+ *   3. For each call, trace the argument that carries the signed bytes (data
+ *      flow within the innermost enclosing function):
+ *        - it is the guard's output — `canonicalJsonForSigning(…)` directly,
+ *          through an encoder / digest (`encode`, `Buffer.from`, `sha256`, …),
+ *          through local variables every assignment of which is guarded, a
+ *          buffer every `.set` write of which is guarded, or a helper the
+ *          guard is handed to as an argument → GUARDED;
+ *        - any path is `canonicalJson` / `canonicalSha256`, or the bytes are
+ *          untraceable in a function that calls them → VIOLATION (signs
+ *          canonical JSON past the boundary). A guard called elsewhere in the
+ *          function (a decoy whose output is not what gets signed) does not
+ *          count;
+ *        - otherwise the signed bytes cannot be traced to the guard.
+ *          VIOLATION unless the (file, function) pair is a documented
+ *          NON_JCS_SIGNER (bytes that are not canonical JSON).
  *   4. Stale NON_JCS_SIGNERS / OUTSIDE_LANE entries fail too, so the lists
  *      can only shrink with the code.
  *
@@ -95,6 +104,29 @@ const NON_JCS_SIGNERS: ReadonlyArray<{ file: string; fn: string; reason: string 
     fn: "rotate",
     reason: "signs the motebit.md YAML frontmatter bytes (identity-file-v1), not JCS",
   },
+  ...["generateIdentity", "regenerateIdentityFile"].map((fn) => ({
+    file: "packages/create-motebit/src/generate.ts",
+    fn,
+    reason: "signs the motebit.md YAML frontmatter bytes (identity-file-v1), not JCS",
+  })),
+  {
+    file: "packages/create-motebit/src/rotate.ts",
+    fn: "rotateKey",
+    reason: "signs the motebit.md YAML frontmatter bytes (identity-file-v1), not JCS",
+  },
+  ...[
+    ["packages/wallet-solana/src/jupiter.ts", "swapUsdcToSol"],
+    ["packages/wallet-solana/src/jupiter.ts", "swapSolToUsdc"],
+    ["packages/wallet-solana/src/memo-submitter.ts", "sendMemo"],
+    ["packages/wallet-solana/src/web3js-adapter.ts", "signSendConfirm"],
+    ["packages/wallet-solana/src/web3js-adapter.ts", "sendLaneTransaction"],
+    ["packages/wallet-solana/src/web3js-adapter.ts", "signDurable"],
+  ].map(([file, fn]) => ({
+    file: file!,
+    fn: fn!,
+    reason:
+      "`tx.sign(keypair)` signs a Solana transaction's binary message (@solana/web3.js), not JCS",
+  })),
 ];
 
 /**
@@ -155,6 +187,13 @@ const OUTSIDE_LANE: ReadonlyArray<{ file: string; fn: string; sites: number; rea
     fn: "signWithdrawalReceipt",
     sites: 1,
     reason: MONEY_RECORD,
+  },
+  {
+    file: "packages/crypto/src/hardware-attestation.ts",
+    fn: "mintSecureEnclaveReceiptForTest",
+    sites: 1,
+    reason:
+      "test-fixture mint of a simulated Secure Enclave P-256 receipt over canonicalSecureEnclaveBodyForTest's canonicalJson bytes (ids, hex keys, an integer; the real producer is device-native code) — migrate with a hardware-attestation review",
   },
   {
     file: "packages/identity-file/src/index.ts",
@@ -316,34 +355,178 @@ function isFunctionLike(node: ts.Node): node is ts.FunctionLikeDeclaration {
   );
 }
 
+/** The name a call's callee goes by: `f(…)`, `x.f(…)`, `x["f"](…)`; null otherwise. */
+function calleeName(e: ts.Expression): string | null {
+  if (ts.isIdentifier(e)) return e.text;
+  if (ts.isPropertyAccessExpression(e)) return e.name.text;
+  if (ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression))
+    return e.argumentExpression.text;
+  return null;
+}
+
+/** The receiver of `x.f(…)` / `x["f"](…)` as written (`Math`, `crypto.subtle`), or null. */
+function receiverText(e: ts.Expression): string | null {
+  if (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e))
+    return e.expression.getText();
+  return null;
+}
+
 /**
- * Names of the functions called anywhere inside `node` (plain or `x.name(…)`),
- * plus every identifier passed as a call argument — a signer that hands the
- * canonicalizer to a shared bytes helper (`certBytes(cert,
- * canonicalJsonForSigning)`, whose verify twin passes `canonicalJson`) names it
- * at the signing function just the same.
+ * Signing-method names caught on ANY receiver (`C.signBySuite`, `ed.signAsync`,
+ * `x["ed25519Sign"]`): a namespace import or a re-bound object never hides a
+ * primitive. `.sign` is caught on every receiver except `Math` — Solana
+ * transactions, ECDSA hardware keys and node/WebCrypto `sign` are signers too,
+ * listed as NON_JCS_SIGNERS where their bytes are not canonical JSON.
  */
-function calledNames(node: ts.Node): Set<string> {
-  const names = new Set<string>();
+const SIGN_METHODS = new Set(["signBySuite", "ed25519Sign", "signAsync", "signSync", "sign"]);
+const NOT_A_SIGNER_RECEIVER = new Set(["Math"]);
+
+/**
+ * Which argument of a signing call carries the signed bytes:
+ * `signBySuite(suite, bytes, key)`, `subtle.sign(alg, key, bytes)`, node's
+ * `crypto.sign(alg, bytes, key)`, and `(bytes, key)` for everything else.
+ */
+function messageArgIndex(call: ts.CallExpression, name: string): number {
+  if (name === "signBySuite") return 1;
+  const recv = receiverText(call.expression);
+  if (name === "sign" && recv !== null && /(?:^|\.)subtle$/.test(recv)) return 2;
+  if (name === "sign" && recv !== null && call.arguments.length === 3) return 1;
+  return 0;
+}
+
+/**
+ * Calls whose result is derived from their FIRST argument's bytes — an
+ * encoder, a byte copy, a digest. The signed bytes trace through them to that
+ * argument; any other call is opaque unless the guard is handed to it.
+ */
+const DERIVES_FROM_FIRST_ARG = new Set([
+  "encode",
+  "from",
+  "utf8ToBytes",
+  "hash",
+  "sha256",
+  "sha512",
+  "digest",
+]);
+
+type Trace = "guard" | "unguarded" | "unknown";
+/** Internal: a fresh zeroed buffer (`new Uint8Array(n)`) — contributes no bytes of its own. */
+type TraceStep = Trace | "empty";
+
+/** True when `node`'s subtree calls (or hands over) canonicalJson / canonicalSha256. */
+function mentionsUnguarded(node: ts.Node): boolean {
+  let hit = false;
   const visit = (n: ts.Node): void => {
+    if (hit) return;
     if (ts.isCallExpression(n)) {
-      const e = n.expression;
-      if (ts.isIdentifier(e)) names.add(e.text);
-      else if (ts.isPropertyAccessExpression(e)) names.add(e.name.text);
-      for (const a of n.arguments) if (ts.isIdentifier(a)) names.add(a.text);
+      const name = calleeName(n.expression);
+      if (name !== null && UNGUARDED.has(name)) hit = true;
+      for (const a of n.arguments) if (ts.isIdentifier(a) && UNGUARDED.has(a.text)) hit = true;
     }
     ts.forEachChild(n, visit);
   };
   visit(node);
-  return names;
+  return hit;
+}
+
+/**
+ * Every value `name` is given inside `scope`: declaration initializers, plain
+ * assignments, and the source of every `name.set(src, …)` write into a buffer.
+ */
+function valuesOf(name: string, scope: ts.Node): ts.Expression[] | null {
+  const out: ts.Expression[] = [];
+  let opaque = false;
+  const visit = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === name) {
+      if (n.initializer) out.push(n.initializer);
+    } else if (
+      ts.isBinaryExpression(n) &&
+      ts.isIdentifier(n.left) &&
+      n.left.text === name &&
+      n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      n.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    ) {
+      // `x = …` is a value; `x += …` mixes in bytes from elsewhere.
+      if (n.operatorToken.kind === ts.SyntaxKind.EqualsToken) out.push(n.right);
+      else opaque = true;
+    } else if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      n.expression.name.text === "set" &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === name &&
+      n.arguments.length > 0
+    ) {
+      // `buf.set(src, offset)` copies src's bytes into the buffer.
+      out.push(n.arguments[0]!);
+    } else if (ts.isParameter(n) && ts.isIdentifier(n.name) && n.name.text === name) {
+      // A parameter: the bytes come from the caller — not traceable here.
+      opaque = true;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(scope);
+  return opaque || out.length === 0 ? null : out;
+}
+
+/**
+ * Where the expression's bytes come from. "guard" only when every path is the
+ * guard's output (directly, through an encoder/digest, through local variables
+ * holding it, or a helper the guard is handed to); "unguarded" when any path is
+ * canonicalJson / canonicalSha256; otherwise "unknown".
+ */
+function traceBytes(expr: ts.Expression, scope: ts.Node, seen: Set<string> = new Set()): Trace {
+  const t = traceStep(expr, scope, seen);
+  return t === "empty" ? "unknown" : t;
+}
+
+function traceStep(expr: ts.Expression, scope: ts.Node, seen: Set<string>): TraceStep {
+  let e: ts.Expression = expr;
+  for (;;) {
+    if (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e))
+      e = e.expression;
+    else if (ts.isAwaitExpression(e) || ts.isTypeAssertionExpression(e)) e = e.expression;
+    else if (ts.isSatisfiesExpression(e)) e = e.expression;
+    else break;
+  }
+  if (ts.isCallExpression(e)) {
+    const name = calleeName(e.expression);
+    if (name === GUARD) return "guard";
+    if (name !== null && UNGUARDED.has(name)) return "unguarded";
+    const handed = e.arguments.filter(ts.isIdentifier).map((a) => a.text);
+    if (handed.some((a) => UNGUARDED.has(a))) return "unguarded";
+    if (handed.includes(GUARD)) return "guard";
+    if (name !== null && DERIVES_FROM_FIRST_ARG.has(name) && e.arguments.length > 0)
+      return traceStep(e.arguments[0]!, scope, seen);
+    return mentionsUnguarded(e) ? "unguarded" : "unknown";
+  }
+  // `new Uint8Array(n)`: an empty buffer, whose bytes are whatever is `.set` into it.
+  if (
+    ts.isNewExpression(e) &&
+    ts.isIdentifier(e.expression) &&
+    e.expression.text === "Uint8Array" &&
+    (e.arguments ?? []).every((a) => !mentionsUnguarded(a) && !ts.isIdentifier(a))
+  )
+    return "empty";
+  if (ts.isIdentifier(e)) {
+    if (seen.has(e.text)) return "unknown";
+    const values = valuesOf(e.text, scope);
+    if (values === null) return "unknown";
+    const next = new Set(seen).add(e.text);
+    const traces = values.map((v) => traceStep(v, scope, next)).filter((t) => t !== "empty");
+    if (traces.includes("unguarded")) return "unguarded";
+    return traces.length > 0 && traces.every((t) => t === "guard") ? "guard" : "unknown";
+  }
+  return mentionsUnguarded(e) ? "unguarded" : "unknown";
 }
 
 export function scanFile(abs: string, rel: string): Site[] {
   const src = readFileSync(abs, "utf8");
-  if (!/ed25519Sign|signBySuite|\bsign\b/.test(src)) return [];
+  if (!/ed25519Sign|signBySuite|\bsign(?:Async|Sync)?\b/.test(src)) return [];
   const sf = ts.createSourceFile(abs, src, ts.ScriptTarget.Latest, true);
 
-  // Local names bound to a signing primitive.
+  // Local names bound to a signing primitive: imports, and re-bindings
+  // (`const s = C.signBySuite`, `const { ed25519Sign: s } = C`).
   const locals = new Set<string>();
   for (const stmt of sf.statements) {
     if (!ts.isImportDeclaration(stmt)) continue;
@@ -356,30 +539,68 @@ export function scanFile(abs: string, rel: string): Site[] {
         locals.add(el.name.text);
     }
   }
+  const rebind = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && n.initializer) {
+      const init = n.initializer;
+      const name = calleeName(init);
+      if (
+        ts.isIdentifier(n.name) &&
+        !ts.isIdentifier(init) &&
+        name !== null &&
+        SIGN_METHODS.has(name) &&
+        receiverText(init) !== "Math"
+      )
+        locals.add(n.name.text);
+      if (ts.isObjectBindingPattern(n.name))
+        for (const el of n.name.elements) {
+          const from = el.propertyName ?? el.name;
+          if (
+            ts.isIdentifier(from) &&
+            ts.isIdentifier(el.name) &&
+            (PRIMITIVES.has(from.text) || from.text === "signAsync")
+          )
+            locals.add(el.name.text);
+        }
+    }
+    ts.forEachChild(n, rebind);
+  };
+  rebind(sf);
   // A primitive called by its own name (same-package relative import or a
   // re-declared binding) is still a primitive.
   for (const p of PRIMITIVES) locals.add(p);
 
   const sites: Site[] = [];
   const visit = (n: ts.Node): void => {
-    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && locals.has(n.expression.text)) {
-      let fn: ts.Node | undefined = n.parent;
-      while (fn && !isFunctionLike(fn)) fn = fn.parent;
-      const isDefinition = rel === DISPATCH_FILE && fn !== undefined && PRIMITIVES.has(fnName(fn));
-      if (!isDefinition) {
-        const scope = fn ?? sf;
-        const called = calledNames(scope);
-        const kind: Site["kind"] = called.has(GUARD)
-          ? "guarded"
-          : [...UNGUARDED].some((u) => called.has(u))
-            ? "unguarded"
-            : "untraced";
-        sites.push({
-          file: rel,
-          line: sf.getLineAndCharacterOfPosition(n.getStart()).line + 1,
-          fn: fn ? fnName(fn) : "<module>",
-          kind,
-        });
+    if (ts.isCallExpression(n)) {
+      const callee = n.expression;
+      const name = calleeName(callee);
+      const isSigner =
+        name !== null &&
+        (ts.isIdentifier(callee)
+          ? locals.has(name)
+          : SIGN_METHODS.has(name) && !NOT_A_SIGNER_RECEIVER.has(receiverText(callee) ?? ""));
+      if (isSigner) {
+        let fn: ts.Node | undefined = n.parent;
+        while (fn && !isFunctionLike(fn)) fn = fn.parent;
+        const isDefinition =
+          rel === DISPATCH_FILE && fn !== undefined && PRIMITIVES.has(fnName(fn));
+        if (!isDefinition) {
+          const scope = fn ?? sf;
+          const msg = n.arguments[messageArgIndex(n, name)];
+          const trace: Trace = msg === undefined ? "unknown" : traceBytes(msg, scope);
+          const kind: Site["kind"] =
+            trace === "guard"
+              ? "guarded"
+              : trace === "unguarded" || mentionsUnguarded(scope)
+                ? "unguarded"
+                : "untraced";
+          sites.push({
+            file: rel,
+            line: sf.getLineAndCharacterOfPosition(n.getStart()).line + 1,
+            fn: fn ? fnName(fn) : "<module>",
+            kind,
+          });
+        }
       }
     }
     ts.forEachChild(n, visit);
