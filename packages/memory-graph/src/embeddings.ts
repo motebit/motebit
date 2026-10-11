@@ -4,6 +4,12 @@
 
 import { CONTEXT_SAFE_SENSITIVITY } from "@motebit/sdk";
 import type { SensitivityLevel } from "@motebit/sdk";
+import {
+  evictCachedModel,
+  installAtomicModelCache,
+  nodeFs,
+  type TransformersCacheEnv,
+} from "./model-cache.js";
 
 // === Semantic embeddings via @xenova/transformers (or remote proxy) ===
 
@@ -41,30 +47,109 @@ type Pipeline = (
   options: { pooling: string; normalize: boolean },
 ) => Promise<{ data: Float32Array }>;
 
-let pipelineInstance: Pipeline | null = null;
+/** The model every local embedding uses. */
+export const EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2";
+
+/**
+ * Loads the local embedding pipeline. The default loads {@link EMBEDDING_MODEL}
+ * through @xenova/transformers; tests and hosts inject their own with
+ * {@link setEmbeddingModelLoader} (adapter pattern — no unit test may load the
+ * real model).
+ */
+export type EmbeddingModelLoader = () => Promise<Pipeline>;
+
+/**
+ * Upper bound on one model load (download included). A load still pending
+ * after this falls back to the hash embedding instead of stalling the caller.
+ */
+export const MODEL_LOAD_TIMEOUT_MS = 120_000;
+
+/** The transformers `env` fields the default loader sets. */
+type TransformersEnv = TransformersCacheEnv & {
+  backends?: { onnx?: { wasm?: { numThreads?: number } } };
+};
+
+async function loadTransformersModel(): Promise<Pipeline> {
+  const mod = (await import("@xenova/transformers")) as unknown as {
+    pipeline: (task: string, model: string) => Promise<unknown>;
+    env?: TransformersEnv;
+  };
+  const pipeline = mod.pipeline;
+  // `in`, not a plain read: a vi.mock factory without `env` throws on access.
+  const env = "env" in mod ? mod.env : undefined;
+  // Single-threaded wasm only. When onnxruntime-node cannot load the model
+  // (e.g. a truncated cached .onnx), transformers falls back to wasm, and the
+  // THREADED wasm build busy-waits the event loop forever once two loads
+  // overlap in one process — no timer fires, so nothing can time it out.
+  const wasm = env?.backends?.onnx?.wasm;
+  if (wasm) wasm.numThreads = 1;
+  const cacheDir = env ? installAtomicModelCache(env, nodeFs()) : undefined;
+  try {
+    return (await pipeline("feature-extraction", EMBEDDING_MODEL)) as Pipeline;
+  } catch (err) {
+    // A cached file that cannot be parsed is corrupt (a torn write by an
+    // older, non-atomic writer): drop it so the next load fetches it fresh.
+    const fs = nodeFs();
+    if (fs !== undefined && cacheDir !== undefined) evictCachedModel(fs, cacheDir, EMBEDDING_MODEL);
+    throw new Error(
+      `embedding model ${EMBEDDING_MODEL} failed to load: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+}
+
+let modelLoader: EmbeddingModelLoader = loadTransformersModel;
+let modelLoadTimeoutMs = MODEL_LOAD_TIMEOUT_MS;
+let pipelinePromise: Promise<Pipeline> | null = null;
 let pipelineFailed = false;
 
-async function getPipeline(): Promise<Pipeline> {
-  if (pipelineInstance !== null) return pipelineInstance;
-  if (pipelineFailed) throw new Error("Pipeline previously failed to load");
-  try {
-    const { pipeline } = await import("@xenova/transformers");
-    pipelineInstance = (await pipeline(
-      "feature-extraction",
-      "Xenova/all-MiniLM-L6-v2",
-    )) as unknown as Pipeline;
-    return pipelineInstance;
-  } catch (e) {
-    pipelineFailed = true;
-    throw e;
+/**
+ * Inject the loader for the local embedding pipeline (`null` restores the
+ * default @xenova/transformers loader) and, optionally, its load timeout.
+ * Resets the loaded pipeline.
+ */
+export function setEmbeddingModelLoader(
+  loader: EmbeddingModelLoader | null,
+  opts: { timeoutMs?: number } = {},
+): void {
+  modelLoader = loader ?? loadTransformersModel;
+  modelLoadTimeoutMs = opts.timeoutMs ?? MODEL_LOAD_TIMEOUT_MS;
+  resetPipeline();
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`embedding model load timed out after ${ms}ms`)), ms);
+    // Never keep a process alive just to time out a load.
+    (timer as { unref?: () => void }).unref?.();
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * The loaded pipeline. Single-flight: concurrent first callers share ONE
+ * load, bounded by the load timeout. A failed load sticks (hash fallback)
+ * until {@link resetPipeline}.
+ */
+function getPipeline(): Promise<Pipeline> {
+  if (pipelineFailed) return Promise.reject(new Error("Pipeline previously failed to load"));
+  if (pipelinePromise === null) {
+    const attempt = withTimeout(modelLoader(), modelLoadTimeoutMs);
+    pipelinePromise = attempt;
+    attempt.catch(() => {
+      // Only the current attempt may mark failure (a reset may have replaced it).
+      if (pipelinePromise === attempt) pipelineFailed = true;
+    });
   }
+  return pipelinePromise;
 }
 
 /**
  * Reset the lazy singleton pipeline. Call in test teardown.
  */
 export function resetPipeline(): void {
-  pipelineInstance = null;
+  pipelinePromise = null;
   pipelineFailed = false;
 }
 

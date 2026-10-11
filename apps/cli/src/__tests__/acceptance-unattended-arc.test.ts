@@ -12,6 +12,11 @@ import { RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import type { TurnResult } from "@motebit/ai-core";
 import { goalRunFakes } from "./goal-run-fakes.js";
+import { setEmbeddingModelLoader } from "@motebit/memory-graph";
+// No unit test loads the real embedding model (vitest.real-model-guard.ts):
+// a rejecting loader sends embedText's local path to its deterministic hash
+// fallback.
+setEmbeddingModelLoader(() => Promise.reject(new Error("no embedding model in unit tests")));
 
 /**
  * The arc's own sentence, walked end to end:

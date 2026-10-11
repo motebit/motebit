@@ -23,11 +23,15 @@ vi.mock("@motebit/memory-graph", async () => {
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { StreamChunk } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
-import { ConsolidationAction, embedTextHash } from "@motebit/memory-graph";
+import { ConsolidationAction, embedTextHash, setEmbeddingModelLoader } from "@motebit/memory-graph";
 import type { ConsolidationProvider } from "@motebit/memory-graph";
 import type { AIResponse, AgentTask } from "@motebit/sdk";
 import { AgentTaskStatus, SensitivityLevel } from "@motebit/sdk";
 import { generateKeypair } from "@motebit/encryption";
+// No unit test loads the real embedding model (vitest.real-model-guard.ts):
+// a rejecting loader sends embedText's local path to its deterministic hash
+// fallback.
+setEmbeddingModelLoader(() => Promise.reject(new Error("no embedding model in unit tests")));
 
 const OWNER_FACT = "The owner's wife is named Beth";
 

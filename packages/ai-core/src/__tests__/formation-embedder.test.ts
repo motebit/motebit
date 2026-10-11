@@ -10,7 +10,8 @@
  * that hung `@motebit/ai-core:test` in the pre-push run.
  *
  * Tamper check: drop the `embed` the loop passes to formation — the formed
- * memory is embedded by the real loader again (384-d, not the 128-d mock).
+ * memory is embedded by the real loader again (384-d, not the 128-d mock),
+ * and the real-model guard (vitest.real-model-guard.ts) fails the run.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -54,23 +55,20 @@ function factProvider(): StreamingProvider {
 }
 
 describe("loop memory formation uses the loop's embedder", () => {
-  it.fails(
-    "RED: a formed memory is embedded by the mocked embedText, never the real model loader",
-    async () => {
-      const eventStore = new EventStore(new InMemoryEventStore());
-      const d = {
-        motebitId: "owner-mote",
-        eventStore,
-        memoryGraph: new MemoryGraph(new InMemoryMemoryStorage(), eventStore, "owner-mote"),
-        stateEngine: new StateVectorEngine(),
-        behaviorEngine: new BehaviorEngine(),
-        provider: factProvider(),
-        getEffectiveSensitivity: () => SensitivityLevel.None,
-      } as unknown as SensitivityCleared<MotebitLoopDependencies>;
+  it("a formed memory is embedded by the mocked embedText, never the real model loader", async () => {
+    const eventStore = new EventStore(new InMemoryEventStore());
+    const d = {
+      motebitId: "owner-mote",
+      eventStore,
+      memoryGraph: new MemoryGraph(new InMemoryMemoryStorage(), eventStore, "owner-mote"),
+      stateEngine: new StateVectorEngine(),
+      behaviorEngine: new BehaviorEngine(),
+      provider: factProvider(),
+      getEffectiveSensitivity: () => SensitivityLevel.None,
+    } as unknown as SensitivityCleared<MotebitLoopDependencies>;
 
-      const result = await runTurn(d, `Remember: ${FACT}`);
-      expect(result.memoriesFormed).toHaveLength(1);
-      expect(result.memoriesFormed[0]!.embedding).toEqual(embedTextHash(FACT));
-    },
-  );
+    const result = await runTurn(d, `Remember: ${FACT}`);
+    expect(result.memoriesFormed).toHaveLength(1);
+    expect(result.memoriesFormed[0]!.embedding).toEqual(embedTextHash(FACT));
+  });
 });

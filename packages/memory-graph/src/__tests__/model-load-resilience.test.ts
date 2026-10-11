@@ -1,14 +1,21 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { embedText, EMBEDDING_DIMENSIONS, embedTextHash, resetPipeline } from "../embeddings";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  embedText,
+  EMBEDDING_DIMENSIONS,
+  EMBEDDING_MODEL,
+  embedTextHash,
+  resetPipeline,
+  setEmbeddingModelLoader,
+} from "../embeddings";
 
 // The pre-push hang (ai-core:test stuck for up to ~80 min on "Failed to load
 // model because protobuf parsing failed") had three cooperating causes in the
-// local-model path of `embedText`. The cells below pin (2) and (3) against a
-// mocked @xenova/transformers, so no real model is ever loaded here. (1) is
-// pinned by the opt-in model-cache-corrupt.real.test.ts: vitest's mocker can
-// hand CONCURRENT first dynamic imports of a mocked specifier the REAL module
-// (observed: three of four concurrent embeds loaded the real model under a
-// vi.mock factory), so a concurrency cell cannot be written against vi.mock:
+// local-model path of `embedText`; each cell below pins one, and no cell
+// loads a real model (the default loader runs against a mocked
+// @xenova/transformers; the rest inject a loader):
 //
 //  1. Concurrent first calls each started their OWN model load (no
 //     single-flight). Two loads in one process after a torn/corrupt cached
@@ -19,12 +26,22 @@ import { embedText, EMBEDDING_DIMENSIONS, embedTextHash, resetPipeline } from ".
 //     never reached its hash fallback.
 //  3. The threaded wasm fallback was left on (numThreads > 1).
 //
-// `vi.hoisted` state lets the hoisted factory and the cells share the fake.
+// The concurrency cell injects a loader instead of mocking the module:
+// vitest's mocker can hand CONCURRENT first dynamic imports of a mocked
+// specifier the REAL module (observed while writing the red repro: three of
+// four concurrent embeds loaded the real model under a vi.mock factory).
 const fake = vi.hoisted(() => ({
   loads: 0,
   numThreadsAtLoad: [] as Array<number | undefined>,
-  mode: "ok" as "ok" | "never",
-  env: { backends: { onnx: { wasm: { numThreads: undefined as number | undefined } } } },
+  mode: "ok" as "ok" | "never" | "corrupt",
+  env: {
+    backends: { onnx: { wasm: { numThreads: undefined as number | undefined } } },
+    useFSCache: false,
+    useCustomCache: false,
+    customCache: undefined as unknown,
+    cacheDir: null as string | null,
+    remoteHost: "https://huggingface.co/",
+  },
 }));
 
 vi.mock("@xenova/transformers", () => ({
@@ -33,6 +50,8 @@ vi.mock("@xenova/transformers", () => ({
     fake.loads++;
     fake.numThreadsAtLoad.push(fake.env.backends.onnx.wasm.numThreads);
     if (fake.mode === "never") return new Promise<never>(() => {});
+    if (fake.mode === "corrupt")
+      throw new Error("Failed to load model because protobuf parsing failed.");
     const data = new Float32Array(384).fill(0.05);
     return async () => ({ data });
   },
@@ -48,30 +67,110 @@ function within<T>(p: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+function hashPadded(text: string): number[] {
+  const padded = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
+  embedTextHash(text).forEach((v, i) => (padded[i] = v));
+  return padded;
+}
+
+const constantPipeline = async () => ({ data: new Float32Array(384).fill(0.05) });
+
 afterEach(() => {
+  setEmbeddingModelLoader(null);
   resetPipeline();
   fake.loads = 0;
   fake.numThreadsAtLoad = [];
   fake.mode = "ok";
+  Object.assign(fake.env, {
+    useFSCache: false,
+    useCustomCache: false,
+    customCache: undefined,
+    cacheDir: null,
+  });
   fake.env.backends.onnx.wasm.numThreads = undefined;
 });
 
 describe("embedText — local model load resilience", () => {
-  it.fails(
-    "RED: a model load that never settles is bounded — embedText falls back to the hash embedding",
-    async () => {
-      fake.mode = "never";
-      const vec = await within(embedText("door code"), 3_000);
-      expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
-      expect(vec.slice(0, 128)).toEqual(embedTextHash("door code"));
-    },
-  );
+  it("concurrent first embeds share ONE model load (single-flight)", async () => {
+    let loads = 0;
+    setEmbeddingModelLoader(async () => {
+      loads++;
+      await new Promise((r) => setTimeout(r, 10));
+      return constantPipeline;
+    });
+    const vecs = await Promise.all(["a", "b", "c", "d"].map((t) => embedText(t)));
+    expect(loads).toBe(1);
+    expect(vecs.every((v) => v[0] === Math.fround(0.05))).toBe(true);
+  });
 
-  it.fails(
-    "RED: the threaded-wasm fallback is pinned off (numThreads = 1) before the model loads",
-    async () => {
+  it("a model load that never settles is bounded — embedText falls back to the hash embedding", async () => {
+    setEmbeddingModelLoader(() => new Promise<never>(() => {}), { timeoutMs: 50 });
+    const vec = await within(embedText("door code"), 3_000);
+    expect(vec).toEqual(hashPadded("door code"));
+  });
+
+  it("a failed load sticks (no reload storm) until resetPipeline", async () => {
+    let loads = 0;
+    setEmbeddingModelLoader(async () => {
+      loads++;
+      throw new Error("boom");
+    });
+    await embedText("x");
+    await embedText("y");
+    expect(loads).toBe(1);
+    resetPipeline();
+    await embedText("z");
+    expect(loads).toBe(2);
+  });
+
+  it("a reset while a load is in flight does not let the stale load mark failure", async () => {
+    let rejectFirst!: (e: Error) => void;
+    let n = 0;
+    setEmbeddingModelLoader(() => {
+      n++;
+      return n === 1
+        ? new Promise<never>((_, rej) => (rejectFirst = rej))
+        : Promise.resolve(constantPipeline);
+    });
+    const stale = embedText("x");
+    resetPipeline();
+    rejectFirst(new Error("stale"));
+    await stale;
+    const vec = await embedText("y");
+    expect(vec[0]).toBe(Math.fround(0.05));
+  });
+
+  it("the default loader pins the threaded-wasm fallback off (numThreads = 1) before loading", async () => {
+    await embedText("x");
+    expect(fake.numThreadsAtLoad).toEqual([1]);
+  });
+
+  it("the default loader routes transformers' file cache through the atomic cache", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "motebit-model-cache-"));
+    try {
+      Object.assign(fake.env, { useFSCache: true, cacheDir: dir });
       await embedText("x");
-      expect(fake.numThreadsAtLoad).toEqual([1]);
-    },
-  );
+      expect(fake.env.useFSCache).toBe(false);
+      expect(fake.env.useCustomCache).toBe(true);
+      expect(typeof (fake.env.customCache as { put?: unknown }).put).toBe("function");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a corrupt cached model is evicted and the load fails fast to the hash fallback", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "motebit-model-cache-"));
+    try {
+      const modelDir = join(dir, ...EMBEDDING_MODEL.split("/"));
+      mkdirSync(join(modelDir, "onnx"), { recursive: true });
+      writeFileSync(join(modelDir, "onnx", "model_quantized.onnx"), Buffer.from([0x08, 0x07]));
+      Object.assign(fake.env, { useFSCache: true, cacheDir: dir });
+      fake.mode = "corrupt";
+      const vec = await within(embedText("door code"), 3_000);
+      expect(vec).toEqual(hashPadded("door code"));
+      expect(existsSync(modelDir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

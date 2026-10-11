@@ -63,7 +63,7 @@ import {
 } from "../index";
 import type { StreamChunk, ToolCall } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
-import { ConsolidationAction, embedTextHash } from "@motebit/memory-graph";
+import { ConsolidationAction, embedTextHash, setEmbeddingModelLoader } from "@motebit/memory-graph";
 import type { ConsolidationProvider } from "@motebit/memory-graph";
 import type {
   AIResponse,
@@ -75,6 +75,10 @@ import type {
 import { AgentTaskStatus, RiskLevel, SensitivityLevel } from "@motebit/sdk";
 import { generateKeypair } from "@motebit/encryption";
 import { foreignTurnTools } from "./helpers/foreign-call";
+// No unit test loads the real embedding model (vitest.real-model-guard.ts):
+// a rejecting loader sends embedText's local path to its deterministic hash
+// fallback.
+setEmbeddingModelLoader(() => Promise.reject(new Error("no embedding model in unit tests")));
 
 const STRANGER = "STRANGER-943";
 const STRANGER_FACT = "STRANGER-FACT-943 the sky is green";

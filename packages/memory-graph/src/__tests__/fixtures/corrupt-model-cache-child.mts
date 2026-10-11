@@ -12,10 +12,11 @@ if (cacheDir === undefined) throw new Error("usage: corrupt-model-cache-child <c
 env.cacheDir = cacheDir;
 env.allowRemoteModels = false;
 
-// Node runs the TS source directly (--experimental-strip-types), so the
-// specifier must name the .ts file; a non-literal keeps tsc out of it.
-const embeddingsSource = "../../embeddings.ts";
-const { embedText } = (await import(embeddingsSource)) as typeof import("../../embeddings.js");
+// The BUILT module (run `pnpm build` first): Node's type stripping does not
+// map the sources' `.js` specifiers to `.ts`. A non-literal keeps tsc from
+// requiring dist/ to exist at typecheck time.
+const embeddingsModule = "../../../dist/embeddings.js";
+const { embedText } = (await import(embeddingsModule)) as typeof import("../../embeddings.js");
 const t0 = Date.now();
 const vecs = await Promise.all([embedText("alpha"), embedText("beta")]);
 process.stdout.write(

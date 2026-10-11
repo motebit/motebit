@@ -11,11 +11,12 @@
  *
  * The child runs in its own process because a blocked event loop cannot be
  * timed out from inside it. The contract: embedText settles quickly with the
- * hash fallback instead of hanging.
+ * hash fallback instead of hanging, and the corrupt model is evicted.
+ * Red before the fix: the child was SIGKILLed at 30s.
  */
 import { describe, it, expect, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,9 +109,14 @@ describe.skipIf(!REAL)("real model: corrupt cached .onnx (opt-in)", () => {
       killSignal: "SIGKILL",
     });
     expect(child.signal, `child hung and was killed; stderr:\n${child.stderr}`).toBeNull();
+    // It really took the failure path under test, not some earlier exit.
+    expect(child.stderr).toContain("protobuf parsing failed");
     const line = child.stdout.trim().split("\n").pop() ?? "";
     const out = JSON.parse(line) as { ms: number; lengths: number[] };
     expect(out.lengths).toEqual([EMBEDDING_DIMENSIONS, EMBEDDING_DIMENSIONS]);
     expect(out.ms).toBeLessThan(15_000);
+    // The torn model is evicted, so the next load fetches it fresh instead
+    // of failing on the same bytes forever.
+    expect(existsSync(join(root, "Xenova", "all-MiniLM-L6-v2"))).toBe(false);
   }, 40_000);
 });
