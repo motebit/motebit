@@ -815,6 +815,40 @@ describe("relay_peers writers: only writePeerRow writes authority columns", () =
       "db.exec(\"CREATE TRIGGER t AFTER INSERT ON x BEGIN UPDATE relay_peers SET state = 'active'; END\");",
     ],
   ];
+  // F5 (third cold review): an SQL string literal is data, never syntax — a
+  // WHERE / FROM / `;` / `(` / `,` inside '…' must neither end the SET list
+  // nor hide the authority column after it.
+  const LITERAL_RED: Array<[string, string, string]> = [
+    [
+      "a string literal holding WHERE ends the SET list early",
+      "a.ts",
+      `db.prepare("UPDATE relay_peers SET trust_score = 'x where', state = 'active'");`,
+    ],
+    [
+      "a string literal holding ; ends the SET list early",
+      "a.ts",
+      `db.prepare("UPDATE relay_peers SET trust_level = ';', public_key = ? WHERE 1");`,
+    ],
+    [
+      "a string literal holding ( hides the next column",
+      "a.ts",
+      `db.prepare("UPDATE relay_peers SET trust_level = '(', state = ? WHERE 1");`,
+    ],
+    [
+      "a string literal holding FROM ends the SET list early",
+      "a.ts",
+      `db.prepare("UPDATE relay_peers SET trust_level = 'from', endpoint_url = ? WHERE 1");`,
+    ],
+  ];
+  for (const [name, file, src] of LITERAL_RED) {
+    // CHECKPOINT 1 — committed RED (it.fails): the scanner misses each today.
+    it.fails(`tamper: ${name} is red`, () => {
+      const sites = scanPeerRowWrites(file, src);
+      expect(sites.length).toBeGreaterThan(0);
+      expect(sites.every((s) => s.refusal !== null)).toBe(true);
+    });
+  }
+
   for (const [name, file, src] of RED) {
     it(`tamper: ${name} is red`, () => {
       const sites = scanPeerRowWrites(file, src);

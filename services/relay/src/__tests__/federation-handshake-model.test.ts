@@ -20,6 +20,25 @@
  * its recipient by id only. Project stop rule: after the second same-class
  * finding, enumerate instead of patching. This file is that enumeration.
  *
+ * The THIRD cold review found the same class in every other kind (round 2
+ * had bound only the confirm's body to the recipient's key):
+ *
+ *   F1  A's operator runs `peer-remove <M-url>`; M's `/identity` claims B's
+ *       id; A's relay mints a peer-remove addressed to B by id; M forwards it
+ *       to B within five minutes: A's row at B active→removed.
+ *   F2  M holds B's never-confirmed relay id AT A (its own key, its own
+ *       endpoint). A's heartbeat loop signs heartbeats to "B" by id and posts
+ *       them to M; M relays them verbatim to B: A's row at B suspended→active.
+ *   F3  A's re-handshake at B (A confirmed there, suspended) is in flight; M
+ *       proposes 8× at B as A and evicts A's pending handshake: A's confirm 403.
+ *   F4  31 proposes naming a never-peered relay_id spend its per-id budget:
+ *       the real relay's propose is 429.
+ *
+ * So the model now lets M drive EVERY honest operator tool and loop as an
+ * oracle against a lying counterparty (peer, peer-remove, the heartbeat
+ * loop), relay anything it receives to any relay, and interleave inside A's
+ * tooling runs; and it adds I-no-weaken.
+ *
  * THE MODEL. Relays A and B are honest and real (in-process). M is the
  * attacker: it holds only its own key (A's and B's public keys are public);
  * it calls any public federation route at B with any body; it lies in its own
@@ -47,6 +66,12 @@
  *                   changes its key, changes its endpoint or deletes it, and
  *                   no step makes a row under A's key confirmed — unless in
  *                   that step A's key holder itself confirmed to B (id + key).
+ *   I-no-weaken     no attacker step moves A's confirmed row at B toward
+ *                   suspended / removed, or makes A's honest in-flight
+ *                   handshake fail — only A's own signed removal or B's own
+ *                   observation may move it down. (Its mirror, a lowered
+ *                   missed-heartbeat count from a heartbeat A never addressed
+ *                   to B, is I-no-strengthen.)
  *   I-live          from every explored state, the real A reaches `active` at
  *                   B under its key at its endpoint by its own tooling within
  *                   one cooldown, unless B's operator acted (never, here) —
@@ -78,7 +103,7 @@ import {
 } from "@motebit/encryption";
 
 import type { SyncRelay } from "../index.js";
-import { initRelayIdentity, type RelayIdentity } from "../federation.js";
+import { initRelayIdentity, sendHeartbeats, type RelayIdentity } from "../federation.js";
 import { setLogLevel } from "../logger.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 import { heartbeatRequest, removeRequest } from "./federation-messages.js";
@@ -138,11 +163,18 @@ const ATTACKER_ACTIONS = [
   "O_PV", // A peers with M; M's /identity: B's (id, key); relays A's propose to B verbatim; forwards A's confirm to B
   "REPLAY", // M re-sends the latest confirm of A's it has seen to B
   "WAIT", // the clock advances one cooldown
+  // Round 3 — every honest operator tool and loop as an oracle against a
+  // lying counterparty, and M relaying whatever it receives:
+  "O_RM", // A's operator runs `peer-remove <M-url>`; M's /identity: (B's id, M's key); M forwards A's removal to B
+  "SQ_BA", // M completes a handshake AT A as B (B's id, M's key, M's endpoint) — the non-self-certifying residual, at A
+  "T_HB", // A's heartbeat loop ticks; what it posts to M's endpoint M relays verbatim to B (nothing else is delivered)
+  "X_EVICT", // A's operator runs `peer <B>`; between its propose and its confirm M proposes 8× at B as A (A's key, M's endpoint)
 ] as const;
 const HONEST_ACTIONS = [
   "H_PEER", // A's operator runs `motebit federation peer <B>`
+  "H_PEER_BA", // B's operator runs its half against A (A then holds B, confirmed)
   "H_BEAT", // A heartbeats B (v2, signed by A)
-  "H_REMOVE", // A's operator removes A at B
+  "H_REMOVE", // A's operator runs `peer-remove <B-url>`
 ] as const;
 const ACTIONS = [...ATTACKER_ACTIONS, ...HONEST_ACTIONS] as const;
 type Action = (typeof ACTIONS)[number];
@@ -243,6 +275,10 @@ interface Run {
   squatted: boolean;
   /** This step: A's key holder confirmed to B by id and key. */
   authorizedThisStep: boolean;
+  /** M holds B's relay id at A under M's key (SQ_BA succeeded). */
+  squattedAtA: boolean;
+  /** This step: A's honest in-flight handshake at B was refused after it did everything right. */
+  evictedThisStep: string | null;
 }
 
 function newRun(start: Start): Run {
@@ -257,6 +293,8 @@ function newRun(start: Start): Run {
     ledger,
     squatted: false,
     authorizedThisStep: false,
+    squattedAtA: false,
+    evictedThisStep: null,
   };
 }
 
@@ -274,6 +312,9 @@ function seed(start: Start): void {
   const db = b.moteDb.db;
   db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(idA.relayMotebitId);
   db.prepare("DELETE FROM relay_federation_nonces").run();
+  // A's own view of B starts empty in every start: B never ran its half.
+  a.moteDb.db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?").run(idB.relayMotebitId);
+  a.moteDb.db.prepare("DELETE FROM relay_federation_nonces").run();
   if (start === "absent") return;
   const now = Date.now();
   const base: Row = { ...confirmedTemplate, last_heartbeat_at: now, peered_at: now - 60_000 };
@@ -320,47 +361,63 @@ const relayAt =
   (path, body) =>
     request(relay, path, body === undefined ? {} : { body });
 
+/** One honest relay as its operator's tooling sees it. */
+interface Side {
+  relay: () => SyncRelay;
+  id: () => RelayIdentity;
+  url: string;
+  label: "A" | "B";
+}
+const SIDE_A: Side = { relay: () => a, id: () => idA, url: URL_A, label: "A" };
+const SIDE_B: Side = { relay: () => b, id: () => idB, url: URL_B, label: "B" };
+
 /**
- * A's half against `peer`: identity → propose → verify the challenge under
- * the key the identity advertised (the key the confirm will commit to) →
- * A's operator mints → confirm. Returns the confirm status, or null when the
- * tooling stopped before sending one.
+ * `self`'s half against `peer` (mirrors apps/cli runHalf): identity → propose
+ * → verify the challenge under the key the identity advertised (the key the
+ * confirm will commit to) → `self`'s operator mints → confirm. `between` runs
+ * after the propose answered and before the operator mints (M interleaving
+ * inside the run). Returns the confirm status, or null when the tooling
+ * stopped before sending one.
  */
-async function aTooling(
+async function tooling(
   r: Run,
+  self: Side,
   peer: Endpoint,
+  between?: () => Promise<void>,
 ): Promise<{ status: number | null; minted: Captured | null }> {
+  const sid = self.id();
   const idRes = await peer("/federation/v1/identity", undefined);
   if (idRes.status !== 200) return { status: null, minted: null };
   const pid = (await idRes.json()) as { relay_motebit_id: string; public_key: string };
   const ourNonce = rand();
   const prop = await peer("/federation/v1/peer/propose", {
-    relay_id: idA.relayMotebitId,
-    public_key: idA.publicKeyHex,
-    endpoint_url: URL_A,
+    relay_id: sid.relayMotebitId,
+    public_key: sid.publicKeyHex,
+    endpoint_url: self.url,
     nonce: ourNonce,
   });
   if (prop.status !== 200) return { status: null, minted: null };
   const pb = (await prop.json()) as { nonce: string; challenge: unknown };
   const ch = await verifyFederationMessage(pb.challenge, {
     kind: "peer-challenge",
-    self: idA.relayMotebitId,
+    self: sid.relayMotebitId,
     expectedSender: pid.relay_motebit_id,
     senderPublicKeyHex: pid.public_key,
     body: challengeBody({
       requestNonce: ourNonce,
       nonce: pb.nonce,
-      proposerEndpoint: URL_A,
-      proposerKey: idA.publicKeyHex,
+      proposerEndpoint: self.url,
+      proposerKey: sid.publicKeyHex,
     }),
   });
   if (!ch.ok) return { status: null, minted: null };
-  const mint = await request(a, "/api/v1/admin/federation/peer-confirm-signature", {
+  if (between) await between();
+  const mint = await request(self.relay(), "/api/v1/admin/federation/peer-confirm-signature", {
     body: {
       nonce: pb.nonce,
       recipient: pid.relay_motebit_id,
       recipient_public_key: pid.public_key,
-      endpoint_url: URL_A,
+      endpoint_url: self.url,
     },
     headers: AUTH_HEADER,
   });
@@ -372,16 +429,51 @@ async function aTooling(
     recipientKey: keyLabel(pid.public_key),
     epoch: r.epoch,
   };
-  r.ledger.add(`A>${minted.recipientId}/${minted.recipientKey}@A`);
-  if (minted.recipientId === "B" && minted.recipientKey === "B") r.authorizedThisStep = true;
+  r.ledger.add(`${self.label}>${minted.recipientId}/${minted.recipientKey}@${self.label}`);
+  if (self.label === "A" && minted.recipientId === "B" && minted.recipientKey === "B")
+    r.authorizedThisStep = true;
   const conf = await peer("/federation/v1/peer/confirm", minted.request);
   return { status: conf.status, minted };
+}
+
+/** A's half against `peer`. */
+const aTooling = (
+  r: Run,
+  peer: Endpoint,
+  between?: () => Promise<void>,
+): ReturnType<typeof tooling> => tooling(r, SIDE_A, peer, between);
+
+/**
+ * A's operator runs `motebit federation peer-remove <peerUrl>` (mirrors
+ * apps/cli handleFederationPeerRemove): read the peer's identity, have A's
+ * relay mint a v2 peer-remove for it, post it to the peer. Returns the status
+ * the peer answered, or null when the tooling stopped first.
+ */
+async function aRemoveTooling(peer: Endpoint, _peerUrl: string): Promise<number | null> {
+  const idRes = await peer("/federation/v1/identity", undefined);
+  if (idRes.status !== 200) return null;
+  const pid = (await idRes.json()) as { relay_motebit_id: string };
+  const res = await request(
+    a,
+    `/api/v1/admin/federation/peer-removal-signature?recipient=${encodeURIComponent(pid.relay_motebit_id)}`,
+    { headers: AUTH_HEADER },
+  );
+  if (res.status !== 200) return null;
+  const { message } = (await res.json()) as { message: unknown };
+  return (await peer("/federation/v1/peer/remove", { message })).status;
+}
+
+/** A's row for B's relay id (whoever holds it at A). */
+function rowOfBAtA(): Row | undefined {
+  return a.moteDb.db
+    .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ?")
+    .get(idB.relayMotebitId) as Row | undefined;
 }
 
 /** M's fake relay for one oracle run. */
 function mRelay(
   r: Run,
-  variant: "O_BM" | "O_MM" | "O_PX" | "O_PV",
+  variant: "O_BM" | "O_MM" | "O_PX" | "O_PV" | "O_RM",
 ): { endpoint: Endpoint; forwarded: () => number | null } {
   let forwardedStatus: number | null = null;
   const claimsB = variant !== "O_MM";
@@ -434,6 +526,12 @@ function mRelay(
       const res = await request(b, "/federation/v1/peer/confirm", { body });
       forwardedStatus = res.status;
       return json({ status: "active" });
+    }
+    if (path === "/federation/v1/peer/remove") {
+      // M sees A's removal and forwards it to B unchanged.
+      const res = await request(b, "/federation/v1/peer/remove", { body });
+      forwardedStatus = res.status;
+      return json({ status: "removed" });
     }
     return new Response("not found", { status: 404 });
   };
@@ -519,6 +617,68 @@ async function act(r: Run, action: Action): Promise<number | null> {
       if (r.captured === null) return null;
       return (await request(b, "/federation/v1/peer/confirm", { body: r.captured.request })).status;
     }
+    case "O_RM": {
+      const fake = mRelay(r, "O_RM");
+      await aRemoveTooling(fake.endpoint, URL_M);
+      return fake.forwarded();
+    }
+    case "SQ_BA": {
+      // M proposes AT A as B under its own key and endpoint, then confirms
+      // with that key: A now holds B's relay id under M's key (§13.2 residual
+      // at A — B never ran its half there).
+      const prop = await request(a, "/federation/v1/peer/propose", {
+        body: {
+          relay_id: idB.relayMotebitId,
+          public_key: m.publicKeyHex,
+          endpoint_url: URL_M,
+          nonce: rand(),
+        },
+      });
+      if (prop.status !== 200) return prop.status;
+      const { nonce } = (await prop.json()) as { nonce: string };
+      const message = await signFederationMessage({
+        kind: "peer-confirm",
+        sender: idB.relayMotebitId,
+        recipient: idA.relayMotebitId,
+        body: confirmBody({ nonce, endpoint: URL_M, recipientKey: idA.publicKeyHex }),
+        privateKey: m.privateKey,
+      });
+      const res = await request(a, "/federation/v1/peer/confirm", { body: { message, nonce } });
+      if (res.status === 200 && keyLabel(rowOfBAtA()?.public_key) === "M") r.squattedAtA = true;
+      return res.status;
+    }
+    case "T_HB": {
+      // A's own heartbeat loop: one tick. Only what it posts to M's endpoint
+      // is delivered — M relays it to B verbatim. (A's honest heartbeat to
+      // B is H_BEAT.)
+      let relayed: number | null = null;
+      const fetchVia = async (input: unknown, init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        if (!url.startsWith(URL_M)) throw new Error("unreachable in this step");
+        const res = await request(b, "/federation/v1/peer/heartbeat", {
+          body: JSON.parse(typeof init?.body === "string" ? init.body : "{}") as unknown,
+        });
+        relayed = res.status;
+        return res;
+      };
+      await sendHeartbeats(a.moteDb.db, idA, fetchVia as never);
+      return relayed;
+    }
+    case "X_EVICT": {
+      // A's honest run against B, with M interleaving 8 proposes at B as A
+      // between A's propose and A's confirm. A did everything right: if its
+      // propose was answered and its challenge verified, its confirm must land.
+      let interleaved = false;
+      const res = await aTooling(r, relayAt(b), async () => {
+        interleaved = true;
+        for (let i = 0; i < 8; i++) await propose(r, idA.publicKeyHex, URL_M);
+      });
+      if (interleaved && res.minted !== null && res.status !== 200)
+        r.evictedThisStep = `A's in-flight handshake at B refused after ${String(8)} interleaved proposes (confirm ${String(res.status)})`;
+      return res.status;
+    }
+    case "H_PEER_BA":
+      return (await tooling(r, SIDE_B, relayAt(a))).status;
     case "WAIT":
       clockOffset += COOLDOWN_MS;
       r.epoch++;
@@ -533,15 +693,8 @@ async function act(r: Run, action: Action): Promise<number | null> {
       });
       return (await request(b, "/federation/v1/peer/heartbeat", { body: req })).status;
     }
-    case "H_REMOVE": {
-      const res = await request(
-        a,
-        `/api/v1/admin/federation/peer-removal-signature?recipient=${idB.relayMotebitId}`,
-        { headers: AUTH_HEADER },
-      );
-      const { message } = (await res.json()) as { message: unknown };
-      return (await request(b, "/federation/v1/peer/remove", { body: { message } })).status;
-    }
+    case "H_REMOVE":
+      return aRemoveTooling(relayAt(b), URL_B);
   }
 }
 
@@ -561,11 +714,29 @@ function checkAuth(r: Run): string | null {
   return null;
 }
 
+/**
+ * I-no-weaken: no attacker-only step moves A's confirmed row at B toward
+ * suspended / removed, or makes A's honest in-flight handshake fail — only
+ * A's own signed removal, or B's own observation (its loop, not modelled
+ * here), may.
+ */
+function checkNoWeaken(r: Run, before: Row | undefined): string | null {
+  if (r.evictedThisStep !== null) return `I-no-weaken: ${r.evictedThisStep}`;
+  const after = rowOfA();
+  if (confirmedUnderA(before) && after !== undefined && keyLabel(after.public_key) === "A") {
+    if ((RANK[after.state] ?? 9) < (RANK[before!.state] ?? 9))
+      return `I-no-weaken: ${before!.state} → ${after.state}`;
+  }
+  return null;
+}
+
 function checkNoStrengthen(r: Run, before: Row | undefined): string | null {
   if (r.authorizedThisStep) return null;
   const after = rowOfA();
   if (confirmedUnderA(before)) {
     if (after === undefined) return "I-no-strengthen: A's confirmed row deleted";
+    if (keyLabel(after.public_key) === "A" && after.missed_heartbeats < before!.missed_heartbeats)
+      return `I-no-strengthen: missed heartbeats ${String(before!.missed_heartbeats)} → ${String(after.missed_heartbeats)}`;
     if (keyLabel(after.public_key) !== "A")
       return `I-no-strengthen: key ${keyLabel(after.public_key)}`;
     if (after.endpoint_url !== before!.endpoint_url)
@@ -645,12 +816,18 @@ function fingerprint(r: Run): string {
   const cap = r.captured
     ? `${r.captured.recipientId}${r.captured.recipientKey}${String(age(r, r.captured.epoch))}`
     : "-";
+  const atA = rowOfBAtA();
+  const atAFp = atA
+    ? `${atA.state}/${keyLabel(atA.public_key)}/${atA.peered_at != null ? "c" : "u"}/${String(atA.missed_heartbeats)}`
+    : "∅";
   return [
     rowFp,
+    atAFp,
     n(latest),
     n(r.ownNonce),
     cap,
     r.squatted ? "S" : "",
+    r.squattedAtA ? "SA" : "",
     [...r.ledger].sort().join(","),
   ].join("|");
 }
@@ -677,16 +854,16 @@ async function replay(start: Start, seq: Action[]): Promise<Replay> {
     const action = seq[i]!;
     const before = rowOfA();
     r.authorizedThisStep = false;
+    r.evictedThisStep = null;
     const status = await act(r, action);
     const at = `step ${i + 1} ${action}`;
     if (status !== null && status >= 500) return { violation: `${at}: HTTP ${status}`, run: r };
     // I-no-strengthen is over the attacker's steps: A's own (a heartbeat
     // signed by A, its own peering) may move its row toward active.
+    const attacker = (ATTACKER_ACTIONS as readonly Action[]).includes(action);
     const v =
       checkAuth(r) ??
-      ((ATTACKER_ACTIONS as readonly Action[]).includes(action)
-        ? checkNoStrengthen(r, before)
-        : null);
+      (attacker ? (checkNoStrengthen(r, before) ?? checkNoWeaken(r, before)) : null);
     if (v !== null) return { violation: `${at}: ${v}`, run: r };
   }
   return { violation: null, run: r };
@@ -803,6 +980,62 @@ describe("the second cold review's findings, as model cells", () => {
   }
 });
 
+/**
+ * CHECKPOINT 1 (round 3) — committed RED. The third cold review's cells and
+ * every start state of the extended model are expected to FAIL against this
+ * tree (counterexamples printed); `it.fails` keeps the push hook honest
+ * without `--no-verify`. The structural fix (the envelope binds the
+ * recipient's key) flips this to `it`.
+ */
+const red = it.fails;
+
+describe("the third cold review's findings, as model cells", () => {
+  const cells: Array<[string, Start, Action[]]> = [
+    [
+      "F1: A's peer-remove, minted for an impersonated B, removes A at B (active)",
+      "active",
+      ["O_RM"],
+    ],
+    ["F1: … at a suspended peer", "suspended", ["O_RM"]],
+    [
+      "F2: A's heartbeat to an id M holds at A, relayed to B, revives A at B (suspended)",
+      "suspended",
+      ["SQ_BA", "T_HB"],
+    ],
+    ["F2: … all the way to active", "suspended", ["SQ_BA", "T_HB", "T_HB", "T_HB"]],
+    [
+      "F3: 8 proposes naming a confirmed peer evict its in-flight re-handshake (suspended)",
+      "suspended",
+      ["X_EVICT"],
+    ],
+    ["F3: … after the removed peer's cooldown", "removed-by-A", ["WAIT", "X_EVICT"]],
+  ];
+  for (const [name, start, seq] of cells) {
+    red(name, async () => {
+      const { violation, run } = await replay(start, seq);
+      const what = violation ?? (run.squatted ? null : await checkLive(run));
+      expect(what, `[${start}] ${seq.join(",")}`).toBeNull();
+    });
+  }
+});
+
+describe("F4: proposes naming a never-peered relay_id never lock the real relay out (§3.1)", () => {
+  const variants: Array<[string, () => Promise<string>]> = [
+    ["under fresh keys of their own", async () => bytesToHex((await generateKeypair()).publicKey)],
+    ["under the id's real (public) key", () => Promise.resolve(idA.publicKeyHex)],
+  ];
+  for (const [name, keyOf] of variants) {
+    red(`31 proposes ${name}, then the real A peers`, async () => {
+      clockOffset += 60 * 60 * 1000;
+      seed("absent");
+      const r = newRun("absent");
+      for (let i = 0; i < 31; i++) await propose(r, await keyOf(), URL_M);
+      expect(await act(r, "H_PEER")).toBe(200);
+      expect(healthy()).toBe(true);
+    });
+  }
+});
+
 describe("a never-confirmed row is no peer (§3.1, §3.3)", () => {
   // The choice for a removal naming a never-confirmed row: REFUSE (403), not
   // delete. The row's key was never proven, so a removal signed under it
@@ -837,7 +1070,7 @@ describe("a never-confirmed row is no peer (§3.1, §3.3)", () => {
 describe(`peering handshake model check (6 start states × action sequences ≤ ${MAX_DEPTH})`, () => {
   const totals = { states: 0, transitions: 0, squatExempt: 0 };
   for (const start of START) {
-    it(
+    red(
       `start ${start}`,
       async () => {
         const res = await explore(start, MAX_DEPTH);
