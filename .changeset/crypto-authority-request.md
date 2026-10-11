@@ -1,0 +1,5 @@
+---
+"@motebit/crypto": minor
+---
+
+Identity-authority requests (`X-Motebit-Authority`; docs/design/identity-authority-writers.md §3.2, Inc 2): `signAuthorityRequest` / `verifyAuthorityRequest`, the one producer and one verifier of a signature by an identity's CURRENT key over one change, domain-separated by field (closed set `AUTHORITY_FIELDS`: `registration`, `sweep_config`, `listing`, `withdrawal`), identity (`motebit_id`), the one accepting relay (`relay_id`) and freshness (`ts` ±5 min + `nonce`), committing to the value by `value_sha256` = SHA-256(JCS(value)). Signed bytes are `"motebit/authority/v1\n" ‖ JCS(envelope)` under `motebit-jcs-ed25519-hex-v1`, through the guarded canonicalizer. Verification is pure and fail-closed with a named refusal (`malformed`, `unknown_field`, `field_mismatch`, `unsupported_suite`, `wrong_identity`, `wrong_relay`, `stale`, `value_mismatch`, `bad_signature`); the verifier records the accepted signature in the same transaction as the write. `encodeAuthorityHeader` / `decodeAuthorityHeader` carry it as base64url(JSON). Additive — no existing export changes.

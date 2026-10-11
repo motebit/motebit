@@ -159,6 +159,55 @@ export type ArtifactType = VerifyResult["type"];
 // @public
 export type AttestationPlatform = HardwareAttestationClaim["platform"];
 
+// @public
+export const AUTHORITY_FIELDS: readonly ["registration", "sweep_config", "listing", "withdrawal"];
+
+// @public
+export const AUTHORITY_REQUEST_DOMAIN: "motebit/authority/v1";
+
+// @public
+export const AUTHORITY_REQUEST_HEADER: "X-Motebit-Authority";
+
+// @public
+export const AUTHORITY_REQUEST_MAX_SKEW_MS = 300000;
+
+// @public
+export const AUTHORITY_REQUEST_SUITE: "motebit-jcs-ed25519-hex-v1";
+
+// @public (undocumented)
+export type AuthorityField = (typeof AUTHORITY_FIELDS)[number];
+
+// @public
+export function authorityRequestBytes(envelope: AuthorityRequestEnvelope, canon?: (value: unknown) => string): Uint8Array;
+
+// @public
+export interface AuthorityRequestEnvelope {
+    // (undocumented)
+    field: AuthorityField;
+    motebit_id: string;
+    nonce: string;
+    relay_id: string;
+    // (undocumented)
+    suite: typeof AUTHORITY_REQUEST_SUITE;
+    ts: number;
+    value_sha256: string;
+}
+
+// @public (undocumented)
+export type AuthorityRequestRefusal = "malformed" | "unknown_field" | "field_mismatch" | "unsupported_suite" | "wrong_identity" | "wrong_relay" | "stale" | "value_mismatch" | "bad_signature";
+
+// @public (undocumented)
+export type AuthorityRequestVerdict = {
+    ok: true;
+    request: SignedAuthorityRequest;
+} | {
+    ok: false;
+    reason: AuthorityRequestRefusal;
+};
+
+// @public
+export function authorityValueDigest(value: unknown): Promise<string>;
+
 export { AuthorityVerdict }
 
 // @public
@@ -398,6 +447,9 @@ export interface DataIntegrityProof {
 }
 
 // @public
+export function decodeAuthorityHeader(header: string): unknown;
+
+// @public
 export function decodeSkillSignaturePublicKey(sig: SkillSignature): Uint8Array;
 
 // @public
@@ -499,6 +551,9 @@ export function ed25519Sign(message: Uint8Array, privateKey: Uint8Array): Promis
 
 // @public (undocumented)
 export function ed25519Verify(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function encodeAuthorityHeader(request: SignedAuthorityRequest): string;
 
 // @public
 export function encodeSecureEnclaveReceiptForTest(bodyBytes: Uint8Array, sigBytes: Uint8Array): string;
@@ -1176,6 +1231,9 @@ export function parse(content: string): {
 };
 
 // @public
+export function parseAuthorityRequest(message: unknown): SignedAuthorityRequest | null;
+
+// @public
 export function parseFederationMessage(message: unknown): SignedFederationMessage | null;
 
 // @public
@@ -1598,6 +1656,17 @@ export function signApprovalDecision<T extends Omit<ApprovalDecision, "signature
 }>;
 
 // @public
+export function signAuthorityRequest(args: {
+    motebitId: string;
+    field: AuthorityField;
+    value: unknown;
+    relayId: string;
+    privateKey: Uint8Array;
+    now?: number;
+    nonce?: string;
+}): Promise<SignedAuthorityRequest>;
+
+// @public
 export function signBalanceWaiver(waiver: Omit<BalanceWaiver, "signature" | "suite">, agentPrivateKey: Uint8Array): Promise<BalanceWaiver>;
 
 // @public
@@ -1696,6 +1765,14 @@ export const SIGNED_REQUEST_ENVELOPE_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
 export const SIGNED_TOKEN_SUITE: "motebit-jwt-ed25519-v1";
+
+// @public
+export interface SignedAuthorityRequest {
+    // (undocumented)
+    envelope: AuthorityRequestEnvelope;
+    // (undocumented)
+    signature: string;
+}
 
 // @public
 export interface SignedFederationMessage {
@@ -2101,6 +2178,16 @@ export function verifyAgentSettlementAnchor(settlement: Record<string, unknown>,
 
 // @public
 export function verifyApprovalDecision(decision: ApprovalDecision, approverPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyAuthorityRequest(message: unknown, expect: {
+    field: AuthorityField;
+    motebitId: string;
+    self: string;
+    publicKeyHex: string;
+    value: unknown;
+    now?: number;
+}): Promise<AuthorityRequestVerdict>;
 
 // @public
 export function verifyBalanceWaiver(waiver: BalanceWaiver, agentPublicKey: Uint8Array): Promise<boolean>;

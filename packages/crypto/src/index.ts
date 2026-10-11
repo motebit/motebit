@@ -3358,3 +3358,27 @@ export {
   type FederationMessageVerdict,
   type SignedFederationMessage,
 } from "./federation-message.js";
+
+// Identity-authority requests (`X-Motebit-Authority`; docs/design/
+// identity-authority-writers.md §3.2) — the one producer and one verifier of a
+// signature by an identity's CURRENT key over one change, domain-separated by
+// field, identity, relay and freshness, committing to the value by digest.
+export {
+  AUTHORITY_FIELDS,
+  AUTHORITY_REQUEST_DOMAIN,
+  AUTHORITY_REQUEST_HEADER,
+  AUTHORITY_REQUEST_MAX_SKEW_MS,
+  AUTHORITY_REQUEST_SUITE,
+  authorityRequestBytes,
+  authorityValueDigest,
+  decodeAuthorityHeader,
+  encodeAuthorityHeader,
+  parseAuthorityRequest,
+  signAuthorityRequest,
+  verifyAuthorityRequest,
+  type AuthorityField,
+  type AuthorityRequestEnvelope,
+  type AuthorityRequestRefusal,
+  type AuthorityRequestVerdict,
+  type SignedAuthorityRequest,
+} from "./authority-request.js";
