@@ -31,13 +31,15 @@ import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
 import { hasRevocationRecord, liftRevocation } from "./identity-revocation.js";
+import { GuardianNotProvenError } from "./errors.js";
 import {
   admitKey,
+  guardianProvenance,
   holderKeyOf,
-  identityGuardianFor,
   isCanonicalKey,
   proveSovereignFirstKey,
   recordFirstIdentityKey,
+  recordGuardianEvidence,
   recordIdentityGuardian,
   recordOperatorServiceKey,
   registryKeyOf,
@@ -1322,6 +1324,26 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       }
     }
 
+    // The identity's CURRENT key and the key this request's bearer was
+    // verified under, both read BEFORE any write below (a succession in this
+    // same request rewrites device rows). A guardian set here has provenance
+    // only when they are the same key: the identity signed (§3.2). A paired
+    // device's own key, the master token and a legacy id with no held key
+    // prove nothing about the identity's key (D1/D2/D3).
+    const holderAtRequest = holderKeyOf(moteDb.db, motebitId);
+    let bearerKeyAtRequest: string | undefined;
+    {
+      const bearerToken = c.req.header("authorization")?.slice(7);
+      const claims =
+        bearerToken != null && callerMotebitId != null
+          ? parseTokenPayloadUnsafe(bearerToken)
+          : null;
+      if (claims?.mid === motebitId && typeof claims.did === "string") {
+        const row = await identityManager.loadDeviceById(claims.did, motebitId);
+        if (row?.public_key) bearerKeyAtRequest = row.public_key;
+      }
+    }
+
     // --- Succession chain validation on re-registration ---
     // A differing key needs a link from the key on file. Once the identity has
     // a holder that is the only answer (§5f); before it has one, this is
@@ -1343,11 +1365,30 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // Verify the succession record signatures
       let guardianPubKeyForVerify: string | undefined;
       if (succession.recovery) {
-        guardianPubKeyForVerify = identityGuardianFor(moteDb.db, motebitId) ?? undefined;
+        const { guardian, proven } = guardianProvenance(moteDb.db, motebitId);
+        guardianPubKeyForVerify = guardian ?? undefined;
         if (!guardianPubKeyForVerify) {
           throw new HTTPException(400, {
             message: "Agent has no guardian registered — cannot use guardian recovery",
           });
+        }
+        // The /rotate-key rule, at this door too: only a guardian set with
+        // provenance authorizes a recovery (identity-authority-writers.md I1).
+        if (!proven) {
+          logger.warn("agent.key.succession_refused", {
+            motebitId,
+            caller: callerMotebitId ?? null,
+            reason: "guardian_not_proven",
+          });
+          deps.recordAuthEvent({
+            kind: "agent_token_rejected",
+            method: "POST",
+            path: c.req.path,
+            motebitId: callerMotebitId,
+            reason: "succession:guardian_not_proven",
+            correlationId: c.req.header("x-correlation-id") ?? null,
+          });
+          throw new GuardianNotProvenError();
         }
       }
       const successionValid = await verifyKeySuccession(succession, guardianPubKeyForVerify);
@@ -1575,8 +1616,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // round-3 prose fix). E-sov for a sovereign identity presenting its own
     // key; E-op for an operator-registered service identity with no device,
     // chain or holder (§5f). Each re-reads its conditions in one transaction.
+    let sovereignFirstKeyRecorded = false;
     if (sovereignProof) {
-      recordFirstIdentityKey(moteDb.db, sovereignProof, {
+      sovereignFirstKeyRecorded = recordFirstIdentityKey(moteDb.db, sovereignProof, {
         source: "register",
         guardianPublicKey: guardianPublicKey ?? null,
         now,
@@ -1634,6 +1676,29 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // because a registration named it (§5d W3).
     if (guardianPublicKey) {
       recordIdentityGuardian(moteDb.db, { motebitId, guardianPublicKey, now });
+      // Its PROVENANCE, only when this request proved the identity's current
+      // key: the bearer's device row holds the held key, or this request
+      // recorded the sovereign first key under the bearer's possession of
+      // it. Any other setter leaves the guardian on file but UNPROVEN, and a
+      // recovery under it is refused (GUARDIAN_NOT_PROVEN) until the owner
+      // re-sets it with the identity key.
+      if (holderAtRequest !== null && bearerKeyAtRequest === holderAtRequest) {
+        recordGuardianEvidence(moteDb.db, {
+          motebitId,
+          guardianPublicKey,
+          setUnderKey: holderAtRequest,
+          evidence: "holder",
+          now,
+        });
+      } else if (sovereignFirstKeyRecorded && sovereignProof) {
+        recordGuardianEvidence(moteDb.db, {
+          motebitId,
+          guardianPublicKey,
+          setUnderKey: sovereignProof.publicKey,
+          evidence: "sovereign",
+          now,
+        });
+      }
     }
 
     // Auto-create a default service listing if one doesn't exist.

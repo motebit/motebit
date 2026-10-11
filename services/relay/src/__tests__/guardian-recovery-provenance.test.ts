@@ -55,14 +55,6 @@ afterEach(async () => {
   await relay.close();
 });
 
-/**
- * CP1 (red harness): the cells the defect decides are declared `it.fails`,
- * which passes ONLY while the cell fails — the harness is proven red on
- * origin/main without blocking the pre-push test phase. The fix flips each
- * back to `it`.
- */
-const redOnMain = it.fails;
-
 // ── Doors ──
 
 async function registerSelf(mid: string, deviceId: string, kp: KeyPair): Promise<number> {
@@ -191,8 +183,9 @@ async function rotateKey(
 async function stranger(): Promise<string> {
   const kp = await generateKeypair();
   const mid = await deriveSovereignMotebitId(hex(kp));
-  expect(await registerSelf(mid, "s-laptop", kp)).toBe(201);
-  return bearer(mid, "s-laptop", kp, "rotate-key");
+  const device = `s-${crypto.randomUUID()}`;
+  expect(await registerSelf(mid, device, kp)).toBe(201);
+  return bearer(mid, device, kp, "rotate-key");
 }
 
 const servedKey = (mid: string): string | null =>
@@ -380,118 +373,108 @@ describe("guardian recovery is accepted IFF the guardian was set with provenance
     for (const kind of def.kinds) {
       for (const signer of ["that guardian", "a different key"] as const) {
         const accept = def.proven && signer === "that guardian";
-        const cell = def.proven ? it : redOnMain;
-        cell(
-          `${setter} × ${kind} × recovery by ${signer} → ${accept ? "200" : "refused"}`,
-          async () => {
-            const p = await def.plant(kind);
-            const next = await generateKeypair();
-            const signingKey = signer === "that guardian" ? p.guardian : await generateKeypair();
-            const record = await signGuardianRecoverySuccession(
-              signingKey.privateKey,
-              next.privateKey,
-              p.k0.publicKey,
-              next.publicKey,
-            );
-            const keyBefore = servedKey(p.mid);
-            const res = await rotateKey(p.mid, await stranger(), record);
-            if (accept) {
-              expect(res.status).toBe(200);
-              expect(servedKey(p.mid)).toBe(hex(next));
-              expect(successions(p.mid)).toBe(1);
+        it(`${setter} × ${kind} × recovery by ${signer} → ${accept ? "200" : "refused"}`, async () => {
+          const p = await def.plant(kind);
+          const next = await generateKeypair();
+          const signingKey = signer === "that guardian" ? p.guardian : await generateKeypair();
+          const record = await signGuardianRecoverySuccession(
+            signingKey.privateKey,
+            next.privateKey,
+            p.k0.publicKey,
+            next.publicKey,
+          );
+          const keyBefore = servedKey(p.mid);
+          const res = await rotateKey(p.mid, await stranger(), record);
+          if (accept) {
+            expect(res.status).toBe(200);
+            expect(servedKey(p.mid)).toBe(hex(next));
+            expect(successions(p.mid)).toBe(1);
+          } else {
+            expect(res.status).not.toBe(200);
+            if (!def.proven) {
+              // The guardian is refused for its provenance, before its signature is read.
+              expect(res.status).toBe(403);
+              expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
             } else {
-              expect(res.status).not.toBe(200);
-              if (!def.proven) {
-                // The guardian is refused for its provenance, before its signature is read.
-                expect(res.status).toBe(403);
-                expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
-              } else {
-                expect(res.status).toBe(400);
-              }
-              expect(servedKey(p.mid)).toBe(keyBefore);
-              expect(successions(p.mid)).toBe(0);
+              expect(res.status).toBe(400);
             }
-          },
-        );
+            expect(servedKey(p.mid)).toBe(keyBefore);
+            expect(successions(p.mid)).toBe(0);
+          }
+        });
       }
     }
   }
 });
 
 describe("the exact repro: a paired device plants its own guardian and takes the identity", () => {
-  redOnMain(
-    "paired-device token sets G it controls (200), then signGuardianRecoverySuccession(G, K0 → K_att) at /rotate-key is refused 403 GUARDIAN_NOT_PROVEN",
-    async () => {
-      const k0 = await generateKeypair();
-      const mid = await deriveSovereignMotebitId(hex(k0));
-      expect(await registerSelf(mid, "laptop", k0)).toBe(201);
-      expect(
-        (await register(mid, await bearer(mid, "laptop", k0), { public_key: hex(k0) })).status,
-      ).toBe(200);
+  it("paired-device token sets G it controls (200), then signGuardianRecoverySuccession(G, K0 → K_att) at /rotate-key is refused 403 GUARDIAN_NOT_PROVEN", async () => {
+    const k0 = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k0));
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    expect(
+      (await register(mid, await bearer(mid, "laptop", k0), { public_key: hex(k0) })).status,
+    ).toBe(200);
 
-      const kd = await generateKeypair();
-      const paired = await pairDevice(mid, "laptop", k0, kd);
-      const g = await generateKeypair(); // the attacker's
-      // The self-made attestation: G signs that it guards `mid`.
-      const plant = await register(mid, await bearer(mid, paired, kd), {
-        ...(await guardianFields(mid, g)),
-      });
-      expect(plant.status).toBe(200);
+    const kd = await generateKeypair();
+    const paired = await pairDevice(mid, "laptop", k0, kd);
+    const g = await generateKeypair(); // the attacker's
+    // The self-made attestation: G signs that it guards `mid`.
+    const plant = await register(mid, await bearer(mid, paired, kd), {
+      ...(await guardianFields(mid, g)),
+    });
+    expect(plant.status).toBe(200);
 
-      const kAtt = await generateKeypair();
-      const takeover = await signGuardianRecoverySuccession(
-        g.privateKey,
-        kAtt.privateKey,
-        k0.publicKey,
-        kAtt.publicKey,
-      );
-      const res = await rotateKey(mid, await bearer(mid, paired, kd, "rotate-key"), takeover);
-      expect(res.status).toBe(403);
-      expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
-      expect(String(res.body?.error)).toMatch(/identity key/i);
-      expect(servedKey(mid)).toBe(hex(k0));
-      expect(registryKey(mid)).toBe(hex(k0));
-      expect(successions(mid)).toBe(0);
-      // The refusal is recorded under the presenter (rule 6).
-      const ev = relay.moteDb.db
-        .prepare(
-          "SELECT reason FROM relay_auth_events WHERE reason = 'succession:guardian_not_proven'",
-        )
-        .all();
-      expect(ev.length).toBe(1);
-    },
-  );
+    const kAtt = await generateKeypair();
+    const takeover = await signGuardianRecoverySuccession(
+      g.privateKey,
+      kAtt.privateKey,
+      k0.publicKey,
+      kAtt.publicKey,
+    );
+    const res = await rotateKey(mid, await bearer(mid, paired, kd, "rotate-key"), takeover);
+    expect(res.status).toBe(403);
+    expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expect(String(res.body?.error)).toMatch(/identity key/i);
+    expect(servedKey(mid)).toBe(hex(k0));
+    expect(registryKey(mid)).toBe(hex(k0));
+    expect(successions(mid)).toBe(0);
+    // The refusal is recorded under the presenter (rule 6).
+    const ev = relay.moteDb.db
+      .prepare(
+        "SELECT reason FROM relay_auth_events WHERE reason = 'succession:guardian_not_proven'",
+      )
+      .all();
+    expect(ev.length).toBe(1);
+  });
 
-  redOnMain(
-    "the same attack through the register door's own recovery branch is refused too",
-    async () => {
-      const k0 = await generateKeypair();
-      const mid = await deriveSovereignMotebitId(hex(k0));
-      expect(await registerSelf(mid, "laptop", k0)).toBe(201);
-      const kd = await generateKeypair();
-      const paired = await pairDevice(mid, "laptop", k0, kd);
-      const g = await generateKeypair();
-      expect(
-        (await register(mid, await bearer(mid, paired, kd), { ...(await guardianFields(mid, g)) }))
-          .status,
-      ).toBe(200);
-      const kAtt = await generateKeypair();
-      const succession = await signGuardianRecoverySuccession(
-        g.privateKey,
-        kAtt.privateKey,
-        k0.publicKey,
-        kAtt.publicKey,
-      );
-      const res = await register(mid, await bearer(mid, paired, kd), {
-        public_key: hex(kAtt),
-        succession,
-      });
-      expect(res.status).toBe(403);
-      expect((res.body as { code?: string } | null)?.code).toBe("GUARDIAN_NOT_PROVEN");
-      expect(servedKey(mid)).toBe(hex(k0));
-      expect(successions(mid)).toBe(0);
-    },
-  );
+  it("the same attack through the register door's own recovery branch is refused too", async () => {
+    const k0 = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k0));
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    const kd = await generateKeypair();
+    const paired = await pairDevice(mid, "laptop", k0, kd);
+    const g = await generateKeypair();
+    expect(
+      (await register(mid, await bearer(mid, paired, kd), { ...(await guardianFields(mid, g)) }))
+        .status,
+    ).toBe(200);
+    const kAtt = await generateKeypair();
+    const succession = await signGuardianRecoverySuccession(
+      g.privateKey,
+      kAtt.privateKey,
+      k0.publicKey,
+      kAtt.publicKey,
+    );
+    const res = await register(mid, await bearer(mid, paired, kd), {
+      public_key: hex(kAtt),
+      succession,
+    });
+    expect(res.status).toBe(403);
+    expect((res.body as { code?: string } | null)?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expect(servedKey(mid)).toBe(hex(k0));
+    expect(successions(mid)).toBe(0);
+  });
 
   it("the register door's recovery branch accepts a proven guardian's record", async () => {
     const k0 = await generateKeypair();
@@ -521,62 +504,56 @@ describe("the exact repro: a paired device plants its own guardian and takes the
     expect(servedKey(mid)).toBe(hex(k1));
   });
 
-  redOnMain(
-    "a guardian the owner replaced cannot be revived by a paired device replaying its old attestation",
-    async () => {
-      const k0 = await generateKeypair();
-      const mid = await deriveSovereignMotebitId(hex(k0));
-      expect(await registerSelf(mid, "laptop", k0)).toBe(201);
-      const g1 = await generateKeypair();
-      const g2 = await generateKeypair();
-      const g1Fields = await guardianFields(mid, g1);
-      const owner = await bearer(mid, "laptop", k0);
-      expect((await register(mid, owner, { public_key: hex(k0), ...g1Fields })).status).toBe(200);
-      expect(
-        (await register(mid, owner, { public_key: hex(k0), ...(await guardianFields(mid, g2)) }))
-          .status,
-      ).toBe(200);
-      const kd = await generateKeypair();
-      const paired = await pairDevice(mid, "laptop", k0, kd);
-      expect((await register(mid, await bearer(mid, paired, kd), g1Fields)).status).toBe(200);
-      const kAtt = await generateKeypair();
-      const record = await signGuardianRecoverySuccession(
-        g1.privateKey,
-        kAtt.privateKey,
-        k0.publicKey,
-        kAtt.publicKey,
-      );
-      const res = await rotateKey(mid, await stranger(), record);
-      expect(res.status).toBe(403);
-      expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
-      expect(servedKey(mid)).toBe(hex(k0));
-    },
-  );
+  it("a guardian the owner replaced cannot be revived by a paired device replaying its old attestation", async () => {
+    const k0 = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k0));
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    const g1 = await generateKeypair();
+    const g2 = await generateKeypair();
+    const g1Fields = await guardianFields(mid, g1);
+    const owner = await bearer(mid, "laptop", k0);
+    expect((await register(mid, owner, { public_key: hex(k0), ...g1Fields })).status).toBe(200);
+    expect(
+      (await register(mid, owner, { public_key: hex(k0), ...(await guardianFields(mid, g2)) }))
+        .status,
+    ).toBe(200);
+    const kd = await generateKeypair();
+    const paired = await pairDevice(mid, "laptop", k0, kd);
+    expect((await register(mid, await bearer(mid, paired, kd), g1Fields)).status).toBe(200);
+    const kAtt = await generateKeypair();
+    const record = await signGuardianRecoverySuccession(
+      g1.privateKey,
+      kAtt.privateKey,
+      k0.publicKey,
+      kAtt.publicKey,
+    );
+    const res = await rotateKey(mid, await stranger(), record);
+    expect(res.status).toBe(403);
+    expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expect(servedKey(mid)).toBe(hex(k0));
+  });
 
-  redOnMain(
-    "re-setting the guardian with the identity key restores recovery (the documented fix)",
-    async () => {
-      const k0 = await generateKeypair();
-      const mid = await deriveSovereignMotebitId(hex(k0));
-      expect(await registerSelf(mid, "laptop", k0)).toBe(201);
-      const kd = await generateKeypair();
-      const paired = await pairDevice(mid, "laptop", k0, kd);
-      const g = await generateKeypair();
-      const fields = await guardianFields(mid, g);
-      expect((await register(mid, await bearer(mid, paired, kd), fields)).status).toBe(200);
-      const k1 = await generateKeypair();
-      const rec = async () =>
-        signGuardianRecoverySuccession(g.privateKey, k1.privateKey, k0.publicKey, k1.publicKey);
-      expect((await rotateKey(mid, await stranger(), await rec())).status).toBe(403);
-      // The owner re-sets the same guardian under the identity key.
-      expect(
-        (await register(mid, await bearer(mid, "laptop", k0), { public_key: hex(k0), ...fields }))
-          .status,
-      ).toBe(200);
-      expect((await rotateKey(mid, await stranger(), await rec())).status).toBe(200);
-      expect(servedKey(mid)).toBe(hex(k1));
-    },
-  );
+  it("re-setting the guardian with the identity key restores recovery (the documented fix)", async () => {
+    const k0 = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k0));
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    const kd = await generateKeypair();
+    const paired = await pairDevice(mid, "laptop", k0, kd);
+    const g = await generateKeypair();
+    const fields = await guardianFields(mid, g);
+    expect((await register(mid, await bearer(mid, paired, kd), fields)).status).toBe(200);
+    const k1 = await generateKeypair();
+    const rec = async () =>
+      signGuardianRecoverySuccession(g.privateKey, k1.privateKey, k0.publicKey, k1.publicKey);
+    expect((await rotateKey(mid, await stranger(), await rec())).status).toBe(403);
+    // The owner re-sets the same guardian under the identity key.
+    expect(
+      (await register(mid, await bearer(mid, "laptop", k0), { public_key: hex(k0), ...fields }))
+        .status,
+    ).toBe(200);
+    expect((await rotateKey(mid, await stranger(), await rec())).status).toBe(200);
+    expect(servedKey(mid)).toBe(hex(k1));
+  });
 
   it("a proven guardian survives an ordinary rotation and still recovers from the new key", async () => {
     const k0 = await generateKeypair();

@@ -479,8 +479,10 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
   }
 
   it("lands when a third party carries a record the registered guardian signed", async () => {
-    const owner = crypto.randomUUID();
+    // A guardian authorizes a recovery only when the identity's current key
+    // set it (GUARDIAN_NOT_PROVEN otherwise): a sovereign id holds its key.
     const ok = await generateKeypair();
+    const owner = await deriveSovereignMotebitId(hex(ok));
     const guardian = await generateKeypair();
     const next = await generateKeypair();
     expect(await registerSelf(owner, `${owner}-laptop`, ok)).toBe(201);
@@ -501,8 +503,8 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
     // Under the empty key, the old-key match used to be skipped, so the
     // record landed under B and moved B to a key A's owner controls.
     const guardian = await generateKeypair();
-    const a = crypto.randomUUID();
     const ak = await generateKeypair();
+    const a = await deriveSovereignMotebitId(hex(ak));
     const aNext = await generateKeypair();
     expect(await registerSelf(a, `${a}-laptop`, ak)).toBe(201);
     expect(await registerAgent(a, ak, guardian)).toBe(200);
@@ -515,7 +517,10 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
       aNext.publicKey,
     );
     const s = await stranger();
-    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, b, genuine)).toBe(400);
+    // B's guardian was set by the operator's master token, which proves no
+    // key of B's: the recovery is refused for that before departure is read
+    // (403 GUARDIAN_NOT_PROVEN); either refusal keeps B's history empty.
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, b, genuine)).toBe(403);
     expect(successions(b)).toBe(0);
     expect(registryKey(b)).toBe("");
     // A's own recovery is untouched by the refusal at B.

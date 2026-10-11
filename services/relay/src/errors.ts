@@ -53,6 +53,26 @@ export class AuthorizationError extends RelayError {
   }
 }
 
+/**
+ * A guardian recovery under a guardian set WITHOUT provenance — by a request
+ * not proven with the identity's current key (a paired device's own token,
+ * the operator's master token, or a record from before provenance existed).
+ * Such a guardian authorizes no key change (identity-authority-writers.md I1,
+ * §3.2): a paired device could otherwise plant a guardian it controls and
+ * recover the identity to a key of its choosing.
+ */
+export class GuardianNotProvenError extends RelayError {
+  constructor(options?: ErrorOptions) {
+    super(
+      "GUARDIAN_NOT_PROVEN",
+      "Guardian recovery refused: the guardian on file was not set by a request proven with this identity's current key. To enable recovery, re-set the guardian with the identity key — POST /api/v1/agents/register with guardian_public_key and guardian_attestation, authenticated by a device holding the identity key — then retry.",
+      403,
+      options,
+    );
+    this.name = "GuardianNotProvenError";
+  }
+}
+
 // ── Economic boundary ───────────────────────────────────────────────────────
 
 /**
