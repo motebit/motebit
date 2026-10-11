@@ -316,8 +316,9 @@ async function phase2() {
   // The peering handshake is a 4-step mutual authentication:
   //
   //   1. Relay A → Relay B: propose (send A's identity + nonce)
-  //   2. Relay B responds with B's nonce + challenge (B signs A's relay_id:nonce)
-  //   3. Relay A → Relay B: confirm (A signs A's relay_id:B_nonce as challenge_response)
+  //   2. Relay B responds with B's nonce + a v2 `peer-challenge` (§3.5)
+  //   3. Relay A → Relay B: confirm (a v2 `peer-confirm` to B over B's nonce
+  //      and A's endpoint, relay-federation@1.5 §3.1)
   //   4. Relay B verifies → state becomes 'active'
   //
   // The complication: we don't have Relay A's private key. The relay signs internally.
@@ -325,8 +326,9 @@ async function phase2() {
   //
   // But wait — the propose endpoint is unauthenticated (any relay can propose).
   // The propose sends the proposer's public_key for the receiver to store.
-  // The confirm requires the proposer to sign `proposer_relay_id:receiver_nonce`
-  // with the proposer's private key.
+  // The confirm requires the proposer to sign a v2 `peer-confirm` to the
+  // receiver over the receiver's nonce and its own endpoint, with the
+  // proposer's private key.
   //
   // Since we can't sign with Relay A's private key from outside, we have two options:
   //   a) Use admin API if it exists (it doesn't)
@@ -392,22 +394,20 @@ async function phase2() {
   test("Peering confirmation completes handshake");
   if (peerNonce) {
     try {
-      // Sign: ${relay_id}:${nonce}:${FEDERATION_SUITE}. The suite suffix
-      // binds the handshake to a specific cryptosuite per
-      // services/relay/src/federation.ts (FEDERATION_SUITE constant on
-      // line 27). The script was written before the suite-binding
-      // landed during the 2026-04-13 cryptosuite-agility pass; updating
-      // here closes that drift.
-      const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";
-      const confirmMsg = Buffer.from(`${syntheticRelayId}:${peerNonce}:${FEDERATION_SUITE}`);
-      const challengeResponse = signBytes(confirmMsg, syntheticPrivKey);
+      // relay-federation@1.5 §3.1: a v2 `peer-confirm` naming Relay B (the
+      // relay that issued the nonce) as recipient, over that nonce and the
+      // endpoint the propose named — never a bare nonce.
+      const message = signFederationV2({
+        kind: "peer-confirm",
+        sender: syntheticRelayId,
+        recipient: identityB.relay_motebit_id,
+        body: { nonce: peerNonce, endpoint_url: "https://synthetic-test-peer.invalid" },
+        privKeyObj: syntheticPrivKey,
+      });
 
       const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/confirm`, {
         method: "POST",
-        body: JSON.stringify({
-          relay_id: syntheticRelayId,
-          challenge_response: toHex(challengeResponse),
-        }),
+        body: JSON.stringify({ message, nonce: peerNonce }),
       });
 
       if (!ok) {

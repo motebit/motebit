@@ -35,7 +35,12 @@ import {
   jsonAuthWithIdempotency,
   createTestRelay,
 } from "./test-helpers.js";
-import { heartbeatRequest, operatorConfirm, removeRequest } from "./federation-messages.js";
+import {
+  heartbeatRequest,
+  operatorConfirm,
+  removeRequest,
+  signedConfirm,
+} from "./federation-messages.js";
 import { reconcileTreasury } from "@motebit/treasury-reconciliation";
 import { startP2pVerifierLoop } from "../p2p-verifier.js";
 import type { TreasuryReconciliationStore } from "@motebit/treasury-reconciliation";
@@ -158,20 +163,16 @@ async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<v
   const confirmB = await relayB.app.request("/federation/v1/peer/confirm", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: idA.relay_motebit_id,
-      challenge_response: await operatorConfirm(relayA, N_B, AUTH_HEADER), // A signs "A.id:N_B"
-    }),
+    // A's operator mints a v2 peer-confirm to B over N_B, for A's endpoint.
+    body: JSON.stringify(await operatorConfirm(relayA, N_B, AUTH_HEADER, idB.relay_motebit_id)),
   });
   expect(confirmB.status).toBe(200);
 
   const confirmA = await relayA.app.request("/federation/v1/peer/confirm", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: idB.relay_motebit_id,
-      challenge_response: await operatorConfirm(relayB, N_A, AUTH_HEADER), // B signs "B.id:N_A"
-    }),
+    // B's operator mints a v2 peer-confirm to A over N_A, for B's endpoint.
+    body: JSON.stringify(await operatorConfirm(relayB, N_A, AUTH_HEADER, idA.relay_motebit_id)),
   });
   expect(confirmA.status).toBe(200);
 }
@@ -403,7 +404,7 @@ describe("Federation E2E", () => {
 
       // Propose first
       const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-      await relayB.app.request("/federation/v1/peer/propose", {
+      const proposed = await relayB.app.request("/federation/v1/peer/propose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -413,16 +414,22 @@ describe("Federation E2E", () => {
           nonce,
         }),
       });
+      const issued = ((await proposed.json()) as { nonce: string }).nonce;
 
-      // Confirm with garbage signature
-      const badSig = bytesToHex(crypto.getRandomValues(new Uint8Array(64)));
+      // A v2 confirm for the issued nonce, signed by a key that is not A's.
+      const stranger = await generateKeypair();
       const confirmRes = await relayB.app.request("/federation/v1/peer/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          relay_id: idA.relayMotebitId,
-          challenge_response: badSig,
-        }),
+        body: JSON.stringify(
+          await signedConfirm({
+            sender: idA.relayMotebitId,
+            recipient: relayB.relayIdentity.relayMotebitId,
+            nonce: issued,
+            endpointUrl: RELAY_A_URL,
+            privateKey: stranger.privateKey,
+          }),
+        ),
       });
       expect(confirmRes.status).toBe(403);
 

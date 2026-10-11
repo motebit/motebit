@@ -21,13 +21,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { createTestRelay, createAgent, JSON_AUTH, AUTH_HEADER } from "./test-helpers.js";
-import { heartbeatRequest } from "./federation-messages.js";
+import { heartbeatRequest, signedConfirm } from "./federation-messages.js";
 // eslint-disable-next-line no-restricted-imports -- the attacker needs raw key material
 import { generateKeypair, sign, bytesToHex } from "@motebit/encryption";
 
 const HOME_URL = "http://relay-home.test:3000";
 const ATTACKER_URL = "http://attacker-relay.test:4000";
-const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";
 
 const rand = (): string => Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
 
@@ -72,17 +71,24 @@ async function becomePeer(relay: SyncRelay): Promise<Peer> {
     nonce: rand(),
   });
   expect(propose.status).toBe(200);
-  const ourNonce = (propose.body as { nonce: string }).nonce;
+  const { nonce: ourNonce, relay_id: recipient } = propose.body as {
+    nonce: string;
+    relay_id: string;
+  };
 
   // The confirm proves control of the key we just supplied — and nothing else.
-  const challenge = await sign(
-    new TextEncoder().encode(`${peer.relayId}:${ourNonce}:${FEDERATION_SUITE}`),
-    peer.privateKey,
+  const confirm = await fed(
+    relay,
+    "POST",
+    "/federation/v1/peer/confirm",
+    await signedConfirm({
+      sender: peer.relayId,
+      recipient,
+      nonce: ourNonce,
+      endpointUrl: ATTACKER_URL,
+      privateKey: peer.privateKey,
+    }),
   );
-  const confirm = await fed(relay, "POST", "/federation/v1/peer/confirm", {
-    relay_id: peer.relayId,
-    challenge_response: bytesToHex(challenge),
-  });
   expect(confirm.status).toBe(200);
   expect((confirm.body as { status: string }).status).toBe("active");
 

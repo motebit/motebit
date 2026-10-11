@@ -119,7 +119,7 @@ const vc = await issueReputationCredential(
 
 ### Federation Signed Messages (`relay-federation@1.5` §3.5)
 
-Relay-to-relay messages domain-separated by role, signer, intended verifier and freshness. Signed bytes are `"motebit-fed/v2\0" ‖ kind ‖ "\0" ‖ JCS(envelope)` under `motebit-jcs-ed25519-hex-v1` (`FEDERATION_MESSAGE_DOMAIN`, `FEDERATION_MESSAGE_SUITE`); kinds and their freshness windows live in `FEDERATION_MESSAGE_KINDS` (`heartbeat`, `heartbeat-ack`, `peer-remove`).
+Relay-to-relay messages domain-separated by role, signer, intended verifier and freshness. Signed bytes are `"motebit-fed/v2\0" ‖ kind ‖ "\0" ‖ JCS(envelope)` under `motebit-jcs-ed25519-hex-v1` (`FEDERATION_MESSAGE_DOMAIN`, `FEDERATION_MESSAGE_SUITE`); kinds and their freshness windows live in `FEDERATION_MESSAGE_KINDS` (`heartbeat`, `heartbeat-ack`, `peer-remove`, `peer-challenge`, `peer-confirm`).
 
 ```ts
 import { signFederationMessage, verifyFederationMessage } from "@motebit/crypto";

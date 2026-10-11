@@ -29,7 +29,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { bytesToHex, generateKeypair, sign } from "@motebit/encryption";
+import { bytesToHex, generateKeypair } from "@motebit/encryption";
 
 import type { SyncRelay } from "../index.js";
 import {
@@ -49,6 +49,8 @@ import {
   ackingFetch,
   heartbeatRequest,
   operatorConfirm,
+  signedConfirm,
+  type ConfirmRequest,
   removeRequest,
 } from "./federation-messages.js";
 import {
@@ -60,7 +62,6 @@ import {
 const URL_A = "http://relay-a.authority.test:3000";
 const URL_B = "http://relay-b.authority.test:3001";
 const ATTACKER_URL = "http://attacker.authority.test:3666";
-const SUITE = "motebit-concat-ed25519-hex-v1";
 const COOLDOWN_STEP_MS = 6 * 60 * 1000; // one removed-peer cooldown (5 min) + margin
 
 const rand = (): string => bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
@@ -143,10 +144,18 @@ function propose(publicKeyHex: string, endpoint: string): Promise<Response> {
   });
 }
 
-function confirm(challengeResponse: string): Promise<Response> {
-  return post("/federation/v1/peer/confirm", {
-    relay_id: idA.relayMotebitId,
-    challenge_response: challengeResponse,
+function confirm(req: ConfirmRequest): Promise<Response> {
+  return post("/federation/v1/peer/confirm", req);
+}
+
+/** A v2 confirm naming A as sender, to B, for `endpoint`, signed by the attacker. */
+function attackerConfirm(nonce: string, endpoint = ATTACKER_URL): Promise<ConfirmRequest> {
+  return signedConfirm({
+    sender: idA.relayMotebitId,
+    recipient: idB.relayMotebitId,
+    nonce,
+    endpointUrl: endpoint,
+    privateKey: attacker.privateKey,
   });
 }
 
@@ -205,11 +214,7 @@ async function runAction(action: Action, s: CellState): Promise<number | null> {
     }
     case "AC_GOOD": {
       const nonce = s.attackerNonce ?? ((rowOfA()?.nonce as string | null) || rand());
-      const sig = await sign(
-        new TextEncoder().encode(`${idA.relayMotebitId}:${nonce}:${SUITE}`),
-        attacker.privateKey,
-      );
-      const res = await confirm(bytesToHex(sig));
+      const res = await confirm(await attackerConfirm(nonce));
       if (
         res.status === 200 &&
         rowOfA()?.public_key === attacker.publicKeyHex &&
@@ -218,8 +223,12 @@ async function runAction(action: Action, s: CellState): Promise<number | null> {
         s.attackerOwned = true;
       return res.status;
     }
-    case "AC_BAD":
-      return (await confirm(rand() + rand())).status;
+    case "AC_BAD": {
+      // A well-formed v2 confirm whose signature is garbage.
+      const req = await attackerConfirm(s.attackerNonce ?? rand());
+      return (await confirm({ ...req, message: { ...req.message, signature: rand() + rand() } }))
+        .status;
+    }
     case "LP": {
       const res = await propose(idA.publicKeyHex, URL_A);
       if (res.status === 200) s.legitNonce = ((await res.json()) as { nonce: string }).nonce;
@@ -227,7 +236,9 @@ async function runAction(action: Action, s: CellState): Promise<number | null> {
     }
     case "LC": {
       if (s.legitNonce === null) return null;
-      const res = await confirm(await operatorConfirm(a, s.legitNonce, AUTH_HEADER));
+      const res = await confirm(
+        await operatorConfirm(a, s.legitNonce, AUTH_HEADER, idB.relayMotebitId),
+      );
       if (res.status === 200) {
         s.legitNonce = null;
         if (rowOfA()?.public_key === idA.publicKeyHex) s.confirmedByLegit = true;

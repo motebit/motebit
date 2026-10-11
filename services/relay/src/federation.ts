@@ -43,13 +43,9 @@ import {
   WitnessSolicitationRequestSchema,
 } from "@motebit/wire-schemas";
 import { persistWitnessOmissionDispute, resolveHorizonCertBySignature } from "./horizon.js";
-// Federation handshake and heartbeat messages sign under the
-// concat-ed25519-hex suite. The primitive call lives in
-// @motebit/crypto's suite-dispatch; this service reaches through
-// @motebit/encryption's sign/verify helpers (which delegate to the
-// dispatcher). The `suite` literal below is the stable contract between
-// services and the registry in @motebit/protocol.
-const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
+// Federation handshake, heartbeat and removal messages are v2 signed
+// messages (relay-federation@1.5 §3.5) — one producer and one verifier in
+// @motebit/crypto (`signFederationMessage` / `verifyFederationMessage`).
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 /**
@@ -971,6 +967,32 @@ function heartbeatBody(agentCount: number, revocations: RevocationEvent[] | unde
 
 /** The body a v2 `peer-remove` commits to. */
 const PEER_REMOVE_BODY = { action: "remove" } as const;
+
+/**
+ * The body a v2 `peer-challenge` (§3.1 step 2) commits to: the proposer's
+ * nonce it answers, the nonce this relay issued for the confirm, and the
+ * endpoint this relay recorded for the proposer.
+ */
+function peerChallengeBody(requestNonce: string, nonce: string, proposerEndpointUrl: string) {
+  return { request_nonce: requestNonce, nonce, proposer_endpoint_url: proposerEndpointUrl };
+}
+
+/**
+ * The body a v2 `peer-confirm` (§3.1 step 3) commits to: the nonce the
+ * recipient issued, and the sender's endpoint being confirmed.
+ */
+function peerConfirmBody(nonce: string, endpointUrl: string) {
+  return { nonce, endpoint_url: endpointUrl };
+}
+
+/** An endpoint in comparable form: parsed, without a trailing slash; null when not a URL. */
+function endpointKey(url: string): string | null {
+  try {
+    return new URL(url).href.replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
 
 // === Peer Row Authority ===
 //
@@ -2145,11 +2167,23 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     crypto.getRandomValues(ourNonceBytes);
     const ourNonce = bytesToHex(ourNonceBytes);
 
-    // Sign relay_id + nonce + suite together so the challenge is bound
-    // to this specific peer and to the cryptosuite. Prevents replay and
-    // cross-suite confusion.
-    const challengeMsg = new TextEncoder().encode(`${relay_id}:${nonce}:${FEDERATION_SUITE}`);
-    const challengeSig = await sign(challengeMsg, relayIdentity.privateKey);
+    // Step 2 as a v2 `peer-challenge` (§3.1, §3.5): from this relay to the
+    // ONE proposer, answering its nonce, naming the nonce it must confirm and
+    // the endpoint recorded for it — so the proposer's tooling can see, before
+    // it mints anything, that the nonce came from this relay's key for its own
+    // endpoint. Proves this relay holds the key it advertises.
+    let challenge: Awaited<ReturnType<typeof signFederationMessage>>;
+    try {
+      challenge = await signFederationMessage({
+        kind: "peer-challenge",
+        sender: relayIdentity.relayMotebitId,
+        recipient: relay_id,
+        body: peerChallengeBody(nonce, ourNonce, endpoint_url),
+        privateKey: relayIdentity.privateKey,
+      });
+    } catch {
+      throw new HTTPException(400, { message: "malformed propose: relay_id, nonce, endpoint_url" });
+    }
 
     if (existing?.peered_at != null) {
       // A confirmed peer re-handshakes beside its row, never in it (§3.1,
@@ -2212,20 +2246,43 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       endpoint_url: federationConfig?.endpointUrl ?? "self",
       display_name: federationConfig?.displayName ?? null,
       nonce: ourNonce,
-      challenge: bytesToHex(challengeSig),
+      challenge,
       spec_version: RELAY_SPEC_VERSION,
     });
   });
 
   /** @spec motebit/relay-federation@1.5 */
   app.post("/federation/v1/peer/confirm", async (c) => {
-    const body = await c.req.json<{ relay_id?: string; challenge_response?: string }>();
-    const { relay_id, challenge_response } = body;
-    if (!relay_id || !challenge_response) {
-      throw new HTTPException(400, { message: "relay_id and challenge_response are required" });
-    }
-
+    const body = await c.req.json<{
+      message?: unknown;
+      nonce?: unknown;
+      relay_id?: unknown;
+      challenge_response?: unknown;
+    }>();
     checkFederationEnabled();
+    // v1 (`{relay_id}:{nonce}:{suite}`, naming no recipient and no endpoint)
+    // is refused by name before any lookup, counter or row (D4: a confirm
+    // minted for one relay was accepted at another, at the endpoint of
+    // whoever obtained it — cold review F1). It changes nothing.
+    if (body.message === undefined) {
+      throw new HTTPException(400, {
+        message:
+          "federation peer confirm v1 ({relay_id}:{nonce}:{suite}) is refused (relay-federation@1.5 §3.1): send { message, nonce } where message is a v2 `peer-confirm` signed message (§3.5) naming this relay as recipient, the nonce this relay issued and the endpoint being confirmed — minted by the confirming relay's operator (POST /api/v1/admin/federation/peer-confirm-signature)",
+      });
+    }
+    const parsed = parseFederationMessage(body.message);
+    if (parsed === null)
+      throw new HTTPException(400, { message: "malformed v2 peer-confirm message (§3.5)" });
+    refuseBeforeLookup(parsed.envelope, "peer-confirm", relayIdentity.relayMotebitId, "Confirm");
+    const relay_id = parsed.envelope.sender;
+    if (body.relay_id !== undefined && body.relay_id !== relay_id)
+      throw new HTTPException(400, { message: "relay_id is not the confirm's sender" });
+    if (typeof body.nonce !== "string" || body.nonce === "")
+      throw new HTTPException(400, {
+        message: "nonce is required: the nonce this relay issued in its propose response",
+      });
+    const answering = body.nonce;
+
     checkPeerPolicy(relay_id);
 
     const peer = readPeerRow(db, relay_id);
@@ -2233,70 +2290,95 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     // As at propose: a confirmed peer's confirm spends its per-peer slot only
     // once it verifies, so no caller can rate-limit the real peer out (§3.1).
     if (!confirmed) checkPeerLimit(relay_id);
-    // The nonces a confirm may answer: a never-confirmed row's own handshake
-    // (first-come); a confirmed peer's pending re-handshakes, and a nonce a
-    // pre-1.5 propose left on its row.
-    const candidates: Array<{ nonce: string; rehandshake: Rehandshake | null }> = [];
+    // The handshakes a confirm may answer, each with the endpoint its propose
+    // named: a never-confirmed row's own handshake (first-come); a confirmed
+    // peer's pending re-handshakes, and a nonce a pre-1.5 propose left on its
+    // row.
+    const candidates: Array<{
+      nonce: string;
+      endpoint_url: string;
+      rehandshake: Rehandshake | null;
+    }> = [];
     if (peer?.state === "pending" && peer.nonce)
-      candidates.push({ nonce: peer.nonce, rehandshake: null });
+      candidates.push({ nonce: peer.nonce, endpoint_url: peer.endpoint_url, rehandshake: null });
     if (confirmed)
       for (const h of liveRehandshakes(relay_id))
-        candidates.push({ nonce: h.nonce, rehandshake: h });
+        candidates.push({ nonce: h.nonce, endpoint_url: h.endpoint_url, rehandshake: h });
     if (!peer || candidates.length === 0)
-      throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
+      throw new HTTPException(403, {
+        message: "Confirm refused: no pending handshake for this relay_id",
+      });
 
-    // Verify: the peer signed their own relay_id + our nonce + suite
-    // (bound to this specific relationship and cryptosuite), under the key
-    // the row holds.
-    let answered: (typeof candidates)[number] | undefined;
-    for (const cand of candidates) {
-      const confirmMsg = new TextEncoder().encode(`${relay_id}:${cand.nonce}:${FEDERATION_SUITE}`);
-      if (await verify(hexToBytes(challenge_response), confirmMsg, hexToBytes(peer.public_key))) {
-        answered = cand;
-        break;
-      }
-    }
-    if (!answered) {
+    // Verify under the key the row holds: the sender confirms THIS relay's
+    // nonce for the endpoint THAT propose named, addressed to THIS relay.
+    const answered = candidates.find((cand) => cand.nonce === answering);
+    const verdict = answered
+      ? await verifyFederationMessage(body.message, {
+          kind: "peer-confirm",
+          self: relayIdentity.relayMotebitId,
+          expectedSender: relay_id,
+          senderPublicKeyHex: peer.public_key,
+          body: peerConfirmBody(answered.nonce, answered.endpoint_url),
+        })
+      : null;
+    if (!answered || !verdict?.ok) {
       // A never-confirmed row held only a proposer's claim and is dropped.
       // A confirmed peer's row is not written: the failed confirm proves
       // nothing, and parking or erasing the row would hand any caller a
       // lockout or a way to clear the known key (§3.1).
       if (!confirmed) writePeerRow(db, peer, { op: "delete" }, "unauthenticated");
-      throw new HTTPException(403, { message: "Challenge response verification failed" });
+      if (!answered)
+        throw new HTTPException(403, {
+          message: "Confirm refused: no pending handshake for that nonce",
+        });
+      const reason = verdict && !verdict.ok ? verdict.reason : "bad_signature";
+      throw new HTTPException(federationRefusalStatus(reason), {
+        message: `Confirm refused: ${reason}`,
+      });
     }
+    const env = verdict.envelope;
+    if (federationNonceSeen(db, relay_id, env.nonce))
+      throw new HTTPException(409, { message: "Confirm refused: replayed nonce" });
     if (confirmed) checkPeerLimit(relay_id);
 
     const now = Date.now();
     const h = answered.rehandshake;
-    const written = writePeerRow(
-      db,
-      peer,
-      {
-        op: "update",
-        row: {
-          ...peer,
-          ...(h
-            ? {
-                endpoint_url: h.endpoint_url,
-                display_name: h.display_name ?? peer.display_name,
-                peer_protocol_version: h.peer_protocol_version,
-              }
-            : {}),
-          state: "active",
-          peered_at: now,
-          last_heartbeat_at: now,
-          missed_heartbeats: 0,
-          nonce: null,
-          handshake_protocol_version: RELAY_SPEC_VERSION,
+    db.transaction(() => {
+      if (!consumeFederationNonce(db, relay_id, env.nonce, env.ts))
+        throw new HTTPException(409, { message: "Confirm refused: replayed nonce" });
+      const written = writePeerRow(
+        db,
+        peer,
+        {
+          op: "update",
+          row: {
+            ...peer,
+            ...(h
+              ? {
+                  endpoint_url: h.endpoint_url,
+                  display_name: h.display_name ?? peer.display_name,
+                  peer_protocol_version: h.peer_protocol_version,
+                }
+              : {}),
+            state: "active",
+            peered_at: now,
+            last_heartbeat_at: now,
+            missed_heartbeats: 0,
+            nonce: null,
+            handshake_protocol_version: RELAY_SPEC_VERSION,
+          },
         },
-      },
-      "peer-key",
-    );
-    if (!written) {
-      throw new HTTPException(409, {
-        message: "peer row changed during confirm (relay-federation@1.5 §3.1); retry the handshake",
-      });
-    }
+        "peer-key",
+      );
+      // Thrown inside the transaction, so the nonce is not spent on a write
+      // that did not land.
+      if (!written) {
+        throw new HTTPException(409, {
+          message:
+            "peer row changed during confirm (relay-federation@1.5 §3.1); retry the handshake",
+        });
+      }
+    });
     rehandshakes.delete(relay_id);
 
     logger.info("federation.peer.active", { peerId: relay_id });
@@ -2873,26 +2955,65 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   });
 
   // Admin signing for the peering handshake's step 3 — consumed by
-  // `motebit federation peer` (apps/cli). The confirm signature
-  // `{own_id}:{nonce}:{suite}` (§3.1) used to be served to ANY caller by a
-  // self-propose; it is now minted only on the operator's authority. The
-  // construction itself is unchanged until propose/confirm move to §3.5
-  // kinds (docs/design/identity-authority-writers.md Inc 6).
+  // `motebit federation peer` (apps/cli). Mints a v2 `peer-confirm`
+  // (relay-federation@1.5 §3.1, §3.5) from this relay to the ONE relay that
+  // issued `nonce` (`recipient`, the counterparty the operator proposed to),
+  // confirming THIS relay's own federation endpoint. It never signs a bare
+  // nonce: a confirm minted for one counterparty is refused at every other
+  // relay, and confirms no endpoint but this relay's (cold review F1 — the
+  // 1.4 bytes let a counterparty that returned another relay's nonce carry
+  // this relay's confirm there, at its own endpoint).
   /** @internal */
   app.post("/api/v1/admin/federation/peer-confirm-signature", async (c) => {
-    const body: { nonce?: unknown } = await c.req.json<{ nonce?: unknown }>().catch(() => ({}));
+    const body: { nonce?: unknown; recipient?: unknown; endpoint_url?: unknown } = await c.req
+      .json<{ nonce?: unknown; recipient?: unknown; endpoint_url?: unknown }>()
+      .catch(() => ({}));
     if (typeof body.nonce !== "string" || !/^[0-9a-f]{64}$/i.test(body.nonce)) {
       throw new HTTPException(400, {
         message: "nonce is required: the 32-byte hex nonce the peer's propose response returned",
       });
     }
-    const sig = await sign(
-      new TextEncoder().encode(`${relayIdentity.relayMotebitId}:${body.nonce}:${FEDERATION_SUITE}`),
-      relayIdentity.privateKey,
-    );
+    if (
+      typeof body.recipient !== "string" ||
+      body.recipient === "" ||
+      body.recipient === relayIdentity.relayMotebitId
+    ) {
+      throw new HTTPException(400, {
+        message:
+          "recipient is required: the relay_motebit_id of the ONE relay this relay proposed to — the relay that issued the nonce (relay-federation@1.5 §3.1)",
+      });
+    }
+    const own = federationConfig?.endpointUrl;
+    const ownKey = own === undefined ? null : endpointKey(own);
+    if (own === undefined || ownKey === null) {
+      throw new HTTPException(400, {
+        message:
+          "this relay has no federation endpoint configured (federation.endpointUrl); a confirm names the endpoint it confirms",
+      });
+    }
+    // The endpoint signed is the one the propose named, in its own spelling,
+    // and it must be this relay's.
+    let endpoint = own;
+    if (body.endpoint_url !== undefined) {
+      if (typeof body.endpoint_url !== "string" || endpointKey(body.endpoint_url) !== ownKey) {
+        throw new HTTPException(400, {
+          message: `endpoint_url is not this relay's federation endpoint (${own}): a confirm names only this relay's own endpoint — propose with it`,
+        });
+      }
+      endpoint = body.endpoint_url;
+    }
+    const message = await signFederationMessage({
+      kind: "peer-confirm",
+      sender: relayIdentity.relayMotebitId,
+      recipient: body.recipient,
+      body: peerConfirmBody(body.nonce, endpoint),
+      privateKey: relayIdentity.privateKey,
+    });
     return c.json({
       relay_id: relayIdentity.relayMotebitId,
-      challenge_response: bytesToHex(sig),
+      nonce: body.nonce,
+      endpoint_url: endpoint,
+      message,
     });
   });
 

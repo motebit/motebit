@@ -27,7 +27,7 @@ import { bytesToHex, generateKeypair, hexToBytes, sign, verify } from "@motebit/
 import type { SyncRelay } from "../index.js";
 import { initRelayIdentity, type RelayIdentity } from "../federation.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
-import { operatorConfirm } from "./federation-messages.js";
+import { operatorConfirm, signedConfirm } from "./federation-messages.js";
 
 const URLS = {
   a: "http://relay-a.pin.test:3000",
@@ -36,7 +36,6 @@ const URLS = {
 type Name = keyof typeof URLS;
 const ATTACKER_URL = "http://attacker.pin.test:3666";
 
-const SUITE = "motebit-concat-ed25519-hex-v1";
 const rand = (): string => bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 
 let relays: Record<Name, SyncRelay>;
@@ -96,11 +95,11 @@ async function peer(x: Name, y: Name): Promise<void> {
   ).nonce;
   const atY = await post(y, "/federation/v1/peer/confirm", {
     relay_id: ids[x].relayMotebitId,
-    challenge_response: await operatorConfirm(relays[x], nonceAtY, AUTH_HEADER),
+    ...(await operatorConfirm(relays[x], nonceAtY, AUTH_HEADER, ids[y].relayMotebitId)),
   });
   const atX = await post(x, "/federation/v1/peer/confirm", {
     relay_id: ids[y].relayMotebitId,
-    challenge_response: await operatorConfirm(relays[y], nonceAtX, AUTH_HEADER),
+    ...(await operatorConfirm(relays[y], nonceAtX, AUTH_HEADER, ids[x].relayMotebitId)),
   });
   expect([atY.status, atX.status]).toEqual([200, 200]);
 }
@@ -192,7 +191,7 @@ describe("a propose naming the same key", () => {
       expect(rowOfA()).toEqual(before);
       const confirm = await post("b", "/federation/v1/peer/confirm", {
         relay_id: ids.a.relayMotebitId,
-        challenge_response: await operatorConfirm(relays.a, nonce, AUTH_HEADER),
+        ...(await operatorConfirm(relays.a, nonce, AUTH_HEADER, ids.b.relayMotebitId)),
       });
       expect(confirm.status).toBe(200);
       expect(rowOfA()?.state).toBe("active");
@@ -211,15 +210,15 @@ describe("two-relay takeover attempt on a suspended peer", () => {
     // Even holding whatever nonce the row carries, a confirm under the
     // attacker's key cannot land: there is no pending row bound to its key.
     const nonce = (rowOfA()?.nonce as string | null) ?? rand();
-    const forged = await sign(
-      new TextEncoder().encode(`${ids.a.relayMotebitId}:${nonce}:${SUITE}`),
-      attacker.privateKey,
-    );
-    const confirm = await post("b", "/federation/v1/peer/confirm", {
-      relay_id: ids.a.relayMotebitId,
-      challenge_response: bytesToHex(forged),
+    const forged = await signedConfirm({
+      sender: ids.a.relayMotebitId,
+      recipient: ids.b.relayMotebitId,
+      nonce,
+      endpointUrl: ATTACKER_URL,
+      privateKey: attacker.privateKey,
     });
-    expect(confirm.status).toBe(404);
+    const confirm = await post("b", "/federation/v1/peer/confirm", forged);
+    expect(confirm.status).toBe(403);
 
     expect(rowOfA()).toEqual(before);
     await storedKeyStillVerifiesA();
@@ -233,14 +232,14 @@ describe("two-relay takeover attempt on a suspended peer", () => {
     expect(res.status).toBe(200);
     const { nonce } = (await res.json()) as { nonce: string };
     // The attacker cannot sign under A's key, so its confirm fails.
-    const forged = await sign(
-      new TextEncoder().encode(`${ids.a.relayMotebitId}:${nonce}:${SUITE}`),
-      attacker.privateKey,
-    );
-    const confirm = await post("b", "/federation/v1/peer/confirm", {
-      relay_id: ids.a.relayMotebitId,
-      challenge_response: bytesToHex(forged),
+    const forged = await signedConfirm({
+      sender: ids.a.relayMotebitId,
+      recipient: ids.b.relayMotebitId,
+      nonce,
+      endpointUrl: ATTACKER_URL,
+      privateKey: attacker.privateKey,
     });
+    const confirm = await post("b", "/federation/v1/peer/confirm", forged);
     expect(confirm.status).toBe(403);
 
     // The known key survives the failed confirm, so a follow-up propose

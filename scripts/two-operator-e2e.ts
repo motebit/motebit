@@ -91,15 +91,24 @@ async function j(method: string, base: number, path: string, body?: unknown) {
   return { status: r.status, body: text ? JSON.parse(text) : null };
 }
 
-/** A relay's step-3 confirm over `nonce`, minted on ITS operator's token only. */
-async function operatorConfirm(op: typeof A, nonce: string): Promise<{ challenge: string }> {
+/**
+ * A relay's step-3 confirm, minted on ITS operator's token only: a v2
+ * `peer-confirm` to `recipient` (the relay that issued `nonce`) for the
+ * relay's own endpoint (relay-federation@1.5 §3.1). Returns the confirm body.
+ */
+async function operatorConfirm(
+  op: typeof A,
+  nonce: string,
+  recipient: string,
+): Promise<{ message: unknown; nonce: string }> {
   const r = await fetch(`${url(op.port)}/api/v1/admin/federation/peer-confirm-signature`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${op.token}` },
-    body: JSON.stringify({ nonce }),
+    body: JSON.stringify({ nonce, recipient, endpoint_url: url(op.port) }),
   });
   if (!r.ok) throw new Error(`operator confirm on :${op.port}: ${r.status} ${await r.text()}`);
-  return { challenge: ((await r.json()) as { challenge_response: string }).challenge_response };
+  const body = (await r.json()) as { message: unknown; nonce: string };
+  return { message: body.message, nonce: body.nonce };
 }
 
 /** Bilateral signed handshake over real HTTP — each operator uses only its OWN admin token. */
@@ -136,18 +145,12 @@ async function handshake() {
   // A's operator mints A's confirm over N_B with A's OWN token
   // (relay-federation@1.5 §3.1: self-propose is refused). B's token never
   // touches A, and vice versa — still no shared secret.
-  const sigA = await operatorConfirm(A, nB.nonce);
+  const sigA = await operatorConfirm(A, nB.nonce, idB.relay_motebit_id);
   // B's operator mints B's confirm over N_A.
-  const sigB = await operatorConfirm(B, nA.nonce);
+  const sigB = await operatorConfirm(B, nA.nonce, idA.relay_motebit_id);
   // Confirm each side.
-  const cB = await j("POST", B.port, "/federation/v1/peer/confirm", {
-    relay_id: idA.relay_motebit_id,
-    challenge_response: sigA.challenge,
-  });
-  const cA = await j("POST", A.port, "/federation/v1/peer/confirm", {
-    relay_id: idB.relay_motebit_id,
-    challenge_response: sigB.challenge,
-  });
+  const cB = await j("POST", B.port, "/federation/v1/peer/confirm", sigA);
+  const cA = await j("POST", A.port, "/federation/v1/peer/confirm", sigB);
   return { idA, idB, confirmA: cA.status, confirmB: cB.status };
 }
 

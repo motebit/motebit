@@ -8,7 +8,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { bytesToHex, hexToBytes, verify } from "@motebit/encryption";
+import { bytesToHex } from "@motebit/encryption";
+import { verifyFederationMessage } from "@motebit/crypto";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 /** Helper: create a relay with specific federation config. */
@@ -353,38 +354,45 @@ describe("Federation configuration enforcement", () => {
       expect(text).not.toMatch(/challenge/);
     });
 
-    it("the operator's confirm mint signs `{own_id}:{nonce}:{suite}` under the master token only", async () => {
+    it("the operator's confirm mint signs a v2 peer-confirm for ONE recipient and its own endpoint, under the master token only", async () => {
       const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-      const denied = await relay.app.request("/api/v1/admin/federation/peer-confirm-signature", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nonce }),
-      });
-      expect(denied.status).toBe(401);
+      const mint = (body: unknown, auth = true) =>
+        relay.app.request("/api/v1/admin/federation/peer-confirm-signature", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(auth ? AUTH_HEADER : {}) },
+          body: JSON.stringify(body),
+        });
+      expect((await mint({ nonce, recipient: "relay-b" }, false)).status).toBe(401);
 
-      const res = await relay.app.request("/api/v1/admin/federation/peer-confirm-signature", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-        body: JSON.stringify({ nonce }),
-      });
+      const res = await mint({ nonce, recipient: "relay-b" });
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { relay_id: string; challenge_response: string };
+      const body = (await res.json()) as {
+        relay_id: string;
+        nonce: string;
+        endpoint_url: string;
+        message: unknown;
+      };
       expect(body.relay_id).toBe(relay.relayIdentity.relayMotebitId);
-      const ok = await verify(
-        hexToBytes(body.challenge_response),
-        new TextEncoder().encode(
-          `${relay.relayIdentity.relayMotebitId}:${nonce}:motebit-concat-ed25519-hex-v1`,
-        ),
-        hexToBytes(relay.relayIdentity.publicKeyHex),
-      );
-      expect(ok).toBe(true);
-
-      const bad = await relay.app.request("/api/v1/admin/federation/peer-confirm-signature", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
-        body: JSON.stringify({ nonce: "not-hex" }),
+      expect(body.endpoint_url).toBe("http://self.test:3000");
+      const v = await verifyFederationMessage(body.message, {
+        kind: "peer-confirm",
+        self: "relay-b",
+        expectedSender: relay.relayIdentity.relayMotebitId,
+        senderPublicKeyHex: relay.relayIdentity.publicKeyHex,
+        body: { nonce, endpoint_url: "http://self.test:3000" },
       });
-      expect(bad.status).toBe(400);
+      expect(v.ok).toBe(true);
+
+      // A bare nonce, no recipient, itself as recipient, a foreign endpoint: refused.
+      expect((await mint({ nonce })).status).toBe(400);
+      expect((await mint({ nonce, recipient: relay.relayIdentity.relayMotebitId })).status).toBe(
+        400,
+      );
+      expect(
+        (await mint({ nonce, recipient: "relay-b", endpoint_url: "http://attacker.test:3666" }))
+          .status,
+      ).toBe(400);
+      expect((await mint({ nonce: "not-hex", recipient: "relay-b" })).status).toBe(400);
     });
 
     it("does NOT persist a relay_peers row keyed on the relay's own id", async () => {

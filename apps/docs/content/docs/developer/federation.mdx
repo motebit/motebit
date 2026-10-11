@@ -49,30 +49,29 @@ Relay A (initiator)                         Relay B (responder)
     |                                            |
     |  1. POST /federation/v1/peer/propose       |
     |  { relay_id, public_key, endpoint_url,     |
-    |    display_name, nonce }                    |
+    |    display_name, nonce: nonce_a }          |
     | -----------------------------------------> |
     |                                            |
     |  2. 200 OK                                 |
     |  { relay_id, public_key, endpoint_url,     |
-    |    display_name, nonce,                    |
-    |    challenge: Sign(relay_id:nonce:suite, key_b) } |
+    |    display_name, nonce: nonce_b,           |
+    |    challenge: peer-challenge B -> A }      |
     | <----------------------------------------- |
     |                                            |
     |  3. POST /federation/v1/peer/confirm       |
-    |  { relay_id,                               |
-    |    challenge_response: Sign(relay_id:nonce:suite, key_a)|
-    |  }                                         |
+    |  { message: peer-confirm A -> B,           |
+    |    nonce: nonce_b }                        |
     | -----------------------------------------> |
     |                                            |
     |  4. 200 OK { status: "active" }            |
     | <----------------------------------------- |
 ```
 
-Step 1: Relay A sends its identity and a 32-byte random `nonce`. Step 2: Relay B signs `${relay_id}:${nonce}:${suite}` (the wire field is `nonce`; the cryptosuite id is part of the signed message) with its private key, proving key possession. Step 3: Relay A verifies B's signature, then signs the same shape over B's `nonce` with its own key. Relay B verifies. Both transition to `active`.
+Both handshake messages are relay-federation@1.5 v2 signed messages (domain-separated envelope naming kind, sender, the ONE recipient, a timestamp and a single-use nonce). Step 1: Relay A sends its identity, its endpoint and a 32-byte random `nonce_a`. Step 2: Relay B records A as pending and answers with `nonce_b` and a `peer-challenge` from B to A over `{ request_nonce: nonce_a, nonce: nonce_b, proposer_endpoint_url }` — proof that B holds its key, that it answers A's own nonce, and which endpoint B recorded for A. Step 3: A checks that challenge, then sends a `peer-confirm` from A to B over `{ nonce: nonce_b, endpoint_url: A's endpoint }`. B accepts it only if B is the recipient, the nonce is one B issued to A, and the endpoint is the one A's propose named, verified under A's key. Both transition to `active`.
 
-If any verification fails, the handshake is aborted and the peer record is discarded.
+If any verification fails, the handshake is aborted and a never-confirmed peer record is discarded (a once-confirmed record is left as it was).
 
-A relay never signs its own step-3 confirm for an anonymous caller: since relay-federation@1.5 a propose naming the receiving relay's own id is refused (400), because its answer would be exactly the confirm bytes for a nonce of the caller's choosing. The confirm is minted on the operator's authority — `motebit federation peer <url>` calls the master-token `POST /api/v1/admin/federation/peer-confirm-signature` on your own relay.
+A relay never signs a confirm for an anonymous caller, and never over a bare nonce. A propose naming the receiving relay's own id is refused (400). The confirm is minted on the operator's authority — `motebit federation peer <url>` verifies the counterparty's challenge, then calls the master-token `POST /api/v1/admin/federation/peer-confirm-signature` on your own relay with the nonce, the counterparty's relay id as `recipient`, and your relay's own endpoint. A confirm minted for one counterparty is refused at every other relay, so a counterparty that hands back another relay's nonce gains nothing. The 1.0–1.4 confirm (`{ relay_id, challenge_response }`) is refused (400).
 
 ### Heartbeat
 

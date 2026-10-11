@@ -43,10 +43,9 @@ import {
   BOOT_TIMEOUT_MS,
   type BootedEntry,
 } from "./booted-entry-harness.js";
-import { heartbeatRequest } from "./federation-messages.js";
+import { heartbeatRequest, signedConfirm } from "./federation-messages.js";
 
 const MASTER_TOKEN = "booted-federation-authority-master";
-const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";
 /** Loopback, so the hostile peer's advertised endpoint needs no DNS. */
 const PEER_ENDPOINT = "http://127.0.0.1:9/peer";
 const AGENT_ENDPOINT = "http://127.0.0.1:9/mcp";
@@ -123,16 +122,22 @@ async function becomeActivePeer(baseUrl: string): Promise<HostilePeer> {
     }),
   });
   expect(propose.status, "arrange: propose is accepted with no authorization").toBe(200);
-  const { nonce } = (await propose.json()) as { nonce: string };
+  const { nonce, relay_id: recipient } = (await propose.json()) as {
+    nonce: string;
+    relay_id: string;
+  };
 
-  const challenge = await sign(
-    new TextEncoder().encode(`${relayId}:${nonce}:${FEDERATION_SUITE}`),
-    kp.privateKey,
-  );
+  const confirmRequest = await signedConfirm({
+    sender: relayId,
+    recipient,
+    nonce,
+    endpointUrl: PEER_ENDPOINT,
+    privateKey: kp.privateKey,
+  });
   const confirm = await fetch(`${baseUrl}/federation/v1/peer/confirm`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ relay_id: relayId, challenge_response: bytesToHex(challenge) }),
+    body: JSON.stringify(confirmRequest),
   });
   expect(confirm.status, "arrange: confirm is accepted with no authorization").toBe(200);
   const confirmBody = (await confirm.json()) as { status: string };

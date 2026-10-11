@@ -260,7 +260,6 @@ const OUTSIDE_LANE: ReadonlyArray<{ file: string; fn: string; sites: number; rea
     sites: 1,
     reason: RELAY,
   },
-  { file: "services/relay/src/federation.ts", fn: "<anonymous>", sites: 2, reason: RELAY },
   {
     file: "services/relay/src/federation.ts",
     fn: "attemptResultDelivery",

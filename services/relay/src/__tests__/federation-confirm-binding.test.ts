@@ -23,7 +23,7 @@
  * whatever the route returned. M forwards that output to B unchanged.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bytesToHex } from "@motebit/encryption";
+import { bytesToHex, sign } from "@motebit/encryption";
 
 import type { SyncRelay } from "../index.js";
 import { initRelayIdentity, type RelayIdentity } from "../federation.js";
@@ -228,5 +228,23 @@ describe("the legitimate lifecycle still works", () => {
     clockOffset += 6 * 60 * 1000; // past the removed-peer cooldown
     await half("a", "b");
     expect(rowAt("b", "a")).toMatchObject({ state: "active", endpoint_url: URLS.a });
+  });
+});
+
+describe("the 1.0–1.4 confirm is refused by name", () => {
+  it("{ relay_id, challenge_response } over {relay_id}:{nonce}:{suite}, signed by A: 400, nothing changes", async () => {
+    const N = await propose("b", "a", URLS.a);
+    const before = rowAt("b", "a");
+    const sig = await sign(
+      new TextEncoder().encode(`${ids.a.relayMotebitId}:${N}:motebit-concat-ed25519-hex-v1`),
+      ids.a.privateKey,
+    );
+    const res = await post("b", "/federation/v1/peer/confirm", {
+      relay_id: ids.a.relayMotebitId,
+      challenge_response: bytesToHex(sig),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/confirm v1 .* is refused/);
+    expect(rowAt("b", "a")).toEqual(before);
   });
 });

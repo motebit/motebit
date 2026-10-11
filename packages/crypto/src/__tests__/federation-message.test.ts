@@ -208,3 +208,35 @@ describe("federation message v2 — the signer signs only well-formed text", () 
     ).rejects.toThrow(/surrogate/i);
   });
 });
+
+describe("federation message v2 — the handshake kinds", () => {
+  it("a peer-confirm verifies only at the relay that issued the nonce, for the endpoint it names", async () => {
+    const kp = await generateKeypair();
+    const pub = bytesToHex(kp.publicKey);
+    const body = { nonce: "ab".repeat(32), endpoint_url: "https://relay-a.example" };
+    const msg = await signFederationMessage({
+      kind: "peer-confirm",
+      sender: A,
+      recipient: B,
+      body,
+      privateKey: kp.privateKey,
+      now: NOW,
+    });
+    const at = (
+      self: string,
+      b: unknown,
+      kind: "peer-confirm" | "peer-challenge" = "peer-confirm",
+    ) => verifyFederationMessage(msg, { kind, self, senderPublicKeyHex: pub, body: b, now: NOW });
+    expect((await at(B, body)).ok).toBe(true);
+    expect(await at(C, body)).toEqual({ ok: false, reason: "wrong_recipient" });
+    expect(await at(B, { ...body, endpoint_url: "https://attacker.example" })).toEqual({
+      ok: false,
+      reason: "body_mismatch",
+    });
+    expect(await at(B, { ...body, nonce: "cd".repeat(32) })).toEqual({
+      ok: false,
+      reason: "body_mismatch",
+    });
+    expect(await at(B, body, "peer-challenge")).toEqual({ ok: false, reason: "kind_mismatch" });
+  });
+});

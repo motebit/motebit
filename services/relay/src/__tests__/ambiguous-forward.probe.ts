@@ -470,8 +470,8 @@ async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<v
     })
   ).nonce;
   // relay-federation@1.5: self-propose is refused; the operator mints each confirm.
-  const sigA = await operatorConfirm(relayA, nB, AUTH_HEADER);
-  const sigB = await operatorConfirm(relayB, nA, AUTH_HEADER);
+  const sigA = await operatorConfirm(relayA, nB, AUTH_HEADER, idB.relay_motebit_id);
+  const sigB = await operatorConfirm(relayB, nA, AUTH_HEADER, idA.relay_motebit_id);
   for (const [on, relayId, challenge] of [
     [relayB, idA.relay_motebit_id, sigA],
     [relayA, idB.relay_motebit_id, sigB],
@@ -479,7 +479,7 @@ async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<v
     const res = await on.app.request("/federation/v1/peer/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ relay_id: relayId, challenge_response: challenge }),
+      body: JSON.stringify({ relay_id: relayId, ...challenge }),
     });
     if (res.status !== 200) throw new Error(`peer confirm failed: ${res.status}`);
   }

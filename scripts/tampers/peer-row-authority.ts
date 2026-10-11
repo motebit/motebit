@@ -22,6 +22,7 @@ const PKG = "services/relay";
 const HARNESS = "src/__tests__/federation-peer-row-authority.test.ts";
 const PINNING = "src/__tests__/federation-peer-key-pinning.test.ts";
 const V2 = "src/__tests__/federation-v2-messages.test.ts";
+const BINDING = "src/__tests__/federation-confirm-binding.test.ts";
 
 interface Tamper {
   name: string;
@@ -122,6 +123,22 @@ const TAMPERS: Tamper[] = [
     replace:
       'if (cbState.state === "open") {\n        db.prepare("UPDATE relay_peers SET state = \'suspended\' WHERE endpoint_url = ?").run(peerEndpoint);',
     filter: "relay_peers writers",
+  },
+  {
+    name: "confirm: the endpoint is the pending propose's, never the request's (F1)",
+    find: "body: peerConfirmBody(answered.nonce, answered.endpoint_url),",
+    replace:
+      "body: peerConfirmBody(answered.nonce, (body as { endpoint_url?: string }).endpoint_url ?? answered.endpoint_url),",
+    tests: [BINDING],
+    filter: "F1",
+  },
+  {
+    name: "confirm: the v1 confirm is refused by name (F1)",
+    find: 'if (body.message === undefined) {\n      throw new HTTPException(400, {\n        message:\n          "federation peer confirm v1',
+    replace:
+      'if (false as boolean) {\n      throw new HTTPException(400, {\n        message:\n          "federation peer confirm v1',
+    tests: [BINDING],
+    filter: "refused by name",
   },
   {
     name: "§3.5 order: heartbeat checks recipient before the key lookup",

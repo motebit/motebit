@@ -627,7 +627,7 @@ describe("identity-authority census Q6 — a relay-federation@1.5 handshake is v
     const { nonce } = (await propose.json()) as { nonce: string };
     const confirm = await post(y, "/federation/v1/peer/confirm", {
       relay_id: ids[x].relayMotebitId,
-      challenge_response: await operatorConfirm(relays[x], nonce, AUTH_HEADER),
+      ...(await operatorConfirm(relays[x], nonce, AUTH_HEADER, ids[y].relayMotebitId)),
     });
     expect(confirm.status).toBe(200);
   }

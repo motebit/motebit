@@ -575,6 +575,12 @@ export const FEDERATION_MESSAGE_KINDS: {
     readonly "peer-remove": {
         readonly maxSkewMs: 300000;
     };
+    readonly "peer-challenge": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "peer-confirm": {
+        readonly maxSkewMs: 300000;
+    };
 };
 
 // @public

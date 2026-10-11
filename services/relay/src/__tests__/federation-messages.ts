@@ -118,24 +118,63 @@ export async function ackVerifies(
   return v.ok;
 }
 
+/** A `/federation/v1/peer/confirm` request body (relay-federation@1.5 §3.1). */
+export interface ConfirmRequest {
+  message: SignedFederationMessage;
+  nonce: string;
+}
+
 /**
- * The relay's own step-3 confirm signature over `nonce`, minted the only way
- * relay-federation@1.5 allows: by its operator, on the master-token admin
- * route (self-propose is refused).
+ * The relay's own step-3 confirm, minted the only way relay-federation@1.5
+ * allows: by its operator, on the master-token admin route — a v2
+ * `peer-confirm` to `recipient` (the relay that issued `nonce`) confirming
+ * the relay's own federation endpoint. Returns the confirm request body.
  */
 export async function operatorConfirm(
   relay: SyncRelay,
   nonce: string,
   /** The relay operator's master-token header (test-helpers' `AUTH_HEADER`). */
   headers: Record<string, string>,
-): Promise<string> {
+  /** The relay that issued `nonce` — the one the confirm is for. */
+  recipient: string,
+  /** The endpoint the propose named, when not the relay's configured one verbatim. */
+  endpointUrl?: string,
+): Promise<ConfirmRequest> {
   const res = await relay.app.request("/api/v1/admin/federation/peer-confirm-signature", {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ nonce }),
+    body: JSON.stringify({
+      nonce,
+      recipient,
+      ...(endpointUrl !== undefined ? { endpoint_url: endpointUrl } : {}),
+    }),
   });
   if (res.status !== 200) {
     throw new Error(`operatorConfirm: ${res.status} ${await res.text()}`);
   }
-  return ((await res.json()) as { challenge_response: string }).challenge_response;
+  const body = (await res.json()) as { message: SignedFederationMessage; nonce: string };
+  return { message: body.message, nonce: body.nonce };
+}
+
+/**
+ * A step-3 confirm signed directly with `privateKey` — for tests that hold a
+ * relay's key (or a stranger's) without its operator route.
+ */
+export async function signedConfirm(args: {
+  sender: string;
+  recipient: string;
+  nonce: string;
+  endpointUrl: string;
+  privateKey: Uint8Array;
+  now?: number;
+}): Promise<ConfirmRequest> {
+  const message = await signFederationMessage({
+    kind: "peer-confirm",
+    sender: args.sender,
+    recipient: args.recipient,
+    body: { nonce: args.nonce, endpoint_url: args.endpointUrl },
+    privateKey: args.privateKey,
+    now: args.now,
+  });
+  return { message, nonce: args.nonce };
 }

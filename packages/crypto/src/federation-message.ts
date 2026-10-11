@@ -60,11 +60,23 @@ export const FEDERATION_MESSAGE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
  *                        agent_count }` — the ack answers exactly one request.
  *   - `peer-remove`    — sender: the relay leaving; verifier: the one named
  *                        recipient. Body `{ action: "remove" }`.
+ *   - `peer-challenge` — handshake step 2. sender: the relay a propose was
+ *                        sent to; verifier: the proposer. Body
+ *                        `{ request_nonce, nonce, proposer_endpoint_url }` —
+ *                        the proposer's nonce it answers, the nonce it issued
+ *                        for the confirm, and the endpoint it recorded for the
+ *                        proposer.
+ *   - `peer-confirm`   — handshake step 3. sender: the proposer; verifier: the
+ *                        ONE relay that issued the nonce. Body
+ *                        `{ nonce, endpoint_url }` — that nonce, and the
+ *                        sender's endpoint being confirmed.
  */
 export const FEDERATION_MESSAGE_KINDS = {
   heartbeat: { maxSkewMs: 300_000 },
   "heartbeat-ack": { maxSkewMs: 300_000 },
   "peer-remove": { maxSkewMs: 300_000 },
+  "peer-challenge": { maxSkewMs: 300_000 },
+  "peer-confirm": { maxSkewMs: 300_000 },
 } as const;
 
 export type FederationMessageKind = keyof typeof FEDERATION_MESSAGE_KINDS;

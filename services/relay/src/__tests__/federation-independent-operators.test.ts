@@ -92,20 +92,20 @@ async function handshake(a: SyncRelay, b: SyncRelay) {
   // relay-federation@1.5: self-propose is refused, so each relay's step-3
   // confirm is minted by ITS OWN operator with ITS OWN token — still no
   // shared secret.
-  const sigA = {
-    challenge: await operatorConfirm(a, nB.nonce, { Authorization: `Bearer ${TOKEN_A}` }),
-  };
-  const sigB = {
-    challenge: await operatorConfirm(b, nA.nonce, { Authorization: `Bearer ${TOKEN_B}` }),
-  };
-  const confirmB = await fed(b, "POST", "/federation/v1/peer/confirm", {
-    relay_id: idA.relay_motebit_id,
-    challenge_response: sigA.challenge,
-  });
-  const confirmA = await fed(a, "POST", "/federation/v1/peer/confirm", {
-    relay_id: idB.relay_motebit_id,
-    challenge_response: sigB.challenge,
-  });
+  const sigA = await operatorConfirm(
+    a,
+    nB.nonce,
+    { Authorization: `Bearer ${TOKEN_A}` },
+    idB.relay_motebit_id,
+  );
+  const sigB = await operatorConfirm(
+    b,
+    nA.nonce,
+    { Authorization: `Bearer ${TOKEN_B}` },
+    idA.relay_motebit_id,
+  );
+  const confirmB = await fed(b, "POST", "/federation/v1/peer/confirm", sigA);
+  const confirmA = await fed(a, "POST", "/federation/v1/peer/confirm", sigB);
   return { idA, idB, confirmA: confirmA.status, confirmB: confirmB.status };
 }
 
