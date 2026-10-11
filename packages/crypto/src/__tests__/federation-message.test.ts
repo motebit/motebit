@@ -195,3 +195,16 @@ describe("federation message v2", () => {
     ).rejects.toThrow(/must differ/);
   });
 });
+
+describe("federation message v2 — the signer signs only well-formed text", () => {
+  it("refuses an unpaired surrogate in the body or the envelope, signing nothing", async () => {
+    const kp = await generateKeypair();
+    const base = { kind: "heartbeat" as const, privateKey: kp.privateKey, now: NOW };
+    await expect(
+      signFederationMessage({ ...base, sender: A, recipient: B, body: { x: "\uD800" } }),
+    ).rejects.toThrow(/surrogate/i);
+    await expect(
+      signFederationMessage({ ...base, sender: "relay-\uDC00", recipient: B, body: {} }),
+    ).rejects.toThrow(/surrogate/i);
+  });
+});

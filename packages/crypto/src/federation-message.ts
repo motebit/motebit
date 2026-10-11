@@ -32,7 +32,14 @@
  * its own peer table) and its own id, and consumes the nonce in the same
  * transaction as the write the message authorizes.
  */
-import { bytesToHex, canonicalJson, canonicalSha256, hexToBytes } from "./signing.js";
+import {
+  bytesToHex,
+  canonicalJson,
+  canonicalJsonForSigning,
+  canonicalSha256,
+  hexToBytes,
+  sha256,
+} from "./signing.js";
 import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
 
 /** The byte-prefix domain tag of every v2 federation message. */
@@ -106,10 +113,17 @@ function isKind(k: unknown): k is FederationMessageKind {
   return typeof k === "string" && Object.prototype.hasOwnProperty.call(FEDERATION_MESSAGE_KINDS, k);
 }
 
-/** The exact bytes a v2 message signs. */
-export function federationMessageBytes(envelope: FederationMessageEnvelope): Uint8Array {
+/**
+ * The exact bytes a v2 message signs. `canonicalize` is `canonicalJson` for a
+ * verifier; the signer passes `canonicalJsonForSigning`, which refuses an
+ * unpaired surrogate and is otherwise byte-identical.
+ */
+export function federationMessageBytes(
+  envelope: FederationMessageEnvelope,
+  canonicalize: (obj: unknown) => string = canonicalJson,
+): Uint8Array {
   return new TextEncoder().encode(
-    `${FEDERATION_MESSAGE_DOMAIN}\0${envelope.kind}\0${canonicalJson(envelope)}`,
+    `${FEDERATION_MESSAGE_DOMAIN}\0${envelope.kind}\0${canonicalize(envelope)}`,
   );
 }
 
@@ -150,12 +164,17 @@ export async function signFederationMessage(args: {
     recipient: args.recipient,
     ts: args.now ?? Date.now(),
     nonce: args.nonce ?? randomNonce(),
-    body_sha256: await federationBodyDigest(args.body),
+    // Signer side through the guarded canonicalizer (refuses an unpaired
+    // surrogate; identical bytes otherwise), so what is signed has one UTF-8
+    // form. The verifier keeps canonicalJson.
+    body_sha256: bytesToHex(
+      await sha256(new TextEncoder().encode(canonicalJsonForSigning(args.body))),
+    ),
     suite: FEDERATION_MESSAGE_SUITE,
   };
   const sig = await signBySuite(
     FEDERATION_MESSAGE_SUITE,
-    federationMessageBytes(envelope),
+    federationMessageBytes(envelope, canonicalJsonForSigning),
     args.privateKey,
   );
   return { envelope, signature: bytesToHex(sig) };
