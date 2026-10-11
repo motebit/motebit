@@ -1,8 +1,9 @@
 # Payment receipts — well-formed text: stop condition and exhaustive harness
 
-Status: **harness red by design, no fix.** Branch `harness/payment-receipt-wellformed`, cut from
-`feat/payment-receipt-hash-binding` @ `0d4497c49`. The founder decides the structural fix; this
-note only states the invariant, the surface, the stop condition, and what the harness shows today.
+Status: **fixed structurally; harness green with `known-red.json` empty (822 → 0 failing
+cells).** The harness and this note were committed red on `harness/payment-receipt-wellformed`
+(cut from `feat/payment-receipt-hash-binding` @ `0d4497c49`); the founder decided the open
+questions on 2026-10-11 (§3) and `fix/payment-receipt-wellformed` implemented them (§6).
 
 Why this note exists: review rounds 1–4 on the hash-binding branch kept finding the same class of
 defect, malformed text (lone UTF-16 surrogates and other non-well-formed strings) in a signed
@@ -42,7 +43,7 @@ straight from the **payer's request**, so the payer controls that text.
 
 ### 2.2 Producers
 
-| id  | producer                                                                                       | what it repairs today                                      |
+| id  | producer                                                                                       | what it repaired on `0d4497c49` (before §6)                |
 | --- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | P1  | `@motebit/crypto` `signExecutionReceipt` (every producer below signs through it)               | `result` only                                              |
 | P2  | `@motebit/crypto` `signSovereignPaymentReceipt` (+ runtime payee handler)                      | `result` (via P1); rejects a non-hex `result_hash` input   |
@@ -95,15 +96,18 @@ This class cannot recur only if all three of these hold:
    `signBySuite` over canonical bytes without going through the guarded canonicalizer, so a
    new producer cannot sidestep (1).
 
-Decisions left to the founder (the harness encodes the invariant as written, not an answer):
+Decisions (the harness encodes the invariant as written, not an answer). **DECIDED 2026-10-11**
+by the founder / PE:
 
-- Does a producer that embeds an **old** child receipt holding a lone surrogate (P1/P3
-  `delegation_receipts`) refuse, or is that one allowed exception (a child is signed by
-  someone else)? Rule (1) as written refuses.
-- Is `verifyReceiptVerdict` part of the pinned default (the harness treats it as one, since
-  `@motebit/verifier` re-exports it), or may its integrity axis fail closed on §11.4?
-- Does `service_result_hash` shape-checking belong behind strict only (keeps I5), or is the
-  default-verdict change accepted with a deprecation note?
+- (a) **A producer REFUSES to embed an old child receipt holding an unpaired surrogate** (P1/P3
+  `delegation_receipts`): fail closed, rule (1) as written. No exception for a child signed by
+  someone else.
+- (b) **`verifyReceiptVerdict`'s default stays byte-identical to origin/main** (pinned public
+  contract, re-exported by `@motebit/verifier`). It has no surrogate branch; it has no strict
+  mode, so it carries no well-formedness check at all.
+- (c) **The `service_result_hash` shape check runs in STRICT mode only.** Tightening the default
+  is deferred to the next major of `@motebit/crypto` / `@motebit/verifier`, announced as a
+  deprecation note in the `sovereign-payment-receipt-service-result-hash` changeset.
 
 ## 4. The harness
 
@@ -184,9 +188,46 @@ What fails, in three findings:
   normalization (NFC/NFD). Duplicate JSON keys.
 - The `motebit serve` daemon path and the relay HTTP doors, exercised through the functions they
   call (P1, `verifyExecutionReceipt`) rather than booted.
-- Fixing anything. This branch changes no producer, verifier, runtime or money code.
+- Fixing anything (on the harness branch). The fix is §6.
 
-## Appendix A — failing cells (field × path × input)
+## 6. The fix (`fix/payment-receipt-wellformed`, 2026-10-11)
+
+1. **Producer boundary.** `canonicalJsonForSigning` (`packages/crypto/src/signing.ts`) is
+   `canonicalJson` that throws `UnpairedSurrogateError` (with the first offending path) for an
+   unpaired surrogate in any string value or object key at any depth, embedded receipts
+   included. `signExecutionReceipt` (so P1, P2, P3, P4, P5 and the daemon) signs through it, as
+   do the other `@motebit/crypto` signers. The per-field repair inside `signExecutionReceipt`
+   is gone; repair stays where text is produced (`toWellFormedText` in the task handler, the MCP
+   receipt builder and the daemon; `truncateWellFormed` at the tool edges and, now, in the
+   smoke worker's `result` cut, which used to split a pair and lean on the signer's repair).
+   No new silent repair was added.
+2. **One strict predicate.** `hasUnpairedSurrogate` (deep, walks exactly what `canonicalJson`
+   serializes) runs before any schema/shape check in `motebit verify receipt`'s strict default
+   (`verifyWire`) and in the Python reference (`verify_receipt`); `motebit-verify` reaches it
+   through `@motebit/crypto`'s strict `verifyReceipt`, which runs it on every node independently
+   of the other checks. `verifyReceiptVerdict` is origin/main's function verbatim, and the
+   `service_result_hash` shape check in `verifyReceipt` runs only under `strictHashBinding`.
+   The lenient, runtime and relay paths have no well-formedness branch.
+3. **Static gate.** `check-signed-text-wellformed` (in `pnpm check`, invariant #175) scans
+   every call of `ed25519Sign` / `signBySuite` / an imported `sign` alias in `packages/`,
+   `services/` and `apps/`; the signing function must call the guard or hand it to a bytes
+   helper. Documented non-JCS signers (JWT payload, identity-file YAML) pass. Out-of-fence
+   canonical-JSON signers are a **count-pinned debt list**, not silently exempt: the money-record
+   signers in `@motebit/crypto` (settlement, federation settlement, withdrawal receipt, balance
+   waiver, bond commitment, invoice, cost attestation, dispute resolution), 27 relay call sites,
+   two runtime ledger-digest signers and the identity-file guardian attestation. Refusing on
+   those changes a settlement- or relay-path failure mode, so each needs its own review; a
+   new unguarded call in a pinned function, or any new signer, fails the gate. Tamper test:
+   `scripts/__tests__/check-signed-text-wellformed.test.ts` (planted bypasses in a fixture) and
+   a `check-gates-effective` probe that reverts `signExecutionReceipt` to `canonicalJson`.
+
+Result: **5,844 cells, 5,844 hold** (python leg required, `REQUIRE_PYTHON=1`), with
+`known-red.json` empty. The origin/main verdict golden (`main-verdicts.json`) is unchanged and
+every I5 default-path cell matches it. Public API in default mode: unchanged. Additive
+producer-side exports: `canonicalJsonForSigning`, `UnpairedSurrogateError` (`@motebit/crypto`;
+re-exported with `hasUnpairedSurrogate` from `@motebit/encryption`).
+
+## Appendix A — failing cells on `0d4497c49`, before the fix (field × path × input)
 
 Inputs: "all 9 malformed" = lone-high-mid, lone-low-mid, lone-high-end, lone-low-start,
 reversed-pair, high-then-pair, only-lone-high, only-lone-low, mixed. The full list with the

@@ -32,7 +32,13 @@ import type {
   WitnessOmissionEvidence,
 } from "@motebit/protocol";
 
-import { canonicalJson, fromBase64Url, hexToBytes, toBase64Url } from "./signing.js";
+import {
+  canonicalJson,
+  canonicalJsonForSigning,
+  fromBase64Url,
+  hexToBytes,
+  toBase64Url,
+} from "./signing.js";
 import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
 import { verifyMerkleInclusion } from "./merkle.js";
 import { WITNESS_OMISSION_DISPUTE_WINDOW_MS } from "./deletion-certificate.js";
@@ -102,9 +108,16 @@ export interface WitnessOmissionDisputeVerifyContext {
  * including `cert_signature`, `cert_issuer`, and the evidence body.
  */
 export function canonicalizeWitnessOmissionDispute(dispute: WitnessOmissionDispute): Uint8Array {
+  return disputeBytes(dispute, canonicalJson);
+}
+
+function disputeBytes(
+  dispute: WitnessOmissionDispute,
+  canonicalize: (value: unknown) => string,
+): Uint8Array {
   const { signature, ...body } = dispute;
   void signature;
-  return new TextEncoder().encode(canonicalJson(body));
+  return new TextEncoder().encode(canonicalize(body));
 }
 
 // ── Signing ──────────────────────────────────────────────────────────
@@ -123,7 +136,7 @@ export async function signWitnessOmissionDispute(
     suite: WITNESS_OMISSION_DISPUTE_SUITE,
     signature: "",
   };
-  const bytes = canonicalizeWitnessOmissionDispute(withSuite);
+  const bytes = disputeBytes(withSuite, canonicalJsonForSigning);
   const sig = await signBySuite(WITNESS_OMISSION_DISPUTE_SUITE, bytes, privateKey);
   return { ...withSuite, signature: toBase64Url(sig) };
 }

@@ -162,7 +162,8 @@ export interface ExecutionReceipt {
   /**
    * SHA-256 of the paid service's result bytes (lowercase hex), as asserted by
    * the payer and signed by the payee. Present on sovereign payment receipts
-   * (spec/settlement-v1.md §7); `verifyReceipt` checks its shape when present.
+   * (spec/settlement-v1.md §7); `verifyReceipt` checks its shape under strict
+   * hash binding (the signature-only default does not).
    */
   service_result_hash?: string;
   signature: string;
@@ -1944,10 +1945,12 @@ async function verifyReceiptAtDepth(
   }
 
   // service_result_hash is optional; when present it must be a SHA-256 hex
-  // digest like every other hash field (spec/settlement-v1.md §7). Receipts
-  // without it take no branch here.
+  // digest like every other hash field (spec/settlement-v1.md §7). Strict
+  // only: the signature-only default stays origin/main's verdict (a default
+  // tightening waits for the next major — see
+  // docs/design/payment-receipt-wellformed-stop-condition.md §3).
   let serviceHashOk = true;
-  if (receipt.service_result_hash !== undefined) {
+  if (strict && receipt.service_result_hash !== undefined) {
     serviceHashOk =
       typeof receipt.service_result_hash === "string" &&
       /^[0-9a-f]{64}$/.test(receipt.service_result_hash);
@@ -2086,7 +2089,12 @@ export async function verifyReceiptVerdict(receipt: SignableReceipt): Promise<Ve
   // Resolve the embedded key (same rule as `verifyReceipt`).
   let publicKey: Uint8Array | null = null;
   if (receipt.public_key) {
-    if (/^[0-9a-fA-F]{64}$/.test(receipt.public_key)) publicKey = hexToBytes(receipt.public_key);
+    try {
+      const b = hexToBytes(receipt.public_key);
+      if (b.length === 32) publicKey = b;
+    } catch {
+      publicKey = null;
+    }
     evidenceBasis.push({ kind: "public_key", ref: receipt.public_key });
   }
   evidenceBasis.push({ kind: "receipt", ref: receipt.result_hash });
@@ -2101,18 +2109,7 @@ export async function verifyReceiptVerdict(receipt: SignableReceipt): Promise<Ve
   // carry distinct repair codes.
   let integrity: IntegrityVerdict;
   let integrityRepair: RepairInstruction | undefined;
-  const { signature: _sig, ...unsignedBody } = receipt;
-  if (hasUnpairedSurrogate(unsignedBody)) {
-    integrity = "invalid";
-    integrityRepair = {
-      code: "integrity.unpaired_surrogate",
-      axis: "integrity",
-      summary:
-        "The receipt contains a string with an unpaired UTF-16 surrogate — it has no UTF-8 encoding, so no canonical bytes to verify or hash.",
-      canonical: "spec/execution-ledger-v1.md §11.4",
-      fix: "Reject the receipt. A signer MUST emit well-formed Unicode; a verifier never substitutes U+FFFD.",
-    };
-  } else if (!publicKey) {
+  if (!publicKey) {
     integrity = "invalid";
     integrityRepair = {
       code: "integrity.no_key",
@@ -2139,19 +2136,6 @@ export async function verifyReceiptVerdict(receipt: SignableReceipt): Promise<Ve
         "Signature verifies, but result_hash != hex(SHA-256(result)) — a valid signature over a self-inconsistent receipt; the digest does not bind the result.",
       canonical: "the receipt's result_hash field (recompute hex(SHA-256(result)))",
       fix: "result_hash MUST equal hex(SHA-256(result)). The signer committed an inconsistent digest — reject the receipt; never trust result_hash as a content address for the result.",
-    };
-  } else if (
-    receipt.service_result_hash !== undefined &&
-    !/^[0-9a-f]{64}$/.test(receipt.service_result_hash)
-  ) {
-    integrity = "invalid";
-    integrityRepair = {
-      code: "integrity.service_result_hash_malformed",
-      axis: "integrity",
-      summary:
-        "Signature verifies, but service_result_hash is not a SHA-256 digest (64 lowercase hex characters).",
-      canonical: "spec/settlement-v1.md §7 (service_result_hash)",
-      fix: "service_result_hash MUST be 64 lowercase hex characters. The signer committed a malformed digest — reject the receipt.",
     };
   } else {
     integrity = "verified";

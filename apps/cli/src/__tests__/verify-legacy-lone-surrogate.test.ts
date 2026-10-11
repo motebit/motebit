@@ -1,9 +1,10 @@
 /**
  * The committed legacy vector (a receipt signed before producers repaired
  * unpaired surrogates — strict-negative/result-lone-surrogate.json): both
- * receipt CLIs reject it under the strict default with the §11.4 reason as a
- * result_hash failure (its signature verifies), and accept it under --lenient,
- * matching the runtime's and relay's signature checks.
+ * receipt CLIs reject it under the strict default with the §11.4 reason, and
+ * accept it under --lenient (its signature verifies), matching the runtime's
+ * and relay's signature checks. `motebit verify receipt` checks well-formed
+ * text before the schema, so §11.4 is its one strict reason.
  */
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -36,10 +37,11 @@ describe("legacy lone-surrogate receipt — strict rejects with §11.4, --lenien
   it("motebit verify receipt", () => {
     const strict = run(WIRE, ["receipt", VECTOR]);
     expect(strict.status).toBe(1);
-    expect(strict.out).toMatch(/✓ signature/);
-    expect(strict.out).toContain(`✗ result_hash ${REASON}`);
+    expect(strict.out).toContain(`✗ well-formed ${REASON}`);
+    expect(strict.out).not.toMatch(/✗ (schema|signature)/);
     const lenient = run(WIRE, ["receipt", VECTOR, "--lenient"]);
     expect(lenient.status).toBe(0);
+    expect(lenient.out).toMatch(/✓ signature/);
   }, 300_000);
 
   it("motebit-verify", () => {

@@ -127,7 +127,7 @@ const vc = await issueReputationCredential(
 ### Chain Verification
 
 - **`verifyReceiptChain(receipt, knownKeys)`** — Recursively verify a delegation receipt tree.
-- **`collectReceiptTreeErrors(result)`** — Flatten a `verifyReceipt` result into every node's own failures (depth, `task_id`, failing field, message), empty iff the tree is valid. With `strictHashBinding`, `result_hash` is checked on every node, including one whose key is missing or malformed (that node also fails its signature check). A receipt containing an unpaired UTF-16 surrogate is invalid in every mode: it has no UTF-8 encoding (spec/execution-ledger-v1.md §11.4).
+- **`collectReceiptTreeErrors(result)`** — Flatten a `verifyReceipt` result into every node's own failures (depth, `task_id`, failing field, message), empty iff the tree is valid. With `strictHashBinding`, `result_hash` is checked on every node, including one whose key is missing or malformed (that node also fails its signature check). Under `strictHashBinding` a receipt containing an unpaired UTF-16 surrogate is invalid: it has no UTF-8 encoding (spec/execution-ledger-v1.md §11.4). The signature-only default accepts it, as it always has.
 - **`verifyReceiptSequence(chain)`** — Verify a flat sequence of receipts.
 - **`verifyDelegation(delegation, options?)`** — Verify a delegation token signature.
 - **`verifyDelegationChain(chain)`** — Verify a chain of delegations with scope narrowing.
@@ -159,6 +159,9 @@ const vc = await issueReputationCredential(
 - **`ed25519Sign(message, privateKey)`** — Raw Ed25519 sign.
 - **`ed25519Verify(signature, message, publicKey)`** — Raw Ed25519 verify.
 - **`canonicalJson(obj)`** — Deterministic JSON serialization (JCS/RFC 8785).
+- **`canonicalJsonForSigning(obj)`** — `canonicalJson`, but throws `UnpairedSurrogateError` when any string value or object key, at any depth (embedded receipts included), holds an unpaired UTF-16 surrogate. Every signer in this package signs through it; verifiers keep `canonicalJson`, so artifacts signed earlier still verify. Repair text where it is produced (`toWellFormedText` / `truncateWellFormed` in `@motebit/protocol`), not at the signer.
+- **`UnpairedSurrogateError`** — What `canonicalJsonForSigning` (and every signer) throws on such text; `path` names the first offending location.
+- **`hasUnpairedSurrogate(value)`** — The deep predicate behind both: true when any string value or object key holds an unpaired UTF-16 surrogate. Strict readers run it before any shape check.
 - **`hash(data)`** — SHA-256 hex string. Async; takes raw bytes (`Uint8Array`), never a string — for objects, use `canonicalSha256`.
 - **`canonicalSha256(obj)`** — Hex SHA-256 of the UTF-8 bytes of `canonicalJson(obj)`. The canonical object-hashing path.
 - **`hashLeaf(entry, treeHashVersion?)`** — Merkle leaf hash under a `MerkleTreeVersion`: `SHA-256(entry)` for `merkle-sha256-plain-v1` (default), `SHA-256(0x00 ‖ entry)` for the RFC 6962 §2.1 `merkle-sha256-rfc6962-v2` leaf tag. The single dispatch point every leaf builder routes through; throws on an unimplemented version.

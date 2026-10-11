@@ -24,6 +24,7 @@ import type { SkillEnvelope, SkillManifest, SkillSignature } from "@motebit/prot
 
 import {
   canonicalJson,
+  canonicalJsonForSigning,
   fromBase64Url,
   hexToBytes,
   signBySuite,
@@ -75,6 +76,14 @@ export function canonicalizeSkillManifestBytes(
   manifest: SkillManifest,
   body: Uint8Array,
 ): Uint8Array {
+  return skillManifestBytes(manifest, body, canonicalJson);
+}
+
+function skillManifestBytes(
+  manifest: SkillManifest,
+  body: Uint8Array,
+  canonicalize: (value: unknown) => string,
+): Uint8Array {
   const motebitForCanonical = manifest.motebit.signature
     ? {
         ...manifest.motebit,
@@ -83,7 +92,7 @@ export function canonicalizeSkillManifestBytes(
     : manifest.motebit;
 
   const manifestForCanonical = { ...manifest, motebit: motebitForCanonical };
-  const canonical = canonicalJson(manifestForCanonical);
+  const canonical = canonicalize(manifestForCanonical);
   const manifestBytes = new TextEncoder().encode(canonical);
 
   const out = new Uint8Array(manifestBytes.length + 1 + body.length);
@@ -99,11 +108,18 @@ export function canonicalizeSkillManifestBytes(
  * body concatenation.
  */
 export function canonicalizeSkillEnvelopeBytes(envelope: SkillEnvelope): Uint8Array {
+  return skillEnvelopeBytes(envelope, canonicalJson);
+}
+
+function skillEnvelopeBytes(
+  envelope: SkillEnvelope,
+  canonicalize: (value: unknown) => string,
+): Uint8Array {
   const envelopeForCanonical = {
     ...envelope,
     signature: signatureWithoutValue(envelope.signature),
   };
-  const canonical = canonicalJson(envelopeForCanonical);
+  const canonical = canonicalize(envelopeForCanonical);
   return new TextEncoder().encode(canonical);
 }
 
@@ -143,7 +159,7 @@ export async function signSkillManifest(
     },
   };
 
-  const message = canonicalizeSkillManifestBytes(unsignedWithSig, body);
+  const message = skillManifestBytes(unsignedWithSig, body, canonicalJsonForSigning);
   const sig = await signBySuite(SKILL_SIGNATURE_SUITE, message, privateKey);
 
   return {
@@ -177,7 +193,7 @@ export async function signSkillEnvelope(
       value: "", // placeholder; stripped by canonicalize
     },
   };
-  const message = canonicalizeSkillEnvelopeBytes(unsignedWithSig);
+  const message = skillEnvelopeBytes(unsignedWithSig, canonicalJsonForSigning);
   const sig = await signBySuite(SKILL_SIGNATURE_SUITE, message, privateKey);
   return {
     ...unsigned,

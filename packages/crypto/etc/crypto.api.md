@@ -211,6 +211,9 @@ export function canonicalizeWitnessOmissionDispute(dispute: WitnessOmissionDispu
 export function canonicalJson(obj: unknown): string;
 
 // @public
+export function canonicalJsonForSigning(obj: unknown): string;
+
+// @public
 export function canonicalLeaf(value: unknown, treeHashVersion?: MerkleTreeVersion): Promise<string>;
 
 // @public
@@ -1943,6 +1946,14 @@ export interface UnknownVerifyResult extends BaseResult {
     valid: false;
 }
 
+// @public
+export class UnpairedSurrogateError extends Error {
+    constructor(path: string);
+    readonly name = "UnpairedSurrogateError";
+    // (undocumented)
+    readonly path: string;
+}
+
 export { VerdictSubject }
 
 // @public (undocumented)
@@ -2394,7 +2405,7 @@ export interface WitnessOmissionDisputeVerifyResult {
 
 // Warnings were encountered during analysis:
 //
-// src/credentials.ts:393:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
+// src/credentials.ts:394:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

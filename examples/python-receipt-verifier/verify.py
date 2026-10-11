@@ -334,13 +334,16 @@ def verify_receipt(
     """
     result = VerificationResult(valid=False)
 
+    # §11.4 first, before any shape check: the diagnostic must not depend on
+    # which field (or object key, at any depth) carries the surrogate. This
+    # verifier is strict-only, so this is its one well-formedness point.
+    if _has_unpaired_surrogate(receipt):
+        result.reasons.append(UNPAIRED_SURROGATE_ERROR)
+        return result
+
     shape_errors = _validate_shape(receipt, depth=depth)
     if shape_errors:
         result.reasons.extend(shape_errors)
-        return result
-
-    if _has_unpaired_surrogate(receipt):
-        result.reasons.append(UNPAIRED_SURROGATE_ERROR)
         return result
 
     embedded_pk = receipt.get("public_key")

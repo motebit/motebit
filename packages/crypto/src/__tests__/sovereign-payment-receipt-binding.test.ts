@@ -86,7 +86,7 @@ describe("signSovereignPaymentReceipt — hash binding", () => {
     expect(await verifyExecutionReceipt(stripped as typeof r, pub)).toBe(false);
   });
 
-  it("a malformed service_result_hash fails verification even when signed", async () => {
+  it("a malformed service_result_hash fails strict verification; the default keeps main's verdict", async () => {
     const pub = await getPublicKeyBySuite(PRIV, SUITE);
     const r = await signExecutionReceipt(
       {
@@ -107,9 +107,14 @@ describe("signSovereignPaymentReceipt — hash binding", () => {
       pub,
     );
     expect(await verifyExecutionReceipt(r, pub)).toBe(true); // signature itself is fine
-    const v = await verifyReceipt(r);
+    const v = await verifyReceipt(r, { strictHashBinding: true });
     expect(v.valid).toBe(false);
     expect(v.errors?.some((e) => e.path === "service_result_hash")).toBe(true);
+    // Signature-only default: origin/main's verdict (the shape check is strict
+    // only until the next major — payment-receipt-wellformed-stop-condition §3).
+    const d = await verifyReceipt(r);
+    expect(d.valid).toBe(true);
+    expect(d.errors).toBeUndefined();
   });
 
   it("refuses to sign when the service result hash is not a SHA-256 hex digest", async () => {

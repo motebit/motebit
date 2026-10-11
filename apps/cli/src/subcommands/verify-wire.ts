@@ -34,6 +34,7 @@ import { resolve } from "node:path";
 // changes but the runtime behavior is identical.
 import {
   collectReceiptTreeErrors,
+  hasUnpairedSurrogate,
   verifyDelegation,
   verifyReceipt,
   type ReceiptTreeError,
@@ -73,6 +74,10 @@ export interface VerifyReport {
 export const LENIENT_WARNING =
   "warning: --lenient — result_hash was not checked; the receipt's result is NOT bound to its signature";
 
+/** The strict §11.4 rejection (verbatim the reason @motebit/crypto's strict verifyReceipt reports). */
+const UNPAIRED_SURROGATE_DIAGNOSTIC =
+  "§11.4 violation: receipt contains a string with an unpaired UTF-16 surrogate — it has no UTF-8 encoding";
+
 export interface VerifyWireOptions {
   /**
    * Receipts: skip the `result_hash` binding check (signature-only). Off by
@@ -108,7 +113,17 @@ export async function verifyWire(
     return finalize(kind, absPath, checks);
   }
 
-  // (2) Schema-validate via the live wire-schemas zod source.
+  // (2) Strict receipts: well-formed text first, before any schema or shape
+  // check, so the §11.4 diagnostic never depends on which field (or object
+  // key, at any depth) carries the unpaired surrogate. The same deep predicate
+  // and message as @motebit/crypto's strict verifyReceipt. --lenient takes no
+  // branch here.
+  if (kind === "receipt" && opts.lenient !== true && hasUnpairedSurrogate(raw)) {
+    checks.push({ name: "well-formed", ok: false, detail: UNPAIRED_SURROGATE_DIAGNOSTIC });
+    return finalize(kind, absPath, checks);
+  }
+
+  // (3) Schema-validate via the live wire-schemas zod source.
   if (kind === "receipt") {
     const parsed = ExecutionReceiptSchema.safeParse(raw);
     if (!parsed.success) {
@@ -116,13 +131,13 @@ export async function verifyWire(
       return finalize(kind, absPath, checks);
     }
     checks.push({ name: "schema", ok: true, detail: "ExecutionReceipt v1" });
-    // (3) Suite known
+    // (4) Suite known
     checks.push({
       name: "suite",
       ok: true,
       detail: `recognized: ${parsed.data.suite}`,
     });
-    // (4)–(5) One walk over the whole delegation tree: @motebit/crypto's
+    // (5)–(6) One walk over the whole delegation tree: @motebit/crypto's
     // verifyReceipt verifies every node (signature always; result_hash binding
     // under strict) whether or not a node's key is usable, and
     // collectReceiptTreeErrors flattens it per node. motebit-verify reads the
@@ -143,7 +158,7 @@ export async function verifyWire(
       e.depth === 0
         ? e.message
         : `delegation depth ${e.depth}, task_id ${e.task_id ?? "unknown"}: ${e.message}`;
-    // (4) Signature — every node that could not be authenticated (no key, a
+    // (5) Signature — every node that could not be authenticated (no key, a
     // malformed key, a bad signature, a delegation entry that is no receipt).
     const sigFailures = treeErrors.filter((e) => e.path === undefined);
     checks.push({
@@ -156,7 +171,7 @@ export async function verifyWire(
             : `Ed25519 over JCS body — verified with embedded public_key`
           : sigFailures.map(describe).join("; "),
     });
-    // (4b) service_result_hash — sovereign payment receipts only: the paid
+    // (5b) service_result_hash — sovereign payment receipts only: the paid
     // service's result hash as the payer asserted it (spec/settlement-v1.md
     // §7). The schema step already rejected a malformed outer value.
     const serviceFailures = treeErrors.filter((e) => e.path === "service_result_hash");
@@ -170,7 +185,7 @@ export async function verifyWire(
             : serviceFailures.map(describe).join("; "),
       });
     }
-    // (5) result_hash binds result — strict by default. A valid signature
+    // (6) result_hash binds result — strict by default. A valid signature
     // proves the bytes are authentic, not that result_hash commits to the
     // result field; a receipt whose hash a third party cannot recompute from
     // its own result is INVALID unless --lenient asks for signature-only.

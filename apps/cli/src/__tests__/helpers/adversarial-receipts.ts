@@ -14,6 +14,7 @@ import {
   toBase64Url,
 } from "@motebit/crypto";
 import { generateKeypair, signExecutionReceipt } from "@motebit/encryption";
+import { toWellFormedText } from "@motebit/sdk";
 
 export const sha256Hex = (s: string): string =>
   createHash("sha256").update(s, "utf8").digest("hex");
@@ -54,6 +55,7 @@ export async function mintLegacy(
   taskId: string,
   result: string,
   resultHash: string,
+  delegations?: unknown[],
 ): Promise<Record<string, unknown>> {
   const kp = await generateKeypair();
   const body = {
@@ -68,6 +70,7 @@ export async function mintLegacy(
     memories_formed: 0,
     prompt_hash: "a".repeat(64),
     result_hash: resultHash,
+    ...(delegations ? { delegation_receipts: delegations } : {}),
     public_key: bytesToHex(kp.publicKey),
     suite: EXECUTION_RECEIPT_SUITE,
   };
@@ -162,14 +165,17 @@ export async function adversarialCorpus(): Promise<CorpusEntry[]> {
   const nestedSurrogate = await mintLegacy("task-depth-1", "\udc00", sha256Hex("\ufffd"));
   out.push({
     name: "child-lone-surrogate-depth1",
-    receipt: await mint("task-outer", "o", sha256Hex("o"), [nestedSurrogate]),
+    // Signed as main signed it: today's signer refuses to embed such a child.
+    receipt: await mintLegacy("task-outer", "o", sha256Hex("o"), [nestedSurrogate]),
     strictOk: false,
     lenientOk: true,
   });
-  // Today's signer replaces the surrogate with U+FFFD before signing: valid.
+  // Repaired where the text is produced (toWellFormedText, as the task handler
+  // does on a stream cut mid-emoji), then signed: valid. The signer itself
+  // refuses an unrepaired one.
   out.push({
-    name: "signer-repaired-lone-surrogate",
-    receipt: await mint("task-outer", "cut \ud83d", sha256Hex("cut \ufffd")),
+    name: "source-repaired-lone-surrogate",
+    receipt: await mint("task-outer", toWellFormedText("cut \ud83d"), sha256Hex("cut \ufffd")),
     strictOk: true,
     lenientOk: true,
   });

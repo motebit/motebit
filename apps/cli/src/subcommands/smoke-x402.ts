@@ -29,7 +29,7 @@
  */
 
 import * as crypto from "node:crypto";
-import type { TokenAudience } from "@motebit/sdk";
+import { truncateWellFormed, type TokenAudience } from "@motebit/sdk";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -491,7 +491,10 @@ export async function buildSmokeWorkerReceipt(args: {
   completedAt: number;
 }): Promise<Awaited<ReturnType<typeof signExecutionReceipt>>> {
   const completedAt = args.completedAt;
-  const result = `echo-ack-${args.taskId.slice(0, 8)}`;
+  // Cut on a code-point boundary: signExecutionReceipt refuses text with an
+  // unpaired surrogate (spec/execution-ledger-v1.md §11.4), so the repair
+  // lives here, at the text's source.
+  const result = `echo-ack-${truncateWellFormed(args.taskId, 8)}`;
 
   // Hashes are SHA-256 hex — the protocol contract is "what could a verifier
   // reproduce?". result_hash is hex(SHA-256(UTF-8(result))) per

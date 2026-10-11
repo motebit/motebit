@@ -3,10 +3,10 @@
  * (spec/execution-ledger-v1.md §11.4; JCS requires I-JSON, RFC 8785 §3.1 /
  * RFC 7493 §2.1). Under STRICT hash binding a receipt carrying one anywhere in
  * its body is INVALID — the verifier never substitutes U+FFFD, which would let
- * two distinct results share one signature and one result_hash — and so is its
- * structured verdict (which always checks result_hash binding). Matches the
+ * two distinct results share one signature and one result_hash. Matches the
  * Python reference verifier, which cannot UTF-8 encode such a string.
- * Signature-only verification keeps main's behaviour (see
+ * Signature-only verification and the structured verdict (`verifyReceiptVerdict`,
+ * part of the pinned default contract) keep main's behaviour (see
  * receipt-lone-surrogate-compat.test.ts).
  */
 import { createHash } from "node:crypto";
@@ -56,7 +56,7 @@ describe("strict verification rejects receipts with an unpaired UTF-16 surrogate
     ["lone low", "\udc00 y"],
     ["reversed pair", "\udc00\ud800"],
   ] as const) {
-    it(`${label} in result → invalid strict with a §11.4 reason; verdict invalid`, async () => {
+    it(`${label} in result → invalid strict with a §11.4 reason; verdict as on main`, async () => {
       const r = await mintLegacy(s);
       const v = await verifyReceipt(r, { strictHashBinding: true });
       expect(v.valid).toBe(false);
@@ -65,9 +65,12 @@ describe("strict verification rejects receipts with an unpaired UTF-16 surrogate
       );
       // Signature-only (the library default) is unchanged from main.
       expect((await verifyReceipt(r)).valid).toBe(true);
+      // The verdict has no strict mode; it stays main's: its result_hash
+      // recomputation (TextEncoder) substitutes U+FFFD exactly as the legacy
+      // signer's hash did, so the binding holds.
       const verdict = await verifyReceiptVerdict(r);
-      expect(verdict.integrity).toBe("invalid");
-      expect(verdict.repair?.code).toBe("integrity.unpaired_surrogate");
+      expect(verdict.integrity).toBe("verified");
+      expect(verdict.repair?.axis).not.toBe("integrity");
     });
   }
 

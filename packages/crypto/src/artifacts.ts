@@ -10,6 +10,7 @@
 
 import {
   canonicalJson,
+  canonicalJsonForSigning,
   canonicalSha256,
   toBase64Url,
   fromBase64Url,
@@ -22,7 +23,6 @@ import {
   ed25519Sign,
   ed25519Verify,
   base58btcEncode,
-  hasUnpairedSurrogate,
 } from "./signing.js";
 
 /**
@@ -111,10 +111,6 @@ export interface SignableReceipt {
 /** The one suite ExecutionReceipts sign under today. */
 export const EXECUTION_RECEIPT_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
 
-/** Every unpaired UTF-16 surrogate (a high not followed by a low, a low not preceded by a high). */
-const UNPAIRED_SURROGATE_G =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
-
 /**
  * Sign an execution receipt. Stamps the cryptosuite discriminator into
  * the receipt body, canonicalizes with JCS, dispatches the primitive
@@ -124,27 +120,23 @@ const UNPAIRED_SURROGATE_G =
  * Callers pass a receipt *without* `signature` or `suite`; the signer
  * owns both. The returned object is a full `SignableReceipt` with
  * `suite` and `signature` set.
+ *
+ * Throws `UnpairedSurrogateError` (via `canonicalJsonForSigning`) when any
+ * string or key in the body, embedded `delegation_receipts` included, holds an
+ * unpaired UTF-16 surrogate (spec/execution-ledger-v1.md §11.4). It never
+ * repairs: callers repair text where they produce it (`toWellFormedText` /
+ * `truncateWellFormed`).
  */
 export async function signExecutionReceipt<T extends Omit<SignableReceipt, "signature" | "suite">>(
   receipt: T,
   privateKey: Uint8Array,
   publicKey?: Uint8Array,
 ): Promise<T & { suite: typeof EXECUTION_RECEIPT_SUITE; signature: string }> {
-  // Never emit an unpaired UTF-16 surrogate (spec/execution-ledger-v1.md
-  // §11.4): a `result` cut mid-pair upstream (an LLM stream truncated
-  // mid-emoji) is repaired to U+FFFD. A `result_hash` the caller computed with
-  // a UTF-8 encoder is unchanged by this — the encoder substitutes U+FFFD too —
-  // so the receipt verifies under strict hash binding. Well-formed input (every
-  // receipt main signed without a surrogate) signs byte-identically.
-  const repaired =
-    typeof receipt.result === "string" && hasUnpairedSurrogate(receipt.result)
-      ? { ...receipt, result: receipt.result.replace(UNPAIRED_SURROGATE_G, "\uFFFD") }
-      : receipt;
   // Embed the public key for portable verification (no relay lookup needed)
   // and stamp the suite into the signed body.
-  const withKey = publicKey ? { ...repaired, public_key: bytesToHex(publicKey) } : repaired;
+  const withKey = publicKey ? { ...receipt, public_key: bytesToHex(publicKey) } : receipt;
   const body = { ...withKey, suite: EXECUTION_RECEIPT_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(EXECUTION_RECEIPT_SUITE, message, privateKey);
   const signed = { ...body, signature: toBase64Url(sig) } as T & {
@@ -360,7 +352,7 @@ export async function signToolInvocationReceipt<
 ): Promise<T & { suite: typeof TOOL_INVOCATION_RECEIPT_SUITE; signature: string }> {
   const withKey = publicKey ? { ...receipt, public_key: bytesToHex(publicKey) } : receipt;
   const body = { ...withKey, suite: TOOL_INVOCATION_RECEIPT_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(TOOL_INVOCATION_RECEIPT_SUITE, message, privateKey);
   const signed = { ...body, signature: toBase64Url(sig) } as T & {
@@ -476,7 +468,7 @@ export async function signComputerSessionReceipt<
 ): Promise<T & { suite: typeof COMPUTER_SESSION_RECEIPT_SUITE; signature: string }> {
   const withKey = publicKey ? { ...receipt, public_key: bytesToHex(publicKey) } : receipt;
   const body = { ...withKey, suite: COMPUTER_SESSION_RECEIPT_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(COMPUTER_SESSION_RECEIPT_SUITE, message, privateKey);
   const signed = { ...body, signature: toBase64Url(sig) } as T & {
@@ -825,7 +817,7 @@ export async function signDelegation(
   delegatorPrivateKey: Uint8Array,
 ): Promise<DelegationToken> {
   const body = { ...delegation, suite: DELEGATION_TOKEN_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(DELEGATION_TOKEN_SUITE, message, delegatorPrivateKey);
   return { ...body, signature: toBase64Url(sig) };
@@ -937,7 +929,7 @@ export async function signStandingDelegation(
   delegatorPrivateKey: Uint8Array,
 ): Promise<StandingDelegation> {
   const body = { ...grant, suite: DELEGATION_TOKEN_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(DELEGATION_TOKEN_SUITE, message, delegatorPrivateKey);
   return { ...body, signature: toBase64Url(sig) };
@@ -1090,7 +1082,7 @@ export async function signDelegationRevocation(
   delegatorPrivateKey: Uint8Array,
 ): Promise<DelegationRevocation> {
   const body = { ...revocation, suite: DELEGATION_TOKEN_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(DELEGATION_TOKEN_SUITE, message, delegatorPrivateKey);
   return { ...body, signature: toBase64Url(sig) };
@@ -1386,7 +1378,7 @@ export async function signRequestEnvelope(
     ...(fields.nonce !== undefined ? { nonce: fields.nonce } : {}),
     suite: SIGNED_REQUEST_ENVELOPE_SUITE,
   };
-  const message = new TextEncoder().encode(canonicalJson(body));
+  const message = new TextEncoder().encode(canonicalJsonForSigning(body));
   const sig = await signBySuite(SIGNED_REQUEST_ENVELOPE_SUITE, message, identityPrivateKey);
   return { ...body, signature: toBase64Url(sig) };
 }
@@ -1481,7 +1473,7 @@ export async function signAdjudicatorVote(
   peerPrivateKey: Uint8Array,
 ): Promise<AdjudicatorVote> {
   const body = { ...vote, suite: ADJUDICATOR_VOTE_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(ADJUDICATOR_VOTE_SUITE, message, peerPrivateKey);
   return { ...body, signature: toBase64Url(sig) };
@@ -1539,7 +1531,7 @@ export async function signApprovalDecision<T extends Omit<ApprovalDecision, "sig
 ): Promise<T & { suite: typeof APPROVAL_DECISION_SUITE; signature: string }> {
   const withKey = publicKey ? { ...decision, public_key: bytesToHex(publicKey) } : decision;
   const body = { ...withKey, suite: APPROVAL_DECISION_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(APPROVAL_DECISION_SUITE, message, approverPrivateKey);
   const signed = { ...body, signature: toBase64Url(sig) } as T & {
@@ -1659,7 +1651,7 @@ export async function signDisputeRequest(
   filerPrivateKey: Uint8Array,
 ): Promise<DisputeRequest> {
   const body = { ...request, suite: DISPUTE_REQUEST_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(DISPUTE_REQUEST_SUITE, message, filerPrivateKey);
   return { ...body, signature: toBase64Url(sig) };
@@ -1782,7 +1774,7 @@ export async function signDisputeEvidence(
   submitterPrivateKey: Uint8Array,
 ): Promise<DisputeEvidence> {
   const body = { ...evidence, suite: DISPUTE_EVIDENCE_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(DISPUTE_EVIDENCE_SUITE, message, submitterPrivateKey);
   return { ...body, signature: toBase64Url(sig) };
@@ -1823,7 +1815,7 @@ export async function signDisputeAppeal(
   appealerPrivateKey: Uint8Array,
 ): Promise<DisputeAppeal> {
   const body = { ...appeal, suite: DISPUTE_APPEAL_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(DISPUTE_APPEAL_SUITE, message, appealerPrivateKey);
   return { ...body, signature: toBase64Url(sig) };
@@ -1882,7 +1874,7 @@ export async function signConsolidationReceipt(
     ? { ...receipt, public_key: bytesToHex(publicKey) }
     : receipt;
   const body = { ...withKey, suite: CONSOLIDATION_RECEIPT_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(CONSOLIDATION_RECEIPT_SUITE, message, privateKey);
   return Object.freeze({ ...body, signature: toBase64Url(sig) });
@@ -1951,7 +1943,7 @@ export async function signConsolidationMutationManifest(
     ? { ...manifest, public_key: bytesToHex(publicKey) }
     : manifest;
   const body = { ...withKey, suite: CONSOLIDATION_MUTATION_MANIFEST_SUITE };
-  const canonical = canonicalJson(body);
+  const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(CONSOLIDATION_MUTATION_MANIFEST_SUITE, message, privateKey);
   return Object.freeze({ ...body, signature: toBase64Url(sig) });
@@ -2189,8 +2181,9 @@ function keySuccessionPayload(
   oldPublicKeyHex: string,
   newPublicKeyHex: string,
   timestamp: number,
-  reason?: string,
-  recovery?: boolean,
+  reason: string | undefined,
+  recovery: boolean | undefined,
+  canonicalize: (value: unknown) => string,
 ): string {
   const obj: Record<string, unknown> = {
     old_public_key: oldPublicKeyHex,
@@ -2204,7 +2197,7 @@ function keySuccessionPayload(
   if (recovery) {
     obj.recovery = true;
   }
-  return canonicalJson(obj);
+  return canonicalize(obj);
 }
 
 /**
@@ -2223,7 +2216,14 @@ export async function signKeySuccession(
   const oldPublicKeyHex = bytesToHex(oldPublicKey);
   const newPublicKeyHex = bytesToHex(newPublicKey);
 
-  const payload = keySuccessionPayload(oldPublicKeyHex, newPublicKeyHex, timestamp, reason);
+  const payload = keySuccessionPayload(
+    oldPublicKeyHex,
+    newPublicKeyHex,
+    timestamp,
+    reason,
+    undefined,
+    canonicalJsonForSigning,
+  );
   const message = new TextEncoder().encode(payload);
 
   const oldSig = await signBySuite(KEY_SUCCESSION_SUITE, message, oldPrivateKey);
@@ -2272,6 +2272,7 @@ export async function signGuardianRecoverySuccession(
     timestamp,
     effectiveReason,
     true,
+    canonicalJsonForSigning,
   );
   const message = new TextEncoder().encode(payload);
 
@@ -2307,6 +2308,7 @@ export async function verifyKeySuccession(
     record.timestamp,
     record.reason,
     record.recovery,
+    canonicalJson,
   );
   const message = new TextEncoder().encode(payload);
 
@@ -2453,7 +2455,7 @@ export async function signGuardianRevocation(
   timestamp: number;
 }> {
   const ts = timestamp ?? Date.now();
-  const payload = canonicalJson({
+  const payload = canonicalJsonForSigning({
     action: "guardian_revoked",
     timestamp: ts,
     suite: GUARDIAN_REVOCATION_SUITE,
@@ -2544,11 +2546,11 @@ export async function signCollaborativeReceipt(
   receipt: Omit<SignableCollaborativeReceipt, "content_hash" | "initiator_signature" | "suite">,
   initiatorPrivateKey: Uint8Array,
 ): Promise<SignableCollaborativeReceipt> {
-  const receiptsCanonical = canonicalJson(receipt.participant_receipts);
+  const receiptsCanonical = canonicalJsonForSigning(receipt.participant_receipts);
   const receiptsBytes = new TextEncoder().encode(receiptsCanonical);
   const contentHash = await hash(receiptsBytes);
 
-  const sigPayload = canonicalJson({
+  const sigPayload = canonicalJsonForSigning({
     proposal_id: receipt.proposal_id,
     plan_id: receipt.plan_id,
     content_hash: contentHash,
@@ -2679,7 +2681,7 @@ export async function signDeviceRegistration<
   privateKey: Uint8Array,
 ): Promise<T & { suite: typeof DEVICE_REGISTRATION_SUITE; signature: string }> {
   const withSuite = { ...body, suite: DEVICE_REGISTRATION_SUITE };
-  const canonical = canonicalJson(withSuite);
+  const canonical = canonicalJsonForSigning(withSuite);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(DEVICE_REGISTRATION_SUITE, message, privateKey);
   return { ...withSuite, signature: toBase64Url(sig) };
@@ -2813,7 +2815,7 @@ export async function signMotebitAnnouncement<
   privateKey: Uint8Array,
 ): Promise<T & { suite: typeof MOTEBIT_ANNOUNCEMENT_SUITE; signature: string }> {
   const withSuite = { ...body, suite: MOTEBIT_ANNOUNCEMENT_SUITE };
-  const canonical = canonicalJson(withSuite);
+  const canonical = canonicalJsonForSigning(withSuite);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(MOTEBIT_ANNOUNCEMENT_SUITE, message, privateKey);
   return { ...withSuite, signature: toBase64Url(sig) };
@@ -3007,7 +3009,7 @@ export async function signMigrationRequest(
 ): Promise<MigrationRequest> {
   const sig = await signBySuite(
     request.suite,
-    new TextEncoder().encode(canonicalJson(request)),
+    new TextEncoder().encode(canonicalJsonForSigning(request)),
     privateKey,
   );
   return { ...request, signature: toBase64Url(sig) };
@@ -3172,11 +3174,11 @@ export async function signCredentialBundle(
   bundle: Omit<CredentialBundle, "bundle_hash" | "signature">,
   privateKey: Uint8Array,
 ): Promise<CredentialBundle> {
-  const bundle_hash = await hash(new TextEncoder().encode(canonicalJson(bundle)));
+  const bundle_hash = await hash(new TextEncoder().encode(canonicalJsonForSigning(bundle)));
   const withHash = { ...bundle, bundle_hash };
   const sig = await signBySuite(
     bundle.suite,
-    new TextEncoder().encode(canonicalJson(withHash)),
+    new TextEncoder().encode(canonicalJsonForSigning(withHash)),
     privateKey,
   );
   return { ...withHash, signature: toBase64Url(sig) };

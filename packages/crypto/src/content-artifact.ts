@@ -34,6 +34,7 @@
 
 import {
   canonicalJson,
+  canonicalJsonForSigning,
   bytesToHex,
   hexToBytes,
   toBase64Url,
@@ -124,8 +125,11 @@ export interface SignContentArtifactOptions {
 }
 
 /** Canonical bytes used for signing — manifest without its own signature field. */
-function canonicalizeForSigning(unsigned: Omit<ContentArtifactManifest, "signature">): Uint8Array {
-  return new TextEncoder().encode(canonicalJson(unsigned));
+function canonicalizeForSigning(
+  unsigned: Omit<ContentArtifactManifest, "signature">,
+  canonicalize: (value: unknown) => string,
+): Uint8Array {
+  return new TextEncoder().encode(canonicalize(unsigned));
 }
 
 /**
@@ -151,7 +155,7 @@ export async function signContentArtifact(
     content_hash: bytesToHex(contentHashBytes),
     ...(options.invocation ? { invocation: options.invocation } : {}),
   };
-  const message = canonicalizeForSigning(unsigned);
+  const message = canonicalizeForSigning(unsigned, canonicalJsonForSigning);
   const sig = await signBySuite(suite, message, options.producerPrivateKey);
   return { ...unsigned, signature: toBase64Url(sig) };
 }
@@ -238,7 +242,7 @@ export async function verifyContentArtifact(
     content_hash: manifest.content_hash,
     ...(manifest.invocation ? { invocation: manifest.invocation } : {}),
   };
-  const message = canonicalizeForSigning(unsigned);
+  const message = canonicalizeForSigning(unsigned, canonicalJson);
   let valid: boolean;
   try {
     valid = await verifyBySuite(manifest.suite, message, sigBytes, publicKey);

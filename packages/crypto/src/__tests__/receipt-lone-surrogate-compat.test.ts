@@ -29,6 +29,7 @@ import {
   hexToBytes,
   signExecutionReceipt,
   toBase64Url,
+  UnpairedSurrogateError,
   verifyExecutionReceipt,
   verifyExecutionReceiptDetailed,
   verifyReceipt,
@@ -105,7 +106,9 @@ describe("legacy (main-signed) lone-surrogate receipt — signature paths keep m
   it("a legacy lone-surrogate child: default accepts the tree, strict names the depth", async () => {
     const { r: child } = await legacyReceipt("\ud83d");
     const kp = await generateKeypair();
-    const outer = (await signExecutionReceipt(
+    // Signed as main signed it: today's signExecutionReceipt refuses to embed
+    // such a child (see "signExecutionReceipt refuses" below).
+    const outer = await signLegacy(
       {
         task_id: "task-outer",
         motebit_id: "m",
@@ -122,7 +125,7 @@ describe("legacy (main-signed) lone-surrogate receipt — signature paths keep m
       },
       kp.privateKey,
       kp.publicKey,
-    )) as ExecutionReceipt;
+    );
     expect((await verifyReceipt(outer)).valid).toBe(true);
     const strict = await verifyReceipt(outer, { strictHashBinding: true });
     expect(strict.valid).toBe(false);
@@ -138,29 +141,39 @@ describe("legacy (main-signed) lone-surrogate receipt — signature paths keep m
 });
 
 describe("signExecutionReceipt never emits an unpaired surrogate", () => {
-  it("replaces a lone surrogate in result with U+FFFD; result_hash still binds; strict accepts", async () => {
+  const body = (extra: Record<string, unknown>) => ({
+    task_id: "t",
+    motebit_id: "m",
+    device_id: "d",
+    submitted_at: 1,
+    completed_at: 2,
+    status: "completed" as const,
+    result: "ok",
+    tools_used: [] as string[],
+    memories_formed: 0,
+    prompt_hash: "a".repeat(64),
+    result_hash: "b".repeat(64),
+    ...extra,
+  });
+
+  it("refuses (UnpairedSurrogateError, path named) — never repairs — at any field, key or depth", async () => {
     const kp = await generateKeypair();
-    const raw = "cut mid-emoji \ud83d";
-    const r = (await signExecutionReceipt(
-      {
-        task_id: "t",
-        motebit_id: "m",
-        device_id: "d",
-        submitted_at: 1,
-        completed_at: 2,
-        status: "completed",
-        result: raw,
-        tools_used: [],
-        memories_formed: 0,
-        prompt_hash: "a".repeat(64),
-        result_hash: await utf8Hash(raw),
-      },
-      kp.privateKey,
-      kp.publicKey,
-    )) as ExecutionReceipt;
-    expect(r.result).toBe("cut mid-emoji �");
-    expect(await verifyExecutionReceipt(r, kp.publicKey)).toBe(true);
-    expect((await verifyReceipt(r, { strictHashBinding: true })).valid).toBe(true);
+    const { r: child } = await legacyReceipt("\ud83d");
+    for (const [extra, path] of [
+      [{ result: "cut mid-emoji \ud83d" }, '$["result"]'],
+      [{ task_id: "\udc00t" }, '$["task_id"]'],
+      [{ tools_used: ["ok", "x\ud800"] }, '$["tools_used"][1]'],
+      [{ ["k\ud800"]: "v" }, '$["k\\ud800"] (object key)'],
+      [{ delegation_receipts: [child] }, '$["delegation_receipts"][0]["result"]'],
+    ] as const) {
+      const err = await signExecutionReceipt(body(extra), kp.privateKey, kp.publicKey).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(UnpairedSurrogateError);
+      expect((err as UnpairedSurrogateError).name).toBe("UnpairedSurrogateError");
+      expect((err as UnpairedSurrogateError).path).toBe(path);
+    }
   });
 
   it("well-formed input signs byte-identically to main's recipe", async () => {
