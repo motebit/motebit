@@ -1018,8 +1018,17 @@ async function main(): Promise<number> {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`motebit-verify: cannot read ${args.file}: ${msg}\n`);
-    return 2;
+    // An I/O failure carries a Node error code: the file could not be read.
+    // Anything else was thrown by the verifier on content it read — the
+    // signature-only default keeps the merge-base's throw on a malformed
+    // receipt (a null delegation entry) — so the artifact is invalid, not
+    // unreadable, as `motebit verify receipt` reports it.
+    if (typeof (err as { code?: unknown } | null)?.code === "string") {
+      process.stderr.write(`motebit-verify: cannot read ${args.file}: ${msg}\n`);
+      return 2;
+    }
+    process.stderr.write(`motebit-verify: invalid: the verifier threw: ${msg}\n`);
+    return 1;
   }
 
   if (args.lenient === true && result.type === "receipt")

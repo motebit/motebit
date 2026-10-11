@@ -197,9 +197,9 @@ describe("signExecutionReceipt never emits an unpaired surrogate", () => {
   });
 });
 
-describe("verifyReceipt never throws on a malformed delegation entry", () => {
+describe("a malformed delegation entry: strict names it, the default keeps the merge-base verdict", () => {
   for (const bad of [null, "x", 7, []]) {
-    it(`delegation_receipts: [${JSON.stringify(bad)}] → invalid, default and strict`, async () => {
+    it(`delegation_receipts: [${JSON.stringify(bad)}]`, async () => {
       const kp = await generateKeypair();
       const outer = (await signExecutionReceipt(
         {
@@ -219,12 +219,22 @@ describe("verifyReceipt never throws on a malformed delegation entry", () => {
         kp.privateKey,
         kp.publicKey,
       )) as ExecutionReceipt;
-      for (const opts of [undefined, { strictHashBinding: true }]) {
-        const v = await verifyReceipt(outer, opts);
+      // Strict: a §11.5 shape failure, never a TypeError.
+      const strict = await verifyReceipt(outer, { strictHashBinding: true });
+      expect(strict.valid).toBe(false);
+      expect(strict.delegations?.[0]?.errors?.[0]?.message).toMatch(
+        /§11\.5 violation: delegation_receipts entry is not an object/,
+      );
+      // Default: byte-identical to the merge-base (locked across the whole
+      // corpus by apps/cli/src/__tests__/default-verdict-differential.test.ts)
+      // — a null entry throws as it always has; any other non-object entry is
+      // a keyless child.
+      if (bad === null) {
+        await expect(verifyReceipt(outer)).rejects.toThrow(TypeError);
+      } else {
+        const v = await verifyReceipt(outer);
         expect(v.valid).toBe(false);
-        expect(v.delegations?.[0]?.errors?.[0]?.message).toMatch(
-          /§11\.5 violation: delegation_receipts entry is not an object/,
-        );
+        expect(v.delegations?.[0]?.errors?.[0]?.message).toMatch(/§11\.3 violation/);
       }
     });
   }

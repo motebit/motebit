@@ -1884,22 +1884,109 @@ export async function verifyReceipt(
   receipt: ExecutionReceipt,
   options?: VerifyOptions,
 ): Promise<ReceiptVerifyResult> {
-  return verifyReceiptAtDepth(receipt, options, 0);
+  // Two modes, two code paths. The default (signature-only) path is the
+  // merge-base's verifyReceipt verbatim — its lenient key decode, its keyless
+  // early return, its child handling (a non-object `delegation_receipts` entry
+  // throws, as it always has). Its verdicts may not change by a byte before a
+  // major release (docs/design/payment-receipt-wellformed-stop-condition.md §3;
+  // locked by apps/cli/src/__tests__/default-verdict-differential.test.ts).
+  // Every tightening — the 64-hex key rule, the full nested walk, the §11.4
+  // and §11.5 strictness — lives behind `strictHashBinding` only.
+  if (options?.strictHashBinding) return verifyReceiptStrictAtDepth(receipt, options, 0);
+  return verifyReceiptDefault(receipt);
 }
 
 /**
- * `verifyReceipt` at a known nesting depth (0 = the outer receipt). Strict
- * hash binding (`options.strictHashBinding`) is carried into every
- * `delegation_receipts` entry at every depth, and its failures name the depth
- * and `task_id` of the offending child. Without strict mode the options are
- * not forwarded and every message is unchanged.
+ * The default (signature-only) `verifyReceipt`: byte-for-byte the merge-base
+ * behaviour. Do not tighten it here; tighten the strict path.
  */
-async function verifyReceiptAtDepth(
+async function verifyReceiptDefault(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult> {
+  // Resolve public key: embedded in receipt, or fail
+  let publicKey: Uint8Array | null = null;
+  let signerDid: string | undefined;
+
+  if (receipt.public_key) {
+    try {
+      publicKey = hexToBytes(receipt.public_key);
+      if (publicKey.length === 32) {
+        signerDid = publicKeyToDidKey(publicKey);
+      } else {
+        publicKey = null;
+      }
+    } catch {
+      publicKey = null;
+    }
+  }
+
+  if (!publicKey) {
+    // Recursively verify delegations even if root can't be verified
+    const delegations = await verifyReceiptDelegationsDefault(receipt);
+    return {
+      type: "receipt",
+      valid: false,
+      receipt,
+      errors: [
+        {
+          message: "§11.3 violation: No embedded public_key — cannot verify without known keys",
+        },
+      ],
+      ...(delegations.length > 0 ? { delegations } : {}),
+    };
+  }
+
+  const sigResult = await verifyReceiptSignature(receipt, publicKey);
+  const errors: VerificationError[] = [];
+
+  if (!sigResult.valid) {
+    errors.push({
+      message: sigResult.error ?? "§11.2 violation: Ed25519 signature did not verify",
+    });
+  }
+
+  // Recursively verify delegation receipts
+  const delegations = await verifyReceiptDelegationsDefault(receipt);
+  const delegationErrors = delegations.filter((d) => !d.valid);
+  for (const d of delegationErrors) {
+    errors.push({
+      message: `§11.5 violation: delegation ${d.receipt?.task_id ?? "unknown"} verification failed`,
+      path: `delegation_receipts`,
+    });
+  }
+
+  return {
+    type: "receipt",
+    valid: sigResult.valid && delegationErrors.length === 0,
+    receipt,
+    signer: signerDid,
+    keySource: "embedded",
+    ...(delegations.length > 0 ? { delegations } : {}),
+    ...(errors.length > 0 ? { errors } : {}),
+  };
+}
+
+/** The default path's children: each verified in default mode, as the merge-base did. */
+async function verifyReceiptDelegationsDefault(
   receipt: ExecutionReceipt,
-  options: VerifyOptions | undefined,
+): Promise<ReceiptVerifyResult[]> {
+  if (!receipt.delegation_receipts || receipt.delegation_receipts.length === 0) {
+    return [];
+  }
+  return Promise.all(receipt.delegation_receipts.map((dr) => verifyReceiptDefault(dr)));
+}
+
+/**
+ * Strict `verifyReceipt` (`strictHashBinding`) at a known nesting depth (0 =
+ * the outer receipt). Strict hash binding is carried into every
+ * `delegation_receipts` entry at every depth, and its failures name the depth
+ * and `task_id` of the offending child. Only a 64-hex-character `public_key`
+ * is a usable key; every node is walked whether or not its parent's key was
+ * usable; a non-object child is a §11.5 shape failure, never a TypeError.
+ */
+async function verifyReceiptStrictAtDepth(
+  receipt: ExecutionReceipt,
+  options: VerifyOptions,
   depth: number,
 ): Promise<ReceiptVerifyResult> {
-  const strict = options?.strictHashBinding === true;
   // Resolve public key: embedded in receipt, or fail. Only 64 hex characters
   // (32 bytes) is a usable key; anything else is treated as absent.
   let publicKey: Uint8Array | null = null;
@@ -1928,16 +2015,14 @@ async function verifyReceiptAtDepth(
 
   // Recursively verify delegation receipts — whether or not this node's key
   // was usable, so every depth is walked.
-  const delegations = await verifyReceiptDelegations(receipt, strict, depth);
+  const delegations = await verifyReceiptDelegationsStrict(receipt, options, depth);
   const delegationErrors = delegations.filter((d) => !d.valid);
   for (const d of delegationErrors) {
     const base = `§11.5 violation: delegation ${d.receipt?.task_id ?? "unknown"} verification failed`;
     // Strict mode surfaces the child's own reasons so a nested result_hash
     // mismatch is named (depth + task_id) at the top level.
     const detail =
-      strict && d.errors && d.errors.length > 0
-        ? `: ${d.errors.map((e) => e.message).join("; ")}`
-        : "";
+      d.errors && d.errors.length > 0 ? `: ${d.errors.map((e) => e.message).join("; ")}` : "";
     errors.push({
       message: `${base}${detail}`,
       path: `delegation_receipts`,
@@ -1946,11 +2031,11 @@ async function verifyReceiptAtDepth(
 
   // service_result_hash is optional; when present it must be a SHA-256 hex
   // digest like every other hash field (spec/settlement-v1.md §7). Strict
-  // only: the signature-only default stays origin/main's verdict (a default
+  // only: the signature-only default stays the merge-base's verdict (a default
   // tightening waits for the next major — see
   // docs/design/payment-receipt-wellformed-stop-condition.md §3).
   let serviceHashOk = true;
-  if (strict && receipt.service_result_hash !== undefined) {
+  if (receipt.service_result_hash !== undefined) {
     serviceHashOk =
       typeof receipt.service_result_hash === "string" &&
       /^[0-9a-f]{64}$/.test(receipt.service_result_hash);
@@ -1974,19 +2059,16 @@ async function verifyReceiptAtDepth(
   // producers stopped emitting one verify over their JCS-escaped bytes, which
   // the runtime and relay signature checks (`verifyExecutionReceipt`) accept.
   let resultHashOk = true;
-  let unicodeOk = true;
-  if (strict) {
-    const { signature: _signature, ...unsignedBody } = receipt;
-    unicodeOk = !hasUnpairedSurrogate(unsignedBody);
-    // A binding failure, not a signature one: the signature over the escaped
-    // JCS bytes may well verify; what fails is that result_hash can bind them.
-    if (!unicodeOk) {
-      const where =
-        depth === 0 ? "" : ` (delegation depth ${depth}, task_id ${receipt.task_id ?? "unknown"})`;
-      errors.push({ message: `${UNPAIRED_SURROGATE_ERROR}${where}`, path: "result_hash" });
-    }
+  const { signature: _signature, ...unsignedBody } = receipt;
+  const unicodeOk = !hasUnpairedSurrogate(unsignedBody);
+  // A binding failure, not a signature one: the signature over the escaped
+  // JCS bytes may well verify; what fails is that result_hash can bind them.
+  if (!unicodeOk) {
+    const where =
+      depth === 0 ? "" : ` (delegation depth ${depth}, task_id ${receipt.task_id ?? "unknown"})`;
+    errors.push({ message: `${UNPAIRED_SURROGATE_ERROR}${where}`, path: "result_hash" });
   }
-  if (strict && unicodeOk) {
+  if (unicodeOk) {
     const result: unknown = receipt.result;
     resultHashOk =
       typeof result === "string" &&
@@ -2530,25 +2612,20 @@ async function verifyToolInvocation(
   };
 }
 
-async function verifyReceiptDelegations(
+async function verifyReceiptDelegationsStrict(
   receipt: ExecutionReceipt,
-  strictHashBinding: boolean,
+  options: VerifyOptions,
   depth: number,
 ): Promise<ReceiptVerifyResult[]> {
-  if (!receipt.delegation_receipts || receipt.delegation_receipts.length === 0) {
+  if (!Array.isArray(receipt.delegation_receipts) || receipt.delegation_receipts.length === 0) {
     return [];
   }
-  // Only strict binding propagates; the default (signature-only) path stays
-  // byte-identical to its pre-recursion behaviour.
-  const childOptions: VerifyOptions | undefined = strictHashBinding
-    ? { strictHashBinding: true }
-    : undefined;
   return Promise.all(
     receipt.delegation_receipts.map((dr) =>
       // A JSON tree can hold anything here; an entry that is not a receipt
       // object is a §11.5 shape failure, never a TypeError out of the verifier.
       dr !== null && typeof dr === "object" && !Array.isArray(dr)
-        ? verifyReceiptAtDepth(dr, childOptions, depth + 1)
+        ? verifyReceiptStrictAtDepth(dr, options, depth + 1)
         : Promise.resolve<ReceiptVerifyResult>({
             type: "receipt",
             valid: false,
