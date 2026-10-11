@@ -357,3 +357,75 @@ describe("v2 removal", () => {
     expect(peerRows("b")).toEqual(before);
   });
 });
+
+// §3.5's verifier order: parse, kind, recipient = self, THEN the sender's key
+// in relay_peers — an unknown sender is 403, and a message for another relay
+// is 400 `wrong_recipient` whether or not this relay knows its sender.
+describe("§3.5 order: recipient before lookup; unknown sender is 403", () => {
+  async function stranger(): Promise<{ id: string; privateKey: Uint8Array }> {
+    const { generateKeypair } = await import("@motebit/encryption");
+    const kp = await generateKeypair();
+    return { id: `relay-stranger-${rand().slice(0, 12)}`, privateKey: kp.privateKey };
+  }
+
+  it("a heartbeat from a sender B holds no peer for is 403, and changes nothing", async () => {
+    const s = await stranger();
+    const beat = await heartbeatRequest({
+      sender: s.id,
+      recipient: ids.b.relayMotebitId,
+      privateKey: s.privateKey,
+    });
+    const before = peerRows("b");
+    const res = await post("b", "/federation/v1/peer/heartbeat", beat);
+    expect(res.status).toBe(403);
+    expect(peerRows("b")).toEqual(before);
+  });
+
+  it("a removal from a sender B holds no peer for is 403, and changes nothing", async () => {
+    const s = await stranger();
+    const removal = await removeRequest({
+      sender: s.id,
+      recipient: ids.b.relayMotebitId,
+      privateKey: s.privateKey,
+    });
+    const before = peerRows("b");
+    const res = await post("b", "/federation/v1/peer/remove", removal);
+    expect(res.status).toBe(403);
+    expect(peerRows("b")).toEqual(before);
+  });
+
+  it("a message for another relay is 400 wrong_recipient before any key lookup", async () => {
+    const s = await stranger();
+    const beat = await heartbeatRequest({
+      sender: s.id,
+      recipient: ids.c.relayMotebitId,
+      privateKey: s.privateKey,
+    });
+    const hb = await post("b", "/federation/v1/peer/heartbeat", beat);
+    expect(hb.status).toBe(400);
+    expect(await hb.text()).toMatch(/wrong_recipient/);
+    const removal = await removeRequest({
+      sender: s.id,
+      recipient: ids.c.relayMotebitId,
+      privateKey: s.privateKey,
+    });
+    const rm = await post("b", "/federation/v1/peer/remove", removal);
+    expect(rm.status).toBe(400);
+    expect(await rm.text()).toMatch(/wrong_recipient/);
+  });
+
+  it("a peer-remove sent to the heartbeat route is 400 kind_mismatch before any key lookup", async () => {
+    const s = await stranger();
+    const removal = await removeRequest({
+      sender: s.id,
+      recipient: ids.b.relayMotebitId,
+      privateKey: s.privateKey,
+    });
+    const res = await post("b", "/federation/v1/peer/heartbeat", {
+      ...removal,
+      agent_count: 0,
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/kind_mismatch/);
+  });
+});

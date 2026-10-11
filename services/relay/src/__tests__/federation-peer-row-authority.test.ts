@@ -25,6 +25,9 @@
  * the removed-peer cooldown, v2 freshness and handshake expiry all move with
  * the harness clock.
  */
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { bytesToHex, generateKeypair, sign } from "@motebit/encryption";
 
@@ -48,6 +51,11 @@ import {
   operatorConfirm,
   removeRequest,
 } from "./federation-messages.js";
+import {
+  COUNTER_TRUST_COLUMNS,
+  PEER_ROW_WRITER,
+  scanPeerRowWrites,
+} from "./peer-row-writer-scan.js";
 
 const URL_A = "http://relay-a.authority.test:3000";
 const URL_B = "http://relay-b.authority.test:3001";
@@ -599,5 +607,140 @@ describe("peerRowTransition: every (row, write, authority) against the invariant
       }
     }
     expect(mismatches, `${mismatches.length}/${cells} cells`).toEqual([]);
+  });
+});
+
+// ── Every relay_peers writer, statically ────────────────────────────────────
+//
+// The dynamic harness above proves `writePeerRow` keeps the invariant; this
+// proves nothing else writes the row. Any SQL under services/relay/src that
+// writes `relay_peers` outside `writePeerRow` is red, unless it is an UPDATE
+// assigning only columns `COUNTER_TRUST_COLUMNS` names (each with a reason) —
+// allowed by column, never by file.
+describe("relay_peers writers: only writePeerRow writes authority columns", () => {
+  const SRC = fileURLToPath(new URL("..", import.meta.url));
+
+  function sources(dir: string): string[] {
+    const out: string[] = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== "__tests__") out.push(...sources(p));
+      } else if (e.name.endsWith(".ts") && !e.name.endsWith(".test.ts")) out.push(p);
+    }
+    return out;
+  }
+
+  it("the relay source tree: every write is the writer or counter/trust-only", () => {
+    const files = sources(SRC);
+    const sites = files.flatMap((f) =>
+      scanPeerRowWrites(relative(SRC, f), readFileSync(f, "utf8")),
+    );
+    const red = sites.filter((s) => s.refusal !== null);
+    expect(
+      red.map((s) => `${s.file}:${s.line} (${s.fn ?? "module"}) ${s.refusal} — ${s.sql}`),
+    ).toEqual([]);
+    // Aperture: the writer's three statements are seen, so the scan reads SQL at all.
+    const writer = sites.filter((s) => s.fn === PEER_ROW_WRITER.fn);
+    expect(writer.map((s) => s.verb).sort()).toEqual(["DELETE", "INSERT", "UPDATE"]);
+    console.log(
+      `relay_peers writers: ${files.length} files scanned, ${sites.length} write sites (${writer.length} in ${PEER_ROW_WRITER.fn}, ${sites.length - writer.length} counter/trust-only)`,
+    );
+  });
+
+  // Tamper fixtures: each must be red. The scanner that misses one is the
+  // scanner that would miss it in the tree.
+  const RED: Array<[string, string, string]> = [
+    [
+      "a circuit-breaker suspend outside the writer",
+      "task-routing.ts",
+      `function f(db) { db.prepare("UPDATE relay_peers SET state = 'suspended' WHERE peer_relay_id = ?").run(id); }`,
+    ],
+    [
+      "lowercase, no spaces",
+      "a.ts",
+      `const g = () => db.prepare("update relay_peers set state='active' where peer_relay_id=?");`,
+    ],
+    [
+      "a quoted table",
+      "a.ts",
+      "db.prepare('UPDATE \"relay_peers\" SET endpoint_url = ? WHERE 1');",
+    ],
+    ["a bracketed table", "a.ts", 'db.prepare("UPDATE [relay_peers] SET public_key = ?");'],
+    ["a schema prefix", "a.ts", 'db.prepare("UPDATE main.relay_peers SET peered_at = ?");'],
+    ["a + chain", "a.ts", 'db.prepare("UPDATE relay_peers SET " + "public_key = ? WHERE x = ?");'],
+    ["a parenthesised chain", "a.ts", 'db.prepare(("UPDATE relay_peers SET ") + ("nonce = ?"));'],
+    [
+      "an interpolated column (not statically known)",
+      "a.ts",
+      "db.prepare(`UPDATE relay_peers SET ${col} = ${col} + 1 WHERE endpoint_url = ?`);",
+    ],
+    [
+      "a counter beside an authority column",
+      "a.ts",
+      'db.prepare("UPDATE relay_peers SET failed_forwards = 0, state = ? WHERE x = ?");',
+    ],
+    [
+      "an authority column after a subquery's WHERE",
+      "a.ts",
+      'db.prepare("UPDATE relay_peers SET trust_score = (SELECT s FROM t WHERE k = 1), missed_heartbeats = 0");',
+    ],
+    [
+      "a row-value target",
+      "a.ts",
+      'db.prepare("UPDATE relay_peers SET (trust_score, state) = (?, ?)");',
+    ],
+    [
+      "an INSERT elsewhere",
+      "a.ts",
+      'db.prepare("INSERT INTO relay_peers (peer_relay_id) VALUES (?)");',
+    ],
+    [
+      "an INSERT OR REPLACE elsewhere",
+      "a.ts",
+      'db.prepare("INSERT OR REPLACE INTO relay_peers (peer_relay_id) VALUES (?)");',
+    ],
+    ["a REPLACE INTO elsewhere", "a.ts", 'db.prepare("REPLACE INTO relay_peers VALUES (?)");'],
+    [
+      "a DELETE elsewhere",
+      "a.ts",
+      'db.prepare("DELETE FROM relay_peers WHERE peer_relay_id = ?");',
+    ],
+    [
+      "a function named writePeerRow in another file",
+      "task-routing.ts",
+      'function writePeerRow() { db.prepare("UPDATE relay_peers SET state = ?"); }',
+    ],
+    [
+      "a trigger body",
+      "a.ts",
+      "db.exec(\"CREATE TRIGGER t AFTER INSERT ON x BEGIN UPDATE relay_peers SET state = 'active'; END\");",
+    ],
+  ];
+  for (const [name, file, src] of RED) {
+    it(`tamper: ${name} is red`, () => {
+      const sites = scanPeerRowWrites(file, src);
+      expect(sites.length).toBeGreaterThan(0);
+      expect(sites.every((s) => s.refusal !== null)).toBe(true);
+    });
+  }
+
+  it("tamper: the real federation.ts with writePeerRow renamed is red at all three statements", () => {
+    const real = readFileSync(join(SRC, "federation.ts"), "utf8");
+    const renamed = real.replace("export function writePeerRow(", "export function writePeerRowX(");
+    expect(renamed).not.toBe(real);
+    const red = scanPeerRowWrites("federation.ts", renamed).filter((s) => s.refusal !== null);
+    expect(red.map((s) => s.verb).sort()).toEqual(["DELETE", "INSERT", "UPDATE"]);
+  });
+
+  it("counter/trust-only updates are allowed by column, with a reason for each", () => {
+    const sites = scanPeerRowWrites(
+      "anywhere.ts",
+      'db.prepare("UPDATE relay_peers SET successful_forwards = successful_forwards + 1, failed_forwards = 0, trust_level = ?, trust_score = ? WHERE peer_relay_id = ?");',
+    );
+    expect(sites).toHaveLength(1);
+    expect(sites[0]!.refusal).toBeNull();
+    for (const c of sites[0]!.columns!)
+      expect(COUNTER_TRUST_COLUMNS[c]).toMatch(/never read by peer authority/);
   });
 });
