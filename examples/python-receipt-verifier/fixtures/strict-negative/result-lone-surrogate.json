@@ -1,0 +1,16 @@
+{
+  "task_id": "019dc500-0000-7000-a000-00000000fffd",
+  "motebit_id": "65b60673-d6ed-884b-b01c-2c222d82ada0",
+  "device_id": "019dc500-0000-7000-a000-0000000000de",
+  "submitted_at": 1777109000245,
+  "completed_at": 1777109004871,
+  "status": "completed",
+  "result": "partial answer \ud800",
+  "tools_used": [],
+  "memories_formed": 0,
+  "prompt_hash": "e4fedd87c0cd17db92a529530d916f913c40eb9961f1f90d74c02c95516b4636",
+  "result_hash": "1b28c30d3dd2f372829b0fbc829d1d2571a5a195293ff5809707c7e1e2bd2f9f",
+  "public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "YEcsOzCfL6cjFbl2JnsPAGjwhKH4Xf6C3LZ1hWhX0rqKrwWW0S8bEt-rCXgjFOTY8mbPBZsliSHjdNdBN4CLAQ"
+}

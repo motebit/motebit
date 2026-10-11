@@ -55,6 +55,10 @@ interface CanonicalCounts {
   publishedBsl: number;
   /** Workspace package.jsons declared `private: true` (everything internal). */
   privatePackages: number;
+  /** Every workspace package (a package.json under `packages/*`, `apps/*`, `services/*`) — published + private. */
+  workspacePackages: number;
+  /** Workspace packages under `packages/` (directories there minus the package.json-less `github-action`). */
+  workspaceLibraries: number;
   /** Drift-defense inventory rows in docs/drift-defenses.md (canonical for the prose count). */
   driftInvariants: number;
   /** Hard-CI-gate entries in scripts/check.ts GATES (canonical for "X run as hard CI gates"). */
@@ -96,8 +100,8 @@ function readPkg(absPath: string): PkgInfo | null {
   }
 }
 
-function walkPackageJsons(): PkgInfo[] {
-  const out: PkgInfo[] = [];
+function walkPackageJsons(): Array<PkgInfo & { parent: string }> {
+  const out: Array<PkgInfo & { parent: string }> = [];
   for (const parent of ["packages", "apps", "services"]) {
     const dir = resolve(ROOT, parent);
     let entries: string[];
@@ -110,7 +114,7 @@ function walkPackageJsons(): PkgInfo[] {
       if (sub.startsWith(".")) continue;
       const pkgJson = resolve(dir, sub, "package.json");
       const info = readPkg(pkgJson);
-      if (info) out.push(info);
+      if (info) out.push({ ...info, parent });
     }
   }
   return out;
@@ -152,6 +156,8 @@ function deriveCanonical(): CanonicalCounts {
     publishedApache: published.filter((p) => p.license === "Apache-2.0").length,
     publishedBsl: published.filter((p) => p.license === "BUSL-1.1").length,
     privatePackages: pkgs.filter((p) => p.isPrivate).length,
+    workspacePackages: pkgs.length,
+    workspaceLibraries: pkgs.filter((p) => p.parent === "packages").length,
     driftInvariants: countDriftInvariants(),
     hardCiGates: countHardCiGates(),
   };
@@ -168,14 +174,18 @@ interface Probe {
    *   - two `(\d+)` groups whose **sum** equals the canonical count when `kind` is `"sum"`.
    *
    * The `"sum"` shape exists because compositional prose claims of the form
-   * `"5 surfaces + 4 supporting apps"` were the last drift class this gate
+   * `"5 surfaces + 4 supporting apps"` were a drift class this gate
    * could not express: `apps` total drifted from 8 → 9 when `apps/vscode`
    * landed, and `5 + 3 = 8` stayed legal in prose because neither digit
    * alone equalled `9`.
+   *
+   * The `"list"` shape captures one enumeration in group 1 and counts its
+   * backticked items: the README's Protocol-section spec list omitted
+   * `sync-hold-receipt` (36 names for 37 specs) with no digit to probe.
    */
   regex: RegExp;
   key: CountKey;
-  kind?: "single" | "sum";
+  kind?: "single" | "sum" | "list";
   /** Optional human label for the failure message. */
   label?: string;
 }
@@ -195,14 +205,31 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Architecture banner",
       },
       {
-        regex: /\(\[`packages\/`\]\(packages\/\)\) — (\d+) packages on a strict layer DAG/,
+        regex: /\(\[`packages\/`\]\(packages\/\)\) — (\d+) directories under `packages\/`/,
         key: "packages",
-        label: "Packages section",
+        label: "Packages section — directory count",
+      },
+      {
+        regex: /directories under `packages\/`: (\d+) workspace libraries on the 7-layer DAG/,
+        key: "workspaceLibraries",
+        label: "Packages section — workspace-library count",
       },
       {
         regex: /— (\d+) open specifications, each `motebit\/<name>@1\.0`/,
         key: "specs",
         label: "Protocol section",
+      },
+      {
+        regex: /each `motebit\/<name>@1\.0`: (.+?)\. By their own headers/,
+        key: "specs",
+        kind: "list",
+        label: "Protocol section — spec name list length",
+      },
+      {
+        regex: /By their own headers: (\d+) are `Status: Stable` and (\d+) `Draft`/,
+        key: "specs",
+        kind: "sum",
+        label: "Protocol section — Stable + Draft split",
       },
       { regex: /All \[(\d+) specs\]\(spec\/\)/, key: "specs", label: "Specification note" },
       {
@@ -290,7 +317,16 @@ const DOCS: ReadonlyArray<DocFile> = [
   {
     path: "CLAUDE.md",
     probes: [
-      { regex: /(\d+) packages on a 7-layer DAG/, key: "packages", label: "Architecture line" },
+      {
+        regex: /(\d+) directories under `packages\/`: (?:\d+) workspace libraries/,
+        key: "packages",
+        label: "Architecture line — directory count",
+      },
+      {
+        regex: /directories under `packages\/`: (\d+) workspace libraries on the 7-layer DAG/,
+        key: "workspaceLibraries",
+        label: "Architecture line — workspace-library count",
+      },
       { regex: /(\d+) open protocol specs/, key: "specs", label: "Architecture line" },
       {
         regex: /(\d+) surfaces \+ (\d+) supporting apps, (?:\d+) services/,
@@ -312,6 +348,16 @@ const DOCS: ReadonlyArray<DocFile> = [
         regex: /\*\*(\d+) packages · 7 architectural layers/,
         key: "packages",
         label: "Shape banner",
+      },
+      {
+        regex: /The (\d+) directories under `packages\/` are (?:\d+) workspace libraries/,
+        key: "packages",
+        label: "Shape paragraph — directory count",
+      },
+      {
+        regex: /directories under `packages\/` are (\d+) workspace libraries on the 7-layer DAG/,
+        key: "workspaceLibraries",
+        label: "Shape paragraph — workspace-library count",
       },
       { regex: /(\d+) open specs\*\*/, key: "specs", label: "Shape banner" },
       {
@@ -437,7 +483,7 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Project structure — apps count",
       },
       {
-        regex: /packages\/\s+(\d+) packages on a 7-layer DAG/,
+        regex: /packages\/\s+(\d+) directories under `packages\/`/,
         key: "packages",
         label: "Project structure — packages count",
       },
@@ -465,6 +511,266 @@ const DOCS: ReadonlyArray<DocFile> = [
   },
 ];
 
+// ── Sweep ─────────────────────────────────────────────────────────────
+//
+// The probe table above is one regex per KNOWN sentence, so its aperture is
+// exactly the sentences someone remembered to write a probe for. On
+// 2026-10-08 an outside reader found README.md saying "the 36 specs" (License
+// in three lines) while every probed sentence said 37: that sentence had no
+// probe, so the gate printed green. CLAUDE.md drifted the same way earlier.
+//
+// The first sweep only knew `<N> [≤2 words] specs|…|directories`, and a cold
+// review planted wrong numbers in "12 publish to npm; the other 62 are
+// workspace-private", "(The 53 under `packages/` …)" and "11 apps and 11
+// services" with the gate still green — while deprecation-lifecycle.md said
+// "51 internal packages" (true: 62) outside every scan. The sweep now reads
+// three claim FORMS in every SWEPT file:
+//
+//   1. noun form       <N> [≤2 qualifier words] specs|specifications|packages|
+//                      libraries|directories|apps|services
+//   2. predicate form  <N> publish(es) · <N> are [workspace-]private ·
+//                      <N> under `packages/`
+//   3. `+` chain       "5 surfaces + 6 supporting apps",
+//                      "(52 libraries + 11 apps + 11 services)" — the SUM is
+//                      the claim, classified by the members' nouns or by the
+//                      count claim the chain parenthesizes
+//
+// Each claim is classified into a canonical key and compared against the
+// filesystem. A claim the classifier cannot place is itself a failure (add a
+// rule or an EXEMPT entry) — never silently skipped. Out of the aperture, and
+// the success line says so: spelled-out numbers ("Four of the …"), noun forms
+// with three or more qualifier words, and `+` chains that name none of the
+// swept nouns and parenthesize no count claim.
+
+/** Files where every count claim of the three forms is checked, not just the probed ones. */
+const SWEPT: ReadonlyArray<string> = [
+  "README.md",
+  "CLAUDE.md",
+  "CONTRIBUTING.md",
+  "apps/cli/README.md",
+  "apps/docs/content/docs/operator/architecture.mdx",
+  "apps/docs/content/docs/concepts/public-surface.mdx",
+  "docs/doctrine/deprecation-lifecycle.md",
+];
+
+/**
+ * Matches that are not claims about this repo's counts. Each needle must be a
+ * literal substring that still occurs in its file (a stale entry fails), and
+ * carries the reason a reader can audit.
+ */
+const EXEMPT: ReadonlyArray<{ file: string; needle: string; reason: string }> = [
+  {
+    file: "CLAUDE.md",
+    needle: "~19 packages via an upstream",
+    reason: "historical breakage tally for the TS 6.0 revert, not a repo count",
+  },
+  {
+    file: "docs/doctrine/deprecation-lifecycle.md",
+    needle: "19 sites across 8 packages",
+    reason: "the deprecation gate's baseline at landing (2026-04-24), not a repo count",
+  },
+  {
+    file: "docs/doctrine/deprecation-lifecycle.md",
+    needle: "9 markers across 4 private packages",
+    reason: "a dated audit tally (2026-04-28), not the private-package count",
+  },
+  {
+    file: "docs/doctrine/deprecation-lifecycle.md",
+    needle: "flip on 51 internal packages",
+    reason: "the private count on the date of the 2026-04-24 sentinel flip, dated history",
+  },
+];
+
+const NOUNS = "specs|specifications|packages|libraries|directories|apps|services";
+
+/** Form 1 — `<N> [≤2 qualifier words] <noun>`. */
+const SWEEP_CLAIM = new RegExp(
+  String.raw`(?<![\w.-])(\d+)((?:\s+[\w\x60.-]+){0,2}?)\s+(${NOUNS})\b`,
+  "g",
+);
+
+/** Form 2 — a count with no noun, carried by its predicate. */
+const PREDICATE_CLAIM =
+  /(?<![\w.-])(\d+)\s+(publish(?:es)?\b|are\s+(?:workspace-)?private\b|under\s+`packages\/`)/g;
+
+/** Form 3 — a `+` chain of `<N> <one or two words>` terms. */
+const CHAIN_CLAIM =
+  /(?<![\w.-])\d+(?:\s+[A-Za-z][\w-]*){1,2}(?:\s*\+\s*\d+(?:\s+[A-Za-z][\w-]*){1,2})+/g;
+
+/** A count claim immediately opening a parenthesis: "11 backend services (". */
+const PAREN_HEAD = new RegExp(
+  String.raw`(?<![\w.-])(\d+)((?:\s+[\w\x60.-]+){0,2}?)\s+(${NOUNS})\s*\(\s*$`,
+);
+
+/** Map a form-1 claim to its canonical key, or null when no rule places it. */
+function classifyClaim(
+  qualifiers: string[],
+  noun: string,
+  after: string,
+  before: string,
+): CountKey | null {
+  const q = qualifiers.map((w) => w.replace(/`/g, "").toLowerCase());
+  const only = (allowed: string[]): boolean => q.every((w) => allowed.includes(w));
+  if (noun === "specs" || noun === "specifications") {
+    return only(["open", "protocol"]) ? "specs" : null;
+  }
+  if (noun === "libraries") return only(["workspace"]) ? "workspaceLibraries" : null;
+  if (noun === "directories") {
+    return q.length === 0 && /^\s+under `packages\/`/.test(after) ? "packages" : null;
+  }
+  if (noun === "apps") return q.length === 0 ? "apps" : null;
+  if (noun === "services") return only(["backend"]) ? "services" : null;
+  // noun === "packages"
+  if (q.length === 0) {
+    if (/^\s+publish\b/.test(after)) return "publishedTotal";
+    if (/\b(?:publish(?:es)?|ships)\s+$/.test(before)) return "publishedTotal";
+    if (/^\s+(?:sit )?on the permissive floor\b/.test(after)) return "publishedApache";
+    return "packages";
+  }
+  if (q.length !== 1) return null;
+  const w = q[0];
+  if (w === "workspace-private" || w === "private" || w === "internal" || w === "0.0.0-private")
+    return "privatePackages";
+  if (w === "apache-2.0") return "publishedApache";
+  if (w === "bsl-1.1" || w === "bsl") return "publishedBsl";
+  if (w === "published" || w === "npm") return "publishedTotal";
+  if (w === "workspace") return "workspacePackages";
+  return null;
+}
+
+/** Map a form-2 predicate to its canonical key. */
+function classifyPredicate(predicate: string): CountKey {
+  if (predicate.startsWith("publish")) return "publishedTotal";
+  if (predicate.startsWith("under")) return "packages";
+  return "privatePackages";
+}
+
+/**
+ * Map a form-3 chain to the key its SUM claims. `"ignore"` = the chain names
+ * none of the swept nouns and parenthesizes no count claim (outside the
+ * aperture); null = it does name one but no rule places it (a failure).
+ */
+function classifyChain(termNouns: string[], before: string): CountKey | "ignore" | null {
+  const has = (n: string): boolean => termNouns.includes(n);
+  const last = termNouns[termNouns.length - 1];
+  if (last === "apps" && termNouns.every((n) => n === "surfaces" || n === "apps")) return "apps";
+  if (has("apps") && has("services") && (has("libraries") || has("packages")))
+    return "workspacePackages";
+  const swept = new Set(NOUNS.split("|"));
+  if (last === "services" && !termNouns.slice(0, -1).some((n) => swept.has(n))) return "services";
+  const head = PAREN_HEAD.exec(before);
+  if (head) {
+    const qualifiers = (head[2] ?? "").trim().split(/\s+/).filter(Boolean);
+    return classifyClaim(qualifiers, head[3] ?? "", " (", before.slice(0, head.index));
+  }
+  return termNouns.some((n) => swept.has(n)) ? null : "ignore";
+}
+
+interface SweepResult {
+  claims: number;
+  exempted: number;
+  drifts: Drift[];
+  unclassified: Array<{ file: string; line: number; text: string }>;
+  staleExempt: Array<{ file: string; needle: string }>;
+}
+
+interface RawClaim {
+  index: number;
+  text: string;
+  claimed: number;
+  key: CountKey | null;
+}
+
+function claimsIn(text: string): RawClaim[] {
+  const out: RawClaim[] = [];
+  const chains: Array<[number, number]> = [];
+  for (const m of text.matchAll(CHAIN_CLAIM)) {
+    const index = m.index ?? 0;
+    const terms = [...m[0].matchAll(/(\d+)((?:\s+[A-Za-z][\w-]*){1,2})/g)];
+    const termNouns = terms.map((t) => {
+      const words = (t[2] ?? "").trim().toLowerCase().split(/\s+/);
+      return words.find((w) => NOUNS.split("|").includes(w)) ?? words[words.length - 1] ?? "";
+    });
+    const before =
+      text
+        .slice(Math.max(0, index - 80), index)
+        .split("\n")
+        .pop() ?? "";
+    const key = classifyChain(termNouns, before);
+    if (key === "ignore") continue;
+    chains.push([index, index + m[0].length]);
+    const claimed = terms.reduce((s, t) => s + parseInt(t[1] ?? "0", 10), 0);
+    out.push({ index, text: m[0], claimed, key });
+  }
+  const inChain = (i: number): boolean => chains.some(([a, b]) => i >= a && i < b);
+  for (const m of text.matchAll(SWEEP_CLAIM)) {
+    const index = m.index ?? 0;
+    const qualifiers = (m[2] ?? "").trim().split(/\s+/).filter(Boolean);
+    const after = text.slice(index + m[0].length, index + m[0].length + 40);
+    const before = text.slice(Math.max(0, index - 40), index);
+    const key = classifyClaim(qualifiers, m[3] ?? "", after, before);
+    // A chain member the noun form cannot place ("6 supporting apps") is
+    // checked through its chain's sum, not reported twice.
+    if (key === null && inChain(index)) continue;
+    out.push({ index, text: m[0], claimed: parseInt(m[1] ?? "0", 10), key });
+  }
+  for (const m of text.matchAll(PREDICATE_CLAIM)) {
+    out.push({
+      index: m.index ?? 0,
+      text: m[0],
+      claimed: parseInt(m[1] ?? "0", 10),
+      key: classifyPredicate(m[2] ?? ""),
+    });
+  }
+  return out;
+}
+
+function sweep(canonical: CanonicalCounts): SweepResult {
+  const res: SweepResult = {
+    claims: 0,
+    exempted: 0,
+    drifts: [],
+    unclassified: [],
+    staleExempt: [],
+  };
+  for (const file of SWEPT) {
+    const text = readFileSync(resolve(ROOT, file), "utf-8");
+    const exempts = EXEMPT.filter((e) => e.file === file);
+    for (const e of exempts) {
+      if (!text.includes(e.needle)) res.staleExempt.push({ file, needle: e.needle });
+    }
+    for (const c of claimsIn(text)) {
+      const line = lineOf(text, c.index);
+      // A leading `~` marks an approximation; it must be exempted explicitly.
+      const exempt = exempts.some((e) => {
+        const at = text.indexOf(e.needle);
+        return at !== -1 && c.index >= at - 1 && c.index < at + e.needle.length;
+      });
+      if (exempt) {
+        res.exempted += 1;
+        continue;
+      }
+      res.claims += 1;
+      if (c.key === null) {
+        res.unclassified.push({ file, line, text: c.text });
+        continue;
+      }
+      if (c.claimed !== canonical[c.key]) {
+        res.drifts.push({
+          file,
+          label: `swept claim "${c.text}"`,
+          noun: c.key,
+          claimed: c.claimed,
+          actual: canonical[c.key],
+          line,
+          text: c.text,
+        });
+      }
+    }
+  }
+  return res;
+}
+
 // ── Main ──────────────────────────────────────────────────────────────
 
 interface Drift {
@@ -474,6 +780,8 @@ interface Drift {
   claimed: number;
   actual: number;
   line: number;
+  /** The matched claim text, so a sum or list claim names the digits it was built from. */
+  text: string;
 }
 
 function lineOf(text: string, charIndex: number): number {
@@ -508,7 +816,9 @@ function main(): void {
       const claimed =
         kind === "sum"
           ? parseInt(m[1] ?? "0", 10) + parseInt(m[2] ?? "0", 10)
-          : parseInt(m[1] ?? "0", 10);
+          : kind === "list"
+            ? ((m[1] ?? "").match(/`[^`]+`/g)?.length ?? 0)
+            : parseInt(m[1] ?? "0", 10);
       const actual = canonical[probe.key];
       if (claimed !== actual) {
         drifts.push({
@@ -518,12 +828,23 @@ function main(): void {
           claimed,
           actual,
           line: lineOf(text, text.indexOf(m[0])),
+          text: m[0].length > 160 ? m[0].slice(0, 157) + "..." : m[0],
         });
       }
     }
   }
 
+  const swept = sweep(canonical);
+  // A swept claim that a probe already reported is one drift, not two.
+  const seen = new Set(drifts.map((d) => `${d.file}:${d.line}:${d.claimed}`));
+  for (const d of swept.drifts) {
+    if (!seen.has(`${d.file}:${d.line}:${d.claimed}`)) drifts.push(d);
+  }
+
+  let failed = false;
+
   if (missingProbes.length > 0) {
+    failed = true;
     process.stderr.write(
       `\n✗ check-doc-counts: ${missingProbes.length} probe(s) failed to match — the doc surface drifted from this gate's expected shape.\n\n`,
     );
@@ -531,36 +852,71 @@ function main(): void {
       process.stderr.write(`  ${mp.file}\n    probe: ${mp.label}\n\n`);
     }
     process.stderr.write(
-      "Either restore the count claim in the doc, or update this gate's probe regex.\n" +
+      "Fix: either restore the count claim in the doc, or update the probe regex in scripts/check-doc-counts.ts (DOCS).\n" +
         "A probe that no longer matches its target file is silent drift waiting to recur.\n",
     );
-    process.exit(1);
+  }
+
+  if (swept.unclassified.length > 0 || swept.staleExempt.length > 0) {
+    failed = true;
+    process.stderr.write(
+      `\n✗ check-doc-counts: ${swept.unclassified.length} unclassified count claim(s), ${swept.staleExempt.length} stale exemption(s).\n\n`,
+    );
+    for (const u of swept.unclassified) {
+      process.stderr.write(
+        `  ${u.file}:${u.line}\n    "${u.text}" — no rule maps these qualifiers to a canonical count\n\n`,
+      );
+    }
+    for (const e of swept.staleExempt) {
+      process.stderr.write(
+        `  ${e.file}\n    EXEMPT needle "${e.needle}" no longer occurs — remove it\n\n`,
+      );
+    }
+    process.stderr.write(
+      "Fix: reword the claim to a classified shape, add a rule to classifyClaim() in scripts/check-doc-counts.ts,\n" +
+        "or (only for a number that is not a repo count) add an EXEMPT entry with its reason.\n",
+    );
   }
 
   if (drifts.length > 0) {
+    failed = true;
     process.stderr.write(
       `\n✗ check-doc-counts: ${drifts.length} count drift(s) detected.\n\n` +
         `  Canonical (filesystem):\n` +
-        `    apps     ${canonical.apps}\n` +
-        `    packages ${canonical.packages}\n` +
-        `    services ${canonical.services}\n` +
-        `    specs    ${canonical.specs}\n\n`,
+        `    apps                ${canonical.apps}\n` +
+        `    packages (dirs)     ${canonical.packages}\n` +
+        `    workspaceLibraries  ${canonical.workspaceLibraries}\n` +
+        `    workspacePackages   ${canonical.workspacePackages}\n` +
+        `    publishedTotal      ${canonical.publishedTotal}\n` +
+        `    privatePackages     ${canonical.privatePackages}\n` +
+        `    services            ${canonical.services}\n` +
+        `    specs               ${canonical.specs}\n\n`,
     );
     for (const d of drifts) {
       process.stderr.write(
         `  ${d.file}:${d.line}\n` +
-          `    ${d.label} claims ${d.claimed} ${d.noun}; filesystem has ${d.actual}\n\n`,
+          `    ${d.label} claims ${d.claimed} ${d.noun}; filesystem has ${d.actual}\n` +
+          (d.label.startsWith("swept claim") ? "" : `    text: "${d.text}"\n`) +
+          "\n",
       );
     }
     process.stderr.write(
-      "Either fix the doc claim or, if the count changed deliberately, update the doc.\n",
+      "Fix: correct the doc claim to the filesystem count (definitions: deriveCanonical() in scripts/check-doc-counts.ts).\n",
     );
-    process.exit(1);
   }
 
+  if (failed) process.exit(1);
+
   process.stderr.write(
-    `  ✓ check-doc-counts: ${probesRun} count claim(s) across ${DOCS.length} doc surface(s) match the filesystem ` +
-      `(${canonical.packages} packages, ${canonical.specs} specs, ${canonical.apps} apps, ${canonical.services} services).\n`,
+    `  ✓ check-doc-counts: ${probesRun} probed count claim(s) across ${DOCS.length} doc surface(s), plus ` +
+      `${swept.claims} count claim(s) swept in ${SWEPT.join(", ")} — every digit-form ` +
+      `"<N> [≤2 qualifiers] specs|specifications|packages|libraries|directories|apps|services", ` +
+      `"<N> publish", "<N> are [workspace-]private", "<N> under \`packages/\`", and the sum of every + chain ` +
+      `naming those nouns or parenthesizing a count claim; ${swept.exempted} exempted; not examined: spelled-out numbers, ` +
+      `3+ qualifier words, other + chains — match the filesystem ` +
+      `(${canonical.specs} specs; ${canonical.packages} dirs under packages/ = ${canonical.workspaceLibraries} workspace libraries + github-action; ` +
+      `${canonical.workspacePackages} workspace packages = ${canonical.publishedTotal} published + ${canonical.privatePackages} private; ` +
+      `${canonical.apps} apps, ${canonical.services} services).\n`,
   );
 }
 

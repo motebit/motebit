@@ -1096,6 +1096,12 @@ const GATES: ReadonlyArray<Gate> = [
       "the committed identity-authority census (`docs/design/identity-authority-inventory.generated.md`, produced by `scripts/inventory-identity-authority.ts`) matches the code it describes. The census lists every writer of identity-keyed state, the columns it assigns, and the weakest door that reaches it; a new authority writer must surface as a census diff in review even before `check-identity-authority-writers` names it. A stale census is the one way that diff never appears, so it fails with the changed lines and the re-run command. Proves freshness, never completeness — the aperture is the census's SCAN_ROOTS, printed on success. Design: `docs/design/identity-authority-writers.md` §4 item 5 (Inc 0), invariants I1/I2.",
     script: "check-identity-authority-inventory",
   },
+  {
+    name: "check-signed-text-wellformed",
+    defends:
+      "every signer that signs canonical JSON goes through the guarded canonicalizer `canonicalJsonForSigning` (packages/crypto/src/signing.ts), which refuses — throws `UnpairedSurrogateError` — a body holding an unpaired UTF-16 surrogate in any string value or object key at any depth, embedded child receipts included (no UTF-8 form, spec/execution-ledger-v1.md §11.4); repair stays at the text's source (toWellFormedText / truncateWellFormed), verifiers keep `canonicalJson` so old receipts still verify. AST scan of packages/, services/, apps/ for every call of ed25519Sign / signBySuite / an imported `sign` alias: the enclosing function must call the guard or hand it to a bytes helper; unguarded canonicalJson/canonicalSha256 bytes, or bytes untraceable from the signing function, are RED unless a documented non-JCS signer (JWT payload, identity-file YAML) or a count-pinned OUTSIDE_LANE debt (money-record signers, relay, runtime ledger digests, identity-file guardian attestation). The static companion of the payment-receipt well-formed-text harness (docs/design/payment-receipt-wellformed-stop-condition.md §3, rule 3). Invariant #176, added 2026-10-11",
+    script: "check-signed-text-wellformed",
+  },
 ];
 
 interface Result {

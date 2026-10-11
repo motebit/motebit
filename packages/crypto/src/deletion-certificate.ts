@@ -33,7 +33,14 @@ import type {
   SuiteId,
 } from "@motebit/protocol";
 
-import { canonicalJson, hexToBytes, fromBase64Url, toBase64Url, bytesToHex } from "./signing.js";
+import {
+  canonicalJson,
+  canonicalJsonForSigning,
+  hexToBytes,
+  fromBase64Url,
+  toBase64Url,
+  bytesToHex,
+} from "./signing.js";
 import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -194,6 +201,13 @@ export interface DeletionCertificateVerifyContext {
 export function canonicalizeMultiSignatureCert(
   cert: Extract<DeletionCertificate, { kind: "mutable_pruning" | "consolidation_flush" }>,
 ): Uint8Array {
+  return multiSignatureCertBytes(cert, canonicalJson);
+}
+
+function multiSignatureCertBytes(
+  cert: Extract<DeletionCertificate, { kind: "mutable_pruning" | "consolidation_flush" }>,
+  canonicalize: (value: unknown) => string,
+): Uint8Array {
   const { subject_signature, operator_signature, delegate_signature, guardian_signature, ...body } =
     cert;
   // touch all extracted fields so unused-locals lint doesn't fail
@@ -201,7 +215,7 @@ export function canonicalizeMultiSignatureCert(
   void operator_signature;
   void delegate_signature;
   void guardian_signature;
-  return new TextEncoder().encode(canonicalJson(body));
+  return new TextEncoder().encode(canonicalize(body));
 }
 
 /**
@@ -215,9 +229,16 @@ export function canonicalizeMultiSignatureCert(
 export function canonicalizeHorizonCert(
   cert: Extract<DeletionCertificate, { kind: "append_only_horizon" }>,
 ): Uint8Array {
+  return horizonCertBytes(cert, canonicalJson);
+}
+
+function horizonCertBytes(
+  cert: Extract<DeletionCertificate, { kind: "append_only_horizon" }>,
+  canonicalize: (value: unknown) => string,
+): Uint8Array {
   const { signature, ...body } = cert;
   void signature;
-  return new TextEncoder().encode(canonicalJson(body));
+  return new TextEncoder().encode(canonicalize(body));
 }
 
 /**
@@ -240,10 +261,17 @@ export function canonicalizeHorizonCert(
 export function canonicalizeHorizonCertForWitness(
   cert: Extract<DeletionCertificate, { kind: "append_only_horizon" }>,
 ): Uint8Array {
+  return horizonCertForWitnessBytes(cert, canonicalJson);
+}
+
+function horizonCertForWitnessBytes(
+  cert: Extract<DeletionCertificate, { kind: "append_only_horizon" }>,
+  canonicalize: (value: unknown) => string,
+): Uint8Array {
   const { signature, witnessed_by, ...body } = cert;
   void signature;
   void witnessed_by;
-  return new TextEncoder().encode(canonicalJson(body));
+  return new TextEncoder().encode(canonicalize(body));
 }
 
 /**
@@ -258,7 +286,7 @@ export function canonicalizeHorizonCertForWitness(
 export async function signCertAsSubject<
   T extends Extract<DeletionCertificate, { kind: "mutable_pruning" | "consolidation_flush" }>,
 >(cert: T, motebitId: string, privateKey: Uint8Array): Promise<T> {
-  const bytes = canonicalizeMultiSignatureCert(cert);
+  const bytes = multiSignatureCertBytes(cert, canonicalJsonForSigning);
   const sig = await signBySuite(DELETION_CERTIFICATE_SUITE, bytes, privateKey);
   return {
     ...cert,
@@ -274,7 +302,7 @@ export async function signCertAsSubject<
 export async function signCertAsOperator<
   T extends Extract<DeletionCertificate, { kind: "mutable_pruning" | "consolidation_flush" }>,
 >(cert: T, operatorId: string, privateKey: Uint8Array): Promise<T> {
-  const bytes = canonicalizeMultiSignatureCert(cert);
+  const bytes = multiSignatureCertBytes(cert, canonicalJsonForSigning);
   const sig = await signBySuite(DELETION_CERTIFICATE_SUITE, bytes, privateKey);
   return {
     ...cert,
@@ -295,7 +323,7 @@ export async function signCertAsDelegate<
   delegationReceiptId: string,
   privateKey: Uint8Array,
 ): Promise<T> {
-  const bytes = canonicalizeMultiSignatureCert(cert);
+  const bytes = multiSignatureCertBytes(cert, canonicalJsonForSigning);
   const sig = await signBySuite(DELETION_CERTIFICATE_SUITE, bytes, privateKey);
   return {
     ...cert,
@@ -312,7 +340,7 @@ export async function signCertAsDelegate<
 export async function signCertAsGuardian<
   T extends Extract<DeletionCertificate, { kind: "mutable_pruning" | "consolidation_flush" }>,
 >(cert: T, guardianPublicKey: Uint8Array, privateKey: Uint8Array): Promise<T> {
-  const bytes = canonicalizeMultiSignatureCert(cert);
+  const bytes = multiSignatureCertBytes(cert, canonicalJsonForSigning);
   const sig = await signBySuite(DELETION_CERTIFICATE_SUITE, bytes, privateKey);
   return {
     ...cert,
@@ -334,7 +362,7 @@ export async function signHorizonCertAsIssuer(
   privateKey: Uint8Array,
 ): Promise<Extract<DeletionCertificate, { kind: "append_only_horizon" }>> {
   const withSuite = { ...cert, suite: DELETION_CERTIFICATE_SUITE, signature: "" };
-  const bytes = canonicalizeHorizonCert(withSuite);
+  const bytes = horizonCertBytes(withSuite, canonicalJsonForSigning);
   const sig = await signBySuite(DELETION_CERTIFICATE_SUITE, bytes, privateKey);
   return { ...withSuite, signature: toBase64Url(sig) };
 }
@@ -357,7 +385,7 @@ export async function signHorizonWitness(
   privateKey: Uint8Array,
   inclusionProof?: HorizonWitness["inclusion_proof"],
 ): Promise<HorizonWitness> {
-  const bytes = canonicalizeHorizonCertForWitness(cert);
+  const bytes = horizonCertForWitnessBytes(cert, canonicalJsonForSigning);
   const sig = await signBySuite(DELETION_CERTIFICATE_SUITE, bytes, privateKey);
   const witness: HorizonWitness = {
     motebit_id: witnessMotebitId,
@@ -393,11 +421,21 @@ export async function signHorizonWitness(
  * synthesizing a full cert.
  */
 export function canonicalizeHorizonWitnessRequestBody(body: HorizonWitnessRequestBody): Uint8Array {
-  return canonicalizeHorizonCertForWitness({
-    ...body,
-    witnessed_by: [],
-    signature: "",
-  });
+  return horizonWitnessRequestBytes(body, canonicalJson);
+}
+
+function horizonWitnessRequestBytes(
+  body: HorizonWitnessRequestBody,
+  canonicalize: (value: unknown) => string,
+): Uint8Array {
+  return horizonCertForWitnessBytes(
+    {
+      ...body,
+      witnessed_by: [],
+      signature: "",
+    },
+    canonicalize,
+  );
 }
 
 /**
@@ -420,7 +458,7 @@ export async function signHorizonWitnessRequestBody(
   body: HorizonWitnessRequestBody,
   privateKey: Uint8Array,
 ): Promise<string> {
-  const bytes = canonicalizeHorizonWitnessRequestBody(body);
+  const bytes = horizonWitnessRequestBytes(body, canonicalJsonForSigning);
   const sig = await signBySuite(DELETION_CERTIFICATE_SUITE, bytes, privateKey);
   return toBase64Url(sig);
 }

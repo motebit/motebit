@@ -15,6 +15,7 @@ import type { HostEnrollment, HostRetirement } from "@motebit/protocol";
 import {
   bytesToHex,
   canonicalJson,
+  canonicalJsonForSigning,
   canonicalSha256,
   fromBase64Url,
   hexToBytes,
@@ -127,7 +128,7 @@ function isHostRetirement(value: unknown): value is HostRetirement {
 }
 
 async function signBody<T extends object>(body: T, privateKey: Uint8Array): Promise<string> {
-  const message = new TextEncoder().encode(canonicalJson(body));
+  const message = new TextEncoder().encode(canonicalJsonForSigning(body));
   return toBase64Url(await signBySuite(HOST_ROSTER_SUITE, message, privateKey));
 }
 

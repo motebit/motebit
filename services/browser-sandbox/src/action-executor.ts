@@ -1041,6 +1041,11 @@ export function extractStructuredPageContent(opts: {
       if (bytesOf(body.slice(0, mid)) <= textMaxBytes) lo = mid;
       else hi = mid - 1;
     }
+    // Never split a surrogate pair: a lone high surrogate has no UTF-8 form and
+    // would reach a signed receipt's result (spec/execution-ledger-v1.md §11.4).
+    // Inline — this runs in the page, where no module import reaches.
+    const last = lo > 0 ? body.charCodeAt(lo - 1) : 0;
+    if (last >= 0xd800 && last <= 0xdbff) lo--;
     body = body.slice(0, lo);
     textTruncated = true;
   }

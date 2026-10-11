@@ -434,7 +434,7 @@ describe("MotebitRuntime sovereign trust loop (no relay)", () => {
         service_description:
           "Search query rendered with verifiable result and tool usage producing meaningful content for the user.",
         prompt_hash: "sha256:prompt",
-        result_hash: "sha256:result",
+        result_hash: "c".repeat(64),
         tools_used: ["web_search", "read_url"],
         submitted_at: Date.now() - 2_000,
         completed_at: Date.now(),
@@ -488,7 +488,7 @@ describe("MotebitRuntime sovereign trust loop (no relay)", () => {
         asset: "USDC",
         service_description: "service",
         prompt_hash: "p",
-        result_hash: "r",
+        result_hash: "c".repeat(64),
         submitted_at: Date.now() - 1000,
         completed_at: Date.now(),
       },

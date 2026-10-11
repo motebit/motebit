@@ -94,6 +94,86 @@ export function canonicalJson(obj: unknown): string {
   return "{" + entries.join(",") + "}";
 }
 
+/**
+ * True when `value` (deeply: string values and object keys) holds an unpaired
+ * UTF-16 surrogate. UTF-8 is undefined for such a string, so a signed artifact
+ * carrying one has no canonical byte form (JCS requires I-JSON — RFC 8785 §3.1,
+ * RFC 7493 §2.1). Verifiers reject it; they never substitute U+FFFD, which
+ * would let two distinct strings share one signature and one digest.
+ *
+ * The one well-formedness predicate: the signing boundary
+ * ({@link canonicalJsonForSigning}) refuses on it and the strict readers reject
+ * on it. Walks exactly what {@link canonicalJson} serializes (an object entry
+ * whose value is `undefined` is skipped, as canonicalJson skips it).
+ */
+export function hasUnpairedSurrogate(value: unknown): boolean {
+  return findUnpairedSurrogate(value, "$") !== null;
+}
+
+/** JSONPath-ish location of the first unpaired surrogate in `value`, or null. */
+function findUnpairedSurrogate(value: unknown, path: string): string | null {
+  if (typeof value === "string") return UNPAIRED_SURROGATE.test(value) ? path : null;
+  if (value === null || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const hit = findUnpairedSurrogate(value[i], `${path}[${i}]`);
+      if (hit !== null) return hit;
+    }
+    return null;
+  }
+  for (const [k, v] of Object.entries(value)) {
+    if (v === undefined) continue;
+    const at = `${path}[${JSON.stringify(k)}]`;
+    if (UNPAIRED_SURROGATE.test(k)) return `${at} (object key)`;
+    const hit = findUnpairedSurrogate(v, at);
+    if (hit !== null) return hit;
+  }
+  return null;
+}
+
+const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * Thrown by {@link canonicalJsonForSigning} when the body to be signed holds an
+ * unpaired UTF-16 surrogate in any string value or object key, at any depth
+ * (embedded child artifacts included). `path` names the first offending
+ * location (`$["task_id"]`, `$["delegation_receipts"][0]["result"]`, …).
+ */
+export class UnpairedSurrogateError extends Error {
+  /** Always `"UnpairedSurrogateError"` — matchable without `instanceof` across realms. */
+  override readonly name = "UnpairedSurrogateError";
+  /**
+   * @param path - The first offending location in the body, e.g.
+   *   `$["delegation_receipts"][0]["result"]`; an object key is suffixed `(object key)`.
+   */
+  constructor(readonly path: string) {
+    super(
+      `refusing to sign: ${path} holds an unpaired UTF-16 surrogate (spec/execution-ledger-v1.md §11.4) — repair text at its source (toWellFormedText / truncateWellFormed) before signing`,
+    );
+  }
+}
+
+/**
+ * The canonical-bytes-for-signing step: {@link canonicalJson}, fail-closed on
+ * text with no UTF-8 form. Every signer that signs canonical JSON goes through
+ * this (enforced by `scripts/check-signed-text-wellformed.ts`); verifiers keep
+ * using {@link canonicalJson}, so artifacts signed before this boundary existed
+ * still verify over their JCS-escaped bytes.
+ *
+ * It refuses rather than repairs: a silent U+FFFD in an id or a hash would
+ * change an identity, and an embedded child signed by someone else cannot be
+ * repaired. Repair belongs at the text's source (a stream cut, a tool
+ * truncation), via `toWellFormedText` / `truncateWellFormed`. Well-formed input
+ * returns exactly `canonicalJson(obj)`.
+ *
+ * @throws {UnpairedSurrogateError}
+ */
+export function canonicalJsonForSigning(obj: unknown): string {
+  const hit = findUnpairedSurrogate(obj, "$");
+  if (hit !== null) throw new UnpairedSurrogateError(hit);
+  return canonicalJson(obj);
+}
+
 // === Encoding Helpers ===
 
 export function bytesToHex(bytes: Uint8Array): string {

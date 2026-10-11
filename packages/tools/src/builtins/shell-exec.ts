@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
+import { truncateWellFormed } from "@motebit/sdk";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as path from "node:path";
@@ -153,7 +154,7 @@ export function createShellExecHandler(config?: ShellExecConfig): ToolHandler {
       });
 
       const output = [stdout, stderr].filter(Boolean).join("\n--- stderr ---\n");
-      return { ok: true, data: output.slice(0, 8000) };
+      return { ok: true, data: truncateWellFormed(output, 8000) };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: `Exec error: ${msg}` };

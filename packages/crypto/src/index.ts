@@ -52,7 +52,7 @@ import type {
   VerdictSubject,
   VerificationVerdict,
 } from "@motebit/protocol";
-import { hash, isScopeNarrowed } from "./signing.js";
+import { hash, hasUnpairedSurrogate, isScopeNarrowed } from "./signing.js";
 // The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
 // as a side effect of module load. Importing verifyBySuite here is
 // enough to guarantee that the primitive is ready before any verify
@@ -159,6 +159,13 @@ export interface ExecutionReceipt {
   result_hash: string;
   delegation_receipts?: ExecutionReceipt[];
   delegated_scope?: string;
+  /**
+   * SHA-256 of the paid service's result bytes (lowercase hex), as asserted by
+   * the payer and signed by the payee. Present on sovereign payment receipts
+   * (spec/settlement-v1.md §7); `verifyReceipt` checks its shape under strict
+   * hash binding (the signature-only default does not).
+   */
+  service_result_hash?: string;
   signature: string;
 }
 
@@ -1877,6 +1884,23 @@ export async function verifyReceipt(
   receipt: ExecutionReceipt,
   options?: VerifyOptions,
 ): Promise<ReceiptVerifyResult> {
+  // Two modes, two code paths. The default (signature-only) path is the
+  // merge-base's verifyReceipt verbatim — its lenient key decode, its keyless
+  // early return, its child handling (a non-object `delegation_receipts` entry
+  // throws, as it always has). Its verdicts may not change by a byte before a
+  // major release (docs/design/payment-receipt-wellformed-stop-condition.md §3;
+  // locked by apps/cli/src/__tests__/default-verdict-differential.test.ts).
+  // Every tightening — the 64-hex key rule, the full nested walk, the §11.4
+  // and §11.5 strictness — lives behind `strictHashBinding` only.
+  if (options?.strictHashBinding) return verifyReceiptStrictAtDepth(receipt, options, 0);
+  return verifyReceiptDefault(receipt);
+}
+
+/**
+ * The default (signature-only) `verifyReceipt`: byte-for-byte the merge-base
+ * behaviour. Do not tighten it here; tighten the strict path.
+ */
+async function verifyReceiptDefault(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult> {
   // Resolve public key: embedded in receipt, or fail
   let publicKey: Uint8Array | null = null;
   let signerDid: string | undefined;
@@ -1896,7 +1920,7 @@ export async function verifyReceipt(
 
   if (!publicKey) {
     // Recursively verify delegations even if root can't be verified
-    const delegations = await verifyReceiptDelegations(receipt);
+    const delegations = await verifyReceiptDelegationsDefault(receipt);
     return {
       type: "receipt",
       valid: false,
@@ -1920,7 +1944,7 @@ export async function verifyReceipt(
   }
 
   // Recursively verify delegation receipts
-  const delegations = await verifyReceiptDelegations(receipt);
+  const delegations = await verifyReceiptDelegationsDefault(receipt);
   const delegationErrors = delegations.filter((d) => !d.valid);
   for (const d of delegationErrors) {
     errors.push({
@@ -1929,17 +1953,131 @@ export async function verifyReceipt(
     });
   }
 
+  return {
+    type: "receipt",
+    valid: sigResult.valid && delegationErrors.length === 0,
+    receipt,
+    signer: signerDid,
+    keySource: "embedded",
+    ...(delegations.length > 0 ? { delegations } : {}),
+    ...(errors.length > 0 ? { errors } : {}),
+  };
+}
+
+/** The default path's children: each verified in default mode, as the merge-base did. */
+async function verifyReceiptDelegationsDefault(
+  receipt: ExecutionReceipt,
+): Promise<ReceiptVerifyResult[]> {
+  if (!receipt.delegation_receipts || receipt.delegation_receipts.length === 0) {
+    return [];
+  }
+  return Promise.all(receipt.delegation_receipts.map((dr) => verifyReceiptDefault(dr)));
+}
+
+/**
+ * Strict `verifyReceipt` (`strictHashBinding`) at a known nesting depth (0 =
+ * the outer receipt). Strict hash binding is carried into every
+ * `delegation_receipts` entry at every depth, and its failures name the depth
+ * and `task_id` of the offending child. Only a 64-hex-character `public_key`
+ * is a usable key; every node is walked whether or not its parent's key was
+ * usable; a non-object child is a §11.5 shape failure, never a TypeError.
+ */
+async function verifyReceiptStrictAtDepth(
+  receipt: ExecutionReceipt,
+  options: VerifyOptions,
+  depth: number,
+): Promise<ReceiptVerifyResult> {
+  // Resolve public key: embedded in receipt, or fail. Only 64 hex characters
+  // (32 bytes) is a usable key; anything else is treated as absent.
+  let publicKey: Uint8Array | null = null;
+  let signerDid: string | undefined;
+
+  if (typeof receipt.public_key === "string" && /^[0-9a-fA-F]{64}$/.test(receipt.public_key)) {
+    publicKey = hexToBytes(receipt.public_key);
+    signerDid = publicKeyToDidKey(publicKey);
+  }
+
+  const errors: VerificationError[] = [];
+  let sigValid = false;
+  if (!publicKey) {
+    errors.push({
+      message: "§11.3 violation: No embedded public_key — cannot verify without known keys",
+    });
+  } else {
+    const sigResult = await verifyReceiptSignature(receipt, publicKey);
+    sigValid = sigResult.valid;
+    if (!sigResult.valid) {
+      errors.push({
+        message: sigResult.error ?? "§11.2 violation: Ed25519 signature did not verify",
+      });
+    }
+  }
+
+  // Recursively verify delegation receipts — whether or not this node's key
+  // was usable, so every depth is walked.
+  const delegations = await verifyReceiptDelegationsStrict(receipt, options, depth);
+  const delegationErrors = delegations.filter((d) => !d.valid);
+  for (const d of delegationErrors) {
+    const base = `§11.5 violation: delegation ${d.receipt?.task_id ?? "unknown"} verification failed`;
+    // Strict mode surfaces the child's own reasons so a nested result_hash
+    // mismatch is named (depth + task_id) at the top level.
+    const detail =
+      d.errors && d.errors.length > 0 ? `: ${d.errors.map((e) => e.message).join("; ")}` : "";
+    errors.push({
+      message: `${base}${detail}`,
+      path: `delegation_receipts`,
+    });
+  }
+
+  // service_result_hash is optional; when present it must be a SHA-256 hex
+  // digest like every other hash field (spec/settlement-v1.md §7). Strict
+  // only: the signature-only default stays the merge-base's verdict (a default
+  // tightening waits for the next major — see
+  // docs/design/payment-receipt-wellformed-stop-condition.md §3).
+  let serviceHashOk = true;
+  if (receipt.service_result_hash !== undefined) {
+    serviceHashOk =
+      typeof receipt.service_result_hash === "string" &&
+      /^[0-9a-f]{64}$/.test(receipt.service_result_hash);
+    if (!serviceHashOk) {
+      errors.push({
+        message: "service_result_hash must be 64 lowercase hex characters (SHA-256)",
+        path: "service_result_hash",
+      });
+    }
+  }
+
   // Strict mode: the signature proves authenticity, NOT that result_hash binds
   // the result field. Recompute it per spec and reject a self-inconsistent
   // receipt (one whose result_hash a third party can't reproduce from result).
+  // Independent of the key: a node whose signature cannot be checked still
+  // has its binding checked.
+  //
+  // A string with an unpaired UTF-16 surrogate has no UTF-8 form (§11.4), so
+  // strict mode rejects the node outright (one reason, no hash comparison).
+  // Signature-only verification keeps main's behaviour: receipts signed before
+  // producers stopped emitting one verify over their JCS-escaped bytes, which
+  // the runtime and relay signature checks (`verifyExecutionReceipt`) accept.
   let resultHashOk = true;
-  if (options?.strictHashBinding) {
-    const expected = await hash(new TextEncoder().encode(receipt.result));
-    resultHashOk = expected === receipt.result_hash;
+  const { signature: _signature, ...unsignedBody } = receipt;
+  const unicodeOk = !hasUnpairedSurrogate(unsignedBody);
+  // A binding failure, not a signature one: the signature over the escaped
+  // JCS bytes may well verify; what fails is that result_hash can bind them.
+  if (!unicodeOk) {
+    const where =
+      depth === 0 ? "" : ` (delegation depth ${depth}, task_id ${receipt.task_id ?? "unknown"})`;
+    errors.push({ message: `${UNPAIRED_SURROGATE_ERROR}${where}`, path: "result_hash" });
+  }
+  if (unicodeOk) {
+    const result: unknown = receipt.result;
+    resultHashOk =
+      typeof result === "string" &&
+      (await hash(new TextEncoder().encode(result))) === receipt.result_hash;
     if (!resultHashOk) {
+      const where =
+        depth === 0 ? "" : ` (delegation depth ${depth}, task_id ${receipt.task_id ?? "unknown"})`;
       errors.push({
-        message:
-          "result_hash does not equal hex(SHA-256(result)) — receipt is not self-consistent (strict mode)",
+        message: `result_hash does not equal hex(SHA-256(result))${where} — receipt is not self-consistent (strict mode)`,
         path: "result_hash",
       });
     }
@@ -1947,13 +2085,58 @@ export async function verifyReceipt(
 
   return {
     type: "receipt",
-    valid: sigResult.valid && delegationErrors.length === 0 && resultHashOk,
+    valid: sigValid && delegationErrors.length === 0 && resultHashOk && serviceHashOk && unicodeOk,
     receipt,
-    signer: signerDid,
-    keySource: "embedded",
+    ...(signerDid !== undefined ? { signer: signerDid, keySource: "embedded" as const } : {}),
     ...(delegations.length > 0 ? { delegations } : {}),
     ...(errors.length > 0 ? { errors } : {}),
   };
+}
+
+/** The §11.4 reason for a receipt carrying an unpaired UTF-16 surrogate. */
+const UNPAIRED_SURROGATE_ERROR =
+  "§11.4 violation: receipt contains a string with an unpaired UTF-16 surrogate — it has no UTF-8 encoding";
+
+/** One failure at one node of a `verifyReceipt` tree. */
+export interface ReceiptTreeError {
+  /** 0 = the outer receipt; n = a `delegation_receipts` entry n levels down. */
+  depth: number;
+  /** The failing node's `task_id`, as carried by the receipt. */
+  task_id: string | undefined;
+  /**
+   * The failing field: `"result_hash"` for a strict binding failure (a
+   * mismatch, or a string with no UTF-8 form — §11.4),
+   * `"service_result_hash"` for a malformed service hash; absent for a
+   * signature / key failure (the node could not be authenticated).
+   */
+  path?: string;
+  /** The verifier's reason, as `verifyReceipt` reported it on that node. */
+  message: string;
+}
+
+/**
+ * Flatten a `verifyReceipt` result into every node's OWN failures, at every
+ * depth. The parent's aggregated `§11.5` entry (path `delegation_receipts`) is
+ * skipped: the child it summarises is walked directly. Empty iff the tree is
+ * valid. The one nested walk both CLIs (`motebit verify receipt`,
+ * `motebit-verify`) read, so they cannot diverge on a nested receipt.
+ */
+export function collectReceiptTreeErrors(result: ReceiptVerifyResult): ReceiptTreeError[] {
+  const out: ReceiptTreeError[] = [];
+  const walk = (node: ReceiptVerifyResult, depth: number): void => {
+    for (const e of node.errors ?? []) {
+      if (e.path === "delegation_receipts") continue;
+      out.push({
+        depth,
+        task_id: node.receipt?.task_id,
+        ...(e.path !== undefined ? { path: e.path } : {}),
+        message: e.message,
+      });
+    }
+    for (const d of node.delegations ?? []) walk(d, depth + 1);
+  };
+  walk(result, 0);
+  return out;
 }
 
 // ===========================================================================
@@ -2429,11 +2612,31 @@ async function verifyToolInvocation(
   };
 }
 
-async function verifyReceiptDelegations(receipt: ExecutionReceipt): Promise<ReceiptVerifyResult[]> {
-  if (!receipt.delegation_receipts || receipt.delegation_receipts.length === 0) {
+async function verifyReceiptDelegationsStrict(
+  receipt: ExecutionReceipt,
+  options: VerifyOptions,
+  depth: number,
+): Promise<ReceiptVerifyResult[]> {
+  if (!Array.isArray(receipt.delegation_receipts) || receipt.delegation_receipts.length === 0) {
     return [];
   }
-  return Promise.all(receipt.delegation_receipts.map((dr) => verifyReceipt(dr)));
+  return Promise.all(
+    receipt.delegation_receipts.map((dr) =>
+      // A JSON tree can hold anything here; an entry that is not a receipt
+      // object is a §11.5 shape failure, never a TypeError out of the verifier.
+      dr !== null && typeof dr === "object" && !Array.isArray(dr)
+        ? verifyReceiptStrictAtDepth(dr, options, depth + 1)
+        : Promise.resolve<ReceiptVerifyResult>({
+            type: "receipt",
+            valid: false,
+            receipt: null,
+            // No `path`: the node could not be authenticated at all (the
+            // `delegation_receipts` path marks a parent's aggregate entry,
+            // which collectReceiptTreeErrors skips).
+            errors: [{ message: "§11.5 violation: delegation_receipts entry is not an object" }],
+          }),
+    ),
+  );
 }
 
 // ===========================================================================

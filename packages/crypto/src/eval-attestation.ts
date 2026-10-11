@@ -30,7 +30,13 @@
  */
 
 import type { EvalAttestation } from "@motebit/protocol";
-import { canonicalJson, hexToBytes, toBase64Url, fromBase64Url } from "./signing.js";
+import {
+  canonicalJson,
+  canonicalJsonForSigning,
+  hexToBytes,
+  toBase64Url,
+  fromBase64Url,
+} from "./signing.js";
 import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
 
 /**
@@ -54,8 +60,11 @@ export const EVAL_ATTESTATION_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
 export const EVAL_KINDS_MIRROR: readonly string[] = Object.freeze(["verification_audit"]);
 
 /** Canonical bytes used for signing — the attestation without its own signature field. */
-function canonicalizeForSigning(unsigned: Omit<EvalAttestation, "signature">): Uint8Array {
-  return new TextEncoder().encode(canonicalJson(unsigned));
+function canonicalizeForSigning(
+  unsigned: Omit<EvalAttestation, "signature">,
+  canonicalize: (value: unknown) => string,
+): Uint8Array {
+  return new TextEncoder().encode(canonicalize(unsigned));
 }
 
 /**
@@ -75,7 +84,7 @@ export async function signEvalAttestation(
     ...body,
     suite: EVAL_ATTESTATION_SUITE,
   };
-  const message = canonicalizeForSigning(unsigned);
+  const message = canonicalizeForSigning(unsigned, canonicalJsonForSigning);
   const sig = await signBySuite(EVAL_ATTESTATION_SUITE, message, issuerPrivateKey);
   return { ...unsigned, signature: toBase64Url(sig) };
 }
@@ -138,7 +147,7 @@ export async function verifyEvalAttestation(
 
   // 6. Signature over canonical bytes, via suite dispatch.
   const { signature: _sig, ...unsigned } = attestation;
-  const message = canonicalizeForSigning(unsigned);
+  const message = canonicalizeForSigning(unsigned, canonicalJson);
   let valid: boolean;
   try {
     valid = await verifyBySuite(attestation.suite, message, sigBytes, publicKey);

@@ -158,6 +158,74 @@ async function main(): Promise<void> {
     );
   }
 
+  // 4. NEGATIVE vectors (fixtures/negative/) — receipts every surface MUST
+  // reject, default and strict. 4b. STRICT-NEGATIVE vectors
+  // (fixtures/strict-negative/) — receipts every STRICT (result_hash-binding)
+  // surface MUST reject while every signature-only surface MUST still accept
+  // them: the compatibility half is pinned too. E.g. a lone UTF-16 surrogate in
+  // `result` (spec/execution-ledger-v1.md §11.4): UTF-8 is undefined for it, so
+  // strict verification rejects it; receipts main signed carry it, so the
+  // signature checks the runtime and relay run keep accepting it. The Python
+  // reference rejects it outright (it MAY: it cannot form the bytes).
+  const readVectors = (sub: string): string[] => {
+    try {
+      return readdirSync(join(fixturesDir, sub))
+        .filter((f) => f.endsWith(".json"))
+        .sort();
+    } catch {
+      return [];
+    }
+  };
+  const negatives = readVectors("negative");
+  const strictNegatives = readVectors("strict-negative");
+  if (negatives.length + strictNegatives.length === 0) {
+    failures.push("negative/ + strict-negative/: no negative vectors found");
+  }
+  for (const [sub, files] of [
+    ["negative", negatives],
+    ["strict-negative", strictNegatives],
+  ] as const) {
+    for (const file of files) {
+      const raw = readFileSync(join(fixturesDir, sub, file), "utf8");
+      const parsed = JSON.parse(raw) as { public_key: string };
+      const mustReject: Record<string, boolean | null> = {
+        "verifier-strict": (await verifier.verifyArtifact(raw, { strictHashBinding: true })).valid,
+        "crypto-strict": (await crypto.verifyReceipt(JSON.parse(raw), { strictHashBinding: true }))
+          .valid,
+        python: pyValid(join(sub, file)),
+      };
+      const signatureOnly: Record<string, boolean> = {
+        verifier: (await verifier.verifyArtifact(raw)).valid,
+        crypto: (await crypto.verifyReceipt(JSON.parse(raw))).valid,
+        "crypto-verifyExecutionReceipt": await crypto.verifyExecutionReceipt(
+          parsed,
+          crypto.hexToBytes(parsed.public_key),
+        ),
+        sec: (await sec.verifyReceiptDocument(raw)).integrity,
+      };
+      if (sub === "negative") Object.assign(mustReject, signatureOnly);
+      const accepted = Object.entries(mustReject).filter(([, v]) => v === true);
+      if (accepted.length > 0) {
+        failures.push(
+          `${sub}/${file}: NOT rejected by ${accepted.map(([k]) => k).join(", ")} — ${sub === "negative" ? "every surface" : "every strict surface"} must reject it`,
+        );
+      }
+      const refused =
+        sub === "strict-negative"
+          ? Object.entries(signatureOnly).filter(([, v]) => v !== true)
+          : [];
+      if (refused.length > 0) {
+        failures.push(
+          `${sub}/${file}: REJECTED by signature-only ${refused.map(([k]) => k).join(", ")} — a legacy-signed receipt must keep verifying signature-only (compat)`,
+        );
+      }
+      const ok = accepted.length === 0 && refused.length === 0;
+      console.log(
+        `  ${`${sub}/${file}`.padEnd(42)} ${ok ? `${sub === "negative" ? "rejected by all" : "rejected strict, accepted signature-only"}${mustReject.python === null ? "" : " (incl. python)"} ✓` : "✗"}`,
+      );
+    }
+  }
+
   if (failures.length > 0) {
     console.error(`\n✗ check-receipt-conformance: ${failures.length} failure(s):`);
     for (const f of failures) console.error(`  - ${f}`);
@@ -176,7 +244,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   console.log(
-    `\n✓ check-receipt-conformance: all ${fixtures.length} vectors agree on integrity${pythonOk ? " (incl. Python reference)" : ""}, verifier sovereign rungs pinned, tamper rejected by all surfaces.`,
+    `\n✓ check-receipt-conformance: all ${fixtures.length} vectors agree on integrity${pythonOk ? " (incl. Python reference)" : ""}, verifier sovereign rungs pinned, tamper rejected by all surfaces; ${negatives.length} negative vector(s) rejected by all surfaces; ${strictNegatives.length} strict-negative vector(s) rejected strict, accepted signature-only.`,
   );
 }
 

@@ -1,4 +1,4 @@
-import { checkOutboundUrl, fetchPublic } from "@motebit/sdk";
+import { checkOutboundUrl, fetchPublic, truncateWellFormed } from "@motebit/sdk";
 import type { OutboundUrlOptions } from "@motebit/sdk";
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
@@ -236,9 +236,9 @@ export function createReadUrlHandler(opts?: {
       if (contentType.includes("application/json")) {
         try {
           const parsed = JSON.parse(body) as unknown;
-          return { ok: true, data: JSON.stringify(parsed, null, 2).slice(0, 8000) };
+          return { ok: true, data: truncateWellFormed(JSON.stringify(parsed, null, 2), 8000) };
         } catch {
-          return { ok: true, data: body.slice(0, 8000) };
+          return { ok: true, data: truncateWellFormed(body, 8000) };
         }
       }
 
@@ -261,7 +261,7 @@ export function createReadUrlHandler(opts?: {
         };
         // `source_ref` names WHAT was read, so a stored evidence pointer
         // can actually be re-fetched. Only this tool knows it.
-        return { ok: true, data: body.slice(0, 64_000), source_digest, source_ref: url };
+        return { ok: true, data: truncateWellFormed(body, 64_000), source_digest, source_ref: url };
       }
 
       // HTML: extracted, NOT raw-byte-addressable as served — but re-derivable via a
@@ -280,7 +280,7 @@ export function createReadUrlHandler(opts?: {
       const projected = projectAgencyHtmlTextV1(rawBytes);
       return {
         ok: true,
-        data: projected.slice(0, 8000),
+        data: truncateWellFormed(projected, 8000),
         source_digest: { algorithm: "sha-256" as const, value: await sha256Hex(rawBytes) },
         source_projection: AGENCY_HTML_TEXT_V1_RECIPE_ID,
         source_ref: url,

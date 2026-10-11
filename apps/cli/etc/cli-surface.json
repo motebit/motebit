@@ -189,6 +189,11 @@
       "default": false
     },
     {
+      "name": "lenient",
+      "type": "boolean",
+      "default": false
+    },
+    {
       "name": "lifetime-usd",
       "type": "string"
     },
@@ -310,6 +315,11 @@
     },
     {
       "name": "sovereign",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "strict",
       "type": "boolean",
       "default": false
     },

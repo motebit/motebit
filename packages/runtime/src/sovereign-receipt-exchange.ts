@@ -118,7 +118,13 @@ export interface SovereignReceiptRequest {
   service_description: string;
   /** SHA-256 hash of the original request payload. */
   prompt_hash: string;
-  /** SHA-256 hash of the result payload delivered to the payer. */
+  /**
+   * SHA-256 of the service result delivered to the payer (lowercase hex, 64
+   * characters). The payee signs it as the receipt's `service_result_hash`;
+   * the receipt's own `result_hash` binds its synthesized `result` text
+   * (spec/settlement-v1.md §7). A value that is not a SHA-256 hex digest is
+   * declined.
+   */
   result_hash: string;
   /** Tools the payee used to render the service. Empty array is valid. */
   tools_used: string[];

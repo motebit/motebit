@@ -6,14 +6,19 @@
  * receipts, and logs events.
  */
 
-import { EventType, AgentTrustLevel } from "@motebit/sdk";
+import { EventType, AgentTrustLevel, toWellFormedText } from "@motebit/sdk";
 import type {
   AgentTask,
   ExecutionReceipt,
   AgentTrustStoreAdapter,
   LatencyStatsStoreAdapter,
 } from "@motebit/sdk";
-import { hash, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/encryption";
+import {
+  hash,
+  hasUnpairedSurrogate,
+  signExecutionReceipt,
+  verifyExecutionReceipt,
+} from "@motebit/encryption";
 import { composeDelegationTrust, trustLevelToScore } from "@motebit/semiring";
 import type { EventStore } from "@motebit/event-log";
 import type { AgentGraphManager } from "./agent-graph.js";
@@ -180,13 +185,34 @@ export async function* handleAgentTask(
       (responseText ? ` Model note: ${responseText}` : "");
   }
 
-  const delegationReceipts = delegationEntries.map((e) => e.receipt);
+  // Embed every hire's receipt — except an old child holding an unpaired
+  // surrogate (§11.4): it was signed by someone else, so it cannot be repaired
+  // (its signature covers the bytes), and the signing boundary refuses to embed
+  // it. It is dropped from delegation_receipts and this receipt is still
+  // signed — a third party's malformed child must never cost the parent
+  // (docs/design/payment-receipt-wellformed-stop-condition.md §3, decision (a)).
+  const delegationReceipts = delegationEntries
+    .map((e) => e.receipt)
+    .filter((dr) => {
+      if (!hasUnpairedSurrogate(dr)) return true;
+      deps.logger.warn("delegation receipt not embedded: unpaired UTF-16 surrogate (§11.4)", {
+        task_id: task.task_id,
+        delegation_task_id: dr.task_id,
+      });
+      return false;
+    });
 
   // Credit the hires this task's turn made: trust, chain trust, graph
   // edges, latency (best-effort). The owner's own hires get the same credit
   // at owner-record intake (#943) — never through a task.
   // The flag survives from where each hire was made: one credit per hire.
   await absorbDelegationReceipts(deps, delegationEntries);
+
+  // Never sign an unpaired UTF-16 surrogate (spec/execution-ledger-v1.md
+  // §11.4): a stream cut mid-emoji (timeout, provider reset) can end on a lone
+  // high surrogate. Repair it before hashing so result_hash binds the signed
+  // result.
+  responseText = toWellFormedText(responseText);
 
   // Hash prompt and result
   const promptHash = await hash(new TextEncoder().encode(task.prompt));

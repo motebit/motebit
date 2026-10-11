@@ -9,6 +9,7 @@
 
 import {
   canonicalJson,
+  canonicalJsonForSigning,
   ed25519Sign,
   ed25519Verify,
   base58btcEncode,
@@ -146,9 +147,9 @@ async function signDataIntegrity(
   };
 
   const encoder = new TextEncoder();
-  const proofHash = await sha256(encoder.encode(canonicalJson(proofOptions)));
+  const proofHash = await sha256(encoder.encode(canonicalJsonForSigning(proofOptions)));
   const { proof: _proof, ...docWithoutProof } = document;
-  const docHash = await sha256(encoder.encode(canonicalJson(docWithoutProof)));
+  const docHash = await sha256(encoder.encode(canonicalJsonForSigning(docWithoutProof)));
 
   const combined = new Uint8Array(proofHash.length + docHash.length);
   combined.set(proofHash);
