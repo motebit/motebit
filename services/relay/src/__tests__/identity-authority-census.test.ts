@@ -592,7 +592,7 @@ describe("identity-authority census Q6 — a relay-federation@1.5 handshake is v
   let ids: Record<Name, RelayIdentity>;
   let ip = 0;
 
-  const post = (n: Name, path: string, body: unknown): Promise<Response> =>
+  const post = async (n: Name, path: string, body: unknown): Promise<Response> =>
     relays[n].app.request(path, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-forwarded-for": `198.51.100.${++ip}` },
