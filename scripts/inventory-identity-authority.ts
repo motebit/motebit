@@ -874,8 +874,18 @@ export function authoritySchemaFields(): string[] {
  * "Authority writers" rows), without its line — the input of the single-writer
  * ratchet in `check-identity-authority-inventory`.
  */
-export function authorityWriterSites(): Array<{ file: string; fn: string; write: string }> {
-  return authorityWriters.map((w) => ({ file: w.file, fn: w.fn, write: `${w.verb} ${w.table}` }));
+export function authorityWriterSites(): Array<{
+  file: string;
+  fn: string;
+  write: string;
+  columns: string[];
+}> {
+  return authorityWriters.map((w) => ({
+    file: w.file,
+    fn: w.fn,
+    write: `${w.verb} ${w.table}`,
+    columns: [...new Set(authCols(w))].sort(),
+  }));
 }
 
 async function main(): Promise<void> {

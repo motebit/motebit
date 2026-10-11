@@ -122,7 +122,11 @@ import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { getAccountBalanceDetailed } from "./accounts.js";
 import { listStoredReceipts, getStoredReceiptJson } from "./receipts-store.js";
 import type { AuthEvent } from "./auth-events.js";
-import { applyAuthorityChange, authorityFromRequest } from "./identity-authority.js";
+import {
+  applyAuthorityChange,
+  authorityFromRequest,
+  reserveAuthority,
+} from "./identity-authority.js";
 import type { VerifiedKeySource } from "./auth.js";
 import {
   isAgentRevocationReason,
@@ -1334,6 +1338,10 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       motebitId,
       value: body,
     });
+    // The register door writes before its change (a succession below), so a
+    // proven request consumes its signature here, ahead of any write: a
+    // concurrent replay of the same header is refused before it writes (L2).
+    reserveAuthority(c, authorityDoor, authority);
 
     // --- Succession chain validation on re-registration ---
     // A differing key needs a link from the key on file. Once the identity has

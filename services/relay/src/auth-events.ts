@@ -80,9 +80,38 @@ const ALL_KINDS: AuthEventKind[] = [
   "authority_write_outside_writer",
 ];
 
+/**
+ * The kinds `recent` lists when the caller names none: every kind except the
+ * identity-authority shadow record, which fires on every device-only money
+ * write in Inc 2 and would otherwise crowd the auth decisions out of the
+ * list (it stays counted in `counts_by_kind`; ask for it with `kinds`).
+ */
+export const DEFAULT_RECENT_KINDS: readonly AuthEventKind[] = [
+  "master_token",
+  "master_token_ws",
+  "agent_token_rejected",
+  "device_token_rejected",
+];
+
+/** Parse a `?kind=` query value (comma-separated, or `all`); null when absent or empty. */
+export function parseAuthEventKinds(raw: string | undefined): AuthEventKind[] | "invalid" | null {
+  if (raw === undefined || raw.trim() === "") return null;
+  if (raw.trim() === "all") return [...ALL_KINDS];
+  const kinds = raw.split(",").map((k) => k.trim());
+  return kinds.every((k): k is AuthEventKind => (ALL_KINDS as string[]).includes(k))
+    ? kinds
+    : "invalid";
+}
+
 export interface AuthEventSink {
   record: (event: AuthEvent) => void;
-  summary: (opts?: { sinceMs?: number; recentLimit?: number; now?: number }) => AuthEventSummary;
+  summary: (opts?: {
+    sinceMs?: number;
+    recentLimit?: number;
+    now?: number;
+    /** The kinds `recent` lists (default `DEFAULT_RECENT_KINDS`). */
+    kinds?: readonly AuthEventKind[];
+  }) => AuthEventSummary;
   /** Delete rows older than the retention window. Returns rows removed. */
   sweep: (now?: number) => number;
 }
@@ -145,13 +174,15 @@ export function createAuthEventSink(
            GROUP BY kind, reason, path ORDER BY count DESC, last_at DESC LIMIT 100`,
         )
         .all(since) as AuthEventSummary["rejections"];
+      const kinds = opts.kinds ?? DEFAULT_RECENT_KINDS;
       const recent = db
         .prepare(
           `SELECT id, at, kind, method, path, motebit_id AS motebitId, audience, reason,
                   correlation_id AS correlationId
-           FROM relay_auth_events WHERE at >= ? ORDER BY at DESC, id DESC LIMIT ?`,
+           FROM relay_auth_events WHERE at >= ? AND kind IN (${kinds.map(() => "?").join(", ") || "NULL"})
+           ORDER BY at DESC, id DESC LIMIT ?`,
         )
-        .all(since, recentLimit) as AuthEventRow[];
+        .all(since, ...kinds, recentLimit) as AuthEventRow[];
       return {
         since,
         counts_by_kind: counts,

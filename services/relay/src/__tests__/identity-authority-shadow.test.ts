@@ -35,6 +35,7 @@ import {
   generateKeypair,
   mintAudienceToken,
   signAuthorityRequest,
+  signKeySuccession,
   type AuthorityField,
   type KeyPair,
 } from "@motebit/crypto";
@@ -829,3 +830,79 @@ describe("X-Motebit-Authority on the money doors — valid writes through writeA
   });
 });
 void AUTH_HEADER;
+
+describe("register: a proven header's signature is consumed BEFORE any write (L2)", () => {
+  it("two concurrent requests with the same header: one 200, one 401 replayed that wrote nothing", async () => {
+    const c = await cast();
+    // Register first (unproven), so the proven request below carries a
+    // succession — the register door's write ahead of its change.
+    expect((await callDoor(c, DOORS["register"]!, { who: "owner" })).status).toBe(200);
+    const next = await generateKeypair();
+    const succession = await signKeySuccession(
+      c.owner.privateKey,
+      next.privateKey,
+      next.publicKey,
+      c.owner.publicKey,
+    );
+    const body = {
+      endpoint_url: "http://127.0.0.1:9999/mcp",
+      capabilities: ["web_search"],
+      public_key: hex(next),
+      succession,
+    };
+    const header = await signedHeader(c, "registration", body);
+
+    // Every write statement on an authority table, attributed to its request.
+    const writes: Array<{ cid: string | undefined; sql: string }> = [];
+    const d = db() as unknown as {
+      prepare: (sql: string) => { run: (...a: unknown[]) => unknown };
+    };
+    const realPrepare = d.prepare.bind(d);
+    const wrapped = new WeakSet<object>();
+    d.prepare = (sql: string) => {
+      const st = realPrepare(sql);
+      if (
+        !wrapped.has(st) &&
+        /^\s*(INSERT|UPDATE|DELETE)/i.test(sql) &&
+        /\b(agent_registry|devices|identity_keys|relay_key_successions|relay_service_listings|pairing_sessions)\b/.test(
+          sql,
+        )
+      ) {
+        wrapped.add(st);
+        const run = st.run.bind(st);
+        st.run = (...a: unknown[]) => {
+          writes.push({ cid: requestContext.getStore()?.correlationId, sql });
+          return run(...a);
+        };
+      }
+      return st;
+    };
+    const send = async (cid: string) => {
+      const res = await relay.app.request("/api/v1/agents/register", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${await token(c, "owner", "admin:query")}`,
+          "X-Motebit-Authority": header,
+          "x-correlation-id": cid,
+        },
+        body: JSON.stringify(body),
+      });
+      return { cid, status: res.status, text: await res.text() };
+    };
+    let results: Array<{ cid: string; status: number; text: string }>;
+    try {
+      results = await Promise.all([send("req-a"), send("req-b")]);
+    } finally {
+      d.prepare = realPrepare;
+    }
+    const ok = results.filter((r) => r.status === 200);
+    const refused = results.filter((r) => r.status === 401);
+    expect(ok, JSON.stringify(results)).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.text).toMatch(/replayed/);
+    expect(writes.filter((w) => w.cid === refused[0]!.cid)).toEqual([]);
+    expect(writes.some((w) => w.cid === ok[0]!.cid)).toBe(true);
+    expect(registryRow(c)).toMatchObject({ public_key: hex(next) });
+  });
+});

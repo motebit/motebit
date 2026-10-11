@@ -110,6 +110,53 @@ describe("relay auth-event record", () => {
     expect((await relay.app.request("/api/v1/admin/auth-events")).status).toBe(401);
   });
 
+  it("the default recent list leaves out the identity-authority shadow rows; ?kind= asks for them (L1)", async () => {
+    const db = relay.moteDb.db;
+    const now = Date.now();
+    const insert = db.prepare(
+      "INSERT INTO relay_auth_events (at, kind, method, path, motebit_id, audience, reason, correlation_id) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL)",
+    );
+    insert.run(now - 2000, "agent_token_rejected", "POST", "/api/v1/x", "m-1", "bad_signature");
+    // A burst of shadow rows, newer than the refusal: they must not crowd it out.
+    for (let i = 0; i < 60; i++)
+      insert.run(
+        now - 1000 + i,
+        "authority_write_outside_writer",
+        "PATCH",
+        "/p",
+        `m-${i}`,
+        "t:UPDATE",
+      );
+    const get = async (q: string) => {
+      const res = await relay.app.request(`/api/v1/admin/auth-events?since_hours=1${q}`, {
+        headers: AUTH_HEADER,
+      });
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    };
+    const kindsOf = (b: Record<string, unknown>) =>
+      new Set((b["recent"] as Array<{ kind: string }>).map((r) => r.kind));
+
+    const plain = await get("&limit=10");
+    expect(plain.status).toBe(200);
+    expect(kindsOf(plain.body).has("authority_write_outside_writer")).toBe(false);
+    expect(kindsOf(plain.body).has("agent_token_rejected")).toBe(true);
+    // Still counted.
+    expect(
+      (plain.body["counts_by_kind"] as Record<string, number>)["authority_write_outside_writer"],
+    ).toBe(60);
+
+    const shadow = await get("&limit=10&kind=authority_write_outside_writer");
+    expect(shadow.status).toBe(200);
+    expect([...kindsOf(shadow.body)]).toEqual(["authority_write_outside_writer"]);
+    expect((shadow.body["recent"] as unknown[]).length).toBe(10);
+
+    const all = await get("&limit=500&kind=all");
+    expect(kindsOf(all.body).has("authority_write_outside_writer")).toBe(true);
+    expect(kindsOf(all.body).has("agent_token_rejected")).toBe(true);
+
+    expect((await get("&kind=nope")).status).toBe(400);
+  });
+
   it("sweeps rows past the 30-day window and keeps the rest", () => {
     const sink = createAuthEventSink(relay.moteDb.db);
     const now = Date.now();

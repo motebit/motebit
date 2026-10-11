@@ -36,13 +36,18 @@
  *     A write outside any request (a loop, boot) is grouped per subject per
  *     UTC hour. Inc 4 turns the record into `RAISE(ABORT)`.
  *
- * Current key (§3.2), as this tree can answer it — the census's own reading
- * (`currentKeyOf`, identity-authority-census.ts): a sovereign id's lineage
- * HEAD from its genesis key K₀ (never a retired key); a legacy id's
- * `identity_keys` holder only when its source is evidence (`succession`,
- * `migration`, `operator`); else NONE — and with none, no request can prove
- * the key, so the header is refused (D2: frozen until evidence exists).
- * A device row is never a current key (D1).
+ * Current key (§3.2) — the census's own reading (`currentKeyOf`,
+ * identity-authority-census.ts): the HEAD of a lineage ROOTED IN EVIDENCE
+ * (E-sov: the id is K₀'s sovereign commitment; E-mig / E-op: the holder's
+ * `migration` / `operator` source), every link of which carries that
+ * evidence — an ordinary link carries its departing key's evidence and
+ * creates none (a self-signed rotation from an unproven key upgrades
+ * nothing; `succession` is never a source of evidence), and a guardian
+ * recovery carries it only under a guardian with a v60 evidence row set
+ * under a key already on the lineage. A retired key never mints. Else NONE —
+ * and with none, no request can prove the key, so the header is refused
+ * (D2: frozen until evidence exists). A device row is never a current key
+ * (D1). Exhaustive proof: `__tests__/proven-key-lineage-model.test.ts`.
  */
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { Context } from "hono";
@@ -170,6 +175,12 @@ interface Proof {
  */
 export class ProvenKey {
   readonly #proof: Readonly<Proof>;
+  /**
+   * `fresh` — the signature is not consumed yet; `reserved` — consumed ahead
+   * of the door's first write (`reserveAuthority`), so `writeAuthority` takes
+   * it without a second consumption; `spent` — written once, never again.
+   */
+  #state: "fresh" | "reserved" | "spent" = "fresh";
   constructor(key: typeof MINT, proof: Proof) {
     if (key !== MINT) throw new Error("ProvenKey is minted only by proveCurrentKey");
     this.#proof = Object.freeze({ ...proof });
@@ -189,6 +200,14 @@ export class ProvenKey {
       throw new AuthorityCapabilityRefused();
     }
     return cap.#proof;
+  }
+  /** The consumption state, through the same private-brand check. */
+  static stateOf(cap: unknown): "fresh" | "reserved" | "spent" {
+    ProvenKey.unwrap(cap);
+    return (cap as ProvenKey).#state;
+  }
+  static mark(cap: ProvenKey, state: "reserved" | "spent"): void {
+    cap.#state = state;
   }
 }
 
@@ -340,16 +359,57 @@ export function writeAuthority<C extends AuthorityChange>(
       `writeAuthority: the ProvenKey authorizes ${proof.field} for ${proof.motebitId}, not ${change.field} for ${change.motebitId}`,
     );
   }
-  return db.transaction(() => {
-    if (keyProofAccepted(db, keyProof(proof))) throw new AuthorityReplayed();
+  const state = ProvenKey.stateOf(cap);
+  if (state === "spent") throw new AuthorityReplayed();
+  const result = db.transaction(() => {
+    if (state === "fresh") {
+      if (keyProofAccepted(db, keyProof(proof))) throw new AuthorityReplayed();
+    }
     setWindow(db, true);
     try {
-      recordKeyProofAccepted(db, keyProof(proof), "authority", now);
+      if (state === "fresh") recordKeyProofAccepted(db, keyProof(proof), "authority", now);
       return applyChange(db, change, proof) as ResultOf<C>;
     } finally {
       setWindow(db, false);
     }
   });
+  ProvenKey.mark(cap, "spent");
+  return result;
+}
+
+/**
+ * Consume a `ProvenKey`'s signature NOW, before the door's first write — for
+ * a door that writes anything ahead of `writeAuthority` (the register door
+ * applies a succession first). Two concurrent requests with the same header
+ * both verify; exactly one reserves, the other is an exact replay refused
+ * before it has written anything (L2 of the Inc 2 review). Synchronous, one
+ * transaction. The reserved capability then writes once, through
+ * `writeAuthority`, without consuming again. A door that refuses after
+ * reserving has burned the nonce: the client signs a fresh request.
+ */
+export function reserveAuthority(
+  c: Context,
+  door: AuthorityDoor,
+  cap: ProvenKey | null,
+  now: number = Date.now(),
+): void {
+  if (cap === null) return;
+  const proof = ProvenKey.unwrap(cap);
+  if (ProvenKey.stateOf(cap) !== "fresh") refuseAuthority(c, door, proof.motebitId, "replayed");
+  const won = door.db.transaction(() => {
+    if (keyProofAccepted(door.db, keyProof(proof))) return false;
+    // The single writer's own replay bookkeeping, under the open window
+    // exactly as `writeAuthority` records it (never a shadow event).
+    setWindow(door.db, true);
+    try {
+      recordKeyProofAccepted(door.db, keyProof(proof), "authority", now);
+    } finally {
+      setWindow(door.db, false);
+    }
+    return true;
+  });
+  if (!won) refuseAuthority(c, door, proof.motebitId, "replayed");
+  ProvenKey.mark(cap, "reserved");
 }
 
 /**
@@ -417,36 +477,29 @@ function applyChange(
       return requestWithdrawal(db, c.motebitId, c.amountMicro, c.destination, c.idempotencyKey);
     }
     case "registration": {
-      applyRegistration(db, change, proof);
-      return undefined;
-    }
-  }
-}
+      // Written out here, not in a helper: the single-writer gate exempts
+      // only the writer's own declarations (`writeAuthority`, `applyChange`),
+      // so every authority statement of a change lives in this function.
+      const c = change;
+      // The holder's first key — BEFORE the registry upsert, whose write would
+      // otherwise fill the empty registry slot E-sov's predicate requires (DA2).
+      if (c.sovereignProof) {
+        recordFirstIdentityKey(db, c.sovereignProof, {
+          source: "register",
+          guardianPublicKey: c.guardianPublicKey,
+          now: c.now,
+        });
+      } else if (c.operatorServiceKey) {
+        recordOperatorServiceKey(db, {
+          motebitId: c.motebitId,
+          publicKey: c.publicKey,
+          guardianPublicKey: c.guardianPublicKey,
+          now: c.now,
+        });
+      }
 
-function applyRegistration(
-  db: DatabaseDriver,
-  c: RegistrationChange,
-  proof: Readonly<Proof> | null,
-): void {
-  // The holder's first key — BEFORE the registry upsert, whose write would
-  // otherwise fill the empty registry slot E-sov's predicate requires (DA2).
-  if (c.sovereignProof) {
-    recordFirstIdentityKey(db, c.sovereignProof, {
-      source: "register",
-      guardianPublicKey: c.guardianPublicKey,
-      now: c.now,
-    });
-  } else if (c.operatorServiceKey) {
-    recordOperatorServiceKey(db, {
-      motebitId: c.motebitId,
-      publicKey: c.publicKey,
-      guardianPublicKey: c.guardianPublicKey,
-      now: c.now,
-    });
-  }
-
-  db.prepare(
-    `
+      db.prepare(
+        `
       INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at, guardian_public_key, federation_visible, settlement_address, settlement_modes, sweep_threshold)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(motebit_id) DO UPDATE SET
@@ -463,70 +516,73 @@ function applyRegistration(
         sweep_threshold = COALESCE(excluded.sweep_threshold, agent_registry.sweep_threshold),
         delisted_at = CASE WHEN agent_registry.revoked = 1 THEN agent_registry.delisted_at ELSE NULL END
     `,
-  ).run(
-    c.motebitId,
-    c.publicKey,
-    c.endpointUrl,
-    JSON.stringify(c.capabilities),
-    c.metadata,
-    c.now,
-    c.now,
-    c.expiresAt,
-    c.guardianPublicKey,
-    c.federationVisible,
-    c.settlementAddress,
-    c.settlementModes,
-    c.sweepThreshold,
-  );
+      ).run(
+        c.motebitId,
+        c.publicKey,
+        c.endpointUrl,
+        JSON.stringify(c.capabilities),
+        c.metadata,
+        c.now,
+        c.now,
+        c.expiresAt,
+        c.guardianPublicKey,
+        c.federationVisible,
+        c.settlementAddress,
+        c.settlementModes,
+        c.sweepThreshold,
+      );
 
-  // Every verified guardian attestation reaches the holder (DA6).
-  if (c.guardianPublicKey) {
-    recordIdentityGuardian(db, {
-      motebitId: c.motebitId,
-      guardianPublicKey: c.guardianPublicKey,
-      now: c.now,
-    });
-  }
+      // Every verified guardian attestation reaches the holder (DA6).
+      if (c.guardianPublicKey) {
+        recordIdentityGuardian(db, {
+          motebitId: c.motebitId,
+          guardianPublicKey: c.guardianPublicKey,
+          now: c.now,
+        });
+      }
 
-  // A default service listing, when the agent has none (routing reads listings).
-  if (c.capabilities.length > 0) {
-    const existing = db
-      .prepare("SELECT listing_id FROM relay_service_listings WHERE motebit_id = ?")
-      .get(c.motebitId) as { listing_id: string } | undefined;
-    if (!existing) {
-      db.prepare(
-        `INSERT INTO relay_service_listings
+      // A default service listing, when the agent has none (routing reads listings).
+      if (c.capabilities.length > 0) {
+        const existing = db
+          .prepare("SELECT listing_id FROM relay_service_listings WHERE motebit_id = ?")
+          .get(c.motebitId) as { listing_id: string } | undefined;
+        if (!existing) {
+          db.prepare(
+            `INSERT INTO relay_service_listings
              (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, updated_at)
              VALUES (?, ?, ?, '[]', 30000, 0.95, ?, ?)`,
-      ).run(
-        `ls-${crypto.randomUUID()}`,
-        c.motebitId,
-        JSON.stringify(c.capabilities),
-        c.listingDescription,
-        c.now,
-      );
-    }
-  }
+          ).run(
+            `ls-${crypto.randomUUID()}`,
+            c.motebitId,
+            JSON.stringify(c.capabilities),
+            c.listingDescription,
+            c.now,
+          );
+        }
+      }
 
-  // Provenance, only beside a proven write (#875 v58/v60): the key and the
-  // guardian were written under the identity's current key.
-  if (proof !== null) {
-    if (c.publicKey === proof.publicKey) {
-      recordRegistryKeyEvidence(db, {
-        motebitId: c.motebitId,
-        publicKey: proof.publicKey,
-        evidence: "key_proof",
-        now: c.now,
-      });
-    }
-    if (c.guardianPublicKey) {
-      recordGuardianEvidence(db, {
-        motebitId: c.motebitId,
-        guardianPublicKey: c.guardianPublicKey,
-        setUnderKey: proof.publicKey,
-        evidence: "key_proof",
-        now: c.now,
-      });
+      // Provenance, only beside a proven write (#875 v58/v60): the key and the
+      // guardian were written under the identity's current key.
+      if (proof !== null) {
+        if (c.publicKey === proof.publicKey) {
+          recordRegistryKeyEvidence(db, {
+            motebitId: c.motebitId,
+            publicKey: proof.publicKey,
+            evidence: "key_proof",
+            now: c.now,
+          });
+        }
+        if (c.guardianPublicKey) {
+          recordGuardianEvidence(db, {
+            motebitId: c.motebitId,
+            guardianPublicKey: c.guardianPublicKey,
+            setUnderKey: proof.publicKey,
+            evidence: "key_proof",
+            now: c.now,
+          });
+        }
+      }
+      return undefined;
     }
   }
 }

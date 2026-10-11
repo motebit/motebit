@@ -124,7 +124,27 @@ export interface AuthorityWriterSite {
   fn: string;
   /** `VERB table`, as the census prints it. */
   write: string;
+  /**
+   * The authority-bearing columns it writes (sorted). Part of the identity of
+   * a registration: a registered writer that starts writing another authority
+   * column is a new writer (F3b of the Inc 2 review).
+   */
+  columns?: readonly string[];
 }
+
+/**
+ * The single writer's own declarations — the ONLY exemption (F3a of the Inc 2
+ * review): a writer elsewhere in identity-authority.ts, exported or not, is a
+ * writer outside the single writer like any other.
+ */
+export const SINGLE_WRITER_DECLARATIONS: ReadonlySet<string> = new Set([
+  "writeAuthority",
+  "applyChange",
+  "writeOperatorAct",
+]);
+
+const insideSingleWriter = (s: AuthorityWriterSite): boolean =>
+  s.file === SINGLE_WRITER_FILE && SINGLE_WRITER_DECLARATIONS.has(s.fn);
 
 interface Outside extends AuthorityWriterSite {
   count: number;
@@ -164,6 +184,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/agents.ts",
     fn: "applyRevocation",
     write: "UPDATE agent_registry",
+    columns: ["delisted_at", "revoked"],
     count: 2,
     why: INC4_REVOKE,
   },
@@ -171,6 +192,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/key-rotation.ts",
     fn: "POST /api/v1/agents/:motebitId/revoke",
     write: "UPDATE agent_registry",
+    columns: ["capabilities", "delisted_at", "endpoint_url", "revoked"],
     count: 1,
     why: INC4_REVOKE,
   },
@@ -178,6 +200,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/migration.ts",
     fn: "commitDeparture",
     write: "UPDATE agent_registry",
+    columns: ["capabilities", "delisted_at", "endpoint_url", "revoked"],
     count: 1,
     why: INC4_REVOKE,
   },
@@ -185,6 +208,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/migration.ts",
     fn: "POST /api/v1/agents/accept-migration",
     write: "INSERT agent_registry",
+    columns: ["capabilities", "delisted_at", "endpoint_url", "public_key", "revoked"],
     count: 1,
     why: "evidence-gated: a migration arrival whose sovereign binding verified (E-mig, rule 23); Inc 4 re-homes it under writeAuthority",
   },
@@ -192,6 +216,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/migrations.ts",
     fn: "up",
     write: "UPDATE agent_registry",
+    columns: ["delisted_at"],
     count: 1,
     why: RETENTION,
   },
@@ -199,13 +224,23 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/succession-apply.ts",
     fn: "applySuccession",
     write: "UPDATE agent_registry",
-    count: 2,
+    columns: ["public_key"],
+    count: 1,
+    why: INC3_SUCCESSION,
+  },
+  {
+    file: "services/relay/src/succession-apply.ts",
+    fn: "applySuccession",
+    write: "UPDATE agent_registry",
+    columns: ["settlement_address"],
+    count: 1,
     why: INC3_SUCCESSION,
   },
   {
     file: "services/relay/src/tasks.ts",
     fn: "healRegistryKey",
     write: "UPDATE agent_registry",
+    columns: ["public_key"],
     count: 1,
     why: "§1.3 row 7: a device-row key promoted to the registry key; Inc 3 deletes `healRegistryKey`",
   },
@@ -213,6 +248,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "packages/persistence/src/index.ts",
     fn: "<module>",
     write: "REPLACE agent_trust",
+    columns: ["failed_tasks", "interaction_count", "public_key", "successful_tasks", "trust_level"],
     count: 1,
     why: DERIVED_TRUST,
   },
@@ -220,6 +256,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "packages/persistence/src/index.ts",
     fn: "<module>",
     write: "UPDATE agent_trust",
+    columns: ["trust_level"],
     count: 1,
     why: DERIVED_TRUST,
   },
@@ -227,6 +264,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/migration.ts",
     fn: "POST /api/v1/agents/accept-migration",
     write: "REPLACE agent_trust",
+    columns: ["trust_level"],
     count: 1,
     why: "evidence-gated: a migration arrival whose sovereign binding verified (E-mig, rule 23); Inc 4 re-homes it under writeAuthority",
   },
@@ -234,6 +272,14 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "packages/runtime/src/agent-trust.ts",
     fn: "bumpTrustFromReceipt",
     write: "STORE agent_trust (adapter)",
+    columns: [
+      "avg_quality",
+      "failed_tasks",
+      "interaction_count",
+      "public_key",
+      "successful_tasks",
+      "trust_level",
+    ],
     count: 2,
     why: DERIVED_TRUST,
   },
@@ -241,6 +287,14 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "packages/runtime/src/agent-trust.ts",
     fn: "recordAgentInteraction",
     write: "STORE agent_trust (adapter)",
+    columns: [
+      "avg_quality",
+      "failed_tasks",
+      "interaction_count",
+      "public_key",
+      "successful_tasks",
+      "trust_level",
+    ],
     count: 2,
     why: DERIVED_TRUST,
   },
@@ -248,6 +302,14 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "packages/runtime/src/motebit-runtime.ts",
     fn: "setAgentPetname",
     write: "STORE agent_trust (adapter)",
+    columns: [
+      "avg_quality",
+      "failed_tasks",
+      "interaction_count",
+      "public_key",
+      "successful_tasks",
+      "trust_level",
+    ],
     count: 1,
     why: DERIVED_TRUST,
   },
@@ -255,6 +317,14 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/tasks.ts",
     fn: "settleLocalAnswer",
     write: "STORE agent_trust (adapter)",
+    columns: [
+      "avg_quality",
+      "failed_tasks",
+      "interaction_count",
+      "public_key",
+      "successful_tasks",
+      "trust_level",
+    ],
     count: 2,
     why: DERIVED_TRUST,
   },
@@ -262,6 +332,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "packages/persistence/src/index.ts",
     fn: "<module>",
     write: "REPLACE devices",
+    columns: ["device_id", "device_token", "hardware_attestation_credential", "public_key"],
     count: 1,
     why: INC3_DEVICE,
   },
@@ -269,6 +340,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/succession-apply.ts",
     fn: "applySuccession",
     write: "UPDATE devices",
+    columns: ["hardware_attestation_credential", "public_key"],
     count: 1,
     why: INC3_SUCCESSION,
   },
@@ -276,6 +348,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/identity-keys.ts",
     fn: "recordIdentityKey",
     write: "INSERT identity_keys",
+    columns: ["guardian_public_key", "public_key"],
     count: 1,
     why: HOLDER,
   },
@@ -283,6 +356,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/identity-keys.ts",
     fn: "recordIdentityGuardian",
     write: "UPDATE identity_keys",
+    columns: ["guardian_public_key"],
     count: 1,
     why: HOLDER,
   },
@@ -290,6 +364,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/identity-keys.ts",
     fn: "<module>",
     write: "INSERT identity_keys",
+    columns: ["guardian_public_key", "public_key"],
     count: 1,
     why: HOLDER,
   },
@@ -297,6 +372,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/pairing.ts",
     fn: "POST /pairing/claim",
     write: "UPDATE pairing_sessions",
+    columns: ["claiming_public_key", "claiming_x25519_pubkey"],
     count: 1,
     why: "§1.3 row 10: the claiming device's key — a sync-only grant under D1 (a device is never identity authority); Inc 3 adds possession proof at claim",
   },
@@ -304,6 +380,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/agent-revocation.ts",
     fn: "insertRevocationRecord",
     write: "INSERT relay_agent_revocations",
+    columns: ["revoked"],
     count: 1,
     why: INC4_REVOKE,
   },
@@ -311,6 +388,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/bond-store.ts",
     fn: "recordBondCommitment",
     write: "INSERT relay_bond_commitments",
+    columns: ["bonded_address", "bonded_public_key"],
     count: 1,
     why: "§1.3 row 25 (G-bond): verified under the holder, else the registry key; Inc 3 binds it to the proven current key",
   },
@@ -318,6 +396,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/delegation-revocations.ts",
     fn: "insertDelegationRevocation",
     write: "INSERT relay_delegation_revocations",
+    columns: ["delegator_public_key", "revoked_at"],
     count: 1,
     why: "request-signed: the revocation verifies under a key the relay holds for its delegator (bindByDelegationRevocation, #850)",
   },
@@ -325,6 +404,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/identity-keys.ts",
     fn: "recordGuardianEvidence",
     write: "INSERT relay_guardian_evidence",
+    columns: ["guardian_public_key"],
     count: 1,
     why: HELPER,
   },
@@ -332,6 +412,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/identity-revocation.ts",
     fn: "recordIdentityRevocation",
     write: "INSERT relay_identity_revocations",
+    columns: ["revoked_at"],
     count: 1,
     why: INC4_REVOKE,
   },
@@ -339,6 +420,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/identity-revocation.ts",
     fn: "liftRevocation",
     write: "DELETE relay_identity_revocations",
+    columns: ["revoked_at"],
     count: 1,
     why: INC4_REVOKE,
   },
@@ -346,6 +428,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/key-proof-replay.ts",
     fn: "recordKeyProofAccepted",
     write: "DELETE relay_key_proofs_accepted",
+    columns: ["public_key"],
     count: 1,
     why: HELPER,
   },
@@ -353,6 +436,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/key-proof-replay.ts",
     fn: "recordKeyProofAccepted",
     write: "INSERT relay_key_proofs_accepted",
+    columns: ["public_key"],
     count: 1,
     why: HELPER,
   },
@@ -360,6 +444,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/succession-apply.ts",
     fn: "applySuccession",
     write: "INSERT relay_key_successions",
+    columns: ["guardian_signature", "new_public_key", "old_public_key", "recovery"],
     count: 1,
     why: INC3_SUCCESSION,
   },
@@ -367,6 +452,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/intake-routes.ts",
     fn: "POST /api/v1/motebits/announce",
     write: "INSERT relay_motebit_intake",
+    columns: ["public_key"],
     count: 1,
     why: NOT_AUTHORITY,
   },
@@ -374,6 +460,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/federation-callbacks.ts",
     fn: "settleFederatedAnswer",
     write: "UPDATE relay_peers",
+    columns: ["failed_forwards", "successful_forwards", "trust_level", "trust_score"],
     count: 1,
     why: PEER,
   },
@@ -381,6 +468,16 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/federation.ts",
     fn: "writePeerRow",
     write: "INSERT relay_peers",
+    columns: [
+      "endpoint_url",
+      "missed_heartbeats",
+      "nonce",
+      "peer_protocol_version",
+      "peered_at",
+      "public_key",
+      "state",
+      "trust_score",
+    ],
     count: 1,
     why: PEER,
   },
@@ -388,6 +485,19 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/federation.ts",
     fn: "writePeerRow",
     write: "DELETE relay_peers",
+    columns: [
+      "endpoint_url",
+      "failed_forwards",
+      "missed_heartbeats",
+      "nonce",
+      "peer_protocol_version",
+      "peered_at",
+      "public_key",
+      "state",
+      "successful_forwards",
+      "trust_level",
+      "trust_score",
+    ],
     count: 1,
     why: PEER,
   },
@@ -395,6 +505,14 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/federation.ts",
     fn: "writePeerRow",
     write: "UPDATE relay_peers",
+    columns: [
+      "endpoint_url",
+      "missed_heartbeats",
+      "nonce",
+      "peer_protocol_version",
+      "peered_at",
+      "state",
+    ],
     count: 1,
     why: PEER,
   },
@@ -402,13 +520,23 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/task-routing.ts",
     fn: "recordPeerForwardResult",
     write: "UPDATE relay_peers",
-    count: 2,
+    columns: ["failed_forwards"],
+    count: 1,
+    why: PEER,
+  },
+  {
+    file: "services/relay/src/task-routing.ts",
+    fn: "recordPeerForwardResult",
+    write: "UPDATE relay_peers",
+    columns: ["state"],
+    count: 1,
     why: PEER,
   },
   {
     file: "services/relay/src/task-routing.ts",
     fn: "resetCircuitBreaker",
     write: "UPDATE relay_peers",
+    columns: ["failed_forwards"],
     count: 1,
     why: PEER,
   },
@@ -416,6 +544,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/tasks.ts",
     fn: "deliverLocalAnswer",
     write: "UPDATE relay_peers",
+    columns: ["failed_forwards", "successful_forwards", "trust_level", "trust_score"],
     count: 1,
     why: PEER,
   },
@@ -423,6 +552,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/account-store-sqlite.ts",
     fn: "debitAndEnqueuePending",
     write: "INSERT relay_pending_withdrawals",
+    columns: ["destination", "rail"],
     count: 1,
     why: DERIVED_MONEY,
   },
@@ -430,6 +560,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/identity-keys.ts",
     fn: "recordRegistryKeyEvidence",
     write: "INSERT relay_registry_key_evidence",
+    columns: ["public_key"],
     count: 1,
     why: HELPER,
   },
@@ -437,6 +568,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/federation.ts",
     fn: "insertRevocationEvent",
     write: "INSERT relay_revocation_events",
+    columns: ["new_public_key"],
     count: 1,
     why: "derived: the federation `key_rotated` / revocation event recorded after a verified succession or revocation (§1.3 rows 11–16)",
   },
@@ -444,6 +576,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/horizon.ts",
     fn: "truncateRevocationEventsBeforeHorizon",
     write: "DELETE relay_revocation_events",
+    columns: ["new_public_key"],
     count: 1,
     why: RETENTION,
   },
@@ -451,6 +584,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/index.ts",
     fn: "createSyncRelay",
     write: "DELETE relay_service_listings",
+    columns: ["capabilities", "pay_to_address", "pricing"],
     count: 1,
     why: RETENTION,
   },
@@ -458,6 +592,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/succession-apply.ts",
     fn: "applySuccession",
     write: "UPDATE relay_service_listings",
+    columns: ["pay_to_address"],
     count: 1,
     why: INC3_SUCCESSION,
   },
@@ -465,6 +600,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/allocation-escrow.ts",
     fn: "insertRow",
     write: "INSERT relay_settlements",
+    columns: ["p2p_worker_address", "p2p_worker_address_rung"],
     count: 2,
     why: DERIVED_MONEY,
   },
@@ -472,6 +608,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/horizon.ts",
     fn: "truncateSettlementsBeforeHorizon",
     write: "DELETE relay_settlements",
+    columns: ["p2p_worker_address", "p2p_worker_address_rung"],
     count: 1,
     why: RETENTION,
   },
@@ -479,6 +616,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/migrations.ts",
     fn: "up",
     write: "DELETE relay_settlements",
+    columns: ["p2p_worker_address", "p2p_worker_address_rung"],
     count: 1,
     why: RETENTION,
   },
@@ -486,6 +624,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/skill-registry.ts",
     fn: "POST /api/v1/skills/submit",
     write: "REPLACE relay_skill_registry",
+    columns: ["signature_public_key"],
     count: 1,
     why: NOT_AUTHORITY,
   },
@@ -493,6 +632,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/account-store-sqlite.ts",
     fn: "insertWithdrawal",
     write: "INSERT relay_withdrawals",
+    columns: ["destination"],
     count: 1,
     why: "the withdrawal store's own insert, reached from the withdraw door only through `requestWithdrawal` inside `writeAuthority` / `writeAuthorityUnproven` (identity-authority.ts)",
   },
@@ -500,6 +640,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "services/relay/src/batch-withdrawals.ts",
     fn: "recordFiredWithdrawal",
     write: "INSERT relay_withdrawals",
+    columns: ["destination"],
     count: 1,
     why: DERIVED_MONEY,
   },
@@ -507,6 +648,7 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "packages/persistence/src/index.ts",
     fn: "<module>",
     write: "REPLACE service_listings",
+    columns: ["capabilities", "pricing"],
     count: 1,
     why: "the worker's own local listing copy (persistence; over-reach of the census name graph, §1.3) — no relay route reads it as authority",
   },
@@ -514,12 +656,14 @@ export const OUTSIDE_SINGLE_WRITER: readonly Outside[] = [
     file: "packages/persistence/src/index.ts",
     fn: "<module>",
     write: "DELETE service_listings",
+    columns: ["capabilities", "pricing"],
     count: 1,
     why: "the worker's own local listing copy (persistence; over-reach of the census name graph, §1.3) — no relay route reads it as authority",
   },
 ];
 
-const key = (s: AuthorityWriterSite): string => `${s.file} | ${s.fn} | ${s.write}`;
+const key = (s: AuthorityWriterSite): string =>
+  `${s.file} | ${s.fn} | ${s.write}${s.columns !== undefined ? ` [${s.columns.join(", ")}]` : ""}`;
 
 /** The census writers the registry does not account for, and stale entries. Pure. */
 export function singleWriterProblems(
@@ -528,7 +672,7 @@ export function singleWriterProblems(
 ): string[] {
   const have = new Map<string, number>();
   for (const s of sites) {
-    if (s.file === SINGLE_WRITER_FILE) continue;
+    if (insideSingleWriter(s)) continue;
     have.set(key(s), (have.get(key(s)) ?? 0) + 1);
   }
   const want = new Map(registry.map((r) => [key(r), r.count]));
@@ -583,9 +727,9 @@ async function main(): Promise<void> {
   console.log(
     `  Shadow guard: AUTHORITY_COLUMNS (${SINGLE_WRITER_FILE}) declares exactly the census's ${census.length} authority-bearing schema column(s).`,
   );
-  const inside = sites.filter((x) => x.file === SINGLE_WRITER_FILE).length;
+  const inside = sites.filter(insideSingleWriter).length;
   console.log(
-    `  Single writer: ${sites.length} census authority writer(s) — ${inside} in ${SINGLE_WRITER_FILE}, ${sites.length - inside} outside it, each registered in OUTSIDE_SINGLE_WRITER (${OUTSIDE_SINGLE_WRITER.length} entries) with the increment that moves it. Aperture: the census's SCAN_ROOTS and name rule; a writer the census cannot see is not examined.`,
+    `  Single writer: ${sites.length} census authority writer(s) — ${inside} in ${SINGLE_WRITER_FILE}'s writer declarations (${[...SINGLE_WRITER_DECLARATIONS].join(" / ")}), ${sites.length - inside} outside them, each registered in OUTSIDE_SINGLE_WRITER (${OUTSIDE_SINGLE_WRITER.length} entries, keyed by file, function, table and authority COLUMN SET) with the increment that moves it. Aperture: the census's SCAN_ROOTS and name rule; a writer the census cannot see is not examined.`,
   );
 }
 

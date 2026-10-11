@@ -34,34 +34,50 @@
  *     wrote (a pairing approval, a key the identity's own chain retired, a
  *     peer recorded under an older federation protocol).
  *
- * "Current key" (§3.2), as far as the schema on this branch can answer it:
+ * "Current key" (§3.2): the head of a lineage ROOTED IN EVIDENCE, every link
+ * of which carries that evidence — else none.
  *
- *   - Sovereign id (the id is the commitment of some key it holds): the head
- *     of the recorded succession chain walked from that genesis key K₀, link
- *     by link (`old_public_key` = the current head). Recovery links are walked
- *     like any other — the guardian-standing rule (875's v60) is not on this
- *     branch, so a recovery link can only make the lineage LONGER, never make
- *     a row read planted that the full design would call proven. A sovereign
- *     id with no held key committing to it has no K₀ and no current key.
- *   - Legacy id: the `identity_keys` holder only when its source is evidence
- *     the relay recorded by proof — `succession`, `migration`, `operator`.
- *     `register` and `backfill:registry` are not evidence for a legacy id
- *     (D2), so such an id has NO current key and every one of its authority
- *     values is listed as unproven.
+ *   - The root. E-sov: the id is the sovereign commitment of a key it holds
+ *     (K₀). Otherwise the `identity_keys` holder's lineage when the holder's
+ *     source is evidence the relay recorded by proof — `migration` (E-mig) or
+ *     `operator` (E-op) — rooted at the earliest key the recorded chain walks
+ *     back to from the holder. `register`, `register-self`,
+ *     `backfill:registry` and `succession` are not evidence for a legacy id
+ *     (D2): a succession INHERITS its predecessor's evidence and never
+ *     creates any (`applySuccession` keeps the holder's source), so a
+ *     self-signed link from an unproven key upgrades nothing. A row written
+ *     `succession` before that rule (it named no root) is no evidence either.
+ *   - The links. From the root, the recorded chain is followed link by link
+ *     (`old_public_key` = the current head). An ordinary link was signed by
+ *     the departing key, so it carries the evidence of the key it departs
+ *     from. A guardian RECOVERY carries no signature by the departing key: it
+ *     carries evidence only when a guardian with a `relay_guardian_evidence`
+ *     row set under a key already on the lineage (or by the operator) signed
+ *     it — re-verified here against that row, never the bare guardian column
+ *     (#875 v60, `recoveryLinkStands`). A link that carries none breaks the
+ *     lineage: the identity then has NO current key (its retired keys stay
+ *     its lineage), never the recorded head.
+ *   - A device row is never a root and never a link (D1).
  *
  * The lists are capped (`limit`); the counts are whole.
  */
 import type { DatabaseDriver, PreparedStatement } from "@motebit/persistence";
+import { KEY_SUCCESSION_SUITE, verifyKeySuccession } from "@motebit/crypto";
 import { hexToBytes } from "@motebit/encryption";
 import { deriveSolanaAddress } from "@motebit/wallet-solana";
-import { proveSovereignFirstKey } from "./identity-keys.js";
+import {
+  guardianEvidenceRows,
+  guardianRowStands,
+  proveSovereignFirstKey,
+  type GuardianEvidenceRow,
+} from "./identity-keys.js";
 
-/** Legacy-id holder sources that are evidence the relay recorded by proof (D2). */
-const LEGACY_EVIDENCE_SOURCES: ReadonlySet<string> = new Set([
-  "succession",
-  "migration",
-  "operator",
-]);
+/**
+ * Legacy-id holder sources that are evidence the relay recorded by proof (D2):
+ * E-mig and E-op. Never `succession` — a succession inherits its
+ * predecessor's evidence, it does not create it (F2 of the Inc 2 review).
+ */
+const LEGACY_EVIDENCE_SOURCES: ReadonlySet<string> = new Set(["migration", "operator"]);
 
 /** The federation protocol version at which the v2 heartbeat/remove kinds ship (Q6). */
 export const FEDERATION_V2_MIN_MINOR = 5;
@@ -139,8 +155,8 @@ interface CurrentKey {
   key: string | null;
   basis: Basis;
   /**
-   * Sovereign ids: every key on the lineage from K₀. Legacy evidence-backed
-   * ids: the holder and the keys its recorded chain walks back through. Lowercased.
+   * Every key on the evidence-rooted lineage, root to head (to the break,
+   * when a link carried no evidence — then `key` is null). Lowercased.
    */
   lineage: ReadonlySet<string>;
 }
@@ -324,48 +340,74 @@ class CurrentKeys {
     return [...keys];
   }
 
+  /** The recorded chain, in recorded order, with what a recovery needs to be re-verified. */
+  private successions(id: string): SuccessionRow[] {
+    return this.db
+      .prepare(
+        "SELECT old_public_key, new_public_key, timestamp, reason, new_key_signature, recovery, guardian_signature FROM relay_key_successions WHERE motebit_id = ? ORDER BY id",
+      )
+      .all(id) as SuccessionRow[];
+  }
+
   async of(id: string): Promise<CurrentKey> {
     const hit = this.cache.get(id);
     if (hit !== undefined) return hit;
-    let k0: string | null = null;
+    const result = await this.resolve(id);
+    this.cache.set(id, result);
+    return result;
+  }
+
+  private async resolve(id: string): Promise<CurrentKey> {
+    const NONE: CurrentKey = { key: null, basis: "none", lineage: new Set() };
+    const links = this.successions(id);
+    // ── The root (E-sov, else E-mig / E-op) ──
+    let root: string | null = null;
+    let basis: Basis = "none";
     for (const k of this.knownKeys(id)) {
       if (await this.commitsTo(id, k)) {
-        k0 = k;
+        root = k;
+        basis = "sovereign_lineage";
         break;
       }
     }
-    let result: CurrentKey;
-    const links = this.links(id);
-    if (k0 !== null) {
-      const lineage = new Set<string>([k0]);
-      let head = k0;
-      for (const l of links) {
-        if (l.old === head) {
-          head = l.new ?? head;
-          lineage.add(head);
+    const h = this.holder(id);
+    if (root === null) {
+      if (h.key === null || h.source === null || !LEGACY_EVIDENCE_SOURCES.has(h.source))
+        return NONE;
+      // The holder's evidence was recorded at the earliest key its recorded
+      // chain walks back to (a succession only carries it forward).
+      root = h.key;
+      const seen = new Set<string>([root]);
+      for (let i = links.length - 1; i >= 0; i--) {
+        const l = links[i]!;
+        const oldKey = lower(l.old_public_key);
+        if (lower(l.new_public_key) === root && oldKey !== null && !seen.has(oldKey)) {
+          root = oldKey;
+          seen.add(root);
         }
       }
-      result = { key: head, basis: "sovereign_lineage", lineage };
-    } else {
-      const h = this.holder(id);
-      if (h.key !== null && h.source !== null && LEGACY_EVIDENCE_SOURCES.has(h.source)) {
-        // The holder's ancestry: walk the recorded chain BACK from the holder.
-        const lineage = new Set<string>([h.key]);
-        let cur = h.key;
-        for (let i = links.length - 1; i >= 0; i--) {
-          const l = links[i]!;
-          if (l.new === cur && l.old !== null && !lineage.has(l.old)) {
-            cur = l.old;
-            lineage.add(cur);
-          }
-        }
-        result = { key: h.key, basis: "holder_evidence", lineage };
-      } else {
-        result = { key: null, basis: "none", lineage: new Set() };
-      }
+      basis = "holder_evidence";
     }
-    this.cache.set(id, result);
-    return result;
+    // ── The links: forward from the root, each one carrying the evidence ──
+    const guardians = guardianEvidenceRows(this.db, id);
+    const lineage = new Set<string>([root]);
+    let head = root;
+    for (const l of links) {
+      if (lower(l.old_public_key) !== head) continue;
+      const next = lower(l.new_public_key);
+      if (next === null) continue;
+      if (l.recovery === 1 && !(await recoveryLinkStands(l, guardians, lineage))) {
+        // A recovery no standing guardian signed: the lineage stops at the
+        // keys before it, and the identity has no current key (F1).
+        return { key: null, basis: "none", lineage };
+      }
+      head = next;
+      lineage.add(head);
+    }
+    // A legacy holder IS the head of its own evidence-rooted chain; if the
+    // chain does not end at it, nothing here proves it (fail closed).
+    if (basis === "holder_evidence" && head !== h.key) return { ...NONE, lineage };
+    return { key: head, basis, lineage };
   }
 
   /** True iff `key` IS `id`'s current key (sovereign: on the lineage from K₀). */
@@ -374,6 +416,47 @@ class CurrentKeys {
     const k = key.toLowerCase();
     return cur.basis === "sovereign_lineage" ? cur.lineage.has(k) : cur.key === k;
   }
+}
+
+interface SuccessionRow {
+  old_public_key: string;
+  new_public_key: string;
+  timestamp: number;
+  reason: string | null;
+  new_key_signature: string;
+  recovery: number | null;
+  guardian_signature: string | null;
+}
+
+/**
+ * A recovery link carries evidence when a guardian set under a key already on
+ * the lineage (or by the operator) signed it — the guardian re-verified
+ * against its provenance row (#875 v60), never the bare guardian column.
+ */
+async function recoveryLinkStands(
+  l: SuccessionRow,
+  guardians: readonly GuardianEvidenceRow[],
+  lineage: ReadonlySet<string>,
+): Promise<boolean> {
+  if (l.guardian_signature == null) return false;
+  for (const g of guardians) {
+    if (!guardianRowStands(g, lineage)) continue;
+    const ok = await verifyKeySuccession(
+      {
+        old_public_key: l.old_public_key,
+        new_public_key: l.new_public_key,
+        timestamp: l.timestamp,
+        ...(l.reason != null ? { reason: l.reason } : {}),
+        recovery: true,
+        suite: KEY_SUCCESSION_SUITE,
+        new_key_signature: l.new_key_signature,
+        guardian_signature: l.guardian_signature,
+      },
+      g.guardian_public_key,
+    ).catch(() => false);
+    if (ok) return true;
+  }
+  return false;
 }
 
 /**
@@ -531,7 +614,7 @@ export async function measureIdentityAuthority(
   // off-lineage value is not an evidence-backed holder (a registry key, or a
   // holder written by a door that proves nothing); `suspicious` when K₀ is
   // not held here (the owner may have rotated elsewhere) or the off-lineage
-  // key arrived by evidence (migration / operator / succession). Never
+  // key arrived by evidence (migration / operator). Never
   // `legitimate_legacy`.
   const ids = (
     db

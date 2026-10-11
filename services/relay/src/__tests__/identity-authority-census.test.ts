@@ -430,10 +430,19 @@ describe("identity-authority census (§6 Q1–Q6)", () => {
 
     const old = await key();
     const cur = await key();
+    // A migrated legacy id that rotated: the holder keeps its E-mig source
+    // (a succession inherits evidence), and the retired key is its lineage.
     const legacy = crypto.randomUUID();
-    holder(db, legacy, cur, "succession");
+    holder(db, legacy, cur, "migration");
     succession(db, legacy, old, cur);
     const retired = device(db, legacy, old);
+
+    // A holder recorded `succession` names no root: not evidence (F2), so the
+    // id has no current key and its retired-looking row is only suspicious.
+    const o2 = await key();
+    const rootless = crypto.randomUUID();
+    holder(db, rootless, await key(), "succession");
+    const unrooted = device(db, rootless, o2);
 
     const c = await census(relay);
     const q1 = c.q1_planted_device_rows;
@@ -441,8 +450,9 @@ describe("identity-authority census (§6 Q1–Q6)", () => {
     expect(bucketOf.get(invalid)).toBe("definitely_invalid");
     expect(bucketOf.get(unknown)).toBe("suspicious");
     expect(bucketOf.get(retired)).toBe("legitimate_legacy");
-    expect(q1.buckets).toEqual({ definitely_invalid: 1, suspicious: 1, legitimate_legacy: 1 });
-    expect(q1.count).toBe(3);
+    expect(bucketOf.get(unrooted)).toBe("suspicious");
+    expect(q1.buckets).toEqual({ definitely_invalid: 1, suspicious: 2, legitimate_legacy: 1 });
+    expect(q1.count).toBe(4);
   });
 
   it("buckets Q2–Q6: each flagged id carries exactly one bucket", async () => {

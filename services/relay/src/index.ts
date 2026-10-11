@@ -84,7 +84,7 @@ import {
   loadFreezeState,
   persistFreeze,
 } from "./freeze.js";
-import { installAuthorityGuards } from "./identity-authority.js";
+import { AUTHORITY_SHADOW_KIND, installAuthorityGuards } from "./identity-authority.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
 import {
@@ -102,7 +102,7 @@ import type {
   CloseTokenConnections,
   ReconcileKeyConnections,
 } from "./connection-ports.js";
-import { createAuthEventSink } from "./auth-events.js";
+import { createAuthEventSink, DEFAULT_RECENT_KINDS, parseAuthEventKinds } from "./auth-events.js";
 import type { ConnectedDevice } from "./websocket.js";
 import { registerSyncRoutes, redactSensitiveEvents } from "./sync-routes.js";
 import { registerIntakeRoutes } from "./intake-routes.js";
@@ -2075,13 +2075,29 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // master token, on which routes, and what did we refuse?" from the relay's
   // own 30-day record. Master-token gated by the /api/v1/* catch-all.
   //   ?since_hours=24 (default 24, max 720)   ?limit=50 (recent rows, max 500)
+  //   ?kind=<kind>[,<kind>…] | all — the kinds `recent` lists; by default every
+  //   kind but the identity-authority shadow record (authority_write_outside_writer),
+  //   which is still counted in counts_by_kind.
   /** @internal */
   app.get("/api/v1/admin/auth-events", (c) => {
     const hours = Math.min(Math.max(Number(c.req.query("since_hours") ?? "24") || 24, 1), 720);
     const limit = Number(c.req.query("limit") ?? "50") || 50;
+    const kinds = parseAuthEventKinds(c.req.query("kind"));
+    if (kinds === "invalid") {
+      return c.json(
+        {
+          error: `unknown kind — one of ${[...DEFAULT_RECENT_KINDS, AUTHORITY_SHADOW_KIND].join(", ")}, comma-separated, or "all"`,
+        },
+        400,
+      );
+    }
     return c.json({
       window_hours: hours,
-      ...authEvents.summary({ sinceMs: hours * 60 * 60 * 1000, recentLimit: limit }),
+      ...authEvents.summary({
+        sinceMs: hours * 60 * 60 * 1000,
+        recentLimit: limit,
+        ...(kinds !== null ? { kinds } : {}),
+      }),
     });
   });
 

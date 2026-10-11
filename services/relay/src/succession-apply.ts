@@ -439,12 +439,20 @@ export function applySuccession(
     // evidence that the new key is the identity's; and never from any other
     // key, so a re-presented old link cannot drag a holder that has moved on.
     // The registry above keeps main's behaviour exactly.
-    const holder = holderKeyOf(db, motebitId);
-    if (holder !== null && holder === record.old_public_key) {
+    //
+    // The moved holder keeps its predecessor's SOURCE: a succession inherits
+    // the evidence of the key it departs from and never creates any
+    // (identity-authority Inc 2 review, F2 — a `backfill:registry` holder that
+    // rotated itself used to become `succession`, which read as evidence).
+    // Whether the link itself carries that evidence (a guardian recovery
+    // needs a guardian set under a standing key) is the current-key reader's
+    // decision (`currentKeyOf`, identity-authority-census.ts), never this row's.
+    const held = identityKey(db, motebitId);
+    if (held !== null && held.publicKey === record.old_public_key) {
       recordIdentityKey(db, {
         motebitId,
         publicKey: record.new_public_key,
-        source: "succession",
+        source: held.source,
         now: Date.now(),
       });
     }

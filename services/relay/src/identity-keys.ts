@@ -452,7 +452,7 @@ export function guardianEvidenceRows(db: DatabaseDriver, motebitId: string): Gua
 }
 
 /** A guardian record stands when the operator set it, or the key it was set under stands. */
-export function guardianRowStands(g: GuardianEvidenceRow, standing: Set<string>): boolean {
+export function guardianRowStands(g: GuardianEvidenceRow, standing: ReadonlySet<string>): boolean {
   if (g.evidence === "operator") return true;
   return g.set_under_key != null && standing.has(g.set_under_key.toLowerCase());
 }

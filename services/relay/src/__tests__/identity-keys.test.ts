@@ -715,7 +715,9 @@ describe("identity-keys", () => {
       expect(await registerSelf(mid, "own", kp)).toBe(201);
       const k2 = await generateKeypair();
       expect(await rotateOwn(mid, "own", kp, k2)).toBe(200);
-      expect(identityKey(db, mid)).toMatchObject({ publicKey: hex(k2), source: "succession" });
+      // The moved holder keeps its predecessor's source: a succession inherits
+      // evidence, it never creates any (identity-authority Inc 2 review, F2).
+      expect(identityKey(db, mid)).toMatchObject({ publicKey: hex(k2), source: "register-self" });
       const k3 = await generateKeypair();
       const stale = await signKeySuccession(
         kp.privateKey,
