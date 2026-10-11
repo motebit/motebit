@@ -2884,6 +2884,18 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-signed-text-wellformed",
+    proves:
+      "flags a receipt signer that signs `canonicalJson` bytes past the guarded canonicalizer — the bypass that let review rounds 1–4 find one malformed-text field at a time (docs/design/payment-receipt-wellformed-stop-condition.md §3). Probe reverts `signExecutionReceipt`'s `canonicalJsonForSigning(body)` to `canonicalJson(body)`; the gate's AST scan must name signExecutionReceipt. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile("packages/crypto/src/artifacts.ts", (src) =>
+        src.replace(
+          "const canonical = canonicalJsonForSigning(body);",
+          "const canonical = canonicalJson(body);",
+        ),
+      ),
+  },
+  {
     script: "check-goal-artifact-signing",
     proves:
       "flags a per-surface goal-runner that has stopped calling `runtime.signGoalArtifact` — the silent regression that would let goal-fire artifacts persist without a signed `ContentArtifactManifest` envelope. The drift class: a refactor that renames or removes the signing call on one surface (`apps/web/src/goal-scheduler.ts`, `apps/desktop/src/goal-scheduler.ts`, or `apps/mobile/src/goal-scheduler.ts`) passes typecheck because `signGoalArtifact` is optional from the runtime's perspective; the gate is the only catch. Probe rewrites `signGoalArtifact(` to `signGoalArtifactDisabled(` on the web surface; the gate's identifier scan must surface the missing-call violation.",

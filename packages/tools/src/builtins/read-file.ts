@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
+import { truncateWellFormed } from "@motebit/sdk";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isPathAllowed } from "./path-sandbox.js";
@@ -37,7 +38,7 @@ export function createReadFileHandler(allowedPaths?: string[]): ToolHandler {
 
     try {
       const content = await fs.readFile(resolved, "utf-8");
-      return { ok: true, data: content.slice(0, 16000) };
+      return { ok: true, data: truncateWellFormed(content, 16000) };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: `Read error: ${msg}` };

@@ -13,8 +13,14 @@
  * services" for the doctrine.
  */
 
-import { hash as sha256, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/encryption";
+import {
+  hash as sha256,
+  hasUnpairedSurrogate,
+  signExecutionReceipt,
+  verifyExecutionReceipt,
+} from "@motebit/encryption";
 import type { ExecutionReceipt, IntentOrigin, DigestRef, ProjectionClass } from "@motebit/sdk";
+import { toWellFormedText } from "@motebit/sdk";
 
 export interface BuildServiceReceiptInput {
   /** Service's motebit identity (same for every receipt this service signs). */
@@ -47,7 +53,11 @@ export interface BuildServiceReceiptInput {
   relayTaskId?: string;
   /** Delegated scope, if this service was itself invoked as a sub-delegate. */
   delegatedScope?: string;
-  /** Signed sub-receipts from delegated work — the cryptographic citation chain. */
+  /**
+   * Signed sub-receipts from delegated work — the cryptographic citation chain.
+   * A child holding an unpaired UTF-16 surrogate (signed before producers
+   * stopped emitting one) is not embedded; the parent is still signed.
+   */
   delegationReceipts?: ExecutionReceipt[];
   /** Explicit completion timestamp override. Defaults to `Date.now()` at call time. */
   completedAt?: number;
@@ -88,8 +98,20 @@ export async function buildServiceReceipt(
   input: BuildServiceReceiptInput,
 ): Promise<ExecutionReceipt> {
   const enc = new TextEncoder();
+  // Never sign an unpaired UTF-16 surrogate (spec/execution-ledger-v1.md
+  // §11.4) — a model output cut mid-emoji is repaired before hashing.
+  const result = toWellFormedText(input.result);
   const promptHash = await sha256(enc.encode(input.prompt));
-  const resultHash = await sha256(enc.encode(input.result));
+  const resultHash = await sha256(enc.encode(result));
+  // An old child receipt holding an unpaired surrogate (§11.4) was signed by
+  // someone else: it cannot be repaired (its signature covers the bytes) and
+  // the signing boundary refuses to embed it. It is dropped from
+  // delegation_receipts and this receipt is still signed — a third party's
+  // malformed child must never cost the parent
+  // (docs/design/payment-receipt-wellformed-stop-condition.md §3, decision (a)).
+  const delegationReceipts = (input.delegationReceipts ?? []).filter(
+    (dr) => !hasUnpairedSurrogate(dr),
+  );
 
   const receipt: Record<string, unknown> = {
     task_id: input.taskId,
@@ -98,16 +120,14 @@ export async function buildServiceReceipt(
     submitted_at: input.submittedAt,
     completed_at: input.completedAt ?? Date.now(),
     status: input.ok ? "completed" : "failed",
-    result: input.result,
+    result,
     tools_used: input.toolsUsed,
     memories_formed: input.memoriesFormed ?? 0,
     prompt_hash: promptHash,
     result_hash: resultHash,
     ...(input.relayTaskId != null ? { relay_task_id: input.relayTaskId } : {}),
     ...(input.delegatedScope != null ? { delegated_scope: input.delegatedScope } : {}),
-    ...(input.delegationReceipts != null && input.delegationReceipts.length > 0
-      ? { delegation_receipts: input.delegationReceipts }
-      : {}),
+    ...(delegationReceipts.length > 0 ? { delegation_receipts: delegationReceipts } : {}),
     ...(input.invocationOrigin != null ? { invocation_origin: input.invocationOrigin } : {}),
     ...(input.sourceDigest != null ? { source_digest: input.sourceDigest } : {}),
     ...(input.sourceProjection != null ? { source_projection: input.sourceProjection } : {}),
@@ -138,7 +158,7 @@ export async function buildServiceReceipt(
   if (!selfVerified) {
     throw new Error(
       `buildServiceReceipt produced a self-invalid receipt for motebit_id=${input.motebitId} ` +
-        `task_id=${input.taskId} chain=${input.delegationReceipts?.length ?? 0} — ` +
+        `task_id=${input.taskId} chain=${delegationReceipts.length} — ` +
         `signature verifies false against embedded public_key. This indicates a body mutation ` +
         `between sign and return, OR a bug in the canonicalization recipe. Run with ` +
         `DEBUG_RECEIPT_BYTES=1 to capture the canonical-hash mismatch.`,

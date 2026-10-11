@@ -33,7 +33,13 @@
  */
 
 import type { RoutingDecisionTranscript } from "@motebit/protocol";
-import { canonicalJson, hexToBytes, toBase64Url, fromBase64Url } from "./signing.js";
+import {
+  canonicalJson,
+  canonicalJsonForSigning,
+  hexToBytes,
+  toBase64Url,
+  fromBase64Url,
+} from "./signing.js";
 import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
 
 /**
@@ -56,8 +62,9 @@ export const ROUTING_TRANSCRIPT_SPEC_MIRROR = "motebit/routing-transcript@1.0" a
 /** Canonical bytes used for signing — the transcript without its own signature field. */
 function canonicalizeForSigning(
   unsigned: Omit<RoutingDecisionTranscript, "signature">,
+  canonicalize: (value: unknown) => string,
 ): Uint8Array {
-  return new TextEncoder().encode(canonicalJson(unsigned));
+  return new TextEncoder().encode(canonicalize(unsigned));
 }
 
 /**
@@ -77,7 +84,7 @@ export async function signRoutingTranscript(
     ...body,
     suite: ROUTING_TRANSCRIPT_SUITE,
   };
-  const message = canonicalizeForSigning(unsigned);
+  const message = canonicalizeForSigning(unsigned, canonicalJsonForSigning);
   const sig = await signBySuite(ROUTING_TRANSCRIPT_SUITE, message, delegatorPrivateKey);
   return { ...unsigned, signature: toBase64Url(sig) };
 }
@@ -153,7 +160,7 @@ export async function verifyRoutingTranscript(
 
   // 7. Signature over canonical bytes, via suite dispatch.
   const { signature: _sig, ...unsigned } = transcript;
-  const message = canonicalizeForSigning(unsigned);
+  const message = canonicalizeForSigning(unsigned, canonicalJson);
   let valid: boolean;
   try {
     valid = await verifyBySuite(transcript.suite, message, sigBytes, publicKey);

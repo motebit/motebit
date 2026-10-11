@@ -248,6 +248,16 @@ def _validate_shape(receipt: Any, *, depth: int = 0) -> list[str]:
                 f"§11.4 violation: {hash_field} must be 64-char lowercase hex SHA-256"
             )
 
+    # Optional (settlement-v1 §7): the paid service's result hash on a
+    # sovereign payment receipt. Absent on every other receipt; when present
+    # it is a SHA-256 hex digest like every other hash field.
+    if "service_result_hash" in receipt:
+        h = receipt.get("service_result_hash")
+        if not isinstance(h, str) or len(h) != HEX_64 or not _is_hex(h):
+            reasons.append(
+                "§11.4 violation: service_result_hash must be 64-char lowercase hex SHA-256"
+            )
+
     nested = receipt.get("delegation_receipts")
     if nested is not None and not isinstance(nested, list):
         reasons.append("§11.5 violation: delegation_receipts must be an array")
@@ -262,6 +272,33 @@ def _validate_shape(receipt: Any, *, depth: int = 0) -> list[str]:
         reasons.append("§11.1 violation: tools_used must be array of strings")
 
     return reasons
+
+
+# §11.4: UTF-8 is undefined for a string holding an unpaired UTF-16 surrogate
+# (JSON permits the escape `\ud800`; JCS requires I-JSON, RFC 8785 §3.1 /
+# RFC 7493 §2.1, which forbids it). Such a receipt has no canonical bytes and
+# no result digest, so it is rejected — never re-encoded with U+FFFD. Message
+# matches @motebit/crypto's byte-for-byte.
+UNPAIRED_SURROGATE_ERROR = (
+    "§11.4 violation: receipt contains a string with an unpaired UTF-16 "
+    "surrogate — it has no UTF-8 encoding"
+)
+
+
+def _has_unpaired_surrogate(value: Any) -> bool:
+    if isinstance(value, str):
+        # json.loads leaves a lone escaped surrogate as a code point in
+        # U+D800..U+DFFF (a valid escaped pair is combined into one astral
+        # code point), so any surrogate code point here is unpaired.
+        return any("\ud800" <= ch <= "\udfff" for ch in value)
+    if isinstance(value, list):
+        return any(_has_unpaired_surrogate(v) for v in value)
+    if isinstance(value, dict):
+        return any(
+            _has_unpaired_surrogate(k) or _has_unpaired_surrogate(v)
+            for k, v in value.items()
+        )
+    return False
 
 
 def _is_hex(s: str) -> bool:
@@ -296,6 +333,13 @@ def verify_receipt(
     signature verification.
     """
     result = VerificationResult(valid=False)
+
+    # §11.4 first, before any shape check: the diagnostic must not depend on
+    # which field (or object key, at any depth) carries the surrogate. This
+    # verifier is strict-only, so this is its one well-formedness point.
+    if _has_unpaired_surrogate(receipt):
+        result.reasons.append(UNPAIRED_SURROGATE_ERROR)
+        return result
 
     shape_errors = _validate_shape(receipt, depth=depth)
     if shape_errors:

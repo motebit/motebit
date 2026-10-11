@@ -25,7 +25,7 @@ function makeRequest(overrides?: Partial<SovereignReceiptRequest>): SovereignRec
     payee_address: "BobAddress",
     service_description: "test service",
     prompt_hash: "p-hash",
-    result_hash: "r-hash",
+    result_hash: "c".repeat(64),
     tools_used: ["web_search"],
     submitted_at: Date.now() - 1000,
     completed_at: Date.now(),

@@ -15,6 +15,11 @@
 export {
   // Core primitives
   canonicalJson,
+  // The signing boundary: canonicalJson, fail-closed on text with no UTF-8
+  // form (spec/execution-ledger-v1.md §11.4), and the strict readers' predicate.
+  canonicalJsonForSigning,
+  UnpairedSurrogateError,
+  hasUnpairedSurrogate,
   canonicalSha256,
   bytesToHex,
   hexToBytes,
@@ -69,6 +74,11 @@ export {
   verifyExecutionReceipt,
   verifyExecutionReceiptDetailed,
   type ReceiptVerifyDetail,
+  // Receipt-chain verifier with optional strict result_hash binding at every depth.
+  verifyReceipt,
+  // The one nested walk over a verifyReceipt tree (both receipt CLIs read it).
+  collectReceiptTreeErrors,
+  type ReceiptTreeError,
   signSovereignPaymentReceipt,
   verifyReceiptChain,
   verifyReceiptSequence,

@@ -1,0 +1,8 @@
+---
+"@motebit/crypto": minor
+"motebit": patch
+---
+
+One signing boundary for well-formed text. New `canonicalJsonForSigning(obj)` is `canonicalJson`, fail-closed: it throws the new `UnpairedSurrogateError` (with the offending `path`) when any string value or object key, at any depth, holds an unpaired UTF-16 surrogate, which has no UTF-8 encoding (spec/execution-ledger-v1.md §11.4). Every receipt signer in `@motebit/crypto` signs through it (`signExecutionReceipt` and so `signSovereignPaymentReceipt`, `buildServiceReceipt`, the runtime task handler, the smoke worker), as do the tool-invocation, computer-session, delegation, approval, dispute-filing, consolidation, identity, content-artifact, deletion-certificate, eval, routing-transcript, skill and roster signers. It refuses rather than repairs: `signExecutionReceipt` no longer rewrites a malformed `result` to U+FFFD, and it refuses to embed an old `delegation_receipts` child that carries one. Repair belongs where text is produced (`toWellFormedText` / `truncateWellFormed`). Well-formed input signs byte-identically. Verifiers keep `canonicalJson`: every default reader returns exactly its previous verdict, and receipts signed before this change still verify. A static gate, `check-signed-text-wellformed`, fails any signer that reaches `ed25519Sign` / `signBySuite` over canonical JSON without the guard; money-record signers (settlement, withdrawal, invoice, cost, bond, waiver, dispute resolution) and relay-side signers are pinned as known exceptions for their own review.
+
+`motebit verify receipt` (strict default) now checks well-formedness before the wire schema, so a surrogate in any field or object key reports the §11.4 reason instead of a schema error; `--lenient` is unchanged.

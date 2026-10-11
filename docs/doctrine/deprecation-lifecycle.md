@@ -45,7 +45,7 @@ Drift defense: `check-deprecation-discipline` (invariant #39).
 
 ### Private packages (no semver, replacement + reason still required)
 
-The 51 internal packages carrying the sentinel `0.0.0-private` version (per `docs/doctrine/release-versioning.md` and the 2026-04-24 sentinel-version flip) bundle into the `motebit` CLI/runtime — they do not publish independently. There is no consumer across a versioning boundary, so the four-field contract has no addressee. A `removed in 1.1.0` promise on a `0.0.0-private` package is theater: there is no v1.1.0, no v1.0.0, no consumer to receive the promise.
+The 62 internal packages carrying the sentinel `0.0.0-private` version (per `docs/doctrine/release-versioning.md` and the 2026-04-24 sentinel-version flip) bundle into the `motebit` CLI/runtime — they do not publish independently. There is no consumer across a versioning boundary, so the four-field contract has no addressee. A `removed in 1.1.0` promise on a `0.0.0-private` package is theater: there is no v1.1.0, no v1.0.0, no consumer to receive the promise.
 
 The shape inside private packages drops the semver fields but keeps the workspace-internal documentation:
 
@@ -145,7 +145,7 @@ Motebit publishes 12 packages, each versioning independently on its own merit (s
 
 - **`removed in <version>` is scoped to the package it annotates.** A `removed in 2.0.0` on `@motebit/sdk` means the removal happens when `@motebit/sdk` itself reaches 2.0.0 — not when other packages do. Each package's own major is its own commitment.
 - **Cross-package replacements are valid but require explicit synchronization.** Deprecating `X` in `@motebit/sdk` in favor of `Y` in `@motebit/verifier` works, but the migration window depends on **both** packages' release cadences. Document the assumed minimum versions of both replacement and deprecator in the `@deprecated` annotation.
-- **Workspace-private packages deprecate without a public window.** `@motebit/runtime`, `@motebit/wire-schemas`, etc. (the 51 `0.0.0-private` packages) carry no semver claim, so deprecation discipline only applies where their behavior is observable through a published-package surface.
+- **Workspace-private packages deprecate without a public window.** `@motebit/runtime`, `@motebit/wire-schemas`, etc. (the 62 `0.0.0-private` packages) carry no semver claim, so deprecation discipline only applies where their behavior is observable through a published-package surface.
 
 ## BSL Change Date as implicit sunset ceiling
 

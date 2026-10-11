@@ -89,6 +89,8 @@ export interface CliConfig {
   allowedCommands: string[];
   blockedCommands: string[];
   json: boolean;
+  /** `motebit verify receipt --lenient` — signature-only (result_hash not checked). */
+  lenient?: boolean;
   presentation: boolean;
   all?: boolean;
   /** Solana RPC endpoint override for `motebit wallet`. */
@@ -182,6 +184,10 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "allow-commands": { type: "string" },
       "block-commands": { type: "string" },
       json: { type: "boolean", default: false },
+      // `motebit verify receipt` — strict (result_hash binding) by default;
+      // `--lenient` is signature-only, `--strict` an accepted no-op alias.
+      lenient: { type: "boolean", default: false },
+      strict: { type: "boolean", default: false },
       presentation: { type: "boolean", default: false },
       all: { type: "boolean", default: false },
       "solana-rpc-url": { type: "string" },
@@ -326,6 +332,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
         ? values["block-commands"].split(",").map((s) => s.trim())
         : [],
     json: values.json,
+    lenient: values.lenient,
     presentation: values.presentation,
     all: values.all,
     solanaRpcUrl: values["solana-rpc-url"],
@@ -498,6 +505,8 @@ Commands:
                             Kinds: receipt | token | listing | identity.
                             Validates schema + suite + Ed25519 signature
                             (+ time window for tokens). [--json]
+                            Receipts also check result_hash = SHA-256(result)
+                            (strict by default; --lenient = signature only)
   register [--sync-url <url> | --sync]  Register this identity with a relay (enables discovery)
   rotate [--reason "..."]   Rotate Ed25519 keypair with cryptographic succession chain
                             Your wallet address IS this key: rotation refuses while

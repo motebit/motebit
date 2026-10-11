@@ -211,6 +211,9 @@ export function canonicalizeWitnessOmissionDispute(dispute: WitnessOmissionDispu
 export function canonicalJson(obj: unknown): string;
 
 // @public
+export function canonicalJsonForSigning(obj: unknown): string;
+
+// @public
 export function canonicalLeaf(value: unknown, treeHashVersion?: MerkleTreeVersion): Promise<string>;
 
 // @public
@@ -236,6 +239,9 @@ export type ChainAnchorVerifier = (anchor: {
 
 // @public
 export const COLLABORATIVE_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export function collectReceiptTreeErrors(result: ReceiptVerifyResult): ReceiptTreeError[];
 
 // @public
 export function computeAgentSettlementLeaf(settlement: Record<string, unknown>, treeHashVersion?: MerkleTreeVersion): Promise<string>;
@@ -539,6 +545,7 @@ export interface ExecutionReceipt {
     result: string;
     // (undocumented)
     result_hash: string;
+    service_result_hash?: string;
     // (undocumented)
     signature: string;
     // (undocumented)
@@ -812,6 +819,9 @@ export function hashLeaf(entry: Uint8Array, treeHashVersion?: MerkleTreeVersion)
 
 // @public
 export function hashToolPayload(value: unknown): Promise<string>;
+
+// @public
+export function hasUnpairedSurrogate(value: unknown): boolean;
 
 // @public (undocumented)
 export function hexPublicKeyToDidKey(hexPublicKey: string): string;
@@ -1196,6 +1206,14 @@ export interface ReceiptChainEntry {
     signer_public_key: Uint8Array;
 }
 
+// @public
+export interface ReceiptTreeError {
+    depth: number;
+    message: string;
+    path?: string;
+    task_id: string | undefined;
+}
+
 // @public (undocumented)
 export interface ReceiptVerification {
     // (undocumented)
@@ -1515,6 +1533,7 @@ export interface SignableReceipt {
     result: string;
     // (undocumented)
     result_hash: string;
+    service_result_hash?: string;
     // (undocumented)
     signature: string;
     source_digest?: DigestRef;
@@ -2002,6 +2021,14 @@ export interface UnknownVerifyResult extends BaseResult {
     valid: false;
 }
 
+// @public
+export class UnpairedSurrogateError extends Error {
+    constructor(path: string);
+    readonly name = "UnpairedSurrogateError";
+    // (undocumented)
+    readonly path: string;
+}
+
 export { VerdictSubject }
 
 // @public (undocumented)
@@ -2463,7 +2490,7 @@ export interface WitnessOmissionDisputeVerifyResult {
 
 // Warnings were encountered during analysis:
 //
-// src/credentials.ts:393:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
+// src/credentials.ts:394:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

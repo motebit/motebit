@@ -75,3 +75,8 @@ apps/verify/src/sample-receipt.json
 # scripts/__tests__/interop-aps-vector.test.ts asserts the exact bytes, so prettier
 # must never re-normalize it.
 examples/interop/aps/*.CANDIDATE.json
+
+# Differential goldens written one case per line by their oracle script
+# (apps/cli/scripts/default-verdict-base-oracle.ts); reformatting them would
+# make every regeneration a whole-file diff.
+apps/cli/src/__tests__/fixtures/default-verdict.base-verdicts.json

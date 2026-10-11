@@ -224,7 +224,6 @@ const WAIVED_EXPORTS: ReadonlyArray<PackageWaiver> = [
       "signWitnessOmissionDispute",
       "verifyWitnessOmissionDispute",
       "verifyMerkleInclusion",
-      "verifyReceipt",
       "verifySkillBundle",
     ],
   },

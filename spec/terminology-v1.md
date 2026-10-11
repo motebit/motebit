@@ -217,6 +217,14 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Standard:** novel; JCS + Ed25519.
 - **Forbidden synonyms:** proof (unqualified), log entry, credential, attestation.
 
+### 6.1.1 service_result_hash
+
+- **Definition:** an optional `ExecutionReceipt` field holding the SHA-256 digest of a paid service's result, as asserted by the payer and signed by the payee. Set only on sovereign payment receipts, whose `result` is a payment record that `result_hash` binds.
+- **Layer:** protocol (`ExecutionReceipt.service_result_hash`), crypto (`signSovereignPaymentReceipt`).
+- **Wire:** string, lowercase hex, 64 characters; `spec/schemas/execution-receipt-v1.json`. See [`settlement-v1.md`](settlement-v1.md) §7 and [`execution-ledger-v1.md`](execution-ledger-v1.md) §11.4.
+- **Standard:** SHA-256 (FIPS 180-4).
+- **Forbidden synonyms:** result_hash (that field binds the receipt's own `result`), proof, attestation.
+
 ### 6.2 ToolInvocationReceipt
 
 - **Definition:** a signed record of one tool call inside a task: invocation id, tool name, args and result hashes, status, timestamps, and `invocation_origin`. Signed by the motebit that made the call.

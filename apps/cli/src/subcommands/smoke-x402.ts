@@ -29,7 +29,7 @@
  */
 
 import * as crypto from "node:crypto";
-import type { TokenAudience } from "@motebit/sdk";
+import { truncateWellFormed, type TokenAudience } from "@motebit/sdk";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -269,7 +269,7 @@ export function loadOrCreateEoaKeyFile(
 // Motebit identity bootstrap
 // ---------------------------------------------------------------------------
 
-interface BootstrappedMotebit {
+export interface BootstrappedMotebit {
   motebitId: string;
   deviceId: string;
   publicKey: Uint8Array;
@@ -479,23 +479,31 @@ async function submitPaidTask(args: {
 // Worker receipt construction + signing
 // ---------------------------------------------------------------------------
 
-async function submitWorkerReceipt(args: {
-  relayUrl: string;
+/**
+ * Build + sign the worker's ExecutionReceipt for the smoke task. Exported so
+ * the receipt's self-consistency (result_hash binds result) is unit-testable
+ * without a live relay.
+ */
+export async function buildSmokeWorkerReceipt(args: {
   worker: BootstrappedMotebit;
   taskId: string;
   submittedAtMs: number;
-}): Promise<void> {
-  const completedAt = Date.now();
-  const result = `echo-ack-${args.taskId.slice(0, 8)}`;
+  completedAt: number;
+}): Promise<Awaited<ReturnType<typeof signExecutionReceipt>>> {
+  const completedAt = args.completedAt;
+  // Cut on a code-point boundary: signExecutionReceipt refuses text with an
+  // unpaired surrogate (spec/execution-ledger-v1.md §11.4), so the repair
+  // lives here, at the text's source.
+  const result = `echo-ack-${truncateWellFormed(args.taskId, 8)}`;
 
-  // Hashes are SHA-256 hex of canonical bytes — the protocol contract is
-  // "what could a verifier reproduce?" Hash inputs are the canonical-JSON
-  // serializations of the prompt + result so a third-party tool can reverify
-  // without bundling the smoke's exact construction.
+  // Hashes are SHA-256 hex — the protocol contract is "what could a verifier
+  // reproduce?". result_hash is hex(SHA-256(UTF-8(result))) per
+  // spec/execution-ledger-v1.md § Hash fields, so the receipt is
+  // self-consistent under strict verification. The smoke has no real prompt
+  // string; prompt_hash commits to a canonical-JSON stand-in for the task.
   const promptCanonical = canonicalJson({ smoke: "x402", task_id: args.taskId });
-  const resultCanonical = canonicalJson({ result });
   const promptHashBytes = await sha256(new TextEncoder().encode(promptCanonical));
-  const resultHashBytes = await sha256(new TextEncoder().encode(resultCanonical));
+  const resultHashBytes = await sha256(new TextEncoder().encode(result));
 
   const receiptBody = {
     task_id: args.taskId,
@@ -514,7 +522,21 @@ async function submitWorkerReceipt(args: {
     invocation_origin: "agent-to-agent" as const,
   };
 
-  const signed = await signExecutionReceipt(receiptBody, args.worker.privateKey);
+  return signExecutionReceipt(receiptBody, args.worker.privateKey);
+}
+
+async function submitWorkerReceipt(args: {
+  relayUrl: string;
+  worker: BootstrappedMotebit;
+  taskId: string;
+  submittedAtMs: number;
+}): Promise<void> {
+  const signed = await buildSmokeWorkerReceipt({
+    worker: args.worker,
+    taskId: args.taskId,
+    submittedAtMs: args.submittedAtMs,
+    completedAt: Date.now(),
+  });
 
   const token = await mintSignedToken({
     motebitId: args.worker.motebitId,

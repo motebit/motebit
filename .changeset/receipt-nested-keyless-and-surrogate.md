@@ -1,0 +1,8 @@
+---
+"@motebit/crypto": minor
+"motebit": patch
+---
+
+Strict `result_hash` binding no longer depends on whether a receipt's key is present or well-formed: `verifyReceipt(receipt, { strictHashBinding: true })` checks `result_hash` on every node of the delegation tree, including a node with no `public_key` or a malformed one (which still fails its signature check). Under strict binding a `public_key` that is not 64 hex characters is unusable rather than decoded leniently. New `collectReceiptTreeErrors(result)` flattens a `verifyReceipt` result into per-node failures (depth, `task_id`, path, message); `motebit verify receipt` now reads its signature and `result_hash` checks from it at every delegation depth, so it can no longer report a tree as bound while `motebit-verify` rejects it.
+
+Under strict hash binding, a receipt that contains an unpaired UTF-16 surrogate in any string is invalid (`verifyReceipt(receipt, { strictHashBinding: true })` reports the §11.4 reason as a `result_hash` failure): UTF-8 is undefined for such a string (spec/execution-ledger-v1.md §11.4), and substituting U+FFFD would let two distinct results share one signature and one `result_hash`. Signature-only verification is unchanged: `verifyExecutionReceipt`, `verifyExecutionReceiptDetailed`, `verifyReceiptVerdict` and `verifyReceipt` without strict binding return exactly the verdicts they returned before, so receipts already signed keep verifying in the runtime and the relay. Under strict binding a `delegation_receipts` entry that is not an object reads invalid (§11.5) instead of throwing; the default keeps its existing behaviour there too.

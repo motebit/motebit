@@ -30,6 +30,7 @@ import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
 import {
   bytesToHex,
   canonicalJson,
+  canonicalJsonForSigning,
   canonicalSha256,
   hexToBytes,
   toBase64Url,
@@ -81,8 +82,11 @@ export function computeSyncEventDigestSync(
 }
 
 /** Canonical bytes used for signing — the receipt without its own signature field. */
-function canonicalizeForSigning(unsigned: Omit<SyncHoldReceipt, "signature">): Uint8Array {
-  return new TextEncoder().encode(canonicalJson(unsigned));
+function canonicalizeForSigning(
+  unsigned: Omit<SyncHoldReceipt, "signature">,
+  canonicalize: (value: unknown) => string,
+): Uint8Array {
+  return new TextEncoder().encode(canonicalize(unsigned));
 }
 
 /**
@@ -101,7 +105,7 @@ export async function signSyncHoldReceipt(
     ...body,
     suite: SYNC_HOLD_RECEIPT_SUITE,
   };
-  const message = canonicalizeForSigning(unsigned);
+  const message = canonicalizeForSigning(unsigned, canonicalJsonForSigning);
   const sig = await signBySuite(SYNC_HOLD_RECEIPT_SUITE, message, relayPrivateKey);
   return { ...unsigned, signature: toBase64Url(sig) };
 }
@@ -263,7 +267,7 @@ export async function verifySyncHoldReceipt(
 
   // 9. Signature over canonical bytes, via suite dispatch.
   const { signature: _sig, ...unsigned } = receipt;
-  const message = canonicalizeForSigning(unsigned);
+  const message = canonicalizeForSigning(unsigned, canonicalJson);
   let valid: boolean;
   try {
     valid = await verifyBySuite(
