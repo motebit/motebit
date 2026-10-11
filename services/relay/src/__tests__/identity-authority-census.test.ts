@@ -9,22 +9,35 @@
  * an 8-hex prefix, no token, no secret — and must write nothing.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bytesToHex, generateKeypair } from "@motebit/encryption";
+import { bytesToHex, generateKeypair, hexPublicKeyToDidKey } from "@motebit/encryption";
 import { deriveSovereignMotebitId } from "@motebit/crypto";
 import type { DatabaseDriver } from "@motebit/persistence";
 
 import type { SyncRelay } from "../index.js";
-import { measureIdentityAuthority } from "../identity-authority-census.js";
+import { initRelayIdentity, type RelayIdentity } from "../federation.js";
+import {
+  deviceKeyStanding,
+  measureIdentityAuthority,
+  readOnlyHandle,
+} from "../identity-authority-census.js";
 import { AUTH_HEADER, createTestRelay, walletOf } from "./test-helpers.js";
+import { operatorConfirm } from "./federation-messages.js";
 
 const CENSUS = "/api/v1/admin/identity-authority/census";
+
+type Bucket = "definitely_invalid" | "suspicious" | "legitimate_legacy";
+type Buckets = Record<Bucket, number>;
+type ByBucket = Record<Bucket, string[]>;
 
 interface Census {
   measured_at: number;
   limit: number;
   q1_planted_device_rows: {
     count: number;
+    buckets: Buckets;
     rows: Array<{
+      bucket: Bucket;
+      paired: boolean;
       motebit_id: string;
       device_id: string;
       registered_at: number;
@@ -33,22 +46,44 @@ interface Census {
       id_commits_to_device_key: boolean;
     }>;
   };
-  q2_sovereign_squats: { count: number; ids: string[] };
+  q2_sovereign_squats: { count: number; ids: string[]; buckets: Buckets; by_bucket: ByBucket };
   q3_unbound_money_destinations: {
-    settlement_address: { count: number; rows: Array<{ motebit_id: string; reason: string }> };
-    pay_to_address: { count: number; rows: Array<{ motebit_id: string; reason: string }> };
+    settlement_address: {
+      count: number;
+      buckets: Buckets;
+      rows: Array<{ motebit_id: string; reason: string; bucket: Bucket }>;
+    };
+    pay_to_address: {
+      count: number;
+      buckets: Buckets;
+      rows: Array<{ motebit_id: string; reason: string; bucket: Bucket }>;
+    };
     withdrawal_destination: {
       count: number;
-      rows: Array<{ motebit_id: string; reason: string; source: string }>;
+      buckets: Buckets;
+      rows: Array<{ motebit_id: string; reason: string; source: string; bucket: Bucket }>;
     };
   };
   q4_unproven_guardians: {
-    identity_keys: { count: number; ids: string[] };
-    agent_registry: { count: number; ids: string[] };
+    identity_keys: { count: number; ids: string[]; buckets: Buckets; by_bucket: ByBucket };
+    agent_registry: { count: number; ids: string[]; buckets: Buckets; by_bucket: ByBucket };
   };
-  q5_keyless_with_device_rows: { count: number; ids: string[] };
-  q6_v1_peers: { count: number; by_state: Record<string, number>; ids: string[] };
+  q5_keyless_with_device_rows: {
+    count: number;
+    ids: string[];
+    buckets: Buckets;
+    by_bucket: ByBucket;
+  };
+  q6_v1_peers: {
+    count: number;
+    by_state: Record<string, number>;
+    ids: string[];
+    buckets: Buckets;
+    by_bucket: ByBucket;
+  };
 }
+
+const ZERO: Buckets = { definitely_invalid: 0, suspicious: 0, legitimate_legacy: 0 };
 
 async function key(): Promise<string> {
   return bytesToHex((await generateKeypair()).publicKey);
@@ -91,6 +126,28 @@ function succession(db: DatabaseDriver, motebitId: string, oldKey: string, newKe
   db.prepare(
     "INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, new_key_signature) VALUES (?, ?, ?, ?, 'sig')",
   ).run(motebitId, oldKey, newKey, Date.now());
+}
+
+/** A pairing session that approved `deviceId` for `motebitId`, claiming `claimingKey`. */
+function pairing(
+  db: DatabaseDriver,
+  motebitId: string,
+  deviceId: string,
+  claimingKey: string,
+  transferredKey: string | null = null,
+): void {
+  const id = crypto.randomUUID();
+  db.prepare(
+    `INSERT INTO pairing_sessions (pairing_id, motebit_id, initiator_device_id, pairing_code, status, claiming_public_key, approved_device_id, key_transfer_payload, created_at, expires_at)
+     VALUES (?, ?, 'initiator', ?, 'approved', ?, ?, ?, 1, 2)`,
+  ).run(
+    id,
+    motebitId,
+    `code-${id}`,
+    claimingKey,
+    deviceId,
+    transferredKey === null ? null : JSON.stringify({ identity_pubkey_check: transferredKey }),
+  );
 }
 
 function changes(db: DatabaseDriver): number {
@@ -285,6 +342,228 @@ describe("identity-authority census (§6 Q1–Q6)", () => {
     expect(text).not.toMatch(/[0-9a-f]{40,}/i);
   });
 
+  // ── Read-only at the database (item 1) ──
+
+  it("read-only: a write through the census handle is refused by the database itself", async () => {
+    const ro = readOnlyHandle(db);
+    const id = crypto.randomUUID();
+    let err: unknown;
+    try {
+      ro.prepare(
+        "INSERT INTO identity_keys (motebit_id, public_key, source, first_seen, updated_at) VALUES (?, ?, 'register', 1, 1)",
+      ).run(id, await key());
+    } catch (e) {
+      err = e;
+    }
+    // better-sqlite3's own refusal: PRAGMA query_only makes SQLite answer
+    // SQLITE_READONLY ("attempt to write a readonly database").
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { code?: string }).code).toBe("SQLITE_READONLY");
+    expect((err as Error).message).toMatch(/readonly database/);
+    expect(db.prepare("SELECT 1 FROM identity_keys WHERE motebit_id = ?").get(id)).toBeUndefined();
+    // Scoped to the census's statements: the relay's own connection still writes.
+    holder(db, id, await key(), "register");
+    expect(db.prepare("SELECT 1 FROM identity_keys WHERE motebit_id = ?").get(id)).toBeDefined();
+    // No door around it: exec and pragma are refused on the handle outright.
+    expect(() => ro.exec("PRAGMA query_only = OFF")).toThrow();
+    expect(() => ro.pragma("query_only = OFF")).toThrow();
+  });
+
+  it("read-only: every statement the census runs executes with query_only ON", async () => {
+    const k0 = await key();
+    const id = await deriveSovereignMotebitId(k0);
+    holder(db, id, await key(), "register", await key());
+    registry(db, id, await key(), { settlement_address: "Addr" });
+    device(db, id, await key());
+    const seen: number[] = [];
+    const probe = (): void => {
+      seen.push((db.prepare("PRAGMA query_only").get() as { query_only: number }).query_only);
+    };
+    const watched: DatabaseDriver = {
+      driverName: db.driverName,
+      exec: (sql) => db.exec(sql),
+      pragma: (sql) => db.pragma(sql),
+      close: () => db.close(),
+      transaction: (fn) => db.transaction(fn),
+      prepare: (sql) => {
+        const st = db.prepare(sql);
+        return {
+          run: (...a: unknown[]) => (probe(), st.run(...a)),
+          get: (...a: unknown[]) => (probe(), st.get(...a)),
+          all: (...a: unknown[]) => (probe(), st.all(...a)),
+        };
+      },
+    };
+    await measureIdentityAuthority(watched);
+    expect(seen.length).toBeGreaterThan(10);
+    expect(new Set(seen)).toEqual(new Set([1]));
+    expect((db.prepare("PRAGMA query_only").get() as { query_only: number }).query_only).toBe(0);
+  });
+
+  // ── Three buckets (item 2) ──
+
+  it("buckets: every query answers per-bucket counts that sum to its count", async () => {
+    const c = await census(relay);
+    for (const b of [
+      c.q1_planted_device_rows.buckets,
+      c.q2_sovereign_squats.buckets,
+      c.q3_unbound_money_destinations.settlement_address.buckets,
+      c.q3_unbound_money_destinations.pay_to_address.buckets,
+      c.q3_unbound_money_destinations.withdrawal_destination.buckets,
+      c.q4_unproven_guardians.identity_keys.buckets,
+      c.q4_unproven_guardians.agent_registry.buckets,
+      c.q5_keyless_with_device_rows.buckets,
+      c.q6_v1_peers.buckets,
+    ])
+      expect(b).toEqual(ZERO);
+  });
+
+  it("buckets Q1: a stranger's key on a sovereign id is definitely_invalid; a no-current-key row is suspicious; a retired legacy key is legitimate_legacy", async () => {
+    const k0 = await key();
+    const sov = await deriveSovereignMotebitId(k0);
+    holder(db, sov, k0, "register-self");
+    const invalid = device(db, sov, await key());
+
+    const keyless = crypto.randomUUID();
+    holder(db, keyless, await key(), "register");
+    const unknown = device(db, keyless, await key());
+
+    const old = await key();
+    const cur = await key();
+    const legacy = crypto.randomUUID();
+    holder(db, legacy, cur, "succession");
+    succession(db, legacy, old, cur);
+    const retired = device(db, legacy, old);
+
+    const c = await census(relay);
+    const q1 = c.q1_planted_device_rows;
+    const bucketOf = new Map(q1.rows.map((r) => [r.device_id, r.bucket]));
+    expect(bucketOf.get(invalid)).toBe("definitely_invalid");
+    expect(bucketOf.get(unknown)).toBe("suspicious");
+    expect(bucketOf.get(retired)).toBe("legitimate_legacy");
+    expect(q1.buckets).toEqual({ definitely_invalid: 1, suspicious: 1, legitimate_legacy: 1 });
+    expect(q1.count).toBe(3);
+  });
+
+  it("buckets Q2–Q6: each flagged id carries exactly one bucket", async () => {
+    // Q2: K0 is held here (the owner's device) and the registry/holder were
+    // written by unproven doors — definitely_invalid. A v8 id with no
+    // committing key held anywhere — suspicious.
+    const k0 = await key();
+    const proven = await deriveSovereignMotebitId(k0);
+    device(db, proven, k0);
+    const sq = await key();
+    registry(db, proven, sq);
+    holder(db, proven, sq, "register");
+    const shapeOnly = await deriveSovereignMotebitId(await key());
+    registry(db, shapeOnly, await key());
+
+    // Q3: derived from a planted key the relay holds — definitely_invalid;
+    // an arbitrary address — suspicious; derived from a retired lineage key —
+    // legitimate_legacy.
+    const a0 = await key();
+    const a1 = await key();
+    const rotated = await deriveSovereignMotebitId(a0);
+    holder(db, rotated, a1, "succession");
+    succession(db, rotated, a0, a1);
+    registry(db, rotated, a1, { settlement_address: walletOf(a0) });
+    const s0 = await key();
+    const sovB = await deriveSovereignMotebitId(s0);
+    holder(db, sovB, s0, "register-self");
+    registry(db, sovB, s0, { settlement_address: "ArbitraryAddr" });
+    const planted = await key();
+    device(db, proven, planted);
+    db.prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?").run(
+      walletOf(planted),
+      proven,
+    );
+
+    const c = await census(relay);
+    expect(c.q2_sovereign_squats.by_bucket).toEqual({
+      definitely_invalid: [proven],
+      suspicious: [shapeOnly],
+      legitimate_legacy: [],
+    });
+    const settle = new Map(
+      c.q3_unbound_money_destinations.settlement_address.rows.map((r) => [r.motebit_id, r.bucket]),
+    );
+    expect(settle.get(proven)).toBe("definitely_invalid");
+    expect(settle.get(sovB)).toBe("suspicious");
+    expect(settle.get(rotated)).toBe("legitimate_legacy");
+  });
+
+  it("buckets Q4/Q5/Q6: guardians and keyless device ids are suspicious; a recorded pre-1.5 peer is legitimate_legacy", async () => {
+    const g = crypto.randomUUID();
+    holder(db, g, await key(), "register", await key());
+    const keyless = crypto.randomUUID();
+    device(db, keyless, await key());
+    const insert = db.prepare(
+      `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, peered_at, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
+       VALUES (?, ?, 'https://peer.example', 'active', 1, 0, 0, 0.5, ?)`,
+    );
+    insert.run("peer-old", await key(), "motebit/relay-federation@1.4");
+    insert.run("peer-unknown", await key(), null);
+
+    const c = await census(relay);
+    expect(c.q4_unproven_guardians.identity_keys.by_bucket.suspicious).toEqual([g]);
+    expect(c.q5_keyless_with_device_rows.by_bucket.suspicious).toEqual([keyless]);
+    expect(c.q6_v1_peers.by_bucket).toEqual({
+      definitely_invalid: [],
+      suspicious: ["peer-unknown"],
+      legitimate_legacy: ["peer-old"],
+    });
+  });
+
+  // ── did:key sovereign ids (item 3) ──
+
+  it("did:key: a did:key id is sovereign exactly as the relay's predicate says", async () => {
+    const k0 = await key();
+    const id = hexPublicKeyToDidKey(k0);
+    const squatter = await key();
+    registry(db, id, squatter);
+    holder(db, id, squatter, "register");
+    const owners = device(db, id, k0);
+
+    const c = await census(relay);
+    expect(c.q2_sovereign_squats.ids).toEqual([id]);
+    expect(c.q1_planted_device_rows.rows.some((r) => r.device_id === owners)).toBe(false);
+    expect(await deviceKeyStanding(db, id, k0)).toEqual({
+      on_current_lineage: true,
+      id_commits_to_device_key: true,
+    });
+    expect(await deviceKeyStanding(db, id, squatter)).toEqual({
+      on_current_lineage: false,
+      id_commits_to_device_key: false,
+    });
+  });
+
+  // ── Paired devices (item 5) ──
+
+  it("paired: a device approved through pairing is never definitely_invalid — legitimate_legacy on an approved key, suspicious on any other", async () => {
+    const k0 = await key();
+    const id = await deriveSovereignMotebitId(k0);
+    holder(db, id, k0, "register-self");
+    // The claiming device registers under its own key; pairing approved it.
+    const claimKey = await key();
+    const paired = device(db, id, claimKey);
+    pairing(db, id, paired, claimKey);
+    // Approved through pairing, but the row now holds a key pairing never
+    // carried (neither the claiming key nor the transferred identity key).
+    const drifted = device(db, id, await key());
+    pairing(db, id, drifted, await key(), await key());
+    // The control: the same shape with no pairing is definitely_invalid.
+    const unpaired = device(db, id, await key());
+
+    const c = await census(relay);
+    const byDevice = new Map(c.q1_planted_device_rows.rows.map((r) => [r.device_id, r]));
+    expect(byDevice.get(paired)?.bucket).toBe("legitimate_legacy");
+    expect(byDevice.get(paired)?.paired).toBe(true);
+    expect(byDevice.get(drifted)?.bucket).toBe("suspicious");
+    expect(byDevice.get(drifted)?.paired).toBe(true);
+    expect(byDevice.get(unpaired)?.bucket).toBe("definitely_invalid");
+    expect(byDevice.get(unpaired)?.paired).toBe(false);
+  });
+
   it("refuses a non-numeric limit", async () => {
     const res = await relay.app.request(`${CENSUS}?limit=abc`, { headers: AUTH_HEADER });
     expect(res.status).toBe(400);
@@ -296,5 +575,88 @@ describe("identity-authority census (§6 Q1–Q6)", () => {
     expect(c.limit).toBe(2);
     expect(c.q5_keyless_with_device_rows.count).toBe(5);
     expect(c.q5_keyless_with_device_rows.ids).toHaveLength(2);
+  });
+});
+
+// ── Q6 against a real handshake (item 4) ──
+
+const URLS = {
+  a: "http://relay-a.census.test:3000",
+  b: "http://relay-b.census.test:3001",
+} as const;
+type Name = keyof typeof URLS;
+const rand = (): string => bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+
+describe("identity-authority census Q6 — a relay-federation@1.5 handshake is v2 evidence", () => {
+  let relays: Record<Name, SyncRelay>;
+  let ids: Record<Name, RelayIdentity>;
+  let ip = 0;
+
+  const post = (n: Name, path: string, body: unknown): Promise<Response> =>
+    relays[n].app.request(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-forwarded-for": `198.51.100.${++ip}` },
+      body: JSON.stringify(body),
+    });
+
+  beforeEach(async () => {
+    relays = {} as Record<Name, SyncRelay>;
+    ids = {} as Record<Name, RelayIdentity>;
+    for (const n of Object.keys(URLS) as Name[]) {
+      relays[n] = await createTestRelay({
+        enableDeviceAuth: false,
+        federation: { endpointUrl: URLS[n], displayName: `Relay ${n}` },
+      });
+      ids[n] = await initRelayIdentity(relays[n].moteDb.db);
+    }
+  });
+  afterEach(async () => {
+    for (const r of Object.values(relays)) await r.close();
+  });
+
+  /** One half exactly as the CLI's runPeerHandshake sends it: no spec_version. */
+  async function half(x: Name, y: Name): Promise<void> {
+    const propose = await post(y, "/federation/v1/peer/propose", {
+      relay_id: ids[x].relayMotebitId,
+      public_key: ids[x].publicKeyHex,
+      endpoint_url: URLS[x],
+      display_name: `Relay ${x}`,
+      nonce: rand(),
+    });
+    expect(propose.status).toBe(200);
+    const { nonce } = (await propose.json()) as { nonce: string };
+    const confirm = await post(y, "/federation/v1/peer/confirm", {
+      relay_id: ids[x].relayMotebitId,
+      challenge_response: await operatorConfirm(relays[x], nonce, AUTH_HEADER),
+    });
+    expect(confirm.status).toBe(200);
+  }
+
+  it("a CLI-shaped 1.5 handshake both ways leaves no pre-v2 peer on either relay", async () => {
+    await half("a", "b");
+    await half("b", "a");
+    for (const n of Object.keys(URLS) as Name[]) {
+      const peers = relays[n].moteDb.db
+        .prepare("SELECT state, peer_protocol_version FROM relay_peers")
+        .all() as Array<{ state: string; peer_protocol_version: string | null }>;
+      // The CLI proposer sends no spec_version: the claim column stays null.
+      expect(peers).toEqual([{ state: "active", peer_protocol_version: null }]);
+      const c = await census(relays[n]);
+      expect(c.q6_v1_peers.count).toBe(0);
+      expect(c.q6_v1_peers.buckets).toEqual(ZERO);
+    }
+  });
+
+  it("a peer proposed but never confirmed carries no v2 evidence and is still counted", async () => {
+    const propose = await post("b", "/federation/v1/peer/propose", {
+      relay_id: ids.a.relayMotebitId,
+      public_key: ids.a.publicKeyHex,
+      endpoint_url: URLS.a,
+      nonce: rand(),
+    });
+    expect(propose.status).toBe(200);
+    const c = await census(relays.b);
+    expect(c.q6_v1_peers.ids).toEqual([ids.a.relayMotebitId]);
+    expect(c.q6_v1_peers.by_state).toEqual({ pending: 1 });
   });
 });
