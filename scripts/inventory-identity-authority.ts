@@ -748,6 +748,8 @@ const unguarded = authorityWriters.filter((w) => WEAK.includes(w.proof));
 let fieldCount = 0;
 let authorityFieldCount = 0;
 const fieldRows: string[] = [];
+/** `table.column` of every authority-bearing relay/persistence schema column (adapter rows excluded). */
+const schemaAuthorityFields: string[] = [];
 for (const t of [...KEYED].sort()) {
   for (const c of [...(COLUMNS.get(t)?.values() ?? [])].sort((a, b) =>
     a.column.localeCompare(b.column),
@@ -757,6 +759,7 @@ for (const t of [...KEYED].sort()) {
     if (cls !== null) authorityFieldCount++;
     const writers = WRITERS.filter((w) => w.table === t && w.columns.includes(c.column));
     if (cls === null) continue; // informational columns are counted, not listed
+    schemaAuthorityFields.push(`${t}.${c.column}`);
     fieldRows.push(
       `| \`${t}.${c.column}\` | ${cls} | ${c.where} | ${writers.length} | ${[...new Set(writers.map((w) => w.proof))].join(", ") || "—"} |`,
     );
@@ -854,6 +857,17 @@ export function censusAperture(): string {
 }
 
 export const CENSUS_OUT = OUT;
+
+/**
+ * The census's authority-bearing schema columns, `table.column` — what the
+ * relay's shadow guard must cover (`AUTHORITY_COLUMNS` in
+ * services/relay/src/identity-authority.ts; checked by
+ * `check-identity-authority-inventory`). The worker-side `AgentTrustRecord`
+ * adapter rows are not schema columns and are not included.
+ */
+export function authoritySchemaFields(): string[] {
+  return [...schemaAuthorityFields].sort();
+}
 
 async function main(): Promise<void> {
   const formatted = await renderCensus();

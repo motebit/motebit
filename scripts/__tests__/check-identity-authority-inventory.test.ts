@@ -8,7 +8,13 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { censusDrift, staleReport } from "../check-identity-authority-inventory.js";
+import {
+  censusDrift,
+  coverageReport,
+  declaredAuthorityColumns,
+  guardCoverageDrift,
+  staleReport,
+} from "../check-identity-authority-inventory.js";
 import { formatRepair, hasApertureDisclosure, hasRepairInstruction } from "../lib/gate-report.js";
 
 const ROOT = resolve(__dirname, "..", "..");
@@ -44,6 +50,46 @@ describe("staleReport", () => {
     expect(hasRepairInstruction(out)).toEqual({ ok: true });
     expect(out).toContain("npx tsx scripts/inventory-identity-authority.ts");
     expect(out).toContain("line 1 …");
+  });
+});
+
+describe("shadow-guard coverage (identity-authority Inc 2)", () => {
+  const SRC = `export const AUTHORITY_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  agent_registry: [
+    "public_key",
+    "settlement_address",
+  ],
+  devices: ["public_key"],
+};
+export const OTHER = { x: ["y"] };`;
+
+  it("reads the declared table.column pairs from the source text, and nothing after the literal", () => {
+    expect(declaredAuthorityColumns(SRC)).toEqual([
+      "agent_registry.public_key",
+      "agent_registry.settlement_address",
+      "devices.public_key",
+    ]);
+    expect(declaredAuthorityColumns("const nothing = 1;")).toEqual([]);
+  });
+
+  it("an authority column the guard omits is UNGUARDED; a declared non-authority column is STALE", () => {
+    const census = [
+      "agent_registry.public_key",
+      "agent_registry.settlement_address",
+      "devices.public_key",
+    ];
+    expect(guardCoverageDrift(census, declaredAuthorityColumns(SRC))).toEqual([]);
+    const drift = guardCoverageDrift(
+      [...census, "relay_withdrawals.destination"],
+      [...declaredAuthorityColumns(SRC), "agent_registry.metadata"],
+    );
+    expect(drift).toEqual([
+      "UNGUARDED: relay_withdrawals.destination is authority-bearing in the census but not in AUTHORITY_COLUMNS",
+      "STALE: agent_registry.metadata is in AUTHORITY_COLUMNS but not authority-bearing in the census",
+    ]);
+    const out = formatRepair(coverageReport(drift));
+    expect(hasRepairInstruction(out)).toEqual({ ok: true });
+    expect(out).toContain("AUTHORITY_COLUMNS");
   });
 });
 

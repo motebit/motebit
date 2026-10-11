@@ -55,9 +55,61 @@ export function staleReport(out: string, drift: string[], aperture: string): Rep
   };
 }
 
+/**
+ * The `table.column` pairs `AUTHORITY_COLUMNS` declares in the relay's single
+ * writer (identity-authority.ts), read from the source text — the object
+ * literal's keys and string-array values. Pure, so the comparison is testable.
+ */
+export function declaredAuthorityColumns(src: string): string[] {
+  const start = src.indexOf("export const AUTHORITY_COLUMNS");
+  if (start < 0) return [];
+  const open = src.indexOf("= {", start);
+  let depth = 0;
+  let end = open + 2;
+  for (; end < src.length; end++) {
+    if (src[end] === "{") depth++;
+    else if (src[end] === "}" && --depth === 0) break;
+  }
+  const body = src.slice(open + 3, end);
+  const out: string[] = [];
+  for (const m of body.matchAll(/(\w+):\s*\[([^\]]*)\]/g)) {
+    for (const col of m[2]!.matchAll(/"(\w+)"/g)) out.push(`${m[1]}.${col[1]}`);
+  }
+  return out.sort();
+}
+
+/** Columns the census calls authority-bearing that the guard does not declare, and vice versa. */
+export function guardCoverageDrift(census: string[], declared: string[]): string[] {
+  const d = new Set(declared);
+  const c = new Set(census);
+  return [
+    ...census
+      .filter((f) => !d.has(f))
+      .map(
+        (f) => `UNGUARDED: ${f} is authority-bearing in the census but not in AUTHORITY_COLUMNS`,
+      ),
+    ...declared
+      .filter((f) => !c.has(f))
+      .map((f) => `STALE: ${f} is in AUTHORITY_COLUMNS but not authority-bearing in the census`),
+  ];
+}
+
+/** The failure block for a guard that does not cover the census's columns. */
+export function coverageReport(drift: string[]): RepairReport {
+  return {
+    invariant: `the identity-authority shadow guard covers exactly the census's authority-bearing columns (D5: the full list, never a hand-picked subset) — ${drift.length} difference(s)`,
+    canonical: "services/relay/src/identity-authority.ts (AUTHORITY_COLUMNS)",
+    fix: 'make AUTHORITY_COLUMNS equal the census\'s "Authority-bearing fields" (relay/persistence schema rows): add every UNGUARDED column, remove every STALE one. A column the census newly calls authority-bearing is guarded the moment it is declared — installAuthorityGuards installs its triggers and throws at boot if the column does not exist.',
+    sites: drift,
+    doctrine: "docs/design/identity-authority-writers.md §4 item 1 (Inc 2), decision D5",
+  };
+}
+
+const SINGLE_WRITER_FILE = "services/relay/src/identity-authority.ts";
+
 async function main(): Promise<void> {
   // Importing the census runs the scan (≈5 s); its main() is guarded.
-  const { renderCensus, censusAperture, CENSUS_OUT } =
+  const { renderCensus, censusAperture, CENSUS_OUT, authoritySchemaFields } =
     await import("./inventory-identity-authority.js");
   const fresh = await renderCensus();
   const path = resolve(ROOT, CENSUS_OUT);
@@ -66,7 +118,16 @@ async function main(): Promise<void> {
   if (drift.length > 0) {
     failWithRepair(staleReport(CENSUS_OUT, drift, censusAperture()));
   }
+  const census = authoritySchemaFields();
+  const declared = declaredAuthorityColumns(
+    readFileSync(resolve(ROOT, SINGLE_WRITER_FILE), "utf-8"),
+  );
+  const coverage = guardCoverageDrift(census, declared);
+  if (coverage.length > 0) failWithRepair(coverageReport(coverage));
   console.log(`✓ check-identity-authority-inventory — census fresh: ${censusAperture()}`);
+  console.log(
+    `  Shadow guard: AUTHORITY_COLUMNS (${SINGLE_WRITER_FILE}) declares exactly the census's ${census.length} authority-bearing schema column(s).`,
+  );
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

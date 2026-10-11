@@ -587,23 +587,9 @@ describe("ProvenKey is a runtime capability — a forgery throws at the writer a
 // ── The guard itself ────────────────────────────────────────────────────
 
 describe("installAuthorityGuards — the census's full authority-column list, recorded never aborted", () => {
-  it("AUTHORITY_COLUMNS is exactly the census's authority-bearing relay fields (the worker-side AgentTrustRecord adapter rows are not relay tables)", () => {
-    const census = readFileSync(
-      join(__dirname, "../../../../docs/design/identity-authority-inventory.generated.md"),
-      "utf8",
-    );
-    const section = census.slice(
-      census.indexOf("## Authority-bearing fields"),
-      census.indexOf("## Authority writers"),
-    );
-    const fromCensus = [...section.matchAll(/^\| `([a-z_0-9]+)\.([a-z_0-9]+)`\s/gm)]
-      .map((m) => `${m[1]}.${m[2]}`)
-      .sort();
-    const declared = Object.entries(AUTHORITY_COLUMNS)
-      .flatMap(([t, cols]) => cols.map((col) => `${t}.${col}`))
-      .sort();
-    expect(declared).toEqual(fromCensus);
-  });
+  // AUTHORITY_COLUMNS ↔ the committed census is checked by
+  // check-identity-authority-inventory (scripts/), which reads docs/ — a relay
+  // test must not (the pre-push hook scopes docs/ changes out of package tests).
 
   it("every declared table carries INSERT / UPDATE OF / DELETE shadow triggers on a booted relay", () => {
     const triggers = new Set(
