@@ -124,6 +124,7 @@ import {
   fakeSolanaTxHash,
   jsonAuthWithIdempotency,
 } from "./test-helpers.js";
+import { operatorConfirm } from "./federation-messages.js";
 import { toMicro } from "../accounts.js";
 import { forwardTaskViaMcp } from "../task-routing.js";
 
@@ -912,22 +913,15 @@ async function peer(a: SyncRelay, aUrl: string, b: SyncRelay, bUrl: string): Pro
       nonce: nonce(),
     })
   ).nonce;
-  const sigA = (
-    await propose(a, {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: aUrl,
-      nonce: nB,
-    })
-  ).challenge;
-  const sigB = (
-    await propose(b, {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: bUrl,
-      nonce: nA,
-    })
-  ).challenge;
+  // relay-federation@1.5: self-propose is refused; the operator mints each confirm.
+  const sigA = await operatorConfirm(a, nB, AUTH_HEADER, {
+    id: idB.relay_motebit_id,
+    publicKey: idB.public_key,
+  });
+  const sigB = await operatorConfirm(b, nA, AUTH_HEADER, {
+    id: idA.relay_motebit_id,
+    publicKey: idA.public_key,
+  });
   for (const [on, relayId, challenge] of [
     [b, idA.relay_motebit_id, sigA],
     [a, idB.relay_motebit_id, sigB],
@@ -935,7 +929,7 @@ async function peer(a: SyncRelay, aUrl: string, b: SyncRelay, bUrl: string): Pro
     const res = await on.app.request("/federation/v1/peer/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ relay_id: relayId, challenge_response: challenge }),
+      body: JSON.stringify({ relay_id: relayId, ...challenge }),
     });
     if (res.status !== 200) throw new Error(`peer confirm failed: ${res.status}`);
   }

@@ -20,6 +20,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { createTestRelay } from "./test-helpers.js";
+import { operatorConfirm } from "./federation-messages.js";
 
 const A_URL = "http://relay-a.test:3000";
 const B_URL = "http://relay-b.test:3001";
@@ -88,30 +89,23 @@ async function handshake(a: SyncRelay, b: SyncRelay) {
       nonce: rand(),
     })
   ).body as { nonce: string };
-  const sigA = (
-    await fed(a, "POST", "/federation/v1/peer/propose", {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: A_URL,
-      nonce: nB.nonce,
-    })
-  ).body as { challenge: string };
-  const sigB = (
-    await fed(b, "POST", "/federation/v1/peer/propose", {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: B_URL,
-      nonce: nA.nonce,
-    })
-  ).body as { challenge: string };
-  const confirmB = await fed(b, "POST", "/federation/v1/peer/confirm", {
-    relay_id: idA.relay_motebit_id,
-    challenge_response: sigA.challenge,
-  });
-  const confirmA = await fed(a, "POST", "/federation/v1/peer/confirm", {
-    relay_id: idB.relay_motebit_id,
-    challenge_response: sigB.challenge,
-  });
+  // relay-federation@1.5: self-propose is refused, so each relay's step-3
+  // confirm is minted by ITS OWN operator with ITS OWN token — still no
+  // shared secret.
+  const sigA = await operatorConfirm(
+    a,
+    nB.nonce,
+    { Authorization: `Bearer ${TOKEN_A}` },
+    { id: idB.relay_motebit_id, publicKey: idB.public_key },
+  );
+  const sigB = await operatorConfirm(
+    b,
+    nA.nonce,
+    { Authorization: `Bearer ${TOKEN_B}` },
+    { id: idA.relay_motebit_id, publicKey: idA.public_key },
+  );
+  const confirmB = await fed(b, "POST", "/federation/v1/peer/confirm", sigA);
+  const confirmA = await fed(a, "POST", "/federation/v1/peer/confirm", sigB);
   return { idA, idB, confirmA: confirmA.status, confirmB: confirmB.status };
 }
 

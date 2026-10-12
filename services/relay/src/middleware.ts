@@ -1397,8 +1397,9 @@ export function registerAuthMiddleware(
   app.use("/api/v1/admin/receipts/*", bearerAuth({ token: apiToken }));
   // Admin aggregated-withdrawal queue summary — master token only.
   app.use("/api/v1/admin/pending-withdrawals", bearerAuth({ token: apiToken }));
-  // Admin federation signing oracles (peer-removal-signature today; future
-  // siblings under the same namespace) — master token only. The signature
-  // shape is unauthenticated-replayable, so the oracle is admin-only.
+  // Admin federation signing (peer-removal-signature: a recipient-bound v2
+  // peer-remove; peer-confirm-signature: the handshake's step-3 confirm, which
+  // relay-federation@1.5 refuses to serve through a public self-propose) —
+  // master token only: only the operator decides to join or leave a peer.
   app.use("/api/v1/admin/federation/*", bearerAuth({ token: apiToken }));
 }

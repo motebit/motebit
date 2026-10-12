@@ -10,20 +10,27 @@ import type { RelayIdentity } from "../federation.js";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
+import { ackingFetch } from "./federation-messages.js";
 
 /** Manually insert a peer into the DB for heartbeat testing. */
-function insertPeer(
+/** Each inserted peer's private key — the v2 ack a stub peer answers with is signed by it. */
+const PEER_KEYS = new Map<string, Uint8Array>();
+
+async function insertPeer(
   db: DatabaseDriver,
   peerId: string,
   endpointUrl: string,
   state: string,
   missed = 0,
-): void {
-  const keypair = crypto.getRandomValues(new Uint8Array(32));
+): Promise<void> {
+  const keypair = await generateKeypair();
+  PEER_KEYS.set(peerId, keypair.privateKey);
   db.prepare(
-    `INSERT OR REPLACE INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, missed_heartbeats, agent_count, trust_score)
-     VALUES (?, ?, ?, ?, ?, 0, 0.5)`,
-  ).run(peerId, bytesToHex(keypair), endpointUrl, state, missed);
+    // A peer row is a confirmed handshake (`peered_at` set): a never-confirmed
+    // row confers no authority (relay-federation@1.5 §3.1).
+    `INSERT OR REPLACE INTO relay_peers (peer_relay_id, public_key, endpoint_url, state, missed_heartbeats, agent_count, trust_score, peered_at)
+     VALUES (?, ?, ?, ?, ?, 0, 0.5, ?)`,
+  ).run(peerId, bytesToHex(keypair.publicKey), endpointUrl, state, missed, Date.now() - 60_000);
 }
 
 function getPeer(
@@ -62,7 +69,7 @@ describe("Heartbeat Sender", () => {
   });
 
   it("increments missed_heartbeats when peer is unreachable", async () => {
-    insertPeer(db, "dead-peer", "http://unreachable.test:9999", "active", 0);
+    await insertPeer(db, "dead-peer", "http://unreachable.test:9999", "active", 0);
 
     // Stub fetch to fail
     vi.stubGlobal("fetch", async () => {
@@ -78,7 +85,7 @@ describe("Heartbeat Sender", () => {
   });
 
   it("suspends peer at 3 missed heartbeats", async () => {
-    insertPeer(db, "flaky-peer", "http://flaky.test:9999", "active", 2); // Already missed 2
+    await insertPeer(db, "flaky-peer", "http://flaky.test:9999", "active", 2); // Already missed 2
 
     vi.stubGlobal("fetch", async () => {
       throw new Error("Connection refused");
@@ -93,7 +100,7 @@ describe("Heartbeat Sender", () => {
   });
 
   it("removes peer at 5 missed heartbeats", async () => {
-    insertPeer(db, "gone-peer", "http://gone.test:9999", "suspended", 4); // Already missed 4
+    await insertPeer(db, "gone-peer", "http://gone.test:9999", "suspended", 4); // Already missed 4
 
     vi.stubGlobal("fetch", async () => {
       throw new Error("Connection refused");
@@ -108,19 +115,10 @@ describe("Heartbeat Sender", () => {
   });
 
   it("decrements missed count on successful heartbeat (hysteresis)", async () => {
-    insertPeer(db, "recovering-peer", "http://recovering.test", "suspended", 3);
+    await insertPeer(db, "recovering-peer", "http://recovering.test", "suspended", 3);
 
-    vi.stubGlobal("fetch", async () => {
-      return new Response(
-        JSON.stringify({
-          relay_id: "peer-relay",
-          timestamp: Date.now(),
-          agent_count: 5,
-          signature: bytesToHex(new Uint8Array(64)),
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
+    // Each success is a heartbeat whose signed v2 ack verifies (§3.2).
+    vi.stubGlobal("fetch", ackingFetch(PEER_KEYS, identity.publicKeyHex));
 
     // First success: 3 → 2 (still suspended)
     await sendHeartbeats(db, identity);
@@ -142,7 +140,7 @@ describe("Heartbeat Sender", () => {
   });
 
   it("skips removed peers", async () => {
-    insertPeer(db, "removed-peer", "http://removed.test:9999", "removed", 10);
+    await insertPeer(db, "removed-peer", "http://removed.test:9999", "removed", 10);
 
     let fetchCalled = false;
     vi.stubGlobal("fetch", async () => {
@@ -157,23 +155,13 @@ describe("Heartbeat Sender", () => {
   });
 
   it("handles concurrent peers independently", async () => {
-    insertPeer(db, "alive-peer", "http://alive.test", "active", 0);
-    insertPeer(db, "dead-peer-2", "http://dead.test", "active", 0);
+    await insertPeer(db, "alive-peer", "http://alive.test", "active", 0);
+    await insertPeer(db, "dead-peer-2", "http://dead.test", "active", 0);
 
-    vi.stubGlobal("fetch", async (url: string) => {
-      if (typeof url === "string" && url.includes("alive.test")) {
-        return new Response(
-          JSON.stringify({
-            relay_id: "alive",
-            timestamp: Date.now(),
-            agent_count: 1,
-            signature: "aa",
-          }),
-          { status: 200 },
-        );
-      }
-      throw new Error("Connection refused");
-    });
+    vi.stubGlobal(
+      "fetch",
+      ackingFetch(PEER_KEYS, identity.publicKeyHex, (peerId) => peerId === "alive-peer"),
+    );
 
     await sendHeartbeats(db, identity);
 
@@ -183,5 +171,30 @@ describe("Heartbeat Sender", () => {
     expect(alive!.state).toBe("active");
     expect(dead!.missed_heartbeats).toBe(1);
     expect(dead!.state).toBe("active");
+  });
+
+  it("counts an unverified 2xx as a missed heartbeat (the ack must verify)", async () => {
+    await insertPeer(db, "liar-peer", "http://liar.test", "active", 0);
+    // The v1 response shape, or any 2xx without a valid ack under the peer's key.
+    vi.stubGlobal("fetch", async () => {
+      return new Response(
+        JSON.stringify({
+          relay_id: "liar-peer",
+          timestamp: Date.now(),
+          agent_count: 1,
+          signature: "aa",
+        }),
+        { status: 200 },
+      );
+    });
+    await sendHeartbeats(db, identity);
+    expect(getPeer(db, "liar-peer")!.missed_heartbeats).toBe(1);
+
+    // An ack signed by a different peer's key is not this peer's ack.
+    await insertPeer(db, "other-peer", "http://other.test", "removed", 0);
+    const keys = new Map([["liar-peer", PEER_KEYS.get("other-peer")!]]);
+    vi.stubGlobal("fetch", ackingFetch(keys, identity.publicKeyHex));
+    await sendHeartbeats(db, identity);
+    expect(getPeer(db, "liar-peer")!.missed_heartbeats).toBe(2);
   });
 });

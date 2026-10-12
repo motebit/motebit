@@ -647,11 +647,10 @@ export async function measureIdentityAuthority(
 
   // ── Q6 ── a peer counts only when NO v2 evidence is stored for it: neither
   // its claimed `peer_protocol_version` nor the `handshake_protocol_version`
-  // a relay-federation@1.5 relay records at a completed confirm is 1.5 or
-  // later. A relay without that column (this one runs 1.4) holds no v2
-  // evidence, so every peer counts. (The CLI proposer sends no spec_version,
-  // so a null claim is not evidence of v1.) Bucket: a recorded pre-1.5
-  // version → `legitimate_legacy`; nothing recorded → `suspicious`.
+  // this relay recorded at a completed confirm is relay-federation@1.5 or
+  // later. (The CLI proposer sends no spec_version, so a null claim is not
+  // evidence of v1.) Bucket: a recorded pre-1.5 version → `legitimate_legacy`;
+  // nothing recorded → `suspicious`.
   const handshakeCol =
     hasTable(db, "relay_peers") && hasColumn(db, "relay_peers", "handshake_protocol_version");
   const peers = hasTable(db, "relay_peers")

@@ -525,3 +525,14 @@ export {
   type ContentArtifactManifest,
   type VerifyContentArtifactResult,
 } from "@motebit/crypto";
+
+// ── Federation signed messages v2 (re-export from @motebit/crypto) ──
+// Operator tooling (`motebit federation peer`) verifies a counterparty's
+// `peer-challenge` before its relay mints a confirm (relay-federation@1.5
+// §3.1); the one producer and one verifier live in @motebit/crypto.
+export {
+  signFederationMessage,
+  verifyFederationMessage,
+  type SignedFederationMessage,
+  type FederationMessageVerdict,
+} from "@motebit/crypto";

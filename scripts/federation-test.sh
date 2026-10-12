@@ -7,7 +7,7 @@
 # This script:
 #   1. Waits for both relays to be healthy
 #   2. Gets relay identities
-#   3. Peers them using the propose + oracle + confirm protocol
+#   3. Peers them using propose + operator-minted confirm (relay-federation@1.5)
 #   4. Registers a test agent on relay-b
 #   5. Discovers the agent from relay-a (cross-relay federation)
 #   6. Submits a task on relay-a requiring the federated capability
@@ -98,58 +98,40 @@ PROPOSE_2=$(curl -sf -X POST "$RELAY_A/federation/v1/peer/propose" \
 NONCE_A=$(echo "$PROPOSE_2" | python3 -c "import sys,json; print(json.load(sys.stdin)['nonce'])")
 echo "  -> relay-a returned nonce: ${NONCE_A:0:16}..."
 
-# 3c. Oracle trick: get relay-a to sign relay-b's nonce (NONCE_B)
-#     We propose a dummy peer to relay-a with NONCE_B as the nonce.
-#     relay-a signs NONCE_B and returns it as the challenge.
-echo "  Oracle: getting relay-a to sign relay-b's nonce..."
-DUMMY_KEY_1=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-DUMMY_ID_1=$(python3 -c "import uuid; print(str(uuid.uuid4()))")
-ORACLE_1=$(curl -sf -X POST "$RELAY_A/federation/v1/peer/propose" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"relay_id\": \"dummy-$DUMMY_ID_1\",
-    \"public_key\": \"$DUMMY_KEY_1\",
-    \"endpoint_url\": \"http://dummy.test\",
-    \"nonce\": \"$NONCE_B\"
-  }") || fail "Oracle 1 failed"
+# 3c. Relay-a's operator mints relay-a's confirm over relay-b's nonce (NONCE_B).
+#     relay-federation@1.5 §3.1: a v2 `peer-confirm` minted only on the
+#     operator's master token, naming relay-b (the relay that issued the
+#     nonce) as recipient by id AND public key, and relay-a's own endpoint —
+#     never a bare nonce.
+echo "  Operator confirm: relay-a confirms to relay-b over relay-b's nonce..."
+CONFIRM_REQ_1=$(curl -sf -X POST "$RELAY_A/api/v1/admin/federation/peer-confirm-signature" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d "{\"nonce\": \"$NONCE_B\", \"recipient\": \"$RELAY_B_ID\", \"recipient_public_key\": \"$RELAY_B_PK\", \"endpoint_url\": \"http://relay-a:3000\"}" \
+  | python3 -c "import sys,json; b=json.load(sys.stdin); print(json.dumps({'message': b['message'], 'nonce': b['nonce']}))") \
+  || fail "Operator confirm on relay-a failed"
+echo "  -> relay-a minted its peer-confirm for relay-b"
 
-SIG_A_OF_NONCE_B=$(echo "$ORACLE_1" | python3 -c "import sys,json; print(json.load(sys.stdin)['challenge'])")
-echo "  -> relay-a signed relay-b's nonce"
+# 3d. Relay-b's operator mints relay-b's confirm over relay-a's nonce (NONCE_A).
+echo "  Operator confirm: relay-b confirms to relay-a over relay-a's nonce..."
+CONFIRM_REQ_2=$(curl -sf -X POST "$RELAY_B/api/v1/admin/federation/peer-confirm-signature" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d "{\"nonce\": \"$NONCE_A\", \"recipient\": \"$RELAY_A_ID\", \"recipient_public_key\": \"$RELAY_A_PK\", \"endpoint_url\": \"http://relay-b:3000\"}" \
+  | python3 -c "import sys,json; b=json.load(sys.stdin); print(json.dumps({'message': b['message'], 'nonce': b['nonce']}))") \
+  || fail "Operator confirm on relay-b failed"
+echo "  -> relay-b minted its peer-confirm for relay-a"
 
-# 3d. Oracle trick: get relay-b to sign relay-a's nonce (NONCE_A)
-echo "  Oracle: getting relay-b to sign relay-a's nonce..."
-DUMMY_KEY_2=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-DUMMY_ID_2=$(python3 -c "import uuid; print(str(uuid.uuid4()))")
-ORACLE_2=$(curl -sf -X POST "$RELAY_B/federation/v1/peer/propose" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"relay_id\": \"dummy-$DUMMY_ID_2\",
-    \"public_key\": \"$DUMMY_KEY_2\",
-    \"endpoint_url\": \"http://dummy.test\",
-    \"nonce\": \"$NONCE_A\"
-  }") || fail "Oracle 2 failed"
-
-SIG_B_OF_NONCE_A=$(echo "$ORACLE_2" | python3 -c "import sys,json; print(json.load(sys.stdin)['challenge'])")
-echo "  -> relay-b signed relay-a's nonce"
-
-# 3e. Confirm on relay-b: prove relay-a owns its key by providing relay-a's signature of relay-b's nonce
+# 3e. Confirm on relay-b: relay-a's v2 peer-confirm, verified under relay-a's key
 echo "  Confirming relay-a on relay-b..."
 CONFIRM_1=$(curl -sf -X POST "$RELAY_B/federation/v1/peer/confirm" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"relay_id\": \"$RELAY_A_ID\",
-    \"challenge_response\": \"$SIG_A_OF_NONCE_B\"
-  }") || fail "Confirm on relay-b failed"
+  -d "$CONFIRM_REQ_1") || fail "Confirm on relay-b failed"
 echo "  -> relay-b confirmed relay-a: $(echo "$CONFIRM_1" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")"
 
-# 3f. Confirm on relay-a: prove relay-b owns its key by providing relay-b's signature of relay-a's nonce
+# 3f. Confirm on relay-a: relay-b's v2 peer-confirm, verified under relay-b's key
 echo "  Confirming relay-b on relay-a..."
 CONFIRM_2=$(curl -sf -X POST "$RELAY_A/federation/v1/peer/confirm" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"relay_id\": \"$RELAY_B_ID\",
-    \"challenge_response\": \"$SIG_B_OF_NONCE_A\"
-  }") || fail "Confirm on relay-a failed"
+  -d "$CONFIRM_REQ_2") || fail "Confirm on relay-a failed"
 echo "  -> relay-a confirmed relay-b: $(echo "$CONFIRM_2" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")"
 
 # Verify peering

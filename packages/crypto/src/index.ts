@@ -3339,3 +3339,22 @@ export {
   verifyAgentCommandEnvelope,
   type AgentCommandVerdict,
 } from "./agent-command.js";
+
+// Federation signed messages v2 (spec/relay-federation-v1.md §3.5) — the one
+// producer and one verifier of role-, signer-, recipient- and freshness-bound
+// relay-to-relay signatures (heartbeat, heartbeat-ack, peer-remove today).
+export {
+  FEDERATION_MESSAGE_DOMAIN,
+  FEDERATION_MESSAGE_KINDS,
+  FEDERATION_MESSAGE_SUITE,
+  federationBodyDigest,
+  federationMessageBytes,
+  parseFederationMessage,
+  signFederationMessage,
+  verifyFederationMessage,
+  type FederationMessageEnvelope,
+  type FederationMessageKind,
+  type FederationMessageRefusal,
+  type FederationMessageVerdict,
+  type SignedFederationMessage,
+} from "./federation-message.js";
