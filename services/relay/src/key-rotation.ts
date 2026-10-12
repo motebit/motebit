@@ -28,7 +28,13 @@ import { createLogger } from "./logger.js";
 import { openObligationsToKey, type OpenObligation } from "./rotation-obligations.js";
 import type { AuthEvent } from "./auth-events.js";
 import type { CloseIdentityConnections, CloseTokenConnections } from "./connection-ports.js";
-import { admitKey, guardianProvenance, identityKey, verificationKeyFor } from "./identity-keys.js";
+import {
+  admitKey,
+  guardianEvidencePossible,
+  guardianProvenance,
+  identityKey,
+  verificationKeyFor,
+} from "./identity-keys.js";
 import { GuardianNotProvenError } from "./errors.js";
 import { isKnownIdentity, recordIdentityRevocation } from "./identity-revocation.js";
 import { bindCaller, unwrapBound, type BoundIdentity } from "./identity-binding.js";
@@ -247,7 +253,9 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       // since a recovery skips the caller check, move the key here.
       if (!proven) {
         recordRefusal("guardian_not_proven");
-        throw new GuardianNotProvenError();
+        throw new GuardianNotProvenError(
+          guardianEvidencePossible(moteDb.db, motebitId) ? "provable" : "legacy",
+        );
       }
       const valid = await verifyKeySuccession(body, guardianPubKey);
       if (!valid) {

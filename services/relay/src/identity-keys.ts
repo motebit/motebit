@@ -432,6 +432,42 @@ export function guardianProvenance(
 }
 
 /**
+ * A sovereign id's SHAPE, decidable from the id alone (the census's
+ * `SOVEREIGN_SHAPE`; `isSovereignShaped` in `@motebit/crypto`). Whether a
+ * KEY is that id's commitment is decided only by `proveSovereignFirstKey`.
+ */
+const SOVEREIGN_ID_SHAPE = (id: string): boolean =>
+  id.startsWith("did:key:") ||
+  /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+
+/**
+ * Whether any request could EVER write guardian evidence for this identity:
+ * it has a holder (`holder` evidence, under a device on that key), or its id
+ * has a sovereign commitment's shape (E-sov can still record its first key,
+ * and `sovereign` evidence with it). A non-sovereign (legacy) id with no
+ * holder has neither — `recordFirstIdentityKey` refuses its id and E-link
+ * needs a holder — so no guardian set for it can ever be proven (D2: the
+ * evidence path for legacy ids is not built). `/agents/register` refuses to
+ * set one, and a recovery under one set before that refusal is told so.
+ */
+export function guardianEvidencePossible(db: DatabaseDriver, motebitId: string): boolean {
+  return holderKeyOf(db, motebitId) !== null || SOVEREIGN_ID_SHAPE(motebitId);
+}
+
+/**
+ * Whether an operator registration of this identity in the current request
+ * would record E-op (`recordOperatorServiceKey`'s conditions, read without
+ * writing): no holder, no recorded chain, no device row. A legacy id that
+ * passes gets a holder from that same request, so its guardian becomes
+ * provable (`guardianEvidencePossible`) — the register door must not refuse it.
+ */
+export function operatorServiceKeyWouldRecord(db: DatabaseDriver, motebitId: string): boolean {
+  if (holderKeyOf(db, motebitId) !== null) return false;
+  if (chainHeadOf(db, motebitId) !== null) return false;
+  return db.prepare("SELECT 1 FROM devices WHERE motebit_id = ? LIMIT 1").get(motebitId) == null;
+}
+
+/**
  * The guardian the identity's LATEST evidence row names, else null — the one
  * guardian that has provenance. The census's Q4 reads this same answer.
  */

@@ -31,12 +31,14 @@ import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
 import { hasRevocationRecord, liftRevocation } from "./identity-revocation.js";
-import { GuardianNotProvenError } from "./errors.js";
+import { GuardianNotProvenError, GuardianUnprovableError } from "./errors.js";
 import {
   admitKey,
+  guardianEvidencePossible,
   guardianProvenance,
   holderKeyOf,
   isCanonicalKey,
+  operatorServiceKeyWouldRecord,
   proveSovereignFirstKey,
   recordFirstIdentityKey,
   recordGuardianEvidence,
@@ -1330,18 +1332,43 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // only when they are the same key: the identity signed (§3.2). A paired
     // device's own key, the master token and a legacy id with no held key
     // prove nothing about the identity's key (D1/D2/D3).
+    // The bearer's key is the one the middleware captured from the device row
+    // that verified the token (auth.ts `onVerified`) — never looked up again:
+    // a re-read after an await can return a row a rotation or pairing rewrote
+    // since, a key this token was never verified under.
     const holderAtRequest = holderKeyOf(moteDb.db, motebitId);
-    let bearerKeyAtRequest: string | undefined;
-    {
-      const bearerToken = c.req.header("authorization")?.slice(7);
-      const claims =
-        bearerToken != null && callerMotebitId != null
-          ? parseTokenPayloadUnsafe(bearerToken)
-          : null;
-      if (claims?.mid === motebitId && typeof claims.did === "string") {
-        const row = await identityManager.loadDeviceById(claims.did, motebitId);
-        if (row?.public_key) bearerKeyAtRequest = row.public_key;
-      }
+    const verifiedKey = c.get("callerVerifiedKey" as never) as string | undefined;
+    const verifiedVia = c.get("callerVerifiedKeySource" as never) as VerifiedKeySource | undefined;
+    const bearerKeyAtRequest =
+      callerMotebitId === motebitId && verifiedVia === "device" ? verifiedKey : undefined;
+
+    // A guardian that could never carry provenance is refused, before any
+    // write: a legacy (non-sovereign) id with no held key, which no request
+    // can prove (D2 — its evidence path is not built). An operator
+    // registration that records E-op in this same request gives the id a
+    // holder, so it is not refused; neither is any identity that can be proven.
+    if (
+      Boolean((body as Record<string, unknown>).guardian_public_key) &&
+      !guardianEvidencePossible(moteDb.db, motebitId) &&
+      !(
+        keyFromBody &&
+        callerMotebitId == null &&
+        operatorServiceKeyWouldRecord(moteDb.db, motebitId)
+      )
+    ) {
+      logger.warn("agent.register.refused_guardian_unprovable", {
+        motebitId,
+        caller: callerMotebitId ?? null,
+      });
+      deps.recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: callerMotebitId ?? null,
+        reason: "register:guardian_unprovable",
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new GuardianUnprovableError();
     }
 
     // --- Succession chain validation on re-registration ---
@@ -1388,7 +1415,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
             reason: "succession:guardian_not_proven",
             correlationId: c.req.header("x-correlation-id") ?? null,
           });
-          throw new GuardianNotProvenError();
+          throw new GuardianNotProvenError(
+            guardianEvidencePossible(moteDb.db, motebitId) ? "provable" : "legacy",
+          );
         }
       }
       const successionValid = await verifyKeySuccession(succession, guardianPubKeyForVerify);
@@ -1682,7 +1711,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // it. Any other setter leaves the guardian on file but UNPROVEN, and a
       // recovery under it is refused (GUARDIAN_NOT_PROVEN) until the owner
       // re-sets it with the identity key.
-      if (holderAtRequest !== null && bearerKeyAtRequest === holderAtRequest) {
+      if (
+        holderAtRequest !== null &&
+        bearerKeyAtRequest !== undefined &&
+        bearerKeyAtRequest === holderAtRequest.toLowerCase()
+      ) {
         recordGuardianEvidence(moteDb.db, {
           motebitId,
           guardianPublicKey,

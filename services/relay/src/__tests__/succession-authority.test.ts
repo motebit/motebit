@@ -451,29 +451,45 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
   /** A victim with a registered guardian and an EMPTY registry key — the replay's precondition. */
   async function victimWithEmptyKey(guardian: KeyPair): Promise<string> {
     const mid = crypto.randomUUID();
-    const res = await relay.app.request("/api/v1/agents/register", {
-      method: "POST",
-      headers: JSON_AUTH,
-      body: JSON.stringify({
+    const attestation = bytesToHex(
+      await ed25519Sign(
+        new TextEncoder().encode(
+          canonicalJson({
+            action: "guardian_attestation",
+            guardian_public_key: hex(guardian),
+            motebit_id: mid,
+          }),
+        ),
+        guardian.privateKey,
+      ),
+    );
+    const registerBody = (withGuardian: boolean) =>
+      JSON.stringify({
         motebit_id: mid,
         endpoint_url: "http://localhost:9999/mcp",
         capabilities: [],
-        guardian_public_key: hex(guardian),
-        guardian_attestation: bytesToHex(
-          await ed25519Sign(
-            new TextEncoder().encode(
-              canonicalJson({
-                action: "guardian_attestation",
-                guardian_public_key: hex(guardian),
-                motebit_id: mid,
-              }),
-            ),
-            guardian.privateKey,
-          ),
-        ),
-      }),
+        ...(withGuardian
+          ? { guardian_public_key: hex(guardian), guardian_attestation: attestation }
+          : {}),
+      });
+    // A legacy id with no held key can never prove a guardian, so the
+    // register door now refuses to set one (GUARDIAN_REQUIRES_SOVEREIGN_IDENTITY).
+    const refused = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: registerBody(true),
+    });
+    expect(refused.status).toBe(400);
+    const res = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: registerBody(false),
     });
     expect(res.status).toBe(200);
+    // The guardian a relay before that refusal stored for it (main's registry write).
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET guardian_public_key = ? WHERE motebit_id = ?")
+      .run(hex(guardian), mid);
     expect(registryKey(mid)).toBe("");
     return mid;
   }
@@ -517,8 +533,8 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
       aNext.publicKey,
     );
     const s = await stranger();
-    // B's guardian was set by the operator's master token, which proves no
-    // key of B's: the recovery is refused for that before departure is read
+    // B's guardian was set without provenance (no key of B's is provable): the
+    // recovery is refused for that before departure is read
     // (403 GUARDIAN_NOT_PROVEN); either refusal keeps B's history empty.
     expect(await present(s.mid, `${s.mid}-laptop`, s.kp, b, genuine)).toBe(403);
     expect(successions(b)).toBe(0);

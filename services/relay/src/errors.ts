@@ -62,14 +62,40 @@ export class AuthorizationError extends RelayError {
  * recover the identity to a key of its choosing.
  */
 export class GuardianNotProvenError extends RelayError {
-  constructor(options?: ErrorOptions) {
+  /**
+   * `provable`: the identity has a key a request can prove (a holder, or a
+   * sovereign id), so the owner can fix it. `legacy`: a non-sovereign id with
+   * no held key — no request can prove its key, so there is no fix to name
+   * (D2; `guardianEvidencePossible`).
+   */
+  constructor(kind: "provable" | "legacy" = "provable", options?: ErrorOptions) {
     super(
       "GUARDIAN_NOT_PROVEN",
-      "Guardian recovery refused: the guardian on file was not set by a request proven with this identity's current key. To enable recovery, re-set the guardian with the identity key — POST /api/v1/agents/register with guardian_public_key and guardian_attestation, authenticated by a device holding the identity key — then retry.",
+      kind === "legacy"
+        ? "Guardian recovery refused: the guardian on file was not set by a request proven with this identity's current key, and none can be: this is a legacy (non-sovereign) identity with no key the relay holds as its own. Guardian recovery is not available for it — it needs a sovereign identity (the evidence path for legacy identities is not built)."
+        : "Guardian recovery refused: the guardian on file was not set by a request proven with this identity's current key. To enable recovery, re-set the guardian with a request proven by the current identity key — POST /api/v1/agents/register with guardian_public_key and guardian_attestation, authenticated by a device holding the identity key — then retry.",
       403,
       options,
     );
     this.name = "GuardianNotProvenError";
+  }
+}
+
+/**
+ * A guardian set for an identity whose guardian could never carry provenance
+ * — a legacy (non-sovereign) id with no held key, which no request can prove
+ * (D2; `guardianEvidencePossible`). Refused at `/agents/register` rather than
+ * stored as a guardian that can never authorize a recovery.
+ */
+export class GuardianUnprovableError extends RelayError {
+  constructor(options?: ErrorOptions) {
+    super(
+      "GUARDIAN_REQUIRES_SOVEREIGN_IDENTITY",
+      "guardian_public_key refused: this is a legacy (non-sovereign) identity with no key the relay holds as its own, so no request can prove the identity's key and a guardian set for it could never authorize a recovery. Guardian recovery needs a sovereign identity (the evidence path for legacy identities is not built).",
+      400,
+      options,
+    );
+    this.name = "GuardianUnprovableError";
   }
 }
 

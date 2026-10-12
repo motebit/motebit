@@ -691,10 +691,18 @@ describe("identity-keys", () => {
       const k = await generateKeypair();
       const g = await generateKeypair();
       plantDevice(db, "c2", "c2-dev", "");
+      // No key of c2's can ever be proven (legacy id, a device row blocks
+      // E-op), so the register door refuses its guardian outright.
       expect(
         (await registerAsOperator("c2", { public_key: hex(k), ...(await guardianFields("c2", g)) }))
           .status,
-      ).toBe(200);
+      ).toBe(400);
+      expect((await registerAsOperator("c2", { public_key: hex(k) })).status).toBe(200);
+      // A guardian from before that refusal (main's registry write) is unproven.
+      db.prepare("UPDATE agent_registry SET guardian_public_key = ? WHERE motebit_id = ?").run(
+        hex(g),
+        "c2",
+      );
       expect(holderRow(db, "c2")).toBeUndefined();
       expect(departureFrom(db, "c2", hex(k))).toMatchObject({ admissible: true, rung: "registry" });
       const n = await generateKeypair();

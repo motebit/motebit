@@ -207,6 +207,19 @@ const successions = (mid: string): number =>
       .get(mid) as { n: number }
   ).n;
 
+/** A guardian a legacy id got before the register door refused it (a registry write main allowed). */
+const plantPreRefusalGuardian = (mid: string, g: KeyPair): void => {
+  relay.moteDb.db
+    .prepare("UPDATE agent_registry SET guardian_public_key = ? WHERE motebit_id = ?")
+    .run(hex(g), mid);
+};
+const guardianOnFile = (mid: string): string | null =>
+  (
+    relay.moteDb.db
+      .prepare("SELECT guardian_public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(mid) as { guardian_public_key: string | null } | undefined
+  )?.guardian_public_key ?? null;
+
 // ── Setters: each returns the identity, its current key, and the guardian it set ──
 
 interface Planted {
@@ -357,11 +370,13 @@ const SETTERS: Record<
       const guardian = await generateKeypair();
       const mid = crypto.randomUUID();
       expect(await registerSelf(mid, "laptop", k0)).toBe(201);
-      const r = await register(mid, await bearer(mid, "laptop", k0), {
-        public_key: hex(k0),
-        ...(await guardianFields(mid, guardian)),
-      });
-      expect(r.status).toBe(200);
+      expect(
+        (await register(mid, await bearer(mid, "laptop", k0), { public_key: hex(k0) })).status,
+      ).toBe(200);
+      // The register door now REFUSES this guardian (below, "legacy ids"), so
+      // it can only be on file from before that refusal: planted as a
+      // pre-refusal registry guardian.
+      plantPreRefusalGuardian(mid, guardian);
       expect(servedKey(mid)).toBeNull();
       return { mid, k0, guardian, proven: false };
     },
@@ -685,5 +700,207 @@ describe("differential: every non-guardian-recovery request answers as on origin
       guardian_attestation: "00".repeat(64),
     });
     expect(r.status).toBe(400);
+  });
+});
+
+/**
+ * A legacy (non-sovereign) id with no held key can never get guardian
+ * evidence: `holderKeyOf` is null for it and `recordFirstIdentityKey`
+ * refuses its id (D2 — the evidence path for legacy ids is not built). So the
+ * register door refuses to set its guardian, and a recovery under one set
+ * before that refusal names no fix that cannot work. Prod measured Q4 = 0
+ * (no guardians at all), so no existing user is affected by the refusal.
+ */
+describe("legacy ids: a guardian that can never be proven is refused, and the refusal says so", () => {
+  it("legacy id, its own device token sets a guardian → 400 GUARDIAN_REQUIRES_SOVEREIGN_IDENTITY, nothing stored, recorded", async () => {
+    const k0 = await generateKeypair();
+    const mid = crypto.randomUUID();
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    const g = await generateKeypair();
+    const r = await register(mid, await bearer(mid, "laptop", k0), {
+      public_key: hex(k0),
+      ...(await guardianFields(mid, g)),
+    });
+    expect(r.status).toBe(400);
+    const body = r.body as { code?: string; error?: string } | null;
+    expect(body?.code).toBe("GUARDIAN_REQUIRES_SOVEREIGN_IDENTITY");
+    expect(String(body?.error)).toMatch(/legacy/i);
+    expect(String(body?.error)).toMatch(/sovereign identity/i);
+    // Refused before any write: no registry row, no guardian, no holder.
+    expect(registryKey(mid)).toBeNull();
+    expect(guardianOnFile(mid)).toBeNull();
+    expect(servedKey(mid)).toBeNull();
+    const ev = relay.moteDb.db
+      .prepare("SELECT reason FROM relay_auth_events WHERE reason = 'register:guardian_unprovable'")
+      .all();
+    expect(ev.length).toBe(1);
+  });
+
+  it("legacy id with a device row, the master token sets a guardian (no E-op possible) → 400", async () => {
+    const k0 = await generateKeypair();
+    const mid = crypto.randomUUID();
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    const g = await generateKeypair();
+    const r = await register(mid, AUTH_HEADER.Authorization, {
+      public_key: hex(k0),
+      ...(await guardianFields(mid, g)),
+    });
+    expect(r.status).toBe(400);
+    expect((r.body as { code?: string } | null)?.code).toBe("GUARDIAN_REQUIRES_SOVEREIGN_IDENTITY");
+    expect(guardianOnFile(mid)).toBeNull();
+  });
+
+  it("legacy id, register WITHOUT a guardian still answers 200 (only the guardian is refused)", async () => {
+    const k0 = await generateKeypair();
+    const mid = crypto.randomUUID();
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    const r = await register(mid, await bearer(mid, "laptop", k0), { public_key: hex(k0) });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ registered: true, motebit_id: mid });
+  });
+
+  it("legacy service id the operator registers with a key (E-op in the same request) may still set a guardian: 200", async () => {
+    const k0 = await generateKeypair();
+    const mid = `svc-${crypto.randomUUID()}`;
+    const g = await generateKeypair();
+    const r = await register(mid, AUTH_HEADER.Authorization, {
+      public_key: hex(k0),
+      ...(await guardianFields(mid, g)),
+    });
+    expect(r.status).toBe(200);
+    expect(servedKey(mid)).toBe(hex(k0));
+    expect(guardianOnFile(mid)).toBe(hex(g));
+  });
+
+  it("legacy id, recovery under a pre-refusal guardian → 403 GUARDIAN_NOT_PROVEN with the legacy wording (no re-set instruction)", async () => {
+    const k0 = await generateKeypair();
+    const mid = crypto.randomUUID();
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    expect(
+      (await register(mid, await bearer(mid, "laptop", k0), { public_key: hex(k0) })).status,
+    ).toBe(200);
+    const g = await generateKeypair();
+    plantPreRefusalGuardian(mid, g);
+    const k1 = await generateKeypair();
+    const rec = await signGuardianRecoverySuccession(
+      g.privateKey,
+      k1.privateKey,
+      k0.publicKey,
+      k1.publicKey,
+    );
+    const res = await rotateKey(mid, await stranger(), rec);
+    expect(res.status).toBe(403);
+    expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expect(String(res.body?.error)).toMatch(/legacy/i);
+    expect(String(res.body?.error)).toMatch(/not available/i);
+    expect(String(res.body?.error)).not.toMatch(/re-set/i);
+    expect(registryKey(mid)).toBe(hex(k0));
+    expect(successions(mid)).toBe(0);
+  });
+
+  it("legacy id, the same recovery through the register door's succession branch → 403 with the legacy wording", async () => {
+    const k0 = await generateKeypair();
+    const mid = crypto.randomUUID();
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    expect(
+      (await register(mid, await bearer(mid, "laptop", k0), { public_key: hex(k0) })).status,
+    ).toBe(200);
+    const g = await generateKeypair();
+    plantPreRefusalGuardian(mid, g);
+    const k1 = await generateKeypair();
+    const succession = await signGuardianRecoverySuccession(
+      g.privateKey,
+      k1.privateKey,
+      k0.publicKey,
+      k1.publicKey,
+    );
+    const res = await register(mid, AUTH_HEADER.Authorization, {
+      public_key: hex(k1),
+      succession,
+    });
+    expect(res.status).toBe(403);
+    const body = res.body as { code?: string; error?: string } | null;
+    expect(body?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expect(String(body?.error)).toMatch(/legacy/i);
+    expect(String(body?.error)).not.toMatch(/re-set/i);
+    expect(successions(mid)).toBe(0);
+  });
+
+  it("a provable identity's refusal keeps the fix: re-set the guardian with a request proven by the current identity key", async () => {
+    const k0 = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k0));
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    const kd = await generateKeypair();
+    const paired = await pairDevice(mid, "laptop", k0, kd);
+    const g = await generateKeypair();
+    expect(
+      (await register(mid, await bearer(mid, paired, kd), { ...(await guardianFields(mid, g)) }))
+        .status,
+    ).toBe(200);
+    const k1 = await generateKeypair();
+    const rec = await signGuardianRecoverySuccession(
+      g.privateKey,
+      k1.privateKey,
+      k0.publicKey,
+      k1.publicKey,
+    );
+    const res = await rotateKey(mid, await stranger(), rec);
+    expect(res.status).toBe(403);
+    expect(String(res.body?.error)).toMatch(
+      /re-set the guardian with a request proven by the current identity key/,
+    );
+    expect(String(res.body?.error)).not.toMatch(/legacy/i);
+  });
+});
+
+describe("the bearer's key is the one the middleware verified, never re-read in the handler", () => {
+  it("a device row rewritten to the identity key between auth and handler does not make a paired device's guardian proven", async () => {
+    const k0 = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k0));
+    expect(await registerSelf(mid, "laptop", k0)).toBe(201);
+    const kd = await generateKeypair();
+    const paired = await pairDevice(mid, "laptop", k0, kd);
+    const g = await generateKeypair();
+    const auth = await bearer(mid, paired, kd);
+    const fields = await guardianFields(mid, g);
+
+    // The first read of the paired device's row is the middleware's (it
+    // verifies the token under kd). Right after it returns, the row is
+    // rewritten to the identity key k0 — the window a pairing update-key or
+    // a rotation landing mid-request opens. Any later read sees k0.
+    const storage = relay.moteDb.identityStorage as unknown as {
+      loadDevice: (id: string) => Promise<{ public_key: string } | null>;
+    };
+    const original = storage.loadDevice.bind(storage);
+    let rewritten = false;
+    storage.loadDevice = async (id: string) => {
+      const row = await original(id);
+      if (id === paired && !rewritten) {
+        rewritten = true;
+        relay.moteDb.db
+          .prepare("UPDATE devices SET public_key = ? WHERE device_id = ?")
+          .run(hex(k0), paired);
+      }
+      return row;
+    };
+    try {
+      expect((await register(mid, auth, fields)).status).toBe(200);
+    } finally {
+      storage.loadDevice = original;
+    }
+    expect(rewritten).toBe(true);
+
+    // The token was verified under kd, so the guardian has no provenance.
+    const k1 = await generateKeypair();
+    const rec = await signGuardianRecoverySuccession(
+      g.privateKey,
+      k1.privateKey,
+      k0.publicKey,
+      k1.publicKey,
+    );
+    const res = await rotateKey(mid, await stranger(), rec);
+    expect(res.status).toBe(403);
+    expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expect(servedKey(mid)).toBe(hex(k0));
   });
 });
