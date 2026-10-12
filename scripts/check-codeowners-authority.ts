@@ -27,7 +27,14 @@
  *      gate reads by path (the R4 policy gate, the R4 tool registration, the
  *      sole grant producer, the granted-spend execute path). Read from the
  *      gate's source by AST, never copied.
- *   4. CODEOWNERS itself and this gate's own file must be owned (a gate that
+ *   4. The payment-site scan (`derivePaymentSites`) — every non-test `src/`
+ *      file in the workspace that CALLS or DEFINES a payment primitive
+ *      (`PAYMENT_PRIMITIVES`: P2P price/build/submit, on-chain broadcast,
+ *      rail out-flow, x402 payer; a receiver-qualified `rail.withdraw` /
+ *      `wallet.send`; any class implementing a rail interface). Found by AST
+ *      structure, not a file list, so a money-moving file can no longer merge
+ *      on CI alone by sitting outside a hand-maintained scope.
+ *   5. CODEOWNERS itself and this gate's own file must be owned (a gate that
  *      can be weakened without the owner is not a gate), and no rule may be a
  *      catch-all.
  *
@@ -213,6 +220,166 @@ export function deriveMoneyAuthorityFiles(source: string): string[] {
   return [...files].sort();
 }
 
+/**
+ * The payment primitives a payment site is recognised by. A file that CALLS or
+ * DEFINES one of these can price, build, sign or broadcast a payment, so it
+ * must be founder-owned. Names, not paths: a file added tomorrow that calls
+ * `buildP2pPayment` is caught without anyone editing a list of files.
+ *
+ * Aperture (stated in the gate's output): matched by NAME in the AST — a call
+ * `f(…)` / `x.f(…)`, or a function/method/property declaration named `f`; a
+ * receiver-qualified call (`rail.withdraw(…)`, `wallet.send(…)`); plus any
+ * class that `implements` a rail interface. It cannot see a primitive
+ * reached through a computed property, an aliased import, or a dynamic
+ * dispatch with a different name, and it scans only `src/` of each workspace
+ * package (package `scripts/` dirs and tests are outside it).
+ */
+export const PAYMENT_PRIMITIVES: ReadonlyMap<string, string> = new Map([
+  // P2P payment: priced, built, proven, submitted (wallet-solana + runtime).
+  ["resolveP2pPaymentRequest", "prices a P2P payment"],
+  ["resolveAndSubmitP2pDelegation", "prices + submits a P2P-paid delegation"],
+  ["buildP2pPayment", "builds a signed P2P payment transaction"],
+  ["buildP2pPaymentProof", "builds a P2P payment proof"],
+  // On-chain broadcast (Solana web3.js / EVM JSON-RPC).
+  ["sendRawTransaction", "broadcasts a signed transaction"],
+  ["sendTransaction", "signs + broadcasts a transaction"],
+  ["sendAndConfirmTransaction", "signs + broadcasts a transaction"],
+  ["sendAndConfirmRawTransaction", "broadcasts a signed transaction"],
+  ["eth_sendRawTransaction", "broadcasts a signed EVM transaction"],
+  // Rail out-flow (settlement-rails / wallet-solana).
+  ["sendBatch", "sovereign-rail batch send"],
+  ["withdrawBatch", "rail batch withdrawal"],
+  // x402 payer.
+  ["wrapFetchWithPayment", "x402 payer (signs payment headers)"],
+  ["createPaymentHeader", "x402 payer (signs a payment header)"],
+]);
+
+/**
+ * Primitives whose bare name is too common to match alone (`send` is also a
+ * WebSocket/MCP send; `withdraw` is also the relay-client's withdrawal REQUEST,
+ * which the owned relay route decides). These match only as a CALL on a
+ * receiver whose name says rail or wallet (`rail.withdraw(…)`, `wallet.send(…)`);
+ * their definitions are caught by `implements <rail interface>` instead.
+ */
+export const RECEIVER_QUALIFIED_PRIMITIVES: ReadonlyMap<string, RegExp> = new Map([
+  ["send", /rail|wallet/i],
+  ["withdraw", /rail|wallet/i],
+]);
+
+/** Rail interfaces whose implementations move money (`implements X`). */
+export const RAIL_INTERFACES: readonly string[] = [
+  "SovereignRail",
+  "GuestRail",
+  "WithdrawableGuestRail",
+];
+
+/** The receiver's terminal name in `a.b.c.f(…)` → `c`, else null. */
+function receiverName(expr: ts.Expression): string | null {
+  const e = unwrapAs(expr);
+  if (!ts.isPropertyAccessExpression(e) && !ts.isElementAccessExpression(e)) return null;
+  const r = unwrapAs(e.expression);
+  if (ts.isIdentifier(r)) return r.text;
+  if (ts.isPropertyAccessExpression(r)) return r.name.text;
+  if (r.kind === ts.SyntaxKind.ThisKeyword) return "this";
+  return null;
+}
+
+/** Name of a call's callee (`f(…)`, `x.f(…)`, `x?.f(…)`, `x["f"](…)`), else null. */
+function calleeName(expr: ts.Expression): string | null {
+  const e = unwrapAs(expr);
+  if (ts.isIdentifier(e)) return e.text;
+  if (ts.isPropertyAccessExpression(e)) return e.name.text;
+  if (ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression)) {
+    return e.argumentExpression.text;
+  }
+  return null;
+}
+
+/**
+ * The payment primitives a source file calls or defines (by the rules above).
+ * Pure over the file text; `primitives` / `rails` are injectable for tests.
+ */
+export function paymentPrimitivesIn(
+  source: string,
+  fileName = "f.ts",
+  primitives: ReadonlyMap<string, string> = PAYMENT_PRIMITIVES,
+  rails: readonly string[] = RAIL_INTERFACES,
+  qualified: ReadonlyMap<string, RegExp> = RECEIVER_QUALIFIED_PRIMITIVES,
+): string[] {
+  const kind = fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, kind);
+  const hits = new Set<string>();
+  const declName = (n: ts.Node): string | null => {
+    if (
+      (ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n) || ts.isMethodSignature(n)) &&
+      n.name !== undefined &&
+      (ts.isIdentifier(n.name) || ts.isStringLiteral(n.name))
+    ) {
+      return n.name.text;
+    }
+    if (
+      (ts.isVariableDeclaration(n) || ts.isPropertyAssignment(n) || ts.isPropertyDeclaration(n)) &&
+      (ts.isIdentifier(n.name) || ts.isStringLiteral(n.name)) &&
+      n.initializer !== undefined &&
+      (ts.isArrowFunction(unwrapAs(n.initializer)) ||
+        ts.isFunctionExpression(unwrapAs(n.initializer)))
+    ) {
+      return n.name.text;
+    }
+    return null;
+  };
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const name = calleeName(n.expression);
+      if (name !== null && primitives.has(name)) hits.add(name);
+      const qualifier = name === null ? undefined : qualified.get(name);
+      const recv = receiverName(n.expression);
+      if (qualifier !== undefined && recv !== null && qualifier.test(recv)) {
+        hits.add(`${recv}.${name}`);
+      }
+    }
+    // eth_sendRawTransaction travels as a JSON-RPC method string.
+    if (ts.isStringLiteralLike(n) && primitives.has(n.text) && n.text.startsWith("eth_")) {
+      hits.add(n.text);
+    }
+    const d = declName(n);
+    if (d !== null && primitives.has(d)) hits.add(d);
+    if (ts.isClassDeclaration(n) || ts.isClassExpression(n)) {
+      for (const h of n.heritageClauses ?? []) {
+        if (h.token !== ts.SyntaxKind.ImplementsKeyword) continue;
+        for (const t of h.types) {
+          const name = calleeName(t.expression);
+          if (name !== null && rails.includes(name)) hits.add(`implements ${name}`);
+        }
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return [...hits].sort();
+}
+
+/** Every non-test `src/` source file in the workspace that is a payment site. */
+export function derivePaymentSites(root = ROOT): {
+  sites: { path: string; primitives: string[] }[];
+  scanned: number;
+} {
+  const sites: { path: string; primitives: string[] }[] = [];
+  let scanned = 0;
+  for (const dir of [...workspacePackageDirs(root).values()].sort()) {
+    for (const abs of walk(resolve(root, dir, "src"))) {
+      const p = relative(root, abs).split("\\").join("/");
+      if (!/\.(?:ts|tsx|mts|cts)$/.test(p) || /\.d\.ts$/.test(p) || isTestPath(p)) continue;
+      scanned++;
+      const hits = paymentPrimitivesIn(readFileSync(abs, "utf-8"), p);
+      if (hits.length > 0) sites.push({ path: p, primitives: hits });
+    }
+  }
+  if (scanned === 0) throw new Error("payment-site scan read no workspace src/ files");
+  if (sites.length === 0) throw new Error("payment-site scan found no payment primitive anywhere");
+  return { sites, scanned };
+}
+
 /** Every path that must be owned, with the source of truth that requires it. */
 export function deriveRequirements(root = ROOT): Requirement[] {
   const reqs: Requirement[] = [];
@@ -240,6 +407,12 @@ export function deriveRequirements(root = ROOT): Requirement[] {
   }
   for (const f of deriveMoneyAuthorityFiles(readFileSync(resolve(root, MONEY_GATE), "utf-8"))) {
     reqs.push({ path: f, source: `${MONEY_GATE} scope` });
+  }
+  for (const site of derivePaymentSites(root).sites) {
+    reqs.push({
+      path: site.path,
+      source: `payment-site scan — calls/defines ${site.primitives.join(", ")}`,
+    });
   }
   reqs.push({ path: CODEOWNERS_PATH, source: "the ownership file itself" });
   reqs.push({ path: SELF, source: "this gate" });
@@ -291,12 +464,13 @@ function main(): void {
     });
   }
   const { violations, checked } = evaluate(rules, reqs);
+  const payment = derivePaymentSites();
   violations.unshift(...errors.map((e) => `${CODEOWNERS_PATH} ${e}`));
   if (violations.length > 0) {
     failWithRepair({
       invariant: `${violations.length} authority path(s) are not owned by ${REQUIRED_OWNER} in ${CODEOWNERS_PATH}, or the file over-reaches`,
-      canonical: `${CODEOWNERS_PATH} (required paths derive from scripts/money-identity-path.ts, ${WRITERS_GATE}, ${MONEY_GATE})`,
-      fix: `add a rule owned by ${REQUIRED_OWNER} to ${CODEOWNERS_PATH} for each path below (a registry package gets \`/<dir>/src/ ${REQUIRED_OWNER}\` and \`/<dir>/package.json ${REQUIRED_OWNER}\`), placed so no later rule overrides it (last match wins); remove any catch-all \`*\` line.`,
+      canonical: `${CODEOWNERS_PATH} (required paths derive from scripts/money-identity-path.ts, ${WRITERS_GATE}, ${MONEY_GATE}, and the payment-site scan in scripts/check-codeowners-authority.ts)`,
+      fix: `add a rule owned by ${REQUIRED_OWNER} to ${CODEOWNERS_PATH} for each path below (a registry package gets \`/<dir>/src/ ${REQUIRED_OWNER}\` and \`/<dir>/package.json ${REQUIRED_OWNER}\`; a payment site gets its own file line with a why-comment above it in section (C)), placed so no later rule overrides it (last match wins); remove any catch-all \`*\` line. Never narrow PAYMENT_PRIMITIVES to make a site disappear.`,
       sites: violations,
       doctrine: "docs/drift-defenses.md (check-codeowners-authority)",
     });
@@ -304,7 +478,8 @@ function main(): void {
   console.log(
     `✓ check-codeowners-authority — ${checked} authority path(s) owned by ${REQUIRED_OWNER} across ${rules.length} CODEOWNERS rule(s): ` +
       `${MONEY_IDENTITY_PATH.size} registry packages (src/ + package.json), the identity-authority writers gate's authority-table write sites, ` +
-      `the money-authority gate's scope, CODEOWNERS and this gate; no catch-all.`,
+      `the money-authority gate's scope, ${payment.sites.length} payment site(s) found by scanning ${payment.scanned} workspace src/ file(s) for ${PAYMENT_PRIMITIVES.size + RECEIVER_QUALIFIED_PRIMITIVES.size} payment primitive name(s) + ${RAIL_INTERFACES.length} rail interface(s), CODEOWNERS and this gate; no catch-all.\n` +
+      `  aperture: name-matched calls/definitions in src/ only — blind to aliased imports, computed or renamed dispatch, and package scripts/ outside src/.`,
   );
 }
 

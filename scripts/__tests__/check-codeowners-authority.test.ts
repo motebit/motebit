@@ -12,8 +12,10 @@ import { describe, expect, it } from "vitest";
 import {
   deriveAuthorityWriterFiles,
   deriveMoneyAuthorityFiles,
+  derivePaymentSites,
   deriveRequirements,
   evaluate,
+  paymentPrimitivesIn,
   type Requirement,
 } from "../check-codeowners-authority.js";
 import { isCatchAll, ownersOf, parseCodeowners, patternToRegex } from "../lib/codeowners.js";
@@ -135,12 +137,58 @@ describe("derivations read the existing gates, not a list of their own", () => {
     ]);
     expect(() => deriveMoneyAuthorityFiles("const x = 1;")).toThrow();
   });
-  it("the live derivation covers all three sources", () => {
+  it("the live derivation covers all four sources", () => {
     const paths = deriveRequirements().map((r) => r.path);
     expect(paths).toContain("packages/virtual-accounts/package.json");
     expect(paths).toContain("services/relay/src/identity-keys.ts");
     expect(paths).toContain("packages/policy/src/policy-gate.ts");
+    expect(paths).toContain("packages/runtime/src/relay-delegation.ts");
     expect(paths.some((p) => p.includes("__tests__"))).toBe(false);
+  });
+});
+
+describe("payment-site scan — derived from structure, not a file list", () => {
+  it("finds calls and definitions of payment primitives", () => {
+    expect(paymentPrimitivesIn("await buildP2pPayment(x);")).toEqual(["buildP2pPayment"]);
+    expect(paymentPrimitivesIn("conn.sendRawTransaction(tx.serialize());")).toEqual([
+      "sendRawTransaction",
+    ]);
+    expect(paymentPrimitivesIn("export async function resolveP2pPaymentRequest() {}")).toEqual([
+      "resolveP2pPaymentRequest",
+    ]);
+    expect(paymentPrimitivesIn("const wrapFetchWithPayment = () => 1;")).toEqual([
+      "wrapFetchWithPayment",
+    ]);
+    expect(paymentPrimitivesIn('rpc("eth_sendRawTransaction", [raw]);')).toEqual([
+      "eth_sendRawTransaction",
+    ]);
+    expect(paymentPrimitivesIn("class R implements Foo, SovereignRail {}")).toEqual([
+      "implements SovereignRail",
+    ]);
+  });
+  it("qualifies generic names by receiver: rail/wallet only", () => {
+    expect(paymentPrimitivesIn("await this.config.walletRail.send(to, amt);")).toEqual([
+      "walletRail.send",
+    ]);
+    expect(paymentPrimitivesIn("await rail.withdraw(a, b);")).toEqual(["rail.withdraw"]);
+    expect(paymentPrimitivesIn("ws.send(msg); client.withdraw(id, req);")).toEqual([]);
+  });
+  it("ignores imports, types and comments that merely mention a primitive", () => {
+    const src = [
+      'import { buildP2pPayment } from "@motebit/wallet-solana";',
+      "type T = typeof buildP2pPayment;",
+      "// buildP2pPayment(x) is called elsewhere",
+      'export { resolveAndSubmitP2pDelegation } from "./relay-delegation.js";',
+    ].join("\n");
+    expect(paymentPrimitivesIn(src)).toEqual([]);
+  });
+  it("the live scan reads the workspace and names the P2P build/broadcast path", () => {
+    const { sites, scanned } = derivePaymentSites();
+    expect(scanned).toBeGreaterThan(500);
+    const paths = sites.map((s) => s.path);
+    expect(paths).toContain("packages/runtime/src/relay-delegation.ts");
+    expect(paths).toContain("packages/wallet-solana/src/rail.ts");
+    expect(paths.some((p) => /__tests__|\.test\.tsx?$/.test(p))).toBe(false);
   });
 });
 
@@ -159,6 +207,28 @@ describe("committed CODEOWNERS", () => {
     const v = evaluate(parseCodeowners(tampered).rules, reqs).violations;
     expect(v.length).toBeGreaterThan(0);
     expect(v.every((s) => s.startsWith("packages/virtual-accounts/src/"))).toBe(true);
+  });
+
+  it("tamper: removing the relay-delegation.ts line turns the gate red", () => {
+    const tampered = COMMITTED.split("\n")
+      .filter((l) => !l.startsWith("/packages/runtime/src/relay-delegation.ts "))
+      .join("\n");
+    expect(tampered).not.toBe(COMMITTED);
+    const v = evaluate(parseCodeowners(tampered).rules, reqs).violations;
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatch(/^packages\/runtime\/src\/relay-delegation\.ts — .*payment-site scan/);
+  });
+
+  it("tamper: a new unowned file calling buildP2pPayment turns the gate red", () => {
+    const path = "packages/runtime/src/new-payer.ts";
+    const hits = paymentPrimitivesIn("export const pay = () => buildP2pPayment(req);", path);
+    expect(hits).toEqual(["buildP2pPayment"]);
+    const v = evaluate(parseCodeowners(COMMITTED).rules, [
+      ...reqs,
+      { path, source: `payment-site scan — calls/defines ${hits.join(", ")}` },
+    ]).violations;
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatch(/new-payer\.ts — not covered/);
   });
 
   it("tamper: adding a catch-all turns the gate red", () => {

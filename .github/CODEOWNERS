@@ -213,6 +213,15 @@
 /packages/ai-core/src/loop.ts @hakimlabs
 /packages/mcp-server/src/index.ts @hakimlabs
 /packages/mcp-server/src/service.ts @hakimlabs
+# Payment build/broadcast sites (check-codeowners-authority payment-site scan).
+# prices, builds (buildP2pPayment) and submits P2P-paid delegations
+/packages/runtime/src/relay-delegation.ts @hakimlabs
+# sovereign pay-forward: sends the wallet-rail payment before executing
+/packages/planner/src/sovereign-delegation-adapter.ts @hakimlabs
+# `motebit delegate` — prices + broadcasts a P2P payment via the runtime
+/apps/cli/src/subcommands/delegate.ts @hakimlabs
+# `motebit smoke x402` — signs real x402 payments from an operator-funded EOA
+/apps/cli/src/subcommands/smoke-x402.ts @hakimlabs
 
 # CLI — direct task doors and the grant subcommand.
 # daemon task doors
