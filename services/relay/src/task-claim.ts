@@ -66,6 +66,7 @@
 import { AgentTaskStatus } from "@motebit/sdk";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { ConnectedDevice } from "./websocket.js";
+import { pinRefusesClaim } from "./task-pin.js";
 
 /** How long a leased claim holds without a renewal. */
 export const TASK_CLAIM_LEASE_MS = 30_000;
@@ -200,6 +201,12 @@ export class TaskClaims {
     const entry = taskQueue.get(taskId);
     if (!entry || entry.task.motebit_id !== motebitId) {
       return { granted: false, reason: "Task not found" };
+    }
+    // A pinned task is claimed by its target's bodies or by no one
+    // (task-pin.ts) — never by the path agent of a task pinned elsewhere
+    // (a P2P delegation's own socket).
+    if (pinRefusesClaim(entry, motebitId)) {
+      return { granted: false, reason: "not_pinned_executor" };
     }
     if (entry.task.status !== AgentTaskStatus.Pending || entry.receipt != null) {
       return { granted: false, reason: "already_claimed" };

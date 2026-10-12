@@ -176,9 +176,11 @@ function x402SettlementRef(
   };
 }
 import { isGrantRevokedBy } from "./delegation-revocations.js";
+import { isKnownIdentity } from "./identity-revocation.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 import { identityGuardianFor, verificationKeyFor } from "./identity-keys.js";
 import type { ReconcileKeyConnections } from "./connection-ports.js";
+import { candidatesUnderPin, pinRefusesClaim, pinnedSelection, taskPinOf } from "./task-pin.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -273,6 +275,14 @@ export type TaskQueueEntry = {
   };
   /** Target agent for p2p tasks (pinned routing). */
   target_agent?: string;
+  /**
+   * The ONE executor this task may have (task-pin.ts), stamped at admission
+   * from the submission: a P2P `target_agent`, an explicit `target_agent`, or
+   * a path agent that is not the submitter (`motebit delegate --target`).
+   * Absent ⇒ unpinned (the relay chooses). Every routing phase, presentation,
+   * claim, answer and settlement attribution reads it through task-pin.ts.
+   */
+  pinned_executor?: string;
   /**
    * What P2P ADMISSION decided about the worker leg (#959) — stamped by the
    * admission branch that accepted the proof, never inferred from the proof's
@@ -3088,6 +3098,24 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     // (`submissionTerms`: the verified caller, else a non-empty `submitted_by`.)
     const submittedBy = terms.submitter;
+    // The executor this submission pins, if any (task-pin.ts) — read ONCE,
+    // from the same terms that priced it, and stamped on the entry. A pinned
+    // task is executed by that target or by no one: every routing phase below
+    // narrows its candidates to it, and the claim, answer and settlement
+    // doors refuse anyone else.
+    const pin = taskPinOf({
+      submitter: submittedBy,
+      submitterIsIdentity:
+        submittedBy != null &&
+        (submittedBy === callerMotebitId || isKnownIdentity(moteDb.db, submittedBy)),
+      p2p: terms.p2p,
+      routedTo: terms.routedTo,
+      pathAgentId: motebitId,
+      explicitTarget:
+        typeof body.target_agent === "string" && body.target_agent !== ""
+          ? body.target_agent
+          : null,
+    });
 
     // A P2P proof already bound to an admitted task (#918). The refusal names
     // that task only to a caller entitled to see it (`mayDiscloseAdmittedTask`).
@@ -4105,6 +4133,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         p2p_payment_proof: p2pPaymentProof,
         p2p_admission: p2pAdmission,
         target_agent: body.target_agent,
+        ...(pin != null ? { pinned_executor: pin } : {}),
         grant_id: body.grant_id,
       };
       // One task, one body (task-claim.ts): the submitter's chosen
@@ -4234,7 +4263,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
             });
             return;
           }
-          if (released != null) {
+          // A pinned task is re-presented only to its target's bodies.
+          if (released != null && !pinRefusesClaim(released, released.task.motebit_id)) {
             const reqCaps = released.task.required_capabilities ?? [];
             routeToSockets(
               connections.get(released.task.motebit_id),
@@ -4502,11 +4532,19 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         // round-tripped forever (submit → route-to-self → execute →
         // sub-delegate again). Deliberate self-delegation stays available
         // via explicit target_agent pinning — that path never ranks.
-        if (submittedBy) excludeSet.add(submittedBy);
-        const eligibleProfiles =
+        // A pinned self-delegation (`target_agent` = the submitter) is the
+        // one place the submitter IS the executor — never excluded from its
+        // own pin.
+        if (submittedBy && submittedBy !== pin) excludeSet.add(submittedBy);
+        // Pinned: the target or nothing (task-pin.ts) — the ranked set never
+        // holds another worker, local or federated.
+        const eligibleProfiles = candidatesUnderPin(
+          pin,
           excludeSet.size > 0
             ? multiCapProfiles.filter((p) => !excludeSet.has(p.motebit_id))
-            : multiCapProfiles;
+            : multiCapProfiles,
+          (p) => p.motebit_id,
+        );
 
         // Phase 4: Fetch federated candidates from active peer relays (best-effort, non-blocking)
         let federatedCandidates: {
@@ -4548,9 +4586,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         }
 
         // Merge local and federated candidates before ranking
-        const federatedProfiles = federatedCandidates
-          .filter((fc) => !excludeSet.has(fc.profile.motebit_id))
-          .map((fc) => fc.profile);
+        const federatedProfiles = candidatesUnderPin(
+          pin,
+          federatedCandidates
+            .filter((fc) => !excludeSet.has(fc.profile.motebit_id))
+            .map((fc) => fc.profile),
+          (p) => p.motebit_id,
+        );
         const allProfiles = [...eligibleProfiles, ...federatedProfiles];
 
         if (allProfiles.length > 0) {
@@ -4595,22 +4637,35 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
           // one guardian truth (§5a A3), not a registry read of its own.
           const callerGuardian = identityGuardianFor(moteDb.db, callerMotebitId ?? motebitId);
 
-          const ranked = explainedRankCandidates(
-            asMotebitId(callerMotebitId ?? motebitId),
-            allProfiles,
-            {
-              ...requirements,
-              required_capabilities: requiredCaps,
-            },
-            {
-              maxCandidates: 10,
-              explorationWeight,
-              peerEdges: allPeerEdges,
-              compositeFunction,
-              callerGuardianPublicKey: callerGuardian ?? undefined,
-            },
-          );
-          const selected = ranked.filter((r) => r.selected && r.composite > 0);
+          // A pin is a deterministic override, never a ranking input
+          // (first-person-worker-routing.md): pinned ⇒ the target, routed on
+          // its own route, or nothing — no score can drop it or substitute
+          // another. Unpinned ⇒ the ranking, as before.
+          const selected: Array<{
+            motebit_id: string;
+            composite: number;
+            sub_scores: Record<string, number>;
+            routing_paths: string[][];
+            alternatives_considered: number;
+            trust_evidence_path?: string[];
+          }> =
+            pin != null
+              ? pinnedSelection(pin, allProfiles)
+              : explainedRankCandidates(
+                  asMotebitId(callerMotebitId ?? motebitId),
+                  allProfiles,
+                  {
+                    ...requirements,
+                    required_capabilities: requiredCaps,
+                  },
+                  {
+                    maxCandidates: 10,
+                    explorationWeight,
+                    peerEdges: allPeerEdges,
+                    compositeFunction,
+                    callerGuardianPublicKey: callerGuardian ?? undefined,
+                  },
+                ).filter((r) => r.selected && r.composite > 0);
 
           if (selected.length > 0) {
             // Capture routing provenance from the top-ranked agent for the response
@@ -4833,18 +4888,36 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       const capFilter = requiredCaps[0]!;
       // Self-exclusion (#459): same rule as the scored path — the fallback
       // must never route a task back to its own submitter (the second half
-      // of the 2026-07-29 routing cycle). Pinned self-delegation never
-      // reaches this query.
-      const httpCandidate = moteDb.db
-        .prepare(
-          `SELECT r.motebit_id, r.endpoint_url FROM agent_registry r
+      // of the 2026-07-29 routing cycle).
+      // Pinned: the query asks for the target alone (a self-pin is not
+      // self-excluded), and the row still passes the one pin filter
+      // (task-pin.ts) — the target or nothing. Unpinned: main's query.
+      const httpRow = (
+        pin == null
+          ? moteDb.db
+              .prepare(
+                `SELECT r.motebit_id, r.endpoint_url FROM agent_registry r
            WHERE r.expires_at > ? AND r.endpoint_url != '' AND r.${ON_SHELF_PREDICATE}
              AND r.motebit_id != ?
              AND EXISTS (SELECT 1 FROM json_each(r.capabilities) WHERE value = ?)
            LIMIT 1`,
-        )
-        .get(now, submittedBy ?? "", capFilter) as
-        { motebit_id: string; endpoint_url: string } | undefined;
+              )
+              .get(now, submittedBy ?? "", capFilter)
+          : moteDb.db
+              .prepare(
+                `SELECT r.motebit_id, r.endpoint_url FROM agent_registry r
+           WHERE r.motebit_id = ? AND r.expires_at > ? AND r.endpoint_url != ''
+             AND r.${ON_SHELF_PREDICATE}
+             AND EXISTS (SELECT 1 FROM json_each(r.capabilities) WHERE value = ?)
+           LIMIT 1`,
+              )
+              .get(pin, now, capFilter)
+      ) as { motebit_id: string; endpoint_url: string } | undefined;
+      const httpCandidate = candidatesUnderPin(
+        pin,
+        httpRow != null ? [httpRow] : [],
+        (r) => r.motebit_id,
+      )[0];
       if (httpCandidate?.endpoint_url?.trim()) {
         await presentViaMcp(httpCandidate.endpoint_url, httpCandidate.motebit_id);
         routed = true;

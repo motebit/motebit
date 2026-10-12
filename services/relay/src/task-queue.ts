@@ -541,6 +541,7 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       settlement_mode: entry.settlement_mode,
       p2p_payment_proof: entry.p2p_payment_proof,
       target_agent: entry.target_agent,
+      pinned_executor: entry.pinned_executor,
       p2p_admission: entry.p2p_admission,
       claim_lease: entry.claim_lease,
       expired_unclaimed: entry.expired_unclaimed,
@@ -571,6 +572,7 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       p2p_payment_proof:
         (stored.p2p_payment_proof as TaskQueueEntry["p2p_payment_proof"]) ?? undefined,
       target_agent: (stored.target_agent as string) ?? undefined,
+      pinned_executor: (stored.pinned_executor as string) ?? undefined,
       p2p_admission: (stored.p2p_admission as TaskQueueEntry["p2p_admission"]) ?? undefined,
       claim_lease: (stored.claim_lease as TaskQueueEntry["claim_lease"]) ?? undefined,
       expired_unclaimed:

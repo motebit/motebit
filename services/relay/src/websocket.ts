@@ -29,6 +29,7 @@ import { sendToEach, WS_OPEN } from "./ws-send.js";
 import { readHeldEvents, tryHoldReceipt } from "./sync-hold-receipt.js";
 import type { RelayIdentity } from "./federation.js";
 import { recoverableOnReconnect } from "./task-presentation.js";
+import { pinRefusesClaim } from "./task-pin.js";
 import { TaskClaims } from "./task-claim.js";
 import {
   appendBoundEvent,
@@ -762,7 +763,12 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
         // while no device was connected.
         // Main's predicate, named in task-presentation.ts (#811).
         for (const [, entry] of taskQueue) {
-          if (entry.task.motebit_id === motebitId && recoverableOnReconnect(entry)) {
+          // A pinned task is recovered only onto its target's bodies.
+          if (
+            entry.task.motebit_id === motebitId &&
+            !pinRefusesClaim(entry, motebitId) &&
+            recoverableOnReconnect(entry)
+          ) {
             ws.send(JSON.stringify({ type: "task_request", task: entry.task }));
             logger.info("task.recovery_on_reconnect", {
               correlationId: entry.task.task_id,

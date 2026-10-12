@@ -220,6 +220,8 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           expiresAt: Date.now() + taskTtlMs,
           submitted_by: task.submitted_by,
           origin_relay: verified.originRelay,
+          // A forwarded task names its executor: pinned to it (task-pin.ts).
+          pinned_executor: verified.targetAgent,
           // Cross-operator federated P2P: the origin relay forwarded the
           // delegator's 3-leg proof. The executor relay settles
           // `settlement_mode='p2p'` (worker leg + its own executor-fee leg) and
