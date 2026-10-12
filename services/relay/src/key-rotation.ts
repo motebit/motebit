@@ -28,7 +28,14 @@ import { createLogger } from "./logger.js";
 import { openObligationsToKey, type OpenObligation } from "./rotation-obligations.js";
 import type { AuthEvent } from "./auth-events.js";
 import type { CloseIdentityConnections, CloseTokenConnections } from "./connection-ports.js";
-import { admitKey, identityGuardianFor, identityKey, verificationKeyFor } from "./identity-keys.js";
+import {
+  admitKey,
+  guardianEvidencePossible,
+  guardianProvenance,
+  identityKey,
+  verificationKeyFor,
+} from "./identity-keys.js";
+import { GuardianNotProvenError } from "./errors.js";
 import { isKnownIdentity, recordIdentityRevocation } from "./identity-revocation.js";
 import { bindCaller, unwrapBound, type BoundIdentity } from "./identity-binding.js";
 
@@ -157,7 +164,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
      * key history is exactly what the operator's auth-event record exists
      * to show (`services/relay/CLAUDE.md` rule 6).
      */
-    const refuse = (status: 400 | 403 | 409, reason: string, message: string): HTTPException => {
+    const recordRefusal = (reason: string): void => {
       logger.warn("key_rotation.refused", { motebitId, caller: caller ?? null, reason });
       recordAuthEvent({
         kind: "agent_token_rejected",
@@ -171,6 +178,9 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         reason: `succession:${reason}`,
         correlationId: c.req.header("x-correlation-id") ?? null,
       });
+    };
+    const refuse = (status: 400 | 403 | 409, reason: string, message: string): HTTPException => {
+      recordRefusal(reason);
       return new HTTPException(status, { message });
     };
 
@@ -228,12 +238,23 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       }
       // Look up the guardian public key from agent's identity
       // The one guardian truth (§5a A3), not a registry read of its own.
-      const guardianPubKey = identityGuardianFor(moteDb.db, motebitId);
+      const { guardian: guardianPubKey, proven } = guardianProvenance(moteDb.db, motebitId);
       if (!guardianPubKey) {
         throw refuse(
           400,
           "recovery_without_registered_guardian",
           "Agent has no guardian registered — cannot use guardian recovery",
+        );
+      }
+      // Only a guardian set by a request proven with the identity's CURRENT
+      // key authorizes a recovery (identity-authority-writers.md I1, §3.2).
+      // A paired device's own token could otherwise set a guardian it
+      // controls (the attestation is the guardian's own signature) and,
+      // since a recovery skips the caller check, move the key here.
+      if (!proven) {
+        recordRefusal("guardian_not_proven");
+        throw new GuardianNotProvenError(
+          guardianEvidencePossible(moteDb.db, motebitId) ? "provable" : "legacy",
         );
       }
       const valid = await verifyKeySuccession(body, guardianPubKey);
