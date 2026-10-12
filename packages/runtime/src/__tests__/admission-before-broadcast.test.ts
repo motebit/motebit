@@ -18,6 +18,14 @@
  * pass while the gap is open and turn red the day it closes, at which point
  * `.fails` is removed.
  *
+ * M3a (option D, client-only interim) closed the cells it can: the
+ * `task:submit` credential is minted at pricing and held across the
+ * broadcast, the pre-flight is re-run immediately before the broadcast (the
+ * federated path re-discovers its pinned worker), and the abort signal is
+ * re-checked last. Those cells are now plain tests. The cells still
+ * `it.fails` — (b) for a refusal no pre-flight mirrors, and (c) — are the
+ * founder-decision backlog: docs/proposals/admission-before-broadcast-m3.md.
+ *
  * Probe shape (founder report, 2026-10-12): a FEDERATED worker is priced from
  * discovery + signed metadata alone — no credential is minted anywhere in the
  * resolver — so a delegation whose credentials vanish mid-discover still
@@ -34,6 +42,7 @@ import {
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 import { base58Encode } from "@motebit/protocol";
 import { resolveAndSubmitP2pDelegation, resolveP2pPaymentRequest } from "../relay-delegation.js";
+import type { P2pBroadcastHooks } from "../relay-delegation.js";
 
 const RELAY_URL = "https://relay.test";
 const PEER_URL = "https://peer.test";
@@ -111,8 +120,19 @@ interface World {
  * removes the credentials while the discovery read is in flight — the
  * founder's probe shape.
  */
-function world(opts: { submit: SubmitAnswer; loseCredentialsDuringDiscover?: boolean }): World {
+function world(opts: {
+  submit: SubmitAnswer;
+  loseCredentialsDuringDiscover?: boolean;
+  /** What the relay's discovery answers on its SECOND read (the pre-broadcast re-check). */
+  rediscover?: "same" | "gone" | "repriced";
+  /** A worker hosted by the origin relay (2-leg path) instead of a federated one. */
+  local?: boolean;
+  /** The local `/p2p-eligibility` answer on its SECOND read. */
+  reEligibility?: "allowed" | "refused";
+}): World {
   const w: World = { broadcasts: [], submits: [], credentialsGone: false };
+  let discovers = 0;
+  let eligibilityReads = 0;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -137,6 +157,13 @@ function world(opts: { submit: SubmitAnswer; loseCredentialsDuringDiscover?: boo
       }
       if (url.includes("/api/v1/agents/discover")) {
         if (opts.loseCredentialsDuringDiscover === true) w.credentialsGone = true;
+        discovers++;
+        const again = discovers > 1 ? (opts.rediscover ?? "same") : "same";
+        if (again === "gone") return json(200, { agents: [] });
+        const placement =
+          opts.local === true
+            ? { hop_distance: 0 }
+            : { source_relay: PEER_ID, source_relay_public_key: peer.hex, hop_distance: 1 };
         return json(200, {
           agents: [
             {
@@ -144,11 +171,21 @@ function world(opts: { submit: SubmitAnswer; loseCredentialsDuringDiscover?: boo
               public_key: worker.hex,
               settlement_address: base58Encode(worker.publicKey),
               settlement_modes: "p2p",
-              source_relay: PEER_ID,
-              source_relay_public_key: peer.hex,
-              pricing: [{ capability: "web_search", unit_cost: 1 }],
+              ...placement,
+              pricing: [{ capability: "web_search", unit_cost: again === "repriced" ? 2 : 1 }],
             },
           ],
+        });
+      }
+      if (url.includes(`/api/v1/agents/${WORKER_ID}/p2p-eligibility`)) {
+        eligibilityReads++;
+        const refused = eligibilityReads > 1 && opts.reEligibility === "refused";
+        return json(200, {
+          allowed: !refused,
+          ...(refused ? { reason: "Active dispute d-1 between agents" } : {}),
+          expected_amount_micro: 1_000_000,
+          expected_fee_micro: 50_000,
+          settlement_address: base58Encode(worker.publicKey),
         });
       }
       if (method === "POST" && url.endsWith(`/agent/${ME}/task`)) {
@@ -216,7 +253,16 @@ function rail(w: World) {
   });
 }
 
-function delegate(w: World, overrides: { signal?: AbortSignal } = {}) {
+function delegate(
+  w: World,
+  overrides: {
+    signal?: AbortSignal;
+    buildP2pPayment?: (
+      request: SovereignP2pPaymentRequest,
+      hooks?: P2pBroadcastHooks,
+    ) => Promise<P2pPaymentProof>;
+  } = {},
+) {
   return resolveAndSubmitP2pDelegation({
     motebitId: ME,
     syncUrl: RELAY_URL,
@@ -236,8 +282,8 @@ function delegate(w: World, overrides: { signal?: AbortSignal } = {}) {
   });
 }
 
-describe("M3 — the resolver prices a federated payment without any credential", () => {
-  it("credentials gone before resolve: a fully priced request still comes back (probe shape)", async () => {
+describe("M3 — a federated payment is never priced without the credential to submit it", () => {
+  it("credentials gone before resolve: no priced request comes back (probe shape, M3a)", async () => {
     const w = world({ submit: "201" });
     w.credentialsGone = true;
     const authToken = vi.fn(async () => {
@@ -250,12 +296,13 @@ describe("M3 — the resolver prices a federated payment without any credential"
       capability: "web_search",
       relayPublicKeyHex: relay.hex,
     });
-    // Records today's behaviour: priced, and no credential was ever asked for.
-    expect(r.ok).toBe(true);
-    expect(authToken).not.toHaveBeenCalled();
+    // M3a: the resolver mints the task:submit credential once priced; none ⇒ no request.
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("auth_expired");
+    expect(authToken).toHaveBeenCalledWith("task:submit");
   });
 
-  it.fails("GAP: a resolved payment request does not survive credential loss", async () => {
+  it("a resolved payment request does not survive credential loss", async () => {
     const w = world({ submit: "201", loseCredentialsDuringDiscover: true });
     const r = await resolveP2pPaymentRequest({
       motebitId: ME,
@@ -272,24 +319,45 @@ describe("M3 — the resolver prices a federated payment without any credential"
 });
 
 describe("M3 — invariant: broadcasts == 0 whenever admission was not secured", () => {
-  it("(a) credentials lost between resolve and submit — today: paid, never submitted", async () => {
+  it("(a) credentials lost between resolve and submit ⇒ nothing broadcast (M3a)", async () => {
     const w = world({ submit: "201", loseCredentialsDuringDiscover: true });
     const result = await delegate(w);
-    // Records the defect as it stands on main.
-    expect(w.broadcasts).toHaveLength(1);
+    expect(w.broadcasts).toHaveLength(0);
     expect(w.submits).toHaveLength(0);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe("payment_not_admitted");
-      expect(result.error.settledPayment?.txHash).toBe(w.broadcasts[0]!.tx_hash);
+      expect(result.error.code).toBe("auth_expired");
+      expect(result.error.settledPayment).toBeUndefined();
     }
   });
 
-  it.fails("GAP (a): credentials lost between resolve and submit ⇒ nothing broadcast", async () => {
-    const w = world({ submit: "201", loseCredentialsDuringDiscover: true });
-    await delegate(w);
-    expect(w.broadcasts).toHaveLength(0);
-  });
+  it("(a′) credentials lost DURING the broadcast: the held credential still submits it (M3a)", async () => {
+    const w = world({ submit: "201" });
+    const inner = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: RequestInit) => {
+        const resp = await inner(input, init);
+        // The credentials come back only once the submission has been made,
+        // so the submission itself can only have used the held credential.
+        if (init?.method === "POST") w.credentialsGone = false;
+        return resp;
+      }),
+    );
+    const send = rail(w);
+    const result = await delegate(w, {
+      buildP2pPayment: async (request) => {
+        const proof = await send(request);
+        w.credentialsGone = true;
+        return proof;
+      },
+    });
+    expect(w.broadcasts).toHaveLength(1);
+    expect(w.submits).toHaveLength(1);
+    expect(w.submits[0]!.txHash).toBe(w.broadcasts[0]!.tx_hash);
+    expect(w.submits[0]!.authorization).toBe("Bearer tok-task:submit");
+    expect(result.ok).toBe(true);
+  }, 15_000);
 
   it("(b) the relay refuses admission (4xx) — today: refused AFTER the broadcast", async () => {
     const w = world({ submit: "403" });
@@ -301,10 +369,41 @@ describe("M3 — invariant: broadcasts == 0 whenever admission was not secured",
     if (!result.ok) expect(result.error.code).toBe("payment_not_admitted");
   });
 
+  // STAYS OPEN under M3a: this refusal is one no pre-flight mirrors (the
+  // pre-broadcast re-check saw an admissible worker). Closing it needs the
+  // founder-chosen protocol option — docs/proposals/admission-before-broadcast-m3.md.
   it.fails("GAP (b): the relay refuses admission (4xx) ⇒ nothing broadcast", async () => {
     const w = world({ submit: "403" });
     await delegate(w);
     expect(w.broadcasts).toHaveLength(0);
+  });
+
+  it("(b, narrowed) federated worker gone from discovery before broadcast ⇒ nothing broadcast (M3a)", async () => {
+    const w = world({ submit: "201", rediscover: "gone" });
+    const result = await delegate(w);
+    expect(w.broadcasts).toHaveLength(0);
+    expect(w.submits).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("p2p_ineligible");
+  });
+
+  it("(b, narrowed) federated worker repriced before broadcast ⇒ nothing broadcast (M3a)", async () => {
+    const w = world({ submit: "201", rediscover: "repriced" });
+    const result = await delegate(w);
+    expect(w.broadcasts).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("p2p_ineligible");
+  });
+
+  it("(b, narrowed) local pair turned ineligible before broadcast ⇒ nothing broadcast (M3a)", async () => {
+    const w = world({ submit: "201", local: true, reEligibility: "refused" });
+    const result = await delegate(w);
+    expect(w.broadcasts).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("p2p_ineligible");
+      expect(result.error.message).toContain("Active dispute");
+    }
   });
 
   it("(c) a throw between broadcast and submit — today: paid, admission unconfirmed", async () => {
@@ -315,6 +414,9 @@ describe("M3 — invariant: broadcasts == 0 whenever admission was not secured",
     if (!result.ok) expect(result.error.code).toBe("payment_admission_unconfirmed");
   });
 
+  // STAYS OPEN under M3a: a network failure after the broadcast is outside
+  // anything a client pre-flight can see. Founder-decision backlog —
+  // docs/proposals/admission-before-broadcast-m3.md.
   it.fails("GAP (c): a throw between broadcast and submit ⇒ nothing broadcast", async () => {
     const w = world({ submit: "throw" });
     await delegate(w);
@@ -343,27 +445,26 @@ describe("M3 — invariant: broadcasts == 0 whenever admission was not secured",
     if (!result.ok) expect(result.error.code).toBe("timeout");
   });
 
-  it.fails(
-    "GAP (abort): a delegation cancelled after its last pricing read broadcasts nothing",
-    async () => {
-      const w = world({ submit: "201" });
-      const controller = new AbortController();
-      const inner = globalThis.fetch;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string, init?: RequestInit) => {
-          const resp = await inner(input, init);
-          // Cancelled the moment the last pricing read (the executor relay's
-          // signed metadata) has answered — nothing re-checks the signal
-          // between pricing and the broadcast.
-          if (input === `${PEER_URL}/.well-known/motebit.json`) controller.abort();
-          return resp;
-        }),
-      );
-      await delegate(w, { signal: controller.signal });
-      expect(w.broadcasts).toHaveLength(0);
-    },
-  );
+  it("(abort) a delegation cancelled after its last pricing read broadcasts nothing (M3a)", async () => {
+    const w = world({ submit: "201" });
+    const controller = new AbortController();
+    const inner = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: RequestInit) => {
+        const resp = await inner(input, init);
+        // Cancelled the moment the last pricing read (the executor relay's
+        // signed metadata) has answered. This stub ignores the signal, so
+        // only the re-check immediately before the broadcast can stop it.
+        if (input === `${PEER_URL}/.well-known/motebit.json`) controller.abort();
+        return resp;
+      }),
+    );
+    const result = await delegate(w, { signal: controller.signal });
+    expect(w.broadcasts).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("timeout");
+  });
 });
 
 describe("M3 — the legitimate flow", () => {

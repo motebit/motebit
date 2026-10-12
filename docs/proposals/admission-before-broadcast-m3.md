@@ -8,7 +8,7 @@
 
 `resolveAndSubmitP2pDelegation` (`packages/runtime/src/relay-delegation.ts`) prices the payment and broadcasts it (`buildP2pPayment`). Only then does it mint `task:submit` and POST the task with the proof. The order is forced by the relay. Admission of a P2P submission reads the payment's payer **from the chain** at `confirmed` commitment, and a transaction not yet visible is refused with 503 `TASK_P2P_PROOF_UNVERIFIED` before anything is admitted (`services/relay/src/tasks.ts`, normative in `spec/delegation-v1.md` §3.3 since 1.4). So admission today structurally requires a landed payment. No client-side order can secure admission first. Closing the gap is a wire and spec change.
 
-Evidence: `packages/runtime/src/__tests__/admission-before-broadcast.test.ts`. The `it.fails("GAP: …")` cells assert `broadcasts == 0` whenever admission was not secured. Each one fails on main on that assertion:
+Evidence: `packages/runtime/src/__tests__/admission-before-broadcast.test.ts`. The `it.fails("GAP: …")` cells assert `broadcasts == 0` whenever admission was not secured. Each one failed on main on that assertion (see the M3a status under D for which still do):
 
 - (a) credentials lost mid-flight (the federated probe: the resolver needs no credential at all)
 - (b) a 4xx admission refusal after the broadcast
@@ -53,5 +53,20 @@ A refusal at finalize can only be the client's own mismatch or an expired reserv
 - re-run the eligibility pre-flight (the federated path has none today).
 
 This closes (a) and the abort cell and narrows (b). It does not close (c), or (b) for gates the pre-flight does not mirror.
+
+**Status: D shipped on this branch as M3a** (`packages/runtime/src/relay-delegation.ts`, client only; no wire, spec or relay change):
+
+- `resolveP2pPaymentRequest` mints the `task:submit` credential once the request is priced and returns it (`submitToken`). No credential ⇒ no priced request (`auth_expired`). `resolveAndSubmitP2pDelegation` holds it across the broadcast and presents it on the first submission attempt.
+- `recheckP2pPreflight` runs immediately before the broadcast. For a local worker it re-reads `/p2p-eligibility` (still allowed, same registered address, same expected amounts). For a federated worker, which had no pre-flight, it re-reads the origin's discovery and requires the same worker through the same peer, at the same address, at a price equal to this payment's budget. That is the part of the relay's federated "discover and validate before admission" gate a client can read from existing endpoints. A refusal is `p2p_ineligible`.
+- The abort signal is re-checked last, after the re-check, before anything is signed. Discovery and every `fetchSignedRelayFeeRate` read already received the delegation's signal.
+
+Cells now plain passing tests: the resolver's credential-loss cell, (a), (a′) (credentials lost during the broadcast; the held credential submits), abort-after-pricing, and three narrowed (b) cells (federated worker delisted, federated worker repriced, local pair turned ineligible, each between pricing and broadcast).
+
+**Cells still open (`it.fails`, the founder-decision backlog):**
+
+- `GAP (b)`: a 4xx admission refusal that no pre-flight mirrors (the re-check saw an admissible worker).
+- `GAP (c)`: a network failure on submit after the broadcast.
+
+Both close only with the founder-chosen protocol option (A, B or C).
 
 **Recommendation:** C, with D shipped first as M3a. C reuses the existing primitives (durable nonce, the signature as idempotency key, the M2 capability pattern). It keeps the relay a non-transmitter. Its only normative move is when the payer is read.
