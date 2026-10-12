@@ -310,8 +310,9 @@ export function IdentityTab({
               lineHeight: 16,
             }}
           >
-            Off by default — nothing is sent while it is off. On: this device registers with the
-            relay, syncs your encrypted events, and can be woken by push.
+            Off by default — nothing is sent to a relay while it is off. On: once the relay accepts
+            this device, it syncs your encrypted events and can be woken by push. Off again: push is
+            unregistered and the relay is disconnected.
           </Text>
         </>
       ) : null}
