@@ -599,6 +599,8 @@ export class MobileSyncController {
           // pass) terminates immediately and sets the done-flag below.
           serving: attempt.serving,
           timeoutMs: 30_000,
+          // The submission (and any poll) rides the session: OFF aborts it on the wire.
+          fetch: session.fetch,
         }),
       );
 

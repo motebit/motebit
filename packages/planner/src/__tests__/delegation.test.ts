@@ -518,6 +518,44 @@ describe("RelayDelegationAdapter retry with failover", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sends the recovery query and pollTaskResult through the injected fetch too", async () => {
+    // Every request path of the adapter: the submission POST, the recovery
+    // query after a missed result frame, and pollTaskResult. Reverting any
+    // one of them to the global fetch reaches `globalFetch` and goes red.
+    const globalFetch = vi.fn();
+    vi.stubGlobal("fetch", globalFetch);
+    const receipt = makeReceipt("task-1");
+    const calls: string[] = [];
+    const injected = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (init?.method === "POST") {
+        return new Response(JSON.stringify({ task_id: "task-1" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ task: { status: "completed" }, receipt }), {
+        status: 200,
+      });
+    });
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      fetch: injected as unknown as typeof fetch,
+      sendRaw: vi.fn(),
+      // No result frame ever arrives: the adapter must fall back to the query.
+      onCustomMessage: () => () => {},
+    });
+    const result = await adapter.delegateStep(makeStep(), 20);
+    expect(result.task_id).toBe("task-1");
+    const polled = await adapter.pollTaskResult("task-1", "step-1");
+    expect(polled?.task_id).toBe("task-1");
+    expect(calls).toEqual([
+      "POST http://localhost:3000/agent/test-mote/task",
+      "GET http://localhost:3000/agent/test-mote/task/task-1",
+      "GET http://localhost:3000/agent/test-mote/task/task-1",
+    ]);
+    expect(globalFetch).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("retries on failure and excludes failed agent", async () => {
     let fetchCount = 0;
     const fetchBodies: unknown[] = [];

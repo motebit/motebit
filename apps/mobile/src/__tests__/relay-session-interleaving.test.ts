@@ -148,11 +148,13 @@ vi.mock("@motebit/runtime", async () => ({
       cfg: {
         relay: { relayUrl: string; motebitId: string };
         mintToken: (a: string) => Promise<string>;
+        fetch?: typeof fetch;
       },
     ) => {
       await h.gate("self-test");
       const token = await cfg.mintToken("task:submit");
-      await fetch(`${cfg.relay.relayUrl}/agent/${cfg.relay.motebitId}/task`, {
+      // As the real command submits: through the fetch it was handed.
+      await (cfg.fetch ?? fetch)(`${cfg.relay.relayUrl}/agent/${cfg.relay.motebitId}/task`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -319,6 +321,7 @@ const BOUNDARIES: Boundary[] = [
     "expo-token",
     "push-post",
     "self-test",
+    "self-test-post",
     "pin",
     "ws-connect",
     "encrypt-event",
@@ -371,6 +374,7 @@ function requestGate(method: string, url: string): string | null {
   if (method === "POST" && path.endsWith("/conversations")) return "conv-sync";
   if (method === "POST" && path.endsWith("/messages")) return "conv-msgs";
   if (method === "POST" && path.endsWith("/plans")) return "plan-sync";
+  if (method === "POST" && path.endsWith("/task")) return "self-test-post";
   return null;
 }
 
