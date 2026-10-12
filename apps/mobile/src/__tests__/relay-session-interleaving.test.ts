@@ -27,11 +27,19 @@
  *   V6 no status callback other than "offline" after OFF;
  *   V7 no OLD-session continuation acts in a NEW session: every relay act
  *      after startSync k+1 carries only k+1's handles (each session uses its
- *      own relay URL, so the URL names the session that issued the act).
+ *      own relay URL, so the URL names the session that issued the act);
+ *   V8 nothing throws out of a timer or continuation (a crash on device);
+ *   V9 every relay request on the wire when OFF lands is aborted by it — the
+ *      one property that tells an adapter on the session's fetch from one on
+ *      the global fetch (session credentials alone already stop NEW requests).
  *
- * The libraries (sync-engine, core-identity, runtime, expo) are faithful
- * fakes that issue their requests through `fetch` / the WebSocket the
- * controller hands them, with a gate before each suspension point.
+ * @motebit/sync-engine is the REAL one (engines, HTTP adapters, encrypting
+ * wrappers, WebSocket adapter): only the network (fetch, WebSocket), timers
+ * and the AEAD primitive are stand-ins, with a gate at each suspension point
+ * — every request in flight, the socket opening, its push ack, and the
+ * per-item encrypt inside a push. core-identity, runtime and expo are
+ * faithful fakes that issue their requests through the fetch / WebSocket the
+ * controller hands them.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -56,7 +64,7 @@ interface FakeWs {
   url: string;
   open: boolean;
   closed: boolean;
-  custom: Array<(msg: Record<string, unknown>) => void>;
+  socket: { deliver(msg: Record<string, unknown>): void };
 }
 
 interface World {
@@ -68,6 +76,12 @@ interface World {
   appStateListeners: Set<(s: string) => void>;
   tokenListeners: Set<(t: unknown) => void>;
   expoTokens: number;
+  /** Exceptions thrown out of a timer or continuation (a crash on device). */
+  crashes: string[];
+  /** Relay requests on the wire right now (sent, answer pending). */
+  inflight: Set<{ label: string; signal?: AbortSignal | null }>;
+  /** Requests that were on the wire at an OFF and that OFF did not abort. */
+  unaborted: string[];
 }
 
 const h = vi.hoisted(() => {
@@ -164,155 +178,93 @@ vi.mock("@motebit/runtime", async () => ({
   }),
 }));
 
-vi.mock("@motebit/sync-engine", () => {
-  const RESULT = { pushed: 0, pulled: 0, conversations_pushed: 0, conversations_pulled: 0 };
-  type Remote = Record<string, (() => Promise<unknown>) | undefined>;
-  class Engine {
-    protected remote: Remote | null = null;
-    private lastError: Error | null = null;
-    protected steps: Array<[gate: string, method: string]> = [];
-    connectRemote(r: Remote): void {
-      this.remote = r;
-    }
-    start(): void {}
-    stop(): void {}
-    getLastError(): Error | null {
-      return this.lastError;
-    }
-    /** Never rejects (the real engines record the failure). */
-    async sync(): Promise<typeof RESULT> {
-      this.lastError = null;
-      try {
-        for (const [g, m] of this.steps) {
-          await h.gate(g);
-          if (this.remote) await this.remote[m]!.call(this.remote);
-        }
-      } catch (err: unknown) {
-        this.lastError = err instanceof Error ? err : new Error(String(err));
-      }
-      return RESULT;
-    }
-  }
-  class SyncEngine extends Engine {
-    protected override steps: Array<[string, string]> = [
-      ["sync-push", "pushEvents"],
-      ["sync-pull", "pullEvents"],
-    ];
-  }
-  class ConversationSyncEngine extends Engine {
-    protected override steps: Array<[string, string]> = [["conv-sync", "push"]];
-  }
-  class PlanSyncEngine extends Engine {
-    protected override steps: Array<[string, string]> = [["plan-sync", "push"]];
-  }
-  interface Creds {
-    getCredential: () => Promise<string>;
-  }
-  class HttpEventStoreAdapter {
-    constructor(private o: { baseUrl: string; credentialSource: Creds }) {}
-    async pushEvents(): Promise<void> {
-      const t = await this.o.credentialSource.getCredential();
-      await fetch(`${this.o.baseUrl}/sync/push`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${t}` },
-      });
-    }
-    async pullEvents(): Promise<void> {
-      const t = await this.o.credentialSource.getCredential();
-      await fetch(`${this.o.baseUrl}/sync/pull`, { headers: { Authorization: `Bearer ${t}` } });
-    }
-  }
-  class Delegating {
-    constructor(protected o: { inner: Remote }) {}
-    pushEvents(): Promise<unknown> {
-      return this.o.inner.pushEvents!.call(this.o.inner);
-    }
-    pullEvents(): Promise<unknown> {
-      return this.o.inner.pullEvents!.call(this.o.inner);
-    }
-    push(): Promise<unknown> {
-      return this.o.inner.push!.call(this.o.inner);
-    }
-  }
-  class WebSocketEventStoreAdapter {
-    private ws: FakeWs;
-    constructor(private o: { url: string; credentialSource: Creds; httpFallback: Remote }) {
-      this.ws = { url: o.url, open: false, closed: false, custom: [] };
-      h.state.world.sockets.push(this.ws);
-    }
-    connect(): void {
-      void (async () => {
-        try {
-          await this.o.credentialSource.getCredential();
-        } catch {
-          return;
-        }
-        await h.gate("ws-connect");
-        if (this.ws.closed) return;
-        this.ws.open = true;
-        h.record({ kind: "ws-open", url: this.o.url });
-      })();
-    }
-    disconnect(): void {
-      this.ws.closed = true;
-      this.ws.open = false;
-    }
-    onEvent(): () => void {
-      return () => {};
-    }
-    onCustomMessage(cb: (m: Record<string, unknown>) => void): () => void {
-      this.ws.custom.push(cb);
-      return () => {
-        this.ws.custom = this.ws.custom.filter((c) => c !== cb);
-      };
-    }
-    sendRaw(data: string): void {
-      if (!this.ws.open) return;
-      h.record({ kind: "ws-send", url: this.o.url, data });
-    }
-    pushEvents(): Promise<unknown> {
-      return this.o.httpFallback.pushEvents!.call(this.o.httpFallback);
-    }
-    pullEvents(): Promise<unknown> {
-      return this.o.httpFallback.pullEvents!.call(this.o.httpFallback);
-    }
-  }
-  class HttpStaticTokenAdapter {
-    constructor(
-      private o: { baseUrl: string; authToken?: string },
-      private path: string,
-    ) {}
-    async push(): Promise<void> {
-      await fetch(`${this.o.baseUrl}${this.path}`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${this.o.authToken ?? ""}` },
-      });
-    }
-  }
-  class HttpConversationSyncAdapter extends HttpStaticTokenAdapter {
-    constructor(o: { baseUrl: string; authToken?: string }) {
-      super(o, "/sync/conversations");
-    }
-  }
-  class HttpPlanSyncAdapter extends HttpStaticTokenAdapter {
-    constructor(o: { baseUrl: string; authToken?: string }) {
-      super(o, "/sync/plans");
-    }
-  }
+// The REAL @motebit/sync-engine (engines, HTTP adapters, the encrypting
+// wrappers, the WebSocket adapter): only the network (fetch, WebSocket) and
+// timers are fake. A fake adapter with no await between its guard and its
+// fetch hid the round-3 leak (an encrypting push resuming after OFF).
+
+// Encryption with a gate inside `encrypt`: the per-message await an
+// encrypting push suspends at before its inner request. The AEAD primitive is
+// a deterministic async stand-in — WebCrypto completes on the REAL event loop,
+// which fake timers cannot schedule, so a real cipher made schedules depend on
+// wall-clock luck. Every await in the adapters around it is the real one.
+vi.mock("@motebit/encryption", async () => {
+  const actual = await vi.importActual<typeof import("@motebit/encryption")>("@motebit/encryption");
   return {
-    SyncEngine,
-    ConversationSyncEngine,
-    PlanSyncEngine,
-    HttpEventStoreAdapter,
-    WebSocketEventStoreAdapter,
-    EncryptedEventStoreAdapter: Delegating,
-    HttpConversationSyncAdapter,
-    EncryptedConversationSyncAdapter: Delegating,
-    HttpPlanSyncAdapter,
-    EncryptedPlanSyncAdapter: Delegating,
-    decryptEventPayload: vi.fn((e: unknown) => Promise.resolve(e)),
+    ...actual,
+    deriveSyncEncryptionKey: vi.fn(() => Promise.resolve(new Uint8Array(32).fill(7))),
+    secureErase: vi.fn(),
+    encrypt: vi.fn(async (plaintext: Uint8Array) => {
+      const text = new TextDecoder().decode(plaintext);
+      // Gate the SECOND message / the plan / the second event: mid-batch.
+      if (text.includes("conv-msg-1")) await h.gate("encrypt-msg");
+      else if (text === "conv-title") await h.gate("encrypt-conv");
+      else if (text.includes("plan-title")) await h.gate("encrypt-plan");
+      else if (text.includes("evt-1")) await h.gate("encrypt-event");
+      await Promise.resolve();
+      return { ciphertext: plaintext.slice(), nonce: new Uint8Array(12), tag: new Uint8Array(16) };
+    }),
+    decrypt: vi.fn(async (payload: { ciphertext: Uint8Array }) => {
+      await Promise.resolve();
+      return payload.ciphertext.slice();
+    }),
   };
 });
+
+/** A WebSocket the relay never sees until the gate opens it. */
+class FakeWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  readyState = 0;
+  onopen: ((ev: unknown) => void) | null = null;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  onclose: ((ev: unknown) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
+  readonly fake: FakeWs;
+  constructor(readonly url: string) {
+    const fake: FakeWs = { url: url.split("?")[0]!, open: false, closed: false, socket: this };
+    this.fake = fake;
+    h.state.world.sockets.push(fake);
+    void (async () => {
+      await h.gate("ws-connect");
+      if (fake.closed) return;
+      this.readyState = 1;
+      fake.open = true;
+      h.record({ kind: "ws-open", url: fake.url });
+      this.onopen?.({});
+    })();
+  }
+  send(data: string): void {
+    if (!this.fake.open) throw new Error("WebSocket is not open");
+    h.record({ kind: "ws-send", url: this.fake.url, data });
+    const msg = JSON.parse(data) as { type?: string; push_id?: string; events?: unknown[] };
+    if (msg.type === "auth") {
+      queueMicrotask(() => this.deliver({ type: "auth_result", ok: true }));
+    } else if (msg.type === "push") {
+      // The relay's ack is pending while the gate holds it.
+      void h
+        .gate("ws-push")
+        .then(() =>
+          this.deliver({ type: "ack", accepted: msg.events?.length ?? 0, push_id: msg.push_id }),
+        );
+    }
+  }
+  deliver(msg: Record<string, unknown>): void {
+    if (!this.fake.open) return;
+    this.onmessage?.({ data: JSON.stringify(msg) });
+  }
+  close(): void {
+    if (this.fake.closed) return;
+    this.fake.closed = true;
+    this.fake.open = false;
+    this.readyState = 3;
+    this.onclose?.({ code: 1000, reason: "" });
+  }
+  addEventListener(): void {}
+  removeEventListener(): void {}
+}
 
 vi.mock("@motebit/core-identity", () => ({
   registerDeviceWithRelay: vi.fn(async (p: { syncUrl: string; signal?: AbortSignal }) => {
@@ -323,11 +275,6 @@ vi.mock("@motebit/core-identity", () => ({
       ? { ok: false, code: "refused", message: "not accepted" }
       : { ok: true, created: false, registered_at: 1 };
   }),
-}));
-
-vi.mock("@motebit/encryption", () => ({
-  deriveSyncEncryptionKey: vi.fn(() => Promise.resolve(new Uint8Array(32))),
-  secureErase: vi.fn(),
 }));
 
 const asyncStoreData = new Map<string, string>();
@@ -345,6 +292,8 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
   },
 }));
 
+import { InMemoryEventStore } from "@motebit/event-log";
+import type { EventLogEntry, SyncConversation, SyncConversationMessage } from "@motebit/sdk";
 import { MobilePushTokenManager } from "../push-token-manager";
 import { MobileSyncController } from "../sync-controller";
 import type { SyncControllerDeps } from "../sync-controller";
@@ -372,23 +321,32 @@ const BOUNDARIES: Boundary[] = [
     "self-test",
     "pin",
     "ws-connect",
-    "sync-push",
-    "sync-pull",
+    "encrypt-event",
+    "ws-push",
+    "encrypt-conv",
     "conv-sync",
+    "encrypt-msg",
+    "conv-msgs",
+    "encrypt-plan",
     "plan-sync",
     "recovery",
   ].map((gate) => ({ trigger: "start" as const, gate })),
   { trigger: "start", gate: "register", refuse: true },
-  // A later sync cycle (token refresh, re-pin, new socket).
-  ...["token", "pin", "ws-connect", "sync-push", "conv-sync"].map((gate) => ({
-    trigger: "cycle" as const,
-    gate,
-  })),
+  // A later sync cycle (token refresh, re-pin, new socket). Its events were
+  // pushed by the first cycle, so it suspends in the conversation/plan pushes.
+  ...["token", "pin", "ws-connect", "encrypt-msg", "conv-msgs", "encrypt-plan", "plan-sync"].map(
+    (gate) => ({
+      trigger: "cycle" as const,
+      gate,
+    }),
+  ),
   // A user /sync.
-  ...["token", "sync-push", "sync-pull", "conv-sync"].map((gate) => ({
-    trigger: "syncNow" as const,
-    gate,
-  })),
+  ...["token", "encrypt-event", "sync-push", "sync-pull", "encrypt-msg", "conv-msgs"].map(
+    (gate) => ({
+      trigger: "syncNow" as const,
+      gate,
+    }),
+  ),
   // Push lifecycle listeners (foreground refresh, token rotation).
   ...["perm-check", "permission", "expo-token", "push-post"].map((gate) => ({
     trigger: "foreground" as const,
@@ -403,6 +361,98 @@ const BOUNDARIES: Boundary[] = [
   // OFF itself, with its push-token DELETE pending.
   { trigger: "off", gate: "push-delete" },
 ];
+
+/** The relay request a gate holds in flight (sent; its answer pending). */
+function requestGate(method: string, url: string): string | null {
+  const path = new URL(url).pathname;
+  if (path.endsWith("/push-token")) return method === "POST" ? "push-post" : "push-delete";
+  if (path.endsWith("/push")) return "sync-push";
+  if (path.endsWith("/pull")) return "sync-pull";
+  if (method === "POST" && path.endsWith("/conversations")) return "conv-sync";
+  if (method === "POST" && path.endsWith("/messages")) return "conv-msgs";
+  if (method === "POST" && path.endsWith("/plans")) return "plan-sync";
+  return null;
+}
+
+/** One body that satisfies every relay route the real adapters parse. */
+const RELAY_BODY = JSON.stringify({
+  accepted: 1,
+  events: [],
+  conversations: [],
+  messages: [],
+  plans: [],
+  steps: [],
+  next_seq: 0,
+  latest_seq: 0,
+  has_more: false,
+  latest_clock: 0,
+  agents: [],
+});
+
+/** Local data, so every push has a batch to encrypt and send. */
+function makeStorage(): Record<string, unknown> {
+  const eventStore = new InMemoryEventStore();
+  for (let i = 0; i < 3; i++) {
+    void eventStore.append({
+      event_id: `evt-${i}`,
+      motebit_id: "mote-1",
+      timestamp: 1_000 + i,
+      event_type: "state_updated",
+      payload: { note: `evt-${i}` },
+      version_clock: i + 1,
+      tombstoned: false,
+    } as EventLogEntry);
+  }
+  const conv: SyncConversation = {
+    conversation_id: "conv-1",
+    motebit_id: "mote-1",
+    started_at: 1,
+    last_active_at: Date.now() + 1e12,
+    title: "conv-title",
+    summary: null,
+    message_count: 50,
+  } as SyncConversation;
+  const messages: SyncConversationMessage[] = Array.from({ length: 50 }, (_, i) => ({
+    message_id: `m-${i}`,
+    conversation_id: "conv-1",
+    motebit_id: "mote-1",
+    role: "user",
+    content: `conv-msg-${i}`,
+    tool_calls: null,
+    tool_call_id: null,
+    created_at: 1 + i,
+    token_estimate: 1,
+  })) as SyncConversationMessage[];
+  const plan = {
+    plan_id: "plan-1",
+    goal_id: "goal-1",
+    motebit_id: "mote-1",
+    title: "plan-title",
+    status: "active",
+    created_at: 1,
+    updated_at: Date.now() + 1e12,
+    current_step_index: 0,
+    total_steps: 0,
+  };
+  return {
+    eventStore,
+    conversationSyncStore: {
+      getConversationsSince: () => [conv],
+      getMessagesSince: () => messages,
+      upsertConversation: () => {},
+      upsertMessage: () => {},
+    },
+    planStore: {
+      getPlan: () => null,
+      getStep: () => null,
+      getStepsForPlan: () => [],
+      savePlan: () => {},
+      saveStep: () => {},
+      listAllPlans: () => [plan],
+      listStepsSince: () => [],
+    },
+  };
+}
 
 const EVENTS: EventKind[] = ["off", "off-on", "restart", "syncNow"];
 const RELEASES: Release[] = ["immediate", "settled"];
@@ -437,7 +487,14 @@ function makeRuntime(): FakeRuntime & Record<string, unknown> {
     /** Polls with the adapter captured at its start, as a recovery does. */
     async *recoverDelegatedSteps() {
       const a = rt.adapter as
-        { config: { syncUrl: string; authToken: (aud: string) => Promise<string> } } | undefined;
+        | {
+            config: {
+              syncUrl: string;
+              authToken: (aud: string) => Promise<string>;
+              fetch?: typeof fetch;
+            };
+          }
+        | undefined;
       if (!a) return;
       for (let i = 0; i < 2; i++) {
         await h.gate("recovery");
@@ -447,15 +504,29 @@ function makeRuntime(): FakeRuntime & Record<string, unknown> {
         } catch {
           return;
         }
-        await fetch(`${a.config.syncUrl}/api/v1/tasks/recover`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        // As the real adapter polls: through the fetch it was handed.
+        try {
+          await (a.config.fetch ?? fetch)(`${a.config.syncUrl}/api/v1/tasks/recover`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        } catch {
+          return;
+        }
         yield { type: "step" };
         await new Promise((r) => setTimeout(r, 2_000));
       }
     },
   };
   return rt;
+}
+
+/** Run timers; an exception thrown out of one is a crash, recorded. */
+async function advance(ms: number): Promise<void> {
+  try {
+    await vi.advanceTimersByTimeAsync(ms);
+  } catch (err: unknown) {
+    h.state.world.crashes.push(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+  }
 }
 
 async function flush(): Promise<void> {
@@ -476,6 +547,9 @@ async function runSchedule(b: Boundary, event: EventKind, release: Release): Pro
     appStateListeners: new Set(),
     tokenListeners: new Set(),
     expoTokens: 0,
+    crashes: [],
+    inflight: new Set(),
+    unaborted: [],
   };
   h.state.world = world;
   const arm = (): void => {
@@ -488,13 +562,22 @@ async function runSchedule(b: Boundary, event: EventKind, release: Release): Pro
       if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");
       const method = init?.method ?? "GET";
       h.record({ kind: "http", method, url: input });
-      if (input.endsWith("/push-token"))
-        await h.gate(method === "POST" ? "push-post" : "push-delete");
-      return new Response(JSON.stringify({ agents: [] }), { status: 200 });
+      const req = { label: `${method} ${input}`, signal: init?.signal };
+      world.inflight.add(req);
+      try {
+        const g = requestGate(method, input);
+        if (g) await h.gate(g);
+        if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");
+        return new Response(RELAY_BODY, { status: 200 });
+      } finally {
+        world.inflight.delete(req);
+      }
     }),
   );
+  vi.stubGlobal("WebSocket", FakeWebSocket);
 
   const runtime = makeRuntime();
+  const storage = makeStorage();
   const box: { ctrl: MobileSyncController | null } = { ctrl: null };
   const push = new MobilePushTokenManager({
     getDeviceId: () => "dev-1",
@@ -511,11 +594,7 @@ async function runSchedule(b: Boundary, event: EventKind, release: Release): Pro
     getMotebitId: () => "mote-1",
     getDeviceId: () => "dev-1",
     getPublicKey: () => "aa".repeat(32),
-    getStorage: () => ({
-      eventStore: { append: vi.fn(), read: vi.fn(() => []) },
-      conversationSyncStore: {},
-      planStore: {},
-    }),
+    getStorage: () => storage,
     getLocalEventStore: () => null,
     getKeyring: () => ({ get: () => Promise.resolve(null), set: () => Promise.resolve() }),
     getPrivKeyBytes: () => Promise.resolve(new Uint8Array(32)),
@@ -547,11 +626,17 @@ async function runSchedule(b: Boundary, event: EventKind, release: Release): Pro
   const doOff = (): Promise<unknown> => {
     on = false;
     h.record({ kind: "marker", what: "OFF", session });
-    return track(ctrl.disconnectSync());
+    const off = track(ctrl.disconnectSync());
+    // OFF disposes synchronously: every request it found on the wire is cut.
+    for (const req of world.inflight) {
+      if (req.label.endsWith("/push-token") && req.label.startsWith("DELETE")) continue;
+      if (req.signal?.aborted !== true) world.unaborted.push(req.label);
+    }
+    return off;
   };
   /** Advance time in small steps until `done()` (bounded). */
   async function until(done: () => boolean, maxMs: number): Promise<boolean> {
-    for (let t = 0; t < maxMs && !done(); t += 100) await vi.advanceTimersByTimeAsync(100);
+    for (let t = 0; t < maxMs && !done(); t += 100) await advance(100);
     await flush();
     return done();
   }
@@ -565,7 +650,7 @@ async function runSchedule(b: Boundary, event: EventKind, release: Release): Pro
   if (b.trigger === "start") arm();
   void doOn();
   if (b.trigger !== "start") {
-    await vi.advanceTimersByTimeAsync(3_500);
+    await advance(3_500);
     await flush();
     arm();
     switch (b.trigger) {
@@ -582,9 +667,12 @@ async function runSchedule(b: Boundary, event: EventKind, release: Release): Pro
         break;
       case "command": {
         const ws = world.sockets.filter((s) => s.open).at(-1);
-        for (const cb of ws?.custom ?? []) {
-          cb({ type: "command_request", id: `cmd-${session}`, command: "status", envelope: {} });
-        }
+        ws?.socket.deliver({
+          type: "command_request",
+          id: `cmd-${session}`,
+          command: "status",
+          envelope: {},
+        });
         break;
       }
       case "off":
@@ -621,11 +709,11 @@ async function runSchedule(b: Boundary, event: EventKind, release: Release): Pro
   releaseFn();
 
   // 4. Resolve everything, run timers 5 min; end OFF; 5 more min.
-  await vi.advanceTimersByTimeAsync(300_000);
+  await advance(300_000);
   await flush();
   if (on) {
     void doOff();
-    await vi.advanceTimersByTimeAsync(300_000);
+    await advance(300_000);
     await flush();
   }
 
@@ -673,6 +761,9 @@ function checkInvariant(world: World, runtime: FakeRuntime): string[] {
   if (world.sockets.some((s) => s.open)) v.add("V4 WebSocket open after OFF");
   if (runtime.interactive != null || runtime.adapter != null)
     v.add("V5 delegation enabled after OFF");
+  for (const c of new Set(world.crashes)) v.add(`V8 uncaught exception: ${c}`);
+  for (const r of new Set(world.unaborted))
+    v.add(`V9 request on the wire at OFF not aborted: ${r}`);
   return [...v];
 }
 

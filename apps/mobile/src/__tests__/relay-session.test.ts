@@ -92,8 +92,21 @@ describe("RelaySession", () => {
     session.dispose();
     release();
     await expect(p).rejects.toSatisfy(isRelaySessionDisposed);
-    expect(() => guarded.push()).toThrow(RelaySessionDisposedError);
+    // Refused without a synchronous throw (a library timer may be the caller).
+    await expect(guarded.push()).rejects.toBeInstanceOf(RelaySessionDisposedError);
     expect(target.calls).toBe(1);
+  });
+
+  it("guard never throws synchronously after dispose (a library timer may call it)", () => {
+    const session = new RelaySession();
+    const target = { hasLiveWork: vi.fn(() => true) };
+    const guarded = session.guard(target);
+    expect(guarded.hasLiveWork()).toBe(true);
+    session.dispose();
+    // The sync engine's watchdog asks `hasLiveWork() === true` from a timer.
+    expect(() => guarded.hasLiveWork()).not.toThrow();
+    expect((guarded.hasLiveWork() as unknown) === true).toBe(false);
+    expect(target.hasLiveWork).toHaveBeenCalledTimes(1);
   });
 
   it("status is silent after dispose; owned handles release once, and late ones at once", () => {
