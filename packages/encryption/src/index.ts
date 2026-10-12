@@ -9,6 +9,9 @@
  * Uses Web Crypto API for AES-256-GCM/PBKDF2.
  */
 
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+
 // ── Re-export protocol signing primitives from @motebit/crypto ──────
 // Backward compat: consumers import from @motebit/encryption unchanged.
 
@@ -422,29 +425,18 @@ export async function deriveKey(
   return new Uint8Array(bits);
 }
 
+const SYNC_ENCRYPTION_INFO = new TextEncoder().encode("motebit-sync-encryption-v1");
+
 /**
  * Derive a deterministic AES-256 encryption key from an Ed25519 private key using HKDF-SHA256.
  * Used for sync encryption: all devices sharing the same identity derive the same key.
  */
-export async function deriveSyncEncryptionKey(privateKey: Uint8Array): Promise<Uint8Array> {
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    privateKey as BufferSource,
-    "HKDF",
-    false,
-    ["deriveBits"],
-  );
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt: new Uint8Array(0),
-      info: new TextEncoder().encode("motebit-sync-encryption-v1"),
-    },
-    keyMaterial,
-    256,
-  );
-  return new Uint8Array(bits);
+export function deriveSyncEncryptionKey(privateKey: Uint8Array): Promise<Uint8Array> {
+  // Pure-JS HKDF (@noble/hashes), never `crypto.subtle`: React Native's
+  // WebCrypto (react-native-quick-crypto) has no HKDF, so the subtle path
+  // threw on mobile. Byte-identical to WebCrypto HKDF-SHA256 (empty salt) —
+  // pinned by hkdf-noble.test.ts, so existing devices keep their sync key.
+  return Promise.resolve(hkdf(sha256, privateKey, new Uint8Array(0), SYNC_ENCRYPTION_INFO, 32));
 }
 
 /**
