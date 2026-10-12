@@ -101,7 +101,7 @@ function saveStoredGrant(stored: StoredGrant): void {
   );
 }
 
-function listStoredGrants(): StoredGrant[] {
+export function listStoredGrants(): StoredGrant[] {
   if (!existsSync(grantsDir())) return [];
   const out: StoredGrant[] = [];
   for (const file of readdirSync(grantsDir())) {
@@ -420,6 +420,66 @@ async function readSpentMicro(grantIds: string[]): Promise<Map<string, number>> 
   return spent;
 }
 
+/**
+ * A grant authorizes spending only when its delegator key is this motebit's
+ * CURRENT identity key (`grantDelegatorIs` in @motebit/runtime — authority
+ * derives from the immediate issuer, and it flows forward across a rotation,
+ * never back). `motebit rotate` leaves stored grants untouched, so a grant
+ * signed under a previous key stays on disk and verifies as a signature,
+ * yet no longer moves money. False when the current key is unknown.
+ */
+export function signedByPreviousKey(
+  grant: Pick<StandingDelegation, "delegator_public_key">,
+  currentPublicKeyHex: string | undefined,
+): boolean {
+  if (currentPublicKeyHex == null || currentPublicKeyHex === "") return false;
+  return grant.delegator_public_key.toLowerCase() !== currentPublicKeyHex.toLowerCase();
+}
+
+export const PREVIOUS_KEY_MARK = "signed by a previous key — re-issue with `motebit grant create`";
+
+/** The `grant list` lines: one per grant, plus the previous-key mark under each it applies to. */
+export function formatGrantListLines(
+  grants: StoredGrant[],
+  opts: { now: number; spent: Map<string, number>; currentPublicKeyHex: string | undefined },
+): string[] {
+  const lines: string[] = [];
+  for (const stored of grants) {
+    const g = stored.grant;
+    const state =
+      stored.revocation != null ? "REVOKED" : g.expires_at < opts.now ? "expired" : "active";
+    const ceiling = g.spend_ceiling?.lifetime_limit_micro;
+    const spentMicro = opts.spent.get(g.grant_id) ?? 0;
+    const money =
+      ceiling != null
+        ? `  ${usd(Math.max(0, ceiling - spentMicro))} of ${usd(ceiling)} lifetime remaining`
+        : "  (no ceiling — no money)";
+    lines.push(`${g.grant_id}  ${state.padEnd(7)}  ${g.subject}  scope=${g.scope}${money}`);
+    if (signedByPreviousKey(g, opts.currentPublicKeyHex)) lines.push(`  ${PREVIOUS_KEY_MARK}`);
+  }
+  return lines;
+}
+
+/**
+ * The one line `motebit rotate` prints after a rotation when live grants
+ * (neither revoked nor expired) were signed by a key other than the new
+ * one; null when there are none.
+ */
+export function previousKeyGrantNotice(
+  grants: StoredGrant[],
+  newPublicKeyHex: string,
+  now: number,
+): string | null {
+  const n = grants.filter(
+    (s) =>
+      s.revocation == null &&
+      s.grant.expires_at >= now &&
+      signedByPreviousKey(s.grant, newPublicKeyHex),
+  ).length;
+  if (n === 0) return null;
+  return `  Grants: ${n} standing grant${n === 1 ? " was" : "s were"} signed by a previous key and no longer authorize${n === 1 ? "s" : ""} spending — re-issue with \`motebit grant create\``;
+}
+
 export async function handleGrantList(): Promise<void> {
   const grants = listStoredGrants();
   if (grants.length === 0) {
@@ -428,19 +488,15 @@ export async function handleGrantList(): Promise<void> {
     );
     return;
   }
-  const now = Date.now();
   const spent = await readSpentMicro(grants.map((s) => s.grant.grant_id));
-  for (const stored of grants) {
-    const g = stored.grant;
-    const state = stored.revocation != null ? "REVOKED" : g.expires_at < now ? "expired" : "active";
-    const ceiling = g.spend_ceiling?.lifetime_limit_micro;
-    const spentMicro = spent.get(g.grant_id) ?? 0;
-    const money =
-      ceiling != null
-        ? `  ${usd(Math.max(0, ceiling - spentMicro))} of ${usd(ceiling)} lifetime remaining`
-        : "  (no ceiling — no money)";
-    console.log(`${g.grant_id}  ${state.padEnd(7)}  ${g.subject}  scope=${g.scope}${money}`);
+  let currentPublicKeyHex: string | undefined;
+  try {
+    currentPublicKeyHex = loadFullConfig().device_public_key;
+  } catch {
+    // No readable config: nothing to compare against, so no mark.
   }
+  const lines = formatGrantListLines(grants, { now: Date.now(), spent, currentPublicKeyHex });
+  for (const line of lines) console.log(line);
 }
 
 export async function handleGrantShow(grantId: string | undefined): Promise<void> {

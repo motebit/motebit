@@ -3,20 +3,24 @@
  * the tool-registry execute method (and the registry's handler map), not just
  * the literal `registry.execute(` call text.
  *
- * Plants one production file per aliasing form under packages/runtime/src,
- * runs the real gate once, and requires each planted file to be named in a
- * red result. Every form below executed a tool raw while the regex scan
- * stayed green.
+ * Plants one production file per aliasing form under packages/runtime/src —
+ * as IN-MEMORY virtual files in the gate's own type-aware scan program
+ * (`createScanProgram`, the same machinery and planting the gate's built-in
+ * self-test uses), never on disk: a real file planted in a scanned tree
+ * races every other gate self-test that walks it (the identity-authority
+ * census counted the probes), and the repo lock is budgeted for short holds,
+ * not a whole-workspace type-aware gate run. Each planted file must yield a
+ * reference outside the registry's own body — and no sanctioned site lives
+ * in these files, so each is a violation. Every form below executed a tool
+ * raw while the regex scan stayed green.
  */
 import { describe, it, expect } from "vitest";
-import { spawnSync } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createScanProgram, scanFile } from "../lib/registry-execute-refs.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
-const SCRIPT = resolve(ROOT, "scripts", "check-money-authority.ts");
 const DIR = "packages/runtime/src";
 const PREFIX = "__money_alias_probe__";
 
@@ -46,18 +50,18 @@ const FORMS: Record<string, string> = {
 
 describe("check-money-authority assertion 5 (type-aware)", () => {
   it("flags every aliasing form of a raw registry execute", () => {
-    const files = Object.keys(FORMS).map((k) => `${DIR}/${PREFIX}${k}.ts`);
-    try {
-      for (const [k, body] of Object.entries(FORMS)) {
-        writeFileSync(resolve(ROOT, `${DIR}/${PREFIX}${k}.ts`), HEADER + body);
-      }
-      const result = spawnSync("npx", ["tsx", SCRIPT], { encoding: "utf-8", cwd: ROOT });
-      const out = `${result.stdout}\n${result.stderr}`;
-      expect(result.status).toBe(1);
-      const missed = files.filter((f) => !out.includes(f));
-      expect(missed).toEqual([]);
-    } finally {
-      for (const f of files) rmSync(resolve(ROOT, f), { force: true });
+    const virtual = new Map<string, string>();
+    for (const [k, body] of Object.entries(FORMS)) {
+      virtual.set(resolve(ROOT, `${DIR}/${PREFIX}${k}.ts`), HEADER + body);
     }
+    const program = createScanProgram(ROOT, [], virtual);
+    const missed: string[] = [];
+    for (const path of virtual.keys()) {
+      const rel = path.slice(ROOT.length + 1);
+      const sf = program.getSourceFile(path);
+      const refs = sf == null ? [] : scanFile(program, sf, rel);
+      if (refs.filter((r) => !r.internal).length === 0) missed.push(rel);
+    }
+    expect(missed).toEqual([]);
   }, 300_000);
 });
