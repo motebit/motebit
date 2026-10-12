@@ -1,9 +1,222 @@
-# Default owner for everything
-* @hakimlabs
+# CODEOWNERS — founder review where authority lives, and nowhere else.
+#
+# Rule: a path is listed here only if a change to it can change WHO may act or
+# WHAT money may move — constitutional files, the gates that enforce authority,
+# the money/identity registry packages, and the authority doors outside
+# packages/. Everything else (docs, UI, tests, tooling) is CI-only. There is
+# deliberately NO catch-all `*` line: with code-owner review required by the
+# ruleset, `*` would gate every PR.
+#
+# GitHub semantics: the LAST matching pattern wins; a pattern with no owner
+# makes matching paths unowned. Why-comments sit on the line ABOVE each entry:
+# GitHub skips any line it cannot parse, so no trailing comments.
+#
+# Drift gate: scripts/check-codeowners-authority.ts (`pnpm check`). It derives
+# the required set from scripts/money-identity-path.ts (MONEY_IDENTITY_PATH),
+# the identity-authority writers gate and the money-authority gate, and fails
+# if any of those paths is not owned here or a catch-all appears. Section (C)
+# entries no existing gate tracks live ONLY in this file.
 
-# Protocol layer (Apache-2.0)
-spec/ @hakimlabs
-packages/protocol/ @hakimlabs
-packages/crypto/ @hakimlabs
-packages/sdk/ @hakimlabs
-packages/create-motebit/ @hakimlabs
+# ── (A) Constitutional ──────────────────────────────────────────────────────
+/.github/ @hakimlabs
+/CLAUDE.md @hakimlabs
+/GOVERNANCE.md @hakimlabs
+/LICENSE @hakimlabs
+/LICENSING.md @hakimlabs
+/CLA.md @hakimlabs
+/TRADEMARK.md @hakimlabs
+/SECURITY.md @hakimlabs
+/SECURITY-DISCLOSURES.md @hakimlabs
+
+# Gates that define or enforce authority (a gate weakened is an authority lost).
+/scripts/check-money-*.ts @hakimlabs
+/scripts/check-identity-authority-*.ts @hakimlabs
+/scripts/check-gates-effective.ts @hakimlabs
+/scripts/check-claude-md.ts @hakimlabs
+/scripts/check-settlement-mode-canonical.ts @hakimlabs
+/scripts/money-identity-path.ts @hakimlabs
+# Enforces the registry coverage floors — the stated mitigation for unowned tests.
+/scripts/check-coverage-config-present.ts @hakimlabs
+/scripts/check-codeowners-authority.ts @hakimlabs
+/scripts/lib/codeowners.ts @hakimlabs
+# The wire contract (protocol primacy): the spec and the protocol types define what
+# every implementer must do, so a change here is constitutional (founder decision 2026-10-11).
+/spec/ @hakimlabs
+/packages/protocol/src/ @hakimlabs
+/packages/protocol/package.json @hakimlabs
+
+# ── (B) Money / identity registry packages (scripts/money-identity-path.ts) ──
+# Implementation (src/) and dependencies (package.json); tests are excluded at
+# the end of this file.
+/packages/virtual-accounts/src/ @hakimlabs
+/packages/virtual-accounts/package.json @hakimlabs
+/packages/wallet-solana/src/ @hakimlabs
+/packages/wallet-solana/package.json @hakimlabs
+/packages/settlement-rails/src/ @hakimlabs
+/packages/settlement-rails/package.json @hakimlabs
+/packages/evm-rpc/src/ @hakimlabs
+/packages/evm-rpc/package.json @hakimlabs
+/packages/deposit-detector/src/ @hakimlabs
+/packages/deposit-detector/package.json @hakimlabs
+/packages/treasury-reconciliation/src/ @hakimlabs
+/packages/treasury-reconciliation/package.json @hakimlabs
+/packages/molecule-runner/src/ @hakimlabs
+/packages/molecule-runner/package.json @hakimlabs
+/packages/core-identity/src/ @hakimlabs
+/packages/core-identity/package.json @hakimlabs
+/packages/identity-file/src/ @hakimlabs
+/packages/identity-file/package.json @hakimlabs
+/packages/crypto/src/ @hakimlabs
+/packages/crypto/package.json @hakimlabs
+/packages/crypto-appattest/src/ @hakimlabs
+/packages/crypto-appattest/package.json @hakimlabs
+/packages/crypto-android-keystore/src/ @hakimlabs
+/packages/crypto-android-keystore/package.json @hakimlabs
+/packages/crypto-tpm/src/ @hakimlabs
+/packages/crypto-tpm/package.json @hakimlabs
+/packages/crypto-webauthn/src/ @hakimlabs
+/packages/crypto-webauthn/package.json @hakimlabs
+/packages/verify/src/ @hakimlabs
+/packages/verify/package.json @hakimlabs
+/packages/verifier/src/ @hakimlabs
+/packages/verifier/package.json @hakimlabs
+
+# ── (C) Authority doors outside the registry ────────────────────────────────
+# Relay — identity authority (write sites the identity-authority writers gate
+# registers into AUTHORITY_TABLES are gate-enforced; the rest are hand-chosen).
+# registration: writes agent_registry keys, guardian attestation
+/services/relay/src/agents.ts @hakimlabs
+# identity_keys holder + guardian rows
+/services/relay/src/identity-keys.ts @hakimlabs
+# identity revocation record / lift
+/services/relay/src/identity-revocation.ts @hakimlabs
+# agent revocation door
+/services/relay/src/agent-revocation.ts @hakimlabs
+# key rotation / guardian recovery approvals
+/services/relay/src/key-rotation.ts @hakimlabs
+# applies key successions to registry + devices
+/services/relay/src/succession-apply.ts @hakimlabs
+# the only sanctioned registry de-list path
+/services/relay/src/registry-delist.ts @hakimlabs
+# identity migration arrival / departure
+/services/relay/src/migration.ts @hakimlabs
+# schema migrations that rewrite agent_registry
+/services/relay/src/migrations.ts @hakimlabs
+# credential submit / revoke (relay_revoked_credentials)
+/services/relay/src/credentials.ts @hakimlabs
+# delegation revocation verified against relay-held keys
+/services/relay/src/delegation-revocations.ts @hakimlabs
+# BoundIdentity minting — the binding primitive every writer trusts
+/services/relay/src/identity-binding.ts @hakimlabs
+# who may register a device under an identity
+/services/relay/src/device-registration-guard.ts @hakimlabs
+# bearer / signed-token verification
+/services/relay/src/auth.ts @hakimlabs
+# task submission + settlement gates; writes agent_registry
+/services/relay/src/tasks.ts @hakimlabs
+# mints the task:dispatch admission token
+/services/relay/src/task-routing.ts @hakimlabs
+# federation peer handshake + envelope verification
+/services/relay/src/federation.ts @hakimlabs
+# peer-authored events applied to local identity state
+/services/relay/src/federation-callbacks.ts @hakimlabs
+# operator emergency freeze
+/services/relay/src/freeze.ts @hakimlabs
+
+# Relay — money flows.
+# virtual-account credit/debit routes
+/services/relay/src/accounts.ts @hakimlabs
+# ledger persistence
+/services/relay/src/account-store-sqlite.ts @hakimlabs
+# budget allocation holds / releases
+/services/relay/src/allocation-escrow.ts @hakimlabs
+# spend budget enforcement
+/services/relay/src/budget.ts @hakimlabs
+# the 5% coordination fee
+/services/relay/src/fees.ts @hakimlabs
+# who pays network fees
+/services/relay/src/fee-payer-guard.ts @hakimlabs
+# settlement proof verification
+/services/relay/src/settlement-proofs.ts @hakimlabs
+# stuck-settlement recovery
+/services/relay/src/settlement-recovery.ts @hakimlabs
+# verifies P2P payment legs before recording
+/services/relay/src/p2p-verifier.ts @hakimlabs
+# P2P payer leg
+/services/relay/src/p2p-payer.ts @hakimlabs
+# P2P payee resolution
+/services/relay/src/p2p-payee.ts @hakimlabs
+# x402 settlement records
+/services/relay/src/x402-settlements.ts @hakimlabs
+# x402 facilitator
+/services/relay/src/x402-facilitator.ts @hakimlabs
+# credits on-chain deposits
+/services/relay/src/deposit-detector.ts @hakimlabs
+# sweeps funds
+/services/relay/src/sweep.ts @hakimlabs
+# withdrawal batching
+/services/relay/src/batch-withdrawals.ts @hakimlabs
+# on-chain withdrawal payouts
+/services/relay/src/withdrawal-chain-payouts.ts @hakimlabs
+# payout timing horizon
+/services/relay/src/payout-horizon.ts @hakimlabs
+# user-initiated off-ramp
+/services/relay/src/offramp.ts @hakimlabs
+# on-ramp credit
+/services/relay/src/onramp.ts @hakimlabs
+# on-ramp provider adapters
+/services/relay/src/onramp/ @hakimlabs
+# card-funded credit
+/services/relay/src/stripe-credit.ts @hakimlabs
+# free-credit grants
+/services/relay/src/free-credit.ts @hakimlabs
+# dispute filing / resolution
+/services/relay/src/disputes.ts @hakimlabs
+# dispute verdict execution
+/services/relay/src/dispute-orchestration.ts @hakimlabs
+# dispute fund movements
+/services/relay/src/dispute-fund-ledger.ts @hakimlabs
+# commitment-bond RPC verification
+/services/relay/src/bond-verifier.ts @hakimlabs
+# commitment-bond records
+/services/relay/src/bond-store.ts @hakimlabs
+
+# Persistence — the devices writer the identity-authority writers gate registers.
+/packages/persistence/src/index.ts @hakimlabs
+
+# Runtime — R4 money path (check-money-authority / check-ceiling-from-grant scope).
+# R4 standing-authority block
+/packages/policy/src/policy-gate.ts @hakimlabs
+# tool risk classification
+/packages/policy/src/risk-model.ts @hakimlabs
+# spend ceiling from the verified grant
+/packages/policy/src/grant-blast-radius.ts @hakimlabs
+# the sole verifiedGrant producer
+/packages/runtime/src/grant-verifier.ts @hakimlabs
+# registers delegate_to_agent at R4
+/packages/runtime/src/interactive-delegation.ts @hakimlabs
+# tool execute path + executeGrantedDelegation
+/packages/runtime/src/motebit-runtime.ts @hakimlabs
+# the R4 meter (gate ∧ meter)
+/packages/runtime/src/money-meter.ts @hakimlabs
+# forwarding paid work
+/packages/runtime/src/sovereign-pay-forward-gate.ts @hakimlabs
+# tool registry execute
+/packages/runtime/src/simple-tool-registry.ts @hakimlabs
+# scoped tool registry execute
+/packages/runtime/src/scoped-tool-registry.ts @hakimlabs
+# task:dispatch admission verification
+/packages/mcp-server/src/caller-token.ts @hakimlabs
+
+# CLI — direct task doors and the grant subcommand.
+# daemon task doors
+/apps/cli/src/daemon.ts @hakimlabs
+# issues standing-delegation grants
+/apps/cli/src/subcommands/grant.ts @hakimlabs
+# grant pre-flight refusals
+/apps/cli/src/grant-preflight.ts @hakimlabs
+
+# ── Exclusions (must stay last: last match wins) ───────────────────────────
+# Tests prove invariants but carry no authority; they are CI-only.
+**/__tests__/
+**/*.test.ts

@@ -131,6 +131,8 @@ fly ssh sftp get /data/motebit-backup-YYYYMMDD.db -a motebit-sync
 2. Or restore from manual backup
 3. The event log is append-only -- clients can re-sync from their local event logs
 
+**Guardian recovery provenance (migration v58):** a guardian recovery is accepted only under a guardian set with the identity's current key (403 `GUARDIAN_NOT_PROVEN` otherwise); before v58 no guardian had provenance, and the prod census measured 0 guardians (Q4 = 0), so no existing user is affected. An owner whose identity can be proven (it has a held key, or a sovereign id) and whose recovery is refused re-sets the guardian with a request proven by the current identity key (`scripts/measure-identity-authority.ts` Q4 lists any unproven guardian). A legacy (non-sovereign) id with no held key can never be proven, so `/agents/register` refuses its guardian (400 `GUARDIAN_REQUIRES_SOVEREIGN_IDENTITY`, recorded `register:guardian_unprovable`) and a recovery under one set before that answers 403 `GUARDIAN_NOT_PROVEN` saying recovery is not available — there is no re-set for it until the legacy evidence path (D2) is built.
+
 ---
 
 ## 3. Service Deployment

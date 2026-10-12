@@ -358,6 +358,131 @@ export function recordIdentityGuardian(
   ).run(input.guardianPublicKey, input.now, input.motebitId);
 }
 
+// ── Guardian provenance (identity-authority-writers.md I1, §3.2; census Q4). ──
+
+/**
+ * What proved the identity's CURRENT key when a guardian was set (closed
+ * set; migration v58):
+ *
+ *  - `holder`    the bearer was verified by a device row holding exactly the
+ *                identity's held key (`identity_keys`) — the identity signed;
+ *  - `sovereign` the same request recorded the identity's sovereign first
+ *                key (E-sov, `recordFirstIdentityKey`) under the bearer's
+ *                proven possession of it.
+ *
+ * Nothing else is provenance: a paired device's own key, the master token
+ * (D3), a legacy identity with no held key (D2) and the v42 backfill's
+ * transplant record no row.
+ */
+export const GUARDIAN_EVIDENCE = ["holder", "sovereign"] as const;
+export type GuardianEvidence = (typeof GUARDIAN_EVIDENCE)[number];
+
+/**
+ * Record that `guardianPublicKey` was set by a request proven under
+ * `setUnderKey`, the identity's current key (the door decides; this proves
+ * nothing itself). One row per guardian; re-setting a guardian makes its row
+ * the LATEST, by a `recorded_at` strictly above every earlier row of the
+ * identity, so the order never rests on clock resolution.
+ */
+export function recordGuardianEvidence(
+  db: DatabaseDriver,
+  input: {
+    motebitId: string;
+    guardianPublicKey: string;
+    setUnderKey: string;
+    evidence: GuardianEvidence;
+    now: number;
+  },
+): void {
+  if (!HEX_64_ANY_CASE.test(input.guardianPublicKey)) {
+    throw new Error("recordGuardianEvidence: guardian must be a 64-hex Ed25519 public key");
+  }
+  db.prepare(
+    `INSERT INTO relay_guardian_evidence (motebit_id, guardian_public_key, set_under_key, evidence, recorded_at)
+     VALUES (?, ?, ?, ?, MAX(?, COALESCE((SELECT MAX(recorded_at) + 1 FROM relay_guardian_evidence WHERE motebit_id = ?), 0)))
+     ON CONFLICT(motebit_id, guardian_public_key) DO UPDATE SET
+       set_under_key = excluded.set_under_key,
+       evidence = excluded.evidence,
+       recorded_at = excluded.recorded_at`,
+  ).run(
+    input.motebitId,
+    input.guardianPublicKey,
+    input.setUnderKey,
+    input.evidence,
+    input.now,
+    input.motebitId,
+  );
+}
+
+/**
+ * The guardian on file (`identityGuardianFor`) and whether it has
+ * provenance: it is EXACTLY the guardian the identity's latest evidence row
+ * names. A guardian set without proof — or one the owner later replaced,
+ * revived by a replayed attestation — is unproven. A guardian recovery is
+ * accepted only under a proven guardian (`/rotate-key` and the register
+ * door's succession branch).
+ */
+export function guardianProvenance(
+  db: DatabaseDriver,
+  motebitId: string,
+): { guardian: string | null; proven: boolean } {
+  const guardian = identityGuardianFor(db, motebitId);
+  if (guardian === null) return { guardian, proven: false };
+  return { guardian, proven: provenGuardianOf(db, motebitId) === guardian };
+}
+
+/**
+ * A sovereign id's SHAPE, decidable from the id alone (the census's
+ * `SOVEREIGN_SHAPE`; `isSovereignShaped` in `@motebit/crypto`). Whether a
+ * KEY is that id's commitment is decided only by `proveSovereignFirstKey`.
+ */
+const SOVEREIGN_ID_SHAPE = (id: string): boolean =>
+  id.startsWith("did:key:") ||
+  /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+
+/**
+ * Whether any request could EVER write guardian evidence for this identity:
+ * it has a holder (`holder` evidence, under a device on that key), or its id
+ * has a sovereign commitment's shape (E-sov can still record its first key,
+ * and `sovereign` evidence with it). A non-sovereign (legacy) id with no
+ * holder has neither — `recordFirstIdentityKey` refuses its id and E-link
+ * needs a holder — so no guardian set for it can ever be proven (D2: the
+ * evidence path for legacy ids is not built). `/agents/register` refuses to
+ * set one, and a recovery under one set before that refusal is told so.
+ */
+export function guardianEvidencePossible(db: DatabaseDriver, motebitId: string): boolean {
+  return holderKeyOf(db, motebitId) !== null || SOVEREIGN_ID_SHAPE(motebitId);
+}
+
+/**
+ * Whether an operator registration of this identity in the current request
+ * would record E-op (`recordOperatorServiceKey`'s conditions, read without
+ * writing): no holder, no recorded chain, no device row. A legacy id that
+ * passes gets a holder from that same request, so its guardian becomes
+ * provable (`guardianEvidencePossible`) — the register door must not refuse it.
+ */
+export function operatorServiceKeyWouldRecord(db: DatabaseDriver, motebitId: string): boolean {
+  if (holderKeyOf(db, motebitId) !== null) return false;
+  if (chainHeadOf(db, motebitId) !== null) return false;
+  return db.prepare("SELECT 1 FROM devices WHERE motebit_id = ? LIMIT 1").get(motebitId) == null;
+}
+
+/**
+ * The guardian the identity's LATEST evidence row names, else null — the one
+ * guardian that has provenance. The census's Q4 reads this same answer.
+ */
+export function provenGuardianOf(db: DatabaseDriver, motebitId: string): string | null {
+  return (
+    (
+      db
+        .prepare(
+          "SELECT guardian_public_key FROM relay_guardian_evidence WHERE motebit_id = ? ORDER BY recorded_at DESC LIMIT 1",
+        )
+        .get(motebitId) as { guardian_public_key: string } | undefined
+    )?.guardian_public_key ?? null
+  );
+}
+
 /**
  * The backfill (E-main), as SQL the migration runs once and a test can run
  * against a planted database: main's registry key, and NOTHING else — the
