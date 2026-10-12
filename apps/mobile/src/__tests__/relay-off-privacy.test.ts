@@ -213,13 +213,14 @@ describe("Relay OFF drops every live relay handle", () => {
 describe("Relay OFF unregisters the push token first", () => {
   it("removes the push token from the relay BEFORE the URL is cleared", async () => {
     const urlAtRemoval: Array<string | null> = [];
-    let ctrl!: MobileSyncController;
+    const ref: { ctrl?: MobileSyncController } = {};
     const deps = makeDeps(makeRuntime(), {
       removePushToken: vi.fn(async (url: string) => {
-        urlAtRemoval.push(url, await ctrl.getSyncUrl());
+        urlAtRemoval.push(url, (await ref.ctrl?.getSyncUrl()) ?? null);
       }),
     });
-    ctrl = new MobileSyncController(deps);
+    const ctrl = new MobileSyncController(deps);
+    ref.ctrl = ctrl;
     await connectAndRunFirstCycle(ctrl);
 
     await ctrl.disconnectSync();

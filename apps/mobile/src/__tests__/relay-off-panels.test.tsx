@@ -54,7 +54,7 @@ function freshApp(syncUrl: string | null = null): MobileApp {
 
 function allText(r: TestRenderer.ReactTestRenderer): string {
   return r.root
-    .findAll((n) => n.type === "Text")
+    .findAll((n) => (n.type as unknown) === "Text")
     .map((n) => {
       const c = n.props.children as unknown;
       return Array.isArray(c) ? c.join("") : typeof c === "string" ? c : "";
@@ -76,23 +76,11 @@ afterEach(() => {
 });
 
 describe("Relay OFF: panels contact nothing", () => {
-  it("Capabilities panel: opening it on a fresh state makes zero requests", async () => {
+  it("Capabilities panel (Browse section): opening it on a fresh state makes zero requests", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const r = await open(
       React.createElement(CapabilitiesPanel, { visible: true, app: freshApp(), onClose: () => {} }),
     );
-    // Browse is the tab that used to fetch — open it too.
-    const browseTab = r.root.findAll(
-      (n) =>
-        n.type === "TouchableOpacity" &&
-        n.findAll((c) => c.type === "Text" && c.props.children === "Browse").length > 0,
-    );
-    if (browseTab.length > 0) {
-      await act(async () => {
-        (browseTab[0]!.props.onPress as () => void)();
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      });
-    }
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(allText(r)).toContain(EMPTY_STATE);
   });
@@ -126,7 +114,7 @@ describe("Relay OFF: panels contact nothing", () => {
     );
     expect(fetchSpy).toHaveBeenCalled();
     for (const [u] of fetchSpy.mock.calls) {
-      expect(String(u).startsWith("https://relay.example.com/")).toBe(true);
+      expect((u as string).startsWith("https://relay.example.com/")).toBe(true);
     }
   });
 });

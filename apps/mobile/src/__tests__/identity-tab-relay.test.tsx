@@ -145,7 +145,7 @@ describe("IdentityTab relay opt-in", () => {
   it("the copy states what ON and OFF actually do", () => {
     const r = mount(fakePort());
     const text = r.root
-      .findAll((n) => n.type === "Text")
+      .findAll((n) => (n.type as unknown) === "Text")
       .map((n) => {
         const c = n.props.children as unknown;
         return Array.isArray(c) ? c.join("") : typeof c === "string" ? c : "";
