@@ -131,7 +131,9 @@ let identity: RelayIdentity;
 async function setupDbAndIdentity(): Promise<void> {
   const keypair = await generateKeypair();
   identity = {
-    relayMotebitId: `relay-${crypto.randomUUID()}`,
+    // The id every stored retry payload names as its `origin_relay`: a v2
+    // `settlement-forward` is signed only by the relay its body names.
+    relayMotebitId: "self-relay",
     publicKey: keypair.publicKey,
     privateKey: keypair.privateKey,
     publicKeyHex: bytesToHex(keypair.publicKey),

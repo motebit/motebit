@@ -15,14 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import {
-  generateKeypair,
-  signExecutionReceipt,
-  bytesToHex,
-  hexToBytes,
-  sign,
-  canonicalJson,
-} from "@motebit/encryption";
+import { generateKeypair, signExecutionReceipt, bytesToHex, hexToBytes } from "@motebit/encryption";
 import { deriveSovereignMotebitId } from "@motebit/crypto";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { deriveSolanaAddress, SolanaWalletRail } from "@motebit/wallet-solana";
@@ -40,6 +33,8 @@ import {
   operatorConfirm,
   removeRequest,
   signedConfirm,
+  workRequest,
+  type WorkRoute,
 } from "./federation-messages.js";
 import { reconcileTreasury } from "@motebit/treasury-reconciliation";
 import { startP2pVerifierLoop } from "../p2p-verifier.js";
@@ -293,6 +288,21 @@ async function registerSovereignWorker(
     body: JSON.stringify({ capabilities, pricing, description: `${name} service agent` }),
   });
   return { motebitId, publicKeyHex, privateKey: keypair.privateKey, settlementAddress };
+}
+
+/**
+ * A v2 work request for `route` addressed to `to` (by id and by key), signed by
+ * a FRESH key no relay holds — the forged-signature fixture. The harness does
+ * not expose relay private keys, and the rejection paths these tests cover
+ * refuse before (unknown peer) or at (bad signature) the signature check.
+ */
+async function forgedWork(
+  route: WorkRoute,
+  to: SyncRelay,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const kp = await generateKeypair();
+  return workRequest({ route, body, privateKey: kp.privateKey, recipient: to.relayIdentity });
 }
 
 // === Tests ===
@@ -866,9 +876,9 @@ describe("Federation E2E", () => {
     // The POSITIVE signed path (sign → verify → 200) is exercised end-to-end by
     // the Phase 3 cross-relay tests above: relayA's fan-out/originating discover
     // routes through `signDiscoverBody`, and relayB verifies it. These tests
-    // cover the REJECTION paths, which reject before (or regardless of) signature
-    // validity, so a random signature suffices — the test harness intentionally
-    // does not expose relay private keys.
+    // cover the REJECTION paths, which reject before (or at) the signature check,
+    // so a v2 message signed by a fresh key (`forgedWork`) suffices; a v1
+    // in-body signature (`randomSig`) is refused by name.
     const randomSig = (): string => bytesToHex(crypto.getRandomValues(new Uint8Array(64)));
 
     const discoverBase = (sender: string): Record<string, unknown> => ({
@@ -883,8 +893,25 @@ describe("Federation E2E", () => {
 
     it("rejects a present-but-invalid discover signature from an active peer (403)", async () => {
       await establishPeering(relayA, relayB);
-      // sender_relay is an ACTIVE peer + timestamp is fresh, so verification
-      // reaches the Ed25519 check and fails on the random signature → 403 (not 400).
+      // sender_relay is an ACTIVE peer and the v2 message is for B's key, so
+      // verification reaches the Ed25519 check and fails on the forged
+      // signature → 403 (not 400).
+      const res = await relayB.app.request("/federation/v1/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          await forgedWork(
+            "/federation/v1/discover",
+            relayB,
+            discoverBase(relayA.relayIdentity.relayMotebitId),
+          ),
+        ),
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("refuses a v1-signed discover (a signature, no v2 message) by name (400)", async () => {
+      await establishPeering(relayA, relayB);
       const res = await relayB.app.request("/federation/v1/discover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -894,20 +921,8 @@ describe("Federation E2E", () => {
           signature: randomSig(),
         }),
       });
-      expect(res.status).toBe(403);
-    });
-
-    it("rejects a signed discover missing its timestamp (400)", async () => {
-      await establishPeering(relayA, relayB);
-      const res = await relayB.app.request("/federation/v1/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...discoverBase(relayA.relayIdentity.relayMotebitId),
-          signature: randomSig(),
-        }),
-      });
       expect(res.status).toBe(400);
+      expect(await res.text()).toMatch(/v1 is refused/);
     });
 
     it("rejects a signed discover from a non-peer sender (403)", async () => {
@@ -915,11 +930,9 @@ describe("Federation E2E", () => {
       const res = await relayB.app.request("/federation/v1/discover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...discoverBase("unknown-relay"),
-          timestamp: Date.now(),
-          signature: randomSig(),
-        }),
+        body: JSON.stringify(
+          await forgedWork("/federation/v1/discover", relayB, discoverBase("unknown-relay")),
+        ),
       });
       expect(res.status).toBe(403);
     });
@@ -1008,14 +1021,14 @@ describe("Federation E2E", () => {
       const res = await relayB.app.request("/federation/v1/task/forward", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task_id: crypto.randomUUID(),
-          origin_relay: "unknown-relay",
-          target_agent: "some-agent",
-          task_payload: { prompt: "test" },
-          timestamp: Date.now(),
-          signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
-        }),
+        body: JSON.stringify(
+          await forgedWork("/federation/v1/task/forward", relayB, {
+            task_id: crypto.randomUUID(),
+            origin_relay: "unknown-relay",
+            target_agent: "some-agent",
+            task_payload: { prompt: "test" },
+          }),
+        ),
       });
       expect(res.status).toBe(403);
     });
@@ -1026,14 +1039,14 @@ describe("Federation E2E", () => {
       const res = await relayB.app.request("/federation/v1/task/forward", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task_id: crypto.randomUUID(),
-          origin_relay: relayA.relayIdentity.relayMotebitId,
-          target_agent: "some-agent",
-          task_payload: { prompt: "test" },
-          timestamp: Date.now(),
-          signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
-        }),
+        body: JSON.stringify(
+          await forgedWork("/federation/v1/task/forward", relayB, {
+            task_id: crypto.randomUUID(),
+            origin_relay: relayA.relayIdentity.relayMotebitId,
+            target_agent: "some-agent",
+            task_payload: { prompt: "test" },
+          }),
+        ),
       });
       expect(res.status).toBe(403);
     });
@@ -1179,29 +1192,29 @@ describe("Federation E2E", () => {
       const res = await relayA.app.request("/federation/v1/task/result", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task_id: crypto.randomUUID(),
-          origin_relay: "unknown-relay",
-          timestamp: now,
-          // Wire-format-conforming ExecutionReceipt (ExecutionReceiptSchema);
-          // peer-auth must reject before relay trusts the body.
-          receipt: {
-            task_id: "test",
-            motebit_id: "unknown-agent",
-            device_id: "unknown-device",
-            submitted_at: now - 1000,
-            completed_at: now,
-            status: "completed",
-            result: "",
-            tools_used: [],
-            memories_formed: 0,
-            prompt_hash: "",
-            result_hash: "",
-            suite: "motebit-jcs-ed25519-b64-v1",
-            signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
-          },
-          signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
-        }),
+        body: JSON.stringify(
+          await forgedWork("/federation/v1/task/result", relayA, {
+            task_id: crypto.randomUUID(),
+            origin_relay: "unknown-relay",
+            // Wire-format-conforming ExecutionReceipt (ExecutionReceiptSchema);
+            // peer-auth must reject before relay trusts the body.
+            receipt: {
+              task_id: "test",
+              motebit_id: "unknown-agent",
+              device_id: "unknown-device",
+              submitted_at: now - 1000,
+              completed_at: now,
+              status: "completed",
+              result: "",
+              tools_used: [],
+              memories_formed: 0,
+              prompt_hash: "",
+              result_hash: "",
+              suite: "motebit-jcs-ed25519-b64-v1",
+              signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
+            },
+          }),
+        ),
       });
       expect(res.status).toBe(403);
     });
@@ -1214,15 +1227,15 @@ describe("Federation E2E", () => {
       const res = await relayB.app.request("/federation/v1/settlement/forward", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task_id: crypto.randomUUID(),
-          settlement_id: crypto.randomUUID(),
-          origin_relay: "unknown-relay",
-          gross_amount: 100,
-          receipt_hash: "abc123",
-          timestamp: Date.now(),
-          signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
-        }),
+        body: JSON.stringify(
+          await forgedWork("/federation/v1/settlement/forward", relayB, {
+            task_id: crypto.randomUUID(),
+            settlement_id: crypto.randomUUID(),
+            origin_relay: "unknown-relay",
+            gross_amount: 100,
+            receipt_hash: "abc123",
+          }),
+        ),
       });
       expect(res.status).toBe(403);
     });
@@ -1233,15 +1246,15 @@ describe("Federation E2E", () => {
       const res = await relayB.app.request("/federation/v1/settlement/forward", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task_id: crypto.randomUUID(),
-          settlement_id: crypto.randomUUID(),
-          origin_relay: relayA.relayIdentity.relayMotebitId,
-          gross_amount: 100,
-          receipt_hash: "abc123",
-          timestamp: Date.now(),
-          signature: bytesToHex(crypto.getRandomValues(new Uint8Array(64))),
-        }),
+        body: JSON.stringify(
+          await forgedWork("/federation/v1/settlement/forward", relayB, {
+            task_id: crypto.randomUUID(),
+            settlement_id: crypto.randomUUID(),
+            origin_relay: relayA.relayIdentity.relayMotebitId,
+            gross_amount: 100,
+            receipt_hash: "abc123",
+          }),
+        ),
       });
       expect(res.status).toBe(403);
     });
@@ -1845,16 +1858,31 @@ describe("Federation E2E", () => {
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         if (url.startsWith(RELAY_B_URL) && url.includes("/federation/v1/task/forward")) {
           // A retried delivery: the first reached B; B answers the second
-          // "duplicate" — the executor holds the task.
+          // "duplicate" — the executor holds the task. A retry is re-signed
+          // (a fresh v2 message: B refuses the same nonce twice), as every
+          // relay sender re-signs each attempt.
           await relayB.app.request(url.slice(RELAY_B_URL.length), {
             method: init?.method ?? "GET",
             headers: init?.headers as Record<string, string>,
             body: init?.body as string,
           });
+          const { message: _first, ...fields } = JSON.parse(init?.body as string) as Record<
+            string,
+            unknown
+          >;
+          const aRelayKey = relayA.moteDb.db
+            .prepare("SELECT private_key_hex FROM relay_identity LIMIT 1")
+            .get() as { private_key_hex: string };
+          const retry = await workRequest({
+            route: "/federation/v1/task/forward",
+            body: fields,
+            privateKey: hexToBytes(aRelayKey.private_key_hex),
+            recipient: relayB.relayIdentity,
+          });
           return relayB.app.request(url.slice(RELAY_B_URL.length), {
             method: init?.method ?? "GET",
             headers: init?.headers as Record<string, string>,
-            body: init?.body as string,
+            body: JSON.stringify(retry),
           }) as unknown as Response;
         }
         for (const [base, relay] of [
@@ -2422,21 +2450,23 @@ describe("Federation E2E", () => {
         origin_relay: relayB.relayIdentity.relayMotebitId,
         receipt: tamperedReceipt,
         agent_public_key: bob.publicKeyHex,
-        timestamp: Date.now(),
       };
       // B's relay private key (plaintext at rest in tests — no passphrase) signs
-      // the peer envelope, exactly as the real result-forward path does.
+      // the v2 `task-result` message for A, exactly as the real result path does.
       const bRelayKey = relayB.moteDb.db
         .prepare("SELECT private_key_hex FROM relay_identity LIMIT 1")
         .get() as { private_key_hex: string };
-      const envelopeSig = await sign(
-        new TextEncoder().encode(canonicalJson(resultBody)),
-        hexToBytes(bRelayKey.private_key_hex),
-      );
       const res = await relayA.app.request("/federation/v1/task/result", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...resultBody, signature: bytesToHex(envelopeSig) }),
+        body: JSON.stringify(
+          await workRequest({
+            route: "/federation/v1/task/result",
+            body: resultBody,
+            privateKey: hexToBytes(bRelayKey.private_key_hex),
+            recipient: relayA.relayIdentity,
+          }),
+        ),
       });
 
       // Rejected at inner-receipt verification — the forwarded key let A check the
@@ -3066,19 +3096,20 @@ describe("Federation E2E", () => {
         target_agent: body(prompt)["target_agent"],
         task_payload: { prompt, required_capabilities: ["cap-918-executor"], submitted_by: alice },
         payment_proof: proof,
-        timestamp: Date.now(),
       };
       const aRelayKey = relayA.moteDb.db
         .prepare("SELECT private_key_hex FROM relay_identity LIMIT 1")
         .get() as { private_key_hex: string };
-      const sig = await sign(
-        new TextEncoder().encode(canonicalJson(forwardBody)),
-        hexToBytes(aRelayKey.private_key_hex),
-      );
+      const signedForward = await workRequest({
+        route: "/federation/v1/task/forward",
+        body: forwardBody,
+        privateKey: hexToBytes(aRelayKey.private_key_hex),
+        recipient: relayB.relayIdentity,
+      });
       const res = await relayB.app.request("/federation/v1/task/forward", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...forwardBody, signature: bytesToHex(sig) }),
+        body: JSON.stringify(signedForward),
       });
       expect(res.status, await res.clone().text()).toBe(409);
       expect(((await res.json()) as { reason?: string }).reason).toBe("p2p_proof_already_admitted");

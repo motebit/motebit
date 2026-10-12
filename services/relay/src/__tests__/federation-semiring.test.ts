@@ -27,10 +27,12 @@ function mockDb(
     return prepareResults.get(key)!;
   };
 
-  // Match the relay_peers query
+  // Match the relay_peers queries: the active-peer list, and the one peer's
+  // key the outbound discover is signed for (a v2 `discover` message names
+  // its recipient by key — relay-federation@1.5 §3.5).
   const peerStmt = {
     all: () => peers,
-    get: () => undefined,
+    get: () => ({ public_key: "ab".repeat(32) }),
     run: () => {},
   };
 
@@ -68,10 +70,10 @@ function makeDeps(
     relayIdentity: {
       relayMotebitId: RELAY_MOTEBIT_ID,
       publicKey: new Uint8Array(32),
-      // 32-byte Ed25519 seed: fetchFederatedCandidates now signs its outbound
-      // discover request (relay-federation@1.3 §4.1), so the key must be a valid
-      // signing seed. The signature isn't verified here (fetch is mocked) — it
-      // only needs `sign()` not to throw.
+      // 32-byte Ed25519 seed: fetchFederatedCandidates signs its outbound
+      // discover request (a v2 `discover` message per peer), so the key must be
+      // a valid signing seed. The signature isn't verified here (fetch is
+      // mocked) — it only needs signing not to throw.
       privateKey: new Uint8Array(32),
     },
   } as TaskRouterDeps;

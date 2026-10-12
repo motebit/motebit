@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FEDERATION_MESSAGE_DOMAIN,
+  FEDERATION_MESSAGE_KINDS,
   federationMessageBytes,
   parseFederationMessage,
   signFederationMessage,
@@ -421,4 +422,59 @@ describe("federation message v2 — the envelope names its recipient by KEY (rou
       /signer's own key/,
     );
   });
+});
+
+// Every kind in the registry — the control kinds and the work kinds alike — is
+// valid only at the relay whose KEY it names: signed for B, it verifies at B
+// and is refused at C (a relay that holds the sender's key too) before any
+// other check, whatever id C claims.
+describe("federation message v2 — every kind is recipient-bound", () => {
+  const kinds = Object.keys(FEDERATION_MESSAGE_KINDS) as Array<
+    keyof typeof FEDERATION_MESSAGE_KINDS
+  >;
+
+  it("the registry holds the control kinds and the four work kinds", () => {
+    expect(kinds.sort()).toEqual(
+      [
+        "discover",
+        "heartbeat",
+        "heartbeat-ack",
+        "peer-challenge",
+        "peer-confirm",
+        "peer-remove",
+        "settlement-forward",
+        "task-forward",
+        "task-result",
+      ].sort(),
+    );
+  });
+
+  for (const kind of kinds) {
+    it(`${kind}: verifies at its recipient, refused at another relay by key`, async () => {
+      const kp = await generateKeypair();
+      const body = { kind_under_test: kind, n: 1 };
+      const msg = await signFederationMessage({
+        kind,
+        sender: A,
+        recipient: B,
+        recipientPublicKey: PUB_B,
+        body,
+        privateKey: kp.privateKey,
+        now: NOW,
+      });
+      const at = (self: string, selfPublicKeyHex: string) =>
+        verifyFederationMessage(msg, {
+          kind,
+          self,
+          selfPublicKeyHex,
+          senderPublicKeyHex: bytesToHex(kp.publicKey),
+          body,
+          now: NOW,
+        });
+      expect(await at(B, PUB_B)).toEqual({ ok: true, envelope: msg.envelope });
+      expect(await at(C, PUB_C)).toEqual({ ok: false, reason: "wrong_recipient_key" });
+      // C claiming B's id is still refused: the key is checked first.
+      expect(await at(B, PUB_C)).toEqual({ ok: false, reason: "wrong_recipient_key" });
+    });
+  }
 });

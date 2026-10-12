@@ -33,13 +33,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SyncRelay, SyncRelayConfig } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation, receipt and envelope signing
-import {
-  generateKeypair,
-  bytesToHex,
-  signExecutionReceipt,
-  sign,
-  canonicalJson,
-} from "@motebit/encryption";
+import { generateKeypair, bytesToHex, signExecutionReceipt } from "@motebit/encryption";
+import { workRequest, type WorkRoute } from "./federation-messages.js";
+import { initRelayIdentity } from "../federation.js";
 import type { KeyPair } from "@motebit/encryption";
 import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
 import { createTestRelay, createAgent, JSON_AUTH, seedBalance } from "./test-helpers.js";
@@ -232,9 +228,21 @@ async function postResult(
   return { code: res.status, ...(body.status != null ? { status: body.status } : {}) };
 }
 
-async function signed(peer: Peer, payload: Record<string, unknown>): Promise<string> {
-  const sig = await sign(new TextEncoder().encode(canonicalJson(payload)), peer.kp.privateKey);
-  return JSON.stringify({ ...payload, signature: bytesToHex(sig) });
+/** `payload` as `peer` sends it to `w`'s relay: a v2 work message for that relay's key. */
+async function signed(
+  w: World,
+  peer: Peer,
+  route: WorkRoute,
+  payload: Record<string, unknown>,
+): Promise<string> {
+  return JSON.stringify(
+    await workRequest({
+      route,
+      body: payload,
+      privateKey: peer.kp.privateKey,
+      recipient: w.relay.relayIdentity,
+    }),
+  );
 }
 
 async function fedResult(w: World, peer: Peer, taskId: string, r: ExecutionReceipt) {
@@ -242,7 +250,7 @@ async function fedResult(w: World, peer: Peer, taskId: string, r: ExecutionRecei
   const res = await w.relay.app.request("/federation/v1/task/result", {
     method: "POST",
     headers: JSON_AUTH,
-    body: await signed(peer, payload),
+    body: await signed(w, peer, "/federation/v1/task/result", payload),
   });
   return res.status;
 }
@@ -259,7 +267,7 @@ async function inboundForward(w: World, peer: Peer, taskId: string): Promise<voi
   const res = await w.relay.app.request("/federation/v1/task/forward", {
     method: "POST",
     headers: JSON_AUTH,
-    body: await signed(peer, payload),
+    body: await signed(w, peer, "/federation/v1/task/forward", payload),
   });
   expect(res.status, await res.clone().text()).toBeLessThan(300);
   await settle(40);
@@ -284,7 +292,7 @@ async function settlementForward(
   const res = await w.relay.app.request("/federation/v1/settlement/forward", {
     method: "POST",
     headers: JSON_AUTH,
-    body: await signed(peer, payload),
+    body: await signed(w, peer, "/federation/v1/settlement/forward", payload),
   });
   return res.status;
 }
@@ -636,9 +644,12 @@ describe("#890 r10 (3) the executor relay redelivers its federation result until
     try {
       const aId = A.relay.relayIdentity.relayMotebitId;
       const bId = B.relay.relayIdentity.relayMotebitId;
-      // B knows A by a key this test signs A's forward with; A knows B by B's
-      // real key (B signs the result it returns).
-      const aAtB = await addPeer(B.relay, aId);
+      // B knows A by A's real key — B's result is a v2 message for that key,
+      // valid only at A — and this test signs A's forward with A's key; A
+      // knows B by B's real key (B signs the result it returns).
+      const aKeys = await initRelayIdentity(A.relay.moteDb.db);
+      const aAtB = await addPeer(B.relay, aId, aKeys.publicKeyHex);
+      aAtB.kp = { publicKey: aKeys.publicKey, privateKey: aKeys.privateKey };
       const bAtA = await addPeer(A.relay, bId, B.relay.relayIdentity.publicKeyHex);
       let originDown = true;
       const toA: number[] = [];
@@ -669,7 +680,9 @@ describe("#890 r10 (3) the executor relay redelivers its federation result until
       // never forwards money it does not hold).
       fundOriginEscrow(A.relay, S, B.W.id, 1_000_000);
       recordTaskRoute(A.relay.moteDb.db, S, B.W.id, bId);
-      await inboundForward(B, aAtB, S);
+      // A's own admission may already have forwarded S (B holds A's real
+      // key, so A's v2 forward verifies there); otherwise forward it now.
+      if (B.q.get(S) == null) await inboundForward(B, aAtB, S);
       // W answers at B; B's one send finds the origin down.
       const R = await receiptBy(B.W, S, "completed");
       expect((await postResult(B, S, R, B.W.id)).code).toBe(200);

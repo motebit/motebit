@@ -255,30 +255,11 @@ const OUTSIDE_LANE: ReadonlyArray<{ file: string; fn: string; sites: number; rea
     reason: RELAY,
   },
   {
-    file: "services/relay/src/federation-callbacks.ts",
-    fn: "forwardOriginSettlement",
-    sites: 1,
-    reason: RELAY,
-  },
-  {
-    file: "services/relay/src/federation.ts",
-    fn: "attemptResultDelivery",
-    sites: 1,
-    reason: RELAY,
-  },
-  {
     file: "services/relay/src/federation.ts",
     fn: "insertRevocationEvent",
     sites: 1,
     reason: RELAY,
   },
-  {
-    file: "services/relay/src/federation.ts",
-    fn: "processSettlementRetries",
-    sites: 1,
-    reason: RELAY,
-  },
-  { file: "services/relay/src/federation.ts", fn: "signDiscoverBody", sites: 1, reason: RELAY },
   {
     file: "services/relay/src/identity-log-anchoring.ts",
     fn: "anchorIdentityLog",
@@ -299,7 +280,6 @@ const OUTSIDE_LANE: ReadonlyArray<{ file: string; fn: string; sites: number; rea
     reason: RELAY,
   },
   { file: "services/relay/src/subscriptions.ts", fn: "issueProxyToken", sites: 1, reason: RELAY },
-  { file: "services/relay/src/tasks.ts", fn: "<anonymous>", sites: 2, reason: RELAY },
   {
     file: "services/relay/src/transparency.ts",
     fn: "buildSignedDeclaration",

@@ -53,9 +53,9 @@ import {
   generateKeypair,
   bytesToHex,
   signExecutionReceipt,
-  sign,
   canonicalJson,
 } from "@motebit/encryption";
+import { workRequest } from "./federation-messages.js";
 import type { KeyPair } from "@motebit/encryption";
 import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
 import { createTestRelay, createAgent, JSON_AUTH, AUTH_HEADER } from "./test-helpers.js";
@@ -255,13 +255,18 @@ async function postResult(w: World, taskId: string, r: ExecutionReceipt): Promis
 
 async function fedResult(w: World, taskId: string, r: ExecutionReceipt): Promise<number> {
   const payload = { task_id: taskId, origin_relay: w.peer.id, receipt: r, timestamp: Date.now() };
-  const sig = await sign(new TextEncoder().encode(canonicalJson(payload)), w.peer.kp.privateKey);
+  const signed = await workRequest({
+    route: "/federation/v1/task/result",
+    body: payload,
+    privateKey: w.peer.kp.privateKey,
+    recipient: w.relay.relayIdentity,
+  });
   // The master token only bypasses the per-IP limiter (the harness sends far
   // more than 30 results a minute from one address); the door ignores it.
   const res = await w.relay.app.request("/federation/v1/task/result", {
     method: "POST",
     headers: JSON_AUTH,
-    body: JSON.stringify({ ...payload, signature: bytesToHex(sig) }),
+    body: JSON.stringify(signed),
   });
   return res.status;
 }

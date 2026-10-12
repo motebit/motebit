@@ -234,3 +234,41 @@ export async function signedConfirm(args: {
     endpoint_url: args.proposedEndpointUrl ?? args.endpointUrl,
   };
 }
+
+/** The work kinds (relay-federation@1.5 §3.5), by route. */
+export const WORK_KIND_BY_ROUTE = {
+  "/federation/v1/discover": "discover",
+  "/federation/v1/task/forward": "task-forward",
+  "/federation/v1/task/result": "task-result",
+  "/federation/v1/settlement/forward": "settlement-forward",
+} as const;
+export type WorkRoute = keyof typeof WORK_KIND_BY_ROUTE;
+
+/**
+ * A work request for `route` as a peer sends it: `body` (the kind's own fields;
+ * its sender is `body.sender_relay` for discover, `body.origin_relay`
+ * otherwise) plus `message`, a v2 message signed by `privateKey` for ONE
+ * recipient, by id and by key. Through the one producer, like a relay's own.
+ */
+export async function workRequest(args: {
+  route: WorkRoute;
+  body: Record<string, unknown>;
+  privateKey: Uint8Array;
+  recipient: { relayMotebitId: string; publicKeyHex: string };
+  now?: number;
+  nonce?: string;
+}): Promise<Record<string, unknown> & { message: SignedFederationMessage }> {
+  const kind = WORK_KIND_BY_ROUTE[args.route];
+  const sender = (kind === "discover" ? args.body.sender_relay : args.body.origin_relay) as string;
+  const message = await signFederationMessage({
+    kind,
+    sender,
+    recipient: args.recipient.relayMotebitId,
+    recipientPublicKey: args.recipient.publicKeyHex,
+    body: args.body,
+    privateKey: args.privateKey,
+    now: args.now,
+    nonce: args.nonce,
+  });
+  return { ...args.body, message };
+}

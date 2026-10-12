@@ -399,7 +399,7 @@ describe("forward lifecycle", () => {
   it("forwardOriginSettlement: delivered on ack, queued (pending) on failure, refused without escrow", async () => {
     const { db, a, t, locked } = await funded();
     db.prepare(
-      `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, state) VALUES ('peer-x', 'aa', 'http://peer-x.test', 'active')`,
+      `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, state) VALUES ('peer-x', '${"ab".repeat(32)}', 'http://peer-x.test', 'active')`,
     ).run();
     let ack = false;
     vi.stubGlobal("fetch", async () => {
@@ -442,7 +442,7 @@ describe("forward lifecycle", () => {
   it("an immediate ack marks the forward delivered", async () => {
     const { db, t, locked } = await funded();
     db.prepare(
-      `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, state) VALUES ('peer-y', 'aa', 'http://peer-y.test', 'active')`,
+      `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, state) VALUES ('peer-y', '${"ab".repeat(32)}', 'http://peer-y.test', 'active')`,
     ).run();
     vi.stubGlobal("fetch", async () => new Response("{}", { status: 200 }));
     claim(db, t);

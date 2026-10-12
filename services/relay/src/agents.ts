@@ -1969,17 +1969,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // sender — unsigned, masked until 1.4 by the tolerant pre-sunset default.
     const forwardPromises = peers.map(async (peer) => {
       try {
-        const discoverBody = await signDiscoverBody(
-          {
-            query: { capability, motebit_id: motebitId, limit },
-            hop_count: 0,
-            max_hops: 3,
-            visited,
-            query_id: queryId,
-            origin_relay: relayIdentity.relayMotebitId,
-          },
-          relayIdentity,
-        );
+        const discoverBody = await signDiscoverBody(moteDb.db, relayIdentity, peer.peer_relay_id, {
+          query: { capability, motebit_id: motebitId, limit },
+          hop_count: 0,
+          max_hops: 3,
+          visited,
+          query_id: queryId,
+          origin_relay: relayIdentity.relayMotebitId,
+        });
         const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/discover`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },

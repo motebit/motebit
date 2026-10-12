@@ -576,17 +576,14 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       try {
         // Originating hop: sign as sender_relay = this relay (== origin_relay
         // here, since we're the query's origin). relay-federation@1.3 §4.1.
-        const discoverBody = await signDiscoverBody(
-          {
-            query: { capability: requiredCaps[0], limit: 20 },
-            hop_count: 0,
-            max_hops: 1, // Only one hop for task routing candidates
-            visited,
-            query_id: queryId,
-            origin_relay: relayIdentity.relayMotebitId,
-          },
-          relayIdentity,
-        );
+        const discoverBody = await signDiscoverBody(db, relayIdentity, peer.peer_relay_id, {
+          query: { capability: requiredCaps[0], limit: 20 },
+          hop_count: 0,
+          max_hops: 1, // Only one hop for task routing candidates
+          visited,
+          query_id: queryId,
+          origin_relay: relayIdentity.relayMotebitId,
+        });
         const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/discover`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },

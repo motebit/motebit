@@ -79,6 +79,20 @@ export const FEDERATION_MESSAGE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
  *                        ONE relay that issued the nonce. Body
  *                        `{ nonce, endpoint_url }` — that nonce and the
  *                        sender's endpoint being confirmed.
+ *
+ * The four WORK kinds (relay-federation@1.5 §3.5, Inc 6). Each body is the
+ * request's own fields (everything but `message`), committed by digest; the
+ * sender is the relay that sends this hop, the recipient the one peer it is
+ * sent to:
+ *
+ *   - `discover`           — one hop of a federated discovery query (§4.1).
+ *                            Sender: the immediate forwarder (`sender_relay`).
+ *   - `task-forward`       — a task forwarded to the relay hosting its agent
+ *                            (§5.3). Sender: the origin (`origin_relay`).
+ *   - `task-result`        — the executor relay's answer to a forwarded task
+ *                            (§5.4). Sender: the executor (`origin_relay`).
+ *   - `settlement-forward` — a settlement leg forwarded down the chain (§7.3).
+ *                            Sender: the upstream relay (`origin_relay`).
  */
 export const FEDERATION_MESSAGE_KINDS = {
   heartbeat: { maxSkewMs: 300_000 },
@@ -86,6 +100,10 @@ export const FEDERATION_MESSAGE_KINDS = {
   "peer-remove": { maxSkewMs: 300_000 },
   "peer-challenge": { maxSkewMs: 300_000 },
   "peer-confirm": { maxSkewMs: 300_000 },
+  discover: { maxSkewMs: 300_000 },
+  "task-forward": { maxSkewMs: 300_000 },
+  "task-result": { maxSkewMs: 300_000 },
+  "settlement-forward": { maxSkewMs: 300_000 },
 } as const;
 
 export type FederationMessageKind = keyof typeof FEDERATION_MESSAGE_KINDS;

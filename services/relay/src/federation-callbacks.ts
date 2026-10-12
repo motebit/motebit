@@ -24,11 +24,9 @@ import {
   verifyExecutionReceipt,
   hexPublicKeyToDidKey,
   issueReputationCredential,
-  sign,
   signFederationSettlement,
   signSettlement,
   canonicalJson,
-  bytesToHex,
   hexToBytes,
 } from "@motebit/encryption";
 /* eslint-enable no-restricted-imports */
@@ -42,7 +40,7 @@ import {
   recordP2pSettlementAudit,
 } from "./allocation-escrow.js";
 import type { PeerFetch, RelayIdentity, VerifiedSettlement } from "./federation.js";
-import { defaultPeerFetch } from "./federation.js";
+import { defaultPeerFetch, signFederationRequest } from "./federation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { ConnectedDevice } from "./index.js";
 import { createLogger } from "./logger.js";
@@ -810,9 +808,8 @@ export async function forwardOriginSettlement(
     origin_relay: relayIdentity.relayMotebitId,
     gross_amount: netAmount,
     receipt_hash: args.receiptHash,
-    timestamp: Date.now(),
-    x402_tx_hash: args.x402TxHash ?? undefined,
-    x402_network: args.x402Network ?? undefined,
+    ...(args.x402TxHash != null ? { x402_tx_hash: args.x402TxHash } : {}),
+    ...(args.x402Network != null ? { x402_network: args.x402Network } : {}),
   };
   const retryId = crypto.randomUUID();
   db.exec("BEGIN");
@@ -871,10 +868,25 @@ export async function forwardOriginSettlement(
   }
 
   if (peerInfo) {
-    const settlementSig = await sign(
-      new TextEncoder().encode(canonicalJson(settlementBody)),
-      relayIdentity.privateKey,
-    );
+    // A v2 `settlement-forward` message for this one peer's key (§3.5). A
+    // relay that cannot sign it (no key on record) leaves the forward to the
+    // retry loop, exactly as a failed send does.
+    let signed: Awaited<ReturnType<typeof signFederationRequest>>;
+    try {
+      signed = await signFederationRequest(
+        db,
+        relayIdentity,
+        "settlement-forward",
+        args.peerRelayId,
+        settlementBody,
+      );
+    } catch (err) {
+      logger.warn("federation.settlement_forward.unsigned", {
+        correlationId: args.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return "queued";
+    }
     // The forward lifecycle's send claim, in the same turn as the send: a
     // freeze that landed during the signing await refuses it, and the
     // committed retry row carries the send to after unfreeze.
@@ -893,7 +905,7 @@ export async function forwardOriginSettlement(
         {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Correlation-ID": args.taskId },
-          body: JSON.stringify({ ...settlementBody, signature: bytesToHex(settlementSig) }),
+          body: JSON.stringify(signed),
           signal: AbortSignal.timeout(10000),
         },
       );

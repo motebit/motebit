@@ -581,6 +581,18 @@ export const FEDERATION_MESSAGE_KINDS: {
     readonly "peer-confirm": {
         readonly maxSkewMs: 300000;
     };
+    readonly discover: {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "task-forward": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "task-result": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "settlement-forward": {
+        readonly maxSkewMs: 300000;
+    };
 };
 
 // @public

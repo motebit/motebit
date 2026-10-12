@@ -55,10 +55,9 @@ import {
   generateKeypair,
   bytesToHex,
   signExecutionReceipt,
-  sign,
-  canonicalJson,
   verifyExecutionReceipt,
 } from "@motebit/encryption";
+import { workRequest } from "./federation-messages.js";
 import type { KeyPair } from "@motebit/encryption";
 import type { ExecutionReceipt, MotebitId, DeviceId, PlanStep, PlanId } from "@motebit/sdk";
 import { StepStatus } from "@motebit/sdk";
@@ -308,11 +307,16 @@ async function fedResult(
     ...(agentKey != null ? { agent_public_key: agentKey } : {}),
     timestamp: Date.now(),
   };
-  const sig = await sign(new TextEncoder().encode(canonicalJson(payload)), from.kp.privateKey);
+  const signed = await workRequest({
+    route: "/federation/v1/task/result",
+    body: payload,
+    privateKey: from.kp.privateKey,
+    recipient: w.relay.relayIdentity,
+  });
   const res = await w.relay.app.request("/federation/v1/task/result", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, signature: bytesToHex(sig) }),
+    body: JSON.stringify(signed),
   });
   return res.status;
 }
@@ -1153,11 +1157,16 @@ async function fedForwardBody(
     task_payload: { prompt: `forwarded ${taskId}` },
     timestamp: Date.now(),
   };
-  const sig = await sign(new TextEncoder().encode(canonicalJson(payload)), from.kp.privateKey);
+  const signed = await workRequest({
+    route: "/federation/v1/task/forward",
+    body: payload,
+    privateKey: from.kp.privateKey,
+    recipient: w.relay.relayIdentity,
+  });
   const res = await w.relay.app.request("/federation/v1/task/forward", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, signature: bytesToHex(sig) }),
+    body: JSON.stringify(signed),
   });
   const body = (await res.json().catch(() => ({}))) as { status?: string };
   return { status: res.status, body: body.status ?? "" };

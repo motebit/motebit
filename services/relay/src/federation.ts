@@ -35,6 +35,7 @@ import {
   type FederationMessageEnvelope,
   type FederationMessageKind,
   type FederationMessageRefusal,
+  type SignedFederationMessage,
 } from "@motebit/crypto";
 import type { DisputeOutcome, VoteRequest } from "@motebit/protocol";
 import {
@@ -43,9 +44,12 @@ import {
   WitnessSolicitationRequestSchema,
 } from "@motebit/wire-schemas";
 import { persistWitnessOmissionDispute, resolveHorizonCertBySignature } from "./horizon.js";
-// Federation handshake, heartbeat and removal messages are v2 signed
-// messages (relay-federation@1.5 §3.5) — one producer and one verifier in
-// @motebit/crypto (`signFederationMessage` / `verifyFederationMessage`).
+// Every signed federation message — handshake, heartbeat, removal, and the
+// work kinds (discover, task forward/result, settlement forward) — is a v2
+// signed message for ONE recipient by key (relay-federation@1.5 §3.5): one
+// producer and one verifier in @motebit/crypto (`signFederationMessage` /
+// `verifyFederationMessage`), reached for the work kinds only through
+// `signFederationRequest` / `verifyFederationRequest` below.
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 /**
@@ -1446,9 +1450,12 @@ export async function processSettlementRetries(
         );
         continue;
       }
-      const settlementBody = JSON.parse(retry.payload_json) as Record<string, unknown>;
-      // Fresh timestamp on each retry so the receiver accepts it (±5min drift check)
-      settlementBody.timestamp = Date.now();
+      // The stored fields; a row written before the v2 envelope also carries
+      // a `timestamp`, which is dropped (the envelope's `ts` is the clock now).
+      const { timestamp: _legacyTs, ...settlementBody } = JSON.parse(retry.payload_json) as Record<
+        string,
+        unknown
+      >;
       const peerInfo = db
         .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
         .get(retry.peer_relay_id) as { endpoint_url: string } | undefined;
@@ -1476,15 +1483,21 @@ export async function processSettlementRetries(
         continue;
       }
 
-      const sigBytes = new TextEncoder().encode(canonicalJson(settlementBody));
-      const sig = await sign(sigBytes, relayIdentity.privateKey);
+      // Re-signed on every attempt (fresh nonce and `ts`), for this one peer.
+      const signed = await signFederationRequest(
+        db,
+        relayIdentity,
+        "settlement-forward",
+        retry.peer_relay_id,
+        settlementBody,
+      );
 
       // Re-claimed after the signing await, in the same turn as the send.
       if (!beginForwardSend(db, retry.settlement_id)) continue;
       const resp = await peerFetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Correlation-ID": retry.task_id },
-        body: JSON.stringify({ ...settlementBody, signature: bytesToHex(sig) }),
+        body: JSON.stringify(signed),
         signal: AbortSignal.timeout(10_000),
       });
 
@@ -1586,8 +1599,8 @@ export async function processSettlementRetries(
 // and retried — bounded, with backoff — until the origin acknowledges (2xx),
 // refuses definitively (4xx other than 429: it holds another answer, or the
 // task is gone there), or the attempts run out. The body is rebuilt and
-// re-signed from the task's archived answer at each attempt (a fresh
-// timestamp passes the origin's drift check); the origin's door decides it
+// re-signed from the task's archived answer at each attempt (a fresh v2
+// `task-result` message for the origin's key: new nonce, new `ts`); the origin's door decides it
 // again (`admitReceipt`), so a redelivery is a repeat there, never a second
 // settlement.
 
@@ -1664,21 +1677,22 @@ export async function attemptResultDelivery(
   let error: string;
   try {
     const key = agentKeyFor(receipt.motebit_id);
-    const resultBody = {
-      task_id: taskId,
-      origin_relay: relayIdentity.relayMotebitId,
-      receipt,
-      ...(key !== null ? { agent_public_key: key } : {}),
-      timestamp: Date.now(),
-    };
-    const sig = await sign(
-      new TextEncoder().encode(canonicalJson(resultBody)),
-      relayIdentity.privateKey,
+    const signed = await signFederationRequest(
+      db,
+      relayIdentity,
+      "task-result",
+      row.peer_relay_id,
+      {
+        task_id: taskId,
+        origin_relay: relayIdentity.relayMotebitId,
+        receipt,
+        ...(key !== null ? { agent_public_key: key } : {}),
+      },
     );
     const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/task/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
-      body: JSON.stringify({ ...resultBody, signature: bytesToHex(sig) }),
+      body: JSON.stringify(signed),
       signal:
         signal != null
           ? AbortSignal.any([AbortSignal.timeout(10_000), signal])
@@ -1798,124 +1812,155 @@ export function startHeartbeatLoop(
   );
 }
 
-// === Peer Signature Verification ===
+// === Work messages: signed for ONE recipient (relay-federation@1.5 §3.5) ===
+//
+// Every signed federation message names the relay it is for, and a relay acts
+// only on messages addressed to its own key. The four work kinds — discover,
+// task/forward, task/result, settlement/forward — used to be signed over a body
+// that named no recipient (`verifyPeerSignature`): a body one relay signed for
+// a second verified at ANY relay that peers the signer, inside the ±5 min
+// window, and only incidental task state stopped it. They now ride the SAME v2
+// envelope as the control kinds (one producer, one verifier in @motebit/crypto):
+// the request is the kind's own fields plus `message`, a v2 signed message
+// whose `body_sha256` commits to those fields and whose `recipient_public_key`
+// the receiving relay compares to its OWN key before any lookup.
+
+/** The work kinds, by the route that serves each. */
+export const FEDERATION_WORK_ROUTES = {
+  discover: "/federation/v1/discover",
+  "task-forward": "/federation/v1/task/forward",
+  "task-result": "/federation/v1/task/result",
+  "settlement-forward": "/federation/v1/settlement/forward",
+} as const satisfies Partial<Record<FederationMessageKind, string>>;
+
+export type FederationWorkKind = keyof typeof FEDERATION_WORK_ROUTES;
 
 /**
- * Look up an active peer and verify its Ed25519 signature over a payload.
- * Returns the peer's public key on success, throws HTTPException on failure.
+ * The body field that names a work message's sender — the relay that signed
+ * THIS hop. The envelope's `sender` must equal it, so the field a handler reads
+ * as "who sent this" is the key that signed it.
  */
-/** Maximum acceptable clock drift for federation request timestamps (±5 minutes). */
-const FEDERATION_TIMESTAMP_DRIFT_MS = 300_000;
+const WORK_SENDER_FIELD: Record<FederationWorkKind, "sender_relay" | "origin_relay"> = {
+  discover: "sender_relay",
+  "task-forward": "origin_relay",
+  "task-result": "origin_relay",
+  "settlement-forward": "origin_relay",
+};
 
-async function verifyPeerSignature(
+/**
+ * Sign a work request for ONE peer: `body` (the kind's own fields) plus
+ * `message`, a v2 `kind` message from this relay to `recipient`, by id AND by
+ * the key this relay holds for it in `relay_peers`. A relay that holds no key
+ * for the recipient has nothing to sign (throws). The only producer of work
+ * requests; every sender (discover fan-out and re-forward, task forward,
+ * result delivery, settlement forward and its retry) goes through it.
+ */
+export async function signFederationRequest<T extends Record<string, unknown>>(
   db: DatabaseDriver,
-  peerId: string,
-  signatureHex: string,
-  payloadBytes: Uint8Array,
-  allowedStates = ["active"],
-  /**
-   * Replay-protection timestamp (epoch ms). REQUIRED — a request without it is
-   * rejected (400). Typed optional only so existing call sites that pass a
-   * possibly-`undefined` `body.timestamp` typecheck; presence is enforced at
-   * runtime. Every federation sender stamps `timestamp: Date.now()` on the
-   * signed body (task/forward, task/result, settlement/forward, discover), so
-   * this rejects only malformed or replayed requests, never legitimate traffic.
-   */
-  timestamp?: number,
-): Promise<string> {
-  // Timestamp freshness — fail-closed. A MISSING timestamp was the audit's
-  // latent fail-open (the drift check was skipped, leaving the replay window
-  // open), so absence now rejects rather than skips.
-  if (timestamp == null || !Number.isFinite(timestamp)) {
-    throw new HTTPException(400, { message: "Federation request timestamp required" });
-  }
-  const drift = Math.abs(Date.now() - timestamp);
-  if (drift > FEDERATION_TIMESTAMP_DRIFT_MS) {
+  relayIdentity: RelayIdentity,
+  kind: FederationWorkKind,
+  recipient: string,
+  body: T,
+): Promise<T & { message: SignedFederationMessage }> {
+  if ("message" in body) throw new Error(`a ${kind} body must not carry \`message\``);
+  if (body[WORK_SENDER_FIELD[kind]] !== relayIdentity.relayMotebitId)
+    throw new Error(`a ${kind} body must name this relay as ${WORK_SENDER_FIELD[kind]}`);
+  const peer = db
+    .prepare("SELECT public_key FROM relay_peers WHERE peer_relay_id = ?")
+    .get(recipient) as { public_key: string } | undefined;
+  if (peer === undefined) throw new Error(`no key on record for peer relay ${recipient}`);
+  const message = await signFederationMessage({
+    kind,
+    sender: relayIdentity.relayMotebitId,
+    recipient,
+    recipientPublicKey: peer.public_key,
+    body,
+    privateKey: relayIdentity.privateKey,
+  });
+  return { ...body, message };
+}
+
+/**
+ * Verify an inbound work request of `kind` at this relay. The only verifier of
+ * work requests. In order: a request without `message` is v1 and refused by
+ * name (no downgrade path); the envelope must parse; then — before any lookup
+ * — the recipient KEY must be this relay's own key, the kind the route's, the
+ * recipient id this relay's (`refuseBeforeLookup`); the body's sender field
+ * must be the envelope's sender; the sender must be a peer in an allowed
+ * state; then freshness, the body digest and the signature
+ * (`verifyFederationMessage`); then the nonce is consumed (a replay is 409).
+ *
+ * The nonce is consumed before the handler's write, not inside it: every
+ * sender re-signs on every attempt (fresh nonce), so a request whose write
+ * then fails is retried as a new message, never as this one.
+ *
+ * Returns the verified sender and its key.
+ */
+async function verifyFederationRequest(
+  db: DatabaseDriver,
+  relayIdentity: RelayIdentity,
+  kind: FederationWorkKind,
+  request: Record<string, unknown>,
+  allowedStates: readonly string[],
+): Promise<{ sender: string; senderPublicKey: string }> {
+  const label = `federation ${kind}`;
+  const { message, ...body } = request;
+  if (message === undefined) {
     throw new HTTPException(400, {
-      message: "Request timestamp outside acceptable drift (±5min)",
+      message: `${label} v1 is refused (relay-federation@1.5 §3.5): send the request's fields with \`message\`, a v2 \`${kind}\` signed message naming this relay as recipient by key`,
     });
   }
-
-  const stateList = allowedStates.map(() => "?").join(", ");
+  const parsed = parseFederationMessage(message);
+  if (parsed === null)
+    throw new HTTPException(400, { message: `malformed v2 ${kind} message (§3.5)` });
+  refuseBeforeLookup(parsed.envelope, kind, relayIdentity, label);
+  const sender = parsed.envelope.sender;
+  if (body[WORK_SENDER_FIELD[kind]] !== sender)
+    throw new HTTPException(400, {
+      message: `${label} refused: ${WORK_SENDER_FIELD[kind]} is not the message's sender`,
+    });
   const peer = db
-    .prepare(
-      `SELECT public_key FROM relay_peers WHERE peer_relay_id = ? AND state IN (${stateList})`,
-    )
-    .get(peerId, ...allowedStates) as { public_key: string } | undefined;
-  if (!peer) {
+    .prepare("SELECT public_key, state FROM relay_peers WHERE peer_relay_id = ?")
+    .get(sender) as { public_key: string; state: string } | undefined;
+  if (peer === undefined || !allowedStates.includes(peer.state))
     throw new HTTPException(403, { message: "Unknown or inactive peer relay" });
-  }
-
-  const valid = await verify(hexToBytes(signatureHex), payloadBytes, hexToBytes(peer.public_key));
-  if (!valid) {
-    throw new HTTPException(403, { message: "Invalid federation signature" });
-  }
-  return peer.public_key;
+  const verdict = await verifyFederationMessage(message, {
+    kind,
+    self: relayIdentity.relayMotebitId,
+    selfPublicKeyHex: relayIdentity.publicKeyHex,
+    expectedSender: sender,
+    senderPublicKeyHex: peer.public_key,
+    body,
+  });
+  if (!verdict.ok)
+    throw new HTTPException(federationRefusalStatus(verdict.reason), {
+      message: `${label} refused: ${verdict.reason}`,
+    });
+  if (!consumeFederationNonce(db, sender, verdict.envelope.nonce, verdict.envelope.ts))
+    throw new HTTPException(409, { message: `${label} refused: replayed nonce` });
+  return { sender, senderPublicKey: peer.public_key };
 }
 
 /**
- * Attach per-hop sender authentication to an outbound `/federation/v1/discover`
- * request: stamp `sender_relay` (THIS relay — the immediate forwarder, distinct
- * from the multi-hop `origin_relay`) and a fresh `timestamp`, then sign the
- * RFC 8785 (JCS) canonical JSON of the whole body (sans `signature`) and attach
- * the hex signature. All three discover senders — the originating task-routing
- * query (`task-routing.ts`), the marketplace discover fan-out (`agents.ts` —
- * the missed third sender the 1.4 strict default exposed), and the fan-out
- * re-forward (the discover handler below) — route through this single helper
- * so the signed bytes can never diverge from what `verifyDiscoverSender`
- * recomputes on the receiver. relay-federation@1.3 §4.1 + §10.2; strict by
- * default since 1.4 (§4.1.1 sunset 2026-07-21).
+ * Sign an outbound `/federation/v1/discover` hop for ONE peer: stamp
+ * `sender_relay` (THIS relay — the immediate forwarder, distinct from the
+ * multi-hop `origin_relay`) and sign it as a `discover` work request to
+ * `recipient`. All three discover senders — the originating task-routing
+ * query (`task-routing.ts`), the marketplace discover fan-out (`agents.ts`),
+ * and the fan-out re-forward (the discover handler below) — route through
+ * this helper, so every hop is signed for exactly the peer it is sent to.
+ * relay-federation@1.5 §3.5, §4.1.1.
  */
 export async function signDiscoverBody<T extends Record<string, unknown>>(
-  body: T,
+  db: DatabaseDriver,
   relayIdentity: RelayIdentity,
-): Promise<T & { sender_relay: string; timestamp: number; signature: string }> {
-  const signed = {
+  recipient: string,
+  body: T,
+): Promise<T & { sender_relay: string; message: SignedFederationMessage }> {
+  return signFederationRequest(db, relayIdentity, "discover", recipient, {
     ...body,
     sender_relay: relayIdentity.relayMotebitId,
-    timestamp: Date.now(),
-  };
-  const sig = await sign(new TextEncoder().encode(canonicalJson(signed)), relayIdentity.privateKey);
-  return { ...signed, signature: bytesToHex(sig) };
-}
-
-/**
- * Authenticate the IMMEDIATE sender of an inbound `/federation/v1/discover`
- * request. Discovery is multi-hop (A→B→D), so the receiver verifies its DIRECT
- * neighbor (`sender_relay`, an active peer whose key it holds), NOT the
- * multi-hop `origin_relay` (whose key the receiver may not have — it could be
- * two hops away). Returns the verified sender id, or `null` when no signature
- * is present AND `requireSignature` is false (the tolerant-reader rollout
- * window — the caller logs the unsigned request). A PRESENT signature is always
- * verified strictly: `sender_relay` + `timestamp` required, ±5min drift, and an
- * active-peer Ed25519 check — throwing 400/403 on any failure.
- */
-async function verifyDiscoverSender(
-  db: DatabaseDriver,
-  body: { sender_relay?: string; timestamp?: number; signature?: string } & Record<string, unknown>,
-  requireSignature: boolean,
-): Promise<string | null> {
-  if (body.signature == null) {
-    if (requireSignature) {
-      throw new HTTPException(403, { message: "Unsigned discovery request rejected" });
-    }
-    return null;
-  }
-  if (typeof body.sender_relay !== "string") {
-    throw new HTTPException(400, { message: "Signed discovery request missing sender_relay" });
-  }
-  if (typeof body.timestamp !== "number") {
-    throw new HTTPException(400, { message: "Signed discovery request missing timestamp" });
-  }
-  const { signature, ...payload } = body;
-  return verifyPeerSignature(
-    db,
-    body.sender_relay,
-    signature,
-    new TextEncoder().encode(canonicalJson(payload)),
-    ["active"],
-    body.timestamp,
-  );
+  });
 }
 
 // === Per-Peer Rate Limiter ===
@@ -3199,11 +3244,12 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       visited: string[];
       query_id: string;
       origin_relay: string;
-      // Per-hop sender authentication (relay-federation@1.3 §4.1). Optional on
-      // the wire during the tolerant-reader rollout; verified strictly when
-      // present, required once `requireDiscoverSignature` is flipped on.
+      // Per-hop sender authentication (relay-federation@1.5 §3.5, §4.1.1):
+      // the immediate forwarder and its v2 `discover` message for THIS relay.
+      // Absent only on an unsigned request, accepted only under the
+      // operator's `requireDiscoverSignature: false` opt-out.
       sender_relay?: string;
-      timestamp?: number;
+      message?: unknown;
       signature?: string;
     }>();
 
@@ -3217,10 +3263,21 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     }
 
     // Per-hop sender auth: verify the IMMEDIATE forwarder (sender_relay), not the
-    // multi-hop origin_relay. Rate-limit on the verified sender when we have it,
-    // falling back to the self-asserted origin only during the unsigned rollout
-    // window (logged so the gap is observable).
-    const verifiedSender = await verifyDiscoverSender(db, body, requireDiscoverSignature);
+    // multi-hop origin_relay — discovery is multi-hop (A→B→D), and only the
+    // direct neighbor's key is held here. A request with a v2 `discover`
+    // message (or a legacy `signature`, refused by name as v1) is verified as
+    // a work request for THIS relay's key; an unsigned one is accepted only
+    // under the operator's `requireDiscoverSignature: false` opt-out, and then
+    // rate-limited on the self-asserted origin (logged so the gap is
+    // observable).
+    let verifiedSender: string | null = null;
+    if (body.message !== undefined || body.signature !== undefined) {
+      verifiedSender = (
+        await verifyFederationRequest(db, relayIdentity, "discover", body, ["active"])
+      ).sender;
+    } else if (requireDiscoverSignature) {
+      throw new HTTPException(403, { message: "Unsigned discovery request rejected" });
+    }
     if (verifiedSender == null) {
       logger.warn("federation.discover.unsigned", {
         origin_relay: body.origin_relay,
@@ -3279,17 +3336,14 @@ export function registerFederationRoutes(deps: FederationDeps): void {
         try {
           // Re-sign at each hop: THIS relay becomes the sender_relay for the
           // next leg (origin_relay carries through unchanged for dedup/merge).
-          const forwardBody = await signDiscoverBody(
-            {
-              query: body.query,
-              hop_count: body.hop_count + 1,
-              max_hops: body.max_hops,
-              visited,
-              query_id: body.query_id,
-              origin_relay: body.origin_relay,
-            },
-            relayIdentity,
-          );
+          const forwardBody = await signDiscoverBody(db, relayIdentity, peer.peer_relay_id, {
+            query: body.query,
+            hop_count: body.hop_count + 1,
+            max_hops: body.max_hops,
+            visited,
+            query_id: body.query_id,
+            origin_relay: body.origin_relay,
+          });
           const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/discover`, {
             method: "POST",
             headers: {
@@ -3364,8 +3418,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
         b_fee_to_address?: string;
         b_fee_amount_micro?: number;
       };
-      timestamp?: number;
-      signature: string;
+      message?: unknown;
     }>();
 
     if (!body.task_id || !body.origin_relay || !body.target_agent || !body.task_payload?.prompt) {
@@ -3373,18 +3426,14 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     }
 
     checkFederationEnabled();
-    checkPeerLimit(body.origin_relay);
 
-    // Federation owns: peer validation + signature verification + timestamp drift check
-    const { signature, ...payload } = body;
-    await verifyPeerSignature(
-      db,
-      body.origin_relay,
-      signature,
-      new TextEncoder().encode(canonicalJson(payload)),
-      ["active"],
-      body.timestamp,
-    );
+    // Federation owns: the v2 `task-forward` message — for THIS relay's key,
+    // from `origin_relay`, an active peer — then the per-peer rate limit,
+    // counted only once the signature verified.
+    const { sender } = await verifyFederationRequest(db, relayIdentity, "task-forward", body, [
+      "active",
+    ]);
+    checkPeerLimit(sender);
 
     // Check target agent exists locally. No `expires_at > now` filter —
     // liveness is checked by the wake-on-delegation hook in
@@ -3439,13 +3488,20 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       origin_relay: string;
       receipt: ExecutionReceipt;
       agent_public_key?: string;
-      timestamp?: number;
-      signature: string;
+      message?: unknown;
     }>();
 
     if (!body.task_id || !body.origin_relay || body.receipt == null) {
       throw new HTTPException(400, { message: "Missing required fields" });
     }
+
+    // Federation owns: the v2 `task-result` message — for THIS relay's key,
+    // from `origin_relay` (the executor), an active or suspended peer.
+    const { sender } = await verifyFederationRequest(db, relayIdentity, "task-result", body, [
+      "active",
+      "suspended",
+    ]);
+    checkPeerLimit(sender);
 
     // Validate nested ExecutionReceipt against the wire schema before any
     // downstream processing. Fail-closed on malformed bodies.
@@ -3453,19 +3509,6 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     if (!parsedReceipt.success) {
       return c.json({ error: parsedReceipt.error.flatten() }, 400);
     }
-
-    checkPeerLimit(body.origin_relay);
-
-    // Federation owns: peer validation + signature verification + timestamp drift check
-    const { signature, ...payload } = body;
-    await verifyPeerSignature(
-      db,
-      body.origin_relay,
-      signature,
-      new TextEncoder().encode(canonicalJson(payload)),
-      ["active", "suspended"],
-      body.timestamp,
-    );
 
     // Relay owns: task queue update, WebSocket fan-out, trust update, credential issuance, settlement
     await deps.onTaskResultReceived({
@@ -3488,8 +3531,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       origin_relay: string;
       gross_amount: number;
       receipt_hash: string;
-      timestamp?: number;
-      signature: string;
+      message?: unknown;
       x402_tx_hash?: string;
       x402_network?: string;
     }>();
@@ -3498,18 +3540,17 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, { message: "Missing required fields" });
     }
 
-    checkPeerLimit(body.origin_relay);
-
-    // Federation owns: peer validation + signature verification + timestamp drift check
-    const { signature, ...payload } = body;
-    await verifyPeerSignature(
+    // Federation owns: the v2 `settlement-forward` message — for THIS relay's
+    // key, from `origin_relay`, an active or suspended peer — before any
+    // settlement row is read or written.
+    const { sender } = await verifyFederationRequest(
       db,
-      body.origin_relay,
-      signature,
-      new TextEncoder().encode(canonicalJson(payload)),
+      relayIdentity,
+      "settlement-forward",
+      body,
       ["active", "suspended"],
-      body.timestamp,
     );
+    checkPeerLimit(sender);
 
     // Relay owns: fee calculation and recording
     const result = await deps.onSettlementReceived({
