@@ -30,8 +30,7 @@ import { EventType } from "@motebit/sdk";
 import { verifyRetentionManifest } from "@motebit/encryption";
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
-
-const DEFAULT_RELAY_URL = "https://relay.motebit.com";
+import { RELAY_OFF_EMPTY_STATE } from "../relay-optin";
 
 const KIND_LABEL: Record<ActivityKind, string> = {
   deletion: "Deletions",
@@ -138,14 +137,18 @@ function createMobileActivityAdapter(app: MobileApp): ActivityFetchAdapter {
 
 function createMobileRetentionAdapter(app: MobileApp): RetentionFetchAdapter {
   // Mobile's getSyncUrl() is async; resolve once per fetch so a relay
-  // change between sessions is picked up on the next panel open.
-  async function relayUrl(): Promise<string> {
+  // change between sessions is picked up on the next panel open. No saved
+  // URL ⇒ no request at all (Relay OFF); there is no fallback relay.
+  async function relayUrl(): Promise<string | null> {
     const configured = await app.getSyncUrl();
-    return (configured ?? DEFAULT_RELAY_URL).replace(/\/$/, "");
+    if (configured == null || configured === "") return null;
+    return configured.replace(/\/$/, "");
   }
   return {
     fetchTransparency: async (): Promise<TransparencyManifestSummary | null> => {
-      const url = `${await relayUrl()}/.well-known/motebit-transparency.json`;
+      const base = await relayUrl();
+      if (base === null) return null;
+      const url = `${base}/.well-known/motebit-transparency.json`;
       try {
         const resp = await fetch(url, { headers: { Accept: "application/json" } });
         if (!resp.ok) return null;
@@ -162,7 +165,9 @@ function createMobileRetentionAdapter(app: MobileApp): RetentionFetchAdapter {
       }
     },
     fetchRetentionManifest: async (): Promise<RetentionManifest | null> => {
-      const url = `${await relayUrl()}/.well-known/motebit-retention.json`;
+      const base = await relayUrl();
+      if (base === null) return null;
+      const url = `${base}/.well-known/motebit-retention.json`;
       try {
         const resp = await fetch(url, { headers: { Accept: "application/json" } });
         if (!resp.ok) return null;
@@ -206,6 +211,8 @@ export function ActivityPanel({ visible, app, onClose }: ActivityPanelProps): Re
     loading: false,
     error: null,
   }));
+  /** False while no relay URL is saved: the retention block fetches nothing. */
+  const [relayConfigured, setRelayConfigured] = useState(true);
   const [retention, setRetention] = useState<RetentionState>(() => ({
     manifest: null,
     operatorId: null,
@@ -265,10 +272,16 @@ export function ActivityPanel({ visible, app, onClose }: ActivityPanelProps): Re
   useEffect(() => {
     if (!visible) return;
     void activityRef.current?.refresh();
-    void retentionRef.current?.refresh();
+    // The retention block reads the relay's manifests — only when a relay
+    // is saved (Relay OFF ⇒ no request; the block shows the empty state).
+    void app.getSyncUrl().then((url) => {
+      const configured = url != null && url !== "";
+      setRelayConfigured(configured);
+      if (configured) void retentionRef.current?.refresh();
+    });
     // Self-test does NOT auto-run on open — it submits a task to the
     // live relay; the user clicks the button when they want to verify.
-  }, [visible]);
+  }, [visible, app]);
 
   const filtered = activityRef.current?.filteredView() ?? state.events;
 
@@ -301,26 +314,30 @@ export function ActivityPanel({ visible, app, onClose }: ActivityPanelProps): Re
         </View>
 
         <View style={styles.retentionBlock}>
-          <View style={styles.retentionHeader}>
-            <Text style={styles.retentionOperator}>{retention.operatorId ?? "operator"}</Text>
-            <View
-              style={[
-                styles.retentionStatus,
-                retention.verification === "verified" && styles.retentionStatusVerified,
-                retention.verification === "invalid" && styles.retentionStatusInvalid,
-              ]}
-            >
-              <Text
-                style={
-                  retention.verification === "verified"
-                    ? styles.retentionStatusTextActive
-                    : styles.retentionStatusText
-                }
+          {relayConfigured ? (
+            <View style={styles.retentionHeader}>
+              <Text style={styles.retentionOperator}>{retention.operatorId ?? "operator"}</Text>
+              <View
+                style={[
+                  styles.retentionStatus,
+                  retention.verification === "verified" && styles.retentionStatusVerified,
+                  retention.verification === "invalid" && styles.retentionStatusInvalid,
+                ]}
               >
-                {verificationLabel[retention.verification]}
-              </Text>
+                <Text
+                  style={
+                    retention.verification === "verified"
+                      ? styles.retentionStatusTextActive
+                      : styles.retentionStatusText
+                  }
+                >
+                  {verificationLabel[retention.verification]}
+                </Text>
+              </View>
             </View>
-          </View>
+          ) : (
+            <Text style={styles.retentionError}>{RELAY_OFF_EMPTY_STATE}</Text>
+          )}
           {summary.length > 0 ? (
             <View style={styles.retentionTable}>
               {summary.map((row) => (

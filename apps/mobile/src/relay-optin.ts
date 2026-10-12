@@ -13,6 +13,12 @@
  * the next launch stays offline too. Pairing flows are unchanged.
  */
 
+/**
+ * What a relay-backed view shows while no relay is saved — it makes no
+ * request (Relay OFF ⇒ nothing contacts the relay; there is no fallback).
+ */
+export const RELAY_OFF_EMPTY_STATE = "Connect to a relay in Settings → Identity to see this";
+
 /** Prefilled in the Relay field; contacted only once the user enables it. */
 export const DEFAULT_RELAY_URL = "https://relay.motebit.com";
 

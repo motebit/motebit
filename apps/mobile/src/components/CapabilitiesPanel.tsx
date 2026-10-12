@@ -55,6 +55,7 @@ import type { SkillRegistryBundle, SkillRegistryEntry, SkillRegistryListing } fr
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
 import { ToolsTab, type ToolsTabProps } from "./settings/ToolsTab";
+import { RELAY_OFF_EMPTY_STATE } from "../relay-optin";
 
 // ── UX constants ──────────────────────────────────────────────────────
 
@@ -153,6 +154,8 @@ export function CapabilitiesPanel({
   }));
   const [browseEntries, setBrowseEntries] = useState<SkillRegistryEntry[]>([]);
   const [browseError, setBrowseError] = useState<string | null>(null);
+  /** False while no relay URL is saved: Browse makes no request (Relay OFF). */
+  const [relayConfigured, setRelayConfigured] = useState(true);
   const [installingName, setInstallingName] = useState<string | null>(null);
 
   // Construct the adapter + controller once per app instance; tear down
@@ -205,7 +208,14 @@ export function CapabilitiesPanel({
 
   async function refreshBrowse(): Promise<void> {
     const syncUrl = await app.getSyncUrl();
-    const relay = (syncUrl ?? DEFAULT_RELAY_URL).replace(/\/$/, "");
+    if (syncUrl == null || syncUrl === "") {
+      setRelayConfigured(false);
+      setBrowseEntries([]);
+      setBrowseError(null);
+      return;
+    }
+    setRelayConfigured(true);
+    const relay = syncUrl.replace(/\/$/, "");
     let resp: Response;
     try {
       resp = await fetch(`${relay}/api/v1/skills/discover?limit=100`, {
@@ -239,7 +249,8 @@ export function CapabilitiesPanel({
     const ctrl = ctrlRef.current;
     if (ctrl === null) return;
     const syncUrl = await app.getSyncUrl();
-    const relay = (syncUrl ?? DEFAULT_RELAY_URL).replace(/\/$/, "");
+    if (syncUrl == null || syncUrl === "") return;
+    const relay = syncUrl.replace(/\/$/, "");
     const url = `${relay}/api/v1/skills/${encodeURIComponent(entry.submitter_motebit_id)}/${encodeURIComponent(entry.name)}/${encodeURIComponent(entry.version)}`;
     setInstallingName(entry.name);
     try {
@@ -361,7 +372,9 @@ export function CapabilitiesPanel({
 
               {/* Browse section */}
               <Text style={styles.sectionHeader}>BROWSE</Text>
-              {browseError !== null ? (
+              {!relayConfigured ? (
+                <Text style={styles.emptyText}>{RELAY_OFF_EMPTY_STATE}</Text>
+              ) : browseError !== null ? (
                 <Text style={styles.emptyText}>{browseError}</Text>
               ) : browseEntries.length === 0 ? (
                 <Text style={styles.emptyText}>No published skills on this relay yet.</Text>
@@ -401,8 +414,6 @@ export function CapabilitiesPanel({
 }
 
 // ── Sub-components ────────────────────────────────────────────────────
-
-const DEFAULT_RELAY_URL = "https://relay.motebit.com";
 
 function InstalledRow({
   skill,
