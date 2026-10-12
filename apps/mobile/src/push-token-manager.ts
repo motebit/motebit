@@ -26,6 +26,8 @@ import { AppState, type AppStateStatus } from "react-native";
 import * as Notifications from "expo-notifications";
 
 const PUSH_TOKEN_KEY = "@motebit/push_token";
+/** The push-token DELETE is abandoned after this (a black-holed relay). */
+const PUSH_TOKEN_REMOVE_TIMEOUT_MS = 5_000;
 
 export interface PushTokenManagerDeps {
   getDeviceId: () => string;
@@ -85,8 +87,14 @@ export class MobilePushTokenManager {
     }
   }
 
-  /** Remove push token from relay (app logout / identity deregister). */
+  /**
+   * Remove push token from relay (Relay OFF, app logout / identity
+   * deregister). Bounded by an abort signal and fail-soft; the local token
+   * is forgotten either way, so a later re-enable registers it again.
+   */
   async removePushToken(syncUrl: string): Promise<void> {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), PUSH_TOKEN_REMOVE_TIMEOUT_MS);
     try {
       const authToken = await this.deps.createSyncToken("push:register");
       if (!authToken) return;
@@ -97,10 +105,19 @@ export class MobilePushTokenManager {
           Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({ device_id: this.deps.getDeviceId() }),
+        signal: abort.signal,
       });
-      await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
-    } catch {
-      // Best-effort cleanup
+    } catch (err: unknown) {
+      // Best-effort cleanup — logged, never blocking.
+      // eslint-disable-next-line no-console -- fail-soft: the log says why
+      console.warn("[push] unregister failed:", err instanceof Error ? err.message : String(err));
+    } finally {
+      clearTimeout(timer);
+      try {
+        await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
+      } catch {
+        // Storage failure: the next registration simply re-posts the token.
+      }
     }
   }
 

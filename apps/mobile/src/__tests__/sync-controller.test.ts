@@ -146,6 +146,7 @@ function makeDeps(overrides?: Partial<SyncControllerDeps>): SyncControllerDeps {
     getPrivKeyBytes: () => Promise.resolve(new Uint8Array(32)),
     createSyncToken: () => Promise.resolve("auth-token"),
     registerPushToken: vi.fn(() => Promise.resolve()),
+    removePushToken: vi.fn(() => Promise.resolve()),
     startPushLifecycle: vi.fn(),
     stopPushLifecycle: vi.fn(),
     ...overrides,
@@ -344,6 +345,7 @@ describe("MobileSyncController onboarding self-test", () => {
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
       enableInteractiveDelegation: vi.fn(),
+      disableInteractiveDelegation: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
@@ -368,6 +370,7 @@ describe("MobileSyncController onboarding self-test", () => {
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
       enableInteractiveDelegation: vi.fn(),
+      disableInteractiveDelegation: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
@@ -390,6 +393,7 @@ describe("MobileSyncController onboarding self-test", () => {
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
       enableInteractiveDelegation: vi.fn(),
+      disableInteractiveDelegation: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
@@ -415,6 +419,7 @@ describe("MobileSyncController.startServing happy path", () => {
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
       enableInteractiveDelegation: vi.fn(),
+      disableInteractiveDelegation: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },

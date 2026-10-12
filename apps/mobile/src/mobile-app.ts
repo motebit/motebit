@@ -663,6 +663,7 @@ export class MobileApp {
     getPrivKeyBytes: () => this.getPrivKeyBytes(),
     createSyncToken: (aud) => this.createSyncToken(aud),
     registerPushToken: (url) => this.registerPushToken(url),
+    removePushToken: (url) => this.removePushToken(url),
     startPushLifecycle: () => this.startPushLifecycle(),
     stopPushLifecycle: () => this.stopPushLifecycle(),
   });

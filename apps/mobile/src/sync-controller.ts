@@ -70,6 +70,10 @@ const SYNC_INTERVAL_MS = 30_000;
 /** Registration retry backoff (#962): 1 s, doubling, capped at 60 s. */
 export const REGISTRATION_RETRY_BASE_MS = 1_000;
 export const REGISTRATION_RETRY_MAX_MS = 60_000;
+/** One device-registration attempt is abandoned after this (a black-holed network). */
+export const REGISTRATION_TIMEOUT_MS = 15_000;
+/** Relay OFF waits at most this long for the push-token unregister. */
+export const PUSH_UNREGISTER_TIMEOUT_MS = 5_000;
 
 export interface SyncControllerDeps {
   getRuntime: () => MotebitRuntime | null;
@@ -81,8 +85,10 @@ export interface SyncControllerDeps {
   getKeyring: () => SecureStoreAdapter;
   getPrivKeyBytes: () => Promise<Uint8Array>;
   createSyncToken: (aud?: TokenAudience) => Promise<string>;
-  /** Called after startSync to register a push token with the relay. */
+  /** Called once the relay accepted the device, to register a push token with it. */
   registerPushToken: (syncUrl: string) => Promise<void>;
+  /** Called on relay OFF, before the URL is cleared, to unregister the push token. */
+  removePushToken: (syncUrl: string) => Promise<void>;
   startPushLifecycle: () => void;
   stopPushLifecycle: () => void;
 }
@@ -320,6 +326,10 @@ export class MobileSyncController {
     } catch (err: unknown) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
+    // Bounded: a black-holed network resolves as a refusal (and the
+    // Settings switch re-enables) instead of hanging the opt-in.
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), REGISTRATION_TIMEOUT_MS);
     try {
       const res = await registerDeviceWithRelay({
         motebitId: this.deps.getMotebitId(),
@@ -328,11 +338,13 @@ export class MobileSyncController {
         privateKey: privKeyBytes,
         syncUrl: url,
         deviceName: "Mobile",
+        signal: abort.signal,
       });
       return res.ok ? { ok: true } : { ok: false, error: `${res.code}: ${res.message}` };
     } catch (err: unknown) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     } finally {
+      clearTimeout(timer);
       secureErase(privKeyBytes);
     }
   }
@@ -348,6 +360,7 @@ export class MobileSyncController {
     if (result.ok) {
       this._registered = true;
       this._registrationError = null;
+      this.onDeviceAccepted(url);
       return;
     }
     this._registrationError = result.error;
@@ -362,6 +375,19 @@ export class MobileSyncController {
       void this.attemptRegistration(url, session);
     }, delay);
     (this._registrationTimer as { unref?: () => void }).unref?.();
+  }
+
+  /**
+   * The relay accepted this device (once per session): only now register
+   * the push token (which may prompt for notification permission) and run
+   * the onboarding self-test — a relay that refused the device, or an
+   * opt-in rolled back, prompts for nothing.
+   */
+  private onDeviceAccepted(url: string): void {
+    void this.deps.registerPushToken(url);
+    this.deps.startPushLifecycle();
+    // Adversarial onboarding: run self-test once after first relay connection
+    void this.runOnboardingSelfTest(url);
   }
 
   async startSync(syncUrl?: string): Promise<void> {
@@ -409,12 +435,8 @@ export class MobileSyncController {
     // Immediate first sync after short delay (let initialization settle)
     setTimeout(() => void this.syncCycle(url), 3000);
 
-    // Register push token for wake-on-demand background execution
-    void this.deps.registerPushToken(url);
-    this.deps.startPushLifecycle();
-
-    // Adversarial onboarding: run self-test once after first relay connection
-    void this.runOnboardingSelfTest(url);
+    // Push registration (wake-on-demand) and the onboarding self-test fire
+    // from onDeviceAccepted, once the relay has accepted the device.
   }
 
   /**
@@ -496,11 +518,45 @@ export class MobileSyncController {
     this.syncEngine = null;
     this.conversationSyncEngine = null;
     this._syncEncKey = null;
+    // Drop every live relay handle: discovery/serving coordinates, the
+    // runtime's interactive delegation (delegate_to_agent & co.) and the
+    // PlanEngine delegation adapter. The next startSync rewires them.
+    this._serving = false;
+    this._servingSyncUrl = null;
+    this._servingAuthToken = null;
+    const runtime = this.deps.getRuntime();
+    runtime?.disableInteractiveDelegation();
+    runtime?.setDelegationAdapter(undefined);
     this._syncStatus = "offline";
     this._syncStatusCallback?.("offline", this._lastSyncTime);
   }
 
+  /**
+   * Relay OFF. Unregister the push token from the relay first, while the
+   * URL and auth still exist — bounded and fail-soft, so an unreachable
+   * relay never blocks OFF — then stop sync and clear the saved URL.
+   */
   async disconnectSync(): Promise<void> {
+    const url = await this.getSyncUrl();
+    if (url != null && url !== "") {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          this.deps.removePushToken(url),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, PUSH_UNREGISTER_TIMEOUT_MS);
+          }),
+        ]);
+      } catch (err: unknown) {
+        // eslint-disable-next-line no-console -- fail-soft: OFF proceeds, the log says why
+        console.warn(
+          "[sync] push-token unregister failed:",
+          err instanceof Error ? err.message : String(err),
+        );
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
     this.stopSync();
     await this.clearSyncUrl();
   }
