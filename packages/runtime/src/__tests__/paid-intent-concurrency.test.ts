@@ -20,13 +20,16 @@ import {
   createInMemoryStorage,
   selectAndRunDelegation,
 } from "../index";
-import { FOREIGN_CALL, executeWithCall } from "./helpers/foreign-call";
+import { FOREIGN_CALL } from "./helpers/foreign-call";
 import {
   SIGNING_PINNED_HEX,
   advanceAfterRealAsync,
   isRelayMetadataUrl,
   relayMetadataResponse,
 } from "./helpers/signed-relay-metadata.js";
+// delegate_to_agent is R4_MONEY: the registry refuses it without the runtime's
+// money capability, so these handler tests drive the handler directly.
+import { runToolHandler } from "./helpers/money-tool-handler.js";
 
 const RELAY = "https://mock-relay.test";
 const ME = "alice-001";
@@ -343,7 +346,12 @@ describe("inside another principal's task, the owner's prior payment is not disc
     const args = { prompt: "research X", required_capabilities: ["web_search"] };
 
     // A foreign CALL (#943 round 9: whose call it is travels with it).
-    const foreign = await executeWithCall(runtime, "delegate_to_agent", args, FOREIGN_CALL);
+    const foreign = await runToolHandler(
+      runtime.getToolRegistry(),
+      "delegate_to_agent",
+      args,
+      FOREIGN_CALL,
+    );
     expect(foreign.ok).toBe(false);
     expect(foreign.error).toContain("INTENT_ALREADY_PAID");
     for (const secret of ["owner-task-7", "OWNER_TX_HASH", "/result"]) {
@@ -351,7 +359,7 @@ describe("inside another principal's task, the owner's prior payment is not disc
     }
 
     // The owner's own turn still gets the full, actionable refusal.
-    const own = await runtime.getToolRegistry().execute("delegate_to_agent", args);
+    const own = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", args);
     expect(own.error).toContain("owner-task-7");
     expect(pay).not.toHaveBeenCalled();
   });

@@ -207,6 +207,12 @@
 /packages/runtime/src/scoped-tool-registry.ts @hakimlabs
 # task:dispatch admission verification
 /packages/mcp-server/src/caller-token.ts @hakimlabs
+/packages/runtime/src/attached-surface.ts @hakimlabs
+/packages/runtime/src/money-capability.ts @hakimlabs
+/packages/runtime/src/streaming.ts @hakimlabs
+/packages/ai-core/src/loop.ts @hakimlabs
+/packages/mcp-server/src/index.ts @hakimlabs
+/packages/mcp-server/src/service.ts @hakimlabs
 
 # CLI — direct task doors and the grant subcommand.
 # daemon task doors
@@ -215,6 +221,7 @@
 /apps/cli/src/subcommands/grant.ts @hakimlabs
 # grant pre-flight refusals
 /apps/cli/src/grant-preflight.ts @hakimlabs
+/apps/cli/src/direct-task-handler.ts @hakimlabs
 
 # ── Exclusions (must stay last: last match wins) ───────────────────────────
 # Tests prove invariants but carry no authority; they are CI-only.

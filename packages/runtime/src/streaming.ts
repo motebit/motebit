@@ -122,6 +122,18 @@ export interface StreamingDeps {
    */
   turnReceiptDestination?(): symbol | undefined;
   /**
+   * The money capability for the approved call — minted by the runtime only
+   * when the policy gate itself paused exactly this call (name + args), and
+   * only once. Undefined for any other call; the registry then refuses an
+   * R4_MONEY tool. See `money-capability.ts`.
+   */
+  approvedCallCapability?(
+    toolName: string,
+    args: Record<string, unknown>,
+  ): import("./money-capability.js").MoneyCapability | undefined;
+  /** The pause resolved without executing (denied, voided, expired). */
+  discardPausedMoneyCalls?(): void;
+  /**
    * The loop dependencies for the turn about to run, for the named
    * principal (#880, #943 round 9): the runtime swaps in the policy gate's
    * no-approval-channel view and the turn-scoped tool registry for a
@@ -472,6 +484,7 @@ export class StreamingManager {
     if (!voided) return null;
     this._pendingApproval = null;
     this.clearApprovalTimeout();
+    this.deps.discardPausedMoneyCalls?.();
     // Only an owner turn voids (the caller is the owner's own message).
     this.deps.conversationFor(TurnPrincipal.OWNER).injectIntermediateMessages(
       {
@@ -975,6 +988,7 @@ export class StreamingManager {
             status: "done" as const,
             result: `Tool "${pending.toolName}" acts for this motebit's owner and is not available to another principal's task`,
           };
+          this.deps.discardPausedMoneyCalls?.();
           return;
         }
         // Ledger: the paused decision is proceeding — written before the call.
@@ -988,9 +1002,14 @@ export class StreamingManager {
         const dispatchedAt = Date.now();
         let result: ToolResult;
         try {
+          const moneyCapability = this.deps.approvedCallCapability?.(
+            pending.toolName,
+            pending.args,
+          );
           const call: ToolCall = {
             destination: this.deps.turnReceiptDestination?.() ?? OWNER_ACT,
             principal,
+            ...(moneyCapability != null ? { moneyCapability } : {}),
           };
           result = await (
             toolRegistry as ToolRegistry & {
@@ -1085,6 +1104,8 @@ export class StreamingManager {
           { role: "user" as const, content: `[tool_result: ${JSON.stringify(sanitized)}]` },
         ];
       } else {
+        // The human refused: the paused money call can never be minted for.
+        this.deps.discardPausedMoneyCalls?.();
         // Record the refusal BEFORE the continuation turn runs, so a
         // re-proposal of this exact intent is short-circuited rather than
         // re-prompting the human (#433).
@@ -1286,6 +1307,7 @@ export class StreamingManager {
       if (!this._pendingApproval) return;
       const expired = this._pendingApproval;
       this._pendingApproval = null;
+      this.deps.discardPausedMoneyCalls?.();
       // Remembered so a late resume can NAME the tool in its
       // approval_expired chunk (#457) — the pending record is gone by then.
       this._lastExpiredToolName = expired.toolName;
