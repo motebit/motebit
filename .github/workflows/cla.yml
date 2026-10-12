@@ -37,7 +37,10 @@ jobs:
           path-to-signatures: "signatures/cla.json"
           path-to-document: "https://github.com/motebit/motebit/blob/main/CLA.md"
           branch: "main"
-          allowlist: dependabot[bot],renovate[bot],github-actions[bot],hakimlabs
+          # motebit-agent: first-party automation acting under maintainer authority
+          # (the agent identity, separate from the founder account so GitHub can
+          # tell founder approval from agent action). Not an outside contributor.
+          allowlist: dependabot[bot],renovate[bot],github-actions[bot],hakimlabs,motebit-agent
           custom-notsigned-prcomment: |
             Thank you for your contribution! Before we can merge this, you need to sign our [Contributor License Agreement](https://github.com/motebit/motebit/blob/main/CLA.md).
 

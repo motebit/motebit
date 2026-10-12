@@ -21,6 +21,7 @@ import {
   readOnlyHandle,
 } from "../identity-authority-census.js";
 import { AUTH_HEADER, createTestRelay, walletOf } from "./test-helpers.js";
+import { recordGuardianEvidence } from "../identity-keys.js";
 
 const CENSUS = "/api/v1/admin/identity-authority/census";
 
@@ -291,6 +292,41 @@ describe("identity-authority census (§6 Q1–Q6)", () => {
     const c = await census(relay);
     expect(c.q4_unproven_guardians.identity_keys.ids).toEqual([a]);
     expect(c.q4_unproven_guardians.agent_registry.ids).toEqual([b]);
+  });
+
+  it("Q4: a guardian is proven only by the identity's latest evidence row naming exactly it — the /rotate-key rule", async () => {
+    const proven = crypto.randomUUID();
+    const replaced = crypto.randomUUID();
+    const g = await key();
+    const kp = await key();
+    holder(db, proven, kp, "register", g);
+    registry(db, proven, kp, { guardian_public_key: g });
+    recordGuardianEvidence(db, {
+      motebitId: proven,
+      guardianPublicKey: g,
+      setUnderKey: kp,
+      evidence: "holder",
+      now: 1,
+    });
+    // Its guardian was later re-set by an unproven write: g1 is on file, but
+    // the latest evidence names g2.
+    const g1 = await key();
+    const g2 = await key();
+    const kr = await key();
+    holder(db, replaced, kr, "register", g1);
+    for (const gk of [g1, g2]) {
+      recordGuardianEvidence(db, {
+        motebitId: replaced,
+        guardianPublicKey: gk,
+        setUnderKey: kr,
+        evidence: "holder",
+        now: 1,
+      });
+    }
+
+    const c = await census(relay);
+    expect(c.q4_unproven_guardians.identity_keys.ids).toEqual([replaced]);
+    expect(c.q4_unproven_guardians.agent_registry.ids).toEqual([]);
   });
 
   it("Q5: an id with no holder, no registry key and a keyed device row is a first-come candidate", async () => {

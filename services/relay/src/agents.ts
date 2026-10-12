@@ -31,13 +31,17 @@ import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
 import { hasRevocationRecord, liftRevocation } from "./identity-revocation.js";
+import { GuardianNotProvenError, GuardianUnprovableError } from "./errors.js";
 import {
   admitKey,
+  guardianEvidencePossible,
+  guardianProvenance,
   holderKeyOf,
-  identityGuardianFor,
   isCanonicalKey,
+  operatorServiceKeyWouldRecord,
   proveSovereignFirstKey,
   recordFirstIdentityKey,
+  recordGuardianEvidence,
   recordIdentityGuardian,
   recordOperatorServiceKey,
   registryKeyOf,
@@ -806,7 +810,6 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     platformFeeRate,
     federationConfig,
     federationQueryCache,
-    parseTokenPayloadUnsafe,
   } = deps;
   const peerFetch = deps.peerFetch ?? defaultPeerFetch;
   // Fee rate for the P2P eligibility pre-flight's expected-fee hint — the SAME
@@ -1322,6 +1325,51 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       }
     }
 
+    // The identity's CURRENT key and the key this request's bearer was
+    // verified under, both read BEFORE any write below (a succession in this
+    // same request rewrites device rows). A guardian set here has provenance
+    // only when they are the same key: the identity signed (§3.2). A paired
+    // device's own key, the master token and a legacy id with no held key
+    // prove nothing about the identity's key (D1/D2/D3).
+    // The bearer's key is the one the middleware captured from the device row
+    // that verified the token (auth.ts `onVerified`) — never looked up again:
+    // a re-read after an await can return a row a rotation or pairing rewrote
+    // since, a key this token was never verified under.
+    const holderAtRequest = holderKeyOf(moteDb.db, motebitId);
+    const verifiedKey = c.get("callerVerifiedKey" as never) as string | undefined;
+    const verifiedVia = c.get("callerVerifiedKeySource" as never) as VerifiedKeySource | undefined;
+    const bearerKeyAtRequest =
+      callerMotebitId === motebitId && verifiedVia === "device" ? verifiedKey : undefined;
+
+    // A guardian that could never carry provenance is refused, before any
+    // write: a legacy (non-sovereign) id with no held key, which no request
+    // can prove (D2 — its evidence path is not built). An operator
+    // registration that records E-op in this same request gives the id a
+    // holder, so it is not refused; neither is any identity that can be proven.
+    if (
+      Boolean((body as Record<string, unknown>).guardian_public_key) &&
+      !guardianEvidencePossible(moteDb.db, motebitId) &&
+      !(
+        keyFromBody &&
+        callerMotebitId == null &&
+        operatorServiceKeyWouldRecord(moteDb.db, motebitId)
+      )
+    ) {
+      logger.warn("agent.register.refused_guardian_unprovable", {
+        motebitId,
+        caller: callerMotebitId ?? null,
+      });
+      deps.recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: callerMotebitId ?? null,
+        reason: "register:guardian_unprovable",
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new GuardianUnprovableError();
+    }
+
     // --- Succession chain validation on re-registration ---
     // A differing key needs a link from the key on file. Once the identity has
     // a holder that is the only answer (§5f); before it has one, this is
@@ -1343,11 +1391,32 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // Verify the succession record signatures
       let guardianPubKeyForVerify: string | undefined;
       if (succession.recovery) {
-        guardianPubKeyForVerify = identityGuardianFor(moteDb.db, motebitId) ?? undefined;
+        const { guardian, proven } = guardianProvenance(moteDb.db, motebitId);
+        guardianPubKeyForVerify = guardian ?? undefined;
         if (!guardianPubKeyForVerify) {
           throw new HTTPException(400, {
             message: "Agent has no guardian registered — cannot use guardian recovery",
           });
+        }
+        // The /rotate-key rule, at this door too: only a guardian set with
+        // provenance authorizes a recovery (identity-authority-writers.md I1).
+        if (!proven) {
+          logger.warn("agent.key.succession_refused", {
+            motebitId,
+            caller: callerMotebitId ?? null,
+            reason: "guardian_not_proven",
+          });
+          deps.recordAuthEvent({
+            kind: "agent_token_rejected",
+            method: "POST",
+            path: c.req.path,
+            motebitId: callerMotebitId,
+            reason: "succession:guardian_not_proven",
+            correlationId: c.req.header("x-correlation-id") ?? null,
+          });
+          throw new GuardianNotProvenError(
+            guardianEvidencePossible(moteDb.db, motebitId) ? "provable" : "legacy",
+          );
         }
       }
       const successionValid = await verifyKeySuccession(succession, guardianPubKeyForVerify);
@@ -1492,21 +1561,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // possession half (DB1): the bearer was verified by the device row that
     // holds exactly this key — an operator bearer or a fallback proves none.
     // The key that verified this bearer, when a device row verified it: the
-    // row its `did` names. (The middleware falls back to the holder, else the
-    // registry, only when no row exists for that did — and then this stays
+    // key the middleware captured from that row (`bearerKeyAtRequest`, above),
+    // never re-read here — a re-read after the awaits above can return a row
+    // a rotation or pairing rewrote since. (The middleware falls back to the
+    // registry only when no row exists for that did — and then this stays
     // undefined.) E-sov needs CURRENT possession of the key it records (DB1);
     // its soundness also rests on recordFirstIdentityKey's predicate (DA2),
     // which refuses any identity already holding a different key.
-    let callerDeviceKey: string | undefined;
-    const bearer = c.req.header("authorization")?.slice(7);
-    const bearerClaims =
-      bearer != null && c.get("callerMotebitId" as never) != null
-        ? parseTokenPayloadUnsafe(bearer)
-        : null;
-    if (bearerClaims?.mid === motebitId && typeof bearerClaims.did === "string") {
-      const signer = await identityManager.loadDeviceById(bearerClaims.did, motebitId);
-      if (signer?.public_key) callerDeviceKey = signer.public_key;
-    }
+    const callerDeviceKey: string | undefined = bearerKeyAtRequest;
     // The key possession is proven for: the bearer's own device key. A body
     // key counts only when it IS that key; a keyless registration (the CLI
     // daemon's, which bootstraps and then registers without a key) presents
@@ -1575,8 +1637,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // round-3 prose fix). E-sov for a sovereign identity presenting its own
     // key; E-op for an operator-registered service identity with no device,
     // chain or holder (§5f). Each re-reads its conditions in one transaction.
+    let sovereignFirstKeyRecorded = false;
     if (sovereignProof) {
-      recordFirstIdentityKey(moteDb.db, sovereignProof, {
+      sovereignFirstKeyRecorded = recordFirstIdentityKey(moteDb.db, sovereignProof, {
         source: "register",
         guardianPublicKey: guardianPublicKey ?? null,
         now,
@@ -1634,6 +1697,33 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // because a registration named it (§5d W3).
     if (guardianPublicKey) {
       recordIdentityGuardian(moteDb.db, { motebitId, guardianPublicKey, now });
+      // Its PROVENANCE, only when this request proved the identity's current
+      // key: the bearer's device row holds the held key, or this request
+      // recorded the sovereign first key under the bearer's possession of
+      // it. Any other setter leaves the guardian on file but UNPROVEN, and a
+      // recovery under it is refused (GUARDIAN_NOT_PROVEN) until the owner
+      // re-sets it with the identity key.
+      if (
+        holderAtRequest !== null &&
+        bearerKeyAtRequest !== undefined &&
+        bearerKeyAtRequest === holderAtRequest.toLowerCase()
+      ) {
+        recordGuardianEvidence(moteDb.db, {
+          motebitId,
+          guardianPublicKey,
+          setUnderKey: holderAtRequest,
+          evidence: "holder",
+          now,
+        });
+      } else if (sovereignFirstKeyRecorded && sovereignProof) {
+        recordGuardianEvidence(moteDb.db, {
+          motebitId,
+          guardianPublicKey,
+          setUnderKey: sovereignProof.publicKey,
+          evidence: "sovereign",
+          now,
+        });
+      }
     }
 
     // Auto-create a default service listing if one doesn't exist.

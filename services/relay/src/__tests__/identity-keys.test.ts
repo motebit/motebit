@@ -187,6 +187,15 @@ describe("identity-keys", () => {
     });
     return res.status;
   }
+  /** A record presented under the operator's master token (no caller identity). */
+  async function presentAsOperator(target: string, record: unknown): Promise<number> {
+    const res = await relay.app.request(`/api/v1/agents/${target}/rotate-key`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(record),
+    });
+    return res.status;
+  }
   /** The owner's own rotation, under its own device's token. */
   async function rotateOwn(mid: string, did: string, from: KeyPair, to: KeyPair) {
     const record = await signKeySuccession(
@@ -467,7 +476,7 @@ describe("identity-keys", () => {
       expect((await registerAsOperator("kl-dis", { public_key: "zz" })).status).toBe(400);
     });
 
-    it("E-op — the operator registering a bare service identity fills it, so it can rotate and recover as on main", async () => {
+    it("E-op — the operator registering a bare service identity fills it; its guardian recovers only once the identity key re-sets it", async () => {
       const k1 = await generateKeypair();
       const g = await generateKeypair();
       expect(
@@ -490,6 +499,20 @@ describe("identity-keys", () => {
         k1.publicKey,
         k2.publicKey,
       );
+      // The master token proves no key of the identity's (D3): the guardian it
+      // set is unproven, and authorizes no recovery.
+      expect(await presentRotation("svc-1", recovery)).toBe(403);
+      expect(identityKey(db, "svc-1")?.publicKey).toBe(hex(k1));
+      // The identity key re-sets it (a device on the held key signs as the identity).
+      expect(await registerSelf("svc-1", "svc-1-dev", k1)).toBe(201);
+      expect(
+        (
+          await registerAsDevice("svc-1", "svc-1-dev", k1, {
+            public_key: hex(k1),
+            ...(await guardianFields("svc-1", g)),
+          })
+        ).status,
+      ).toBe(200);
       expect(await presentRotation("svc-1", recovery)).toBe(200);
       expect(identityKey(db, "svc-1")?.publicKey).toBe(hex(k2));
     });
@@ -517,13 +540,26 @@ describe("identity-keys", () => {
         k1.publicKey,
         k2.publicKey,
       );
-      expect(await presentRotation("svc-g", stale)).toBe(400);
       const fresh = await signGuardianRecoverySuccession(
         g2.privateKey,
         k2.privateKey,
         k1.publicKey,
         k2.publicKey,
       );
+      // Operator-set guardians are unproven (D3): neither recovers.
+      expect(await presentRotation("svc-g", stale)).toBe(403);
+      expect(await presentRotation("svc-g", fresh)).toBe(403);
+      // Proven by the identity key, the replaced guardian still cannot recover.
+      expect(await registerSelf("svc-g", "svc-g-dev", k1)).toBe(201);
+      expect(
+        (
+          await registerAsDevice("svc-g", "svc-g-dev", k1, {
+            public_key: hex(k1),
+            ...(await guardianFields("svc-g", g2)),
+          })
+        ).status,
+      ).toBe(200);
+      expect(await presentRotation("svc-g", stale)).toBe(400);
       expect(await presentRotation("svc-g", fresh)).toBe(200);
     });
 
@@ -623,7 +659,7 @@ describe("identity-keys", () => {
   });
 
   describe("#753 decisive round — build 4's departure is main's rule when unfilled", () => {
-    it("C1 — a chain-only identity (registry '' or absent) still rotates and recovers from its chain head", async () => {
+    it("C1 — a chain-only identity (registry '' or absent) still departs from its chain head; its backfilled guardian is unproven (D2)", async () => {
       const k = await generateKeypair();
       const k1 = await generateKeypair();
       const g = await generateKeypair();
@@ -639,17 +675,34 @@ describe("identity-keys", () => {
         k1.publicKey,
         n.publicKey,
       );
-      expect(await presentRotation("c1", rec)).toBe(200);
+      // No held key, so no request ever proved the identity's current key
+      // when the guardian was set: the recovery is refused (GUARDIAN_NOT_PROVEN).
+      expect(await presentRotation("c1", rec)).toBe(403);
+      // An ordinary rotation still departs from the chain head, as on main.
+      expect(
+        await presentAsOperator(
+          "c1",
+          await signKeySuccession(k1.privateKey, n.privateKey, n.publicKey, k1.publicKey),
+        ),
+      ).toBe(200);
     });
 
-    it("C2 — an operator identity WITH a device row rotates and recovers from its registry key", async () => {
+    it("C2 — an operator identity WITH a device row departs from its registry key; its operator-set guardian is unproven (D3)", async () => {
       const k = await generateKeypair();
       const g = await generateKeypair();
       plantDevice(db, "c2", "c2-dev", "");
+      // No key of c2's can ever be proven (legacy id, a device row blocks
+      // E-op), so the register door refuses its guardian outright.
       expect(
         (await registerAsOperator("c2", { public_key: hex(k), ...(await guardianFields("c2", g)) }))
           .status,
-      ).toBe(200);
+      ).toBe(400);
+      expect((await registerAsOperator("c2", { public_key: hex(k) })).status).toBe(200);
+      // A guardian from before that refusal (main's registry write) is unproven.
+      db.prepare("UPDATE agent_registry SET guardian_public_key = ? WHERE motebit_id = ?").run(
+        hex(g),
+        "c2",
+      );
       expect(holderRow(db, "c2")).toBeUndefined();
       expect(departureFrom(db, "c2", hex(k))).toMatchObject({ admissible: true, rung: "registry" });
       const n = await generateKeypair();
@@ -659,7 +712,13 @@ describe("identity-keys", () => {
         k.publicKey,
         n.publicKey,
       );
-      expect(await presentRotation("c2", rec)).toBe(200);
+      expect(await presentRotation("c2", rec)).toBe(403);
+      expect(
+        await presentAsOperator(
+          "c2",
+          await signKeySuccession(k.privateKey, n.privateKey, n.publicKey, k.publicKey),
+        ),
+      ).toBe(200);
     });
 
     it("C3 — a paired device cannot rotate where main refuses (registry names the owner)", async () => {
