@@ -1,0 +1,12 @@
+diff --git a/build/transform-plugins/helpers.js b/build/transform-plugins/helpers.js
+index 5ba93d85c2c4fa3272f37a6cf716c6577876a67f..d8184f79915427a730f7d5a4f41e11bb21def071 100644
+--- a/build/transform-plugins/helpers.js
++++ b/build/transform-plugins/helpers.js
+@@ -15,6 +15,7 @@ const namespaceWrapHelper = ({ statement }, name) => {
+       if (e && e.__esModule) return e;
+       var n = {};
+       if (e) Object.keys(e).forEach(function (k) {
++        if (k === "default") return;
+         var d = Object.getOwnPropertyDescriptor(e, k);
+         Object.defineProperty(n, k, d.get ? d : {
+           enumerable: true,
