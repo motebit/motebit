@@ -24,6 +24,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { TokenAudience } from "@motebit/sdk";
 import { AppState, type AppStateStatus } from "react-native";
 import * as Notifications from "expo-notifications";
+import type { RelayChannel } from "./relay-session";
 
 const PUSH_TOKEN_KEY = "@motebit/push_token";
 /** The push-token DELETE is abandoned after this (a black-holed relay). */
@@ -35,6 +36,9 @@ export interface PushTokenManagerDeps {
   getSyncUrl: () => Promise<string | null>;
 }
 
+/** No session scoping (a direct call outside the sync controller). */
+const UNSCOPED: RelayChannel = { live: true, fetch: (input, init) => fetch(input, init) };
+
 export class MobilePushTokenManager {
   private _pushTokenListener: Notifications.Subscription | null = null;
   private _appStateListener: ReturnType<typeof AppState.addEventListener> | null = null;
@@ -45,12 +49,14 @@ export class MobilePushTokenManager {
 
   /**
    * Register push token with the relay for wake-on-demand task execution.
-   * Called once the relay accepted the device. `isCurrent` is the caller's
-   * session guard: re-checked after every await (the permission prompt can
-   * sit open across relay OFF), so a registration whose session ended
-   * neither posts the token nor stores it.
+   * Called once the relay accepted the device, under that relay session
+   * (`RelaySession`): the token is posted ONLY through the session's fetch,
+   * which refuses once the session is disposed (relay OFF or a restart) — a
+   * registration resuming after OFF (the permission prompt, the Expo token
+   * fetch) cannot reach the relay, and stores nothing.
    */
-  async registerPushToken(syncUrl: string, isCurrent: () => boolean = () => true): Promise<void> {
+  async registerPushToken(syncUrl: string, session: RelayChannel = UNSCOPED): Promise<void> {
+    const isCurrent = (): boolean => session.live;
     try {
       const { status } = await Notifications.getPermissionsAsync();
       if (!isCurrent()) return;
@@ -72,7 +78,7 @@ export class MobilePushTokenManager {
       const authToken = await this.deps.createSyncToken("push:register");
       if (!authToken || !isCurrent()) return;
 
-      const res = await fetch(`${syncUrl}/api/v1/agents/push-token`, {
+      const res = await session.fetch(`${syncUrl}/api/v1/agents/push-token`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -127,17 +133,30 @@ export class MobilePushTokenManager {
     }
   }
 
-  /** Start listening for push token rotation and app state changes. */
-  startPushLifecycle(): void {
-    const lifecycle = ++this._lifecycle;
-    const isCurrent = () => lifecycle === this._lifecycle;
+  /**
+   * Start listening for push token rotation and app state changes. Every
+   * registration a listener starts runs under `session` and this lifecycle:
+   * it posts nothing once either has ended.
+   */
+  startPushLifecycle(session: RelayChannel = UNSCOPED): void {
+    // A restart replaces the listeners; it never stacks a second pair.
+    this.stopPushLifecycle();
+    const lifecycle = this._lifecycle;
+    const thisLifecycle = (): boolean => lifecycle === this._lifecycle;
+    const scoped: RelayChannel = {
+      get live() {
+        return thisLifecycle() && session.live;
+      },
+      fetch: session.fetch,
+    };
+    const isCurrent = (): boolean => scoped.live;
     // Token rotation: FCM/APNs may rotate tokens at any time
     this._pushTokenListener = Notifications.addPushTokenListener((_token) => {
       void (async () => {
         const syncUrl = await this.deps.getSyncUrl();
         if (syncUrl != null && syncUrl !== "" && isCurrent()) {
           await AsyncStorage.removeItem(PUSH_TOKEN_KEY); // Force re-register
-          await this.registerPushToken(syncUrl, isCurrent);
+          await this.registerPushToken(syncUrl, scoped);
         }
       })();
     });
@@ -148,7 +167,7 @@ export class MobilePushTokenManager {
         void (async () => {
           const syncUrl = await this.deps.getSyncUrl();
           if (syncUrl != null && syncUrl !== "" && isCurrent()) {
-            await this.registerPushToken(syncUrl, isCurrent);
+            await this.registerPushToken(syncUrl, scoped);
           }
         })();
       }

@@ -5,8 +5,9 @@
  *   - OFF drops every live relay handle — the serving URL/token behind
  *     `discoverAgents`, the runtime's interactive delegation
  *     (`delegate_to_agent` & co.) and the PlanEngine delegation adapter;
- *   - OFF unregisters the push token from the relay BEFORE the URL is
- *     cleared, and an unreachable relay never blocks OFF (fail-soft);
+ *   - OFF disposes the relay session FIRST, then unregisters the push
+ *     token with the URL captured before, and an unreachable relay never
+ *     blocks OFF (fail-soft);
  *   - ON fires push registration and the onboarding self-test only once
  *     the relay has ACCEPTED the device — a refusal prompts for nothing;
  *   - device registration is bounded by an abort signal, so a black-holed
@@ -230,13 +231,20 @@ describe("Relay OFF drops every live relay handle", () => {
   });
 });
 
-describe("Relay OFF unregisters the push token first", () => {
-  it("removes the push token from the relay BEFORE the URL is cleared", async () => {
-    const urlAtRemoval: Array<string | null> = [];
+describe("Relay OFF disposes the session first, then unregisters the push token", () => {
+  it("unregisters with the URL captured before dispose, once nothing can re-register", async () => {
+    const atRemoval: Array<unknown> = [];
     const ref: { ctrl?: MobileSyncController } = {};
-    const deps = makeDeps(makeRuntime(), {
+    const runtime = makeRuntime();
+    const deps = makeDeps(runtime, {
       removePushToken: vi.fn(async (url: string) => {
-        urlAtRemoval.push(url, (await ref.ctrl?.getSyncUrl()) ?? null);
+        atRemoval.push(
+          url,
+          ref.ctrl?.syncStatus,
+          vi.mocked(deps.stopPushLifecycle).mock.calls.length > 0,
+          runtime.disableInteractiveDelegation.mock.calls.length > 0,
+          (await ref.ctrl?.getSyncUrl()) ?? null,
+        );
       }),
     });
     const ctrl = new MobileSyncController(deps);
@@ -246,7 +254,9 @@ describe("Relay OFF unregisters the push token first", () => {
     await ctrl.disconnectSync();
 
     expect(deps.removePushToken).toHaveBeenCalledTimes(1);
-    expect(urlAtRemoval).toEqual([RELAY, RELAY]);
+    // The captured URL; the session already disposed (offline, push
+    // lifecycle and delegation stopped); the saved URL already cleared.
+    expect(atRemoval).toEqual([RELAY, "offline", true, true, null]);
     expect(await ctrl.getSyncUrl()).toBeNull();
   });
 
@@ -316,7 +326,11 @@ describe("Relay ON: push + self-test only after the relay accepted the device", 
     const ctrl = new MobileSyncController(deps);
     await ctrl.startSync(RELAY);
     await vi.advanceTimersByTimeAsync(50);
-    expect(deps.registerPushToken).toHaveBeenCalledWith(RELAY, expect.any(Function));
+    // Under the attempt's RelaySession: posts only through its fetch.
+    expect(deps.registerPushToken).toHaveBeenCalledWith(
+      RELAY,
+      expect.objectContaining({ live: true, fetch: expect.any(Function) }),
+    );
     expect(deps.startPushLifecycle).toHaveBeenCalled();
     expect(hoisted.selfTestSpy).toHaveBeenCalled();
     ctrl.stopSync();

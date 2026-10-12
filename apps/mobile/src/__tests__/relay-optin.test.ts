@@ -107,6 +107,32 @@ describe("connectRelay / disconnectRelay", () => {
     expect(port.saved.url).toBeNull();
   });
 
+  it("an enable superseded by a newer start never rolls that start back", async () => {
+    // Pairing (or OFF) started a newer attempt while this enable was in
+    // flight: the shared status belongs to that attempt, not to this enable.
+    const port = fakePort();
+    port.relayGeneration = 0;
+    port.startSync = vi.fn(async () => {
+      port.relayGeneration = (port.relayGeneration ?? 0) + 2; // ours, then the newer start
+      port.syncStatus = "error"; // the newer attempt's registration is retrying
+    });
+    const result = await connectRelay(port, DEFAULT_RELAY_URL);
+    expect(result).toEqual({ ok: false, error: "Relay connection was interrupted" });
+    expect(port.disconnectSync).not.toHaveBeenCalled();
+  });
+
+  it("an enable that is still the live attempt rolls back on its own refusal", async () => {
+    const port = fakePort();
+    port.relayGeneration = 4;
+    port.startSync = vi.fn(async () => {
+      port.relayGeneration = 5;
+      port.syncStatus = "error";
+    });
+    const result = await connectRelay(port, DEFAULT_RELAY_URL);
+    expect(result).toEqual({ ok: false, error: "Could not connect to the relay" });
+    expect(port.disconnectSync).toHaveBeenCalledTimes(1);
+  });
+
   it("disable stops sync and clears the saved URL", async () => {
     const port = fakePort();
     await connectRelay(port, DEFAULT_RELAY_URL);

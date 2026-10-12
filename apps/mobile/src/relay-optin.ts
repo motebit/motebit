@@ -11,10 +11,13 @@
  * show RELAY_OFF_EMPTY_STATE instead of falling back to a default relay.
  * Enabling persists the normalized URL and starts sync, which registers the
  * device (bounded by a timeout) and only once the relay accepts it
- * registers the push token. Disabling unregisters the push token (bounded,
- * fail-soft), drops every live relay handle (serving coordinates, the
- * runtime's interactive delegation) and clears the URL, so the next launch
- * stays offline too. Pairing flows are unchanged.
+ * registers the push token. Disabling disposes the relay session FIRST —
+ * every live relay handle it owns (timers, socket, in-flight requests,
+ * serving coordinates, the runtime's interactive delegation, the push
+ * lifecycle) is dropped synchronously, so no in-flight continuation can act
+ * afterwards — then clears the URL, so the next launch stays offline too,
+ * and unregisters the push token with the URL captured before (bounded,
+ * fail-soft). Pairing flows are unchanged.
  */
 
 /**
@@ -60,6 +63,11 @@ export interface RelayOptInPort {
   /** Stop sync and clear the saved URL (`MobileSyncController.disconnectSync`). */
   disconnectSync(): Promise<void>;
   readonly syncStatus: "idle" | "syncing" | "error" | "offline";
+  /**
+   * Bumped by every startSync and stopSync. Lets an enable tell whether its
+   * own attempt is still the live one before it reads the shared status.
+   */
+  readonly relayGeneration?: number;
 }
 
 /**
@@ -71,8 +79,10 @@ export interface RelayOptInPort {
 export async function connectRelay(port: RelayOptInPort, input: string): Promise<RelayUrlResult> {
   const parsed = parseRelayUrl(input);
   if (!parsed.ok) return parsed;
+  let generation: number | undefined;
   try {
     await port.setSyncUrl(parsed.url);
+    generation = port.relayGeneration;
     await port.startSync(parsed.url);
   } catch (err: unknown) {
     await port.disconnectSync();
@@ -80,6 +90,11 @@ export async function connectRelay(port: RelayOptInPort, input: string): Promise
       ok: false,
       error: `Could not connect to the relay: ${err instanceof Error ? err.message : String(err)}`,
     };
+  }
+  // A newer start (pairing) or an OFF superseded this attempt: the shared
+  // status is not ours to read, and the session is not ours to roll back.
+  if (generation !== undefined && port.relayGeneration !== generation + 1) {
+    return { ok: false, error: "Relay connection was interrupted" };
   }
   if (port.syncStatus === "error") {
     await port.disconnectSync();

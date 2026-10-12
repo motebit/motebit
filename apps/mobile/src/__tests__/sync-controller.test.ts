@@ -223,9 +223,13 @@ describe("MobileSyncController.startServing / stopServing", () => {
             >,
         }),
       );
-      const internals = ctrl as unknown as { _servingSyncUrl: string; _servingAuthToken: string };
-      internals._servingSyncUrl = "https://relay.test";
-      internals._servingAuthToken = "tok";
+      // A connected attempt with serving coordinates: the gate alone refuses.
+      const internals = ctrl as unknown as { attempt: Record<string, unknown> };
+      internals.attempt = {
+        servingUrl: "https://relay.test",
+        servingAuthToken: "tok",
+        serving: false,
+      };
       const res = await ctrl.startServing();
       expect(res.ok).toBe(false);
       expect(res.error).toContain("not available");
