@@ -640,7 +640,23 @@ export function actionDeployedProjects(
   return { deployers, rejected, broken };
 }
 
-/** `"git": {"deploymentEnabled": …}` — only `{ "main": false }` may be off. */
+/**
+ * Branch patterns whose Git-integration previews are off: each is a branch
+ * nobody reviews a preview of (the merge-queue temp branch is the PR head that
+ * main rebuilds as production minutes later; Dependabot bumps change no page;
+ * release PRs carry only versions and changelogs). Previews of every other
+ * branch keep deploying because a human reviews those.
+ */
+export const AUTOMATION_PREVIEW_OFF: readonly string[] = [
+  "gh-readonly-queue/**",
+  "dependabot/**",
+  "changeset-release/**",
+];
+
+/**
+ * `"git": {"deploymentEnabled": …}` — only `main` and the
+ * `AUTOMATION_PREVIEW_OFF` patterns may be off.
+ */
 function gitDeployState(cfg: { git?: unknown }): { mainOff: boolean; problem?: string } {
   const g = cfg.git as { deploymentEnabled?: unknown } | undefined;
   const de = g?.deploymentEnabled;
@@ -653,13 +669,13 @@ function gitDeployState(cfg: { git?: unknown }): { mainOff: boolean; problem?: s
     };
   if (de != null && typeof de === "object") {
     const off = Object.entries(de as Record<string, unknown>)
-      .filter(([k, v]) => v === false && k !== "main")
+      .filter(([k, v]) => v === false && k !== "main" && !AUTOMATION_PREVIEW_OFF.includes(k))
       .map(([k]) => k);
     const mainOff = (de as Record<string, unknown>)["main"] === false;
     if (off.length > 0)
       return {
         mainOff,
-        problem: `"git.deploymentEnabled" disables ${off.map((k) => `\`${k}\``).join(", ")} — only main may be disabled (previews must keep deploying)`,
+        problem: `"git.deploymentEnabled" disables ${off.map((k) => `\`${k}\``).join(", ")} — only main and the automation branches (${AUTOMATION_PREVIEW_OFF.join(", ")}) may be disabled; every other preview must keep deploying`,
       };
     return { mainOff };
   }
