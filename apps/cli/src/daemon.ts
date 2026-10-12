@@ -30,17 +30,10 @@ import {
   SensitivityLevel,
   AgentTaskStatus,
   DeviceCapability,
-  toWellFormedText,
   isSensitivityLevel,
   maxSensitivity,
 } from "@motebit/sdk";
-import {
-  mintAudienceToken,
-  verifySignedToken,
-  secureErase,
-  signExecutionReceipt,
-  hash as sha256,
-} from "@motebit/encryption";
+import { mintAudienceToken, verifySignedToken, secureErase } from "@motebit/encryption";
 import { verify, identityVerifyOutcome, governanceToPolicyConfig } from "@motebit/identity-file";
 import { McpServerAdapter, assertOwnerPrincipal } from "@motebit/mcp-server";
 import { MemoryClass } from "@motebit/policy";
@@ -59,7 +52,9 @@ import { applyLaunchProvider } from "./provider-config.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { LIVENESS_SESSION_GAP_MS } from "./runtime-coverage.js";
 import { handleRelayCommandFrame } from "./relay-command-frame.js";
-import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
+import { loadActiveSigningKey, IdentityKeyError } from "./identity.js";
+import { createDirectTaskHandler } from "./direct-task-handler.js";
+import { createGrantPresenter } from "./subcommands/grant.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
 import { cliRuntimeConfig, daemonRelay } from "./sync-configured.js";
@@ -226,6 +221,11 @@ export async function handleRun(config: CliConfig): Promise<void> {
         },
         memoryGovernance: governance.memoryGovernance,
         taskRouter: PLANNING_TASK_ROUTER,
+        // This motebit's identity key: a standing grant authorizes spending
+        // only when this identity signed it.
+        ...(fullConfig.device_public_key
+          ? { identityPublicKeyHex: fullConfig.device_public_key }
+          : {}),
       },
       relay,
     ),
@@ -1191,6 +1191,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
         },
         memoryGovernance: governance.memoryGovernance,
         taskRouter: PLANNING_TASK_ROUTER,
+        // This motebit's identity key: a standing grant (`serve --direct
+        // --grant`) authorizes spending only when this identity signed it.
+        ...(publicKeyHex != null && publicKeyHex !== ""
+          ? { identityPublicKeyHex: publicKeyHex }
+          : {}),
       },
       relay,
     ),
@@ -1405,107 +1410,35 @@ export async function handleServe(config: CliConfig): Promise<void> {
       );
     }
   }
+  // `serve --direct --grant <id>`: the stored standing grant whose due tick is
+  // presented to each direct execution, re-read (with its revocations) per
+  // task. Artifacts only — the runtime's `verifyGrantForTurn` derives (or
+  // refuses) the authority per task, and only for a caller who IS the grant's
+  // delegate (the task submitter is a foreign principal); without it an
+  // R4_MONEY tool is refused on this path (no human to approve).
+  const serveGrant =
+    config.direct && config.grant != null ? await createGrantPresenter(config.grant) : null;
   if (servePrivateKey) {
     {
       const privateKey = servePrivateKey;
 
       if (config.direct) {
-        // Direct tool execution mode — bypass AI, execute tools directly
-        deps.handleAgentTask = async function* (
-          prompt: string,
-          options?: { delegatedScope?: string; relayTaskId?: string },
-        ) {
-          const taskId = crypto.randomUUID();
-          const submittedAt = Date.now();
-
-          // Find the tool to execute
-          const allTools = runtime.getToolRegistry().list();
-          // A caller's prompt never selects an owner-interior tool (#880).
-          const servable = allTools.filter((t) => t.localOnly !== true);
-          const loadedTools = config.tools
-            ? servable.filter(
-                (t) =>
-                  // Prefer externally loaded tools; fall back to first tool
-                  !["read_file", "write_file", "list_directory", "run_command"].includes(t.name),
-              )
-            : servable;
-          const tool = loadedTools[0];
-          if (!tool) {
-            yield {
-              type: "task_result" as const,
-              receipt: {
-                task_id: taskId,
-                motebit_id: motebitId,
-                status: "failed",
-                result: "no tools available",
-              } as unknown as Record<string, unknown>,
-            };
-            return;
-          }
-
-          // Map prompt to the first required string parameter
-          const schema = tool.inputSchema as {
-            properties?: Record<string, { type?: string }>;
-            required?: string[];
-          };
-          const requiredProps = schema.required ?? [];
-          const stringParam =
-            requiredProps.find((k) => schema.properties?.[k]?.type === "string") ??
-            requiredProps[0] ??
-            Object.keys(schema.properties ?? {})[0];
-          const args: Record<string, unknown> = {};
-          if (stringParam) args[stringParam] = prompt;
-
-          let result: { ok: boolean; data?: unknown; error?: string };
-          try {
-            result = await runtime.getToolRegistry().execute(tool.name, args);
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            result = { ok: false, error: msg };
-          }
-          const completedAt = Date.now();
-
-          // Well-formed before hashing: a tool's text may end on a lone
-          // surrogate (spec/execution-ledger-v1.md §11.4).
-          const resultStr = toWellFormedText(
-            result.ok
-              ? typeof result.data === "string"
-                ? result.data
-                : JSON.stringify(result.data ?? null)
-              : (result.error ?? "error"),
-          );
-          const enc = new TextEncoder();
-          const promptHash = await sha256(enc.encode(prompt));
-          const resultHash = await sha256(enc.encode(resultStr));
-
-          const receipt: Record<string, unknown> = {
-            task_id: taskId,
-            motebit_id: motebitId,
-            device_id: deviceId,
-            submitted_at: submittedAt,
-            completed_at: completedAt,
-            status: result.ok ? "completed" : "failed",
-            result: resultStr,
-            tools_used: [tool.name],
-            memories_formed: 0,
-            prompt_hash: promptHash,
-            result_hash: resultHash,
-            ...(options?.relayTaskId ? { relay_task_id: options.relayTaskId } : {}),
-          };
-
-          const signed = await signExecutionReceipt(
-            receipt as Parameters<typeof signExecutionReceipt>[0],
-            privateKey,
-            publicKeyHex ? fromHex(publicKeyHex) : undefined,
-          );
-          log(
-            `receipt=${signed.signature.slice(0, 12)}… tool=${tool.name} prompt="${prompt.slice(0, 60)}"`,
-          );
-          yield {
-            type: "task_result" as const,
-            receipt: signed as unknown as Record<string, unknown>,
-          };
-        };
+        // Direct tool execution mode — bypass AI, execute ONE tool directly.
+        // Both callers (the MCP `motebit_task` tool and the relay WebSocket
+        // dispatch below) reach the tool through this handler, and it goes
+        // through the runtime's policy gate (direct-task-handler.ts, M2).
+        deps.handleAgentTask = createDirectTaskHandler({
+          runtime,
+          motebitId,
+          deviceId,
+          publicKeyHex,
+          privateKey,
+          preferExternalTools: Boolean(config.tools),
+          log,
+          ...(serveGrant != null
+            ? { delegationForTask: () => serveGrant.delegationForTurn() }
+            : {}),
+        });
         log("Agent task handler enabled (direct mode — no LLM)");
       } else {
         deps.handleAgentTask = async function* (prompt: string) {

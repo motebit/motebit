@@ -101,7 +101,7 @@ function saveStoredGrant(stored: StoredGrant): void {
   );
 }
 
-function listStoredGrants(): StoredGrant[] {
+export function listStoredGrants(): StoredGrant[] {
   if (!existsSync(grantsDir())) return [];
   const out: StoredGrant[] = [];
   for (const file of readdirSync(grantsDir())) {
@@ -123,64 +123,76 @@ export function selectDueTick(stored: StoredGrant, now: number): DelegationToken
 
 /**
  * Per-turn presentation of a stored grant — what `motebit --grant <id>`
- * threads into `sendMessageStreaming({ delegation })`. Artifacts only:
- * the runtime's `verifyGrantForTurn` (the sole authority producer) does
- * every check; a null here just means an honestly grantless turn.
+ * threads into `sendMessageStreaming({ delegation })` and what `motebit serve
+ * --direct --grant <id>` presents to each task. Artifacts only: the runtime's
+ * `verifyGrantForTurn` (the sole authority producer) does every check; a null
+ * here just means an honestly grantless turn.
  *
- * The held revocation set = the locally stored revocation (if any) plus
- * a best-effort pull of the relay's delegation-revocation cache at
- * session start — so a revocation signed on ANOTHER device and
- * propagated through the relay bites here too. Offline pull failure is
- * not an error (the cache is a cache, §6 D2); it narrows freshness to
- * the local set, and the relay re-fences at acceptance regardless.
+ * Everything is read at EACH presentation, never cached from startup: the
+ * stored grant and its locally stored revocation (so `motebit grant revoke`
+ * from another shell bites on the running session's next call), plus a
+ * best-effort pull of the relay's delegation-revocation cache (so a
+ * revocation signed on ANOTHER device bites too). An offline pull is not an
+ * error (the cache is a cache, §6 D2); it narrows freshness to the local set,
+ * and the relay re-fences at acceptance regardless. A stored grant that has
+ * disappeared presents nothing.
  */
 export interface GrantPresenter {
   grantId: string;
-  /** Options fragment for this turn, or null when no tick is due / revoked. */
-  delegationForTurn(): {
+  /** Options fragment for this turn, or null when no tick is due / the grant is gone. */
+  delegationForTurn(): Promise<{
     delegation: {
       token: DelegationToken;
       grant: StandingDelegation;
       revocations: readonly DelegationRevocation[];
     };
-  } | null;
+  } | null>;
 }
 
-export async function createGrantPresenter(grantId: string): Promise<GrantPresenter | null> {
-  const stored = loadStoredGrant(grantId);
-  if (stored == null) {
-    console.error(`--grant: no stored grant ${grantId} under ${grantsDir()}`);
-    return null;
-  }
-  const revocations: DelegationRevocation[] = stored.revocation != null ? [stored.revocation] : [];
+/** Upper bound on the per-presentation relay revocation pull. */
+const RELAY_REVOCATION_PULL_TIMEOUT_MS = 3_000;
 
+async function pullRelayRevocations(): Promise<DelegationRevocation[]> {
   const relayUrl = (loadFullConfig().sync_url ?? process.env["MOTEBIT_SYNC_URL"] ?? "").replace(
     /\/$/,
     "",
   );
-  if (relayUrl !== "") {
-    try {
-      const res = await fetch(`${relayUrl}/api/v1/delegations/revocations`);
-      if (res.ok) {
-        const body = (await res.json()) as { records?: DelegationRevocation[] };
-        // Include the whole cache — findGrantRevocation inside the
-        // runtime's verifier does the authoritative grant_id + delegator-
-        // key binding check, so over-inclusion is harmless and correct.
-        for (const record of body.records ?? []) revocations.push(record);
-      }
-    } catch {
-      // Offline — local set stands; the relay re-fences at acceptance.
-    }
+  if (relayUrl === "") return [];
+  try {
+    const res = await fetch(`${relayUrl}/api/v1/delegations/revocations`, {
+      signal: AbortSignal.timeout(RELAY_REVOCATION_PULL_TIMEOUT_MS),
+    });
+    if (!res.ok) return [];
+    const body = (await res.json()) as { records?: DelegationRevocation[] };
+    // The whole cache — findGrantRevocation inside the runtime's verifier
+    // does the authoritative grant_id + delegator-key binding check, so
+    // over-inclusion is harmless and correct.
+    return body.records ?? [];
+  } catch {
+    // Offline — local set stands; the relay re-fences at acceptance.
+    return [];
   }
+}
 
-  return {
+export function createGrantPresenter(grantId: string): Promise<GrantPresenter | null> {
+  if (loadStoredGrant(grantId) == null) {
+    console.error(`--grant: no stored grant ${grantId} under ${grantsDir()}`);
+    return Promise.resolve(null);
+  }
+  return Promise.resolve({
     grantId,
-    delegationForTurn() {
+    async delegationForTurn() {
+      const stored = loadStoredGrant(grantId);
+      if (stored == null || stored.grant.grant_id !== grantId) return null;
       const tick = selectDueTick(stored, Date.now());
       if (tick == null) return null;
+      const revocations: DelegationRevocation[] = [
+        ...(stored.revocation != null ? [stored.revocation] : []),
+        ...(await pullRelayRevocations()),
+      ];
       return { delegation: { token: tick, grant: stored.grant, revocations } };
     },
-  };
+  });
 }
 
 function usdFlag(value: string | undefined, name: string): number | undefined {
@@ -408,6 +420,66 @@ async function readSpentMicro(grantIds: string[]): Promise<Map<string, number>> 
   return spent;
 }
 
+/**
+ * A grant authorizes spending only when its delegator key is this motebit's
+ * CURRENT identity key (`grantDelegatorIs` in @motebit/runtime — authority
+ * derives from the immediate issuer, and it flows forward across a rotation,
+ * never back). `motebit rotate` leaves stored grants untouched, so a grant
+ * signed under a previous key stays on disk and verifies as a signature,
+ * yet no longer moves money. False when the current key is unknown.
+ */
+export function signedByPreviousKey(
+  grant: Pick<StandingDelegation, "delegator_public_key">,
+  currentPublicKeyHex: string | undefined,
+): boolean {
+  if (currentPublicKeyHex == null || currentPublicKeyHex === "") return false;
+  return grant.delegator_public_key.toLowerCase() !== currentPublicKeyHex.toLowerCase();
+}
+
+export const PREVIOUS_KEY_MARK = "signed by a previous key — re-issue with `motebit grant create`";
+
+/** The `grant list` lines: one per grant, plus the previous-key mark under each it applies to. */
+export function formatGrantListLines(
+  grants: StoredGrant[],
+  opts: { now: number; spent: Map<string, number>; currentPublicKeyHex: string | undefined },
+): string[] {
+  const lines: string[] = [];
+  for (const stored of grants) {
+    const g = stored.grant;
+    const state =
+      stored.revocation != null ? "REVOKED" : g.expires_at < opts.now ? "expired" : "active";
+    const ceiling = g.spend_ceiling?.lifetime_limit_micro;
+    const spentMicro = opts.spent.get(g.grant_id) ?? 0;
+    const money =
+      ceiling != null
+        ? `  ${usd(Math.max(0, ceiling - spentMicro))} of ${usd(ceiling)} lifetime remaining`
+        : "  (no ceiling — no money)";
+    lines.push(`${g.grant_id}  ${state.padEnd(7)}  ${g.subject}  scope=${g.scope}${money}`);
+    if (signedByPreviousKey(g, opts.currentPublicKeyHex)) lines.push(`  ${PREVIOUS_KEY_MARK}`);
+  }
+  return lines;
+}
+
+/**
+ * The one line `motebit rotate` prints after a rotation when live grants
+ * (neither revoked nor expired) were signed by a key other than the new
+ * one; null when there are none.
+ */
+export function previousKeyGrantNotice(
+  grants: StoredGrant[],
+  newPublicKeyHex: string,
+  now: number,
+): string | null {
+  const n = grants.filter(
+    (s) =>
+      s.revocation == null &&
+      s.grant.expires_at >= now &&
+      signedByPreviousKey(s.grant, newPublicKeyHex),
+  ).length;
+  if (n === 0) return null;
+  return `  Grants: ${n} standing grant${n === 1 ? " was" : "s were"} signed by a previous key and no longer authorize${n === 1 ? "s" : ""} spending — re-issue with \`motebit grant create\``;
+}
+
 export async function handleGrantList(): Promise<void> {
   const grants = listStoredGrants();
   if (grants.length === 0) {
@@ -416,19 +488,15 @@ export async function handleGrantList(): Promise<void> {
     );
     return;
   }
-  const now = Date.now();
   const spent = await readSpentMicro(grants.map((s) => s.grant.grant_id));
-  for (const stored of grants) {
-    const g = stored.grant;
-    const state = stored.revocation != null ? "REVOKED" : g.expires_at < now ? "expired" : "active";
-    const ceiling = g.spend_ceiling?.lifetime_limit_micro;
-    const spentMicro = spent.get(g.grant_id) ?? 0;
-    const money =
-      ceiling != null
-        ? `  ${usd(Math.max(0, ceiling - spentMicro))} of ${usd(ceiling)} lifetime remaining`
-        : "  (no ceiling — no money)";
-    console.log(`${g.grant_id}  ${state.padEnd(7)}  ${g.subject}  scope=${g.scope}${money}`);
+  let currentPublicKeyHex: string | undefined;
+  try {
+    currentPublicKeyHex = loadFullConfig().device_public_key;
+  } catch {
+    // No readable config: nothing to compare against, so no mark.
   }
+  const lines = formatGrantListLines(grants, { now: Date.now(), spent, currentPublicKeyHex });
+  for (const line of lines) console.log(line);
 }
 
 export async function handleGrantShow(grantId: string | undefined): Promise<void> {

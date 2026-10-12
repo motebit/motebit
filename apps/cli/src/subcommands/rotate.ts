@@ -28,6 +28,7 @@ import {
 } from "../pending-rotation.js";
 import { performRotation, RotationUnlockError, type RotationNote } from "../rotation.js";
 import { getRelayUrl } from "./_helpers.js";
+import { listStoredGrants, previousKeyGrantNotice } from "./grant.js";
 import { DEFAULT_SOLANA_RPC_URL } from "./wallet.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 
@@ -200,6 +201,14 @@ export async function handleRotate(config: CliConfig): Promise<void> {
         decryptPrivateKey,
       });
       if (rosterLine != null) console.log(rosterLine);
+      // Stored grants are untouched by a rotation, and a grant spends only
+      // while the key that signed it is the CURRENT one: say so once.
+      const grantLine = previousKeyGrantNotice(
+        listStoredGrants(),
+        outcome.newPublicKeyHex,
+        Date.now(),
+      );
+      if (grantLine != null) console.log(grantLine);
       console.log();
     }
   }

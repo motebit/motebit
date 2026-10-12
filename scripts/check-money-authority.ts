@@ -6,7 +6,7 @@
  * Doctrine: `docs/doctrine/memory-never-confers-authority.md`. Shape:
  * ordered source-marker scan, same family as `check-affordance-routing`.
  *
- * Three assertions:
+ * Assertions:
  *
  *   1. **The gate step exists and is ordered.** `policy-gate.ts`
  *      contains the R4 standing-authority block (`profile.risk >=
@@ -31,11 +31,31 @@
  *      threading (`verifiedGrant: options?.verifiedGrant` and the
  *      `ctx` spread) is permitted; minting the object literal anywhere
  *      else is an unverified authority claim.
+ *
+ *   4. **The deterministic granted-spend path re-composes the R4 AND**
+ *      (`executeGrantedDelegation`: fail-closed verify + scope + meter).
+ *
+ *   5. **No raw registry execute outside the gated paths — type-aware.**
+ *      Every reference the TypeScript checker resolves to a tool registry's
+ *      `execute` (or a registry class's private handler storage) is held to a
+ *      closed set of sanctioned scopes with exact site counts; a built-in
+ *      self-test plants every aliasing form and fails if one goes unseen.
+ *      Aperture: all `.ts`/`.tsx` under packages/<pkg>/src, apps/<app>/src,
+ *      services/<svc>/src in one program (tests excluded); see the assertion's
+ *      own comment for what a type cannot show. An early warning only: a
+ *      structural interface in another file routes around any reference scan.
+ *
+ *   6. **The R4 handler is unreachable without the runtime capability** —
+ *      the enforcement assertion 5 cannot be: the registry consumes a
+ *      single-use, name+args-bound capability minted only on gate-decided
+ *      runtime paths (`money-capability.ts`); the grant's delegator is pinned
+ *      to this runtime's identity.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createScanProgram, scanFile, workspaceSourceFiles } from "./lib/registry-execute-refs.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -281,11 +301,372 @@ function fail(message: string): void {
   }
 }
 
+// === 5. No raw registry execute outside the gated paths ================
+// The deterministic worker path (`motebit serve --direct`, which answers both
+// the MCP `motebit_task` tool and the relay WebSocket dispatch) executed tools
+// straight from the registry: an R4_MONEY tool reached through a task moved
+// money with no policy decision and no grant, while the same tool called over
+// MCP said "requires approval" (M2). Every REFERENCE to a tool registry's
+// `execute` (and to a registry class's private handler storage) in workspace
+// source is therefore a CLOSED set, located by the TypeScript checker — not by
+// spelling — so aliasing (`const e = r.execute`), destructuring, bracket
+// access, `.call/.apply/.bind`, passing the method as a callback, casting
+// through a registry type, computed access and private-member access all
+// count (scripts/lib/registry-execute-refs.ts). Each site must be SANCTIONED
+// by file + enclosing named scope with an exact site count; a new site, or a
+// second site in a sanctioned scope, fails until it is routed through a gated
+// path (`MotebitRuntime.executeToolGated`, `invokeLocalTool`, the AI loop) or
+// argued into this list in review. A built-in self-test plants every aliasing
+// form (virtual files, same program) and fails the gate if any goes unseen.
+//
+// Aperture: every `.ts`/`.tsx` under packages/*/src, apps/*/src,
+// services/*/src (tests, `.test`/`.spec`/`.probe` files and `.d.ts`
+// excluded), resolved in ONE program with workspace packages mapped to their
+// src. Not seen: values typed so that no registry type is ever in the chain
+// — a STRUCTURAL interface in another file (`interface Runner { execute(…) }`
+// called with the registry), a registry stored into a `Record<string,
+// Function>` — and object-destructuring ASSIGNMENT (`({ execute } = r)`).
+// Structural typing means a reference scan can always be routed around, so
+// this assertion is an EARLY WARNING, not the enforcement: an R4_MONEY tool's
+// handler is unreachable without the runtime money capability (assertion 6),
+// which fails such a call AT RUNTIME whatever its spelling.
+{
+  interface Sanctioned {
+    file: string;
+    /** The reference's enclosing named scope chain, exactly (`RegistryRef.container`). */
+    container: string;
+    /** Exact number of references allowed in that scope. */
+    sites: number;
+    /** Each site's line must match (literal-tool sites). */
+    line?: RegExp;
+    /** Must appear in the scope's text before each site (the decision it executes under). */
+    precededBy?: RegExp;
+    why: string;
+  }
+  const SANCTIONED: Sanctioned[] = [
+    {
+      file: "packages/ai-core/src/loop.ts",
+      container: "runTurnStreaming",
+      sites: 2,
+      precededBy: /policyGate/,
+      why: "the AI loop — every tool call is decided by the policy gate (R4 step 8b/8c) first",
+    },
+    {
+      file: "packages/runtime/src/motebit-runtime.ts",
+      container: "MotebitRuntime.invokeLocalTool",
+      sites: 1,
+      precededBy: /this\.policy\.validate\(/,
+      why: "invokeLocalTool — after policy.validate; requiresApproval refuses",
+    },
+    {
+      file: "packages/runtime/src/motebit-runtime.ts",
+      container: "MotebitRuntime.executeToolGated",
+      sites: 2,
+      precededBy:
+        /verifyGrantForTurn\([\s\S]*this\.policy\.validate\([\s\S]*decision\.requiresApproval/,
+      why: "executeToolGated — presenter-bound verifyGrantForTurn, policy.validate, requiresApproval refuses",
+    },
+    {
+      file: "packages/runtime/src/motebit-runtime.ts",
+      container: "MotebitRuntime.toolsForTurn > execute",
+      sites: 1,
+      why: "the turn-scoped registry handed ONLY to the AI loop (whose every call the gate decides), forwarding the turn's call context",
+    },
+    {
+      file: "packages/runtime/src/motebit-runtime.ts",
+      container: "MotebitRuntime.wrapToolRegistryForSensitivity > execute",
+      sites: 1,
+      why: "sensitivity wrapper around the loop's registry — adds a fail-closed outbound check, forwards otherwise",
+    },
+    {
+      file: "packages/runtime/src/motebit-runtime.ts",
+      container: "MotebitRuntime.registerExternalTools",
+      sites: 1,
+      line: /registerOwnerConnectedTool\(def, \(args\) => registry\.execute\(def\.name, args\)\)/,
+      why: "re-registers an owner-connected tool INTO the runtime registry (reached only through a gated path)",
+    },
+    {
+      file: "packages/runtime/src/streaming.ts",
+      container: "StreamingManager.resumePaused",
+      sites: 1,
+      precededBy: /recordApprovalSatisfied/,
+      why: "approval resume — executes exactly the paused, gate-decided call after a human approved it",
+    },
+    {
+      file: "packages/runtime/src/attached-surface.ts",
+      container: "resolveAttachedAct",
+      sites: 1,
+      precededBy: /runtime\.policy\.validate\(/,
+      why: "attached-frontend tool_execute — after policy.validate; requiresApproval refuses",
+    },
+    {
+      file: "packages/mcp-server/src/service.ts",
+      container: "wireServerDeps > executeTool",
+      sites: 1,
+      why: "McpServerAdapter executeTool dep — reached only after handleToolCall's validateTool decision",
+    },
+    {
+      file: "apps/cli/src/daemon.ts",
+      container: "handleServe > executeTool",
+      sites: 1,
+      line: /executeTool: \(name, args\) => runtime\.getToolRegistry\(\)\.execute\(name, args\)/,
+      why: "McpServerAdapter executeTool dep — reached only after handleToolCall's validateTool decision",
+    },
+    ...["read-url", "summarize", "web-search"].map((svc) => ({
+      file: `services/${svc}/src/index.ts`,
+      container: "main > handleAgentTask",
+      sites: 1,
+      line: /registry\.execute\("(?:read_url|summarize_search|web_search)",/,
+      why: "a first-party service executing its own fixed read-class tool, named by literal",
+    })),
+  ];
+
+  // Self-test: every aliasing form, planted as virtual files in the SAME
+  // program the real scan uses. A form the analysis stops seeing fails here.
+  const SELFTEST_DIR = resolve(ROOT, "packages/runtime/src/__money_authority_selftest__");
+  const SELFTEST_HEADER =
+    'import type { ToolRegistry } from "@motebit/protocol";\n' +
+    'import { SimpleToolRegistry } from "../simple-tool-registry.js";\n' +
+    "void SimpleToolRegistry;\n";
+  const SELFTEST_FORMS: Record<string, string> = {
+    direct: 'export const p = (r: ToolRegistry) => r.execute("t", {});\n',
+    alias:
+      'export function p(r: ToolRegistry) {\n  const e = r.execute;\n  return e("t", {});\n}\n',
+    destructure:
+      'export function p(r: ToolRegistry) {\n  const { execute } = r;\n  return execute("t", {});\n}\n',
+    destructure_param:
+      'export function p({ execute }: SimpleToolRegistry) {\n  return execute("t", {});\n}\n',
+    bracket: 'export function p(r: ToolRegistry) {\n  return r["execute"]("t", {});\n}\n',
+    computed: 'export function p(r: ToolRegistry, k: "execute") {\n  return r[k]("t", {});\n}\n',
+    call: 'export function p(r: ToolRegistry) {\n  return r.execute.call(r, "t", {});\n}\n',
+    apply: 'export function p(r: ToolRegistry) {\n  return r.execute.apply(r, ["t", {}]);\n}\n',
+    bind_callback:
+      'function run(f: (n: string, a: Record<string, unknown>) => unknown) {\n  return f("t", {});\n}\n' +
+      "export function p(r: ToolRegistry) {\n  return run(r.execute.bind(r));\n}\n",
+    callback:
+      'function run(f: (n: string, a: Record<string, unknown>) => unknown) {\n  return f("t", {});\n}\n' +
+      "export function p(r: ToolRegistry) {\n  return run(r.execute);\n}\n",
+    cast:
+      "export function p(r: unknown) {\n" +
+      '  return (r as SimpleToolRegistry as unknown as { execute(n: string, a: object): unknown }).execute("t", {});\n}\n',
+    any_receiver: 'export function p(r: any) {\n  return r.execute("t", {});\n}\n',
+    // The handler map itself is ECMAScript-private (`#tools`) — unreachable by
+    // construction, so the private-member form is planted on a TS-private one.
+    private_member: 'export function p(r: SimpleToolRegistry) {\n  return r["receiptRouter"];\n}\n',
+    concrete_class: 'export const p = (r: SimpleToolRegistry) => r.execute("t", {});\n',
+  };
+  const virtual = new Map<string, string>();
+  for (const [form, body] of Object.entries(SELFTEST_FORMS)) {
+    virtual.set(join(SELFTEST_DIR, `${form}.ts`), SELFTEST_HEADER + body);
+  }
+
+  const files = workspaceSourceFiles(ROOT);
+  const program = createScanProgram(
+    ROOT,
+    files.map((f) => resolve(ROOT, f)),
+    virtual,
+  );
+
+  const unseen: string[] = [];
+  for (const [path] of virtual) {
+    const sf = program.getSourceFile(path);
+    const refs = sf == null ? [] : scanFile(program, sf, path);
+    if (refs.filter((r) => !r.internal).length === 0) unseen.push(path.slice(ROOT.length + 1));
+  }
+  if (unseen.length > 0) {
+    fail(
+      "assertion 5 self-test: the type-aware registry-execute scan no longer sees these planted " +
+        "aliasing forms:\n" +
+        unseen.map((u) => `  - ${u}`).join("\n") +
+        "\nA form the scan cannot see is a raw execute that bypasses the policy gate unseen. " +
+        "Fix scripts/lib/registry-execute-refs.ts until every SELFTEST_FORMS entry is reported.",
+    );
+  }
+
+  const violations: string[] = [];
+  const perEntry = new Map<Sanctioned, number>();
+  let refs = 0;
+  let internal = 0;
+  let unresolved = 0;
+  for (const rel of files) {
+    const sf = program.getSourceFile(resolve(ROOT, rel));
+    if (sf == null) {
+      unresolved++;
+      violations.push(`${rel}  (not loaded into the program — cannot be proven clean)`);
+      continue;
+    }
+    for (const r of scanFile(program, sf, rel)) {
+      refs++;
+      if (r.internal) {
+        internal++;
+        continue;
+      }
+      const entry = SANCTIONED.find(
+        (e) =>
+          e.file === r.file &&
+          e.container === r.container &&
+          (e.line == null || e.line.test(r.lineText)) &&
+          (e.precededBy == null || e.precededBy.test(r.containerPrefix)),
+      );
+      if (entry == null) {
+        violations.push(`${r.file}:${r.line}  [${r.kind} in ${r.container}]  ${r.lineText.trim()}`);
+        continue;
+      }
+      perEntry.set(entry, (perEntry.get(entry) ?? 0) + 1);
+    }
+  }
+  for (const e of SANCTIONED) {
+    const n = perEntry.get(e) ?? 0;
+    if (n !== e.sites) {
+      violations.push(
+        `${e.file} [${e.container}]: ${n} sanctioned site(s), expected exactly ${e.sites} — ` +
+          (n > e.sites
+            ? "a new raw execute was added inside a sanctioned scope"
+            : "the sanctioned site moved or its gate marker no longer precedes it; update SANCTIONED"),
+      );
+    }
+  }
+  if (violations.length > 0) {
+    fail(
+      "tool-registry execute reference outside the gated paths:\n" +
+        violations.map((v) => `  - ${v}`).join("\n") +
+        "\nA raw registry execute skips the policy gate, so an R4_MONEY tool runs with no verified " +
+        "grant (the serve --direct / motebit_task bypass) — whatever its spelling (alias, " +
+        "destructure, bracket, .call/.apply/.bind, callback, cast, private handler map). Fix: " +
+        "execute through `MotebitRuntime.executeToolGated(name, args, { caller, delegation })` " +
+        "(policy.validate + presenter-bound verifyGrantForTurn + metering), or add the scope to " +
+        "SANCTIONED in scripts/check-money-authority.ts with the gate it runs under. " +
+        "docs/doctrine/memory-never-confers-authority.md.",
+    );
+  }
+
+  // The MCP adapter's executeTool sites above are sanctioned only because the
+  // adapter decides first: validateTool → refuse on requiresApproval → execute.
+  const adapter = readFile("packages/mcp-server/src/index.ts");
+  if (
+    adapter === null ||
+    !/const decision = await this\.deps\.validateTool\([\s\S]{0,1500}if \(decision\.requiresApproval\) \{[\s\S]{0,800}const result = await this\.deps\.executeTool\(/.test(
+      adapter,
+    )
+  ) {
+    fail(
+      "McpServerAdapter.handleToolCall no longer decides before it executes " +
+        "(validateTool → requiresApproval refusal → executeTool). The executeTool adapters " +
+        "sanctioned in assertion 5 depend on that order — restore it or remove them from SANCTIONED.",
+    );
+  }
+  // The serve --direct handler must execute through the gated runtime path,
+  // as a FOREIGN principal (the task submitter is never the owner).
+  const direct = readFile("apps/cli/src/direct-task-handler.ts");
+  if (
+    direct === null ||
+    !/deps\.runtime\.executeToolGated\(/.test(direct) ||
+    !/caller: \{ principal: "foreign", identity: options\?\.caller \?\? null \}/.test(direct)
+  ) {
+    fail(
+      "apps/cli/src/direct-task-handler.ts (serve --direct: motebit_task + relay dispatch) does not " +
+        "execute through `runtime.executeToolGated` as a FOREIGN principal bound to the " +
+        'transport-verified caller (`caller: { principal: "foreign", identity: options?.caller ?? null }`) — ' +
+        "the R4 bypass the gate exists to prevent: a task submitter riding the owner's grant.",
+    );
+  }
+  console.log(
+    `check-money-authority: type-aware scan of ${files.length} source files (.ts/.tsx under ` +
+      `packages/*/src, apps/*/src, services/*/src; tests excluded; ${unresolved} unloaded) — ` +
+      `${refs} registry execute/private-member reference(s): ${internal} internal to a registry ` +
+      `class, ${refs - internal} checked against ${SANCTIONED.length} sanctioned scopes; ` +
+      `self-test ${Object.keys(SELFTEST_FORMS).length - unseen.length}/${Object.keys(SELFTEST_FORMS).length} aliasing forms seen. ` +
+      `NOT seen by this scan: structural/cross-file wrappers (an interface with an execute method, ` +
+      `a Function-typed holder) — those are refused AT RUNTIME by the money capability (assertion 6), not here.`,
+  );
+}
+
+// === 6. The R4 handler is unreachable without the runtime capability =====
+// A static scan cannot see every route to `execute` (structural typing; see
+// assertion 5's aperture). The enforcement is a RUNTIME object: the runtime's
+// registry refuses an R4_MONEY tool unless the call carries a single-use
+// capability bound to its name + exact args, minted only by the runtime's
+// ECMAScript-private minter, and only on the gate-decided paths below. This
+// locks that structure in place (packages/runtime/src/money-capability.ts):
+//   - the registry's handler map is `#tools` and `execute` consumes the
+//     capability before any handler runs; the guard installs once;
+//   - the runtime constructs the authority, installs its guard, and keeps the
+//     minter `#mintMoney` — called at exactly three sites: executeToolGated
+//     (after verify + gate + meter), the loop registry wrapper (a decision the
+//     loop's gate view recorded under a PRODUCED grant, metered), and the
+//     approval resume (the exact call the gate paused);
+//   - `verifyGrantForTurn` pins the delegator to this runtime's identity and
+//     registers each value it produces (the runtime twin of the type brand).
+// Aperture: these four files, by source marker; the behaviour is proven by
+// packages/runtime/src/__tests__/money-capability-{runtime,loop}.test.ts.
+{
+  const registry = readFile("packages/runtime/src/simple-tool-registry.ts") ?? "";
+  const runtime = readFile("packages/runtime/src/motebit-runtime.ts") ?? "";
+  const verifier = readFile("packages/runtime/src/grant-verifier.ts") ?? "";
+  const capability = readFile("packages/runtime/src/money-capability.ts") ?? "";
+  const checks: Array<[boolean, string]> = [
+    [
+      /readonly #tools = new Map/.test(registry) && !/private tools\b/.test(registry),
+      "SimpleToolRegistry's handler map must be ECMAScript-private (`readonly #tools`) — a TS `private` map is readable by bracket access, handing out the money handler",
+    ],
+    [
+      /guard\.isMoney\(entry\.definition\)[\s\S]{0,200}guard\.consume\([\s\S]{0,400}entry\.handler as CallAwareToolHandler/.test(
+        registry,
+      ),
+      "SimpleToolRegistry.execute must consume the money capability (guard.isMoney → guard.consume) BEFORE the handler runs",
+    ],
+    [
+      /if \(this\.#moneyGuard != null\) throw/.test(registry),
+      "SimpleToolRegistry.installMoneyGuard must refuse a second install (code holding the registry must not replace the runtime's guard)",
+    ],
+    [
+      /readonly #mintMoney:/.test(runtime) &&
+        /this\.toolRegistry\.installMoneyGuard\(money\.guard\)/.test(runtime),
+      "MotebitRuntime must build the money authority, install its guard on its registry, and keep the minter in the ECMAScript-private `#mintMoney`",
+    ],
+    [
+      (runtime.match(/this\.#mintMoney\(/g) ?? []).length === 3,
+      `MotebitRuntime must mint the money capability at exactly 3 gate-decided sites (executeToolGated, the loop wrapper, the approval resume) — found ${(runtime.match(/this\.#mintMoney\(/g) ?? []).length}`,
+    ],
+    [
+      /isProducedGrant\(ctx\.verifiedGrant\)/.test(runtime) &&
+        /if \(!isProducedGrant\(grant\)\)/.test(runtime),
+      "the loop's gate view and meter view must require a grant verifyGrantForTurn PRODUCED (isProducedGrant) — the VerifiedGrant brand is type-only and forgeable at runtime",
+    ],
+    [
+      /if \(!grantDelegatorIs\(grant, options\.delegator\)\) return null;/.test(verifier) &&
+        /produced\.add\(body\)/.test(verifier),
+      "verifyGrantForTurn must pin the grant's delegator to the verifying runtime (grantDelegatorIs) and register what it produces",
+    ],
+    [
+      /live\.delete\(cap\)/.test(capability),
+      "the money capability must be single-use (consume deletes it)",
+    ],
+  ];
+  for (const [ok, why] of checks) {
+    if (!ok) {
+      fail(
+        `${why}. An R4_MONEY handler reachable without the runtime capability runs money with no ` +
+          "verified grant (the structural-wrapper bypass). docs/doctrine/memory-never-confers-authority.md.",
+      );
+    }
+  }
+  if (checks.every(([ok]) => ok)) {
+    console.log(
+      "check-money-authority: runtime capability — 4 files checked (simple-tool-registry, " +
+        "motebit-runtime, grant-verifier, money-capability): #tools private, capability consumed " +
+        "before the handler, guard install-once, 3 mint sites, produced-grant + delegator pinning.",
+    );
+  }
+}
+
 if (failed) {
   process.exit(1);
 }
 console.log(
   "✓ check-money-authority: R4 standing-authority block present + ordered after the trust switch; " +
     "delegate_to_agent declares explicit riskHint (R4 on payment rail); verifiedGrant has a single " +
-    "audited producer; executeGrantedDelegation re-composes the R4 AND (fail-closed verify + scope + meter-wrapped builder).",
+    "audited producer; executeGrantedDelegation re-composes the R4 AND (fail-closed verify + scope + meter-wrapped builder); " +
+    "every tool-registry execute is a sanctioned gated site; an R4_MONEY handler is unreachable " +
+    "without the runtime money capability.",
 );
