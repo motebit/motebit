@@ -39,6 +39,12 @@ export interface HttpPlanAdapterConfig {
   authToken?: string;
   /** Dynamic credential provider — takes precedence over authToken. */
   credentialSource?: CredentialSource;
+  /**
+   * The fetch every request goes through (default: the global `fetch`,
+   * resolved per call). A surface that must be able to cut the transport
+   * off — relay OFF — hands in its own, so no request outlives it.
+   */
+  fetch?: typeof fetch;
 }
 
 /**
@@ -48,16 +54,18 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
   private baseUrl: string;
   private authToken: string | undefined;
   private credentialSource: CredentialSource | undefined;
+  private fetchImpl: typeof fetch;
 
   constructor(config: HttpPlanAdapterConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
     this.authToken = config.authToken;
     this.credentialSource = config.credentialSource;
+    this.fetchImpl = config.fetch ?? ((input, init) => fetch(input, init));
   }
 
   async pushPlans(motebitId: string, plans: SyncPlan[]): Promise<number> {
     const url = `${this.baseUrl}/sync/${motebitId}/plans`;
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: "POST",
       headers: await this.headers(),
       body: JSON.stringify({ plans }),
@@ -71,7 +79,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
 
   async pullPlans(motebitId: string, since: number): Promise<SyncPlan[]> {
     const url = `${this.baseUrl}/sync/${motebitId}/plans?since=${since}`;
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: "GET",
       headers: await this.headers(),
     });
@@ -84,7 +92,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
 
   async pushSteps(motebitId: string, steps: SyncPlanStep[]): Promise<number> {
     const url = `${this.baseUrl}/sync/${motebitId}/plan-steps`;
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: "POST",
       headers: await this.headers(),
       body: JSON.stringify({ steps }),
@@ -98,7 +106,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
 
   async pullSteps(motebitId: string, since: number): Promise<SyncPlanStep[]> {
     const url = `${this.baseUrl}/sync/${motebitId}/plan-steps?since=${since}`;
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: "GET",
       headers: await this.headers(),
     });

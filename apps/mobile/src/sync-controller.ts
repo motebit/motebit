@@ -252,6 +252,7 @@ export class MobileSyncController {
    * events reached the relay in plaintext; both push doors now come from here.
    */
   private e2eHttpEventStore(
+    session: RelaySession<SyncStatus>,
     syncUrl: string,
     motebitId: string,
     encKey: Uint8Array,
@@ -261,6 +262,7 @@ export class MobileSyncController {
       baseUrl: syncUrl,
       motebitId,
       credentialSource,
+      fetch: session.fetch,
       payloads: "e2e",
     });
     return new EncryptedEventStoreAdapter({ inner: http, key: encKey });
@@ -710,13 +712,15 @@ export class MobileSyncController {
     const mint =
       attempt?.mint ?? session.token((aud?: TokenAudience) => this.deps.createSyncToken(aud));
 
-    const token = await mint();
+    // Fail before any work when the relay cannot mint (or OFF came first).
+    await mint();
     const encKey = attempt?.encKey ?? (await session.run(() => this.deriveEncKey()));
+    const credentials = this.sessionCredentials(mint);
 
     // Event sync — E2E, the same transport the sync cycle uses (#928).
     const tempEventSync = new SyncEngine(storage.eventStore, motebitId);
     tempEventSync.connectRemote(
-      session.guard(this.e2eHttpEventStore(url, motebitId, encKey, this.sessionCredentials(mint))),
+      session.guard(this.e2eHttpEventStore(session, url, motebitId, encKey, credentials)),
     );
     const eventResult = await session.run(() => tempEventSync.sync());
     // `sync()` never rejects: a refused or failed push is recorded, not
@@ -731,7 +735,8 @@ export class MobileSyncController {
     const convHttpAdapter = new HttpConversationSyncAdapter({
       baseUrl: url,
       motebitId,
-      authToken: token,
+      credentialSource: credentials,
+      fetch: session.fetch,
     });
     const tempConvSync = new ConversationSyncEngine(storage.conversationSyncStore, motebitId);
     tempConvSync.connectRemote(
@@ -782,7 +787,7 @@ export class MobileSyncController {
       // every credential session-minted.
       const credentials = this.sessionCredentials(attempt.mint);
       const encryptedHttp = session.guard(
-        this.e2eHttpEventStore(syncUrl, motebitId, encKey, credentials),
+        this.e2eHttpEventStore(session, syncUrl, motebitId, encKey, credentials),
       );
       const wsUrl =
         syncUrl.replace(/^https?/, (m) => (m === "https" ? "wss" : "ws")) + "/ws/sync/" + motebitId;
@@ -829,6 +834,7 @@ export class MobileSyncController {
           syncUrl,
           motebitId,
           authToken: (audience: TokenAudience) => attempt.mint(audience),
+          fetch: session.fetch,
           sendRaw: (data: string) => {
             if (session.live) wsAdapter.sendRaw(data);
           },
@@ -897,7 +903,8 @@ export class MobileSyncController {
       const convHttpAdapter = new HttpConversationSyncAdapter({
         baseUrl: syncUrl,
         motebitId,
-        authToken: token,
+        credentialSource: credentials,
+        fetch: session.fetch,
       });
       conversationSyncEngine.connectRemote(
         session.guard(
@@ -920,7 +927,8 @@ export class MobileSyncController {
           const httpPlanAdapter = new HttpPlanSyncAdapter({
             baseUrl: syncUrl,
             motebitId,
-            authToken: token ?? undefined,
+            credentialSource: credentials,
+            fetch: session.fetch,
           });
           planSync.connectRemote(
             session.guard(new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encKey })),

@@ -12,9 +12,12 @@
  *     request still in flight), so a continuation that resumes after OFF
  *     throws instead of reaching the relay;
  *   - `setTimeout` / `setInterval` are owned — dispose cancels every one;
- *   - `guard(obj)` wraps a relay adapter so none of its methods can run (or
- *     hand back a result) after dispose — for library code that does its own
- *     I/O with a static credential;
+ *   - every relay adapter is BUILT on the session: its requests go through
+ *     `fetch`, its credentials through `token` — never the global fetch,
+ *     never a static token (an encrypting push resumes between its own
+ *     awaits, past any check at its door);
+ *   - `guard(obj)` additionally wraps an adapter so none of its methods can
+ *     run (or hand back a result) after dispose;
  *   - `own(disposer)` hands the session every other handle (the WebSocket,
  *     delegation, the push lifecycle, engines) to release on dispose;
  *   - `status` is how the session reports; it says nothing once disposed.
@@ -136,7 +139,13 @@ export class RelaySession<S extends string = string> implements RelayChannel {
 
   /**
    * `target` with every method gated on this session: a call after dispose
-   * throws (or rejects), and a result that arrives after dispose is refused.
+   * never reaches it and gets a rejected promise, and a result that arrives
+   * after dispose is refused. Never a synchronous throw: library timers (the
+   * sync engine's stall watchdog asks `hasLiveWork()`) call adapter methods
+   * after OFF, and a throw there is an uncaught exception, not a refusal.
+   *
+   * Defense in depth only: the adapters' own I/O goes through `fetch` and
+   * `token` — the guard is not what keeps a request from leaving.
    */
   guard<T extends object>(target: T): T {
     return new Proxy(target, {
@@ -144,7 +153,7 @@ export class RelaySession<S extends string = string> implements RelayChannel {
         const value: unknown = Reflect.get(obj, prop, obj);
         if (typeof value !== "function") return value;
         return (...args: unknown[]): unknown => {
-          this.assertLive();
+          if (!this._live) return refused();
           const out: unknown = (value as (...a: unknown[]) => unknown).apply(obj, args);
           if (out instanceof Promise) {
             return out.then((v: unknown) => {
@@ -177,6 +186,13 @@ export class RelaySession<S extends string = string> implements RelayChannel {
     this.intervals.clear();
     for (const d of this.disposers.splice(0).reverse()) safely(d);
   }
+}
+
+/** A disposed-session refusal no caller is obliged to observe. */
+function refused(): Promise<never> {
+  const p = Promise.reject(new RelaySessionDisposedError());
+  p.catch(() => {});
+  return p;
 }
 
 function safely(fn: () => void): void {

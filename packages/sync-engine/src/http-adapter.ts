@@ -24,6 +24,12 @@ export interface HttpAdapterConfig {
    */
   credentialSource?: CredentialSource;
   /**
+   * The fetch every request goes through (default: the global `fetch`,
+   * resolved per call). A surface that must be able to cut the transport
+   * off — relay OFF — hands in its own, so no request outlives it.
+   */
+  fetch?: typeof fetch;
+  /**
    * What this transport may push (#928). `e2e`: only E2E envelopes — a
    * plaintext payload is refused before it leaves the device. A surface that
    * holds a sync encryption key MUST build its transports in `e2e` mode.
@@ -183,6 +189,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
   private motebitId: string;
   private authToken: string | undefined;
   private credentialSource: CredentialSource | undefined;
+  private fetchImpl: typeof fetch;
   private maxRetries: number;
   private retryBackoffMs: number;
   private requestTimeoutMs: number;
@@ -271,6 +278,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     this.motebitId = config.motebitId;
     this.authToken = config.authToken;
     this.credentialSource = config.credentialSource;
+    this.fetchImpl = config.fetch ?? ((input, init) => fetch(input, init));
     this.maxRetries = config.maxRetries ?? 3;
     this.retryBackoffMs = config.retryBackoffMs ?? 1_000;
     this.requestTimeoutMs = config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
@@ -799,7 +807,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
       // The credential is inside the race too: a lookup that hangs ends with its attempt.
       const headers = await Promise.race([this.headers(), ended]);
       const r = await Promise.race([
-        fetch(url, { ...init, headers, signal: a.ctrl.signal }),
+        this.fetchImpl(url, { ...init, headers, signal: a.ctrl.signal }),
         ended,
       ]);
       a.answered = true;

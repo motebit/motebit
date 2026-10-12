@@ -494,6 +494,30 @@ describe("RelayDelegationAdapter retry with failover", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sends every relay call through an injected fetch, never the global one", async () => {
+    const globalFetch = vi.fn();
+    vi.stubGlobal("fetch", globalFetch);
+    const injected = vi.fn(
+      async () => new Response(JSON.stringify({ task_id: "task-1" }), { status: 200 }),
+    );
+    const receipt = makeReceipt("task-1");
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      fetch: injected,
+      sendRaw: vi.fn(),
+      onCustomMessage: (cb) => {
+        setTimeout(() => cb({ type: "task_result", task_id: "task-1", receipt }), 10);
+        return () => {};
+      },
+    });
+    const result = await adapter.delegateStep(makeStep(), 5000);
+    expect(result.task_id).toBe("task-1");
+    expect(injected).toHaveBeenCalledTimes(1);
+    expect(globalFetch).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("retries on failure and excludes failed agent", async () => {
     let fetchCount = 0;
     const fetchBodies: unknown[] = [];

@@ -47,6 +47,12 @@ export interface HttpConversationAdapterConfig {
   authToken?: string;
   /** Dynamic credential provider — takes precedence over authToken. */
   credentialSource?: CredentialSource;
+  /**
+   * The fetch every request goes through (default: the global `fetch`,
+   * resolved per call). A surface that must be able to cut the transport
+   * off — relay OFF — hands in its own, so no request outlives it.
+   */
+  fetch?: typeof fetch;
 }
 
 /**
@@ -56,16 +62,18 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
   private baseUrl: string;
   private authToken: string | undefined;
   private credentialSource: CredentialSource | undefined;
+  private fetchImpl: typeof fetch;
 
   constructor(config: HttpConversationAdapterConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
     this.authToken = config.authToken;
     this.credentialSource = config.credentialSource;
+    this.fetchImpl = config.fetch ?? ((input, init) => fetch(input, init));
   }
 
   async pushConversations(motebitId: string, conversations: SyncConversation[]): Promise<number> {
     const url = `${this.baseUrl}/sync/${motebitId}/conversations`;
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: "POST",
       headers: await this.headers(),
       body: JSON.stringify({ conversations }),
@@ -81,7 +89,7 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
 
   async pullConversations(motebitId: string, since: number): Promise<SyncConversation[]> {
     const url = `${this.baseUrl}/sync/${motebitId}/conversations?since=${since}`;
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: "GET",
       headers: await this.headers(),
     });
@@ -96,7 +104,7 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
 
   async pushMessages(motebitId: string, messages: SyncConversationMessage[]): Promise<number> {
     const url = `${this.baseUrl}/sync/${motebitId}/messages`;
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: "POST",
       headers: await this.headers(),
       body: JSON.stringify({ messages }),
@@ -114,7 +122,7 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
     since: number,
   ): Promise<SyncConversationMessage[]> {
     const url = `${this.baseUrl}/sync/${motebitId}/messages?conversation_id=${conversationId}&since=${since}`;
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: "GET",
       headers: await this.headers(),
     });
