@@ -260,7 +260,6 @@ const OUTSIDE_LANE: ReadonlyArray<{ file: string; fn: string; sites: number; rea
     sites: 1,
     reason: RELAY,
   },
-  { file: "services/relay/src/federation.ts", fn: "<anonymous>", sites: 4, reason: RELAY },
   {
     file: "services/relay/src/federation.ts",
     fn: "attemptResultDelivery",
@@ -279,7 +278,6 @@ const OUTSIDE_LANE: ReadonlyArray<{ file: string; fn: string; sites: number; rea
     sites: 1,
     reason: RELAY,
   },
-  { file: "services/relay/src/federation.ts", fn: "sendHeartbeats", sites: 1, reason: RELAY },
   { file: "services/relay/src/federation.ts", fn: "signDiscoverBody", sites: 1, reason: RELAY },
   {
     file: "services/relay/src/identity-log-anchoring.ts",

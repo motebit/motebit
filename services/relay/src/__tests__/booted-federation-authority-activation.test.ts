@@ -43,9 +43,9 @@ import {
   BOOT_TIMEOUT_MS,
   type BootedEntry,
 } from "./booted-entry-harness.js";
+import { heartbeatRequest, signedConfirm } from "./federation-messages.js";
 
 const MASTER_TOKEN = "booted-federation-authority-master";
-const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";
 /** Loopback, so the hostile peer's advertised endpoint needs no DNS. */
 const PEER_ENDPOINT = "http://127.0.0.1:9/peer";
 const AGENT_ENDPOINT = "http://127.0.0.1:9/mcp";
@@ -122,16 +122,28 @@ async function becomeActivePeer(baseUrl: string): Promise<HostilePeer> {
     }),
   });
   expect(propose.status, "arrange: propose is accepted with no authorization").toBe(200);
-  const { nonce } = (await propose.json()) as { nonce: string };
+  const {
+    nonce,
+    relay_id: recipient,
+    public_key: recipientPublicKey,
+  } = (await propose.json()) as {
+    nonce: string;
+    relay_id: string;
+    public_key: string;
+  };
 
-  const challenge = await sign(
-    new TextEncoder().encode(`${relayId}:${nonce}:${FEDERATION_SUITE}`),
-    kp.privateKey,
-  );
+  const confirmRequest = await signedConfirm({
+    sender: relayId,
+    recipient,
+    recipientPublicKey,
+    nonce,
+    endpointUrl: PEER_ENDPOINT,
+    privateKey: kp.privateKey,
+  });
   const confirm = await fetch(`${baseUrl}/federation/v1/peer/confirm`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ relay_id: relayId, challenge_response: bytesToHex(challenge) }),
+    body: JSON.stringify(confirmRequest),
   });
   expect(confirm.status, "arrange: confirm is accepted with no authorization").toBe(200);
   const confirmBody = (await confirm.json()) as { status: string };
@@ -162,20 +174,23 @@ async function heartbeatWith(
     );
     revocations.push({ ...e, timestamp, signature: bytesToHex(sig) });
   }
-  const beat = await sign(
-    enc.encode(`${peer.relayId}|${timestamp}|${FEDERATION_SUITE}`),
-    peer.privateKey,
-  );
+  // relay-federation@1.5: a v2 `heartbeat` names this relay as its recipient.
+  const identity = (await (await fetch(`${baseUrl}/federation/v1/identity`)).json()) as {
+    relay_motebit_id: string;
+    public_key: string;
+  };
   const res = await fetch(`${baseUrl}/federation/v1/peer/heartbeat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relay_id: peer.relayId,
-      timestamp,
-      agent_count: 0,
-      signature: bytesToHex(beat),
-      revocations,
-    }),
+    body: JSON.stringify(
+      await heartbeatRequest({
+        sender: peer.relayId,
+        recipient: identity.relay_motebit_id,
+        recipientPublicKey: identity.public_key,
+        privateKey: peer.privateKey,
+        revocations,
+      }),
+    ),
   });
   return res.status;
 }

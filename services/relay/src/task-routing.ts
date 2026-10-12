@@ -41,7 +41,7 @@ import {
 } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig, PeerFetch } from "./federation.js";
-import { defaultPeerFetch, signDiscoverBody } from "./federation.js";
+import { defaultPeerFetch, readPeerRow, signDiscoverBody, writePeerRow } from "./federation.js";
 import { CircuitBreaker } from "@motebit/circuit-breaker";
 import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit-breaker";
 import { createLogger } from "./logger.js";
@@ -919,10 +919,17 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   // Also updates DB counters for observability (operator console).
 
   function recordPeerForwardResult(peerEndpoint: string, success: boolean): void {
-    const col = success ? "successful_forwards" : "failed_forwards";
-    db.prepare(`UPDATE relay_peers SET ${col} = ${col} + 1 WHERE endpoint_url = ?`).run(
-      peerEndpoint,
-    );
+    // Counter columns only (relay-federation@1.5 §3.1: never authority); the
+    // statements are literal so the peer-row writer scan can read them.
+    if (success) {
+      db.prepare(
+        "UPDATE relay_peers SET successful_forwards = successful_forwards + 1 WHERE endpoint_url = ?",
+      ).run(peerEndpoint);
+    } else {
+      db.prepare(
+        "UPDATE relay_peers SET failed_forwards = failed_forwards + 1 WHERE endpoint_url = ?",
+      ).run(peerEndpoint);
+    }
 
     if (success) {
       circuitBreaker.recordSuccess(peerEndpoint);
@@ -934,7 +941,11 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       circuitBreaker.recordFailure(peerEndpoint);
 
       // Sync DB state: when circuit opens, mark peer as suspended in DB
-      // so heartbeat and other DB-querying code sees the suspension.
+      // so heartbeat and other DB-querying code sees the suspension. This is
+      // the relay's own observation of the peer, so it goes through the one
+      // writer as `observed` (relay-federation@1.5 §3.1: away from `active`
+      // only, never the endpoint), compare-and-set against the row as read —
+      // a row re-pointed or re-confirmed since is left alone.
       const cbState = circuitBreaker.getState(peerEndpoint);
       if (cbState.state === "open") {
         const peer = db
@@ -942,12 +953,20 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
             "SELECT peer_relay_id FROM relay_peers WHERE endpoint_url = ? AND state = 'active'",
           )
           .get(peerEndpoint) as { peer_relay_id: string } | undefined;
-        if (peer) {
-          db.prepare("UPDATE relay_peers SET state = 'suspended' WHERE peer_relay_id = ?").run(
-            peer.peer_relay_id,
-          );
+        const before = peer ? readPeerRow(db, peer.peer_relay_id) : undefined;
+        if (
+          before &&
+          before.state === "active" &&
+          before.endpoint_url === peerEndpoint &&
+          writePeerRow(
+            db,
+            before,
+            { op: "update", row: { ...before, state: "suspended" } },
+            "observed",
+          )
+        ) {
           logger.warn("circuit_breaker.peer_suspended", {
-            peerId: peer.peer_relay_id,
+            peerId: before.peer_relay_id,
             peerEndpoint,
           });
         }
@@ -969,10 +988,13 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
 
   function resetCircuitBreaker(peerEndpoint: string): void {
     circuitBreaker.reset(peerEndpoint);
-    // Re-activate the peer in DB if it was suspended by the circuit breaker.
-    db.prepare(
-      "UPDATE relay_peers SET state = 'active', failed_forwards = 0 WHERE endpoint_url = ? AND state = 'suspended'",
-    ).run(peerEndpoint);
+    // The breaker only. A suspended peer's row returns to `active` on a
+    // message verified under its stored key (its heartbeat, or this relay's
+    // heartbeat it acknowledges) — never on a local reset
+    // (relay-federation@1.5 §3.1, peer row authority).
+    db.prepare("UPDATE relay_peers SET failed_forwards = 0 WHERE endpoint_url = ?").run(
+      peerEndpoint,
+    );
   }
 
   return {

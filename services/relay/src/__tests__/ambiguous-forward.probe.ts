@@ -57,6 +57,7 @@ import {
   createTestRelay,
   jsonAuthWithIdempotency,
 } from "./test-helpers.js";
+import { operatorConfirm } from "./federation-messages.js";
 import { toMicro } from "../accounts.js";
 
 const obs: Record<string, unknown> = {};
@@ -468,22 +469,15 @@ async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<v
       nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
     })
   ).nonce;
-  const sigA = (
-    await propose(relayA, {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: RELAY_A_URL,
-      nonce: nB,
-    })
-  ).challenge;
-  const sigB = (
-    await propose(relayB, {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: RELAY_B_URL,
-      nonce: nA,
-    })
-  ).challenge;
+  // relay-federation@1.5: self-propose is refused; the operator mints each confirm.
+  const sigA = await operatorConfirm(relayA, nB, AUTH_HEADER, {
+    id: idB.relay_motebit_id,
+    publicKey: idB.public_key,
+  });
+  const sigB = await operatorConfirm(relayB, nA, AUTH_HEADER, {
+    id: idA.relay_motebit_id,
+    publicKey: idA.public_key,
+  });
   for (const [on, relayId, challenge] of [
     [relayB, idA.relay_motebit_id, sigA],
     [relayA, idB.relay_motebit_id, sigB],
@@ -491,7 +485,7 @@ async function establishPeering(relayA: SyncRelay, relayB: SyncRelay): Promise<v
     const res = await on.app.request("/federation/v1/peer/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ relay_id: relayId, challenge_response: challenge }),
+      body: JSON.stringify({ relay_id: relayId, ...challenge }),
     });
     if (res.status !== 200) throw new Error(`peer confirm failed: ${res.status}`);
   }

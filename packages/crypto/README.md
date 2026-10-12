@@ -117,6 +117,35 @@ const vc = await issueReputationCredential(
 - **`verifyAgentCommandEnvelope(opts)`** — Fail-closed verification consumers run before executing a relay-forwarded `command_request`; returns an `AgentCommandVerdict` with an honest rejection reason (missing envelope, foreign identity, bad signature, stale timestamp, audience mismatch, payload tamper).
 - **`agentCommandAudience(motebitId)`** / **`agentCommandPayload(command, args?)`** — the shared audience + canonical-payload convention both sides bind to.
 
+### Federation Signed Messages (`relay-federation@1.5` §3.5)
+
+Relay-to-relay messages domain-separated by role, signer, intended verifier — by relay id AND public key (`recipient_public_key`; relay ids are not self-certifying, so the verifier compares the key to its own before anything else) — and freshness. Signed bytes are `"motebit-fed/v2\0" ‖ kind ‖ "\0" ‖ JCS(envelope)` under `motebit-jcs-ed25519-hex-v1` (`FEDERATION_MESSAGE_DOMAIN`, `FEDERATION_MESSAGE_SUITE`); kinds and their freshness windows live in `FEDERATION_MESSAGE_KINDS` (`heartbeat`, `heartbeat-ack`, `peer-remove`, `peer-challenge`, `peer-confirm`).
+
+```ts
+import { signFederationMessage, verifyFederationMessage } from "@motebit/crypto";
+
+const message = await signFederationMessage({
+  kind: "heartbeat",
+  sender: myRelayId,
+  recipient: peerRelayId,
+  recipientPublicKey: peerPublicKeyHex, // the key you verified the peer under
+  body: { agent_count: 3, revocations: [] },
+  privateKey,
+});
+
+// At the recipient: refuses another recipient (by key or id), kind, stale ts, altered body or key.
+const verdict = await verifyFederationMessage(message, {
+  kind: "heartbeat",
+  self: peerRelayId,
+  selfPublicKeyHex: peerPublicKeyHex,
+  senderPublicKeyHex,
+  body: { agent_count: 3, revocations: [] },
+});
+// verdict.ok → record verdict.envelope.nonce for its sender in the same transaction as the write.
+```
+
+`parseFederationMessage` reads a wire value strictly (exactly the eight envelope fields) so a verifier can look up the sender's key first; `federationMessageBytes` and `federationBodyDigest` expose the signed bytes and the `body_sha256` rule.
+
 ### Credential Issuance
 
 - **`issueGradientCredential(snapshot, privateKey, publicKey)`** — Issue an intelligence gradient VC.

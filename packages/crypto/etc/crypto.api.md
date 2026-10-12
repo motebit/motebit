@@ -562,10 +562,70 @@ export interface ExecutionReceipt {
 export function executionReceiptDigest(receipt: ExecutionReceipt_2): Promise<string>;
 
 // @public
+export const FEDERATION_MESSAGE_DOMAIN: "motebit-fed/v2";
+
+// @public
+export const FEDERATION_MESSAGE_KINDS: {
+    readonly heartbeat: {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "heartbeat-ack": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "peer-remove": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "peer-challenge": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "peer-confirm": {
+        readonly maxSkewMs: 300000;
+    };
+};
+
+// @public
+export const FEDERATION_MESSAGE_SUITE: "motebit-jcs-ed25519-hex-v1";
+
+// @public
 export const FEDERATION_SETTLEMENT_ANCHOR_SUITE: "motebit-jcs-ed25519-hex-v1";
 
 // @public
 export const FEDERATION_SETTLEMENT_RECORD_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export function federationBodyDigest(body: unknown): Promise<string>;
+
+// @public
+export function federationMessageBytes(envelope: FederationMessageEnvelope, canonicalize?: (obj: unknown) => string): Uint8Array;
+
+// @public
+export interface FederationMessageEnvelope {
+    body_sha256: string;
+    // (undocumented)
+    kind: FederationMessageKind;
+    nonce: string;
+    recipient: string;
+    recipient_public_key: string;
+    sender: string;
+    // (undocumented)
+    suite: typeof FEDERATION_MESSAGE_SUITE;
+    ts: number;
+}
+
+// @public (undocumented)
+export type FederationMessageKind = keyof typeof FEDERATION_MESSAGE_KINDS;
+
+// @public (undocumented)
+export type FederationMessageRefusal = "malformed" | "unknown_kind" | "kind_mismatch" | "unsupported_suite" | "wrong_recipient" | "wrong_recipient_key" | "wrong_sender" | "stale" | "body_mismatch" | "bad_signature";
+
+// @public (undocumented)
+export type FederationMessageVerdict = {
+    ok: true;
+    envelope: FederationMessageEnvelope;
+} | {
+    ok: false;
+    reason: FederationMessageRefusal;
+};
 
 // @public
 export interface FederationSettlementAnchorProofFields {
@@ -1123,6 +1183,9 @@ export function parse(content: string): {
 };
 
 // @public
+export function parseFederationMessage(message: unknown): SignedFederationMessage | null;
+
+// @public
 export function parseScopeSet(scope: string): Set<string>;
 
 // @public (undocumented)
@@ -1641,6 +1704,14 @@ export const SIGNED_REQUEST_ENVELOPE_SUITE: "motebit-jcs-ed25519-b64-v1";
 // @public
 export const SIGNED_TOKEN_SUITE: "motebit-jwt-ed25519-v1";
 
+// @public
+export interface SignedFederationMessage {
+    // (undocumented)
+    envelope: FederationMessageEnvelope;
+    // (undocumented)
+    signature: string;
+}
+
 export { SignedRequestEnvelope }
 
 // @public (undocumented)
@@ -1668,6 +1739,18 @@ export function signExecutionReceipt<T extends Omit<SignableReceipt, "signature"
     suite: typeof EXECUTION_RECEIPT_SUITE;
     signature: string;
 }>;
+
+// @public
+export function signFederationMessage(args: {
+    kind: FederationMessageKind;
+    sender: string;
+    recipient: string;
+    recipientPublicKey: string;
+    body: unknown;
+    privateKey: Uint8Array;
+    now?: number;
+    nonce?: string;
+}): Promise<SignedFederationMessage>;
 
 // @public
 export function signFederationSettlement(settlement: Omit<FederationSettlementRecord, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<FederationSettlementRecord>;
@@ -2139,6 +2222,17 @@ export function verifyExecutionReceipt(receipt: SignableReceipt, publicKey: Uint
 
 // @public (undocumented)
 export function verifyExecutionReceiptDetailed(receipt: SignableReceipt, publicKey: Uint8Array): Promise<ReceiptVerifyDetail>;
+
+// @public
+export function verifyFederationMessage(message: unknown, expect: {
+    kind: FederationMessageKind;
+    self: string;
+    selfPublicKeyHex: string;
+    expectedSender?: string;
+    senderPublicKeyHex: string;
+    body: unknown;
+    now?: number;
+}): Promise<FederationMessageVerdict>;
 
 // @public
 export function verifyFederationSettlement(settlement: FederationSettlementRecord, issuerPublicKey: Uint8Array): Promise<boolean>;

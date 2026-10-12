@@ -187,6 +187,16 @@ export const DECLARATION_CONTENT = {
       retention_window:
         '30-day rolling window, swept every minute by the task-cleanup loop; an operator\'s audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log',
     },
+    // The federation v2 replay store (relay-federation@1.5 §3.5): one row per
+    // signed peer message accepted, kept only past its freshness window.
+    federation_nonces: {
+      tables: ["relay_federation_nonces"],
+      observable: [
+        "for every v2 federation message this relay accepted from a peer relay (heartbeat, peer removal, peering confirm): the sending relay's id, the message's single-use nonce, and when the row expires — no content, no agent identity",
+      ],
+      retention_window:
+        "10 minutes past the message's timestamp (twice its ±5-minute freshness window); expired rows are deleted whenever a new message is accepted",
+    },
     // Who the relay handed each task to (#890 round 6): read by every
     // receipt door and the receipt archive, swept by age.
     task_routes: {
@@ -695,6 +705,16 @@ export function renderMarkdown(): string {
   for (const item of c.retention.auth_events.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.auth_events.retention_window}.`);
+  lines.push("");
+
+  lines.push("### Federation nonces");
+  lines.push("");
+  lines.push(`Tables: ${c.retention.federation_nonces.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.federation_nonces.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.federation_nonces.retention_window}.`);
   lines.push("");
 
   lines.push("### Task routes");
