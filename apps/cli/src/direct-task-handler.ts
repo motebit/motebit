@@ -3,22 +3,38 @@
  * mapped onto ONE served tool, executed, and answered with a signed
  * ExecutionReceipt. Both of serve's task doors reach it: the MCP
  * `motebit_task` tool (`deps.handleAgentTask`) and the relay WebSocket
- * dispatch (`handleTask`), so whatever this handler does, both doors do.
- *
- * Extracted from `daemon.ts` unchanged so the doors can be driven in a unit
- * test (`handleServe` cannot be: passphrase prompt, database, socket).
+ * dispatch (`handleTask`), so a gate here covers both.
  */
 import { toWellFormedText } from "@motebit/sdk";
-import type { ToolDefinition, ToolResult } from "@motebit/sdk";
+import type {
+  DelegationRevocation,
+  DelegationToken,
+  StandingDelegation,
+  ToolDefinition,
+  ToolResult,
+} from "@motebit/sdk";
 import { signExecutionReceipt, hash as sha256 } from "@motebit/encryption";
 import { fromHex } from "./identity.js";
 
 /** The slice of `MotebitRuntime` the direct handler uses. */
 export interface DirectTaskRuntime {
-  getToolRegistry(): {
-    list(): ToolDefinition[];
-    execute(name: string, args: Record<string, unknown>): Promise<ToolResult>;
-  };
+  /** Listing only — execution goes through `executeToolGated`, never the registry. */
+  getToolRegistry(): { list(): ToolDefinition[] };
+  executeToolGated(
+    name: string,
+    args: Record<string, unknown>,
+    options: {
+      caller: {
+        principal: "foreign";
+        identity: { motebitId: string; publicKeyHex: string } | null;
+      };
+      delegation?: {
+        token: DelegationToken;
+        grant: StandingDelegation;
+        revocations?: readonly DelegationRevocation[];
+      };
+    },
+  ): Promise<ToolResult>;
 }
 
 export interface DirectTaskHandlerDeps {
@@ -30,12 +46,43 @@ export interface DirectTaskHandlerDeps {
   /** `--tools` was given: prefer externally loaded tools over the builtins. */
   preferExternalTools: boolean;
   log: (msg: string) => void;
+  /**
+   * The standing grant presented to each execution (`serve --direct --grant`),
+   * as signed artifacts — re-read and verified per task by the runtime, never
+   * trusted here. It authorizes a task only when its delegate is that task's
+   * verified caller (the task submitter is a foreign principal).
+   */
+  delegationForTask?: () =>
+    | {
+        delegation: {
+          token: DelegationToken;
+          grant: StandingDelegation;
+          revocations: readonly DelegationRevocation[];
+        };
+      }
+    | null
+    | Promise<{
+        delegation: {
+          token: DelegationToken;
+          grant: StandingDelegation;
+          revocations: readonly DelegationRevocation[];
+        };
+      } | null>;
 }
 
 export function createDirectTaskHandler(deps: DirectTaskHandlerDeps) {
   return async function* (
     prompt: string,
-    options?: { delegatedScope?: string; relayTaskId?: string },
+    options?: {
+      delegatedScope?: string;
+      relayTaskId?: string;
+      /**
+       * The caller the transport VERIFIED (MCP caller-signed bearer: `mid` +
+       * the key it verified under). Absent for relay WebSocket dispatch and
+       * any transport that verified no caller. Never read from the prompt.
+       */
+      caller?: { motebitId: string; publicKeyHex: string };
+    },
   ) {
     const taskId = crypto.randomUUID();
     const submittedAt = Date.now();
@@ -78,17 +125,33 @@ export function createDirectTaskHandler(deps: DirectTaskHandlerDeps) {
     const args: Record<string, unknown> = {};
     if (stringParam) args[stringParam] = prompt;
 
+    // Through the runtime's policy gate, never the registry raw (M2): the SAME
+    // decision a direct MCP call of this tool gets, plus the R4 invariant — an
+    // R4_MONEY tool runs only under a verified in-scope standing grant
+    // presented as signed artifacts; with none it is refused, never queued
+    // (no human is on this path). docs/doctrine/memory-never-confers-authority.md.
+    //
+    // The task's submitter is a FOREIGN principal: the prompt (and so the
+    // tool's argument) is theirs. The grant clears R4 only when its delegate
+    // IS the caller the transport verified — so the owner's own grant never
+    // lets a stranger choose where the owner's money goes, and a task with no
+    // verified caller (relay dispatch) is authorized by no grant.
     let result: { ok: boolean; data?: unknown; error?: string };
     try {
-      result = await deps.runtime.getToolRegistry().execute(tool.name, args);
+      const presented = (await deps.delegationForTask?.()) ?? null;
+      result = await deps.runtime.executeToolGated(tool.name, args, {
+        caller: { principal: "foreign", identity: options?.caller ?? null },
+        ...(presented != null ? { delegation: presented.delegation } : {}),
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       result = { ok: false, error: msg };
     }
     const completedAt = Date.now();
 
-    // Well-formed before hashing: a tool's text may end on a lone
-    // surrogate (spec/execution-ledger-v1.md §11.4).
+    // Well-formed before hashing and signing: a tool's text may end on a lone
+    // surrogate, and `signExecutionReceipt` refuses one (UnpairedSurrogateError)
+    // — which would escape this generator unsigned (spec/execution-ledger-v1.md §11.4).
     const resultStr = toWellFormedText(
       result.ok
         ? typeof result.data === "string"

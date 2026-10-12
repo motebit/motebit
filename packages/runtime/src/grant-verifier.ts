@@ -77,18 +77,95 @@ export interface VerifiedGrantBody {
 }
 
 /**
- * Verify a token + grant pair against held revocations. Returns the
- * `verifiedGrant` value for the TurnContext, or `null` when any step
- * fails — wrong signature, expired, revoked, token not a valid tick of
- * the grant, scope/TTL violation.
+ * WHO is presenting a grant: the identity the presenting path authenticated
+ * — the runtime's own identity for an owner turn, the transport-verified
+ * caller for a foreign one. Never derived from prompt or task content.
+ */
+export interface GrantPresenterIdentity {
+  motebitId: string;
+  /**
+   * The presenter's Ed25519 public key, hex. When present it must equal the
+   * grant's `delegate_public_key` (case-insensitive); a foreign presenter
+   * without a verified key is refused upstream (`executeToolGated`).
+   */
+  publicKeyHex?: string;
+}
+
+/**
+ * Is `presenter` the grant's delegate? Exact `motebit_id` match, and — when
+ * the presenter's key is known — the same key. Pure; exported so a refusing
+ * caller can name WHY a presentation conferred nothing.
+ */
+export function grantDelegateIs(
+  grant: Pick<StandingDelegation, "delegate_id" | "delegate_public_key">,
+  presenter: GrantPresenterIdentity,
+): boolean {
+  if (presenter.motebitId === "" || grant.delegate_id !== presenter.motebitId) return false;
+  if (presenter.publicKeyHex == null) return true;
+  return grant.delegate_public_key.toLowerCase() === presenter.publicKeyHex.toLowerCase();
+}
+
+/**
+ * Is `delegator` the grant's delegator? Exact `motebit_id` AND key — the key
+ * is required: a delegator check that falls back to the id alone would let
+ * anyone sign a grant under this motebit's id with their own key.
+ */
+export function grantDelegatorIs(
+  grant: Pick<StandingDelegation, "delegator_id" | "delegator_public_key">,
+  delegator: GrantPresenterIdentity,
+): boolean {
+  if (delegator.motebitId === "" || grant.delegator_id !== delegator.motebitId) return false;
+  if (delegator.publicKeyHex == null || delegator.publicKeyHex === "") return false;
+  return grant.delegator_public_key.toLowerCase() === delegator.publicKeyHex.toLowerCase();
+}
+
+// Runtime twin of the type brand: every value this module returns is
+// registered here (and frozen), so a consumer that must not trust an object
+// merely SHAPED like a verified grant — the money-capability mint — can ask
+// whether this function produced it. A WeakSet is closure-private; nothing
+// outside this module can add to it.
+const produced = new WeakSet<object>();
+
+/** True only for a value `verifyGrantForTurn` returned. */
+export function isProducedGrant(value: unknown): value is VerifiedGrant {
+  return value !== null && typeof value === "object" && produced.has(value);
+}
+
+/**
+ * Verify a token + grant pair against held revocations, presented by
+ * `options.presenter`, over the money of `options.delegator`. Returns the
+ * `verifiedGrant` value for the TurnContext, or `null` when any step fails —
+ * the delegator is not this runtime's identity, presenter is not the grant's
+ * delegate, wrong signature, expired, revoked, token not a valid tick of the
+ * grant, scope/TTL violation.
  */
 export async function verifyGrantForTurn(
   token: DelegationToken,
   grant: StandingDelegation,
   revocations: readonly DelegationRevocation[],
-  options?: { now?: number },
+  options: {
+    presenter: GrantPresenterIdentity;
+    /**
+     * WHOSE authority the grant must carry: the identity of the runtime the
+     * grant would spend from (its own motebit_id and key). Only the owner can
+     * delegate the owner's money — a grant a stranger signed, even one naming
+     * the stranger as its own delegate, confers nothing here.
+     */
+    delegator: GrantPresenterIdentity;
+    now?: number;
+  },
 ): Promise<VerifiedGrant | null> {
-  const now = options?.now ?? Date.now();
+  const now = options.now ?? Date.now();
+
+  // Delegator binding: the grant must be signed BY this runtime's identity.
+  // The signature check below proves the grant is internally consistent; it
+  // cannot tell whose money the signer was entitled to delegate.
+  if (!grantDelegatorIs(grant, options.delegator)) return null;
+
+  // Presenter binding: a grant authorizes its delegate and nobody else. A
+  // valid grant presented by anyone but its delegate is a stolen
+  // capability, so it confers nothing — whatever its signature says.
+  if (!grantDelegateIs(grant, options.presenter)) return null;
 
   // Revocation check first — build the isRevoked seam from the held
   // feed via the binding-safe helper (matches grant_id AND the
@@ -107,8 +184,14 @@ export async function verifyGrantForTurn(
     grant_id: grant.grant_id,
     verified_at: now,
     token_issued_at: token.issued_at,
-    ...(grant.spend_ceiling !== undefined ? { spend_ceiling: grant.spend_ceiling } : {}),
+    // A frozen copy: the caller still holds the grant object, and the meter
+    // reads this ceiling later — it must be the bytes that verified.
+    ...(grant.spend_ceiling !== undefined
+      ? { spend_ceiling: Object.freeze({ ...grant.spend_ceiling }) }
+      : {}),
   };
   // The single authorized production site for the brand.
+  Object.freeze(body);
+  produced.add(body);
   return body as VerifiedGrant;
 }

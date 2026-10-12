@@ -45,24 +45,19 @@ const FORMS: Record<string, string> = {
 };
 
 describe("check-money-authority assertion 5 (type-aware)", () => {
-  // RED on main (M2): `it.fails` pins that this invariant is violated today; the fix flips it to `it`.
-  it.fails(
-    "flags every aliasing form of a raw registry execute",
-    () => {
-      const files = Object.keys(FORMS).map((k) => `${DIR}/${PREFIX}${k}.ts`);
-      try {
-        for (const [k, body] of Object.entries(FORMS)) {
-          writeFileSync(resolve(ROOT, `${DIR}/${PREFIX}${k}.ts`), HEADER + body);
-        }
-        const result = spawnSync("npx", ["tsx", SCRIPT], { encoding: "utf-8", cwd: ROOT });
-        const out = `${result.stdout}\n${result.stderr}`;
-        expect(result.status).toBe(1);
-        const missed = files.filter((f) => !out.includes(f));
-        expect(missed).toEqual([]);
-      } finally {
-        for (const f of files) rmSync(resolve(ROOT, f), { force: true });
+  it("flags every aliasing form of a raw registry execute", () => {
+    const files = Object.keys(FORMS).map((k) => `${DIR}/${PREFIX}${k}.ts`);
+    try {
+      for (const [k, body] of Object.entries(FORMS)) {
+        writeFileSync(resolve(ROOT, `${DIR}/${PREFIX}${k}.ts`), HEADER + body);
       }
-    },
-    300_000,
-  );
+      const result = spawnSync("npx", ["tsx", SCRIPT], { encoding: "utf-8", cwd: ROOT });
+      const out = `${result.stdout}\n${result.stderr}`;
+      expect(result.status).toBe(1);
+      const missed = files.filter((f) => !out.includes(f));
+      expect(missed).toEqual([]);
+    } finally {
+      for (const f of files) rmSync(resolve(ROOT, f), { force: true });
+    }
+  }, 300_000);
 });

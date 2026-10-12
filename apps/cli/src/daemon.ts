@@ -54,6 +54,7 @@ import { LIVENESS_SESSION_GAP_MS } from "./runtime-coverage.js";
 import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { createDirectTaskHandler } from "./direct-task-handler.js";
+import { createGrantPresenter } from "./subcommands/grant.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
 import { cliRuntimeConfig, daemonRelay } from "./sync-configured.js";
@@ -220,6 +221,11 @@ export async function handleRun(config: CliConfig): Promise<void> {
         },
         memoryGovernance: governance.memoryGovernance,
         taskRouter: PLANNING_TASK_ROUTER,
+        // This motebit's identity key: a standing grant authorizes spending
+        // only when this identity signed it.
+        ...(fullConfig.device_public_key
+          ? { identityPublicKeyHex: fullConfig.device_public_key }
+          : {}),
       },
       relay,
     ),
@@ -1185,6 +1191,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
         },
         memoryGovernance: governance.memoryGovernance,
         taskRouter: PLANNING_TASK_ROUTER,
+        // This motebit's identity key: a standing grant (`serve --direct
+        // --grant`) authorizes spending only when this identity signed it.
+        ...(publicKeyHex != null && publicKeyHex !== ""
+          ? { identityPublicKeyHex: publicKeyHex }
+          : {}),
       },
       relay,
     ),
@@ -1399,6 +1410,14 @@ export async function handleServe(config: CliConfig): Promise<void> {
       );
     }
   }
+  // `serve --direct --grant <id>`: the stored standing grant whose due tick is
+  // presented to each direct execution, re-read (with its revocations) per
+  // task. Artifacts only — the runtime's `verifyGrantForTurn` derives (or
+  // refuses) the authority per task, and only for a caller who IS the grant's
+  // delegate (the task submitter is a foreign principal); without it an
+  // R4_MONEY tool is refused on this path (no human to approve).
+  const serveGrant =
+    config.direct && config.grant != null ? await createGrantPresenter(config.grant) : null;
   if (servePrivateKey) {
     {
       const privateKey = servePrivateKey;
@@ -1406,7 +1425,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
       if (config.direct) {
         // Direct tool execution mode — bypass AI, execute ONE tool directly.
         // Both callers (the MCP `motebit_task` tool and the relay WebSocket
-        // dispatch below) reach the tool through this handler.
+        // dispatch below) reach the tool through this handler, and it goes
+        // through the runtime's policy gate (direct-task-handler.ts, M2).
         deps.handleAgentTask = createDirectTaskHandler({
           runtime,
           motebitId,
@@ -1415,6 +1435,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
           privateKey,
           preferExternalTools: Boolean(config.tools),
           log,
+          ...(serveGrant != null
+            ? { delegationForTask: () => serveGrant.delegationForTurn() }
+            : {}),
         });
         log("Agent task handler enabled (direct mode — no LLM)");
       } else {

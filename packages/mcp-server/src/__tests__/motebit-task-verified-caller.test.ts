@@ -54,8 +54,7 @@ async function post(port: number, bearer: string, body: unknown, sid?: string) {
 }
 
 describe("motebit_task — verified caller reaches the handler", () => {
-  // RED on main (M2): `it.fails` pins that this invariant is violated today; the fix flips it to `it`.
-  it.fails("passes the caller-signed bearer's mid and verified key", async () => {
+  it("passes the caller-signed bearer's mid and verified key", async () => {
     const seen: unknown[] = [];
     const deps: MotebitServerDeps = {
       motebitId: WORKER,
@@ -72,7 +71,7 @@ describe("motebit_task — verified caller reaches the handler", () => {
         ) as { mid: string; did: string; iat: number; exp: number };
       }),
       handleAgentTask: async function* (_prompt, options) {
-        seen.push((options as { caller?: unknown } | undefined)?.caller);
+        seen.push(options?.caller);
         yield { type: "task_result" as const, receipt: { status: "completed" } };
       },
     };

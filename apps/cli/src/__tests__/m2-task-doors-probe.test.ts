@@ -201,26 +201,18 @@ async function mcpDoor(
 }
 
 describe("M2 probe: R4 through the serve --direct task doors", () => {
-  // RED on main (M2): `it.fails` pins that this invariant is violated today; the fix flips it to `it`.
-  it.fails(
-    "relay WebSocket door: an R4_MONEY task never runs the handler (no grant, operator preset)",
-    async () => {
-      const { handler, probe } = await serving(TRANSFER);
-      const receipt = await relayDoor(handler, "AttackerAddr9999999999999999999999999999999");
-      expect(probe.handlerRan).toBe(0);
-      expect(receipt?.["status"]).toBe("failed");
-    },
-  );
+  it("relay WebSocket door: an R4_MONEY task never runs the handler (no grant, operator preset)", async () => {
+    const { handler, probe } = await serving(TRANSFER);
+    const receipt = await relayDoor(handler, "AttackerAddr9999999999999999999999999999999");
+    expect(probe.handlerRan).toBe(0);
+    expect(receipt?.["status"]).toBe("failed");
+  });
 
-  // RED on main (M2): `it.fails` pins that this invariant is violated today; the fix flips it to `it`.
-  it.fails(
-    "MCP motebit_task door: an R4_MONEY task never runs the handler (no grant, operator preset)",
-    async () => {
-      const { handler, probe } = await serving(TRANSFER);
-      await mcpDoor(handler, "AttackerAddr9999999999999999999999999999999");
-      expect(probe.handlerRan).toBe(0);
-    },
-  );
+  it("MCP motebit_task door: an R4_MONEY task never runs the handler (no grant, operator preset)", async () => {
+    const { handler, probe } = await serving(TRANSFER);
+    await mcpDoor(handler, "AttackerAddr9999999999999999999999999999999");
+    expect(probe.handlerRan).toBe(0);
+  });
 
   it("control: an R0 tool still runs through the relay WebSocket door", async () => {
     const { handler, probe } = await serving(ECHO);

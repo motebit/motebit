@@ -87,6 +87,12 @@ export type {
 export interface CallerIdentity {
   motebitId: string;
   trustLevel: AgentTrustLevel;
+  /**
+   * The key the caller's signed token verified under (hex) — set only for a
+   * caller-signed bearer (`verifyCallerToken`), never for the relay's own
+   * bearer. What binds a presented standing grant to THIS caller.
+   */
+  publicKeyHex?: string;
 }
 
 /**
@@ -214,6 +220,14 @@ interface MotebitServerDeps {
        * budget — keys on this, never on the run.
        */
       admittedRelayTaskId?: string;
+      /**
+       * The caller this request's transport VERIFIED — a caller-signed
+       * bearer's `mid` and the key its signature verified under. Absent when
+       * the transport verified no caller identity (stdio, a shared bearer,
+       * the relay's own bearer). A handler that acts on standing authority
+       * binds it to this identity, never to task content.
+       */
+      caller?: { motebitId: string; publicKeyHex: string };
     },
   ): AsyncGenerator<
     | { type: "text"; text: string }
@@ -1219,10 +1233,19 @@ export class McpServerAdapter {
               setTimeout(() => resolve(timeoutError), timeoutMs),
             );
 
+            const verified = callerFromExtra(extra, this.transportKind);
             const gen = handleAgentTask(args.prompt, {
               delegatedScope,
               relayTaskId,
               ...(admittedSub != null ? { admittedRelayTaskId: admittedSub } : {}),
+              ...(verified.kind === "caller" && verified.caller.publicKeyHex != null
+                ? {
+                    caller: {
+                      motebitId: verified.caller.motebitId,
+                      publicKeyHex: verified.caller.publicKeyHex,
+                    },
+                  }
+                : {}),
             });
             let timedOut = false;
             try {
@@ -1827,7 +1850,7 @@ export class McpServerAdapter {
       this.deps.onCallerVerified(mid, publicKeyHex, trustLevel);
     }
 
-    return { ok: true, caller: { motebitId: mid, trustLevel } };
+    return { ok: true, caller: { motebitId: mid, trustLevel, publicKeyHex } };
   }
 
   // --- HTTP Transport (Streamable HTTP) ---

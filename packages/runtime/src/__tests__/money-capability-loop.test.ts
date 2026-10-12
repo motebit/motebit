@@ -135,8 +135,7 @@ async function selfGrant(keys: { publicKey: Uint8Array; privateKey: Uint8Array }
 }
 
 describe("loop money doors", () => {
-  // RED on main (M2): `it.fails` pins that this invariant is violated today; the fix flips it to `it`.
-  it.fails("a paused money call runs only through the approval resume, once", async () => {
+  it("a paused money call runs only through the approval resume, once", async () => {
     const { runtime, moved, loopTools } = await setup();
     const chunks = await drain(runtime.sendMessageStreaming("pay acme"));
     expect(chunks.some((c) => c.type === "approval_request")).toBe(true);
@@ -157,45 +156,50 @@ describe("loop money doors", () => {
     expect(moved).toHaveBeenCalledTimes(1);
   });
 
-  // RED on main (M2): `it.fails` pins that this invariant is violated today; the fix flips it to `it`.
-  it.fails(
-    "a verifiedGrant SHAPED like one (not produced by verifyGrantForTurn) moves nothing",
-    async () => {
-      const { runtime, moved } = await setup();
-      const forged = {
-        grant_id: "forged",
-        verified_at: Date.now(),
-        token_issued_at: Date.now(),
-        spend_ceiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: 1e12 },
-      };
-      const out = await drain(
-        runtime.sendMessageStreaming("pay acme", undefined, {
-          verifiedGrant: forged as never,
-          delegationScope: "transfer_funds",
-        }),
-      );
-      // The policy gate only sees "a grant is present" and lets it through —
-      // the refusal is the runtime's (meter view + capability), not a pause.
-      expect(out.some((c) => c.type === "approval_request")).toBe(false);
-      expect(moved).not.toHaveBeenCalled();
-    },
-  );
+  it("a denied approval leaves nothing to mint", async () => {
+    const { runtime, moved } = await setup();
+    await drain(runtime.sendMessageStreaming("pay acme"));
+    await drain(runtime.resumeAfterApproval(false));
+    const deps = (
+      runtime as unknown as {
+        streaming: { deps: { approvedCallCapability(n: string, a: object): unknown } };
+      }
+    ).streaming.deps;
+    expect(deps.approvedCallCapability("transfer_funds", { ...ARGS })).toBeUndefined();
+    expect(moved).not.toHaveBeenCalled();
+  });
 
-  // RED on main (M2): `it.fails` pins that this invariant is violated today; the fix flips it to `it`.
-  it.fails(
-    "a presented self-grant clears, meters and executes the loop's call exactly once",
-    async () => {
-      const { runtime, keys, moved, loopTools } = await setup();
-      const g = await selfGrant(keys);
-      const out = await drain(
-        runtime.sendMessageStreaming("pay acme", undefined, {
-          delegation: { token: g.token, grant: g.grant, revocations: [] },
-        }),
-      );
-      expect(out.some((c) => c.type === "approval_request")).toBe(false);
-      expect(moved).toHaveBeenCalledTimes(1);
-      expect((await loopTools().execute("transfer_funds", { ...ARGS })).ok).toBe(false);
-      expect(moved).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("a verifiedGrant SHAPED like one (not produced by verifyGrantForTurn) moves nothing", async () => {
+    const { runtime, moved } = await setup();
+    const forged = {
+      grant_id: "forged",
+      verified_at: Date.now(),
+      token_issued_at: Date.now(),
+      spend_ceiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: 1e12 },
+    };
+    const out = await drain(
+      runtime.sendMessageStreaming("pay acme", undefined, {
+        verifiedGrant: forged as never,
+        delegationScope: "transfer_funds",
+      }),
+    );
+    // The policy gate only sees "a grant is present" and lets it through —
+    // the refusal is the runtime's (meter view + capability), not a pause.
+    expect(out.some((c) => c.type === "approval_request")).toBe(false);
+    expect(moved).not.toHaveBeenCalled();
+  });
+
+  it("a presented self-grant clears, meters and executes the loop's call exactly once", async () => {
+    const { runtime, keys, moved, loopTools } = await setup();
+    const g = await selfGrant(keys);
+    const out = await drain(
+      runtime.sendMessageStreaming("pay acme", undefined, {
+        delegation: { token: g.token, grant: g.grant, revocations: [] },
+      }),
+    );
+    expect(out.some((c) => c.type === "approval_request")).toBe(false);
+    expect(moved).toHaveBeenCalledTimes(1);
+    expect((await loopTools().execute("transfer_funds", { ...ARGS })).ok).toBe(false);
+    expect(moved).toHaveBeenCalledTimes(1);
+  });
 });

@@ -150,22 +150,18 @@ async function grantFrom(
 }
 
 describe("M2 probe: a standing grant's provenance on an owner turn", () => {
-  // RED on main (M2): `it.fails` pins that this invariant is violated today; the fix flips it to `it`.
-  it.fails(
-    "a STRANGER's self-issued grant (delegator = delegate = stranger) moves nothing — the R4 call pauses",
-    async () => {
-      const { runtime, probe } = await setup();
-      const stranger = await generateKeypair();
-      const g = await grantFrom(stranger, STRANGER_ID, stranger, STRANGER_ID);
-      const out = await drain(
-        runtime.sendMessageStreaming("pay acme", undefined, {
-          delegation: { token: g.token, grant: g.grant, revocations: [] },
-        }),
-      );
-      expect(probe.handlerRan).toBe(0);
-      expect(out.some((c) => c.type === "approval_request")).toBe(true);
-    },
-  );
+  it("a STRANGER's self-issued grant (delegator = delegate = stranger) moves nothing — the R4 call pauses", async () => {
+    const { runtime, probe } = await setup();
+    const stranger = await generateKeypair();
+    const g = await grantFrom(stranger, STRANGER_ID, stranger, STRANGER_ID);
+    const out = await drain(
+      runtime.sendMessageStreaming("pay acme", undefined, {
+        delegation: { token: g.token, grant: g.grant, revocations: [] },
+      }),
+    );
+    expect(probe.handlerRan).toBe(0);
+    expect(out.some((c) => c.type === "approval_request")).toBe(true);
+  });
 
   it("control: no grant — the R4 call pauses, the human approves, exactly one move", async () => {
     const { runtime, probe } = await setup();
