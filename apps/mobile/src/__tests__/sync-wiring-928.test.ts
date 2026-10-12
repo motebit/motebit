@@ -113,6 +113,7 @@ function makeDeps(createSyncToken: SyncControllerDeps["createSyncToken"]): SyncC
     getPrivKeyBytes: () => Promise.resolve(new Uint8Array(32).fill(9)),
     createSyncToken,
     registerPushToken: vi.fn(() => Promise.resolve()),
+    removePushToken: vi.fn(() => Promise.resolve()),
     startPushLifecycle: vi.fn(),
     stopPushLifecycle: vi.fn(),
   };

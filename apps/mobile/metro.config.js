@@ -9,6 +9,12 @@ const fs = require("fs");
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, "../..");
 
+// Generate src/creature-webview-bundle.generated.ts before Metro resolves
+// it. Every bundling path (Xcode / Gradle bundle phase, export:embed,
+// expo start, EAS) loads this file; the npm pre* hooks do not run under a
+// plain `xcodebuild`. See scripts/ensure-creature-html.cjs for the choice.
+require("./scripts/ensure-creature-html.cjs").ensureCreatureHtml({ projectRoot, monorepoRoot });
+
 const config = getDefaultConfig(projectRoot);
 
 config.projectRoot = projectRoot;

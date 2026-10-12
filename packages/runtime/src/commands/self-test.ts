@@ -46,6 +46,12 @@ export interface SelfTestConfig {
    * probe), and execution liveness is simply out of scope. Default: false.
    */
   serving?: boolean;
+  /**
+   * The fetch every relay call goes through (default: the global `fetch`,
+   * resolved per call). A surface that can turn the relay off hands in its
+   * own, so neither the submission nor the poll outlives that.
+   */
+  fetch?: typeof fetch;
 }
 
 /**
@@ -87,7 +93,7 @@ export async function cmdSelfTest(
   // Submit self-delegation task
   let taskResp: Response;
   try {
-    taskResp = await fetch(`${relay.relayUrl}/agent/${relay.motebitId}/task`, {
+    taskResp = await (config.fetch ?? fetch)(`${relay.relayUrl}/agent/${relay.motebitId}/task`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -150,9 +156,10 @@ export async function cmdSelfTest(
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollIntervalMs));
     try {
-      const pollResp = await fetch(`${relay.relayUrl}/agent/${relay.motebitId}/task/${taskId}`, {
-        headers: { Authorization: `Bearer ${queryToken || submitToken}` },
-      });
+      const pollResp = await (config.fetch ?? fetch)(
+        `${relay.relayUrl}/agent/${relay.motebitId}/task/${taskId}`,
+        { headers: { Authorization: `Bearer ${queryToken || submitToken}` } },
+      );
       if (!pollResp.ok) continue;
       const pollData = (await pollResp.json()) as { status?: string };
       if (pollData.status === "completed") {

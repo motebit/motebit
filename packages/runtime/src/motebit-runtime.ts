@@ -2189,7 +2189,8 @@ export class MotebitRuntime {
     this.planEngine.setLocalCapabilities(caps);
   }
 
-  setDelegationAdapter(adapter: StepDelegationAdapter): void {
+  /** Set (or, with `undefined`, clear) the PlanEngine's step-delegation adapter. */
+  setDelegationAdapter(adapter: StepDelegationAdapter | undefined): void {
     this.planEngine.setDelegationAdapter(adapter);
   }
 
@@ -6534,6 +6535,20 @@ export class MotebitRuntime {
           : {}),
       };
     }
+  }
+
+  /**
+   * Undo `enableInteractiveDelegation`: unregister the relay tools
+   * (`delegate_to_agent`, `discover_agents`, `retrieve_task_result`) and the
+   * credential submitter, and drop the stored relay coordinates (task-query
+   * retrieval, granted spend). A surface calls it when the user disconnects
+   * the relay, so nothing the runtime holds can contact that relay any more.
+   * Idempotent; a later enable binds the new relay.
+   */
+  disableInteractiveDelegation(): void {
+    this.interactiveDelegation.disable();
+    this._taskQueryCoords = null;
+    this._grantedSpendCoords = null;
   }
 
   /**

@@ -301,6 +301,9 @@
         "CVE-2026-85393",
         "CVE-2026-93687"
       ]
+    },
+    "patchedDependencies": {
+      "@expo/metro-config@55.0.27": "patches/@expo__metro-config@55.0.27.patch"
     }
   },
   "lint-staged": {

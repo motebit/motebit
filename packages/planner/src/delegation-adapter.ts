@@ -34,6 +34,12 @@ export interface RelayDelegationConfig {
    * master token passes `async () => masterToken`.
    */
   authToken?: (audience: TokenAudience) => Promise<string>;
+  /**
+   * The fetch every relay call goes through (default: the global `fetch`,
+   * resolved per call). A surface that can turn the relay off hands in its
+   * own, so no submission or poll outlives that.
+   */
+  fetch?: typeof fetch;
   sendRaw: (data: string) => void;
   onCustomMessage: (cb: (msg: { type: string; [key: string]: unknown }) => void) => () => void;
   /** Optional: returns agent's current exploration drive [0-1] from intelligence gradient, passed to relay for routing. */
@@ -60,6 +66,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
   readonly resubmitsIdempotently = true;
 
   constructor(private config: RelayDelegationConfig) {}
+
+  private relayFetch(input: string, init?: RequestInit): Promise<Response> {
+    return (this.config.fetch ?? fetch)(input, init);
+  }
 
   private async buildHeaders(audience: TokenAudience): Promise<Record<string, string>> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -187,7 +197,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     // submitUnderKey only decides when to send it again.
     const resp = await submitUnderKey(
       () =>
-        fetch(`${syncUrl}/agent/${motebitId}/task`, {
+        this.relayFetch(`${syncUrl}/agent/${motebitId}/task`, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
@@ -362,7 +372,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
   > {
     const { syncUrl, motebitId } = this.config;
     try {
-      const resp = await fetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
+      const resp = await this.relayFetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
         headers: await this.buildHeaders("task:query"),
       });
       if (resp.status === 404) return { kind: "not_found" };
@@ -407,7 +417,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     const { syncUrl, motebitId } = this.config;
 
     try {
-      const resp = await fetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
+      const resp = await this.relayFetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
         headers: await this.buildHeaders("task:query"),
       });
 

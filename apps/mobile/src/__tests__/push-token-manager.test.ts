@@ -204,6 +204,37 @@ describe("MobilePushTokenManager.removePushToken", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("bounds the DELETE with an abort signal (a black-holed relay never blocks OFF)", async () => {
+    const fetchSpy = makeFetchSpy(true, 200);
+    vi.stubGlobal("fetch", fetchSpy);
+    const mgr = new MobilePushTokenManager({
+      getDeviceId: () => "dev-1",
+      createSyncToken: () => Promise.resolve("auth-token"),
+      getSyncUrl: () => Promise.resolve(null),
+    });
+    await mgr.removePushToken("https://relay.test");
+    const init = (fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("clears the local token even when the relay is unreachable (re-enable re-registers)", async () => {
+    asyncStoreData.set("@motebit/push_token", "stored");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("offline"))),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mgr = new MobilePushTokenManager({
+      getDeviceId: () => "dev-1",
+      createSyncToken: () => Promise.resolve("auth-token"),
+      getSyncUrl: () => Promise.resolve(null),
+    });
+    await mgr.removePushToken("https://relay.test");
+    expect(asyncStoreData.get("@motebit/push_token")).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it("swallows errors", async () => {
     vi.stubGlobal(
       "fetch",
@@ -282,5 +313,29 @@ describe("MobilePushTokenManager.startPushLifecycle / stopPushLifecycle", () => 
     mgr.startPushLifecycle();
     appStateChangeCallback?.("background");
     mgr.stopPushLifecycle();
+  });
+
+  it("stopPushLifecycle during a listener's permission prompt: nothing is posted or stored", async () => {
+    permissionStatus = "undetermined";
+    let answer!: (v: { status: string }) => void;
+    const Notifications = await import("expo-notifications");
+    vi.mocked(Notifications.requestPermissionsAsync).mockImplementationOnce(
+      () => new Promise((r) => (answer = r)) as never,
+    );
+    const fetchSpy = makeFetchSpy(true, 200);
+    vi.stubGlobal("fetch", fetchSpy);
+    const mgr = new MobilePushTokenManager({
+      getDeviceId: () => "dev-1",
+      createSyncToken: () => Promise.resolve("auth-token"),
+      getSyncUrl: () => Promise.resolve("https://relay.test"),
+    });
+    mgr.startPushLifecycle();
+    appStateChangeCallback?.("active");
+    await new Promise((r) => setTimeout(r, 10)); // now at the prompt
+    mgr.stopPushLifecycle(); // relay OFF
+    answer({ status: "granted" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(asyncStoreData.has("@motebit/push_token")).toBe(false);
   });
 });

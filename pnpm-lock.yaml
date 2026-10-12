@@ -38,6 +38,11 @@ overrides:
   shell-quote@>=1.8.4 <1.11.0: '>=1.11.0 <2.0.0'
   ip-address@>=10.0.0 <10.7.1: '>=10.7.1 <11.0.0'
 
+patchedDependencies:
+  '@expo/metro-config@55.0.27':
+    hash: bht4iji27e2njfdzzaifvapuee
+    path: patches/@expo__metro-config@55.0.27.patch
+
 importers:
 
   .:
@@ -767,6 +772,9 @@ importers:
         specifier: ^4.7.0
         version: 4.7.0
     devDependencies:
+      '@babel/plugin-transform-runtime':
+        specifier: ^7.29.7
+        version: 7.29.7(@babel/core@7.29.7)
       '@hono/node-server':
         specifier: '>=1.19.10 <2.0.0'
         version: 1.19.17(hono@4.13.13)
@@ -791,6 +799,9 @@ importers:
       '@types/react-test-renderer':
         specifier: 19.1.0
         version: 19.1.0
+      babel-preset-expo:
+        specifier: ~55.0.25
+        version: 55.0.25(@babel/core@7.29.7)(@babel/runtime@7.29.7)(expo@55.0.31)(react-refresh@0.14.2)
       react-test-renderer:
         specifier: 19.2.0
         version: 19.2.0(react@19.2.0)
@@ -1425,6 +1436,9 @@ importers:
       '@noble/ed25519':
         specifier: ~3.2.0
         version: 3.2.0
+      '@noble/hashes':
+        specifier: ^2.4.0
+        version: 2.4.0
     devDependencies:
       '@types/node':
         specifier: ^22.20.5
@@ -13175,7 +13189,7 @@ snapshots:
       '@expo/json-file': 10.2.0
       '@expo/log-box': 55.0.13(@expo/dom-webview@55.0.5)(expo@55.0.31)(react-native@0.83.10(@babel/core@7.29.7)(@types/react@19.2.18)(bufferutil@4.1.0)(react@19.2.0)(utf-8-validate@6.0.6))(react@19.2.0)
       '@expo/metro': 55.1.2(bufferutil@4.1.0)(utf-8-validate@6.0.6)
-      '@expo/metro-config': 55.0.27(bufferutil@4.1.0)(expo@55.0.31)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@expo/metro-config': 55.0.27(patch_hash=bht4iji27e2njfdzzaifvapuee)(bufferutil@4.1.0)(expo@55.0.31)(typescript@5.9.3)(utf-8-validate@6.0.6)
       '@expo/osascript': 2.7.1
       '@expo/package-manager': 1.13.1
       '@expo/plist': 0.5.4
@@ -13378,7 +13392,7 @@ snapshots:
       react-native: 0.83.10(@babel/core@7.29.7)(@types/react@19.2.18)(bufferutil@4.1.0)(react@19.2.0)(utf-8-validate@6.0.6)
       stacktrace-parser: 0.1.11
 
-  '@expo/metro-config@55.0.27(bufferutil@4.1.0)(expo@55.0.31)(typescript@5.9.3)(utf-8-validate@6.0.6)':
+  '@expo/metro-config@55.0.27(patch_hash=bht4iji27e2njfdzzaifvapuee)(bufferutil@4.1.0)(expo@55.0.31)(typescript@5.9.3)(utf-8-validate@6.0.6)':
     dependencies:
       '@babel/code-frame': 7.29.7
       '@babel/core': 7.29.7
@@ -16425,7 +16439,7 @@ snapshots:
       obug: 2.1.3
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@types/node@22.20.5)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@22.20.5)(esbuild@0.27.3)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+      vitest: 4.1.10(@types/node@26.6.5)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@26.6.5)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
 
   '@vitest/expect@4.1.10':
     dependencies:
@@ -18243,7 +18257,7 @@ snapshots:
       '@expo/local-build-cache-provider': 55.0.16(typescript@5.9.3)
       '@expo/log-box': 55.0.13(@expo/dom-webview@55.0.5)(expo@55.0.31)(react-native@0.83.10(@babel/core@7.29.7)(@types/react@19.2.18)(bufferutil@4.1.0)(react@19.2.0)(utf-8-validate@6.0.6))(react@19.2.0)
       '@expo/metro': 55.1.2(bufferutil@4.1.0)(utf-8-validate@6.0.6)
-      '@expo/metro-config': 55.0.27(bufferutil@4.1.0)(expo@55.0.31)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@expo/metro-config': 55.0.27(patch_hash=bht4iji27e2njfdzzaifvapuee)(bufferutil@4.1.0)(expo@55.0.31)(typescript@5.9.3)(utf-8-validate@6.0.6)
       '@expo/vector-icons': 15.1.1(expo-font@55.0.8)(react-native@0.83.10(@babel/core@7.29.7)(@types/react@19.2.18)(bufferutil@4.1.0)(react@19.2.0)(utf-8-validate@6.0.6))(react@19.2.0)
       '@ungap/structured-clone': 1.3.3
       babel-preset-expo: 55.0.25(@babel/core@7.29.7)(@babel/runtime@7.29.7)(expo@55.0.31)(react-refresh@0.14.2)

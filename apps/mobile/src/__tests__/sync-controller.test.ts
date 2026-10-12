@@ -146,6 +146,7 @@ function makeDeps(overrides?: Partial<SyncControllerDeps>): SyncControllerDeps {
     getPrivKeyBytes: () => Promise.resolve(new Uint8Array(32)),
     createSyncToken: () => Promise.resolve("auth-token"),
     registerPushToken: vi.fn(() => Promise.resolve()),
+    removePushToken: vi.fn(() => Promise.resolve()),
     startPushLifecycle: vi.fn(),
     stopPushLifecycle: vi.fn(),
     ...overrides,
@@ -222,9 +223,13 @@ describe("MobileSyncController.startServing / stopServing", () => {
             >,
         }),
       );
-      const internals = ctrl as unknown as { _servingSyncUrl: string; _servingAuthToken: string };
-      internals._servingSyncUrl = "https://relay.test";
-      internals._servingAuthToken = "tok";
+      // A connected attempt with serving coordinates: the gate alone refuses.
+      const internals = ctrl as unknown as { attempt: Record<string, unknown> };
+      internals.attempt = {
+        servingUrl: "https://relay.test",
+        servingAuthToken: "tok",
+        serving: false,
+      };
       const res = await ctrl.startServing();
       expect(res.ok).toBe(false);
       expect(res.error).toContain("not available");
@@ -344,6 +349,7 @@ describe("MobileSyncController onboarding self-test", () => {
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
       enableInteractiveDelegation: vi.fn(),
+      disableInteractiveDelegation: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
@@ -368,6 +374,7 @@ describe("MobileSyncController onboarding self-test", () => {
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
       enableInteractiveDelegation: vi.fn(),
+      disableInteractiveDelegation: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
@@ -390,6 +397,7 @@ describe("MobileSyncController onboarding self-test", () => {
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
       enableInteractiveDelegation: vi.fn(),
+      disableInteractiveDelegation: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
@@ -415,6 +423,7 @@ describe("MobileSyncController.startServing happy path", () => {
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
       enableInteractiveDelegation: vi.fn(),
+      disableInteractiveDelegation: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },

@@ -46,6 +46,7 @@ import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
 import { SECURE_STORE_KEYS } from "../storage-keys";
 import { APPROVAL_PRESET_CONFIGS } from "../mobile-app";
 import { modelForProviderSwitch } from "../provider-model";
+import { connectRelay, disconnectRelay } from "../relay-optin";
 import { BillingPanel } from "./BillingPanel";
 import { RestoreIdentityModal } from "./RestoreIdentityModal";
 import {
@@ -449,6 +450,17 @@ export function SettingsModal({
               onLinkDevice={onLinkDevice}
               onClaimDevice={onClaimDevice}
               machineRoster={app.machineRoster()?.section ?? null}
+              relayUrl={billingRelayUrl}
+              onConnectRelay={async (input) => {
+                const result = await connectRelay(app, input);
+                if (!result.ok) return result.error;
+                setBillingRelayUrl(result.url);
+                return null;
+              }}
+              onDisconnectRelay={async () => {
+                await disconnectRelay(app);
+                setBillingRelayUrl(null);
+              }}
               onRotateKey={() => {
                 Alert.alert(
                   "Rotate Key",

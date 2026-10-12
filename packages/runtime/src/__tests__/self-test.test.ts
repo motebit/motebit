@@ -82,3 +82,27 @@ describe("cmdSelfTest — serving gates the completion poll", () => {
     expect(r.data?.status).toBe("failed");
   });
 });
+
+describe("cmdSelfTest — an injected fetch carries every relay call", () => {
+  it("submits and polls through the injected fetch, never the global one", async () => {
+    const globalFetch = stubFetch((init) => submitOk(init, "completed"));
+    const calls: string[] = [];
+    const injected = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      return submitOk(init, "completed");
+    });
+    const r = await cmdSelfTest(runtime, {
+      ...baseConfig,
+      serving: true,
+      pollIntervalMs: 1,
+      timeoutMs: 1000,
+      fetch: injected as unknown as typeof fetch,
+    });
+    expect(r.data?.status).toBe("passed");
+    expect(calls).toEqual([
+      "POST http://relay.test/agent/m1/task",
+      "GET http://relay.test/agent/m1/task/t1",
+    ]);
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
+});

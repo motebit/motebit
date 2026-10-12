@@ -9,8 +9,12 @@
  * — and this script inlines it into a TypeScript string constant that
  * `creature-webview.ts` pastes into its HTML between two `<script>` tags.
  *
- * Run automatically via the `prestart` / `preios` / `preandroid` scripts.
+ * Run automatically by `metro.config.js` (via `scripts/ensure-creature-html.cjs`)
+ * whenever Metro bundles — Xcode's "Bundle React Native code and images"
+ * phase, Gradle, `expo export:embed`, `expo start`, EAS — and by the
+ * `prestart` / `preios` / `preandroid` / `pretest` / `pretypecheck` scripts.
  * Also runnable standalone: `pnpm run build:creature-html`.
+ * `--out <path>` writes elsewhere (used by the codegen test).
  *
  * Invariant #27 (soft): the generated file is the ONLY path by which
  * render-engine code reaches mobile's WebView. Any inline duplication
@@ -28,7 +32,11 @@ const ROOT = resolve(__dirname, "..");
 const MONOREPO = resolve(ROOT, "../..");
 
 const bundlePath = resolve(MONOREPO, "packages/render-engine/dist/browser.iife.js");
-const outPath = resolve(ROOT, "src/creature-webview-bundle.generated.ts");
+const outFlag = process.argv.indexOf("--out");
+const outPath =
+  outFlag !== -1 && process.argv[outFlag + 1]
+    ? resolve(process.argv[outFlag + 1])
+    : resolve(ROOT, "src/creature-webview-bundle.generated.ts");
 
 let bundle;
 try {
@@ -50,7 +58,7 @@ const output = `/**
  *
  * Source: packages/render-engine/dist/browser.iife.js
  * Regenerate: pnpm --filter @motebit/mobile run build:creature-html
- *   (runs automatically via prestart / preios / preandroid)
+ *   (runs automatically whenever Metro loads metro.config.js)
  *
  * This is the @motebit/render-engine browser bundle, exposed as
  * window.MotebitRE when the WebView evaluates it. Kept gitignored —
@@ -61,6 +69,4 @@ export const MOTEBIT_RE_BUNDLE = \`${escaped}\`;
 `;
 
 writeFileSync(outPath, output, "utf8");
-console.log(
-  `✓ creature-webview-bundle.generated.ts (${(bundle.length / 1024).toFixed(1)}KB)`,
-);
+console.log(`✓ creature-webview-bundle.generated.ts (${(bundle.length / 1024).toFixed(1)}KB)`);

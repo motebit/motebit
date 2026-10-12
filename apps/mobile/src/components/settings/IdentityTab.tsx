@@ -1,15 +1,26 @@
 /**
  * Identity tab — displays motebit ID, DID, device ID, public key with
  * copy-to-clipboard; actions for rotate key, link device, export
- * identity file, export all data, open docs.
+ * identity file, export all data, open docs; the Relay opt-in row.
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, TouchableOpacity, Clipboard, Linking, Alert } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  Switch,
+  TouchableOpacity,
+  Clipboard,
+  Linking,
+  Alert,
+} from "react-native";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { MachineRosterSection } from "@motebit/surface-kit";
 import { useSettingsStyles } from "./settings-shared";
 import { MachinesSection } from "./MachinesSection";
+import { useTheme } from "../../theme";
+import { DEFAULT_RELAY_URL } from "../../relay-optin";
 
 export interface IdentityTabProps {
   motebitId: string;
@@ -37,6 +48,12 @@ export interface IdentityTabProps {
   onRotateKey?: () => void;
   /** The Machines section (machine-roster-surfaces-v1 C-2b); null before bootstrap. */
   machineRoster?: MachineRosterSection | null;
+  /** The saved relay URL (`@motebit/sync_url`); null/empty means the Relay toggle is off. */
+  relayUrl?: string | null;
+  /** Enable the relay: resolves to an error message, or null once connected. */
+  onConnectRelay?: (url: string) => Promise<string | null>;
+  /** Disable the relay: stop sync and clear the saved URL. */
+  onDisconnectRelay?: () => Promise<void>;
 }
 
 const RECOVERY_SEED_AUTOHIDE_MS = 60_000;
@@ -57,8 +74,43 @@ export function IdentityTab({
   onClaimDevice,
   onRotateKey,
   machineRoster,
+  relayUrl,
+  onConnectRelay,
+  onDisconnectRelay,
 }: IdentityTabProps): React.ReactElement {
   const styles = useSettingsStyles();
+  const colors = useTheme();
+  const relayOn = relayUrl != null && relayUrl !== "";
+  const [relayInput, setRelayInput] = useState<string>(relayOn ? relayUrl : DEFAULT_RELAY_URL);
+  const [relayBusy, setRelayBusy] = useState(false);
+  const [relayError, setRelayError] = useState<string | null>(null);
+
+  // Mirror the saved URL into the field when it changes underneath (pairing).
+  useEffect(() => {
+    if (relayUrl != null && relayUrl !== "") setRelayInput(relayUrl);
+  }, [relayUrl]);
+
+  // Calm: no toast either way — the switch and the Sync row show the result.
+  // Only an invalid URL or a failed connection says anything.
+  function handleRelayToggle(enable: boolean): void {
+    if (relayBusy) return;
+    setRelayError(null);
+    setRelayBusy(true);
+    void (async () => {
+      try {
+        if (enable) {
+          const error = (await onConnectRelay?.(relayInput)) ?? null;
+          if (error != null) setRelayError(error);
+        } else {
+          await onDisconnectRelay?.();
+        }
+      } catch (err: unknown) {
+        setRelayError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setRelayBusy(false);
+      }
+    })();
+  }
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [revealedSeed, setRevealedSeed] = useState<string | null>(null);
   const autoHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -205,6 +257,65 @@ export function IdentityTab({
           {copiedField === "publicKey" ? "Copied!" : "Copy"}
         </Text>
       </TouchableOpacity>
+
+      {onConnectRelay != null && onDisconnectRelay != null ? (
+        <>
+          <Text style={styles.sectionTitle}>Relay</Text>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Connect to relay</Text>
+            <Switch
+              testID="relay-toggle"
+              value={relayOn}
+              disabled={relayBusy}
+              onValueChange={handleRelayToggle}
+              trackColor={{ false: colors.buttonSecondaryBg, true: colors.accentSoft }}
+              thumbColor={relayOn ? colors.textPrimary : colors.textMuted}
+            />
+          </View>
+          <TextInput
+            testID="relay-url"
+            style={styles.textField}
+            value={relayInput}
+            onChangeText={(v) => {
+              setRelayInput(v);
+              setRelayError(null);
+            }}
+            editable={!relayOn && !relayBusy}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            placeholder={DEFAULT_RELAY_URL}
+            placeholderTextColor={colors.inputPlaceholder}
+          />
+          {relayError != null ? (
+            <Text
+              testID="relay-error"
+              style={{
+                color: colors.statusError,
+                fontSize: 12,
+                paddingHorizontal: 12,
+                paddingTop: 6,
+              }}
+            >
+              {relayError}
+            </Text>
+          ) : null}
+          <Text
+            style={{
+              fontSize: 11,
+              color: "#888",
+              paddingHorizontal: 12,
+              paddingTop: 6,
+              paddingBottom: 8,
+              lineHeight: 16,
+            }}
+          >
+            Off by default — nothing is sent to a relay while it is off. On: once the relay accepts
+            this device, it syncs your encrypted events and can be woken by push. Off again: push is
+            unregistered and the relay is disconnected.
+          </Text>
+        </>
+      ) : null}
 
       <Text style={styles.sectionTitle}>Sync</Text>
       <View style={styles.identityFieldRow}>

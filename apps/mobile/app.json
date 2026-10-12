@@ -11,7 +11,8 @@
     "ios": {
       "bundleIdentifier": "com.motebit.mobile",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["remote-notification"]
       }
     },
     "plugins": [
