@@ -316,7 +316,7 @@ describe("Relay ON: push + self-test only after the relay accepted the device", 
     const ctrl = new MobileSyncController(deps);
     await ctrl.startSync(RELAY);
     await vi.advanceTimersByTimeAsync(50);
-    expect(deps.registerPushToken).toHaveBeenCalledWith(RELAY);
+    expect(deps.registerPushToken).toHaveBeenCalledWith(RELAY, expect.any(Function));
     expect(deps.startPushLifecycle).toHaveBeenCalled();
     expect(hoisted.selfTestSpy).toHaveBeenCalled();
     ctrl.stopSync();
@@ -408,6 +408,14 @@ describe("Relay OFF while relay work is in flight: stale continuations cannot ac
     await expectNothingLiveAfterOff(ctrl, runtime);
     expect(deps.registerPushToken).not.toHaveBeenCalled();
     expect(hoisted.selfTestSpy).not.toHaveBeenCalled();
+  });
+
+  it("OFF before the first cycle fires clears its timer (nothing left armed)", async () => {
+    const runtime = makeRuntime();
+    const ctrl = new MobileSyncController(makeDeps(runtime));
+    await ctrl.startSync(RELAY); // first cycle armed 3 s out, interval 30 s
+    await ctrl.disconnectSync();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("OFF during the relay-key pin: the resumed cycle does not re-enable delegation", async () => {

@@ -38,33 +38,39 @@ export interface PushTokenManagerDeps {
 export class MobilePushTokenManager {
   private _pushTokenListener: Notifications.Subscription | null = null;
   private _appStateListener: ReturnType<typeof AppState.addEventListener> | null = null;
+  /** Bumped by stopPushLifecycle: a listener-started registration then posts nothing. */
+  private _lifecycle = 0;
 
   constructor(private deps: PushTokenManagerDeps) {}
 
   /**
    * Register push token with the relay for wake-on-demand task execution.
-   * Called during startSync() after WebSocket connects.
+   * Called once the relay accepted the device. `isCurrent` is the caller's
+   * session guard: re-checked after every await (the permission prompt can
+   * sit open across relay OFF), so a registration whose session ended
+   * neither posts the token nor stores it.
    */
-  async registerPushToken(syncUrl: string): Promise<void> {
+  async registerPushToken(syncUrl: string, isCurrent: () => boolean = () => true): Promise<void> {
     try {
       const { status } = await Notifications.getPermissionsAsync();
+      if (!isCurrent()) return;
       let finalStatus: string = status;
       if (finalStatus !== "granted") {
         const { status: asked } = await Notifications.requestPermissionsAsync();
         finalStatus = asked;
       }
-      if (finalStatus !== "granted") return;
+      if (finalStatus !== "granted" || !isCurrent()) return;
 
       const tokenData = await Notifications.getExpoPushTokenAsync();
       const pushToken = tokenData.data;
-      if (!pushToken) return;
+      if (!pushToken || !isCurrent()) return;
 
       // Skip if token hasn't changed
       const stored = await AsyncStorage.getItem(PUSH_TOKEN_KEY);
-      if (stored === pushToken) return;
+      if (stored === pushToken || !isCurrent()) return;
 
       const authToken = await this.deps.createSyncToken("push:register");
-      if (!authToken) return;
+      if (!authToken || !isCurrent()) return;
 
       const res = await fetch(`${syncUrl}/api/v1/agents/push-token`, {
         method: "POST",
@@ -79,7 +85,7 @@ export class MobilePushTokenManager {
         }),
       });
 
-      if (res.ok) {
+      if (res.ok && isCurrent()) {
         await AsyncStorage.setItem(PUSH_TOKEN_KEY, pushToken);
       }
     } catch {
@@ -123,13 +129,15 @@ export class MobilePushTokenManager {
 
   /** Start listening for push token rotation and app state changes. */
   startPushLifecycle(): void {
+    const lifecycle = ++this._lifecycle;
+    const isCurrent = () => lifecycle === this._lifecycle;
     // Token rotation: FCM/APNs may rotate tokens at any time
     this._pushTokenListener = Notifications.addPushTokenListener((_token) => {
       void (async () => {
         const syncUrl = await this.deps.getSyncUrl();
-        if (syncUrl != null && syncUrl !== "") {
+        if (syncUrl != null && syncUrl !== "" && isCurrent()) {
           await AsyncStorage.removeItem(PUSH_TOKEN_KEY); // Force re-register
-          await this.registerPushToken(syncUrl);
+          await this.registerPushToken(syncUrl, isCurrent);
         }
       })();
     });
@@ -139,7 +147,9 @@ export class MobilePushTokenManager {
       if (state === "active") {
         void (async () => {
           const syncUrl = await this.deps.getSyncUrl();
-          if (syncUrl != null && syncUrl !== "") await this.registerPushToken(syncUrl);
+          if (syncUrl != null && syncUrl !== "" && isCurrent()) {
+            await this.registerPushToken(syncUrl, isCurrent);
+          }
         })();
       }
     });
@@ -147,6 +157,7 @@ export class MobilePushTokenManager {
 
   /** Clean up push lifecycle listeners. */
   stopPushLifecycle(): void {
+    this._lifecycle++;
     this._pushTokenListener?.remove();
     this._pushTokenListener = null;
     this._appStateListener?.remove();

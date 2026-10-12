@@ -85,8 +85,13 @@ export interface SyncControllerDeps {
   getKeyring: () => SecureStoreAdapter;
   getPrivKeyBytes: () => Promise<Uint8Array>;
   createSyncToken: (aud?: TokenAudience) => Promise<string>;
-  /** Called once the relay accepted the device, to register a push token with it. */
-  registerPushToken: (syncUrl: string) => Promise<void>;
+  /**
+   * Called once the relay accepted the device, to register a push token with
+   * it. `isCurrent` turns false at relay OFF: the registration re-checks it
+   * after every await (the permission prompt can outlive OFF) and posts or
+   * stores nothing once it is false.
+   */
+  registerPushToken: (syncUrl: string, isCurrent: () => boolean) => Promise<void>;
   /** Called on relay OFF, before the URL is cleared, to unregister the push token. */
   removePushToken: (syncUrl: string) => Promise<void>;
   startPushLifecycle: () => void;
@@ -97,6 +102,7 @@ export class MobileSyncController {
   private syncEngine: SyncEngine | null = null;
   private conversationSyncEngine: ConversationSyncEngine | null = null;
   private syncTimer: ReturnType<typeof setInterval> | null = null;
+  private _firstSyncTimer: ReturnType<typeof setTimeout> | null = null;
   private _syncStatus: SyncStatus = "offline";
   private _syncStatusCallback: ((status: SyncStatus, lastSync: number) => void) | null = null;
   private _lastSyncTime = 0;
@@ -112,7 +118,7 @@ export class MobileSyncController {
   private _registrationError: string | null = null;
   private _registrationTimer: ReturnType<typeof setTimeout> | null = null;
   private _registrationDelay = REGISTRATION_RETRY_BASE_MS;
-  /** Bumped by stopSync: a registration of an ended session touches nothing. */
+  /** Bumped by startSync and stopSync; see `sessionGuard`. */
   private _session = 0;
 
   // Serving state
@@ -354,13 +360,13 @@ export class MobileSyncController {
    * goes to "error" and the next attempt is scheduled on backoff (1 s
    * doubling to 60 s, unref'd) until the relay accepts or sync stops.
    */
-  private async attemptRegistration(url: string, session: number): Promise<void> {
+  private async attemptRegistration(url: string, live: () => boolean): Promise<void> {
     const result = await this.registerDevice(url);
-    if (session !== this._session) return;
+    if (!live()) return;
     if (result.ok) {
       this._registered = true;
       this._registrationError = null;
-      this.onDeviceAccepted(url);
+      this.onDeviceAccepted(url, live);
       return;
     }
     this._registrationError = result.error;
@@ -372,7 +378,7 @@ export class MobileSyncController {
     this._registrationDelay = Math.min(delay * 2, REGISTRATION_RETRY_MAX_MS);
     this._registrationTimer = setTimeout(() => {
       this._registrationTimer = null;
-      void this.attemptRegistration(url, session);
+      void this.attemptRegistration(url, live);
     }, delay);
     (this._registrationTimer as { unref?: () => void }).unref?.();
   }
@@ -383,32 +389,51 @@ export class MobileSyncController {
    * the onboarding self-test — a relay that refused the device, or an
    * opt-in rolled back, prompts for nothing.
    */
-  private onDeviceAccepted(url: string): void {
-    void this.deps.registerPushToken(url);
+  private onDeviceAccepted(url: string, live: () => boolean): void {
+    void this.deps.registerPushToken(url, live);
     this.deps.startPushLifecycle();
     // Adversarial onboarding: run self-test once after first relay connection
-    void this.runOnboardingSelfTest(url);
+    void this.runOnboardingSelfTest(url, live);
+  }
+
+  /**
+   * The one session guard. Captures the current sync session and returns a
+   * predicate that turns false the moment stopSync (relay OFF) or a newer
+   * startSync ends it. Every async relay path re-checks it after EVERY await
+   * and touches nothing once it is false — so a stale continuation (a
+   * registration, relay-key pin or permission prompt that resolves after
+   * OFF) can no longer act after OFF. stopSync already dropped whatever the
+   * session had set up before the await; bailing is the whole undo.
+   */
+  private sessionGuard(): () => boolean {
+    const session = this._session;
+    return () => session === this._session;
   }
 
   async startSync(syncUrl?: string): Promise<void> {
+    this._session++;
+    const live = this.sessionGuard();
     const url = syncUrl != null && syncUrl !== "" ? syncUrl : await this.getSyncUrl();
     const storage = this.deps.getStorage();
-    if (url == null || url === "" || !storage) return;
+    if (!live() || url == null || url === "" || !storage) return;
 
     await this.setSyncUrl(url);
+    if (!live()) return;
     const motebitId = this.deps.getMotebitId();
 
     // Registration is attempted BEFORE the socket connects and before the
     // first push (#962); a refusal keeps retrying on backoff below.
-    const session = ++this._session;
     this._registered = false;
     this._registrationDelay = REGISTRATION_RETRY_BASE_MS;
-    await this.attemptRegistration(url, session);
+    await this.attemptRegistration(url, live);
+    if (!live()) return;
 
     // Derive encryption key once for the sync session, then erase raw key bytes
     const privKeyBytes = await this.deps.getPrivKeyBytes();
-    this._syncEncKey = await deriveSyncEncryptionKey(privKeyBytes);
+    const syncEncKey = await deriveSyncEncryptionKey(privKeyBytes);
     secureErase(privKeyBytes);
+    if (!live()) return;
+    this._syncEncKey = syncEncKey;
 
     // Create engines (they don't start their own timers — we manage the interval
     // ourselves so we can refresh the auth token each cycle)
@@ -429,11 +454,14 @@ export class MobileSyncController {
 
     // Run the sync loop via our own timer (to refresh tokens per cycle)
     this.syncTimer = setInterval(() => {
-      void this.syncCycle(url);
+      void this.syncCycle(url, live);
     }, SYNC_INTERVAL_MS);
 
     // Immediate first sync after short delay (let initialization settle)
-    setTimeout(() => void this.syncCycle(url), 3000);
+    this._firstSyncTimer = setTimeout(() => {
+      this._firstSyncTimer = null;
+      void this.syncCycle(url, live);
+    }, 3000);
 
     // Push registration (wake-on-demand) and the onboarding self-test fire
     // from onDeviceAccepted, once the relay has accepted the device.
@@ -443,11 +471,11 @@ export class MobileSyncController {
    * Run cmdSelfTest exactly once per device. Uses AsyncStorage flag to avoid
    * repeating on subsequent launches. Best-effort — failures are logged, never blocking.
    */
-  private async runOnboardingSelfTest(syncUrl: string): Promise<void> {
+  private async runOnboardingSelfTest(syncUrl: string, live: () => boolean): Promise<void> {
     const FLAG = "motebit:self-test-done";
     try {
       const done = await AsyncStorage.getItem(FLAG);
-      if (done === "true") return;
+      if (done === "true" || !live()) return;
     } catch (err: unknown) {
       // eslint-disable-next-line no-console -- docstring promises logging
       console.warn(
@@ -461,7 +489,7 @@ export class MobileSyncController {
 
     try {
       const token = await this.deps.createSyncToken("task:submit");
-      if (!token) return;
+      if (!token || !live()) return;
 
       const result = await cmdSelfTest(runtime, {
         relay: { relayUrl: syncUrl, authToken: token, motebitId: this.deps.getMotebitId() },
@@ -504,6 +532,10 @@ export class MobileSyncController {
     if (this.syncTimer) {
       clearInterval(this.syncTimer);
       this.syncTimer = null;
+    }
+    if (this._firstSyncTimer) {
+      clearTimeout(this._firstSyncTimer);
+      this._firstSyncTimer = null;
     }
     if (this._wsUnsubOnEvent) {
       this._wsUnsubOnEvent();
@@ -611,8 +643,12 @@ export class MobileSyncController {
     };
   }
 
-  private async syncCycle(syncUrl: string): Promise<void> {
-    if (!this.syncEngine || !this.conversationSyncEngine) return;
+  /** One sync round for the session `live` guards (the startSync that armed it). */
+  private async syncCycle(syncUrl: string, live: () => boolean): Promise<void> {
+    if (!live()) return;
+    const syncEngine = this.syncEngine;
+    const conversationSyncEngine = this.conversationSyncEngine;
+    if (!syncEngine || !conversationSyncEngine) return;
     const storage = this.deps.getStorage();
     if (!storage) return;
     const motebitId = this.deps.getMotebitId();
@@ -622,6 +658,7 @@ export class MobileSyncController {
 
     try {
       const token = await this.deps.createSyncToken();
+      if (!live()) return;
       const encKey = this._syncEncKey;
 
       // Tear down previous WS connection (token expired)
@@ -700,6 +737,8 @@ export class MobileSyncController {
             setItem: (k, v) => AsyncStorage.setItem(k, v),
           },
         });
+        // OFF during the pin already dropped the adapter and the socket.
+        if (!live()) return;
         runtime.enableInteractiveDelegation({
           syncUrl,
           // Honor the audience the runtime asks for — `task:submit` to
@@ -833,7 +872,7 @@ export class MobileSyncController {
         });
       }
 
-      this.syncEngine.connectRemote(encryptedWs);
+      syncEngine.connectRemote(encryptedWs);
       wsAdapter.connect();
 
       // Recover any delegated steps orphaned by a previous app close
@@ -855,19 +894,20 @@ export class MobileSyncController {
         motebitId,
         authToken: token,
       });
-      this.conversationSyncEngine.connectRemote(
+      conversationSyncEngine.connectRemote(
         new EncryptedConversationSyncAdapter({ inner: convHttpAdapter, key: encKey }),
       );
 
-      await this.syncEngine.sync();
+      await syncEngine.sync();
+      if (!live()) return;
       // `sync()` never rejects: a refused or failed push is recorded in
       // `getLastError()`. It ends this cycle in "error", never "idle" (#962).
-      const eventError = this.syncEngine.getLastError();
+      const eventError = syncEngine.getLastError();
       if (eventError) throw eventError;
-      await this.conversationSyncEngine.sync();
+      await conversationSyncEngine.sync();
 
       // Plan sync — push/pull plans for cross-device visibility
-      if (storage.planStore != null) {
+      if (live() && storage.planStore != null) {
         try {
           const planSyncStore = new ExpoPlanSyncStoreAdapter(storage.planStore, motebitId);
           const planSync = new PlanSyncEngine(planSyncStore, motebitId);
@@ -885,6 +925,7 @@ export class MobileSyncController {
         }
       }
 
+      if (!live()) return;
       // The relay has not accepted this device: nothing it sent was taken.
       if (!this._registered) {
         throw new Error(
@@ -895,6 +936,7 @@ export class MobileSyncController {
       this._syncStatus = "idle";
       this._syncStatusCallback?.("idle", this._lastSyncTime);
     } catch {
+      if (!live()) return;
       this._syncStatus = "error";
       this._syncStatusCallback?.("error", this._lastSyncTime);
     }

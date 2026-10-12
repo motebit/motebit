@@ -314,4 +314,28 @@ describe("MobilePushTokenManager.startPushLifecycle / stopPushLifecycle", () => 
     appStateChangeCallback?.("background");
     mgr.stopPushLifecycle();
   });
+
+  it("stopPushLifecycle during a listener's permission prompt: nothing is posted or stored", async () => {
+    permissionStatus = "undetermined";
+    let answer!: (v: { status: string }) => void;
+    const Notifications = await import("expo-notifications");
+    vi.mocked(Notifications.requestPermissionsAsync).mockImplementationOnce(
+      () => new Promise((r) => (answer = r)) as never,
+    );
+    const fetchSpy = makeFetchSpy(true, 200);
+    vi.stubGlobal("fetch", fetchSpy);
+    const mgr = new MobilePushTokenManager({
+      getDeviceId: () => "dev-1",
+      createSyncToken: () => Promise.resolve("auth-token"),
+      getSyncUrl: () => Promise.resolve("https://relay.test"),
+    });
+    mgr.startPushLifecycle();
+    appStateChangeCallback?.("active");
+    await new Promise((r) => setTimeout(r, 10)); // now at the prompt
+    mgr.stopPushLifecycle(); // relay OFF
+    answer({ status: "granted" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(asyncStoreData.has("@motebit/push_token")).toBe(false);
+  });
 });

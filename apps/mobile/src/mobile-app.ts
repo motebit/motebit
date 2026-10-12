@@ -662,7 +662,7 @@ export class MobileApp {
     getKeyring: () => this.keyring,
     getPrivKeyBytes: () => this.getPrivKeyBytes(),
     createSyncToken: (aud) => this.createSyncToken(aud),
-    registerPushToken: (url) => this.registerPushToken(url),
+    registerPushToken: (url, isCurrent) => this.registerPushToken(url, isCurrent),
     removePushToken: (url) => this.removePushToken(url),
     startPushLifecycle: () => this.startPushLifecycle(),
     stopPushLifecycle: () => this.stopPushLifecycle(),
@@ -2145,8 +2145,8 @@ export class MobileApp {
 
   // === Push Token Lifecycle (delegates to MobilePushTokenManager) ===
 
-  registerPushToken(syncUrl: string): Promise<void> {
-    return this.pushTokens.registerPushToken(syncUrl);
+  registerPushToken(syncUrl: string, isCurrent?: () => boolean): Promise<void> {
+    return this.pushTokens.registerPushToken(syncUrl, isCurrent);
   }
 
   removePushToken(syncUrl: string): Promise<void> {
