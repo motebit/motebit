@@ -31,6 +31,8 @@ RUN npm install -g corepack@latest && \
 
 # Copy lockfile + workspace config first (cache layer)
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+# Root pnpm patchedDependencies (package.json) must be present for --frozen-lockfile.
+COPY patches/ patches/
 
 # Copy workspace packages browser-sandbox depends on (transitive).
 COPY packages/ packages/

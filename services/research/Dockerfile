@@ -11,6 +11,8 @@ RUN apk add --no-cache python3 make g++
 
 # Copy lockfile + workspace config first (cache layer)
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+# Root pnpm patchedDependencies (package.json) must be present for --frozen-lockfile.
+COPY patches/ patches/
 
 # Copy all workspace packages (research depends on transitive workspace deps)
 COPY packages/ packages/

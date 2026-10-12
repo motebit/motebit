@@ -9,6 +9,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+# Root pnpm patchedDependencies (package.json) must be present for --frozen-lockfile.
+COPY patches/ patches/
 COPY packages/ packages/
 COPY services/embed/ services/embed/
 
