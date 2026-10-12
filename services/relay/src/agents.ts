@@ -109,6 +109,66 @@ export function sanitizePeerAgent(agent: Record<string, unknown>): Record<string
   for (const f of RELAY_ATTESTED_PEER_FIELDS) delete clean[f];
   return clean;
 }
+
+/**
+ * Admit a SANITIZED peer discover entry into the origin's merge, or DROP it
+ * (`null`) — the settlement-authority half sanitizePeerAgent does not carry
+ * (M1, docs/doctrine/settlement-authority-binding.md). A peer TRANSPORTS a
+ * remote worker's address; it never asserts one for a worker it does not host.
+ *
+ *  - `source_relay` must be a non-empty string naming some relay other than
+ *    THIS one (a peer cannot claim to speak for our own agents).
+ *  - A direct answer (`hop_distance === 1`) must be hosted by the peer that
+ *    returned it: an honest peer stamps its own relay id on its own agents
+ *    (federation.ts), so any other host at distance 1 is a forgery.
+ *  - An entry whose host is not a currently-active direct peer (multi-hop) is
+ *    listed but carries NO pay-to destination: federated P2P is validated only
+ *    against direct peers, and nothing here can bind a far host's address.
+ *
+ * The LOCAL-shadow rule (a peer entry under an id this relay hosts is dropped,
+ * whatever the local result set held) is applied by the caller, which holds
+ * the database (`locallyHostedIds`).
+ */
+export function admitPeerAgent(
+  agent: Record<string, unknown>,
+  returningPeerId: string,
+  ownRelayId: string,
+  activePeerIds: ReadonlySet<string>,
+): Record<string, unknown> | null {
+  const host = agent.source_relay;
+  if (typeof host !== "string" || host === "" || host === ownRelayId) return null;
+  if (agent.hop_distance === 1 && host !== returningPeerId) return null;
+  // The host relay's key is the ORIGIN's attestation (attached from
+  // relay_peers after the merge), never the peer's word.
+  const admitted: Record<string, unknown> = { ...agent };
+  delete admitted.source_relay_public_key;
+  if (!activePeerIds.has(host)) delete admitted.settlement_address;
+  return admitted;
+}
+
+/**
+ * Ids among `ids` that THIS relay hosts — on the discovery shelf and not
+ * revoked (`relay CLAUDE.md` rule 9's locality: on the shelf ⇒ local; a
+ * delisted row may be a worker that moved to a peer, and a revoked one is never
+ * local). A hosted worker's settlement address is the one IT wrote here, so no
+ * peer may speak for it — even a sleeping one missing from the local results.
+ */
+export function locallyHostedIds(db: DatabaseDriver, ids: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    if (chunk.length === 0) continue;
+    const rows = db
+      .prepare(
+        `SELECT motebit_id FROM agent_registry
+         WHERE motebit_id IN (${chunk.map(() => "?").join(",")})
+           AND (revoked IS NULL OR revoked = 0)${ON_SHELF}`,
+      )
+      .all(...chunk) as Array<{ motebit_id: string }>;
+    for (const r of rows) out.add(r.motebit_id);
+  }
+  return out;
+}
 import {
   hexPublicKeyToDidKey,
   verifyKeySuccession,
@@ -1870,6 +1930,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         "SELECT peer_relay_id, endpoint_url, public_key FROM relay_peers WHERE state = 'active'",
       )
       .all() as Array<{ peer_relay_id: string; endpoint_url: string; public_key: string }>;
+    const activePeerIds = new Set(peers.map((p) => p.peer_relay_id));
 
     // Originating hop: sign as sender_relay = this relay (== origin_relay
     // here, since we're the query's origin) — the SAME per-hop sender
@@ -1900,6 +1961,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         const data = (await resp.json()) as { agents: Array<Record<string, unknown>> };
         return (data.agents ?? [])
           .map(sanitizePeerAgent)
+          .map((a) =>
+            a === null
+              ? null
+              : admitPeerAgent(a, peer.peer_relay_id, relayIdentity.relayMotebitId, activePeerIds),
+          )
           .filter((a): a is Record<string, unknown> => a !== null);
       } catch {
         return [];
@@ -1913,9 +1979,18 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       )
       .flatMap((r) => r.value);
 
+    // A peer never speaks for an agent hosted HERE — even when the local row
+    // is not in `localResults` (capability filter, limit, a sleeping worker).
+    // Without this, the peer entry was the only entry for a local id, and its
+    // settlement_address reached the payer as that worker's destination (M1).
+    const localIds = locallyHostedIds(moteDb.db, [
+      ...new Set(peerResults.map((a) => String(a.motebit_id))),
+    ]);
+    const admittedPeerResults = peerResults.filter((a) => !localIds.has(String(a.motebit_id)));
+
     // Merge: dedup by motebit_id, prefer lowest hop_distance
     const merged = new Map<string, Record<string, unknown>>();
-    for (const agent of [...localResults, ...peerResults]) {
+    for (const agent of [...localResults, ...admittedPeerResults]) {
       const id = agent.motebit_id as string;
       const existing = merged.get(id);
       if (!existing || (agent.hop_distance as number) < (existing.hop_distance as number)) {
@@ -2128,6 +2203,18 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const ack = c.req.query("acknowledge_no_history_risk") === "true";
     const capability = c.req.query("capability") ?? undefined;
 
+    // The worker's OWN registered (write-authorized) settlement address, read
+    // from the registry — never the merged discover shelf a peer can feed. The
+    // payer refuses to pay a discovered address this does not confirm (M1;
+    // docs/doctrine/settlement-authority-binding.md § "Where binding is enforced").
+    const registered = moteDb.db
+      .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
+      .get(workerId) as { settlement_address: string | null } | undefined;
+    const binding =
+      registered?.settlement_address != null && registered.settlement_address !== ""
+        ? { settlement_address: registered.settlement_address }
+        : {};
+
     const unitCostDollars = getListingUnitCost(moteDb, workerId, capability);
     const amounts: { expected_amount_micro?: number; expected_fee_micro?: number } = {};
     if (unitCostDollars > 0) {
@@ -2137,7 +2224,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     }
 
     if (callerMotebitId == null || callerMotebitId === workerId) {
-      return c.json({ allowed: true, reason: "caller not identified — advisory only", ...amounts });
+      return c.json({
+        allowed: true,
+        reason: "caller not identified — advisory only",
+        ...amounts,
+        ...binding,
+      });
     }
     const eligibility = await evaluateSettlementEligibility(
       moteDb.db,
@@ -2145,7 +2237,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       workerId,
       ack,
     );
-    return c.json({ allowed: eligibility.allowed, reason: eligibility.reason, ...amounts });
+    return c.json({
+      allowed: eligibility.allowed,
+      reason: eligibility.reason,
+      ...amounts,
+      ...binding,
+    });
   });
 
   // POST /api/v1/agents/:motebitId/bond — submit a signed commitment bond.
