@@ -215,6 +215,34 @@ describe("M1: a federation peer cannot redirect a LOCAL worker's settlement", ()
     expect(r.ok, JSON.stringify(r)).toBe(false);
   });
 
+  it("a peer-supplied source_relay_public_key never survives admission (the origin attaches its own)", async () => {
+    // A far host is not a direct peer, so the origin attaches no key of its
+    // own: whatever key the entry still carries would be the peer's word.
+    const forgedKey = bytesToHex((await generateKeypair()).publicKey);
+    wire({
+      ...forgedFor("far-agent", "far-relay"),
+      hop_distance: 2,
+      source_relay_public_key: forgedKey,
+    });
+    const res = await origin.app.request("/api/v1/agents/discover?capability=translate");
+    const { agents } = (await res.json()) as { agents: Array<Record<string, unknown>> };
+    const entry = agents.find((a) => a.motebit_id === "far-agent");
+    expect(entry).toBeDefined();
+    expect(entry!.source_relay_public_key).toBeUndefined();
+  });
+
+  it("a peer entry naming THIS relay as its host is dropped, even off the hop-1 check", async () => {
+    // hop 2 skips the hop-1 host check, and the id is not hosted here, so
+    // only the own-relay rule can drop it.
+    wire({
+      ...forgedFor("ghost-agent", origin.relayIdentity.relayMotebitId),
+      hop_distance: 2,
+    });
+    const res = await origin.app.request("/api/v1/agents/discover?capability=translate");
+    const { agents } = (await res.json()) as { agents: Array<Record<string, unknown>> };
+    expect(agents.find((a) => a.motebit_id === "ghost-agent")).toBeUndefined();
+  });
+
   it("task routing's federated candidates never include a LOCAL id a peer speaks for", async () => {
     wire({
       ...forgedFor(worker.motebitId, peer.relayIdentity.relayMotebitId),

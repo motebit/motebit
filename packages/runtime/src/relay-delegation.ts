@@ -1792,23 +1792,27 @@ export async function resolveP2pPaymentRequest(
     // shape). A NON-local entry without a direct-peer key is unpriceable and
     // unbindable — a multi-hop listing or a peer speaking for a worker it does
     // not host (M1) — so it is never a P2P candidate: treating "no peer key" as
-    // LOCAL skipped every binding check and paid the peer's address.
+    // LOCAL skipped every binding check and paid the peer's address. Only an
+    // entry that passes the pin and p2p-mode gates counts as unbindable: one
+    // those gates drop could never have been paid, and counting it would turn
+    // an honest `no_routing` (which falls back to relay mode) into a refusal.
     let droppedUnbindable = 0;
     const isNonLocal = (a: { hop_distance?: number | null }): boolean =>
       a.hop_distance != null && a.hop_distance !== 0;
     const admissible = (data.agents ?? []).filter((a) => {
       if (a.motebit_id === motebitId || a.settlement_address == null) return false;
-      if (isNonLocal(a) && a.source_relay_public_key == null) {
-        droppedUnbindable++;
-        return false;
-      }
       // Pinned hire: only the worker the user tapped is eligible — never
       // substitute another candidate for the same capability.
       if (params.targetWorkerId != null && a.motebit_id !== params.targetWorkerId) return false;
       const modes = Array.isArray(a.settlement_modes)
         ? a.settlement_modes
         : String(a.settlement_modes ?? "").split(",");
-      return modes.includes("p2p");
+      if (!modes.includes("p2p")) return false;
+      if (isNonLocal(a) && a.source_relay_public_key == null) {
+        droppedUnbindable++;
+        return false;
+      }
+      return true;
     });
 
     // ORDER among the admissible. A pin already narrowed the set to that one
