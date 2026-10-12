@@ -6,11 +6,15 @@
  * phone-only user could never connect (or register for push). The toggle
  * is the phone-only entry point.
  *
- * Privacy boundary: the toggle is OFF by default and nothing here contacts
- * the relay while it is off — the prefilled URL is only text in a field.
- * Enabling persists the normalized URL and starts sync (which registers the
- * device and the push token); disabling stops sync and clears the URL, so
- * the next launch stays offline too. Pairing flows are unchanged.
+ * Privacy boundary (founder-approved): with Relay OFF, nothing contacts the
+ * relay — the prefilled URL is only text in a field, and relay-backed views
+ * show RELAY_OFF_EMPTY_STATE instead of falling back to a default relay.
+ * Enabling persists the normalized URL and starts sync, which registers the
+ * device (bounded by a timeout) and only once the relay accepts it
+ * registers the push token. Disabling unregisters the push token (bounded,
+ * fail-soft), drops every live relay handle (serving coordinates, the
+ * runtime's interactive delegation) and clears the URL, so the next launch
+ * stays offline too. Pairing flows are unchanged.
  */
 
 /**
