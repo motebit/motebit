@@ -39,6 +39,11 @@
 /scripts/check-coverage-config-present.ts @hakimlabs
 /scripts/check-codeowners-authority.ts @hakimlabs
 /scripts/lib/codeowners.ts @hakimlabs
+# The wire contract (protocol primacy): the spec and the protocol types define what
+# every implementer must do, so a change here is constitutional (founder decision 2026-10-11).
+/spec/ @hakimlabs
+/packages/protocol/src/ @hakimlabs
+/packages/protocol/package.json @hakimlabs
 
 # ── (B) Money / identity registry packages (scripts/money-identity-path.ts) ──
 # Implementation (src/) and dependencies (package.json); tests are excluded at
