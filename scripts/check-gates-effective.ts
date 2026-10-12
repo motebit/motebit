@@ -3281,6 +3281,15 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-codeowners-authority",
+    proves:
+      "flags a MONEY_IDENTITY_PATH package losing its founder-owned rule — the drift class where a CODEOWNERS edit (or an agent's PR) quietly drops one authority path from code-owner review so a money door merges on CI alone. Probe deletes the `/packages/virtual-accounts/src/` line from .github/CODEOWNERS; every non-test virtual-accounts src file then falls to no rule and the gate must go red with the add-a-rule repair. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`.github/CODEOWNERS`, (src) =>
+        src.replace("/packages/virtual-accounts/src/ @hakimlabs\n", ""),
+      ),
+  },
+  {
     script: "check-identity-authority-inventory",
     proves:
       "flags a census that lags the code — a new relay source file that writes agent_registry.settlement_address (an authority column) appears without the committed census being regenerated. The census counts the file and the writer, so the fresh render differs from the committed one and the gate must go red with the re-run command. byte-identical cleanup via writeFixture.",

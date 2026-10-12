@@ -2669,4 +2669,29 @@ export const relayMigrations: Migration[] = [
       createAnchorBroadcastsTable(db);
     },
   },
+  {
+    version: 58,
+    name: "guardian_evidence",
+    up: (db) => {
+      // The PROVENANCE of a guardian (identity-authority-writers.md I1, §3.2;
+      // census Q4): the identity's CURRENT key a request proved when it set
+      // this guardian, and which evidence proved it (`recordGuardianEvidence`).
+      // A guardian recovery is accepted only under the guardian the latest
+      // such row names (`guardianProvenance`); a guardian a paired device's
+      // own token, the operator, or the v42 backfill set has no row. Nothing
+      // is backfilled: no relay before this recorded a proof for any
+      // guardian. Same table and shape as the identity-authority lane's
+      // planned `guardian_evidence`, so that lane's create is a no-op here.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_guardian_evidence (
+          motebit_id TEXT NOT NULL,
+          guardian_public_key TEXT NOT NULL,
+          set_under_key TEXT,
+          evidence TEXT NOT NULL,
+          recorded_at INTEGER NOT NULL,
+          PRIMARY KEY (motebit_id, guardian_public_key)
+        );
+      `);
+    },
+  },
 ];

@@ -99,6 +99,7 @@ const AUTHORITY_TABLES = [
   "relay_revoked_credentials",
   "identity_keys",
   "relay_identity_revocations",
+  "relay_guardian_evidence",
 ] as const;
 
 /** A column naming an identity, at the start of a column definition. */
@@ -194,6 +195,14 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       "`recordIdentityGuardian`, called only by /agents/register after it verified the guardian's attestation over {action, guardian_public_key, motebit_id}; updates an existing holder row only",
+  },
+  {
+    file: R + "identity-keys.ts",
+    verb: "INSERT",
+    table: "relay_guardian_evidence",
+    count: 1,
+    principal:
+      "`recordGuardianEvidence`, called only by /agents/register after it verified the guardian's attestation AND proved the identity's CURRENT key: the bearer was verified by the device row holding exactly the held key (read before any write in the request), or the same request recorded the sovereign first key (E-sov) under the bearer's possession of it. A paired device's own key, the master token and a legacy id with no held key write no row (identity-authority-writers.md I1, §3.2)",
   },
   {
     file: R + "tasks.ts",
