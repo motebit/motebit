@@ -1097,6 +1097,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-identity-authority-inventory",
   },
   {
+    name: "check-codeowners-authority",
+    defends:
+      "`.github/CODEOWNERS` gates exactly the paths that carry authority — founder review where authority lives, CI-only everywhere else. Agents act as a separate GitHub identity with write access; a ruleset requiring code-owner review is only as good as the file behind it. Two failure shapes: a catch-all `*` rule (every PR, typos included, waits on the owner) and a missing rule (a money or identity door merges on CI alone). NO THIRD REGISTRY — the required set is derived from existing sources of truth: each `MONEY_IDENTITY_PATH` package's non-test `src/` files and `package.json` (`scripts/money-identity-path.ts`), every file `check-identity-authority-writers` registers as a write site into its `AUTHORITY_TABLES` (read by AST), every workspace source file `check-money-authority` reads by path (read by AST), plus CODEOWNERS itself and this gate. Each must be decided by a rule owned by `@hakimlabs` under GitHub semantics (last match wins, directory patterns — `scripts/lib/codeowners.ts`), and no rule may be a catch-all. Hand-chosen authority doors no gate tracks live only in CODEOWNERS with why-comments.",
+    script: "check-codeowners-authority",
+  },
+  {
     name: "check-signed-text-wellformed",
     defends:
       "every signer that signs canonical JSON goes through the guarded canonicalizer `canonicalJsonForSigning` (packages/crypto/src/signing.ts), which refuses — throws `UnpairedSurrogateError` — a body holding an unpaired UTF-16 surrogate in any string value or object key at any depth, embedded child receipts included (no UTF-8 form, spec/execution-ledger-v1.md §11.4); repair stays at the text's source (toWellFormedText / truncateWellFormed), verifiers keep `canonicalJson` so old receipts still verify. AST scan of packages/, services/, apps/ for every call of ed25519Sign / signBySuite / an imported `sign` alias: the enclosing function must call the guard or hand it to a bytes helper; unguarded canonicalJson/canonicalSha256 bytes, or bytes untraceable from the signing function, are RED unless a documented non-JCS signer (JWT payload, identity-file YAML) or a count-pinned OUTSIDE_LANE debt (money-record signers, relay, runtime ledger digests, identity-file guardian attestation). The static companion of the payment-receipt well-formed-text harness (docs/design/payment-receipt-wellformed-stop-condition.md §3, rule 3). Invariant #176, added 2026-10-11",
