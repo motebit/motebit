@@ -142,6 +142,21 @@ describe("IdentityTab relay opt-in", () => {
     expect(queryTestId(r, "relay-error")).toHaveLength(0);
   });
 
+  it("the copy states what ON and OFF actually do", () => {
+    const r = mount(fakePort());
+    const text = r.root
+      .findAll((n) => n.type === "Text")
+      .map((n) => {
+        const c = n.props.children as unknown;
+        return Array.isArray(c) ? c.join("") : typeof c === "string" ? c : "";
+      })
+      .join(" ")
+      .replace(/\s+/g, " ");
+    expect(text).toContain("nothing is sent to a relay while it is off");
+    expect(text).toContain("once the relay accepts this device");
+    expect(text).toContain("Off again: push is unregistered and the relay is disconnected.");
+  });
+
   it("an invalid URL shows an error and starts nothing", async () => {
     const port = fakePort();
     const r = mount(port);
