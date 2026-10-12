@@ -2399,9 +2399,19 @@ export async function resolveAndSubmitP2pDelegation(
   });
   const signed: SignedP2pTransaction[] = [];
   // A holder, not a `let`: the hook writes it from inside a closure.
-  const recordState: { failure: string | null } = { failure: null };
+  const recordState: { failure: string | null; aborted: boolean } = {
+    failure: null,
+    aborted: false,
+  };
   const hooks: P2pBroadcastHooks = {
     beforeBroadcast: (tx) => {
+      // The last abort check sits here, immediately before the send: the
+      // builder's own pre-send work (the M2 meter, the rail) is an async
+      // window after 3c, and a cancellation landing in it must stop the send.
+      if (params.signal?.aborted === true) {
+        recordState.aborted = true;
+        throw new Error("payment not sent: the delegation was cancelled");
+      }
       if (ledger != null) {
         try {
           ledger.recordBroadcast(entry(tx.signature));
@@ -2446,6 +2456,15 @@ export async function resolveAndSubmitP2pDelegation(
       return fail("insufficient_balance", err.message);
     }
     const errMessage = err instanceof Error ? err.message : String(err);
+
+    // Cancelled at the hook before the first send: nothing was sent and
+    // nothing was recorded (the hook refuses before the ledger write).
+    if (recordState.aborted && signed.length === 0) {
+      return fail(
+        "timeout",
+        "Delegation cancelled before the payment was broadcast — nothing was sent",
+      );
+    }
 
     // A rail that reports its signed transactions (it has a confirmer) and
     // reported none signed nothing — so it sent nothing.

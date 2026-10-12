@@ -57,6 +57,8 @@ interface Keys {
 }
 let relay: Keys;
 let peer: Keys;
+/** A second federation peer that also lists the same worker. */
+let otherPeer: Keys;
 let worker: Keys;
 let WORKER_ID: string;
 
@@ -68,6 +70,7 @@ async function keys(): Promise<Keys> {
 beforeAll(async () => {
   relay = await keys();
   peer = await keys();
+  otherPeer = await keys();
   worker = await keys();
   WORKER_ID = await deriveSovereignMotebitId(worker.hex);
 });
@@ -124,11 +127,11 @@ function world(opts: {
   submit: SubmitAnswer;
   loseCredentialsDuringDiscover?: boolean;
   /** What the relay's discovery answers on its SECOND read (the pre-broadcast re-check). */
-  rediscover?: "same" | "gone" | "repriced";
+  rediscover?: "same" | "gone" | "repriced" | "address_changed" | "other_peer";
   /** A worker hosted by the origin relay (2-leg path) instead of a federated one. */
   local?: boolean;
   /** The local `/p2p-eligibility` answer on its SECOND read. */
-  reEligibility?: "allowed" | "refused";
+  reEligibility?: "allowed" | "refused" | "address_changed" | "amounts_changed";
 }): World {
   const w: World = { broadcasts: [], submits: [], credentialsGone: false };
   let discovers = 0;
@@ -163,13 +166,23 @@ function world(opts: {
         const placement =
           opts.local === true
             ? { hop_distance: 0 }
-            : { source_relay: PEER_ID, source_relay_public_key: peer.hex, hop_distance: 1 };
+            : again === "other_peer"
+              ? // The same worker, relisted through a DIFFERENT peer relay.
+                {
+                  source_relay: "relay-c-id",
+                  source_relay_public_key: otherPeer.hex,
+                  hop_distance: 1,
+                }
+              : { source_relay: PEER_ID, source_relay_public_key: peer.hex, hop_distance: 1 };
         return json(200, {
           agents: [
             {
               motebit_id: WORKER_ID,
               public_key: worker.hex,
-              settlement_address: base58Encode(worker.publicKey),
+              settlement_address:
+                again === "address_changed"
+                  ? base58Encode(otherPeer.publicKey)
+                  : base58Encode(worker.publicKey),
               settlement_modes: "p2p",
               ...placement,
               pricing: [{ capability: "web_search", unit_cost: again === "repriced" ? 2 : 1 }],
@@ -179,13 +192,17 @@ function world(opts: {
       }
       if (url.includes(`/api/v1/agents/${WORKER_ID}/p2p-eligibility`)) {
         eligibilityReads++;
-        const refused = eligibilityReads > 1 && opts.reEligibility === "refused";
+        const again = eligibilityReads > 1 ? (opts.reEligibility ?? "allowed") : "allowed";
+        const refused = again === "refused";
         return json(200, {
           allowed: !refused,
           ...(refused ? { reason: "Active dispute d-1 between agents" } : {}),
-          expected_amount_micro: 1_000_000,
-          expected_fee_micro: 50_000,
-          settlement_address: base58Encode(worker.publicKey),
+          expected_amount_micro: again === "amounts_changed" ? 2_000_000 : 1_000_000,
+          expected_fee_micro: again === "amounts_changed" ? 100_000 : 50_000,
+          settlement_address:
+            again === "address_changed"
+              ? base58Encode(otherPeer.publicKey)
+              : base58Encode(worker.publicKey),
         });
       }
       if (method === "POST" && url.endsWith(`/agent/${ME}/task`)) {
@@ -406,6 +423,54 @@ describe("M3 — invariant: broadcasts == 0 whenever admission was not secured",
     }
   });
 
+  it("(b, narrowed) local worker's registered address changed before broadcast ⇒ nothing broadcast (M3a)", async () => {
+    const w = world({ submit: "201", local: true, reEligibility: "address_changed" });
+    const result = await delegate(w);
+    expect(w.broadcasts).toHaveLength(0);
+    expect(w.submits).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("p2p_ineligible");
+      expect(result.error.message).toContain("registered settlement address changed");
+    }
+  });
+
+  it("(b, narrowed) local worker's expected amounts changed before broadcast ⇒ nothing broadcast (M3a)", async () => {
+    const w = world({ submit: "201", local: true, reEligibility: "amounts_changed" });
+    const result = await delegate(w);
+    expect(w.broadcasts).toHaveLength(0);
+    expect(w.submits).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("p2p_ineligible");
+      expect(result.error.message).toContain("expected amounts changed");
+    }
+  });
+
+  it("(b, narrowed) federated worker's address changed before broadcast ⇒ nothing broadcast (M3a)", async () => {
+    const w = world({ submit: "201", rediscover: "address_changed" });
+    const result = await delegate(w);
+    expect(w.broadcasts).toHaveLength(0);
+    expect(w.submits).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("p2p_ineligible");
+      expect(result.error.message).toContain("settlement address changed");
+    }
+  });
+
+  it("(b, narrowed) federated worker relisted through a DIFFERENT peer before broadcast ⇒ nothing broadcast (M3a)", async () => {
+    const w = world({ submit: "201", rediscover: "other_peer" });
+    const result = await delegate(w);
+    expect(w.broadcasts).toHaveLength(0);
+    expect(w.submits).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("p2p_ineligible");
+      expect(result.error.message).toContain("same peer relay");
+    }
+  });
+
   it("(c) a throw between broadcast and submit — today: paid, admission unconfirmed", async () => {
     const w = world({ submit: "throw" });
     const result = await delegate(w);
@@ -464,6 +529,33 @@ describe("M3 — invariant: broadcasts == 0 whenever admission was not secured",
     expect(w.broadcasts).toHaveLength(0);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("timeout");
+  });
+});
+
+describe("M3 — the last abort check sits immediately before the send", () => {
+  it("(abort) a delegation cancelled while the builder awaits, before it sends, broadcasts nothing (CP2)", async () => {
+    const w = world({ submit: "201" });
+    const controller = new AbortController();
+    const send = rail(w);
+    const result = await delegate(w, {
+      signal: controller.signal,
+      // The window the cold review named: the M2 meter and the rail's own
+      // pre-send work run after every pre-broadcast check in the delegator.
+      buildP2pPayment: async (request, hooks) => {
+        await Promise.resolve();
+        controller.abort();
+        // A rail honouring the hooks contract: a throw here means "not sent".
+        await hooks?.beforeBroadcast?.({ signature: "sig-cp2", lastValidBlockHeight: 100 });
+        return send(request);
+      },
+    });
+    expect(w.broadcasts).toHaveLength(0);
+    expect(w.submits).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("timeout");
+      expect(result.error.settledPayment).toBeUndefined();
+    }
   });
 });
 
