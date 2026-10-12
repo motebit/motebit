@@ -810,7 +810,6 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     platformFeeRate,
     federationConfig,
     federationQueryCache,
-    parseTokenPayloadUnsafe,
   } = deps;
   const peerFetch = deps.peerFetch ?? defaultPeerFetch;
   // Fee rate for the P2P eligibility pre-flight's expected-fee hint — the SAME
@@ -1562,21 +1561,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // possession half (DB1): the bearer was verified by the device row that
     // holds exactly this key — an operator bearer or a fallback proves none.
     // The key that verified this bearer, when a device row verified it: the
-    // row its `did` names. (The middleware falls back to the holder, else the
-    // registry, only when no row exists for that did — and then this stays
+    // key the middleware captured from that row (`bearerKeyAtRequest`, above),
+    // never re-read here — a re-read after the awaits above can return a row
+    // a rotation or pairing rewrote since. (The middleware falls back to the
+    // registry only when no row exists for that did — and then this stays
     // undefined.) E-sov needs CURRENT possession of the key it records (DB1);
     // its soundness also rests on recordFirstIdentityKey's predicate (DA2),
     // which refuses any identity already holding a different key.
-    let callerDeviceKey: string | undefined;
-    const bearer = c.req.header("authorization")?.slice(7);
-    const bearerClaims =
-      bearer != null && c.get("callerMotebitId" as never) != null
-        ? parseTokenPayloadUnsafe(bearer)
-        : null;
-    if (bearerClaims?.mid === motebitId && typeof bearerClaims.did === "string") {
-      const signer = await identityManager.loadDeviceById(bearerClaims.did, motebitId);
-      if (signer?.public_key) callerDeviceKey = signer.public_key;
-    }
+    const callerDeviceKey: string | undefined = bearerKeyAtRequest;
     // The key possession is proven for: the bearer's own device key. A body
     // key counts only when it IS that key; a keyless registration (the CLI
     // daemon's, which bootstraps and then registers without a key) presents

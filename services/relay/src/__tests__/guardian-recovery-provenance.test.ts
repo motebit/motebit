@@ -903,4 +903,64 @@ describe("the bearer's key is the one the middleware verified, never re-read in 
     expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
     expect(servedKey(mid)).toBe(hex(k0));
   });
+
+  it("no holder: a device row rewritten to the genesis key between auth and handler records no E-sov and no evidence for a paired device's guardian", async () => {
+    // A sovereign id with NO holder (bootstrap proves nothing), and a paired
+    // device on its own key kd. If the handler re-read the bearer's device
+    // row after its awaits, it would see the genesis key k0, "prove" E-sov
+    // for k0 under kd's token, and record the paired device's guardian G as
+    // sovereign-proven — then recovery under G would take the identity.
+    const k0 = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k0));
+    expect(await bootstrap(mid, "laptop", k0)).toBe(201);
+    const kd = await generateKeypair();
+    const paired = await pairDevice(mid, "laptop", k0, kd);
+    expect(servedKey(mid)).toBeNull();
+    const g = await generateKeypair();
+    const auth = await bearer(mid, paired, kd);
+    const fields = await guardianFields(mid, g);
+
+    const storage = relay.moteDb.identityStorage as unknown as {
+      loadDevice: (id: string) => Promise<{ public_key: string } | null>;
+    };
+    const original = storage.loadDevice.bind(storage);
+    let rewritten = false;
+    storage.loadDevice = async (id: string) => {
+      const row = await original(id);
+      if (id === paired && !rewritten) {
+        rewritten = true;
+        relay.moteDb.db
+          .prepare("UPDATE devices SET public_key = ? WHERE device_id = ?")
+          .run(hex(k0), paired);
+      }
+      return row;
+    };
+    try {
+      expect((await register(mid, auth, fields)).status).toBe(200);
+    } finally {
+      storage.loadDevice = original;
+    }
+    expect(rewritten).toBe(true);
+
+    // The token was verified under kd: no holder recorded from the rewritten
+    // key, and no evidence row for G.
+    expect(servedKey(mid)).toBeNull();
+    expect(
+      relay.moteDb.db
+        .prepare("SELECT COUNT(*) AS n FROM relay_guardian_evidence WHERE motebit_id = ?")
+        .get(mid),
+    ).toEqual({ n: 0 });
+
+    const k1 = await generateKeypair();
+    const rec = await signGuardianRecoverySuccession(
+      g.privateKey,
+      k1.privateKey,
+      k0.publicKey,
+      k1.publicKey,
+    );
+    const res = await rotateKey(mid, await stranger(), rec);
+    expect(res.status).toBe(403);
+    expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expect(successions(mid)).toBe(0);
+  });
 });
