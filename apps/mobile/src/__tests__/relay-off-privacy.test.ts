@@ -10,13 +10,30 @@
  *   - ON fires push registration and the onboarding self-test only once
  *     the relay has ACCEPTED the device — a refusal prompts for nothing;
  *   - device registration is bounded by an abort signal, so a black-holed
- *     network resolves (and the Settings switch re-enables).
+ *     network resolves (and the Settings switch re-enables);
+ *   - OFF while relay work is IN FLIGHT (a pending registration, a pending
+ *     relay-key pin, a pending notification-permission prompt) still wins:
+ *     the stale continuation touches nothing once it resumes.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   selfTestSpy: vi.fn(() => Promise.resolve({ summary: "ok", data: { status: "passed" } })),
   registerImpl: null as null | ((p: { signal?: AbortSignal }) => Promise<unknown>),
+  permissionPrompt: null as null | Promise<{ status: string }>,
+}));
+
+vi.mock("expo-notifications", () => ({
+  getPermissionsAsync: vi.fn(() => Promise.resolve({ status: "undetermined" })),
+  requestPermissionsAsync: vi.fn(
+    () => hoisted.permissionPrompt ?? Promise.resolve({ status: "denied" }),
+  ),
+  getExpoPushTokenAsync: vi.fn(() => Promise.resolve({ data: "expo-push-token" })),
+  addPushTokenListener: vi.fn(() => ({ remove: vi.fn() })),
+}));
+
+vi.mock("react-native", () => ({
+  AppState: { addEventListener: vi.fn(() => ({ remove: vi.fn() })) },
 }));
 
 vi.mock("@motebit/runtime", async () => ({
@@ -98,6 +115,8 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 }));
 
 import { registerDeviceWithRelay } from "@motebit/core-identity";
+import { getOrPinRelayKey } from "@motebit/runtime";
+import { MobilePushTokenManager } from "../push-token-manager";
 import {
   MobileSyncController,
   PUSH_UNREGISTER_TIMEOUT_MS,
@@ -158,6 +177,7 @@ beforeEach(() => {
   asyncStoreData.clear();
   hoisted.selfTestSpy.mockClear();
   hoisted.registerImpl = null;
+  hoisted.permissionPrompt = null;
   vi.mocked(registerDeviceWithRelay).mockClear();
   fetchSpy = vi.fn(() =>
     Promise.resolve(new Response(JSON.stringify({ agents: [] }), { status: 200 })),
@@ -343,5 +363,99 @@ describe("Relay ON: push + self-test only after the relay accepted the device", 
     expect(ctrl.syncStatus).toBe("error");
     expect(deps.registerPushToken).not.toHaveBeenCalled();
     ctrl.stopSync();
+  });
+});
+
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** After OFF: nothing reaches the relay, delegation stays off, no timer is left. */
+async function expectNothingLiveAfterOff(
+  ctrl: MobileSyncController,
+  runtime: ReturnType<typeof makeRuntime>,
+): Promise<void> {
+  // Run out every timer a stale continuation may have armed (first sync, interval).
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(ctrl.isSyncConnected).toBe(false);
+  expect(ctrl.syncStatus).toBe("offline");
+  expect(runtime.enableInteractiveDelegation).not.toHaveBeenCalled();
+  expect(await ctrl.discoverAgents()).toEqual([]);
+  expect(fetchSpy).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+}
+
+describe("Relay OFF while relay work is in flight: stale continuations cannot act", () => {
+  it("OFF during a pending device registration: the resumed startSync arms nothing", async () => {
+    const registration = deferred<unknown>();
+    hoisted.registerImpl = () => registration.promise;
+    const runtime = makeRuntime();
+    const deps = makeDeps(runtime);
+    const ctrl = new MobileSyncController(deps);
+
+    const on = ctrl.startSync(RELAY);
+    await vi.advanceTimersByTimeAsync(10);
+    await ctrl.disconnectSync();
+    fetchSpy.mockClear();
+
+    registration.resolve({ ok: true, created: false, registered_at: 1 });
+    await on;
+
+    await expectNothingLiveAfterOff(ctrl, runtime);
+    expect(deps.registerPushToken).not.toHaveBeenCalled();
+    expect(hoisted.selfTestSpy).not.toHaveBeenCalled();
+  });
+
+  it("OFF during the relay-key pin: the resumed cycle does not re-enable delegation", async () => {
+    const pin = deferred<string | undefined>();
+    vi.mocked(getOrPinRelayKey).mockImplementationOnce(() => pin.promise);
+    const runtime = makeRuntime();
+    const ctrl = new MobileSyncController(makeDeps(runtime));
+
+    await ctrl.startSync(RELAY);
+    await vi.advanceTimersByTimeAsync(3_100); // first cycle, now blocked on the pin
+    expect(getOrPinRelayKey).toHaveBeenCalled();
+    await ctrl.disconnectSync();
+    expect(runtime.disableInteractiveDelegation).toHaveBeenCalled();
+    fetchSpy.mockClear();
+    runtime.enableInteractiveDelegation.mockClear();
+
+    pin.resolve("relay-key-hex");
+    await expectNothingLiveAfterOff(ctrl, runtime);
+  });
+
+  it("OFF during the notification-permission prompt: no push token is posted or stored", async () => {
+    const prompt = deferred<{ status: string }>();
+    hoisted.permissionPrompt = prompt.promise;
+    const runtime = makeRuntime();
+    const ref: { ctrl?: MobileSyncController } = {};
+    const pushTokens = new MobilePushTokenManager({
+      getDeviceId: () => "dev-1",
+      createSyncToken: () => Promise.resolve("auth-token"),
+      getSyncUrl: () => ref.ctrl?.getSyncUrl() ?? Promise.resolve(null),
+    });
+    const ctrl = new MobileSyncController(
+      makeDeps(runtime, {
+        registerPushToken: (...args: Parameters<MobilePushTokenManager["registerPushToken"]>) =>
+          pushTokens.registerPushToken(...args),
+        removePushToken: (url) => pushTokens.removePushToken(url),
+      }),
+    );
+    ref.ctrl = ctrl;
+
+    await ctrl.startSync(RELAY); // accepted → push registration sits at the prompt
+    await ctrl.disconnectSync();
+    fetchSpy.mockClear();
+
+    prompt.resolve({ status: "granted" });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(asyncStoreData.has("@motebit/push_token")).toBe(false);
+    await expectNothingLiveAfterOff(ctrl, runtime);
   });
 });
