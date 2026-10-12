@@ -254,6 +254,7 @@ describe("v2 heartbeat", () => {
     const forB = await heartbeatRequest({
       sender: ids.a.relayMotebitId,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       privateKey: ids.a.privateKey,
     });
     setPeer("c", "a", "suspended", 3);
@@ -269,6 +270,7 @@ describe("v2 heartbeat", () => {
     const beat = await heartbeatRequest({
       sender: ids.a.relayMotebitId,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       privateKey: ids.a.privateKey,
     });
     expect((await post("b", "/federation/v1/peer/heartbeat", beat)).status).toBe(200);
@@ -287,6 +289,7 @@ describe("v2 heartbeat", () => {
     const beat = await heartbeatRequest({
       sender: ids.a.relayMotebitId,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       privateKey: ids.a.privateKey,
       agentCount: 1,
     });
@@ -301,6 +304,7 @@ describe("v2 heartbeat", () => {
     const beat = await heartbeatRequest({
       sender: ids.a.relayMotebitId,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       privateKey: ids.a.privateKey,
       now: Date.now() - 301_000,
     });
@@ -349,12 +353,43 @@ describe("v2 removal", () => {
     expect(noAuth.status).toBe(401);
   });
 
+  it("the removal mint addresses only a confirmed peer it holds, by the key it holds (round 3, F1)", async () => {
+    const mint = (q: string) =>
+      relays.a.app.request(`/api/v1/admin/federation/peer-removal-signature?${q}`, {
+        headers: AUTH_HEADER,
+      });
+    const byUrl = await mint(`endpoint_url=${encodeURIComponent(URLS.b)}`);
+    expect(byUrl.status).toBe(200);
+    const body = (await byUrl.json()) as {
+      recipient: string;
+      recipient_public_key: string;
+      message: { envelope: { recipient: string; recipient_public_key: string } };
+    };
+    expect(body.recipient).toBe(ids.b.relayMotebitId);
+    expect(body.recipient_public_key).toBe(ids.b.publicKeyHex.toLowerCase());
+    expect(body.message.envelope).toMatchObject({
+      recipient: ids.b.relayMotebitId,
+      recipient_public_key: ids.b.publicKeyHex.toLowerCase(),
+    });
+    // No confirmed peer there — an endpoint or id A holds none for (whatever
+    // that URL's /identity would claim): nothing is minted.
+    expect((await mint(`endpoint_url=${encodeURIComponent("http://nowhere.test:9")}`)).status).toBe(
+      404,
+    );
+    expect((await mint(`recipient=relay-unknown-${rand().slice(0, 8)}`)).status).toBe(404);
+    expect(
+      (await mint(`endpoint_url=${encodeURIComponent(URLS.b)}&recipient=${ids.c.relayMotebitId}`))
+        .status,
+    ).toBe(404);
+  });
+
   it("a removal signed by a stranger's key is refused", async () => {
     const { generateKeypair } = await import("@motebit/encryption");
     const stranger = await generateKeypair();
     const forged = await removeRequest({
       sender: ids.a.relayMotebitId,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       privateKey: stranger.privateKey,
     });
     const before = peerRows("b");
@@ -379,6 +414,7 @@ describe("§3.5 order: recipient before lookup; unknown sender is 403", () => {
     const beat = await heartbeatRequest({
       sender: s.id,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       privateKey: s.privateKey,
     });
     const before = peerRows("b");
@@ -392,6 +428,7 @@ describe("§3.5 order: recipient before lookup; unknown sender is 403", () => {
     const removal = await removeRequest({
       sender: s.id,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       privateKey: s.privateKey,
     });
     const before = peerRows("b");
@@ -405,6 +442,7 @@ describe("§3.5 order: recipient before lookup; unknown sender is 403", () => {
     const beat = await heartbeatRequest({
       sender: s.id,
       recipient: ids.c.relayMotebitId,
+      recipientPublicKey: ids.c.publicKeyHex,
       privateKey: s.privateKey,
     });
     const hb = await post("b", "/federation/v1/peer/heartbeat", beat);
@@ -413,6 +451,7 @@ describe("§3.5 order: recipient before lookup; unknown sender is 403", () => {
     const removal = await removeRequest({
       sender: s.id,
       recipient: ids.c.relayMotebitId,
+      recipientPublicKey: ids.c.publicKeyHex,
       privateKey: s.privateKey,
     });
     const rm = await post("b", "/federation/v1/peer/remove", removal);
@@ -425,6 +464,7 @@ describe("§3.5 order: recipient before lookup; unknown sender is 403", () => {
     const removal = await removeRequest({
       sender: s.id,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       privateKey: s.privateKey,
     });
     const res = await post("b", "/federation/v1/peer/heartbeat", {

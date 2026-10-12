@@ -605,6 +605,7 @@ export interface FederationMessageEnvelope {
     kind: FederationMessageKind;
     nonce: string;
     recipient: string;
+    recipient_public_key: string;
     sender: string;
     // (undocumented)
     suite: typeof FEDERATION_MESSAGE_SUITE;
@@ -615,7 +616,7 @@ export interface FederationMessageEnvelope {
 export type FederationMessageKind = keyof typeof FEDERATION_MESSAGE_KINDS;
 
 // @public (undocumented)
-export type FederationMessageRefusal = "malformed" | "unknown_kind" | "kind_mismatch" | "unsupported_suite" | "wrong_recipient" | "wrong_sender" | "stale" | "body_mismatch" | "bad_signature";
+export type FederationMessageRefusal = "malformed" | "unknown_kind" | "kind_mismatch" | "unsupported_suite" | "wrong_recipient" | "wrong_recipient_key" | "wrong_sender" | "stale" | "body_mismatch" | "bad_signature";
 
 // @public (undocumented)
 export type FederationMessageVerdict = {
@@ -1744,6 +1745,7 @@ export function signFederationMessage(args: {
     kind: FederationMessageKind;
     sender: string;
     recipient: string;
+    recipientPublicKey: string;
     body: unknown;
     privateKey: Uint8Array;
     now?: number;
@@ -2225,6 +2227,7 @@ export function verifyExecutionReceiptDetailed(receipt: SignableReceipt, publicK
 export function verifyFederationMessage(message: unknown, expect: {
     kind: FederationMessageKind;
     self: string;
+    selfPublicKeyHex: string;
     expectedSender?: string;
     senderPublicKeyHex: string;
     body: unknown;

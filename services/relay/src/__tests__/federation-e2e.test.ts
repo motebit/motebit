@@ -477,6 +477,7 @@ describe("Federation E2E", () => {
       const forged = await heartbeatRequest({
         sender: idB.relayMotebitId,
         recipient: relayA.relayIdentity.relayMotebitId,
+        recipientPublicKey: relayA.relayIdentity.publicKeyHex,
         privateKey: stranger.privateKey,
         agentCount: 5,
       });
@@ -496,6 +497,7 @@ describe("Federation E2E", () => {
       const forged = await removeRequest({
         sender: idB.relayMotebitId,
         recipient: relayA.relayIdentity.relayMotebitId,
+        recipientPublicKey: relayA.relayIdentity.publicKeyHex,
         privateKey: stranger.privateKey,
       });
 

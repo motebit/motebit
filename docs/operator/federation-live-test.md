@@ -96,7 +96,7 @@ Without `RELAY_C_URL` + `RELAY_D_URL`, Phase 8 skips with a friendly message and
 
 ### "Confirm refused: …" on Phase 2 confirm
 
-A 403 `bad_signature` or 400 `body_mismatch` means the script's `signFederationV2` (kind `peer-confirm`, body `{ nonce, endpoint_url, recipient_public_key }`) no longer matches `signFederationMessage` in `packages/crypto/src/federation-message.ts`, or the `endpoint_url` it confirms is not the one its propose named, or `recipient_public_key` is not Relay B's key (lowercase hex). A 400 naming "v1 is refused" means the script sent the 1.0–1.4 `{ relay_id, challenge_response }` form to a 1.5 relay.
+A 403 `bad_signature` or 400 `body_mismatch` means the script's `signFederationV2` (kind `peer-confirm`, body `{ nonce, endpoint_url }`, envelope `recipient_public_key` = Relay B's key) no longer matches `signFederationMessage` in `packages/crypto/src/federation-message.ts`, or the `endpoint_url` it confirms is not the one its propose named. A 400 `wrong_recipient_key` means the envelope's `recipient_public_key` is not Relay B's key (lowercase hex); a 403 "no pending handshake" means the request's `public_key` / `endpoint_url` are not the ones the propose named, or the nonce is older than ten minutes. A 400 naming "v1 is refused" means the script sent the 1.0–1.4 `{ relay_id, challenge_response }` form to a 1.5 relay.
 
 ### "Heartbeat refused: bad_signature" (HTTP 403) or "…: body_mismatch" (HTTP 400) on Phase 4
 

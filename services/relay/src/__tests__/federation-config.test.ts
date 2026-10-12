@@ -379,15 +379,22 @@ describe("Federation configuration enforcement", () => {
       const v = await verifyFederationMessage(body.message, {
         kind: "peer-confirm",
         self: "relay-b",
+        selfPublicKeyHex: bKey,
         expectedSender: relay.relayIdentity.relayMotebitId,
         senderPublicKeyHex: relay.relayIdentity.publicKeyHex,
-        body: {
-          nonce,
-          endpoint_url: "http://self.test:3000",
-          recipient_public_key: bKey,
-        },
+        body: { nonce, endpoint_url: "http://self.test:3000" },
       });
       expect(v.ok).toBe(true);
+      // The recipient by KEY is in the envelope (§3.5): a relay holding
+      // relay-b's id under another key refuses it before anything else.
+      const other = await verifyFederationMessage(body.message, {
+        kind: "peer-confirm",
+        self: "relay-b",
+        selfPublicKeyHex: "cc".repeat(32),
+        senderPublicKeyHex: relay.relayIdentity.publicKeyHex,
+        body: { nonce, endpoint_url: "http://self.test:3000" },
+      });
+      expect(other).toEqual({ ok: false, reason: "wrong_recipient_key" });
 
       // A bare nonce, no recipient, itself as recipient, no recipient key, a
       // malformed key, its own key, a foreign endpoint: refused.

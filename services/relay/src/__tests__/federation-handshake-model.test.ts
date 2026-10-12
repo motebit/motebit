@@ -119,32 +119,32 @@ const rand = (): string => bytesToHex(crypto.getRandomValues(new Uint8Array(32))
 
 // ── The byte format of the handshake bodies, as the tooling and B build them ─
 
-/** The peer-challenge body (§3.1 step 2) a proposer verifies. */
+/** The peer-challenge body (§3.1 step 2) a proposer verifies (its key is the envelope's). */
 function challengeBody(args: {
   requestNonce: string;
   nonce: string;
   proposerEndpoint: string;
-  proposerKey: string;
 }): Record<string, string> {
   return {
     request_nonce: args.requestNonce,
     nonce: args.nonce,
     proposer_endpoint_url: args.proposerEndpoint,
-    proposer_public_key: args.proposerKey.toLowerCase(),
   };
 }
 
-/** The peer-confirm body (§3.1 step 3) a signer commits to. */
-function confirmBody(args: {
-  nonce: string;
-  endpoint: string;
-  recipientKey: string;
-}): Record<string, string> {
-  return {
-    nonce: args.nonce,
-    endpoint_url: args.endpoint,
-    recipient_public_key: args.recipientKey.toLowerCase(),
-  };
+/** The peer-confirm body (§3.1 step 3) a signer commits to (the recipient's key is the envelope's). */
+function confirmBody(args: { nonce: string; endpoint: string }): Record<string, string> {
+  return { nonce: args.nonce, endpoint_url: args.endpoint };
+}
+
+/** A confirm request: the message, the nonce it answers, and the key and endpoint the propose named. */
+function confirmRequest(
+  message: unknown,
+  nonce: string,
+  publicKey: string,
+  endpoint: string,
+): { message: unknown; nonce: string; public_key: string; endpoint_url: string } {
+  return { message, nonce, public_key: publicKey, endpoint_url: endpoint };
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────
@@ -258,7 +258,7 @@ interface Nonce {
 }
 
 interface Captured {
-  request: { message: unknown; nonce: string };
+  request: { message: unknown; nonce: string; public_key: string; endpoint_url: string };
   recipientId: string; // label
   recipientKey: string; // label
   epoch: number;
@@ -401,14 +401,10 @@ async function tooling(
   const ch = await verifyFederationMessage(pb.challenge, {
     kind: "peer-challenge",
     self: sid.relayMotebitId,
+    selfPublicKeyHex: sid.publicKeyHex,
     expectedSender: pid.relay_motebit_id,
     senderPublicKeyHex: pid.public_key,
-    body: challengeBody({
-      requestNonce: ourNonce,
-      nonce: pb.nonce,
-      proposerEndpoint: self.url,
-      proposerKey: sid.publicKeyHex,
-    }),
+    body: challengeBody({ requestNonce: ourNonce, nonce: pb.nonce, proposerEndpoint: self.url }),
   });
   if (!ch.ok) return { status: null, minted: null };
   if (between) await between();
@@ -422,9 +418,14 @@ async function tooling(
     headers: AUTH_HEADER,
   });
   if (mint.status !== 200) return { status: null, minted: null };
-  const mb = (await mint.json()) as { message: unknown; nonce: string };
+  const mb = (await mint.json()) as {
+    message: unknown;
+    nonce: string;
+    public_key: string;
+    endpoint_url: string;
+  };
   const minted: Captured = {
-    request: { message: mb.message, nonce: mb.nonce },
+    request: confirmRequest(mb.message, mb.nonce, mb.public_key, mb.endpoint_url),
     recipientId: idLabel(pid.relay_motebit_id),
     recipientKey: keyLabel(pid.public_key),
     epoch: r.epoch,
@@ -445,17 +446,16 @@ const aTooling = (
 
 /**
  * A's operator runs `motebit federation peer-remove <peerUrl>` (mirrors
- * apps/cli handleFederationPeerRemove): read the peer's identity, have A's
- * relay mint a v2 peer-remove for it, post it to the peer. Returns the status
- * the peer answered, or null when the tooling stopped first.
+ * apps/cli handleFederationPeerRemove): have A's relay mint a v2 peer-remove
+ * for the confirmed peer it holds at that endpoint — by the id and key A
+ * verified it under, never the URL's self-description — and post it to the
+ * peer. Returns the status the peer answered, or null when the tooling
+ * stopped first (A holds no confirmed peer there).
  */
-async function aRemoveTooling(peer: Endpoint, _peerUrl: string): Promise<number | null> {
-  const idRes = await peer("/federation/v1/identity", undefined);
-  if (idRes.status !== 200) return null;
-  const pid = (await idRes.json()) as { relay_motebit_id: string };
+async function aRemoveTooling(peer: Endpoint, peerUrl: string): Promise<number | null> {
   const res = await request(
     a,
-    `/api/v1/admin/federation/peer-removal-signature?recipient=${encodeURIComponent(pid.relay_motebit_id)}`,
+    `/api/v1/admin/federation/peer-removal-signature?endpoint_url=${encodeURIComponent(peerUrl)}`,
     { headers: AUTH_HEADER },
   );
   if (res.status !== 200) return null;
@@ -505,11 +505,11 @@ function mRelay(
         kind: "peer-challenge",
         sender: claimedId,
         recipient: idA.relayMotebitId,
+        recipientPublicKey: p.public_key,
         body: challengeBody({
           requestNonce: p.nonce,
           nonce: issued,
           proposerEndpoint: p.endpoint_url,
-          proposerKey: p.public_key,
         }),
         privateKey: m.privateKey,
       });
@@ -565,26 +565,33 @@ async function act(r: Run, action: Action): Promise<number | null> {
         kind: "peer-confirm",
         sender: idA.relayMotebitId,
         recipient: idB.relayMotebitId,
-        body: confirmBody({ nonce, endpoint, recipientKey: idB.publicKeyHex }),
+        recipientPublicKey: idB.publicKeyHex,
+        body: confirmBody({ nonce, endpoint }),
         privateKey: m.privateKey,
       });
       r.ledger.add(`M>B/B@${urlLabel(endpoint)}`);
-      const res = await request(b, "/federation/v1/peer/confirm", { body: { message, nonce } });
+      const res = await request(b, "/federation/v1/peer/confirm", {
+        body: confirmRequest(message, nonce, m.publicKeyHex, endpoint),
+      });
       if (res.status === 200 && keyLabel(rowOfA()?.public_key) === "M") r.squatted = true;
       return res.status;
     }
     case "C_BAD": {
-      const nonce = latestNonce(r)?.nonce ?? rand();
+      const latest = latestNonce(r);
+      const nonce = latest?.nonce ?? rand();
+      const key = latest?.key === "M" ? m.publicKeyHex : idA.publicKeyHex;
+      const endpoint = latest?.endpoint === "A" ? URL_A : URL_M;
       const message = await signFederationMessage({
         kind: "peer-confirm",
         sender: idA.relayMotebitId,
         recipient: idB.relayMotebitId,
-        body: confirmBody({ nonce, endpoint: URL_M, recipientKey: idB.publicKeyHex }),
+        recipientPublicKey: idB.publicKeyHex,
+        body: confirmBody({ nonce, endpoint }),
         privateKey: m.privateKey,
       });
       return (
         await request(b, "/federation/v1/peer/confirm", {
-          body: { message: { ...message, signature: rand() + rand() }, nonce },
+          body: confirmRequest({ ...message, signature: rand() + rand() }, nonce, key, endpoint),
         })
       ).status;
     }
@@ -592,6 +599,7 @@ async function act(r: Run, action: Action): Promise<number | null> {
       const req = await removeRequest({
         sender: idA.relayMotebitId,
         recipient: idB.relayMotebitId,
+        recipientPublicKey: idB.publicKeyHex,
         privateKey: m.privateKey,
       });
       return (await request(b, "/federation/v1/peer/remove", { body: req })).status;
@@ -600,6 +608,7 @@ async function act(r: Run, action: Action): Promise<number | null> {
       const req = await heartbeatRequest({
         sender: idA.relayMotebitId,
         recipient: idB.relayMotebitId,
+        recipientPublicKey: idB.publicKeyHex,
         privateKey: m.privateKey,
       });
       return (await request(b, "/federation/v1/peer/heartbeat", { body: req })).status;
@@ -640,10 +649,13 @@ async function act(r: Run, action: Action): Promise<number | null> {
         kind: "peer-confirm",
         sender: idB.relayMotebitId,
         recipient: idA.relayMotebitId,
-        body: confirmBody({ nonce, endpoint: URL_M, recipientKey: idA.publicKeyHex }),
+        recipientPublicKey: idA.publicKeyHex,
+        body: confirmBody({ nonce, endpoint: URL_M }),
         privateKey: m.privateKey,
       });
-      const res = await request(a, "/federation/v1/peer/confirm", { body: { message, nonce } });
+      const res = await request(a, "/federation/v1/peer/confirm", {
+        body: confirmRequest(message, nonce, m.publicKeyHex, URL_M),
+      });
       if (res.status === 200 && keyLabel(rowOfBAtA()?.public_key) === "M") r.squattedAtA = true;
       return res.status;
     }
@@ -689,6 +701,7 @@ async function act(r: Run, action: Action): Promise<number | null> {
       const req = await heartbeatRequest({
         sender: idA.relayMotebitId,
         recipient: idB.relayMotebitId,
+        recipientPublicKey: idB.publicKeyHex,
         privateKey: idA.privateKey,
       });
       return (await request(b, "/federation/v1/peer/heartbeat", { body: req })).status;
@@ -980,15 +993,6 @@ describe("the second cold review's findings, as model cells", () => {
   }
 });
 
-/**
- * CHECKPOINT 1 (round 3) — committed RED. The third cold review's cells and
- * every start state of the extended model are expected to FAIL against this
- * tree (counterexamples printed); `it.fails` keeps the push hook honest
- * without `--no-verify`. The structural fix (the envelope binds the
- * recipient's key) flips this to `it`.
- */
-const red = it.fails;
-
 describe("the third cold review's findings, as model cells", () => {
   const cells: Array<[string, Start, Action[]]> = [
     [
@@ -997,6 +1001,11 @@ describe("the third cold review's findings, as model cells", () => {
       ["O_RM"],
     ],
     ["F1: … at a suspended peer", "suspended", ["O_RM"]],
+    [
+      "F1': … even where M holds B's id at A, so A mints for M's key (the envelope refuses it at B)",
+      "active",
+      ["SQ_BA", "O_RM"],
+    ],
     [
       "F2: A's heartbeat to an id M holds at A, relayed to B, revives A at B (suspended)",
       "suspended",
@@ -1011,7 +1020,7 @@ describe("the third cold review's findings, as model cells", () => {
     ["F3: … after the removed peer's cooldown", "removed-by-A", ["WAIT", "X_EVICT"]],
   ];
   for (const [name, start, seq] of cells) {
-    red(name, async () => {
+    it(name, async () => {
       const { violation, run } = await replay(start, seq);
       const what = violation ?? (run.squatted ? null : await checkLive(run));
       expect(what, `[${start}] ${seq.join(",")}`).toBeNull();
@@ -1025,7 +1034,7 @@ describe("F4: proposes naming a never-peered relay_id never lock the real relay 
     ["under the id's real (public) key", () => Promise.resolve(idA.publicKeyHex)],
   ];
   for (const [name, keyOf] of variants) {
-    red(`31 proposes ${name}, then the real A peers`, async () => {
+    it(`31 proposes ${name}, then the real A peers`, async () => {
       clockOffset += 60 * 60 * 1000;
       seed("absent");
       const r = newRun("absent");
@@ -1051,12 +1060,14 @@ describe("a never-confirmed row is no peer (§3.1, §3.3)", () => {
       const rm = await removeRequest({
         sender: idA.relayMotebitId,
         recipient: idB.relayMotebitId,
+        recipientPublicKey: idB.publicKeyHex,
         privateKey: key,
       });
       expect((await request(b, "/federation/v1/peer/remove", { body: rm })).status).toBe(403);
       const hb = await heartbeatRequest({
         sender: idA.relayMotebitId,
         recipient: idB.relayMotebitId,
+        recipientPublicKey: idB.publicKeyHex,
         privateKey: key,
       });
       expect((await request(b, "/federation/v1/peer/heartbeat", { body: hb })).status).toBe(403);
@@ -1070,7 +1081,7 @@ describe("a never-confirmed row is no peer (§3.1, §3.3)", () => {
 describe(`peering handshake model check (6 start states × action sequences ≤ ${MAX_DEPTH})`, () => {
   const totals = { states: 0, transitions: 0, squatExempt: 0 };
   for (const start of START) {
-    red(
+    it(
       `start ${start}`,
       async () => {
         const res = await explore(start, MAX_DEPTH);

@@ -118,7 +118,7 @@ describe("Heartbeat Sender", () => {
     await insertPeer(db, "recovering-peer", "http://recovering.test", "suspended", 3);
 
     // Each success is a heartbeat whose signed v2 ack verifies (§3.2).
-    vi.stubGlobal("fetch", ackingFetch(PEER_KEYS));
+    vi.stubGlobal("fetch", ackingFetch(PEER_KEYS, identity.publicKeyHex));
 
     // First success: 3 → 2 (still suspended)
     await sendHeartbeats(db, identity);
@@ -160,7 +160,7 @@ describe("Heartbeat Sender", () => {
 
     vi.stubGlobal(
       "fetch",
-      ackingFetch(PEER_KEYS, (peerId) => peerId === "alive-peer"),
+      ackingFetch(PEER_KEYS, identity.publicKeyHex, (peerId) => peerId === "alive-peer"),
     );
 
     await sendHeartbeats(db, identity);
@@ -193,7 +193,7 @@ describe("Heartbeat Sender", () => {
     // An ack signed by a different peer's key is not this peer's ack.
     await insertPeer(db, "other-peer", "http://other.test", "removed", 0);
     const keys = new Map([["liar-peer", PEER_KEYS.get("other-peer")!]]);
-    vi.stubGlobal("fetch", ackingFetch(keys));
+    vi.stubGlobal("fetch", ackingFetch(keys, identity.publicKeyHex));
     await sendHeartbeats(db, identity);
     expect(getPeer(db, "liar-peer")!.missed_heartbeats).toBe(2);
   });

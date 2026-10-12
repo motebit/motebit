@@ -94,14 +94,14 @@ async function j(method: string, base: number, path: string, body?: unknown) {
 /**
  * A relay's step-3 confirm, minted on ITS operator's token only: a v2
  * `peer-confirm` to `recipient` (the relay that issued `nonce`, by id and
- * by key — relay ids are not self-certifying) for the
+ * by key in the envelope — relay ids are not self-certifying) for the
  * relay's own endpoint (relay-federation@1.5 §3.1). Returns the confirm body.
  */
 async function operatorConfirm(
   op: typeof A,
   nonce: string,
   recipient: { relay_motebit_id: string; public_key: string },
-): Promise<{ message: unknown; nonce: string }> {
+): Promise<{ message: unknown; nonce: string; public_key: string; endpoint_url: string }> {
   const r = await fetch(`${url(op.port)}/api/v1/admin/federation/peer-confirm-signature`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${op.token}` },
@@ -113,8 +113,20 @@ async function operatorConfirm(
     }),
   });
   if (!r.ok) throw new Error(`operator confirm on :${op.port}: ${r.status} ${await r.text()}`);
-  const body = (await r.json()) as { message: unknown; nonce: string };
-  return { message: body.message, nonce: body.nonce };
+  // The confirm request repeats the key and endpoint the propose named: the
+  // issuing relay recognises its nonce only for exactly those (§3.1).
+  const body = (await r.json()) as {
+    message: unknown;
+    nonce: string;
+    public_key: string;
+    endpoint_url: string;
+  };
+  return {
+    message: body.message,
+    nonce: body.nonce,
+    public_key: body.public_key,
+    endpoint_url: body.endpoint_url,
+  };
 }
 
 /** Bilateral signed handshake over real HTTP — each operator uses only its OWN admin token. */

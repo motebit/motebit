@@ -129,6 +129,7 @@ async function heartbeatWith(
     await heartbeatRequest({
       sender: peer.relayId,
       recipient: relay.relayIdentity.relayMotebitId,
+      recipientPublicKey: relay.relayIdentity.publicKeyHex,
       privateKey: peer.privateKey,
       revocations,
     }),

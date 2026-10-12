@@ -3,7 +3,7 @@
  * F1): the operator's tooling never has its relay sign a bare nonce. It
  * checks the counterparty's `peer-challenge` (from the counterparty's key,
  * to this relay, answering this relay's own nonce, for this relay's
- * endpoint and key) before minting, and the mint it asks for names the
+ * endpoint, addressed to this relay's key) before minting, and the mint it asks for names the
  * counterparty as recipient by id AND by the key the challenge verified
  * under (cold review R2: relay ids are not self-certifying), and this
  * relay's own endpoint.
@@ -54,11 +54,11 @@ beforeEach(async () => {
         kind: "peer-challenge",
         sender: B_ID,
         recipient: A_ID,
+        recipientPublicKey: p.public_key,
         body: {
           request_nonce: p.nonce,
           nonce: ISSUED,
           proposer_endpoint_url: p.endpoint_url,
-          proposer_public_key: p.public_key,
         },
         privateKey: bKey.privateKey,
       }),
@@ -77,7 +77,13 @@ beforeEach(async () => {
     }
     if (url === `${A_URL}/api/v1/admin/federation/peer-confirm-signature`) {
       mints.push(body);
-      return json({ relay_id: A_ID, nonce: body.nonce, endpoint_url: A_URL, message: { m: 1 } });
+      return json({
+        relay_id: A_ID,
+        public_key: "aa".repeat(32),
+        nonce: body.nonce,
+        endpoint_url: A_URL,
+        message: { m: 1 },
+      });
     }
     if (url === `${B_URL}/federation/v1/peer/confirm`) {
       confirms.push(body);
@@ -103,7 +109,9 @@ describe("runPeerHandshake — the confirm is bound before it is minted", () => 
         endpoint_url: A_URL,
       },
     ]);
-    expect(confirms).toEqual([{ message: { m: 1 }, nonce: ISSUED }]);
+    expect(confirms).toEqual([
+      { message: { m: 1 }, nonce: ISSUED, public_key: "aa".repeat(32), endpoint_url: A_URL },
+    ]);
   });
 
   it("a challenge not from the counterparty's key: nothing is minted", async () => {
@@ -151,11 +159,11 @@ describe("runPeerHandshake — the confirm is bound before it is minted", () => 
         kind: "peer-challenge",
         sender: B_ID,
         recipient: A_ID,
+        recipientPublicKey: p.public_key,
         body: {
           request_nonce: p.nonce,
           nonce: ISSUED,
           proposer_endpoint_url: p.endpoint_url,
-          proposer_public_key: p.public_key,
         },
         privateKey: m.privateKey,
       });

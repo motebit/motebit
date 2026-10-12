@@ -4,7 +4,12 @@
  * federation bytes by hand — so the suites exercise exactly the bytes a relay
  * sends.
  */
-import { signFederationMessage, verifyFederationMessage } from "@motebit/crypto";
+import {
+  bytesToHex,
+  getPublicKeyBySuite,
+  signFederationMessage,
+  verifyFederationMessage,
+} from "@motebit/crypto";
 import type { SignedFederationMessage } from "@motebit/crypto";
 import type { SyncRelay } from "../index.js";
 
@@ -19,10 +24,12 @@ export interface RevocationLike {
   credential_id?: string;
 }
 
-/** A v2 heartbeat request body from `sender` to `recipient`. */
+/** A v2 heartbeat request body from `sender` to `recipient` (by id and key). */
 export async function heartbeatRequest(args: {
   sender: string;
   recipient: string;
+  /** The recipient's public key, as the signer verified it (hex). */
+  recipientPublicKey: string;
   privateKey: Uint8Array;
   agentCount?: number;
   revocations?: RevocationLike[];
@@ -39,6 +46,7 @@ export async function heartbeatRequest(args: {
     kind: "heartbeat",
     sender: args.sender,
     recipient: args.recipient,
+    recipientPublicKey: args.recipientPublicKey,
     body: { agent_count: agentCount, revocations },
     privateKey: args.privateKey,
     now: args.now,
@@ -51,10 +59,12 @@ export async function heartbeatRequest(args: {
   };
 }
 
-/** A v2 peer-remove request body from `sender` to `recipient`. */
+/** A v2 peer-remove request body from `sender` to `recipient` (by id and key). */
 export async function removeRequest(args: {
   sender: string;
   recipient: string;
+  /** The recipient's public key, as the signer verified it (hex). */
+  recipientPublicKey: string;
   privateKey: Uint8Array;
   now?: number;
 }): Promise<{ message: SignedFederationMessage }> {
@@ -62,6 +72,7 @@ export async function removeRequest(args: {
     kind: "peer-remove",
     sender: args.sender,
     recipient: args.recipient,
+    recipientPublicKey: args.recipientPublicKey,
     body: { action: "remove" },
     privateKey: args.privateKey,
     now: args.now,
@@ -73,10 +84,12 @@ export async function removeRequest(args: {
  * A fetch stub standing in for heartbeat peers: for a POST to
  * `/federation/v1/peer/heartbeat` it answers with a valid signed
  * `heartbeat-ack` from the addressed peer, using `keys` (peer id → private
- * key). `reply(peerId)` returning false makes that peer unreachable.
+ * key), addressed to the heartbeating relay by id and by `relayPublicKeyHex`.
+ * `reply(peerId)` returning false makes that peer unreachable.
  */
 export function ackingFetch(
   keys: Map<string, Uint8Array>,
+  relayPublicKeyHex: string,
   reply: (peerId: string) => boolean = () => true,
 ): (input: unknown, init?: RequestInit) => Promise<Response> {
   return async (_input, init) => {
@@ -93,6 +106,7 @@ export function ackingFetch(
       kind: "heartbeat-ack",
       sender: env.recipient,
       recipient: env.sender,
+      recipientPublicKey: relayPublicKeyHex,
       body: { request_nonce: env.nonce, agent_count: 1 },
       privateKey: key,
     });
@@ -106,11 +120,18 @@ export function ackingFetch(
 /** Verify a relay's heartbeat ack the way the sending relay does. */
 export async function ackVerifies(
   ack: { message?: unknown; agent_count?: number },
-  args: { self: string; peer: string; peerPublicKeyHex: string; requestNonce: string },
+  args: {
+    self: string;
+    selfPublicKeyHex: string;
+    peer: string;
+    peerPublicKeyHex: string;
+    requestNonce: string;
+  },
 ): Promise<boolean> {
   const v = await verifyFederationMessage(ack.message, {
     kind: "heartbeat-ack",
     self: args.self,
+    selfPublicKeyHex: args.selfPublicKeyHex,
     expectedSender: args.peer,
     senderPublicKeyHex: args.peerPublicKeyHex,
     body: { request_nonce: args.requestNonce, agent_count: ack.agent_count },
@@ -118,10 +139,16 @@ export async function ackVerifies(
   return v.ok;
 }
 
-/** A `/federation/v1/peer/confirm` request body (relay-federation@1.5 §3.1). */
+/**
+ * A `/federation/v1/peer/confirm` request body (relay-federation@1.5 §3.1):
+ * the confirm, the nonce it answers, and the key and endpoint the propose
+ * named (the issuer recognises its nonce only for exactly those).
+ */
 export interface ConfirmRequest {
   message: SignedFederationMessage;
   nonce: string;
+  public_key: string;
+  endpoint_url: string;
 }
 
 /**
@@ -156,8 +183,18 @@ export async function operatorConfirm(
   if (res.status !== 200) {
     throw new Error(`operatorConfirm: ${res.status} ${await res.text()}`);
   }
-  const body = (await res.json()) as { message: SignedFederationMessage; nonce: string };
-  return { message: body.message, nonce: body.nonce };
+  const body = (await res.json()) as {
+    message: SignedFederationMessage;
+    nonce: string;
+    public_key: string;
+    endpoint_url: string;
+  };
+  return {
+    message: body.message,
+    nonce: body.nonce,
+    public_key: body.public_key,
+    endpoint_url: body.endpoint_url,
+  };
 }
 
 /**
@@ -173,18 +210,27 @@ export async function signedConfirm(args: {
   endpointUrl: string;
   privateKey: Uint8Array;
   now?: number;
+  /** The key the request claims the propose named, when not the signer's own (a forgery). */
+  proposedPublicKey?: string;
+  /** The endpoint the request claims the propose named, when not the signed one (a forgery). */
+  proposedEndpointUrl?: string;
 }): Promise<ConfirmRequest> {
   const message = await signFederationMessage({
     kind: "peer-confirm",
     sender: args.sender,
     recipient: args.recipient,
-    body: {
-      nonce: args.nonce,
-      endpoint_url: args.endpointUrl,
-      recipient_public_key: args.recipientPublicKey.toLowerCase(),
-    },
+    recipientPublicKey: args.recipientPublicKey,
+    body: { nonce: args.nonce, endpoint_url: args.endpointUrl },
     privateKey: args.privateKey,
     now: args.now,
   });
-  return { message, nonce: args.nonce };
+  const publicKey = bytesToHex(
+    await getPublicKeyBySuite(args.privateKey, "motebit-jcs-ed25519-hex-v1"),
+  );
+  return {
+    message,
+    nonce: args.nonce,
+    public_key: args.proposedPublicKey ?? publicKey,
+    endpoint_url: args.proposedEndpointUrl ?? args.endpointUrl,
+  };
 }

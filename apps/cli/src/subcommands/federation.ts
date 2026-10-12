@@ -170,13 +170,13 @@ async function runHalf(
   const challenge = await verifyFederationMessage(proposal.challenge, {
     kind: "peer-challenge",
     self: selfId.relay_motebit_id,
+    selfPublicKeyHex: selfId.public_key,
     expectedSender: peerId.relay_motebit_id,
     senderPublicKeyHex: peerId.public_key,
     body: {
       request_nonce: ourNonce,
       nonce: proposal.nonce,
       proposer_endpoint_url: self.url,
-      proposer_public_key: selfId.public_key.toLowerCase(),
     },
   });
   if (!challenge.ok) {
@@ -225,10 +225,16 @@ async function postProposal(
   return { ok: true, nonce: body.nonce, challenge: body.challenge };
 }
 
-/** A `/federation/v1/peer/confirm` request: a v2 `peer-confirm` and the nonce it answers. */
+/**
+ * A `/federation/v1/peer/confirm` request: a v2 `peer-confirm`, the nonce it
+ * answers, and the key and endpoint the propose named (the recipient
+ * recognises its nonce only for exactly those — relay-federation@1.5 §3.1).
+ */
 interface ConfirmRequest {
   message: unknown;
   nonce: string;
+  public_key: string;
+  endpoint_url: string;
 }
 
 async function postConfirm(
@@ -268,8 +274,21 @@ async function postOperatorConfirm(
     }),
   });
   if (!res.ok) return { ok: false, error: `${String(res.status)} ${await res.text()}` };
-  const body = (await res.json()) as { message: unknown; nonce: string };
-  return { ok: true, request: { message: body.message, nonce: body.nonce } };
+  const body = (await res.json()) as {
+    message: unknown;
+    nonce: string;
+    public_key: string;
+    endpoint_url: string;
+  };
+  return {
+    ok: true,
+    request: {
+      message: body.message,
+      nonce: body.nonce,
+      public_key: body.public_key,
+      endpoint_url: body.endpoint_url,
+    },
+  };
 }
 
 /** `Authorization` headers from a bare master token, or undefined when none is set. */
@@ -315,16 +334,20 @@ export async function handleFederationPeer(config: CliConfig): Promise<void> {
  * `motebit federation peer-remove <peer-url>` — un-peer this relay from
  * a remote peer. Sibling to `handleFederationPeer`.
  *
- * Three HTTP calls:
- *   1. The PEER's public identity, for its relay id.
- *   2. Admin-authed GET to OUR relay, which mints a v2 `peer-remove` message
- *      (relay-federation@1.5 §3.3) for that ONE recipient — good at that peer
- *      only, once, within five minutes.
- *   3. Unauth'd POST to the PEER's /federation/v1/peer/remove with
+ * Two HTTP calls:
+ *   1. Admin-authed GET to OUR relay, which mints a v2 `peer-remove` message
+ *      (relay-federation@1.5 §3.3) for the ONE confirmed peer it holds at
+ *      that endpoint — addressed by the id AND the key our relay verified
+ *      that peer under, good at that peer only, once, within five minutes.
+ *      Never by what the URL's `/identity` claims: relay ids are not
+ *      self-certifying, and a counterparty claiming another peer's id would
+ *      otherwise have us mint a removal it could carry to THAT peer (cold
+ *      review round 3, F1). No confirmed peer there, nothing minted.
+ *   2. Unauth'd POST to the PEER's /federation/v1/peer/remove with
  *      `{ message }` — the signed message itself is the auth.
  *
  * The split exists because the signing key lives on our relay (in its DB),
- * not on the operator's CLI host. The admin gate sits on (2) only.
+ * not on the operator's CLI host. The admin gate sits on (1) only.
  */
 export async function handleFederationPeerRemove(config: CliConfig): Promise<void> {
   const peerUrl = config.positionals[2];
@@ -337,16 +360,9 @@ export async function handleFederationPeerRemove(config: CliConfig): Promise<voi
 
   console.log(`Un-peering ${relayUrl} from ${peerEndpoint}\n`);
 
-  const peerId = await fetchRelayJson(`${peerEndpoint}/federation/v1/identity`, {});
-  if (!peerId.ok) {
-    console.error(`Failed to read the peer's identity: ${peerId.error}`);
-    process.exit(1);
-  }
-  const recipient = (peerId.data as { relay_motebit_id: string }).relay_motebit_id;
-
   const headers = await getRelayAuthHeaders(config);
   const sigRes = await fetchRelayJson(
-    `${relayUrl}/api/v1/admin/federation/peer-removal-signature?recipient=${encodeURIComponent(recipient)}`,
+    `${relayUrl}/api/v1/admin/federation/peer-removal-signature?endpoint_url=${encodeURIComponent(peerEndpoint)}`,
     headers,
   );
   if (!sigRes.ok) {

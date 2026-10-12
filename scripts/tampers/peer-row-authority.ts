@@ -86,9 +86,9 @@ const TAMPERS: Tamper[] = [
   },
   {
     name: "propose: a confirmed peer re-handshakes beside its row, never in it",
-    find: "    recordHandshake(relay_id, {",
+    find: "    handshakeCosmetics.set(ourNonce, {",
     replace:
-      '    if (peer) writePeerRow(db, peer, { op: "update", row: { ...peer, endpoint_url, state: "pending" } }, "peer-key");\n    recordHandshake(relay_id, {',
+      '    if (peer) writePeerRow(db, peer, { op: "update", row: { ...peer, endpoint_url, state: "pending" } }, "peer-key");\n    handshakeCosmetics.set(ourNonce, {',
     filter: "initial suspended",
   },
   {
@@ -98,15 +98,17 @@ const TAMPERS: Tamper[] = [
     tests: [PINNING],
   },
   {
-    name: "propose: a confirmed peer's re-handshake spends no per-peer slot",
-    find: "if (peer === undefined) checkPeerLimit(relay_id);\n    checkMaxPeers();",
-    replace: "checkPeerLimit(relay_id);\n    checkMaxPeers();",
+    name: "propose: a propose spends no relay_id's per-peer slot (round 3, F4)",
+    find: "    checkMaxPeers();\n\n    // A known peer's key is never replaced",
+    replace:
+      "    checkPeerLimit(relay_id);\n    checkMaxPeers();\n\n    // A known peer's key is never replaced",
     filter: "flood",
   },
   {
-    name: "confirm: a confirmed peer's failed confirm spends no per-peer slot",
-    find: "if (peer === undefined) checkPeerLimit(relay_id);\n    // The handshake this confirm answers",
-    replace: "checkPeerLimit(relay_id);\n    // The handshake this confirm answers",
+    name: "confirm: a confirm spends a per-peer slot only once it verifies",
+    find: "    checkPeerPolicy(relay_id);\n\n    const existing = readPeerRow(db, relay_id);\n    const peer = existing?.peered_at != null ? existing : undefined;\n    // The handshake this confirm answers",
+    replace:
+      "    checkPeerPolicy(relay_id);\n    checkPeerLimit(relay_id);\n\n    const existing = readPeerRow(db, relay_id);\n    const peer = existing?.peered_at != null ? existing : undefined;\n    // The handshake this confirm answers",
     filter: "flood",
   },
   {
@@ -126,12 +128,11 @@ const TAMPERS: Tamper[] = [
     filter: "relay_peers writers",
   },
   {
-    name: "confirm: the endpoint is the pending propose's, never the request's (F1)",
-    find: "body: peerConfirmBody(answered.nonce, answered.endpoint_url, relayIdentity.publicKeyHex),",
-    replace:
-      "body: peerConfirmBody(answered.nonce, (body as { endpoint_url?: string }).endpoint_url ?? answered.endpoint_url, relayIdentity.publicKeyHex),",
+    name: "confirm: the endpoint is the one the propose named (and outbound-checked), never only the request's",
+    find: "          endpointUrl,\n          rand,\n",
+    replace: "          rand,\n",
     tests: [BINDING],
-    filter: "F1",
+    filter: "propose did not name",
   },
   {
     name: "confirm: the v1 confirm is refused by name (F1)",
@@ -143,14 +144,14 @@ const TAMPERS: Tamper[] = [
   },
   {
     name: "§3.5 order: heartbeat checks recipient before the key lookup",
-    find: 'refuseBeforeLookup(parsed.envelope, "heartbeat", relayIdentity.relayMotebitId, "Heartbeat");',
+    find: 'refuseBeforeLookup(parsed.envelope, "heartbeat", relayIdentity, "Heartbeat");',
     replace: "",
     tests: [V2],
     filter: "§3.5 order",
   },
   {
     name: "§3.5 order: removal checks recipient before the key lookup",
-    find: 'refuseBeforeLookup(parsed.envelope, "peer-remove", relayIdentity.relayMotebitId, "Removal");',
+    find: 'refuseBeforeLookup(parsed.envelope, "peer-remove", relayIdentity, "Removal");',
     replace: "",
     tests: [V2],
     filter: "§3.5 order",

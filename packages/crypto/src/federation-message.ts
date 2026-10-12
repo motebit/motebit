@@ -13,7 +13,15 @@
  *                     canonical envelope and in the byte prefix, so a
  *                     signature for one kind never verifies as another;
  *   - its SIGNER    — `sender`, the relay id whose key must verify it;
- *   - its VERIFIER  — `recipient`, the one relay that may accept it;
+ *   - its VERIFIER  — `recipient` AND `recipient_public_key`: the one relay
+ *                     that may accept it, by id and by KEY. Relay ids are
+ *                     random, not derived from keys, so a relay's
+ *                     `/identity` can claim any id; an id alone names no
+ *                     relay. The signer commits to the key it verified the
+ *                     recipient under, and the verifier compares it to its
+ *                     OWN key before anything else — so a message minted
+ *                     against an identity that claimed another relay's id
+ *                     never verifies at that relay, whatever its kind;
  *   - its FRESHNESS — `ts` within the kind's window, plus a single-use
  *                     `nonce` the verifier records (the replay store is the
  *                     verifier's, not this module's).
@@ -40,7 +48,7 @@ import {
   hexToBytes,
   sha256,
 } from "./signing.js";
-import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
+import { getPublicKeyBySuite, signBySuite, verifyBySuite } from "./suite-dispatch.js";
 
 /** The byte-prefix domain tag of every v2 federation message. */
 export const FEDERATION_MESSAGE_DOMAIN = "motebit-fed/v2" as const;
@@ -61,19 +69,16 @@ export const FEDERATION_MESSAGE_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
  *   - `peer-remove`    — sender: the relay leaving; verifier: the one named
  *                        recipient. Body `{ action: "remove" }`.
  *   - `peer-challenge` — handshake step 2. sender: the relay a propose was
- *                        sent to; verifier: the proposer. Body
- *                        `{ request_nonce, nonce, proposer_endpoint_url,
- *                        proposer_public_key }` — the proposer's nonce it
- *                        answers, the nonce it issued for the confirm, and the
- *                        endpoint and key it recorded for the proposer.
+ *                        sent to; verifier: the proposer (the envelope's
+ *                        `recipient_public_key` is the key the propose named).
+ *                        Body `{ request_nonce, nonce, proposer_endpoint_url }`
+ *                        — the proposer's nonce it answers, the nonce it
+ *                        issued for the confirm, and the endpoint it recorded
+ *                        for the proposer.
  *   - `peer-confirm`   — handshake step 3. sender: the proposer; verifier: the
  *                        ONE relay that issued the nonce. Body
- *                        `{ nonce, endpoint_url, recipient_public_key }` —
- *                        that nonce, the sender's endpoint being confirmed,
- *                        and the recipient's key: relay ids are not
- *                        self-certifying, so the envelope's `recipient` id
- *                        alone does not name a relay, and the verifier builds
- *                        this body from its OWN key.
+ *                        `{ nonce, endpoint_url }` — that nonce and the
+ *                        sender's endpoint being confirmed.
  */
 export const FEDERATION_MESSAGE_KINDS = {
   heartbeat: { maxSkewMs: 300_000 },
@@ -92,6 +97,12 @@ export interface FederationMessageEnvelope {
   sender: string;
   /** Relay id of the one relay that may accept the message. */
   recipient: string;
+  /**
+   * Lowercase hex Ed25519 public key of that relay — the key the signer
+   * verified it under. The verifier refuses a message whose
+   * `recipient_public_key` is not its own key, before anything else.
+   */
+  recipient_public_key: string;
   /** Epoch ms at signing. */
   ts: number;
   /** 32 random bytes, hex; single-use at the recipient. */
@@ -113,6 +124,7 @@ export type FederationMessageRefusal =
   | "kind_mismatch"
   | "unsupported_suite"
   | "wrong_recipient"
+  | "wrong_recipient_key"
   | "wrong_sender"
   | "stale"
   | "body_mismatch"
@@ -155,13 +167,17 @@ function randomNonce(): string {
 }
 
 /**
- * Sign a v2 federation message of `kind` from `sender` to `recipient` over
- * `body`. The only producer of v2 federation signatures.
+ * Sign a v2 federation message of `kind` from `sender` to `recipient` — by id
+ * AND by `recipientPublicKey`, the key the caller verified the recipient
+ * under — over `body`. The only producer of v2 federation signatures. A
+ * caller that holds no verified key for the recipient has nothing to sign.
  */
 export async function signFederationMessage(args: {
   kind: FederationMessageKind;
   sender: string;
   recipient: string;
+  /** Hex Ed25519 public key of the recipient, as the caller verified it. */
+  recipientPublicKey: string;
   body: unknown;
   privateKey: Uint8Array;
   /** Injected for tests; defaults to `Date.now()`. */
@@ -174,10 +190,22 @@ export async function signFederationMessage(args: {
     throw new Error("federation message needs a sender and a recipient");
   if (args.sender === args.recipient)
     throw new Error("federation message sender and recipient must differ");
+  if (
+    typeof args.recipientPublicKey !== "string" ||
+    !HEX64.test(args.recipientPublicKey.toLowerCase())
+  )
+    throw new Error("federation message needs the recipient's public key (64 hex characters)");
+  const recipientPublicKey = args.recipientPublicKey.toLowerCase();
+  const ownPublicKey = bytesToHex(
+    await getPublicKeyBySuite(args.privateKey, FEDERATION_MESSAGE_SUITE),
+  ).toLowerCase();
+  if (recipientPublicKey === ownPublicKey)
+    throw new Error("federation message recipient key is the signer's own key");
   const envelope: FederationMessageEnvelope = {
     kind: args.kind,
     sender: args.sender,
     recipient: args.recipient,
+    recipient_public_key: recipientPublicKey,
     ts: args.now ?? Date.now(),
     nonce: args.nonce ?? randomNonce(),
     // Signer side through the guarded canonicalizer (refuses an unpaired
@@ -198,10 +226,12 @@ export async function signFederationMessage(args: {
 
 /**
  * Verify a v2 federation message. The only verifier of v2 federation
- * signatures. Fail-closed and never throws; checks, in order: shape, kind
- * (known AND the one the caller expects), suite, recipient = `self`, sender =
- * `expectedSender` (when the caller already knows who must have sent it),
- * freshness, body digest, signature under `senderPublicKeyHex`.
+ * signatures. Fail-closed and never throws; checks, in order: shape, the
+ * recipient KEY = `selfPublicKeyHex` (the verifier's own key — first, because
+ * relay ids are not self-certifying), kind (known AND the one the caller
+ * expects), suite, recipient id = `self`, sender = `expectedSender` (when the
+ * caller already knows who must have sent it), freshness, body digest,
+ * signature under `senderPublicKeyHex`.
  *
  * It does NOT consume the nonce: the caller records `envelope.nonce` for
  * `envelope.sender` in the same transaction as the write the message
@@ -213,6 +243,8 @@ export async function verifyFederationMessage(
     kind: FederationMessageKind;
     /** The verifying relay's own id. */
     self: string;
+    /** The verifying relay's own public key (hex). */
+    selfPublicKeyHex: string;
     /** The sender the caller requires, when known before lookup. */
     expectedSender?: string;
     /** The sender's key, as the verifier holds it (hex). */
@@ -226,6 +258,8 @@ export async function verifyFederationMessage(
   const parsed = parseFederationMessage(message);
   if (parsed === null) return { ok: false, reason: "malformed" };
   const { envelope, signature } = parsed;
+  if (envelope.recipient_public_key !== expect.selfPublicKeyHex.toLowerCase())
+    return { ok: false, reason: "wrong_recipient_key" };
   if (!isKind(envelope.kind)) return { ok: false, reason: "unknown_kind" };
   if (envelope.kind !== expect.kind) return { ok: false, reason: "kind_mismatch" };
   if (envelope.suite !== FEDERATION_MESSAGE_SUITE)
@@ -253,7 +287,7 @@ export async function verifyFederationMessage(
 }
 
 /**
- * Read a wire value as a v2 message, keeping exactly the envelope fields (so
+ * Read a wire value as a v2 message, keeping exactly the eight envelope fields (so
  * an extra field can never ride along unsigned), or null when it is not one.
  * Exposed so a verifier can read `envelope.sender` to look up the sender's key
  * BEFORE calling `verifyFederationMessage`.
@@ -264,13 +298,15 @@ export function parseFederationMessage(message: unknown): SignedFederationMessag
   if (typeof m.signature !== "string" || !HEX_SIG.test(m.signature)) return null;
   const e = m.envelope as Record<string, unknown> | null | undefined;
   if (e === null || typeof e !== "object") return null;
-  const { kind, sender, recipient, ts, nonce, body_sha256, suite } = e;
+  const { kind, sender, recipient, recipient_public_key, ts, nonce, body_sha256, suite } = e;
   if (
     typeof kind !== "string" ||
     typeof sender !== "string" ||
     sender === "" ||
     typeof recipient !== "string" ||
     recipient === "" ||
+    typeof recipient_public_key !== "string" ||
+    !HEX64.test(recipient_public_key) ||
     typeof ts !== "number" ||
     !Number.isSafeInteger(ts) ||
     typeof nonce !== "string" ||
@@ -278,7 +314,7 @@ export function parseFederationMessage(message: unknown): SignedFederationMessag
     typeof body_sha256 !== "string" ||
     !HEX64.test(body_sha256) ||
     typeof suite !== "string" ||
-    Object.keys(e).length !== 7
+    Object.keys(e).length !== 8
   )
     return null;
   return {
@@ -286,6 +322,7 @@ export function parseFederationMessage(message: unknown): SignedFederationMessag
       kind: kind as FederationMessageKind,
       sender,
       recipient,
+      recipient_public_key,
       ts,
       nonce,
       body_sha256,

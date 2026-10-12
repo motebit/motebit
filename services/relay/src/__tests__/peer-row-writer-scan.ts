@@ -26,8 +26,12 @@
  * template literals, `+` chains of them, `[…].join(sep)` over an array
  * literal, `.concat(…)`, an identifier bound to a string in the same file
  * (`const`/`let`/`var`, with every later `x += …` appended), each read as one
- * text — with SQL comments (`/* … *\/`, `-- …`) stripped, identifier quoting
- * (`"`, `` ` ``, `[]`) and a `main.` schema prefix folded away. A table name
+ * text — lexed as SQL in one left-to-right pass: a string literal (`'…'`,
+ * `''` escaping a quote) becomes `?` and a comment (`/* … *\/`, `-- …`)
+ * whitespace, so neither can end a SET list, hide a column, or split a verb
+ * from its table (an unterminated literal is refused: what cannot be read is
+ * not assumed counter-only); then identifier quoting (`"`, `` ` ``, `[]`) and
+ * a `main.` schema prefix are folded away. A table name
  * that reaches the SQL through a function call, another module or a runtime
  * value is not seen; that is outside the accidental-drift threat model this
  * scan guards.
@@ -75,9 +79,51 @@ const HOLE = "\u0000";
 const WRITE_RE =
   /\b(UPDATE(?:\s+OR\s+[a-z]+)?|INSERT(?:\s+OR\s+[a-z]+)?\s+INTO|REPLACE\s+INTO|DELETE\s+FROM)\s+(?:main\s*\.\s*)?relay_peers\b/gi;
 
-/** SQL comments removed (a comment is whitespace to SQL; left in, it can split a verb from its table or end a SET list early). */
-function stripSqlComments(sql: string): string {
-  return sql.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, " ").replace(/--[^\n]*/g, " ");
+/**
+ * SQL lexed in one left-to-right pass, the way SQLite reads it: a string
+ * literal becomes `?` (its text is data — a `WHERE`, `FROM`, `;`, `(` or `,`
+ * inside it must neither end a SET list nor hide the column after it; cold
+ * review round 3, F5) and a comment becomes whitespace (left in, it can split
+ * a verb from its table or end a SET list early). Quoted identifiers are kept
+ * verbatim (a `'` inside one is not a literal). `unterminated` when a literal
+ * or quoted identifier never closes.
+ */
+export function lexSql(sql: string): { text: string; unterminated: boolean } {
+  let out = "";
+  let i = 0;
+  const closeOf: Record<string, string> = { '"': '"', "`": "`", "[": "]" };
+  while (i < sql.length) {
+    const ch = sql[i]!;
+    if (ch === "'") {
+      let j = i + 1;
+      for (;;) {
+        if (j >= sql.length) return { text: out, unterminated: true };
+        if (sql[j] === "'") {
+          if (sql[j + 1] === "'") j += 2;
+          else break;
+        } else j++;
+      }
+      out += "?";
+      i = j + 1;
+    } else if (ch in closeOf) {
+      const end = sql.indexOf(closeOf[ch]!, i + 1);
+      if (end < 0) return { text: out, unterminated: true };
+      out += sql.slice(i, end + 1);
+      i = end + 1;
+    } else if (ch === "/" && sql[i + 1] === "*") {
+      const end = sql.indexOf("*/", i + 2);
+      out += " ";
+      i = end < 0 ? sql.length : end + 2;
+    } else if (ch === "-" && sql[i + 1] === "-") {
+      const end = sql.indexOf("\n", i + 2);
+      out += " ";
+      i = end < 0 ? sql.length : end;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return { text: out, unterminated: false };
 }
 
 function literalText(node: ts.Node): string | null {
@@ -307,8 +353,10 @@ export function scanPeerRowWrites(file: string, source: string): PeerRowWriteSit
       const raw = isBindingRoot
         ? flatten((node as ts.VariableDeclaration).name, bindings)
         : flatten(node, bindings);
-      // Comments out; identifier quoting folded so `"relay_peers"`, `[relay_peers]` read the same.
-      const text = stripSqlComments(raw).replace(/["`[\]]/g, "");
+      // Literals and comments out; identifier quoting folded so
+      // `"relay_peers"`, `[relay_peers]` read the same.
+      const lexed = lexSql(raw);
+      const text = lexed.text.replace(/["`[\]]/g, "");
       WRITE_RE.lastIndex = 0;
       let m: RegExpExecArray | null;
       while ((m = WRITE_RE.exec(text)) !== null) {
@@ -325,7 +373,9 @@ export function scanPeerRowWrites(file: string, source: string): PeerRowWriteSit
         const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
         let refusal: string | null = null;
         if (!inWriterNode(node)) {
-          if (verb !== "UPDATE") {
+          if (lexed.unterminated) {
+            refusal = "relay_peers write whose SQL has an unterminated literal: it cannot be read";
+          } else if (verb !== "UPDATE") {
             refusal = `${verb} on relay_peers outside ${PEER_ROW_WRITER.fn}`;
           } else if (columns === null) {
             refusal = "UPDATE relay_peers whose assigned columns are not statically known";

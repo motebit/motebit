@@ -61,7 +61,14 @@ import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
  * 4. Update `@spec` jsdoc annotations on each endpoint that changed
  */
 export const RELAY_SPEC_VERSION = "motebit/relay-federation@1.5";
-import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHmac,
+  pbkdf2Sync,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
@@ -945,18 +952,27 @@ function federationRefusalStatus(reason: FederationMessageRefusal): 400 | 403 {
 
 /**
  * §3.5's checks that come BEFORE the sender's key is looked up, in the spec's
- * order: the kind this route serves, then recipient = this relay. A message
- * for another relay is refused (400) the same whether or not this relay knows
- * its sender; only then is an unknown sender a 403.
+ * order: the recipient KEY = this relay's own key (relay ids are not
+ * self-certifying, so a message minted for an identity that claimed this
+ * relay's id under another key is refused first), the kind this route serves,
+ * then the recipient id = this relay. A message for another relay is refused
+ * (400) the same whether or not this relay knows its sender; only then is an
+ * unknown sender a 403.
  */
 function refuseBeforeLookup(
   env: FederationMessageEnvelope,
   kind: FederationMessageKind,
-  self: string,
+  self: RelayIdentity,
   label: string,
 ): void {
   const reason: FederationMessageRefusal | null =
-    env.kind !== kind ? "kind_mismatch" : env.recipient !== self ? "wrong_recipient" : null;
+    env.recipient_public_key !== self.publicKeyHex.toLowerCase()
+      ? "wrong_recipient_key"
+      : env.kind !== kind
+        ? "kind_mismatch"
+        : env.recipient !== self.relayMotebitId
+          ? "wrong_recipient"
+          : null;
   if (reason !== null) throw new HTTPException(400, { message: `${label} refused: ${reason}` });
 }
 
@@ -971,37 +987,26 @@ const PEER_REMOVE_BODY = { action: "remove" } as const;
 /**
  * The body a v2 `peer-challenge` (§3.1 step 2) commits to: the proposer's
  * nonce it answers, the nonce this relay issued for the confirm, and the
- * endpoint and public key this relay recorded for the proposer — so the
- * proposer sees the handshake is bound to ITS key, not only its id.
+ * endpoint this relay recorded for the proposer. The proposer's KEY is the
+ * envelope's `recipient_public_key` (§3.5), so the proposer sees the
+ * handshake is bound to its key, not only its id.
  */
-function peerChallengeBody(
-  requestNonce: string,
-  nonce: string,
-  proposerEndpointUrl: string,
-  proposerPublicKey: string,
-) {
+function peerChallengeBody(requestNonce: string, nonce: string, proposerEndpointUrl: string) {
   return {
     request_nonce: requestNonce,
     nonce,
     proposer_endpoint_url: proposerEndpointUrl,
-    proposer_public_key: proposerPublicKey.toLowerCase(),
   };
 }
 
 /**
  * The body a v2 `peer-confirm` (§3.1 step 3) commits to: the nonce the
- * recipient issued, the sender's endpoint being confirmed, and the public key
- * of the recipient the sender meant. Relay ids are not self-certifying, so
- * the id alone does not name a relay: a recipient builds this body from its
- * OWN key, and a confirm minted against an identity that claimed its id under
- * another key never verifies there (cold review R2).
+ * recipient issued and the sender's endpoint being confirmed. The recipient's
+ * KEY is the envelope's `recipient_public_key` (§3.5), checked against the
+ * verifying relay's own key before anything else (cold reviews R2, round 3).
  */
-function peerConfirmBody(nonce: string, endpointUrl: string, recipientPublicKey: string) {
-  return {
-    nonce,
-    endpoint_url: endpointUrl,
-    recipient_public_key: recipientPublicKey.toLowerCase(),
-  };
+function peerConfirmBody(nonce: string, endpointUrl: string) {
+  return { nonce, endpoint_url: endpointUrl };
 }
 
 /** An endpoint in comparable form: parsed, without a trailing slash; null when not a URL. */
@@ -1200,25 +1205,25 @@ export function writePeerRow(
 }
 
 /**
- * A handshake pending its confirm (§3.1): the key, endpoint and nonce one
- * propose named. Every propose records one beside `relay_peers`, never in it:
- * a propose is unauthenticated, so it writes no row — a relay_id never
- * confirmed has no row at all, and a confirmed peer's row moves only when a
- * confirm verifies under its stored key.
+ * A handshake pending its confirm (§3.1) is held by NO table: the nonce a
+ * propose answers with IS the handshake — 16 random bytes and a 16-byte
+ * HMAC, under a key this relay process holds, over (relay_id, the proposed
+ * key, the proposed endpoint, those random bytes, the issuing window). A
+ * confirm presents the key and endpoint again; the nonce verifies only for
+ * exactly what its propose named, in the window it was issued or the next.
+ *
+ * Nothing is stored, so nothing can be evicted or exhausted: any number of
+ * proposes naming a relay_id — under any key, including the id's real
+ * (public) one — leave every other proposer's nonce valid (cold review round
+ * 3, F3/F4; the slot table it replaces let 8 proposes evict a confirmed
+ * peer's in-flight re-handshake, and the per-id limit let 30 lock a
+ * never-peered relay out). A propose is unauthenticated, so it writes no row
+ * either: a relay_id never confirmed has no row at all, and a confirmed
+ * peer's row moves only when a confirm verifies under its stored key.
  */
-interface PendingHandshake {
-  nonce: string;
-  public_key: string;
-  endpoint_url: string;
-  display_name: string | null;
-  peer_protocol_version: string | null;
-  expires_at: number;
-}
-const HANDSHAKE_TTL_MS = 10 * 60 * 1000;
-/** Handshakes kept per relay_id: a caller's proposes displace the real peer's only by outnumbering it inside its TTL. */
-const HANDSHAKE_SLOTS = 8;
-/** relay_ids with a pending handshake at once: bounds the table a public route fills. */
-const HANDSHAKE_IDS_MAX = 4096;
+const HANDSHAKE_WINDOW_MS = 5 * 60 * 1000;
+/** Cosmetic propose fields (display name, spec version) kept by nonce; evicting one costs only those. */
+const HANDSHAKE_COSMETICS_MAX = 4096;
 
 // === Heartbeat Sender ===
 
@@ -1264,10 +1269,14 @@ export async function sendHeartbeats(
       // One v2 `heartbeat` per peer (relay-federation@1.5 §3.2): the message
       // names its recipient and a single-use nonce, so it is good at this
       // peer, once, and nowhere else.
+      // Addressed by the key this relay verified the peer under (its row's),
+      // not by id alone: a row whose id a stranger holds here under its own
+      // key yields heartbeats only that stranger's key accepts (round 3, F2).
       const message = await signFederationMessage({
         kind: "heartbeat",
         sender: relayIdentity.relayMotebitId,
         recipient: peer.peer_relay_id,
+        recipientPublicKey: peer.public_key,
         body: heartbeatBody(agentCount, revocations),
         privateKey: relayIdentity.privateKey,
       });
@@ -1294,6 +1303,7 @@ export async function sendHeartbeats(
       const verdict = await verifyFederationMessage(ack?.message, {
         kind: "heartbeat-ack",
         self: relayIdentity.relayMotebitId,
+        selfPublicKeyHex: relayIdentity.publicKeyHex,
         expectedSender: peer.peer_relay_id,
         senderPublicKeyHex: peer.public_key,
         body: { request_nonce: message.envelope.nonce, agent_count: ackCount },
@@ -2097,36 +2107,83 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 2: Peering Protocol ──
 
-  // Pending handshakes (§3.1), held beside `relay_peers` — never in it —
-  // until a confirm verifies under the key the handshake recorded. Several
-  // are kept per relay_id, so a caller's proposes cannot displace the real
-  // peer's in-flight handshake short of outnumbering it inside its TTL; in
-  // memory, because each lives minutes and a restart costs only a re-propose.
-  const handshakes = new Map<string, PendingHandshake[]>();
+  // Pending handshakes (§3.1) are nonces this relay can recognise, never
+  // rows or slots: see HANDSHAKE_WINDOW_MS. The key lives in memory — a
+  // restart costs only a re-propose, as the in-memory table it replaces did.
+  const handshakeKey = randomBytes(32);
+  const handshakeCosmetics = new Map<
+    string,
+    { display_name: string | null; peer_protocol_version: string | null }
+  >();
 
-  function liveHandshakes(relayId: string): PendingHandshake[] {
-    const now = Date.now();
-    const live = (handshakes.get(relayId) ?? []).filter((h) => h.expires_at > now);
-    if (live.length > 0) handshakes.set(relayId, live);
-    else handshakes.delete(relayId);
-    return live;
+  function handshakeTag(
+    relayId: string,
+    publicKey: string,
+    endpointUrl: string,
+    rand: string,
+    window: number,
+  ): Buffer {
+    return createHmac("sha256", handshakeKey)
+      .update(
+        JSON.stringify([
+          "motebit-peer-handshake",
+          relayId,
+          publicKey.toLowerCase(),
+          endpointUrl,
+          rand,
+          window,
+        ]),
+      )
+      .digest()
+      .subarray(0, 16);
   }
 
-  function recordHandshake(relayId: string, h: PendingHandshake): void {
-    const live = liveHandshakes(relayId);
-    if (live.length === 0 && handshakes.size >= HANDSHAKE_IDS_MAX) {
-      for (const id of [...handshakes.keys()]) liveHandshakes(id);
-      if (handshakes.size >= HANDSHAKE_IDS_MAX)
-        throw new HTTPException(429, { message: "Too many pending handshakes; retry shortly" });
+  /** The nonce a propose answers with: the handshake itself (32 bytes, hex). */
+  function issueHandshake(relayId: string, publicKey: string, endpointUrl: string): string {
+    const rand = randomBytes(16).toString("hex");
+    const window = Math.floor(Date.now() / HANDSHAKE_WINDOW_MS);
+    return rand + handshakeTag(relayId, publicKey, endpointUrl, rand, window).toString("hex");
+  }
+
+  /** True iff `nonce` was issued by this relay for exactly (relayId, key, endpoint), this window or the last. */
+  function handshakeValid(
+    relayId: string,
+    publicKey: string,
+    endpointUrl: string,
+    nonce: string,
+  ): boolean {
+    if (!/^[0-9a-f]{64}$/.test(nonce)) return false;
+    const rand = nonce.slice(0, 32);
+    const tag = Buffer.from(nonce.slice(32), "hex");
+    const window = Math.floor(Date.now() / HANDSHAKE_WINDOW_MS);
+    return [window, window - 1].some((w) =>
+      timingSafeEqual(tag, handshakeTag(relayId, publicKey, endpointUrl, rand, w)),
+    );
+  }
+
+  /**
+   * The removed-record cooldown (§3.1): a removed peer re-handshakes only
+   * five minutes after its last verified heartbeat or confirm. Checked at
+   * propose and again at confirm, since a nonce outlives the propose that
+   * issued it. `last_heartbeat_at` moves only under the peer's key, so no
+   * caller can extend it.
+   */
+  function checkRemovedCooldown(peer: PeerRow | undefined): void {
+    if (
+      peer &&
+      peer.state === "removed" &&
+      peer.last_heartbeat_at != null &&
+      peer.last_heartbeat_at !== 0
+    ) {
+      const cooldownMs = 5 * 60 * 1000;
+      const elapsed = Date.now() - peer.last_heartbeat_at;
+      if (elapsed < cooldownMs) {
+        const retryAfter = Math.ceil((cooldownMs - elapsed) / 1000);
+        throw new HTTPException(429, {
+          message: `Removed peer must wait ${retryAfter}s before re-peering`,
+        });
+      }
     }
-    live.push(h);
-    handshakes.set(relayId, live.slice(-HANDSHAKE_SLOTS));
-  }
-
-  function dropHandshake(relayId: string, nonce: string): void {
-    const rest = liveHandshakes(relayId).filter((h) => h.nonce !== nonce);
-    if (rest.length > 0) handshakes.set(relayId, rest);
-    else handshakes.delete(relayId);
   }
 
   /** @spec motebit/relay-federation@1.5 */
@@ -2174,12 +2231,11 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     // build wrote at propose confers no authority: it pins no key, holds no
     // id, and runs no cooldown — a verified confirm replaces it.
     const peer = existing?.peered_at != null ? existing : undefined;
-    // A confirmed peer's re-handshake writes nothing until its confirm
-    // verifies under the stored key, so it spends no per-peer slot either: an
-    // unauthenticated caller naming the relay_id must not be able to
-    // rate-limit the real peer out of recovering (§3.1). The per-IP limiter
-    // still applies.
-    if (peer === undefined) checkPeerLimit(relay_id);
+    // A propose writes nothing and stores nothing (the nonce is the
+    // handshake), so it spends no per-peer slot for any relay_id: an
+    // unauthenticated caller naming a relay_id — under any key, the id's real
+    // one included — must not be able to rate-limit the real relay out of
+    // peering or recovering (§3.1; round 3, F4). The per-IP limiter applies.
     checkMaxPeers();
 
     // A known peer's key is never replaced by a propose (relay-federation@1.5
@@ -2199,41 +2255,26 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     }
     // Cooldown: removed peers must wait 5 minutes before re-peering.
     // Prevents rapid removed→pending oscillation when the root cause persists.
-    // `last_heartbeat_at` moves only under the peer's key, so no caller can
-    // extend it.
-    if (
-      peer &&
-      peer.state === "removed" &&
-      peer.last_heartbeat_at != null &&
-      peer.last_heartbeat_at !== 0
-    ) {
-      const cooldownMs = 5 * 60 * 1000;
-      const elapsed = Date.now() - peer.last_heartbeat_at;
-      if (elapsed < cooldownMs) {
-        const retryAfter = Math.ceil((cooldownMs - elapsed) / 1000);
-        throw new HTTPException(429, {
-          message: `Removed peer must wait ${retryAfter}s before re-peering`,
-        });
-      }
-    }
+    checkRemovedCooldown(peer);
 
-    const ourNonceBytes = new Uint8Array(32);
-    crypto.getRandomValues(ourNonceBytes);
-    const ourNonce = bytesToHex(ourNonceBytes);
+    if (!/^[0-9a-f]{64}$/i.test(public_key))
+      throw new HTTPException(400, { message: "public_key must be 64 hex characters" });
+    const ourNonce = issueHandshake(relay_id, public_key, endpoint_url);
 
     // Step 2 as a v2 `peer-challenge` (§3.1, §3.5): from this relay to the
-    // ONE proposer, answering its nonce, naming the nonce it must confirm and
-    // the endpoint and key recorded for it — so the proposer's tooling can
-    // see, before it mints anything, that the nonce came from this relay's
-    // key for its own endpoint and its own key. Proves this relay holds the
-    // key it advertises.
+    // ONE proposer — by id and by the key the propose named — answering its
+    // nonce, naming the nonce it must confirm and the endpoint recorded for
+    // it, so the proposer's tooling can see, before it mints anything, that
+    // the nonce came from this relay's key for its own endpoint and its own
+    // key. Proves this relay holds the key it advertises.
     let challenge: Awaited<ReturnType<typeof signFederationMessage>>;
     try {
       challenge = await signFederationMessage({
         kind: "peer-challenge",
         sender: relayIdentity.relayMotebitId,
         recipient: relay_id,
-        body: peerChallengeBody(nonce, ourNonce, endpoint_url, public_key),
+        recipientPublicKey: public_key,
+        body: peerChallengeBody(nonce, ourNonce, endpoint_url),
         privateKey: relayIdentity.privateKey,
       });
     } catch {
@@ -2242,17 +2283,17 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       });
     }
 
-    // The propose is unauthenticated, so it records only a pending handshake
-    // beside the table (§3.1). The row — its key, its endpoint, the move to
-    // active — is written when a confirm verifies under the key this
-    // handshake names.
-    recordHandshake(relay_id, {
-      nonce: ourNonce,
-      public_key: public_key.toLowerCase(),
-      endpoint_url,
+    // The propose is unauthenticated: it stores nothing that carries
+    // authority (§3.1). The row — its key, its endpoint, the move to active —
+    // is written when a confirm verifies under the key this nonce names.
+    // Only the cosmetic fields are kept, by nonce, and losing them is free.
+    if (handshakeCosmetics.size >= HANDSHAKE_COSMETICS_MAX) {
+      const oldest = handshakeCosmetics.keys().next().value;
+      if (oldest !== undefined) handshakeCosmetics.delete(oldest);
+    }
+    handshakeCosmetics.set(ourNonce, {
       display_name: display_name ?? null,
       peer_protocol_version: spec_version ?? null,
-      expires_at: Date.now() + HANDSHAKE_TTL_MS,
     });
 
     return c.json({
@@ -2271,6 +2312,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const body = await c.req.json<{
       message?: unknown;
       nonce?: unknown;
+      public_key?: unknown;
+      endpoint_url?: unknown;
       relay_id?: unknown;
       challenge_response?: unknown;
     }>();
@@ -2282,13 +2325,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     if (body.message === undefined) {
       throw new HTTPException(400, {
         message:
-          "federation peer confirm v1 ({relay_id}:{nonce}:{suite}) is refused (relay-federation@1.5 §3.1): send { message, nonce } where message is a v2 `peer-confirm` signed message (§3.5) naming this relay as recipient, the nonce this relay issued, the endpoint being confirmed and this relay's public key — minted by the confirming relay's operator (POST /api/v1/admin/federation/peer-confirm-signature)",
+          "federation peer confirm v1 ({relay_id}:{nonce}:{suite}) is refused (relay-federation@1.5 §3.1): send { message, nonce, public_key, endpoint_url } where message is a v2 `peer-confirm` signed message (§3.5) naming this relay as recipient by id and by public key, over the nonce this relay issued and the endpoint being confirmed — minted by the confirming relay's operator (POST /api/v1/admin/federation/peer-confirm-signature)",
       });
     }
     const parsed = parseFederationMessage(body.message);
     if (parsed === null)
       throw new HTTPException(400, { message: "malformed v2 peer-confirm message (§3.5)" });
-    refuseBeforeLookup(parsed.envelope, "peer-confirm", relayIdentity.relayMotebitId, "Confirm");
+    refuseBeforeLookup(parsed.envelope, "peer-confirm", relayIdentity, "Confirm");
     const relay_id = parsed.envelope.sender;
     if (body.relay_id !== undefined && body.relay_id !== relay_id)
       throw new HTTPException(400, { message: "relay_id is not the confirm's sender" });
@@ -2296,42 +2339,53 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, {
         message: "nonce is required: the nonce this relay issued in its propose response",
       });
-    const answering = body.nonce;
+    if (
+      typeof body.public_key !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(body.public_key) ||
+      typeof body.endpoint_url !== "string" ||
+      body.endpoint_url === ""
+    )
+      throw new HTTPException(400, {
+        message:
+          "public_key and endpoint_url are required: the key and endpoint the propose named, as it named them (relay-federation@1.5 §3.1)",
+      });
+    const answering = {
+      nonce: body.nonce,
+      key: body.public_key.toLowerCase(),
+      endpoint: body.endpoint_url,
+    };
 
     checkPeerPolicy(relay_id);
 
     const existing = readPeerRow(db, relay_id);
     const peer = existing?.peered_at != null ? existing : undefined;
-    // As at propose: a confirmed peer's confirm spends its per-peer slot only
-    // once it verifies, so no caller can rate-limit the real peer out (§3.1).
-    if (peer === undefined) checkPeerLimit(relay_id);
-    // The handshake this confirm answers: the one this relay recorded for
-    // that nonce. For a confirmed peer it must name the key on record (a key
-    // the row does not hold confers nothing, whichever propose recorded it).
-    const answered = liveHandshakes(relay_id).find(
-      (h) =>
-        h.nonce === answering &&
-        (peer === undefined || h.public_key === peer.public_key.toLowerCase()),
-    );
-    if (!answered)
+    // The handshake this confirm answers: a nonce this relay issued for
+    // exactly this relay_id, key and endpoint. For a confirmed peer it must
+    // name the key on record (a key the row does not hold confers nothing,
+    // whoever proposed it).
+    if (
+      (peer !== undefined && answering.key !== peer.public_key.toLowerCase()) ||
+      !handshakeValid(relay_id, answering.key, answering.endpoint, answering.nonce)
+    )
       throw new HTTPException(403, {
-        message: "Confirm refused: no pending handshake for that relay_id and nonce",
+        message: "Confirm refused: no pending handshake for that relay_id, key, endpoint and nonce",
       });
+    // A nonce outlives its propose: the removed-peer cooldown holds here too.
+    checkRemovedCooldown(peer);
 
-    // Verify under the key the handshake recorded: the sender confirms THIS
+    // Verify under the key the handshake names: the sender confirms THIS
     // relay's nonce, for the endpoint THAT propose named, to THIS relay by id
-    // (the envelope) AND by key (the body, built from this relay's own key).
+    // and by key (the envelope, checked against this relay's own key).
     const verdict = await verifyFederationMessage(body.message, {
       kind: "peer-confirm",
       self: relayIdentity.relayMotebitId,
+      selfPublicKeyHex: relayIdentity.publicKeyHex,
       expectedSender: relay_id,
-      senderPublicKeyHex: answered.public_key,
-      body: peerConfirmBody(answered.nonce, answered.endpoint_url, relayIdentity.publicKeyHex),
+      senderPublicKeyHex: answering.key,
+      body: peerConfirmBody(answering.nonce, answering.endpoint),
     });
     if (!verdict.ok) {
-      // The handshake is single-use: a confirm that fails against it discards
-      // it. No row is written — the failed confirm proves nothing (§3.1).
-      dropHandshake(relay_id, answered.nonce);
+      // No row is written — the failed confirm proves nothing (§3.1).
       throw new HTTPException(federationRefusalStatus(verdict.reason), {
         message: `Confirm refused: ${verdict.reason}`,
       });
@@ -2339,7 +2393,19 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const env = verdict.envelope;
     if (federationNonceSeen(db, relay_id, env.nonce))
       throw new HTTPException(409, { message: "Confirm refused: replayed nonce" });
-    if (peer) checkPeerLimit(relay_id);
+    // Counted only once the signature verified, for every relay_id: an
+    // unverified confirm never spends the real relay's slot (§3.1).
+    checkPeerLimit(relay_id);
+    const cosmetic = handshakeCosmetics.get(answering.nonce);
+    const answered = {
+      public_key: answering.key,
+      endpoint_url: answering.endpoint,
+      display_name: cosmetic?.display_name ?? null,
+      peer_protocol_version:
+        cosmetic === undefined
+          ? (peer?.peer_protocol_version ?? null)
+          : cosmetic.peer_protocol_version,
+    };
 
     const now = Date.now();
     const confirmedRow = (base: PeerRow): PeerRow => ({
@@ -2393,7 +2459,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
         });
       }
     });
-    handshakes.delete(relay_id);
+    handshakeCosmetics.delete(answering.nonce);
 
     logger.info("federation.peer.active", { peerId: relay_id });
 
@@ -2427,7 +2493,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, { message: "agent_count is required" });
     if (revocations !== undefined && !Array.isArray(revocations))
       throw new HTTPException(400, { message: "revocations must be an array" });
-    refuseBeforeLookup(parsed.envelope, "heartbeat", relayIdentity.relayMotebitId, "Heartbeat");
+    refuseBeforeLookup(parsed.envelope, "heartbeat", relayIdentity, "Heartbeat");
     const relay_id = parsed.envelope.sender;
 
     const peer = readPeerRow(db, relay_id);
@@ -2437,6 +2503,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const verdict = await verifyFederationMessage(message, {
       kind: "heartbeat",
       self: relayIdentity.relayMotebitId,
+      selfPublicKeyHex: relayIdentity.publicKeyHex,
       senderPublicKeyHex: peer.public_key,
       body: heartbeatBody(agent_count, revocations),
     });
@@ -2527,6 +2594,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       kind: "heartbeat-ack",
       sender: relayIdentity.relayMotebitId,
       recipient: relay_id,
+      recipientPublicKey: peer.public_key,
       body: { request_nonce: env.nonce, agent_count: localAgentCount },
       privateKey: relayIdentity.privateKey,
     });
@@ -2910,7 +2978,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const parsed = parseFederationMessage(body.message);
     if (parsed === null)
       throw new HTTPException(400, { message: "malformed v2 peer-remove message (§3.5)" });
-    refuseBeforeLookup(parsed.envelope, "peer-remove", relayIdentity.relayMotebitId, "Removal");
+    refuseBeforeLookup(parsed.envelope, "peer-remove", relayIdentity, "Removal");
     const relay_id = parsed.envelope.sender;
 
     // A never-confirmed row (an earlier build wrote one at propose) is no
@@ -2925,6 +2993,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const verdict = await verifyFederationMessage(body.message, {
       kind: "peer-remove",
       self: relayIdentity.relayMotebitId,
+      selfPublicKeyHex: relayIdentity.publicKeyHex,
       senderPublicKeyHex: peer.public_key,
       body: PEER_REMOVE_BODY,
     });
@@ -2944,34 +3013,68 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       if (!writePeerRow(db, peer, { op: "update", row: { ...peer, state: "removed" } }, "peer-key"))
         throw new HTTPException(409, { message: "Removal refused: peer row changed; retry" });
     });
-    handshakes.delete(relay_id);
     return c.json({ status: "removed" });
   });
 
   // Admin signing for federation peer removal — consumed by
   // `motebit federation peer-remove <peer-url>` (apps/cli).
   //
-  // Mints a v2 `peer-remove` message (relay-federation@1.5 §3.3) for ONE named
-  // recipient: it removes this relay at that peer only, once, within five
-  // minutes. Behind master-token admin auth (services/relay/CLAUDE.md rule 5)
-  // because only the operator decides to leave a peer.
+  // Mints a v2 `peer-remove` message (relay-federation@1.5 §3.3) for ONE
+  // recipient, named by the key THIS relay verified it under: the confirmed
+  // peer row this relay holds at `endpoint_url` (or for `recipient`). Never by
+  // what the counterparty's `/identity` says — relay ids are not
+  // self-certifying, so an identity claiming another peer's id would have had
+  // this relay mint a removal good at THAT peer (cold review round 3, F1). No
+  // confirmed row, no key, nothing minted. It removes this relay at that peer
+  // only, once, within five minutes. Behind master-token admin auth
+  // (services/relay/CLAUDE.md rule 5) because only the operator decides to
+  // leave a peer.
   /** @internal */
   app.get("/api/v1/admin/federation/peer-removal-signature", async (c) => {
+    const endpoint = c.req.query("endpoint_url");
     const recipient = c.req.query("recipient");
-    if (!recipient || recipient === relayIdentity.relayMotebitId) {
+    if (!endpoint && !recipient) {
       throw new HTTPException(400, {
         message:
-          "recipient is required: the relay_motebit_id of the ONE peer this removal is for (relay-federation@1.5 §3.3)",
+          "endpoint_url (or recipient) is required: the confirmed peer this removal is for (relay-federation@1.5 §3.3)",
       });
     }
+    const wanted = endpoint ? endpointKey(endpoint) : null;
+    if (endpoint && wanted === null)
+      throw new HTTPException(400, { message: "endpoint_url is not a URL" });
+    const rows = (
+      db
+        .prepare(`SELECT ${PEER_ROW_COLUMNS} FROM relay_peers WHERE peered_at IS NOT NULL`)
+        .all() as PeerRow[]
+    ).filter(
+      (r) =>
+        (wanted === null || endpointKey(r.endpoint_url) === wanted) &&
+        (!recipient || r.peer_relay_id === recipient),
+    );
+    if (rows.length !== 1) {
+      throw new HTTPException(rows.length === 0 ? 404 : 409, {
+        message:
+          rows.length === 0
+            ? "this relay holds no confirmed peer there: a removal names its recipient by the key this relay verified it under (relay-federation@1.5 §3.3), so it mints only for a peer it holds"
+            : "more than one confirmed peer matches; name the recipient as well",
+      });
+    }
+    const row = rows[0]!;
     const message = await signFederationMessage({
       kind: "peer-remove",
       sender: relayIdentity.relayMotebitId,
-      recipient,
+      recipient: row.peer_relay_id,
+      recipientPublicKey: row.public_key,
       body: PEER_REMOVE_BODY,
       privateKey: relayIdentity.privateKey,
     });
-    return c.json({ relay_id: relayIdentity.relayMotebitId, message });
+    return c.json({
+      relay_id: relayIdentity.relayMotebitId,
+      recipient: row.peer_relay_id,
+      recipient_public_key: row.public_key.toLowerCase(),
+      endpoint_url: row.endpoint_url,
+      message,
+    });
   });
 
   // Admin signing for the peering handshake's step 3 — consumed by
@@ -3047,11 +3150,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       kind: "peer-confirm",
       sender: relayIdentity.relayMotebitId,
       recipient: body.recipient,
-      body: peerConfirmBody(body.nonce, endpoint, body.recipient_public_key),
+      recipientPublicKey: body.recipient_public_key,
+      body: peerConfirmBody(body.nonce, endpoint),
       privateKey: relayIdentity.privateKey,
     });
     return c.json({
       relay_id: relayIdentity.relayMotebitId,
+      public_key: relayIdentity.publicKeyHex.toLowerCase(),
       nonce: body.nonce,
       endpoint_url: endpoint,
       recipient_public_key: body.recipient_public_key.toLowerCase(),

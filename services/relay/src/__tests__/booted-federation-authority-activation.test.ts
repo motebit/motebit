@@ -177,6 +177,7 @@ async function heartbeatWith(
   // relay-federation@1.5: a v2 `heartbeat` names this relay as its recipient.
   const identity = (await (await fetch(`${baseUrl}/federation/v1/identity`)).json()) as {
     relay_motebit_id: string;
+    public_key: string;
   };
   const res = await fetch(`${baseUrl}/federation/v1/peer/heartbeat`, {
     method: "POST",
@@ -185,6 +186,7 @@ async function heartbeatWith(
       await heartbeatRequest({
         sender: peer.relayId,
         recipient: identity.relay_motebit_id,
+        recipientPublicKey: identity.public_key,
         privateKey: peer.privateKey,
         revocations,
       }),

@@ -28,7 +28,7 @@ import { bytesToHex, sign } from "@motebit/encryption";
 import type { SyncRelay } from "../index.js";
 import { initRelayIdentity, type RelayIdentity } from "../federation.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
-import { heartbeatRequest } from "./federation-messages.js";
+import { heartbeatRequest, signedConfirm } from "./federation-messages.js";
 
 const URLS = {
   a: "http://relay-a.bind.test:3000",
@@ -207,8 +207,10 @@ describe("F1: A's confirm, obtained by M, is refused at B", () => {
     it("A's confirm names B by id AND key, over a nonce M obtained at M's endpoint: the endpoint check alone refuses it", async () => {
       // Recipient id and key are both right here (as if A's operator minted
       // without the tooling's challenge check), so only the endpoint binding
-      // — the body built from the endpoint B's pending propose named — stands
-      // between M and A active at M's endpoint.
+      // stands between M and A active at M's endpoint: B issued the nonce for
+      // M's endpoint only (the handshake is the nonce), and A's confirm names
+      // A's endpoint — so it answers no handshake B issued (403); presented
+      // as M's endpoint, its signed body disagrees (400 body_mismatch).
       const N = await propose("b", "a", URLS.m);
       const minted = await mint("a", N, {
         id: ids.b.relayMotebitId,
@@ -216,8 +218,10 @@ describe("F1: A's confirm, obtained by M, is refused at B", () => {
       });
       const before = rowAt("b", "a");
       const res = await confirm("b", "a", N, minted);
-      expect(res.status).toBe(400);
-      expect(await res.text()).toMatch(/body_mismatch/);
+      expect(res.status).toBe(403);
+      const asM = await confirm("b", "a", N, { ...minted, endpoint_url: URLS.m });
+      expect(asM.status).toBe(400);
+      expect(await asM.text()).toMatch(/body_mismatch/);
       expect(rowAt("b", "a")).toEqual(before);
     });
 
@@ -242,6 +246,7 @@ describe("the legitimate lifecycle still works", () => {
     const beat = await heartbeatRequest({
       sender: ids.a.relayMotebitId,
       recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
       privateKey: ids.a.privateKey,
       agentCount: 2,
     });
@@ -276,5 +281,100 @@ describe("the 1.0–1.4 confirm is refused by name", () => {
     expect(res.status).toBe(400);
     expect(await res.text()).toMatch(/confirm v1 .* is refused/);
     expect(rowAt("b", "a")).toEqual(before);
+  });
+});
+
+// Round 3 (F3, F4): no pending handshake is stored — the nonce IS the
+// handshake, recognised only for the relay_id, key and endpoint its propose
+// named, so nothing a caller proposes can evict or exhaust another's.
+describe("the handshake is its nonce: bound to what the propose named, never evictable", () => {
+  const confirmBy = (
+    nonce: string,
+    endpointUrl: string,
+    extra: { proposedEndpointUrl?: string; proposedPublicKey?: string } = {},
+  ) =>
+    signedConfirm({
+      sender: ids.a.relayMotebitId,
+      recipient: ids.b.relayMotebitId,
+      recipientPublicKey: ids.b.publicKeyHex,
+      nonce,
+      endpointUrl,
+      privateKey: ids.a.privateKey,
+      ...extra,
+    });
+
+  it("a confirm for an endpoint the propose did not name is refused, even signed by the key holder", async () => {
+    const N = await propose("b", "a", URLS.a);
+    const before = rowAt("b", "a");
+    const other = "http://elsewhere.bind.test:3002";
+    // Signed for the other endpoint and claiming it in the request: the nonce
+    // was issued for URLS.a only.
+    const res = await post("b", "/federation/v1/peer/confirm", await confirmBy(N, other));
+    expect(res.status).toBe(403);
+    // Claiming the named endpoint in the request but signed for another: the
+    // body digest disagrees.
+    const res2 = await post(
+      "b",
+      "/federation/v1/peer/confirm",
+      await confirmBy(N, other, { proposedEndpointUrl: URLS.a }),
+    );
+    expect(res2.status).toBe(400);
+    expect(await res2.text()).toMatch(/body_mismatch/);
+    expect(rowAt("b", "a")).toEqual(before);
+  });
+
+  it("a confirm under a key the propose did not name is refused", async () => {
+    const N = await propose("b", "a", URLS.a);
+    const res = await post(
+      "b",
+      "/federation/v1/peer/confirm",
+      await confirmBy(N, URLS.a, { proposedPublicKey: ids.m.publicKeyHex }),
+    );
+    expect(res.status).toBe(403);
+    expect(rowAt("b", "a")).toBeUndefined();
+  });
+
+  it("40 proposes naming A (under A's public key and others) evict nothing: A's earlier nonce still confirms", async () => {
+    const N = await propose("b", "a", URLS.a);
+    for (let i = 0; i < 20; i++) {
+      await propose("b", "a", `http://relay-m.bind.test:${String(4000 + i)}`);
+      const res = await post("b", "/federation/v1/peer/propose", {
+        relay_id: ids.a.relayMotebitId,
+        public_key: ids.m.publicKeyHex,
+        endpoint_url: URLS.m,
+        nonce: rand(),
+      });
+      expect(res.status).toBe(200);
+    }
+    const res = await post("b", "/federation/v1/peer/confirm", await confirmBy(N, URLS.a));
+    expect(res.status).toBe(200);
+    expect(rowAt("b", "a")).toMatchObject({ state: "active", public_key: ids.a.publicKeyHex });
+  });
+
+  it("a nonce lapses after its window (at most ten minutes)", async () => {
+    const N = await propose("b", "a", URLS.a);
+    clockOffset += 11 * 60 * 1000;
+    const res = await post("b", "/federation/v1/peer/confirm", await confirmBy(N, URLS.a));
+    expect(res.status).toBe(403);
+    expect(rowAt("b", "a")).toBeUndefined();
+  });
+
+  it("a nonce taken before a removal does not skip the removed-peer cooldown", async () => {
+    await half("a", "b");
+    await half("b", "a");
+    relays.b.moteDb.db
+      .prepare("UPDATE relay_peers SET state = 'suspended' WHERE peer_relay_id = ?")
+      .run(ids.a.relayMotebitId);
+    const N = await propose("b", "a", URLS.a);
+    const removal = await relays.a.app.request(
+      `/api/v1/admin/federation/peer-removal-signature?endpoint_url=${encodeURIComponent(URLS.b)}`,
+      { headers: AUTH_HEADER },
+    );
+    expect(removal.status).toBe(200);
+    const { message } = (await removal.json()) as { message: unknown };
+    expect((await post("b", "/federation/v1/peer/remove", { message })).status).toBe(200);
+    const res = await post("b", "/federation/v1/peer/confirm", await confirmBy(N, URLS.a));
+    expect(res.status).toBe(429);
+    expect(rowAt("b", "a")?.state).toBe("removed");
   });
 });

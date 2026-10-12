@@ -196,7 +196,7 @@ interface CellState {
 }
 
 function ackFetchFor(urlOk: (url: string) => boolean, before?: () => Promise<void>) {
-  const ack = ackingFetch(new Map([[idA.relayMotebitId, idA.privateKey]]));
+  const ack = ackingFetch(new Map([[idA.relayMotebitId, idA.privateKey]]), idB.publicKeyHex);
   return async (input: unknown, init?: RequestInit): Promise<Response> => {
     if (before) await before();
     const url = String(input);
@@ -255,6 +255,7 @@ async function runAction(action: Action, s: CellState): Promise<number | null> {
       const req = await heartbeatRequest({
         sender: idA.relayMotebitId,
         recipient: idB.relayMotebitId,
+        recipientPublicKey: idB.publicKeyHex,
         privateKey: action === "HB_L" ? idA.privateKey : attacker.privateKey,
       });
       return (await post("/federation/v1/peer/heartbeat", req)).status;
@@ -264,6 +265,7 @@ async function runAction(action: Action, s: CellState): Promise<number | null> {
       const req = await removeRequest({
         sender: idA.relayMotebitId,
         recipient: idB.relayMotebitId,
+        recipientPublicKey: idB.publicKeyHex,
         privateKey: action === "RM_L" ? idA.privateKey : attacker.privateKey,
       });
       return (await post("/federation/v1/peer/remove", req)).status;
@@ -839,10 +841,24 @@ describe("relay_peers writers: only writePeerRow writes authority columns", () =
       "a.ts",
       `db.prepare("UPDATE relay_peers SET trust_level = 'from', endpoint_url = ? WHERE 1");`,
     ],
+    [
+      "an escaped quote inside a literal does not end it",
+      "a.ts",
+      `db.prepare("UPDATE relay_peers SET trust_level = 'it''s where', state = 'active'");`,
+    ],
+    [
+      "a comment marker inside a literal does not comment out the next column",
+      "a.ts",
+      `db.prepare("UPDATE relay_peers SET trust_level = '--', public_key = ?");`,
+    ],
+    [
+      "an unterminated literal (cannot be read)",
+      "a.ts",
+      `db.prepare("UPDATE relay_peers SET trust_level = 'x, state = ?");`,
+    ],
   ];
   for (const [name, file, src] of LITERAL_RED) {
-    // CHECKPOINT 1 — committed RED (it.fails): the scanner misses each today.
-    it.fails(`tamper: ${name} is red`, () => {
+    it(`tamper: ${name} is red`, () => {
       const sites = scanPeerRowWrites(file, src);
       expect(sites.length).toBeGreaterThan(0);
       expect(sites.every((s) => s.refusal !== null)).toBe(true);
@@ -875,6 +891,16 @@ describe("relay_peers writers: only writePeerRow writes authority columns", () =
         .map((s) => s.verb)
         .sort(),
     ).toEqual(["DELETE", "INSERT", "UPDATE"]);
+  });
+
+  it("a literal holding SQL syntax in a counter/trust-only update is still counter/trust-only", () => {
+    const sites = scanPeerRowWrites(
+      "anywhere.ts",
+      `db.prepare("UPDATE relay_peers SET trust_level = 'a, b where (', trust_score = ? WHERE x = '; state'");`,
+    );
+    expect(sites).toHaveLength(1);
+    expect(sites[0]!.columns).toEqual(["trust_level", "trust_score"]);
+    expect(sites[0]!.refusal).toBeNull();
   });
 
   it("counter/trust-only updates are allowed by column, with a reason for each", () => {

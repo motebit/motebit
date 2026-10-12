@@ -113,7 +113,7 @@ function getRetry(
 
 /** Stub fetch to answer every heartbeat with the addressed peer's valid signed v2 ack. */
 function stubFetchSuccess(): void {
-  vi.stubGlobal("fetch", ackingFetch(PEER_KEYS));
+  vi.stubGlobal("fetch", ackingFetch(PEER_KEYS, identity.publicKeyHex));
 }
 
 /** Stub fetch to fail with connection refused. */

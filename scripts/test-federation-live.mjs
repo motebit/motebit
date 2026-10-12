@@ -117,11 +117,14 @@ function makePrivKeyObj(privBytes) {
 // "motebit-fed/v2\0" ‖ kind ‖ "\0" ‖ JCS(envelope); body_sha256 is the hex
 // SHA-256 of JCS(body). This script stays dependency-free, so it re-states
 // the construction rather than importing the one producer.
-function signFederationV2({ kind, sender, recipient, body, privKeyObj, ts }) {
+function signFederationV2({ kind, sender, recipient, recipientPublicKey, body, privKeyObj, ts }) {
   const envelope = {
     kind,
     sender,
     recipient,
+    // The recipient by KEY as well as id (§3.5): relay ids are not
+    // self-certifying, and the recipient checks this against its own key.
+    recipient_public_key: recipientPublicKey.toLowerCase(),
     ts: ts ?? Date.now(),
     nonce: crypto.randomBytes(32).toString("hex"),
     body_sha256: crypto.createHash("sha256").update(canonicalJson(body)).digest("hex"),
@@ -395,24 +398,29 @@ async function phase2() {
   if (peerNonce) {
     try {
       // relay-federation@1.5 §3.1: a v2 `peer-confirm` naming Relay B (the
-      // relay that issued the nonce) as recipient by id, over that nonce, the
-      // endpoint the propose named and Relay B's public key — never a bare
-      // nonce.
+      // relay that issued the nonce) as recipient by id and by public key,
+      // over that nonce and the endpoint the propose named — never a bare
+      // nonce. The request repeats the key and endpoint the propose named.
       const message = signFederationV2({
         kind: "peer-confirm",
         sender: syntheticRelayId,
         recipient: identityB.relay_motebit_id,
+        recipientPublicKey: identityB.public_key,
         body: {
           nonce: peerNonce,
           endpoint_url: "https://synthetic-test-peer.invalid",
-          recipient_public_key: identityB.public_key.toLowerCase(),
         },
         privKeyObj: syntheticPrivKey,
       });
 
       const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/confirm`, {
         method: "POST",
-        body: JSON.stringify({ message, nonce: peerNonce }),
+        body: JSON.stringify({
+          message,
+          nonce: peerNonce,
+          public_key: syntheticPeer.publicKeyHex,
+          endpoint_url: "https://synthetic-test-peer.invalid",
+        }),
       });
 
       if (!ok) {
@@ -718,6 +726,7 @@ async function phase4() {
       kind: "heartbeat",
       sender: syntheticRelayId,
       recipient: identityB.relay_motebit_id,
+      recipientPublicKey: identityB.public_key,
       body: { agent_count: 0, revocations: [] },
       privKeyObj: syntheticPrivKey,
     });
@@ -771,6 +780,7 @@ async function phase4() {
       kind: "heartbeat",
       sender: syntheticRelayId,
       recipient: identityB.relay_motebit_id,
+      recipientPublicKey: identityB.public_key,
       body: { agent_count: 0, revocations: [] },
       privKeyObj: stranger._privKey,
     });
@@ -792,6 +802,7 @@ async function phase4() {
       kind: "heartbeat",
       sender: syntheticRelayId,
       recipient: identityB.relay_motebit_id,
+      recipientPublicKey: identityB.public_key,
       body: { agent_count: 0, revocations: [] },
       privKeyObj: syntheticPrivKey,
       ts: Date.now() - 600_000, // 10 min in the past
@@ -1376,6 +1387,7 @@ async function phase5() {
         kind: "peer-remove",
         sender: phase2.syntheticRelayId,
         recipient: identityB.relay_motebit_id,
+        recipientPublicKey: identityB.public_key,
         body: { action: "remove" },
         privKeyObj: phase2.syntheticPrivKey,
       });
