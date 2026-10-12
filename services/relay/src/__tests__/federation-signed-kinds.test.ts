@@ -1,14 +1,18 @@
 /**
  * Every signed federation message is recipient-bound — the static half
- * (relay-federation@1.5 §3.5). The behavioural half is
- * `federation-recipient-binding.test.ts` (a message signed for one relay,
- * replayed to a third, is refused there) and the crypto registry test
- * (`packages/crypto/src/__tests__/federation-message.test.ts`, every kind).
+ * (relay-federation@1.5 §3.5). The behavioural halves are
+ * `federation-route-registry.test.ts` (every registered `/federation` route is
+ * declared, and every signed one refuses another relay's message and the v1
+ * body with nothing written), `federation-recipient-binding.test.ts` (a
+ * message signed for one relay, replayed to a third, is refused there) and the
+ * crypto registry test (`packages/crypto/src/__tests__/federation-message.test.ts`,
+ * every kind).
  *
  * `scanFederationRoutes` (federation-route-scan.ts) over every non-test relay
- * source and the CLI's federation subcommand: every `/federation/v1/*` POST
- * route verifies exactly one §3.5 kind through the one verifier (or carries a
- * stated exemption), every kind in the registry has a verifier site, every
+ * source and the CLI's federation subcommand: every literal-path
+ * `/federation/v1/*` POST route's handler contains a call to the one verifier
+ * naming exactly one §3.5 kind (or carries a stated exemption) — presence of
+ * the call, not its order or reach (see the scan's aperture), every kind in the registry has a verifier site, every
  * verifier compares the recipient to this relay's own key, and every outbound
  * work request is signed through the one producer. Then each rule is tampered
  * in a fixture and must go red.
@@ -89,7 +93,7 @@ describe("every signed federation kind is recipient-bound (static)", () => {
     expect([...r.verifiedKinds].sort()).toEqual([...REGISTRY.kinds].sort());
     expect(files.length).toBeGreaterThan(50);
     console.info(
-      `[federation-signed-kinds] scanned ${files.length} files; ${r.routes.length} /federation/v1 POST routes (${Object.keys(UNENVELOPED_ROUTES).length} stated exemptions); ${r.verifiedKinds.size}/${REGISTRY.kinds.length} kinds with a verifier site`,
+      `[federation-signed-kinds] scanned ${files.length} files; ${r.routes.length} literal-path /federation/v1 POST routes scanned for a verifier call (${Object.keys(UNENVELOPED_ROUTES).length} stated exemptions); ${r.verifiedKinds.size}/${REGISTRY.kinds.length} kinds with a verifier site`,
     );
   });
 

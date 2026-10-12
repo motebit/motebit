@@ -133,6 +133,8 @@ The forwarding request includes:
 | `visited`   | Array of `relay_id` values already visited  |
 | `query_id`  | UUID v7 for deduplication (30-second TTL)   |
 
+Each hop also carries `sender_relay` (the immediate forwarder) and `message`, a v2 `discover` signed message from that forwarder to the ONE peer the hop is sent to, by id and by key (see [Authentication](#authentication)). A re-forwarding relay signs a fresh message for each peer it forwards to.
+
 A relay will not forward a query if its own `relay_id` is in the `visited` set, if `hop_count >= max_hops`, or if it has already processed the `query_id`. This bounds the amplification factor to _p^3_ where _p_ is the maximum peer count per relay.
 
 ### Result merging
@@ -183,15 +185,27 @@ When the optimal path crosses a relay boundary, the local relay forwards the tas
   "task_payload": { "prompt": "Search for..." },
   "budget": { "amount": 0.1, "currency": "USD" },
   "routing_choice": { "composite": 0.82, "path": ["relay-abc", "relay-def", "motebit-xyz"] },
-  "signature": "..."
+  "message": {
+    "envelope": {
+      "kind": "task-forward",
+      "sender": "relay-abc",
+      "recipient": "relay-def",
+      "recipient_public_key": "3b6a27bc...",
+      "ts": 1760270400000,
+      "nonce": "9f2c41d0...",
+      "body_sha256": "c0ffee12...",
+      "suite": "motebit-jcs-ed25519-hex-v1"
+    },
+    "signature": "..."
+  }
 }
 ```
 
-The receiving relay verifies the signature, checks that the target agent is registered locally, allocates budget, and submits the task to the agent.
+`message` is a v2 `task-forward` signed message from `origin_relay` to the ONE peer the task is forwarded to, by id and by key, committing by digest to every other field of the request. The receiving relay first checks that the message is addressed to its own key, then verifies it under `origin_relay`'s peer key and spends its nonce, checks that the target agent is registered locally, allocates budget, and submits the task to the agent.
 
 ### Result return
 
-When the task completes, the peer relay returns the result via `POST /federation/v1/task/result` with the agent's signed `ExecutionReceipt` and a `RelayAttestation` — the peer relay's co-signature attesting to the receipt's delivery context.
+When the task completes, the peer relay returns the result via `POST /federation/v1/task/result` with the agent's signed `ExecutionReceipt` and a `RelayAttestation` — the peer relay's co-signature attesting to the receipt's delivery context. The request is `{ task_id, origin_relay, receipt, agent_public_key?, message }`: here `origin_relay` names the executor relay that sends the result, and `message` is a v2 `task-result` signed message from it to the relay that forwarded the task. Each delivery attempt is signed afresh.
 
 ## Receipt verification
 
@@ -220,7 +234,7 @@ Each relay applies its own `PLATFORM_FEE_RATE` (default: 5%) to the budget it re
 
 ### Settlement forwarding
 
-After a forwarded task completes and the receipt is verified, the originating relay sends a settlement record to the peer via `POST /federation/v1/settlement/forward`. The receiving relay verifies the signature, records its own settlement entry, and pays the agent via `settleOnReceipt`.
+After a forwarded task completes and the receipt is verified, the originating relay sends a settlement record to the peer via `POST /federation/v1/settlement/forward` as `{ task_id, settlement_id, origin_relay, gross_amount, receipt_hash, x402_tx_hash?, x402_network?, message }`, where `message` is a v2 `settlement-forward` signed message from `origin_relay` to that peer, by id and by key. The receiving relay verifies the message (addressed to its own key, signed by an `active` or `suspended` peer, nonce unspent), records its own settlement entry, and pays the agent via `settleOnReceipt`. Every retry is a freshly signed message.
 
 Settlement records may include optional on-chain payment proof fields (`x402_tx_hash`, `x402_network`) for verifiable payment linkage.
 
@@ -246,17 +260,24 @@ Trust is isolated per-subject. If a peer relay is demoted, only routes through t
 
 ## Authentication
 
-Every request to a federation endpoint must include:
+Every signed request to a federation endpoint carries `message`, a v2 signed message (relay-federation@1.5 §3.5) beside the request's own fields:
 
-| Body field     | Value                                                                                               |
-| -------------- | --------------------------------------------------------------------------------------------------- |
-| `sender_relay` | The sending relay's `motebit_id` (some routes name it `relay_id`)                                   |
-| `timestamp`    | Unix epoch milliseconds; requests more than 5 minutes from the receiver's clock are rejected        |
-| `signature`    | Hex Ed25519 signature over the RFC 8785 canonical JSON of the request body with `signature` removed |
+| Envelope field         | Value                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `kind`                 | `discover`, `task-forward`, `task-result`, `settlement-forward`, or a peering kind      |
+| `sender`               | The signing relay's `motebit_id`; must equal the body's `sender_relay` / `origin_relay` |
+| `recipient`            | The `motebit_id` of the ONE relay that may accept it                                    |
+| `recipient_public_key` | That relay's Ed25519 public key, lowercase hex                                          |
+| `ts`                   | Unix epoch milliseconds; more than 5 minutes from the receiver's clock is refused       |
+| `nonce`                | 32 random bytes, lowercase hex; single-use at the recipient (a replay is 409)           |
+| `body_sha256`          | Lowercase hex SHA-256 of the RFC 8785 canonical JSON of every other request field       |
+| `suite`                | `motebit-jcs-ed25519-hex-v1`                                                            |
 
-Authentication is carried **in the JSON body**, not in HTTP headers: the receiver looks up the sender's registered public key, drops `signature`, canonicalizes the rest and verifies.
+`message.signature` is the sender's hex Ed25519 signature over `"motebit-fed/v2" ‖ 0x00 ‖ kind ‖ 0x00 ‖ JCS(envelope)`.
 
-Federation endpoints use a dedicated rate limit tier: 30 requests per minute per peer relay, keyed by `X-Relay-Id`.
+Authentication is carried **in the JSON body**, not in HTTP headers. Before any lookup, the receiver checks `recipient_public_key` against its OWN key, then the kind and the recipient id. A message signed for one relay is therefore refused at every other relay (`wrong_recipient_key`, 400), even one that peers the signer. Then it looks up the sender's key in `relay_peers`, checks freshness, recomputes the body digest, verifies the signature and records the nonce. A request without `message` (the 1.0–1.4 form: `timestamp` and an in-body `signature` over the canonical body) is refused with 400 by name; there is no downgrade path. Deploy both relays of a pair together.
+
+Federation endpoints use a dedicated rate limit tier: 30 requests per minute per peer relay, counted only once a request's signature has verified, keyed by the verified sender.
 
 ## Privacy
 

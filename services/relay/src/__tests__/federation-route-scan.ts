@@ -7,9 +7,10 @@
  *
  * The rules, each red on its own:
  *
- *   ROUTE   Every `app.post("/federation/v1/…", handler)` either verifies
- *           exactly ONE §3.5 kind inside its handler — `verifyFederationRequest
- *           (…, "<kind>", …)` for a work kind, `verifyFederationMessage(…,
+ *   ROUTE   Every `.post("/federation/v1/…", handler)` call whose path is a
+ *           string literal has, somewhere inside its handler's text, a call
+ *           naming exactly ONE §3.5 kind — `verifyFederationRequest(…,
+ *           "<kind>", …)` for a work kind, `verifyFederationMessage(…,
  *           { kind: "<kind>", … })` for a control kind — or is in
  *           `UNENVELOPED_ROUTES` with its reason. A verifying handler calls no
  *           raw signature primitive (`verify`, `verifyBySuite`,
@@ -26,11 +27,21 @@
  *           sits in a function that signs through `signFederationRequest` or
  *           `signDiscoverBody` — the one producer.
  *
- * Aperture: the TypeScript AST of every scanned file — calls by callee
- * identifier (or `a.b` member name), string/template literals by text. A route
- * registered through a computed path, or a verifier reached through an alias,
- * is not seen; that is outside the accidental-drift threat model this scan
- * guards (the three-relay replay harness is the behavioural proof).
+ * Aperture — what this scan examines, and what it does not: the TypeScript AST
+ * of every scanned file; calls by callee identifier (or `a.b` member name);
+ * string/template literals by text. ROUTE sees only `.post(...)` calls with a
+ * literal `/federation/v1/` path, and proves only that a verifier CALL is
+ * PRESENT in the handler — not that it runs (a call under
+ * `if (body.message !== undefined)` passes), not that it runs before the
+ * handler's side effects, and not that the handler is the only one at that
+ * path. It does not see routes registered by another method (`.put`, `.all`,
+ * `.on`), through a computed or prefixed path, or through a sub-router
+ * mounted with `app.route("/federation/v1", sub)`. Those are proven by
+ * execution in `federation-route-registry.test.ts`: every route the booted
+ * relay registers under `/federation` is in its registry, and every signed
+ * route refuses a message addressed to another relay's key and the v1 body
+ * with no write and no outbound request. This scan keeps the call-site shape
+ * (CALL, KIND, SEND) the registry test cannot see.
  */
 import ts from "typescript";
 

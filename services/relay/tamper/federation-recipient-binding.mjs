@@ -11,7 +11,11 @@
  *     (the route-side check before lookup AND the verifier's own-key/own-id
  *     arguments) — the three-relay replay harness must go red;
  *   - a new signed route that skips the one verifier — the static scan must
- *     go red.
+ *     go red;
+ *   - the runtime route registry (`federation-route-registry.test.ts`) must go
+ *     red for: a new `app.put` route that writes and verifies nothing; a side
+ *     effect moved before the verifier; the verifier run only when `message`
+ *     is present (the downgrade); a sub-router mounted at `/federation/v1`.
  *
  * Exit 1 if any tamper stays green or cannot apply.
  *
@@ -33,6 +37,9 @@ const vitest = (test) => ({
 });
 const REPLAY = vitest("src/__tests__/federation-recipient-binding.test.ts");
 const SCAN = vitest("src/__tests__/federation-signed-kinds.test.ts");
+const REGISTRY = vitest("src/__tests__/federation-route-registry.test.ts");
+const BEFORE_FORWARD =
+  '  /** @spec motebit/relay-federation@1.5 */\n  app.post("/federation/v1/task/forward"';
 
 /** `kind`'s recipient compare removed: no check before lookup, and the verifier told "self" is whoever the message names. */
 const dropRecipientCompare = (kind) => [
@@ -78,6 +85,72 @@ const TAMPERS = [
       },
     ],
     ...SCAN,
+  },
+  {
+    name: "registry: a new app.put route that writes a row and verifies nothing",
+    edits: [
+      {
+        file: FED,
+        from: BEFORE_FORWARD,
+        to:
+          '  app.put("/federation/v1/peer/note", async (c) => {\n' +
+          '    db.prepare("INSERT INTO relay_federation_nonces (sender, nonce, ts) VALUES (?, ?, ?)").run("x", "n", Date.now());\n' +
+          "    return c.json({ ok: true });\n" +
+          "  });\n\n" +
+          BEFORE_FORWARD,
+      },
+    ],
+    ...REGISTRY,
+  },
+  {
+    name: "registry: task-forward's side effect moved before the verifier",
+    edits: [
+      {
+        file: FED,
+        from: '    const { sender } = await verifyFederationRequest(db, relayIdentity, "task-forward", body, [',
+        to:
+          "    await deps.onTaskForwarded({\n" +
+          "      taskId: body.task_id,\n" +
+          "      originRelay: body.origin_relay,\n" +
+          "      targetAgent: body.target_agent,\n" +
+          "      payload: body.task_payload,\n" +
+          "    });\n" +
+          '    const { sender } = await verifyFederationRequest(db, relayIdentity, "task-forward", body, [',
+      },
+    ],
+    ...REGISTRY,
+  },
+  {
+    name: "registry: settlement-forward verified only when `message` is present (downgrade)",
+    edits: [
+      {
+        file: FED,
+        from:
+          "    const { sender } = await verifyFederationRequest(\n      db,\n      relayIdentity,\n" +
+          '      "settlement-forward",\n      body,\n      ["active", "suspended"],\n    );',
+        to:
+          "    const { sender } =\n      body.message !== undefined\n" +
+          '        ? await verifyFederationRequest(db, relayIdentity, "settlement-forward", body, [\n' +
+          '            "active",\n            "suspended",\n          ])\n' +
+          "        : { sender: body.origin_relay };",
+      },
+    ],
+    ...REGISTRY,
+  },
+  {
+    name: "registry: a sub-router mounted at /federation/v1",
+    edits: [
+      {
+        file: FED,
+        from: BEFORE_FORWARD,
+        to:
+          "  {\n    const sub = new (app.constructor as new () => Hono)();\n" +
+          '    sub.post("/peer/note", (c) => c.json({ ok: true }));\n' +
+          '    app.route("/federation/v1", sub);\n  }\n\n' +
+          BEFORE_FORWARD,
+      },
+    ],
+    ...REGISTRY,
   },
 ];
 

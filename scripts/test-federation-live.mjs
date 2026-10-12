@@ -29,6 +29,11 @@
  */
 
 import * as crypto from "node:crypto";
+import {
+  canonicalJson,
+  directDiscoverRequest,
+  signFederationV2,
+} from "./lib/federation-live-v2.mjs";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -112,55 +117,8 @@ function makePrivKeyObj(privBytes) {
   });
 }
 
-// MIRROR: keep in sync with `packages/crypto/src/federation-message.ts`
-// (`signFederationMessage`) — relay-federation@1.5 §3.5. Signed bytes are
-// "motebit-fed/v2\0" ‖ kind ‖ "\0" ‖ JCS(envelope); body_sha256 is the hex
-// SHA-256 of JCS(body). This script stays dependency-free, so it re-states
-// the construction rather than importing the one producer.
-function signFederationV2({ kind, sender, recipient, recipientPublicKey, body, privKeyObj, ts }) {
-  const envelope = {
-    kind,
-    sender,
-    recipient,
-    // The recipient by KEY as well as id (§3.5): relay ids are not
-    // self-certifying, and the recipient checks this against its own key.
-    recipient_public_key: recipientPublicKey.toLowerCase(),
-    ts: ts ?? Date.now(),
-    nonce: crypto.randomBytes(32).toString("hex"),
-    body_sha256: crypto.createHash("sha256").update(canonicalJson(body)).digest("hex"),
-    suite: "motebit-jcs-ed25519-hex-v1",
-  };
-  const bytes = Buffer.from(`motebit-fed/v2\0${kind}\0${canonicalJson(envelope)}`);
-  return { envelope, signature: toHex(signBytes(bytes, privKeyObj)) };
-}
-
-// MIRROR: keep in sync with `packages/encryption/src/canonical.ts::canonicalJson`.
-// Inline duplicate because this script is pure-Node (no workspace deps) — the
-// live-test runs against deployed relays and must self-bootstrap. Drift between
-// this and the production version manifests as wire-format incompatibility,
-// which the live test will surface as Phase 6.1 fail-closed at issuer-signature
-// verification (relay rebuilds canonical bytes, sig doesn't match). On any
-// change to canonical.ts, audit this function as a sibling-boundary touchpoint.
-// Same dual-source pattern as the `@motebit/crypto/merkle.ts` ↔
-// `@motebit/encryption/merkle.ts` split (verifier in crypto, writer in
-// encryption — kept separate so crypto stays self-contained for browser-side
-// re-verification).
-//
-// JCS-style canonical JSON (sorted keys, no whitespace, undefined-omission).
-// Used by the §15 witness-solicitation signing payload (motebit-jcs-ed25519-b64-v1).
-function canonicalJson(obj) {
-  if (obj === null || obj === undefined) return JSON.stringify(obj);
-  if (typeof obj !== "object") return JSON.stringify(obj);
-  if (Array.isArray(obj)) return "[" + obj.map((i) => canonicalJson(i)).join(",") + "]";
-  const sorted = Object.keys(obj).sort();
-  const entries = [];
-  for (const key of sorted) {
-    const val = obj[key];
-    if (val === undefined) continue;
-    entries.push(JSON.stringify(key) + ":" + canonicalJson(val));
-  }
-  return "{" + entries.join(",") + "}";
-}
+// The §3.5 v2 signer and the JCS mirror live in `scripts/lib/federation-live-v2.mjs`
+// (still dependency-free), so the relay suite can run them against a real relay.
 
 // MIRROR: equivalent to `@motebit/crypto/signing.ts::toBase64Url(Uint8Array)`.
 // Node's `Buffer#toString('base64url')` produces the same output (RFC 4648
@@ -652,34 +610,35 @@ async function phase3() {
   // This uses the /federation/v1/discover POST endpoint that peers call
   test("Direct federation discover endpoint on Relay B returns test agent");
   try {
+    // relay-federation@1.5 §3.5, §4.1.1: the discover fields plus a v2
+    // `discover` message from the synthetic peer to Relay B, by id AND by key
+    // (a body signed for one relay is refused at every other). The synthetic
+    // peer is an ACTIVE peer on B at this point (Phase 2 ran first). Without
+    // it there is nothing to sign: the request goes unsigned, which a relay
+    // accepts only under the operator's `requireDiscoverSignature: false`
+    // (the default refuses it 403). A v1 body (`timestamp` + hex `signature`,
+    // no `message`) is refused 400 by name.
     const queryId = crypto.randomUUID();
-    // Per-hop sender signing (relay-federation@1.3 §4.1): sign the JCS form of
-    // the body-minus-signature with the synthetic peer's key. The synthetic
-    // peer is an ACTIVE peer on B at this point (Phase 2 ran first), so this
-    // exercises the signed path — and survives strict mode
-    // (MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=true), where an unsigned
-    // discover 403s. Falls back to unsigned only if Phase 2 didn't establish
-    // the synthetic peer (tolerant relays accept; strict relays reject loudly).
-    const senderId = phase2.syntheticRelayId ?? "synthetic-test-relay";
-    const discoverPayload = {
-      query: { capability: testCapability, limit: 10 },
-      hop_count: 0,
-      max_hops: 1,
-      visited: [senderId],
-      query_id: queryId,
-      origin_relay: senderId,
-      sender_relay: senderId,
-      timestamp: Date.now(),
-    };
     const discoverBody = phase2.syntheticPrivKey
-      ? {
-          ...discoverPayload,
-          signature: signBytes(
-            Buffer.from(canonicalJson(discoverPayload)),
-            phase2.syntheticPrivKey,
-          ).toString("hex"),
-        }
-      : discoverPayload;
+      ? directDiscoverRequest({
+          sender: phase2.syntheticRelayId,
+          recipient: {
+            relayMotebitId: identityB.relay_motebit_id,
+            publicKey: identityB.public_key,
+          },
+          capability: testCapability,
+          queryId,
+          privKeyObj: phase2.syntheticPrivKey,
+        })
+      : {
+          query: { capability: testCapability, limit: 10 },
+          hop_count: 0,
+          max_hops: 1,
+          visited: ["synthetic-test-relay"],
+          query_id: queryId,
+          origin_relay: "synthetic-test-relay",
+          sender_relay: "synthetic-test-relay",
+        };
     const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/discover`, {
       method: "POST",
       body: JSON.stringify(discoverBody),
