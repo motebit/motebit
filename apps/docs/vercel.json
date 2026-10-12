@@ -1,3 +1,10 @@
 {
-  "ignoreCommand": "sh ../../scripts/vercel-ignore-build.sh --turbo-ignore @motebit/docs"
+  "ignoreCommand": "sh ../../scripts/vercel-ignore-build.sh --turbo-ignore @motebit/docs",
+  "git": {
+    "deploymentEnabled": {
+      "gh-readonly-queue/**": false,
+      "dependabot/**": false,
+      "changeset-release/**": false
+    }
+  }
 }

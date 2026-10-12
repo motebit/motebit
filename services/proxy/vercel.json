@@ -1,3 +1,10 @@
 {
-  "ignoreCommand": "sh ../../scripts/vercel-ignore-build.sh --watch ../../scripts/vercel-watch/proxy.txt"
+  "ignoreCommand": "sh ../../scripts/vercel-ignore-build.sh --watch ../../scripts/vercel-watch/proxy.txt",
+  "git": {
+    "deploymentEnabled": {
+      "gh-readonly-queue/**": false,
+      "dependabot/**": false,
+      "changeset-release/**": false
+    }
+  }
 }
