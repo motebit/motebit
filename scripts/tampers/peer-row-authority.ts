@@ -135,6 +135,13 @@ const TAMPERS: Tamper[] = [
     filter: "propose did not name",
   },
   {
+    name: "confirm: a nonce verifies only for the key its propose named (the handshake MAC's key term)",
+    find: "          relayId,\n          publicKey.toLowerCase(),\n          endpointUrl,\n",
+    replace: "          relayId,\n          endpointUrl,\n",
+    tests: [BINDING],
+    filter: "key the propose did not name",
+  },
+  {
     name: "confirm: the v1 confirm is refused by name (F1)",
     find: 'if (body.message === undefined) {\n      throw new HTTPException(400, {\n        message:\n          "federation peer confirm v1',
     replace:

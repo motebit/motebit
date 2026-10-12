@@ -325,12 +325,29 @@ describe("the handshake is its nonce: bound to what the propose named, never evi
 
   it("a confirm under a key the propose did not name is refused", async () => {
     const N = await propose("b", "a", URLS.a);
+    // Claiming M's key but signed by A: the signature does not verify.
     const res = await post(
       "b",
       "/federation/v1/peer/confirm",
       await confirmBy(N, URLS.a, { proposedPublicKey: ids.m.publicKeyHex }),
     );
     expect(res.status).toBe(403);
+    // M holds A's nonce and signs under its OWN key, which it names: every
+    // signature verifies, so only the nonce's binding to the key its propose
+    // named refuses it (the handshake MAC's key term).
+    const res2 = await post(
+      "b",
+      "/federation/v1/peer/confirm",
+      await signedConfirm({
+        sender: ids.a.relayMotebitId,
+        recipient: ids.b.relayMotebitId,
+        recipientPublicKey: ids.b.publicKeyHex,
+        nonce: N,
+        endpointUrl: URLS.a,
+        privateKey: ids.m.privateKey,
+      }),
+    );
+    expect(res2.status).toBe(403);
     expect(rowAt("b", "a")).toBeUndefined();
   });
 
