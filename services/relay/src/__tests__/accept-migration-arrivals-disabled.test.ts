@@ -386,3 +386,107 @@ describe("accept-migration is disabled (P0 containment)", () => {
     await refusedUntouched(JSON.stringify(body));
   });
 });
+
+/**
+ * The gate is the handler's first statement, so it runs AFTER the middleware
+ * the route mounts. What runs first, and what it may write, is measured here
+ * over EVERY table in the database (not only the identity tables): the only
+ * write any credential causes before the 503 is the agent-route door's one
+ * `relay_auth_events` row — for a master-token presentation or a refused
+ * token. An ordinary device token that verifies writes nothing at all.
+ */
+describe("what runs before the gate (the agent-route door), measured over every table", () => {
+  /** Every row of every table, keyed by table, with `relay_auth_events` separated out. */
+  function wholeDb(): { authEvents: unknown[]; rest: string } {
+    const db = relay.moteDb.db;
+    const tables = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as {
+        name: string;
+      }[]
+    ).map((t) => t.name);
+    const dump: Record<string, unknown> = {};
+    for (const t of tables) {
+      if (t === "relay_auth_events") continue;
+      // The auth-event table's AUTOINCREMENT counter moves with its row.
+      dump[t] =
+        t === "sqlite_sequence"
+          ? db.prepare("SELECT * FROM sqlite_sequence WHERE name != 'relay_auth_events'").all()
+          : db.prepare(`SELECT * FROM "${t}"`).all();
+    }
+    return {
+      authEvents: db
+        .prepare("SELECT kind, method, path, reason FROM relay_auth_events ORDER BY id")
+        .all(),
+      rest: JSON.stringify(dump),
+    };
+  }
+
+  async function body(): Promise<string> {
+    return JSON.stringify(await presentation(await pinnedSource(), sid, genesis));
+  }
+
+  it("no credential → 401 at the door (the gate is never reached); one auth-event row, nothing else", async () => {
+    const payload = await body();
+    const before = wholeDb();
+    const res = await post(payload, {});
+    expect(res.status).toBe(401);
+    const after = wholeDb();
+    expect(after.rest).toBe(before.rest);
+    expect(after.authEvents.slice(before.authEvents.length)).toEqual([
+      {
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: "/api/v1/agents/accept-migration",
+        reason: "missing_token",
+      },
+    ]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("a token that does not verify → 401 at the door; one auth-event row, nothing else", async () => {
+    const payload = await body();
+    const stranger = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(stranger));
+    const { token } = await mintAudienceToken(
+      { mid, did: "no-such-device", aud: "admin:query" },
+      stranger.privateKey,
+    );
+    const before = wholeDb();
+    const res = await post(payload, { Authorization: `Bearer ${token}` });
+    expect(res.status).toBe(401);
+    const after = wholeDb();
+    expect(after.rest).toBe(before.rest);
+    expect(after.authEvents.length).toBe(before.authEvents.length + 1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("the master token → 503; the door records the presentation (one auth-event row), nothing else", async () => {
+    const payload = await body();
+    const before = wholeDb();
+    const res = await post(payload, AUTH_HEADER);
+    expect(res.status).toBe(503);
+    const after = wholeDb();
+    expect(after.rest).toBe(before.rest);
+    expect(after.authEvents.slice(before.authEvents.length)).toEqual([
+      {
+        kind: "master_token",
+        method: "POST",
+        path: "/api/v1/agents/accept-migration",
+        reason: null,
+      },
+    ]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("an ordinary device token that verifies → 503; no row written in ANY table", async () => {
+    const auth = await ordinaryAttackerToken();
+    const payload = await body();
+    const before = wholeDb();
+    const res = await post(payload, auth);
+    expect(res.status).toBe(503);
+    const after = wholeDb();
+    expect(after.rest).toBe(before.rest);
+    expect(after.authEvents).toEqual(before.authEvents);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

@@ -56,6 +56,29 @@ const logger = createLogger({ service: "relay", module: "migration" });
 
 // === Constants (§4.4, §5.4 Convention) ===
 
+/**
+ * P0 CONTAINMENT GATE (2026-10-12) — `POST /api/v1/agents/accept-migration`
+ * is OFF. On main it permits identity takeover: a retired genesis key is
+ * re-accepted after a rotation, and `verifyMigratingKeyBinding` trusts a
+ * guardian named inside the PRESENTED identity file, so anyone can forge a
+ * "recovery" chain genesis → X holding no secret of the identity — reachable
+ * with any device token (register-self is free) and an attacker-run source
+ * relay (TOFU). The handler then overwrites `agent_registry` + the
+ * `identity_keys` holder, lifts the identity's revocation and reconciles its
+ * sockets. Production had accepted zero migrations, so refusing arrivals costs
+ * ~nothing legitimate. Only this route is gated; token issue, attestation,
+ * export, depart and cancel are unchanged.
+ *
+ * RE-ENABLE CONDITION: the permanent fix (key currency + guardian provenance
+ * on arrival) has merged AND passed a cold adversarial review. Flip this to
+ * `true` in that PR and delete `__tests__/accept-migration-arrivals-disabled.test.ts`
+ * (whose cases become that fix's refusal tests). Typed `boolean` so the
+ * guarded code stays type-checked and lint sees no constant condition.
+ */
+const MIGRATION_ARRIVALS_ENABLED: boolean = false;
+const MIGRATION_ARRIVALS_DISABLED_MESSAGE =
+  "Migration arrivals are temporarily disabled on this relay";
+
 /** Default migration token expiry: 72 hours. */
 const DEFAULT_TOKEN_EXPIRY_MS = 72 * 60 * 60 * 1000;
 
@@ -548,6 +571,13 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
   // Validate MigrationPresentation at destination, onboard agent.
   /** @spec motebit/migration@1.0 */
   app.post("/api/v1/agents/accept-migration", async (c) => {
+    // P0 CONTAINMENT — the first statement: every arrival is refused before
+    // body parsing, any DB read or write, and any outbound fetch (the TOFU
+    // tier dials `source_relay_url`, so this also closes that blind SSRF).
+    if (!MIGRATION_ARRIVALS_ENABLED) {
+      logger.warn("migration.accept.disabled");
+      return c.json({ error: MIGRATION_ARRIVALS_DISABLED_MESSAGE }, 503);
+    }
     const body = await c.req.json<{
       migration_token: MigrationToken;
       departure_attestation: DepartureAttestation;

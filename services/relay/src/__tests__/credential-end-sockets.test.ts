@@ -509,7 +509,10 @@ describe("pairing's update-key closes per (device, key), not per key (#776 B4)",
 });
 
 describe("accept-migration closes the sockets the overwritten registry key admitted", () => {
-  it("a returning identity that rotated elsewhere: the registry-fallback socket under the old key closes 4010; its device-row, master-token and bystander sockets stay; the new key registers", async () => {
+  // P0 containment (migration.ts MIGRATION_ARRIVALS_ENABLED = false): the
+  // arrival is refused 503, moves no key and closes no socket. Restore the
+  // 4010 assertions with the gate.
+  it("[arrivals disabled] a returning identity that rotated elsewhere is refused 503: every socket stays open, the old key still admits, the new key does not", async () => {
     // The source relay, pinned as an active federation peer.
     const sourceKp = await generateKeypair();
     relay.moteDb.db
@@ -623,17 +626,17 @@ describe("accept-migration closes the sockets the overwritten registry key admit
         public_key: hex(rotated),
       }),
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
 
-    expect(await closeCodeOf(svc)).toBe(WS_CLOSE_KEY_RETIRED);
+    await expectStillOpen(sid, svc);
     await expectStillOpen(sid, phoneSock);
     await expectStillOpen(sid, master);
     await expectStillOpen(other.mid, other.sock);
-    // The old key admits nothing new through the fallback; the new one does.
-    expect(await refused(sid, `token=${await syncToken(sid, "svc", genesis)}&device_id=svc`)).toBe(
+    // Nothing moved: the old key still admits through the fallback; the new one does not.
+    await connect(sid, `token=${await syncToken(sid, "svc", genesis)}&device_id=svc`);
+    expect(await refused(sid, `token=${await syncToken(sid, "svc", rotated)}&device_id=svc`)).toBe(
       4003,
     );
-    await connect(sid, `token=${await syncToken(sid, "svc", rotated)}&device_id=svc`);
   });
 });
 

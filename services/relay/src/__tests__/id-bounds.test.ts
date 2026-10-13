@@ -376,6 +376,11 @@ describe("#814 the doors", () => {
   // onboarded here. The bound refuses it first, before any network fetch or
   // verification; at the bound the request passes this check and is judged
   // by the next one.
+  //
+  // P0 containment (migration.ts MIGRATION_ARRIVALS_ENABLED = false): every
+  // arrival is refused 503 before the bound runs, so these cases assert the
+  // 503 and that nothing is written. Restore the bound's own assertions with
+  // the gate.
 
   const arrive = (motebitId: string) =>
     post(
@@ -390,15 +395,15 @@ describe("#814 the doors", () => {
       AUTH_HEADER,
     );
 
-  it("migration arrival refuses a motebit_id of bound+1 before anything else", async () => {
+  it("[arrivals disabled] migration arrival refuses a motebit_id of bound+1 (503, before the bound)", async () => {
     const res = await arrive("m".repeat(MAX_MOTEBIT_ID_LENGTH + 1));
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain("motebit_id is 257 characters");
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain("Migration arrivals are temporarily disabled");
   });
 
-  it("migration arrival passes a motebit_id at the bound on to its next check", async () => {
+  it("[arrivals disabled] migration arrival refuses a motebit_id at the bound (503)", async () => {
     const res = await arrive("m".repeat(MAX_MOTEBIT_ID_LENGTH));
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(503);
     expect(await res.text()).not.toContain("characters; this relay admits");
   });
 
@@ -530,9 +535,11 @@ describe("#814 the doors", () => {
       }
     });
 
-    it(`migration arrival refuses a ${name} motebit_id first`, async () => {
-      const t = await refusedWritingNothing(() => arrive(value as string));
-      expect(t).toContain("motebit_id must be a string");
+    it(`[arrivals disabled] migration arrival refuses a ${name} motebit_id (503) and writes nothing`, async () => {
+      const before = counts();
+      const res = await arrive(value as string);
+      expect(res.status).toBe(503);
+      expect(counts()).toEqual(before);
     });
   }
 
