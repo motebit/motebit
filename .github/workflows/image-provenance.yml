@@ -27,15 +27,19 @@ concurrency:
   group: image-provenance
   cancel-in-progress: false
 
+# Least privilege: read-only by default; the grants are on the job that uses
+# them, so a job added later does not inherit the write.
 permissions:
   contents: read
-  actions: read
-  packages: read
-  issues: write # the failure alert below comments on / opens a pinned issue
 
 jobs:
   provenance:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # the gate reads the publish run's conclusion (gh run list)
+      packages: read # ghcr pulls of the documented tags
+      issues: write # the failure alert below comments on / opens a pinned issue
     # Sequential cosign verifications against Sigstore; a slow log round-trip
     # dominates, not our compute. Generous so a slow day is a slow run, never a
     # spurious red about an image that is fine.

@@ -61,6 +61,11 @@ concurrency:
 env:
   RELEASE_APP_ID: ${{ secrets.APP_ID }}
 
+# Least privilege: read-only by default; the merge job grants its own writes
+# (below), so a job added later does not inherit them.
+permissions:
+  contents: read
+
 jobs:
   merge-version-packages-pr:
     runs-on: ubuntu-latest

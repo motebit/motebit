@@ -19,6 +19,11 @@ env:
   TURBO_TEAM: ${{ vars.TURBO_TEAM }}
   TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
 
+# Least privilege: read-only by default; the publish job grants its own
+# OIDC scope, so a job added later does not inherit it.
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest

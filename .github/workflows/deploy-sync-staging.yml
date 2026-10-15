@@ -56,9 +56,10 @@ concurrency:
   group: deploy-relay-staging
   cancel-in-progress: false
 
+# Least privilege: read-only by default; `actions: read` only on the gate job
+# that polls run status. The deploy authenticates to Fly with its own secret.
 permissions:
   contents: read
-  actions: read # read the CI run status for the gate below
 
 # Split for the same reason as deploy-sync.yml: a gate that WAITS must not
 # spend the budget of the deploy it gates. Staging has not been bitten yet,
@@ -69,6 +70,9 @@ jobs:
     runs-on: ubuntu-latest
     # 45 min for CI (a 30-min check job, then e2e) + slack (#978).
     timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: read # gh run list: the CI run on this sha
 
     steps:
       # Same gate deploy-sync.yml applies to prod, for the same reason one

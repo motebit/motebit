@@ -28,10 +28,19 @@ concurrency:
   group: model-catalog-drift
   cancel-in-progress: false
 
+# Least privilege: the repo's default GITHUB_TOKEN is write, so every
+# workflow states its own. Read-only by default; the one write is granted on
+# the job whose alert step needs it.
+permissions:
+  contents: read
+
 jobs:
   drift:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write # the failure alert below comments on / opens a pinned issue
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4

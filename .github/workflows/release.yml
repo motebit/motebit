@@ -20,6 +20,11 @@ env:
   # into the `env` context the conditional can see.
   RELEASE_APP_ID: ${{ secrets.APP_ID }}
 
+# Least privilege: read-only by default; the release job grants its own
+# writes (below), so a job added later does not inherit them.
+permissions:
+  contents: read
+
 jobs:
   release:
     runs-on: ubuntu-latest
