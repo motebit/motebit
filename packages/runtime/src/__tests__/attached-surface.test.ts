@@ -13,6 +13,11 @@ import {
   NullRenderer,
   createInMemoryStorage,
 } from "../index";
+import { setEmbeddingModelLoader } from "@motebit/memory-graph";
+// No unit test loads the real embedding model (vitest.real-model-guard.ts):
+// a rejecting loader sends embedText's local path to its deterministic hash
+// fallback.
+setEmbeddingModelLoader(() => Promise.reject(new Error("no embedding model in unit tests")));
 
 function makeRuntime(): MotebitRuntime {
   return new MotebitRuntime(

@@ -49,6 +49,15 @@ export interface MemoryFormationDeps {
   readonly mode: FormationMode;
   readonly consolidationProvider?: ConsolidationProvider;
   /**
+   * Embedder for the candidates. Defaults to the model-backed `embedText`.
+   * Callers pass the embedder they already use for the turn so formation
+   * and retrieval embed alike — and so a caller's test double reaches
+   * formation too (a module mock of `embedText` cannot replace this
+   * module's own reference; that gap loaded the real ONNX model in
+   * ai-core's unit tests and hung the pre-push run).
+   */
+  readonly embed?: (text: string, sensitivity?: SensitivityLevel) => Promise<number[]>;
+  /**
    * Ceiling applied to the classify neighbors `consolidateAndForm`
    * sends to the provider. On a non-sovereign provider this MUST be
    * set to the context-safe tier (`Personal`) so a stored
@@ -94,7 +103,8 @@ export async function formMemoriesFromCandidates(
   //    so pay one round trip (or one CPU batch) instead of N. On
   //    mobile this is the difference between a UI stall per candidate
   //    and one stall per batch.
-  const embeddings = await Promise.all(candidates.map((c) => embedText(c.content, c.sensitivity)));
+  const embed = deps.embed ?? embedText;
+  const embeddings = await Promise.all(candidates.map((c) => embed(c.content, c.sensitivity)));
 
   // 2. Sequential form: consolidation decisions depend on graph state
   //    (the previous candidate may have merged into a cluster the

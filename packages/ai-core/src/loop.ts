@@ -2155,6 +2155,8 @@ export async function* runTurnStreaming(
         mode: formation,
         consolidationProvider: deps.consolidationProvider,
         sensitivityCeiling: classifyCeiling,
+        // The same embedder this turn's retrieval used (memory-formation.ts).
+        embed: embedText,
       },
       candidates,
       relevantMemories,

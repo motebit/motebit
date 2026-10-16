@@ -1,5 +1,5 @@
 import { defineConfig } from "vitest/config";
-import { MOTEBIT_TEST_REPORTERS } from "../../vitest.shared.js";
+import { MOTEBIT_TEST_REPORTERS, REAL_MODEL_GUARD_ALIAS } from "../../vitest.shared.js";
 
 // vitest 4's default `exclude` only covers node_modules/.git (vitest 2 also
 // excluded dist/coverage). This package runs a bare `vitest run` with no
@@ -9,6 +9,9 @@ import { MOTEBIT_TEST_REPORTERS } from "../../vitest.shared.js";
 // the standard excludes. (Coverage THRESHOLDS are intentionally omitted: this
 // package's `test:coverage` collects without per-package thresholds.)
 export default defineConfig({
+  // No unit test loads the real embedding model — the same guard every
+  // defineMotebitTest package gets (vitest.real-model-guard.ts).
+  resolve: { alias: REAL_MODEL_GUARD_ALIAS },
   test: {
     exclude: ["**/node_modules/**", "**/dist/**", "**/coverage/**"],
     // 30s, not vitest's default 5s. These are integration-shaped tests — real

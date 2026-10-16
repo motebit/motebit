@@ -26,6 +26,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
@@ -138,11 +139,46 @@ export const MOTEBIT_TEST_REPORTERS = [
   runEndReporter,
 ];
 
+/**
+ * Unit tests never load the real embedding model: `@xenova/transformers`
+ * resolves to vitest.real-model-guard.ts, which fails the run loudly when
+ * its `pipeline` is reached (see that file for the 2026-10 pre-push hang it
+ * prevents). A test's own `vi.mock("@xenova/transformers")` still applies.
+ * `MOTEBIT_REAL_MODEL_TESTS=1` lifts the alias for the opt-in real-model
+ * tests (`*.real.test.ts`, skipped without it).
+ */
+export const REAL_MODEL_GUARD_ALIAS =
+  process.env.MOTEBIT_REAL_MODEL_TESTS === "1"
+    ? []
+    : [
+        {
+          find: /^@xenova\/transformers$/,
+          replacement: fileURLToPath(new URL("./vitest.real-model-guard.ts", import.meta.url)),
+        },
+      ];
+
+type AliasEntry = { find: string | RegExp; replacement: string };
+
+function withRealModelGuard(resolve: ViteUserConfig["resolve"]): ViteUserConfig["resolve"] {
+  const own = resolve?.alias;
+  const ownEntries: AliasEntry[] =
+    own === undefined
+      ? []
+      : Array.isArray(own)
+        ? (own as AliasEntry[])
+        : Object.entries(own as Record<string, string>).map(([find, replacement]) => ({
+            find,
+            replacement,
+          }));
+  return { ...(resolve ?? {}), alias: [...REAL_MODEL_GUARD_ALIAS, ...ownEntries] };
+}
+
 export function defineMotebitTest(opts: MotebitVitestOptions): ViteUserConfig {
   const { thresholds, testExclude = [], coverageInclude, coverageExclude = [], extra, vite } = opts;
 
   return defineConfig({
     ...(vite ?? {}),
+    resolve: withRealModelGuard(vite?.resolve),
     test: {
       testTimeout: DEFAULT_TEST_TIMEOUT_MS,
       // `extra` spreads after, so a package can still override the default.

@@ -23,7 +23,11 @@ export {
   EMBEDDING_DIMENSIONS,
   resetPipeline,
   setRemoteEmbedUrl,
+  setEmbeddingModelLoader,
+  EMBEDDING_MODEL,
+  MODEL_LOAD_TIMEOUT_MS,
 } from "./embeddings.js";
+export type { EmbeddingModelLoader } from "./embeddings.js";
 export {
   ConsolidationAction,
   buildConsolidationPrompt,
