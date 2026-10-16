@@ -1,5 +1,18 @@
 # @motebit/protocol
 
+## 3.20.0
+
+### Minor Changes
+
+- 796deb8: Add the optional `Plan.sensitivity` field: the highest sensitivity tier a plan's content (its steps' prompts and results, derived from the goal and the turns that ran them) was produced at. A runtime executes or resumes a plan at no lower tier, so a plan produced at a medical, financial or secret tier is never sent to an external provider, and treats an unstamped plan as `secret`. The field is local to a device and is not on the sync wire.
+
+  Additive only. No existing type changes.
+
+- ce129e1: New `toWellFormedText(s)` replaces every unpaired UTF-16 surrogate with U+FFFD (the identity on well-formed text; the same bytes a UTF-8 encoder produces), and `truncateWellFormed(s, maxUnits)` cuts text to at most `maxUnits` UTF-16 code units without ever splitting a surrogate pair. Producers use them so no signed receipt carries a string with no UTF-8 encoding (spec/execution-ledger-v1.md §11.4).
+- ce129e1: Sovereign payment receipts now bind every hash to the bytes it names. `signSovereignPaymentReceipt` sets `result_hash` to `hex(SHA-256(UTF-8(result)))` of the receipt's own synthesized `result` text, so the receipt verifies under strict hash binding (`motebit-verify`, `motebit verify receipt`). Before this change it signed the caller-supplied hash of the paid service's result as `result_hash`, so a strict verifier rejected every real sovereign payment receipt.
+
+  The paid service's result hash now travels in a new optional, signature-bound `ExecutionReceipt` field, `service_result_hash`: the SHA-256 of the paid service's result bytes, as asserted by the payer and signed by the payee (`spec/settlement-v1.md` §7). The field is additive. It is absent on every other receipt, and receipts without it sign and verify byte-identically to before. When present, strict verifiers (`motebit-verify`, `motebit verify receipt`, `verifyReceipt(…, { strictHashBinding: true })`) check that it is a 64-character lowercase hex digest, and every verifier reports it. The signature-only defaults (`verifyReceipt` / `verify` / `verifyArtifact` without strict binding, `verifyReceiptVerdict`) do not check its shape and return exactly their previous verdicts. Deprecation note: the defaults will check the shape too in the next major of `@motebit/crypto` / `@motebit/verifier`; a producer should emit only a SHA-256 hex digest there today. `signSovereignPaymentReceipt` refuses an input `result_hash` that is not such a digest. Receipts issued before this change still verify signature-only (`--lenient`); under strict binding they fail, because their `result_hash` does not bind their `result`.
+
 ## 3.19.0
 
 ### Minor Changes
