@@ -671,6 +671,11 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
         prompt,
         submitted_by: motebitId,
         required_capabilities: [capability],
+        // The worker this delegation is FOR, named as well as addressed: the
+        // relay pins an explicit `target_agent` (equal to the path agent)
+        // whatever token carries the request — the task is executed by this
+        // worker or by no one, never re-routed while it is offline.
+        target_agent: targetMotebitId,
       }),
     });
     if (submitRes.status === 402) {

@@ -332,6 +332,11 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
       const taskBody: Record<string, unknown> = {
         prompt,
         submitted_by: `a2a:${(body.metadata?.caller_id as string | undefined) ?? "unknown"}`,
+        // The A2A caller addressed THIS agent: name it, so the relay pins the
+        // task to it (task-pin.ts) — executed by it or by no one, never
+        // re-routed to another agent while it is offline. The `a2a:` label
+        // names no identity, so the path alone does not pin it (#1112).
+        target_agent: motebitId,
       };
       if (requiredCapabilities) taskBody.required_capabilities = requiredCapabilities;
       if (routingStrategy) taskBody.routing_strategy = routingStrategy;
@@ -479,6 +484,8 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
     const taskBody: Record<string, unknown> = {
       prompt,
       submitted_by: `ap2:${mandate.signer ?? "unknown"}`,
+      // The mandate addresses THIS agent: pinned to it (task-pin.ts, #1112).
+      target_agent: motebitId,
     };
 
     // Forward budget constraint from mandate

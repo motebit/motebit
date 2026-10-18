@@ -424,6 +424,13 @@ describe("handleDelegate", () => {
     const firstUrl = mockFetch.mock.calls[0]![0] as string;
     expect(firstUrl).toContain("/agent/target-1/task");
     expect(firstUrl).not.toContain("candidates");
+    // #1112: the target is NAMED as well as addressed, so the relay pins it
+    // whatever token carries the request (this config uses the master token).
+    const submitBody = JSON.parse((mockFetch.mock.calls[0]![1] as { body: string }).body) as Record<
+      string,
+      unknown
+    >;
+    expect(submitBody.target_agent).toBe("target-1");
   });
 
   it("a codeless 402 for a discovered other worker points at --sovereign, never `motebit fund`", async () => {

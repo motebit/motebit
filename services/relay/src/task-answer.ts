@@ -11,7 +11,8 @@
  * it decides in a fixed order:
  *
  *   1. the receipt is bound to THIS task (`relay_task_id`);
- *   2. a P2P task is answered only by the worker it was paid to (#959);
+ *   2. a P2P task is answered only by the worker it was paid to (#959),
+ *      and a pinned task only by its target (task-pin.ts);
  *   3. the signer is a recorded executor of this task, through the door's
  *      peer, on a route of the task's own origin (`isRoutedExecutor`, #890
  *      r6/r7) — the local doors by the entry's `origin_relay`, the
@@ -64,6 +65,7 @@ import { issueAnswerCapability } from "./task-queue.js";
 import type { AnswerCapability } from "./task-queue.js";
 import { verificationKeyFor } from "./identity-keys.js";
 import { p2pPayeeOf, receiptDischargesP2p } from "./p2p-payee.js";
+import { pinOf, pinRefusesAnswer, pinRefusesSettlement } from "./task-pin.js";
 import {
   admittedBeforeTaskRoutes,
   isRoutedExecutor,
@@ -115,6 +117,8 @@ export type AnswerRefusal =
   | "gone"
   | "not_bound"
   | "not_payee"
+  /** A pinned task's receipt signed by anyone but its target (task-pin.ts). */
+  | "not_pinned_executor"
   | "not_routed"
   | "no_key"
   | "bad_signature"
@@ -434,6 +438,21 @@ export async function answerTask(
     );
   }
 
+  // 2b. A pinned task answers only its target (task-pin.ts) — whatever any
+  //     route records: the relay never substitutes a pinned task's executor.
+  if (pinRefusesAnswer(entry, receipt.motebit_id)) {
+    logger.error("task.receipt_not_from_pinned_executor", {
+      correlationId: taskId,
+      pinned: pinOf(entry),
+      signer: receipt.motebit_id,
+      door: door.kind,
+    });
+    return refuse(
+      "not_pinned_executor",
+      `receipt is signed by ${receipt.motebit_id}, not by the agent this task is pinned to (${pinOf(entry) ?? ""})`,
+    );
+  }
+
   // 3. A recorded executor, through the door's peer, on a route of the
   //    task's own origin (#890 r6/r7).
   let routed: boolean;
@@ -693,6 +712,22 @@ export async function admitReceipt(
       AnswerVerdict,
       { took: false }
     >;
+  }
+  // Settlement attribution (task-pin.ts): a pinned task's settlement never
+  // names anyone but its target — checked here on the ENTRY's answer, apart
+  // from the answer door's own check, before anything is archived or settled
+  // for a substitute executor.
+  if (pinRefusesSettlement(entry, answer.motebit_id)) {
+    logger.error("settlement.not_pinned_executor", {
+      correlationId: taskId,
+      pinned: pinOf(entry),
+      payee: answer.motebit_id,
+      door: door.kind,
+    });
+    return refuse(
+      "not_pinned_executor",
+      `task ${taskId} is pinned to ${pinOf(entry) ?? ""}; its answer is signed by ${answer.motebit_id} — not settled`,
+    ) as Extract<AnswerVerdict, { took: false }>;
   }
   // Archive the signed receipt tree (rule 12, insert-only). Before the
   // settlement step, so a re-submission still archives when an earlier
