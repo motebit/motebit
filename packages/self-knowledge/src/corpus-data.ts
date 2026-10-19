@@ -15,11 +15,11 @@ export const CORPUS_INDEX: CorpusIndex = {
       source: "README.md",
       title: "Motebit",
       content:
-        '<p align="center">\n  <img src="social-preview.png" alt="Motebit — protocol + runtime for sovereign AI agents" width="100%">\n</p>\n\n<p align="center">\n  <a href="https://github.com/motebit/motebit/actions/workflows/ci.yml"><img src="https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>\n  <a href="https://docs.motebit.com"><img src="https://img.shields.io/badge/docs-docs.motebit.com-0369a1" alt="Documentation"></a>\n  <a href="https://www.npmjs.com/package/motebit"><img src="https://img.shields.io/npm/v/motebit?label=motebit" alt="motebit"></a>\n  <a href="https://www.npmjs.com/package/create-motebit"><img src="https://img.shields.io/npm/v/create-motebit?label=create-motebit" alt="create-motebit"></a>\n  <a href="https://github.com/motebit/motebit/pkgs/container/relay"><img src="https://img.shields.io/badge/ghcr.io%2Fmotebit%2Frelay-1.1.0-blue?logo=docker&logoColor=white" alt="ghcr.io/motebit/relay"></a>\n  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License: BSL 1.1"></a>\n  <a href="LICENSING.md"><img src="https://img.shields.io/badge/protocol-Apache--2.0-green" alt="Protocol: Apache-2.0"></a>\n</p>\n\n**Motebit is an open protocol for sovereign AI agents — and a reference runtime you can run today.** A motebit is a droplet of intelligence under surface tension: identity forms the boundary, intelligence fills the interior, governance maintains the surface that prevents diffusion.',
+        '<p align="center">\n  <img src="social-preview.png" alt="Motebit — protocol + runtime for sovereign AI agents" width="100%">\n</p>\n\n<p align="center">\n  <a href="https://github.com/motebit/motebit/actions/workflows/ci.yml"><img src="https://github.com/motebit/motebit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>\n  <a href="https://docs.motebit.com"><img src="https://img.shields.io/badge/docs-docs.motebit.com-0369a1" alt="Documentation"></a>\n  <a href="https://www.npmjs.com/package/motebit"><img src="https://img.shields.io/npm/v/motebit?label=motebit" alt="motebit"></a>\n  <a href="https://www.npmjs.com/package/create-motebit"><img src="https://img.shields.io/npm/v/create-motebit?label=create-motebit" alt="create-motebit"></a>\n  <a href="https://github.com/motebit/motebit/pkgs/container/relay"><img src="https://img.shields.io/badge/ghcr.io%2Fmotebit%2Frelay-1.2.0-blue?logo=docker&logoColor=white" alt="ghcr.io/motebit/relay"></a>\n  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License: BSL 1.1"></a>\n  <a href="LICENSING.md"><img src="https://img.shields.io/badge/protocol-Apache--2.0-green" alt="Protocol: Apache-2.0"></a>\n</p>\n\n**Motebit is an open protocol for sovereign AI agents — and a reference runtime you can run today.** A motebit is a droplet of intelligence under surface tension: identity forms the boundary, intelligence fills the interior, governance maintains the surface that prevents diffusion.',
       termFrequencies: {
         "0": 3,
-        "1": 5,
-        "2": 2,
+        "1": 4,
+        "2": 3,
         "100": 1,
         "201": 1,
         p: 4,
@@ -471,10 +471,11 @@ export const CORPUS_INDEX: CorpusIndex = {
       source: "README.md",
       title: "Run a signed relay container",
       content:
-        "For multi-tenant operators who want the relay as a verifiable binary instead of an `npm install`: pull the signed multi-arch container, verify the signature, and run it.\n\n```bash\ndocker pull ghcr.io/motebit/relay:1.1.0\n\ncosign verify ghcr.io/motebit/relay:1.1.0 \\\n  --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/publish-images.yml@.*' \\\n  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'\n```\n\nBoth commands work without authentication. The image is built for `linux/amd64` and `linux/arm64`, signed via Sigstore keyless OIDC, and carries a SLSA build-provenance attestation binding the image digest to this exact source commit. Verifying is mandatory, not optional — verifiability is the protocol's premise. See [`docs/operator/self-host.md`](docs/operator/self-host.md) for the verify-and-run flow, [`docker-compose.example.yml`](docs/operator/docker-compose.example.yml) for a reference operator stack, and the federation peering path. The CLI above is fastest for local-dev experimentation; the container is the right shape for production self-hosting and federation.",
+        "For multi-tenant operators who want the relay as a verifiable binary instead of an `npm install`: pull the signed multi-arch container, verify the signature, and run it.\n\n```bash\ndocker pull ghcr.io/motebit/relay:1.2.0\n\ncosign verify ghcr.io/motebit/relay:1.2.0 \\\n  --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/publish-images.yml@.*' \\\n  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'\n```\n\nBoth commands work without authentication. The image is built for `linux/amd64` and `linux/arm64`, signed via Sigstore keyless OIDC, and carries a SLSA build-provenance attestation binding the image digest to this exact source commit. Verifying is mandatory, not optional — verifiability is the protocol's premise. See [`docs/operator/self-host.md`](docs/operator/self-host.md) for the verify-and-run flow, [`docker-compose.example.yml`](docs/operator/docker-compose.example.yml) for a reference operator stack, and the federation peering path. The CLI above is fastest for local-dev experimentation; the container is the right shape for production self-hosting and federation.",
       termFrequencies: {
         "0": 2,
-        "1": 4,
+        "1": 2,
+        "2": 2,
         multi: 2,
         tenant: 1,
         operators: 1,
@@ -6832,7 +6833,7 @@ export const CORPUS_INDEX: CorpusIndex = {
   documentFrequencies: {
     "0": 20,
     "1": 20,
-    "2": 19,
+    "2": 20,
     "3": 11,
     "4": 5,
     "5": 7,
@@ -9183,6 +9184,6 @@ export const CORPUS_INDEX: CorpusIndex = {
   },
   averageLength: 97.33333333333333,
   totalDocuments: 87,
-  sourceHash: "91958f772e76515013f693c645c5450bef2fd084778281f6283fb44ad5564bad",
-  generatedAt: "sha256:91958f772e765150",
+  sourceHash: "511580b1ecfff1635f840e5c0c61256d48db626e2dcf05764ff94a671d94d7fc",
+  generatedAt: "sha256:511580b1ecfff163",
 };
