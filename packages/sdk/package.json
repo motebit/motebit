@@ -16,6 +16,7 @@
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
+    "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
     "README.md"

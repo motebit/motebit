@@ -11,6 +11,7 @@
     "dist/index.js",
     "dist/index.js.map",
     "schema/motebit-yaml-v1.json",
+    "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
     "README.md"

@@ -25,6 +25,8 @@
  *   4. missing_license — no `license` field. (SPDX validity is the
  *      sibling gate `check-license-doc-sync`'s job; this gate just
  *      enforces presence.)
+ *   5. changelog_not_shipped — the package has a CHANGELOG.md but its
+ *      `files` allowlist omits it, so the tarball ships without one.
  *
  * Scope: every direct subdirectory of `packages/`, `apps/`, `services/`
  * that has a `package.json` where `private !== true` AND
@@ -47,6 +49,7 @@
  *   tsx scripts/check-publishable-package-metadata.ts        # exit 1 on violation
  */
 
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { publishablePackages, workspaceGlobs } from "./lib/publish-freshness.js";
@@ -72,7 +75,12 @@ interface PackageInfo {
 }
 
 interface Finding {
-  kind: "missing_repository" | "malformed_repository" | "directory_mismatch" | "missing_license";
+  kind:
+    | "missing_repository"
+    | "malformed_repository"
+    | "directory_mismatch"
+    | "missing_license"
+    | "changelog_not_shipped";
   packageName: string;
   detail: string;
 }
@@ -167,6 +175,21 @@ function analyzePackage(pkg: PackageInfo): Finding[] {
     });
   }
 
+  // 3. The package's own CHANGELOG.md ships in the tarball. A `files`
+  //    allowlist that omits it leaves npm, yarn and the CDN mirrors with no
+  //    changelog, or the repo-root one, which stops at 0.3.0 (found
+  //    2026-10-17: every published package omitted it).
+  if (existsSync(resolve(pkg.dir, "CHANGELOG.md"))) {
+    const files = pkg.raw.files;
+    if (Array.isArray(files) && !files.includes("CHANGELOG.md")) {
+      findings.push({
+        kind: "changelog_not_shipped",
+        packageName: pkg.name,
+        detail: `${pkg.relativeDir}/package.json — \`files\` omits "CHANGELOG.md", so the published tarball carries no changelog. Add "CHANGELOG.md" to \`files\`.`,
+      });
+    }
+  }
+
   return findings;
 }
 
@@ -189,6 +212,7 @@ function main(): void {
         `    repository.url === "${CANONICAL_REPOSITORY_URL}"\n` +
         `    repository.directory matches the package path\n` +
         `    license field present\n` +
+        `    CHANGELOG.md listed in \`files\` (when the package has one)\n` +
         `  Sigstore provenance has the metadata it needs to attest every publish.`,
     );
     return;
@@ -204,6 +228,7 @@ function main(): void {
     "malformed_repository",
     "directory_mismatch",
     "missing_license",
+    "changelog_not_shipped",
   ] as const) {
     const group = byKind[kind];
     if (!group || group.length === 0) continue;

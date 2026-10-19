@@ -2599,6 +2599,13 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-publishable-package-metadata",
+    proves:
+      'flags a publishable package whose `files` allowlist omits its own CHANGELOG.md, so the tarball ships with no changelog (found 2026-10-17 on all 12 published packages). Probe removes the "CHANGELOG.md" entry from packages/verifier/package.json; the gate must flag `changelog_not_shipped`. byte-identical restoration on cleanup via mutateFile.',
+    perturb: () =>
+      mutateFile(`packages/verifier/package.json`, (src) => src.replace(/\s*"CHANGELOG\.md",/, "")),
+  },
+  {
     script: "check-slab-chrome-coverage",
     proves:
       'flags a slab-chrome dispatcher silently regressing to a partial-matrix shape. Drift class: the doctrine line `chrome-as-state-render.md` § \'each register is an information shape, not a UI component\' is satisfied by every cell of the (controlState × embodimentMode) matrix being NAMED in the dispatcher\'s source — code literal or JSDoc, doctrine accepts either. A refactor that drops a `case "paused":` AND the corresponding doctrine-comment reference would regress the matrix to 3-of-4 states with no compile-time signal; the gate catches the structural-erasure shape. Probe rewrites every `paused` literal in `apps/mobile/src/slab-chrome.ts` to `PAUSED_REMOVED`; the gate must surface `control state "paused" not handled`. byte-identical restoration on cleanup via mutateFile.',

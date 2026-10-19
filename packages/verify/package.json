@@ -20,6 +20,7 @@
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
     "examples/*.json",
+    "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
     "README.md"
