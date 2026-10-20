@@ -518,8 +518,9 @@ describe("(e) one writer per database on the fallback path", () => {
   });
 
   it("another OS process is refused while one holds the database", async () => {
-    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
-    const tsx = path.join(root, "node_modules/.bin/tsx");
+    // node + the tsx loader directly, not the tsx CLI: the CLI wraps the
+    // script in a second process with its own signal relay.
+    const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
     const script = path.join(tmpDir, "holder.mts");
     const driverUrl = new URL("../sqljs-driver.ts", import.meta.url).href;
     fs.writeFileSync(
@@ -530,9 +531,11 @@ describe("(e) one writer per database on the fallback path", () => {
         `process.stdout.write("OPEN " + process.pid + "\\n");\n` +
         `setInterval(() => {}, 1 << 30);\n`,
     );
-    const child = spawn(tsx, [script], { stdio: ["ignore", "pipe", "inherit"] });
+    const child = spawn(process.execPath, ["--import", "tsx", script], {
+      cwd: pkgDir,
+      stdio: ["ignore", "pipe", "inherit"],
+    });
     try {
-      // tsx runs the script in its own child; the holder reports its pid.
       const holderPid = await new Promise<string>((resolve, reject) => {
         child.stdout.on("data", (b: Buffer) => {
           const m = /OPEN (\d+)/.exec(b.toString());
