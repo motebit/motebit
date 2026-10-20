@@ -17,7 +17,11 @@
  *   - the credential store (credential-store.ts): a bound read made raw, a
  *     verified read's validity mode flipped, ambiguous JSON accepted — relay
  *     red; a raw read of the table outside the store, a bound read filtering
- *     after its LIMIT, the raw reader exported — the boundary test red.
+ *     after its LIMIT, the raw reader exported — the boundary test red;
+ *   - the credential anchoring cut (relay rule 30): the batch INSERT and leaf
+ *     assignments run outside one transaction, the assignment UPDATE loses
+ *     `AND anchor_batch_id IS NULL`, the cut's short-count refusal removed —
+ *     the cut-atomicity test red.
  *
  * Exit 1 if any tamper stays green or cannot apply.
  *
@@ -55,6 +59,8 @@ const VERIFY_BINDING = {
 
 const STORE = "services/relay/src/credential-store.ts";
 const BOUNDARY_TEST = vitest("@motebit/relay", "src/__tests__/credential-store-boundary.test.ts");
+const CUT_TEST = vitest("@motebit/relay", "src/__tests__/credential-anchor-cut-atomic.test.ts");
+const ANCHORING = "services/relay/src/credential-anchoring.ts";
 const RAW_READER = {
   file: STORE,
   from: "\nfunction readBoundCredentials<",
@@ -343,6 +349,39 @@ const TAMPERS = [
       },
     ],
     ...RELAY_TEST,
+  },
+  {
+    name: "anchoring cut: batch row and leaf assignments outside one transaction",
+    edits: [
+      {
+        file: ANCHORING,
+        from: "  db.transaction(() => {\n    db.prepare(\n      `INSERT INTO relay_credential_anchor_batches",
+        to: "  ((fn: () => void) => fn())(() => {\n    db.prepare(\n      `INSERT INTO relay_credential_anchor_batches",
+      },
+    ],
+    ...CUT_TEST,
+  },
+  {
+    name: "anchoring cut: an anchored credential re-assigned (IS NULL guard dropped)",
+    edits: [
+      {
+        file: STORE,
+        from: "SET anchor_batch_id = ? WHERE credential_id = ? AND anchor_batch_id IS NULL",
+        to: "SET anchor_batch_id = ? WHERE credential_id = ?",
+      },
+    ],
+    ...CUT_TEST,
+  },
+  {
+    name: "anchoring cut: a short assignment count committed",
+    edits: [
+      {
+        file: ANCHORING,
+        from: "    if (assigned !== rows.length) {",
+        to: "    if (assigned > rows.length) {",
+      },
+    ],
+    ...CUT_TEST,
   },
 ];
 

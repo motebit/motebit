@@ -468,18 +468,24 @@ export function listUnanchoredCredentialEvidence(
     .all(limit) as CredentialEvidenceLeaf[];
 }
 
-/** Stamp each row cut into `batchId`. */
+/**
+ * Stamp each row cut into `batchId`, only while it is unanchored: a credential
+ * is anchored in at most one batch. Returns how many rows it stamped; the cut
+ * (in its transaction) refuses a count short of its leaves.
+ */
 export function assignCredentialEvidenceToBatch(
   db: ReadDb,
   batchId: string,
   credentialIds: readonly string[],
-): void {
+): number {
   const assignStmt = db.prepare(
-    "UPDATE relay_credentials SET anchor_batch_id = ? WHERE credential_id = ?",
+    "UPDATE relay_credentials SET anchor_batch_id = ? WHERE credential_id = ? AND anchor_batch_id IS NULL",
   );
+  let assigned = 0;
   for (const credentialId of credentialIds) {
-    assignStmt.run(batchId, credentialId);
+    assigned += assignStmt.run(batchId, credentialId).changes;
   }
+  return assigned;
 }
 
 /** How many rows await a batch. */

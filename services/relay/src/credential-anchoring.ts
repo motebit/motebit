@@ -204,30 +204,42 @@ export async function cutCredentialBatch(
   const treeHashVersionColumn =
     treeHashVersion === "merkle-sha256-rfc6962-v2" ? treeHashVersion : null;
 
-  // Persist atomically: create batch + assign all credentials
   const now = Date.now();
-  db.prepare(
-    `INSERT INTO relay_credential_anchor_batches
-       (batch_id, relay_id, merkle_root, leaf_count, first_issued_at, last_issued_at,
-        signature, status, created_at, tree_hash_version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
-  ).run(
-    batchId,
-    relayIdentity.relayMotebitId,
-    tree.root,
-    rows.length,
-    firstIssuedAt,
-    lastIssuedAt,
-    signature,
-    now,
-    treeHashVersionColumn,
-  );
+  // ONE transaction: the signed batch row and every leaf's assignment commit
+  // together or not at all (relay CLAUDE.md rule 30, as the settlement cuts in
+  // anchoring.ts). A batch row without its leaves would be anchored onchain
+  // beside a later batch covering the same leaves.
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO relay_credential_anchor_batches
+         (batch_id, relay_id, merkle_root, leaf_count, first_issued_at, last_issued_at,
+          signature, status, created_at, tree_hash_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
+    ).run(
+      batchId,
+      relayIdentity.relayMotebitId,
+      tree.root,
+      rows.length,
+      firstIssuedAt,
+      lastIssuedAt,
+      signature,
+      now,
+      treeHashVersionColumn,
+    );
 
-  assignCredentialEvidenceToBatch(
-    db,
-    batchId,
-    rows.map((row) => row.credential_id),
-  );
+    const assigned = assignCredentialEvidenceToBatch(
+      db,
+      batchId,
+      rows.map((row) => row.credential_id),
+    );
+    if (assigned !== rows.length) {
+      // Another cut took a leaf during this one's awaits: a batch must own
+      // exactly the leaves it signed, so this one is not written.
+      throw new Error(
+        `credential_anchoring: ${rows.length - assigned} of ${rows.length} leaves were assigned during the cut`,
+      );
+    }
+  });
 
   logger.info("credential_anchoring.batch_cut", {
     batch_id: batchId,
