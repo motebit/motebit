@@ -131,6 +131,27 @@ fly ssh sftp get /data/motebit-backup-YYYYMMDD.db -a motebit-sync
 2. Or restore from manual backup
 3. The event log is append-only -- clients can re-sync from their local event logs
 
+#### Credential anchor audit (read-only, local snapshot)
+
+Batches cut before #1135 may have stranded or overwritten membership. `services/relay/scripts/audit-credential-anchors.ts` audits every credential anchor batch in a LOCAL snapshot: PASS, LEAF_COUNT_MISMATCH, ROOT_MISMATCH, SIGNATURE_FAILURE, PROOF_FAILURE (credential ids listed) or VERIFICATION_INCOMPLETE (not evidence of corruption), plus credentials whose `anchor_batch_id` names no batch. It opens the file read-only, runs no migrations, reads only credential and anchor-batch data and the relay's public key, and writes nothing. Exit 0 = all PASS, 2 = a discrepancy, 3 = only incomplete, 1 = refused / could not run.
+
+The snapshot holds the relay keypair (secret encrypted at rest) and user data. Procedure, on the NEW encrypted machine (FileVault on), with the repo built at the commit you run (`pnpm install && pnpm build`):
+
+```bash
+fly status -a motebit-sync                              # exactly one machine
+fly ssh console -a motebit-sync -C 'df -h /data'        # room for a copy
+fly ssh console -a motebit-sync -C "sqlite3 /data/motebit.db '.backup /data/audit-snapshot.db'"
+# record the snapshot time (UTC) and the deployed commit (fly releases -a motebit-sync)
+fly ssh sftp get /data/audit-snapshot.db ./audit-snapshot.db -a motebit-sync
+fly ssh console -a motebit-sync -C 'rm /data/audit-snapshot.db'   # DELETE the copy on the volume
+chmod 600 ./audit-snapshot.db
+# if the script refuses a WAL-mode file, run the repair line it prints on this LOCAL copy only
+npx tsx services/relay/scripts/audit-credential-anchors.ts ./audit-snapshot.db --json audit-report.json > audit-report.txt
+rm ./audit-snapshot.db                                  # after the report is kept
+```
+
+Keep the report (`audit-report.txt` / `.json`) with the snapshot time and the deployed commit; the report header carries the snapshot path, mtime, the script's commit and the audit start time. Never upload the snapshot anywhere — no cloud agents, no chat. Historical batches are never rebuilt or re-signed: a discrepancy is recorded and investigated.
+
 **Guardian recovery provenance (migration v58):** a guardian recovery is accepted only under a guardian set with the identity's current key (403 `GUARDIAN_NOT_PROVEN` otherwise); before v58 no guardian had provenance, and the prod census measured 0 guardians (Q4 = 0), so no existing user is affected. An owner whose identity can be proven (it has a held key, or a sovereign id) and whose recovery is refused re-sets the guardian with a request proven by the current identity key (`scripts/measure-identity-authority.ts` Q4 lists any unproven guardian). A legacy (non-sovereign) id with no held key can never be proven, so `/agents/register` refuses its guardian (400 `GUARDIAN_REQUIRES_SOVEREIGN_IDENTITY`, recorded `register:guardian_unprovable`) and a recovery under one set before that answers 403 `GUARDIAN_NOT_PROVEN` saying recovery is not available — there is no re-set for it until the legacy evidence path (D2) is built.
 
 ---

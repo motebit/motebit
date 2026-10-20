@@ -92,7 +92,11 @@ const REFERENCES: Record<string, Record<string, number>> = {
   countUnanchoredCredentialEvidence: { "src/credential-anchoring.ts": 3 },
   oldestUnanchoredCredentialEvidenceIssuedAt: { "src/credential-anchoring.ts": 2 },
   getCredentialEvidenceWithBatch: { "src/credential-anchoring.ts": 2 },
-  listCredentialEvidenceInBatch: { "src/credential-anchoring.ts": 2 },
+  listCredentialEvidenceInBatch: {
+    "src/credential-anchoring.ts": 2,
+    "src/credential-anchor-audit.ts": 4, // the read-only snapshot audit: header, import, members, dangling ids
+  },
+  listCredentialEvidenceAnchorBatchIds: { "src/credential-anchor-audit.ts": 2 }, // the read-only snapshot audit
   getCredentialEvidenceBatchId: { "src/credential-anchoring.ts": 2 },
   CredentialEvidenceRow: {},
   CredentialEvidenceLeaf: {},
@@ -102,7 +106,7 @@ const REFERENCES: Record<string, Record<string, number>> = {
  * the store fails until it is counted here: a bound read that skips the
  * binding is caught by review of exactly that change, never added silently.
  */
-const STORE_MENTIONS = 24;
+const STORE_MENTIONS = 25;
 /** Exported store functions whose names need not say their kind, and why. */
 const NAME_EXEMPT: Record<string, string> = {
   insertSubmittedCredential:

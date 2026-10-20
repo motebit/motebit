@@ -2125,6 +2125,8 @@ describe("freeze guards — registry and installation", () => {
     const ALLOWED: Record<string, string> = {
       "index.ts": "the relay's one connection; installs the freeze guards",
       "cli.ts": "offline operator CLI (relay key backup export/import), not the running relay",
+      "credential-anchor-audit.ts":
+        "offline audit of a local snapshot FILE (readonly connection, every write refused), not the running relay",
     };
     const dir = join(__dirname, "..");
     const opener =

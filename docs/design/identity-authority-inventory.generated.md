@@ -8,7 +8,7 @@ Census for [identity-authority-writers.md](identity-authority-writers.md). Metho
 
 | measure                                                                                                                                                                | n   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
-| files scanned (services/relay/src, packages/persistence/src, packages/runtime/src, packages/mcp-server/src, packages/virtual-accounts/src, packages/core-identity/src) | 226 |
+| files scanned (services/relay/src, packages/persistence/src, packages/runtime/src, packages/mcp-server/src, packages/virtual-accounts/src, packages/core-identity/src) | 227 |
 | identity-keyed tables                                                                                                                                                  | 90  |
 | columns on identity-keyed tables (+ AgentTrustRecord)                                                                                                                  | 916 |
 | authority-bearing columns                                                                                                                                              | 64  |

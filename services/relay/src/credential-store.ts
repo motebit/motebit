@@ -531,6 +531,22 @@ export function listCredentialEvidenceInBatch(
     .all(batchId) as CredentialEvidenceLeaf[];
 }
 
+/**
+ * Every distinct batch id the rows name, for an audit that looks for a row
+ * naming a batch that does not exist (`credential-anchor-audit.ts`).
+ */
+export function listCredentialEvidenceAnchorBatchIds(db: ReadDb): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT DISTINCT anchor_batch_id FROM relay_credentials
+         WHERE anchor_batch_id IS NOT NULL
+         ORDER BY anchor_batch_id`,
+      )
+      .all() as Array<{ anchor_batch_id: string }>
+  ).map((row) => row.anchor_batch_id);
+}
+
 /** The row's batch id; undefined when no row is held. */
 export function getCredentialEvidenceBatchId(
   db: ReadDb,
