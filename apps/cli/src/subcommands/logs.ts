@@ -28,7 +28,8 @@ export async function handleLogs(config: CliConfig): Promise<void> {
 
   const motebitId = requireMotebitId(loadFullConfig());
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = await openMotebitDatabase(dbPath);
+  // Read-only view: accepts the sql.js fallback's snapshot durability.
+  const moteDb = await openMotebitDatabase(dbPath, { durability: "snapshot" });
 
   try {
     const goal = resolveGoal(moteDb.goalStore.list(motebitId), key);

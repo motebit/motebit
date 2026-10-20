@@ -518,7 +518,8 @@ export async function handleDoctor(): Promise<void> {
     // wrong thing — and skipped the outcomes report that would have
     // worked fine.
     try {
-      const db = await openMotebitDatabase(getDbPath(undefined));
+      // Read-only view: accepts the sql.js fallback's snapshot durability.
+      const db = await openMotebitDatabase(getDbPath(undefined), { durability: "snapshot" });
       try {
         // How much of the observed period this machine was awake.
         //
@@ -567,7 +568,8 @@ export async function handleDoctor(): Promise<void> {
     }
 
     try {
-      const db = await openMotebitDatabase(getDbPath(undefined));
+      // Read-only view: accepts the sql.js fallback's snapshot durability.
+      const db = await openMotebitDatabase(getDbPath(undefined), { durability: "snapshot" });
       try {
         // How much of the last week this machine was actually awake.
         //

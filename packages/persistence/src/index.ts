@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/require-await -- Sync SQLite methods implementing async interfaces */
 import { createRequire } from "node:module";
 import { runMigrations } from "@motebit/sqlite-migrations";
-import type { DatabaseDriver, PreparedStatement } from "./driver.js";
+import type { DatabaseDriver, DriverDurability, PreparedStatement } from "./driver.js";
+import type { SqlJsDriverOptions } from "./sqljs-driver.js";
 import { PERSISTENCE_MIGRATIONS } from "./migrations-registry.js";
-export type { DatabaseDriver, PreparedStatement, RunResult } from "./driver.js";
-export { SqlJsDriver } from "./sqljs-driver.js";
+export type { DatabaseDriver, DriverDurability, PreparedStatement, RunResult } from "./driver.js";
+export { SqlJsDriver, sqlJsLockPath } from "./sqljs-driver.js";
+export type { SqlJsDriverOptions, SqlJsFs, SqlJsProcess } from "./sqljs-driver.js";
 export { PERSISTENCE_MIGRATIONS } from "./migrations-registry.js";
 import { SqliteAuditChainStore } from "./sqlite-audit-chain-store.js";
 export { SqliteAuditChainStore };
@@ -4118,20 +4120,47 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   };
 }
 
+/** The better-sqlite3 `Database` constructor, as loaded. */
+export type NativeDatabaseCtor = new (dbPath: string) => unknown;
+
+/** Load the native better-sqlite3 module. Throws exactly what `require` throws. */
+function loadBetterSqlite3(): NativeDatabaseCtor {
+  const require = createRequire(import.meta.url);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("better-sqlite3") as NativeDatabaseCtor;
+}
+
+/**
+ * True only for errors that mean "the native module could not be loaded on
+ * this platform" — missing package, missing or mis-built binding, ABI
+ * mismatch. Never true for an error from opening or migrating a database.
+ */
+export function isNativeModuleLoadFailure(err: unknown): boolean {
+  const code = typeof err === "object" && err !== null && "code" in err ? String(err.code) : "";
+  if (
+    code === "MODULE_NOT_FOUND" ||
+    code === "ERR_MODULE_NOT_FOUND" ||
+    code === "ERR_DLOPEN_FAILED"
+  )
+    return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /Cannot find module|Could not locate the bindings file|NODE_MODULE_VERSION|was compiled against a different Node\.js version|invalid ELF header|wrong ELF class|not a valid Win32 application|Module did not self-register|wrong architecture|incompatible architecture/.test(
+    msg,
+  );
+}
+
 /**
  * Thin wrapper that adapts better-sqlite3's Database to DatabaseDriver.
- * Uses createRequire so better-sqlite3 is loaded lazily (not at module load time).
+ * better-sqlite3 is loaded lazily (not at module load time) by the caller.
  */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- Dynamic require of better-sqlite3 returns untyped Database */
 class BetterSqliteDriver implements DatabaseDriver {
   readonly driverName = "better-sqlite3";
+  readonly durability: DriverDurability = "commit";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private inner: any;
 
-  constructor(dbPath: string) {
-    const require = createRequire(import.meta.url);
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database = require("better-sqlite3");
+  constructor(Database: NativeDatabaseCtor, dbPath: string) {
     this.inner = new Database(dbPath);
   }
 
@@ -4162,26 +4191,83 @@ class BetterSqliteDriver implements DatabaseDriver {
 }
 /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
 
+function openNative(Database: NativeDatabaseCtor, dbPath: string): MotebitDatabase {
+  const driver = new BetterSqliteDriver(Database, dbPath);
+  try {
+    return createMotebitDatabaseFromDriver(driver);
+  } catch (err) {
+    try {
+      driver.close();
+    } catch {
+      // already failing
+    }
+    throw err;
+  }
+}
+
 /**
  * Sync convenience factory — uses better-sqlite3.
  * Throws if better-sqlite3 is not installed.
  */
 export function createMotebitDatabase(dbPath: string): MotebitDatabase {
-  const driver = new BetterSqliteDriver(dbPath);
-  return createMotebitDatabaseFromDriver(driver);
+  return openNative(loadBetterSqlite3(), dbPath);
+}
+
+export interface OpenMotebitDatabaseOptions {
+  /**
+   * The weakest durability the caller accepts. Default `"commit"`: the
+   * sql.js fallback (`"snapshot"`) is refused. Pass `"snapshot"` only from a
+   * path that tolerates losing the last ~1s of acknowledged writes on a
+   * crash — never a money, approval, credential, halt or identity path.
+   */
+  durability?: DriverDurability;
+  /** Options for the sql.js fallback driver. */
+  sqlJs?: SqlJsDriverOptions;
+  /** Test seam: replaces loading better-sqlite3. */
+  loadNative?: () => NativeDatabaseCtor;
 }
 
 /**
  * Async factory with fallback.
- * Tries better-sqlite3 first; if unavailable, falls back to sql.js (WASM).
+ *
+ * Tries better-sqlite3 first. Falls back to sql.js (WASM) ONLY when the
+ * native module itself cannot be loaded (`isNativeModuleLoadFailure`) AND
+ * the caller accepts `durability: "snapshot"`. Any other native failure —
+ * a locked, corrupt or unmigratable database — is rethrown: falling back
+ * would open a stale view of the same file (sql.js cannot read the native
+ * driver's `-wal`) and its next save would overwrite the real one.
  */
-export async function openMotebitDatabase(dbPath: string): Promise<MotebitDatabase> {
+export async function openMotebitDatabase(
+  dbPath: string,
+  options: OpenMotebitDatabaseOptions = {},
+): Promise<MotebitDatabase> {
+  const required = options.durability ?? "commit";
+  let Database: NativeDatabaseCtor;
   try {
-    return createMotebitDatabase(dbPath);
-  } catch {
-    // better-sqlite3 not available — fall back to sql.js
+    Database = (options.loadNative ?? loadBetterSqlite3)();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!isNativeModuleLoadFailure(err)) {
+      throw new Error(`persistence: loading better-sqlite3 failed: ${msg}`, { cause: err });
+    }
+    if (required === "commit") {
+      throw new Error(
+        `persistence: the native SQLite driver (better-sqlite3) could not be loaded (${msg}). ` +
+          `This command needs commit-durable storage; the sql.js fallback only saves ` +
+          `snapshots (up to ~1s of acknowledged writes can be lost on a crash), so it is ` +
+          `refused here. Repair: \`pnpm rebuild better-sqlite3\` or reinstall motebit for ` +
+          `this Node version.`,
+        { cause: err },
+      );
+    }
     const { SqlJsDriver } = await import("./sqljs-driver.js");
-    const driver = await SqlJsDriver.open(dbPath);
-    return createMotebitDatabaseFromDriver(driver);
+    const driver = await SqlJsDriver.open(dbPath, options.sqlJs);
+    try {
+      return createMotebitDatabaseFromDriver(driver);
+    } catch (e) {
+      driver.abandon();
+      throw e;
+    }
   }
+  return openNative(Database, dbPath);
 }

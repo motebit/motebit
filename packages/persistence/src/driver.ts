@@ -11,6 +11,18 @@ export interface PreparedStatement {
 }
 
 /**
+ * What an acknowledged write survives.
+ *
+ * - `"commit"` — every committed transaction is durable before the call
+ *   returns (better-sqlite3: WAL + fsync on commit).
+ * - `"snapshot"` — commits land in memory and reach disk as a whole-database
+ *   snapshot some time later (sql.js: debounced atomic save, plus flush on
+ *   close/exit/SIGINT/SIGTERM). A crash in between loses the writes since
+ *   the last snapshot, never the snapshot itself.
+ */
+export type DriverDurability = "commit" | "snapshot";
+
+/**
  * Abstract database driver interface.
  *
  * Matches the API surface used across all persistence adapter classes:
@@ -19,6 +31,8 @@ export interface PreparedStatement {
  */
 export interface DatabaseDriver {
   readonly driverName: string;
+  /** The guarantee this driver gives an acknowledged write. Absent = unknown; treat as `"snapshot"`. */
+  readonly durability?: DriverDurability;
   exec(sql: string): void;
   prepare(sql: string): PreparedStatement;
   pragma(sql: string): unknown;

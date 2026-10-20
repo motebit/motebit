@@ -31,7 +31,8 @@ import { requireMotebitId } from "./_helpers.js";
 export async function handleRunsList(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = await openMotebitDatabase(dbPath);
+  // Read-only view: accepts the sql.js fallback's snapshot durability.
+  const moteDb = await openMotebitDatabase(dbPath, { durability: "snapshot" });
   try {
     // Waiting on a person, not merely open. `listBlocking` includes
     // `running`, and a run the daemon is executing right now printed
@@ -166,7 +167,8 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
     process.exit(1);
   }
   const motebitId = requireMotebitId(loadFullConfig());
-  const moteDb = await openMotebitDatabase(getDbPath(config.dbPath));
+  // Read-only view: accepts the sql.js fallback's snapshot durability.
+  const moteDb = await openMotebitDatabase(getDbPath(config.dbPath), { durability: "snapshot" });
   try {
     // Exact ids go through the indexed lookup, like `runs ack` does. A
     // window-only scan failed to find a full run id pasted from an older

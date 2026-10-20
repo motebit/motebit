@@ -107,7 +107,8 @@ export async function handleGoalList(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = await openMotebitDatabase(dbPath);
+  // Read-only view: accepts the sql.js fallback's snapshot durability.
+  const moteDb = await openMotebitDatabase(dbPath, { durability: "snapshot" });
   const goals = moteDb.goalStore.list(motebitId);
 
   if (goals.length === 0) {
@@ -153,7 +154,8 @@ export async function handleGoalOutcomes(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
 
   const dbPath = getDbPath(config.dbPath);
-  const moteDb = await openMotebitDatabase(dbPath);
+  // Read-only view: accepts the sql.js fallback's snapshot durability.
+  const moteDb = await openMotebitDatabase(dbPath, { durability: "snapshot" });
 
   // Find goal by prefix match
   const goals = moteDb.goalStore.list(motebitId);
