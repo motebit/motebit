@@ -4171,17 +4171,49 @@ export function createMotebitDatabase(dbPath: string): MotebitDatabase {
   return createMotebitDatabaseFromDriver(driver);
 }
 
+/** Why `openMotebitDatabase` opened on sql.js instead of better-sqlite3. */
+export interface DriverFallbackEvent {
+  /** The error better-sqlite3 threw (typically: module or native binding missing). */
+  cause: unknown;
+}
+
+const driverFallbackListeners = new Set<(event: DriverFallbackEvent) => void>();
+
+/**
+ * Subscribe to `openMotebitDatabase` falling back to sql.js. Fires after the
+ * sql.js database has opened, once per fallback open. A surface that keeps
+ * the fallback (the CLI — better-sqlite3 is an optionalDependency so a
+ * missing prebuild cannot fail its install) uses this to say which driver it
+ * runs on; the fallback itself stays silent so the package never writes to a
+ * terminal. Listener errors are swallowed — a notice must never fail an open.
+ * Returns the unsubscribe function.
+ */
+export function onDriverFallback(listener: (event: DriverFallbackEvent) => void): () => void {
+  driverFallbackListeners.add(listener);
+  return () => {
+    driverFallbackListeners.delete(listener);
+  };
+}
+
 /**
  * Async factory with fallback.
- * Tries better-sqlite3 first; if unavailable, falls back to sql.js (WASM).
+ * Tries better-sqlite3 first; if unavailable, falls back to sql.js (WASM)
+ * and notifies `onDriverFallback` listeners.
  */
 export async function openMotebitDatabase(dbPath: string): Promise<MotebitDatabase> {
   try {
     return createMotebitDatabase(dbPath);
-  } catch {
+  } catch (cause: unknown) {
     // better-sqlite3 not available — fall back to sql.js
     const { SqlJsDriver } = await import("./sqljs-driver.js");
     const driver = await SqlJsDriver.open(dbPath);
+    for (const listener of driverFallbackListeners) {
+      try {
+        listener({ cause });
+      } catch {
+        // A notice must never fail the open.
+      }
+    }
     return createMotebitDatabaseFromDriver(driver);
   }
 }

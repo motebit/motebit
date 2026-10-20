@@ -188,7 +188,9 @@ The intelligence is pluggable: a motebit's identity, memory, and trust persist i
 
 ## Troubleshooting
 
-If `npm install -g motebit` fails with native module errors (`better-sqlite3`):
+The native SQLite driver (`better-sqlite3`) is an optional dependency. It installs from a prebuilt binary, or compiles when a C/C++ toolchain is present; when neither works, npm skips it and the install still succeeds. The CLI then runs on the sql.js (WASM) fallback and prints one notice on stderr saying so. The fallback is less durable: the database is held in memory and rewritten to disk up to about a second after each change, so a crash in that window loses the latest writes, and two motebit processes sharing a database can overwrite each other. `motebit doctor` shows the active driver.
+
+To get the native driver back, install a toolchain and reinstall (`npm install -g motebit`):
 
 - **macOS**: Install Xcode command line tools: `xcode-select --install`
 - **Linux**: Install build essentials: `apt install build-essential python3` (Debian/Ubuntu)

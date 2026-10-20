@@ -92,6 +92,7 @@ if ! npm install -g "$TARBALL" >"$WORK/install.log" 2>&1; then
   tail -30 "$WORK/install.log" >&2
   fail "npm install -g exited non-zero"
 fi
+tail -3 "$WORK/install.log"
 
 BIN="$PREFIX/bin/motebit"
 BINDING="$(find "$PREFIX/lib/node_modules" -name better_sqlite3.node -path '*better-sqlite3/build/*' 2>/dev/null | head -1)"

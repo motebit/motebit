@@ -170,9 +170,6 @@ importers:
       '@x402/hono':
         specifier: ^2.22.0
         version: 2.22.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hono@4.13.13)(typescript@5.9.3)(utf-8-validate@6.0.6)
-      better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
       hono:
         specifier: '>=4.13.5 <5.0.0'
         version: 4.13.13
@@ -203,6 +200,10 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+    optionalDependencies:
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
     devDependencies:
       '@motebit/ai-core':
         specifier: workspace:*

@@ -8,6 +8,7 @@ import { applyConfiguredMaxTokens, applyLaunchProvider } from "./provider-config
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
 import { installTaskPollFault } from "./fault-injection.js";
+import { installSqliteFallbackNotice } from "./sqlite-fallback-notice.js";
 import {
   parseCliArgs,
   printHelp,
@@ -176,6 +177,7 @@ async function main(): Promise<void> {
   let config: CliConfig;
   try {
     installTaskPollFault();
+    installSqliteFallbackNotice();
     config = parseCliArgs();
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

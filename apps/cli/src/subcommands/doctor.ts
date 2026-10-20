@@ -75,7 +75,7 @@ export async function handleDoctor(): Promise<void> {
     checks.push({ name: "Config dir", ok: false, detail: `Cannot write to ${CONFIG_DIR}` });
   }
 
-  // SQLite driver (sql.js)
+  // SQLite driver (better-sqlite3 when installed, else the sql.js fallback)
   try {
     const tmpDbPath = path.join(CONFIG_DIR, ".doctor-test.db");
     const db = await openMotebitDatabase(tmpDbPath);
@@ -92,7 +92,14 @@ export async function handleDoctor(): Promise<void> {
     } catch {
       /* ignore */
     }
-    checks.push({ name: "SQLite", ok: true, detail: `${driverName} loaded and functional` });
+    checks.push({
+      name: "SQLite",
+      ok: true,
+      detail:
+        driverName === "sql.js"
+          ? "sql.js loaded and functional (fallback — native better-sqlite3 unavailable; writes reach disk ~1s after each change)"
+          : `${driverName} loaded and functional`,
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     checks.push({ name: "SQLite", ok: false, detail: msg });
