@@ -10,7 +10,12 @@
 import { describe, it, expect } from "vitest";
 import { createTestRelay, seedX402PaidTask } from "./test-helpers.js";
 import { creditAccount } from "../accounts.js";
-import { allocationEscrowHeld, allocationLedgerPosition } from "../dispute-fund-ledger.js";
+import {
+  allocationEscrowHeld,
+  allocationLedgerPosition,
+  backfillDisputeFundActions,
+  DISPUTE_FUND_ACTIONS_DDL,
+} from "../dispute-fund-ledger.js";
 import { backfillAllocationEscrow } from "../allocation-escrow.js";
 
 function insertDispute(
@@ -96,5 +101,85 @@ describe("allocationEscrowHeld", () => {
     expect(allocationLedgerPosition(db, a1).reviewReason).toBe("legacy_ambiguous_dispute_rows");
     expect(allocationLedgerPosition(db, a2).reviewReason).toBe("legacy_ambiguous_dispute_rows");
     await relay.close();
+  });
+});
+
+describe("backfillDisputeFundActions — deterministic over same-millisecond finals (#1137)", () => {
+  /** Two legacy finals on one allocation, both stamped in the same millisecond. */
+  async function worldWithTiedFinals(): Promise<{
+    relay: Awaited<ReturnType<typeof createTestRelay>>;
+    allocationId: string;
+    first: string;
+    second: string;
+  }> {
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    const db = relay.moteDb.db;
+    const task = seedX402PaidTask(relay, {
+      workerId: "wrk-tie",
+      delegatorId: "del-tie",
+      prompt: "p",
+      unitCostUsd: 1.0,
+    });
+    const allocationId = `x402-${task}`;
+    const held = allocationEscrowHeld(db, allocationId);
+    const finalAt = Date.now();
+    const insertFinal = (id: string): void => {
+      db.prepare(
+        `INSERT INTO relay_disputes
+         (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state,
+          amount_locked, filing_fee, filed_at, evidence_deadline, body_json, filer_role,
+          fund_action, split_ratio, final_at)
+         VALUES (?, ?, ?, 'del-tie', 'wrk-tie', 'quality', 'x', 'final', ?, 0, ?, ?, '', 'delegator',
+                 'refund_delegator', 1, ?)`,
+      ).run(id, task, allocationId, held, finalAt, finalAt, finalAt);
+    };
+    // A pre-fix relay admitted two live disputes on one task; the index that
+    // forbids it today is dropped to model such a database (as the
+    // conservation harness's legacy worlds do).
+    for (const { name } of db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'relay_disputes' AND sql LIKE 'CREATE UNIQUE%'",
+      )
+      .all() as Array<{ name: string }>) {
+      db.exec(`DROP INDEX IF EXISTS "${name}"`);
+    }
+    insertFinal("dsp-tie-first");
+    insertFinal("dsp-tie-second");
+    db.exec("DELETE FROM relay_dispute_fund_actions");
+    db.exec(DISPUTE_FUND_ACTIONS_DDL);
+    return { relay, allocationId, first: "dsp-tie-first", second: "dsp-tie-second" };
+  }
+
+  it("claims exactly one fund action, for the earliest-inserted final, and a rerun claims nothing more", async () => {
+    const { relay, allocationId, first } = await worldWithTiedFinals();
+    const db = relay.moteDb.db;
+    expect(backfillDisputeFundActions(db)).toBe(1);
+    const rows = db
+      .prepare("SELECT dispute_id FROM relay_dispute_fund_actions WHERE allocation_id = ?")
+      .all(allocationId) as Array<{ dispute_id: string }>;
+    expect(rows.map((r) => r.dispute_id)).toEqual([first]);
+    // Idempotent: the reconstruction over identical rows adds nothing.
+    expect(backfillDisputeFundActions(db)).toBe(0);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM relay_dispute_fund_actions").get() as { n: number }).n,
+    ).toBe(1);
+    await relay.close();
+  });
+
+  it("two databases built from the same rows name the same claimant", async () => {
+    const a = await worldWithTiedFinals();
+    const b = await worldWithTiedFinals();
+    backfillDisputeFundActions(a.relay.moteDb.db);
+    backfillDisputeFundActions(b.relay.moteDb.db);
+    const claimant = (db: typeof a.relay.moteDb.db, allocationId: string): string =>
+      (
+        db
+          .prepare("SELECT dispute_id FROM relay_dispute_fund_actions WHERE allocation_id = ?")
+          .get(allocationId) as { dispute_id: string }
+      ).dispute_id;
+    expect(claimant(a.relay.moteDb.db, a.allocationId)).toBe(a.first);
+    expect(claimant(b.relay.moteDb.db, b.allocationId)).toBe(b.first);
+    await a.relay.close();
+    await b.relay.close();
   });
 });
