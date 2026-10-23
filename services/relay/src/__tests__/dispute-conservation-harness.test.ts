@@ -1533,21 +1533,30 @@ function checkLaws(w: World): Array<{ law: string; detail: string }> {
     // L5 The first verdict to become final is the allocation's one fund action:
     // no other dispute moves money afterwards, whether or not that verdict
     // itself moved any (release_to_worker after settlement moves nothing).
-    const firstFinal = db
-      .prepare(
-        "SELECT dispute_id FROM relay_disputes WHERE allocation_id = ? AND state = 'final' ORDER BY final_at, rowid LIMIT 1",
-      )
+    // "First" is read from the relay's own record of it — the write-once claim
+    // in relay_dispute_fund_actions (allocation_id PRIMARY KEY), written in
+    // the same transaction as the movement (dispute-v1 §7.3) — never
+    // re-derived from `final_at`: two finals in one millisecond tie on it and
+    // rowid then names a dispute the claim may not (#1137). A row of an own
+    // dispute with no claim at all is money that moved outside the one fund
+    // action.
+    const claim = db
+      .prepare("SELECT dispute_id FROM relay_dispute_fund_actions WHERE allocation_id = ?")
       .get(a.allocation_id) as { dispute_id: string } | undefined;
-    if (firstFinal) {
-      const others = fresh.filter(
-        (t) => own.has(t.reference_id) && t.reference_id !== firstFinal.dispute_id,
-      );
+    const ownFresh = fresh.filter((t) => own.has(t.reference_id));
+    if (claim) {
+      const others = ownFresh.filter((t) => t.reference_id !== claim.dispute_id);
       if (others.length > 0) {
         out.push({
           law: "L5 first-final-owns-funds",
-          detail: `${others.length} row(s) from a dispute other than the first final (${others.map((t) => t.reference_id).join(",")})`,
+          detail: `${others.length} row(s) from a dispute other than the one holding the fund action (${[...new Set(others.map((t) => t.reference_id))].join(",")}; claim ${claim.dispute_id})`,
         });
       }
+    } else if (ownFresh.length > 0) {
+      out.push({
+        law: "L5 first-final-owns-funds",
+        detail: `${ownFresh.length} row(s) moved by ${[...new Set(ownFresh.map((t) => t.reference_id))].join(",")} with no fund-action claim for ${a.allocation_id}`,
+      });
     }
 
     // L11 SWEEP-CONSERVATION / L12 NO-STRAND, from the harness's own reading.
