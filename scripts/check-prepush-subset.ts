@@ -36,7 +36,13 @@
  * The CI side, read with a real YAML parser:
  *   - the workflow runs on `push` to `main` with no path/branch filter and no
  *     `defaults`, and on `merge_group` (checks_requested) so the merge queue's
- *     required checks report; its `env` is exactly the pinned turbo-cache block;
+ *     required checks report; its `env` is exactly the pinned turbo-cache block
+ *     (whose two secrets resolve to '' on any event but push / merge_group);
+ *     every other `${{ }}` expression and every `if:` references only
+ *     CI_EXPRESSION_ALLOWLIST paths (case-insensitive) and calls only
+ *     CI_EXPRESSION_FUNCTIONS, deny by default, so no credential context
+ *     appears outside that env; no job has `uses:` / `secrets:` /
+ *     `permissions:`; top-level `permissions` is exactly `{ contents: read }`;
  *   - for each task key the hook runs, a step whose `run` EXACTLY equals the
  *     allowlisted CI form, with only `name`/`run` keys, in an allowlisted job
  *     whose `if:`/`needs:` chain is exactly the pinned one (and whose needs
@@ -1095,12 +1101,203 @@ const STEP_ACTIONS = [
   "actions/upload-artifact@",
   "actions/download-artifact@",
 ];
-const WORKFLOW_KEYS = new Set(["name", "on", "concurrency", "env", "jobs"]);
+const WORKFLOW_KEYS = new Set(["name", "on", "concurrency", "permissions", "env", "jobs"]);
+/**
+ * The turbo remote-cache block. The two secrets are granted to an ALLOWLIST of
+ * events (push to main, merge_group: code that already passed the one-approval
+ * ruleset) and resolve to '' on every other event, `pull_request` included.
+ * PR-head code (install lifecycle scripts, tests) runs in these jobs and could
+ * otherwise read the token and upload artifacts a later main / merge-queue
+ * build restores. turbo treats an empty TURBO_TOKEN as "Remote caching
+ * disabled" (fork PRs have always run that way: a fork gets '' for a secret).
+ * Scope of the claim: a pull_request run executes the PR's OWN ci.yml, so
+ * this pin does not bind a same-repo PR that edits ci.yml (only the founder,
+ * and dependabot, whose runs get a read-only token and Dependabot secrets,
+ * can push one); it keeps that edit from merging. The structural fix, the
+ * secrets in a branch-restricted environment, is deferred.
+ */
 export const WORKFLOW_ENV: Record<string, string> = {
-  TURBO_TOKEN: "${{ secrets.TURBO_TOKEN }}",
+  TURBO_TOKEN:
+    "${{ (github.event_name == 'push' || github.event_name == 'merge_group') && secrets.TURBO_TOKEN || '' }}",
   TURBO_TEAM: "${{ vars.TURBO_TEAM }}",
-  TURBO_REMOTE_CACHE_SIGNATURE_KEY: "${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}",
+  TURBO_REMOTE_CACHE_SIGNATURE_KEY:
+    "${{ (github.event_name == 'push' || github.event_name == 'merge_group') && secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY || '' }}",
 };
+/**
+ * The GITHUB_TOKEN's whole authority in ci.yml. No CI job calls the GitHub API,
+ * pushes, comments, or reads another run's artifacts, so read access to the
+ * repository contents (checkout) is all any job needs. Any other value (another
+ * scope, `write`, `read-all`, `write-all`, or absent, i.e. the repo default) is
+ * RED, and a job-level `permissions:` is RED on every job, pinned or not.
+ */
+export const WORKFLOW_PERMISSIONS: Record<string, string> = { contents: "read" };
+
+/** Job keys refused on EVERY ci.yml job (pinned or not): a reusable-workflow call and its secrets. */
+export const CI_FORBIDDEN_JOB_KEYS = ["uses", "secrets"] as const;
+
+/**
+ * DENY BY DEFAULT over GitHub expressions. Every `${{ … }}` in ci.yml — in any
+ * key or value outside the pinned workflow `env` (compared exactly above), and
+ * every `if:` (which GitHub evaluates as an expression even without `${{ }}`)
+ * — may reference ONLY these context paths (compared lowercased: GitHub's
+ * contexts are case-insensitive, so `Secrets.X` / `GITHUB.TOKEN` are the same
+ * reference) and call only CI_EXPRESSION_FUNCTIONS. Anything else is RED:
+ * `secrets` in any case, `github.token`, bare `github` / `toJSON(github)`,
+ * `vars`, `env`, an index `x['y']`, a filter `x.*`, an unparseable or
+ * unterminated expression. An entry no expression uses is RED too, so the list
+ * stays exactly what ci.yml reads. Value: where ci.yml uses it.
+ */
+export const CI_EXPRESSION_ALLOWLIST: Record<string, string> = {
+  "github.workflow": "concurrency.group",
+  "github.ref": "concurrency.group",
+  "github.event_name":
+    "job if: of gate-effectiveness-shard, gate-self-tests, activation-effectiveness, github-action-smoke, sibling-audit, changeset; changes filter run; env EVENT (gate-effectiveness), DIFF_BASE (github-action-smoke, sibling-audit), CHANGESET_BASE_REF",
+  "github.base_ref": "changes filter run; github-action-smoke env DIFF_BASE",
+  "github.event.merge_group.base_sha":
+    "changes filter run; env DIFF_BASE (github-action-smoke, sibling-audit), CHANGESET_BASE_REF",
+  "matrix.shard": "test-coverage + gate-effectiveness-shard step run",
+  "strategy.job-index": "test-coverage + gate-effectiveness-shard upload `with.name`",
+  "runner.temp": "github-action-smoke `with.path`",
+  "needs.changes.outputs.scripts":
+    "job if: of gate-effectiveness-shard, gate-self-tests, activation-effectiveness; gate-effectiveness env SCRIPTS",
+  "needs.changes.outputs.relay": "activation-effectiveness job if:",
+  "needs.changes.result": "gate-effectiveness env CHANGES",
+  "needs.check-static.result": "check env STATIC",
+  "needs.test-coverage.result": "check env TESTS",
+  "needs.gate-effectiveness-shard.result": "gate-effectiveness env SHARDS",
+  "needs.gate-self-tests.result": "gate-effectiveness env SELF_TESTS",
+  "steps.filter.outputs.scripts": "changes job `outputs.scripts`",
+  "steps.filter.outputs.relay": "changes job `outputs.relay`",
+  "steps.scope.outputs.run": "github-action-smoke step if:",
+  "steps.decide.outputs.required": "gate-effectiveness step if:",
+  "steps.gen.outputs.motebit_id": "github-action-smoke env WANT_ID",
+  "steps.gen.outputs.public_key": "github-action-smoke env WANT_PK",
+  "steps.action.outputs.valid": "github-action-smoke env VALID",
+  "steps.action.outputs.motebit-id": "github-action-smoke env GOT_ID",
+  "steps.action.outputs.public-key": "github-action-smoke env GOT_PK",
+  "steps.tampered.outcome": "github-action-smoke env OUTCOME",
+  "steps.tampered.outputs.valid": "github-action-smoke env VALID (tampered run)",
+};
+export const CI_EXPRESSION_FUNCTIONS: Record<string, string> = {
+  always:
+    "if: of the check + gate-effectiveness jobs; steps of check-static, test-coverage, python-conformance, python-receipt-verifier-conformance",
+  success: "steps of python-conformance, python-receipt-verifier-conformance",
+  failure: "e2e screenshot-upload step",
+  format: "github-action-smoke env DIFF_BASE (`format('origin/{0}', github.base_ref)`)",
+};
+
+/**
+ * Read one GitHub expression conservatively: string literals dropped, then a
+ * sticky tokenizer that knows only paths (`a.b-c.d`), numbers, true/false/null,
+ * `== != && || ! < > <= >= ( )`. Anything it does not recognise is an error,
+ * never skipped.
+ */
+export function readExpression(
+  expr: string,
+): { refs: string[]; fns: string[] } | { error: string } {
+  let s = "";
+  for (let i = 0; i < expr.length;) {
+    if (expr[i] !== "'") {
+      s += expr[i++];
+      continue;
+    }
+    let j = i + 1;
+    for (;;) {
+      if (j >= expr.length) return { error: "unterminated string literal" };
+      if (expr[j] === "'") {
+        if (expr[j + 1] === "'") {
+          j += 2;
+          continue;
+        }
+        break;
+      }
+      j++;
+    }
+    s += " 0 ";
+    i = j + 1;
+  }
+  const refs: string[] = [];
+  const fns: string[] = [];
+  const tok =
+    /\s+|==|!=|&&|\|\||<=|>=|[!()<>,]|\d+(?:\.\d+)?|([A-Za-z_][A-Za-z0-9_-]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_-]*)*)(\s*\()?/y;
+  let at = 0;
+  while (at < s.length) {
+    tok.lastIndex = at;
+    const m = tok.exec(s);
+    if (!m)
+      return { error: `\`${s.slice(at, at + 12)}\` is outside the reviewed expression grammar` };
+    at = tok.lastIndex;
+    const path = m[1]?.replace(/\s+/g, "").toLowerCase();
+    if (path === undefined) continue;
+    if (m[2] !== undefined) fns.push(path);
+    else if (!["true", "false", "null"].includes(path)) refs.push(path);
+  }
+  return { refs, fns };
+}
+
+/** Every expression in a parsed ci.yml, judged against the allowlists (see CI_EXPRESSION_ALLOWLIST). */
+export function ciExpressionViolations(
+  wf: Record<string, unknown>,
+  stats: { expressions: number } = { expressions: 0 },
+): string[] {
+  const out: string[] = [];
+  const used = new Set<string>();
+  const judge = (expr: string, where: string): void => {
+    stats.expressions++;
+    const r = readExpression(expr);
+    if ("error" in r) {
+      out.push(
+        `${CI} \`${where}\` has an expression the gate cannot read (${r.error}): \`${expr.trim()}\` — rewrite it with plain context paths, string literals and == != && || ! ( ), or extend readExpression in scripts/check-prepush-subset.ts deliberately`,
+      );
+      return;
+    }
+    for (const f of r.fns) {
+      if (CI_EXPRESSION_FUNCTIONS[f] === undefined)
+        out.push(
+          `${CI} \`${where}\` calls \`${f}()\`, not one of ${Object.keys(CI_EXPRESSION_FUNCTIONS).join(", ")} — remove it (\`toJSON(github)\` / \`toJSON(secrets)\` serialise credentials), or add it to CI_EXPRESSION_FUNCTIONS in scripts/check-prepush-subset.ts with where it is used`,
+        );
+      else used.add(`${f}()`);
+    }
+    for (const ref of r.refs) {
+      if (CI_EXPRESSION_ALLOWLIST[ref] === undefined)
+        out.push(
+          `${CI} \`${where}\` references \`${ref}\`, which is not in CI_EXPRESSION_ALLOWLIST — a credential (\`secrets\`, \`github.token\`, the whole \`github\` context) may enter ci.yml only through the pinned workflow \`env:\` (WORKFLOW_ENV), whose event allowlist withholds it from pull_request runs; remove the reference, or, for a non-credential field, add it to CI_EXPRESSION_ALLOWLIST in scripts/check-prepush-subset.ts with where it is used`,
+        );
+      else used.add(ref);
+    }
+  };
+  const text = (s: string, where: string, isIf: boolean): void => {
+    const exprs = [...s.matchAll(/\$\{\{([\s\S]*?)\}\}/g)];
+    for (const m of exprs) judge(m[1]!, where);
+    if (s.replace(/\$\{\{[\s\S]*?\}\}/g, "").includes("${{"))
+      out.push(`${CI} \`${where}\` has an unterminated \`\${{\` — close it, or remove it`);
+    if (isIf && exprs.length === 0) judge(s, where);
+  };
+  const walk = (v: unknown, where: string, key: string): void => {
+    if (typeof v === "string") text(v, where, key.toLowerCase() === "if");
+    else if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${where}[${i}]`, ""));
+    else if (v && typeof v === "object")
+      for (const [k, x] of Object.entries(v)) {
+        const at = where ? `${where}.${k}` : k;
+        if (k === "<<")
+          out.push(
+            `${CI} \`${at}\` is a YAML merge key — the gate's parser does not expand it, so what it merges (a \`permissions:\`, \`uses:\`, \`secrets:\`, an expression) would be judged as a nested map, not as the keys GitHub may read; write the keys out in place`,
+          );
+        text(k, `${at} (key)`, false);
+        walk(x, at, k);
+      }
+  };
+  for (const [k, v] of Object.entries(wf)) if (k !== "env") walk(v, k, k);
+  for (const name of [
+    ...Object.keys(CI_EXPRESSION_ALLOWLIST),
+    ...Object.keys(CI_EXPRESSION_FUNCTIONS).map((f) => `${f}()`),
+  ])
+    if (!used.has(name))
+      out.push(
+        `${CI} no expression uses \`${name}\` any more — remove it from CI_EXPRESSION_ALLOWLIST / CI_EXPRESSION_FUNCTIONS in scripts/check-prepush-subset.ts (the allowlist is exactly what ci.yml reads)`,
+      );
+  return out;
+}
 
 /** Root package.json scripts the forms reach, by exact value. */
 export const ROOT_SCRIPTS: Record<string, string> = {
@@ -1358,7 +1555,28 @@ export function evaluateCi(
       `${CI} workflow \`env:\` must be exactly the pinned turbo remote-cache block ${JSON.stringify(WORKFLOW_ENV)}; got ${JSON.stringify(wf.env)}`,
     );
   }
+  if (JSON.stringify(wf.permissions ?? null) !== JSON.stringify(WORKFLOW_PERMISSIONS)) {
+    violations.push(
+      `${CI} workflow \`permissions:\` must be exactly ${JSON.stringify(WORKFLOW_PERMISSIONS)}; got ${JSON.stringify(wf.permissions ?? null)} — no CI job calls the GitHub API, pushes, comments or reads another run's artifacts, so set the top-level block to \`permissions: { contents: read }\` and nothing else; a job that truly needs more belongs in its own workflow with its own reviewed grant (then change WORKFLOW_PERMISSIONS in scripts/check-prepush-subset.ts deliberately)`,
+    );
+  }
+  violations.push(...ciExpressionViolations(wf));
   const jobs = (wf.jobs ?? {}) as Record<string, Job>;
+  for (const [name, job] of Object.entries(jobs)) {
+    if (!job || typeof job !== "object") continue;
+    // Compared case-insensitively: `Permissions:` / `Uses:` / `Secrets:` are refused too.
+    for (const k of Object.keys(job)) {
+      const lower = k.toLowerCase();
+      if (lower === "permissions")
+        violations.push(
+          `${CI} job \`${name}\` declares its own \`${k}:\` ${JSON.stringify(job[k])} — a job-level grant replaces the pinned top-level ${JSON.stringify(WORKFLOW_PERMISSIONS)} for that job; remove it (a job that needs more belongs in its own workflow with its own reviewed grant)`,
+        );
+      if ((CI_FORBIDDEN_JOB_KEYS as readonly string[]).includes(lower))
+        violations.push(
+          `${CI} job \`${name}\` has \`${k}:\` ${JSON.stringify(job[k])} — a job-level \`uses:\` calls a reusable workflow and \`secrets:\` (incl. \`secrets: inherit\`) hands it the repo's secrets, on every event this workflow runs on, pull_request included; remove it (work that needs secrets belongs in its own workflow that never runs PR-head code)`,
+        );
+    }
+  }
   const chainOk = (name: string, seen = new Set<string>()): boolean => {
     const job = jobs[name];
     const spec = CI_JOBS[name];
@@ -1396,6 +1614,10 @@ export function evaluateCi(
     }
     for (const k of Object.keys(job)) {
       if (k === "strategy" && spec0.strategy !== undefined) continue;
+      if (k.toLowerCase() === "permissions") {
+        ok = false; // reported once, for every job, by the permissions loop above
+        continue;
+      }
       if (!JOB_KEYS.has(k)) {
         violations.push(
           `${CI} job \`${name}\` has \`${k}:\` — not allowed on a counterpart job (only ${[...JOB_KEYS].join(", ")})`,
@@ -1730,13 +1952,18 @@ function main(): void {
       invariant:
         "pre-push ⊆ CI, deny by default — every command the local pre-push hook runs is a pure builtin, an exact allowlisted line, or a run_phase form mapped to a CI step that runs at least as wide (exact `run`, only name/run keys, in a job with the pinned if:/needs: chain, in a workflow on every push to main)",
       sites: violations,
-      canonical: `${CI} (the authority) and ${HOOK} (the fast subset); turbo.json (test / test:coverage cache: false, resolved per package); the allowlists are RUN_PHASE_FORMS / EXACT_COMMANDS / ASSIGNMENTS / PINNED_FUNCTIONS / CI_FORMS / CI_JOBS / CI_JOB_STEPS / ROOT_SCRIPTS in scripts/check-prepush-subset.ts`,
+      canonical: `${CI} (the authority) and ${HOOK} (the fast subset); turbo.json (test / test:coverage cache: false, resolved per package); the allowlists are RUN_PHASE_FORMS / EXACT_COMMANDS / ASSIGNMENTS / PINNED_FUNCTIONS / CI_FORMS / CI_JOBS / CI_JOB_STEPS / ROOT_SCRIPTS / WORKFLOW_ENV / WORKFLOW_PERMISSIONS / CI_EXPRESSION_ALLOWLIST / CI_EXPRESSION_FUNCTIONS in scripts/check-prepush-subset.ts`,
       fix: "Undo the edit, or — if it is deliberate — add its CI counterpart first and then extend the matching table in scripts/check-prepush-subset.ts (a changed pinned function: review it and paste the printed hash into PINNED_FUNCTIONS). A cached test task: delete the package-level turbo.json test/test:coverage override so the root's cache: false applies.",
       doctrine: "docs/drift-defenses.md",
     });
   }
   const history = historyViolations(
     ((parseYaml(inp.ci) as { jobs?: Record<string, Job> }).jobs ?? {}) as Record<string, Job>,
+  );
+  const exprStats = { expressions: 0 };
+  ciExpressionViolations(parseYaml(inp.ci) as Record<string, unknown>, exprStats);
+  console.log(
+    `✓ check-prepush-subset (ci.yml authority): top-level permissions exactly ${JSON.stringify(WORKFLOW_PERMISSIONS)}, no job with ${["permissions", ...CI_FORBIDDEN_JOB_KEYS].join("/")}; ${exprStats.expressions} expression(s) in every key, value and if: outside the pinned env read against ${Object.keys(CI_EXPRESSION_ALLOWLIST).length} allowlisted context path(s) + ${Object.keys(CI_EXPRESSION_FUNCTIONS).length} function(s), none outside them.`,
   );
   console.log(
     `✓ check-prepush-subset: ${history.jobs.length} ${CI} job(s) run a base-ref-dependent gate (${BASE_REF_GATES.join(", ")}) [${history.jobs.join(", ")}], each on a full-history checkout; ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned; the shard runner executed ${runner.launches} time(s) against a stub turbo — each launched exactly its shard's args and exited with turbo's status; the outcome verifier judged ${outcomes.runs} fixture(s) (2 as the CI command) — green on the green one, red on all ${Object.keys(RED_VARIANTS).length} red ones.`,

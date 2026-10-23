@@ -1,0 +1,20 @@
+{
+  "bundle": {
+    "motebit_id": "65b60673-d6ed-884b-b01c-2c222d82ada0",
+    "created_at": "2026-05-28T20:26:40.000Z",
+    "current_public_key": "d6eed8963f8bc1e22d4b30966298ab87d0402efb8599cd1c20eb87d1d891969a",
+    "succession": [
+      {
+        "old_public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+        "new_public_key": "d6eed8963f8bc1e22d4b30966298ab87d0402efb8599cd1c20eb87d1d891969a",
+        "timestamp": 1791872519555,
+        "reason": "rotation",
+        "suite": "motebit-jcs-ed25519-hex-v1",
+        "old_key_signature": "b5d655c07e87b147773eb4911b5f6414e8791013048b216b7ff854e16464c79bcb273d6282b40c09ac5bff674d60fc2e1fd009861e2e81a51b0318f4c6d5b404",
+        "new_key_signature": "0994d629927788f66db135561383f7e6ce6500bf8eaba6ef595d366235344af726b60745a48e45c9824f8e542c658e7d264004e5226f195940e163e78fa9ff0b"
+      }
+    ],
+    "anchored": null
+  },
+  "memos": []
+}

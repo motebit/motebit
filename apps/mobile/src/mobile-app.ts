@@ -137,6 +137,7 @@ export type { SyncStatus } from "./sync-controller";
 import { MobileMcpManager } from "./mcp-manager";
 import { MobilePairingManager } from "./pairing-manager";
 import { MobilePushTokenManager } from "./push-token-manager";
+import type { RelayChannel } from "./relay-session";
 import {
   canExecuteDelegatedTask,
   mobileServingAllowed,
@@ -662,8 +663,9 @@ export class MobileApp {
     getKeyring: () => this.keyring,
     getPrivKeyBytes: () => this.getPrivKeyBytes(),
     createSyncToken: (aud) => this.createSyncToken(aud),
-    registerPushToken: (url) => this.registerPushToken(url),
-    startPushLifecycle: () => this.startPushLifecycle(),
+    registerPushToken: (url, session) => this.registerPushToken(url, session),
+    removePushToken: (url) => this.removePushToken(url),
+    startPushLifecycle: (session) => this.startPushLifecycle(session),
     stopPushLifecycle: () => this.stopPushLifecycle(),
   });
 
@@ -2144,16 +2146,16 @@ export class MobileApp {
 
   // === Push Token Lifecycle (delegates to MobilePushTokenManager) ===
 
-  registerPushToken(syncUrl: string): Promise<void> {
-    return this.pushTokens.registerPushToken(syncUrl);
+  registerPushToken(syncUrl: string, session?: RelayChannel): Promise<void> {
+    return this.pushTokens.registerPushToken(syncUrl, session);
   }
 
   removePushToken(syncUrl: string): Promise<void> {
     return this.pushTokens.removePushToken(syncUrl);
   }
 
-  startPushLifecycle(): void {
-    this.pushTokens.startPushLifecycle();
+  startPushLifecycle(session?: RelayChannel): void {
+    this.pushTokens.startPushLifecycle(session);
   }
 
   stopPushLifecycle(): void {
@@ -2342,6 +2344,11 @@ export class MobileApp {
 
   disconnectSync(): Promise<void> {
     return this.sync.disconnectSync();
+  }
+
+  /** Bumped by every startSync / stopSync (relay-optin's supersede check). */
+  get relayGeneration(): number {
+    return this.sync.relayGeneration;
   }
 
   syncNow(): Promise<{

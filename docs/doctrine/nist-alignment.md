@@ -9,9 +9,9 @@ The April 2, 2026 NCCoE submission ([`nist-submission.md`](../../nist-submission
 NIST AI guidance shifted center of gravity over 2023–2026:
 
 - **2023–2024.** Voluntary risk-management frameworks (AI RMF 1.0; GenAI Profile / AI 600-1). Product-level guidance for individual AI systems.
-- **2024–early 2025.** Dual-use foundation model reporting (AI 600-2) and content-authenticity initiatives. Briefly mandatory under EO 14110.
+- **2024–early 2025.** Dual-use foundation model reporting (EO 14110, administered through Commerce/BIS; NIST's related guidance is the draft NIST AI 800-1) and content-authenticity initiatives. Briefly mandatory under EO 14110.
 - **Early 2025.** EO 14110 rescinded; AI Safety Institute partially defunded; federal mandatory-reporting trajectory collapses.
-- **2025–2026.** Voluntary frameworks survive at the federal layer; state-level mandates land (Colorado AI Act, CA SB-1047 redux, NY AI Bill of Rights); **NCCoE's "Software and AI Agent Identity and Authorization" project becomes the live coordination point** for what audits agent action.
+- **2025–2026.** Voluntary frameworks survive at the federal layer; state-level mandates land (Colorado AI Act; California SB 53, the Transparency in Frontier AI Act, signed 2025-09-29; New York's RAISE Act, signed 2025-12-19, effective 2027-01-01); **NCCoE's "Software and AI Agent Identity and Authorization" project becomes the live coordination point** for what audits agent action.
 
 The trajectory: **from regulating frontier models → to regulating agent action accountability.** Frontier models are an industrial-policy concern; agent action accountability is an identity-and-audit concern. The second territory is where motebit's protocol surface lives natively.
 
@@ -25,7 +25,7 @@ The April 2 submission to NCCoE was the channel through which motebit's primitiv
 
 ## What motebit ships against the asks
 
-The recurring asks across NIST documents (SP 800-63-4, SP 800-207, NISTIR 8587, FIPS 203/204/205, NCCoE concept paper, AI RMF, GenAI Profile) collapse to eight categories. Seven are shipped; one is named as deferred extension.
+The recurring asks across NIST documents (SP 800-63-4, SP 800-207, NISTIR 8587, FIPS 203/204/205, NCCoE concept paper, AI RMF, GenAI Profile) collapse to eight categories. Each section states what ships and, where part of the ask is not met, says so. Shipped is not the same as adversarially sound: see the status note under category 1.
 
 ### 1. Persistent, verifiable agent identity
 
@@ -33,13 +33,15 @@ The recurring asks across NIST documents (SP 800-63-4, SP 800-207, NISTIR 8587, 
 
 **Motebit.** Ed25519 sovereign identity per [`THE_SOVEREIGN_INTERIOR.md`](../../THE_SOVEREIGN_INTERIOR.md). Identity is interior; the keypair is the agent. The protocol declares one identity file format ([`spec/identity-v1.md`](../../spec/identity-v1.md)), one suite registry ([`packages/protocol/src/crypto-suite.ts`](../../packages/protocol/src/crypto-suite.ts)), one verifier primitive that any third party runs without motebit cooperation.
 
+**Status (2026-10-14).** Three identity-authority defects were found and disclosed. A guardian named only by a presented identity file could establish key binding; fixed in `@motebit/crypto` 4.0.0 ([GHSA-9jqm-qqxp-39w4](https://github.com/motebit/motebit/security/advisories/GHSA-9jqm-qqxp-39w4)). Relay guardian recovery and relay migration could move an identity to a key that is not its current authority ([GHSA-855c-g46h-2v8w](https://github.com/motebit/motebit/security/advisories/GHSA-855c-g46h-2v8w), [GHSA-8f95-x57f-mfc6](https://github.com/motebit/motebit/security/advisories/GHSA-8f95-x57f-mfc6)); both are contained by refusal (503) on the hosted relay and in `motebit` 2.2.1, not yet fixed permanently. `verifyMigratingKeyBinding` establishes that a key is bound to an identity, not that it is the identity's current authority. The permanent authority fix is in progress.
+
 **Aligned with.** SP 800-63-4 (AAL2-characteristic via hardware-backed key storage where available; formal AAL assessment pending), W3C DID 1.0 (`did:key` derivation), W3C VC 2.0 (`eddsa-jcs-2022` suite).
 
 ### 2. Cryptographic delegation chains with cascade revocation
 
 **Ask.** When a principal authorizes an agent to act, and that agent sub-delegates to other agents, the full chain must be verifiable and revocation must cascade.
 
-**Motebit.** `signDelegation` / `verifyDelegation` / `verifyDelegationChain` in `@motebit/crypto`. Every signed token carries `aud` audience binding (cross-endpoint replay defense, locked structurally by [`check-audience-canonical`](../../scripts/check-audience-canonical.ts), drift-defense #83); the closed `TokenAudience` registry in [`packages/protocol/src/audience.ts`](../../packages/protocol/src/audience.ts) is the wire law. Key-succession + token blacklist provide cascade revocation per [`spec/delegation-v1.md`](../../spec/delegation-v1.md) §§4.5–4.7.
+**Motebit.** `signDelegation` / `verifyDelegation` / `verifyDelegationChain` in `@motebit/crypto`. Every signed token carries `aud` audience binding (cross-endpoint replay defense, locked structurally by [`check-audience-canonical`](../../scripts/check-audience-canonical.ts), drift-defense #83); the closed `TokenAudience` registry in [`packages/protocol/src/audience.ts`](../../packages/protocol/src/audience.ts) is the wire law. Individual tokens can be revoked. Cascade revocation (a sub-delegation becoming invalid when its parent is revoked) is not yet specified: [`spec/delegation-v1.md`](../../spec/delegation-v1.md) has no cascade rule, so this half of the ask is an open gap, not a shipped property.
 
 **Aligned with.** NISTIR 8587 (token security: short expiry, scope binding, audience binding), SP 800-63 (revocation requirements — answered onchain via credential-anchor; chain is the registry).
 
@@ -111,7 +113,7 @@ The recurring asks across NIST documents (SP 800-63-4, SP 800-207, NISTIR 8587, 
 
 ## What motebit does not claim
 
-**AI 600-2 (Dual-Use Foundation Model Reporting).** Motebit does not train foundation models. The metabolic principle ([`THE_METABOLIC_PRINCIPLE.md`](../../THE_METABOLIC_PRINCIPLE.md)) makes model providers adapters with fallback — glucose, not enzymes. The 10^26 FLOPS reporting threshold doesn't apply.
+**Dual-use foundation model reporting (EO 14110; NIST AI 800-1, draft).** Motebit does not train foundation models. The metabolic principle ([`THE_METABOLIC_PRINCIPLE.md`](../../THE_METABOLIC_PRINCIPLE.md)) makes model providers adapters with fallback — glucose, not enzymes. The 10^26 FLOPS reporting threshold doesn't apply.
 
 **Content-moderation mandates.** Motebit's answer to content harm is the sensitivity ladder ([`packages/protocol/src/sensitivity.ts`](../../packages/protocol/src/sensitivity.ts)) and `assertSensitivityPermitsAiCall` enforced fail-closed before any provider call. Categorical moderation lists are not motebit's primitive.
 

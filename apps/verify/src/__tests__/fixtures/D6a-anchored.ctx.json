@@ -1,0 +1,19 @@
+{
+  "bundle": {
+    "motebit_id": "019dc500-0000-7abc-8000-00000000beef",
+    "created_at": "2026-05-28T20:26:40.000Z",
+    "current_public_key": "b79a5770956e8d5e416f49b671092d075615b1ac6ed0a0507b0c9fb2defb008b",
+    "succession": [],
+    "anchored": {
+      "proof": {
+        "index": 0,
+        "siblings": [],
+        "layerSizes": [1],
+        "anchoredRoot": "7f0ec4b577cc15cc877303fea7be8d5af1da773b27bd7fac5b42f03f66813606"
+      },
+      "tx_hash": "anchorTx111",
+      "network": "solana:mainnet"
+    }
+  },
+  "memos": ["motebit:anchor:v1:7f0ec4b577cc15cc877303fea7be8d5af1da773b27bd7fac5b42f03f66813606:1"]
+}

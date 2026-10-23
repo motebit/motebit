@@ -255,7 +255,7 @@ describe("S1: the response was lost after the relay committed", () => {
     expect(loadPendingRotation(f.mid, hex(f.a), dir)).toBeNull();
   });
 
-  it("if the write-ahead will not open under this passphrase, it stops and names guardian recovery — never mints a third key", async () => {
+  it("if the write-ahead will not open under this passphrase, it stops and names the passphrase as the remedy — never mints a third key", async () => {
     const f = await registered();
     const lossy: typeof fetch = async (input, init) => {
       const res = await viaRelay(input, init);
@@ -271,7 +271,11 @@ describe("S1: the response was lost after the relay committed", () => {
     ))!;
     const o = await performRotation(deps(f, { passphrase: "new passphrase" }));
     expect(o).toMatchObject({ kind: "stopped", state: "held-unopenable" });
-    expect((o as { message: string }).message).toContain("guardian");
+    expect((o as { message: string }).message).toContain("restore the passphrase");
+    // Guardian recovery is suspended on the reference relay: never offered as the way out.
+    expect((o as { message: string }).message).not.toContain(
+      "recover through the identity's guardian",
+    );
     expect(chainLength(f.mid)).toBe(1);
     expect((await localKey(f, "new passphrase")).publicKeyHex).toBe(hex(f.a));
   });
@@ -285,6 +289,10 @@ describe("S1: the response was lost after the relay committed", () => {
     writeFileSync(pendingRotationPath(dir), torn);
     const o = await performRotation(deps(f));
     expect(o).toMatchObject({ kind: "stopped", state: "held-unopenable" });
+    expect((o as { message: string }).message).toContain("keep the file where it is");
+    expect((o as { message: string }).message).not.toContain(
+      "recover through the identity's guardian",
+    );
     expect(readFileSync(pendingRotationPath(dir), "utf-8")).toBe(torn);
     expect(chainLength(f.mid)).toBe(0);
     expect((await localKey(f)).publicKeyHex).toBe(hex(f.a));

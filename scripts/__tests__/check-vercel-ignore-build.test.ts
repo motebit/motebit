@@ -313,7 +313,29 @@ describe("production ownership is parsed, not grepped (#2)", () => {
       git: { deploymentEnabled: { main: false, "*": false } },
     });
     expect(w).toHaveLength(1);
-    expect(w[0]).toMatch(/only main may be disabled/);
+    expect(w[0]).toMatch(/only main and the automation branches/);
+  });
+
+  it("automation branches' previews off → green; any other pattern off → red", () => {
+    expect(
+      owned(deployWorkflow("apps/web"), {
+        git: {
+          deploymentEnabled: {
+            main: false,
+            "gh-readonly-queue/**": false,
+            "dependabot/**": false,
+            "changeset-release/**": false,
+          },
+        },
+      }),
+    ).toEqual([]);
+    for (const k of ["fix/**", "design/**", "**", "docs/**"]) {
+      const v = owned(deployWorkflow("apps/web"), {
+        git: { deploymentEnabled: { main: false, "gh-readonly-queue/**": false, [k]: false } },
+      });
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain(`\`${k}\``);
+    }
   });
 
   it("workflow_dispatch without a main-only restriction → red", () => {
@@ -647,7 +669,14 @@ describe("every vercel.json on the real workspace", () => {
   });
 
   it("gives apps/web production to deploy-web.yml alone (Git deploys of main off)", () => {
-    expect(cfgOf("apps/web/vercel.json").git).toEqual({ deploymentEnabled: { main: false } });
+    expect(cfgOf("apps/web/vercel.json").git).toEqual({
+      deploymentEnabled: {
+        main: false,
+        "gh-readonly-queue/**": false,
+        "dependabot/**": false,
+        "changeset-release/**": false,
+      },
+    });
   });
 
   it.each(PROJECTS)("%s: dropping any one watched path turns the gate red", (dir) => {

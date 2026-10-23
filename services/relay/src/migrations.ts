@@ -6,6 +6,7 @@
  * Never modify an existing migration — always add new ones.
  */
 
+import { boundIssuerDid } from "@motebit/market";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { isEncryptedField } from "@motebit/encryption";
 import { createLogger } from "./logger.js";
@@ -2667,6 +2668,113 @@ export const relayMigrations: Migration[] = [
       // (stream, subject) — the latest broadcast for that anchor. Idempotent:
       // a table created by an earlier build of v57 gains the missing columns.
       createAnchorBroadcastsTable(db);
+    },
+  },
+  {
+    version: 58,
+    name: "guardian_evidence",
+    up: (db) => {
+      // The PROVENANCE of a guardian (identity-authority-writers.md I1, §3.2;
+      // census Q4): the identity's CURRENT key a request proved when it set
+      // this guardian, and which evidence proved it (`recordGuardianEvidence`).
+      // A guardian recovery is accepted only under the guardian the latest
+      // such row names (`guardianProvenance`); a guardian a paired device's
+      // own token, the operator, or the v42 backfill set has no row. Nothing
+      // is backfilled: no relay before this recorded a proof for any
+      // guardian. Same table and shape as the identity-authority lane's
+      // planned `guardian_evidence`, so that lane's create is a no-op here.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_guardian_evidence (
+          motebit_id TEXT NOT NULL,
+          guardian_public_key TEXT NOT NULL,
+          set_under_key TEXT,
+          evidence TEXT NOT NULL,
+          recorded_at INTEGER NOT NULL,
+          PRIMARY KEY (motebit_id, guardian_public_key)
+        );
+      `);
+    },
+  },
+  {
+    version: 59,
+    name: "credential_signer_is_issuer",
+    up: (db) => {
+      // GHSA-7pgw-2976-r236: until the verifier bound a credential's issuer to
+      // the proof's signer, `credentials/submit` stored credentials signed by
+      // one key that named another identity as issuer. Every reader of this
+      // table would otherwise have to re-check that, and one reader missed
+      // already shows the cost. So the table itself holds the invariant from
+      // here on: existing unanchored rows that fail it are removed (they were
+      // never credentials from the issuer they name), and triggers refuse any
+      // later row or rewrite that fails it, including an `issuer_did` column
+      // that is not the bound issuer. The rule is `boundIssuerDid`
+      // (@motebit/market): the DID part of `proof.verificationMethod` before
+      // `#` equals the issuer DID (`issuer`, or `issuer.id`). SQLite's
+      // json_extract reads the FIRST of duplicate keys and JSON.parse the
+      // last; every writer serializes with JSON.stringify, which never emits
+      // duplicates, and every reader applies the JS rule as well.
+      // A forgery already cut into an anchor batch is KEPT: the batch's
+      // Merkle root was signed and anchored onchain over every leaf in it, and
+      // removing a leaf would break the inclusion proof of every honest
+      // credential in the same batch (cold review 3). Every reader applies
+      // `boundIssuerDid`, so a kept forgery carries no weight and is never
+      // presented.
+      const rows = db
+        .prepare(
+          "SELECT credential_id, credential_json FROM relay_credentials WHERE anchor_batch_id IS NULL",
+        )
+        .all() as Array<{ credential_id: string; credential_json: string }>;
+      const del = db.prepare("DELETE FROM relay_credentials WHERE credential_id = ?");
+      type StoredVc = { issuer?: unknown; proof?: { verificationMethod?: unknown } };
+      const parse = (json: string): StoredVc | null => {
+        try {
+          const v: unknown = JSON.parse(json);
+          return v !== null && typeof v === "object" ? v : null;
+        } catch {
+          return null;
+        }
+      };
+      for (const row of rows) {
+        const vc = parse(row.credential_json);
+        if (vc == null || boundIssuerDid({ issuer: vc.issuer, proof: vc.proof }) === undefined) {
+          del.run(row.credential_id);
+        }
+      }
+      // The same rule in SQL, so no writer, present or future, can store a
+      // row that breaks it.
+      const bound = `(
+        CASE json_type(NEW.credential_json, '$.issuer')
+          WHEN 'text' THEN json_extract(NEW.credential_json, '$.issuer')
+          WHEN 'object' THEN CASE json_type(NEW.credential_json, '$.issuer.id')
+            WHEN 'text' THEN json_extract(NEW.credential_json, '$.issuer.id') END
+        END
+      ) <> '' AND json_type(NEW.credential_json, '$.proof.verificationMethod') = 'text' AND (
+        CASE WHEN instr(json_extract(NEW.credential_json, '$.proof.verificationMethod'), '#') > 0
+          THEN substr(json_extract(NEW.credential_json, '$.proof.verificationMethod'), 1,
+            instr(json_extract(NEW.credential_json, '$.proof.verificationMethod'), '#') - 1)
+          ELSE json_extract(NEW.credential_json, '$.proof.verificationMethod')
+        END
+      ) = (
+        CASE json_type(NEW.credential_json, '$.issuer')
+          WHEN 'text' THEN json_extract(NEW.credential_json, '$.issuer')
+          WHEN 'object' THEN json_extract(NEW.credential_json, '$.issuer.id')
+        END
+      ) AND NEW.issuer_did = (
+        CASE json_type(NEW.credential_json, '$.issuer')
+          WHEN 'text' THEN json_extract(NEW.credential_json, '$.issuer')
+          WHEN 'object' THEN json_extract(NEW.credential_json, '$.issuer.id')
+        END
+      )`;
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS relay_credentials_signer_is_issuer_insert
+        BEFORE INSERT ON relay_credentials
+        WHEN json_valid(NEW.credential_json) = 0 OR NOT COALESCE(${bound}, 0)
+        BEGIN SELECT RAISE(ABORT, 'credential signer is not its issuer'); END;
+        CREATE TRIGGER IF NOT EXISTS relay_credentials_signer_is_issuer_update
+        BEFORE UPDATE OF credential_json, issuer_did ON relay_credentials
+        WHEN json_valid(NEW.credential_json) = 0 OR NOT COALESCE(${bound}, 0)
+        BEGIN SELECT RAISE(ABORT, 'credential signer is not its issuer'); END;
+      `);
     },
   },
 ];

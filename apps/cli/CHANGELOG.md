@@ -1,5 +1,32 @@
 # motebit CLI Changelog
 
+## 2.2.2
+
+### Patch Changes
+
+- **Security release.** The CLI bundles `@motebit/crypto` and the relay that `motebit relay up` runs, so it carries both halves of the fix.
+
+  - **Bundled `@motebit/crypto` 4.0.1.** Credential and presentation verification require the proof's signer to be the issuer (or holder). See the `@motebit/crypto` 4.0.1 changelog.
+  - **Self-hosted relay.** `POST /api/v1/credentials/submit` refuses a credential whose signer is not its issuer. A one-way migration removes stored credentials that fail that rule and were never anchored; anchored ones are kept as evidence, so existing inclusion proofs still verify. Database triggers refuse any new row that fails the rule. Discovery badges, routing weight, departure counts, the signed presentation and the migration export count or present only credentials signed by their issuer. The owner's credential list shows every stored credential with an `issuer_bound` flag, and the migration export lists what it left out in `excluded_credentials`.
+
+## 2.2.1
+
+_2.2.0 is reserved by the pending main release train, so this security release takes 2.2.1._
+
+### Patch Changes
+
+- ad08627: **Security release.** This CLI carries three fixes that were published only in libraries or the hosted relay, because the CLI bundles both `@motebit/crypto` and the relay that `motebit relay up` runs.
+
+  - **Bundled `@motebit/crypto` 4.0.0.** `motebit` 1.4.1 through 2.1.0 bundle a `verifyKeyBindingAtTime` that fell back to the guardian named inside the identity file being verified, so a forged guardian-recovery chain could bind an attacker key as sovereign from the victim's genesis public key alone. The bundled verifier now never treats a guardian named only by the presented file as authority (see the `@motebit/crypto` 4.0.0 changelog).
+  - **Self-hosted relay: `POST /api/v1/agents/accept-migration` refuses every arrival with 503.** On 1.4.2 through 2.1.0 this route passed the presented identity file to the verifier above and could re-key an identity on a forged chain. Migration arrivals stay off on this release line; other migration routes are unchanged.
+  - **Self-hosted relay: guardian recovery is suspended.** A guardian-recovery key succession is refused with 503 `GUARDIAN_RECOVERY_SUSPENDED` at `POST /api/v1/agents/:motebitId/rotate-key` and through the `succession` branch of `POST /api/v1/agents/register`, and the one writer of a recorded link refuses it too. The guardian a recovery was checked against was simply the last one registered, so whoever held the current key could install their own guardian and keep recovering the identity after the owner rotated. Ordinary key rotation and guardian registration are unchanged.
+
+  Operators of a self-hosted relay should upgrade; there is no configuration that restores either route on this release.
+
+- Updated dependencies [17a81e5]
+- Updated dependencies [3e9f65f]
+  - @motebit/state-export-client@0.7.0
+
 ## 2.1.0
 
 ### Minor Changes

@@ -64,6 +64,8 @@ function insertTrustCredential(
       id: `did:motebit:${opts.subject_motebit_id}`,
       hardware_attestation: { platform: opts.platform, key_exported: opts.key_exported },
     },
+    // The relay stores only credentials whose signer is their issuer (v59).
+    proof: { verificationMethod: `${opts.issuer_did ?? "did:key:z-issuer-test"}#key-1` },
   };
   db.prepare(
     `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)

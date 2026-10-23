@@ -253,7 +253,9 @@ describe("#853 through the relay", () => {
       expect(rows("SELECT 1 FROM relay_push_tokens")).toHaveLength(0);
     });
 
-    it("migration arrival refuses a non-canonical motebit_id before anything else", async () => {
+    // P0 containment (migration.ts MIGRATION_ARRIVALS_ENABLED = false): every
+    // arrival is refused 503 before the id check runs. Restore with the gate.
+    it("[arrivals disabled] migration arrival refuses a non-canonical motebit_id (503)", async () => {
       const res = await req(
         "POST",
         "/api/v1/agents/accept-migration",
@@ -266,8 +268,10 @@ describe("#853 through the relay", () => {
         },
         AUTH_HEADER,
       );
-      expect(res.status).toBe(400);
-      expect(await res.text()).toContain("motebit_id may contain only");
+      expect(res.status).toBe(503);
+      expect(await res.text()).toContain("Migration arrivals are temporarily disabled");
+      expect(rows("SELECT 1 FROM agent_registry")).toHaveLength(0);
+      expect(rows("SELECT 1 FROM identity_keys")).toHaveLength(0);
     });
 
     it("pairing approve gives a non-canonical held id no new device", async () => {

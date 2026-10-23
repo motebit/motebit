@@ -1,5 +1,19 @@
 # create-motebit Changelog
 
+## 1.2.12
+
+### Patch Changes
+
+- Bundles `@motebit/crypto` 4.0.1.
+
+## 1.2.11
+
+_1.2.10 is reserved by the pending main release train, so this security release takes 1.2.11._
+
+### Patch Changes
+
+- ad08627: **Security release.** The scaffold now pins `@motebit/crypto` to the patched `^4.0.0` line (and the `--agent` scaffold pins the patched `motebit` CLI). Projects scaffolded by 1.2.9 and earlier depend on `@motebit/crypto@^3.x`, which cannot reach 4.0.0 and resolves to an affected version; upgrade that dependency to `^4.0.0` by hand. The generated `verify.js` calls only `verify()`, whose behavior is unchanged.
+
 ## 1.2.9
 
 ### Patch Changes

@@ -19,6 +19,6 @@ Motebit calls this a **semiring**: a small algebra (`add`, `multiply`, `zero`, `
 
 ## What survives the relay
 
-A receipt is signed once and verifiable forever. To make the trust history portable, motebit issues [verifiable credentials](/docs/developer/credentials) about completed work — W3C VC 2.0, Merkle-batched, anchored onchain via Solana memo. A motebit migrating to a different relay carries its credential bundle; the new relay verifies the chain and the trust history is preserved without ever importing the old relay's database.
+A receipt is signed once and verifiable forever. To make the trust history portable, motebit issues [verifiable credentials](/docs/developer/credentials) about completed work — W3C VC 2.0, Merkle-batched, anchored onchain via Solana memo. A motebit migrating to a different relay carries its credential bundle; the new relay verifies the chain and the trust history is preserved without ever importing the old relay's database. (That is the [migration protocol](https://github.com/motebit/motebit/blob/main/spec/migration-v1.md); migration arrivals are currently disabled on the reference relay, which answers accept-migration with `503`.)
 
 The receipts are the truth. The relay is the fast path. The trust graph is the operator's accumulated state — never licensed, never mirrored — and the credential anchor is the public, durable proof that survives any relay's lifetime.

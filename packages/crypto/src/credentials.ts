@@ -202,6 +202,43 @@ async function verifyDataIntegritySigning(
   return ed25519Verify(signature, combined, publicKey);
 }
 
+// === Signer <-> issuer binding ===
+
+/**
+ * The DID a credential's `issuer` (or a presentation's `holder`) names: the
+ * value itself when it is a string, or its `id` when it is an object (W3C VC
+ * 2.0 permits both). `undefined` when neither is a non-empty string.
+ * Internal: not re-exported from the package entry.
+ */
+export function namedDidOf(party: unknown): string | undefined {
+  if (typeof party === "string") return party.length > 0 ? party : undefined;
+  if (party !== null && typeof party === "object") {
+    const id = (party as { id?: unknown }).id;
+    if (typeof id === "string" && id.length > 0) return id;
+  }
+  return undefined;
+}
+
+/**
+ * Is the key that produced `proof` the key of the party `did` names?
+ *
+ * A Data Integrity proof verifies under the key its own `verificationMethod`
+ * names, so a valid signature proves only that SOME key signed the document,
+ * not that the named issuer did. This binds the two: the DID part of
+ * `verificationMethod` (before `#`) must be exactly `did`.
+ *
+ * Only `did:key` resolves here (the key is the DID), so any other DID method
+ * fails closed: this verifier cannot learn which keys such a DID authorizes,
+ * and does not guess. Internal: not re-exported from the package entry.
+ */
+export function proofSignerIs(proof: unknown, did: string | undefined): boolean {
+  if (typeof did !== "string" || !did.startsWith("did:key:")) return false;
+  if (proof === null || typeof proof !== "object") return false;
+  const vm = (proof as { verificationMethod?: unknown }).verificationMethod;
+  if (typeof vm !== "string") return false;
+  return vm.split("#")[0] === did;
+}
+
 // === Verifiable Credential Sign/Verify ===
 
 export async function signVerifiableCredential<T = Record<string, unknown>>(
@@ -216,8 +253,11 @@ export async function signVerifiableCredential<T = Record<string, unknown>>(
 /**
  * Verify a W3C Verifiable Credential's Data Integrity proof + temporal validity.
  *
- * Checks, fail-closed: the `eddsa-jcs-2022` signature, `validUntil` (expiry), and
- * `validFrom` (not-yet-valid). `now` defaults to the wall clock.
+ * Checks, fail-closed: the proof's signer IS the credential's `issuer` (the DID
+ * part of `proof.verificationMethod` equals the issuer's DID, `issuer` or
+ * `issuer.id`; `did:key` only, any other issuer DID method is refused), the
+ * `eddsa-jcs-2022` signature, `validUntil` (expiry), and `validFrom`
+ * (not-yet-valid). `now` defaults to the wall clock.
  *
  * REVOCATION IS NOT CHECKED unless you wire `isRevoked`. A credential carrying a
  * `credentialStatus` (credential-v1 §6) is revocable; this function is I/O-free
@@ -235,6 +275,8 @@ export async function verifyVerifiableCredential<T = Record<string, unknown>>(
   if (vc.validUntil && now > new Date(vc.validUntil).getTime()) return false;
   if (vc.validFrom && now < new Date(vc.validFrom).getTime()) return false;
   if (vc.credentialStatus && options?.isRevoked?.(vc.credentialStatus.id) === true) return false;
+  // Integrity is not authorization: the signature must be the ISSUER's.
+  if (!proofSignerIs(vc.proof, namedDidOf(vc.issuer))) return false;
   return verifyDataIntegritySigning(vc as unknown as Record<string, unknown>, vc.proof);
 }
 
@@ -260,6 +302,9 @@ export async function verifyVerifiablePresentation(
   );
   if (!vpValid) {
     errors.push("Presentation proof is invalid");
+  }
+  if (!proofSignerIs(vp.proof, namedDidOf(vp.holder))) {
+    errors.push("Presentation holder is not the presentation signer");
   }
 
   for (let i = 0; i < vp.verifiableCredential.length; i++) {

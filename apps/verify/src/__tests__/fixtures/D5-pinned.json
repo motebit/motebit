@@ -1,0 +1,16 @@
+{
+  "task_id": "rc-legacy",
+  "motebit_id": "019dc500-0000-7abc-8000-00000000beef",
+  "device_id": "rc-device",
+  "submitted_at": 1790000000000,
+  "completed_at": 1790000001000,
+  "status": "completed",
+  "result": "Paid invoice #42 for $5.00.",
+  "tools_used": [],
+  "memories_formed": 0,
+  "prompt_hash": "cf07194ee232eb531e15f690000d19846dea69cf05504782658afcfacb9228a2",
+  "result_hash": "21ac289df93ec6d3e6b3a5cf3c548399a18269ab36f8c7b87e16b8169d6b629a",
+  "public_key": "b79a5770956e8d5e416f49b671092d075615b1ac6ed0a0507b0c9fb2defb008b",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "NYHGEDsJKX6DiV5Fb9P12HcEVo8W0DOjwmBn8urQ2Q8rQu0bjfQOxBgd9zhXNYVv9VOib61DsH2ptCLA8z4KBg"
+}

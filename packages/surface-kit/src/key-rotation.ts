@@ -481,7 +481,7 @@ async function rotateWithin(
     if (derived !== target.new_public_key) {
       return stopped(
         "held-corrupt",
-        "the write-ahead's private key does not derive to the key it names; nothing was changed — recover through the identity's guardian",
+        "the write-ahead's private key does not derive to the key it names; nothing was changed; guardian recovery, the remedy for this, is currently suspended on the reference relay",
       );
     }
     // Only a commit that started after the relay held the key is ever
@@ -599,7 +599,7 @@ async function rotateWithin(
       // S5. Someone else rotated first. Guardian recovery is the remedy.
       return stopped(
         "diverged",
-        `the relay holds a key this device does not (${relay.relayKey.slice(0, 16)}…); a rotation cannot depart from a key the relay has already left — recover through the identity's guardian`,
+        `the relay holds a key this device does not (${relay.relayKey.slice(0, 16)}…); a rotation cannot depart from a key the relay has already left; guardian recovery, the remedy for this, is currently suspended on the reference relay`,
         relay.relayKey,
       );
     case "applied": {
@@ -621,7 +621,7 @@ async function rotateWithin(
         if (derived !== held.new_public_key) {
           return stopped(
             "held-corrupt",
-            "the relay already holds the new key from a rotation this device started, but the write-ahead's private key does not derive to it; this device cannot finish the rotation — recover through the identity's guardian",
+            "the relay already holds the new key from a rotation this device started, but the write-ahead's private key does not derive to it; this device cannot finish the rotation; guardian recovery, the remedy for this, is currently suspended on the reference relay",
           );
         }
       }

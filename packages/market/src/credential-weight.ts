@@ -28,6 +28,8 @@ export interface ReputationVC {
   issuer: string;
   validFrom?: string;
   credentialSubject: ReputationCredentialSubject & { id: string };
+  /** The Data Integrity proof; only `verificationMethod` is read here. */
+  proof?: { verificationMethod?: unknown };
 }
 
 /**
@@ -41,6 +43,8 @@ export interface TrustVC {
   issuer: string;
   validFrom?: string;
   credentialSubject: TrustCredentialSubject & { id: string };
+  /** The Data Integrity proof; only `verificationMethod` is read here. */
+  proof?: { verificationMethod?: unknown };
 }
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -81,12 +85,56 @@ const DEFAULT_MIN_ISSUER_TRUST = 0.05;
 // ── Core ────────────────────────────────────────────────────────────
 
 /**
+ * The issuer DID a credential names: `issuer` itself, or `issuer.id` (W3C VC
+ * 2.0 permits both forms). `undefined` when neither is a non-empty string, and
+ * such a credential contributes nothing.
+ *
+ * PRECONDITION for every aggregator here: the caller has VERIFIED each
+ * credential with `verifyVerifiableCredential` (`@motebit/crypto`), which binds
+ * the issuer to the proof's signer. This package carries no proofs and cannot
+ * check that itself; it trusts the issuer only because verification did.
+ */
+function issuerDidOf(issuer: unknown): string | undefined {
+  if (typeof issuer === "string") return issuer.length > 0 ? issuer : undefined;
+  if (issuer !== null && typeof issuer === "object") {
+    const id = (issuer as { id?: unknown }).id;
+    if (typeof id === "string" && id.length > 0) return id;
+  }
+  return undefined;
+}
+
+/**
+ * The issuer DID, only when the proof's signer IS that issuer: the DID part of
+ * `proof.verificationMethod` (before `#`) equals it exactly. Otherwise
+ * `undefined`, and the credential contributes nothing.
+ *
+ * Verification at the door already enforces this, but a credential can reach
+ * an aggregator without passing that door now: rows stored before the binding
+ * existed (GHSA-7pgw-2976-r236) are read straight from the relay's table. The
+ * check is synchronous and needs no key material, so every read applies it.
+ * It complements signature verification and never replaces it.
+ */
+export function boundIssuerDid(vc: {
+  issuer: unknown;
+  proof?: { verificationMethod?: unknown };
+}): string | undefined {
+  const issuerDid = issuerDidOf(vc.issuer);
+  if (issuerDid === undefined) return undefined;
+  const vm = vc.proof?.verificationMethod;
+  if (typeof vm !== "string") return undefined;
+  const hash = vm.indexOf("#");
+  const signerDid = hash === -1 ? vm : vm.slice(0, hash);
+  return signerDid === issuerDid ? issuerDid : undefined;
+}
+
+/**
  * Aggregate multiple peer-issued reputation credentials into a single
  * weighted reputation, using issuer trust as the authority signal.
  *
  * Pure function — no graph access, no side effects.
  *
- * @param credentials Reputation VCs about a single subject agent.
+ * @param credentials Reputation VCs about a single subject agent, each already
+ *                    VERIFIED (issuer bound to signer) — see `issuerDidOf`.
  * @param getIssuerTrust Returns the issuer's trust score [0,1] from the trust closure.
  *                       Accepts a did:key URI (the VC issuer field).
  * @param config Optional tuning parameters.
@@ -116,7 +164,8 @@ export function aggregateCredentialReputation(
     if (!vc.type.includes(VC_TYPE_REPUTATION)) continue;
 
     const subject = vc.credentialSubject;
-    const issuerDid = vc.issuer;
+    const issuerDid = boundIssuerDid(vc);
+    if (issuerDid === undefined) continue;
 
     // 0. Self-attestation filter: ignore credentials where the issuer is the subject.
     // These carry no trust signal — an agent vouching for itself is tautological.
@@ -245,7 +294,8 @@ export function aggregateHardwareAttestation(
     const claim: HardwareAttestationClaim | undefined = subject.hardware_attestation;
     if (claim == null) continue;
 
-    const issuerDid = vc.issuer;
+    const issuerDid = boundIssuerDid(vc);
+    if (issuerDid === undefined) continue;
 
     // Self-attestation filter: same rule as the reputation aggregator.
     // Self-issued hardware claims live on the device record / capabilities

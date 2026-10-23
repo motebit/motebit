@@ -198,6 +198,23 @@ export interface VerifyReceiptDocumentOptions {
    */
   readonly identity?: MotebitIdentityFile;
   /**
+   * A guardian public key (hex) the CALLER trusts for this motebit — the only
+   * way a guardian-recovery link in `identity`'s succession chain counts toward
+   * `pinned` / `anchored` / `sovereign`. The guardian `identity` itself names is
+   * never used for binding: it is signed only by the key a recovery link would
+   * install, so an attacker who knows a motebit's genesis PUBLIC key can name
+   * their own. Without this option a chain that runs through a recovery link
+   * leaves the receipt at `integrity-only` (unless the receipt alone is
+   * sovereign).
+   *
+   * This is the caller's trust decision: a guardian pinned independently of
+   * the material being verified. Copying `identity.guardian.public_key` (or a
+   * guardian served alongside the identity by the same party) into this field
+   * trusts whoever produced that material, and re-opens the hole. See
+   * `docs/doctrine/identity-binding-verification.md`.
+   */
+  readonly trustedGuardianPublicKey?: string;
+  /**
    * Anchor material. Requires `identity` too — `anchored` is `pinned` PLUS an
    * on-chain-confirmed transparency-log inclusion. When the inclusion proof and
    * the on-chain root cross-check both pass, the root upgrades to
@@ -229,10 +246,16 @@ export interface VerifyReceiptDocumentOptions {
 async function pinnedBinding(
   receipt: ExecutionReceipt,
   identity: MotebitIdentityFile,
+  trustedGuardian: string | undefined,
 ): Promise<"pinned" | null> {
   if (typeof receipt.public_key !== "string") return null;
   if (String(identity.motebit_id) !== String(receipt.motebit_id)) return null;
-  const r = await verifyKeyBindingAtTime(identity, receipt.public_key, receipt.completed_at);
+  const r = await verifyKeyBindingAtTime(
+    identity,
+    receipt.public_key,
+    receipt.completed_at,
+    trustedGuardian,
+  );
   return r.bound ? "pinned" : null;
 }
 
@@ -247,10 +270,16 @@ async function pinnedBinding(
 async function sovereignBinding(
   receipt: ExecutionReceipt,
   identity: MotebitIdentityFile,
+  trustedGuardian: string | undefined,
 ): Promise<"sovereign" | null> {
   if (typeof receipt.public_key !== "string") return null;
   if (String(identity.motebit_id) !== String(receipt.motebit_id)) return null;
-  const r = await verifyKeyBindingAtTime(identity, receipt.public_key, receipt.completed_at);
+  const r = await verifyKeyBindingAtTime(
+    identity,
+    receipt.public_key,
+    receipt.completed_at,
+    trustedGuardian,
+  );
   return r.bound === true && r.sovereign === true ? "sovereign" : null;
 }
 
@@ -267,6 +296,7 @@ async function anchoredBinding(
   receipt: ExecutionReceipt,
   identity: MotebitIdentityFile,
   anchor: ReceiptAnchorOptions,
+  trustedGuardian: string | undefined,
 ): Promise<{ txHash: string } | null> {
   if (typeof receipt.public_key !== "string") return null;
   if (String(identity.motebit_id) !== String(receipt.motebit_id)) return null;
@@ -275,6 +305,7 @@ async function anchoredBinding(
     receipt.public_key,
     receipt.completed_at,
     anchor.proof,
+    trustedGuardian,
   );
   if (!bound.bound) return null;
   const onchain = await lookupIdentityLogAnchor(
@@ -352,15 +383,34 @@ export async function verifyReceiptDocument(
       if (receiptAloneSovereign) return { ...view, binding: "sovereign" };
     }
     if (options?.identity) {
+      // The identity file is caller-supplied, often from an untrusted party. The
+      // contract is "never throws on bad input": a rung whose check throws on a
+      // file it cannot read simply does not lift the receipt (fail-closed) — the
+      // ladder continues to the next, weaker rung, and the receipt otherwise stays
+      // at what its own signature proved.
+      const rung = async <T>(check: () => Promise<T | null>): Promise<T | null> => {
+        try {
+          return await check();
+        } catch {
+          return null;
+        }
+      };
+      const identity = options.identity;
       // Sovereign is the strongest root AND fully offline — check it first; a
       // sovereign motebit needs no operator anchor at all.
-      const sovereign = await sovereignBinding(parsed, options.identity);
+      // A guardian-recovery link binds only under a caller-trusted guardian
+      // (`trustedGuardianPublicKey`); the identity file's own guardian never does.
+      const trustedGuardian = options.trustedGuardianPublicKey;
+      const sovereign = await rung(() => sovereignBinding(parsed, identity, trustedGuardian));
       if (sovereign) return { ...view, binding: sovereign };
-      if (options.anchor) {
-        const anchored = await anchoredBinding(parsed, options.identity, options.anchor);
+      const anchor = options.anchor;
+      if (anchor) {
+        const anchored = await rung(() =>
+          anchoredBinding(parsed, identity, anchor, trustedGuardian),
+        );
         if (anchored) return { ...view, binding: "anchored", anchorTxHash: anchored.txHash };
       }
-      const pinned = await pinnedBinding(parsed, options.identity);
+      const pinned = await rung(() => pinnedBinding(parsed, identity, trustedGuardian));
       if (pinned) return { ...view, binding: pinned };
     }
   }

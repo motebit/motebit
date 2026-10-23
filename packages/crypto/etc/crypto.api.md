@@ -562,10 +562,82 @@ export interface ExecutionReceipt {
 export function executionReceiptDigest(receipt: ExecutionReceipt_2): Promise<string>;
 
 // @public
+export const FEDERATION_MESSAGE_DOMAIN: "motebit-fed/v2";
+
+// @public
+export const FEDERATION_MESSAGE_KINDS: {
+    readonly heartbeat: {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "heartbeat-ack": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "peer-remove": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "peer-challenge": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "peer-confirm": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly discover: {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "task-forward": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "task-result": {
+        readonly maxSkewMs: 300000;
+    };
+    readonly "settlement-forward": {
+        readonly maxSkewMs: 300000;
+    };
+};
+
+// @public
+export const FEDERATION_MESSAGE_SUITE: "motebit-jcs-ed25519-hex-v1";
+
+// @public
 export const FEDERATION_SETTLEMENT_ANCHOR_SUITE: "motebit-jcs-ed25519-hex-v1";
 
 // @public
 export const FEDERATION_SETTLEMENT_RECORD_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export function federationBodyDigest(body: unknown): Promise<string>;
+
+// @public
+export function federationMessageBytes(envelope: FederationMessageEnvelope, canonicalize?: (obj: unknown) => string): Uint8Array;
+
+// @public
+export interface FederationMessageEnvelope {
+    body_sha256: string;
+    // (undocumented)
+    kind: FederationMessageKind;
+    nonce: string;
+    recipient: string;
+    recipient_public_key: string;
+    sender: string;
+    // (undocumented)
+    suite: typeof FEDERATION_MESSAGE_SUITE;
+    ts: number;
+}
+
+// @public (undocumented)
+export type FederationMessageKind = keyof typeof FEDERATION_MESSAGE_KINDS;
+
+// @public (undocumented)
+export type FederationMessageRefusal = "malformed" | "unknown_kind" | "kind_mismatch" | "unsupported_suite" | "wrong_recipient" | "wrong_recipient_key" | "wrong_sender" | "stale" | "body_mismatch" | "bad_signature";
+
+// @public (undocumented)
+export type FederationMessageVerdict = {
+    ok: true;
+    envelope: FederationMessageEnvelope;
+} | {
+    ok: false;
+    reason: FederationMessageRefusal;
+};
 
 // @public
 export interface FederationSettlementAnchorProofFields {
@@ -931,9 +1003,12 @@ export interface KeyBindingResult {
     activeUntil?: number;
     // (undocumented)
     bound: boolean;
+    genesisCommitment?: boolean;
     genesisPublicKey?: string;
+    guardianAuthority?: "not_required" | "caller_trusted" | "not_established";
     reason?: string;
     sovereign?: boolean;
+    successionIntegrity?: boolean;
 }
 
 // @public
@@ -1121,6 +1196,9 @@ export function parse(content: string): {
     signature: string;
     rawFrontmatter: string;
 };
+
+// @public
+export function parseFederationMessage(message: unknown): SignedFederationMessage | null;
 
 // @public
 export function parseScopeSet(scope: string): Set<string>;
@@ -1641,6 +1719,14 @@ export const SIGNED_REQUEST_ENVELOPE_SUITE: "motebit-jcs-ed25519-b64-v1";
 // @public
 export const SIGNED_TOKEN_SUITE: "motebit-jwt-ed25519-v1";
 
+// @public
+export interface SignedFederationMessage {
+    // (undocumented)
+    envelope: FederationMessageEnvelope;
+    // (undocumented)
+    signature: string;
+}
+
 export { SignedRequestEnvelope }
 
 // @public (undocumented)
@@ -1668,6 +1754,18 @@ export function signExecutionReceipt<T extends Omit<SignableReceipt, "signature"
     suite: typeof EXECUTION_RECEIPT_SUITE;
     signature: string;
 }>;
+
+// @public
+export function signFederationMessage(args: {
+    kind: FederationMessageKind;
+    sender: string;
+    recipient: string;
+    recipientPublicKey: string;
+    body: unknown;
+    privateKey: Uint8Array;
+    now?: number;
+    nonce?: string;
+}): Promise<SignedFederationMessage>;
 
 // @public
 export function signFederationSettlement(settlement: Omit<FederationSettlementRecord, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<FederationSettlementRecord>;
@@ -2141,6 +2239,17 @@ export function verifyExecutionReceipt(receipt: SignableReceipt, publicKey: Uint
 export function verifyExecutionReceiptDetailed(receipt: SignableReceipt, publicKey: Uint8Array): Promise<ReceiptVerifyDetail>;
 
 // @public
+export function verifyFederationMessage(message: unknown, expect: {
+    kind: FederationMessageKind;
+    self: string;
+    selfPublicKeyHex: string;
+    expectedSender?: string;
+    senderPublicKeyHex: string;
+    body: unknown;
+    now?: number;
+}): Promise<FederationMessageVerdict>;
+
+// @public
 export function verifyFederationSettlement(settlement: FederationSettlementRecord, issuerPublicKey: Uint8Array): Promise<boolean>;
 
 // @public
@@ -2177,7 +2286,7 @@ export function verifyHostRoster(input: {
 }): Promise<HostRosterResult>;
 
 // @public
-export function verifyIdentityBindingAnchored(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, proof: IdentityLogInclusionProof, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;
+export function verifyIdentityBindingAnchored(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, proof: IdentityLogInclusionProof, trustedGuardianPublicKeyHex?: string): Promise<KeyBindingResult>;
 
 // @public
 export function verifyInvoice(invoice: InvoiceV1, registeredIssuerKeyHex: string, options?: {
@@ -2188,7 +2297,7 @@ export function verifyInvoice(invoice: InvoiceV1, registeredIssuerKeyHex: string
 }): Promise<InvoiceVerdict>;
 
 // @public
-export function verifyKeyBindingAtTime(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;
+export function verifyKeyBindingAtTime(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, trustedGuardianPublicKeyHex?: string): Promise<KeyBindingResult>;
 
 // @public
 export function verifyKeySuccession(record: KeySuccessionRecord, guardianPublicKeyHex?: string): Promise<boolean>;
@@ -2197,7 +2306,7 @@ export function verifyKeySuccession(record: KeySuccessionRecord, guardianPublicK
 export function verifyMerkleInclusion(leaf: string, index: number, siblings: string[], layerSizes: number[], expectedRoot: string, treeHashVersion?: MerkleTreeVersion): Promise<boolean>;
 
 // @public
-export function verifyMigratingKeyBinding(motebitId: string, presentedKeyHex: string, identityFile?: MotebitIdentityFile): Promise<boolean>;
+export function verifyMigratingKeyBinding(motebitId: string, presentedKeyHex: string, identityFile?: MotebitIdentityFile, trustedGuardianPublicKeyHex?: string): Promise<boolean>;
 
 // @public
 export function verifyMigrationPresentation(presentation: MigrationPresentation, publicKey: Uint8Array): Promise<boolean>;
@@ -2405,7 +2514,7 @@ export interface WitnessOmissionDisputeVerifyResult {
 
 // Warnings were encountered during analysis:
 //
-// src/credentials.ts:394:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
+// src/credentials.ts:439:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

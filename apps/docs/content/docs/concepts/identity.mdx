@@ -13,7 +13,7 @@ The identity belongs to its owner, not to a service provider. Switch AI provider
 
 ## Cryptographic keys
 
-Each device that hosts a motebit generates an Ed25519 keypair. The private key is stored in the device's key store: the iOS Keychain / Android Keystore on mobile, a passphrase-encrypted file on the CLI, and an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (the OS keychain is not used on desktop yet) — it never leaves the device and never gets sent over the network. The public key is shared with services that need to verify the agent's identity.
+A motebit's identity is an Ed25519 keypair, generated on the first device. The private key is stored in the device's key store: the iOS Keychain / Android Keystore on mobile, a passphrase-encrypted file on the CLI, an owner-only (`0600` on Unix; Windows is best-effort) plaintext key file on desktop (the OS keychain is not used on desktop yet), and browser storage on the web. It is never sent to a relay in the clear: registration sends only the public key, and pairing a new device transfers the identity key end-to-end encrypted through the relay, which cannot read it. The public key is shared with services that need to verify the agent's identity.
 
 Ed25519 was chosen for its speed, small key size, and resistance to timing attacks. It's the same signature scheme used by SSH, Signal, and WireGuard.
 
@@ -59,13 +59,13 @@ If a key is compromised and you haven't set up succession, generate a new identi
 - **Multi-device** — Your motebit exists across all your devices with the same identity and shared state
 - **Relay independence** — The identity doesn't depend on the relay server. Kill the relay, the motebit continues. Switch relays, the motebit follows.
 - **Audit trail** — Every event is tagged with the agent and device that produced it, creating a verifiable history
-- **Key recovery** — Rotate keys without losing identity. If no succession is set up, generate a new identity — same model as SSH keys
+- **Key recovery** — Rotate keys without losing identity. A recovery seed (`motebit restore`) re-derives a sovereign identity on any machine. If neither works, generate a new identity — same model as SSH keys
 
 ## Organizational custody (enterprise)
 
 > For enterprise deployments. Individual users can skip this section.
 
-Enterprise agents can declare a guardian — an organizational Ed25519 key held in cold storage. The guardian enables key recovery when the primary key is compromised, employee departure workflows (rotate the agent to a new operator while preserving trust history), and organizational trust baseline in routing.
+Enterprise agents can declare a guardian — an organizational Ed25519 key held in cold storage. The guardian is specified to enable key recovery when the primary key is compromised (guardian recovery is currently suspended on the reference relay, which refuses recovery successions with `503 GUARDIAN_RECOVERY_SUSPENDED`), employee departure workflows (rotate the agent to a new operator while preserving trust history), and organizational trust baseline in routing.
 
 Guardian revocation requires dual authorization — both the identity key and the guardian key must sign. Neither party can unilaterally dissolve the custody relationship.
 

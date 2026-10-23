@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "motebit_id": "019dc500-0000-7abc-8000-00000000beef",
+    "created_at": "2026-05-28T20:26:40.000Z",
+    "current_public_key": "b79a5770956e8d5e416f49b671092d075615b1ac6ed0a0507b0c9fb2defb008b",
+    "succession": [],
+    "anchored": null
+  },
+  "memos": []
+}

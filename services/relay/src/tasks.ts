@@ -37,10 +37,8 @@ import {
   verifyExecutionReceipt,
   hexPublicKeyToDidKey,
   issueReputationCredential,
-  sign,
   signSettlement,
   canonicalJson,
-  bytesToHex,
   hexToBytes,
 } from "@motebit/encryption";
 /* eslint-enable no-restricted-imports */
@@ -73,7 +71,12 @@ import { secretEquals } from "./secret-compare.js";
 import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
 import type { RelayIdentity } from "./federation.js";
-import { attemptResultDelivery, defaultPeerFetch, enqueueResultDelivery } from "./federation.js";
+import {
+  attemptResultDelivery,
+  defaultPeerFetch,
+  enqueueResultDelivery,
+  signFederationRequest,
+} from "./federation.js";
 import type { PeerFetch } from "./federation.js";
 import {
   forwardTaskViaMcp,
@@ -128,6 +131,7 @@ import {
   type P2pAdmission,
 } from "./p2p-payee.js";
 import { createLogger } from "./logger.js";
+import { insertRelayIssuedCredentialEvidence } from "./credential-store.js";
 import { pathIdentity } from "./id-bounds.js";
 import type { TaskQueue } from "./task-queue.js";
 import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
@@ -1609,19 +1613,14 @@ export async function handleReceiptIngestion(
           }
 
           if (credentialRow) {
-            moteDb.db
-              .prepare(
-                `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
-               VALUES (?, ?, ?, ?, ?, ?)`,
-              )
-              .run(
-                credentialRow.credential_id,
-                credentialRow.subject,
-                credentialRow.issuer,
-                credentialRow.type,
-                credentialRow.json,
-                credentialRow.issued_at,
-              );
+            insertRelayIssuedCredentialEvidence(moteDb.db, {
+              credentialId: credentialRow.credential_id,
+              subjectMotebitId: credentialRow.subject,
+              issuerDid: credentialRow.issuer,
+              credentialType: credentialRow.type,
+              credentialJson: credentialRow.json,
+              issuedAt: credentialRow.issued_at,
+            });
             credential_id = credentialRow.credential_id;
           }
 
@@ -4371,20 +4370,25 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
           wall_clock_ms: body.wall_clock_ms,
         },
         // The proof rides the SIGNED forward body — the executor relay
-        // verifies A's signature over canonicalJson(body), so the proof is
-        // integrity-protected peer-to-peer (no separate channel).
+        // verifies A's v2 `task-forward` message, whose digest commits to the
+        // body, so the proof is integrity-protected peer-to-peer (no separate
+        // channel) and valid at that one relay only.
         payment_proof: proof,
         routing_choice: routingChoice,
-        timestamp: Date.now(),
       };
-      const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
-      const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
+      const signedForward = await signFederationRequest(
+        moteDb.db,
+        relayIdentity,
+        "task-forward",
+        peerRelayId,
+        forwardBody,
+      );
       recordTaskRoute(moteDb.db, taskId, targetId, peerRelayId);
       try {
         const resp = await peerFetch(`${peerEndpoint}/federation/v1/task/forward`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
-          body: JSON.stringify({ ...forwardBody, signature: bytesToHex(forwardSig) }),
+          body: JSON.stringify(signedForward),
           signal: AbortSignal.timeout(10000),
         });
         if (resp.ok) {
@@ -4642,7 +4646,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
                 const plannedPeer = plannedRoute.length >= 2 ? plannedRoute[0] : undefined;
                 const peerEndpoint =
                   plannedPeer != null ? peerEndpointByRelayId.get(plannedPeer) : undefined;
-                if (peerEndpoint == null || plannedRoute[plannedRoute.length - 1] !== selId) {
+                if (
+                  plannedPeer == null ||
+                  peerEndpoint == null ||
+                  plannedRoute[plannedRoute.length - 1] !== selId
+                ) {
                   // Loud, not silent: the ranking produced a route the dispatcher
                   // cannot take. Skip rather than forward on a different path.
                   logger.warn("task.forward_route_mismatch", {
@@ -4710,19 +4718,20 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
                       wall_clock_ms: body.wall_clock_ms,
                     },
                     routing_choice: routingChoice,
-                    timestamp: Date.now(),
                   };
-                  const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
-                  const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
+                  const signedForward = await signFederationRequest(
+                    moteDb.db,
+                    relayIdentity,
+                    "task-forward",
+                    plannedPeer,
+                    forwardBody,
+                  );
                   recordTaskRoute(moteDb.db, taskId, selId, plannedPeer);
 
                   const resp = await peerFetch(`${peerEndpoint}/federation/v1/task/forward`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
-                    body: JSON.stringify({
-                      ...forwardBody,
-                      signature: bytesToHex(forwardSig),
-                    }),
+                    body: JSON.stringify(signedForward),
                     signal: AbortSignal.timeout(10000),
                   });
 

@@ -1,6 +1,6 @@
 {
   "name": "@motebit/crypto-tpm",
-  "version": "1.1.37",
+  "version": "1.1.40",
   "description": "Apache-2.0 verifier for TPM 2.0 Endorsement-Key hardware-attestation credentials — offline chain verification against pinned vendor EK roots (Infineon, Nuvoton, STMicro, Intel PTT) plus binary TPMS_ATTEST parsing. Plugs into @motebit/crypto's HardwareAttestationVerifiers dispatcher to validate TPM-attested motebit identities on Windows/Linux hosts.",
   "type": "module",
   "main": "./dist/index.js",
@@ -68,7 +68,7 @@
   },
   "devDependencies": {
     "@peculiar/webcrypto": "^1.7.1",
-    "@types/node": "^22.20.1",
+    "@types/node": "^22.20.5",
     "fast-check": "^4.9.0",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"

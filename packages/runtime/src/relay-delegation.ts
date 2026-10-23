@@ -184,11 +184,14 @@ export type DelegationErrorCode =
   /** Pre-flight. No agent advertises the capability. */
   | "no_routing"
   /**
-   * Pre-flight, BEFORE broadcast. A FEDERATED (peer-hosted) worker's discovered
-   * settlement address is not cryptographically bound to the worker's identity
-   * — a malicious peer could be redirecting the worker's payments. The client
-   * refuses to broadcast rather than pay a peer-asserted address it cannot
-   * verify. No funds move. docs/doctrine/settlement-authority-binding.md.
+   * Pre-flight, BEFORE broadcast. A worker's discovered settlement address is
+   * not bound to the worker: a FEDERATED (peer-hosted) address not
+   * cryptographically bound to its identity, a peer-listed entry with no
+   * direct-peer key (unbindable), or a LOCAL address that is not the one the
+   * worker registered on the relay — a malicious peer could be redirecting the
+   * worker's payments. The client refuses to broadcast rather than pay an
+   * address it cannot bind. No funds move.
+   * docs/doctrine/settlement-authority-binding.md.
    */
   | "worker_settlement_unbound"
   /**
@@ -945,6 +948,13 @@ export interface SubmitP2pDelegationParams {
   syncUrl: string;
   /** Mints audience-scoped auth tokens. */
   authToken: (audience?: TokenAudience) => Promise<string>;
+  /**
+   * A `task:submit` token minted BEFORE the payment was broadcast and held
+   * across it (M3a): the first attempt presents it, so a credential source
+   * that vanishes after the broadcast cannot strand the payment unsubmitted.
+   * A retry mints a fresh token and falls back to this one if minting fails.
+   */
+  heldSubmitToken?: string;
   /** Task prompt to submit. */
   prompt: string;
   /**
@@ -1082,20 +1092,31 @@ type SubmitAttempt =
  * POST the pinned task with the proof, classify the answer. Never
  * broadcasts; a caller retries by calling it again with the same proof.
  */
-async function submitP2pOnce(params: SubmitP2pDelegationParams): Promise<SubmitAttempt> {
+async function submitP2pOnce(
+  params: SubmitP2pDelegationParams,
+  attempt: number,
+): Promise<SubmitAttempt> {
   let submitHeader: string;
   try {
-    submitHeader = `Bearer ${await params.authToken("task:submit")}`;
+    if (attempt === 1 && params.heldSubmitToken != null) {
+      submitHeader = `Bearer ${params.heldSubmitToken}`;
+    } else {
+      submitHeader = `Bearer ${await params.authToken("task:submit")}`;
+    }
   } catch (err: unknown) {
-    return {
-      kind: "failed",
-      retryable: true,
-      ambiguous: false,
-      error: {
-        code: "auth_expired",
-        message: `Auth token mint failed: ${err instanceof Error ? err.message : String(err)}`,
-      },
-    };
+    if (params.heldSubmitToken != null) {
+      submitHeader = `Bearer ${params.heldSubmitToken}`;
+    } else {
+      return {
+        kind: "failed",
+        retryable: true,
+        ambiguous: false,
+        error: {
+          code: "auth_expired",
+          message: `Auth token mint failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      };
+    }
   }
 
   try {
@@ -1259,7 +1280,7 @@ export async function submitP2pDelegation(
   let ambiguous = false;
   for (;;) {
     attempts++;
-    const attempt = await submitP2pOnce(params);
+    const attempt = await submitP2pOnce(params, attempts);
     if (attempt.kind === "accepted") {
       taskId = attempt.taskId;
       break;
@@ -1709,6 +1730,13 @@ export type ResolveP2pPaymentRequestResult =
       workerMotebitId: string;
       /** The selected worker's settlement address (the meter counterparty). */
       workerAddress: string;
+      /**
+       * The `task:submit` credential, minted once the request is priced (M3a).
+       * A priced payment the delegator could not submit is not a resolved one:
+       * no credential ⇒ no request. The live path holds it across the
+       * broadcast and presents it on the first submission attempt.
+       */
+      submitToken: string;
     }
   | { ok: false; error: DelegationError };
 
@@ -1777,10 +1805,25 @@ export async function resolveP2pPaymentRequest(
         /** Relay-verified commitment bond (backing RPC-confirmed) — an
          * exploration-PRIORITY signal for the selector, never a gate. */
         bonded?: boolean | null;
+        /** 0 ⇔ the origin's OWN agent; ≥ 1 ⇔ returned by a federation peer. */
+        hop_distance?: number | null;
       }>;
     };
     // HARD gates: not self, declares a settlement address, advertises p2p, and
     // — when pinned — is exactly that worker. These filter WHO is eligible.
+    // Locality is the ORIGIN's mark, never inferred from a missing peer key: the
+    // origin stamps its own agents `hop_distance: 0` and every peer entry ≥ 1
+    // (absent = an older relay, which served local agents only under that
+    // shape). A NON-local entry without a direct-peer key is unpriceable and
+    // unbindable — a multi-hop listing or a peer speaking for a worker it does
+    // not host (M1) — so it is never a P2P candidate: treating "no peer key" as
+    // LOCAL skipped every binding check and paid the peer's address. Only an
+    // entry that passes the pin and p2p-mode gates counts as unbindable: one
+    // those gates drop could never have been paid, and counting it would turn
+    // an honest `no_routing` (which falls back to relay mode) into a refusal.
+    let droppedUnbindable = 0;
+    const isNonLocal = (a: { hop_distance?: number | null }): boolean =>
+      a.hop_distance != null && a.hop_distance !== 0;
     const admissible = (data.agents ?? []).filter((a) => {
       if (a.motebit_id === motebitId || a.settlement_address == null) return false;
       // Pinned hire: only the worker the user tapped is eligible — never
@@ -1789,7 +1832,12 @@ export async function resolveP2pPaymentRequest(
       const modes = Array.isArray(a.settlement_modes)
         ? a.settlement_modes
         : String(a.settlement_modes ?? "").split(",");
-      return modes.includes("p2p");
+      if (!modes.includes("p2p")) return false;
+      if (isNonLocal(a) && a.source_relay_public_key == null) {
+        droppedUnbindable++;
+        return false;
+      }
+      return true;
     });
 
     // ORDER among the admissible. A pin already narrowed the set to that one
@@ -1821,6 +1869,12 @@ export async function resolveP2pPaymentRequest(
       }
     }
     if (candidate?.settlement_address == null) {
+      if (droppedUnbindable > 0) {
+        return fail(
+          "worker_settlement_unbound",
+          `No candidate for "${capability}" has a settlement address this client can bind (peer-listed without a direct-peer key); refusing to pay an unbound destination.`,
+        );
+      }
       return fail(
         "no_routing",
         params.targetWorkerId != null
@@ -1975,9 +2029,27 @@ export async function resolveP2pPaymentRequest(
           reason?: string;
           expected_amount_micro?: number;
           expected_fee_micro?: number;
+          /** The worker's OWN registered (write-authorized) settlement address. */
+          settlement_address?: string | null;
         };
         if (data.allowed !== true) {
           return fail("p2p_ineligible", data.reason ?? "Not P2P-eligible for this worker");
+        }
+        // SETTLEMENT-AUTHORITY BINDING for a LOCAL candidate: its address is
+        // bound by the worker's own authed write on this relay, so the relay's
+        // registry read (not the merged discover shelf) is the evidence. A
+        // discovered address the registry does not hold is never paid —
+        // custody separation stays legal (the address need not derive from the
+        // key; it must be the one the worker registered). An older relay omits
+        // the field; the locality gate above already refused every peer entry.
+        if (
+          typeof data.settlement_address === "string" &&
+          data.settlement_address !== worker.settlement_address
+        ) {
+          return fail(
+            "worker_settlement_unbound",
+            `Discovered settlement address for "${worker.motebit_id}" is not the one the worker registered; refusing to pay an unbound destination.`,
+          );
         }
         preflightAllowed = true;
         preflightAmountMicro = data.expected_amount_micro;
@@ -2002,8 +2074,7 @@ export async function resolveP2pPaymentRequest(
     // separate listing read (3c) is the fallback for an older relay that didn't
     // return them.
     if (preflightAmountMicro != null && preflightAmountMicro > 0 && preflightFeeMicro != null) {
-      return {
-        ok: true,
+      return withSubmitCredential(params, {
         paymentRequest: {
           workerAddress: worker.settlement_address,
           amountMicro: preflightAmountMicro,
@@ -2012,7 +2083,7 @@ export async function resolveP2pPaymentRequest(
         },
         workerMotebitId: worker.motebit_id,
         workerAddress: worker.settlement_address,
-      };
+      });
     }
 
     // 3b. The relay's declared fee rate, from metadata signed by the PINNED
@@ -2069,12 +2140,143 @@ export async function resolveP2pPaymentRequest(
     };
   }
 
-  return {
-    ok: true,
+  return withSubmitCredential(params, {
     paymentRequest,
     workerMotebitId: worker.motebit_id,
     workerAddress: worker.settlement_address,
-  };
+  });
+}
+
+/**
+ * 4. The admission credential (M3a). Mint the `task:submit` token that will
+ *    submit this payment's task, before anything can broadcast it. The
+ *    federated path prices from public reads alone, so without this step a
+ *    delegation whose credentials vanished mid-resolve came back fully priced
+ *    and paid a task it could never submit.
+ */
+async function withSubmitCredential(
+  params: ResolveP2pPaymentRequestParams,
+  priced: {
+    paymentRequest: SovereignP2pPaymentRequest;
+    workerMotebitId: string;
+    workerAddress: string;
+  },
+): Promise<ResolveP2pPaymentRequestResult> {
+  let submitToken: string;
+  try {
+    submitToken = await params.authToken("task:submit");
+  } catch (err: unknown) {
+    return fail(
+      "auth_expired",
+      `The task:submit credential could not be minted, so the payment was not priced for broadcast — nothing was sent: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return { ok: true, ...priced, submitToken };
+}
+
+/**
+ * The pre-flight, again, immediately before the broadcast (M3a). Nothing the
+ * relay checks at admission may have changed since the request was priced:
+ *
+ * - LOCAL worker: the caller-bound `/p2p-eligibility` read (the submission
+ *   gate's own decision) must still allow the pair, still name the address
+ *   being paid, and — when it returns amounts — still price exactly these legs.
+ * - FEDERATED worker: the relay's admission re-discovers the pinned worker on
+ *   an active peer and checks the address and price (tasks.ts, "discover and
+ *   validate BEFORE admission"). The same public discovery read must still
+ *   list it through the same peer, at the same address, at a price that is
+ *   exactly this payment's budget.
+ *
+ * A refusal is `p2p_ineligible`: nothing was broadcast. This mirrors only the
+ * gates readable from existing endpoints; the relay may still refuse after the
+ * broadcast for a reason no pre-flight sees (docs/proposals/admission-before-broadcast-m3.md).
+ */
+async function recheckP2pPreflight(
+  params: ResolveAndSubmitP2pDelegationParams,
+  resolved: {
+    paymentRequest: SovereignP2pPaymentRequest;
+    workerMotebitId: string;
+    workerAddress: string;
+  },
+): Promise<{ ok: true } | { ok: false; error: DelegationError }> {
+  const request = resolved.paymentRequest;
+  const refuse = (why: string) =>
+    fail("p2p_ineligible", `Pre-broadcast re-check: ${why} — nothing was sent.`);
+  try {
+    if (request.executorTreasuryAddress == null) {
+      const eligToken = await params.authToken("market:listing");
+      const q = new URLSearchParams();
+      if (params.acknowledgeNoHistoryRisk === true) q.set("acknowledge_no_history_risk", "true");
+      q.set("capability", params.capability);
+      const resp = await fetch(
+        `${params.syncUrl}/api/v1/agents/${resolved.workerMotebitId}/p2p-eligibility?${q.toString()}`,
+        { headers: { Authorization: `Bearer ${eligToken}` }, signal: params.signal },
+      );
+      if (!resp.ok) return refuse(`eligibility could not be confirmed (HTTP ${resp.status})`);
+      const data = (await resp.json()) as {
+        allowed?: boolean;
+        reason?: string;
+        expected_amount_micro?: number;
+        expected_fee_micro?: number;
+        settlement_address?: string | null;
+      };
+      if (data.allowed !== true) return refuse(data.reason ?? "the pair is no longer P2P-eligible");
+      if (
+        typeof data.settlement_address === "string" &&
+        data.settlement_address !== resolved.workerAddress
+      ) {
+        return refuse("the worker's registered settlement address changed");
+      }
+      if (
+        data.expected_amount_micro != null &&
+        data.expected_fee_micro != null &&
+        (data.expected_amount_micro !== request.amountMicro ||
+          data.expected_fee_micro !== request.feeAmountMicro)
+      ) {
+        return refuse("the relay's expected amounts changed");
+      }
+      return { ok: true };
+    }
+    const resp = await fetch(
+      `${params.syncUrl}/api/v1/agents/discover?capability=${encodeURIComponent(params.capability)}`,
+      { signal: params.signal },
+    );
+    if (!resp.ok) return refuse(`the worker could not be re-discovered (HTTP ${resp.status})`);
+    const data = (await resp.json()) as {
+      agents?: Array<{
+        motebit_id: string;
+        settlement_address?: string | null;
+        source_relay_public_key?: string | null;
+        pricing?: Array<{ capability?: string; unit_cost?: number }> | null;
+      }>;
+    };
+    const listed = (data.agents ?? []).find(
+      (a) =>
+        a.motebit_id === resolved.workerMotebitId &&
+        a.source_relay_public_key != null &&
+        base58Encode(hexToBytes(a.source_relay_public_key)) === request.executorTreasuryAddress,
+    );
+    if (listed == null) return refuse("the worker is no longer listed through the same peer relay");
+    if (listed.settlement_address !== resolved.workerAddress) {
+      return refuse("the worker's settlement address changed");
+    }
+    const priced =
+      (listed.pricing ?? []).find((p) => p.capability === params.capability) ??
+      (listed.pricing ?? [])[0];
+    const budgetMicro =
+      request.amountMicro + request.feeAmountMicro + (request.executorFeeAmountMicro ?? 0);
+    if (priced?.unit_cost == null || toMicro(priced.unit_cost) !== budgetMicro) {
+      return refuse("the worker's price changed");
+    }
+    return { ok: true };
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return fail("timeout", "Aborted during the pre-broadcast re-check — nothing was sent");
+    }
+    return refuse(
+      `the relay could not be read (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
 }
 
 export async function resolveAndSubmitP2pDelegation(
@@ -2157,6 +2359,23 @@ export async function resolveAndSubmitP2pDelegation(
     }
   }
 
+  // 3c. Admission, as far as the client can secure it (M3a), immediately
+  //     before the broadcast: the pre-flight again (nothing the relay checks
+  //     may have changed since pricing), then the abort signal — a delegation
+  //     cancelled at any point up to here sends nothing. The `task:submit`
+  //     credential was minted at pricing and is held across the broadcast.
+  //     This narrows paid-never-submitted; it does not close it — the relay
+  //     still admits only after the payment lands
+  //     (docs/proposals/admission-before-broadcast-m3.md).
+  const recheck = await recheckP2pPreflight(params, resolved);
+  if (!recheck.ok) return { ok: false, error: recheck.error };
+  if (params.signal?.aborted === true) {
+    return fail(
+      "timeout",
+      "Delegation cancelled before the payment was broadcast — nothing was sent",
+    );
+  }
+
   // 4. Sign, record, THEN send (#885). The builder reports each transaction
   //    it signs through `beforeBroadcast`, before sending it. The payment is
   //    written to the ledger under that exact signature at that moment — so
@@ -2180,9 +2399,19 @@ export async function resolveAndSubmitP2pDelegation(
   });
   const signed: SignedP2pTransaction[] = [];
   // A holder, not a `let`: the hook writes it from inside a closure.
-  const recordState: { failure: string | null } = { failure: null };
+  const recordState: { failure: string | null; aborted: boolean } = {
+    failure: null,
+    aborted: false,
+  };
   const hooks: P2pBroadcastHooks = {
     beforeBroadcast: (tx) => {
+      // The last abort check sits here, immediately before the send: the
+      // builder's own pre-send work (the M2 meter, the rail) is an async
+      // window after 3c, and a cancellation landing in it must stop the send.
+      if (params.signal?.aborted === true) {
+        recordState.aborted = true;
+        throw new Error("payment not sent: the delegation was cancelled");
+      }
       if (ledger != null) {
         try {
           ledger.recordBroadcast(entry(tx.signature));
@@ -2227,6 +2456,15 @@ export async function resolveAndSubmitP2pDelegation(
       return fail("insufficient_balance", err.message);
     }
     const errMessage = err instanceof Error ? err.message : String(err);
+
+    // Cancelled at the hook before the first send: nothing was sent and
+    // nothing was recorded (the hook refuses before the ledger write).
+    if (recordState.aborted && signed.length === 0) {
+      return fail(
+        "timeout",
+        "Delegation cancelled before the payment was broadcast — nothing was sent",
+      );
+    }
 
     // A rail that reports its signed transactions (it has a confirmer) and
     // reported none signed nothing — so it sent nothing.
@@ -2403,6 +2641,7 @@ export async function resolveAndSubmitP2pDelegation(
     motebitId: params.motebitId,
     syncUrl: params.syncUrl,
     authToken: params.authToken,
+    heldSubmitToken: resolved.submitToken,
     prompt: params.prompt,
     targetWorkerId: resolved.workerMotebitId,
     // The relay needs the capability to locate + price a federated worker on its

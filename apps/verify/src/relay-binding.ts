@@ -33,7 +33,7 @@ export interface IdentityBundle {
   readonly motebit_id: string;
   readonly created_at: string;
   readonly current_public_key: string;
-  /** Guardian public key (hex), if registered — needed to verify a recovery rotation. */
+  /** Guardian public key (hex), if registered. Relay-served: inert for binding unless a caller passes it as trusted. */
   readonly guardian_public_key?: string;
   readonly succession: SuccessionRecord[];
   readonly anchored: {
@@ -95,8 +95,9 @@ function reconstructIdentity(bundle: IdentityBundle): MotebitIdentityFile {
     created_at: bundle.created_at,
     owner_id: "",
     identity: { algorithm: "Ed25519", public_key: bundle.current_public_key },
-    // The guardian key is binding-relevant: verifyKeyBindingAtTime needs it to
-    // check a guardian-recovery rotation (the spec's key-compromise mechanism).
+    // Carried for integrity only: a guardian named by the identity material is
+    // inert for binding unless a caller passes it as trusted, and this page
+    // passes none (a relay-served guardian is at most as trusted as the relay).
     ...(bundle.guardian_public_key
       ? { guardian: { public_key: bundle.guardian_public_key, established_at: bundle.created_at } }
       : {}),

@@ -8,7 +8,7 @@
  * pasted content is always shown escaped, never parsed as HTML.
  */
 
-import type { ReceiptDocumentVerification } from "@motebit/state-export-client";
+import type { DisplayVerdict } from "./assess.js";
 import { resultLabels } from "./labels.js";
 import { buildClaim, type ClaimNode, type ClaimTime } from "./claim.js";
 import { proofLadder, type RelayContext, type RungState } from "./ladder.js";
@@ -59,9 +59,13 @@ function resultValue(c: ClaimNode): HTMLElement {
   return wrap;
 }
 
-function verdictChip(v: ReceiptDocumentVerification | undefined): HTMLElement {
+function verdictChip(v: DisplayVerdict | undefined): HTMLElement {
   const ok = v?.integrity === true && v.binding !== "revoked";
-  const text = !v?.integrity ? "INVALID" : v.binding === "revoked" ? "REVOKED" : "valid signature";
+  const text = !v?.integrity
+    ? "INVALID"
+    : v.binding === "revoked"
+      ? "REVOCATION REPORTED"
+      : "valid signature";
   return el("span", `chip ${ok ? "chip-ok" : "chip-fail"}`, text);
 }
 
@@ -70,15 +74,24 @@ function claimFields(c: ClaimNode): HTMLElement {
   const dl = el("dl", "fields");
   if (c.status !== undefined) dl.append(field("status", c.status));
   if (c.result !== undefined) dl.append(field("result", resultValue(c)));
-  if (c.submitted) dl.append(field("submitted", timeValue(c.submitted)));
-  if (c.completed) dl.append(field("completed", timeValue(c.completed)));
+  // Both times are written by the signer; the label says so.
+  // A value that is not a displayable time is still shown, as written (N3).
+  const claimed = (label: string, t?: ClaimTime, asWritten?: string): void => {
+    if (t === undefined && asWritten === undefined) return;
+    const value = el("span", "");
+    if (t !== undefined) value.append(timeValue(t));
+    if (asWritten !== undefined) value.append(el("span", "field-sub mono", asWritten));
+    dl.append(field(`${label} (signer's claim)`, value));
+  };
+  claimed("submitted", c.submitted, c.submittedAsWritten);
+  claimed("completed", c.completed, c.completedAsWritten);
   dl.append(field("tools used", c.toolsUsed.length > 0 ? c.toolsUsed.join(", ") : "none", true));
   if (c.memoriesFormed !== undefined) dl.append(field("memories formed", String(c.memoriesFormed)));
   if (c.delegatedScope !== undefined) dl.append(field("delegated scope", c.delegatedScope, true));
   return dl;
 }
 
-function ladderList(view: ReceiptDocumentVerification, ctx: RelayContext): HTMLElement {
+function ladderList(view: DisplayVerdict, ctx: RelayContext): HTMLElement {
   const list = el("ol", "ladder");
   list.setAttribute("aria-label", "Proof, rung by rung");
   for (const rung of proofLadder(view, ctx)) {
@@ -124,7 +137,7 @@ export interface RenderOptions {
   readonly ctx: RelayContext;
 }
 
-export function renderResult(view: ReceiptDocumentVerification, opts: RenderOptions): HTMLElement {
+export function renderResult(view: DisplayVerdict, opts: RenderOptions): HTMLElement {
   const labels = resultLabels(view);
   const card = el("div", `result-card tone-${labels.tone}`);
   const claim = buildClaim(opts.receipt, view);
@@ -174,10 +187,13 @@ export function renderResult(view: ReceiptDocumentVerification, opts: RenderOpti
   proof.append(grade, ladderList(view, opts.ctx));
   if (view.integrity) {
     const meta = el("dl", "fields result-meta");
-    const bound =
-      view.binding === "sovereign" || view.binding === "anchored" || view.binding === "pinned";
-    if (view.motebitId)
-      meta.append(field(bound ? "motebit" : "claims to be", view.motebitId, true));
+    const bound = view.binding === "anchored" || view.binding === "pinned";
+    const idLabel = bound
+      ? "motebit"
+      : view.binding === "key-commitment"
+        ? "commits to this key (original key)"
+        : "claims to be";
+    if (view.motebitId) meta.append(field(idLabel, view.motebitId, true));
     if (view.signerDid) meta.append(field("signed by", view.signerDid, true));
     if (view.taskId) meta.append(field("task", view.taskId, true));
     proof.append(meta);
@@ -201,5 +217,41 @@ export function renderResult(view: ReceiptDocumentVerification, opts: RenderOpti
   );
   card.append(hon);
 
+  return card;
+}
+
+/**
+ * The neutral state shown the instant the input changes — the previous verdict
+ * is removed before any new verification starts, so it can never sit next to
+ * bytes it was not computed for.
+ */
+export function renderPending(): HTMLElement {
+  const p = el("p", "empty-label", "Checking this receipt…");
+  p.dataset["state"] = "pending";
+  return p;
+}
+
+/**
+ * Verification threw (the verifier's no-throw contract was broken, e.g. by a
+ * malformed delegation chain). Fail closed: an explicit not-verified card, never
+ * a fallback to whatever was on screen before.
+ */
+export function renderUnverifiable(err: unknown): HTMLElement {
+  const card = el("div", "result-card tone-failed");
+  card.dataset["state"] = "unverifiable";
+  const proof = el("section", "proof");
+  const grade = el("div", "grade");
+  const text = el("div", "grade-text");
+  text.append(
+    el("div", "grade-headline", "Not verified — could not check this receipt"),
+    el(
+      "div",
+      "grade-detail",
+      `Verification stopped with an error, so nothing about this receipt is established. Treat every field as unsigned text. (${err instanceof Error ? err.message : String(err)})`,
+    ),
+  );
+  grade.append(el("span", "grade-badge tone-failed", "NOT VERIFIED"), text);
+  proof.append(grade);
+  card.append(proof);
   return card;
 }

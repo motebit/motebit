@@ -131,9 +131,31 @@ fly ssh sftp get /data/motebit-backup-YYYYMMDD.db -a motebit-sync
 2. Or restore from manual backup
 3. The event log is append-only -- clients can re-sync from their local event logs
 
+**Guardian recovery provenance (migration v58):** a guardian recovery is accepted only under a guardian set with the identity's current key (403 `GUARDIAN_NOT_PROVEN` otherwise); before v58 no guardian had provenance, and the prod census measured 0 guardians (Q4 = 0), so no existing user is affected. An owner whose identity can be proven (it has a held key, or a sovereign id) and whose recovery is refused re-sets the guardian with a request proven by the current identity key (`scripts/measure-identity-authority.ts` Q4 lists any unproven guardian). A legacy (non-sovereign) id with no held key can never be proven, so `/agents/register` refuses its guardian (400 `GUARDIAN_REQUIRES_SOVEREIGN_IDENTITY`, recorded `register:guardian_unprovable`) and a recovery under one set before that answers 403 `GUARDIAN_NOT_PROVEN` saying recovery is not available — there is no re-set for it until the legacy evidence path (D2) is built.
+
 ---
 
 ## 3. Service Deployment
+
+### receipt.computer (`apps/verify/`)
+
+receipt.computer is the public verifier, so what it serves must be the exact build that was reviewed. The Vercel project `receipt-computer` is **deliberately not connected to Git**. A Git connection rebuilds from source on Vercel's side and would make every push to `main` a production deploy, using the project's Vite preset at the repo root.
+
+Production changes only by founder approval of an exact artifact:
+
+1. **Build and check.** From a fully clean worktree at the reviewed commit, on Node 22:
+   ```bash
+   scripts/stage-receipt-computer.sh --expect <reviewed-manifest.txt> --commit <reviewed-sha> --deploy
+   ```
+   - The script refuses to deploy unless `apps/verify/dist` matches the reviewed sha256 manifest exactly.
+   - It uploads a prebuilt Build Output directory, so Vercel runs no install or build and injects no build-time env.
+   - The local build is the one that could embed env, so the script runs it with every `VITE_*` variable unset, and refuses to run if any `apps/verify/.env*` file exists.
+   - `--skip-domain` leaves receipt.computer unchanged.
+2. **Verify the staged URL.**
+   - `scripts/stage-receipt-computer.sh --verify <url> <manifest>` re-hashes the served files. Vercel's security checkpoint can answer automated clients with 403; check in a browser if so.
+   - Then open the page and check the sample and the Tamper button.
+3. **Promote** (a separate founder go): `vercel promote <url> --scope motebit`. Then re-run `--verify https://receipt.computer <manifest>`.
+4. **Rollback:** `vercel promote <previous production deployment> --scope motebit`.
 
 ### Web Search (`services/web-search/`)
 
@@ -327,16 +349,85 @@ the pinned `create-motebit@0.8.0` wrapper to the canonical CLI:
 README text in `packages/github-action/README.md` also gets a small sweep.
 See the inline comment in `action.yml` for the exact swap point.
 
-### Emergency Patch
+### Publish authority
 
-```bash
-# Fix the code, then:
-pnpm changeset           # Create changeset
-pnpm version-packages    # Bump versions
-pnpm run build           # Build
-pnpm release             # Publish
-git push --follow-tags   # Push version commits + tags
-```
+In this repo, exactly two jobs can publish to npm, both in `.github/workflows/release.yml`, and
+both wait in the `npm-publish` environment (main only, founder is the required reviewer):
+
+- `train-publish` publishes what the Version Packages PR versioned. It runs after a push only
+  when main carries a public package ahead of npm and no changesets are pending.
+- `security-publish` publishes an exact named list on a manual dispatch (below).
+
+A push to `main` runs `release` (prepare), which versions changesets into the Version Packages
+PR. It has no `id-token` and no publish step, so it cannot publish whatever npm accepts.
+`scripts/__tests__/security-publish.test.ts` fails if any job in any workflow gains an id-token,
+a publish command, or a changesets `publish:` input outside `npm-publish`. The one exception is
+`publish-images.yml`, whose id-token signs container images and which has no npm path.
+
+What the repo cannot enforce, and the founder checks on npmjs.com for every public package:
+
+- **Trusted publishers.** npm allows up to 10 per package. Each one must name motebit/motebit,
+  `release.yml` and environment `npm-publish`, and no other.
+- **Tokens.** Trusted publishing does not disable token publishing. Publishing access should be
+  "Require two-factor authentication and disallow tokens", and the account should hold no
+  write-capable automation tokens.
+
+### Emergency Patch (security publish)
+
+A patch that cannot wait for the train ships through the `security-publish` job. A laptop
+publish carries no provenance.
+
+1. **Rehearse before the fix is public.** Run **Actions → Release → Run workflow** on `main`
+   with main's head SHA, the packages to patch in dependency order, and `dry-run` on. A dry
+   run accepts versions equal to npm's, so it exercises the approval, plan, build, tests and
+   pack on today's main without exposing anything. npm refuses even `npm publish --dry-run`
+   over a version it already has, so the Publish step skips those and the run summary says so.
+   A dry run uploads nothing: the OIDC publish and the provenance attestation are proven only
+   by the real publish in step 4.
+2. **Bump by hand.** On the private branch, bump the patched packages' versions (dependencies
+   first) and write their CHANGELOG entries. Add no changeset for those packages (an empty
+   changeset satisfies `check-changeset-required`), and do not run `pnpm version-packages`:
+   the train would bump them again and version every pending changeset.
+3. **Bring the fix to main.** The advisory's temporary private fork cannot merge into `main`:
+   the ruleset has no bypass, and nobody should add one. Its code also never runs CI. The route
+   below makes the fix public before a patched package exists, so it is a fallback, not a
+   default.
+   - **Decide the disclosure risk first.** The founder decides, and records on the advisory,
+     whether the fix may be public before the packages are: how severe and how exploitable
+     the bug is, and whether users can mitigate it meanwhile. A neutral commit message hides
+     the history, not the diff, and the window can run longer than planned (a failing check,
+     a queue backlog, a registry outage).
+   - Run `pnpm build`, `pnpm check` and the affected packages' tests locally before opening
+     the PR, to avoid exposure from predictable CI failures. The public PR's own CI and
+     merge-queue checks must still pass before merging; any failure blocks the release.
+   - Squash the private branch into ONE commit on main's current head with a neutral message
+     (`fix(<scope>): <area> hardening`, the patched versions, "details follow in a security
+     advisory"). Check that its tree under `packages/ services/ apps/ spec/` equals the
+     private branch's. Push only that commit's SHA, never the private branch: its commit
+     messages describe the vulnerability.
+   - Open a public PR from it, approve it once CI is green, and queue it. Close the private PR
+     (no comment; the private fork forbids them).
+     From the PR opening to step 4 the fix is public without a patched package. Have the dispatch
+     ready before you queue.
+4. **Publish at once.** As soon as the PR merges, dispatch again with the merge commit's SHA and
+   `dry-run` off, and approve. The job refuses unless each version is strictly ahead of npm. It
+   publishes the packed tarballs in order, checks that the registry serves each with the packed
+   sha512 and a provenance attestation, and runs `npm audit signatures` on a clean install.
+   Just before publishing, the job re-reads main's head and refuses if anything merged after
+   the dispatch; dispatch again for the new head.
+   If the merge's own push also asks for `train-publish` approval (main ahead of npm, no
+   pending changesets), reject that one: the security-publish run is the verified path.
+5. **Disclose.** Fill in the advisory's patched versions, then request the CVE and publish. If
+   the page's button does not publish, the API does (founder login):
+   `gh api -X POST repos/motebit/motebit/security-advisories/<GHSA>/cve`, then
+   `gh api -X PATCH repos/motebit/motebit/security-advisories/<GHSA> -f state=published`.
+6. **Tags.** Push the `<name>@<version>` tags at the merge commit yourself. The job has
+   `contents: read`.
+
+The job refuses before building when: main has moved past the SHA; a package is private or listed
+twice; a version is behind npm, a first publish, or (outside a dry run) equal to npm's; a
+dependency is listed after its dependent; or an unlisted public dependency is not on the
+registry. The rules are in `scripts/lib/security-publish.ts`.
 
 ---
 

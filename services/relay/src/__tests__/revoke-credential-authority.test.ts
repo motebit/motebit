@@ -100,7 +100,15 @@ function seedCredential(relay: SyncRelay, subject: string, issuerDid: string): s
     .prepare(
       "INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at) VALUES (?,?,?,?,?,?)",
     )
-    .run(credentialId, subject, issuerDid, "AgentReputationCredential", "{}", Date.now());
+    .run(
+      credentialId,
+      subject,
+      issuerDid,
+      "AgentReputationCredential",
+      // The table holds only credentials whose signer is their issuer (v59).
+      JSON.stringify({ issuer: issuerDid, proof: { verificationMethod: `${issuerDid}#key-1` } }),
+      Date.now(),
+    );
   return credentialId;
 }
 

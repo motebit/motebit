@@ -16,16 +16,39 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: no job here calls the GitHub API, pushes, comments, or reads
+# another run's artifacts, so the token can only read the repository (checkout).
+# Pinned to exactly this by scripts/check-prepush-subset.ts, which also refuses
+# a job-level `permissions:` on every job, so no wider grant can merge. (A
+# pull_request run uses the PR's own copy of this file, so the gate does not
+# bind that one run; it stops the change from landing.)
+permissions:
+  contents: read
+
 # Turbo remote cache — restores build/typecheck/lint/lint:pack outputs for
 # packages whose inputs haven't changed since the last passing run. Each
 # job exports TURBO_TOKEN + TURBO_TEAM automatically via env inheritance.
 # Secrets live in repo settings (TURBO_TOKEN) and repo variables (TURBO_TEAM);
 # when absent the cache silently no-ops and CI falls back to local build,
 # so forks / first-boot runs degrade gracefully.
+#
+# The two secrets are granted only on push-to-main and merge_group runs. On
+# every other event (pull_request included) they are '' and turbo reports
+# "Remote caching disabled", so PR code that does not edit ci.yml (install
+# lifecycle scripts, tests) never receives the Turbo secrets and cannot upload
+# artifacts a later main / merge-queue build restores. What this does NOT stop:
+# a pull_request run executes the PR's OWN ci.yml, so someone who can push a
+# same-repo branch can put the secrets back in that one run. Only the founder
+# (and dependabot, whose runs get a read-only token and Dependabot secrets)
+# can push same-repo branches; agent PRs come from forks, which receive no
+# secrets. scripts/check-prepush-subset.ts (WORKFLOW_ENV) pins this block
+# exactly, which keeps such an edit from merging. The structural fix (these
+# secrets in a branch-restricted environment) is deferred. The cost: a
+# same-repo PR run builds without the remote cache, as fork PRs always have.
 env:
-  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TOKEN: ${{ (github.event_name == 'push' || github.event_name == 'merge_group') && secrets.TURBO_TOKEN || '' }}
   TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ (github.event_name == 'push' || github.event_name == 'merge_group') && secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY || '' }}
 
 jobs:
   # `check` is a REQUIRED status check (branch protection + the merge queue,

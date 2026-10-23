@@ -9674,8 +9674,9 @@
                 the address below.</strong
               >
               Save it in a password manager (1Password, Bitwarden, paper backup) and never paste it
-              in chat, email, or screenshots. Lose it without a paired device or guardian — the
-              identity is gone, no recovery path. Auto-hides after 60 seconds.
+              in chat, email, or screenshots. Lose it without a paired device and the identity is
+              gone: guardian recovery is currently suspended on the reference relay, so there is no
+              other recovery path. Auto-hides after 60 seconds.
             </div>
           </div>
           <div class="settings-card" style="margin-top: 8px">
@@ -9756,8 +9757,8 @@
               Restore from recovery seed…
             </button>
             <div style="font-size: 11px; color: var(--text-muted); margin-top: -2px">
-              Raw key only. Reclaims funds + private key, but creates a new motebit_id (the original
-              UUID is not derivable from the seed).
+              Raw key only. Reclaims funds + private key and re-derives your motebit_id (a legacy
+              random id is not derivable from the seed).
             </div>
           </div>
         </div>
@@ -9832,13 +9833,13 @@
         </div>
         <!-- Step 1b: paste seed (seed-only flow). Skips the file step;
              synthesized metadata advances to the preview step with a
-             warning banner that the original motebit_id is not recoverable. -->
+             banner that the motebit_id is re-derived (a legacy id is not). -->
         <div id="restore-step-seed-only" class="restore-step" style="display: none">
           <div class="restore-title">Restore from recovery seed</div>
           <div class="restore-body">
-            Paste your 64-hex-char recovery seed. The original motebit_id cannot be recovered from
-            the seed alone — a new one will be assigned. Your cryptographic identity (private key +
-            Solana address + funds) is preserved.
+            Paste your 64-hex-char recovery seed. A sovereign motebit_id (the default) is re-derived
+            from the seed; a legacy random id cannot be recovered from the seed alone. Your
+            cryptographic identity (private key + Solana address + funds) is preserved.
           </div>
           <div class="restore-field-group">
             <label class="restore-label" for="restore-seed-only-input">

@@ -1022,6 +1022,66 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-prepush-subset",
     proves:
+      "flags ci.yml's GITHUB_TOKEN grant widened past the pinned `permissions: { contents: read }` — here `contents: write` plus an extra `pull-requests: write` scope, which would let PR-head code in any CI job push or comment",
+    perturb: () =>
+      mutateFile(".github/workflows/ci.yml", (src) =>
+        src.replace(
+          "\npermissions:\n  contents: read\n",
+          `\npermissions:\n  contents: write # ${PROBE_PREFIX}injected\n  pull-requests: write\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags a ci.yml job declaring its own `permissions:` — a job-level grant replaces the pinned top-level one for that job, so the pin would no longer be the whole authority. Perturbs `sibling-audit`, an UNPINNED job, so only the every-job permissions rule can catch it (on a counterpart job the job-key allowlist would fire anyway)",
+    perturb: () =>
+      mutateFile(".github/workflows/ci.yml", (src) =>
+        src.replace(
+          "  sibling-audit:\n",
+          `  sibling-audit:\n    permissions: # ${PROBE_PREFIX}injected\n      contents: write\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags a ci.yml expression outside the reviewed context allowlist — here `${{ secrets.TURBO_TOKEN }}` (a bare context reference, no function call, so only the context-path allowlist can catch it) in an unpinned job's step env, bypassing the event allowlist of the pinned workflow env",
+    perturb: () =>
+      mutateFile(".github/workflows/ci.yml", (src) =>
+        src.replace(
+          "          DIFF_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}\n",
+          `          DIFF_BASE: \${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}\n          CTX: \${{ secrets.TURBO_TOKEN }} # ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags a ci.yml job calling a reusable workflow with `secrets: inherit` — every repo secret handed to it on every event, pull_request included",
+    perturb: () =>
+      mutateFile(".github/workflows/ci.yml", (src) =>
+        src.replace(
+          "\n  format:\n",
+          `\n  reuse: # ${PROBE_PREFIX}injected\n    uses: ./.github/workflows/x.yml\n    secrets: inherit\n\n  format:\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags the Turbo remote-cache token reaching `pull_request` CI again — TURBO_TOKEN back to a bare `${{ secrets.TURBO_TOKEN }}`, so PR-head code could upload cache artifacts a later main / merge-queue build restores",
+    perturb: () =>
+      mutateFile(".github/workflows/ci.yml", (src) =>
+        src.replace(
+          /\n  TURBO_TOKEN: .*\n/,
+          `\n  TURBO_TOKEN: \${{ secrets.TURBO_TOKEN }} # ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
       "flags a CI counterpart that can no longer fail — `continue-on-error: true` on the `test:coverage` step (a shape the first, regex version of the gate let through): a counterpart step carries only name/run",
     perturb: () =>
       mutateFile(".github/workflows/ci.yml", (src) =>
@@ -3279,6 +3339,15 @@ export async function probeFetch(): Promise<unknown> {
         }
         return src.replace(re, "$1true");
       }),
+  },
+  {
+    script: "check-codeowners-authority",
+    proves:
+      "flags a MONEY_IDENTITY_PATH package losing its founder-owned rule — the drift class where a CODEOWNERS edit (or an agent's PR) quietly drops one authority path from code-owner review so a money door merges on CI alone. Probe deletes the `/packages/virtual-accounts/src/` line from .github/CODEOWNERS; every non-test virtual-accounts src file then falls to no rule and the gate must go red with the add-a-rule repair. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`.github/CODEOWNERS`, (src) =>
+        src.replace("/packages/virtual-accounts/src/ @hakimlabs\n", ""),
+      ),
   },
   {
     script: "check-identity-authority-inventory",

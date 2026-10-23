@@ -151,7 +151,7 @@ const result = await verifyReceiptChain(receipt, knownKeys);
 // result.delegations — array of ReceiptVerification for sub-delegations
 ```
 
-Each node in the verification tree contains `task_id`, `motebit_id`, `verified`, and an optional `error`. An unknown `motebit_id` (not in `knownKeys`) produces `verified: false` with `error: "unknown motebit_id"`.
+Each node in the verification tree contains `task_id`, `motebit_id`, `verified`, `keySource`, and an optional `error`. An unknown `motebit_id` (not in `knownKeys`) is NOT fail-closed: `verifyReceiptChain` falls back to the receipt's own embedded `public_key` and reports `keySource: "embedded"`, which proves the bytes are intact but not that the key belongs to that `motebit_id` (a forged receipt can embed any key and still report `verified: true`). Only `keySource: "external"` (the key came from your `knownKeys`) establishes identity binding, so check `keySource` at every node. A receipt with neither a known nor an embedded key yields `verified: false` with `error: "unknown motebit_id"`.
 
 ### Flat receipt sequences
 

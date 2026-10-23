@@ -36,6 +36,8 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import type { KeySuccessionRecord } from "@motebit/encryption";
 import { bytesToHex, hexToBytes } from "@motebit/encryption";
 import { createLogger } from "./logger.js";
+import { GuardianRecoverySuspendedError } from "./errors.js";
+import { guardianRecoverySuspended } from "./guardian-recovery-containment.js";
 import {
   openObligationsToKey,
   solanaAddressOfKey,
@@ -355,6 +357,12 @@ export function applySuccession(
   record: KeySuccessionRecord,
   retireConnections: RetireKeyConnections,
 ): SuccessionApplied {
+  // P0 CONTAINMENT backstop (`guardian-recovery-containment.ts`): the one
+  // writer of a recorded link applies no guardian recovery while recovery is
+  // suspended. Both doors refuse first; this is what a door added later, or a
+  // refactor that drops a door's gate, still meets. Before the transaction,
+  // so nothing is read or written.
+  if (guardianRecoverySuspended(record)) throw new GuardianRecoverySuspendedError();
   const result = db.transaction((): SuccessionApplied => {
     // Refused before any write, inside the transaction, so no door — and no
     // interleaving of two doors — can record a key twice (#775).

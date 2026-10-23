@@ -239,8 +239,8 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
           motebitId,
           state: "held-unopenable",
           message: heldWouldNotOpen
-            ? `a rotation this machine started is held in ${deps.pending.path}, but its new key will not open under this passphrase — this machine cannot finish or safely discard it; recover through the identity's guardian, or restore the passphrase it was written under`
-            : `the write-ahead in ${deps.pending.path} could not be used (${outcome.message}); recover through the identity's guardian`,
+            ? `a rotation this machine started is held in ${deps.pending.path}, but its new key will not open under this passphrase — this machine cannot finish or safely discard it; restore the passphrase it was written under (guardian recovery, the other remedy, is currently suspended on the reference relay)`
+            : `the write-ahead in ${deps.pending.path} could not be used (${outcome.message}); keep the file where it is, since it may hold the only copy of a key the relay already accepted (guardian recovery, the remedy for a lost rotated key, is currently suspended on the reference relay)`,
           notes,
         };
       }

@@ -17,6 +17,9 @@ import {
   isRelayMetadataUrl,
   relayMetadataResponse,
 } from "./helpers/signed-relay-metadata.js";
+// delegate_to_agent is R4_MONEY: the registry refuses it without the runtime's
+// money capability, so these handler tests drive the handler directly.
+import { runToolHandler } from "./helpers/money-tool-handler.js";
 
 // === Mock ai-core: intercept runTurnStreaming to simulate AI calling delegate_to_agent ===
 
@@ -334,7 +337,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     });
 
     // Execute the tool directly
-    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+    const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "search the web for motebit",
       required_capabilities: ["web_search"],
     });
@@ -424,7 +427,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       acknowledgeNoHistoryRisk: true,
     });
 
-    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+    const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "search the web for motebit",
       required_capabilities: ["web_search"],
     });
@@ -503,7 +506,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       acknowledgeNoHistoryRisk: true,
     });
 
-    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+    const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "search the web for motebit",
       required_capabilities: ["web_search"],
     });
@@ -536,7 +539,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       authToken: async () => "test-token",
     });
 
-    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+    const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "search something",
     });
 
@@ -570,7 +573,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       timeoutMs: 3000, // 3s timeout → ~1 poll
     });
 
-    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+    const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "this will timeout",
     });
 
@@ -591,7 +594,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       },
     });
 
-    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+    const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "auth will fail",
     });
 
@@ -626,7 +629,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     });
 
     // Execute the tool
-    await runtime.getToolRegistry().execute("delegate_to_agent", {
+    await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "delegated work",
     });
 
@@ -728,7 +731,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       authToken: async () => "test-token",
     });
 
-    await runtime.getToolRegistry().execute("delegate_to_agent", {
+    await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "read this URL",
       required_capabilities: ["read_url"],
     });
@@ -765,7 +768,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       authToken: async () => "test-token",
     });
 
-    await runtime.getToolRegistry().execute("delegate_to_agent", {
+    await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "just do something",
     });
 
@@ -800,7 +803,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     });
 
     // Execute delegate_to_agent tool (simulating what the AI would do)
-    await runtime.getToolRegistry().execute("delegate_to_agent", {
+    await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "search the web",
       required_capabilities: ["web_search"],
     });
@@ -862,7 +865,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       authToken: async () => "test-token",
     });
 
-    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+    const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "retry after network failure",
     });
 
@@ -900,7 +903,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       authToken: async () => "signed-jwt-token",
     });
 
-    await runtime.getToolRegistry().execute("delegate_to_agent", {
+    await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "check auth",
     });
 
@@ -945,7 +948,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       authToken: async (aud) => `test-token-${aud ?? "default"}`,
     });
 
-    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+    const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "test poll retry",
     });
 
@@ -990,7 +993,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       authToken: async () => "test-token",
     });
 
-    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+    const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "trust bump will fail",
     });
 

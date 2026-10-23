@@ -146,6 +146,67 @@ describe("mutation table — every mutant RED", () => {
   }
 });
 
+describe("least privilege: the token grant and the turbo secrets", () => {
+  // Each P* mutant must go RED for ITS rule, not incidentally (a step-pin or
+  // job-key violation would also fire on P6, hiding a missing permissions rule).
+  const reason: Record<string, RegExp> = {
+    P1: /workflow `permissions:` must be exactly/,
+    P2: /workflow `permissions:` must be exactly/,
+    P3: /workflow `permissions:` must be exactly/,
+    P4: /workflow `permissions:` must be exactly/,
+    P5: /workflow `permissions:` must be exactly/,
+    P6: /job `check-static` declares its own `permissions:`/,
+    P7: /job `sibling-audit` declares its own `permissions:`/,
+    P8: /workflow `env:` must be exactly/,
+    P9: /workflow `env:` must be exactly/,
+    P10: /workflow `env:` must be exactly/,
+    P11: /`jobs\.sibling-audit\.env\.TURBO_TOKEN` references `secrets\.turbo_token`/,
+    P12: /`jobs\.sibling-audit\.steps\[\d+\]\.env\.GH_TOKEN` references `github\.token`/,
+    P13: /`jobs\.sibling-audit\.steps\[\d+\]\.env\.T` references `secrets\.turbo_token`/,
+    P14: /`jobs\.sibling-audit\.steps\[\d+\]\.env\.T` references `secrets\.turbo_token`/,
+    P15: /`jobs\.sibling-audit\.steps\[\d+\]\.env\.T` references `github\.token`/,
+    P16: /`jobs\.sibling-audit\.steps\[\d+\]\.env\.T` has an expression the gate cannot read/,
+    P17: /`jobs\.sibling-audit\.steps\[\d+\]\.env\.T` calls `tojson\(\)`/,
+    P18: /job `reuse` has `secrets:` "inherit"/,
+    P19: /job `reuse` has `uses:`/,
+    P20: /`jobs\.sibling-audit\.steps\[\d+\]\.env\.T` references `vars\.turbo_team`/,
+    P21: /`jobs\.sibling-audit\.steps\[\d+\]\.if` references `secrets\.turbo_token`/,
+    P22: /`jobs\.sibling-audit\.steps\[\d+\]\.env\.T` has an unterminated `\$\{\{`/,
+    P23: /no expression uses `runner\.temp` any more/,
+    P24: /`jobs\.sibling-audit\.steps\[\d+\]\.env\.\$\{\{ secrets\.TURBO_TOKEN \}\} \(key\)` references `secrets\.turbo_token`/,
+    P25: /`jobs\.sibling-audit\.<<` is a YAML merge key/,
+    P26: /`jobs\.reuse\.<<` is a YAML merge key/,
+    P27: /job `sibling-audit` declares its own `Permissions:`/,
+    P28: /job `reuse` has `Uses:`/,
+    P29: /job `sibling-audit` has `Secrets:`/,
+    P30: /`jobs\.sibling-audit\.steps\[\d+\]\.If` references `secrets\.turbo_token`/,
+  };
+  it("covers every P* mutant", () => {
+    expect(
+      MUTANTS.filter((x) => /^P\d/.test(x.id))
+        .map((x) => x.id)
+        .sort(),
+    ).toEqual(Object.keys(reason).sort());
+  });
+  for (const mu of MUTANTS.filter((x) => /^P\d/.test(x.id)))
+    it(`${mu.id} is RED for its own reason, with a repair instruction`, () => {
+      const v = evaluate(mu.apply(REAL)).violations.filter((x) => reason[mu.id]!.test(x));
+      expect(v, mu.id).toHaveLength(1);
+      // A repair instruction: the pinned value it must equal, or the directive.
+      expect(v[0]).toMatch(
+        /must be exactly .*; got |\bremove (it|the reference)\b|— rewrite it|— close it|— remove it from CI_EXPRESSION_ALLOWLIST|write the keys out in place/,
+      );
+    });
+  it("the real ci.yml grants the secrets to push / merge_group only, and contents: read", () => {
+    const wf = parseYaml(REAL.ci) as { permissions: unknown; env: Record<string, string> };
+    expect(wf.permissions).toEqual({ contents: "read" });
+    for (const k of ["TURBO_TOKEN", "TURBO_REMOTE_CACHE_SIGNATURE_KEY"])
+      expect(wf.env[k]).toBe(
+        `\${{ (github.event_name == 'push' || github.event_name == 'merge_group') && secrets.${k} || '' }}`,
+      );
+  });
+});
+
 describe("controls — every control GREEN", () => {
   for (const c of CONTROLS) {
     it(`${c.id}: ${c.what}`, () => {

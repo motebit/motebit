@@ -18,6 +18,12 @@ concurrency:
   group: deploy-read-url-${{ github.ref }}
   cancel-in-progress: false
 
+# Least privilege: the repo's default GITHUB_TOKEN is write, so every
+# workflow states its own. This one only checks out the repo; the deploy
+# authenticates with its own secret, never the GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

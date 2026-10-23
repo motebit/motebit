@@ -117,6 +117,35 @@ const vc = await issueReputationCredential(
 - **`verifyAgentCommandEnvelope(opts)`** — Fail-closed verification consumers run before executing a relay-forwarded `command_request`; returns an `AgentCommandVerdict` with an honest rejection reason (missing envelope, foreign identity, bad signature, stale timestamp, audience mismatch, payload tamper).
 - **`agentCommandAudience(motebitId)`** / **`agentCommandPayload(command, args?)`** — the shared audience + canonical-payload convention both sides bind to.
 
+### Federation Signed Messages (`relay-federation@1.5` §3.5)
+
+Relay-to-relay messages domain-separated by role, signer, intended verifier — by relay id AND public key (`recipient_public_key`; relay ids are not self-certifying, so the verifier compares the key to its own before anything else) — and freshness. Signed bytes are `"motebit-fed/v2\0" ‖ kind ‖ "\0" ‖ JCS(envelope)` under `motebit-jcs-ed25519-hex-v1` (`FEDERATION_MESSAGE_DOMAIN`, `FEDERATION_MESSAGE_SUITE`); kinds and their freshness windows live in `FEDERATION_MESSAGE_KINDS` (`heartbeat`, `heartbeat-ack`, `peer-remove`, `peer-challenge`, `peer-confirm`).
+
+```ts
+import { signFederationMessage, verifyFederationMessage } from "@motebit/crypto";
+
+const message = await signFederationMessage({
+  kind: "heartbeat",
+  sender: myRelayId,
+  recipient: peerRelayId,
+  recipientPublicKey: peerPublicKeyHex, // the key you verified the peer under
+  body: { agent_count: 3, revocations: [] },
+  privateKey,
+});
+
+// At the recipient: refuses another recipient (by key or id), kind, stale ts, altered body or key.
+const verdict = await verifyFederationMessage(message, {
+  kind: "heartbeat",
+  self: peerRelayId,
+  selfPublicKeyHex: peerPublicKeyHex,
+  senderPublicKeyHex,
+  body: { agent_count: 3, revocations: [] },
+});
+// verdict.ok → record verdict.envelope.nonce for its sender in the same transaction as the write.
+```
+
+`parseFederationMessage` reads a wire value strictly (exactly the eight envelope fields) so a verifier can look up the sender's key first; `federationMessageBytes` and `federationBodyDigest` expose the signed bytes and the `body_sha256` rule.
+
 ### Credential Issuance
 
 - **`issueGradientCredential(snapshot, privateKey, publicKey)`** — Issue an intelligence gradient VC.
@@ -133,12 +162,12 @@ const vc = await issueReputationCredential(
 - **`verifyDelegationChain(chain)`** — Verify a chain of delegations with scope narrowing.
 - **`verifyKeySuccession(record, guardianPublicKeyHex?)`** — Verify a key rotation record.
 - **`verifySuccessionChain(chain, guardianPublicKeyHex?)`** — Verify a full key rotation chain.
-- **`verifyKeyBindingAtTime(identity, signingKeyHex, atTimestampMs, guardianPublicKeyHex?)`** — Sovereign-root identity binding with time-windowing: was this key the motebit's legitimate key _at_ a given time? Verifies the succession chain, then checks the key's active window. Returns `KeyBindingResult`.
+- **`verifyKeyBindingAtTime(identity, signingKeyHex, atTimestampMs, trustedGuardianPublicKeyHex?)`** — Sovereign-root identity binding with time-windowing: was this key the motebit's legitimate key _at_ a given time? Verifies the succession chain, then checks the key's active window. Returns `KeyBindingResult`. **A guardian named only by the identity file being verified never binds:** a chain with a guardian-recovery link binds only when the caller passes `trustedGuardianPublicKeyHex`, a guardian it trusts independently of that file (never one copied out of it). Without it the result is `bound: false` for every key of that chain, the genesis key included; only a well-formed 32-byte hex value counts as supplied. The result reports four properties apart: `genesisCommitment` (the id commits to the genesis key; a fact that authorizes nothing alone), `successionIntegrity` (the links' signatures and order verify), `guardianAuthority` (`not_required` / `caller_trusted` / `not_established`: where the guardian came from, not whether the link verified, so read it together with `successionIntegrity`), and current authority, which no offline verifier establishes and no field claims.
 - **`identityLogLeaf(motebitId, currentKeyHex)`** — Canonical SHA-256 leaf of the identity-transparency log (the operator's `motebit_id → current key` commitment). Shared convention for the relay producer and the verifier.
-- **`verifyIdentityBindingAnchored(identity, signingKeyHex, atTimestampMs, proof, guardianPublicKeyHex?)`** — Anchored binding: sovereign-root binding AND Merkle inclusion of the current key in the transparency log under `proof.anchoredRoot`. Confirming the root is on-chain is the caller's cross-check.
+- **`verifyIdentityBindingAnchored(identity, signingKeyHex, atTimestampMs, proof, trustedGuardianPublicKeyHex?)`** — Anchored binding: sovereign-root binding AND Merkle inclusion of the current key in the transparency log under `proof.anchoredRoot`. Confirming the root is on-chain is the caller's cross-check. The guardian rule is the same as `verifyKeyBindingAtTime`'s.
 - **`deriveSovereignMotebitId(genesisPublicKeyHex)`** — The sovereign commitment of a genesis key: a deterministic UUIDv8 from `sha256(genesisKey)`. A sovereign-minted motebit's `motebit_id` IS this value, so the id↔key binding is self-certifying (offline, no operator). Second-preimage resistance ~2^122.
 - **`verifySovereignBinding(motebitId, genesisPublicKeyHex)`** — True iff `motebitId` is the sovereign commitment to the genesis key. `verifyKeyBindingAtTime` sets `sovereign: true` on its result when this holds.
-- **`verifyMigratingKeyBinding(motebitId, presentedKeyHex, identityFile?)`** — Does `presentedKeyHex` legitimately control `motebitId` right now? The migration key↔id check ([`spec/migration-v1.md`](https://github.com/motebit/motebit/blob/main/spec/migration-v1.md) §8.2 step 6), fail-closed: a never-rotated sovereign id binds its key directly; a rotated key binds via the identity file's sovereign-rooted succession chain. Composes `verifySovereignBinding` and `verifyKeyBindingAtTime`.
+- **`verifyMigratingKeyBinding(motebitId, presentedKeyHex, identityFile?, trustedGuardianPublicKeyHex?)`** — Is `presentedKeyHex` a key the identity's own lineage binds to `motebitId`? The migration key↔id check ([`spec/migration-v1.md`](https://github.com/motebit/motebit/blob/main/spec/migration-v1.md) §8.2 step 6), fail-closed on malformed input: a sovereign id binds its genesis key directly; any other key binds via the identity file's sovereign-rooted succession chain. Composes `verifySovereignBinding` and `verifyKeyBindingAtTime`; a chain through a guardian-recovery link binds only under the caller's `trustedGuardianPublicKeyHex`, never the file's own guardian. **It establishes binding, not current authority.** The genesis check runs first and ignores any rotation, so a retired genesis key still returns `true`; the function also never proves possession of the private key. Before an authorization decision, verify the identity's current key state from an authenticated, sufficiently fresh source (succession and revocation included) and require proof of possession; if current authority cannot be established, refuse the operation.
 - **`verifyPairingIdentityBinding(motebitId, transferredPublicKeyHex, { successionSources?, relaySuccession?, guardianKey? })`** — May a pairing device adopt the relay-supplied `motebitId` together with the identity key the pairing transferred? Refused (`malformed_id`) unless the id is a canonical spelling (lowercase UUIDv7 / UUIDv8 / UUIDv4, or a `did:key`); accepted at `sovereign` when the id commits to that key, or — for a rotated UUIDv8 / `did:key` — when the succession records (tried source by source, each verified; a source is never trusted) connect the id's genesis key to it; refused when no verified lineage does (`no_verified_lineage`), or only through a guardian-recovery link with no guardian key pinned on the device (`guardian_recovery_unverifiable`); once bound, refused (`identity_fork`) when a verified record in the relay's served chain (`relaySuccession`, always fetched) supersedes the key or forks its lineage, with `relayCheck` reporting `no_conflict` / `unreachable` / `not_checked` on acceptance; accepted at `unverified` for a legacy UUIDv7 or UUIDv4 that commits to no key. Never throws.
 - **`identityVerifyOutcome(result)`** — Folds an identity `verify()` result into the one answer a surface shows: intact only when the signature AND the succession chain verify (`valid` on the raw result covers the signature alone).
 

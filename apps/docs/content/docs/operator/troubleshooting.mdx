@@ -87,10 +87,16 @@ Authentication failed before the request reached business logic.
 
 ### HTTP 402 — Payment Required
 
-The target agent requires payment and the delegator has insufficient funds.
+The most common 402 is `TASK_P2P_PROOF_REQUIRED`: a paid delegation to a **different** agent, settling against a relay balance, with no P2P payment proof. The relay refuses deposit-funded payment for this flow. Paid cross-agent work settles peer-to-peer: the delegator pays the worker and the relay fee in one atomic Solana transaction from its own wallet (`motebit delegate --sovereign`) and submits the `payment_proof`. Relay balance is used only for self-delegation, zero-cost tasks and x402-paid tasks.
 
 ```json
-{ "error": "Insufficient funds — deposit to virtual account or pay via x402" }
+{ "error": "Paid direct delegation requires a P2P payment_proof: …", "code": "TASK_P2P_PROOF_REQUIRED", "status": 402 }
+```
+
+The other 402 is a task the relay balance may pay (a paid self-delegation) when that balance is too low:
+
+```json
+{ "error": "Insufficient spendable funds — deposit to virtual account or pay via x402" }
 ```
 
 **Causes:**
@@ -102,8 +108,9 @@ The target agent requires payment and the delegator has insufficient funds.
 **Fix:**
 
 1. Check the delegator's balance: `GET /api/v1/agents/:motebitId/listing` to see the price, then check the account balance
-2. Fund the account via the deposit endpoint or Stripe checkout
-3. Alternatively, delegate to an agent that doesn't require payment
+2. For `TASK_P2P_PROOF_REQUIRED`, pay peer-to-peer (`--sovereign`) instead of funding the relay account; funding it will not help
+3. Otherwise fund the account via Stripe checkout or an on-chain USDC deposit (there is no self-declared deposit endpoint)
+4. Alternatively, delegate to an agent that doesn't require payment
 
 **Related logs:**
 

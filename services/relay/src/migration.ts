@@ -51,10 +51,38 @@ import { admitKey, recordIdentityKey, verificationKeyFor } from "./identity-keys
 import { liftRevocation } from "./identity-revocation.js";
 import { refuseInvalidIds } from "./id-bounds.js";
 import type { CloseIdentityConnections, ReconcileKeyConnections } from "./connection-ports.js";
+import {
+  countBoundCredentialsForSubject,
+  countCredentialEvidenceForSubject,
+  readVerifiedCredentialsForExport,
+} from "./credential-store.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
 
 // === Constants (§4.4, §5.4 Convention) ===
+
+/**
+ * P0 CONTAINMENT GATE (2026-10-12) — `POST /api/v1/agents/accept-migration`
+ * is OFF. On main it permits identity takeover: a retired genesis key is
+ * re-accepted after a rotation, and `verifyMigratingKeyBinding` trusts a
+ * guardian named inside the PRESENTED identity file, so anyone can forge a
+ * "recovery" chain genesis → X holding no secret of the identity — reachable
+ * with any device token (register-self is free) and an attacker-run source
+ * relay (TOFU). The handler then overwrites `agent_registry` + the
+ * `identity_keys` holder, lifts the identity's revocation and reconciles its
+ * sockets. Production had accepted zero migrations, so refusing arrivals costs
+ * ~nothing legitimate. Only this route is gated; token issue, attestation,
+ * export, depart and cancel are unchanged.
+ *
+ * RE-ENABLE CONDITION: the permanent fix (key currency + guardian provenance
+ * on arrival) has merged AND passed a cold adversarial review. Flip this to
+ * `true` in that PR and delete `__tests__/accept-migration-arrivals-disabled.test.ts`
+ * (whose cases become that fix's refusal tests). Typed `boolean` so the
+ * guarded code stays type-checked and lint sees no constant condition.
+ */
+const MIGRATION_ARRIVALS_ENABLED: boolean = false;
+const MIGRATION_ARRIVALS_DISABLED_MESSAGE =
+  "Migration arrivals are temporarily disabled on this relay";
 
 /** Default migration token expiry: 72 hours. */
 const DEFAULT_TOKEN_EXPIRY_MS = 72 * 60 * 60 * 1000;
@@ -416,9 +444,9 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     // Credential count
     let credCount: { cnt: number } | undefined;
     try {
-      credCount = db
-        .prepare("SELECT COUNT(*) as cnt FROM relay_credentials WHERE subject_motebit_id = ?")
-        .get(motebitId) as { cnt: number } | undefined;
+      // The relay attests to credentials their named issuer signed, never to a
+      // stored forgery (credential-store.ts).
+      credCount = { cnt: countBoundCredentialsForSubject(db, motebitId) };
     } catch {
       /* table may not exist */
     }
@@ -489,12 +517,13 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     // Advance state
     updateMigrationState(db, owner, migration.token_id, "exporting");
 
-    // Fetch all credentials for this agent
-    const credentials = db
-      .prepare(
-        "SELECT credential_id, credential_json FROM relay_credentials WHERE subject_motebit_id = ? ORDER BY issued_at ASC",
-      )
-      .all(motebitId) as Array<{ credential_id: string; credential_json: string }>;
+    // The export carries credentials to another relay as credentials, so it
+    // includes only those whose signature and issuer binding verify; expired
+    // ones are kept (the agent's history, spec/migration-v1.md §6.2). The
+    // destination verifies again. What was left out is
+    // reported beside the bundle (`excluded_credentials`), never silently.
+    const storedCount = countCredentialEvidenceForSubject(db, motebitId);
+    const credentials = await readVerifiedCredentialsForExport(db, motebitId);
 
     const parsedCredentials = credentials.map(
       (row) => JSON.parse(row.credential_json) as Record<string, unknown>,
@@ -541,6 +570,9 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     return c.json({
       ok: true,
       credential_bundle: bundle,
+      // Stored credentials not exported because they do not verify in full
+      // (GHSA-7pgw-2976-r236). Outside the bundle, which the agent signs.
+      excluded_credentials: storedCount - credentials.length,
     });
   });
 
@@ -548,6 +580,13 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
   // Validate MigrationPresentation at destination, onboard agent.
   /** @spec motebit/migration@1.0 */
   app.post("/api/v1/agents/accept-migration", async (c) => {
+    // P0 CONTAINMENT — the first statement: every arrival is refused before
+    // body parsing, any DB read or write, and any outbound fetch (the TOFU
+    // tier dials `source_relay_url`, so this also closes that blind SSRF).
+    if (!MIGRATION_ARRIVALS_ENABLED) {
+      logger.warn("migration.accept.disabled");
+      return c.json({ error: MIGRATION_ARRIVALS_DISABLED_MESSAGE }, 503);
+    }
     const body = await c.req.json<{
       migration_token: MigrationToken;
       departure_attestation: DepartureAttestation;

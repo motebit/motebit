@@ -31,16 +31,20 @@ on:
       - "relay-v*"
   workflow_dispatch:
 
+# Least privilege: read-only by default; the publishing grants are on the one
+# job that publishes, so a job added later does not inherit them.
 permissions:
   contents: read
-  packages: write
-  id-token: write
-  attestations: write
 
 jobs:
   relay:
     name: ghcr.io/motebit/relay
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # docker/login-action + push to ghcr.io with GITHUB_TOKEN
+      id-token: write # cosign keyless signing + attest-build-provenance (Sigstore OIDC)
+      attestations: write # actions/attest-build-provenance records the attestation
     # The arm64 half builds under QEMU emulation and the cache export is
     # mode=max, so a normal run is 18-24 minutes. At 30 the margin was one bad
     # run wide, and on 2026-09-21 a run took 30.3 and was killed — reported as

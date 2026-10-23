@@ -11,7 +11,6 @@ import {
   issueReputationCredential,
   verifyVerifiableCredential,
   createPresentation,
-  canonicalJson,
 } from "@motebit/encryption";
 import type { VerifiableCredential } from "@motebit/encryption";
 import { asMotebitId, AgentTrustLevel } from "@motebit/sdk";
@@ -23,14 +22,15 @@ import type { IdentityManager } from "@motebit/core-identity";
 import type { Hono } from "hono";
 import type { RelayIdentity } from "./federation.js";
 import { insertRevocationEvent } from "./federation.js";
-import {
-  bindCredentialSubject,
-  didKeyProvenFor,
-  unwrapBound,
-  type BoundIdentity,
-} from "./identity-binding.js";
+import { bindCredentialSubject, didKeyProvenFor } from "./identity-binding.js";
 import type { AuthEvent } from "./auth-events.js";
 import { createLogger } from "./logger.js";
+import {
+  getCredentialEvidenceParties,
+  insertSubmittedCredential,
+  listOwnerCredentialsWithBoundStatus,
+  readVerifiedCredentialsForPresentation,
+} from "./credential-store.js";
 
 const logger = createLogger({ service: "credentials" });
 
@@ -61,52 +61,10 @@ export function getRelayKeypair(relayIdentity: RelayIdentity): {
 }
 
 /**
- * File a submitted credential under its bound subject (#850). `owner` is the
- * identity `bindCredentialSubject` proved the credential is about; it is
- * read only through `unwrapBound`. Idempotent: `true` when the row is new or
- * is this exact credential under this owner already; `false` when the
- * `credential_id` is held by a different credential or another identity —
- * the caller refuses it rather than report a silent no-op as accepted.
+ * `insertSubmittedCredential` (#850) lives in the credential store, with
+ * every other statement against it; re-exported here for existing importers.
  */
-export function insertSubmittedCredential(
-  db: DatabaseDriver,
-  owner: BoundIdentity,
-  row: { credentialId: string; issuerDid: string; credentialType: string; credentialJson: string },
-): boolean {
-  const subject = unwrapBound(owner);
-  const result = db
-    .prepare(
-      `INSERT OR IGNORE INTO relay_credentials
-       (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      row.credentialId,
-      subject,
-      row.issuerDid,
-      row.credentialType,
-      row.credentialJson,
-      Date.now(),
-    );
-  if (result.changes > 0) return true;
-  const held = db
-    .prepare(
-      "SELECT subject_motebit_id, credential_json FROM relay_credentials WHERE credential_id = ?",
-    )
-    .get(row.credentialId) as { subject_motebit_id: string; credential_json: string } | undefined;
-  // The SAME credential re-submitted is idempotent even when its keys arrive
-  // in another order (spec §7.1 step 6): compare the JCS canonical forms, not
-  // the stored bytes.
-  if (held === undefined || held.subject_motebit_id !== subject) return false;
-  try {
-    return (
-      canonicalJson(JSON.parse(held.credential_json)) ===
-      canonicalJson(JSON.parse(row.credentialJson))
-    );
-  } catch {
-    return false;
-  }
-}
+export { insertSubmittedCredential };
 
 /** Register all credential endpoints on the Hono app. */
 export function registerCredentialRoutes(deps: CredentialDeps): void {
@@ -274,11 +232,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     // compared the named credential to it, so naming yourself in the path
     // authorized you over anyone's credential. Authority has to bind to the
     // object being acted on, not to a parameter of the request.
-    const credRow = db
-      .prepare(
-        "SELECT subject_motebit_id, issuer_did FROM relay_credentials WHERE credential_id = ?",
-      )
-      .get(body.credential_id) as { subject_motebit_id: string; issuer_did: string } | undefined;
+    const credRow = getCredentialEvidenceParties(db, body.credential_id);
 
     // A master-token caller is the operator (no `callerMotebitId` is set by
     // the device-auth middleware). The operator may still name a credential
@@ -415,31 +369,17 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     const typeFilter = c.req.query("type");
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
 
-    let rows: Array<{
-      credential_id: string;
-      credential_type: string;
-      credential_json: string;
-      issued_at: number;
-    }>;
-    if (typeFilter) {
-      rows = db
-        .prepare(
-          "SELECT credential_id, credential_type, credential_json, issued_at FROM relay_credentials WHERE subject_motebit_id = ? AND credential_type = ? ORDER BY issued_at DESC LIMIT ?",
-        )
-        .all(mid, typeFilter, limit) as typeof rows;
-    } else {
-      rows = db
-        .prepare(
-          "SELECT credential_id, credential_type, credential_json, issued_at FROM relay_credentials WHERE subject_motebit_id = ? ORDER BY issued_at DESC LIMIT ?",
-        )
-        .all(mid, limit) as typeof rows;
-    }
+    // EVIDENCE, not trust: the owner sees every credential stored under its
+    // id, including one stored before the issuer binding whose named issuer
+    // never signed it (GHSA-7pgw-2976-r236). `issuer_bound` says which.
+    const rows = listOwnerCredentialsWithBoundStatus(db, mid, typeFilter || undefined, limit);
 
     const credentials = rows.map((r) => ({
       credential_id: r.credential_id,
       credential_type: r.credential_type,
       credential: JSON.parse(r.credential_json) as VerifiableCredential,
       issued_at: r.issued_at,
+      issuer_bound: r.issuer_bound,
     }));
 
     return c.json({ motebit_id: mid, credentials });
@@ -460,28 +400,23 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     const typeFilter = c.req.query("type");
     const limit = Math.min(parseInt(c.req.query("limit") ?? "100", 10) || 100, 500);
 
-    let rows: Array<{
-      credential_json: string;
-    }>;
-    if (typeFilter) {
-      rows = db
-        .prepare(
-          "SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND credential_type = ? ORDER BY issued_at DESC LIMIT ?",
-        )
-        .all(mid, typeFilter, limit) as typeof rows;
-    } else {
-      rows = db
-        .prepare(
-          "SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? ORDER BY issued_at DESC LIMIT ?",
-        )
-        .all(mid, limit) as typeof rows;
-    }
-
-    if (rows.length === 0) {
-      throw new HTTPException(404, { message: "No credentials found for this agent" });
-    }
+    // The relay signs this presentation, so it includes only credentials that
+    // verify in full (signature, issuer binding, validity window). A row stored
+    // before the issuer binding (GHSA-7pgw-2976-r236) can name an issuer that
+    // never signed it; the binding is applied in SQL so the LIMIT counts only
+    // bound rows, then each credential is re-verified.
+    const rows = await readVerifiedCredentialsForPresentation(
+      db,
+      mid,
+      typeFilter || undefined,
+      limit,
+    );
 
     const credentials = rows.map((r) => JSON.parse(r.credential_json) as VerifiableCredential);
+
+    if (credentials.length === 0) {
+      throw new HTTPException(404, { message: "No credentials found for this agent" });
+    }
 
     const relayKeys = getRelayKeypair(relayIdentity);
     const vp = await createPresentation(credentials, relayKeys.privateKey, relayKeys.publicKey);
@@ -557,7 +492,19 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
         typeof vc.credentialSubject === "object" && "id" in vc.credentialSubject
           ? (vc.credentialSubject as { id: unknown }).id
           : undefined;
-      const issuerDid = typeof vc.issuer === "string" ? vc.issuer : "";
+      // The issuer DID, string or `{ id }` form (W3C VC 2.0 permits both). Normalized
+      // here so the self-issuance check and the indexed `issuer_did` read the same
+      // DID the verifier binds to the proof's signer: reading only the string form
+      // let `{ id: <subject's own did:key> }` pass the self-issuance check below.
+      const rawIssuer: unknown = vc.issuer;
+      const issuerDid =
+        typeof rawIssuer === "string"
+          ? rawIssuer
+          : rawIssuer !== null &&
+              typeof rawIssuer === "object" &&
+              typeof (rawIssuer as { id?: unknown }).id === "string"
+            ? (rawIssuer as { id: string }).id
+            : "";
 
       // Self-attestation rejection: issuer === subject carries no trust signal. Compared by
       // IDENTITY as well as by DID string: the `did:key` of V's own key issuing about

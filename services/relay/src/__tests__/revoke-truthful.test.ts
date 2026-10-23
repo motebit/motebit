@@ -469,11 +469,18 @@ describe("no record is terminal: the owner's verified arrival or the operator li
   });
   afterEach(stop);
 
-  it("a register-self-only identity's own revoke: the owner's verified migration arrival lifts it", async () => {
+  // P0 containment (migration.ts MIGRATION_ARRIVALS_ENABLED = false): an
+  // arrival is refused 503 and lifts nothing, so the operator's
+  // restore-listing is the only lift until arrivals are re-enabled. Restore
+  // the arrival-lifts assertions with the gate.
+  it("[arrivals disabled] a register-self-only identity's own revoke: the owner's arrival is refused 503 and lifts nothing; restore-listing still lifts it", async () => {
     const sourceKp = await pinSourceRelay();
     const { kp, mid } = await selfOnlyIdentity();
     expect((await revokeOwn(mid, kp)).status).toBe(200);
-    expect((await acceptMigration(mid, kp, sourceKp)).status).toBe(200);
+    expect((await acceptMigration(mid, kp, sourceKp)).status).toBe(503);
+    expect(hasRecord(mid)).toBe(true);
+    expect(await httpStatus(mid, kp)).toBe(403);
+    expect((await operator(mid, "restore-listing")).status).toBe(200);
     expect(hasRecord(mid)).toBe(false);
     expect(await httpStatus(mid, kp)).toBe(200);
   });
@@ -546,14 +553,17 @@ describe("no record is terminal: the owner's verified arrival or the operator li
   });
 });
 
-describe("the three withdrawn attacks (#794, #796) are all lifted by the owner's verified arrival", () => {
+// P0 containment (migration.ts MIGRATION_ARRIVALS_ENABLED = false): the
+// owner's arrival is refused 503 and lifts nothing; each record stays until the
+// operator's restore-listing. Restore the arrival-lifts assertions with the gate.
+describe("the three withdrawn attacks (#794, #796): with arrivals disabled, only restore-listing lifts them", () => {
   beforeEach(async () => {
     relay = await createTestRelay();
     await listen(relay);
   });
   afterEach(stop);
 
-  it("first-come squat: a stranger registers a device under a never-seen sovereign id and revokes it", async () => {
+  it("[arrivals disabled] first-come squat: a stranger registers a device under a never-seen sovereign id and revokes it; the owner's arrival is 503, the record stands until restore-listing", async () => {
     const sourceKp = await pinSourceRelay();
     const owner = await generateKeypair();
     const stranger = await generateKeypair();
@@ -562,13 +572,14 @@ describe("the three withdrawn attacks (#794, #796) are all lifted by the owner's
     expect((await revokeAs(mid, "evil", stranger)).status).toBe(200);
     expect(await syncStatusAs(mid, "evil", stranger)).toBe(403);
 
-    expect((await acceptMigration(mid, owner, sourceKp)).status).toBe(200);
+    expect((await acceptMigration(mid, owner, sourceKp)).status).toBe(503);
+    expect(hasRecord(mid)).toBe(true);
+    expect(registryRow(mid)).toBeUndefined();
+    expect((await operator(mid, "restore-listing")).status).toBe(200);
     expect(hasRecord(mid)).toBe(false);
-    expect(registryRow(mid)!.revoked).toBe(0);
-    await connect(mid, `token=${await token(mid, "svc", owner, "sync")}&device_id=svc`);
   });
 
-  it("registry-key squat: the stranger also registers itself (its key in the registry) before revoking", async () => {
+  it("[arrivals disabled] registry-key squat: the stranger also registers itself (its key in the registry) before revoking; the owner's arrival is 503 and lifts nothing", async () => {
     const sourceKp = await pinSourceRelay();
     const owner = await generateKeypair();
     const stranger = await generateKeypair();
@@ -578,14 +589,15 @@ describe("the three withdrawn attacks (#794, #796) are all lifted by the owner's
     expect((await revokeAs(mid, "evil", stranger)).status).toBe(200);
     expect(await syncStatusAs(mid, "evil", stranger)).toBe(403);
 
-    expect((await acceptMigration(mid, owner, sourceKp)).status).toBe(200);
+    expect((await acceptMigration(mid, owner, sourceKp)).status).toBe(503);
+    expect(hasRecord(mid)).toBe(true);
+    expect(registryRow(mid)!.revoked).toBe(1);
+    expect((await operator(mid, "restore-listing")).status).toBe(200);
     expect(hasRecord(mid)).toBe(false);
-    expect(registryRow(mid)!.revoked).toBe(0);
-    await connect(mid, `token=${await token(mid, "svc", owner, "sync")}&device_id=svc`);
   });
 
   for (const withRegistry of [false, true]) {
-    it(`retired genesis key: a thief holding the key the owner rotated away from elsewhere revokes (registry=${String(withRegistry)})`, async () => {
+    it(`[arrivals disabled] retired genesis key: a thief holding the key the owner rotated away from elsewhere revokes; the owner's arrival is 503 and lifts nothing (registry=${String(withRegistry)})`, async () => {
       const sourceKp = await pinSourceRelay();
       const genesis = await generateKeypair();
       const current = await generateKeypair();
@@ -596,12 +608,13 @@ describe("the three withdrawn attacks (#794, #796) are all lifted by the owner's
       expect((await revokeAs(mid, "thief", genesis)).status).toBe(200);
       expect(await syncStatusAs(mid, "thief", genesis)).toBe(403);
 
-      // The owner arrives under the CURRENT key, proving the chain.
+      // The owner arrives under the CURRENT key, proving the chain: refused.
       expect((await acceptMigration(mid, current, sourceKp, succession, identityFile)).status).toBe(
-        200,
+        503,
       );
+      expect(hasRecord(mid)).toBe(true);
+      expect((await operator(mid, "restore-listing")).status).toBe(200);
       expect(hasRecord(mid)).toBe(false);
-      await connect(mid, `token=${await token(mid, "svc", current, "sync")}&device_id=svc`);
     });
   }
 

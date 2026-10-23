@@ -44,7 +44,7 @@ motebit delegate "review owner/repo#42"  # Discover worker → submit → get re
 # Account
 motebit balance                      # Show balance + recent transactions
 motebit withdraw 10.00               # Request withdrawal
-  --destination 0xWallet             #   Payout address
+  --destination <solana-address>     #   Payout address (Solana only; 0x refused)
 
 # Earn side
 motebit run --price 0.50             # Daemon mode — accept tasks at $0.50/task

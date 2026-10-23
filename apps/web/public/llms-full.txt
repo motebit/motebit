@@ -10,14 +10,14 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 
 ## Identity
 
-Every motebit has an Ed25519 keypair. The private key is stored in the OS secure keyring (never filesystem, never network). The public key is published for verification.
+Every motebit has an Ed25519 keypair. Where the private key is stored depends on the surface: on the CLI it is passphrase-encrypted (PBKDF2 + AES-256-GCM) in `~/.motebit/config.json`; on desktop it is `~/.motebit/dev-keyring.json`, an owner-only (`0600`) plaintext file (the OS keychain is not used yet); on mobile it is the OS keychain (SecureStore); on the web it is browser storage. Pairing a new device transfers the identity key end-to-end encrypted through the relay; registering with a relay never sends the private key. The public key is published for verification.
 
 - **Ed25519** chosen for speed, small keys (32 bytes), timing-attack resistance
-- **UUID v7** identifiers: time-ordered, sortable, globally unique
-- **Multi-device**: same motebit_id across devices; each device registers independently with its own keypair
+- **Sovereign identifiers**: a new `motebit_id` is a UUIDv8 derived from the genesis public key (first 16 bytes of SHA-256, RFC 9562 version/variant bits), so anyone can check the id-to-key binding offline. Identities minted before sovereign ids carry a random legacy id
+- **Multi-device**: same motebit_id across devices; each device registers its own device id
 - **Key rotation**: dual-signed succession records — old key authorizes new key, both sign canonical payload. Chains verify end-to-end. 15-minute freshness window (±1 min clock skew)
 - **DID interop**: every public key auto-converts to W3C `did:key` format (no registration needed)
-- **Guardian key** (optional, enterprise): organizational custody via separate Ed25519 key. Guardian key MUST NOT equal identity key. Registration requires guardian attestation signature. Same guardian key = organizational trust baseline (0.35) in semiring routing
+- **Guardian key** (optional, enterprise): organizational custody via separate Ed25519 key. Guardian key MUST NOT equal identity key. Registration requires guardian attestation signature. Same guardian key = organizational trust baseline (0.35) in semiring routing. Guardian *recovery* (a guardian-signed succession after key compromise) is specified in identity-v1 but currently suspended on the reference relay; the working recovery path today is the recovery seed (`motebit restore`), which re-derives a sovereign identity
 
 ## Memory
 
@@ -54,7 +54,7 @@ Risk classification:
 - **Execute**: requires operator mode (shell commands, code execution)
 - **Financial**: denied by default
 
-Operator mode is PIN-protected (4-6 digits, PBKDF2 600K iterations) escalation stored hashed in OS keyring. Never plaintext, never network.
+Operator mode is PIN-protected (4-6 digits, PBKDF2 100K iterations) escalation stored hashed in the surface's keyring adapter. Never plaintext, never network.
 
 Additional safeguards:
 - **Audit log**: append-only, immutable record of all policy decisions
@@ -72,7 +72,7 @@ Structure:
 ```
 ---
 spec: motebit/identity@1.0
-motebit_id: {UUID v7}
+motebit_id: {UUIDv8 derived from the genesis public key}
 created_at: {ISO 8601}
 identity:
   algorithm: Ed25519
@@ -91,14 +91,14 @@ memory:
   half_life_days: 7
   confidence_threshold: 0.1
 devices:
-  - device_id: {UUID v7}
+  - device_id: {string}
     public_key: {hex}
     registered_at: {ISO 8601}
 ---
-<!-- motebit:sig:Ed25519:{base64url_signature} -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex_signature} -->
 ```
 
-Signature is Ed25519 over exact UTF-8 bytes between `---` delimiters. Base64url-encoded in HTML comment. Modification invalidates signature. Verification is offline — no network required.
+Signature is Ed25519 over exact UTF-8 bytes between `---` delimiters. Hex-encoded in the HTML comment, under the pinned suite `motebit-jcs-ed25519-hex-v1`; the legacy `motebit:sig:Ed25519:` form is rejected. Modification invalidates signature. Verification is offline — no network required.
 
 ## Agent-to-Agent Delegation
 

@@ -91,6 +91,9 @@ export type Classification =
 export const REGISTRY: Record<string, Classification> = {
   // ── A: dedicated portable verifier ──────────────────────────────────────
   AgentSettlementAnchorProof: { kind: "verifier", verifier: "verifyAgentSettlementAnchor" },
+  // Federation signed messages v2 (relay-federation@1.5 §3.5): heartbeat,
+  // heartbeat-ack and peer-remove; one producer and one verifier for every kind.
+  SignedFederationMessage: { kind: "verifier", verifier: "verifyFederationMessage" },
   // Federation settlement anchoring (PR6, the RFC 6962 arc-closer). The
   // inter-relay peer-audit analogue of the per-agent pair above: the signed
   // record is the verbatim leaf, the proof is the portable inclusion proof.

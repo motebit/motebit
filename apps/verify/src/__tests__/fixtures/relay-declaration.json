@@ -1,0 +1,12 @@
+{
+  "spec": "motebit/relay-transparency@1",
+  "declared_at": 1780000000000,
+  "relay_id": "rc-demo-relay",
+  "relay_public_key": "6c8d14b047593d7117dc445957d8bdd6772c303d064297fdc8e329927d370bda",
+  "content": {
+    "note": "rc review mock"
+  },
+  "hash": "9c8f16c33b7779af8e64bc77787fe97693292083de7d8f80e767b400fb2d48bc",
+  "suite": "motebit-jcs-ed25519-hex-v1",
+  "signature": "d84f64b05f51229ff1f77dc17c209ef0ec1ac116e8b198ed69447b0ae211c79469968ea8f3c20ee6c6ece61e918a97aba2f1e5ac2555f9c88c4b52eb766bdf00"
+}

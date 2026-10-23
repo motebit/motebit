@@ -29,6 +29,11 @@
  */
 
 import * as crypto from "node:crypto";
+import {
+  canonicalJson,
+  directDiscoverRequest,
+  signFederationV2,
+} from "./lib/federation-live-v2.mjs";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -112,33 +117,8 @@ function makePrivKeyObj(privBytes) {
   });
 }
 
-// MIRROR: keep in sync with `packages/encryption/src/canonical.ts::canonicalJson`.
-// Inline duplicate because this script is pure-Node (no workspace deps) — the
-// live-test runs against deployed relays and must self-bootstrap. Drift between
-// this and the production version manifests as wire-format incompatibility,
-// which the live test will surface as Phase 6.1 fail-closed at issuer-signature
-// verification (relay rebuilds canonical bytes, sig doesn't match). On any
-// change to canonical.ts, audit this function as a sibling-boundary touchpoint.
-// Same dual-source pattern as the `@motebit/crypto/merkle.ts` ↔
-// `@motebit/encryption/merkle.ts` split (verifier in crypto, writer in
-// encryption — kept separate so crypto stays self-contained for browser-side
-// re-verification).
-//
-// JCS-style canonical JSON (sorted keys, no whitespace, undefined-omission).
-// Used by the §15 witness-solicitation signing payload (motebit-jcs-ed25519-b64-v1).
-function canonicalJson(obj) {
-  if (obj === null || obj === undefined) return JSON.stringify(obj);
-  if (typeof obj !== "object") return JSON.stringify(obj);
-  if (Array.isArray(obj)) return "[" + obj.map((i) => canonicalJson(i)).join(",") + "]";
-  const sorted = Object.keys(obj).sort();
-  const entries = [];
-  for (const key of sorted) {
-    const val = obj[key];
-    if (val === undefined) continue;
-    entries.push(JSON.stringify(key) + ":" + canonicalJson(val));
-  }
-  return "{" + entries.join(",") + "}";
-}
+// The §3.5 v2 signer and the JCS mirror live in `scripts/lib/federation-live-v2.mjs`
+// (still dependency-free), so the relay suite can run them against a real relay.
 
 // MIRROR: equivalent to `@motebit/crypto/signing.ts::toBase64Url(Uint8Array)`.
 // Node's `Buffer#toString('base64url')` produces the same output (RFC 4648
@@ -270,8 +250,8 @@ async function phase1() {
     // together — federation-e2e.test.ts has a defensive test that catches the constant↔doc
     // drift, but this live-test assertion has no such backstop.
     const specOk =
-      identityA.spec === "motebit/relay-federation@1.3" &&
-      identityB.spec === "motebit/relay-federation@1.3";
+      identityA.spec === "motebit/relay-federation@1.5" &&
+      identityB.spec === "motebit/relay-federation@1.5";
     expect(specOk, `A.spec=${identityA.spec}, B.spec=${identityB.spec}`);
   } else {
     fail("cannot check — identity fetch failed");
@@ -297,8 +277,9 @@ async function phase2() {
   // The peering handshake is a 4-step mutual authentication:
   //
   //   1. Relay A → Relay B: propose (send A's identity + nonce)
-  //   2. Relay B responds with B's nonce + challenge (B signs A's relay_id:nonce)
-  //   3. Relay A → Relay B: confirm (A signs A's relay_id:B_nonce as challenge_response)
+  //   2. Relay B responds with B's nonce + a v2 `peer-challenge` (§3.5)
+  //   3. Relay A → Relay B: confirm (a v2 `peer-confirm` to B over B's nonce
+  //      and A's endpoint, relay-federation@1.5 §3.1)
   //   4. Relay B verifies → state becomes 'active'
   //
   // The complication: we don't have Relay A's private key. The relay signs internally.
@@ -306,8 +287,9 @@ async function phase2() {
   //
   // But wait — the propose endpoint is unauthenticated (any relay can propose).
   // The propose sends the proposer's public_key for the receiver to store.
-  // The confirm requires the proposer to sign `proposer_relay_id:receiver_nonce`
-  // with the proposer's private key.
+  // The confirm requires the proposer to sign a v2 `peer-confirm` to the
+  // receiver over the receiver's nonce and its own endpoint, with the
+  // proposer's private key.
   //
   // Since we can't sign with Relay A's private key from outside, we have two options:
   //   a) Use admin API if it exists (it doesn't)
@@ -373,21 +355,29 @@ async function phase2() {
   test("Peering confirmation completes handshake");
   if (peerNonce) {
     try {
-      // Sign: ${relay_id}:${nonce}:${FEDERATION_SUITE}. The suite suffix
-      // binds the handshake to a specific cryptosuite per
-      // services/relay/src/federation.ts (FEDERATION_SUITE constant on
-      // line 27). The script was written before the suite-binding
-      // landed during the 2026-04-13 cryptosuite-agility pass; updating
-      // here closes that drift.
-      const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";
-      const confirmMsg = Buffer.from(`${syntheticRelayId}:${peerNonce}:${FEDERATION_SUITE}`);
-      const challengeResponse = signBytes(confirmMsg, syntheticPrivKey);
+      // relay-federation@1.5 §3.1: a v2 `peer-confirm` naming Relay B (the
+      // relay that issued the nonce) as recipient by id and by public key,
+      // over that nonce and the endpoint the propose named — never a bare
+      // nonce. The request repeats the key and endpoint the propose named.
+      const message = signFederationV2({
+        kind: "peer-confirm",
+        sender: syntheticRelayId,
+        recipient: identityB.relay_motebit_id,
+        recipientPublicKey: identityB.public_key,
+        body: {
+          nonce: peerNonce,
+          endpoint_url: "https://synthetic-test-peer.invalid",
+        },
+        privKeyObj: syntheticPrivKey,
+      });
 
       const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/confirm`, {
         method: "POST",
         body: JSON.stringify({
-          relay_id: syntheticRelayId,
-          challenge_response: toHex(challengeResponse),
+          message,
+          nonce: peerNonce,
+          public_key: syntheticPeer.publicKeyHex,
+          endpoint_url: "https://synthetic-test-peer.invalid",
         }),
       });
 
@@ -620,34 +610,35 @@ async function phase3() {
   // This uses the /federation/v1/discover POST endpoint that peers call
   test("Direct federation discover endpoint on Relay B returns test agent");
   try {
+    // relay-federation@1.5 §3.5, §4.1.1: the discover fields plus a v2
+    // `discover` message from the synthetic peer to Relay B, by id AND by key
+    // (a body signed for one relay is refused at every other). The synthetic
+    // peer is an ACTIVE peer on B at this point (Phase 2 ran first). Without
+    // it there is nothing to sign: the request goes unsigned, which a relay
+    // accepts only under the operator's `requireDiscoverSignature: false`
+    // (the default refuses it 403). A v1 body (`timestamp` + hex `signature`,
+    // no `message`) is refused 400 by name.
     const queryId = crypto.randomUUID();
-    // Per-hop sender signing (relay-federation@1.3 §4.1): sign the JCS form of
-    // the body-minus-signature with the synthetic peer's key. The synthetic
-    // peer is an ACTIVE peer on B at this point (Phase 2 ran first), so this
-    // exercises the signed path — and survives strict mode
-    // (MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=true), where an unsigned
-    // discover 403s. Falls back to unsigned only if Phase 2 didn't establish
-    // the synthetic peer (tolerant relays accept; strict relays reject loudly).
-    const senderId = phase2.syntheticRelayId ?? "synthetic-test-relay";
-    const discoverPayload = {
-      query: { capability: testCapability, limit: 10 },
-      hop_count: 0,
-      max_hops: 1,
-      visited: [senderId],
-      query_id: queryId,
-      origin_relay: senderId,
-      sender_relay: senderId,
-      timestamp: Date.now(),
-    };
     const discoverBody = phase2.syntheticPrivKey
-      ? {
-          ...discoverPayload,
-          signature: signBytes(
-            Buffer.from(canonicalJson(discoverPayload)),
-            phase2.syntheticPrivKey,
-          ).toString("hex"),
-        }
-      : discoverPayload;
+      ? directDiscoverRequest({
+          sender: phase2.syntheticRelayId,
+          recipient: {
+            relayMotebitId: identityB.relay_motebit_id,
+            publicKey: identityB.public_key,
+          },
+          capability: testCapability,
+          queryId,
+          privKeyObj: phase2.syntheticPrivKey,
+        })
+      : {
+          query: { capability: testCapability, limit: 10 },
+          hop_count: 0,
+          max_hops: 1,
+          visited: ["synthetic-test-relay"],
+          query_id: queryId,
+          origin_relay: "synthetic-test-relay",
+          sender_relay: "synthetic-test-relay",
+        };
     const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/discover`, {
       method: "POST",
       body: JSON.stringify(discoverBody),
@@ -689,31 +680,28 @@ async function phase4() {
   // Send a heartbeat from synthetic peer to Relay B
   test("Heartbeat from synthetic peer accepted by Relay B");
   try {
-    const timestamp = Date.now();
-    // Heartbeat signing: ${relay_id}|${timestamp}|${FEDERATION_SUITE}
-    // per services/relay/src/federation.ts (uses `|` separator, distinct
-    // from the peering challenge's `:` separator). Suite-bound for the
-    // same cryptosuite-agility reason as the confirm step.
-    const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1";
-    const message = Buffer.from(`${syntheticRelayId}|${timestamp}|${FEDERATION_SUITE}`);
-    const sig = signBytes(message, syntheticPrivKey);
+    // relay-federation@1.5 §3.2: a v2 `heartbeat` naming Relay B as recipient.
+    const message = signFederationV2({
+      kind: "heartbeat",
+      sender: syntheticRelayId,
+      recipient: identityB.relay_motebit_id,
+      recipientPublicKey: identityB.public_key,
+      body: { agent_count: 0, revocations: [] },
+      privKeyObj: syntheticPrivKey,
+    });
 
     const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/heartbeat`, {
       method: "POST",
-      body: JSON.stringify({
-        relay_id: syntheticRelayId,
-        timestamp,
-        agent_count: 0,
-        signature: toHex(sig),
-      }),
+      body: JSON.stringify({ message, agent_count: 0 }),
     });
 
     if (!ok) {
       fail(`heartbeat rejected: ${JSON.stringify(body)}`);
     } else {
       expect(
-        body.relay_id && body.timestamp && body.signature,
-        `missing fields in heartbeat response: ${JSON.stringify(body)}`,
+        body.message?.envelope?.kind === "heartbeat-ack" &&
+          body.message?.envelope?.recipient === syntheticRelayId,
+        `expected a heartbeat-ack addressed to the synthetic peer: ${JSON.stringify(body)}`,
       );
     }
   } catch (err) {
@@ -745,18 +733,20 @@ async function phase4() {
   // Test heartbeat with wrong signature is rejected
   test("Heartbeat with wrong signature is rejected");
   try {
-    const timestamp = Date.now();
-    // Sign wrong message
-    const badSig = signBytes(Buffer.from("wrong-message"), syntheticPrivKey);
+    // A v2 heartbeat in the synthetic peer's name under a stranger's key.
+    const stranger = generateEd25519Keypair();
+    const message = signFederationV2({
+      kind: "heartbeat",
+      sender: syntheticRelayId,
+      recipient: identityB.relay_motebit_id,
+      recipientPublicKey: identityB.public_key,
+      body: { agent_count: 0, revocations: [] },
+      privKeyObj: stranger._privKey,
+    });
 
     const { status } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/heartbeat`, {
       method: "POST",
-      body: JSON.stringify({
-        relay_id: syntheticRelayId,
-        timestamp,
-        agent_count: 0,
-        signature: toHex(badSig),
-      }),
+      body: JSON.stringify({ message, agent_count: 0 }),
     });
 
     expect(status === 403, `expected 403, got ${status}`);
@@ -767,10 +757,34 @@ async function phase4() {
   // Test heartbeat with excessive clock drift is rejected
   test("Heartbeat with >5min clock drift is rejected");
   try {
-    const timestamp = Date.now() - 600_000; // 10 min in the past
-    const message = Buffer.from(`${syntheticRelayId}${timestamp}`);
-    const sig = signBytes(message, syntheticPrivKey);
+    const message = signFederationV2({
+      kind: "heartbeat",
+      sender: syntheticRelayId,
+      recipient: identityB.relay_motebit_id,
+      recipientPublicKey: identityB.public_key,
+      body: { agent_count: 0, revocations: [] },
+      privKeyObj: syntheticPrivKey,
+      ts: Date.now() - 600_000, // 10 min in the past
+    });
 
+    const { status } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/heartbeat`, {
+      method: "POST",
+      body: JSON.stringify({ message, agent_count: 0 }),
+    });
+
+    expect(status === 400, `expected 400 (clock drift), got ${status}`);
+  } catch (err) {
+    fail(err.message);
+  }
+
+  // relay-federation@1.5: the v1 heartbeat construction is refused by name.
+  test("v1 heartbeat (relay_id|timestamp|suite) is refused with 400");
+  try {
+    const timestamp = Date.now();
+    const sig = signBytes(
+      Buffer.from(`${syntheticRelayId}|${timestamp}|motebit-concat-ed25519-hex-v1`),
+      syntheticPrivKey,
+    );
     const { status } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/heartbeat`, {
       method: "POST",
       body: JSON.stringify({
@@ -780,8 +794,7 @@ async function phase4() {
         signature: toHex(sig),
       }),
     });
-
-    expect(status === 400, `expected 400 (clock drift), got ${status}`);
+    expect(status === 400, `expected 400 (v1 refused), got ${status}`);
   } catch (err) {
     fail(err.message);
   }
@@ -1151,11 +1164,11 @@ async function phase8() {
   }
 
   // 8.1 — stg-c identity check
-  test("Phase 8.1: stg-c reports motebit/relay-federation@1.3 + vote_policy_configured");
+  test("Phase 8.1: stg-c reports motebit/relay-federation@1.5 + vote_policy_configured");
   const idC = await fetchJSON(`${RELAY_C_URL}/federation/v1/identity`);
   if (
     idC.ok &&
-    idC.body.spec === "motebit/relay-federation@1.3" &&
+    idC.body.spec === "motebit/relay-federation@1.5" &&
     idC.body.vote_policy_configured === true
   ) {
     pass();
@@ -1166,11 +1179,11 @@ async function phase8() {
   }
 
   // 8.2 — stg-d identity check
-  test("Phase 8.2: stg-d reports motebit/relay-federation@1.3 + vote_policy_configured");
+  test("Phase 8.2: stg-d reports motebit/relay-federation@1.5 + vote_policy_configured");
   const idD = await fetchJSON(`${RELAY_D_URL}/federation/v1/identity`);
   if (
     idD.ok &&
-    idD.body.spec === "motebit/relay-federation@1.3" &&
+    idD.body.spec === "motebit/relay-federation@1.5" &&
     idD.body.vote_policy_configured === true
   ) {
     pass();
@@ -1328,14 +1341,19 @@ async function phase5() {
   if (phase2.syntheticRelayId && phase2.syntheticPrivKey) {
     test("Remove synthetic peer from Relay B");
     try {
-      const sig = signBytes(Buffer.from(phase2.syntheticRelayId), phase2.syntheticPrivKey);
+      // relay-federation@1.5 §3.3: a v2 `peer-remove` for Relay B only.
+      const message = signFederationV2({
+        kind: "peer-remove",
+        sender: phase2.syntheticRelayId,
+        recipient: identityB.relay_motebit_id,
+        recipientPublicKey: identityB.public_key,
+        body: { action: "remove" },
+        privKeyObj: phase2.syntheticPrivKey,
+      });
 
       const { ok, body } = await fetchJSON(`${RELAY_B_URL}/federation/v1/peer/remove`, {
         method: "POST",
-        body: JSON.stringify({
-          relay_id: phase2.syntheticRelayId,
-          signature: toHex(sig),
-        }),
+        body: JSON.stringify({ message }),
       });
 
       if (!ok) {

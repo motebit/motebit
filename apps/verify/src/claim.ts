@@ -9,7 +9,7 @@
  * the correspondence.
  */
 
-import type { ReceiptDocumentVerification } from "@motebit/state-export-client";
+import type { DisplayVerdict } from "./assess.js";
 
 /** Characters of `result` shown before the "show all" expander. */
 export const RESULT_PREVIEW_CHARS = 280;
@@ -29,6 +29,9 @@ export interface ClaimNode {
   readonly resultTruncated: boolean;
   readonly submitted?: ClaimTime;
   readonly completed?: ClaimTime;
+  /** The signer's value as written, when it is not a whole-millisecond time this page can display. */
+  readonly submittedAsWritten?: string;
+  readonly completedAsWritten?: string;
   readonly toolsUsed: readonly string[];
   readonly memoriesFormed?: number;
   readonly delegatedScope?: string;
@@ -36,7 +39,7 @@ export interface ClaimNode {
   readonly delegationCount: number;
   /** This node's own verdict, straight from the verifier's `integrity`. */
   readonly verdict: "valid" | "invalid";
-  readonly view?: ReceiptDocumentVerification;
+  readonly view?: DisplayVerdict;
   readonly delegations: readonly ClaimNode[];
 }
 
@@ -49,8 +52,24 @@ export function claimTime(value: unknown): ClaimTime | undefined {
 
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
+/**
+ * A claimed time as the signer wrote it, whenever `claimTime` alone would hide
+ * or round it: out of the displayable range, not a whole millisecond, or not a
+ * number at all. The page never drops a claim it points to (round 4, N3).
+ */
+export function claimAsWritten(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "number") {
+    if (claimTime(value) === undefined) {
+      return `${String(value)} — outside the range of dates this page can display`;
+    }
+    return Number.isSafeInteger(value) ? undefined : `${String(value)} as written`;
+  }
+  return `${JSON.stringify(value) ?? typeof value} — not a number, so not a time`;
+}
+
 /** Map a parsed receipt object + its verification view to the plain-words claim. */
-export function buildClaim(receipt: unknown, view?: ReceiptDocumentVerification): ClaimNode | null {
+export function buildClaim(receipt: unknown, view?: DisplayVerdict): ClaimNode | null {
   if (typeof receipt !== "object" || receipt === null || Array.isArray(receipt)) return null;
   const r = receipt as Record<string, unknown>;
   const result = str(r["result"]);
@@ -87,6 +106,8 @@ export function buildClaim(receipt: unknown, view?: ReceiptDocumentVerification)
   set("resultPreview", truncated ? `${result.slice(0, RESULT_PREVIEW_CHARS)}…` : result);
   set("submitted", claimTime(r["submitted_at"]));
   set("completed", claimTime(r["completed_at"]));
+  set("submittedAsWritten", claimAsWritten(r["submitted_at"]));
+  set("completedAsWritten", claimAsWritten(r["completed_at"]));
   set("memoriesFormed", typeof memories === "number" ? memories : undefined);
   set("delegatedScope", str(r["delegated_scope"]));
   set("view", view);

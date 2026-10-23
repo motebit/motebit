@@ -47,12 +47,12 @@ import {
   bytesToHex,
   hexToBytes,
   signExecutionReceipt,
-  sign,
   canonicalJson,
   signAdjudicatorVote,
   signDisputeAppeal,
   signDisputeRequest,
 } from "@motebit/encryption";
+import { workRequest, type WorkRoute } from "./federation-messages.js";
 import type { KeyPair } from "@motebit/encryption";
 import type {
   ExecutionReceipt,
@@ -118,8 +118,9 @@ const hook = vi.hoisted(() => ({
   /** The anchoring cut's await before its batch write (its Merkle build). */
   beforeMerkle: null as null | (() => Promise<void>),
   /**
-   * The raw `sign` await — the settlement forward signs its body with it right
-   * before the send, after the forward's money already committed.
+   * The request-signing await — the settlement forward signs its v2
+   * `settlement-forward` message (`signFederationMessage`) right before the
+   * send, after the forward's money already committed.
    */
   beforeRawSign: null as null | (() => Promise<void>),
 }));
@@ -153,6 +154,18 @@ vi.mock("@motebit/encryption", async (importOriginal) => {
     signFederationSettlement: wrap(m.signFederationSettlement),
     sign: wrap(m.sign, "beforeRawSign"),
   };
+});
+vi.mock("@motebit/crypto", async (importOriginal) => {
+  const m = await importOriginal<typeof import("@motebit/crypto")>();
+  const signFederationMessage: typeof m.signFederationMessage = async (...a) => {
+    const before = hook.beforeRawSign;
+    if (before != null) {
+      hook.beforeRawSign = null;
+      await before();
+    }
+    return m.signFederationMessage(...a);
+  };
+  return { ...m, signFederationMessage };
 });
 vi.mock(
   "../x402-facilitator.js",
@@ -393,16 +406,28 @@ async function addPeer(relay: SyncRelay): Promise<Peer> {
     .run(id, bytesToHex(kp.publicKey), url, Date.now());
   return { id, kp, url };
 }
-async function signed(peer: Peer, payload: Record<string, unknown>): Promise<string> {
-  const sig = await sign(new TextEncoder().encode(canonicalJson(payload)), peer.kp.privateKey);
-  return JSON.stringify({ ...payload, signature: bytesToHex(sig) });
+/** `payload` as `peer` sends it to `w`'s relay: a v2 work message for that relay's key. */
+async function signed(
+  w: World,
+  peer: Peer,
+  route: WorkRoute,
+  payload: Record<string, unknown>,
+): Promise<string> {
+  return JSON.stringify(
+    await workRequest({
+      route,
+      body: payload,
+      privateKey: peer.kp.privateKey,
+      recipient: w.relay.relayIdentity,
+    }),
+  );
 }
 async function fedResult(w: World, peer: Peer, taskId: string, r: ExecutionReceipt) {
   const payload = { task_id: taskId, origin_relay: peer.id, receipt: r, timestamp: Date.now() };
   const res = await w.relay.app.request("/federation/v1/task/result", {
     method: "POST",
     headers: JSON_AUTH,
-    body: await signed(peer, payload),
+    body: await signed(w, peer, "/federation/v1/task/result", payload),
   });
   return { code: res.status, body: (await res.json().catch(() => ({}))) as { code?: string } };
 }
@@ -417,7 +442,7 @@ async function inboundForward(w: World, peer: Peer, taskId: string): Promise<voi
   const res = await w.relay.app.request("/federation/v1/task/forward", {
     method: "POST",
     headers: JSON_AUTH,
-    body: await signed(peer, payload),
+    body: await signed(w, peer, "/federation/v1/task/forward", payload),
   });
   expect(res.status, await res.clone().text()).toBeLessThan(300);
   await settle(40);
@@ -440,7 +465,7 @@ async function settlementForward(
   const res = await w.relay.app.request("/federation/v1/settlement/forward", {
     method: "POST",
     headers: JSON_AUTH,
-    body: await signed(peer, payload),
+    body: await signed(w, peer, "/federation/v1/settlement/forward", payload),
   });
   return { code: res.status, body: (await res.json().catch(() => ({}))) as { code?: string } };
 }

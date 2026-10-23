@@ -1,5 +1,22 @@
 # @motebit/crypto-webauthn
 
+## 1.0.41
+
+### Patch Changes
+
+- Updated dependencies
+  - @motebit/crypto@4.0.1
+
+## 1.0.40
+
+_1.0.39 is reserved by the pending main release train, so this security release takes 1.0.40._
+
+### Patch Changes
+
+- Updated dependencies [17a81e5]
+- Updated dependencies [3e9f65f]
+  - @motebit/crypto@4.0.0
+
 ## 1.0.38
 
 ### Patch Changes

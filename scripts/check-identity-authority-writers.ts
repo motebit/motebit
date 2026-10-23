@@ -99,6 +99,7 @@ const AUTHORITY_TABLES = [
   "relay_revoked_credentials",
   "identity_keys",
   "relay_identity_revocations",
+  "relay_guardian_evidence",
 ] as const;
 
 /** A column naming an identity, at the start of a column definition. */
@@ -196,6 +197,14 @@ const WRITERS: readonly Writer[] = [
       "`recordIdentityGuardian`, called only by /agents/register after it verified the guardian's attestation over {action, guardian_public_key, motebit_id}; updates an existing holder row only",
   },
   {
+    file: R + "identity-keys.ts",
+    verb: "INSERT",
+    table: "relay_guardian_evidence",
+    count: 1,
+    principal:
+      "`recordGuardianEvidence`, called only by /agents/register after it verified the guardian's attestation AND proved the identity's CURRENT key: the bearer was verified by the device row holding exactly the held key (read before any write in the request), or the same request recorded the sovereign first key (E-sov) under the bearer's possession of it. A paired device's own key, the master token and a legacy id with no held key write no row (identity-authority-writers.md I1, §3.2)",
+  },
+  {
     file: R + "tasks.ts",
     verb: "UPDATE",
     table: "agent_registry",
@@ -249,6 +258,15 @@ const WRITERS: readonly Writer[] = [
     table: "agent_registry",
     count: 1,
     principal: MIGRATION + " (v43: stamp `delisted_at` on rows already revoked)",
+  },
+  {
+    file: R + "migrations.ts",
+    verb: "DELETE",
+    table: "relay_credentials",
+    count: 1,
+    principal:
+      MIGRATION +
+      " (v59: remove stored credentials whose proof signer is not their named issuer — never credentials from that issuer; GHSA-7pgw-2976-r236)",
   },
   {
     file: R + "credentials.ts",
@@ -667,14 +685,6 @@ const WRITERS: readonly Writer[] = [
   {
     file: R + "tasks.ts",
     verb: "INSERT",
-    table: "relay_credentials",
-    count: 1,
-    principal:
-      "the relay issuing its own reputation credential from a verified receipt (issuer = the relay)",
-  },
-  {
-    file: R + "tasks.ts",
-    verb: "INSERT",
     table: "relay_delegation_edges",
     count: 1,
     principal: "a verified receipt between two identities (relay bookkeeping)",
@@ -738,14 +748,6 @@ const WRITERS: readonly Writer[] = [
     table: "relay_federation_settlements",
     count: 1,
     principal: LOOP + ": federation settlement anchoring",
-  },
-  {
-    file: R + "federation-callbacks.ts",
-    verb: "INSERT",
-    table: "relay_credentials",
-    count: 1,
-    principal:
-      "a federation peer's signed result carrying the worker's credential (signature verified)",
   },
   {
     file: R + "receipts-store.ts",
@@ -896,19 +898,21 @@ const WRITERS: readonly Writer[] = [
     principal: LOOP + ": the bond verifier's onchain backing read",
   },
   {
-    file: R + "credentials.ts",
+    file: R + "credential-store.ts",
     verb: "INSERT",
     table: "relay_credentials",
-    count: 1,
+    count: 2,
     principal:
-      "credentials/submit, through `insertSubmittedCredential(db, owner: BoundIdentity, …)`: the VC's issuer signature verifies (the route is public — any party may carry it), and the row is filed only under the identity the credential's own `credentialSubject.id` names — `bindCredentialSubject` (#850): `did:motebit:<id>` must be the path id exactly; a `did:key` must be PROVEN the path identity's key — the path id is its sovereign commitment, or it is the #703 holder key; registry and device-row keys never bind or veto (#850 review). Before #850 it was filed under the PATH id, so X filed V's credential under X and could revoke it as its subject",
+      "the credential store, the table's one module (its writers' callers are a closed set in credential-store-boundary.test.ts): `insertSubmittedCredential(db, owner: BoundIdentity, …)` for credentials/submit — the VC's issuer signature verifies (the route is public — any party may carry it), and the row is filed only under the identity the credential's own `credentialSubject.id` names — `bindCredentialSubject` (#850): `did:motebit:<id>` must be the path id exactly; a `did:key` must be PROVEN the path identity's key — the path id is its sovereign commitment, or it is the #703 holder key; registry and device-row keys never bind or veto (#850 review); and `insertRelayIssuedCredentialEvidence`, called only by tasks.ts (the relay issuing its own reputation credential from a verified receipt, issuer = the relay) and federation-callbacks.ts (a federation peer's signed result, signature verified)",
   },
   {
-    file: R + "credential-anchoring.ts",
+    file: R + "credential-store.ts",
     verb: "UPDATE",
     table: "relay_credentials",
     count: 1,
-    principal: LOOP + ": credential anchoring",
+    principal:
+      LOOP +
+      ": credential anchoring (`assignCredentialEvidenceToBatch`, called only by credential-anchoring.ts)",
   },
   {
     file: R + "federation.ts",
@@ -1342,7 +1346,7 @@ const WRITER_HELPERS: ReadonlyArray<{ file: string; fn: string; param: string }>
   { file: R + "migration.ts", fn: "updateMigrationState", param: "owner" },
   { file: R + "migration.ts", fn: "commitDeparture", param: "owner" },
   { file: R + "key-rotation.ts", fn: "insertApproval", param: "owner" },
-  { file: R + "credentials.ts", fn: "insertSubmittedCredential", param: "owner" },
+  { file: R + "credential-store.ts", fn: "insertSubmittedCredential", param: "owner" },
   { file: R + "delegation-revocations.ts", fn: "insertDelegationRevocation", param: "owner" },
 ];
 

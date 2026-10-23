@@ -14,7 +14,7 @@ describe("buildClaim", () => {
   };
 
   it("maps the signed fields to plain words", () => {
-    const c = buildClaim(base, { integrity: true, binding: "sovereign" })!;
+    const c = buildClaim(base, { integrity: true, binding: "key-commitment" })!;
     expect(c.status).toBe("completed");
     expect(c.result).toBe("hello");
     expect(c.resultTruncated).toBe(false);

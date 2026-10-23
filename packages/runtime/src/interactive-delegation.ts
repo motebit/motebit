@@ -65,10 +65,12 @@ export interface InteractiveDelegationDeps {
   motebitToolServers: Map<string, string>;
   /** Set the credential submitter on the credential manager. */
   setCredentialSubmitter: (
-    submitter: (
-      vc: import("@motebit/encryption").VerifiableCredential<unknown>,
-      targetMotebitId: string,
-    ) => Promise<void>,
+    submitter:
+      | ((
+          vc: import("@motebit/encryption").VerifiableCredential<unknown>,
+          targetMotebitId: string,
+        ) => Promise<void>)
+      | null,
   ) => void;
   /** Bump trust for a remote agent based on a verified receipt. */
   bumpTrustFromReceipt: (receipt: ExecutionReceipt) => Promise<void>;
@@ -225,6 +227,13 @@ export function renderTaskRetrieval(
 
 // === Manager ===
 
+/** Every relay-bound tool `enable` registers (and `disable` removes). */
+const INTERACTIVE_DELEGATION_TOOLS = [
+  "delegate_to_agent",
+  "discover_agents",
+  "retrieve_task_result",
+] as const;
+
 export class InteractiveDelegationManager {
   /** #943: receipts are collected per turn — see `turn-delegation-receipts.ts`. */
   private readonly receipts: TurnDelegationReceipts;
@@ -240,6 +249,20 @@ export class InteractiveDelegationManager {
 
   constructor(private readonly deps: InteractiveDelegationDeps) {
     this.receipts = deps.turnReceipts ?? new TurnDelegationReceipts();
+  }
+
+  /**
+   * Undo `enable`: unregister the relay tools and the credential submitter,
+   * so nothing this manager wired can contact the relay any more. Idempotent;
+   * a later `enable` registers everything again against its (new) relay.
+   */
+  disable(): void {
+    for (const name of INTERACTIVE_DELEGATION_TOOLS) {
+      this.deps.toolRegistry.unregister?.(name);
+      this.deps.motebitToolServers.delete(name);
+    }
+    this.deps.setCredentialSubmitter(null);
+    this.deps.wireLoopDeps();
   }
 
   /**

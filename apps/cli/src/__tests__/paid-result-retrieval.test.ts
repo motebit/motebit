@@ -21,7 +21,7 @@ import {
   selectAndRunDelegation,
 } from "@motebit/runtime";
 import { createMotebitDatabase } from "@motebit/persistence";
-import type { ExecutionReceipt, P2pPaymentProof } from "@motebit/sdk";
+import type { ExecutionReceipt, P2pPaymentProof, ToolResult } from "@motebit/sdk";
 import type { CliConfig } from "../args.js";
 import { faultingFetch } from "../fault-injection.js";
 import { buildStorageAdapters } from "../runtime-factory.js";
@@ -159,6 +159,19 @@ describe("paid result lost, restart, /result (#874 on the CLI's SQLite)", () => 
       { motebitId: ME, tickRateHz: 0 },
       { storage: buildStorageAdapters(db2), renderer: new NullRenderer() },
     );
+    // delegate_to_agent is R4_MONEY on the payment rail: the registry refuses
+    // it without the runtime's money capability, so this test (about the
+    // paid-intent interlock, not about who may call) drives the handler,
+    // recorded as the delegation manager registers it.
+    const handlers = new Map<string, (a: Record<string, unknown>) => Promise<ToolResult>>();
+    const registry = runtime.getToolRegistry();
+    for (const method of ["register", "replace"] as const) {
+      const original = registry[method].bind(registry);
+      registry[method] = (def, handler) => {
+        handlers.set(def.name, handler as never);
+        original(def, handler);
+      };
+    }
     runtime.enableInteractiveDelegation({
       syncUrl: RELAY,
       authToken: async () => "token",
@@ -173,7 +186,7 @@ describe("paid result lost, restart, /result (#874 on the CLI's SQLite)", () => 
     );
 
     // "Hire again" is refused across the session boundary, before broadcast.
-    const rehire = await runtime.getToolRegistry().execute("delegate_to_agent", {
+    const rehire = await handlers.get("delegate_to_agent")!({
       prompt: "research X",
       required_capabilities: ["web_search"],
     });

@@ -114,7 +114,7 @@ Your motebit starts local, and stays local: relay sync is opt-in, so until you n
 motebit register --sync
 ```
 
-`--sync` names the public relay (`relay.motebit.com`). This registers your device there; the relay stores your public key and device ID. Your private key never leaves your machine.
+`--sync` names the public relay (`relay.motebit.com`). This registers your device there; the relay stores your public key and device ID. Registering never sends your private key.
 
 After registration, the CLI saves the relay URL to `~/.motebit/config.json`. Future REPL and daemon sessions connect automatically — no need to pass `--sync-url` each time. (`motebit sync enable [url]` saves it without registering; `motebit sync disable` turns sync off again.)
 
@@ -181,10 +181,10 @@ When a task arrives, your agent executes it and signs a receipt. Paid work from 
 
 ```bash
 motebit balance                                        # See your relay balance
-motebit withdraw 10.00 --destination <solana-or-0x-address>   # Request a payout
+motebit withdraw 10.00 --destination <solana-address>   # Request a payout
 ```
 
-A Solana address pays out on Solana; a `0x` address pays out over x402 to your EVM wallet. Without `--destination`, the request is queued as pending for the relay operator.
+Payouts go to a Solana address you control. An EVM (`0x`) destination is refused with `400` before anything is debited: the x402 payout path to EVM wallets is retired. Without `--destination`, the request is queued as pending for the relay operator.
 
 See [Budget & Settlement](/docs/developer/budget-settlement) for the full protocol.
 
@@ -271,7 +271,7 @@ Back up `~/.motebit/` and you have everything (on the CLI you also need your pas
 
 ### New device
 
-To use your motebit on another device, pair it. The new device generates its own keypair and registers under your existing identity via a 6-character pairing code. Both devices sync memories and state through the relay. Each device has its own private key — compromise of one doesn't compromise the other.
+To use your motebit on another device, pair it. The new device claims a 6-character pairing code, and the approving device transfers the identity key to it end-to-end encrypted (X25519) through the relay, which never sees the key. Both devices then hold the same identity key and sync memories and state through the relay, so a compromise of either device compromises the identity: rotate the key if a device is lost.
 
 ### Key rotation
 
@@ -285,7 +285,7 @@ The old key signs a succession record declaring the new key as its successor, an
 
 ### Key compromise
 
-If a private key is compromised, rotate immediately. If rotation isn't possible (you've lost access to the old key), generate a fresh identity:
+If a private key is compromised, rotate immediately. If rotation isn't possible (you've lost access to the old key), generate a fresh identity. Guardian recovery, which would keep the `motebit_id`, is specified but currently suspended on the reference relay:
 
 ```bash
 npm create motebit

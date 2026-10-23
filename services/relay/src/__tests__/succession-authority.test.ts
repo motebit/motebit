@@ -447,40 +447,64 @@ describe("a record must depart from a key this relay holds for the identity", ()
   });
 });
 
+// P0 containment (guardian-recovery-containment.ts, GUARDIAN_RECOVERY_ENABLED =
+// false): every guardian recovery at /rotate-key is refused 503
+// GUARDIAN_RECOVERY_SUSPENDED before any guardian or key read, so the cases
+// below that presented one now assert the 503 and an unchanged identity.
+// Titles carry `[recovery suspended]`; restore the original assertions with
+// the gate (git show this commit).
 describe("guardian recovery is carried by someone else, and anchored to a key on file", () => {
   /** A victim with a registered guardian and an EMPTY registry key — the replay's precondition. */
   async function victimWithEmptyKey(guardian: KeyPair): Promise<string> {
     const mid = crypto.randomUUID();
-    const res = await relay.app.request("/api/v1/agents/register", {
-      method: "POST",
-      headers: JSON_AUTH,
-      body: JSON.stringify({
+    const attestation = bytesToHex(
+      await ed25519Sign(
+        new TextEncoder().encode(
+          canonicalJson({
+            action: "guardian_attestation",
+            guardian_public_key: hex(guardian),
+            motebit_id: mid,
+          }),
+        ),
+        guardian.privateKey,
+      ),
+    );
+    const registerBody = (withGuardian: boolean) =>
+      JSON.stringify({
         motebit_id: mid,
         endpoint_url: "http://localhost:9999/mcp",
         capabilities: [],
-        guardian_public_key: hex(guardian),
-        guardian_attestation: bytesToHex(
-          await ed25519Sign(
-            new TextEncoder().encode(
-              canonicalJson({
-                action: "guardian_attestation",
-                guardian_public_key: hex(guardian),
-                motebit_id: mid,
-              }),
-            ),
-            guardian.privateKey,
-          ),
-        ),
-      }),
+        ...(withGuardian
+          ? { guardian_public_key: hex(guardian), guardian_attestation: attestation }
+          : {}),
+      });
+    // A legacy id with no held key can never prove a guardian, so the
+    // register door now refuses to set one (GUARDIAN_REQUIRES_SOVEREIGN_IDENTITY).
+    const refused = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: registerBody(true),
+    });
+    expect(refused.status).toBe(400);
+    const res = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: registerBody(false),
     });
     expect(res.status).toBe(200);
+    // The guardian a relay before that refusal stored for it (main's registry write).
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET guardian_public_key = ? WHERE motebit_id = ?")
+      .run(hex(guardian), mid);
     expect(registryKey(mid)).toBe("");
     return mid;
   }
 
-  it("lands when a third party carries a record the registered guardian signed", async () => {
-    const owner = crypto.randomUUID();
+  it("[recovery suspended] a third party carrying a record the registered guardian signed is refused 503 (would land)", async () => {
+    // A guardian authorizes a recovery only when the identity's current key
+    // set it (GUARDIAN_NOT_PROVEN otherwise): a sovereign id holds its key.
     const ok = await generateKeypair();
+    const owner = await deriveSovereignMotebitId(hex(ok));
     const guardian = await generateKeypair();
     const next = await generateKeypair();
     expect(await registerSelf(owner, `${owner}-laptop`, ok)).toBe(201);
@@ -492,17 +516,18 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
       ok.publicKey,
       next.publicKey,
     );
-    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, owner, recovery)).toBe(200);
-    expect(registryKey(owner)).toBe(hex(next));
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, owner, recovery)).toBe(503);
+    expect(registryKey(owner)).toBe(hex(ok));
+    expect(successions(owner)).toBe(0);
   });
 
-  it("refuses the SAME guardian's genuine record replayed at a sibling identity with an empty key", async () => {
+  it("[recovery suspended] refuses the SAME guardian's genuine record replayed at a sibling identity with an empty key (503 at both)", async () => {
     // Both identities answer to guardian G. A's recovery record is genuine.
     // Under the empty key, the old-key match used to be skipped, so the
     // record landed under B and moved B to a key A's owner controls.
     const guardian = await generateKeypair();
-    const a = crypto.randomUUID();
     const ak = await generateKeypair();
+    const a = await deriveSovereignMotebitId(hex(ak));
     const aNext = await generateKeypair();
     expect(await registerSelf(a, `${a}-laptop`, ak)).toBe(201);
     expect(await registerAgent(a, ak, guardian)).toBe(200);
@@ -515,15 +540,18 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
       aNext.publicKey,
     );
     const s = await stranger();
-    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, b, genuine)).toBe(400);
+    // B's guardian was set without provenance (no key of B's is provable): the
+    // recovery is refused for that before departure is read
+    // (403 GUARDIAN_NOT_PROVEN); either refusal keeps B's history empty.
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, b, genuine)).toBe(503);
     expect(successions(b)).toBe(0);
     expect(registryKey(b)).toBe("");
-    // A's own recovery is untouched by the refusal at B.
-    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, a, genuine)).toBe(200);
-    expect(registryKey(a)).toBe(hex(aNext));
+    // A's own recovery is suspended too (would be 200).
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, a, genuine)).toBe(503);
+    expect(registryKey(a)).toBe(hex(ak));
   });
 
-  it("refuses a recovery for an identity with no guardian on file, however it is carried", async () => {
+  it("[recovery suspended] refuses a recovery for an identity with no guardian on file, however it is carried (503; would be 400)", async () => {
     const k1 = await generateKeypair();
     // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
     const mid = await deriveSovereignMotebitId(hex(k1));
@@ -538,7 +566,7 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
       mine.publicKey,
     );
     const s = await stranger();
-    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, forged)).toBe(400);
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, forged)).toBe(503);
     expect(registryKey(mid)).toBe(hex(k1));
     expect(successions(mid)).toBe(0);
   });
@@ -674,7 +702,7 @@ describe("the public succession route answers the departure question with the ru
 });
 
 describe("every refusal leaves a trace in the relay's own record", () => {
-  it("records a recovery probe too — the flag must not be a way to probe unrecorded", async () => {
+  it("[recovery suspended] records a recovery probe too — the flag must not be a way to probe unrecorded", async () => {
     // `recovery: true` skips the caller check by design. If the refusals
     // inside that branch went unrecorded, setting the flag would be the
     // obvious way to probe other identities silently.
@@ -691,13 +719,14 @@ describe("every refusal leaves a trace in the relay's own record", () => {
       vk.publicKey,
       mine.publicKey,
     );
-    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, victim, forged)).toBe(400);
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, victim, forged)).toBe(503);
     const reasons = (
       relay.moteDb.db
         .prepare("SELECT reason FROM relay_auth_events WHERE reason LIKE 'succession:%'")
         .all() as Array<{ reason: string }>
     ).map((r) => r.reason);
-    expect(reasons).toEqual(["succession:recovery_without_registered_guardian"]);
+    // Would be "succession:recovery_without_registered_guardian" with recovery on.
+    expect(reasons).toEqual(["succession:guardian_recovery_suspended"]);
   });
 
   it("names the PRESENTER as the subject, not the identity that presented nothing", async () => {
@@ -1368,7 +1397,7 @@ describe("a recorded rotation ends the old key here", () => {
     expect(successionRefusals()).toEqual([{ motebit_id: mid, reason: "succession:reuses_key" }]);
   });
 
-  it("a guardian recovery re-presented after a later link is never applied again (the #777 replay)", async () => {
+  it("[recovery suspended] a guardian recovery re-presented after a later link is never applied again (the #777 replay)", async () => {
     // K1→K2 by guardian recovery, carried by a third party. Before #775 the
     // owner could then rotate back K2→K1, and the holder on K1 made the
     // recovery K1→K2 departable again: anyone holding it could replay it
@@ -1389,7 +1418,25 @@ describe("a recorded rotation ends the old key here", () => {
       k2.publicKey,
     );
     const s = await stranger();
-    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, recovery)).toBe(200);
+    // Suspended: the recovery itself is refused 503 (would be 200), so the
+    // recovery link a relay before the containment accepted is planted.
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, recovery)).toBe(503);
+    expect(holderKey(mid)).toBe(hex(k1));
+    const db = relay.moteDb.db;
+    db.prepare(
+      `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, NULL, ?, 1, ?)`,
+    ).run(
+      mid,
+      recovery.old_public_key,
+      recovery.new_public_key,
+      recovery.timestamp,
+      recovery.reason ?? null,
+      recovery.new_key_signature,
+      recovery.guardian_signature,
+    );
+    db.prepare("UPDATE identity_keys SET public_key = ? WHERE motebit_id = ?").run(hex(k2), mid);
+    db.prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?").run(hex(k2), mid);
+    db.prepare("UPDATE devices SET public_key = ? WHERE motebit_id = ?").run(hex(k2), mid);
     expect(holderKey(mid)).toBe(hex(k2));
 
     // The rotate-back is refused at the route now.
@@ -1398,7 +1445,6 @@ describe("a recorded rotation ends the old key here", () => {
     expect(holderKey(mid)).toBe(hex(k2));
 
     // A relay that ran the old rule recorded it: plant that state.
-    const db = relay.moteDb.db;
     db.prepare(
       `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
     ).run(
@@ -1415,15 +1461,17 @@ describe("a recorded rotation ends the old key here", () => {
     db.prepare("UPDATE devices SET public_key = ? WHERE motebit_id = ?").run(hex(k1), mid);
 
     // The replay: the same recovery record, still fresh, carried by anyone.
-    // It departs from the key held (K1), so only #775 stands in its way.
-    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, recovery)).toBe(409);
+    // It departs from the key held (K1). Suspended, it is refused 503 before
+    // #775 is reached (would be 409 replays_recorded_link).
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, recovery)).toBe(503);
     expect(successions(mid)).toBe(2);
     expect(holderKey(mid)).toBe(hex(k1));
     expect(registryKey(mid)).toBe(hex(k1));
     expect(deviceKey(`${mid}-laptop`)).toBe(hex(k1));
     expect(successionRefusals()).toEqual([
+      { motebit_id: s.mid, reason: "succession:guardian_recovery_suspended" },
       { motebit_id: mid, reason: "succession:reuses_key" },
-      { motebit_id: s.mid, reason: "succession:replays_recorded_link" },
+      { motebit_id: s.mid, reason: "succession:guardian_recovery_suspended" },
     ]);
     // And a rotation onward from what is held still lands.
     const k3 = await generateKeypair();
@@ -1791,7 +1839,7 @@ describe("a recorded rotation ends the old key here", () => {
     expect(row.c).toBeNull();
   });
 
-  it("a guardian recovery ends the old key too", async () => {
+  it("[recovery suspended] a guardian recovery is refused 503 and the old key keeps authenticating (would end the old key)", async () => {
     const k1 = await generateKeypair();
     // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
     const mid = await deriveSovereignMotebitId(hex(k1));
@@ -1806,11 +1854,12 @@ describe("a recorded rotation ends the old key here", () => {
       next.publicKey,
     );
     const s = await stranger();
-    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, recovery)).toBe(200);
-    // Recovery is for an owner who lost the key. One that left the lost key
-    // authenticating would have recovered nothing. A guardian can already
-    // move the identity to any key, so this adds no power it lacked.
-    expect(deviceKey(`${mid}-laptop`)).toBe(hex(next));
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, recovery)).toBe(503);
+    // With recovery on: recovery is for an owner who lost the key. One that
+    // left the lost key authenticating would have recovered nothing, so the
+    // device row moves to `next`. Suspended, nothing moves.
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k1));
+    expect(successions(mid)).toBe(0);
   });
 });
 

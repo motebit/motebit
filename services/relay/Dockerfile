@@ -24,6 +24,8 @@ RUN apt-get update \
 
 # Copy lockfile + workspace config first (cache layer)
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+# Root pnpm patchedDependencies (package.json) must be present for --frozen-lockfile.
+COPY patches/ patches/
 
 # Copy all workspace packages (relay depends on 14 transitive workspace deps)
 COPY packages/ packages/

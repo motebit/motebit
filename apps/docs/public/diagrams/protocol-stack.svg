@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" width="100%" preserveAspectRatio="xMidYMid meet" style="max-width: 100%; height: auto; font-family: ui-sans-serif, system-ui, sans-serif;">
   <title id="protocol-stack-title">Protocol stack — motebit fills the missing layer underneath</title>
-  <desc id="protocol-stack-desc">MCP defines what an agent can do (tool capabilities). A2A defines how agents communicate. x402 and AP2 define how they pay. None of those define who an agent is across time and devices, what trust it has accumulated, or what the operator's policy allows it to do. Motebit is the layer underneath: persistent cryptographic identity, signed receipts that compound into trust, and governance enforced at the agent's surface tension.</desc>
+  <desc id="protocol-stack-desc">MCP defines what an agent can do (tool capabilities). A2A defines how agents communicate. x402 and AP2 define how they pay; AP2 with cryptographically verifiable mandates. Motebit addresses a complementary problem: an identity its owner controls across time, devices and providers, trust accumulated from its own past work, and what the operator's policy allows it to do. Motebit is the layer underneath: persistent cryptographic identity, signed receipts that compound into trust, and governance enforced at the agent's surface tension.</desc>
 
   <g style="font-family: inherit;">
     <!-- Three thin upper-layer rows, each one continuous tspan-typeset line -->

@@ -1,0 +1,5 @@
+---
+"@motebit/runtime": patch
+---
+
+**M3a — narrow paid-never-submitted on the client.** `resolveP2pPaymentRequest` mints the `task:submit` credential once a payment is priced and returns it as `submitToken`; a delegation whose credentials are gone gets no priced request (`auth_expired`), so the federated path can no longer price, and then pay, a task it cannot submit. `resolveAndSubmitP2pDelegation` holds that credential across the broadcast and presents it on the first submission attempt, re-runs the pre-flight immediately before broadcasting (the local `/p2p-eligibility` read, and for a federated worker a re-read of discovery for the same worker, peer, address and price), and re-checks the abort signal last. A refusal there is `p2p_ineligible` or `timeout` and nothing is sent. This does not meet "no payment is broadcast unless its task has already secured admission": a relay refusal no pre-flight mirrors, or a network failure after the broadcast, still leaves a paid task unsubmitted (`docs/proposals/admission-before-broadcast-m3.md`).

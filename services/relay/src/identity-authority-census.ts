@@ -54,7 +54,7 @@
 import type { DatabaseDriver, PreparedStatement } from "@motebit/persistence";
 import { hexToBytes } from "@motebit/encryption";
 import { deriveSolanaAddress } from "@motebit/wallet-solana";
-import { proveSovereignFirstKey } from "./identity-keys.js";
+import { proveSovereignFirstKey, provenGuardianOf } from "./identity-keys.js";
 
 /** Legacy-id holder sources that are evidence the relay recorded by proof (D2). */
 const LEGACY_EVIDENCE_SOURCES: ReadonlySet<string> = new Set([
@@ -187,7 +187,7 @@ export interface IdentityAuthorityCensus {
     pay_to_address: Listed<MoneyRow>;
     withdrawal_destination: Listed<MoneyRow & { source: string }>;
   };
-  /** Q4 — guardians recorded with no provenance (all of them, before 875's v60). */
+  /** Q4 — guardians recorded with no provenance (all of them on a relay before v58). */
   q4_unproven_guardians: { identity_keys: IdList; agent_registry: IdList };
   /** Q5 — keyless ids carrying a keyed device row (register-self's first-come residual). */
   q5_keyless_with_device_rows: IdList;
@@ -611,18 +611,26 @@ export async function measureIdentityAuthority(
     }
   }
 
-  // ── Q4 ── every guardian is `suspicious`: none has provenance before 875's
-  // v60, so none is decidable, and the owner re-confirms each.
+  // ── Q4 ── every guardian WITHOUT provenance is `suspicious`: provenance is
+  // the identity's latest `relay_guardian_evidence` row naming exactly that
+  // guardian (`provenGuardianOf`, the rule /rotate-key enforces). A relay
+  // before v58 recorded none, so there every guardian is listed, and the
+  // owner re-confirms each.
   const suspiciousIds = (sql: string): Array<{ id: string; bucket: CensusBucket }> =>
     (db.prepare(sql).all() as Array<{ motebit_id: string }>).map((r) => ({
       id: r.motebit_id,
       bucket: "suspicious",
     }));
-  const g1 = suspiciousIds(
-    "SELECT motebit_id FROM identity_keys WHERE guardian_public_key IS NOT NULL AND guardian_public_key != '' ORDER BY 1",
+  const evidenceHeld = hasTable(db, "relay_guardian_evidence");
+  const unprovenGuardians = (sql: string): Array<{ id: string; bucket: CensusBucket }> =>
+    (db.prepare(sql).all() as Array<{ motebit_id: string; guardian_public_key: string }>)
+      .filter((r) => !evidenceHeld || provenGuardianOf(db, r.motebit_id) !== r.guardian_public_key)
+      .map((r) => ({ id: r.motebit_id, bucket: "suspicious" }));
+  const g1 = unprovenGuardians(
+    "SELECT motebit_id, guardian_public_key FROM identity_keys WHERE guardian_public_key IS NOT NULL AND guardian_public_key != '' ORDER BY 1",
   );
-  const g2 = suspiciousIds(
-    "SELECT motebit_id FROM agent_registry WHERE guardian_public_key IS NOT NULL AND guardian_public_key != '' ORDER BY 1",
+  const g2 = unprovenGuardians(
+    "SELECT motebit_id, guardian_public_key FROM agent_registry WHERE guardian_public_key IS NOT NULL AND guardian_public_key != '' ORDER BY 1",
   );
 
   // ── Q5 ── every keyless id with a keyed device row is `suspicious`: with
@@ -639,11 +647,10 @@ export async function measureIdentityAuthority(
 
   // ── Q6 ── a peer counts only when NO v2 evidence is stored for it: neither
   // its claimed `peer_protocol_version` nor the `handshake_protocol_version`
-  // a relay-federation@1.5 relay records at a completed confirm is 1.5 or
-  // later. A relay without that column (this one runs 1.4) holds no v2
-  // evidence, so every peer counts. (The CLI proposer sends no spec_version,
-  // so a null claim is not evidence of v1.) Bucket: a recorded pre-1.5
-  // version → `legitimate_legacy`; nothing recorded → `suspicious`.
+  // this relay recorded at a completed confirm is relay-federation@1.5 or
+  // later. (The CLI proposer sends no spec_version, so a null claim is not
+  // evidence of v1.) Bucket: a recorded pre-1.5 version → `legitimate_legacy`;
+  // nothing recorded → `suspicious`.
   const handshakeCol =
     hasTable(db, "relay_peers") && hasColumn(db, "relay_peers", "handshake_protocol_version");
   const peers = hasTable(db, "relay_peers")

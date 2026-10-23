@@ -7,11 +7,11 @@
  * one says "motebit", and pasted content is escaped (textContent), never HTML.
  */
 import { describe, it, expect } from "vitest";
-import type { ReceiptDocumentVerification } from "@motebit/state-export-client";
-import { renderResult } from "../render.js";
+import { renderResult, renderUnverifiable, renderPending } from "../render.js";
+import type { DisplayVerdict } from "../assess.js";
 import type { RelayContext } from "../ladder.js";
 
-const view = (over: Partial<ReceiptDocumentVerification> = {}): ReceiptDocumentVerification => ({
+const view = (over: Partial<DisplayVerdict> = {}): DisplayVerdict => ({
   integrity: true,
   binding: "integrity-only",
   signerDid: "did:key:zABC",
@@ -62,23 +62,44 @@ describe("renderResult", () => {
     );
   });
 
-  it("sovereign → bound tone, motebit proven, sovereign rung ✓", () => {
-    const el = renderResult(view({ binding: "sovereign" }), { receipt, ctx: OFFLINE });
+  it("key commitment → integrity tone, id labelled a commitment to the original key, binding rung —", () => {
+    const el = renderResult(view({ binding: "key-commitment" }), { receipt, ctx: OFFLINE });
+    expect(el.classList.contains("tone-integrity")).toBe(true);
+    expect(el.querySelector(".grade-badge")?.textContent).toBe("KEY COMMITMENT");
+    expect(el.textContent).not.toMatch(/sovereign/i);
+    const labels = Array.from(el.querySelectorAll(".field-label")).map((n) => n.textContent);
+    expect(labels).toContain("commits to this key (original key)");
+    expect(labels).not.toContain("motebit");
+    expect(el.querySelector('[data-rung="binding"] .check-mark.ok')).toBeNull();
+  });
+
+  it("pinned → bound tone, motebit proven, binding rung ✓", () => {
+    const el = renderResult(view({ binding: "pinned" }), { receipt, ctx: { kind: "resolved" } });
     expect(el.classList.contains("tone-bound")).toBe(true);
     const labels = Array.from(el.querySelectorAll(".field-label")).map((n) => n.textContent);
     expect(labels).toContain("motebit");
     expect(labels).not.toContain("claims to be");
-    expect(el.querySelector('[data-rung="binding"]')?.textContent).toContain("sovereign");
     expect(el.querySelector('[data-rung="binding"] .check-mark.ok')).not.toBeNull();
   });
 
-  it("revoked → failed tone, REVOKED grade + chip, revocation rung ✗", () => {
+  it("renderUnverifiable is an explicit failed state; renderPending carries no verdict", () => {
+    const bad = renderUnverifiable(new TypeError("boom <b>"));
+    expect(bad.classList.contains("tone-failed")).toBe(true);
+    expect(bad.textContent).toContain("Not verified — could not check this receipt");
+    expect(bad.textContent).toContain("boom <b>");
+    expect(bad.querySelector("b")).toBeNull();
+    const p = renderPending();
+    expect(p.textContent).not.toMatch(/valid|SOVEREIGN|PINNED|ANCHORED/);
+  });
+
+  it("revocation memo → failed tone, REVOCATION REPORTED grade + chip, revocation rung ✗", () => {
     const el = renderResult(view({ binding: "revoked", revokedAt: 1500, revocation: "revoked" }), {
       receipt,
       ctx: { kind: "resolved" },
     });
-    expect(el.querySelector(".grade-badge")?.textContent).toBe("REVOKED");
-    expect(el.querySelector(".claim .chip")?.textContent).toBe("REVOKED");
+    expect(el.querySelector(".grade-badge")?.textContent).toBe("REVOCATION REPORTED");
+    expect(el.querySelector(".claim .chip")?.textContent).toBe("REVOCATION REPORTED");
+    expect(el.querySelector(".chip-ok")).toBeNull();
     expect(el.querySelector('[data-rung="revocation"] .check-mark.fail')).not.toBeNull();
   });
 

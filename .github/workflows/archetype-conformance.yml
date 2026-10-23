@@ -36,12 +36,21 @@ concurrency:
   group: archetype-conformance
   cancel-in-progress: false
 
+# Least privilege: the repo's default GITHUB_TOKEN is write, so every
+# workflow states its own. Read-only by default; the one write is granted on
+# the job whose alert step needs it.
+permissions:
+  contents: read
+
 jobs:
   conformance:
     if: ${{ github.event_name == 'schedule' || inputs.target == 'staging' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging
+    permissions:
+      contents: read
+      issues: write # the failure alert below comments on / opens a pinned issue
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4

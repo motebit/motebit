@@ -184,6 +184,8 @@ import type {
   VerifiableCredential,
   VerifiablePresentation,
 } from "./credentials.js";
+// Internal binding helpers (deliberately NOT re-exported).
+import { namedDidOf, proofSignerIs } from "./credentials.js";
 import type { SkillEnvelope } from "@motebit/protocol";
 import { verifySkillEnvelopeDetailed, decodeSkillSignaturePublicKey } from "./skills.js";
 import type { SkillVerifyReason } from "./skills.js";
@@ -289,7 +291,7 @@ export interface CredentialVerifyResult extends BaseResult {
    * imply "not revoked": it sets this flag, and a consumer that needs revocation
    * MUST check `credentialStatus.id` against its own source (or call
    * `verifyVerifiableCredential` with an injected `isRevoked` seam). `valid` here
-   * means "signature + temporal validity", NOT "not revoked".
+   * means "signed by its issuer + temporal validity", NOT "not revoked".
    */
   revocation_unchecked?: boolean;
   /**
@@ -1002,6 +1004,11 @@ async function verifyIdentity(content: string): Promise<IdentityVerifyResult> {
   let successionResult: IdentityVerifyResult["succession"];
 
   if (chain && chain.length > 0) {
+    // INTEGRITY ONLY. A recovery link is checked against the guardian this same
+    // file names, so `succession.valid` says the file is internally consistent —
+    // never that its guardian had authority to recover the identity. Binding a
+    // key to the identity goes through verifyKeyBindingAtTime, which refuses a
+    // file-named guardian (see its doc comment).
     const guardianPubKeyHex = parsed.frontmatter.guardian?.public_key;
     successionResult = await verifySuccessionChain(chain, pubKeyHex, guardianPubKeyHex);
   }
@@ -1181,6 +1188,21 @@ async function verifySuccessionChain(
  * timestamp — sovereign-root binding (rooted in the motebit's own genesis +
  * rotation signatures), with time-windowing. See
  * `docs/doctrine/identity-binding-verification.md`.
+ *
+ * Four properties, kept apart (only `bound` / `sovereign` are verdicts):
+ *
+ *  1. **Genesis commitment** (`genesisCommitment`) — the `motebit_id` is the
+ *     sovereign commitment to the chain's genesis key. A fact about the file,
+ *     derivable from public data alone; on its own it authorizes nothing.
+ *  2. **Succession integrity** (`successionIntegrity`) — every link's
+ *     signatures verify and the chain is continuous and ordered.
+ *  3. **Guardian authority** (`guardianAuthority`) — whether the guardian a
+ *     recovery link is checked against was supplied by the CALLER. A guardian
+ *     named only by the presented identity file is checked for integrity but
+ *     never establishes authority: such a chain is `bound: false`.
+ *  4. **Current authority** — whether the key is the identity's key NOW. Not
+ *     established by any offline verifier: it sees only the chain it was
+ *     handed, never a later rotation, recovery, or fork. No field claims it.
  */
 export interface KeyBindingResult {
   bound: boolean;
@@ -1198,6 +1220,30 @@ export interface KeyBindingResult {
    * rung); independent of `bound`, which is about the *signing* key's window.
    */
   sovereign?: boolean;
+  /**
+   * Property 1: `motebit_id` is the sovereign commitment to
+   * `genesisPublicKey`. Reported whether or not the key binds, because it is a
+   * fact about the file — never read it as authority: anyone who knows a
+   * motebit's genesis PUBLIC key can build a file for which this is true.
+   */
+  genesisCommitment?: boolean;
+  /**
+   * Property 2: every succession link's signatures verify and the chain is
+   * continuous and ordered. Absent when the identity has no succession chain.
+   * When `guardianAuthority` is `"not_established"`, a recovery link was checked
+   * against the guardian the presented file names — integrity only.
+   */
+  successionIntegrity?: boolean;
+  /**
+   * Property 3: where the guardian key a recovery link is verified against
+   * came from. `"not_required"` — no recovery link in the chain;
+   * `"caller_trusted"` — the caller passed it (the caller's trust decision;
+   * it says where the guardian came from, not that the link verified — read
+   * it together with `successionIntegrity`);
+   * `"not_established"` — a recovery link is present and the only guardian is
+   * the one the presented file names, so the chain does not bind.
+   */
+  guardianAuthority?: "not_required" | "caller_trusted" | "not_established";
   /** Why binding failed, when `bound` is false. */
   reason?: string;
 }
@@ -1272,26 +1318,115 @@ export async function verifySovereignBinding(
  * This roots in the motebit's own keys; no operator trust. Tying the genesis key
  * to the `motebit_id` (the non-equivocable anchor) is the caller's responsibility
  * — this primitive proves the key/identity-file relationship, not file/id.
+ *
+ * **A guardian named only by the presented file is never a trust root.** A
+ * guardian-recovery link (spec/identity-v1.md §3.8.3) is signed by the guardian,
+ * not by the key it departs from, so whoever names the guardian decides who may
+ * recover. The presented file's `guardian.public_key` is signed only by the
+ * file's CURRENT key — the very key a recovery link would install — so it is
+ * circular evidence: an attacker who knows only a motebit's genesis PUBLIC key
+ * can name their own guardian and "recover" to their own key. A recovery link
+ * therefore counts toward `bound` only when `trustedGuardianPublicKeyHex` is
+ * passed. Without it the chain is still checked for integrity against the
+ * file's guardian (`successionIntegrity`), but the result is `bound: false`
+ * with `guardianAuthority: "not_established"`.
+ *
+ * Only a well-formed 32-byte hex key counts as supplied: `null`, `""` or any
+ * malformed value is treated as no guardian (`"not_established"`, never
+ * `"caller_trusted"`).
+ *
+ * The rule applies to every key of such a chain, not only those after the
+ * recovery link: with no caller guardian, the genesis key and a key reached by
+ * ordinary rotation before the recovery do not bind through this file either.
+ *
+ * `trustedGuardianPublicKeyHex` is the CALLER's trust decision — a guardian it
+ * pinned independently (registered with it under the identity's key, held on its
+ * own device, configured by its operator). A value copied out of the same
+ * presented file is no better than no value at all.
  */
 export async function verifyKeyBindingAtTime(
   identity: MotebitIdentityFile,
   signingKeyHex: string,
   atTimestampMs: number,
-  guardianPublicKeyHex?: string,
+  trustedGuardianPublicKeyHex?: string,
 ): Promise<KeyBindingResult> {
-  const chain = identity.succession ?? [];
-  const currentKey = identity.identity.public_key;
+  // Shape first, fail-closed, never a throw: every wrapper (verifyMigratingKeyBinding,
+  // verifyIdentityBindingAnchored, state-export-client's verifyReceiptDocument)
+  // documents "never throws on bad input". A `succession` that is present but not an
+  // array of record objects is unreadable history, so it binds NOTHING — not even the
+  // genesis key: reading it as "no rotations" would bind a key the file's real chain
+  // may have retired. Absent / null is the legitimate "never rotated".
+  const rawChain: unknown = (identity as { succession?: unknown } | null | undefined)?.succession;
+  const currentKey: unknown = (
+    identity as { identity?: { public_key?: unknown } } | null | undefined
+  )?.identity?.public_key;
+  if (
+    (rawChain != null &&
+      (!Array.isArray(rawChain) ||
+        rawChain.some((r) => typeof r !== "object" || r === null || Array.isArray(r)))) ||
+    typeof currentKey !== "string"
+  ) {
+    return {
+      bound: false,
+      reason:
+        typeof currentKey !== "string"
+          ? "identity file has no identity.public_key string; nothing binds"
+          : "succession must be an array of succession records; a malformed chain binds nothing",
+    };
+  }
+  const chain = (rawChain ?? []) as SuccessionRecord[];
+  const genesisKey = chain.length > 0 ? chain[0]!.old_public_key : currentKey;
+  const genesisCommitment = await verifySovereignBinding(identity.motebit_id, genesisKey);
+  // Only a well-formed 32-byte hex key counts as SUPPLIED. `null`, `""` or any
+  // other value (a JS caller can pass anything) is treated as no guardian, so it
+  // can never be reported as `caller_trusted`.
+  const trustedGuardian =
+    typeof trustedGuardianPublicKeyHex === "string" &&
+    /^[0-9a-fA-F]{64}$/.test(trustedGuardianPublicKeyHex)
+      ? trustedGuardianPublicKeyHex
+      : undefined;
 
+  let guardianAuthority: NonNullable<KeyBindingResult["guardianAuthority"]> = "not_required";
+  let successionIntegrity: boolean | undefined;
   if (chain.length > 0) {
-    // A guardian-recovery rotation (the spec's key-compromise mechanism, §3.8.3)
-    // is guardian-signed, so verifying it needs the guardian key. Fall back to the
-    // identity file's own `guardian.public_key` when the caller doesn't pass one —
-    // otherwise a recovery chain carried in the identity file (e.g. served to a
-    // third-party verifier) would fail for lack of a key the file already names.
-    const guardianKey = guardianPublicKeyHex ?? identity.guardian?.public_key;
-    const chk = await verifySuccessionChain(chain, currentKey, guardianKey);
+    // Same predicate verifySuccessionChain uses to take the guardian path.
+    const hasRecoveryLink = chain.some((record) => Boolean(record.recovery));
+    if (hasRecoveryLink && trustedGuardian === undefined) {
+      // Integrity only: check the links against the guardian the file names,
+      // then refuse to bind — that guardian is the presented artifact's own word.
+      const integrity = await verifySuccessionChain(
+        chain,
+        currentKey,
+        identity.guardian?.public_key,
+      );
+      return {
+        bound: false,
+        genesisPublicKey: genesisKey,
+        genesisCommitment,
+        successionIntegrity: integrity.valid,
+        guardianAuthority: "not_established",
+        reason: integrity.valid
+          ? "succession chain contains a guardian-recovery link, and no caller-trusted guardian key was supplied; a guardian named only by the presented identity file cannot establish authority"
+          : (integrity.error ?? "succession chain invalid"),
+      };
+    }
+    if (hasRecoveryLink) guardianAuthority = "caller_trusted";
+    // Only a caller-supplied guardian ever reaches the authority check.
+    const chk = await verifySuccessionChain(
+      chain,
+      currentKey,
+      hasRecoveryLink ? trustedGuardian : undefined,
+    );
+    successionIntegrity = chk.valid;
     if (!chk.valid) {
-      return { bound: false, reason: chk.error ?? "succession chain invalid" };
+      return {
+        bound: false,
+        genesisPublicKey: genesisKey,
+        genesisCommitment,
+        successionIntegrity,
+        guardianAuthority,
+        reason: chk.error ?? "succession chain invalid",
+      };
     }
   }
 
@@ -1299,7 +1434,6 @@ export async function verifyKeyBindingAtTime(
   // false, so the genesis key simply won't match — fail-closed, no special case
   // (an identity without a valid creation time is malformed and shouldn't bind).
   const createdAtMs = Date.parse(identity.created_at);
-  const genesisKey = chain.length > 0 ? chain[0]!.old_public_key : currentKey;
 
   // Contiguous active windows in chain order: genesis first, then each rotation's
   // new key. The chain is already verified temporally ordered, so windows don't
@@ -1323,6 +1457,9 @@ export async function verifyKeyBindingAtTime(
     return {
       bound: false,
       genesisPublicKey: genesisKey,
+      genesisCommitment,
+      ...(successionIntegrity !== undefined ? { successionIntegrity } : {}),
+      guardianAuthority,
       reason: inChain
         ? "signing key is in the succession chain but was not active at the given timestamp"
         : "signing key is not in this identity's succession chain",
@@ -1331,21 +1468,31 @@ export async function verifyKeyBindingAtTime(
   return {
     bound: true,
     genesisPublicKey: genesisKey,
-    sovereign: await verifySovereignBinding(identity.motebit_id, genesisKey),
+    sovereign: genesisCommitment,
+    genesisCommitment,
+    ...(successionIntegrity !== undefined ? { successionIntegrity } : {}),
+    guardianAuthority,
     activeFrom: match.from,
     ...(match.until !== Number.POSITIVE_INFINITY ? { activeUntil: match.until } : {}),
   };
 }
 
 /**
- * Does `presentedKeyHex` legitimately control `motebitId` *right now*? The
- * offline, operator-free binding check a destination relay runs before
- * onboarding a migrating agent (spec/migration-v1.md §8.2 step 6). Two tiers,
- * fail-closed (returns false, never throws, on any unmet condition):
+ * Is `presentedKeyHex` a key the identity's own lineage binds to `motebitId`?
+ * The offline, operator-free binding check a destination relay runs before
+ * onboarding a migrating agent (spec/migration-v1.md §8.2 step 6). Two tiers;
+ * returns false, never throws, on malformed input.
+ *
+ * **Binding, not current authority.** Tier 1 runs first and ignores any
+ * rotation, so a retired genesis key still returns true; the function never
+ * proves possession of the private key. Before an authorization decision,
+ * verify the identity's current key state from an authenticated, sufficiently
+ * fresh source (succession and revocation included) and require proof of
+ * possession; if current authority cannot be established, refuse.
  *
  *  1. **Sovereign genesis** — `motebitId` is the sovereign commitment to
- *     `presentedKeyHex` itself (a never-rotated identity). No identity file
- *     needed; this is {@link verifySovereignBinding}.
+ *     `presentedKeyHex` itself, whether or not the identity has since rotated.
+ *     No identity file needed; this is {@link verifySovereignBinding}.
  *  2. **Sovereign-rooted succession** — with an `identityFile`, `presentedKeyHex`
  *     is the key active *now* in a verified succession chain
  *     ({@link verifyKeyBindingAtTime}) whose genesis is the sovereign commitment
@@ -1357,16 +1504,30 @@ export async function verifyKeyBindingAtTime(
  *
  * A non-sovereign (legacy random) id satisfies neither tier and cannot migrate —
  * by design, only sovereign-rooted identities migrate without trusting an operator.
+ *
+ * A chain that runs through a guardian-recovery link satisfies tier 2 only when
+ * the caller passes `trustedGuardianPublicKeyHex` — a guardian it pinned itself
+ * (for a relay: one it already holds for this identity, set under the
+ * identity's key per spec/identity-v1.md §7.5 obligation 4; a migrating arrival
+ * usually has none, so a recovery-chained identity does not migrate on its file
+ * alone). The guardian the presented `identityFile` names is never consulted
+ * for authority; see {@link verifyKeyBindingAtTime}.
  */
 export async function verifyMigratingKeyBinding(
   motebitId: string,
   presentedKeyHex: string,
   identityFile?: MotebitIdentityFile,
+  trustedGuardianPublicKeyHex?: string,
 ): Promise<boolean> {
   if (await verifySovereignBinding(motebitId, presentedKeyHex)) return true;
   if (!identityFile || identityFile.motebit_id !== motebitId) return false;
   try {
-    const r = await verifyKeyBindingAtTime(identityFile, presentedKeyHex, Date.now());
+    const r = await verifyKeyBindingAtTime(
+      identityFile,
+      presentedKeyHex,
+      Date.now(),
+      trustedGuardianPublicKeyHex,
+    );
     return r.bound === true && r.sovereign === true;
   } catch {
     return false;
@@ -1759,19 +1920,23 @@ export interface IdentityLogInclusionProof {
  * one the operator anchored on-chain is the caller's cross-check. The caller must
  * also confirm `identity.motebit_id` is the receipt's claimed motebit — this
  * primitive binds a key to the supplied identity file, not to a receipt.
+ *
+ * `trustedGuardianPublicKeyHex` has the same meaning as in
+ * {@link verifyKeyBindingAtTime}: the caller's own trust decision, never the
+ * guardian the presented identity file names.
  */
 export async function verifyIdentityBindingAnchored(
   identity: MotebitIdentityFile,
   signingKeyHex: string,
   atTimestampMs: number,
   proof: IdentityLogInclusionProof,
-  guardianPublicKeyHex?: string,
+  trustedGuardianPublicKeyHex?: string,
 ): Promise<KeyBindingResult> {
   const sovereign = await verifyKeyBindingAtTime(
     identity,
     signingKeyHex,
     atTimestampMs,
-    guardianPublicKeyHex,
+    trustedGuardianPublicKeyHex,
   );
   if (!sovereign.bound) return sovereign;
 
@@ -2950,8 +3115,15 @@ async function verifyCredential(
     errors.push({ message: "Credential proof verification failed", path: "proof" });
   }
 
-  // Extract issuer DID
-  const issuerDid = typeof vc.issuer === "string" ? vc.issuer : undefined;
+  // Bind the signer to the issuer. The proof verifies under the key its own
+  // `verificationMethod` names, so a valid signature alone says nothing about
+  // WHO issued the credential: the signer must be the issuer (did:key only;
+  // any other issuer DID method fails closed).
+  const issuerDid = namedDidOf(vc.issuer);
+  const issuerBound = proofSignerIs(vc.proof, issuerDid);
+  if (!issuerBound) {
+    errors.push({ message: "Credential issuer is not the proof signer", path: "issuer" });
+  }
   const subjectId = vc.credentialSubject?.id;
 
   // Hardware-attestation verification (additive — absent claim = no
@@ -3004,7 +3176,7 @@ async function verifyCredential(
 
   return {
     type: "credential",
-    valid: proofValid && !expired && !notYetValid,
+    valid: proofValid && issuerBound && !expired && !notYetValid,
     credential: vc,
     issuer: issuerDid,
     subject: subjectId,
@@ -3035,6 +3207,12 @@ async function verifyPresentation(
   if (!envelopeValid) {
     errors.push({ message: "Presentation proof verification failed", path: "proof" });
   }
+  // The envelope's signer must be the holder it names (the same binding as a
+  // credential's issuer).
+  const holderBound = proofSignerIs(vp.proof, namedDidOf(vp.holder));
+  if (!holderBound) {
+    errors.push({ message: "Presentation holder is not the presentation signer", path: "holder" });
+  }
 
   // Verify each contained credential
   const credentialResults: CredentialVerifyResult[] = [];
@@ -3050,7 +3228,7 @@ async function verifyPresentation(
     }
   }
 
-  const allValid = envelopeValid && credentialResults.every((c) => c.valid);
+  const allValid = envelopeValid && holderBound && credentialResults.every((c) => c.valid);
 
   return {
     type: "presentation",
@@ -3339,3 +3517,22 @@ export {
   verifyAgentCommandEnvelope,
   type AgentCommandVerdict,
 } from "./agent-command.js";
+
+// Federation signed messages v2 (spec/relay-federation-v1.md §3.5) — the one
+// producer and one verifier of role-, signer-, recipient- and freshness-bound
+// relay-to-relay signatures (heartbeat, heartbeat-ack, peer-remove today).
+export {
+  FEDERATION_MESSAGE_DOMAIN,
+  FEDERATION_MESSAGE_KINDS,
+  FEDERATION_MESSAGE_SUITE,
+  federationBodyDigest,
+  federationMessageBytes,
+  parseFederationMessage,
+  signFederationMessage,
+  verifyFederationMessage,
+  type FederationMessageEnvelope,
+  type FederationMessageKind,
+  type FederationMessageRefusal,
+  type FederationMessageVerdict,
+  type SignedFederationMessage,
+} from "./federation-message.js";

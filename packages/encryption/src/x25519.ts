@@ -10,6 +10,8 @@
  */
 
 import { x25519 } from "@noble/curves/ed25519.js";
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import type { KeySuccessionRecord, KeyTransferPayload } from "@motebit/protocol";
 import {
   encrypt,
@@ -50,27 +52,18 @@ export function x25519SharedSecret(
  * Uses HKDF-SHA256 with SHA-256(pairingCode) as salt — binds the derived
  * key to the pairing session without requiring the relay to not know the code.
  */
-export async function deriveKeyTransferKey(
+export function deriveKeyTransferKey(
   sharedSecret: Uint8Array,
   pairingCode: string,
 ): Promise<Uint8Array> {
+  // Pure-JS HKDF + SHA-256 (@noble/hashes), never `crypto.subtle`: React
+  // Native's WebCrypto has no HKDF. Byte-identical to the WebCrypto output
+  // (pinned by hkdf-noble.test.ts).
   const codeBytes = new TextEncoder().encode(pairingCode.toUpperCase());
-  const salt = new Uint8Array(await crypto.subtle.digest("SHA-256", codeBytes));
-
-  const ikm = await crypto.subtle.importKey("raw", sharedSecret as BufferSource, "HKDF", false, [
-    "deriveBits",
-  ]);
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt,
-      info: new TextEncoder().encode("motebit-key-transfer-v1"),
-    },
-    ikm,
-    256,
+  const salt = sha256(codeBytes);
+  return Promise.resolve(
+    hkdf(sha256, sharedSecret, salt, new TextEncoder().encode("motebit-key-transfer-v1"), 32),
   );
-  return new Uint8Array(bits);
 }
 
 /**

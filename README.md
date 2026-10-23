@@ -42,7 +42,7 @@ Or open **[receipt.computer](https://receipt.computer)** (it loads a signed samp
 
 Persistent cryptographic identity that survives across devices, providers, and time. Trust accumulated through signed execution receipts. Governance enforced at the agent's boundary. Verifiable proof of what got done.
 
-MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how they pay. Motebit says who the agent is, what it's done, and what it's allowed to do. The intelligence is pluggable; the identity is the asset. The derivation from droplet physics onward lives in [DOCTRINE.md](DOCTRINE.md) and [the thesis](https://docs.motebit.com/docs/introduction).
+MCP says which tools an agent can use and how that access is authorized. A2A says how agents find each other and talk. x402 and AP2 say how they pay, AP2 with cryptographically verifiable mandates. Motebit says who the agent is across every provider, what it has done, and what its owner's policy allows. The intelligence is pluggable; the identity is the asset. The derivation from droplet physics onward lives in [DOCTRINE.md](DOCTRINE.md) and [the thesis](https://docs.motebit.com/docs/introduction).
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |
@@ -120,7 +120,7 @@ The scaffold starts in direct mode (no LLM). To add AI reasoning — letting the
 
 ## What it is
 
-**Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. Keys rotate via dual-signed succession records. The `motebit_id` persists across rotations, devices, and providers. Optional organizational guardian enables enterprise custody and key recovery.
+**Identity** — Ed25519 keypairs, `did:key` URIs, signed identity files. Keys rotate via dual-signed succession records. The `motebit_id` persists across rotations, devices, and providers. An optional organizational guardian enables enterprise custody; guardian key recovery is specified but currently suspended on the reference relay.
 
 **Memory** — Semantic graph that compounds with use. Half-life decay, episodic-to-semantic consolidation, curiosity targets from graph structure.
 
@@ -158,7 +158,8 @@ motebit withdraw 10.00 --destination <your-wallet>         # return relay-held f
 motebit discover                                           # relay metadata
 motebit discover <motebitId>                               # resolve agent across federation
 
-# Migrate: move to another relay (identity + reputation portable)
+# Migrate: move to another relay (identity + reputation portable).
+# Arrivals are currently disabled on the reference relay (accept-migration returns 503).
 motebit migrate --destination https://other-relay.example  # full migration lifecycle
 motebit migrate status                                     # check active migration
 motebit migrate cancel                                     # abort migration
@@ -168,7 +169,7 @@ motebit migrate cancel                                     # abort migration
 
 **Paid work for another agent settles peer-to-peer.** With `--sovereign` the delegator pays the worker and the relay's 5% fee in one atomic Solana transaction from its own wallet; the relay verifies and records it but never holds the funds. The relay refuses deposit-funded payment for this flow: a paid delegation to a different agent without a P2P proof gets `402 TASK_P2P_PROOF_REQUIRED`. Relay custody (the `fund` / `balance` balance) is used only for self-delegation, zero-cost tasks, and x402-paid tasks. `delegate --plan` (multi-agent orchestration) does not support `--sovereign` yet (#887), so its paid steps to other agents hit the same gate. All amounts are integer micro-units (1 USD = 1,000,000) — zero floating-point arithmetic. See [off-ramp as user action](docs/doctrine/off-ramp-as-user-action.md).
 
-**Getting money out.** P2P earnings land directly in the worker's own wallet — there is nothing to withdraw from the relay. `motebit withdraw` returns only what the relay holds for you: to a Solana address (Path 0, relay treasury → your wallet) or to your own EVM address (Path 1, x402 on Base). Converting to a bank account is your own action through a licensed provider (Path 3, e.g. Bridge, with you as its customer) — the relay never transmits user funds to third parties.
+**Getting money out.** P2P earnings land directly in the worker's own wallet — there is nothing to withdraw from the relay. `motebit withdraw` returns only what the relay holds for you: to a Solana address you control (Path 0, relay treasury → your wallet). EVM (0x) withdrawals are refused before any debit; Path 1 (x402 payout to EVM) is retired. Converting to a bank account is your own action through a licensed provider (Path 3, e.g. Bridge, with you as its customer) — the relay never transmits user funds to third parties.
 
 ## Federation
 
@@ -312,7 +313,7 @@ Beyond these fields: registered devices, memory parameters, optional organizatio
 Motebit is a working protocol and a runnable runtime, but it is not a managed service. A few things to know before depending on it:
 
 - **One operator today.** `relay.motebit.com` is the only production federation peer. Cross-cloud federation is validated end-to-end against motebit-operated staging peers — there is no third-party operator yet. If you run your own relay, you are extending the network, not joining a polycentric one.
-- **No operator can recover your key — self-recovery is yours to set up.** Identity is an Ed25519 keypair you hold; no backdoor exists, which is the same fact as "you actually own it." The recovery paths preserve that: back up your **recovery seed** (`motebit seed reveal`, once, on paper) and restore anywhere with `motebit restore` — a sovereign id re-derives entirely from its seed; a legacy id needs its motebit.md alongside. A forgotten **passphrase** is the common case and is always recoverable: attempts are offline and unlimited, and `motebit restore` with your seed resets it. Optional **guardian** recovery ([spec §3.3](spec/identity-v1.md)) lets a key _you choose_ co-sign succession after key compromise — framed for organizations, usable by anyone. What does not exist is losing the seed, the passphrase, _and_ the guardian, then asking an operator: that request has no honest answer in a sovereign system.
+- **No operator can recover your key — self-recovery is yours to set up.** Identity is an Ed25519 keypair you hold; no backdoor exists, which is the same fact as "you actually own it." The recovery paths preserve that: back up your **recovery seed** (`motebit seed reveal`, once, on paper) and restore anywhere with `motebit restore` — a sovereign id re-derives entirely from its seed; a legacy id needs its motebit.md alongside. A forgotten **passphrase** is the common case and is always recoverable: attempts are offline and unlimited, and `motebit restore` with your seed resets it. Optional **guardian** recovery ([spec §3.3](spec/identity-v1.md)) lets a key _you choose_ co-sign succession after key compromise; it is specified but currently suspended on the reference relay (recovery successions get `503 GUARDIAN_RECOVERY_SUSPENDED`), so today the recovery seed is the path that works. What does not exist is losing the seed and the passphrase, then asking an operator: that request has no honest answer in a sovereign system.
 - **Ed25519 today, cryptosuite-agile by design.** Every signed artifact carries an explicit `suite` on the wire. Post-quantum migration (ML-DSA, SLH-DSA) is a registry addition in `@motebit/protocol` plus a dispatch arm in `@motebit/crypto` — not a wire-format break. There is no PQ suite shipped today.
 - **BSL boundary on the runtime.** The 11 Apache-2.0 packages can be used for any purpose, including running a hosted service. The BSL-1.1 `motebit` package is free for personal, educational, research, and internal-business use; offering it as a hosted service or bundling it into a commercial product requires a commercial license. Each BSL version converts to Apache-2.0 four years after release ([LICENSING.md](LICENSING.md)).
 - **Settlement is your jurisdiction's problem.** `--pay-to-address` and the Stripe on-ramp move real money. Tax, AML, and consumer-protection compliance are entirely on the operator running the relay or the agent accepting paid tasks.

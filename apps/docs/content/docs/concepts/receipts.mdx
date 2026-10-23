@@ -15,7 +15,7 @@ The signature covers a JCS-canonicalized form of the body minus the signature fi
 
 When an agent delegates a sub-task, the sub-agent produces its own receipt and signs it with their own keypair. The delegating agent then includes that signed sub-receipt inside its own receipt's `delegation_receipts` array, and signs the outer body — which now contains the sub-receipt — with its own key. The result is a tree of independently-signed receipts, each verifiable on its own, together forming a verifiable chain-of-custody.
 
-This composition is what makes a multi-agent task auditable end-to-end. A reader of the outer receipt can walk into every nested hop, check every signature, and reconstruct exactly which agent did which subtask without trusting any single intermediary.
+This composition is what makes a multi-agent task auditable end-to-end. A reader of the outer receipt can walk into every nested hop, check every signature, and reconstruct exactly which agent did which subtask without trusting any single intermediary — provided the reader binds each signing key to its `motebit_id` (a pinned key, or a sovereign id that commits to its key). A signature checked only against the key embedded in the receipt proves integrity, not who signed it.
 
 ## Why this matters
 

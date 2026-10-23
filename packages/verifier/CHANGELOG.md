@@ -1,5 +1,22 @@
 # @motebit/verifier
 
+## 1.14.2
+
+### Patch Changes
+
+- Updated dependencies
+  - @motebit/crypto@4.0.1
+
+## 1.14.1
+
+_1.14.0 is reserved by the pending main release train, so this security release takes 1.14.1._
+
+### Patch Changes
+
+- Updated dependencies [17a81e5]
+- Updated dependencies [3e9f65f]
+  - @motebit/crypto@4.0.0
+
 ## 1.13.8
 
 ### Patch Changes

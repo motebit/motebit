@@ -213,7 +213,7 @@ Your motebit starts local, and stays local: relay sync is opt-in, so until you n
 motebit register --sync
 ```
 
-`--sync` names the public relay (`relay.motebit.com`). This registers your device there; the relay stores your public key and device ID. Your private key never leaves your machine.
+`--sync` names the public relay (`relay.motebit.com`). This registers your device there; the relay stores your public key and device ID. Registering never sends your private key.
 
 After registration, the CLI saves the relay URL to `~/.motebit/config.json`. Future REPL and daemon sessions connect automatically — no need to pass `--sync-url` each time. (`motebit sync enable [url]` saves it without registering; `motebit sync disable` turns sync off again.)
 
@@ -280,10 +280,10 @@ When a task arrives, your agent executes it and signs a receipt. Paid work from 
 
 ```bash
 motebit balance                                        # See your relay balance
-motebit withdraw 10.00 --destination <solana-or-0x-address>   # Request a payout
+motebit withdraw 10.00 --destination <solana-address>   # Request a payout
 ```
 
-A Solana address pays out on Solana; a `0x` address pays out over x402 to your EVM wallet. Without `--destination`, the request is queued as pending for the relay operator.
+Payouts go to a Solana address you control. An EVM (`0x`) destination is refused with `400` before anything is debited: the x402 payout path to EVM wallets is retired. Without `--destination`, the request is queued as pending for the relay operator.
 
 See [Budget & Settlement](/docs/developer/budget-settlement) for the full protocol.
 
@@ -370,7 +370,7 @@ Back up `~/.motebit/` and you have everything (on the CLI you also need your pas
 
 ### New device
 
-To use your motebit on another device, pair it. The new device generates its own keypair and registers under your existing identity via a 6-character pairing code. Both devices sync memories and state through the relay. Each device has its own private key — compromise of one doesn't compromise the other.
+To use your motebit on another device, pair it. The new device claims a 6-character pairing code, and the approving device transfers the identity key to it end-to-end encrypted (X25519) through the relay, which never sees the key. Both devices then hold the same identity key and sync memories and state through the relay, so a compromise of either device compromises the identity: rotate the key if a device is lost.
 
 ### Key rotation
 
@@ -384,7 +384,7 @@ The old key signs a succession record declaring the new key as its successor, an
 
 ### Key compromise
 
-If a private key is compromised, rotate immediately. If rotation isn't possible (you've lost access to the old key), generate a fresh identity:
+If a private key is compromised, rotate immediately. If rotation isn't possible (you've lost access to the old key), generate a fresh identity. Guardian recovery, which would keep the `motebit_id`, is specified but currently suspended on the reference relay:
 
 ```bash
 npm create motebit
@@ -429,9 +429,9 @@ Retention is governed too. Deleting a memory or a conversation produces a signed
 
 Your motebit's identity is an **Ed25519 keypair**. The public key (and, for a sovereign identity, the `motebit_id` derived from it) is shareable; the private key is the root of all authority.
 
-- **At rest.** On mobile the private key lives in the iOS Keychain / Android Keystore. On desktop it lives in `~/.motebit/dev-keyring.json`, an owner-only (`0600` on Unix; Windows is best-effort) file — access-controlled, not application-encrypted (the same protection as an SSH key). The OS keychain is not used yet; enabling it is its own arc, gated on real-device testing (`docs/proposals/key-file-durability-v1.md`). On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations by default, SHA-256) and AES-256-GCM. Registering with a relay sends the `motebit_id`, device id, and public key — never the private key.
+- **At rest.** On mobile the private key lives in the iOS Keychain / Android Keystore. On desktop it lives in `~/.motebit/dev-keyring.json`, an owner-only (`0600` on Unix; Windows is best-effort) file — access-controlled, not application-encrypted (the same protection as an SSH key). The OS keychain is not used yet; enabling it is its own arc, gated on real-device testing (`docs/proposals/key-file-durability-v1.md`). On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations by default, SHA-256) and AES-256-GCM. In the web app it is held in browser storage (IndexedDB, wrapped by a non-extractable WebCrypto key). Registering with a relay sends the `motebit_id`, device id, and public key — never the private key. Pairing a new device transfers the private key end-to-end encrypted (X25519) through the relay, which cannot read it.
 - **Recovery.** A recovery seed re-derives a sovereign identity. A sovereign `motebit_id` is a cryptographic commitment to its genesis key, so the binding between an id and its key is checkable offline by anyone. Identities minted before sovereign ids carry a random id that is not derived from a key and cannot be recovered from a seed.
-- **Rotation & succession.** Keys can be rotated; a signed succession chain (the new key always signs; the old key also signs in a normal rotation, or a designated guardian signs in recovery) preserves continuity, so a rotated key does not orphan past receipts.
+- **Rotation & succession.** Keys can be rotated; a signed succession chain (the new key always signs; the old key also signs in a normal rotation, or a designated guardian signs in recovery) preserves continuity, so a rotated key does not orphan past receipts. Guardian recovery is specified but currently suspended on the reference relay, which refuses recovery successions with `503 GUARDIAN_RECOVERY_SUSPENDED`; ordinary rotation is unaffected.
 - **Hardware attestation is additive.** Secure Enclave / TPM / StrongBox attestations *raise* an identity's assurance score — they never replace the Ed25519 key, and their absence never blocks a software identity. Software identity is the floor.
 
 See [Identity & crypto](/docs/developer/identity-crypto) for the full key lifecycle.
@@ -482,7 +482,7 @@ The identity belongs to its owner, not to a service provider. Switch AI provider
 
 ## Cryptographic keys
 
-Each device that hosts a motebit generates an Ed25519 keypair. The private key is stored in the device's key store: the iOS Keychain / Android Keystore on mobile, a passphrase-encrypted file on the CLI, and an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (the OS keychain is not used on desktop yet) — it never leaves the device and never gets sent over the network. The public key is shared with services that need to verify the agent's identity.
+A motebit's identity is an Ed25519 keypair, generated on the first device. The private key is stored in the device's key store: the iOS Keychain / Android Keystore on mobile, a passphrase-encrypted file on the CLI, an owner-only (`0600` on Unix; Windows is best-effort) plaintext key file on desktop (the OS keychain is not used on desktop yet), and browser storage on the web. It is never sent to a relay in the clear: registration sends only the public key, and pairing a new device transfers the identity key end-to-end encrypted through the relay, which cannot read it. The public key is shared with services that need to verify the agent's identity.
 
 Ed25519 was chosen for its speed, small key size, and resistance to timing attacks. It's the same signature scheme used by SSH, Signal, and WireGuard.
 
@@ -528,13 +528,13 @@ If a key is compromised and you haven't set up succession, generate a new identi
 - **Multi-device** — Your motebit exists across all your devices with the same identity and shared state
 - **Relay independence** — The identity doesn't depend on the relay server. Kill the relay, the motebit continues. Switch relays, the motebit follows.
 - **Audit trail** — Every event is tagged with the agent and device that produced it, creating a verifiable history
-- **Key recovery** — Rotate keys without losing identity. If no succession is set up, generate a new identity — same model as SSH keys
+- **Key recovery** — Rotate keys without losing identity. A recovery seed (`motebit restore`) re-derives a sovereign identity on any machine. If neither works, generate a new identity — same model as SSH keys
 
 ## Organizational custody (enterprise)
 
 > For enterprise deployments. Individual users can skip this section.
 
-Enterprise agents can declare a guardian — an organizational Ed25519 key held in cold storage. The guardian enables key recovery when the primary key is compromised, employee departure workflows (rotate the agent to a new operator while preserving trust history), and organizational trust baseline in routing.
+Enterprise agents can declare a guardian — an organizational Ed25519 key held in cold storage. The guardian is specified to enable key recovery when the primary key is compromised (guardian recovery is currently suspended on the reference relay, which refuses recovery successions with `503 GUARDIAN_RECOVERY_SUSPENDED`), employee departure workflows (rotate the agent to a new operator while preserving trust history), and organizational trust baseline in routing.
 
 Guardian revocation requires dual authorization — both the identity key and the guardian key must sign. Neither party can unilaterally dissolve the custody relationship.
 
@@ -629,7 +629,7 @@ The signature covers a JCS-canonicalized form of the body minus the signature fi
 
 When an agent delegates a sub-task, the sub-agent produces its own receipt and signs it with their own keypair. The delegating agent then includes that signed sub-receipt inside its own receipt's `delegation_receipts` array, and signs the outer body — which now contains the sub-receipt — with its own key. The result is a tree of independently-signed receipts, each verifiable on its own, together forming a verifiable chain-of-custody.
 
-This composition is what makes a multi-agent task auditable end-to-end. A reader of the outer receipt can walk into every nested hop, check every signature, and reconstruct exactly which agent did which subtask without trusting any single intermediary.
+This composition is what makes a multi-agent task auditable end-to-end. A reader of the outer receipt can walk into every nested hop, check every signature, and reconstruct exactly which agent did which subtask without trusting any single intermediary — provided the reader binds each signing key to its `motebit_id` (a pinned key, or a sovereign id that commits to its key). A signature checked only against the key embedded in the receipt proves integrity, not who signed it.
 
 ## Why this matters
 
@@ -664,7 +664,7 @@ Motebit calls this a **semiring**: a small algebra (`add`, `multiply`, `zero`, `
 
 ## What survives the relay
 
-A receipt is signed once and verifiable forever. To make the trust history portable, motebit issues [verifiable credentials](/docs/developer/credentials) about completed work — W3C VC 2.0, Merkle-batched, anchored onchain via Solana memo. A motebit migrating to a different relay carries its credential bundle; the new relay verifies the chain and the trust history is preserved without ever importing the old relay's database.
+A receipt is signed once and verifiable forever. To make the trust history portable, motebit issues [verifiable credentials](/docs/developer/credentials) about completed work — W3C VC 2.0, Merkle-batched, anchored onchain via Solana memo. A motebit migrating to a different relay carries its credential bundle; the new relay verifies the chain and the trust history is preserved without ever importing the old relay's database. (That is the [migration protocol](https://github.com/motebit/motebit/blob/main/spec/migration-v1.md); migration arrivals are currently disabled on the reference relay, which answers accept-migration with `503`.)
 
 The receipts are the truth. The relay is the fast path. The trust graph is the operator's accumulated state — never licensed, never mirrored — and the credential anchor is the public, durable proof that survives any relay's lifetime.
 
@@ -1417,7 +1417,7 @@ Key fields:
 
 The signature covers the canonical JSON serialization of all fields except `signature`. Keys are sorted recursively for deterministic output. Since `relay_task_id` is inside the signature, an attacker cannot replay a receipt from one task against another — tampering breaks the signature.
 
-Anyone can verify the receipt offline — the signer's public key is embedded in the receipt's `public_key` field, so no relay lookup or out-of-band key is needed. Use the published `@motebit/verifier` (it reads the embedded key, handles JCS + suite dispatch, and reports the binding-ladder rung):
+Anyone can check the receipt's integrity offline — the signer's public key is embedded in the receipt's `public_key` field, so no relay lookup is needed for that. The embedded key alone does not prove the key belongs to the `motebit_id`; that is the binding rung. Use the published `@motebit/verifier` (it reads the embedded key, handles JCS + suite dispatch, and reports the binding-ladder rung):
 
 ```typescript
 import { verifyArtifact } from "@motebit/verifier";
@@ -1508,7 +1508,7 @@ Alice (CLI)                    Relay                         Your Service
 ```
 
 1. **Discovery** — Alice's agent finds your service via `/discover` or DNS. Your capabilities (tool names) are listed in the relay's registry.
-2. **Budget allocation** — The relay estimates the task cost and reserves funds from Alice's balance. If Alice has insufficient funds, the relay returns HTTP 402.
+2. **Payment** — Your service is a different agent from Alice's, so paid work settles peer-to-peer: Alice's agent pays your worker and the relay fee onchain in one atomic Solana transaction (`--sovereign`) and submits the proof. A paid submission without it is refused with HTTP 402 `TASK_P2P_PROOF_REQUIRED`; Alice's relay balance is not used.
 3. **Routing** — The relay scores candidates using the semiring computation graph (trust, cost, latency, reliability) and routes to the best match.
 4. **Execution** — Your service receives the task via WebSocket, executes the tool, and builds a signed receipt.
 5. **Receipt verification** — The relay verifies your Ed25519 signature, confirms the `relay_task_id` binding, and settles the budget.
@@ -2231,7 +2231,7 @@ succession:
 | **privacy**    | Sensitivity levels and retention rules (see [Governance](/docs/concepts/governance))                                                                 |
 | **memory**     | Decay parameters for semantic memory (see [Memory](/docs/concepts/memory))                                                                           |
 | **devices**    | Registered device public keys for multi-device identity                                                                                              |
-| **guardian**   | Optional organizational custody key for enterprise recovery ([spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) §3.3)          |
+| **guardian**   | Optional organizational custody key for enterprise recovery ([spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) §3.3); recovery is currently suspended on the reference relay |
 | **succession** | Key rotation history — dual-signed chain from genesis to current key ([spec](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md) §3.8) |
 
 ### Signature
@@ -2248,7 +2248,7 @@ The signature is stored as a hex-encoded value in an HTML comment after the clos
 | Private key theft                  | Encrypted at rest (PBKDF2 + AES-256-GCM) in config on the CLI; the OS keychain on mobile; an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (access-controlled, not encrypted); never in the identity file |
 | Identity impersonation             | Public key is self-certifying; verification requires the matching keypair                     |
 | Key compromise (with succession)   | Old key signs succession record delegating to new key; chain is verifiable end-to-end         |
-| Key compromise (guardian recovery) | Guardian signs recovery succession; `motebit_id` and trust preserved                          |
+| Key compromise (guardian recovery) | Guardian signs recovery succession; `motebit_id` and trust preserved. Specified, but currently suspended on the reference relay (`503 GUARDIAN_RECOVERY_SUSPENDED`) |
 | Key compromise (no succession)     | Generate new keypair + new `motebit_id`; old identity is abandoned                            |
 | YAML injection                     | Restricted parser; no anchors/aliases/tags                                                    |
 
@@ -2282,7 +2282,7 @@ Source: https://docs.motebit.com/docs/developer/identity-crypto
 
 > How motebit creates and manages persistent sovereign identity
 
-Session tokens expire. API keys are shared secrets managed by someone else. A motebit agent owns an Ed25519 keypair — the private key never leaves the device, and the identity persists across sessions, devices, and intelligence providers. This guide explains how the cryptographic identity works, from first launch through multi-device sync.
+Session tokens expire. API keys are shared secrets managed by someone else. A motebit agent owns an Ed25519 keypair — the private key is never sent to a relay in the clear (pairing moves it to a new device end-to-end encrypted), and the identity persists across sessions, devices, and intelligence providers. This guide explains how the cryptographic identity works, from first launch through multi-device sync.
 
 For the conceptual foundation, see [Identity](/docs/concepts/identity). For where identity sits in the package architecture, see [Architecture](/docs/operator/architecture).
 
@@ -2291,7 +2291,7 @@ For the conceptual foundation, see [Identity](/docs/concepts/identity). For wher
 On first launch, the system runs a shared bootstrap protocol (`bootstrapIdentity` in `@motebit/core-identity`):
 
 1. **Generate an Ed25519 keypair** using `@noble/ed25519` — a zero-dependency, audited library. The same signing scheme used by SSH, Signal, and WireGuard.
-2. **Store the private key** in the platform's secure storage. On desktop, `~/.motebit/dev-keyring.json` — an owner-only (mode `0600` on Unix; Windows is best-effort) file, access-controlled rather than application-encrypted; the OS keychain is not used yet (its enablement is a separate arc gated on real-device testing, because keychain providers differ in ways that can lose a key). On CLI, PBKDF2-encrypted as `cli_encrypted_key` in `~/.motebit/config.json`. On mobile, `expo-secure-store` (iOS Keychain / Android Keystore, no fallback). The private key never appears in the non-secret `config.json` and never crosses the network; on desktop the key file is access-controlled but not application-encrypted (moving it into the OS keychain is tracked as its own arc — see [security boundaries](https://github.com/motebit/motebit/blob/main/docs/doctrine/security-boundaries.md)).
+2. **Store the private key** in the platform's secure storage. On desktop, `~/.motebit/dev-keyring.json` — an owner-only (mode `0600` on Unix; Windows is best-effort) file, access-controlled rather than application-encrypted; the OS keychain is not used yet (its enablement is a separate arc gated on real-device testing, because keychain providers differ in ways that can lose a key). On CLI, PBKDF2-encrypted as `cli_encrypted_key` in `~/.motebit/config.json`. On mobile, `expo-secure-store` (iOS Keychain / Android Keystore, no fallback). On the web, browser storage. Outside the CLI's encrypted `cli_encrypted_key`, the private key never appears in `config.json`; it crosses the network only when pairing transfers it to a new device, end-to-end encrypted (X25519) through the relay, which cannot read it; on desktop the key file is access-controlled but not application-encrypted (moving it into the OS keychain is tracked as its own arc — see [security boundaries](https://github.com/motebit/motebit/blob/main/docs/doctrine/security-boundaries.md)).
 3. **Derive the `motebit_id` from the public key** — a UUIDv8 (RFC 9562) built from the first 16 bytes of `SHA-256(public_key)` with the version and variant bits set (`deriveSovereignMotebitId` in `@motebit/crypto`). The id is a self-certifying commitment to the genesis key: anyone can recompute it offline, and it is recoverable from the key's seed. A random `device_id` is generated alongside it. Identities minted before this default carry a random UUID v7 `motebit_id` that is not bound to any key; they remain valid identifiers.
 4. **Register the device** against the identity, binding the device's public key to the `motebit_id`.
 5. **Write config** — the `motebit_id`, `device_id`, and public key are persisted to `~/.motebit/config.json` (non-secret metadata only).
@@ -2392,11 +2392,11 @@ A valid signature proves the holder has the private key. It does not prove the h
 
 | Concern               | Approach                                                                                                                                                                                                                                                                                                                                                   |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Key storage**       | Mobile: iOS Keychain / Android Keystore. Desktop: `~/.motebit/dev-keyring.json`, owner-only (`0600`), access-controlled rather than application-encrypted; the OS keychain is not used yet. CLI: PBKDF2-encrypted file. Never in the non-secret `config.json`.                 |
+| **Key storage**       | Mobile: iOS Keychain / Android Keystore. Desktop: `~/.motebit/dev-keyring.json`, owner-only (`0600`), access-controlled rather than application-encrypted; the OS keychain is not used yet. CLI: PBKDF2-encrypted (`cli_encrypted_key` in `~/.motebit/config.json`). Web: browser storage (IndexedDB, wrapped by a non-extractable WebCrypto key). |
 | **Key rotation**      | Signed succession records (spec §3.8). The old keypair signs a tombstone declaring the new keypair as successor — both keys sign the canonical payload. The `motebit_id` persists across rotations. Rotate via `motebit rotate` (CLI) or `npx create-motebit rotate` (scaffolder). No centralized revocation — succession chains are verifiable by anyone. |
-| **Guardian recovery** | Enterprise agents can declare an organizational guardian (spec §3.3). If the primary key is compromised, the guardian signs a recovery succession record — rotating to a new key without the compromised key. Guardian revocation requires dual authorization (both keys sign).                                                                            |
+| **Guardian recovery** | Enterprise agents can declare an organizational guardian (spec §3.3). If the primary key is compromised, the guardian signs a recovery succession record — rotating to a new key without the compromised key. Specified, but currently suspended on the reference relay (`503 GUARDIAN_RECOVERY_SUSPENDED`); the recovery seed (`motebit restore`) is the recovery path that works today. Guardian revocation requires dual authorization (both keys sign).                                                                            |
 | **Secure erasure**    | `secureErase()` overwrites byte arrays with random data then zeros before garbage collection.                                                                                                                                                                                                                                                              |
-| **Private key scope** | The private key never appears in `motebit.md`, never crosses the network, and never enters a config file.                                                                                                                                                                                                                                                  |
+| **Private key scope** | The private key never appears in `motebit.md`. It crosses the network only inside an end-to-end-encrypted pairing transfer, and enters a config file only as the CLI's passphrase-encrypted `cli_encrypted_key`.                                                                                                                                                                                                                                                  |
 
 ---
 
@@ -2506,6 +2506,8 @@ Every credential follows the W3C VC Data Model 2.0:
 ```
 
 The `proof` uses `eddsa-jcs-2022` — the W3C Data Integrity EdDSA cryptosuite. Signing works by hashing the proof options and the document separately (both as canonical JSON via JCS/RFC 8785), concatenating the two SHA-256 hashes, and signing the result with Ed25519. The `proofValue` is the signature encoded as `"z" + base58btc`.
+
+A valid signature is not enough on its own: verification also requires the proof's signer to be the credential's `issuer` (for a `did:key` issuer, the DID in `proof.verificationMethod` before `#` must equal it), and an issuer DID method the verifier cannot resolve to the signing key fails closed. A presentation's signer must likewise be its `holder`. See [credential-v1 §5.4](https://github.com/motebit/motebit/blob/main/spec/credential-v1.md). `@motebit/crypto` enforces this from 4.0.1; earlier versions reported an unbound `issuer` as verified ([GHSA-7pgw-2976-r236](https://github.com/motebit/motebit/security/advisories/GHSA-7pgw-2976-r236)).
 
 ## Presentations
 
@@ -2759,7 +2761,7 @@ const result = await verifyReceiptChain(receipt, knownKeys);
 // result.delegations — array of ReceiptVerification for sub-delegations
 ```
 
-Each node in the verification tree contains `task_id`, `motebit_id`, `verified`, and an optional `error`. An unknown `motebit_id` (not in `knownKeys`) produces `verified: false` with `error: "unknown motebit_id"`.
+Each node in the verification tree contains `task_id`, `motebit_id`, `verified`, `keySource`, and an optional `error`. An unknown `motebit_id` (not in `knownKeys`) is NOT fail-closed: `verifyReceiptChain` falls back to the receipt's own embedded `public_key` and reports `keySource: "embedded"`, which proves the bytes are intact but not that the key belongs to that `motebit_id` (a forged receipt can embed any key and still report `verified: true`). Only `keySource: "external"` (the key came from your `knownKeys`) establishes identity binding, so check `keySource` at every node. A receipt with neither a known nor an embedded key yields `verified: false` with `error: "unknown motebit_id"`.
 
 ### Flat receipt sequences
 
@@ -3132,7 +3134,7 @@ const result = await verifyReceiptChain(receipt, knownKeys);
 //   result.delegations[0].motebit_id — "charlie-motebit-id"
 ```
 
-An unknown `motebit_id` (not in `knownKeys`) produces `verified: false` with `error: "unknown motebit_id"` — the verification is fail-closed but does not reject the entire tree.
+An unknown `motebit_id` (not in `knownKeys`) is NOT fail-closed: `verifyReceiptChain` falls back to the receipt's own embedded `public_key` and reports `keySource: "embedded"`, which proves the bytes are intact but not that the key belongs to that `motebit_id` (a forged receipt can embed any key and still report `verified: true`). Only `keySource: "external"` (the key came from your `knownKeys`) establishes identity binding, so check `keySource` at every node. A receipt with neither a known nor an embedded key yields `verified: false` with `error: "unknown motebit_id"`. A failing node does not reject the entire tree.
 
 ## Trust accumulation
 
@@ -4041,6 +4043,8 @@ A delegation task moves through five economic stages:
 
 If the estimated cost exceeds available budget at step 3, the delegation fails with HTTP 402 (insufficient budget) before any work begins.
 
+On the reference relay, steps 3 and 5 against a relay balance apply only to self-delegation, zero-cost tasks and x402-paid tasks. A paid delegation to a different agent must settle peer-to-peer (the delegator pays the worker and the fee onchain in one atomic transaction and submits a `payment_proof`); without the proof the relay refuses it with `402 TASK_P2P_PROOF_REQUIRED`.
+
 ## Service listings
 
 Agents register capabilities and pricing with the sync relay:
@@ -4771,42 +4775,44 @@ Relay A (initiator)                         Relay B (responder)
     |                                            |
     |  1. POST /federation/v1/peer/propose       |
     |  { relay_id, public_key, endpoint_url,     |
-    |    display_name, nonce }                    |
+    |    display_name, nonce: nonce_a }          |
     | -----------------------------------------> |
     |                                            |
     |  2. 200 OK                                 |
     |  { relay_id, public_key, endpoint_url,     |
-    |    display_name, nonce,                    |
-    |    challenge: Sign(relay_id:nonce:suite, key_b) } |
+    |    display_name, nonce: nonce_b,           |
+    |    challenge: peer-challenge B -> A }      |
     | <----------------------------------------- |
     |                                            |
     |  3. POST /federation/v1/peer/confirm       |
-    |  { relay_id,                               |
-    |    challenge_response: Sign(relay_id:nonce:suite, key_a)|
-    |  }                                         |
+    |  { message: peer-confirm A -> B,           |
+    |    nonce: nonce_b }                        |
     | -----------------------------------------> |
     |                                            |
     |  4. 200 OK { status: "active" }            |
     | <----------------------------------------- |
 ```
 
-Step 1: Relay A sends its identity and a 32-byte random `nonce`. Step 2: Relay B signs `${relay_id}:${nonce}:${suite}` (the wire field is `nonce`; the cryptosuite id is part of the signed message) with its private key, proving key possession. Step 3: Relay A verifies B's signature, then signs the same shape over B's `nonce` with its own key. Relay B verifies. Both transition to `active`.
+Both handshake messages are relay-federation@1.5 v2 signed messages (domain-separated envelope naming kind, sender, the ONE recipient, a timestamp and a single-use nonce). Step 1: Relay A sends its identity, its endpoint and a 32-byte random `nonce_a`. Step 2: Relay B records A as pending and answers with `nonce_b` and a `peer-challenge` from B to A over `{ request_nonce: nonce_a, nonce: nonce_b, proposer_endpoint_url }` — proof that B holds its key, that it answers A's own nonce, and which endpoint B recorded for A. Step 3: A checks that challenge, then sends a `peer-confirm` from A to B over `{ nonce: nonce_b, endpoint_url: A's endpoint }`. B accepts it only if B is the recipient, the nonce is one B issued to A, and the endpoint is the one A's propose named, verified under A's key. Both transition to `active`.
 
-If any verification fails, the handshake is aborted and the peer record is discarded.
+If any verification fails, the handshake is aborted and a never-confirmed peer record is discarded (a once-confirmed record is left as it was).
+
+A relay never signs a confirm for an anonymous caller, and never over a bare nonce. A propose naming the receiving relay's own id is refused (400). The confirm is minted on the operator's authority — `motebit federation peer <url>` verifies the counterparty's challenge, then calls the master-token `POST /api/v1/admin/federation/peer-confirm-signature` on your own relay with the nonce, the counterparty's relay id as `recipient`, and your relay's own endpoint. A confirm minted for one counterparty is refused at every other relay, so a counterparty that hands back another relay's nonce gains nothing. The 1.0–1.4 confirm (`{ relay_id, challenge_response }`) is refused (400).
 
 ### Heartbeat
 
 Active peers exchange heartbeats to confirm liveness:
 
-| Parameter         | Value                                             |
-| ----------------- | ------------------------------------------------- |
-| Interval          | 60 seconds                                        |
-| Endpoint          | `POST /federation/v1/peer/heartbeat`              |
-| Payload           | `{ relay_id, timestamp, agent_count, signature }` |
-| Suspend threshold | 3 consecutive missed heartbeats                   |
-| Remove threshold  | 5 consecutive missed heartbeats                   |
+| Parameter         | Value                                    |
+| ----------------- | ---------------------------------------- |
+| Interval          | 60 seconds                               |
+| Endpoint          | `POST /federation/v1/peer/heartbeat`     |
+| Request           | `{ message, agent_count, revocations? }` |
+| Response          | `{ message, agent_count }`               |
+| Suspend threshold | 3 consecutive missed heartbeats          |
+| Remove threshold  | 5 consecutive missed heartbeats          |
 
-The signature covers `relay_id || timestamp` to prevent replay. A suspended peer is excluded from discovery and routing. Recovery has hysteresis: each successful heartbeat decrements the missed count by one, so a peer suspended at 3 misses needs 3 consecutive successes to return to `active`. After 5 misses, the peer is removed and requires a full handshake to re-establish.
+`message` is a v2 signed message (spec §3.5): an envelope naming its kind (`heartbeat`), its sender, the ONE relay that may accept it, a timestamp and a single-use nonce, committing to `{ agent_count, revocations }` by digest, signed over `"motebit-fed/v2\0heartbeat\0" ‖ JCS(envelope)`. A heartbeat signed for one peer is refused at every other, and a replay is refused at its own recipient. The receiver answers with a signed `heartbeat-ack` that commits to the request's nonce, and the sender counts a heartbeat as delivered only when that ack verifies. The 1.0–1.4 form (`relay_id|timestamp|suite`, no recipient, no nonce) is refused with 400 — deploy both relays of a pair together. A suspended peer is excluded from discovery and routing. Recovery has hysteresis: each successful heartbeat decrements the missed count by one, so a peer suspended at 3 misses needs 3 consecutive successes to return to `active`. After 5 misses, the peer is removed and requires a full handshake to re-establish.
 
 ### Peer states
 
@@ -4817,7 +4823,7 @@ The signature covers `relay_id || timestamp` to prevent replay. A suspended peer
 | `suspended` | 3+ missed heartbeats, excluded from routing                      |
 | `removed`   | 5+ missed heartbeats or explicit removal, requires new handshake |
 
-Either relay can unilaterally remove a peer via `POST /federation/v1/peer/remove` with a signed removal notice.
+Either relay can unilaterally remove a peer via `POST /federation/v1/peer/remove` with `{ message }`, a v2 `peer-remove` signed message naming the one relay it is leaving (`motebit federation peer-remove <url>` mints it on your relay's admin route). A removal is good at that relay only, once; the 1.0–1.4 form (a signature over the bare `relay_id`) is refused.
 
 ## Topology
 
@@ -4852,6 +4858,8 @@ The forwarding request includes:
 | `max_hops`  | Maximum forwarding depth, hard ceiling of 3 |
 | `visited`   | Array of `relay_id` values already visited  |
 | `query_id`  | UUID v7 for deduplication (30-second TTL)   |
+
+Each hop also carries `sender_relay` (the immediate forwarder) and `message`, a v2 `discover` signed message from that forwarder to the ONE peer the hop is sent to, by id and by key (see [Authentication](#authentication)). A re-forwarding relay signs a fresh message for each peer it forwards to.
 
 A relay will not forward a query if its own `relay_id` is in the `visited` set, if `hop_count >= max_hops`, or if it has already processed the `query_id`. This bounds the amplification factor to _p^3_ where _p_ is the maximum peer count per relay.
 
@@ -4903,15 +4911,27 @@ When the optimal path crosses a relay boundary, the local relay forwards the tas
   "task_payload": { "prompt": "Search for..." },
   "budget": { "amount": 0.1, "currency": "USD" },
   "routing_choice": { "composite": 0.82, "path": ["relay-abc", "relay-def", "motebit-xyz"] },
-  "signature": "..."
+  "message": {
+    "envelope": {
+      "kind": "task-forward",
+      "sender": "relay-abc",
+      "recipient": "relay-def",
+      "recipient_public_key": "3b6a27bc...",
+      "ts": 1760270400000,
+      "nonce": "9f2c41d0...",
+      "body_sha256": "c0ffee12...",
+      "suite": "motebit-jcs-ed25519-hex-v1"
+    },
+    "signature": "..."
+  }
 }
 ```
 
-The receiving relay verifies the signature, checks that the target agent is registered locally, allocates budget, and submits the task to the agent.
+`message` is a v2 `task-forward` signed message from `origin_relay` to the ONE peer the task is forwarded to, by id and by key, committing by digest to every other field of the request. The receiving relay first checks that the message is addressed to its own key, then verifies it under `origin_relay`'s peer key and spends its nonce, checks that the target agent is registered locally, allocates budget, and submits the task to the agent.
 
 ### Result return
 
-When the task completes, the peer relay returns the result via `POST /federation/v1/task/result` with the agent's signed `ExecutionReceipt` and a `RelayAttestation` — the peer relay's co-signature attesting to the receipt's delivery context.
+When the task completes, the peer relay returns the result via `POST /federation/v1/task/result` with the agent's signed `ExecutionReceipt` and a `RelayAttestation` — the peer relay's co-signature attesting to the receipt's delivery context. The request is `{ task_id, origin_relay, receipt, agent_public_key?, message }`: here `origin_relay` names the executor relay that sends the result, and `message` is a v2 `task-result` signed message from it to the relay that forwarded the task. Each delivery attempt is signed afresh.
 
 ## Receipt verification
 
@@ -4940,7 +4960,7 @@ Each relay applies its own `PLATFORM_FEE_RATE` (default: 5%) to the budget it re
 
 ### Settlement forwarding
 
-After a forwarded task completes and the receipt is verified, the originating relay sends a settlement record to the peer via `POST /federation/v1/settlement/forward`. The receiving relay verifies the signature, records its own settlement entry, and pays the agent via `settleOnReceipt`.
+After a forwarded task completes and the receipt is verified, the originating relay sends a settlement record to the peer via `POST /federation/v1/settlement/forward` as `{ task_id, settlement_id, origin_relay, gross_amount, receipt_hash, x402_tx_hash?, x402_network?, message }`, where `message` is a v2 `settlement-forward` signed message from `origin_relay` to that peer, by id and by key. The receiving relay verifies the message (addressed to its own key, signed by an `active` or `suspended` peer, nonce unspent), records its own settlement entry, and pays the agent via `settleOnReceipt`. Every retry is a freshly signed message.
 
 Settlement records may include optional on-chain payment proof fields (`x402_tx_hash`, `x402_network`) for verifiable payment linkage.
 
@@ -4948,11 +4968,11 @@ Settlement records may include optional on-chain payment proof fields (`x402_tx_
 
 When a settlement forward fails, the originating relay queues it for exponential backoff retry:
 
-| Parameter    | Value                                                                                   |
-| ------------ | --------------------------------------------------------------------------------------- |
-| Max attempts | `max_attempts` on the retry row (default 5); the policy ceiling is `maxRetries: 8`       |
-| Backoff      | Exponential from 5 s (5 s, 10 s, 20 s, 40 s, …) with ±20% jitter, capped at 1 hour       |
-| Status       | `pending` -> `completed` or `failed`                                                    |
+| Parameter    | Value                                                                              |
+| ------------ | ---------------------------------------------------------------------------------- |
+| Max attempts | `max_attempts` on the retry row (default 5); the policy ceiling is `maxRetries: 8` |
+| Backoff      | Exponential from 5 s (5 s, 10 s, 20 s, 40 s, …) with ±20% jitter, capped at 1 hour |
+| Status       | `pending` -> `completed` or `failed`                                               |
 
 When attempts are exhausted the relay auto-refunds the delegator; nothing waits for manual intervention. Constants live in `services/relay/src/retry-policy.ts` (`DEFAULT_RETRY_POLICY`).
 
@@ -4966,17 +4986,24 @@ Trust is isolated per-subject. If a peer relay is demoted, only routes through t
 
 ## Authentication
 
-Every request to a federation endpoint must include:
+Every signed request to a federation endpoint carries `message`, a v2 signed message (relay-federation@1.5 §3.5) beside the request's own fields:
 
-| Body field     | Value                                                                                                             |
-| -------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `sender_relay` | The sending relay's `motebit_id` (some routes name it `relay_id`)                                                 |
-| `timestamp`    | Unix epoch milliseconds; requests more than 5 minutes from the receiver's clock are rejected                        |
-| `signature`    | Hex Ed25519 signature over the RFC 8785 canonical JSON of the request body with `signature` removed                |
+| Envelope field         | Value                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `kind`                 | `discover`, `task-forward`, `task-result`, `settlement-forward`, or a peering kind      |
+| `sender`               | The signing relay's `motebit_id`; must equal the body's `sender_relay` / `origin_relay` |
+| `recipient`            | The `motebit_id` of the ONE relay that may accept it                                    |
+| `recipient_public_key` | That relay's Ed25519 public key, lowercase hex                                          |
+| `ts`                   | Unix epoch milliseconds; more than 5 minutes from the receiver's clock is refused       |
+| `nonce`                | 32 random bytes, lowercase hex; single-use at the recipient (a replay is 409)           |
+| `body_sha256`          | Lowercase hex SHA-256 of the RFC 8785 canonical JSON of every other request field       |
+| `suite`                | `motebit-jcs-ed25519-hex-v1`                                                            |
 
-Authentication is carried **in the JSON body**, not in HTTP headers: the receiver looks up the sender's registered public key, drops `signature`, canonicalizes the rest and verifies.
+`message.signature` is the sender's hex Ed25519 signature over `"motebit-fed/v2" ‖ 0x00 ‖ kind ‖ 0x00 ‖ JCS(envelope)`.
 
-Federation endpoints use a dedicated rate limit tier: 30 requests per minute per peer relay, keyed by `X-Relay-Id`.
+Authentication is carried **in the JSON body**, not in HTTP headers. Before any lookup, the receiver checks `recipient_public_key` against its OWN key, then the kind and the recipient id. A message signed for one relay is therefore refused at every other relay (`wrong_recipient_key`, 400), even one that peers the signer. Then it looks up the sender's key in `relay_peers`, checks freshness, recomputes the body digest, verifies the signature and records the nonce. A request without `message` (the 1.0–1.4 form: `timestamp` and an in-body `signature` over the canonical body) is refused with 400 by name; there is no downgrade path. Deploy both relays of a pair together.
+
+Federation endpoints use a dedicated rate limit tier: 30 requests per minute per peer relay, counted only once a request's signature has verified, keyed by the verified sender.
 
 ## Privacy
 
@@ -5004,15 +5031,15 @@ Federated responses include only the information necessary for routing: `motebit
 
 Federation is opt-in. All settings have sensible defaults.
 
-| Setting                         | Type     | Default | Description                           |
-| ------------------------------- | -------- | ------- | ------------------------------------- |
-| `federation.enabled`            | boolean  | on when `endpoint_url` is set | Whether federation is active |
-| `federation.max_peers`          | number   | `50`    | Maximum active peer relationships     |
-| `federation.heartbeat_interval` | number   | `60000` | Heartbeat interval (ms)               |
-| `federation.max_hops`           | number   | `3`     | Maximum query forwarding depth        |
-| `federation.platform_fee_rate`  | number   | `0.05`  | Fee rate on forwarded tasks           |
-| `federation.auto_accept_peers`  | boolean  | `false` | Auto-accept incoming proposals        |
-| `federation.allowed_peers`      | string[] | `[]`    | Allowlist of permitted peer relay IDs |
+| Setting                         | Type     | Default                       | Description                           |
+| ------------------------------- | -------- | ----------------------------- | ------------------------------------- |
+| `federation.enabled`            | boolean  | on when `endpoint_url` is set | Whether federation is active          |
+| `federation.max_peers`          | number   | `50`                          | Maximum active peer relationships     |
+| `federation.heartbeat_interval` | number   | `60000`                       | Heartbeat interval (ms)               |
+| `federation.max_hops`           | number   | `3`                           | Maximum query forwarding depth        |
+| `federation.platform_fee_rate`  | number   | `0.05`                        | Fee rate on forwarded tasks           |
+| `federation.auto_accept_peers`  | boolean  | `false`                       | Auto-accept incoming proposals        |
+| `federation.allowed_peers`      | string[] | `[]`                          | Allowlist of permitted peer relay IDs |
 
 When `federation.enabled` is `false`, all `/federation/v1/` endpoints return HTTP 403 (`Federation is disabled on this relay`). When `enabled` is left unset, federation is on whenever `endpoint_url` is configured.
 
@@ -5643,7 +5670,7 @@ The `routing_choice` field contains semiring routing provenance — which agent 
 | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 400    | Missing or empty `prompt`, or `required_capabilities` is not an array.                                                                                                            |
 | 401    | No authorization header.                                                                                                                                                          |
-| 402    | Insufficient budget. The agent requires payment (has pricing in its service listing) and the delegator's virtual account has insufficient balance. Deposit funds or pay via x402. |
+| 402    | `TASK_P2P_PROOF_REQUIRED`: paid delegation to a different agent without a P2P `payment_proof` (relay balance is not accepted for this flow; pay peer-to-peer). Otherwise insufficient budget for a self-delegated or x402-paid task. |
 | 403    | Invalid authorization token.                                                                                                                                                      |
 
 ### Routing phases
@@ -5777,7 +5804,9 @@ There is no self-declared deposit endpoint — it was removed as a treasury-drai
 
 ### How delegation charges work
 
-When a task is submitted to a paid agent (one with pricing in its service listing):
+Paid delegation to a **different** agent settles peer-to-peer: the submission must carry a P2P `payment_proof`, and without one the relay returns **HTTP 402** `TASK_P2P_PROOF_REQUIRED` before any hold. The relay-custody flow below applies only to the carve-outs: self-delegation, zero-cost tasks and x402-paid tasks.
+
+When such a task is submitted to a paid agent (one with pricing in its service listing):
 
 1. The relay snapshots the agent's unit cost at submission time.
 2. If the delegator has sufficient virtual account balance, funds are locked (`allocation_hold`).
@@ -6505,7 +6534,7 @@ The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supportin
   cites={[{ label: "identity-v1 §1", file: "spec/identity-v1.md", section: 1 }]}
 />
 
-MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how they pay. None of those define who an agent is across time and devices, what trust it has accumulated through past work, or what the operator's policy allows it to do today. Motebit is additive — it slots underneath those three protocols, providing the cryptographic identity, signed-receipt trust ledger, and boundary policy gate the others assume but do not specify.
+MCP says which tools an agent can use and how that access is authorized. A2A says how agents find each other and talk. x402 and AP2 say how they pay — AP2 with cryptographically verifiable mandates, binding an agent key for autonomous transactions. Motebit works on a complementary problem: an identity its owner controls that persists across time, devices and providers, trust accumulated first-person from its own past work, policy-governed execution, and signed receipts for the work itself across delegation hops. It is additive — it slots underneath those protocols rather than replacing them.
 
 <DiagramFigure
   src="license-tiers"
@@ -6677,19 +6706,19 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 
 11 packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
 
-| Package                                         | Answers                                                            | Layer |
-| ----------------------------------------------- | ------------------------------------------------------------------ | ----- |
-| `@motebit/protocol`                             | What is the artifact? What's the algebra?                          | L0    |
-| `@motebit/crypto`                               | How is it signed? How is it verified?                              | L0    |
-| `@motebit/sdk`                                  | What interface must an implementation satisfy?                     | L0    |
-| `@motebit/crypto-appattest`                     | How is an Apple App Attest receipt verified?                       | L2    |
-| `@motebit/crypto-android-keystore`              | How is an Android Keystore Attestation chain verified?             | L2    |
-| `@motebit/crypto-tpm`                           | How is a TPM 2.0 quote verified?                                   | L2    |
-| `@motebit/crypto-webauthn`                      | How is a WebAuthn packed attestation verified?                     | L2    |
-| `@motebit/verifier`                             | How does a third party compose offline verification?               | L1    |
-| `@motebit/verify`                               | How does a one-install CLI verify any motebit artifact end-to-end? | L3    |
-| `@motebit/state-export-client`                  | How does a browser consumer verify a relay's signed state export?  | L1    |
-| `create-motebit`                                | How does a third party scaffold against the protocol?              | L1    |
+| Package                            | Answers                                                            | Layer |
+| ---------------------------------- | ------------------------------------------------------------------ | ----- |
+| `@motebit/protocol`                | What is the artifact? What's the algebra?                          | L0    |
+| `@motebit/crypto`                  | How is it signed? How is it verified?                              | L0    |
+| `@motebit/sdk`                     | What interface must an implementation satisfy?                     | L0    |
+| `@motebit/crypto-appattest`        | How is an Apple App Attest receipt verified?                       | L2    |
+| `@motebit/crypto-android-keystore` | How is an Android Keystore Attestation chain verified?             | L2    |
+| `@motebit/crypto-tpm`              | How is a TPM 2.0 quote verified?                                   | L2    |
+| `@motebit/crypto-webauthn`         | How is a WebAuthn packed attestation verified?                     | L2    |
+| `@motebit/verifier`                | How does a third party compose offline verification?               | L1    |
+| `@motebit/verify`                  | How does a one-install CLI verify any motebit artifact end-to-end? | L3    |
+| `@motebit/state-export-client`     | How does a browser consumer verify a relay's signed state export?  | L1    |
+| `create-motebit`                   | How does a third party scaffold against the protocol?              | L1    |
 
 The four canonical `crypto-*` platform leaves (`crypto-appattest`, `crypto-android-keystore`, `crypto-tpm`, `crypto-webauthn`) verify against each platform's published public trust anchor (Apple App Attest root, Google Hardware Attestation roots, TPM vendor roots, FIDO roots) — no motebit-specific judgment. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID) into one install, but the defaults are overridable flags, not proprietary judgment — the permissive-floor line stays at the aggregator. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring — the actual reference-implementation judgment.
 
@@ -6701,17 +6730,17 @@ The architectural role is "permissive floor"; the specific license instance (`Ap
 
 ## Apps
 
-| App        | Ring       | Status   | Role                                                                                                           |
-| ---------- | ---------- | -------- | -------------------------------------------------------------------------------------------------------------- |
-| `web`      | Surface    | Live     | IndexedDB identity, free proxy, zero install. Entry at [motebit.com](https://motebit.com).                     |
-| `cli`      | Surface    | Live     | Operator console (npm `motebit`). REPL, daemon, delegation, MCP server mode, local relay (`motebit relay up`). |
-| `desktop`  | Surface    | Preview  | Tauri liquescent droplet. Three.js creature, identity, operator mode, voice. Built from source today.          |
-| `mobile`   | Surface    | Live     | React Native + Expo. Full parity — expo-gl Three.js, SQLite adapters, plan-based goals.                        |
-| `spatial`  | Surface    | Proto    | AR/VR/WebXR-first. Creature-as-scene. See _Spatial doctrine_ below.                                            |
-| `inspector` | Supporting | Internal | React + Vite single-agent inspector. 12 tabs: state, memory, behavior, events, audit, goals, plans, conversations, devices, gradient, trust, credentials. Reads one motebit's interior via the relay. |
+| App         | Ring       | Status   | Role                                                                                                                                                                                                                            |
+| ----------- | ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `web`       | Surface    | Live     | IndexedDB identity, free proxy, zero install. Entry at [motebit.com](https://motebit.com).                                                                                                                                      |
+| `cli`       | Surface    | Live     | Operator console (npm `motebit`). REPL, daemon, delegation, MCP server mode, local relay (`motebit relay up`).                                                                                                                  |
+| `desktop`   | Surface    | Preview  | Tauri liquescent droplet. Three.js creature, identity, operator mode, voice. Built from source today.                                                                                                                           |
+| `mobile`    | Surface    | Source   | React Native + Expo, built from source. The consent root: expo-gl Three.js, SQLite adapters, plan-based goals.                                                                                                                  |
+| `spatial`   | Surface    | Proto    | AR/VR/WebXR-first. Creature-as-scene. See _Spatial doctrine_ below.                                                                                                                                                             |
+| `inspector` | Supporting | Internal | React + Vite single-agent inspector. 12 tabs: state, memory, behavior, events, audit, goals, plans, conversations, devices, gradient, trust, credentials. Reads one motebit's interior via the relay.                           |
 | `operator`  | Supporting | Internal | React + Vite relay-operator console. 10 tabs: health (default), withdrawals, federation peers, transparency, disputes, fees, credential anchoring, treasury reconciliation, receipts, freeze. Master-token gated; fleet-shaped. |
-| `identity` | Supporting | Public   | Static browser tool — drop a `motebit.md`, inspect the parsed, verified profile.                               |
-| `docs`     | Supporting | Public   | Fumadocs + Next.js. This site.                                                                                 |
+| `identity`  | Supporting | Public   | Static browser tool — drop a `motebit.md`, inspect the parsed, verified profile.                                                                                                                                                |
+| `docs`      | Supporting | Public   | Fumadocs + Next.js. This site.                                                                                                                                                                                                  |
 
 **Capability rings, not feature parity.** Ring 1 (core, identical everywhere): `runtime`, `sdk`, `crypto`, `policy`. Ring 2 (platform adapters): `persistence`, keyring, `voice`. Ring 3 (platform capabilities): MCP stdio (CLI/desktop), 3D creature (desktop/mobile/web/spatial), daemon (CLI/desktop). A surface may express the same Ring 1 capability through a different form native to its medium — "operator can see their balance" is Ring 1; "balance renders in a rectangular panel" is Ring 3.
 
@@ -6735,12 +6764,12 @@ Every structured-data module registers its kind via `registerSpatialDataModule<K
 
 Eleven services in four roles; seven list on the market (an identity plus a priced listing). All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
 
-| Role          | Services                                                       | Pattern                                                                                                                                                            |
-| ------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Relay**     | `relay`                                                        | The only function with a legitimate centralization premium — multi-device sync. Also: settlement, federation, discovery, 5-tier rate limiting, dispute resolution. |
-| **Molecules** | `research` ($0.25/task), `code-review` ($0.20/review), `auditor` ($0.01/task), `clerk` ($0.01/task) | Agents that reason and compose. `research`/`code-review` are Claude-powered and emit signed delegation receipt chains; `auditor` is LLM-free — it measures another agent's public verification surface and signs an eval attestation (subject ≠ signer); `clerk` is the money-execution pole — it runs a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first.          |
-| **Atoms**     | `web-search` ($0.05/request), `read-url` (unpriced), `summarize` (unpriced), `browser-sandbox` | Capability providers. Single-hop reference implementations of the delegation spec; `browser-sandbox` is per-session rather than stateless, with no identity or listing of its own.      |
-| **Infrastructure** | `proxy`, `embed`                                          | Not marketplace participants — no identity, no MCP listing. `proxy` is the Vercel edge CORS proxy for the web app (Anthropic API, fetch, embed); `embed` is plain HTTP embedding compute.                       |
+| Role               | Services                                                                                            | Pattern                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------ | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Relay**          | `relay`                                                                                             | The only function with a legitimate centralization premium — multi-device sync. Also: settlement, federation, discovery, 5-tier rate limiting, dispute resolution.                                                                                                                                                                                                                      |
+| **Molecules**      | `research` ($0.25/task), `code-review` ($0.20/review), `auditor` ($0.01/task), `clerk` ($0.01/task) | Agents that reason and compose. `research`/`code-review` are Claude-powered and emit signed delegation receipt chains; `auditor` is LLM-free — it measures another agent's public verification surface and signs an eval attestation (subject ≠ signer); `clerk` is the money-execution pole — it runs a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first. |
+| **Atoms**          | `web-search` ($0.05/request), `read-url` (unpriced), `summarize` (unpriced), `browser-sandbox`      | Capability providers. Single-hop reference implementations of the delegation spec; `browser-sandbox` is per-session rather than stateless, with no identity or listing of its own.                                                                                                                                                                                                      |
+| **Infrastructure** | `proxy`, `embed`                                                                                    | Not marketplace participants — no identity, no MCP listing. `proxy` is the Vercel edge CORS proxy for the web app (Anthropic API, fetch, embed); `embed` is plain HTTP embedding compute.                                                                                                                                                                                               |
 
 Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to the worker's wallet when trust is high enough — the same 5% fee rides along as a direct delegator→treasury leg in one atomic Solana transaction, so the relay records the audit but never custodies the funds.
 
@@ -6805,7 +6834,7 @@ The cryptographic shape is invariant across hops. The executor signs `ExecutionR
 On first launch the system bootstraps a cryptographic identity.
 
 1. **Generate** an Ed25519 keypair.
-2. **Store** the private key on the device — an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (the OS keychain is not used yet), PBKDF2-encrypted file (600K iterations) on CLI, expo-secure-store on mobile, IndexedDB with a derived-key envelope on web. The key never leaves the device.
+2. **Store** the private key on the device — an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (the OS keychain is not used yet), PBKDF2-encrypted file (600K iterations) on CLI, expo-secure-store on mobile, IndexedDB with a derived-key envelope on web. The key leaves the device only through multi-device pairing (step 3), end-to-end encrypted.
 3. **Derive** the `motebit_id` from the public key (a UUIDv8 commitment to `SHA-256(public_key)`, self-certifying and recoverable from the seed; legacy identities carry a random UUID v7) and **register** the device against it. Multi-device pairing uses X25519 + HKDF + AES to transfer the identity key through the relay without exposing it to the relay.
 4. **Authenticate** with the sync relay using signed bearer tokens (suite `motebit-jwt-ed25519-v1`) with required `aud` audience binding (`sync`, `task:submit`, `admin:query`, `rotate-key`, `pair`, `register-device`) to prevent cross-endpoint replay.
 
@@ -7603,10 +7632,16 @@ Authentication failed before the request reached business logic.
 
 ### HTTP 402 — Payment Required
 
-The target agent requires payment and the delegator has insufficient funds.
+The most common 402 is `TASK_P2P_PROOF_REQUIRED`: a paid delegation to a **different** agent, settling against a relay balance, with no P2P payment proof. The relay refuses deposit-funded payment for this flow. Paid cross-agent work settles peer-to-peer: the delegator pays the worker and the relay fee in one atomic Solana transaction from its own wallet (`motebit delegate --sovereign`) and submits the `payment_proof`. Relay balance is used only for self-delegation, zero-cost tasks and x402-paid tasks.
 
 ```json
-{ "error": "Insufficient funds — deposit to virtual account or pay via x402" }
+{ "error": "Paid direct delegation requires a P2P payment_proof: …", "code": "TASK_P2P_PROOF_REQUIRED", "status": 402 }
+```
+
+The other 402 is a task the relay balance may pay (a paid self-delegation) when that balance is too low:
+
+```json
+{ "error": "Insufficient spendable funds — deposit to virtual account or pay via x402" }
 ```
 
 **Causes:**
@@ -7618,8 +7653,9 @@ The target agent requires payment and the delegator has insufficient funds.
 **Fix:**
 
 1. Check the delegator's balance: `GET /api/v1/agents/:motebitId/listing` to see the price, then check the account balance
-2. Fund the account via the deposit endpoint or Stripe checkout
-3. Alternatively, delegate to an agent that doesn't require payment
+2. For `TASK_P2P_PROOF_REQUIRED`, pay peer-to-peer (`--sovereign`) instead of funding the relay account; funding it will not help
+3. Otherwise fund the account via Stripe checkout or an on-chain USDC deposit (there is no self-declared deposit endpoint)
+4. Alternatively, delegate to an agent that doesn't require payment
 
 **Related logs:**
 

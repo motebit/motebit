@@ -346,7 +346,7 @@ The `routing_choice` field contains semiring routing provenance — which agent 
 | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 400    | Missing or empty `prompt`, or `required_capabilities` is not an array.                                                                                                            |
 | 401    | No authorization header.                                                                                                                                                          |
-| 402    | Insufficient budget. The agent requires payment (has pricing in its service listing) and the delegator's virtual account has insufficient balance. Deposit funds or pay via x402. |
+| 402    | `TASK_P2P_PROOF_REQUIRED`: paid delegation to a different agent without a P2P `payment_proof` (relay balance is not accepted for this flow; pay peer-to-peer). Otherwise insufficient budget for a self-delegated or x402-paid task. |
 | 403    | Invalid authorization token.                                                                                                                                                      |
 
 ### Routing phases
@@ -480,7 +480,9 @@ There is no self-declared deposit endpoint — it was removed as a treasury-drai
 
 ### How delegation charges work
 
-When a task is submitted to a paid agent (one with pricing in its service listing):
+Paid delegation to a **different** agent settles peer-to-peer: the submission must carry a P2P `payment_proof`, and without one the relay returns **HTTP 402** `TASK_P2P_PROOF_REQUIRED` before any hold. The relay-custody flow below applies only to the carve-outs: self-delegation, zero-cost tasks and x402-paid tasks.
+
+When such a task is submitted to a paid agent (one with pricing in its service listing):
 
 1. The relay snapshots the agent's unit cost at submission time.
 2. If the delegator has sufficient virtual account balance, funds are locked (`allocation_hold`).

@@ -41,12 +41,16 @@ import {
 } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig, PeerFetch } from "./federation.js";
-import { defaultPeerFetch, signDiscoverBody } from "./federation.js";
+import { defaultPeerFetch, readPeerRow, signDiscoverBody, writePeerRow } from "./federation.js";
 import { CircuitBreaker } from "@motebit/circuit-breaker";
 import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit-breaker";
 import { createLogger } from "./logger.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 import { verificationKeyFor } from "./identity-keys.js";
+import {
+  readBoundReputationCredentialsForRouting,
+  readBoundTrustCredentialsForRouting,
+} from "./credential-store.js";
 
 const logger = createLogger({ service: "relay", module: "task-routing" });
 const circuitBreakerLogger = createLogger({ service: "relay", module: "circuit-breaker" });
@@ -312,22 +316,6 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
        ORDER BY recorded_at DESC LIMIT 100`,
     );
 
-    // Credential aggregation: fetch peer-issued reputation VCs for each candidate.
-    // The issuer trust callback resolves did:key URIs to trust scores from agent_trust.
-    const credStmt = db.prepare(
-      `SELECT credential_json FROM relay_credentials
-       WHERE subject_motebit_id = ? AND credential_type = 'AgentReputationCredential'
-       ORDER BY issued_at DESC LIMIT 50`,
-    );
-    // Hardware-attestation aggregation: peer-issued AgentTrustCredentials carrying
-    // `hardware_attestation` claims. Phase 1 of the hardware-attestation peer flow.
-    // The aggregator filters self-issued claims (issuer === subject.id) by the same
-    // rule the reputation aggregator uses; only peer-verified claims drive routing.
-    const trustCredStmt = db.prepare(
-      `SELECT credential_json FROM relay_credentials
-       WHERE subject_motebit_id = ? AND credential_type = 'AgentTrustCredential'
-       ORDER BY issued_at DESC LIMIT 50`,
-    );
     const issuerTrustStmt = callerMotebitId
       ? db.prepare(
           `SELECT trust_level FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = (
@@ -410,7 +398,10 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       // Aggregate peer-issued credentials for this candidate
       let credential_reputation: CandidateProfile["credential_reputation"];
       try {
-        const credRows = credStmt.all(mid) as Array<{ credential_json: string }>;
+        // Peer-issued reputation VCs for this candidate, only those their named
+        // issuer signed (credential-store.ts). The issuer trust callback resolves
+        // did:key URIs to trust scores from agent_trust.
+        const credRows = readBoundReputationCredentialsForRouting(db, mid);
         if (credRows.length > 0) {
           const vcs = credRows
             .map((r) => {
@@ -435,7 +426,11 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       // graph-routing.ts:setEdge — peer-verified claims dominate self-attestation.
       let hardware_attestation_aggregate: CandidateProfile["hardware_attestation_aggregate"];
       try {
-        const trustRows = trustCredStmt.all(mid) as Array<{ credential_json: string }>;
+        // Peer-issued AgentTrustCredentials carrying `hardware_attestation`
+        // claims (phase 1 of the hardware-attestation peer flow). The aggregator
+        // filters self-issued claims by the same rule as reputation; only
+        // peer-verified claims drive routing.
+        const trustRows = readBoundTrustCredentialsForRouting(db, mid);
         if (trustRows.length > 0) {
           const vcs = trustRows
             .map((r) => {
@@ -576,17 +571,14 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       try {
         // Originating hop: sign as sender_relay = this relay (== origin_relay
         // here, since we're the query's origin). relay-federation@1.3 §4.1.
-        const discoverBody = await signDiscoverBody(
-          {
-            query: { capability: requiredCaps[0], limit: 20 },
-            hop_count: 0,
-            max_hops: 1, // Only one hop for task routing candidates
-            visited,
-            query_id: queryId,
-            origin_relay: relayIdentity.relayMotebitId,
-          },
-          relayIdentity,
-        );
+        const discoverBody = await signDiscoverBody(db, relayIdentity, peer.peer_relay_id, {
+          query: { capability: requiredCaps[0], limit: 20 },
+          hop_count: 0,
+          max_hops: 1, // Only one hop for task routing candidates
+          visited,
+          query_id: queryId,
+          origin_relay: relayIdentity.relayMotebitId,
+        });
         const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/discover`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
@@ -622,6 +614,19 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
 
         const MAX_CANDIDATES_PER_PEER = 50;
         const agents = (data.agents ?? []).slice(0, MAX_CANDIDATES_PER_PEER);
+        const locallyHosted = new Set(
+          agents.length === 0
+            ? []
+            : (
+                db
+                  .prepare(
+                    `SELECT motebit_id FROM agent_registry
+                     WHERE motebit_id IN (${agents.map(() => "?").join(",")})
+                       AND (revoked IS NULL OR revoked = 0)${ON_SHELF}`,
+                  )
+                  .all(...agents.map((a) => a.motebit_id)) as Array<{ motebit_id: string }>
+              ).map((r) => r.motebit_id),
+        );
 
         const peerTrust = peer.trust_score ?? 0.5;
 
@@ -647,6 +652,12 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           }
           // Skip agents that are local (already covered by local candidate search)
           if (agent.source_relay === relayIdentity.relayMotebitId) continue;
+          // A peer never speaks for an agent hosted HERE (on the shelf, not
+          // revoked — rule 9's locality), whatever host it
+          // claims: forwarding a local worker's task (and budget) to the peer,
+          // or validating its peer-asserted settlement address, would let the
+          // peer redirect it (M1; docs/doctrine/settlement-authority-binding.md).
+          if (locallyHosted.has(agent.motebit_id)) continue;
 
           // Create peerRelayId → agentId edge for the semiring graph.
           // Default agent trust 0.5 since peer relay doesn't expose per-agent trust in discovery.
@@ -919,10 +930,17 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   // Also updates DB counters for observability (operator console).
 
   function recordPeerForwardResult(peerEndpoint: string, success: boolean): void {
-    const col = success ? "successful_forwards" : "failed_forwards";
-    db.prepare(`UPDATE relay_peers SET ${col} = ${col} + 1 WHERE endpoint_url = ?`).run(
-      peerEndpoint,
-    );
+    // Counter columns only (relay-federation@1.5 §3.1: never authority); the
+    // statements are literal so the peer-row writer scan can read them.
+    if (success) {
+      db.prepare(
+        "UPDATE relay_peers SET successful_forwards = successful_forwards + 1 WHERE endpoint_url = ?",
+      ).run(peerEndpoint);
+    } else {
+      db.prepare(
+        "UPDATE relay_peers SET failed_forwards = failed_forwards + 1 WHERE endpoint_url = ?",
+      ).run(peerEndpoint);
+    }
 
     if (success) {
       circuitBreaker.recordSuccess(peerEndpoint);
@@ -934,7 +952,11 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       circuitBreaker.recordFailure(peerEndpoint);
 
       // Sync DB state: when circuit opens, mark peer as suspended in DB
-      // so heartbeat and other DB-querying code sees the suspension.
+      // so heartbeat and other DB-querying code sees the suspension. This is
+      // the relay's own observation of the peer, so it goes through the one
+      // writer as `observed` (relay-federation@1.5 §3.1: away from `active`
+      // only, never the endpoint), compare-and-set against the row as read —
+      // a row re-pointed or re-confirmed since is left alone.
       const cbState = circuitBreaker.getState(peerEndpoint);
       if (cbState.state === "open") {
         const peer = db
@@ -942,12 +964,20 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
             "SELECT peer_relay_id FROM relay_peers WHERE endpoint_url = ? AND state = 'active'",
           )
           .get(peerEndpoint) as { peer_relay_id: string } | undefined;
-        if (peer) {
-          db.prepare("UPDATE relay_peers SET state = 'suspended' WHERE peer_relay_id = ?").run(
-            peer.peer_relay_id,
-          );
+        const before = peer ? readPeerRow(db, peer.peer_relay_id) : undefined;
+        if (
+          before &&
+          before.state === "active" &&
+          before.endpoint_url === peerEndpoint &&
+          writePeerRow(
+            db,
+            before,
+            { op: "update", row: { ...before, state: "suspended" } },
+            "observed",
+          )
+        ) {
           logger.warn("circuit_breaker.peer_suspended", {
-            peerId: peer.peer_relay_id,
+            peerId: before.peer_relay_id,
             peerEndpoint,
           });
         }
@@ -969,10 +999,13 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
 
   function resetCircuitBreaker(peerEndpoint: string): void {
     circuitBreaker.reset(peerEndpoint);
-    // Re-activate the peer in DB if it was suspended by the circuit breaker.
-    db.prepare(
-      "UPDATE relay_peers SET state = 'active', failed_forwards = 0 WHERE endpoint_url = ? AND state = 'suspended'",
-    ).run(peerEndpoint);
+    // The breaker only. A suspended peer's row returns to `active` on a
+    // message verified under its stored key (its heartbeat, or this relay's
+    // heartbeat it acknowledges) — never on a local reset
+    // (relay-federation@1.5 §3.1, peer row authority).
+    db.prepare("UPDATE relay_peers SET failed_forwards = 0 WHERE endpoint_url = ?").run(
+      peerEndpoint,
+    );
   }
 
   return {

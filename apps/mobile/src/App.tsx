@@ -72,6 +72,7 @@ import { useChatStream } from "./use-chat-stream";
 import { dispatchSlabChrome } from "./slab-chrome";
 import type { ControlState } from "@motebit/sdk";
 import { usePairing } from "./use-pairing";
+import { autoStartRelaySync } from "./relay-optin";
 import { useVoice } from "./use-voice";
 
 // === Types ===
@@ -398,15 +399,14 @@ export default function App(): React.ReactElement {
         a.onToolsChanged(refreshMcpServers);
         refreshMcpServers();
 
-        // 9. Auto-start sync if relay URL persisted
-        const syncUrl = await a.getSyncUrl();
-        if (syncUrl != null && syncUrl !== "") {
-          a.onSyncStatus((status, lastSync) => {
-            setSyncStatus(status);
-            setLastSyncTime(lastSync);
-          });
-          void a.startSync(syncUrl);
-        }
+        // 9. Auto-start sync if a relay URL is persisted (pairing or the
+        //    Settings → Identity relay opt-in). Status is wired regardless,
+        //    so an opt-in later in the session reports into the same UI.
+        a.onSyncStatus((status, lastSync) => {
+          setSyncStatus(status);
+          setLastSyncTime(lastSync);
+        });
+        await autoStartRelaySync(a);
 
         // 10. Restore persisted conversation history into chat UI
         restoreConversation(a);

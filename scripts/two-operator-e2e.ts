@@ -5,6 +5,9 @@
  * treasuries, separate DBs, separate admin tokens, separate ports), peers them
  * over real localhost HTTP via the signed handshake, and asserts:
  *   1. They federate with NO shared admin token (the load-bearing day-1 unknown).
+ *      Since relay-federation@1.5 each relay's handshake confirm is minted by
+ *      its own operator (self-propose is refused), so each operator presents
+ *      its own token to its own relay — never to the other.
  *   2. Each ends in mutually-active peering.
  *
  * This is the loopback fast-filter. Day 2 swaps the in-script boot for two
@@ -88,7 +91,45 @@ async function j(method: string, base: number, path: string, body?: unknown) {
   return { status: r.status, body: text ? JSON.parse(text) : null };
 }
 
-/** Bilateral signed handshake over real HTTP — NO admin token anywhere. */
+/**
+ * A relay's step-3 confirm, minted on ITS operator's token only: a v2
+ * `peer-confirm` to `recipient` (the relay that issued `nonce`, by id and
+ * by key in the envelope — relay ids are not self-certifying) for the
+ * relay's own endpoint (relay-federation@1.5 §3.1). Returns the confirm body.
+ */
+async function operatorConfirm(
+  op: typeof A,
+  nonce: string,
+  recipient: { relay_motebit_id: string; public_key: string },
+): Promise<{ message: unknown; nonce: string; public_key: string; endpoint_url: string }> {
+  const r = await fetch(`${url(op.port)}/api/v1/admin/federation/peer-confirm-signature`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${op.token}` },
+    body: JSON.stringify({
+      nonce,
+      recipient: recipient.relay_motebit_id,
+      recipient_public_key: recipient.public_key,
+      endpoint_url: url(op.port),
+    }),
+  });
+  if (!r.ok) throw new Error(`operator confirm on :${op.port}: ${r.status} ${await r.text()}`);
+  // The confirm request repeats the key and endpoint the propose named: the
+  // issuing relay recognises its nonce only for exactly those (§3.1).
+  const body = (await r.json()) as {
+    message: unknown;
+    nonce: string;
+    public_key: string;
+    endpoint_url: string;
+  };
+  return {
+    message: body.message,
+    nonce: body.nonce,
+    public_key: body.public_key,
+    endpoint_url: body.endpoint_url,
+  };
+}
+
+/** Bilateral signed handshake over real HTTP — each operator uses only its OWN admin token. */
 async function handshake() {
   const idA = (await j("GET", A.port, "/federation/v1/identity")).body as {
     relay_motebit_id: string;
@@ -119,33 +160,15 @@ async function handshake() {
       nonce: rand(),
     })
   ).body as { nonce: string };
-  // A signs "A.id:N_B" (self-propose to A with B's nonce).
-  const sigA = (
-    await j("POST", A.port, "/federation/v1/peer/propose", {
-      relay_id: idA.relay_motebit_id,
-      public_key: idA.public_key,
-      endpoint_url: url(A.port),
-      nonce: nB.nonce,
-    })
-  ).body as { challenge: string };
-  // B signs "B.id:N_A".
-  const sigB = (
-    await j("POST", B.port, "/federation/v1/peer/propose", {
-      relay_id: idB.relay_motebit_id,
-      public_key: idB.public_key,
-      endpoint_url: url(B.port),
-      nonce: nA.nonce,
-    })
-  ).body as { challenge: string };
+  // A's operator mints A's confirm over N_B with A's OWN token
+  // (relay-federation@1.5 §3.1: self-propose is refused). B's token never
+  // touches A, and vice versa — still no shared secret.
+  const sigA = await operatorConfirm(A, nB.nonce, idB);
+  // B's operator mints B's confirm over N_A.
+  const sigB = await operatorConfirm(B, nA.nonce, idA);
   // Confirm each side.
-  const cB = await j("POST", B.port, "/federation/v1/peer/confirm", {
-    relay_id: idA.relay_motebit_id,
-    challenge_response: sigA.challenge,
-  });
-  const cA = await j("POST", A.port, "/federation/v1/peer/confirm", {
-    relay_id: idB.relay_motebit_id,
-    challenge_response: sigB.challenge,
-  });
+  const cB = await j("POST", B.port, "/federation/v1/peer/confirm", sigA);
+  const cA = await j("POST", A.port, "/federation/v1/peer/confirm", sigB);
   return { idA, idB, confirmA: cA.status, confirmB: cB.status };
 }
 

@@ -134,7 +134,9 @@ describe("verifyKeyBindingAtTime", () => {
 // the guardian signs the rotation away from the compromised key. It's the binding
 // ladder's "revocation" — the compromised key's window closes at the recovery, so
 // receipts dated after it must not bind. Verifying the recovery link needs the
-// guardian key; this exercises reading it from the identity file (the fix).
+// guardian key, and it must come from the CALLER: a guardian named only by the
+// presented identity file is checked for integrity but never establishes
+// authority (guardian-not-trust-root.test.ts pins the forged-guardian attack).
 async function recoveryRotation(
   oldKp: KeyPair,
   newKp: KeyPair,
@@ -196,28 +198,36 @@ describe("verifyKeyBindingAtTime — guardian-recovery (revocation via successio
     chain = [await recoveryRotation(compromised, recovered, guardian, T1)];
   });
 
-  it("with the guardian in the identity file, the recovery chain verifies", async () => {
+  it("with the guardian ONLY in the identity file, the recovery chain is integrity-valid but does not bind", async () => {
     const id = identityWithGuardian(kRec, chain, gKey);
-    // Recovered key binds after the recovery rotation.
-    expect((await verifyKeyBindingAtTime(id, kRec, T1 + DAY)).bound).toBe(true);
+    const r = await verifyKeyBindingAtTime(id, kRec, T1 + DAY);
+    expect(r.bound).toBe(false);
+    expect(r.successionIntegrity).toBe(true);
+    expect(r.guardianAuthority).toBe("not_established");
+  });
+
+  it("with a caller-trusted guardian, the recovered key binds after the recovery", async () => {
+    const id = identityWithGuardian(kRec, chain, gKey);
+    expect((await verifyKeyBindingAtTime(id, kRec, T1 + DAY, gKey)).bound).toBe(true);
   });
 
   it("the compromised key does NOT bind after the recovery (its window closed)", async () => {
     const id = identityWithGuardian(kRec, chain, gKey);
-    const after = await verifyKeyBindingAtTime(id, kComp, T1 + DAY);
+    const after = await verifyKeyBindingAtTime(id, kComp, T1 + DAY, gKey);
     expect(after.bound).toBe(false);
     expect(after.reason).toContain("not active");
     // But receipts it legitimately signed BEFORE the recovery still bind.
-    expect((await verifyKeyBindingAtTime(id, kComp, T0 + DAY)).bound).toBe(true);
+    expect((await verifyKeyBindingAtTime(id, kComp, T0 + DAY, gKey)).bound).toBe(true);
   });
 
-  it("WITHOUT the guardian (no field, no param), the recovery chain fails to verify", async () => {
+  it("WITHOUT any guardian (no field, no param), the recovery chain fails integrity", async () => {
     const id = identityWithGuardian(kRec, chain, undefined);
     const r = await verifyKeyBindingAtTime(id, kRec, T1 + DAY);
-    expect(r.bound).toBe(false); // the fix is what makes the guardian-in-file case pass
+    expect(r.bound).toBe(false);
+    expect(r.successionIntegrity).toBe(false);
   });
 
-  it("an explicit guardian param still works and overrides the file", async () => {
+  it("an explicit guardian param works when the file names none", async () => {
     const id = identityWithGuardian(kRec, chain, undefined);
     expect((await verifyKeyBindingAtTime(id, kRec, T1 + DAY, gKey)).bound).toBe(true);
   });

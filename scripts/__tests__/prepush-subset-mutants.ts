@@ -66,6 +66,10 @@ const job = (id: string, checkout: string, run: string) =>
     `\n  extra:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1${checkout}\n      - run: ${run}\n\n  format:\n`,
   );
 const FULL = "\n        with:\n          fetch-depth: 0";
+/** Append one env line to sibling-audit's audit step (an unpinned job). */
+const SA_ENV =
+  "          DIFF_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}\n";
+const stepEnv = (id: string, line: string) => ci(id, SA_ENV, `${SA_ENV}          ${line}\n`);
 
 export const MUTANTS: Edit[] = [
   // --- the ten review findings -------------------------------------------
@@ -641,6 +645,177 @@ export const MUTANTS: Edit[] = [
     "ci: a new job runs check-test-outcome-floors at fetch-depth: 1",
     job("H8", "\n        with:\n          fetch-depth: 1", "pnpm check-test-outcome-floors"),
   ),
+  // P*: the GITHUB_TOKEN grant (WORKFLOW_PERMISSIONS) and the turbo secrets'
+  // event allowlist (WORKFLOW_ENV) — widened, removed, or bypassed per job.
+  m(
+    "P1",
+    "ci: top-level permissions widened to contents: write",
+    ci("P1", "\npermissions:\n  contents: read\n", "\npermissions:\n  contents: write\n"),
+  ),
+  m(
+    "P2",
+    "ci: top-level permissions grows an extra scope",
+    ci(
+      "P2",
+      "\npermissions:\n  contents: read\n",
+      "\npermissions:\n  contents: read\n  pull-requests: write\n",
+    ),
+  ),
+  m(
+    "P3",
+    "ci: top-level permissions: write-all",
+    ci("P3", "\npermissions:\n  contents: read\n", "\npermissions: write-all\n"),
+  ),
+  m(
+    "P4",
+    "ci: top-level permissions: read-all",
+    ci("P4", "\npermissions:\n  contents: read\n", "\npermissions: read-all\n"),
+  ),
+  m(
+    "P5",
+    "ci: top-level permissions removed (the repo default applies)",
+    ci("P5", "\npermissions:\n  contents: read\n", "\n"),
+  ),
+  m(
+    "P6",
+    "ci: a counterpart job (check-static) declares its own permissions",
+    ci(
+      "P6",
+      "  check-static:\n    runs-on: ubuntu-latest\n",
+      "  check-static:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n",
+    ),
+  ),
+  m(
+    "P7",
+    "ci: an unpinned job (sibling-audit) declares its own permissions",
+    ci(
+      "P7",
+      "  sibling-audit:\n",
+      "  sibling-audit:\n    permissions:\n      pull-requests: write\n",
+    ),
+  ),
+  m(
+    "P8",
+    "ci: TURBO_TOKEN reaches every event again (pull_request included)",
+    ci("P8", /  TURBO_TOKEN: .*\n/, "  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}\n"),
+  ),
+  m(
+    "P9",
+    "ci: the signature key reaches every event again",
+    ci(
+      "P9",
+      /  TURBO_REMOTE_CACHE_SIGNATURE_KEY: .*\n/,
+      "  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}\n",
+    ),
+  ),
+  m(
+    "P10",
+    "ci: TURBO_TOKEN's allowlist inverted to a denylist (`!= 'pull_request'` lets pull_request_target or any new event through)",
+    ci(
+      "P10",
+      /  TURBO_TOKEN: .*\n/,
+      "  TURBO_TOKEN: ${{ github.event_name != 'pull_request' && secrets.TURBO_TOKEN || '' }}\n",
+    ),
+  ),
+  m(
+    "P11",
+    "ci: a job re-exports the secret in its own env",
+    ci(
+      "P11",
+      "  sibling-audit:\n",
+      "  sibling-audit:\n    env:\n      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}\n",
+    ),
+  ),
+  m(
+    "P12",
+    "ci: a step hands github.token to a script",
+    ci(
+      "P12",
+      "          DIFF_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}\n",
+      "          DIFF_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}\n          GH_TOKEN: ${{ github.token }}\n",
+    ),
+  ),
+  // The cold review's bypasses of the first (pattern-matching) scan: each must
+  // be RED under the deny-by-default expression allowlist.
+  m(
+    "P13",
+    "ci: `Secrets.X` (contexts are case-insensitive)",
+    stepEnv("P13", "T: ${{ Secrets.TURBO_TOKEN }}"),
+  ),
+  m("P14", "ci: `SECRETS.X`", stepEnv("P14", "T: ${{ SECRETS.TURBO_TOKEN }}")),
+  m("P15", "ci: `github.TOKEN`", stepEnv("P15", "T: ${{ github.TOKEN }}")),
+  m("P16", "ci: `github['token']` (index syntax)", stepEnv("P16", "T: ${{ github['token'] }}")),
+  m("P17", "ci: `toJSON(github)` serialises the token", stepEnv("P17", "T: ${{ toJSON(github) }}")),
+  m(
+    "P18",
+    "ci: a job calls a reusable workflow with `secrets: inherit`",
+    ci(
+      "P18",
+      "\n  format:\n",
+      "\n  reuse:\n    uses: ./.github/workflows/x.yml\n    secrets: inherit\n\n  format:\n",
+    ),
+  ),
+  m(
+    "P19",
+    "ci: a job calls a reusable workflow (no `secrets:`)",
+    ci("P19", "\n  format:\n", "\n  reuse:\n    uses: ./.github/workflows/x.yml\n\n  format:\n"),
+  ),
+  m("P20", "ci: an unallowlisted context (`vars.X`)", stepEnv("P20", "T: ${{ vars.TURBO_TEAM }}")),
+  m(
+    "P21",
+    "ci: a secret in a bare `if:` (evaluated as an expression without `${{ }}`)",
+    ci(
+      "P21",
+      "      - name: Sibling boundary audit\n",
+      "      - name: Sibling boundary audit\n        if: secrets.TURBO_TOKEN != ''\n",
+    ),
+  ),
+  m("P22", "ci: an unterminated `${{`", stepEnv("P22", "T: ${{ github.event_name")),
+  m(
+    "P23",
+    "ci: an allowlisted path no expression uses any more (the allowlist is exactly what ci.yml reads)",
+    ci("P23", /path: \$\{\{ runner\.temp \}\}\/motebit\.md/g, "path: /tmp/motebit.md"),
+  ),
+  // Second cold review: a KEY is walked too; merge keys and capitalised job keys are refused.
+  m("P24", "ci: an expression used as an env KEY", stepEnv("P24", "${{ secrets.TURBO_TOKEN }}: a")),
+  m(
+    "P25",
+    "ci: a job-level YAML merge key carrying permissions",
+    ci("P25", "  sibling-audit:\n", "  sibling-audit:\n    <<: { permissions: write-all }\n"),
+  ),
+  m(
+    "P26",
+    "ci: a job whose only key is a merge key carrying uses + secrets: inherit",
+    ci(
+      "P26",
+      "\n  format:\n",
+      "\n  reuse:\n    <<: { uses: ./.github/workflows/x.yml, secrets: inherit }\n\n  format:\n",
+    ),
+  ),
+  m(
+    "P27",
+    "ci: a capitalised job-level `Permissions:`",
+    ci("P27", "  sibling-audit:\n", "  sibling-audit:\n    Permissions: write-all\n"),
+  ),
+  m(
+    "P28",
+    "ci: a capitalised job-level `Uses:`",
+    ci("P28", "\n  format:\n", "\n  reuse:\n    Uses: ./.github/workflows/x.yml\n\n  format:\n"),
+  ),
+  m(
+    "P29",
+    "ci: a capitalised job-level `Secrets:`",
+    ci("P29", "  sibling-audit:\n", "  sibling-audit:\n    Secrets: inherit\n"),
+  ),
+  m(
+    "P30",
+    "ci: a secret in a bare capitalised `If:` (the if-key is matched in any case)",
+    ci(
+      "P30",
+      "      - name: Sibling boundary audit\n",
+      "      - name: Sibling boundary audit\n        If: secrets.TURBO_TOKEN != ''\n",
+    ),
+  ),
 ];
 
 export const CONTROLS: Edit[] = [
@@ -689,6 +864,13 @@ export const CONTROLS: Edit[] = [
     "K11",
     "hook: the scrub's comment reworded",
     hook("K11", "No inherited GIT_* past this line", "Scrub the inherited git environment"),
+  ),
+  m("KP1", "ci: a step reads an allowlisted path in its env, and a bare step `if:` on one", (i) =>
+    ci(
+      "KP1b",
+      "      - name: Sibling boundary audit\n",
+      "      - name: Sibling boundary audit\n        if: github.event_name != 'push'\n",
+    )(stepEnv("KP1", "EV: ${{ GITHUB.EVENT_NAME }}")(i)),
   ),
   m(
     "HC1",

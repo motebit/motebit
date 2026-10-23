@@ -546,7 +546,7 @@ describe("Migration: accept-migration (destination)", () => {
     await relay.close();
   });
 
-  it("accepts a valid migration presentation (pinned source relay, real signatures)", async () => {
+  it("[arrivals disabled] a valid migration presentation (pinned source relay, real signatures) is refused 503 and not onboarded", async () => {
     const { payload, motebitId } = await buildPinnedAcceptPayload(relay, {
       tokenId: `mig-test-${Date.now()}`,
     });
@@ -556,19 +556,16 @@ describe("Migration: accept-migration (destination)", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(payload),
     });
-    expect(res.status).toBe(200);
+    // P0 containment (migration.ts MIGRATION_ARRIVALS_ENABLED = false).
+    expect(res.status).toBe(503);
 
-    const body = (await res.json()) as { ok: boolean; motebit_id: string };
-    expect(body.ok).toBe(true);
-    expect(body.motebit_id).toBe(motebitId);
-
-    // Agent should now be discoverable on this relay
+    // Arrivals are disabled: the agent is NOT onboarded on this relay.
     const discoverRes = await relay.app.request(`/api/v1/discover/${motebitId}`);
     const discoverBody = (await discoverRes.json()) as { found: boolean };
-    expect(discoverBody.found).toBe(true);
+    expect(discoverBody.found).toBe(false);
   });
 
-  it("arrival keeps what the payload does not carry — guardian, settlement, sweep — and re-shelves a departed row (#703 F2)", async () => {
+  it("[arrivals disabled] a departed row is left exactly as it was — still revoked and delisted, guardian/settlement/sweep kept (#703 F2 shape)", async () => {
     const { payload, motebitId } = await buildPinnedAcceptPayload(relay, {
       tokenId: `mig-keep-${Date.now()}`,
     });
@@ -590,7 +587,7 @@ describe("Migration: accept-migration (destination)", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(payload),
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
 
     const row = relay.moteDb.db
       .prepare(
@@ -601,11 +598,12 @@ describe("Migration: accept-migration (destination)", () => {
     expect(row.settlement_address).toBe("SettleAddr");
     expect(row.settlement_modes).toBe("relay");
     expect(row.sweep_threshold).toBe(42);
-    expect(row.revoked).toBe(0);
-    expect(row.delisted_at).toBeNull();
+    // Not re-shelved: the arrival never ran.
+    expect(row.revoked).toBe(1);
+    expect(row.delisted_at).toBe(t);
   });
 
-  it("rejects a bundle whose agent signature is invalid (§8.2 step 4 — required-and-verified)", async () => {
+  it("[arrivals disabled] a bundle whose agent signature is invalid is refused (503, before §8.2 step 4)", async () => {
     const { payload } = await buildPinnedAcceptPayload(relay, {
       tokenId: `mig-tamper-${Date.now()}`,
     });
@@ -624,10 +622,10 @@ describe("Migration: accept-migration (destination)", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(tampered),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(503);
   });
 
-  it("rejects a stolen token presented under an attacker's key (§13 token theft — sovereign binding)", async () => {
+  it("[arrivals disabled] a stolen token presented under an attacker's key is refused (503) and not onboarded (§13 token theft)", async () => {
     // The canonical attack: an adversary holds a victim's source-signed token +
     // attestation (both verify against the pinned source key) but NOT the
     // victim's private key. They substitute their own key and re-sign the bundle
@@ -657,13 +655,13 @@ describe("Migration: accept-migration (destination)", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(hijack),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(503);
     // The victim's identity was NOT onboarded under the attacker's key.
     const discover = await relay.app.request(`/api/v1/discover/${victimMotebitId}`);
     expect(((await discover.json()) as { found: boolean }).found).toBe(false);
   });
 
-  it("rejects a bundle whose motebit_id does not match the presentation", async () => {
+  it("[arrivals disabled] a bundle whose motebit_id does not match the presentation is refused (503)", async () => {
     const { payload } = await buildPinnedAcceptPayload(relay, {
       tokenId: `mig-mismatch-${Date.now()}`,
     });
@@ -679,10 +677,10 @@ describe("Migration: accept-migration (destination)", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(mismatched),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(503);
   });
 
-  it("accepts a ROTATED sovereign agent via its succession chain (§8.2 step 6, tier 2)", async () => {
+  it("[arrivals disabled] a ROTATED sovereign agent is refused 503 with or without its succession chain, and not onboarded", async () => {
     // The agent's motebit_id commits to its GENESIS key; it has since rotated.
     // Tier-1 sovereign binding (id == sha256(presented key)) fails for the
     // rotated key — only the identity_file's chain (genesis → rotated) re-binds.
@@ -773,26 +771,26 @@ describe("Migration: accept-migration (destination)", () => {
       public_key: rHex,
     };
 
-    // Without the identity_file the rotated key fails tier-1 sovereign bind → 400.
     const noFile = await relay.app.request(`/api/v1/agents/accept-migration`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(base),
     });
-    expect(noFile.status).toBe(400);
+    expect(noFile.status).toBe(503);
 
-    // With the identity_file the chain re-binds the rotated key → onboarded.
     const withFile = await relay.app.request(`/api/v1/agents/accept-migration`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ ...base, identity_file }),
     });
-    expect(withFile.status).toBe(200);
-    const disc = await relay.app.request(`/api/v1/discover/${sid}`);
-    expect(((await disc.json()) as { found: boolean }).found).toBe(true);
+    expect(withFile.status).toBe(503);
+    // Read the table, not /discover: a miss there asks the pinned peer (a real dial).
+    expect(
+      relay.moteDb.db.prepare("SELECT 1 FROM agent_registry WHERE motebit_id = ?").get(sid),
+    ).toBeUndefined();
   });
 
-  it("rejects a migration whose source relay identity cannot be established (fail-closed)", async () => {
+  it("[arrivals disabled] a migration whose source relay identity cannot be established is refused (503) and not onboarded", async () => {
     // No pinned peer + unreachable well-known → key cannot be established → reject.
     const now = Date.now();
     const res = await relay.app.request(`/api/v1/agents/accept-migration`, {
@@ -839,13 +837,13 @@ describe("Migration: accept-migration (destination)", () => {
         public_key: "00".repeat(32),
       }),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(503);
     // And the agent must NOT have been onboarded.
     const discover = await relay.app.request(`/api/v1/discover/ghost-agent`);
     expect(((await discover.json()) as { found: boolean }).found).toBe(false);
   });
 
-  it("rejects expired migration token", async () => {
+  it("[arrivals disabled] an expired migration token is refused (503)", async () => {
     const now = Date.now();
     const res = await relay.app.request(`/api/v1/agents/accept-migration`, {
       method: "POST",
@@ -888,29 +886,30 @@ describe("Migration: accept-migration (destination)", () => {
         public_key: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
       }),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(503);
   });
 
-  it("rejects duplicate migration token (replay prevention §10)", async () => {
+  it("[arrivals disabled] a token presented twice is refused 503 both times and records no acceptance", async () => {
     const { payload } = await buildPinnedAcceptPayload(relay, {
       tokenId: "replay-token",
     });
 
-    // First submission — success
     const res1 = await relay.app.request(`/api/v1/agents/accept-migration`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(payload),
     });
-    expect(res1.status).toBe(200);
+    expect(res1.status).toBe(503);
 
-    // Replay — should be rejected
     const res2 = await relay.app.request(`/api/v1/agents/accept-migration`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(payload),
     });
-    expect(res2.status).toBe(409);
+    expect(res2.status).toBe(503);
+    expect(
+      relay.moteDb.db.prepare("SELECT COUNT(*) AS n FROM relay_accepted_migrations").get(),
+    ).toEqual({ n: 0 });
   });
 });
 
@@ -946,7 +945,7 @@ describe("Migration: end-to-end (performMigration across two relays)", () => {
     }) as typeof globalThis.fetch;
   }
 
-  it("an agent leaves the source relay and is onboarded + discoverable on the destination", async () => {
+  it("[arrivals disabled] performMigration fails at `accept` (503); the agent is not onboarded and NOT departed from the source", async () => {
     // The agent exists on the source relay. Its id is the sovereign commitment
     // to its key, so the destination can bind key↔id offline.
     const agentKp = await generateKeypair();
@@ -978,14 +977,21 @@ describe("Migration: end-to-end (performMigration across two relays)", () => {
       fetch: twoRelayFetch(),
     });
 
-    // The sovereign migration succeeded — the destination verified the source's
-    // relay-signed token against the pinned key, bound the agent's key to its id,
-    // verified the agent-signed bundle, and onboarded — trusting neither the
-    // agent's self-report nor a fetched key.
-    expect(result).toEqual({ ok: true, acceptedMotebitId: motebitId });
+    // Arrivals are disabled on the destination (P0 containment): the client
+    // stops at `accept` and never departs, so the identity stays live at its
+    // source relay.
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.step).toBe("accept");
+      expect(result.status).toBe(503);
+    }
 
     const discover = await dest.app.request(`/api/v1/discover/${motebitId}`);
-    expect(((await discover.json()) as { found: boolean }).found).toBe(true);
+    expect(((await discover.json()) as { found: boolean }).found).toBe(false);
+    const departed = source.moteDb.db
+      .prepare("SELECT state FROM relay_migrations WHERE motebit_id = ? AND state = 'departed'")
+      .all(motebitId);
+    expect(departed).toEqual([]);
   });
 
   it("the destination rejects the migration when it cannot establish the source's identity", async () => {

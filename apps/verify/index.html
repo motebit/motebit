@@ -711,11 +711,14 @@
               ⌘/Ctrl + Enter · verifies as you type. Tamper flips one byte of <code>result</code>.
             </p>
             <p class="terminal-line">
-              Same check at the terminal: <code>motebit verify &lt;receipt&gt;</code><br />
+              Signature check at the terminal: <code>motebit verify &lt;receipt&gt;</code> — it
+              names the binding rung in its own terms; this page shows only the rung it checked.<br />
               The signature is checked in this tab. For pasted receipts and shared links, identity
-              and revocation checks query public proof endpoints: the relay, with the receipt's
-              motebit_id, and Solana, with its public key. The receipt itself is never uploaded —
-              a shared link keeps it in the URL fragment, which the browser does not send.
+              and revocation checks query the relay, with the receipt's motebit_id, and read Solana
+              through Motebit's RPC proxy (api.motebit.com) at the relay's anchor address. Chain
+              reads through Motebit's RPC proxy are not independent confirmation, so this page never
+              shows them as anchored or as a revocation ✓. The receipt itself is never uploaded — a
+              shared link keeps it in the URL fragment, which the browser does not send.
             </p>
           </div>
 
@@ -723,8 +726,8 @@
             <p class="mint-note">
               <strong>demo key — generated in your browser, never sent anywhere.</strong> A fresh
               Ed25519 key signs one receipt and is discarded. Its motebit_id is derived from the
-              key, so it verifies <em>sovereign</em> — which shows that sovereign is a math binding,
-              not trust.
+              key, so it verifies as a <em>key commitment</em> — which shows that a commitment is a
+              math binding, not trust or current authorization.
             </p>
             <form id="mint-form" class="mint-form">
               <label for="mint-prompt">Prompt</label>

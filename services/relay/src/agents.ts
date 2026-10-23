@@ -32,12 +32,24 @@ import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
 import { hasRevocationRecord, liftRevocation } from "./identity-revocation.js";
 import {
+  GuardianNotProvenError,
+  GuardianRecoverySuspendedError,
+  GuardianUnprovableError,
+} from "./errors.js";
+import {
+  GUARDIAN_RECOVERY_SUSPENDED_REASON,
+  guardianRecoverySuspended,
+} from "./guardian-recovery-containment.js";
+import {
   admitKey,
+  guardianEvidencePossible,
+  guardianProvenance,
   holderKeyOf,
-  identityGuardianFor,
   isCanonicalKey,
+  operatorServiceKeyWouldRecord,
   proveSovereignFirstKey,
   recordFirstIdentityKey,
+  recordGuardianEvidence,
   recordIdentityGuardian,
   recordOperatorServiceKey,
   registryKeyOf,
@@ -109,6 +121,66 @@ export function sanitizePeerAgent(agent: Record<string, unknown>): Record<string
   for (const f of RELAY_ATTESTED_PEER_FIELDS) delete clean[f];
   return clean;
 }
+
+/**
+ * Admit a SANITIZED peer discover entry into the origin's merge, or DROP it
+ * (`null`) — the settlement-authority half sanitizePeerAgent does not carry
+ * (M1, docs/doctrine/settlement-authority-binding.md). A peer TRANSPORTS a
+ * remote worker's address; it never asserts one for a worker it does not host.
+ *
+ *  - `source_relay` must be a non-empty string naming some relay other than
+ *    THIS one (a peer cannot claim to speak for our own agents).
+ *  - A direct answer (`hop_distance === 1`) must be hosted by the peer that
+ *    returned it: an honest peer stamps its own relay id on its own agents
+ *    (federation.ts), so any other host at distance 1 is a forgery.
+ *  - An entry whose host is not a currently-active direct peer (multi-hop) is
+ *    listed but carries NO pay-to destination: federated P2P is validated only
+ *    against direct peers, and nothing here can bind a far host's address.
+ *
+ * The LOCAL-shadow rule (a peer entry under an id this relay hosts is dropped,
+ * whatever the local result set held) is applied by the caller, which holds
+ * the database (`locallyHostedIds`).
+ */
+export function admitPeerAgent(
+  agent: Record<string, unknown>,
+  returningPeerId: string,
+  ownRelayId: string,
+  activePeerIds: ReadonlySet<string>,
+): Record<string, unknown> | null {
+  const host = agent.source_relay;
+  if (typeof host !== "string" || host === "" || host === ownRelayId) return null;
+  if (agent.hop_distance === 1 && host !== returningPeerId) return null;
+  // The host relay's key is the ORIGIN's attestation (attached from
+  // relay_peers after the merge), never the peer's word.
+  const admitted: Record<string, unknown> = { ...agent };
+  delete admitted.source_relay_public_key;
+  if (!activePeerIds.has(host)) delete admitted.settlement_address;
+  return admitted;
+}
+
+/**
+ * Ids among `ids` that THIS relay hosts — on the discovery shelf and not
+ * revoked (`relay CLAUDE.md` rule 9's locality: on the shelf ⇒ local; a
+ * delisted row may be a worker that moved to a peer, and a revoked one is never
+ * local). A hosted worker's settlement address is the one IT wrote here, so no
+ * peer may speak for it — even a sleeping one missing from the local results.
+ */
+export function locallyHostedIds(db: DatabaseDriver, ids: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    if (chunk.length === 0) continue;
+    const rows = db
+      .prepare(
+        `SELECT motebit_id FROM agent_registry
+         WHERE motebit_id IN (${chunk.map(() => "?").join(",")})
+           AND (revoked IS NULL OR revoked = 0)${ON_SHELF}`,
+      )
+      .all(...chunk) as Array<{ motebit_id: string }>;
+    for (const r of rows) out.add(r.motebit_id);
+  }
+  return out;
+}
 import {
   hexPublicKeyToDidKey,
   verifyKeySuccession,
@@ -145,6 +217,7 @@ import {
 import { createLogger } from "./logger.js";
 import { recordMasterTokenOnce, recordRefusalBeforeVerify } from "./auth-events.js";
 import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
+import { readBoundTrustCredentialsForSubjects } from "./credential-store.js";
 
 const logger = createLogger({ service: "agents" });
 
@@ -190,7 +263,7 @@ export function enrichWithCallerTrust<T extends Record<string, unknown> & { mote
 /**
  * Layer the most-recent verified `hardware_attestation` claim onto each
  * agent in a discover result list. The claim is read from the relay's
- * `relay_credentials` index (the same pool `aggregateHardwareAttestation`
+ * credential store (the same pool `aggregateHardwareAttestation`
  * routes against in `task-routing.ts`) — most-recent peer-issued
  * `AgentTrustCredential` per subject, revocation-filtered, self-issued
  * already filtered at `/credentials/submit`.
@@ -204,7 +277,7 @@ export function enrichWithCallerTrust<T extends Record<string, unknown> & { mote
  *
  * Federation merge passes through unchanged — peer relays may already
  * have populated `hardware_attestation` on their merged-in agents from
- * THEIR `relay_credentials`. We only attach when we have a local claim
+ * THEIR credential store. We only attach when we have a local claim
  * AND the agent has none yet, so peer-provided HA on cross-relay
  * agents is preserved (that peer's HA store is more authoritative for
  * agents we've never directly transacted with).
@@ -213,30 +286,23 @@ export function enrichWithHardwareAttestation<
   T extends Record<string, unknown> & { motebit_id: string },
 >(agents: T[], db: DatabaseDriver): T[] {
   if (agents.length === 0) return agents;
-  const placeholders = agents.map(() => "?").join(",");
-  const rows = db
-    .prepare(
-      `SELECT credential_id, subject_motebit_id, credential_json, issued_at
-       FROM relay_credentials
-       WHERE credential_type = 'AgentTrustCredential'
-         AND subject_motebit_id IN (${placeholders})
-       ORDER BY issued_at DESC`,
-    )
-    .all(...agents.map((a) => a.motebit_id)) as Array<{
-    credential_id: string;
-    subject_motebit_id: string;
-    credential_json: string;
-    issued_at: number;
-  }>;
-  if (rows.length === 0) return agents;
+  const boundRows = readBoundTrustCredentialsForSubjects(
+    db,
+    agents.map((a) => a.motebit_id),
+  );
+  if (boundRows.length === 0) return agents;
 
   const revokedStmt = db.prepare("SELECT 1 FROM relay_revoked_credentials WHERE credential_id = ?");
   type Projection = NonNullable<AgentTrustRecord["hardware_attestation"]>;
   const projectedByAgent = new Map<string, Projection>();
-  for (const row of rows) {
+  for (const row of boundRows) {
     if (projectedByAgent.has(row.subject_motebit_id)) continue; // already have a more-recent row
     if (revokedStmt.get(row.credential_id) != null) continue;
-    let parsed: { credentialSubject?: { hardware_attestation?: HardwareAttestationClaim } };
+    let parsed: {
+      issuer?: unknown;
+      proof?: { verificationMethod?: unknown };
+      credentialSubject?: { hardware_attestation?: HardwareAttestationClaim };
+    };
     try {
       parsed = JSON.parse(row.credential_json) as typeof parsed;
     } catch {
@@ -806,7 +872,6 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     platformFeeRate,
     federationConfig,
     federationQueryCache,
-    parseTokenPayloadUnsafe,
   } = deps;
   const peerFetch = deps.peerFetch ?? defaultPeerFetch;
   // Fee rate for the P2P eligibility pre-flight's expected-fee hint — the SAME
@@ -1227,6 +1292,27 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       metadata?: { name?: string; description?: string };
       public_key?: string;
     }>();
+    // P0 CONTAINMENT (`guardian-recovery-containment.ts`): a registration
+    // carrying a guardian-recovery succession is refused here, before any
+    // identity, guardian or key read and any registry/identity write — this
+    // door applies a recovery through the same writer as `/rotate-key`. The
+    // one write is the refusal's auth-event row (rule 6). A registration
+    // with no succession, or an ordinary one, never enters this branch.
+    if (guardianRecoverySuspended((body as Record<string, unknown> | null)?.succession)) {
+      logger.warn("agent.key.succession_refused", {
+        caller: callerMotebitId ?? null,
+        reason: GUARDIAN_RECOVERY_SUSPENDED_REASON,
+      });
+      deps.recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: callerMotebitId ?? null,
+        reason: `succession:${GUARDIAN_RECOVERY_SUSPENDED_REASON}`,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new GuardianRecoverySuspendedError();
+    }
     const motebitId = callerMotebitId ?? body.motebit_id;
     if (!motebitId || typeof motebitId !== "string") {
       throw new HTTPException(400, { message: "Missing motebit_id" });
@@ -1322,6 +1408,51 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       }
     }
 
+    // The identity's CURRENT key and the key this request's bearer was
+    // verified under, both read BEFORE any write below (a succession in this
+    // same request rewrites device rows). A guardian set here has provenance
+    // only when they are the same key: the identity signed (§3.2). A paired
+    // device's own key, the master token and a legacy id with no held key
+    // prove nothing about the identity's key (D1/D2/D3).
+    // The bearer's key is the one the middleware captured from the device row
+    // that verified the token (auth.ts `onVerified`) — never looked up again:
+    // a re-read after an await can return a row a rotation or pairing rewrote
+    // since, a key this token was never verified under.
+    const holderAtRequest = holderKeyOf(moteDb.db, motebitId);
+    const verifiedKey = c.get("callerVerifiedKey" as never) as string | undefined;
+    const verifiedVia = c.get("callerVerifiedKeySource" as never) as VerifiedKeySource | undefined;
+    const bearerKeyAtRequest =
+      callerMotebitId === motebitId && verifiedVia === "device" ? verifiedKey : undefined;
+
+    // A guardian that could never carry provenance is refused, before any
+    // write: a legacy (non-sovereign) id with no held key, which no request
+    // can prove (D2 — its evidence path is not built). An operator
+    // registration that records E-op in this same request gives the id a
+    // holder, so it is not refused; neither is any identity that can be proven.
+    if (
+      Boolean((body as Record<string, unknown>).guardian_public_key) &&
+      !guardianEvidencePossible(moteDb.db, motebitId) &&
+      !(
+        keyFromBody &&
+        callerMotebitId == null &&
+        operatorServiceKeyWouldRecord(moteDb.db, motebitId)
+      )
+    ) {
+      logger.warn("agent.register.refused_guardian_unprovable", {
+        motebitId,
+        caller: callerMotebitId ?? null,
+      });
+      deps.recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: callerMotebitId ?? null,
+        reason: "register:guardian_unprovable",
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new GuardianUnprovableError();
+    }
+
     // --- Succession chain validation on re-registration ---
     // A differing key needs a link from the key on file. Once the identity has
     // a holder that is the only answer (§5f); before it has one, this is
@@ -1343,11 +1474,32 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // Verify the succession record signatures
       let guardianPubKeyForVerify: string | undefined;
       if (succession.recovery) {
-        guardianPubKeyForVerify = identityGuardianFor(moteDb.db, motebitId) ?? undefined;
+        const { guardian, proven } = guardianProvenance(moteDb.db, motebitId);
+        guardianPubKeyForVerify = guardian ?? undefined;
         if (!guardianPubKeyForVerify) {
           throw new HTTPException(400, {
             message: "Agent has no guardian registered — cannot use guardian recovery",
           });
+        }
+        // The /rotate-key rule, at this door too: only a guardian set with
+        // provenance authorizes a recovery (identity-authority-writers.md I1).
+        if (!proven) {
+          logger.warn("agent.key.succession_refused", {
+            motebitId,
+            caller: callerMotebitId ?? null,
+            reason: "guardian_not_proven",
+          });
+          deps.recordAuthEvent({
+            kind: "agent_token_rejected",
+            method: "POST",
+            path: c.req.path,
+            motebitId: callerMotebitId,
+            reason: "succession:guardian_not_proven",
+            correlationId: c.req.header("x-correlation-id") ?? null,
+          });
+          throw new GuardianNotProvenError(
+            guardianEvidencePossible(moteDb.db, motebitId) ? "provable" : "legacy",
+          );
         }
       }
       const successionValid = await verifyKeySuccession(succession, guardianPubKeyForVerify);
@@ -1492,21 +1644,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // possession half (DB1): the bearer was verified by the device row that
     // holds exactly this key — an operator bearer or a fallback proves none.
     // The key that verified this bearer, when a device row verified it: the
-    // row its `did` names. (The middleware falls back to the holder, else the
-    // registry, only when no row exists for that did — and then this stays
+    // key the middleware captured from that row (`bearerKeyAtRequest`, above),
+    // never re-read here — a re-read after the awaits above can return a row
+    // a rotation or pairing rewrote since. (The middleware falls back to the
+    // registry only when no row exists for that did — and then this stays
     // undefined.) E-sov needs CURRENT possession of the key it records (DB1);
     // its soundness also rests on recordFirstIdentityKey's predicate (DA2),
     // which refuses any identity already holding a different key.
-    let callerDeviceKey: string | undefined;
-    const bearer = c.req.header("authorization")?.slice(7);
-    const bearerClaims =
-      bearer != null && c.get("callerMotebitId" as never) != null
-        ? parseTokenPayloadUnsafe(bearer)
-        : null;
-    if (bearerClaims?.mid === motebitId && typeof bearerClaims.did === "string") {
-      const signer = await identityManager.loadDeviceById(bearerClaims.did, motebitId);
-      if (signer?.public_key) callerDeviceKey = signer.public_key;
-    }
+    const callerDeviceKey: string | undefined = bearerKeyAtRequest;
     // The key possession is proven for: the bearer's own device key. A body
     // key counts only when it IS that key; a keyless registration (the CLI
     // daemon's, which bootstraps and then registers without a key) presents
@@ -1575,8 +1720,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // round-3 prose fix). E-sov for a sovereign identity presenting its own
     // key; E-op for an operator-registered service identity with no device,
     // chain or holder (§5f). Each re-reads its conditions in one transaction.
+    let sovereignFirstKeyRecorded = false;
     if (sovereignProof) {
-      recordFirstIdentityKey(moteDb.db, sovereignProof, {
+      sovereignFirstKeyRecorded = recordFirstIdentityKey(moteDb.db, sovereignProof, {
         source: "register",
         guardianPublicKey: guardianPublicKey ?? null,
         now,
@@ -1634,6 +1780,33 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // because a registration named it (§5d W3).
     if (guardianPublicKey) {
       recordIdentityGuardian(moteDb.db, { motebitId, guardianPublicKey, now });
+      // Its PROVENANCE, only when this request proved the identity's current
+      // key: the bearer's device row holds the held key, or this request
+      // recorded the sovereign first key under the bearer's possession of
+      // it. Any other setter leaves the guardian on file but UNPROVEN, and a
+      // recovery under it is refused (GUARDIAN_NOT_PROVEN) until the owner
+      // re-sets it with the identity key.
+      if (
+        holderAtRequest !== null &&
+        bearerKeyAtRequest !== undefined &&
+        bearerKeyAtRequest === holderAtRequest.toLowerCase()
+      ) {
+        recordGuardianEvidence(moteDb.db, {
+          motebitId,
+          guardianPublicKey,
+          setUnderKey: holderAtRequest,
+          evidence: "holder",
+          now,
+        });
+      } else if (sovereignFirstKeyRecorded && sovereignProof) {
+        recordGuardianEvidence(moteDb.db, {
+          motebitId,
+          guardianPublicKey,
+          setUnderKey: sovereignProof.publicKey,
+          evidence: "sovereign",
+          now,
+        });
+      }
     }
 
     // Auto-create a default service listing if one doesn't exist.
@@ -1870,6 +2043,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         "SELECT peer_relay_id, endpoint_url, public_key FROM relay_peers WHERE state = 'active'",
       )
       .all() as Array<{ peer_relay_id: string; endpoint_url: string; public_key: string }>;
+    const activePeerIds = new Set(peers.map((p) => p.peer_relay_id));
 
     // Originating hop: sign as sender_relay = this relay (== origin_relay
     // here, since we're the query's origin) — the SAME per-hop sender
@@ -1879,17 +2053,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // sender — unsigned, masked until 1.4 by the tolerant pre-sunset default.
     const forwardPromises = peers.map(async (peer) => {
       try {
-        const discoverBody = await signDiscoverBody(
-          {
-            query: { capability, motebit_id: motebitId, limit },
-            hop_count: 0,
-            max_hops: 3,
-            visited,
-            query_id: queryId,
-            origin_relay: relayIdentity.relayMotebitId,
-          },
-          relayIdentity,
-        );
+        const discoverBody = await signDiscoverBody(moteDb.db, relayIdentity, peer.peer_relay_id, {
+          query: { capability, motebit_id: motebitId, limit },
+          hop_count: 0,
+          max_hops: 3,
+          visited,
+          query_id: queryId,
+          origin_relay: relayIdentity.relayMotebitId,
+        });
         const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/discover`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
@@ -1900,6 +2071,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         const data = (await resp.json()) as { agents: Array<Record<string, unknown>> };
         return (data.agents ?? [])
           .map(sanitizePeerAgent)
+          .map((a) =>
+            a === null
+              ? null
+              : admitPeerAgent(a, peer.peer_relay_id, relayIdentity.relayMotebitId, activePeerIds),
+          )
           .filter((a): a is Record<string, unknown> => a !== null);
       } catch {
         return [];
@@ -1913,9 +2089,18 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       )
       .flatMap((r) => r.value);
 
+    // A peer never speaks for an agent hosted HERE — even when the local row
+    // is not in `localResults` (capability filter, limit, a sleeping worker).
+    // Without this, the peer entry was the only entry for a local id, and its
+    // settlement_address reached the payer as that worker's destination (M1).
+    const localIds = locallyHostedIds(moteDb.db, [
+      ...new Set(peerResults.map((a) => String(a.motebit_id))),
+    ]);
+    const admittedPeerResults = peerResults.filter((a) => !localIds.has(String(a.motebit_id)));
+
     // Merge: dedup by motebit_id, prefer lowest hop_distance
     const merged = new Map<string, Record<string, unknown>>();
-    for (const agent of [...localResults, ...peerResults]) {
+    for (const agent of [...localResults, ...admittedPeerResults]) {
       const id = agent.motebit_id as string;
       const existing = merged.get(id);
       if (!existing || (agent.hop_distance as number) < (existing.hop_distance as number)) {
@@ -2128,6 +2313,18 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const ack = c.req.query("acknowledge_no_history_risk") === "true";
     const capability = c.req.query("capability") ?? undefined;
 
+    // The worker's OWN registered (write-authorized) settlement address, read
+    // from the registry — never the merged discover shelf a peer can feed. The
+    // payer refuses to pay a discovered address this does not confirm (M1;
+    // docs/doctrine/settlement-authority-binding.md § "Where binding is enforced").
+    const registered = moteDb.db
+      .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
+      .get(workerId) as { settlement_address: string | null } | undefined;
+    const binding =
+      registered?.settlement_address != null && registered.settlement_address !== ""
+        ? { settlement_address: registered.settlement_address }
+        : {};
+
     const unitCostDollars = getListingUnitCost(moteDb, workerId, capability);
     const amounts: { expected_amount_micro?: number; expected_fee_micro?: number } = {};
     if (unitCostDollars > 0) {
@@ -2137,7 +2334,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     }
 
     if (callerMotebitId == null || callerMotebitId === workerId) {
-      return c.json({ allowed: true, reason: "caller not identified — advisory only", ...amounts });
+      return c.json({
+        allowed: true,
+        reason: "caller not identified — advisory only",
+        ...amounts,
+        ...binding,
+      });
     }
     const eligibility = await evaluateSettlementEligibility(
       moteDb.db,
@@ -2145,7 +2347,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       workerId,
       ack,
     );
-    return c.json({ allowed: eligibility.allowed, reason: eligibility.reason, ...amounts });
+    return c.json({
+      allowed: eligibility.allowed,
+      reason: eligibility.reason,
+      ...amounts,
+      ...binding,
+    });
   });
 
   // POST /api/v1/agents/:motebitId/bond — submit a signed commitment bond.

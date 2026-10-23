@@ -33,6 +33,16 @@ import {
   drainAnchorBacklog,
 } from "./anchor-submit-pacing.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
+import {
+  addCredentialEvidenceAnchorColumn,
+  assignCredentialEvidenceToBatch,
+  countUnanchoredCredentialEvidence,
+  getCredentialEvidenceBatchId,
+  getCredentialEvidenceWithBatch,
+  listCredentialEvidenceInBatch,
+  listUnanchoredCredentialEvidence,
+  oldestUnanchoredCredentialEvidenceIssuedAt,
+} from "./credential-store.js";
 
 const logger = createLogger({ service: "relay", module: "credential-anchoring" });
 
@@ -96,12 +106,8 @@ export function createCredentialAnchoringTables(db: DatabaseDriver): void {
       ON relay_credential_anchor_batches(status) WHERE status != 'confirmed';
   `);
 
-  // Migration: add anchor_batch_id to relay_credentials
-  try {
-    db.exec("ALTER TABLE relay_credentials ADD COLUMN anchor_batch_id TEXT");
-  } catch {
-    /* column already exists */
-  }
+  // Migration: add anchor_batch_id to the credential store
+  addCredentialEvidenceAnchorColumn(db);
 }
 
 // === Leaf Hash ===
@@ -143,12 +149,6 @@ export interface CredentialAnchorRecord {
 
 // === Batch Cutting ===
 
-interface CredentialRow {
-  credential_id: string;
-  credential_json: string;
-  issued_at: number;
-}
-
 /**
  * Cut a batch from unanchored credentials.
  * Returns null if no credentials are pending.
@@ -160,15 +160,7 @@ export async function cutCredentialBatch(
   treeHashVersion: MerkleTreeVersion = CREDENTIAL_TREE_HASH_VERSION,
 ): Promise<CredentialAnchorRecord | null> {
   // Fetch unanchored credentials, sorted deterministically
-  const rows = db
-    .prepare(
-      `SELECT credential_id, credential_json, issued_at
-       FROM relay_credentials
-       WHERE anchor_batch_id IS NULL
-       ORDER BY issued_at ASC, credential_id ASC
-       LIMIT ?`,
-    )
-    .all(maxSize) as CredentialRow[];
+  const rows = listUnanchoredCredentialEvidence(db, maxSize);
 
   if (rows.length === 0) return null;
 
@@ -212,31 +204,42 @@ export async function cutCredentialBatch(
   const treeHashVersionColumn =
     treeHashVersion === "merkle-sha256-rfc6962-v2" ? treeHashVersion : null;
 
-  // Persist atomically: create batch + assign all credentials
   const now = Date.now();
-  db.prepare(
-    `INSERT INTO relay_credential_anchor_batches
-       (batch_id, relay_id, merkle_root, leaf_count, first_issued_at, last_issued_at,
-        signature, status, created_at, tree_hash_version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
-  ).run(
-    batchId,
-    relayIdentity.relayMotebitId,
-    tree.root,
-    rows.length,
-    firstIssuedAt,
-    lastIssuedAt,
-    signature,
-    now,
-    treeHashVersionColumn,
-  );
+  // ONE transaction: the signed batch row and every leaf's assignment commit
+  // together or not at all (relay CLAUDE.md rule 30, as the settlement cuts in
+  // anchoring.ts). A batch row without its leaves would be anchored onchain
+  // beside a later batch covering the same leaves.
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO relay_credential_anchor_batches
+         (batch_id, relay_id, merkle_root, leaf_count, first_issued_at, last_issued_at,
+          signature, status, created_at, tree_hash_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
+    ).run(
+      batchId,
+      relayIdentity.relayMotebitId,
+      tree.root,
+      rows.length,
+      firstIssuedAt,
+      lastIssuedAt,
+      signature,
+      now,
+      treeHashVersionColumn,
+    );
 
-  const assignStmt = db.prepare(
-    "UPDATE relay_credentials SET anchor_batch_id = ? WHERE credential_id = ?",
-  );
-  for (const row of rows) {
-    assignStmt.run(batchId, row.credential_id);
-  }
+    const assigned = assignCredentialEvidenceToBatch(
+      db,
+      batchId,
+      rows.map((row) => row.credential_id),
+    );
+    if (assigned !== rows.length) {
+      // Another cut took a leaf during this one's awaits: a batch must own
+      // exactly the leaves it signed, so this one is not written.
+      throw new Error(
+        `credential_anchoring: ${rows.length - assigned} of ${rows.length} leaves were assigned during the cut`,
+      );
+    }
+  });
 
   logger.info("credential_anchoring.batch_cut", {
     batch_id: batchId,
@@ -363,24 +366,18 @@ export function startCredentialAnchorLoop(
     async () => {
       try {
         // Count unanchored credentials
-        const countRow = db
-          .prepare("SELECT COUNT(*) as cnt FROM relay_credentials WHERE anchor_batch_id IS NULL")
-          .get() as { cnt: number };
+        const pending = countUnanchoredCredentialEvidence(db);
 
-        if (countRow.cnt === 0) return;
+        if (pending === 0) return;
 
         // Trigger 1: count threshold
-        if (countRow.cnt >= maxSize) {
+        if (pending >= maxSize) {
           await cutCredentialBatch(db, relayIdentity, maxSize);
         } else {
           // Trigger 2: time threshold
-          const oldest = db
-            .prepare(
-              "SELECT MIN(issued_at) as oldest FROM relay_credentials WHERE anchor_batch_id IS NULL",
-            )
-            .get() as { oldest: number | null };
+          const oldest = oldestUnanchoredCredentialEvidenceIssuedAt(db);
 
-          if (oldest.oldest != null && Date.now() - oldest.oldest >= intervalMs) {
+          if (oldest != null && Date.now() - oldest >= intervalMs) {
             await cutCredentialBatch(db, relayIdentity, maxSize);
           }
         }
@@ -426,13 +423,7 @@ export async function getCredentialAnchorProof(
   credentialId: string,
 ): Promise<CredentialAnchorProof | null> {
   // Find the credential and its batch
-  const credential = db
-    .prepare(
-      `SELECT credential_id, credential_json, issued_at, anchor_batch_id
-       FROM relay_credentials
-       WHERE credential_id = ?`,
-    )
-    .get(credentialId) as (CredentialRow & { anchor_batch_id: string | null }) | undefined;
+  const credential = getCredentialEvidenceWithBatch(db, credentialId);
 
   if (!credential || !credential.anchor_batch_id) return null;
 
@@ -471,14 +462,7 @@ export async function getCredentialAnchorProof(
       : "merkle-sha256-plain-v1";
 
   // Reconstruct the tree from all credentials in this batch (same sort order as batch cutting)
-  const batchCredentials = db
-    .prepare(
-      `SELECT credential_id, credential_json, issued_at
-       FROM relay_credentials
-       WHERE anchor_batch_id = ?
-       ORDER BY issued_at ASC, credential_id ASC`,
-    )
-    .all(batchId) as CredentialRow[];
+  const batchCredentials = listCredentialEvidenceInBatch(db, batchId);
 
   // Compute all leaves under the batch's stored version
   const leaves: string[] = [];
@@ -555,9 +539,7 @@ function relayIdentity_publicKeyFromDb(db: DatabaseDriver, relayId: string): Uin
  * Used to return HTTP 202 with Retry-After header.
  */
 export function isCredentialPendingBatch(db: DatabaseDriver, credentialId: string): boolean {
-  const row = db
-    .prepare("SELECT anchor_batch_id FROM relay_credentials WHERE credential_id = ?")
-    .get(credentialId) as { anchor_batch_id: string | null } | undefined;
+  const row = getCredentialEvidenceBatchId(db, credentialId);
 
   return row != null && row.anchor_batch_id == null;
 }
@@ -644,15 +626,13 @@ export function getCredentialAnchoringStats(db: DatabaseDriver): {
     )
     .get() as { total: number; confirmed: number; total_leaves: number | null };
 
-  const pendingRow = db
-    .prepare("SELECT COUNT(*) as cnt FROM relay_credentials WHERE anchor_batch_id IS NULL")
-    .get() as { cnt: number };
+  const pendingCount = countUnanchoredCredentialEvidence(db);
 
   return {
     total_batches: batchStats.total,
     confirmed_batches: batchStats.confirmed,
     total_credentials_anchored: batchStats.total_leaves ?? 0,
-    pending_credentials: pendingRow.cnt,
+    pending_credentials: pendingCount,
   };
 }
 

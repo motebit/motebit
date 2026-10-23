@@ -18,9 +18,10 @@ concurrency:
   group: deploy-relay-${{ github.ref }}
   cancel-in-progress: false
 
+# Least privilege: read-only by default; `actions: read` only on the gate job
+# that polls run status. The deploy authenticates to Fly with its own secret.
 permissions:
   contents: read
-  actions: read # read the CI run status for the gate below
 
 # The gate WAITS; the deploy WORKS. They are separate jobs because they were
 # not, and the waiting ate the working.
@@ -41,6 +42,9 @@ jobs:
     # CI can take 35+ min on shared runners (a 30-min check job, then e2e):
     # 45 min for CI + 12 min for the staging relay deploy + slack.
     timeout-minutes: 65
+    permissions:
+      contents: read
+      actions: read # gh run list: the CI run and the staging deploy run on this sha
 
     steps:
       # The relay is the durability-sensitive trust root; never deploy a commit

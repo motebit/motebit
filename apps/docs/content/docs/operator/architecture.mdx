@@ -13,7 +13,7 @@ The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supportin
   cites={[{ label: "identity-v1 §1", file: "spec/identity-v1.md", section: 1 }]}
 />
 
-MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how they pay. None of those define who an agent is across time and devices, what trust it has accumulated through past work, or what the operator's policy allows it to do today. Motebit is additive — it slots underneath those three protocols, providing the cryptographic identity, signed-receipt trust ledger, and boundary policy gate the others assume but do not specify.
+MCP says which tools an agent can use and how that access is authorized. A2A says how agents find each other and talk. x402 and AP2 say how they pay — AP2 with cryptographically verifiable mandates, binding an agent key for autonomous transactions. Motebit works on a complementary problem: an identity its owner controls that persists across time, devices and providers, trust accumulated first-person from its own past work, policy-governed execution, and signed receipts for the work itself across delegation hops. It is additive — it slots underneath those protocols rather than replacing them.
 
 <DiagramFigure
   src="license-tiers"
@@ -185,19 +185,19 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 
 11 packages sit on the permissive floor — Apache-2.0, with an explicit patent grant and litigation-termination clause. `check-deps.ts` enforces that permissive-floor packages export only types, enums, branded casts, allowlisted utilities, and deterministic verifiers — never algorithms that would bind a competing implementation to this codebase.
 
-| Package                                         | Answers                                                            | Layer |
-| ----------------------------------------------- | ------------------------------------------------------------------ | ----- |
-| `@motebit/protocol`                             | What is the artifact? What's the algebra?                          | L0    |
-| `@motebit/crypto`                               | How is it signed? How is it verified?                              | L0    |
-| `@motebit/sdk`                                  | What interface must an implementation satisfy?                     | L0    |
-| `@motebit/crypto-appattest`                     | How is an Apple App Attest receipt verified?                       | L2    |
-| `@motebit/crypto-android-keystore`              | How is an Android Keystore Attestation chain verified?             | L2    |
-| `@motebit/crypto-tpm`                           | How is a TPM 2.0 quote verified?                                   | L2    |
-| `@motebit/crypto-webauthn`                      | How is a WebAuthn packed attestation verified?                     | L2    |
-| `@motebit/verifier`                             | How does a third party compose offline verification?               | L1    |
-| `@motebit/verify`                               | How does a one-install CLI verify any motebit artifact end-to-end? | L3    |
-| `@motebit/state-export-client`                  | How does a browser consumer verify a relay's signed state export?  | L1    |
-| `create-motebit`                                | How does a third party scaffold against the protocol?              | L1    |
+| Package                            | Answers                                                            | Layer |
+| ---------------------------------- | ------------------------------------------------------------------ | ----- |
+| `@motebit/protocol`                | What is the artifact? What's the algebra?                          | L0    |
+| `@motebit/crypto`                  | How is it signed? How is it verified?                              | L0    |
+| `@motebit/sdk`                     | What interface must an implementation satisfy?                     | L0    |
+| `@motebit/crypto-appattest`        | How is an Apple App Attest receipt verified?                       | L2    |
+| `@motebit/crypto-android-keystore` | How is an Android Keystore Attestation chain verified?             | L2    |
+| `@motebit/crypto-tpm`              | How is a TPM 2.0 quote verified?                                   | L2    |
+| `@motebit/crypto-webauthn`         | How is a WebAuthn packed attestation verified?                     | L2    |
+| `@motebit/verifier`                | How does a third party compose offline verification?               | L1    |
+| `@motebit/verify`                  | How does a one-install CLI verify any motebit artifact end-to-end? | L3    |
+| `@motebit/state-export-client`     | How does a browser consumer verify a relay's signed state export?  | L1    |
+| `create-motebit`                   | How does a third party scaffold against the protocol?              | L1    |
 
 The four canonical `crypto-*` platform leaves (`crypto-appattest`, `crypto-android-keystore`, `crypto-tpm`, `crypto-webauthn`) verify against each platform's published public trust anchor (Apple App Attest root, Google Hardware Attestation roots, TPM vendor roots, FIDO roots) — no motebit-specific judgment. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID) into one install, but the defaults are overridable flags, not proprietary judgment — the permissive-floor line stays at the aggregator. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring — the actual reference-implementation judgment.
 
@@ -209,17 +209,17 @@ The architectural role is "permissive floor"; the specific license instance (`Ap
 
 ## Apps
 
-| App        | Ring       | Status   | Role                                                                                                           |
-| ---------- | ---------- | -------- | -------------------------------------------------------------------------------------------------------------- |
-| `web`      | Surface    | Live     | IndexedDB identity, free proxy, zero install. Entry at [motebit.com](https://motebit.com).                     |
-| `cli`      | Surface    | Live     | Operator console (npm `motebit`). REPL, daemon, delegation, MCP server mode, local relay (`motebit relay up`). |
-| `desktop`  | Surface    | Preview  | Tauri liquescent droplet. Three.js creature, identity, operator mode, voice. Built from source today.          |
-| `mobile`   | Surface    | Live     | React Native + Expo. Full parity — expo-gl Three.js, SQLite adapters, plan-based goals.                        |
-| `spatial`  | Surface    | Proto    | AR/VR/WebXR-first. Creature-as-scene. See _Spatial doctrine_ below.                                            |
-| `inspector` | Supporting | Internal | React + Vite single-agent inspector. 12 tabs: state, memory, behavior, events, audit, goals, plans, conversations, devices, gradient, trust, credentials. Reads one motebit's interior via the relay. |
+| App         | Ring       | Status   | Role                                                                                                                                                                                                                            |
+| ----------- | ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `web`       | Surface    | Live     | IndexedDB identity, free proxy, zero install. Entry at [motebit.com](https://motebit.com).                                                                                                                                      |
+| `cli`       | Surface    | Live     | Operator console (npm `motebit`). REPL, daemon, delegation, MCP server mode, local relay (`motebit relay up`).                                                                                                                  |
+| `desktop`   | Surface    | Preview  | Tauri liquescent droplet. Three.js creature, identity, operator mode, voice. Built from source today.                                                                                                                           |
+| `mobile`    | Surface    | Source   | React Native + Expo, built from source. The consent root: expo-gl Three.js, SQLite adapters, plan-based goals.                                                                                                                  |
+| `spatial`   | Surface    | Proto    | AR/VR/WebXR-first. Creature-as-scene. See _Spatial doctrine_ below.                                                                                                                                                             |
+| `inspector` | Supporting | Internal | React + Vite single-agent inspector. 12 tabs: state, memory, behavior, events, audit, goals, plans, conversations, devices, gradient, trust, credentials. Reads one motebit's interior via the relay.                           |
 | `operator`  | Supporting | Internal | React + Vite relay-operator console. 10 tabs: health (default), withdrawals, federation peers, transparency, disputes, fees, credential anchoring, treasury reconciliation, receipts, freeze. Master-token gated; fleet-shaped. |
-| `identity` | Supporting | Public   | Static browser tool — drop a `motebit.md`, inspect the parsed, verified profile.                               |
-| `docs`     | Supporting | Public   | Fumadocs + Next.js. This site.                                                                                 |
+| `identity`  | Supporting | Public   | Static browser tool — drop a `motebit.md`, inspect the parsed, verified profile.                                                                                                                                                |
+| `docs`      | Supporting | Public   | Fumadocs + Next.js. This site.                                                                                                                                                                                                  |
 
 **Capability rings, not feature parity.** Ring 1 (core, identical everywhere): `runtime`, `sdk`, `crypto`, `policy`. Ring 2 (platform adapters): `persistence`, keyring, `voice`. Ring 3 (platform capabilities): MCP stdio (CLI/desktop), 3D creature (desktop/mobile/web/spatial), daemon (CLI/desktop). A surface may express the same Ring 1 capability through a different form native to its medium — "operator can see their balance" is Ring 1; "balance renders in a rectangular panel" is Ring 3.
 
@@ -243,12 +243,12 @@ Every structured-data module registers its kind via `registerSpatialDataModule<K
 
 Eleven services in four roles; seven list on the market (an identity plus a priced listing). All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
 
-| Role          | Services                                                       | Pattern                                                                                                                                                            |
-| ------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Relay**     | `relay`                                                        | The only function with a legitimate centralization premium — multi-device sync. Also: settlement, federation, discovery, 5-tier rate limiting, dispute resolution. |
-| **Molecules** | `research` ($0.25/task), `code-review` ($0.20/review), `auditor` ($0.01/task), `clerk` ($0.01/task) | Agents that reason and compose. `research`/`code-review` are Claude-powered and emit signed delegation receipt chains; `auditor` is LLM-free — it measures another agent's public verification surface and signs an eval attestation (subject ≠ signer); `clerk` is the money-execution pole — it runs a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first.          |
-| **Atoms**     | `web-search` ($0.05/request), `read-url` (unpriced), `summarize` (unpriced), `browser-sandbox` | Capability providers. Single-hop reference implementations of the delegation spec; `browser-sandbox` is per-session rather than stateless, with no identity or listing of its own.      |
-| **Infrastructure** | `proxy`, `embed`                                          | Not marketplace participants — no identity, no MCP listing. `proxy` is the Vercel edge CORS proxy for the web app (Anthropic API, fetch, embed); `embed` is plain HTTP embedding compute.                       |
+| Role               | Services                                                                                            | Pattern                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------ | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Relay**          | `relay`                                                                                             | The only function with a legitimate centralization premium — multi-device sync. Also: settlement, federation, discovery, 5-tier rate limiting, dispute resolution.                                                                                                                                                                                                                      |
+| **Molecules**      | `research` ($0.25/task), `code-review` ($0.20/review), `auditor` ($0.01/task), `clerk` ($0.01/task) | Agents that reason and compose. `research`/`code-review` are Claude-powered and emit signed delegation receipt chains; `auditor` is LLM-free — it measures another agent's public verification surface and signs an eval attestation (subject ≠ signer); `clerk` is the money-execution pole — it runs a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first. |
+| **Atoms**          | `web-search` ($0.05/request), `read-url` (unpriced), `summarize` (unpriced), `browser-sandbox`      | Capability providers. Single-hop reference implementations of the delegation spec; `browser-sandbox` is per-session rather than stateless, with no identity or listing of its own.                                                                                                                                                                                                      |
+| **Infrastructure** | `proxy`, `embed`                                                                                    | Not marketplace participants — no identity, no MCP listing. `proxy` is the Vercel edge CORS proxy for the web app (Anthropic API, fetch, embed); `embed` is plain HTTP embedding compute.                                                                                                                                                                                               |
 
 Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to the worker's wallet when trust is high enough — the same 5% fee rides along as a direct delegator→treasury leg in one atomic Solana transaction, so the relay records the audit but never custodies the funds.
 
@@ -313,7 +313,7 @@ The cryptographic shape is invariant across hops. The executor signs `ExecutionR
 On first launch the system bootstraps a cryptographic identity.
 
 1. **Generate** an Ed25519 keypair.
-2. **Store** the private key on the device — an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (the OS keychain is not used yet), PBKDF2-encrypted file (600K iterations) on CLI, expo-secure-store on mobile, IndexedDB with a derived-key envelope on web. The key never leaves the device.
+2. **Store** the private key on the device — an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (the OS keychain is not used yet), PBKDF2-encrypted file (600K iterations) on CLI, expo-secure-store on mobile, IndexedDB with a derived-key envelope on web. The key leaves the device only through multi-device pairing (step 3), end-to-end encrypted.
 3. **Derive** the `motebit_id` from the public key (a UUIDv8 commitment to `SHA-256(public_key)`, self-certifying and recoverable from the seed; legacy identities carry a random UUID v7) and **register** the device against it. Multi-device pairing uses X25519 + HKDF + AES to transfer the identity key through the relay without exposing it to the relay.
 4. **Authenticate** with the sync relay using signed bearer tokens (suite `motebit-jwt-ed25519-v1`) with required `aud` audience binding (`sync`, `task:submit`, `admin:query`, `rotate-key`, `pair`, `register-device`) to prevent cross-endpoint replay.
 

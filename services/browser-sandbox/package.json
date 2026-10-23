@@ -27,13 +27,13 @@
     "@motebit/crypto": "workspace:*",
     "@motebit/protocol": "workspace:*",
     "@motebit/sdk": "workspace:*",
-    "hono": "^4.13.5",
+    "hono": "^4.13.13",
     "playwright-core": "^1.62.1",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
   "devDependencies": {
-    "@types/node": "^22.20.1",
+    "@types/node": "^22.20.5",
     "tsx": "^4.23.12",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"

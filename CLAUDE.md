@@ -12,7 +12,7 @@ See [`DOCTRINE.md`](DOCTRINE.md) for the foundational derivation chain — nine 
 2. **Accumulated trust** — memory, state history, audit trails that make the agent more capable the longer it runs
 3. **Governance at the boundary** — sensitivity-aware privacy and policy controlling what crosses the surface
 
-MCP defines capability but not identity. A2A defines communication but has no trust accumulation. x402/AP2 defines payment but has no identity. Motebit is the missing layer underneath. The relay bridges all four at a single economic checkpoint — identity resolved, execution verified, money finalized.
+MCP standardizes tool access and its authorization. A2A standardizes agent discovery and task communication. x402 enables HTTP payments; AP2 provides cryptographically verifiable payment mandates, binding an agent key for autonomous transactions; Visa's Trusted Agent Protocol authenticates approved agents to merchants. Motebit works on a complementary problem: an owner-controlled identity that persists across providers, first-person trust accumulated from the agent's own work, policy-governed execution, and independently verifiable work receipts across delegation hops. Motebit is the missing layer underneath. The relay bridges all four at a single economic checkpoint — identity resolved, execution verified, money finalized.
 
 ## Architecture
 

@@ -117,7 +117,7 @@ Reviewers see the exact API diff and the migration guide side-by-side. No silent
 
 ## Fallback
 
-If the Changesets workflow goes sideways (rare), `.github/workflows/publish.yml` is a manual fallback that publishes any of the 11 packages with npm provenance. Don't use it unless the Changesets-driven release has genuinely failed.
+A patch that cannot wait for the train ships through the manually dispatched `security-publish` job in `.github/workflows/release.yml` (procedure: `docs/ops/RUNBOOK.md`, "Emergency Patch"). npm accepts publishes only from `release.yml` in the `npm-publish` environment, so there is no other fallback workflow.
 
 ## References
 

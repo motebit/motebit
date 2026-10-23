@@ -45,13 +45,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { DEFAULT_MOTEBIT_CLOUD_URL } from "@motebit/sdk";
 import type { MobileApp } from "./mobile-app";
 import { ASYNC_STORAGE_KEYS } from "./storage-keys";
-
-function normalizeRelayUrl(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) return "";
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  return `https://${trimmed}`;
-}
+import { normalizeRelayUrl } from "./relay-optin";
 
 export interface UsePairingDeps {
   app: MobileApp;

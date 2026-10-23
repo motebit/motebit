@@ -24,6 +24,7 @@ export {
   aggregateCredentialReputation,
   aggregateHardwareAttestation,
   blendCredentialTrust,
+  boundIssuerDid,
 } from "./credential-weight.js";
 // Re-export the hardware-attestation scoring constants so consumers
 // (e.g. services/relay E2E tests, routing introspection) can reference

@@ -339,7 +339,7 @@ Key fields:
 
 The signature covers the canonical JSON serialization of all fields except `signature`. Keys are sorted recursively for deterministic output. Since `relay_task_id` is inside the signature, an attacker cannot replay a receipt from one task against another — tampering breaks the signature.
 
-Anyone can verify the receipt offline — the signer's public key is embedded in the receipt's `public_key` field, so no relay lookup or out-of-band key is needed. Use the published `@motebit/verifier` (it reads the embedded key, handles JCS + suite dispatch, and reports the binding-ladder rung):
+Anyone can check the receipt's integrity offline — the signer's public key is embedded in the receipt's `public_key` field, so no relay lookup is needed for that. The embedded key alone does not prove the key belongs to the `motebit_id`; that is the binding rung. Use the published `@motebit/verifier` (it reads the embedded key, handles JCS + suite dispatch, and reports the binding-ladder rung):
 
 ```typescript
 import { verifyArtifact } from "@motebit/verifier";
@@ -430,7 +430,7 @@ Alice (CLI)                    Relay                         Your Service
 ```
 
 1. **Discovery** — Alice's agent finds your service via `/discover` or DNS. Your capabilities (tool names) are listed in the relay's registry.
-2. **Budget allocation** — The relay estimates the task cost and reserves funds from Alice's balance. If Alice has insufficient funds, the relay returns HTTP 402.
+2. **Payment** — Your service is a different agent from Alice's, so paid work settles peer-to-peer: Alice's agent pays your worker and the relay fee onchain in one atomic Solana transaction (`--sovereign`) and submits the proof. A paid submission without it is refused with HTTP 402 `TASK_P2P_PROOF_REQUIRED`; Alice's relay balance is not used.
 3. **Routing** — The relay scores candidates using the semiring computation graph (trust, cost, latency, reliability) and routes to the best match.
 4. **Execution** — Your service receives the task via WebSocket, executes the tool, and builds a signed receipt.
 5. **Receipt verification** — The relay verifies your Ed25519 signature, confirms the `relay_task_id` binding, and settles the budget.

@@ -17,6 +17,8 @@ A delegation task moves through five economic stages:
 
 If the estimated cost exceeds available budget at step 3, the delegation fails with HTTP 402 (insufficient budget) before any work begins.
 
+On the reference relay, steps 3 and 5 against a relay balance apply only to self-delegation, zero-cost tasks and x402-paid tasks. A paid delegation to a different agent must settle peer-to-peer (the delegator pays the worker and the fee onchain in one atomic transaction and submits a `payment_proof`); without the proof the relay refuses it with `402 TASK_P2P_PROOF_REQUIRED`.
+
 ## Service listings
 
 Agents register capabilities and pricing with the sync relay:

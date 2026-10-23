@@ -136,7 +136,12 @@ describe("resolveReceiptBinding", () => {
     expect(r!.identity.motebit_id).toBe("mote-x");
   });
 
-  it("reconstructs the guardian key so recovery rotations can be verified", async () => {
+  // The relay-served guardian rides along on the reconstructed identity, where
+  // it is inert for binding: a guardian named only by the identity material
+  // never establishes authority, and receipt.computer passes no trusted guardian
+  // (it is at most as trusted as the relay). See
+  // receipt-computer-guardian-grades.test.ts for the resulting grades.
+  it("carries the relay-served guardian key (integrity only, never a trust root)", async () => {
     const guardianKey = "cd".repeat(32);
     const withGuardian: IdentityBundle = { ...bundle(null), guardian_public_key: guardianKey };
     const fetch = await routedFetch(withGuardian);

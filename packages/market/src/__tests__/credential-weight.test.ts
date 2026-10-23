@@ -29,6 +29,7 @@ function makeRepVC(
       ...overrides,
     },
     validFrom: overrides?.validFrom ?? now.toISOString(),
+    proof: { verificationMethod: `${issuer}#key-1` },
   };
 }
 
@@ -415,6 +416,7 @@ function makeTrustVC(
       hardware_attestation: hwAttestation,
     },
     validFrom: overrides?.validFrom ?? now.toISOString(),
+    proof: { verificationMethod: `${issuer}#key-1` },
   };
 }
 

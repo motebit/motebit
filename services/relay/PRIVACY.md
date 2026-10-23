@@ -92,6 +92,15 @@ Observable:
 
 Retention window: 30-day rolling window, swept every minute by the task-cleanup loop; an operator's audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log.
 
+### Federation nonces
+
+Tables: `relay_federation_nonces`.
+
+Observable:
+- for every v2 federation message this relay accepted from a peer relay (heartbeat, peer removal, peering confirm): the sending relay's id, the message's single-use nonce, and when the row expires — no content, no agent identity
+
+Retention window: 10 minutes past the message's timestamp (twice its ±5-minute freshness window); expired rows are deleted whenever a new message is accepted.
+
 ### Task routes
 
 Tables: `relay_task_routes`, `relay_task_answers`, `relay_result_deliveries`.

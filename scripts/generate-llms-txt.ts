@@ -67,7 +67,7 @@ const LLMS_PREAMBLE = `# Motebit
 
 > Sovereign agent infrastructure. Persistent cryptographic identity that survives across devices, providers, and time. Trust accumulated through signed execution receipts. Governance enforced at the agent's boundary. Verifiable proof of what got done.
 
-Motebit is the missing layer underneath today's agent protocols. MCP defines what an agent can do. A2A defines how agents talk. x402 and AP2 define how they pay. Motebit defines who the agent is, what it has done, and what it is allowed to do.
+Motebit is the missing layer underneath today's agent protocols. MCP defines what an agent can do. A2A defines how agents talk. x402 and AP2 define how they pay, AP2 with cryptographically verifiable mandates. Motebit defines who the agent is across every provider, what it has done, and what its owner's policy allows.
 
 A motebit is a persistent, cryptographically-anchored, sovereign agent. The intelligence provider is pluggable. The identity — with its accumulated memory, trust, and governance — is the asset.
 

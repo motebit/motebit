@@ -96,6 +96,7 @@ function makeDeps(
     getPrivKeyBytes: () => Promise.resolve(new Uint8Array(32).fill(9)),
     createSyncToken: () => Promise.resolve(`token-${++n}`),
     registerPushToken: vi.fn(() => Promise.resolve()),
+    removePushToken: vi.fn(() => Promise.resolve()),
     startPushLifecycle: vi.fn(),
     stopPushLifecycle: vi.fn(),
   };

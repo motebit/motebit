@@ -3,12 +3,13 @@
  * un-peering, and N-relay mesh setup.
  *
  * `runPeerHandshake` is the protocol primitive: walks two relays through
- * propose → oracle signature extraction → bidirectional confirm so the two
- * end in mutually-active peering. Consumed by `handleFederationPeer` (we-as-A)
+ * propose → operator-minted confirm (relay-federation@1.5 §3.1; self-propose
+ * is refused) → confirm, each half on the token of the relay it confirms. Consumed by `handleFederationPeer` (we-as-A)
  * and `handleFederationMesh` (orchestrating arbitrary pairs from outside).
  * The helper is silent — each handler does its own logging.
  */
 
+import { verifyFederationMessage } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { fetchRelayJson, getRelayAuthHeaders, getRelayUrl } from "./_helpers.js";
 
@@ -71,7 +72,9 @@ function randomNonceHex(): string {
 
 interface PeerHandshakeResult {
   ok: boolean;
-  /** Step name when ok=false: "identity-a" | "identity-b" | "propose-a-to-b" | ... */
+  /** True when only a's half ran (b now holds a active; b's operator runs the reverse). */
+  half?: boolean;
+  /** Step name when ok=false: "identity-a" | "identity-b" | "<propose|challenge|operator-confirm|confirm>-<a-to-b|b-to-a>" */
   step?: string;
   error?: string;
   aId?: string;
@@ -79,31 +82,41 @@ interface PeerHandshakeResult {
 }
 
 /**
- * Mutual peering handshake between two relays via their public APIs.
+ * Peering handshake between two relays via their APIs (relay-federation@1.5 §3.1).
  *
- * No relay private keys cross the wire — each relay self-signs via its
- * /peer/propose self-mode. Mirrors federation-e2e's establishPeering:
+ * Self-propose is refused since 1.5, so a relay's step-3 confirm is minted
+ * only on its OPERATOR's authority — the master-token
+ * `POST /api/v1/admin/federation/peer-confirm-signature`. Each half of the
+ * handshake therefore needs the token of the relay whose confirm it carries:
  *   1. Fetch identity from a + b
- *   2. Propose a→b (b stores a as pending), propose b→a (a stores b as pending)
- *   3. Self-propose to extract each relay's signature over its own
- *      relay_id + the peer's nonce (the confirm endpoint binds the challenge
- *      to relay_id:nonce:SUITE; only the relay's own propose path produces it)
- *   4. Confirm on both sides
+ *   2. Propose a→b (b stores a as pending, returns b's nonce for a and a v2
+ *      `peer-challenge` signed by b's key)
+ *   3. Verify the challenge — from b's key, to a, answering a's own nonce,
+ *      for a's endpoint and a's key — BEFORE minting anything; then a's
+ *      operator mints a v2 `peer-confirm` naming b (the relay that issued
+ *      the nonce) by id AND by the key the challenge verified under, and a's
+ *      own endpoint; confirm a on b — b now holds a as an active peer.
+ *   4. With b's token too: the same for b→a. Without it the result is
+ *      `half: true` and b's operator runs the reverse.
+ *
+ * A confirm never signs a bare nonce: a counterparty that answers with
+ * another relay's nonce gets a confirm that relay refuses (wrong recipient)
+ * and that confirms no endpoint but a's (cold review F1).
  *
  * Silent — caller logs. Returns step+error on failure for caller-side framing.
  */
-async function runPeerHandshake(
-  aUrl: string,
-  bUrl: string,
+export async function runPeerHandshake(
+  a: { url: string; headers: Record<string, string> },
+  b: { url: string; headers?: Record<string, string> },
   opts?: { aDisplayName?: string; bDisplayName?: string },
 ): Promise<PeerHandshakeResult> {
-  const aIdRes = await fetchRelayJson(`${aUrl}/federation/v1/identity`, {});
+  const aIdRes = await fetchRelayJson(`${a.url}/federation/v1/identity`, {});
   if (!aIdRes.ok) return { ok: false, step: "identity-a", error: aIdRes.error };
-  const bIdRes = await fetchRelayJson(`${bUrl}/federation/v1/identity`, {});
+  const bIdRes = await fetchRelayJson(`${b.url}/federation/v1/identity`, {});
   if (!bIdRes.ok) return { ok: false, step: "identity-b", error: bIdRes.error };
 
-  const aId = aIdRes.data as { relay_motebit_id: string; public_key: string };
-  const bId = bIdRes.data as { relay_motebit_id: string; public_key: string };
+  const aId = aIdRes.data as RelayIdentityView;
+  const bId = bIdRes.data as RelayIdentityView;
   const ret = (step: string, error: string): PeerHandshakeResult => ({
     ok: false,
     step,
@@ -112,31 +125,82 @@ async function runPeerHandshake(
     bId: bId.relay_motebit_id,
   });
 
-  // Cross-propose: each side stores the other as pending; each response
-  // carries the target's stored nonce, which the proposer must later
-  // self-sign to confirm.
-  const proposeAtoB = await postProposal(bUrl, aId, aUrl, opts?.aDisplayName);
-  if (!proposeAtoB.ok) return ret("propose-a-to-b", proposeAtoB.error);
-  const proposeBtoA = await postProposal(aUrl, bId, bUrl, opts?.bDisplayName);
-  if (!proposeBtoA.ok) return ret("propose-b-to-a", proposeBtoA.error);
+  // a's half: b stores a as pending and answers with the nonce a must confirm.
+  const halfAtoB = await runHalf(a, aId, b.url, bId, a.headers, opts?.aDisplayName);
+  if (!halfAtoB.ok) return ret(`${halfAtoB.step}-a-to-b`, halfAtoB.error);
 
-  // Oracle: each relay self-signs (its own relay_id, the peer's nonce).
-  // The confirm endpoint will verify `relay_id:nonce:SUITE` against the
-  // relay's own public key — only the relay's own propose path produces it.
-  const oracleA = await postProposal(aUrl, aId, aUrl, undefined, proposeAtoB.nonce);
-  if (!oracleA.ok) return ret("oracle-a", oracleA.error);
-  const oracleB = await postProposal(bUrl, bId, bUrl, undefined, proposeBtoA.nonce);
-  if (!oracleB.ok) return ret("oracle-b", oracleB.error);
+  if (b.headers === undefined) {
+    return { ok: true, half: true, aId: aId.relay_motebit_id, bId: bId.relay_motebit_id };
+  }
 
-  const confirmAonB = await postConfirm(bUrl, aId.relay_motebit_id, oracleA.challenge);
-  if (!confirmAonB.ok) return ret("confirm-a-on-b", confirmAonB.error);
-  const confirmBonA = await postConfirm(aUrl, bId.relay_motebit_id, oracleB.challenge);
-  if (!confirmBonA.ok) return ret("confirm-b-on-a", confirmBonA.error);
+  // b's half, on b's operator's authority.
+  const halfBtoA = await runHalf(b, bId, a.url, aId, b.headers, opts?.bDisplayName);
+  if (!halfBtoA.ok) return ret(`${halfBtoA.step}-b-to-a`, halfBtoA.error);
 
   return { ok: true, aId: aId.relay_motebit_id, bId: bId.relay_motebit_id };
 }
 
-type ProposalResult = { ok: true; nonce: string; challenge: string } | { ok: false; error: string };
+interface RelayIdentityView {
+  relay_motebit_id: string;
+  public_key: string;
+}
+
+/**
+ * One half: `self` (at `selfUrl`) proposes to `peer` (at `peerUrl`), checks
+ * the peer's challenge, has its own operator mint the confirm, and confirms.
+ * Steps: "propose" | "challenge" | "operator-confirm" | "confirm".
+ */
+async function runHalf(
+  self: { url: string },
+  selfId: RelayIdentityView,
+  peerUrl: string,
+  peerId: RelayIdentityView,
+  selfHeaders: Record<string, string>,
+  displayName: string | undefined,
+): Promise<{ ok: true } | { ok: false; step: string; error: string }> {
+  const ourNonce = randomNonceHex();
+  const proposal = await postProposal(peerUrl, selfId, self.url, displayName, ourNonce);
+  if (!proposal.ok) return { ok: false, step: "propose", error: proposal.error };
+  // The nonce must come from the peer's key, to us, answering OUR nonce, for
+  // OUR endpoint and OUR key — checked before our operator signs anything
+  // over it. The key it verifies under is the key the confirm commits to:
+  // relay ids are not self-certifying, so a counterparty that claims another
+  // relay's id under its own key gets a confirm only its own key would
+  // accept — never one the relay it impersonates accepts (cold review R2).
+  const challenge = await verifyFederationMessage(proposal.challenge, {
+    kind: "peer-challenge",
+    self: selfId.relay_motebit_id,
+    selfPublicKeyHex: selfId.public_key,
+    expectedSender: peerId.relay_motebit_id,
+    senderPublicKeyHex: peerId.public_key,
+    body: {
+      request_nonce: ourNonce,
+      nonce: proposal.nonce,
+      proposer_endpoint_url: self.url,
+    },
+  });
+  if (!challenge.ok) {
+    return {
+      ok: false,
+      step: "challenge",
+      error: `the peer's peer-challenge did not verify (${challenge.reason}): it is not from ${peerId.relay_motebit_id.slice(0, 16)}… for this relay's endpoint ${self.url}`,
+    };
+  }
+  const minted = await postOperatorConfirm(
+    self.url,
+    selfHeaders,
+    proposal.nonce,
+    { id: peerId.relay_motebit_id, publicKey: peerId.public_key },
+    self.url,
+  );
+  if (!minted.ok) return { ok: false, step: "operator-confirm", error: minted.error };
+  const confirmed = await postConfirm(peerUrl, minted.request);
+  if (!confirmed.ok) return { ok: false, step: "confirm", error: confirmed.error };
+  return { ok: true };
+}
+
+type ProposalResult =
+  { ok: true; nonce: string; challenge: unknown } | { ok: false; error: string };
 
 async function postProposal(
   targetUrl: string,
@@ -157,22 +221,79 @@ async function postProposal(
     }),
   });
   if (!res.ok) return { ok: false, error: await res.text() };
-  const body = (await res.json()) as { nonce: string; challenge: string };
+  const body = (await res.json()) as { nonce: string; challenge: unknown };
   return { ok: true, nonce: body.nonce, challenge: body.challenge };
+}
+
+/**
+ * A `/federation/v1/peer/confirm` request: a v2 `peer-confirm`, the nonce it
+ * answers, and the key and endpoint the propose named (the recipient
+ * recognises its nonce only for exactly those — relay-federation@1.5 §3.1).
+ */
+interface ConfirmRequest {
+  message: unknown;
+  nonce: string;
+  public_key: string;
+  endpoint_url: string;
 }
 
 async function postConfirm(
   targetUrl: string,
-  relayId: string,
-  challengeResponse: string,
+  request: ConfirmRequest,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const res = await fetch(`${targetUrl}/federation/v1/peer/confirm`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ relay_id: relayId, challenge_response: challengeResponse }),
+    body: JSON.stringify(request),
   });
   if (!res.ok) return { ok: false, error: await res.text() };
   return { ok: true };
+}
+
+/**
+ * The relay's own step-3 confirm, minted on its operator's authority (§3.1):
+ * a v2 `peer-confirm` to `recipient` — the ONE relay that issued `nonce`, by
+ * id AND by the key its challenge verified under — confirming `endpointUrl`,
+ * which the relay refuses unless it is its own.
+ */
+async function postOperatorConfirm(
+  relayUrl: string,
+  headers: Record<string, string>,
+  nonce: string,
+  recipient: { id: string; publicKey: string },
+  endpointUrl: string,
+): Promise<{ ok: true; request: ConfirmRequest } | { ok: false; error: string }> {
+  const res = await fetch(`${relayUrl}/api/v1/admin/federation/peer-confirm-signature`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      nonce,
+      recipient: recipient.id,
+      recipient_public_key: recipient.publicKey,
+      endpoint_url: endpointUrl,
+    }),
+  });
+  if (!res.ok) return { ok: false, error: `${String(res.status)} ${await res.text()}` };
+  const body = (await res.json()) as {
+    message: unknown;
+    nonce: string;
+    public_key: string;
+    endpoint_url: string;
+  };
+  return {
+    ok: true,
+    request: {
+      message: body.message,
+      nonce: body.nonce,
+      public_key: body.public_key,
+      endpoint_url: body.endpoint_url,
+    },
+  };
+}
+
+/** `Authorization` headers from a bare master token, or undefined when none is set. */
+function bearer(token: string | undefined): Record<string, string> | undefined {
+  return token ? { Authorization: `Bearer ${token}` } : undefined;
 }
 
 export async function handleFederationPeer(config: CliConfig): Promise<void> {
@@ -184,14 +305,28 @@ export async function handleFederationPeer(config: CliConfig): Promise<void> {
   const relayUrl = getRelayUrl(config);
   const peerEndpoint = peerUrl.replace(/\/+$/, "");
 
+  // Our confirm is minted on our operator's authority (relay-federation@1.5
+  // §3.1); the peer's needs the peer operator's token, when we hold it.
+  const ownHeaders = await getRelayAuthHeaders(config);
+  const peerHeaders = bearer(process.env["MOTEBIT_PEER_API_TOKEN"]);
+
   console.log(`Peering ${relayUrl} ↔ ${peerEndpoint}\n`);
-  const result = await runPeerHandshake(relayUrl, peerEndpoint);
+  const result = await runPeerHandshake(
+    { url: relayUrl, headers: ownHeaders },
+    { url: peerEndpoint, headers: peerHeaders },
+  );
   if (!result.ok) {
     console.error(`Peering failed at step ${result.step ?? "unknown"}: ${result.error ?? ""}`);
     process.exit(1);
   }
   console.log(`  Our relay:  ${result.aId!.slice(0, 16)}...`);
   console.log(`  Peer relay: ${result.bId!.slice(0, 16)}...`);
+  if (result.half) {
+    console.log(
+      `\nThe peer now holds us as an active peer. Its operator completes the other half with:\n  motebit federation peer ${relayUrl}\n(or re-run this with MOTEBIT_PEER_API_TOKEN set to the peer's master token).`,
+    );
+    return;
+  }
   console.log(`\nPeered successfully. Both relays are now active peers.`);
 }
 
@@ -200,14 +335,19 @@ export async function handleFederationPeer(config: CliConfig): Promise<void> {
  * a remote peer. Sibling to `handleFederationPeer`.
  *
  * Two HTTP calls:
- *   1. Admin-authed GET to OUR relay's signing oracle, which returns
- *      this relay's signature over its own relay_motebit_id raw bytes.
- *   2. Unauth'd POST to the PEER's /federation/v1/peer/remove with that
- *      `{relay_id, signature}` — the signature itself is the auth.
+ *   1. Admin-authed GET to OUR relay, which mints a v2 `peer-remove` message
+ *      (relay-federation@1.5 §3.3) for the ONE confirmed peer it holds at
+ *      that endpoint — addressed by the id AND the key our relay verified
+ *      that peer under, good at that peer only, once, within five minutes.
+ *      Never by what the URL's `/identity` claims: relay ids are not
+ *      self-certifying, and a counterparty claiming another peer's id would
+ *      otherwise have us mint a removal it could carry to THAT peer (cold
+ *      review round 3, F1). No confirmed peer there, nothing minted.
+ *   2. Unauth'd POST to the PEER's /federation/v1/peer/remove with
+ *      `{ message }` — the signed message itself is the auth.
  *
  * The split exists because the signing key lives on our relay (in its DB),
- * not on the operator's CLI host. The admin gate sits on (1) only —
- * (2)'s payload is what the protocol spec already defines.
+ * not on the operator's CLI host. The admin gate sits on (1) only.
  */
 export async function handleFederationPeerRemove(config: CliConfig): Promise<void> {
   const peerUrl = config.positionals[2];
@@ -222,20 +362,20 @@ export async function handleFederationPeerRemove(config: CliConfig): Promise<voi
 
   const headers = await getRelayAuthHeaders(config);
   const sigRes = await fetchRelayJson(
-    `${relayUrl}/api/v1/admin/federation/peer-removal-signature`,
+    `${relayUrl}/api/v1/admin/federation/peer-removal-signature?endpoint_url=${encodeURIComponent(peerEndpoint)}`,
     headers,
   );
   if (!sigRes.ok) {
-    console.error(`Failed to mint removal signature: ${sigRes.error}`);
+    console.error(`Failed to mint removal message: ${sigRes.error}`);
     process.exit(1);
   }
-  const { relay_id, signature } = sigRes.data as { relay_id: string; signature: string };
+  const { relay_id, message } = sigRes.data as { relay_id: string; message: unknown };
   console.log(`  Our relay: ${relay_id.slice(0, 16)}...`);
 
   const removeRes = await fetch(`${peerEndpoint}/federation/v1/peer/remove`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ relay_id, signature }),
+    body: JSON.stringify({ message }),
   });
   if (!removeRes.ok) {
     const err = await removeRes.text();
@@ -250,8 +390,10 @@ export async function handleFederationPeerRemove(config: CliConfig): Promise<voi
  * `motebit federation mesh <url1> <url2> ...` — pair-wise peer N relays.
  *
  * Generalizes the K4 staging mesh script (n-choose-2 = 6 handshakes for
- * n=4) to any N≥2. Each pair uses the same `/peer/propose` self-mode +
- * `/peer/confirm` flow as `handleFederationPeer`. Per-pair failure
+ * n=4) to any N≥2. Each pair uses the same propose → operator-minted
+ * confirm → `/peer/confirm` flow as `handleFederationPeer`, so every relay's
+ * master token is needed: `MOTEBIT_MESH_TOKENS` (comma-separated, one per
+ * URL, in order), else the configured relay token for all. Per-pair failure
  * isolation: a single failed handshake is reported in the summary, not
  * a fatal abort — operators bringing up federation meshes need to see
  * the full pair-grid status, not stop at the first transient hiccup.
@@ -280,10 +422,28 @@ export async function handleFederationMesh(config: CliConfig): Promise<void> {
     `Mesh-peering ${String(urls.length)} relay(s) — ${String(pairs.length)} pair handshake(s):\n`,
   );
 
+  // Each relay's confirm is minted by its operator (relay-federation@1.5 §3.1).
+  const meshTokens = (process.env["MOTEBIT_MESH_TOKENS"] ?? "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t !== "");
+  if (meshTokens.length > 0 && meshTokens.length !== urls.length) {
+    console.error(
+      `MOTEBIT_MESH_TOKENS has ${String(meshTokens.length)} token(s) for ${String(urls.length)} URL(s); give one per URL, in order.`,
+    );
+    process.exit(1);
+  }
+  const fallback = await getRelayAuthHeaders(config);
+  const headersFor = (url: string): Record<string, string> =>
+    bearer(meshTokens[urls.indexOf(url)]) ?? fallback;
+
   const results: Array<{ pair: string; ok: boolean; step?: string; error?: string }> = [];
   for (const [a, b] of pairs) {
     const label = `${shortUrl(a)} ↔ ${shortUrl(b)}`;
-    const r = await runPeerHandshake(a, b);
+    const r = await runPeerHandshake(
+      { url: a, headers: headersFor(a) },
+      { url: b, headers: headersFor(b) },
+    );
     if (r.ok) {
       console.log(`  ✓ ${label}`);
       results.push({ pair: label, ok: true });
