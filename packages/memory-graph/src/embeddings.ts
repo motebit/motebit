@@ -59,10 +59,26 @@ export const EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2";
 export type EmbeddingModelLoader = () => Promise<Pipeline>;
 
 /**
- * Upper bound on one model load (download included). A load still pending
- * after this falls back to the hash embedding instead of stalling the caller.
+ * Upper bound on a caller's wait for the model load (download included). A
+ * caller still waiting after this falls back to the hash embedding instead of
+ * stalling; the load itself keeps going, and once it settles later callers
+ * use the model.
  */
 export const MODEL_LOAD_TIMEOUT_MS = 120_000;
+
+/**
+ * Is `err` what a torn or truncated cached model file produces? onnxruntime
+ * reports a truncated `.onnx` as a protobuf parse failure; a truncated JSON
+ * file (config, tokenizer) fails `JSON.parse`. Anything else — the hub
+ * unreachable, a 404, a runtime fault — says nothing about the cached bytes.
+ */
+function isCorruptModelError(err: unknown): boolean {
+  if (err instanceof SyntaxError || (err as { name?: unknown } | null)?.name === "SyntaxError") {
+    return true;
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return /protobuf parsing failed|unexpected end of json|is not valid json/i.test(msg);
+}
 
 /** The transformers `env` fields the default loader sets. */
 type TransformersEnv = TransformersCacheEnv & {
@@ -89,8 +105,11 @@ async function loadTransformersModel(): Promise<Pipeline> {
   } catch (err) {
     // A cached file that cannot be parsed is corrupt (a torn write by an
     // older, non-atomic writer): drop it so the next load fetches it fresh.
+    // Only then — an offline or server failure leaves a good cache alone.
     const fs = nodeFs();
-    if (fs !== undefined && cacheDir !== undefined) evictCachedModel(fs, cacheDir, EMBEDDING_MODEL);
+    if (fs !== undefined && cacheDir !== undefined && isCorruptModelError(err)) {
+      evictCachedModel(fs, cacheDir, EMBEDDING_MODEL);
+    }
     throw new Error(
       `embedding model ${EMBEDDING_MODEL} failed to load: ${err instanceof Error ? err.message : String(err)}`,
       { cause: err },
@@ -102,6 +121,10 @@ let modelLoader: EmbeddingModelLoader = loadTransformersModel;
 let modelLoadTimeoutMs = MODEL_LOAD_TIMEOUT_MS;
 let pipelinePromise: Promise<Pipeline> | null = null;
 let pipelineFailed = false;
+/** The current load outlived a caller's wait and has not settled yet. */
+let pipelinePending = false;
+
+class ModelLoadTimeout extends Error {}
 
 /**
  * Inject the loader for the local embedding pipeline (`null` restores the
@@ -120,7 +143,10 @@ export function setEmbeddingModelLoader(
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`embedding model load timed out after ${ms}ms`)), ms);
+    timer = setTimeout(
+      () => reject(new ModelLoadTimeout(`embedding model load timed out after ${ms}ms`)),
+      ms,
+    );
     // Never keep a process alive just to time out a load.
     (timer as { unref?: () => void }).unref?.();
   });
@@ -129,20 +155,32 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 
 /**
  * The loaded pipeline. Single-flight: concurrent first callers share ONE
- * load, bounded by the load timeout. A failed load sticks (hash fallback)
- * until {@link resetPipeline}.
+ * load. Each caller's wait is bounded by the load timeout; a load that
+ * outlives it keeps going — callers fall back (hash) at once until it
+ * settles, then use the model. A failed load sticks (hash fallback) until
+ * {@link resetPipeline}.
  */
 function getPipeline(): Promise<Pipeline> {
   if (pipelineFailed) return Promise.reject(new Error("Pipeline previously failed to load"));
   if (pipelinePromise === null) {
-    const attempt = withTimeout(modelLoader(), modelLoadTimeoutMs);
+    const attempt = modelLoader();
     pipelinePromise = attempt;
-    attempt.catch(() => {
-      // Only the current attempt may mark failure (a reset may have replaced it).
-      if (pipelinePromise === attempt) pipelineFailed = true;
-    });
+    // Only the current attempt may change state (a reset may have replaced it).
+    attempt.then(
+      () => {
+        if (pipelinePromise === attempt) pipelinePending = false;
+      },
+      () => {
+        if (pipelinePromise === attempt) pipelineFailed = true;
+      },
+    );
   }
-  return pipelinePromise;
+  if (pipelinePending) return Promise.reject(new Error("Pipeline load still pending"));
+  const attempt = pipelinePromise;
+  return withTimeout(attempt, modelLoadTimeoutMs).catch((err: unknown) => {
+    if (err instanceof ModelLoadTimeout && pipelinePromise === attempt) pipelinePending = true;
+    throw err;
+  });
 }
 
 /**
@@ -151,6 +189,7 @@ function getPipeline(): Promise<Pipeline> {
 export function resetPipeline(): void {
   pipelinePromise = null;
   pipelineFailed = false;
+  pipelinePending = false;
 }
 
 /**

@@ -33,7 +33,7 @@ import {
 const fake = vi.hoisted(() => ({
   loads: 0,
   numThreadsAtLoad: [] as Array<number | undefined>,
-  mode: "ok" as "ok" | "never" | "corrupt",
+  mode: "ok" as "ok" | "never" | "corrupt" | "offline",
   env: {
     backends: { onnx: { wasm: { numThreads: undefined as number | undefined } } },
     useFSCache: false,
@@ -52,6 +52,8 @@ vi.mock("@xenova/transformers", () => ({
     if (fake.mode === "never") return new Promise<never>(() => {});
     if (fake.mode === "corrupt")
       throw new Error("Failed to load model because protobuf parsing failed.");
+    // What transformers surfaces when the hub is unreachable (undici).
+    if (fake.mode === "offline") throw new TypeError("fetch failed");
     const data = new Float32Array(384).fill(0.05);
     return async () => ({ data });
   },
@@ -172,5 +174,53 @@ describe("embedText — local model load resilience", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("a load that fails for a reason other than corruption (offline) leaves the cached model in place", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "motebit-model-cache-"));
+    try {
+      const modelDir = join(dir, ...EMBEDDING_MODEL.split("/"));
+      const onnx = join(modelDir, "onnx", "model_quantized.onnx");
+      mkdirSync(join(modelDir, "onnx"), { recursive: true });
+      writeFileSync(onnx, Buffer.from([0x08, 0x07]));
+      Object.assign(fake.env, { useFSCache: true, cacheDir: dir });
+      fake.mode = "offline";
+      const vec = await within(embedText("door code"), 3_000);
+      expect(vec).toEqual(hashPadded("door code"));
+      // Nothing about "fetch failed" says the cached bytes are bad: evicting
+      // here would turn one offline moment into a full re-download.
+      expect(existsSync(onnx)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a load that outlives the timeout is not abandoned: the caller falls back once, later embeds use the model", async () => {
+    let loads = 0;
+    setEmbeddingModelLoader(
+      async () => {
+        loads++;
+        await new Promise((r) => setTimeout(r, 80));
+        return constantPipeline;
+      },
+      { timeoutMs: 20 },
+    );
+    const first = await within(embedText("x"), 3_000);
+    expect(first).toEqual(hashPadded("x"));
+    await new Promise((r) => setTimeout(r, 150));
+    // A slow first download must not pin a long-lived process to hash
+    // vectors (not comparable with model vectors in the same memory space).
+    const later = await within(embedText("y"), 3_000);
+    expect(later[0]).toBe(Math.fround(0.05));
+    expect(loads).toBe(1);
+  });
+
+  it("while a timed-out load is still pending, later embeds fall back at once instead of waiting out the timeout again", async () => {
+    setEmbeddingModelLoader(() => new Promise<never>(() => {}), { timeoutMs: 300 });
+    await within(embedText("x"), 3_000);
+    const t0 = Date.now();
+    const vec = await within(embedText("y"), 3_000);
+    expect(vec).toEqual(hashPadded("y"));
+    expect(Date.now() - t0).toBeLessThan(150);
   });
 });
