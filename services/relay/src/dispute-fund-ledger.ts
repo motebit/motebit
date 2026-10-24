@@ -138,6 +138,10 @@ export function backfillDisputeFundActions(db: DatabaseDriver): number {
          JOIN relay_allocations a ON a.allocation_id = d.allocation_id
         WHERE d.state = 'final' AND d.fund_action IS NOT NULL AND d.amount_locked > 0
           AND d.task_id = a.task_id
+        -- Total order: finals that share a millisecond (final_at is Date.now())
+        -- fall back to insertion order, so the claim an allocation's earliest
+        -- legacy final receives is the same on every run over the same rows
+        -- (dispute-fund-ledger.test.ts, "same-millisecond finals").
         ORDER BY COALESCE(d.final_at, d.resolved_at, d.filed_at), d.rowid`,
     )
     .run().changes;
