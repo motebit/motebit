@@ -51,7 +51,7 @@
     "@motebit/voice": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "@ricky0123/vad-web": "^0.0.30",
-    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/api": "^2.12.4",
     "buffer": "^6.0.3",
     "onnxruntime-web": "^1.27.0",
     "three": "^0.185.1"
@@ -62,7 +62,7 @@
     "@noble/curves": "^2.4.0",
     "@noble/ed25519": "~3.2.0",
     "@noble/hashes": "^2.4.0",
-    "@tauri-apps/cli": "^2.11.4",
+    "@tauri-apps/cli": "^2.12.4",
     "@types/better-sqlite3": "^7.6.0",
     "@types/three": "^0.185.4",
     "better-sqlite3": "^12.11.1",

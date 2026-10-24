@@ -76,12 +76,32 @@ export default defineConfig({
     viteStaticCopy({
       targets: [
         // Silero VAD model + worklet
-        { src: "node_modules/@ricky0123/vad-web/dist/silero_vad_v5.onnx", dest: "." },
-        { src: "node_modules/@ricky0123/vad-web/dist/silero_vad_legacy.onnx", dest: "." },
-        { src: "node_modules/@ricky0123/vad-web/dist/vad.worklet.bundle.min.js", dest: "." },
+        {
+          src: "node_modules/@ricky0123/vad-web/dist/silero_vad_v5.onnx",
+          dest: ".",
+          rename: { stripBase: true },
+        },
+        {
+          src: "node_modules/@ricky0123/vad-web/dist/silero_vad_legacy.onnx",
+          dest: ".",
+          rename: { stripBase: true },
+        },
+        {
+          src: "node_modules/@ricky0123/vad-web/dist/vad.worklet.bundle.min.js",
+          dest: ".",
+          rename: { stripBase: true },
+        },
         // ONNX Runtime WASM
-        { src: "node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm", dest: "." },
-        { src: "node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs", dest: "." },
+        {
+          src: "node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm",
+          dest: ".",
+          rename: { stripBase: true },
+        },
+        {
+          src: "node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs",
+          dest: ".",
+          rename: { stripBase: true },
+        },
       ],
     }),
   ],
