@@ -37,26 +37,12 @@
       "description": "Decimal USD the relay would actually release on requestWithdrawal now."
     },
     "sweep_threshold": {
-      "anyOf": [
-        {
-          "type": "number"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Operator sweep threshold in decimal USD; null when unset."
+      "description": "Operator sweep threshold in decimal USD; null when unset.",
+      "type": ["number", "null"]
     },
     "settlement_address": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Agent's declared settlement address; null when undeclared."
+      "description": "Agent's declared settlement address; null when undeclared.",
+      "type": ["string", "null"]
     },
     "transactions": {
       "type": "array",
@@ -87,26 +73,12 @@
             "description": "Decimal USD balance after this transaction was applied."
           },
           "reference_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "External correlation id (deposit tx hash, allocation id, …); null when none."
+            "description": "External correlation id (deposit tx hash, allocation id, …); null when none.",
+            "type": ["string", "null"]
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Human-readable annotation; null when none."
+            "description": "Human-readable annotation; null when none.",
+            "type": ["string", "null"]
           },
           "created_at": {
             "type": "number",

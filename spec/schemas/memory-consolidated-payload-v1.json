@@ -41,14 +41,7 @@
     },
     "superseded_valid_until": {
       "description": "Present on \"supersede\": validity-time (Unix ms) the superseded belief ended; consumers set valid_until on existing_node_id. Spec §3.5.",
-      "anyOf": [
-        {
-          "type": "number"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "type": ["number", "null"]
     }
   },
   "required": ["action", "existing_node_id", "new_node_id", "reason"],

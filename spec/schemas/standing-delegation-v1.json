@@ -125,15 +125,8 @@
       "description": "Unix timestamp in milliseconds when the grant was issued."
     },
     "not_before": {
-      "anyOf": [
-        {
-          "type": "number"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Optional activation delay (Unix ms). Null ⇒ active from `issued_at`."
+      "description": "Optional activation delay (Unix ms). Null ⇒ active from `issued_at`.",
+      "type": ["number", "null"]
     },
     "expires_at": {
       "type": "number",

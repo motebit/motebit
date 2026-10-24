@@ -27,15 +27,8 @@
       "description": "SHA-256 hex digest of the canonical-JSON ExecutionReceipt that earned this settlement. Lets external workers verify the relay paid them for the receipt they actually emitted."
     },
     "ledger_hash": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Optional SHA-256 hex digest of the relay's accounting ledger entry committing this settlement. Null when the relay does not maintain an external-facing ledger; present when the relay publishes one for transparency."
+      "description": "Optional SHA-256 hex digest of the relay's accounting ledger entry committing this settlement. Null when the relay does not maintain an external-facing ledger; present when the relay publishes one for transparency.",
+      "type": ["string", "null"]
     },
     "amount_settled": {
       "type": "number",

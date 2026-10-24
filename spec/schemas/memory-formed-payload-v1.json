@@ -52,14 +52,7 @@
     },
     "valid_until": {
       "description": "Validity-time end (Unix ms), or null for an open interval (still true). Closed by a later supersession.",
-      "anyOf": [
-        {
-          "type": "number"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "type": ["number", "null"]
     }
   },
   "required": ["node_id", "content", "sensitivity"],
