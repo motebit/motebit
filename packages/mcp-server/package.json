@@ -20,7 +20,7 @@
     "@motebit/encryption": "workspace:*",
     "@motebit/identity-file": "workspace:*",
     "@motebit/sdk": "workspace:*",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@motebit/mcp-client": "workspace:*",
