@@ -341,7 +341,7 @@ The `DisputeAppeal` type in `@motebit/protocol` is the binding machine-readable 
 
 ### 8.3 Appeal Adjudication
 
-Single-relay appeals go to operator review with the additional evidence. Federation appeals trigger a second vote round with the new evidence included.
+Single-relay appeals go to operator review with the additional evidence. The operator submits its round-2 verdict to the same endpoint as round 1 (`POST /api/v1/disputes/:disputeId/resolve`, operator-only). The relay MUST commit it as round 2, with money derived per §7.2, and MUST NOT answer it with the round-1 resolution. Federation appeals trigger a second vote round with the new evidence included.
 
 Each adjudication round increments a counter: `round=1` for the original adjudication, `round=2` for the federation appeal. Each `AdjudicatorVote` signature binds its `round` per §6.5 — adjudicators sign each vote with the round they're voting in, so round-1 vote bytes do not satisfy round-2 binding even for the same evidence. Round-aggregation queries MUST filter `WHERE round = current_round` so a flipped-vote peer in round 2 cannot pull a round-2 majority back toward round-1's outcome.
 

@@ -326,6 +326,125 @@ function tryFinalizeIfWindowExpired(
  * resolution is an appeal still in flight (or a single-relay appeal parked for
  * the operator) — untouched.
  */
+/** A round-2 verdict to commit: the federation's aggregate or the operator's ruling. */
+interface Round2Verdict {
+  resolution: DisputeOutcome;
+  rationale: string;
+  fund_action: DisputeFundAction;
+  split_ratio: number;
+  adjudicator_votes: AdjudicatorVote[];
+}
+
+/**
+ * Sign and commit a round-2 verdict (§8.3), on either adjudication path.
+ * One transaction: the round-2 resolution row, `appealed → final`, and the
+ * fund action. The state move is guarded on `appealed`, so a verdict that
+ * lost a race to another commit writes nothing (409). A refused fund action
+ * (or the emergency freeze) keeps the signed round-2 row and leaves the
+ * dispute `appealed`, so `tryFinalizePersistedRound2` retries it on read.
+ */
+async function commitRound2Verdict(
+  db: DatabaseDriver,
+  relayIdentity: RelayIdentity,
+  dispute: Record<string, unknown>,
+  verdict: Round2Verdict,
+): Promise<{ resolvedAt: number; finalAt: number }> {
+  const disputeId = dispute.dispute_id as string;
+  const resolvedAt = Date.now();
+  const signed = await signDisputeResolution(
+    {
+      dispute_id: disputeId,
+      resolution: verdict.resolution,
+      rationale: verdict.rationale,
+      fund_action: verdict.fund_action,
+      split_ratio: verdict.split_ratio,
+      adjudicator: relayIdentity.relayMotebitId,
+      adjudicator_votes: verdict.adjudicator_votes,
+      resolved_at: resolvedAt,
+    },
+    relayIdentity.privateKey,
+  );
+  const resolutionId = `res-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const finalAt = Date.now();
+  // INSERT OR REPLACE handles crash-mid-orchestration recovery (a re-call
+  // after a partial round 2 overwrites the prior round-2 row idempotently);
+  // UNIQUE(dispute_id, round) from migration 19 lets round 2 coexist with
+  // round 1's signed audit row.
+  const insertRound2 = (): void => {
+    db.prepare(
+      `INSERT OR REPLACE INTO relay_dispute_resolutions
+         (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature, is_appeal)
+       VALUES (?, ?, 2, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    ).run(
+      resolutionId,
+      disputeId,
+      verdict.resolution,
+      verdict.rationale,
+      verdict.fund_action,
+      verdict.split_ratio,
+      relayIdentity.relayMotebitId,
+      JSON.stringify(verdict.adjudicator_votes),
+      resolvedAt,
+      signed.signature,
+    );
+  };
+  let lostRace = false;
+  db.exec("BEGIN");
+  try {
+    const moved = db
+      .prepare(
+        "UPDATE relay_disputes SET state = 'final', final_at = ?, resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ? AND state = 'appealed'",
+      )
+      .run(
+        finalAt,
+        verdict.resolution,
+        verdict.rationale,
+        verdict.fund_action,
+        verdict.split_ratio,
+        relayIdentity.relayMotebitId,
+        resolvedAt,
+        disputeId,
+      );
+    if (moved.changes === 0) {
+      lostRace = true;
+      db.exec("ROLLBACK");
+    } else {
+      insertRound2();
+      executeFundAction(db, dispute, verdict.fund_action, verdict.split_ratio);
+      db.exec("COMMIT");
+    }
+  } catch (err) {
+    db.exec("ROLLBACK");
+    // The emergency freeze refused the fund action (at the escrow
+    // chokepoint): the signed round-2 verdict is persisted exactly as for a
+    // refused fund action, so the read after unfreeze finalizes it — but
+    // with no refusal marker (nothing is wrong with the verdict) and a 503,
+    // never a 500.
+    const frozen = err instanceof EmergencyFrozenError || isEmergencyFrozenAbort(err);
+    if (err instanceof FundActionRefused || frozen) {
+      // P1: the round-2 verdict stands even when its fund action cannot run
+      // yet (a claw-back the paid account no longer covers). Persist the
+      // signed round-2 resolution and the marker — the dispute stays
+      // `appealed`, visibly refused, and `tryFinalizeIfWindowExpired`
+      // retries it on every read.
+      insertRound2();
+      if (err instanceof FundActionRefused) recordFundRefusal(db, disputeId, err.reason);
+    }
+    if (frozen) {
+      throw new EmergencyFrozenError(
+        `Relay is in emergency freeze mode: dispute ${disputeId}'s round-2 verdict is recorded; its fund action runs on the first read after the freeze lifts`,
+      );
+    }
+    throw new HTTPException(500, {
+      message: `Round-2 finalization failed: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+  if (lostRace) {
+    throw new HTTPException(409, { message: "Dispute is no longer awaiting a round-2 verdict" });
+  }
+  return { resolvedAt, finalAt };
+}
+
 function tryFinalizePersistedRound2(
   db: DatabaseDriver,
   dispute: Record<string, unknown>,
@@ -1644,6 +1763,59 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // state='resolved' guard).
     dispute = tryFinalizeIfWindowExpired(db, dispute, { retryRound2: false });
 
+    // §8.3 single-relay appeal: "Single-relay appeals go to operator review
+    // with the additional evidence." The operator's round-2 verdict lands
+    // here. It used to fall into the cached-resolution check below, which
+    // returned round 1 with a 200 and dropped the verdict, so a single-relay
+    // appeal could never be decided. The money is derived exactly as for
+    // round 1 (§7.2), and the commit is the same one the federation round 2
+    // uses (`commitRound2Verdict`: guarded on `appealed`, one transaction).
+    const relayIsParty =
+      dispute.filed_by === relayIdentity.relayMotebitId ||
+      dispute.respondent === relayIdentity.relayMotebitId;
+    if (dispute.state === "appealed" && !relayIsParty) {
+      const round2Persisted = db
+        .prepare("SELECT 1 FROM relay_dispute_resolutions WHERE dispute_id = ? AND round = 2")
+        .get(disputeId);
+      if (round2Persisted === undefined) {
+        if (!body.rationale) {
+          throw new HTTPException(400, { message: "Rationale is required" });
+        }
+        const money = deriveSingleRelayFundAction(
+          body,
+          (dispute.filer_role as FilerRole | null) ?? null,
+        );
+        if ("refused" in money) {
+          throw new HTTPException(400, { message: money.refused });
+        }
+        const { resolvedAt, finalAt } = await commitRound2Verdict(db, relayIdentity, dispute, {
+          resolution: body.resolution,
+          rationale: body.rationale,
+          fund_action: money.fund_action,
+          split_ratio: money.split_ratio,
+          adjudicator_votes: [],
+        });
+        logger.info("dispute.finalized.round_2_operator", {
+          disputeId,
+          resolution: body.resolution,
+          fundAction: money.fund_action,
+          splitRatio: money.split_ratio,
+        });
+        return c.json({
+          ok: true,
+          dispute_id: disputeId,
+          state: "final",
+          round: 2,
+          resolution: body.resolution,
+          fund_action: money.fund_action,
+          split_ratio: money.split_ratio,
+          resolved_at: resolvedAt,
+          final_at: finalAt,
+          adjudicator_votes: [],
+        });
+      }
+    }
+
     // 1. Cached-resolution check — return existing resolution if present.
     //    Handles re-call after successful resolve + the second-caller-on-
     //    crash-recovery case (first caller completed; second caller sees
@@ -1930,8 +2102,8 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // execute fund_action (per §7.1+§7.3, fund movement happens at
     // `final`, not on first `resolved`).
     //
-    // Single-relay appeals stay in `appealed` for operator manual
-    // review (existing behavior, unchanged).
+    // Single-relay appeals stay in `appealed` until the operator's round-2
+    // verdict arrives at `/resolve` (§8.3).
     //
     // Round-2 evidence union (§8.3 + §8.5): the orchestrator pulls
     // all `relay_dispute_evidence` rows for the dispute (no round
@@ -1966,106 +2138,12 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       { db, relayIdentity, fetchImpl, voteRequestTimeoutMs },
     );
 
-    const round2ResolvedAt = Date.now();
-    const round2Signed = await signDisputeResolution(
-      {
-        dispute_id: disputeId,
-        resolution: round2Result.resolution,
-        rationale: round2Result.rationale,
-        fund_action: round2Result.fund_action,
-        split_ratio: round2Result.split_ratio,
-        adjudicator: relayIdentity.relayMotebitId,
-        adjudicator_votes: round2Result.adjudicator_votes,
-        resolved_at: round2ResolvedAt,
-      },
-      relayIdentity.privateKey,
+    const { resolvedAt: round2ResolvedAt, finalAt } = await commitRound2Verdict(
+      db,
+      relayIdentity,
+      dispute,
+      round2Result,
     );
-
-    const round2ResolutionId = `res-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
-    const finalAt = Date.now();
-
-    // Atomic terminal transition: round-2 resolution insert + state →
-    // final + fund_action all in one txn. INSERT OR REPLACE handles
-    // crash-mid-orchestration recovery (re-call after partial round-2
-    // overwrites the prior round-2 row idempotently). UNIQUE(dispute_id,
-    // round) from migration 19 lets round-2 coexist with round-1's
-    // signed audit row.
-    db.exec("BEGIN");
-    try {
-      db.prepare(
-        `INSERT OR REPLACE INTO relay_dispute_resolutions
-           (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature, is_appeal)
-         VALUES (?, ?, 2, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      ).run(
-        round2ResolutionId,
-        disputeId,
-        round2Result.resolution,
-        round2Result.rationale,
-        round2Result.fund_action,
-        round2Result.split_ratio,
-        relayIdentity.relayMotebitId,
-        JSON.stringify(round2Result.adjudicator_votes),
-        round2ResolvedAt,
-        round2Signed.signature,
-      );
-      db.prepare(
-        "UPDATE relay_disputes SET state = 'final', final_at = ?, resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ?",
-      ).run(
-        finalAt,
-        round2Result.resolution,
-        round2Result.rationale,
-        round2Result.fund_action,
-        round2Result.split_ratio,
-        relayIdentity.relayMotebitId,
-        round2ResolvedAt,
-        disputeId,
-      );
-      executeFundAction(db, dispute, round2Result.fund_action, round2Result.split_ratio);
-      db.exec("COMMIT");
-    } catch (err) {
-      db.exec("ROLLBACK");
-      // The emergency freeze refused the fund action (at the escrow
-      // chokepoint): the signed round-2 verdict is persisted exactly as for a
-      // refused fund action, so the read after unfreeze finalizes it — but
-      // with no refusal marker (nothing is wrong with the verdict) and a 503,
-      // never a 500.
-      const frozen = err instanceof EmergencyFrozenError || isEmergencyFrozenAbort(err);
-      if (err instanceof FundActionRefused || frozen) {
-        // P1: the round-2 verdict stands even when its fund action cannot run
-        // yet (a claw-back the paid account no longer covers). Persist the
-        // signed round-2 resolution and the marker — the dispute stays
-        // `appealed`, visibly refused, and `tryFinalizeIfWindowExpired`
-        // retries it on every read (it used to roll back to `appealed` with
-        // the verdict lost and nothing ever retrying it).
-        db.prepare(
-          `INSERT OR REPLACE INTO relay_dispute_resolutions
-             (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature, is_appeal)
-           VALUES (?, ?, 2, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-        ).run(
-          round2ResolutionId,
-          disputeId,
-          round2Result.resolution,
-          round2Result.rationale,
-          round2Result.fund_action,
-          round2Result.split_ratio,
-          relayIdentity.relayMotebitId,
-          JSON.stringify(round2Result.adjudicator_votes),
-          round2ResolvedAt,
-          round2Signed.signature,
-        );
-        if (err instanceof FundActionRefused) recordFundRefusal(db, disputeId, err.reason);
-      }
-      if (frozen) {
-        throw new EmergencyFrozenError(
-          `Relay is in emergency freeze mode: dispute ${disputeId}'s round-2 verdict is recorded; its fund action runs on the first read after the freeze lifts`,
-        );
-      }
-      throw new HTTPException(500, {
-        message: `Round-2 finalization failed: ${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
 
     logger.info("dispute.finalized.round_2", {
       disputeId,
