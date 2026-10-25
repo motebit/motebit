@@ -261,7 +261,7 @@ When a dispute is opened, the referenced `BudgetAllocation` transitions to `disp
 | `overturned` | Original settlement      | The pre-dispute settlement stands                                        |
 | `split`      | Divide by `split_ratio`  | Worker receives `locked * split_ratio`, delegator receives the remainder |
 
-**Fund action is derived from `(resolution, filer_role)` per the table below.** Filer role is captured at filing time (when the task / allocation / p2p settlement row is definitely present) — `worker` if `filed_by` matches the allocation's worker motebit_id, else `delegator`. Federation-resolved disputes (§6.2 orchestrator) and single-relay resolutions both flow through this table.
+**Fund action is derived from `(resolution, filer_role)` per the table below, on both adjudication paths.** A single-relay adjudicator supplies `resolution` and `rationale`, and for `split` a `split_ratio` (default `0.5`). It never supplies the money for `upheld` or `overturned`. A relay MUST refuse a resolution whose `fund_action` or `split_ratio` contradicts the table, because the signed resolution must be exactly the money that moves (§7.3). Filer role is captured at filing time (when the task / allocation / p2p settlement row is definitely present) — `worker` if `filed_by` matches the allocation's worker motebit_id, else `delegator`. Federation-resolved disputes (§6.2 orchestrator) and single-relay resolutions both flow through this table.
 
 | Resolution   | Filer role  | `fund_action`         | `split_ratio` | Effect                                  |
 | ------------ | ----------- | --------------------- | ------------- | --------------------------------------- |

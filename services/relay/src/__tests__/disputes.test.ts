@@ -334,7 +334,7 @@ describe("Dispute: evidence + resolve", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
     await registerAgent(relay, "del-ev");
     await registerAgent(relay, "wrk-ev");
-    createAllocation(relay, "alloc-ev", "task-ev", "del-ev", "wrk-ev");
+    createAllocation(relay, "alloc-ev", "task-ev", "wrk-ev", "del-ev");
   });
 
   afterEach(async () => {
@@ -516,7 +516,7 @@ describe("Dispute: evidence + resolve", () => {
       body: JSON.stringify({
         resolution: "upheld",
         rationale: "first call",
-        fund_action: "release_to_worker",
+        fund_action: "refund_to_delegator",
       }),
     });
     expect(first.status).toBe(200);
@@ -531,7 +531,7 @@ describe("Dispute: evidence + resolve", () => {
       body: JSON.stringify({
         resolution: "overturned",
         rationale: "second call (should be ignored)",
-        fund_action: "refund_to_delegator",
+        fund_action: "release_to_worker",
       }),
     });
     expect(second.status).toBe(200);
@@ -723,7 +723,7 @@ describe("Dispute: appeal", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
     await registerAgent(relay, "del-ap");
     await registerAgent(relay, "wrk-ap");
-    createAllocation(relay, "alloc-ap", "task-ap", "del-ap", "wrk-ap");
+    createAllocation(relay, "alloc-ap", "task-ap", "wrk-ap", "del-ap");
   });
 
   afterEach(async () => {

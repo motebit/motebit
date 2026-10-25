@@ -656,6 +656,52 @@ function mapFundAction(
 }
 
 /**
+ * The money a single-relay verdict moves, derived — never taken from the
+ * operator's body (§7.2/§7.3). `executeFundAction` moves money by
+ * `split_ratio` alone, and the body's `fund_action` and `split_ratio` used to
+ * be read independently, with an omitted ratio defaulting by outcome alone
+ * (`upheld → 0` whoever filed): a worker's upheld dispute recorded
+ * `release_to_worker` and clawed the worker's settlement back to the
+ * delegator. `upheld` and `overturned` take both fields from the
+ * `(resolution, filer_role)` table, as the federation path does; `split`
+ * keeps the adjudicator's ratio (0.5 when omitted). A body that names a
+ * different `fund_action`, or a ratio the table does not give, is refused —
+ * the signed resolution must be the money that moves. Returns the refusal
+ * message, or the derived pair.
+ */
+export function deriveSingleRelayFundAction(
+  body: { resolution?: unknown; fund_action?: unknown; split_ratio?: unknown },
+  filerRole: FilerRole | null,
+): { fund_action: DisputeFundAction; split_ratio: number } | { refused: string } {
+  const outcome = body.resolution;
+  if (outcome !== "upheld" && outcome !== "overturned" && outcome !== "split") {
+    return { refused: "resolution must be one of upheld, overturned, split" };
+  }
+  const ratio = body.split_ratio;
+  if (
+    ratio !== undefined &&
+    (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 0 || ratio > 1)
+  ) {
+    return { refused: "split_ratio must be a number in [0, 1]" };
+  }
+  const derived =
+    outcome === "split"
+      ? { fund_action: "split" as const, split_ratio: ratio ?? 0.5 }
+      : mapFundAction(outcome, filerRole);
+  if (body.fund_action !== undefined && body.fund_action !== derived.fund_action) {
+    return {
+      refused: `fund_action ${JSON.stringify(body.fund_action)} contradicts the §7.2 table for ${outcome} (${filerRole ?? "legacy"} filer): ${derived.fund_action}`,
+    };
+  }
+  if (outcome !== "split" && ratio !== undefined && ratio !== derived.split_ratio) {
+    return {
+      refused: `split_ratio ${ratio} contradicts the §7.2 table for ${outcome} (${filerRole ?? "legacy"} filer): ${derived.split_ratio}`,
+    };
+  }
+  return derived;
+}
+
+/**
  * Aggregate valid peer votes into a `FederationResolutionResult`.
  *
  * §6.4: Majority wins; ties resolve to `split`.
@@ -1584,7 +1630,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     const body = await c.req.json<{
       resolution: DisputeOutcome;
       rationale: string;
-      fund_action: DisputeFundAction;
+      fund_action?: DisputeFundAction;
       split_ratio?: number;
     }>();
 
@@ -1701,12 +1747,17 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
         if (!body.rationale) {
           throw new HTTPException(400, { message: "Rationale is required" });
         }
+        const money = deriveSingleRelayFundAction(
+          body,
+          (dispute.filer_role as FilerRole | null) ?? null,
+        );
+        if ("refused" in money) {
+          throw new HTTPException(400, { message: money.refused });
+        }
         resolutionOutcome = body.resolution;
         resolutionRationale = body.rationale;
-        resolutionFundAction = body.fund_action;
-        splitRatio =
-          body.split_ratio ??
-          (body.resolution === "upheld" ? 0 : body.resolution === "overturned" ? 1 : 0.5);
+        resolutionFundAction = money.fund_action;
+        splitRatio = money.split_ratio;
         adjudicatorVotes = [];
       }
 
