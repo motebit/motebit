@@ -96,11 +96,14 @@ The reference relay persists filed disputes in `relay_disputes(dispute_id PRIMAR
 - `task_id` and `allocation_id` are required. A dispute without economic binding is rejected.
 - Filing party must be a direct party to the referenced task.
 - At least one evidence reference is required at filing time.
+- `filed_at` is the filing party's signed claim, never the dispute's clock. A relay MUST anchor every dispute window (evidence, adjudication, appeal) on its own receive time, and MUST refuse a `DisputeRequest` whose `filed_at` differs from that receive time by more than the skew tolerance (§4.5). A clock the filer chose would let the filer set how long the counterparty's funds stay locked.
+- A dispute of a settlement filed after the dispute window (§4.5) is not eligible, and a relay MUST refuse it: the §7.5 hold over the settled funds has already lifted.
 - A relay must not reject an eligible dispute. Suppressing a valid dispute is a protocol violation.
 
 ### 4.5 Convention
 
-- Dispute window: 24 hours after settlement.
+- Dispute window: 24 hours after settlement, measured on the relay's clock from the settlement's `settled_at`.
+- `filed_at` skew tolerance: 15 minutes either side of the relay's receive time.
 - Minimum trust threshold: see §9.4.
 
 ## 5. Evidence
@@ -149,7 +152,7 @@ The evidence window begins when the dispute transitions to `evidence` and runs f
 
 ### 5.5 Convention
 
-- Evidence window: 48 hours from dispute opening.
+- Evidence window: 48 hours from dispute opening, as the relay received it (§4.4).
 - Maximum 10 evidence submissions per party per dispute.
 
 ## 6. Adjudication

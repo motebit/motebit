@@ -754,6 +754,34 @@ describe("Dispute: appeal", () => {
     expect(body.state).toBe("appealed");
   });
 
+  it("refuses an appeal whose signed appealed_at is not now on the relay's clock (#1153)", async () => {
+    const openRes = await openDispute(relay, "alloc-ap", "del-ap", "wrk-ap", "task-ap");
+    const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+    await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "overturned",
+        rationale: "Original settlement was correct",
+        fund_action: "release_to_worker",
+      }),
+    });
+
+    const future = await fileAppeal(relay, dispute_id, "del-ap", {
+      appealed_at: Date.now() + 10 * 365 * 24 * 3600_000,
+    });
+    expect(future.status).toBe(400);
+    const row = relay.moteDb.db
+      .prepare("SELECT state, appealed_at FROM relay_disputes WHERE dispute_id = ?")
+      .get(dispute_id) as { state: string; appealed_at: number | null };
+    expect(row.state).toBe("resolved");
+    expect(row.appealed_at).toBeNull();
+
+    // The refusal spent nothing: an appeal dated now is still accepted.
+    const now = await fileAppeal(relay, dispute_id, "del-ap");
+    expect(now.status).toBe(200);
+  });
+
   it("rejects second appeal (§8.4)", async () => {
     const openRes = await openDispute(relay, "alloc-ap", "del-ap", "wrk-ap", "task-ap");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
