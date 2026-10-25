@@ -11,7 +11,7 @@
  * ambient audio analysis (creature body language), and TTS playback.
  */
 
-import { stripTags } from "@motebit/ai-core";
+import { stripForSpeech } from "@motebit/ai-core";
 import {
   WebSpeechSTTProvider,
   WebSpeechTTSProvider,
@@ -249,7 +249,7 @@ export class SpatialVoicePipeline {
   async speak(text: string): Promise<void> {
     if (!this.tts) return;
 
-    const clean = stripTags(text);
+    const clean = stripForSpeech(text);
     if (!clean.trim()) return;
 
     // Pause STT while speaking to avoid feedback loop

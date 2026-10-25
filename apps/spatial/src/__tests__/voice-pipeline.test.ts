@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 vi.mock("@motebit/ai-core", () => ({
-  stripTags: vi.fn((text: string) => text.replace(/<[^>]+>/g, "")),
+  stripForSpeech: vi.fn((text: string) => text.replace(/<[^>]+>/g, "")),
 }));
 
 // Shared mock instances — tests can inspect/configure these

@@ -17,7 +17,7 @@ import {
   AMBIENT_EMA_TUNING,
 } from "@motebit/voice";
 import type { TTSProvider, STTProvider, WaveformState } from "@motebit/voice";
-import { stripTags } from "@motebit/ai-core";
+import { stripForSpeech } from "@motebit/ai-core";
 import type { InteriorColor, InvokeFn } from "../index";
 import {
   ELEVENLABS_API_KEY_SLOT,
@@ -770,7 +770,7 @@ export function initVoice(ctx: DesktopContext, callbacks: VoiceCallbacks): Voice
 
   function speakAssistantResponse(text: string): void {
     if (!voiceResponseEnabled) return;
-    const clean = stripTags(text).trim();
+    const clean = stripForSpeech(text).trim();
     if (clean) speakText(clean);
   }
 

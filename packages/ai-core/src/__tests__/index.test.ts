@@ -388,12 +388,13 @@ describe("AnthropicProvider", () => {
 // ---------------------------------------------------------------------------
 
 describe("stripPartialActionTag", () => {
-  it("strips completed action tags", () => {
-    expect(stripPartialActionTag("Hello *smile* world")).toBe("Hello world");
+  it("keeps Markdown emphasis, including a span still streaming in (#1076)", () => {
+    expect(stripPartialActionTag("Hello *smile* world")).toBe("Hello *smile* world");
+    expect(stripPartialActionTag("The answer is **SY")).toBe("The answer is **SY");
   });
 
-  it("strips trailing unclosed action tags during streaming", () => {
-    expect(stripPartialActionTag("Hello *smi")).toBe("Hello");
+  it("still strips an internal tag still streaming in", () => {
+    expect(stripPartialActionTag('Hello <state field="warmth" value="0.')).toBe("Hello");
   });
 
   it("preserves text without tags", () => {
