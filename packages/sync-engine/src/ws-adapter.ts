@@ -13,6 +13,9 @@ import {
 import { assertPushable, type RelayPayloadMode } from "./event-payload.js";
 import { sanitizeRelayText } from "./relay-text.js";
 
+/** `WebSocket.CONNECTING`, spelled out: the `ws` fallback class may not carry the static. */
+const WS_CONNECTING = 0;
+
 // Resolve WebSocket: use the global (Node 22+, browsers) or fall back to the `ws` package (Node 20).
 // globalThis.WebSocket is checked every time (tests may mock it). The `ws` import result is cached.
 let _wsPackage: typeof globalThis.WebSocket | undefined;
@@ -605,8 +608,28 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.scheduleReconnect();
     };
 
+    // A socket that fails to connect fires `error` and then `close` (1006)
+    // in browsers, in Node 24 and in the `ws` package, and `onclose` above
+    // schedules the reconnect. Node 22's built-in WebSocket (undici 6) fires
+    // `error` and then stays CONNECTING forever — `close` never comes, so a
+    // host that connected while the relay was down never reconnected (#1159).
+    // An error while still CONNECTING is therefore taken as the close it
+    // should have been: the close handler runs once, detached first so a
+    // late real `close` cannot run it again.
+    const closeHandler = this.ws.onclose;
     this.ws.onerror = () => {
-      // onclose will fire after onerror
+      if (thisSocket.readyState !== WS_CONNECTING) return; // `close` follows
+      if (this.ws !== thisSocket) return;
+      // Detach both first: undici's close() on a CONNECTING socket fails the
+      // connection again and re-fires `error` synchronously.
+      thisSocket.onclose = null;
+      thisSocket.onerror = null;
+      try {
+        thisSocket.close();
+      } catch {
+        // Closing a socket that never opened may throw; it is abandoned anyway.
+      }
+      closeHandler?.call(thisSocket, new Event("close") as CloseEvent);
     };
   }
 
