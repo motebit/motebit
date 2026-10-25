@@ -37,6 +37,7 @@ import {
   DisputeRequestSchema,
 } from "@motebit/wire-schemas";
 import type { DatabaseDriver } from "@motebit/persistence";
+import { DISPUTE_WINDOW_MS } from "@motebit/virtual-accounts";
 import type { RelayIdentity } from "./federation.js";
 import { AllocationMoneyRefused, moveAllocationMoney } from "./allocation-escrow.js";
 import { EmergencyFrozenError } from "./errors.js";
@@ -71,6 +72,13 @@ const logger = createLogger({ service: "relay", module: "disputes" });
 const EVIDENCE_WINDOW_MS = 48 * 60 * 60 * 1000;
 /** Appeal window: 24 hours after resolution. */
 const APPEAL_WINDOW_MS = 24 * 60 * 60 * 1000;
+/**
+ * §4.4: how far a DisputeRequest's signed `filed_at` may sit from this
+ * relay's clock (#1153). Every window is anchored on the relay's own receive
+ * time, so the bound only refuses a claim that is plainly not "now"; it is
+ * the same 15-minute freshness tolerance the succession route applies.
+ */
+export const FILED_AT_SKEW_MS = 15 * 60 * 1000;
 /** Maximum evidence submissions per party per dispute. */
 const MAX_EVIDENCE_PER_PARTY = 10;
 /** Maximum active disputes per agent (§9.2). */
@@ -1200,6 +1208,18 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       });
     }
 
+    // §4.4 (#1153): the relay owns the clock. `filed_at` is the filer's
+    // signed claim, so it may not be what anchors a window: a filing dated
+    // ten years ahead used to push its evidence deadline (and so the lock on
+    // the counterparty's funds) ten years out. Refuse a claim that is not
+    // "now" on this relay's clock; every deadline below uses `receivedAt`.
+    const receivedAt = Date.now();
+    if (Math.abs(req.filed_at - receivedAt) > FILED_AT_SKEW_MS) {
+      throw new HTTPException(400, {
+        message: `DisputeRequest.filed_at is more than ${FILED_AT_SKEW_MS / 60000} minutes from the relay's clock`,
+      });
+    }
+
     // Verify the signature against the filer's registered public key.
     // No public key on file = no signature can be verified = filing
     // rejected (foundation law §4.4 + §10).
@@ -1247,6 +1267,9 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // For p2p tasks: no allocation exists, but a p2p settlement does.
     // Create a trust-layer dispute (amount_locked = 0, no fund movement).
     let isP2pDispute = false;
+    // When the settlement this dispute challenges was recorded, if one was
+    // (§4.3/§4.5 window). Unset for a pre-settlement (locked) allocation.
+    let settledAt: number | null = null;
     let workerId: string;
     let delegatorId: string | null;
     if (allocation) {
@@ -1263,7 +1286,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     } else {
       const p2pSettlement = db
         .prepare(
-          "SELECT settlement_id, task_id, motebit_id, delegator_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
+          "SELECT settlement_id, task_id, motebit_id, delegator_id, settled_at FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
         )
         .get(req.task_id) as
         | {
@@ -1271,6 +1294,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
             task_id: string;
             motebit_id: string;
             delegator_id: string | null;
+            settled_at: number;
           }
         | undefined;
 
@@ -1280,6 +1304,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       isP2pDispute = true;
       workerId = p2pSettlement.motebit_id;
       delegatorId = p2pSettlement.delegator_id || null;
+      settledAt = p2pSettlement.settled_at;
     }
 
     // §4.1 / §4.4: the filer must be a direct party — the allocation's worker
@@ -1337,6 +1362,24 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       });
     }
 
+    // §4.3 / §4.5 (#1153): a dispute of a settlement is filed within the
+    // dispute window after it. The §7.5 hold is computed over the same window
+    // (`DISPUTE_WINDOW_MS`), so a filing after it would re-lock funds the
+    // worker could already withdraw.
+    if (allocation && allocation.status === "settled") {
+      const row = db
+        .prepare(
+          "SELECT MAX(settled_at) AS settled_at FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'relay'",
+        )
+        .get(allocation.task_id) as { settled_at: number | null } | undefined;
+      settledAt = row?.settled_at ?? null;
+    }
+    if (settledAt !== null && receivedAt > settledAt + DISPUTE_WINDOW_MS) {
+      throw new HTTPException(409, {
+        message: `The dispute window closed ${DISPUTE_WINDOW_MS / 3600000} hours after settlement (dispute-v1 §4.5)`,
+      });
+    }
+
     // Rate limit: max active disputes per agent (§9.2)
     const activeCount = db
       .prepare(
@@ -1350,7 +1393,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       });
     }
 
-    const evidenceDeadline = req.filed_at + EVIDENCE_WINDOW_MS;
+    const evidenceDeadline = receivedAt + EVIDENCE_WINDOW_MS;
     const amountLocked = isP2pDispute ? 0 : allocation!.amount_locked;
     const filingFee = Math.floor(amountLocked * FILING_FEE_RATE);
 
@@ -1822,6 +1865,15 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     const resolvedAt = dispute.resolved_at as number;
     if (Date.now() > resolvedAt + APPEAL_WINDOW_MS) {
       throw new HTTPException(400, { message: "Appeal window has expired" });
+    }
+
+    // §4.4 sibling (#1153): `appealed_at` is the appellant's signed claim,
+    // stored verbatim, so it must be "now" on this relay's clock — a later
+    // appeal deadline must never be one a party chose.
+    if (Math.abs(ap.appealed_at - Date.now()) > FILED_AT_SKEW_MS) {
+      throw new HTTPException(400, {
+        message: `DisputeAppeal.appealed_at is more than ${FILED_AT_SKEW_MS / 60000} minutes from the relay's clock`,
+      });
     }
 
     // Check appealer is a party (party-membership check before signature

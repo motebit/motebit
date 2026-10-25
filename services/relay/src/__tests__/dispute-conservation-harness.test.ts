@@ -912,6 +912,14 @@ async function buildRound2ClawbackInsufficient(relay: SyncRelay): Promise<World>
     taskId,
   );
   if (withdrawAll(w) === 0) throw new Error("round2: worker could not withdraw");
+  // A late filing after the worker withdrew is refused since #1153 (§4.5
+  // window). Relays before it admitted one, and this state is what they
+  // left: restore the settlement time so the filing lands in the window,
+  // with the withdrawal already made.
+  db.prepare("UPDATE relay_settlements SET settled_at = ? WHERE task_id = ?").run(
+    Date.now(),
+    taskId,
+  );
   const filed = await fileDispute(w, "W");
   if (filed.status !== 200) throw new Error(`round2 file: ${filed.status} ${await filed.text()}`);
   const resolved = await relay.app.request(`/api/v1/disputes/${w.disputes[0]}/resolve`, {
