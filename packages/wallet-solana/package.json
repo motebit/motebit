@@ -17,7 +17,7 @@
   "dependencies": {
     "@motebit/protocol": "workspace:*",
     "@solana/spl-token": "^0.4.15",
-    "@solana/web3.js": "^1.95.0"
+    "@solana/web3.js": "^3.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
