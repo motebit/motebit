@@ -1,34 +1,73 @@
 /**
- * Doctrine law-label tamper checks — the proof behind each `> **Layer:** law`
- * line that names a TEST FILE (or a gate whose own probe does not reach the
- * doc's claim). The rule for a law call: the named enforcement must turn red
- * when the doc's central claim is broken. Each entry breaks one central claim
- * in the source and names the test that must go red.
+ * Doctrine law-label proofs — the executable record behind every
+ * `> **Layer:** law` line. The rule for a law call: the doc's central claim
+ * (or the scoped claim its `law (<scope>)` names) is proven by a NAMED item —
+ * a test file, or a gate when the claim is the gate's own invariant — that a
+ * recorded tamper turns red. Each `{ doc, named, … }` entry in PROOFS breaks
+ * that claim in the source and names the item that must go red.
  *
- * Law lines that name only gates are proven by those gates' perturbation
- * probes in scripts/check-gates-effective.ts (each breaks the invariant the
- * gate defends, and the full run must prove every probe red).
+ * A gate's perturbation probe in scripts/check-gates-effective.ts is NOT such
+ * a proof: a probe breaks the GATE's invariant, which is often narrower than
+ * the doc's claim (round-3 review, 2026-10-29: six docs stayed fully green
+ * while their central claim was broken). Only an entry here counts.
+ *
+ * `check-doctrine-layer` reads this file statically: every law doc must have
+ * at least one entry here whose `doc` is that doc and whose `named` is one of
+ * the items its law line names, and every entry must point at a live law label
+ * and one of its named items. Keep `doc` and `named` as the first two keys, as string literals.
  *
  *   node scripts/tampers/doctrine-law-labels.ts
  *
  * Every entry is (file, text to revert, test expected red); the shared runner
  * applies each in an isolated copy of the tree.
  */
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { runTampers, type TamperEdit, type TamperEntry } from "../lib/tamper-runner.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-function entry(
-  name: string,
-  pkg: string | undefined,
-  test: string,
-  red: string,
-  edit: TamperEdit,
-): TamperEntry {
-  return { name, edits: [edit], ...(pkg ? { pkg } : {}), test, red };
+interface Proof {
+  /** The doc key: `docs/doctrine/<doc>.md`, or a chain doc's filename. */
+  doc: string;
+  /** One item the doc's law line names: a test file path or a gate name. */
+  named: string;
+  /** What the tamper breaks, in one line. */
+  name: string;
+  edits: TamperEdit[];
+  /** vitest mode: the exact full name of the test in `named` that must go red. */
+  red?: string;
+  /** Packages to rebuild in the copy (the test reads their dist). */
+  rebuild?: string[];
+  /** command mode: argv + the text it prints only on failure. */
+  command?: string[];
+  redMarker?: string;
+}
+
+/**
+ * One proof → one runner entry. A test path in `named` resolves to its
+ * package (`packages/x/…` → the `name` in `packages/x/package.json`) and the
+ * test path relative to it; a root `scripts/__tests__/…` test runs from the
+ * root.
+ */
+function proof(p: Proof): TamperEntry {
+  const base = { name: `${p.doc}: ${p.name}`, edits: p.edits };
+  if (p.command) return { ...base, command: p.command, redMarker: p.redMarker! };
+  const segs = p.named.split("/");
+  if (segs[0] === "scripts") return { ...base, test: p.named, red: p.red! };
+  const dir = segs.slice(0, 2).join("/");
+  const pkg = (
+    JSON.parse(readFileSync(path.join(ROOT, dir, "package.json"), "utf-8")) as { name: string }
+  ).name;
+  return {
+    ...base,
+    pkg,
+    test: segs.slice(2).join("/"),
+    red: p.red!,
+    ...(p.rebuild ? { rebuild: p.rebuild } : {}),
+  };
 }
 
 /** Prefix a condition with `(false as boolean) &&` so the guard never fires. */
@@ -41,231 +80,534 @@ function off(file: string, condition: string): TamperEdit {
 }
 
 const RUNTIME = "packages/runtime/src/motebit-runtime.ts";
-const EGD = "src/__tests__/execute-granted-delegation.test.ts";
 const EGD_MAIN = "executeGrantedDelegation — deterministic granted spend, fail-closed";
 const STAKES = "explorationStrengthForStakes — explore where mistakes are cheap";
 
-const TAMPERS: TamperEntry[] = [
-  // proactive-interior — the fail-closed proactive tool scope.
-  entry(
-    "proactive-interior: a tending cycle may call any user-allowed tool",
-    "@motebit/runtime",
-    "src/__tests__/proactive-wire.test.ts",
-    "Runtime — proactive interior wire-in scoped tool registry honors proactiveCapabilities config but only for memory-mutation tools",
-    {
-      file: RUNTIME,
-      from: "          return TENDING_ALLOWED_TOOLS.has(toolName);",
-      to: "          return true || TENDING_ALLOWED_TOOLS.has(toolName);",
-    },
-  ),
-
-  // first-person-worker-routing — the sovereign ranks; never first-eligible.
-  entry(
-    "first-person-worker-routing: selectWorker hires the lowest-ranked worker",
-    "@motebit/semiring",
-    "src/__tests__/worker-selection.test.ts",
-    "selectWorker — first-person worker selection prefers a trusted worker over an unknown one (trust-dominant)",
-    {
-      file: "packages/semiring/src/worker-selection.ts",
-      from: "  return rankWorkers(selfId, candidates, opts)[0] ?? null;",
-      to: "  return rankWorkers(selfId, candidates, opts).at(-1) ?? null;",
-    },
-  ),
-  entry(
-    "first-person-worker-routing: the delegation path ignores the selector (first-eligible again)",
-    "@motebit/runtime",
-    "src/__tests__/relay-delegation.test.ts",
-    "resolveAndSubmitP2pDelegation unpinned + selector → hires the ranked worker, not the first candidate",
-    off(
-      "packages/runtime/src/relay-delegation.ts",
-      "    if (params.targetWorkerId == null && params.selectWorker != null && admissible.length > 1) {",
-    ),
-  ),
-
-  // exploration-as-market-vitality — seeded Thompson draw, signed seed, stakes → strength.
-  entry(
-    "exploration: the Thompson draw is not a pure function of its seed",
-    "@motebit/semiring",
-    "src/__tests__/thompson.test.ts",
-    "thompsonDraw — the auditable one-shot draw reproduces exactly from its seed (offline-verifiable)",
-    {
-      file: "packages/semiring/src/thompson.ts",
-      from: "  return sampleBeta(alpha, beta, mulberry32(hashSeed(seed)));",
-      to: "  return sampleBeta(alpha, beta, mulberry32(hashSeed(seed + String(Math.random()))));",
-    },
-  ),
-  entry(
-    "exploration: no exploration draw (pure exploit — the newcomer never gets a first job)",
-    "@motebit/semiring",
-    "src/__tests__/onramp-probability.test.ts",
-    "newcomer on-ramp probability (full exploration, micro stakes) the staging shape — Trusted incumbent 60/2 vs an Unknown newcomer — gives the newcomer a few percent per draw",
-    {
-      file: "packages/semiring/src/worker-selection.ts",
-      from: "  const draw = thompsonDraw(alpha, beta, `${explore.seed}|${c.motebit_id}`);",
-      to: "  const draw = alpha / (alpha + beta);",
-    },
-  ),
-  entry(
-    "exploration: the seed is a constant, not the signed tick token's signature",
-    "@motebit/runtime",
-    EGD,
-    `${EGD_MAIN} a ranked paid hire MINTS a signed routing-decision transcript that verifies on both rungs`,
-    {
-      file: RUNTIME,
-      from: "      const exploreSeed = params.delegation.token.signature;",
-      to: '      const exploreSeed = "constant-seed";',
-    },
-  ),
-  entry(
-    "exploration: a dollar-scale hop explores at full strength",
-    "@motebit/runtime",
-    EGD,
-    `${STAKES} pure exploit at/above the ceiling (dollar-scale hops)`,
-    {
-      file: RUNTIME,
-      from: "  if (costUsd >= EXPLORE_STAKES_CEIL_USD) return 0;",
-      to: "  if (costUsd >= EXPLORE_STAKES_CEIL_USD) return 1;",
-    },
-  ),
-  entry(
-    "exploration: a micro-priced hop never explores",
-    "@motebit/runtime",
-    EGD,
-    `${STAKES} full exploration at/below the floor (micro-priced hops)`,
-    {
-      file: RUNTIME,
-      from: "  if (!(costUsd > EXPLORE_STAKES_FLOOR_USD)) return 1;",
-      to: "  if (!(costUsd > EXPLORE_STAKES_FLOOR_USD)) return 0;",
-    },
-  ),
-
-  // daemon-desktop-unification — the signed runtime:attach handshake.
-  entry(
-    "daemon-desktop-unification: attach accepts a token whose signature does not verify",
-    "@motebit/runtime-host",
-    "src/__tests__/attach.test.ts",
-    "attach handshake refuses a token signed by the wrong key",
-    off("packages/runtime-host/src/server.ts", "    if (payload === null) {"),
-  ),
-
-  // task-admission — the worker verifies the dispatch token before motebit_task runs.
-  entry(
-    "task-admission: motebit_task runs without consulting task admission",
-    "@motebit/mcp-server",
-    "src/__tests__/index.test.ts",
-    "McpServerAdapter — task admission (dispatch_token) refuses tokens signed by a key other than the pinned relay key",
-    off("packages/mcp-server/src/index.ts", "          if (this.config.taskAdmission) {"),
-  ),
-
-  // operator-transparency — the declaration is signed over its payload and that hash is anchored.
-  entry(
-    "operator-transparency: the declaration signature is not over its canonical payload",
-    "@motebit/relay",
-    "src/__tests__/transparency.test.ts",
-    "operator transparency declaration signs the canonical payload verifiably against the relay public key",
-    {
-      file: "services/relay/src/transparency.ts",
-      from: "  const sigBytes = await sign(canonicalBytes, relayIdentity.privateKey);",
-      to: "  const sigBytes = await sign(new Uint8Array([0]), relayIdentity.privateKey);",
-    },
-  ),
-  entry(
-    "operator-transparency: a different hash is anchored than the one served",
-    "@motebit/relay",
-    "src/__tests__/transparency.test.ts",
-    "anchorTransparencyDeclaration — Stage 2 onchain anchor anchors a hash that round-trips against the verifier",
-    {
-      file: "services/relay/src/transparency.ts",
-      from: "      : submitter.submitTransparencyAnchor(declaration.hash),",
-      to: '      : submitter.submitTransparencyAnchor("0".repeat(64)),',
-    },
-  ),
-
-  // auto-routing-as-protocol-primitive — the dispatcher honours Constraints.
-  entry(
-    "auto-routing: the dispatcher ignores the jurisdiction constraint",
-    "@motebit/policy",
-    "src/__tests__/auto-router.test.ts",
-    "dispatchRouting — deny path (constraints make every entry ineligible) impossible jurisdiction → deny (all entries filtered out)",
-    off(
-      "packages/policy/src/auto-router.ts",
-      "    if (constraints.jurisdiction !== undefined && cap.jurisdiction !== constraints.jurisdiction) {",
-    ),
-  ),
-
-  // routing-decision-transcript — verification.
-  entry(
-    "routing-decision-transcript: a bad signature verifies",
-    "@motebit/crypto",
-    "src/__tests__/routing-transcript.test.ts",
-    "routing-transcript envelope law any field tamper invalidates the signature",
-    off("packages/crypto/src/routing-transcript.ts", "  if (!valid) {"),
-  ),
-  entry(
-    "routing-decision-transcript: a winner outside the frozen candidate set verifies",
-    "@motebit/crypto",
-    "src/__tests__/routing-transcript.test.ts",
-    "routing-transcript envelope law a winner outside the frozen candidate set is structurally rejected before crypto",
-    off(
-      "packages/crypto/src/routing-transcript.ts",
-      "  if (!candidates.some((c) => c.motebit_id === transcript.winner_motebit_id)) {",
-    ),
-  ),
-
-  // evidence-provenance — content addressing.
-  entry(
-    "evidence-provenance: a digest mismatch still counts as present",
-    "@motebit/crypto",
-    "src/__tests__/evidence-provenance.test.ts",
-    "verifyEvidenceProvenance — law + hostile corpus digest mismatch → not present (digest_mismatch), even if the span is there",
-    off(
-      "packages/crypto/src/index.ts",
-      "  if (computed.toLowerCase() !== provenance.digest.value.toLowerCase()) {",
-    ),
-  ),
-
-  // machine-roster (roster verifier) — only a good signature enrols a machine.
-  entry(
-    "machine-roster: an entry with no good signature is accepted",
-    "@motebit/crypto",
-    "src/__tests__/host-roster.test.ts",
-    "the reduction — what it refuses gives ONE reason per entry, by precedence, and none for an id with a good copy",
-    {
-      file: "packages/crypto/src/host-roster.ts",
-      from: "        if (await verifyBody(copy)) {",
-      to: "        if ((await verifyBody(copy)) || true) {",
-    },
-  ),
-  entry(
-    "machine-roster: an entry with no good signature is accepted (properties)",
-    "@motebit/crypto",
-    "src/__tests__/host-roster-properties.test.ts",
-    "§6 properties P11 keyless additions — nothing a party with NO key can add moves any machine",
-    {
-      file: "packages/crypto/src/host-roster.ts",
-      from: "        if (await verifyBody(copy)) {",
-      to: "        if ((await verifyBody(copy)) || true) {",
-    },
-  ),
-
-  // gate-repair-instructions (repair instructions) — the contract rejects bare output.
-  entry(
-    "gate-repair-instructions: the repair contract passes any output",
-    undefined,
-    "scripts/__tests__/gate-report.test.ts",
-    "hasRepairInstruction — rejects bare output rejects: pure count",
-    {
-      file: "scripts/lib/gate-report.ts",
-      from: "  if (pointer && directive) return { ok: true };",
-      to: "  if (pointer || directive || true) return { ok: true };",
-    },
-  ),
-
-  // settlement-rails (custody split) — the registry refuses a sovereign rail AT THE
-  // TYPE LEVEL: custody-boundary.test.ts's @ts-expect-error turns into TS2578 under
-  // the package typecheck (vitest alone does not type-check).
+export const PROOFS: Proof[] = [
+  // ── auto-routing-as-protocol-primitive ───────────────────────────────────
   {
-    name: "settlement-rails: the registry is widened to accept a sovereign rail",
+    doc: "auto-routing-as-protocol-primitive",
+    named: "packages/policy/src/__tests__/auto-router.test.ts",
+    name: "the dispatcher ignores the jurisdiction constraint",
+    red: "dispatchRouting — deny path (constraints make every entry ineligible) impossible jurisdiction → deny (all entries filtered out)",
+    edits: [
+      off(
+        "packages/policy/src/auto-router.ts",
+        "    if (constraints.jurisdiction !== undefined && cap.jurisdiction !== constraints.jurisdiction) {",
+      ),
+    ],
+  },
+
+  // ── chrome-as-state-render (cell coverage) ───────────────────────────────
+  {
+    doc: "chrome-as-state-render",
+    named: "apps/web/src/__tests__/slab-chrome.test.ts",
+    name: "the motebit × virtual_browser register collapses into cobrowse chrome",
+    red: "renderSlabChrome — motebit × virtual_browser narration register renders task-step narration in the middle slot when present",
+    edits: [off("apps/web/src/ui/slab-chrome.ts", '  if (state.kind === "motebit") {')],
+  },
+
+  // ── commitment-bond (address binding, backing reads) ─────────────────────
+  {
+    doc: "commitment-bond",
+    named: "packages/crypto/src/__tests__/bond.test.ts",
+    name: "the anti-sybil address binding is dropped",
+    red: "signBondCommitment / verifyBondCommitment rejects a bond whose bonded_address is an arbitrary non-derived string",
+    edits: [
+      off(
+        "packages/crypto/src/artifacts.ts",
+        "  if (commitment.bonded_address !== base58btcEncode(bondedKey)) return false;",
+      ),
+    ],
+  },
+  {
+    doc: "commitment-bond",
+    named: "services/relay/src/__tests__/commitment-bond.test.ts",
+    name: "the backing read marks every bond backed",
+    red: "bond-verifier loop — RPC backing reads marks an under-funded bond underbacked",
+    edits: [
+      {
+        file: "services/relay/src/bond-verifier.ts",
+        from: 'const state = balance >= committed ? "backed" : "underbacked";',
+        to: 'const state = balance >= committed || true ? "backed" : "underbacked";',
+      },
+    ],
+  },
+
+  // ── coverage-graduation ──────────────────────────────────────────────────
+  {
+    doc: "coverage-graduation",
+    named: "check-coverage-graduation",
+    name: "a graduated floor is silently lowered past its raise-by date",
+    edits: [
+      {
+        file: "packages/core-identity/vitest.config.ts",
+        from: "  thresholds: { statements: 85, branches: 86, functions: 85, lines: 85 },",
+        to: "  thresholds: { statements: 70, branches: 86, functions: 85, lines: 85 },",
+      },
+    ],
+    command: ["npx", "tsx", "scripts/coverage-graduation.ts"],
+    redMarker: "PAST target_date with the target still unmet",
+  },
+
+  // ── creature-canon (camera canon) ────────────────────────────────────────
+  {
+    doc: "creature-canon",
+    named: "packages/render-engine/src/__tests__/camera-envelope.test.ts",
+    name: "the canonical front pose leaves the framing envelope",
+    red: "camera envelope × backdrop dome every canonical pose sits inside the orbit envelope and the dome",
+    edits: [
+      {
+        file: "packages/render-engine/src/spec.ts",
+        from: "  front: { fov: 45, position: [0, 0.02, 0.92], lookAt: [0, -0.015, 0] },",
+        to: "  front: { fov: 45, position: [0, 0.02, 9.2], lookAt: [0, -0.015, 0] },",
+      },
+    ],
+  },
+  {
+    doc: "creature-canon",
+    named: "check-creature-canon",
+    name: "a surface re-encodes the camera instead of consuming the canon",
+    edits: [
+      {
+        file: "apps/mobile/src/creature-webview.ts",
+        from: "camera.position.set(...pose.position);",
+        to: "camera.position.set(0, 0.02, 0.85);",
+      },
+    ],
+    command: ["npx", "tsx", "scripts/check-creature-canon.ts"],
+    redMarker: "re-encodes the canonical camera as a literal",
+  },
+
+  // ── daemon-desktop-unification ───────────────────────────────────────────
+  {
+    doc: "daemon-desktop-unification",
+    named: "packages/runtime-host/src/__tests__/attach.test.ts",
+    name: "attach accepts a token whose signature does not verify",
+    red: "attach handshake refuses a token signed by the wrong key",
+    edits: [off("packages/runtime-host/src/server.ts", "    if (payload === null) {")],
+  },
+
+  // ── deprecation-lifecycle (deprecation annotations) ──────────────────────
+  {
+    doc: "deprecation-lifecycle",
+    named: "check-deprecation-discipline",
+    name: "a published @deprecated ships without a replacement pointer or Reason",
+    edits: [
+      {
+        file: "packages/sdk/src/models.ts",
+        from: "/** Default Anthropic model — the picker's `recommended` row (#654). */\nexport const DEFAULT_ANTHROPIC_MODEL",
+        to: "/**\n * Default Anthropic model — the picker's `recommended` row (#654).\n * @deprecated since 1.0.0, removed in 2.0.0.\n */\nexport const DEFAULT_ANTHROPIC_MODEL",
+      },
+    ],
+    command: ["npx", "tsx", "scripts/check-deprecation-discipline.ts"],
+    redMarker: "missing replacement pointer",
+  },
+
+  // ── evidence-provenance ──────────────────────────────────────────────────
+  {
+    doc: "evidence-provenance",
+    named: "packages/crypto/src/__tests__/evidence-provenance.test.ts",
+    name: "a digest mismatch still counts as present",
+    red: "verifyEvidenceProvenance — law + hostile corpus digest mismatch → not present (digest_mismatch), even if the span is there",
+    edits: [
+      off(
+        "packages/crypto/src/index.ts",
+        "  if (computed.toLowerCase() !== provenance.digest.value.toLowerCase()) {",
+      ),
+    ],
+  },
+
+  // ── exploration-as-market-vitality ───────────────────────────────────────
+  {
+    doc: "exploration-as-market-vitality",
+    named: "packages/semiring/src/__tests__/thompson.test.ts",
+    name: "the Thompson draw is not a pure function of its seed",
+    red: "thompsonDraw — the auditable one-shot draw reproduces exactly from its seed (offline-verifiable)",
+    edits: [
+      {
+        file: "packages/semiring/src/thompson.ts",
+        from: "  return sampleBeta(alpha, beta, mulberry32(hashSeed(seed)));",
+        to: "  return sampleBeta(alpha, beta, mulberry32(hashSeed(seed + String(Math.random()))));",
+      },
+    ],
+  },
+  {
+    doc: "exploration-as-market-vitality",
+    named: "packages/semiring/src/__tests__/onramp-probability.test.ts",
+    name: "no exploration draw (pure exploit — the newcomer never gets a first job)",
+    red: "newcomer on-ramp probability (full exploration, micro stakes) the staging shape — Trusted incumbent 60/2 vs an Unknown newcomer — gives the newcomer a few percent per draw",
+    edits: [
+      {
+        file: "packages/semiring/src/worker-selection.ts",
+        from: "  const draw = thompsonDraw(alpha, beta, `${explore.seed}|${c.motebit_id}`);",
+        to: "  const draw = alpha / (alpha + beta);",
+      },
+    ],
+  },
+  {
+    doc: "exploration-as-market-vitality",
+    named: "packages/runtime/src/__tests__/execute-granted-delegation.test.ts",
+    name: "the seed is a constant, not the signed tick token's signature",
+    red: `${EGD_MAIN} a ranked paid hire MINTS a signed routing-decision transcript that verifies on both rungs`,
+    edits: [
+      {
+        file: RUNTIME,
+        from: "      const exploreSeed = params.delegation.token.signature;",
+        to: '      const exploreSeed = "constant-seed";',
+      },
+    ],
+  },
+  {
+    doc: "exploration-as-market-vitality",
+    named: "packages/runtime/src/__tests__/execute-granted-delegation.test.ts",
+    name: "a dollar-scale hop explores at full strength",
+    red: `${STAKES} pure exploit at/above the ceiling (dollar-scale hops)`,
+    edits: [
+      {
+        file: RUNTIME,
+        from: "  if (costUsd >= EXPLORE_STAKES_CEIL_USD) return 0;",
+        to: "  if (costUsd >= EXPLORE_STAKES_CEIL_USD) return 1;",
+      },
+    ],
+  },
+  {
+    doc: "exploration-as-market-vitality",
+    named: "packages/runtime/src/__tests__/execute-granted-delegation.test.ts",
+    name: "a micro-priced hop never explores",
+    red: `${STAKES} full exploration at/below the floor (micro-priced hops)`,
+    edits: [
+      {
+        file: RUNTIME,
+        from: "  if (!(costUsd > EXPLORE_STAKES_FLOOR_USD)) return 1;",
+        to: "  if (!(costUsd > EXPLORE_STAKES_FLOOR_USD)) return 0;",
+      },
+    ],
+  },
+
+  // ── felt-accumulation (accrual basis) ────────────────────────────────────
+  {
+    doc: "felt-accumulation",
+    named: "packages/memory-graph/src/__tests__/accrual.test.ts",
+    name: "a basis is minted for a recall below the consequential bar",
+    red: "recalledMemoryBasis — the consequential-recall producer returns undefined when every match is below the consequential bar",
+    edits: [
+      {
+        file: "packages/memory-graph/src/accrual.ts",
+        from: "    if (sim >= min && (best === undefined || sim > best.sim)) {",
+        to: "    if (best === undefined || sim > best.sim) {",
+      },
+    ],
+  },
+
+  // ── felt-interior (honesty floors) ───────────────────────────────────────
+  {
+    doc: "felt-interior",
+    named: "packages/panels/src/__tests__/felt-consolidation.test.ts",
+    name: "a candidate is shown as verified without its coverage holding",
+    red: "verifyFeltCoverage — evidence regression matrix (2) bad signature → receipt_only",
+    edits: [
+      {
+        file: "packages/panels/src/memory/felt-consolidation.ts",
+        from: "      verified && manifest\n",
+        to: "      manifest\n",
+      },
+    ],
+  },
+
+  // ── first-person-worker-routing ──────────────────────────────────────────
+  {
+    doc: "first-person-worker-routing",
+    named: "packages/semiring/src/__tests__/worker-selection.test.ts",
+    name: "selectWorker hires the lowest-ranked worker",
+    red: "selectWorker — first-person worker selection prefers a trusted worker over an unknown one (trust-dominant)",
+    edits: [
+      {
+        file: "packages/semiring/src/worker-selection.ts",
+        from: "  return rankWorkers(selfId, candidates, opts)[0] ?? null;",
+        to: "  return rankWorkers(selfId, candidates, opts).at(-1) ?? null;",
+      },
+    ],
+  },
+  {
+    doc: "first-person-worker-routing",
+    named: "packages/runtime/src/__tests__/relay-delegation.test.ts",
+    name: "the delegation path ignores the selector (first-eligible again)",
+    red: "resolveAndSubmitP2pDelegation unpinned + selector → hires the ranked worker, not the first candidate",
+    edits: [
+      off(
+        "packages/runtime/src/relay-delegation.ts",
+        "    if (params.targetWorkerId == null && params.selectWorker != null && admissible.length > 1) {",
+      ),
+    ],
+  },
+
+  // ── gate-repair-instructions (repair instructions) ───────────────────────
+  {
+    doc: "gate-repair-instructions",
+    named: "scripts/__tests__/gate-report.test.ts",
+    name: "the repair contract passes any output",
+    red: "hasRepairInstruction — rejects bare output rejects: pure count",
+    edits: [
+      {
+        file: "scripts/lib/gate-report.ts",
+        from: "  if (pointer && directive) return { ok: true };",
+        to: "  if (pointer || directive || true) return { ok: true };",
+      },
+    ],
+  },
+
+  // ── hardware-attestation ─────────────────────────────────────────────────
+  {
+    doc: "hardware-attestation",
+    named: "packages/market/src/__tests__/graph-routing.test.ts",
+    name: "an unattested agent's trust is zeroed — attestation becomes a gate",
+    red: "hardware attestation trust boost absent hardware_attestation → trust unchanged (boost factor 1.0)",
+    edits: [
+      {
+        file: "packages/market/src/graph-routing.ts",
+        from: "  return Math.min(1.0, trust * (1 + chainHwScore * HARDWARE_ATTESTATION_BOOST));",
+        to: "  return chainHwScore < HW_ATTESTATION_HARDWARE ? 0 : Math.min(1.0, trust * (1 + chainHwScore * HARDWARE_ATTESTATION_BOOST));",
+      },
+    ],
+  },
+
+  // ── machine-roster (roster verifier) ─────────────────────────────────────
+  {
+    doc: "machine-roster",
+    named: "packages/crypto/src/__tests__/host-roster.test.ts",
+    name: "an entry with no good signature is accepted",
+    red: "the reduction — what it refuses gives ONE reason per entry, by precedence, and none for an id with a good copy",
+    edits: [
+      {
+        file: "packages/crypto/src/host-roster.ts",
+        from: "        if (await verifyBody(copy)) {",
+        to: "        if ((await verifyBody(copy)) || true) {",
+      },
+    ],
+  },
+  {
+    doc: "machine-roster",
+    named: "packages/crypto/src/__tests__/host-roster-properties.test.ts",
+    name: "an entry with no good signature is accepted (properties)",
+    red: "§6 properties P11 keyless additions — nothing a party with NO key can add moves any machine",
+    edits: [
+      {
+        file: "packages/crypto/src/host-roster.ts",
+        from: "        if (await verifyBody(copy)) {",
+        to: "        if ((await verifyBody(copy)) || true) {",
+      },
+    ],
+  },
+
+  // ── memory-never-confers-authority ───────────────────────────────────────
+  {
+    doc: "memory-never-confers-authority",
+    named: "packages/policy/src/__tests__/grant-authorizes-r4.test.ts",
+    name: "a grantless R4 call auto-executes under a permissive band",
+    red: "approval (validate step 8c) grantless R4 requires approval even when the band would auto-execute it (8b is load-bearing)",
+    edits: [
+      off(
+        "packages/policy/src/policy-gate.ts",
+        "    if (profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null) {",
+      ),
+    ],
+  },
+  {
+    // The grant's own signature/expiry/revocation check runs twice: in
+    // verifyGrantForTurn (`grantValid`) and again inside crypto's
+    // verifyTokenAgainstGrant. Bypassing only `grantValid` is masked by the
+    // second check, so the claim is broken by bypassing both.
+    doc: "memory-never-confers-authority",
+    named: "packages/runtime/src/__tests__/grant-verifier.test.ts",
+    name: "the grant's signature is never checked (both sites)",
+    red: "verifyGrantForTurn returns null for a tampered grant",
+    rebuild: ["@motebit/crypto"],
+    edits: [
+      off("packages/runtime/src/grant-verifier.ts", "  if (!grantValid) return null;"),
+      off(
+        "packages/crypto/src/artifacts.ts",
+        "  if (!(await verifyStandingDelegation(grant, { now, isRevoked: options?.isRevoked }))) {",
+      ),
+    ],
+  },
+
+  // ── memory-provenance ────────────────────────────────────────────────────
+  {
+    doc: "memory-provenance",
+    named: "packages/ai-core/src/__tests__/index.test.ts",
+    name: "a `[from:` marker inside memory content is not escaped (spoofable provenance)",
+    red: "packContext escapes a spoofed [from: marker inside memory content",
+    edits: [
+      {
+        file: "packages/ai-core/src/core.ts",
+        from: '    .replace(/\\[from:/g, "[escaped-from:");',
+        to: '    .replace(/\\[from-never:/g, "[escaped-from:");',
+      },
+    ],
+  },
+  {
+    doc: "memory-provenance",
+    named: "packages/ai-core/src/__tests__/index.test.ts",
+    name: "the provenance marker moves inside [MEMORY_DATA]",
+    red: "packContext renders the provenance marker outside the data boundary for every source",
+    edits: [
+      {
+        file: "packages/ai-core/src/core.ts",
+        from: "[from:${marker}] [confidence=${mem.confidence.toFixed(2)}] [MEMORY_DATA]${escapeMemoryContent(mem.content)}[/MEMORY_DATA]",
+        to: "[confidence=${mem.confidence.toFixed(2)}] [MEMORY_DATA][from:${marker}] ${escapeMemoryContent(mem.content)}[/MEMORY_DATA]",
+      },
+    ],
+  },
+
+  // ── merkle-tree-hash-versioning ──────────────────────────────────────────
+  {
+    doc: "merkle-tree-hash-versioning",
+    named: "packages/crypto/src/__tests__/merkle-domain-separation.test.ts",
+    name: "the v2 leaf tag equals the node tag (no domain separation)",
+    red: "hashLeaf — the leaf-tag dispatch primitive, pinned to the external KAT v2: hashLeaf(enc('L123456')) == HashLeaf('L123456') (0x00 leaf tag through the primitive)",
+    edits: [
+      {
+        file: "packages/crypto/src/merkle.ts",
+        from: "const LEAF_TAG_V2 = new Uint8Array([0x00]);",
+        to: "const LEAF_TAG_V2 = new Uint8Array([0x01]);",
+      },
+    ],
+  },
+
+  // ── operator-transparency (declaration signing, anchoring, processor disclosure)
+  {
+    doc: "operator-transparency",
+    named: "services/relay/src/__tests__/transparency.test.ts",
+    name: "the declaration signature is not over its canonical payload",
+    red: "operator transparency declaration signs the canonical payload verifiably against the relay public key",
+    edits: [
+      {
+        file: "services/relay/src/transparency.ts",
+        from: "  const sigBytes = await sign(canonicalBytes, relayIdentity.privateKey);",
+        to: "  const sigBytes = await sign(new Uint8Array([0]), relayIdentity.privateKey);",
+      },
+    ],
+  },
+  {
+    doc: "operator-transparency",
+    named: "services/relay/src/__tests__/transparency.test.ts",
+    name: "a different hash is anchored than the one served",
+    red: "anchorTransparencyDeclaration — Stage 2 onchain anchor anchors a hash that round-trips against the verifier",
+    edits: [
+      {
+        file: "services/relay/src/transparency.ts",
+        from: "      : submitter.submitTransparencyAnchor(declaration.hash),",
+        to: '      : submitter.submitTransparencyAnchor("0".repeat(64)),',
+      },
+    ],
+  },
+
+  // ── proactive-interior ───────────────────────────────────────────────────
+  {
+    doc: "proactive-interior",
+    named: "packages/runtime/src/__tests__/proactive-wire.test.ts",
+    name: "a tending cycle may call any user-allowed tool",
+    red: "Runtime — proactive interior wire-in scoped tool registry honors proactiveCapabilities config but only for memory-mutation tools",
+    edits: [
+      {
+        file: RUNTIME,
+        from: "          return TENDING_ALLOWED_TOOLS.has(toolName);",
+        to: "          return true || TENDING_ALLOWED_TOOLS.has(toolName);",
+      },
+    ],
+  },
+
+  // ── protocol-model (permissive floor) ────────────────────────────────────
+  {
+    doc: "protocol-model",
+    named: "check-deps",
+    name: "permissive-floor @motebit/sdk declares a BSL production dependency",
+    edits: [
+      {
+        file: "packages/sdk/package.json",
+        from: '  "dependencies": {\n    "@motebit/protocol": "workspace:*"\n  },',
+        to: '  "dependencies": {\n    "@motebit/protocol": "workspace:*",\n    "@motebit/semiring": "workspace:*"\n  },',
+      },
+    ],
+    command: ["npx", "tsx", "scripts/check-deps.ts"],
+    redMarker: "declares a production dependency on BSL package",
+  },
+
+  // ── registry-pattern-canonical ───────────────────────────────────────────
+  {
+    doc: "registry-pattern-canonical",
+    named: "check-closed-registry-canonical",
+    name: "a registered registry loses its exported type guard",
+    edits: [
+      {
+        file: "packages/protocol/src/sensitivity.ts",
+        from: "export function isSensitivityLevel(value: unknown): value is SensitivityLevel {",
+        to: "function isSensitivityLevel(value: unknown): value is SensitivityLevel {",
+      },
+    ],
+    command: ["npx", "tsx", "scripts/check-closed-registry-canonical.ts"],
+    redMarker: "missing_guard_export",
+  },
+
+  // ── retention-policy (store coverage, deletion certificates) ─────────────
+  {
+    doc: "retention-policy",
+    named: "check-retention-coverage",
+    name: "a sensitivity-bearing store the flush never sees",
+    edits: [
+      {
+        file: "packages/persistence/src/index.ts",
+        from: "CREATE TABLE IF NOT EXISTS conversation_messages (\n  message_id TEXT PRIMARY KEY,",
+        to: "CREATE TABLE IF NOT EXISTS shadow_notes (\n  id TEXT PRIMARY KEY,\n  sensitivity TEXT\n);\n\nCREATE TABLE IF NOT EXISTS conversation_messages (\n  message_id TEXT PRIMARY KEY,",
+      },
+    ],
+    command: ["npx", "tsx", "scripts/check-retention-coverage.ts"],
+    redMarker: "[unregistered-table]",
+  },
+  {
+    doc: "retention-policy",
+    named: "packages/privacy-layer/src/__tests__/index.test.ts",
+    name: "a memory deletion issues an unsigned certificate",
+    red: "PrivacyLayer deleteMemory creates a signed mutable_pruning deletion certificate",
+    edits: [
+      {
+        file: "packages/privacy-layer/src/index.ts",
+        from: "    const cert = await signCertAsSubject(\n      certBody,\n      this.signer.motebitId as string,\n      this.signer.privateKey,\n    );\n\n    // Erase the memory",
+        to: "    const cert: DeletionCertificate = certBody;\n\n    // Erase the memory",
+      },
+    ],
+  },
+
+  // ── routing-decision-transcript (emission, verification) ─────────────────
+  {
+    doc: "routing-decision-transcript",
+    named: "packages/crypto/src/__tests__/routing-transcript.test.ts",
+    name: "a bad signature verifies",
+    red: "routing-transcript envelope law any field tamper invalidates the signature",
+    edits: [off("packages/crypto/src/routing-transcript.ts", "  if (!valid) {")],
+  },
+  {
+    doc: "routing-decision-transcript",
+    named: "packages/crypto/src/__tests__/routing-transcript.test.ts",
+    name: "a winner outside the frozen candidate set verifies",
+    red: "routing-transcript envelope law a winner outside the frozen candidate set is structurally rejected before crypto",
+    edits: [
+      off(
+        "packages/crypto/src/routing-transcript.ts",
+        "  if (!candidates.some((c) => c.motebit_id === transcript.winner_motebit_id)) {",
+      ),
+    ],
+  },
+
+  // ── settlement-rails (custody split) ─────────────────────────────────────
+  {
+    // The registry refuses a sovereign rail AT THE TYPE LEVEL: the test's
+    // @ts-expect-error becomes TS2578 under the package typecheck (vitest
+    // alone does not type-check).
+    doc: "settlement-rails",
+    named: "packages/settlement-rails/src/__tests__/custody-boundary.test.ts",
+    name: "the registry is widened to accept a sovereign rail",
     edits: [
       {
         file: "packages/settlement-rails/src/index.ts",
@@ -277,19 +619,73 @@ const TAMPERS: TamperEntry[] = [
     redMarker: "TS2578",
   },
 
-  // protocol-model (permissive floor) — a permissive-floor package may not depend on BSL.
+  // ── surface-determinism (runtime invocation path) ────────────────────────
   {
-    name: "protocol-model: permissive-floor @motebit/sdk declares a BSL production dependency",
+    doc: "surface-determinism",
+    named: "packages/runtime/src/__tests__/invoke-capability.test.ts",
+    name: "a capability invocation is routed through the AI loop as a prompt",
+    red: "invokeCapability — surface determinism bypasses the AI loop entirely — runTurnStreaming is never called",
     edits: [
       {
-        file: "packages/sdk/package.json",
-        from: '  "dependencies": {\n    "@motebit/protocol": "workspace:*"\n  },',
-        to: '  "dependencies": {\n    "@motebit/protocol": "workspace:*",\n    "@motebit/semiring": "workspace:*"\n  },',
+        file: RUNTIME,
+        from: "    yield* this.invokeCapabilityManager.invokeCapability(capability, prompt, options);",
+        to: "    yield* this.sendMessageStreaming(`${capability}: ${prompt}`);",
       },
     ],
-    command: ["npx", "tsx", "scripts/check-deps.ts"],
-    redMarker: "declares a production dependency on BSL package",
+  },
+
+  // ── task-admission ───────────────────────────────────────────────────────
+  {
+    doc: "task-admission",
+    named: "packages/mcp-server/src/__tests__/index.test.ts",
+    name: "motebit_task runs without consulting task admission",
+    red: "McpServerAdapter — task admission (dispatch_token) refuses tokens signed by a key other than the pinned relay key",
+    edits: [off("packages/mcp-server/src/index.ts", "          if (this.config.taskAdmission) {")],
+  },
+  {
+    doc: "task-admission",
+    named: "packages/molecule-runner/src/__tests__/task-admission.test.ts",
+    name: "a priced, relay-registered listing defaults to open",
+    red: "resolveTaskAdmission — posture priced + relay-registered with nothing configured ⇒ relay by DEFAULT (flipped 2026-09-13)",
+    edits: [
+      {
+        file: "packages/molecule-runner/src/index.ts",
+        from: '  const defaulted = priced && Boolean(config.syncUrl) ? "relay" : "open";',
+        to: '  const defaulted = priced && Boolean(config.syncUrl) ? "open" : "open";',
+      },
+    ],
+  },
+
+  // ── typed-truth-perception ───────────────────────────────────────────────
+  {
+    doc: "typed-truth-perception",
+    named: "services/browser-sandbox/src/__tests__/url-equivalence.test.ts",
+    name: "every URL pair reads as equivalent (already_there always true)",
+    red: "urlsAreEquivalent returns false for different hosts",
+    edits: [
+      {
+        file: "services/browser-sandbox/src/url-equivalence.ts",
+        from: "export function urlsAreEquivalent(a: string, b: string): boolean {\n",
+        to: "export function urlsAreEquivalent(a: string, b: string): boolean {\n  if (a.length >= 0) return true;\n",
+      },
+    ],
+  },
+  {
+    doc: "typed-truth-perception",
+    named: "packages/ai-core/src/__tests__/dishonest-closing.test.ts",
+    name: "a dishonest closing claim is never corrected",
+    red: "detectDishonestClosing — three test pins PIN 1 — each field triggers override on first-attempt failure navigation_triggered: false on click triggers correction",
+    edits: [
+      {
+        file: "packages/ai-core/src/dishonest-closing.ts",
+        from: "  const claim = classifyClosingClaim(args.finalText);\n  if (claim === null) return null;",
+        to: "  const claim = classifyClosingClaim(args.finalText);\n  if (claim === null || args.finalText.length >= 0) return null;",
+      },
+    ],
   },
 ];
 
-await runTampers(TAMPERS, { root: ROOT });
+// Run only when invoked directly, so the entries can be read without running.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await runTampers(PROOFS.map(proof), { root: ROOT });
+}

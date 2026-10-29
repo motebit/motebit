@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkDoctrineLayer } from "../check-doctrine-layer.ts";
+import { checkDoctrineLayer, LAW_PROOFS_FILE } from "../check-doctrine-layer.ts";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -33,6 +33,9 @@ const GATES = [
   { name: "check-renamed", defends: "x", script: "check-renamed" },
   { name: "check-nosource", defends: "x", script: "check-nosource" },
   // { name: "check-commented", defends: "x", script: "check-commented" },
+  /*
+  { name: "check-blocked", defends: "x", script: "check-blocked" },
+  */
 ];
 
 // A later literal that is not GATES.
@@ -52,6 +55,7 @@ const PACKAGE_JSON = JSON.stringify({
     "check-info": "npx tsx scripts/check-info.ts",
     "check-commented": "npx tsx scripts/check-commented.ts",
     "check-after": "npx tsx scripts/check-after.ts",
+    "check-blocked": "npx tsx scripts/check-blocked.ts",
     "check-deploy-freshness": "npx tsx scripts/check-deploy-freshness.ts",
     "check-model-catalog-drift": "npx tsx scripts/check-model-catalog-drift.ts",
   },
@@ -59,6 +63,22 @@ const PACKAGE_JSON = JSON.stringify({
 
 const LAW_LINE =
   "> **Layer:** law — enforced by `check-real`, `check-renamed`, `check-ext`, `packages/pkg/src/__tests__/x.test.ts`, `packages/pkg/src/code.ts`";
+
+/** The fixture's recorded law proofs: one per law doc, each naming an item its line names. */
+const PROOFS = `export const PROOFS = [
+  {
+    doc: "law",
+    named: "packages/pkg/src/__tests__/x.test.ts",
+    name: "x",
+  },
+  {
+    // a chain doc keys by its filename
+    doc: "CHAIN.md",
+    named: "check-real",
+    name: "y",
+  },
+];
+`;
 
 let root: string;
 
@@ -72,9 +92,14 @@ function doc(title: string, layerLine: string | null, body = "Body text."): stri
   return layerLine === null ? `# ${title}\n\n${body}\n` : `# ${title}\n\n${layerLine}\n\n${body}\n`;
 }
 
-/** Problems reported, each prefixed with its site. */
-function problems(): string[] {
+/** Every problem reported, each prefixed with its site. */
+function allProblems(): string[] {
   return checkDoctrineLayer(root).findings.map((f) => `${f.site} — ${f.problem}`);
+}
+
+/** Problems about the layer line itself — the proof-record findings a broken line also causes are left to the proof cases. */
+function problems(): string[] {
+  return allProblems().filter((p) => !p.includes("tamper proof") && !p.startsWith(LAW_PROOFS_FILE));
 }
 
 beforeEach(() => {
@@ -92,6 +117,7 @@ beforeEach(() => {
     "check-info",
     "check-commented",
     "check-after",
+    "check-blocked",
     "check-deploy-freshness",
     "check-model-catalog-drift",
   ]) {
@@ -99,6 +125,9 @@ beforeEach(() => {
   }
   put("packages/pkg/src/__tests__/x.test.ts", "export {};\n");
   put("packages/pkg/src/__tests__/fixtures/data.json", "{}\n");
+  put("packages/pkg/src/__tests__/helpers.ts", "export {};\n");
+  mkdirSync(join(root, "packages/pkg/src/__tests__/dir.test.ts"), { recursive: true });
+  put(LAW_PROOFS_FILE, PROOFS);
   put("packages/pkg/src/code.ts", "export {};\n");
   put("README.md", "# Readme\n");
   put(
@@ -125,6 +154,10 @@ describe("check-doctrine-layer passing cases", () => {
     expect(r.docs).toEqual(["docs/doctrine/law.md", "docs/doctrine/story.md", "CHAIN.md"]);
     expect(r.law).toBe(2);
     expect(r.narrative).toBe(1);
+    expect(r.proofs).toBe(2);
+    // 6 hard registrations, 2 of them scheduled external probes counted apart.
+    expect(r.scheduledProbes).toBe(2);
+    expect(r.registeredGates).toBe(4);
   });
 
   it("the real repo passes", () => {
@@ -241,7 +274,7 @@ describe("check-doctrine-layer failure cases", () => {
   it("a law line naming a path that is neither a test nor a source file fails", () => {
     put("docs/doctrine/law.md", doc("Law doc", "> **Layer:** law — enforced by `README.md`"));
     expect(problems()).toEqual([
-      "docs/doctrine/law.md:3 — `README.md` is neither a test file (`*.test.ts` / `*.spec.ts` or under `__tests__/`) nor a source file under a package, app or service `src/`",
+      "docs/doctrine/law.md:3 — `README.md` is neither a test file (`*.test.*` / `*.spec.*`) nor a source file under a package, app or service `src/` (a non-test file under `__tests__/` is neither)",
     ]);
   });
 
@@ -252,13 +285,13 @@ describe("check-doctrine-layer failure cases", () => {
     ]);
   });
 
-  it("a law line naming a directory under __tests__ fails", () => {
+  it("a law line naming a directory shaped like a test file fails", () => {
     put(
       "docs/doctrine/law.md",
-      doc("Law doc", "> **Layer:** law — enforced by `packages/pkg/src/__tests__/fixtures`"),
+      doc("Law doc", "> **Layer:** law — enforced by `packages/pkg/src/__tests__/dir.test.ts`"),
     );
     expect(problems()).toEqual([
-      "docs/doctrine/law.md:3 — named test file `packages/pkg/src/__tests__/fixtures` is not a regular file",
+      "docs/doctrine/law.md:3 — named test file `packages/pkg/src/__tests__/dir.test.ts` is not a regular file",
     ]);
   });
 
@@ -367,6 +400,55 @@ describe("check-doctrine-layer failure cases", () => {
         (g) =>
           `docs/doctrine/law.md:3 — gate \`${g}\` is a scheduled external probe — it runs on a schedule, never on a merge, so a broken claim can merge green; it enforces nothing at merge time`,
       ),
+    );
+  });
+  it("a non-test file under __tests__ fails", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc("Law doc", "> **Layer:** law — enforced by `packages/pkg/src/__tests__/helpers.ts`"),
+    );
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — `packages/pkg/src/__tests__/helpers.ts` is neither a test file (`*.test.*` / `*.spec.*`) nor a source file under a package, app or service `src/` (a non-test file under `__tests__/` is neither)",
+    ]);
+  });
+
+  it("a GATES entry inside a block comment does not register", () => {
+    put("docs/doctrine/law.md", doc("Law doc", "> **Layer:** law — enforced by `check-blocked`"));
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — gate `check-blocked` is not registered in scripts/check.ts (neither GATES nor EXCLUDED_CHECKS)",
+    ]);
+  });
+});
+
+describe("check-doctrine-layer law proofs", () => {
+  it("a law doc with no recorded tamper proof fails", () => {
+    put(LAW_PROOFS_FILE, PROOFS.replace('doc: "law"', 'doc: "story"'));
+    expect(allProblems()).toContain(
+      'law — law label has no recorded tamper proof — no `{ doc: "law", named: <one of its named items>, … }` entry in scripts/tampers/doctrine-law-labels.ts that breaks its claim and turns that item red',
+    );
+  });
+
+  it("a proof naming an item the law line does not name fails", () => {
+    put(
+      LAW_PROOFS_FILE,
+      PROOFS.replace("packages/pkg/src/__tests__/x.test.ts", "check-ext-unnamed"),
+    );
+    expect(allProblems()).toContain(
+      'scripts/tampers/doctrine-law-labels.ts — proof for "law" names `check-ext-unnamed`, which its law line does not name',
+    );
+  });
+
+  it("a proof for a doc that is not a law doc fails", () => {
+    put(LAW_PROOFS_FILE, PROOFS.replace('doc: "law"', 'doc: "story"'));
+    expect(allProblems()).toContain(
+      'scripts/tampers/doctrine-law-labels.ts — proof for "story" points at a doc that is not a law doc',
+    );
+  });
+
+  it("a chain doc's law label needs its own proof", () => {
+    put(LAW_PROOFS_FILE, PROOFS.replace('doc: "CHAIN.md"', 'doc: "OTHER.md"'));
+    expect(allProblems()).toContain(
+      'CHAIN.md — law label has no recorded tamper proof — no `{ doc: "CHAIN.md", named: <one of its named items>, … }` entry in scripts/tampers/doctrine-law-labels.ts that breaks its claim and turns that item red',
     );
   });
 });

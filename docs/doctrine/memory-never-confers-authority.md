@@ -1,6 +1,6 @@
 # Memory never confers authority
 
-> **Layer:** law — enforced by `check-money-authority`
+> **Layer:** law — enforced by `check-money-authority`, `packages/policy/src/__tests__/grant-authorizes-r4.test.ts`, `packages/runtime/src/__tests__/grant-verifier.test.ts`
 
 **Status:** shipped (invariant + producer seam, 2026-06-10). Grant store / inbound-token plumbing / relay revocation feed deferred behind the named triggers in `docs/proposals/standing-delegation-v1.md` §6b.
 **Code:** `packages/policy/src/policy-gate.ts` (step 8b), `packages/runtime/src/grant-verifier.ts` (`verifyGrantForTurn`), `packages/runtime/src/interactive-delegation.ts` (explicit `riskHint`).

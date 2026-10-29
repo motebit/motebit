@@ -1,6 +1,6 @@
 # The creature canon
 
-> **Layer:** law (canon consumption) — enforced by `check-creature-canon`
+> **Layer:** law (camera canon) — enforced by `check-creature-canon`, `packages/render-engine/src/__tests__/camera-envelope.test.ts`
 
 **The creature is the show. Every frame is a product shot.**
 

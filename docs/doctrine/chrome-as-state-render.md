@@ -1,6 +1,6 @@
 # Chrome as state render
 
-> **Layer:** law (cell coverage) — enforced by `check-slab-chrome-coverage`
+> **Layer:** law (cell coverage) — enforced by `check-slab-chrome-coverage`, `apps/web/src/__tests__/slab-chrome.test.ts`
 
 The slab's chrome is **`render(controlState × embodimentMode)`**, not a fixed layout that lives around the screencast. Every cell of the matrix has its own register; the chrome's job is to render whichever cell the slab is currently in. The cobrowser-shaped chrome that ships today — URL bar primary, nav buttons, screencast as a page the user might drive — is the `user × virtual_browser` register universalized as if it were the only register. That's the polarity error this doctrine corrects.
 

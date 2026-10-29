@@ -1,6 +1,6 @@
 # Hardware attestation
 
-> **Layer:** law — enforced by `check-ha-not-a-gate`, `check-hardware-attestation-primitives`
+> **Layer:** law — enforced by `check-ha-not-a-gate`, `check-hardware-attestation-primitives`, `packages/market/src/__tests__/graph-routing.test.ts`
 
 A motebit's identity key is Ed25519, stored on desktop in an owner-only plaintext file (`~/.motebit/dev-keyring.json`; the OS keychain is a pending arc, [#764](https://github.com/motebit/motebit/issues/764)) and in the OS keychain (SecureStore) on mobile. That key is **software-custody**: the private bytes are readable by any process running as the user. A self-attesting system that stops there has a clear ceiling — a third party can verify the signature, but not that any piece of hardware has ever seen the key.
 

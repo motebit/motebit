@@ -20,18 +20,19 @@ const GATE = "scripts/check-doctrine-layer.ts";
 const TEST = "scripts/__tests__/check-doctrine-layer.test.ts";
 const FAIL = "check-doctrine-layer failure cases";
 
-/** One edit to the gate; `red` is the failure case's title. */
-function entry(name: string, red: string, from: string, to: string): TamperEntry {
-  return { name, edits: [{ file: GATE, from, to }], test: TEST, red: `${FAIL} ${red}` };
+/** One edit to the gate; `red` is the case's title inside `suite` (default: the failure cases). */
+function entry(name: string, red: string, from: string, to: string, suite = FAIL): TamperEntry {
+  return { name, edits: [{ file: GATE, from, to }], test: TEST, red: `${suite} ${red}` };
 }
 
 /** Switch a guard's condition off without changing its type. */
-function off(name: string, red: string, condition: string): TamperEntry {
+function off(name: string, red: string, condition: string, suite = FAIL): TamperEntry {
   return entry(
     name,
     red,
     condition,
     condition.replace(/^(\s*(?:\} else )?if \()/, "$1(false as boolean) && "),
+    suite,
   );
 }
 
@@ -57,7 +58,7 @@ const TAMPERS: TamperEntry[] = [
     "a malformed layer line is not reported",
     "a malformed layer line fails",
     "  if (!law) {\n",
-    '  if (!law) {\n    if (line.length > 0) return "law";\n',
+    '  if (!law) {\n    if (line.length > 0) return { layer: "law", tokens: [] };\n',
   ),
   entry(
     "an enforcement entry without backticks is skipped silently",
@@ -99,7 +100,7 @@ const TAMPERS: TamperEntry[] = [
   off(
     "a path that is neither a test nor a source file is accepted",
     "a law line naming a path that is neither a test nor a source file fails",
-    "    if (!isTest && !SOURCE_FILE_RE.test(tok)) {",
+    "    if (!isTest && (TESTS_DIR_RE.test(tok) || !SOURCE_FILE_RE.test(tok))) {",
   ),
   off(
     "the repo root `.` is accepted as a path (path-normalization guard off)",
@@ -138,7 +139,7 @@ const TAMPERS: TamperEntry[] = [
   ),
   off(
     "a directory is accepted as a test file",
-    "a law line naming a directory under __tests__ fails",
+    "a law line naming a directory shaped like a test file fails",
     "    } else if (!statSync(abs).isFile()) {",
   ),
   off(
@@ -153,10 +154,47 @@ const TAMPERS: TamperEntry[] = [
     '  const gates = src.slice(src.indexOf("const GATES"));',
   ),
   entry(
-    "commented-out lines are not removed before parsing",
+    "line comments are not removed before parsing",
     "a commented-out GATES entry does not register",
-    "    .filter((l) => !/^\\s*(?:\\/\\/|\\/\\*|\\*)/.test(l))",
-    "    .filter((l) => l.length >= 0)",
+    "      .filter((l) => !/^\\s*\\/\\//.test(l))",
+    "      .filter((l) => l.length >= 0)",
+  ),
+  entry(
+    "block comments are not removed before parsing",
+    "a GATES entry inside a block comment does not register",
+    '      .replace(/^[ \\t]*\\/\\*[\\s\\S]*?\\*\\//gm, "")',
+    '      .replace(/^NEVER-MATCHES$/gm, "")',
+  ),
+  entry(
+    "any file under __tests__ counts as a test file",
+    "a non-test file under __tests__ fails",
+    "    if (!isTest && (TESTS_DIR_RE.test(tok) || !SOURCE_FILE_RE.test(tok))) {",
+    "    if (!isTest && !SOURCE_FILE_RE.test(tok)) {",
+  ),
+  off(
+    "a law label needs no recorded tamper proof",
+    "a law doc with no recorded tamper proof fails",
+    "    if (!proofs.some((p) => p.doc === key && tokens.includes(p.named))) {",
+    "check-doctrine-layer law proofs",
+  ),
+  off(
+    "a chain doc's law label needs no recorded tamper proof (same guard, second case)",
+    "a chain doc's law label needs its own proof",
+    "    if (!proofs.some((p) => p.doc === key && tokens.includes(p.named))) {",
+    "check-doctrine-layer law proofs",
+  ),
+  entry(
+    "a proof may point at a doc that is not law",
+    "a proof for a doc that is not a law doc fails",
+    "    const tokens = lawTokens.get(p.doc);",
+    "    const tokens = lawTokens.get(p.doc) ?? [p.named];",
+    "check-doctrine-layer law proofs",
+  ),
+  off(
+    "a proof may name an item the law line does not name",
+    "a proof naming an item the law line does not name fails",
+    "    } else if (!tokens.includes(p.named)) {",
+    "check-doctrine-layer law proofs",
   ),
   entry(
     "advisory detection narrowed back to 'soft signal|advisory'",
