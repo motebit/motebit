@@ -226,6 +226,7 @@ export { verifyRepoChange } from "./repo-change.js";
 export {
   checkRepoChangeGrantShape,
   checkRepoChangeParties,
+  checkRepoChangeRevocationSet,
   checkRepoChangeTickStructure,
   checkRepoChangeWindow,
   isCanonicalBase64Url,

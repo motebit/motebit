@@ -19,7 +19,6 @@
  */
 
 import {
-  findGrantRevocation,
   verifyDelegationTokenVerdict,
   verifyStandingDelegation,
   verifySubjectBinding,
@@ -29,6 +28,7 @@ import type { RepoChangeRepairCode, RepoChangeTool, RepoTaskScope } from "@moteb
 import {
   checkRepoChangeGrantShape,
   checkRepoChangeParties,
+  checkRepoChangeRevocationSet,
   checkRepoChangeTickStructure,
   checkRepoChangeWindow,
   isCanonicalBase64Url,
@@ -172,6 +172,12 @@ export async function checkRepoTaskAuthority(
   if (!CANONICAL_UUID.test(grant.grant_id)) {
     fail("integrity.repo_change.value_not_canonical", "grant.grant_id is not a lowercase UUID");
   }
+  if (grant.subject_binding !== undefined && !HEX64.test(grant.subject_binding.digest)) {
+    fail(
+      "integrity.repo_change.value_not_canonical",
+      "grant.subject_binding.digest is not 64 lowercase hex",
+    );
+  }
 
   // -- Signatures, each clockless (the window is judged below), and the binding.
   if (
@@ -191,10 +197,7 @@ export async function checkRepoTaskAuthority(
     clock === null
       ? null
       : await verifyDelegationTokenVerdict(tick, grant, {
-          revocations: revocations.set,
-          // As of the tip commit the preflight read (`revocations.readAt`); the
-          // freshness type has no commit field, so the time is left unstated.
-          revocationFreshness: { basis: "asserted", asOf: {} },
+          // Revocation is judged below by the strict set rule, not here.
           now: clock,
           temporalMode: "wall_clock",
         });
@@ -210,19 +213,9 @@ export async function checkRepoTaskAuthority(
   checkRepoChangeWindow({ grant, tick, now: clock, wallClock: verdict, failures }, fail);
   const tickTools = checkRepoChangeGrantShape(grant, tick, fail);
 
-  // -- Revocation: the strictly parsed set read at preflight.
-  if (revocations.failures.length > 0) {
-    fail(
-      "revocation.repo_change.set_malformed",
-      `${revocations.failures.length} revocation file(s) failed strict parsing`,
-    );
-  }
-  if (
-    verdict !== null &&
-    (verdict.revocation.status !== "fresh" || (await findGrantRevocation(grant, revocations.set)))
-  ) {
-    fail("revocation.repo_change.revoked", "a revocation of the grant was read at preflight");
-  }
+  // -- Revocation: the set read at preflight, parsed strictly by the
+  // verifier's own rule — a malformed entry is set_malformed, never skipped.
+  await checkRepoChangeRevocationSet(grant, revocations, fail);
 
   if (failures.length > 0 || tickTools === null) {
     return {

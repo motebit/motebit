@@ -123,7 +123,23 @@ export interface RepoTaskRunResult {
   readonly runtime_version: string;
   readonly submitted_at: number;
   readonly completed_at: number;
+  /**
+   * The detail of every tool call that failed by throwing — LOCAL ONLY. The
+   * model saw only the fixed code `repo_task_tool_failed`; the receipt's
+   * `result_hash` commits to that code.
+   */
+  readonly tool_failures: readonly RepoTaskToolFailure[];
 }
+
+/** One failed call's local detail (never shown to the model). */
+export interface RepoTaskToolFailure {
+  readonly tool_name: string;
+  readonly tool_call_id: string;
+  readonly detail: string;
+}
+
+/** What the model is told when a tool call failed: a fixed code, no host detail. */
+const TOOL_FAILED = "repo_task_tool_failed";
 
 /** The run refused to start: authority (or the agent's own key) failed before any model call. */
 export class RepoTaskRefusedError extends Error {
@@ -157,7 +173,26 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
   const clock = input.clock ?? Date.now;
   const newId = input.newId ?? defaultNewId;
   const maxModelCalls = input.maxModelCalls ?? DEFAULT_MAX_MODEL_CALLS;
-  const { authority, agent, provider } = input;
+  const { provider } = input;
+  // Snapshot every bound, deep-cloned and frozen, before the first await: a
+  // caller that mutates its scope, grant, tick, revocations or pins after
+  // calling cannot move the run's limits. The path predicate is a function,
+  // held by reference (it is the caller's pure interpretation of data).
+  const authority: RepoTaskAuthorityBundle = deepFreeze({
+    scope: structuredClone(input.authority.scope),
+    grant: structuredClone(input.authority.grant),
+    tick: structuredClone(input.authority.tick),
+    revocations: structuredClone(input.authority.revocations),
+    principal: structuredClone(input.authority.principal),
+    expectedRepo: input.authority.expectedRepo,
+    isPathPermitted: input.authority.isPathPermitted,
+  });
+  const agent: RepoTaskAgent = deepFreeze({
+    motebitId: input.agent.motebitId,
+    deviceId: input.agent.deviceId,
+    privateKey: new Uint8Array(input.agent.privateKey),
+    publicKey: new Uint8Array(input.agent.publicKey),
+  });
   const { scope, grant, tick } = authority;
   const agentPin: RepoTaskPin = {
     motebit_id: agent.motebitId,
@@ -242,6 +277,7 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
   };
 
   const history: ConversationMessage[] = [];
+  const toolFailures: RepoTaskToolFailure[] = [];
   const receipts: SignableToolInvocationReceipt[] = [];
   const used = new Set<RepoChangeTool>();
   const written: string[] = [];
@@ -323,8 +359,12 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
         try {
           outcome = await entry.handler.invoke(args);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          outcome = { status: "failed", result: { ok: false, error: msg } };
+          // The model sees a fixed code, never the port's message: an I/O
+          // error can carry host detail (an absolute path, git's stderr).
+          // The detail stays in the run's local record (`tool_failures`).
+          const detail = err instanceof Error ? err.message : String(err);
+          toolFailures.push({ tool_name: toolCall.name, tool_call_id: toolCall.id, detail });
+          outcome = { status: "failed", result: { ok: false, error: TOOL_FAILED } };
         }
       }
       if (outcome.status === "completed" && toolCall.name === "repo_write_path") {
@@ -366,7 +406,20 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
     runtime_version: input.runtimeVersion,
     submitted_at: submittedAt,
     completed_at: clock(),
+    tool_failures: toolFailures,
   };
+}
+
+/**
+ * Freeze a plain snapshot all the way down (objects and arrays). Typed arrays
+ * cannot be frozen; the key copies are private to the run.
+ */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !ArrayBuffer.isView(value)) {
+    for (const v of Object.values(value as Record<string, unknown>)) deepFreeze(v);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 /** A tool result as the model sees it: repository bytes inside the external-data boundary. */

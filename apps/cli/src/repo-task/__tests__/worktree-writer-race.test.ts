@@ -15,6 +15,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const hooks = vi.hoisted(() => ({
   beforeOpen: null as null | (() => void),
   afterOpen: null as null | (() => void),
+  /** The mocked module's own `constants` object, so a test can drop O_NOFOLLOW. */
+  constants: null as null | Record<string, number | undefined>,
+  /** Add a second hard link to the target right after the open. */
+  linkAfterOpen: null as null | (() => void),
 }));
 
 vi.mock("node:fs", async () => {
@@ -24,12 +28,18 @@ vi.mock("node:fs", async () => {
     hooks.beforeOpen = null;
     before?.();
     const fd = actual.openSync(...args);
+    const link = hooks.linkAfterOpen;
+    hooks.linkAfterOpen = null;
+    link?.();
     const after = hooks.afterOpen;
     hooks.afterOpen = null;
     after?.();
     return fd;
   };
-  return { ...actual, openSync, default: { ...actual, openSync } };
+  const constants: Record<string, number | undefined> = { ...actual.constants };
+  hooks.constants = constants;
+  const mocked = { ...actual, openSync, constants };
+  return { ...mocked, default: mocked };
 });
 
 const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
@@ -52,6 +62,8 @@ beforeEach(() => {
 afterEach(() => {
   hooks.beforeOpen = null;
   hooks.afterOpen = null;
+  if (hooks.constants) hooks.constants.O_NOFOLLOW = fs.constants.O_NOFOLLOW;
+  hooks.linkAfterOpen = null;
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -89,6 +101,20 @@ describe("worktree writer: a swap between the walk and the write is refused", ()
     const result = await writer.write("docs/a.md", new TextEncoder().encode("ours\n"));
     expect(result).toEqual({ ok: false, refusal: "path_raced" });
     expect(fs.readFileSync(path.join(repo, "docs", "a.md"), "utf8")).toBe("someone else\n");
+  });
+
+  it("a second hard link added right after the open: refused, the other name untouched", async () => {
+    const writer = createWorktreeWriter({ root: repo });
+    hooks.linkAfterOpen = () =>
+      fs.linkSync(path.join(repo, "docs", "a.md"), path.join(outside, "alias.md"));
+    const result = await writer.write("docs/a.md", new TextEncoder().encode("ours\n"));
+    expect(result).toEqual({ ok: false, refusal: "hard_link" });
+    expect(fs.readFileSync(path.join(outside, "alias.md"), "utf8")).toBe("original\n");
+  });
+
+  it("a platform without O_NOFOLLOW: the writer refuses to exist", () => {
+    hooks.constants!.O_NOFOLLOW = undefined;
+    expect(() => createWorktreeWriter({ root: repo })).toThrow(/O_NOFOLLOW/);
   });
 
   it("no swap: the write lands (positive control)", async () => {

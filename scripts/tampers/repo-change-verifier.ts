@@ -996,34 +996,34 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "revocation: caller's parse failures ignored",
     `${REV} a file that failed the caller's strict parse makes revocation unchecked`,
-    edit("    let malformed = revs.failures.length > 0;", "    let malformed = false as boolean;"),
+    edit("  let malformed = revs.failures.length > 0;", "  let malformed = false as boolean;"),
   ),
   entry(
     "revocation: caller's parse failures not reported",
     `${REV} a file that failed the caller's strict parse makes revocation unchecked`,
-    edit("    for (const f of revs.failures) fail(", "    for (const f of [] as string[]) fail("),
+    edit("  for (const f of revs.failures) fail(", "  for (const f of [] as string[]) fail("),
   ),
   entry(
     "revocation: strict shape not re-checked",
     `${REV} a revocation with a key the spec does not name makes revocation unchecked`,
-    edit("        isRevocationShape(r) &&\n", ""),
+    edit("      isRevocationShape(r) &&\n", ""),
   ),
   entry(
     "revocation: grant_id UUID not re-checked",
     `${REV} a revocation whose grant_id is not a lowercase UUID makes revocation unchecked`,
-    edit("        CANONICAL_UUID.test(r.grant_id) &&\n", ""),
+    edit("      CANONICAL_UUID.test(r.grant_id) &&\n", ""),
   ),
   entry(
     "revocation: canonical signature not re-checked",
     `${REV} a revocation with a re-spelled signature makes revocation unchecked`,
-    edit("        isCanonicalBase64Url(r.signature) &&\n", ""),
+    edit("      isCanonicalBase64Url(r.signature) &&\n", ""),
   ),
   entry(
     "revocation: signature not re-checked",
     `${REV} a revocation whose signature does not verify makes revocation unchecked`,
     edit(
-      "        isCanonicalBase64Url(r.signature) &&\n        (await verifyDelegationRevocation(r));",
-      "        isCanonicalBase64Url(r.signature);",
+      "      isCanonicalBase64Url(r.signature) &&\n      (await verifyDelegationRevocation(r));",
+      "      isCanonicalBase64Url(r.signature);",
     ),
   ),
   entry(

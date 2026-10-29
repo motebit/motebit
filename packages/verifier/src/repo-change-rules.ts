@@ -11,8 +11,19 @@
  * order (the verdict's `repair` names the first failure of an axis).
  */
 
-import { fromBase64Url, isScopeNarrowed, toBase64Url } from "@motebit/crypto";
-import type { DelegationToken, StandingDelegation, VerificationVerdict } from "@motebit/crypto";
+import {
+  findGrantRevocation,
+  fromBase64Url,
+  isScopeNarrowed,
+  toBase64Url,
+  verifyDelegationRevocation,
+} from "@motebit/crypto";
+import type {
+  DelegationRevocation,
+  DelegationToken,
+  StandingDelegation,
+  VerificationVerdict,
+} from "@motebit/crypto";
 import {
   ALL_GIT_OBJECT_FORMATS,
   ALL_REPO_CHANGE_TOOLS,
@@ -42,6 +53,9 @@ export interface RepoChangePins {
 }
 
 const PATH_SEGMENT = /^[A-Za-z0-9._-]+$/;
+
+/** A lowercase UUID (`8-4-4-4-12` lowercase hex): a grant_id's one spelling (spec §4). */
+export const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** @internal */
 export type Json = Record<string, unknown>;
@@ -437,6 +451,64 @@ export function checkRepoChangeParties(
       "the grant's delegator and delegate are one identity",
     );
   }
+}
+
+/** A `DelegationRevocation` of the strict shape: exactly its keys, each well-typed. */
+export function isRevocationShape(v: unknown): v is DelegationRevocation {
+  return (
+    isObject(v) &&
+    hasExactKeys(v, [
+      "grant_id",
+      "delegator_id",
+      "delegator_public_key",
+      "revoked_at",
+      "suite",
+      "signature",
+    ]) &&
+    isNonEmptyString(v.grant_id) &&
+    isNonEmptyString(v.delegator_id) &&
+    isString(v.delegator_public_key) &&
+    isNumber(v.revoked_at) &&
+    v.suite === "motebit-jcs-ed25519-b64-v1" &&
+    isNonEmptyString(v.signature)
+  );
+}
+
+/**
+ * The revocation set, parsed strictly (spec §2): every entry must be of the
+ * exact revocation shape, with a lowercase-UUID `grant_id`, a canonical
+ * base64url signature and a signature that verifies. Any entry that fails —
+ * and every file the caller already could not parse (`failures`) — is
+ * `set_malformed`, never silently skipped. Authority over the grant is then
+ * decided per grant by `findGrantRevocation` over the well-formed entries; a
+ * binding revocation is `revoked`. Returns the binding revocation and whether
+ * the set was malformed.
+ */
+export async function checkRepoChangeRevocationSet(
+  grant: Pick<StandingDelegation, "grant_id" | "delegator_public_key">,
+  revs: { readonly set: readonly DelegationRevocation[]; readonly failures: readonly string[] },
+  fail: RepoChangeRuleSink,
+): Promise<{ binding: DelegationRevocation | null; malformed: boolean }> {
+  let malformed = revs.failures.length > 0;
+  for (const f of revs.failures) fail("revocation.repo_change.set_malformed", f);
+  const wellFormed: DelegationRevocation[] = [];
+  for (const [i, r] of revs.set.entries()) {
+    const ok =
+      isRevocationShape(r) &&
+      CANONICAL_UUID.test(r.grant_id) &&
+      isCanonicalBase64Url(r.signature) &&
+      (await verifyDelegationRevocation(r));
+    if (ok) wellFormed.push(r);
+    else {
+      malformed = true;
+      fail("revocation.repo_change.set_malformed", `revocations[${i}] fails strict parsing`);
+    }
+  }
+  const binding = await findGrantRevocation(grant, wellFormed);
+  if (binding !== null) {
+    fail("revocation.repo_change.revoked", `grant ${grant.grant_id} is revoked`);
+  }
+  return { binding, malformed };
 }
 
 // -- Case collisions (spec §7) --

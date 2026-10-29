@@ -99,6 +99,15 @@ export function checkRepoChangeGrantShape(grant: StandingDelegation, tick: Deleg
 export function checkRepoChangeParties(grant: StandingDelegation, pins: RepoChangePins, fail: RepoChangeRuleSink): void;
 
 // @public
+export function checkRepoChangeRevocationSet(grant: Pick<StandingDelegation, "grant_id" | "delegator_public_key">, revs: {
+    readonly set: readonly DelegationRevocation[];
+    readonly failures: readonly string[];
+}, fail: RepoChangeRuleSink): Promise<{
+    binding: DelegationRevocation | null;
+    malformed: boolean;
+}>;
+
+// @public
 export function checkRepoChangeTickStructure(grant: StandingDelegation, tick: DelegationToken, fail: RepoChangeRuleSink): void;
 
 // @public

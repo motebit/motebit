@@ -90,6 +90,11 @@ describe("repo task: the run cannot start without a valid tick", () => {
       undefined,
     ],
     [
+      "a forged revocation in the set (strictly parsed, never skipped)",
+      { revocations: async (k, g) => [await revokeGrant({ ...k, f: k.x }, g)] },
+      undefined,
+    ],
+    [
       "a scope wider than the two tools",
       {
         grant: (g) => void (g.scope = "repo_read_blob,repo_write_path,web_search"),
@@ -474,6 +479,48 @@ describe("repo task: a path counts toward max_changed_files once the writer may 
     s.writer.refuseNext = [{ ok: false, refusal: "symlink_component" }];
     await runRepoTask(s.input);
     expect(s.sink.list().map((r) => r.status)).toEqual(["denied", "completed"]);
+  });
+});
+
+describe("repo task: no host detail reaches the model", () => {
+  it("a port error is a fixed code to the model; the detail stays in the local record", async () => {
+    const tree = MemTree.withFile("docs/a.md", "x");
+    tree.lookup = () =>
+      Promise.reject(new Error("fatal: /Users/someone/secret-host/.git: bad object (git stderr)"));
+    const { input, model, sink } = await setup(
+      [[call("c1", "repo_read_blob", { path: "docs/a.md" })], "done"],
+      { tree },
+    );
+    const result = await runRepoTask(input);
+    expect(sink.list().map((r) => r.status)).toEqual(["failed"]);
+    const sent = JSON.stringify(model.packs);
+    expect(sent).not.toContain("secret-host");
+    expect(sent).toContain("repo_task_tool_failed");
+    expect(result.tool_failures).toEqual([
+      expect.objectContaining({
+        tool_name: "repo_read_blob",
+        detail: expect.stringContaining("secret-host"),
+      }),
+    ]);
+  });
+});
+
+describe("repo task: the bounds are a snapshot taken before the first await", () => {
+  it("a caller that widens the scope after calling cannot move the run's limits", async () => {
+    const { input, writer, sink } = await setup([
+      [call("c1", "repo_write_path", { path: "docs/evil.md", content: "x" })],
+      "done",
+    ]);
+    const scope = input.authority.scope as unknown as {
+      allowed_paths: string[];
+      max_changed_files: number;
+    };
+    const running = runRepoTask(input);
+    scope.allowed_paths.push("docs/evil.md");
+    scope.max_changed_files = 99;
+    await running;
+    expect(sink.list().map((r) => r.status)).toEqual(["denied"]);
+    expect(writer.calls).toHaveLength(0);
   });
 });
 

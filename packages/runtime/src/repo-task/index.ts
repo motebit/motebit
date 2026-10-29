@@ -26,4 +26,10 @@ export type {
 } from "./tools.js";
 export { buildRepoTaskPack, repoTaskFrame, repoTaskSystemPrompt } from "./system-prompt.js";
 export { runRepoTask, RepoTaskAbortedError, RepoTaskRefusedError } from "./run.js";
-export type { RepoTaskAgent, RepoTaskRunEnd, RepoTaskRunInput, RepoTaskRunResult } from "./run.js";
+export type {
+  RepoTaskAgent,
+  RepoTaskRunEnd,
+  RepoTaskRunInput,
+  RepoTaskRunResult,
+  RepoTaskToolFailure,
+} from "./run.js";

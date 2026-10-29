@@ -22,12 +22,10 @@
 import {
   canonicalJson,
   canonicalSha256,
-  findGrantRevocation,
   hash,
   hexToBytes,
   subjectBindingDigest,
   verifyDelegation,
-  verifyDelegationRevocation,
   verifyDelegationTokenVerdict,
   verifyExecutionReceipt,
   verifyStandingDelegation,
@@ -52,8 +50,10 @@ import {
   REPO_TASK_SCOPE_SCHEMA,
 } from "@motebit/protocol";
 import {
+  CANONICAL_UUID,
   checkRepoChangeGrantShape,
   checkRepoChangeParties,
+  checkRepoChangeRevocationSet,
   checkRepoChangeTickStructure,
   checkRepoChangeWindow,
   hasExactKeys,
@@ -435,7 +435,6 @@ const REPAIR: Readonly<Record<RepoChangeRepairCode, { summary: string; fix: stri
 // ===========================================================================
 
 const HEX64 = /^[0-9a-f]{64}$/;
-const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OCTAL_MODE = /^[0-7]{6}$/;
 const REGULAR_FILE_MODE = "100644";
 const SYMLINK_MODE = "120000";
@@ -630,26 +629,6 @@ function isResultShape(v: unknown): v is RepoChangeResult {
     isNonEmptyString(v.provider) &&
     isNonEmptyString(v.model) &&
     isNonEmptyString(v.runtime_version)
-  );
-}
-
-function isRevocationShape(v: unknown): v is DelegationRevocation {
-  return (
-    isObject(v) &&
-    hasExactKeys(v, [
-      "grant_id",
-      "delegator_id",
-      "delegator_public_key",
-      "revoked_at",
-      "suite",
-      "signature",
-    ]) &&
-    isNonEmptyString(v.grant_id) &&
-    isNonEmptyString(v.delegator_id) &&
-    isString(v.delegator_public_key) &&
-    isNumber(v.revoked_at) &&
-    v.suite === "motebit-jcs-ed25519-b64-v1" &&
-    isNonEmptyString(v.signature)
   );
 }
 
@@ -1104,24 +1083,8 @@ export async function verifyRepoChange(
     fail("revocation.repo_change.unchecked", "no revocation set was supplied");
     revocation = { status: "unchecked" };
   } else {
-    let malformed = revs.failures.length > 0;
-    for (const f of revs.failures) fail("revocation.repo_change.set_malformed", f);
-    const wellFormed: DelegationRevocation[] = [];
-    for (const [i, r] of revs.set.entries()) {
-      const ok =
-        isRevocationShape(r) &&
-        CANONICAL_UUID.test(r.grant_id) &&
-        isCanonicalBase64Url(r.signature) &&
-        (await verifyDelegationRevocation(r));
-      if (ok) wellFormed.push(r);
-      else {
-        malformed = true;
-        fail("revocation.repo_change.set_malformed", `revocations[${i}] fails strict parsing`);
-      }
-    }
-    const binding = await findGrantRevocation(grant, wellFormed);
+    const { binding, malformed } = await checkRepoChangeRevocationSet(grant, revs, fail);
     if (binding !== null) {
-      fail("revocation.repo_change.revoked", `grant ${grant.grant_id} is revoked`);
       evidenceBasis.push({ kind: "revocation", ref: binding.signature });
       revocation = { status: "revoked", freshness: revs.freshness };
     } else if (malformed) {

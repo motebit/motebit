@@ -32,9 +32,11 @@ function fakeBuses() {
       toolName: string,
       args: Record<string, unknown>,
       signed: boolean,
+      status: ReceiptPulseReceipt["status"] = "completed",
     ) {
       for (const l of activity) l({ invocation_id: invocationId, tool_name: toolName, args });
-      if (signed) for (const l of receipts) l({ invocation_id: invocationId, tool_name: toolName });
+      if (signed)
+        for (const l of receipts) l({ invocation_id: invocationId, tool_name: toolName, status });
     },
     listenerCount: () => activity.size + receipts.size,
   };
@@ -66,6 +68,17 @@ describe("wireReceiptSignPulse — the signed pulse claims only what was signed"
     f.toolCall("call-b", "read_page", {}, true);
     expect(onSigned).toHaveBeenCalledTimes(1);
     expect(onSigned).toHaveBeenCalledWith("read_page", {});
+  });
+
+  it("does NOT pulse for a signed receipt that says the call failed or was denied", () => {
+    const f = fakeBuses();
+    const onSigned = vi.fn();
+    wireReceiptSignPulse(f.buses, onSigned);
+    f.toolCall("call-f", "computer", { kind: "click" }, true, "failed");
+    f.toolCall("call-d", "computer", { kind: "click" }, true, "denied");
+    expect(onSigned).not.toHaveBeenCalled();
+    f.toolCall("call-c", "computer", { kind: "click" }, true, "completed");
+    expect(onSigned).toHaveBeenCalledTimes(1);
   });
 
   it("unsubscribes from every bus it joined", () => {

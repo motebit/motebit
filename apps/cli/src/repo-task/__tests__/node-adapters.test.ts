@@ -195,6 +195,38 @@ describe("worktree writer: by real path, never through a symlink", () => {
     expect(fs.readFileSync(path.join(repo, "docs", "C.md"), "utf8")).toBe("capital\n");
   });
 
+  it("refuses a file with a second hard link (the other name could be outside)", async () => {
+    fs.writeFileSync(path.join(outside, "linked.txt"), "outside original\n");
+    fs.linkSync(path.join(outside, "linked.txt"), path.join(repo, "docs", "h.md"));
+    const writer = createWorktreeWriter({ root: repo });
+    expect(await writer.write("docs/h.md", new TextEncoder().encode("pwned\n"))).toEqual({
+      ok: false,
+      refusal: "hard_link",
+    });
+    expect(fs.readFileSync(path.join(outside, "linked.txt"), "utf8")).toBe("outside original\n");
+  });
+
+  it("refuses Windows device names in any segment, with any extension, in any case", async () => {
+    const writer = createWorktreeWriter({ root: repo });
+    for (const p of [
+      "docs/con.md",
+      "docs/NUL",
+      "docs/Aux.tar.gz",
+      "docs/com1.txt",
+      "lpt9/x.md",
+      "docs/prn",
+    ]) {
+      expect(await writer.write(p, new TextEncoder().encode("x"))).toEqual({
+        ok: false,
+        refusal: "reserved_name",
+      });
+    }
+    // Lookalikes are ordinary names.
+    expect(await writer.write("docs/console.md", new TextEncoder().encode("x"))).toEqual({
+      ok: true,
+    });
+  });
+
   it("keeps an existing file's mode", async () => {
     const writer = createWorktreeWriter({ root: repo });
     expect(await writer.write("bin/run.sh", new TextEncoder().encode("#!/bin/sh\necho\n"))).toEqual(

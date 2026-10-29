@@ -59,6 +59,10 @@ export type RepoPathWriteRefusal =
    * filesystem would have resolved the requested name to it).
    */
   | "case_variant"
+  /** The file has more than one hard link: writing it would write its other names too. */
+  | "hard_link"
+  /** A segment is a Windows device name (`con`, `nul`, `com1`, … with any extension). */
+  | "reserved_name"
   /**
    * The file opened was not the one the walk resolved (a directory or the
    * file was swapped between the walk and the open). Reported after the open,
@@ -241,7 +245,8 @@ function buildWritePath(
       written.add(path);
       const outcome = await writer.write(path, bytes);
       if (!outcome.ok) {
-        if (outcome.refusal !== "path_raced" && !wasWritten) written.delete(path);
+        const opened = outcome.refusal === "path_raced" || outcome.refusal === "hard_link";
+        if (!opened && !wasWritten) written.delete(path);
         return deny(`repo_write_path: refused (${outcome.refusal})`);
       }
       return { status: "completed", result: { ok: true, data: { path, bytes: bytes.length } } };

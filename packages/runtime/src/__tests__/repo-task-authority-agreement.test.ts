@@ -19,9 +19,11 @@ import {
   canonicalJson,
   canonicalSha256,
   hash,
+  signDelegationRevocation,
   signExecutionReceipt,
   signToolInvocationReceipt,
 } from "@motebit/crypto";
+import type { KeyPair, StandingDelegation } from "@motebit/crypto";
 import type { RepoChangeRepairCode } from "@motebit/protocol";
 import { verifyRepoChange } from "@motebit/verifier";
 
@@ -201,6 +203,24 @@ async function runtimeCodes(
 
 const NOW = T0 + 60_000;
 
+/** A revocation of `grantId` claiming the grant's delegator, signed by `signer`, with extra fields. */
+async function revocation(
+  grant: StandingDelegation,
+  signer: KeyPair,
+  over: { grant_id?: string; extra?: Record<string, unknown> } = {},
+) {
+  return signDelegationRevocation(
+    {
+      grant_id: over.grant_id ?? grant.grant_id,
+      delegator_id: grant.delegator_id,
+      delegator_public_key: grant.delegator_public_key,
+      revoked_at: T0 + 1,
+      ...(over.extra ?? {}),
+    },
+    signer.privateKey,
+  );
+}
+
 const CASES: Array<[string, BundleOpts, number]> = [
   ["an honest authority (positive control)", {}, NOW],
   [
@@ -282,6 +302,47 @@ const CASES: Array<[string, BundleOpts, number]> = [
     NOW,
   ],
   ["a revoked grant", { revocations: async (k, g) => [await revokeGrant(k, g)] }, NOW],
+  [
+    "a forged-signature revocation of this grant",
+    { revocations: async (k, g) => [await revocation(g, k.x)] },
+    NOW,
+  ],
+  [
+    "a revocation with an uppercase grant_id",
+    {
+      revocations: async (k, g) => [
+        await revocation(g, k.f, { grant_id: g.grant_id.toUpperCase() }),
+      ],
+    },
+    NOW,
+  ],
+  [
+    "a revocation with an extra key",
+    { revocations: async (k, g) => [await revocation(g, k.f, { extra: { reason: "x" } })] },
+    NOW,
+  ],
+  [
+    "a bad-signature revocation of another grant",
+    {
+      revocations: async (k, g) => [
+        await revocation(g, k.x, { grant_id: "ffffffff-4f50-4a61-8b72-93a4b5c6d7e8" }),
+      ],
+    },
+    NOW,
+  ],
+  [
+    "a non-canonical subject_binding digest",
+    {
+      grant: (g) => {
+        if (g.subject_binding)
+          g.subject_binding = {
+            ...g.subject_binding,
+            digest: g.subject_binding.digest.toUpperCase(),
+          };
+      },
+    },
+    NOW,
+  ],
   ["a revocation file that failed strict parsing", { revocationFailures: ["bad.json"] }, NOW],
   ["an allowed path the predicate refuses", { isPathPermitted: () => false }, NOW],
   ["a scope for another repository", { scope: (s) => void (s.repo = "someone/else") }, NOW],

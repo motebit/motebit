@@ -33,6 +33,14 @@
  * after the check). Removing that empty file is not attempted: by then the
  * path is not one this writer can name safely.
  *
+ * Also refused: a file with more than one hard link (`nlink !== 1`, checked
+ * on the `lstat` before the open and on the descriptor after it) — writing
+ * to it would write every other name of it, possibly outside the worktree —
+ * and a Windows device name as any segment (`con`, `nul`, `aux`, `prn`,
+ * `com1`–`com9`, `lpt1`–`lpt9`, with any extension, in any case). The writer
+ * refuses to exist at all where `O_NOFOLLOW` is not available (Windows): the
+ * last-component guard is not optional.
+ *
  * A new file is created 0644; an existing file keeps its mode. Not wired to
  * any command yet (build step 4 constructs it over the clean worktree its
  * preflight checked).
@@ -63,6 +71,13 @@ function lstatOrNull(p: string): fs.Stats | null {
   }
 }
 
+/** A Windows device name: the segment's stem (before the first dot), in any case. */
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+function isWindowsDeviceName(segment: string): boolean {
+  return WINDOWS_DEVICE.test(segment.split(".")[0] ?? "");
+}
+
 function inside(root: string, p: string): boolean {
   return p === root || p.startsWith(root + path.sep);
 }
@@ -73,6 +88,12 @@ function listedExactly(dir: string, name: string): boolean {
 }
 
 export function createWorktreeWriter(opts: WorktreeWriterOptions): RepoPathWriter {
+  // Fail closed where the last-component guard does not exist.
+  if (typeof fs.constants.O_NOFOLLOW !== "number") {
+    throw new Error(
+      "worktree writer: O_NOFOLLOW is not available on this platform; refusing to write",
+    );
+  }
   const root = fs.realpathSync.native(opts.root);
   return {
     write(rel: string, content: Uint8Array): Promise<RepoPathWriteResult> {
@@ -86,6 +107,7 @@ export function createWorktreeWriter(opts: WorktreeWriterOptions): RepoPathWrite
       ) {
         return Promise.resolve(refuse("outside_worktree"));
       }
+      if (segments.some(isWindowsDeviceName)) return Promise.resolve(refuse("reserved_name"));
       const name = segments[segments.length - 1]!;
       let dir = root;
       for (const seg of segments.slice(0, -1)) {
@@ -109,6 +131,7 @@ export function createWorktreeWriter(opts: WorktreeWriterOptions): RepoPathWrite
       }
       if (st !== null && st.isSymbolicLink()) return Promise.resolve(refuse("symlink_component"));
       if (st !== null && !st.isFile()) return Promise.resolve(refuse("not_a_regular_file"));
+      if (st !== null && st.nlink !== 1) return Promise.resolve(refuse("hard_link"));
       let fd: number;
       try {
         // No O_TRUNC: nothing is cut until the descriptor is proven to be
@@ -139,6 +162,8 @@ export function createWorktreeWriter(opts: WorktreeWriterOptions): RepoPathWrite
         ) {
           return Promise.resolve(refuse("path_raced"));
         }
+        // A second name added since the walk: every other name would see the bytes.
+        if (opened.nlink !== 1) return Promise.resolve(refuse("hard_link"));
         fs.ftruncateSync(fd, 0);
         let off = 0;
         while (off < content.length) off += fs.writeSync(fd, content, off, content.length - off);

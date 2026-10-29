@@ -40,6 +40,7 @@ const CORE = "packages/ai-core/src/core.ts";
 const WRITER = "apps/cli/src/repo-task/worktree-writer.ts";
 const READER = "apps/cli/src/repo-task/git-tree-reader.ts";
 const SINK = "apps/cli/src/repo-task/receipt-file-sink.ts";
+const WEB_PULSE = "apps/web/src/ui/cobrowse-chrome.ts";
 
 const RUN_TEST = "src/__tests__/repo-task-run.test.ts";
 const AGREE_TEST = "src/__tests__/repo-task-authority-agreement.test.ts";
@@ -165,21 +166,36 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   run(
-    "preflight: revocation not consulted",
+    "preflight: the revocation-set rule not called (revoked)",
     `${PRE} refuses a revoked grant before any model call`,
-    edit(
-      AUTH,
-      "    verdict !== null &&\n    (verdict.revocation",
-      "    verdict !== null &&\n    (false as boolean) &&\n    (verdict.revocation",
-    ),
+    edit(AUTH, "  await checkRepoChangeRevocationSet(grant, revocations, fail);\n", ""),
   ),
   run(
-    "preflight: a malformed revocation file ignored",
+    "preflight: the revocation-set rule not called (malformed file)",
     `${PRE} refuses a revocation file that failed strict parsing before any model call`,
+    edit(AUTH, "  await checkRepoChangeRevocationSet(grant, revocations, fail);\n", ""),
+  ),
+  run(
+    "preflight: the revocation-set rule not called (forged entry)",
+    `${PRE} refuses a forged revocation in the set (strictly parsed, never skipped) before any model call`,
+    edit(AUTH, "  await checkRepoChangeRevocationSet(grant, revocations, fail);\n", ""),
+  ),
+  verifierRule(
+    "verifier rule: a revocation entry's signature not verified",
+    `${PRE} refuses a forged revocation in the set (strictly parsed, never skipped) before any model call`,
+    edit(
+      RULES,
+      "      (await verifyDelegationRevocation(r));",
+      "      ((await verifyDelegationRevocation(r)) || true);",
+    ),
+  ),
+  agree(
+    "preflight: subject_binding digest canonicality not checked",
+    `${AGREE} agree on a non-canonical subject_binding digest`,
     edit(
       AUTH,
-      "if (revocations.failures.length > 0) {",
-      "if ((false as boolean) && revocations.failures.length > 0) {",
+      "  if (grant.subject_binding !== undefined && !HEX64.test(grant.subject_binding.digest)) {",
+      "  if ((false as boolean) && grant.subject_binding !== undefined && !HEX64.test(grant.subject_binding.digest)) {",
     ),
   ),
   run(
@@ -306,8 +322,8 @@ const TAMPERS: TamperEntry[] = [
     `${STATUS} success is completed, refusal is denied, a throw is failed — each a receipt in the sink`,
     edit(
       RUN,
-      'outcome = { status: "failed", result: { ok: false, error: msg } };',
-      'outcome = { status: "completed", result: { ok: false, error: msg } };',
+      'outcome = { status: "failed", result: { ok: false, error: TOOL_FAILED } };',
+      'outcome = { status: "completed", result: { ok: false, error: TOOL_FAILED } };',
     ),
   ),
   run(
@@ -744,6 +760,47 @@ const TAMPERS: TamperEntry[] = [
     edit(WRITER, "          opened.ino !== expected.ino ||\n", ""),
   ),
   adapter(
+    "writer: a hard-linked file written (both nlink checks removed)",
+    "worktree writer: by real path, never through a symlink refuses a file with a second hard link (the other name could be outside)",
+    edit(
+      WRITER,
+      '      if (st !== null && st.nlink !== 1) return Promise.resolve(refuse("hard_link"));\n',
+      "",
+    ),
+    edit(
+      WRITER,
+      '        if (opened.nlink !== 1) return Promise.resolve(refuse("hard_link"));\n',
+      "",
+    ),
+  ),
+  race(
+    "writer: a hard link added after the open not re-checked",
+    "worktree writer: a swap between the walk and the write is refused a second hard link added right after the open: refused, the other name untouched",
+    edit(
+      WRITER,
+      '        if (opened.nlink !== 1) return Promise.resolve(refuse("hard_link"));\n',
+      "",
+    ),
+  ),
+  adapter(
+    "writer: Windows device names accepted",
+    "worktree writer: by real path, never through a symlink refuses Windows device names in any segment, with any extension, in any case",
+    edit(
+      WRITER,
+      '      if (segments.some(isWindowsDeviceName)) return Promise.resolve(refuse("reserved_name"));\n',
+      "      void isWindowsDeviceName;\n",
+    ),
+  ),
+  race(
+    "writer: constructed without O_NOFOLLOW",
+    "worktree writer: a swap between the walk and the write is refused a platform without O_NOFOLLOW: the writer refuses to exist",
+    edit(
+      WRITER,
+      '  if (typeof fs.constants.O_NOFOLLOW !== "number") {',
+      '  if ((false as boolean) && typeof fs.constants.O_NOFOLLOW !== "number") {',
+    ),
+  ),
+  adapter(
     "receipt file: an older run's file appended to",
     "receipt file sink: durable, one run per file appends each receipt as a line and refuses to reuse a file",
     edit(
@@ -800,8 +857,8 @@ const TAMPERS: TamperEntry[] = [
     "repo task: a path counts toward max_changed_files once the writer may open it a race refused after the open still counts",
     edit(
       TOOLS,
-      'if (outcome.refusal !== "path_raced" && !wasWritten) written.delete(path);',
-      "if (!wasWritten) written.delete(path);",
+      'const opened = outcome.refusal === "path_raced" || outcome.refusal === "hard_link";',
+      "const opened = false as boolean;",
     ),
   ),
   agree(
@@ -819,6 +876,37 @@ const TAMPERS: TamperEntry[] = [
     `${AGREE} agree on an extra signed key on the tick`,
     edit(AUTH, '      ["the tick", isRepoChangeTickShape(tick)],\n', ""),
   ),
+  run(
+    "run: a port's error message shown to the model",
+    "repo task: no host detail reaches the model a port error is a fixed code to the model; the detail stays in the local record",
+    edit(
+      RUN,
+      '          outcome = { status: "failed", result: { ok: false, error: TOOL_FAILED } };',
+      '          outcome = { status: "failed", result: { ok: false, error: detail } };',
+    ),
+  ),
+  run(
+    "run: the bounds read live from the caller's objects (no snapshot)",
+    "repo task: the bounds are a snapshot taken before the first await a caller that widens the scope after calling cannot move the run's limits",
+    edit(
+      RUN,
+      "  const authority: RepoTaskAuthorityBundle = deepFreeze({",
+      "  const authority: RepoTaskAuthorityBundle = ({",
+    ),
+    edit(
+      RUN,
+      "    scope: structuredClone(input.authority.scope),",
+      "    scope: input.authority.scope,",
+    ),
+  ),
+  {
+    name: "web: the receipt pulse fires for any status",
+    pkg: "@motebit/web",
+    test: "src/ui/__tests__/receipt-sign-pulse.test.ts",
+    red: "wireReceiptSignPulse — the signed pulse claims only what was signed does NOT pulse for a signed receipt that says the call failed or was denied",
+    only: true,
+    edits: [edit(WEB_PULSE, '    if (receipt.status !== "completed") return;\n', "")],
+  },
   status(
     "streaming: a superseded approval request gets no receipt",
     "every proposed call that is not executed gets a denied receipt two calls needing approval in one response: the superseded one is denied, the kept one approved",
