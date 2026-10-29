@@ -71,6 +71,10 @@ export function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
 }
 
+export function isNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
 /** Canonical unpadded base64url: `toBase64Url(fromBase64Url(s)) === s` (spec §4). */
 export function isCanonicalBase64Url(s: string): boolean {
   if (!/^[A-Za-z0-9_-]*$/.test(s)) return false;
@@ -132,6 +136,94 @@ export function isRepoTaskScopeShape(v: unknown): v is RepoTaskScope {
     Number.isSafeInteger(v.max_changed_files) &&
     (v.max_changed_files as number) >= 1 &&
     isNonEmptyString(v.task)
+  );
+}
+
+function isSubjectBindingShape(v: unknown): boolean {
+  return (
+    isObject(v) &&
+    hasExactKeys(v, ["schema", "artifact_schema", "digest_method", "digest"]) &&
+    v.schema === "motebit.subject-binding.v1" &&
+    isString(v.artifact_schema) &&
+    isString(v.digest_method) &&
+    isString(v.digest)
+  );
+}
+
+/** A `StandingDelegation` of the strict repo-change bundle shape: exactly its keys, each well-typed. */
+export function isRepoChangeGrantShape(v: unknown): v is StandingDelegation {
+  return (
+    isObject(v) &&
+    hasExactKeys(
+      v,
+      [
+        "grant_id",
+        "delegator_id",
+        "delegator_public_key",
+        "delegate_id",
+        "delegate_public_key",
+        "scope",
+        "subject",
+        "cadence_ms",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "max_token_ttl_ms",
+        "suite",
+        "signature",
+      ],
+      ["subject_binding", "spend_ceiling"],
+    ) &&
+    isNonEmptyString(v.grant_id) &&
+    isNonEmptyString(v.delegator_id) &&
+    isString(v.delegator_public_key) &&
+    isNonEmptyString(v.delegate_id) &&
+    isString(v.delegate_public_key) &&
+    isNonEmptyString(v.scope) &&
+    isString(v.subject) &&
+    (v.subject_binding === undefined || isSubjectBindingShape(v.subject_binding)) &&
+    (v.spend_ceiling === undefined || isObject(v.spend_ceiling)) &&
+    isNumber(v.cadence_ms) &&
+    isNumber(v.issued_at) &&
+    (v.not_before === null || isNumber(v.not_before)) &&
+    isNumber(v.expires_at) &&
+    isNumber(v.max_token_ttl_ms) &&
+    v.suite === "motebit-jcs-ed25519-b64-v1" &&
+    isNonEmptyString(v.signature)
+  );
+}
+
+/** A `DelegationToken` of the strict repo-change bundle shape (`grant_id` required): exactly its keys, each well-typed. */
+export function isRepoChangeTickShape(v: unknown): v is DelegationToken {
+  return (
+    isObject(v) &&
+    hasExactKeys(
+      v,
+      [
+        "delegator_id",
+        "delegator_public_key",
+        "delegate_id",
+        "delegate_public_key",
+        "scope",
+        "issued_at",
+        "expires_at",
+        "grant_id",
+        "suite",
+        "signature",
+      ],
+      ["not_before"],
+    ) &&
+    isNonEmptyString(v.delegator_id) &&
+    isString(v.delegator_public_key) &&
+    isNonEmptyString(v.delegate_id) &&
+    isString(v.delegate_public_key) &&
+    isNonEmptyString(v.scope) &&
+    isNumber(v.issued_at) &&
+    isNumber(v.expires_at) &&
+    (v.not_before === undefined || isNumber(v.not_before)) &&
+    isString(v.grant_id) &&
+    v.suite === "motebit-jcs-ed25519-b64-v1" &&
+    isNonEmptyString(v.signature)
   );
 }
 
@@ -345,4 +437,51 @@ export function checkRepoChangeParties(
       "the grant's delegator and delegate are one identity",
     );
   }
+}
+
+// -- Case collisions (spec §7) --
+
+/**
+ * Case-fold key for collision detection. Folds harder than ASCII lowercasing
+ * (compatibility normalization and an upper-then-lower round trip, so `ſ`,
+ * `K` (Kelvin) and `ß` meet their ASCII aliases): over-folding only adds
+ * collisions, which fail closed.
+ */
+function caseKey(s: string): string {
+  return s.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC");
+}
+
+/** Folded path and every directory prefix → the exact spellings that exist (spec §7: case collisions). */
+export function caseIndex(paths: Iterable<string>): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const p of paths) {
+    const parts = p.split("/");
+    for (let k = 1; k <= parts.length; k++) {
+      const q = parts.slice(0, k).join("/");
+      const key = caseKey(q);
+      let s = out.get(key);
+      if (!s) out.set(key, (s = new Set()));
+      s.add(q);
+    }
+  }
+  return out;
+}
+
+/**
+ * The first prefix of `p` whose folded key another exact spelling in `index`
+ * shares, as a message; `null` when no other spelling aliases `p` or any of
+ * its directories on a case-insensitive filesystem.
+ */
+export function caseCollision(
+  p: string,
+  index: ReadonlyMap<string, ReadonlySet<string>>,
+): string | null {
+  const parts = p.split("/");
+  for (let k = 1; k <= parts.length; k++) {
+    const q = parts.slice(0, k).join("/");
+    for (const other of index.get(caseKey(q)) ?? []) {
+      if (other !== q) return `${q} collides by case with ${other}`;
+    }
+  }
+  return null;
 }

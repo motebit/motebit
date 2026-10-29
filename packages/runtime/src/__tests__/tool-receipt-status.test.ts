@@ -93,6 +93,7 @@ async function makeRuntime(
     },
     forbidden: async () => ({ ok: true, data: "must not run" }),
     gated: async () => ({ ok: true, data: "ran after approval" }),
+    gated2: async () => ({ ok: true, data: "the second gated call ran" }),
     gated_throws: async () => {
       throw new Error("approved, then boom");
     },
@@ -103,6 +104,7 @@ async function makeRuntime(
     throws: RiskLevel.R0_READ,
     forbidden: RiskLevel.R3_EXECUTE,
     gated: RiskLevel.R2_WRITE,
+    gated2: RiskLevel.R2_WRITE,
     gated_throws: RiskLevel.R2_WRITE,
   };
   const spies: Record<string, ReturnType<typeof vi.fn>> = {};
@@ -209,6 +211,49 @@ describe("tool receipts on the approval refusal paths", () => {
     const { runtime, spies } = await makeRuntime(["gated"], sink, { approvalTimeoutMs: 10 });
     await drain(runtime.sendMessageStreaming("go"));
     await vi.waitFor(() => expect(statuses(sink)).toEqual([["gated", "denied"]]));
+    expect(spies.gated).not.toHaveBeenCalled();
+  });
+});
+
+describe("every proposed call that is not executed gets a denied receipt", () => {
+  it("two calls needing approval in one response: the superseded one is denied, the kept one approved", async () => {
+    const sink = new InMemoryToolReceiptSink();
+    const { runtime, spies } = await makeRuntime(["gated", "gated2"], sink);
+    await drain(runtime.sendMessageStreaming("go"));
+    expect(statuses(sink)).toEqual([["gated", "denied"]]);
+    await drain(runtime.resumeAfterApproval(true));
+    expect(statuses(sink)).toEqual([
+      ["gated", "denied"],
+      ["gated2", "completed"],
+    ]);
+    expect(spies.gated).not.toHaveBeenCalled();
+    expect(spies.gated2).toHaveBeenCalledTimes(1);
+  });
+
+  it("two calls needing approval in one response, then a refusal: both are denied", async () => {
+    const sink = new InMemoryToolReceiptSink();
+    const { runtime, spies } = await makeRuntime(["gated", "gated2"], sink);
+    await drain(runtime.sendMessageStreaming("go"));
+    await drain(runtime.resumeAfterApproval(false));
+    expect(statuses(sink)).toEqual([
+      ["gated", "denied"],
+      ["gated2", "denied"],
+    ]);
+    expect(spies.gated).not.toHaveBeenCalled();
+    expect(spies.gated2).not.toHaveBeenCalled();
+  });
+
+  it("a pending approval voided by a new message is denied with a receipt, and is not a no", async () => {
+    const sink = new InMemoryToolReceiptSink();
+    const { runtime, spies } = await makeRuntime(["gated"], sink, { proposals: 2 });
+    await drain(runtime.sendMessageStreaming("go"));
+    expect(runtime.hasPendingApproval).toBe(true);
+    const second = await drain(runtime.sendMessageStreaming("actually, something else"));
+    expect(second.some((c) => c.type === "approval_voided")).toBe(true);
+    expect(statuses(sink)).toEqual([["gated", "denied"]]);
+    // A void is not a refusal: the re-proposal re-prompts the human.
+    expect(second.some((c) => c.type === "approval_request")).toBe(true);
+    expect(runtime.hasPendingApproval).toBe(true);
     expect(spies.gated).not.toHaveBeenCalled();
   });
 });

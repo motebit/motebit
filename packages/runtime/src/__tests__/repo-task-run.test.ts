@@ -386,6 +386,97 @@ describe("repo task: repo_write_path is closed over the allowed paths", () => {
   });
 });
 
+describe("repo task: repo_write_path refuses a case alias (the verifier's case rule)", () => {
+  async function writeTo(tree: MemTree, bundle?: BundleOpts) {
+    const s = await setup(
+      [[call("c1", "repo_write_path", { path: "docs/a.md", content: "x" })], "done"],
+      { tree, bundle },
+    );
+    await runRepoTask(s.input);
+    return s;
+  }
+
+  it("a tracked Docs/A.md (100755) makes docs/a.md denied, before the writer is touched", async () => {
+    const tree = new MemTree().set("Docs/A.md", {
+      kind: "blob",
+      mode: "100755",
+      oid: "8".repeat(40),
+    });
+    const { sink, writer } = await writeTo(tree);
+    expect(sink.list().map((r) => r.status)).toEqual(["denied"]);
+    expect(writer.calls).toHaveLength(0);
+  });
+
+  it("a tracked directory spelled in another case (DOCS/x.md) makes docs/a.md denied", async () => {
+    const tree = new MemTree().set("DOCS/x.md", {
+      kind: "blob",
+      mode: "100644",
+      oid: "8".repeat(40),
+    });
+    const { sink, writer } = await writeTo(tree);
+    expect(sink.list().map((r) => r.status)).toEqual(["denied"]);
+    expect(writer.calls).toHaveLength(0);
+  });
+
+  it("two allowed paths that alias by case are both refused", async () => {
+    const { sink, writer } = await writeTo(new MemTree(), {
+      scope: (s) => void (s.allowed_paths = ["docs/a.md", "docs/A.md"]),
+    });
+    expect(sink.list().map((r) => r.status)).toEqual(["denied"]);
+    expect(writer.calls).toHaveLength(0);
+  });
+
+  it("a tracked path that is not UTF-8 refuses every write (no collision can be ruled out)", async () => {
+    const tree = new MemTree();
+    tree.extraTrackedBytes.push(new Uint8Array([0x64, 0xff, 0x2e, 0x6d, 0x64]));
+    const { sink, writer } = await writeTo(tree);
+    expect(sink.list().map((r) => r.status)).toEqual(["denied"]);
+    expect(writer.calls).toHaveLength(0);
+  });
+
+  it("the same spelling, tracked, is a modify and is written (positive control)", async () => {
+    const { sink, writer } = await writeTo(MemTree.withFile("docs/a.md", "old"));
+    expect(sink.list().map((r) => r.status)).toEqual(["completed"]);
+    expect(writer.calls).toHaveLength(1);
+  });
+});
+
+describe("repo task: a path counts toward max_changed_files once the writer may open it", () => {
+  const twoPaths: BundleOpts = {
+    scope: (s) => void (s.allowed_paths = ["docs/a.md", "docs/b.md"]),
+  };
+  const twoWrites = [
+    [
+      call("c1", "repo_write_path", { path: "docs/a.md", content: "x" }),
+      call("c2", "repo_write_path", { path: "docs/b.md", content: "y" }),
+    ],
+    "done",
+  ] as Turn[];
+
+  it("a write that fails part-way is failed and still counts", async () => {
+    const s = await setup(twoWrites, { bundle: twoPaths });
+    s.writer.throwNext = 1;
+    await runRepoTask(s.input);
+    expect(s.sink.list().map((r) => r.status)).toEqual(["failed", "denied"]);
+    expect(s.writer.calls.map((c) => c.path)).toEqual(["docs/a.md"]);
+  });
+
+  it("a race refused after the open still counts", async () => {
+    const s = await setup(twoWrites, { bundle: twoPaths });
+    s.writer.refuseNext = [{ ok: false, refusal: "path_raced" }];
+    await runRepoTask(s.input);
+    expect(s.sink.list().map((r) => r.status)).toEqual(["denied", "denied"]);
+    expect(s.writer.calls.map((c) => c.path)).toEqual(["docs/a.md"]);
+  });
+
+  it("a refusal made before anything was opened gives the slot back", async () => {
+    const s = await setup(twoWrites, { bundle: twoPaths });
+    s.writer.refuseNext = [{ ok: false, refusal: "symlink_component" }];
+    await runRepoTask(s.input);
+    expect(s.sink.list().map((r) => r.status)).toEqual(["denied", "completed"]);
+  });
+});
+
 describe("repo task: repo_read_blob reads only tracked blobs at the tip", () => {
   async function readOnce(path: unknown, tree: MemTree) {
     const s = await setup([[call("c1", "repo_read_blob", { path })], "done"], { tree });

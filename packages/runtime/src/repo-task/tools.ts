@@ -22,6 +22,7 @@
 
 import type { RepoChangeTool, RepoTaskScope, ToolDefinition, ToolResult } from "@motebit/protocol";
 import { RiskLevel } from "@motebit/protocol";
+import { repoPathCaseCollision, repoPathCaseIndex } from "@motebit/verifier";
 
 /** One entry of the tip's tree at a path, as git records it. */
 export interface RepoTreeEntry {
@@ -39,6 +40,8 @@ export interface RepoTreeReader {
   lookup(path: string): Promise<RepoTreeEntry | null>;
   /** The bytes of a blob reached through `lookup`. */
   readBlob(oid: string): Promise<Uint8Array>;
+  /** Every path tracked at the tip, as git's own path bytes (for the case-collision rule). */
+  listTrackedPaths(): Promise<readonly Uint8Array[]>;
 }
 
 /** Why the writer refused a write (each is a `denied` call). */
@@ -50,7 +53,18 @@ export type RepoPathWriteRefusal =
   /** Something other than a regular file (a directory, a socket) is at the path. */
   | "not_a_regular_file"
   /** A directory on the path does not exist (the writer creates files, never directories). */
-  | "missing_directory";
+  | "missing_directory"
+  /**
+   * A component exists only under another case spelling (a case-insensitive
+   * filesystem would have resolved the requested name to it).
+   */
+  | "case_variant"
+  /**
+   * The file opened was not the one the walk resolved (a directory or the
+   * file was swapped between the walk and the open). Reported after the open,
+   * so the path counts as touched.
+   */
+  | "path_raced";
 
 export type RepoPathWriteResult =
   { readonly ok: true } | { readonly ok: false; readonly refusal: RepoPathWriteRefusal };
@@ -165,6 +179,25 @@ function buildWritePath(
   const allowed: ReadonlySet<string> = new Set([...scope.allowed_paths]);
   const maxChanged = scope.max_changed_files;
   const written = new Set<string>();
+  // The tip's tracked paths, read once (the tip is fixed for the run) and
+  // folded with every allowed path by the verifier's own case rule.
+  let caseIndexAtTip: Promise<ReadonlyMap<string, ReadonlySet<string>> | null> | null = null;
+  const loadCaseIndex = (): Promise<ReadonlyMap<string, ReadonlySet<string>> | null> => {
+    caseIndexAtTip ??= reader.listTrackedPaths().then((tracked) => {
+      const names: string[] = [];
+      for (const bytes of tracked) {
+        try {
+          names.push(STRICT_UTF8.decode(bytes));
+        } catch {
+          // A tracked path the case rule cannot read: no collision can be
+          // ruled out, so every write fails closed (as the verifier does).
+          return null;
+        }
+      }
+      return repoPathCaseIndex([...names, ...allowed]);
+    });
+    return caseIndexAtTip;
+  };
   const handler: RepoTaskToolHandler = Object.freeze({
     name: "repo_write_path" as const,
     async invoke(args: Record<string, unknown>): Promise<RepoTaskToolOutcome> {
@@ -183,14 +216,34 @@ function buildWritePath(
       // A tracked path must stay a regular 100644 file: writing over a
       // symlink, submodule, directory or executable would change its kind or
       // mode, which the scope never authorizes.
+      // No case alias: on a case-insensitive filesystem `docs/a.md` IS a
+      // tracked `Docs/A.md` (or another allowed path), so a write to one would
+      // land on the other. The verifier's rule, over tip ∪ allowed, before any
+      // write I/O.
+      const index = await loadCaseIndex();
+      if (index === null) {
+        return deny(
+          "repo_write_path: a tracked path is not UTF-8, so no case collision can be ruled out",
+        );
+      }
+      const collision = repoPathCaseCollision(path, index);
+      if (collision !== null) return deny(`repo_write_path: ${collision}`);
       const tracked = await reader.lookup(path);
       if (tracked !== null && (tracked.kind !== "blob" || tracked.mode !== REGULAR_FILE_MODE)) {
         return deny(`repo_write_path: ${path} is tracked as ${tracked.kind} ${tracked.mode}`);
       }
       const bytes = ENCODER.encode(content);
-      const outcome = await writer.write(path, bytes);
-      if (!outcome.ok) return deny(`repo_write_path: refused (${outcome.refusal})`);
+      // Counted from the moment the writer may open the file: a write that
+      // fails part-way has still touched the path, so it counts toward
+      // max_changed_files. Only a refusal the writer made before opening
+      // anything gives the slot back.
+      const wasWritten = written.has(path);
       written.add(path);
+      const outcome = await writer.write(path, bytes);
+      if (!outcome.ok) {
+        if (outcome.refusal !== "path_raced" && !wasWritten) written.delete(path);
+        return deny(`repo_write_path: refused (${outcome.refusal})`);
+      }
       return { status: "completed", result: { ok: true, data: { path, bytes: bytes.length } } };
     },
   });

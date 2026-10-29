@@ -95,5 +95,18 @@ export function createGitTreeReader(opts: GitTreeReaderOptions): RepoTreeReader 
       const bytes = await git(gitDir, ["cat-file", "blob", oid]);
       return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     },
+    async listTrackedPaths(): Promise<readonly Uint8Array[]> {
+      // Every path of the tip's tree, recursively, as git's own bytes
+      // (`-z`: NUL-separated, never quoted or re-encoded).
+      const out = await git(gitDir, ["ls-tree", "-r", "-z", "--full-tree", "--name-only", tip]);
+      const paths: Uint8Array[] = [];
+      let start = 0;
+      for (let i = 0; i < out.length; i++) {
+        if (out[i] !== 0) continue;
+        if (i > start) paths.push(new Uint8Array(out.subarray(start, i)));
+        start = i + 1;
+      }
+      return paths;
+    },
   };
 }

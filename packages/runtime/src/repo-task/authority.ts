@@ -33,6 +33,8 @@ import {
   checkRepoChangeWindow,
   isCanonicalBase64Url,
   isCanonicalRepoPath,
+  isRepoChangeGrantShape,
+  isRepoChangeTickShape,
   isRepoTaskScopeShape,
 } from "@motebit/verifier";
 
@@ -106,25 +108,41 @@ export async function checkRepoTaskAuthority(
   const { scope, grant, tick, revocations, principal } = bundle;
   const clock = typeof now === "number" && Number.isFinite(now) ? now : null;
 
-  // -- The scope: the verifier's strict shape and canonical paths; the predicate; the repo.
-  if (!isRepoTaskScopeShape(scope)) {
-    fail("integrity.repo_change.bundle_malformed", "the scope is not of the strict shape");
-  } else {
-    const seen = new Set<string>();
-    for (const p of scope.allowed_paths) {
-      if (!isCanonicalRepoPath(p)) {
-        fail("integrity.repo_change.value_not_canonical", `allowed path ${JSON.stringify(p)}`);
-      } else if (!bundle.isPathPermitted(p)) {
-        fail("authority.repo_change.scope_path_not_permitted", `allowed path ${JSON.stringify(p)}`);
-      }
-      if (seen.has(p)) {
-        fail(
-          "integrity.repo_change.value_not_canonical",
-          `allowed path ${JSON.stringify(p)} repeats`,
-        );
-      }
-      seen.add(p);
+  // -- Strict shapes first, the verifier's own: a scope, grant or tick that is
+  // not of its exact shape (an extra signed key, a missing one) is judged no
+  // further, as the verifier judges a malformed bundle no further.
+  const malformed = (
+    [
+      ["the scope", isRepoTaskScopeShape(scope)],
+      ["the grant", isRepoChangeGrantShape(grant)],
+      ["the tick", isRepoChangeTickShape(tick)],
+    ] as const
+  ).filter(([, ok]) => !ok);
+  if (malformed.length > 0) {
+    return {
+      ok: false,
+      failures: malformed.map(([what]) => ({
+        code: "integrity.repo_change.bundle_malformed" as const,
+        detail: `${what} is not of the strict shape`,
+      })),
+    };
+  }
+
+  // -- The scope's canonical paths, the predicate, the repo.
+  const seen = new Set<string>();
+  for (const p of scope.allowed_paths) {
+    if (!isCanonicalRepoPath(p)) {
+      fail("integrity.repo_change.value_not_canonical", `allowed path ${JSON.stringify(p)}`);
+    } else if (!bundle.isPathPermitted(p)) {
+      fail("authority.repo_change.scope_path_not_permitted", `allowed path ${JSON.stringify(p)}`);
     }
+    if (seen.has(p)) {
+      fail(
+        "integrity.repo_change.value_not_canonical",
+        `allowed path ${JSON.stringify(p)} repeats`,
+      );
+    }
+    seen.add(p);
   }
   if (scope.repo !== bundle.expectedRepo) {
     fail("authority.repo_change.repo_mismatch", "the scope names another repository");

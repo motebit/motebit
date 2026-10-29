@@ -45,6 +45,7 @@ const sha = (value: string) => ({ algorithm: "sha-256" as const, value });
 
 /** The codes a run can judge before any change exists. */
 const JUDGEABLE: ReadonlySet<RepoChangeRepairCode> = new Set<RepoChangeRepairCode>([
+  "integrity.repo_change.bundle_malformed",
   "integrity.repo_change.value_not_canonical",
   "integrity.repo_change.signature_invalid",
   "integrity.repo_change.scope_binding_mismatch",
@@ -202,6 +203,21 @@ const NOW = T0 + 60_000;
 
 const CASES: Array<[string, BundleOpts, number]> = [
   ["an honest authority (positive control)", {}, NOW],
+  [
+    "an extra signed key on the grant",
+    { grant: (g) => void ((g as unknown as Record<string, unknown>).extra = "x") },
+    NOW,
+  ],
+  [
+    "a grant missing its not_before key",
+    { grant: (g) => void delete (g as unknown as Record<string, unknown>).not_before },
+    NOW,
+  ],
+  [
+    "an extra signed key on the tick",
+    { tick: (t) => void ((t as unknown as Record<string, unknown>).extra = "x") },
+    NOW,
+  ],
   ["an expired tick", {}, T0 + HOUR + 1],
   ["an expired grant", {}, T0 + 25 * HOUR],
   ["a tick not yet valid", { tick: (t) => void (t.not_before = T0 + 30 * 60_000) }, NOW],

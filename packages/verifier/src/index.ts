@@ -230,7 +230,11 @@ export {
   checkRepoChangeWindow,
   isCanonicalBase64Url,
   isCanonicalRepoPath,
+  isRepoChangeGrantShape,
+  isRepoChangeTickShape,
   isRepoTaskScopeShape,
+  caseIndex as repoPathCaseIndex,
+  caseCollision as repoPathCaseCollision,
   parseRepoChangeTools,
   repoChangeAuthorityWindow,
 } from "./repo-change-rules.js";

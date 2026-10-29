@@ -166,6 +166,12 @@ export function isCanonicalRepoPath(p: string): boolean;
 export { isFullyVerified }
 
 // @public
+export function isRepoChangeGrantShape(v: unknown): v is StandingDelegation;
+
+// @public
+export function isRepoChangeTickShape(v: unknown): v is DelegationToken;
+
+// @public
 export function isRepoTaskScopeShape(v: unknown): v is RepoTaskScope;
 
 // @public
@@ -268,6 +274,12 @@ export interface RepoChangeVerification {
     readonly outcome: "completed" | "failed" | "denied" | null;
     readonly verdict: VerificationVerdict;
 }
+
+// @public
+export function repoPathCaseCollision(p: string, index: ReadonlyMap<string, ReadonlySet<string>>): string | null;
+
+// @public
+export function repoPathCaseIndex(paths: Iterable<string>): Map<string, Set<string>>;
 
 export { RepoTaskScope }
 

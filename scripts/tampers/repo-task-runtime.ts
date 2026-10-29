@@ -48,6 +48,7 @@ const INTERIOR_TEST = "src/__tests__/repo-task-no-interior.test.ts";
 const STATUS_TEST = "src/__tests__/tool-receipt-status.test.ts";
 const OUTCOME_TEST = "src/__tests__/tool-outcome.test.ts";
 const ADAPTER_TEST = "src/repo-task/__tests__/node-adapters.test.ts";
+const RACE_TEST = "src/repo-task/__tests__/worktree-writer-race.test.ts";
 
 const PRE = "repo task: the run cannot start without a valid tick";
 const AGREE = "repo task: the run and the verifier judge authority by one law";
@@ -94,6 +95,8 @@ const outcome = (name: string, red: string, ...edits: TamperEdit[]) =>
   entry("@motebit/ai-core", OUTCOME_TEST, name, red, ...edits);
 const adapter = (name: string, red: string, ...edits: TamperEdit[]) =>
   entry("motebit", ADAPTER_TEST, name, red, ...edits);
+const race = (name: string, red: string, ...edits: TamperEdit[]) =>
+  entry("motebit", RACE_TEST, name, red, ...edits);
 
 const IDENTITY_ASSERTION = edit(
   RUN,
@@ -189,8 +192,8 @@ const TAMPERS: TamperEntry[] = [
     `${PRE} refuses a non-canonical allowed path before any model call`,
     edit(
       AUTH,
-      "      if (!isCanonicalRepoPath(p)) {",
-      "      if ((false as boolean) && !isCanonicalRepoPath(p)) {",
+      "    if (!isCanonicalRepoPath(p)) {",
+      "    if ((false as boolean) && !isCanonicalRepoPath(p)) {",
     ),
   ),
   run(
@@ -198,8 +201,8 @@ const TAMPERS: TamperEntry[] = [
     `${PRE} refuses an allowed path the predicate refuses before any model call`,
     edit(
       AUTH,
-      "      } else if (!bundle.isPathPermitted(p)) {",
-      "      } else if ((false as boolean) && !bundle.isPathPermitted(p)) {",
+      "    } else if (!bundle.isPathPermitted(p)) {",
+      "    } else if ((false as boolean) && !bundle.isPathPermitted(p)) {",
     ),
   ),
   run(
@@ -417,11 +420,7 @@ const TAMPERS: TamperEntry[] = [
   run(
     "write: a writer refusal reported as completed",
     `${WRITE} a writer refusal (symlink component) is denied`,
-    edit(
-      TOOLS,
-      "if (!outcome.ok) return deny(",
-      "if ((false as boolean) && !outcome.ok) return deny(",
-    ),
+    edit(TOOLS, "      if (!outcome.ok) {", "      if ((false as boolean) && !outcome.ok) {"),
   ),
   run(
     "write: max_changed_files not enforced",
@@ -670,7 +669,7 @@ const TAMPERS: TamperEntry[] = [
     edit(WRITER, "    return fs.lstatSync(p);", "    return fs.statSync(p);"),
     edit(
       WRITER,
-      '      if (realDir !== dir || !inside(root, realDir))\n        return Promise.resolve(refuse("outside_worktree"));',
+      '      if (realDir !== dir || !inside(root, realDir)) {\n        return Promise.resolve(refuse("outside_worktree"));\n      }',
       "      void inside;",
     ),
   ),
@@ -680,8 +679,8 @@ const TAMPERS: TamperEntry[] = [
     edit(WRITER, "    return fs.lstatSync(p);", "    return fs.statSync(p);"),
     edit(
       WRITER,
-      "            fs.constants.O_TRUNC |\n            fs.constants.O_NOFOLLOW,",
-      "            fs.constants.O_TRUNC,",
+      "fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW,",
+      "fs.constants.O_WRONLY | fs.constants.O_CREAT,",
     ),
   ),
   adapter(
@@ -694,18 +693,55 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   adapter(
+    "writer: case-variant names accepted (no exact-name check)",
+    "worktree writer: by real path, never through a symlink refuses a name that exists only under another case (no case-variant match)",
+    edit(
+      WRITER,
+      "function listedExactly(dir: string, name: string): boolean {\n  return fs.readdirSync(dir).includes(name);",
+      "function listedExactly(dir: string, name: string): boolean {\n  return fs.readdirSync(dir).length >= 0 || name === dir;",
+    ),
+  ),
+  adapter(
     "reader: an entry at another path answered (exact path compare removed)",
     "git tree reader: the tip's tree, never the worktree sees nothing untracked, nothing through a symlinked directory, no glob",
     edit(READER, "if (!got.equals(want) || mode === undefined", "if (mode === undefined"),
+  ),
+  adapter(
+    "reader: the tracked-path list is not recursive",
+    "git tree reader: the tip's tree, never the worktree lists every tracked path at the tip, as git's bytes",
+    edit(
+      READER,
+      '["ls-tree", "-r", "-z", "--full-tree", "--name-only", tip]',
+      '["ls-tree", "-z", "--full-tree", "--name-only", tip]',
+    ),
   ),
   adapter(
     "writer: creates a missing directory",
     "worktree writer: by real path, never through a symlink refuses a path under a missing directory and creates none",
     edit(
       WRITER,
-      '          return Promise.resolve(refuse("missing_directory"));',
-      "          fs.mkdirSync(next);",
+      '        if (st === null) return Promise.resolve(refuse("missing_directory"));',
+      "        if (st === null) {\n          fs.mkdirSync(next);\n          dir = next;\n          continue;\n        }",
     ),
+  ),
+  race(
+    "writer: truncates on open (O_TRUNC), before the descriptor is proven",
+    "worktree writer: a swap between the walk and the write is refused a directory swapped for a symlink before the open: nothing outside is truncated or written",
+    edit(
+      WRITER,
+      "fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW,",
+      "fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,",
+    ),
+  ),
+  race(
+    "writer: the parent's real path not re-checked after the open",
+    "worktree writer: a swap between the walk and the write is refused a directory swapped for a symlink before the open: nothing outside is truncated or written",
+    edit(WRITER, "          fs.realpathSync.native(dir) !== realDir ||\n", ""),
+  ),
+  race(
+    "writer: the opened file not matched to the walked one",
+    "worktree writer: a swap between the walk and the write is refused the file replaced right after the open: the swapped-in file is not written",
+    edit(WRITER, "          opened.ino !== expected.ino ||\n", ""),
   ),
   adapter(
     "receipt file: an older run's file appended to",
@@ -714,6 +750,100 @@ const TAMPERS: TamperEntry[] = [
       SINK,
       "fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_APPEND",
       "fs.constants.O_CREAT | fs.constants.O_APPEND",
+    ),
+  ),
+
+  // ── case alias, write counting, shapes, unexecuted calls (review round 1) ──
+  run(
+    "write: the case-collision rule not applied",
+    "repo task: repo_write_path refuses a case alias (the verifier's case rule) a tracked Docs/A.md (100755) makes docs/a.md denied, before the writer is touched",
+    edit(
+      TOOLS,
+      "      if (collision !== null) return deny(",
+      "      if ((false as boolean) && collision !== null) return deny(",
+    ),
+  ),
+  run(
+    "write: allowed paths left out of the case index",
+    "repo task: repo_write_path refuses a case alias (the verifier's case rule) two allowed paths that alias by case are both refused",
+    edit(
+      TOOLS,
+      "      return repoPathCaseIndex([...names, ...allowed]);",
+      "      return repoPathCaseIndex([...names, path0]);",
+    ),
+    edit(
+      TOOLS,
+      "  let caseIndexAtTip:",
+      '  const path0 = scope.allowed_paths[0] ?? "";\n  let caseIndexAtTip:',
+    ),
+  ),
+  run(
+    "write: an undecodable tracked path ignored by the case rule",
+    "repo task: repo_write_path refuses a case alias (the verifier's case rule) a tracked path that is not UTF-8 refuses every write (no collision can be ruled out)",
+    edit(
+      TOOLS,
+      "          return null;\n        }\n      }\n      return repoPathCaseIndex(",
+      "          continue;\n        }\n      }\n      return repoPathCaseIndex(",
+    ),
+  ),
+  run(
+    "write: a path counted only after a successful write",
+    "repo task: a path counts toward max_changed_files once the writer may open it a write that fails part-way is failed and still counts",
+    edit(
+      TOOLS,
+      "      written.add(path);\n      const outcome = await writer.write(path, bytes);",
+      "      const outcome = await writer.write(path, bytes);\n      written.add(path);",
+    ),
+  ),
+  run(
+    "write: a post-open race gives the slot back",
+    "repo task: a path counts toward max_changed_files once the writer may open it a race refused after the open still counts",
+    edit(
+      TOOLS,
+      'if (outcome.refusal !== "path_raced" && !wasWritten) written.delete(path);',
+      "if (!wasWritten) written.delete(path);",
+    ),
+  ),
+  agree(
+    "preflight: grant and tick shapes not checked",
+    `${AGREE} agree on an extra signed key on the grant`,
+    edit(AUTH, '      ["the grant", isRepoChangeGrantShape(grant)],\n', ""),
+  ),
+  agree(
+    "preflight: a grant missing a key accepted",
+    `${AGREE} agree on a grant missing its not_before key`,
+    edit(AUTH, '      ["the grant", isRepoChangeGrantShape(grant)],\n', ""),
+  ),
+  agree(
+    "preflight: tick shape not checked",
+    `${AGREE} agree on an extra signed key on the tick`,
+    edit(AUTH, '      ["the tick", isRepoChangeTickShape(tick)],\n', ""),
+  ),
+  status(
+    "streaming: a superseded approval request gets no receipt",
+    "every proposed call that is not executed gets a denied receipt two calls needing approval in one response: the superseded one is denied, the kept one approved",
+    edit(
+      STREAM,
+      "        const superseded = this._pendingApproval;\n        if (superseded) {",
+      "        const superseded = this._pendingApproval;\n        if ((false as boolean) && superseded) {",
+    ),
+  ),
+  status(
+    "streaming: a voided approval gets no receipt",
+    "every proposed call that is not executed gets a denied receipt a pending approval voided by a new message is denied with a receipt, and is not a no",
+    edit(
+      STREAM,
+      "    this.approvalVoidedCallback?.(voided.toolName);\n    await this.emitToolInvocationReceipt({",
+      "    this.approvalVoidedCallback?.(voided.toolName);\n    void ({",
+    ),
+  ),
+  status(
+    "streaming: a voided approval is recorded as a refusal (enters the brake)",
+    "every proposed call that is not executed gets a denied receipt a pending approval voided by a new message is denied with a receipt, and is not a no",
+    edit(
+      STREAM,
+      "    this.approvalVoidedCallback?.(voided.toolName);\n",
+      "    this.approvalVoidedCallback?.(voided.toolName);\n    this.deniedToolsThisExchange.add(voided.toolName);\n    this.deniedIntents.set(deniedIntentKey(voided.toolName, voided.args), 1);\n",
     ),
   ),
 ];

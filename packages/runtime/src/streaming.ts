@@ -487,9 +487,16 @@ export class StreamingManager {
    * - fires the voided callback so the OWNING surface renders the void
    *   (the new turn's surface gets the `approval_voided` chunk instead).
    *
+   * The voided call was never executed, so it gets a signed `denied`
+   * receipt whose result names the void (`VOIDED_BY_NEW_MESSAGE`). That is a
+   * record of what happened to the call, not a refusal: nothing enters the
+   * refusal brake (`deniedIntents` / `deniedToolsThisExchange`), so a "void is
+   * not a no" still holds for trust and memory — re-proposal re-prompts the
+   * human.
+   *
    * Returns the voided approval so the caller can emit the typed chunk.
    */
-  voidPendingApproval(): { toolName: string } | null {
+  async voidPendingApproval(): Promise<{ toolName: string } | null> {
     const voided = this._pendingApproval;
     if (!voided) return null;
     this._pendingApproval = null;
@@ -507,6 +514,16 @@ export class StreamingManager {
       },
     );
     this.approvalVoidedCallback?.(voided.toolName);
+    await this.emitToolInvocationReceipt({
+      invocation_id: voided.toolCallId,
+      task_id: voided.runId,
+      tool_name: voided.toolName,
+      args: voided.args,
+      result: "VOIDED_BY_NEW_MESSAGE",
+      started_at: voided.requestedAt,
+      completed_at: Date.now(),
+      status: "denied",
+    });
     return { toolName: voided.toolName };
   }
 
@@ -861,6 +878,22 @@ export class StreamingManager {
 
       // Approval request: capture pending state and start timeout
       if (chunk.type === "approval_request") {
+        // One pause at a time: a later approval request in the same response
+        // supersedes an earlier one, which is then never executed — so it
+        // gets its `denied` receipt here, naming why, instead of vanishing.
+        const superseded = this._pendingApproval;
+        if (superseded) {
+          await this.emitToolInvocationReceipt({
+            invocation_id: superseded.toolCallId,
+            task_id: superseded.runId,
+            tool_name: superseded.toolName,
+            args: superseded.args,
+            result: "SUPERSEDED_BY_A_LATER_APPROVAL_REQUEST",
+            started_at: superseded.requestedAt,
+            completed_at: Date.now(),
+            status: "denied",
+          });
+        }
         this._pendingApproval = {
           toolCallId: chunk.tool_call_id,
           toolName: chunk.name,

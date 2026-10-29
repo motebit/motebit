@@ -3446,9 +3446,11 @@ export class MotebitRuntime {
     // A new user turn sets aside any pending approval — but never silently
     // (#462): the void renders on THIS stream via the typed chunk below, and
     // the owning surface hears it through the onApprovalVoided callback. A
-    // void is not a refusal — nothing executes, nothing is recorded as
-    // denied, and re-proposal re-prompts the human.
-    const voidedApproval = principal.foreign ? null : this.streaming.voidPendingApproval();
+    // void is not a refusal — nothing executes, nothing enters the refusal
+    // brake, and re-proposal re-prompts the human. (The voided call does get
+    // its signed `denied` receipt, reason VOIDED_BY_NEW_MESSAGE: a record that
+    // it never ran, not a "no".)
+    const voidedApproval = principal.foreign ? null : await this.streaming.voidPendingApproval();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
 

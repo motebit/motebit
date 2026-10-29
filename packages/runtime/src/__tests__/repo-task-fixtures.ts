@@ -198,6 +198,15 @@ export class MemTree implements RepoTreeReader {
       if (e.oid === oid && e.bytes) return Promise.resolve(e.bytes);
     return Promise.reject(new Error(`no blob ${oid}`));
   }
+  /** Every non-tree entry, as `git ls-tree -r` lists them; `extraTrackedBytes` adds raw ones. */
+  extraTrackedBytes: Uint8Array[] = [];
+  listTrackedPaths(): Promise<readonly Uint8Array[]> {
+    const enc = new TextEncoder();
+    return Promise.resolve([
+      ...[...this.files.entries()].filter(([, e]) => e.kind !== "tree").map(([p]) => enc.encode(p)),
+      ...this.extraTrackedBytes,
+    ]);
+  }
 }
 
 /** The worktree writer, in memory. Records every write it was asked for. */
@@ -205,11 +214,21 @@ export class MemWriter implements RepoPathWriter {
   readonly calls: Array<{ path: string; text: string }> = [];
   readonly files = new Map<string, string>();
   refuse: RepoPathWriteResult | null = null;
+  /** Refusals for the next calls, in order (then `refuse`). */
+  refuseNext: RepoPathWriteResult[] = [];
   throwOnWrite = false;
+  /** Throw on the next N calls (a write that fails after the file was opened). */
+  throwNext = 0;
   write(path: string, content: Uint8Array): Promise<RepoPathWriteResult> {
     const text = new TextDecoder().decode(content);
     this.calls.push({ path, text });
     if (this.throwOnWrite) return Promise.reject(new Error("disk full"));
+    if (this.throwNext > 0) {
+      this.throwNext--;
+      return Promise.reject(new Error("disk full mid-write"));
+    }
+    const next = this.refuseNext.shift();
+    if (next) return Promise.resolve(next);
     if (this.refuse) return Promise.resolve(this.refuse);
     this.files.set(path, text);
     return Promise.resolve({ ok: true });

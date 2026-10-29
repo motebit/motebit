@@ -102,6 +102,12 @@ describe("git tree reader: the tip's tree, never the worktree", () => {
     expect(await reader.lookup("docs/")).toBeNull();
   });
 
+  it("lists every tracked path at the tip, as git's bytes", async () => {
+    const reader = createGitTreeReader({ gitDir: path.join(repo, ".git"), tip });
+    const listed = (await reader.listTrackedPaths()).map((b) => new TextDecoder().decode(b)).sort();
+    expect(listed).toEqual(["bin/run.sh", "docs/a.md", "escape", "link", "sub"]);
+  });
+
   it("refuses a tip that is not a full object id", () => {
     expect(() => createGitTreeReader({ gitDir: path.join(repo, ".git"), tip: "HEAD" })).toThrow();
   });
@@ -167,6 +173,26 @@ describe("worktree writer: by real path, never through a symlink", () => {
       });
     }
     expect(fs.readFileSync(path.join(outside, "secret.txt"), "utf8")).toBe("outside\n");
+  });
+
+  it("refuses a name that exists only under another case (no case-variant match)", async () => {
+    fs.mkdirSync(path.join(repo, "Upper"));
+    fs.writeFileSync(path.join(repo, "Upper", "B.md"), "upper\n");
+    fs.writeFileSync(path.join(repo, "docs", "C.md"), "capital\n");
+    const caseInsensitive = fs.existsSync(path.join(repo, "UPPER"));
+    const writer = createWorktreeWriter({ root: repo });
+    const dirVariant = await writer.write("upper/b.md", new TextEncoder().encode("x"));
+    const nameVariant = await writer.write("docs/c.md", new TextEncoder().encode("x"));
+    if (caseInsensitive) {
+      expect(dirVariant).toEqual({ ok: false, refusal: "case_variant" });
+      expect(nameVariant).toEqual({ ok: false, refusal: "case_variant" });
+    } else {
+      // A case-sensitive filesystem: the lowercase names are other paths.
+      expect(dirVariant).toEqual({ ok: false, refusal: "missing_directory" });
+      expect(nameVariant).toEqual({ ok: true });
+    }
+    expect(fs.readFileSync(path.join(repo, "Upper", "B.md"), "utf8")).toBe("upper\n");
+    expect(fs.readFileSync(path.join(repo, "docs", "C.md"), "utf8")).toBe("capital\n");
   });
 
   it("keeps an existing file's mode", async () => {
