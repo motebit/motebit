@@ -35,8 +35,12 @@
  *      to an existing file exactly as `pnpm check` launches it
  *      (`scripts/lib/gate-launch.ts`). An EXCLUDED_CHECKS entry whose reason
  *      says it does not block (soft, advisory, warn-only, non-blocking,
- *      informational, continue-on-error) is not enforcement and is rejected.
- *   4. Every other token is a path to a REGULAR FILE that exists and is
+ *      informational, continue-on-error) is not enforcement and is rejected,
+ *      and so is a scheduled external probe (`SCHEDULED_EXTERNAL_PROBES`:
+ *      it runs on a schedule, never on a merge).
+ *   4. Every other token is a normal repo-relative path (no leading `/`,
+ *      no `.` / `..` / empty segment, unchanged by `path.posix.normalize`)
+ *      to a REGULAR FILE that exists and is
  *      either a test file (`*.test.ts(x)` / `*.spec.ts(x)`, or under
  *      `__tests__/`) or a source file under a package, app or service
  *      `src/`. A `scripts/check-*.ts` path is refused: a gate is named by its
@@ -58,7 +62,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveGateFiles } from "./lib/gate-launch.js";
 import { formatRepair } from "./lib/gate-report.js";
@@ -80,6 +84,35 @@ const TEST_FILE_RE = /(?:\.(?:test|spec)\.tsx?$)|(?:(?:^|\/)__tests__\/)/;
 const SOURCE_FILE_RE = /^(?:packages|apps|services)\/[^/]+\/src\/.+\.(?:ts|tsx|mts|js|mjs)$/;
 /** A gate's own source: name the gate by its gate name instead. */
 const GATE_PATH_RE = /^scripts\/check-[^/]+\.ts$/;
+
+/**
+ * Scheduled EXTERNAL probes. Their canonical source lives outside the repo
+ * (a live endpoint, the deployed fleet, a registry), so they run on a
+ * schedule from their own workflow, never on a merge: a doc they "enforce"
+ * can be broken and merged green. `EXCLUDED_CHECKS` carries no structured
+ * schedule/trigger field to key on, so the set is named here, explicitly;
+ * add a probe here when one joins the scheduled family in
+ * docs/drift-defenses.md.
+ */
+const SCHEDULED_EXTERNAL_PROBES: ReadonlySet<string> = new Set([
+  "check-model-catalog-drift", // weekly, .github/workflows/model-catalog-drift.yml
+  "check-deploy-freshness", // daily, .github/workflows/deploy-freshness.yml
+  "check-image-provenance", // daily, .github/workflows/image-provenance.yml
+  "check-publish-freshness", // daily, .github/workflows/publish-freshness.yml
+]);
+
+/**
+ * A path token must already be in normal repo-relative form: no leading `/`,
+ * no backslash, no `.` / `..` / empty segment, and unchanged by
+ * `path.posix.normalize`. The same no-traversal rule `resolveGateFiles`
+ * applies to a gate's script path (scripts/lib/gate-launch.ts), stated as a
+ * predicate here because that one is inline and not exported.
+ */
+function isNormalRepoPath(tok: string): boolean {
+  if (tok.startsWith("/") || tok.includes("\\")) return false;
+  if (tok.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) return false;
+  return posix.normalize(tok) === tok;
+}
 /**
  * `EXCLUDED_CHECKS` is `Record<string, string>` — there is no structured
  * hard/soft field, so the reason text decides. Any wording that says the
@@ -217,7 +250,12 @@ function checkDoc(
       continue;
     }
     if (GATE_TOKEN_RE.test(tok)) {
-      if (gates.advisory.has(tok)) {
+      if (SCHEDULED_EXTERNAL_PROBES.has(tok)) {
+        findings.push({
+          site,
+          problem: `gate \`${tok}\` is a scheduled external probe — it runs on a schedule, never on a merge, so a broken claim can merge green; it enforces nothing at merge time`,
+        });
+      } else if (gates.advisory.has(tok)) {
         findings.push({
           site,
           problem: `gate \`${tok}\` is registered as soft/advisory in EXCLUDED_CHECKS, so it enforces nothing`,
@@ -233,6 +271,13 @@ function checkDoc(
           problem: `gate \`${tok}\` has no runnable source (root package.json script must be \`npx tsx scripts/<file>.ts\` naming an existing file)`,
         });
       }
+      continue;
+    }
+    if (!isNormalRepoPath(tok)) {
+      findings.push({
+        site,
+        problem: `\`${tok}\` is not a normal repo-relative path — no leading \`/\`, no \`.\` / \`..\` / empty segment, and unchanged by path normalization`,
+      });
       continue;
     }
     if (GATE_PATH_RE.test(tok)) {

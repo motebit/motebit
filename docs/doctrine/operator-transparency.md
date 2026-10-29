@@ -1,6 +1,6 @@
 # Operator transparency
 
-> **Layer:** law — enforced by `check-transparency-onchain-anchored`, `check-transparency-processors-canonical`, `services/relay/src/__tests__/transparency.test.ts`
+> **Layer:** law (declaration signing, anchoring, processor disclosure) — enforced by `check-transparency-onchain-anchored`, `check-transparency-processors-canonical`, `services/relay/src/__tests__/transparency.test.ts`
 
 A motebit relay is the one place in the system that sees more than the user does. The user's identity is sovereign; the user's content is sensitivity-gated; but the operator that runs the relay sees presence (who exists), operational activity (who delegates to whom, who settles, who federates), and the structure of the network. That asymmetry is unavoidable — someone has to run the wires.
 

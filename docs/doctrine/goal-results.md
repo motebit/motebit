@@ -1,6 +1,6 @@
 # Goal results
 
-> **Layer:** law — enforced by `check-goal-artifact-signing`
+> **Layer:** law (artifact signing) — enforced by `check-goal-artifact-signing`
 
 A goal is a commitment ([`goals-vs-tasks`](goals-vs-tasks.md)). A commitment, when motebit fires it, produces a **result** — the actual content motebit generated. The Goals panel today conflates three distinct categories on a single card and loses two of the three to truncation. This memo names the three categories, the existing primitives each maps to, and the implementation phases that close the gap between the current state and the architectural intent.
 

@@ -1,6 +1,6 @@
 # The creature canon
 
-> **Layer:** law — enforced by `check-creature-canon`, `apps/web/e2e/golden/golden.spec.ts`
+> **Layer:** law (canon consumption) — enforced by `check-creature-canon`
 
 **The creature is the show. Every frame is a product shot.**
 

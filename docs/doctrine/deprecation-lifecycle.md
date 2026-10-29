@@ -1,6 +1,6 @@
 # Deprecation lifecycle
 
-> **Layer:** law — enforced by `check-deprecation-discipline`, `check-private-deprecation-shape`
+> **Layer:** law (deprecation annotations) — enforced by `check-deprecation-discipline`, `check-private-deprecation-shape`
 
 Removal has a doctrine — `migration-cleanup.md` gives the state-holder analysis for stripping dead compat. Addition needs a matching doctrine. Post-GA, every breaking change either ships as a coordinated major or as a disciplined deprecation; there is no third option.
 

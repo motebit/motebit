@@ -68,7 +68,7 @@ const TAMPERS: TamperEntry[] = [
   off(
     "a soft/advisory gate is not refused",
     "a law line naming a soft or advisory gate fails",
-    "      if (gates.advisory.has(tok)) {",
+    "      } else if (gates.advisory.has(tok)) {",
   ),
   entry(
     "EXCLUDED_CHECKS reasons are not classified (every excluded gate counts as hard)",
@@ -102,9 +102,39 @@ const TAMPERS: TamperEntry[] = [
     "    if (!isTest && !SOURCE_FILE_RE.test(tok)) {",
   ),
   off(
-    "the repo root directory is accepted as a path (same guard, second case)",
+    "the repo root `.` is accepted as a path (path-normalization guard off)",
     "a law line naming the repo root directory fails",
-    "    if (!isTest && !SOURCE_FILE_RE.test(tok)) {",
+    "    if (!isNormalRepoPath(tok)) {",
+  ),
+  off(
+    "a `..` traversal path is accepted (path-normalization guard off)",
+    "a path token with a `..` segment fails",
+    "    if (!isNormalRepoPath(tok)) {",
+  ),
+  off(
+    "a leading `./` path is accepted (path-normalization guard off)",
+    "a path token with a leading `./` fails",
+    "    if (!isNormalRepoPath(tok)) {",
+  ),
+  off(
+    "an inner `.` segment path is accepted (path-normalization guard off)",
+    "a path token with an inner `.` segment fails",
+    "    if (!isNormalRepoPath(tok)) {",
+  ),
+  off(
+    "an empty-segment (`//`) path is accepted (path-normalization guard off)",
+    "a path token with an empty segment fails",
+    "    if (!isNormalRepoPath(tok)) {",
+  ),
+  off(
+    "an absolute path is accepted (path-normalization guard off)",
+    "an absolute path token fails",
+    "    if (!isNormalRepoPath(tok)) {",
+  ),
+  off(
+    "a scheduled external probe counts as merge-time enforcement",
+    "a law line naming a scheduled external probe fails",
+    "      if (SCHEDULED_EXTERNAL_PROBES.has(tok)) {",
   ),
   off(
     "a directory is accepted as a test file",

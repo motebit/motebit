@@ -24,6 +24,8 @@ const EXCLUDED_CHECKS: Record<string, string> = {
   "check-warn": "warn-only — prints findings, exits 0",
   "check-nonblocking": "non-blocking report, runs nightly",
   "check-info": "informational summary for reviewers",
+  "check-deploy-freshness": "the second EXTERNAL drift gate — needs network + FLY_API_TOKEN. Runs daily from .github/workflows/deploy-freshness.yml.",
+  "check-model-catalog-drift": "the EXTERNAL drift gate — needs ANTHROPIC_API_KEY. Runs weekly from .github/workflows/model-catalog-drift.yml.",
 };
 
 const GATES = [
@@ -50,6 +52,8 @@ const PACKAGE_JSON = JSON.stringify({
     "check-info": "npx tsx scripts/check-info.ts",
     "check-commented": "npx tsx scripts/check-commented.ts",
     "check-after": "npx tsx scripts/check-after.ts",
+    "check-deploy-freshness": "npx tsx scripts/check-deploy-freshness.ts",
+    "check-model-catalog-drift": "npx tsx scripts/check-model-catalog-drift.ts",
   },
 });
 
@@ -88,6 +92,8 @@ beforeEach(() => {
     "check-info",
     "check-commented",
     "check-after",
+    "check-deploy-freshness",
+    "check-model-catalog-drift",
   ]) {
     put(`scripts/${f}.ts`, "export {};\n");
   }
@@ -242,7 +248,7 @@ describe("check-doctrine-layer failure cases", () => {
   it("a law line naming the repo root directory fails", () => {
     put("docs/doctrine/law.md", doc("Law doc", "> **Layer:** law — enforced by `.`"));
     expect(problems()).toEqual([
-      "docs/doctrine/law.md:3 — `.` is neither a test file (`*.test.ts` / `*.spec.ts` or under `__tests__/`) nor a source file under a package, app or service `src/`",
+      "docs/doctrine/law.md:3 — `.` is not a normal repo-relative path — no leading `/`, no `.` / `..` / empty segment, and unchanged by path normalization",
     ]);
   });
 
@@ -292,6 +298,74 @@ describe("check-doctrine-layer failure cases", () => {
       ["check-warn", "check-nonblocking", "check-info"].map(
         (g) =>
           `docs/doctrine/law.md:3 — gate \`${g}\` is registered as soft/advisory in EXCLUDED_CHECKS, so it enforces nothing`,
+      ),
+    );
+  });
+  it("a path token with a `..` segment fails", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc(
+        "Law doc",
+        "> **Layer:** law — enforced by `packages/pkg/src/__tests__/../../../../README.md`",
+      ),
+    );
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — `packages/pkg/src/__tests__/../../../../README.md` is not a normal repo-relative path — no leading `/`, no `.` / `..` / empty segment, and unchanged by path normalization",
+    ]);
+  });
+
+  it("a path token with a leading `./` fails", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc("Law doc", "> **Layer:** law — enforced by `./packages/pkg/src/code.ts`"),
+    );
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — `./packages/pkg/src/code.ts` is not a normal repo-relative path — no leading `/`, no `.` / `..` / empty segment, and unchanged by path normalization",
+    ]);
+  });
+
+  it("a path token with an inner `.` segment fails", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc("Law doc", "> **Layer:** law — enforced by `packages/pkg/src/./code.ts`"),
+    );
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — `packages/pkg/src/./code.ts` is not a normal repo-relative path — no leading `/`, no `.` / `..` / empty segment, and unchanged by path normalization",
+    ]);
+  });
+
+  it("a path token with an empty segment fails", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc("Law doc", "> **Layer:** law — enforced by `packages/pkg//src/code.ts`"),
+    );
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — `packages/pkg//src/code.ts` is not a normal repo-relative path — no leading `/`, no `.` / `..` / empty segment, and unchanged by path normalization",
+    ]);
+  });
+
+  it("an absolute path token fails", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc("Law doc", "> **Layer:** law — enforced by `/packages/pkg/src/code.ts`"),
+    );
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — `/packages/pkg/src/code.ts` is not a normal repo-relative path — no leading `/`, no `.` / `..` / empty segment, and unchanged by path normalization",
+    ]);
+  });
+
+  it("a law line naming a scheduled external probe fails", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc(
+        "Law doc",
+        "> **Layer:** law — enforced by `check-deploy-freshness`, `check-model-catalog-drift`",
+      ),
+    );
+    expect(problems()).toEqual(
+      ["check-deploy-freshness", "check-model-catalog-drift"].map(
+        (g) =>
+          `docs/doctrine/law.md:3 — gate \`${g}\` is a scheduled external probe — it runs on a schedule, never on a merge, so a broken claim can merge green; it enforces nothing at merge time`,
       ),
     );
   });
