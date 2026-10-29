@@ -23,8 +23,8 @@
  *
  *   1. The first non-blank line after the H1 is a layer line, exactly one of
  *        > **Layer:** narrative
- *        > **Layer:** law — enforced by `check-x`, `path/to/x.test.ts`
- *        > **Layer:** law (scope) — enforced by `…`
+ *        > **Layer:** law (<claim>; <claim>) — enforced by `check-x`, `path/to/x.test.ts`
+ *      (a bare `law` with no scope is refused — see 5)
  *      and the doc carries no second `> **Layer:**` line anywhere.
  *   2. A law line names at least one enforcement token, each backticked and
  *      comma-separated.
@@ -55,7 +55,12 @@
  *      not law, a claim the scope does not list, or an item the line does
  *      not name is stale and fails too. A command-mode proof must run the
  *      item it names (`npx tsx <the gate's source>`, or the named test's
- *      package typecheck); a vitest-mode proof must name a test file. A
+ *      package typecheck); a vitest-mode proof must name a test file.
+ *      Static liveness: a proof's `edits` is non-empty, each edit's `from`
+ *      occurs exactly once in its file, and a vitest proof's `red` is a
+ *      test full name the named file declares. This proves a proof CAN
+ *      bite; `node scripts/tampers/doctrine-law-labels.ts` proves it DOES
+ *      (CI does not run the tampers yet). A
  *      gate's own check-gates-effective probe is NOT a proof — it breaks the
  *      gate's invariant, which is often narrower than the doc's claim.
  *
@@ -351,6 +356,10 @@ export interface LawProof {
   claim: string;
   named: string;
   command?: string[];
+  /** vitest mode: the exact full name of the test that must go red. */
+  red?: string;
+  /** The edits the tamper applies: `from` must occur exactly once in `file`. */
+  edits: { file: string; from: string }[];
 }
 
 /**
@@ -374,9 +383,98 @@ export async function loadLawProofs(root: string): Promise<LawProof[]> {
       Array.isArray(r.command) && r.command.every((c) => typeof c === "string")
         ? (r.command as string[])
         : undefined;
-    out.push({ doc: r.doc, claim: r.claim, named: r.named, ...(command ? { command } : {}) });
+    const edits = Array.isArray(r.edits)
+      ? (r.edits as unknown[]).flatMap((x) => {
+          const ed = x as Record<string, unknown>;
+          return typeof ed.file === "string" && typeof ed.from === "string"
+            ? [{ file: ed.file, from: ed.from }]
+            : [];
+        })
+      : [];
+    out.push({
+      doc: r.doc,
+      claim: r.claim,
+      named: r.named,
+      edits,
+      ...(command ? { command } : {}),
+      ...(typeof r.red === "string" ? { red: r.red } : {}),
+    });
   }
   return out;
+}
+
+/** Exact occurrences of `needle` in `hay` (non-overlapping). */
+function occurrences(hay: string, needle: string): number {
+  return needle === "" ? 0 : hay.split(needle).length - 1;
+}
+
+/**
+ * The titles of `describe(…)` and `it(…)` / `test(…)` calls in a test file, as
+ * anchored patterns: a quoted title matches itself; a template-literal title's
+ * `${…}` holes match any text (a generated case such as `rejects: ${name}`).
+ */
+function testTitles(src: string): { suites: RegExp[]; cases: RegExp[] } {
+  const suites: RegExp[] = [];
+  const cases: RegExp[] = [];
+  const re = /\b(describe|it|test)(?:\.\w+)?\(\s*(["'`])((?:\\.|(?!\2)[^\\])*)\2/g;
+  for (const m of src.matchAll(re)) {
+    const title = m[3]!.replace(/\\(["'`\\])/g, "$1");
+    const parts = m[2] === "`" ? title.split(/\$\{[^}]*\}/) : [title];
+    const pattern = new RegExp(
+      `^${parts.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`,
+      "s",
+    );
+    (m[1] === "describe" ? suites : cases).push(pattern);
+  }
+  return { suites, cases };
+}
+
+/** Whether `name` is a case title preceded by zero or more suite titles, space-joined. */
+function isTestFullName(name: string, titles: { suites: RegExp[]; cases: RegExp[] }): boolean {
+  // Every split point: `prefix` (suite titles) + " " + case title, or the whole name as a case.
+  const splits = (text: string): [string, string][] => {
+    const out: [string, string][] = [["", text]];
+    for (let i = text.indexOf(" "); i >= 0; i = text.indexOf(" ", i + 1)) {
+      out.push([text.slice(0, i), text.slice(i + 1)]);
+    }
+    return out;
+  };
+  const isSuitePath = (prefix: string): boolean =>
+    prefix === "" ||
+    splits(prefix).some(([head, tail]) =>
+      head === ""
+        ? titles.suites.some((d) => d.test(tail))
+        : isSuitePath(head) && titles.suites.some((d) => d.test(tail)),
+    );
+  return splits(name).some(
+    ([prefix, rest]) => titles.cases.some((c) => c.test(rest)) && isSuitePath(prefix),
+  );
+}
+
+/**
+ * Static liveness: a proof that cannot apply, or whose red test does not
+ * exist, proves nothing even before the runner is run. Its edits must be
+ * non-empty, each `from` must occur exactly once in its file, and in vitest
+ * mode `red` must be a test full name (suite titles + case title) the named
+ * test file declares.
+ */
+function proofLivenessProblem(root: string, p: LawProof): string | null {
+  if (p.edits.length === 0) return "has no edits — a proof must break something";
+  for (const e of p.edits) {
+    const abs = join(root, e.file);
+    const n = existsSync(abs) ? occurrences(readFileSync(abs, "utf-8"), e.from) : 0;
+    if (n !== 1) {
+      return `edit "${e.from.slice(0, 60)}" occurs ${n} time(s) in ${e.file} — a tamper edit must match exactly once`;
+    }
+  }
+  if (!p.command) {
+    const abs = join(root, p.named);
+    const src = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+    if (p.red === undefined || !isTestFullName(p.red, testTitles(src))) {
+      return `its red test "${p.red ?? ""}" is not a test declared in ${p.named}`;
+    }
+  }
+  return null;
 }
 
 /** The pnpm package name of the workspace package a repo path sits in (`packages/x/…` → its `name`). */
@@ -479,7 +577,7 @@ export async function checkDoctrineLayer(root: string): Promise<LayerReport> {
       problem = `claims "${p.claim}", which its law line's scope does not list`;
     else if (!line.tokens.includes(p.named))
       problem = `names \`${p.named}\`, which its law line does not name`;
-    else problem = proofRunProblem(root, p);
+    else problem = proofRunProblem(root, p) ?? proofLivenessProblem(root, p);
     if (problem) {
       findings.push({ site: LAW_PROOFS_FILE, problem: `proof for "${p.doc}" ${problem}` });
     }
@@ -506,7 +604,7 @@ async function main(): Promise<void> {
 
   if (r.findings.length === 0) {
     process.stderr.write(
-      `✓ check-doctrine-layer: ${r.docs.length} doc(s) scanned (${r.law} law, ${r.narrative} narrative); every law line's enforcement resolves against ${r.registeredGates} registered gate(s) (${r.scheduledProbes} scheduled external probe(s) refused) and the filesystem, and every one of the ${r.claims} scoped law claim(s) has a recorded tamper proof (${r.proofs} proof(s) in ${LAW_PROOFS_FILE}).\n`,
+      `✓ check-doctrine-layer: ${r.docs.length} doc(s) scanned (${r.law} law, ${r.narrative} narrative); every law line's enforcement resolves against ${r.registeredGates} registered gate(s) (${r.scheduledProbes} scheduled external probe(s) refused) and the filesystem, and every one of the ${r.claims} scoped law claim(s) has a recorded tamper proof (${r.proofs} proof(s) in ${LAW_PROOFS_FILE}, each statically live).\n`,
     );
     return;
   }

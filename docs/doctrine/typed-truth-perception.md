@@ -1,6 +1,6 @@
 # Typed-truth perception
 
-> **Layer:** law (URL equivalence is exact; dishonest closings are corrected) — enforced by `services/browser-sandbox/src/__tests__/url-equivalence.test.ts`, `packages/ai-core/src/__tests__/dishonest-closing.test.ts`
+> **Layer:** law (different resources are never equivalent; dishonest closings are corrected) — enforced by `services/browser-sandbox/src/__tests__/url-equivalence.test.ts`, `packages/ai-core/src/__tests__/dishonest-closing.test.ts`
 
 The AI never interprets natural-language outcomes. Every tool result carries semantic-intent truth as structured fields; the prompt's `PERCEPTION_DOCTRINE` teaches the AI to read them and branch; the dispatch enforces the same condition structurally so the AI's behavior is never the only protection.
 

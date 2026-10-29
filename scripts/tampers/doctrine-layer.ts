@@ -272,6 +272,34 @@ const TAMPERS: TamperEntry[] = [
     "a chain doc DOCTRINE.md lists that does not exist fails",
     "  if (!existsSync(path)) {",
   ),
+  entry(
+    "a proof with no edits is accepted",
+    "a proof with no edits fails",
+    '  if (p.edits.length === 0) return "has no edits — a proof must break something";',
+    '  if (p.edits.length < 0) return "has no edits — a proof must break something";',
+    "check-doctrine-layer law proofs",
+  ),
+  entry(
+    "a proof edit that does not occur is accepted",
+    "a proof edit that does not occur in its file fails",
+    "    if (n !== 1) {",
+    "    if (n > 1) {",
+    "check-doctrine-layer law proofs",
+  ),
+  entry(
+    "a proof edit that occurs more than once is accepted",
+    "a proof edit that occurs more than once fails",
+    "    if (n !== 1) {",
+    "    if (n < 1) {",
+    "check-doctrine-layer law proofs",
+  ),
+  entry(
+    "a vitest proof's red test need not exist",
+    "a vitest proof whose red test the named file does not declare fails",
+    "    if (p.red === undefined || !isTestFullName(p.red, testTitles(src))) {",
+    "    if (p.red === undefined) {",
+    "check-doctrine-layer law proofs",
+  ),
 ];
 
 await runTampers(TAMPERS, { root: ROOT });

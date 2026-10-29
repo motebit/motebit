@@ -1,22 +1,32 @@
 /**
  * Doctrine law-label proofs — the executable record behind every
- * `> **Layer:** law` line. The rule for a law call: the doc's central claim
- * (or the scoped claim its `law (<scope>)` names) is proven by a NAMED item —
- * a test file, or a gate when the claim is the gate's own invariant — that a
- * recorded tamper turns red. Each `{ doc, named, … }` entry in PROOFS breaks
- * that claim in the source and names the item that must go red.
+ * `> **Layer:** law (<claim>; <claim>) — enforced by …` line. A law label
+ * guarantees exactly the claims its scope lists, and each listed claim is
+ * proven here: a `{ doc, claim, named, … }` entry in PROOFS breaks that claim
+ * in the source and names the item (a test file, or the gate itself where the
+ * claim is the gate's own invariant) that must go red.
  *
  * A gate's perturbation probe in scripts/check-gates-effective.ts is NOT such
  * a proof: a probe breaks the GATE's invariant, which is often narrower than
  * the doc's claim (round-3 review, 2026-10-29: six docs stayed fully green
  * while their central claim was broken). Only an entry here counts.
  *
- * `check-doctrine-layer` reads this file statically: every law doc must have
- * at least one entry here whose `doc` is that doc and whose `named` is one of
- * the items its law line names, and every entry must point at a live law label
- * and one of its named items. Keep `doc` and `named` as the first two keys, as string literals.
+ * `check-doctrine-layer` IMPORTS `PROOFS` (never scans this file as text, so a
+ * commented-out or unused entry counts for nothing) and requires one live
+ * proof per listed claim: same `doc`, same `claim`, a `named` item from the
+ * law line. It also runs a static liveness check on every proof — `edits` is
+ * non-empty, each edit's `from` occurs exactly once in its file, a vitest
+ * proof's `red` is a test the named file declares, and a command proof runs
+ * the item it names. That check proves a proof CAN bite; only running this
+ * file proves it DOES.
+ *
+ * The proofs run with
  *
  *   node scripts/tampers/doctrine-law-labels.ts
+ *
+ * and CI does not run them yet: `pnpm check` runs the static check above, not
+ * the tampers. Run this file before merging any change to a law line, a
+ * proof, or the code a proof edits.
  *
  * Every entry is (file, text to revert, test expected red); the shared runner
  * applies each in an isolated copy of the tree.
@@ -160,9 +170,9 @@ export const PROOFS: Proof[] = [
   // ── creature-canon (camera canon) ────────────────────────────────────────
   {
     doc: "creature-canon",
-    claim: "canonical poses stay inside the framing envelope",
+    claim: "canonical poses stay inside the orbit envelope and the backdrop dome",
     named: "packages/render-engine/src/__tests__/camera-envelope.test.ts",
-    name: "the canonical front pose leaves the framing envelope",
+    name: "the canonical front pose leaves the orbit envelope and the dome",
     red: "camera envelope × backdrop dome every canonical pose sits inside the orbit envelope and the dome",
     edits: [
       {
@@ -218,7 +228,7 @@ export const PROOFS: Proof[] = [
   // ── evidence-provenance ──────────────────────────────────────────────────
   {
     doc: "evidence-provenance",
-    claim: "digest",
+    claim: "a digest mismatch is never reported present",
     named: "packages/crypto/src/__tests__/evidence-provenance.test.ts",
     name: "a digest mismatch still counts as present",
     red: "verifyEvidenceProvenance — law + hostile corpus digest mismatch → not present (digest_mismatch), even if the span is there",
@@ -702,7 +712,7 @@ export const PROOFS: Proof[] = [
   // ── typed-truth-perception ───────────────────────────────────────────────
   {
     doc: "typed-truth-perception",
-    claim: "URL equivalence is exact",
+    claim: "different resources are never equivalent",
     named: "services/browser-sandbox/src/__tests__/url-equivalence.test.ts",
     name: "every URL pair reads as equivalent (already_there always true)",
     red: "urlsAreEquivalent returns false for different hosts",

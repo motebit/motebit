@@ -1,6 +1,6 @@
 # The creature canon
 
-> **Layer:** law (canonical poses stay inside the framing envelope; surfaces consume the canonical camera) — enforced by `packages/render-engine/src/__tests__/camera-envelope.test.ts`, `check-creature-canon`
+> **Layer:** law (canonical poses stay inside the orbit envelope and the backdrop dome; surfaces consume the canonical camera) — enforced by `packages/render-engine/src/__tests__/camera-envelope.test.ts`, `check-creature-canon`
 
 **The creature is the show. Every frame is a product shot.**
 

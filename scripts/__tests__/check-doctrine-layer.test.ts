@@ -64,19 +64,21 @@ const PACKAGE_JSON = JSON.stringify({
 const LAW_LINE =
   "> **Layer:** law (alpha; beta) — enforced by `check-real`, `check-renamed`, `check-ext`, `packages/pkg/src/__tests__/x.test.ts`, `packages/pkg/src/code.ts`";
 
+const EDITS_Z = 'edits: [{ file: "scripts/check-real.ts", from: "export {};", to: "" }]';
+
 /** The fixture's recorded law proofs: one per law doc, each naming an item its line names. */
 const PROOFS = `export const PROOFS = [
   {
     doc: "law",
     claim: "alpha",
     named: "packages/pkg/src/__tests__/x.test.ts",
-    name: "x",
+    name: "x", red: "suite case one", edits: [{ file: "packages/pkg/src/code.ts", from: "export {};", to: "" }],
   },
   {
     doc: "law",
     claim: "beta",
     named: "check-renamed",
-    name: "y",
+    name: "y", edits: [{ file: "scripts/renamed-gate.ts", from: "export {};", to: "" }],
     command: ["npx", "tsx", "scripts/renamed-gate.ts"],
   },
   {
@@ -84,7 +86,7 @@ const PROOFS = `export const PROOFS = [
     doc: "CHAIN.md",
     claim: "body",
     named: "check-real",
-    name: "z",
+    name: "z", edits: [{ file: "scripts/check-real.ts", from: "export {};", to: "" }],
     command: ["npx", "tsx", "scripts/check-real.ts"],
   },
 ];
@@ -135,7 +137,10 @@ beforeEach(() => {
   ]) {
     put(`scripts/${f}.ts`, "export {};\n");
   }
-  put("packages/pkg/src/__tests__/x.test.ts", "export {};\n");
+  put(
+    "packages/pkg/src/__tests__/x.test.ts",
+    'describe("suite", () => {\n  it("case one", () => {});\n});\n',
+  );
   put("packages/pkg/src/__tests__/fixtures/data.json", "{}\n");
   put("packages/pkg/src/__tests__/helpers.ts", "export {};\n");
   mkdirSync(join(root, "packages/pkg/src/__tests__/dir.test.ts"), { recursive: true });
@@ -518,7 +523,10 @@ describe("check-doctrine-layer law proofs", () => {
   });
 
   it("a proof whose command does not run the gate it names fails", async () => {
-    put(LAW_PROOFS_FILE, PROOFS.replace('"scripts/renamed-gate.ts"', '"scripts/check-ext.ts"'));
+    put(
+      LAW_PROOFS_FILE,
+      PROOFS.replace('"tsx", "scripts/renamed-gate.ts"', '"tsx", "scripts/check-ext.ts"'),
+    );
     expect(await allProblems()).toContain(
       'scripts/tampers/doctrine-law-labels.ts — proof for "law" its command ["npx","tsx","scripts/check-ext.ts"] does not run the gate it names (`check-renamed` runs as ["npx","tsx","scripts/renamed-gate.ts"])',
     );
@@ -544,11 +552,11 @@ describe("check-doctrine-layer law proofs", () => {
   //   claim: "beta",`,
     ).replace(
       `    named: "check-renamed",
-    name: "y",
+    name: "y", edits: [{ file: "scripts/renamed-gate.ts", from: "export {};", to: "" }],
     command: ["npx", "tsx", "scripts/renamed-gate.ts"],
   },`,
       `  //   named: "check-renamed",
-  //   name: "y",
+  //  name: "y", edits: [{ file: "scripts/renamed-gate.ts", from: "export {};", to: "" }],
   //   command: ["npx", "tsx", "scripts/renamed-gate.ts"],
   // },`,
     );
@@ -562,7 +570,7 @@ describe("check-doctrine-layer law proofs", () => {
     doc: "law",
     claim: "beta",
     named: "check-renamed",
-    name: "y",
+    name: "y", edits: [{ file: "scripts/renamed-gate.ts", from: "export {};", to: "" }],
     command: ["npx", "tsx", "scripts/renamed-gate.ts"],
   },
 `,
@@ -577,7 +585,7 @@ const UNUSED = [
     doc: "law",
     claim: "beta",
     named: "check-renamed",
-    name: "y",
+    name: "y", edits: [{ file: "scripts/renamed-gate.ts", from: "export {};", to: "" }],
     command: ["npx", "tsx", "scripts/renamed-gate.ts"],
   },
 ];
@@ -585,5 +593,35 @@ void UNUSED;
 `,
     );
     expect(await allProblems()).toContain(NO_PROOF("law", "beta"));
+  });
+  it("a proof with no edits fails", async () => {
+    put(LAW_PROOFS_FILE, PROOFS.replace(EDITS_Z, "edits: []"));
+    expect(await allProblems()).toContain(
+      'scripts/tampers/doctrine-law-labels.ts — proof for "CHAIN.md" has no edits — a proof must break something',
+    );
+  });
+
+  it("a proof edit that does not occur in its file fails", async () => {
+    put(
+      LAW_PROOFS_FILE,
+      PROOFS.replace(EDITS_Z, EDITS_Z.replace('from: "export {};"', 'from: "export {}; // gone"')),
+    );
+    expect(await allProblems()).toContain(
+      'scripts/tampers/doctrine-law-labels.ts — proof for "CHAIN.md" edit "export {}; // gone" occurs 0 time(s) in scripts/check-real.ts — a tamper edit must match exactly once',
+    );
+  });
+
+  it("a proof edit that occurs more than once fails", async () => {
+    put("scripts/check-real.ts", "export {};\nexport {};\n");
+    expect(await allProblems()).toContain(
+      'scripts/tampers/doctrine-law-labels.ts — proof for "CHAIN.md" edit "export {};" occurs 2 time(s) in scripts/check-real.ts — a tamper edit must match exactly once',
+    );
+  });
+
+  it("a vitest proof whose red test the named file does not declare fails", async () => {
+    put(LAW_PROOFS_FILE, PROOFS.replace('red: "suite case one"', 'red: "suite case two"'));
+    expect(await allProblems()).toContain(
+      'scripts/tampers/doctrine-law-labels.ts — proof for "law" its red test "suite case two" is not a test declared in packages/pkg/src/__tests__/x.test.ts',
+    );
   });
 });
