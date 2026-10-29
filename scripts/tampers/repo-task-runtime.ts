@@ -396,8 +396,8 @@ const TAMPERS: TamperEntry[] = [
     `${WRITE} a tick without repo_write_path builds no write tool: the call is denied`,
     edit(
       TOOLS,
-      'if (tools.has("repo_write_path")) entries.push(',
-      "if (true as boolean) entries.push(",
+      'if (tools.has("repo_write_path"))\n    entries.push(',
+      "if (true as boolean)\n    entries.push(",
     ),
     edit(
       TOOLS,
@@ -847,7 +847,7 @@ const TAMPERS: TamperEntry[] = [
   ),
   adapter(
     "isolated git: the per-call timeout never fires",
-    "isolated git: no git process runs on the real git directory a git call past its timeout is killed and fails",
+    "isolated git: no git process runs on the real git directory a git call past its timeout is killed and fails, and the session ends",
     edit(GITSESSION, '      timedOut = true;\n      child.kill("SIGKILL");\n', ""),
   ),
   adapter(
@@ -1001,6 +1001,43 @@ const TAMPERS: TamperEntry[] = [
       STREAM,
       "    this.approvalVoidedCallback?.(voided.toolName);\n",
       "    this.approvalVoidedCallback?.(voided.toolName);\n    this.deniedToolsThisExchange.add(voided.toolName);\n    this.deniedIntents.set(deniedIntentKey(voided.toolName, voided.args), 1);\n",
+    ),
+  ),
+  // ── round 6: EPIPE, the unnamed call, stage after expiry ─────────────
+  adapter(
+    "isolated git: no stdin error handler (an EPIPE crashes the process)",
+    "isolated git: no git process runs on the real git directory a git killed while its stdin is still being written rejects; the process survives",
+    edit(
+      GITSESSION,
+      '    child.stdin.on("error", (e) => {',
+      '    if (false as boolean) child.stdin.on("error", (e) => {',
+    ),
+  ),
+  adapter(
+    "isolated git: a broken call leaves the session directory behind",
+    "isolated git: no git process runs on the real git directory a git killed while its stdin is still being written rejects; the process survives",
+    edit(
+      GITSESSION,
+      "        if (/timed out|stopped reading its input/.test(msg)) close();\n",
+      "        void msg;\n",
+    ),
+  ),
+  run(
+    "write: authority not re-checked immediately before the stage",
+    `${WRITE_AUTH} a tick that expires during the write's own lookup stages nothing and is denied`,
+    edit(
+      TOOLS,
+      "      if (!(await authorize())) {\n        return deny(",
+      "      if ((false as boolean) && !(await authorize())) {\n        return deny(",
+    ),
+  ),
+  agree(
+    "unnamed call: signed under its empty name (the bundle stops verifying)",
+    "repo task: a call that names no tool leaves the bundle verifiable run -> bundle -> verifyRepoChange: the empty-name call is a denied placeholder, no failure",
+    edit(
+      RUN,
+      "      const receiptToolName = named ? toolCall.name : UNNAMED_TOOL;",
+      "      const receiptToolName = named ? toolCall.name : (toolCall.name ?? UNNAMED_TOOL);",
     ),
   ),
 ];

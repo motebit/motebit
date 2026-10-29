@@ -140,6 +140,9 @@ export interface RepoTaskToolFailure {
   readonly detail: string;
 }
 
+/** The receipt name of a call that named no tool (always `denied`). */
+const UNNAMED_TOOL = "repo_task_unnamed_tool";
+
 /** What the model is told when a tool call failed: a fixed code, no host detail. */
 const TOOL_FAILED = "repo_task_tool_failed";
 
@@ -261,6 +264,7 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
   const { registry, expected } = buildRepoTaskTools(authorized, scope, {
     reader: input.reader,
     stager: input.stager,
+    authorize: async () => (await checkRepoTaskAuthority(authority, agentPin, clock())).ok,
   });
   const toolNames = registry.entries.map((e) => e.definition.name as RepoChangeTool);
   const frame = repoTaskFrame(scope, toolNames, input.runtimeVersion);
@@ -341,6 +345,13 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
       }
       const startedAt = clock();
       const args = toolCall.args ?? {};
+      // A call whose name fails the verifier's tool-receipt shape (a
+      // non-empty string; mirrored here, the verifier's `isNonEmptyString`
+      // is not part of its public surface) is never dispatched; its denied
+      // receipt carries a fixed placeholder name so the bundle stays
+      // verifiable.
+      const named = typeof toolCall.name === "string" && toolCall.name.length > 0;
+      const receiptToolName = named ? toolCall.name : UNNAMED_TOOL;
       let outcome: RepoTaskToolOutcome;
       // Authority on every call: the tick against the grant at this moment.
       const check = await checkRepoTaskAuthority(authority, agentPin, startedAt);
@@ -354,6 +365,8 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
             error: `authority: ${check.failures.map((f) => f.code).join("; ")}`,
           },
         };
+      } else if (!named) {
+        outcome = { status: "denied", result: { ok: false, error: "the call names no tool" } };
       } else if (entry === undefined) {
         outcome = {
           status: "denied",
@@ -379,7 +392,7 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
         used.add(entry.definition.name as RepoChangeTool);
       }
       await recordRunReceipt(
-        await signRunReceipt({ toolName: toolCall.name, args, startedAt, outcome }),
+        await signRunReceipt({ toolName: receiptToolName, args, startedAt, outcome }),
       );
       history.push({
         role: "tool",

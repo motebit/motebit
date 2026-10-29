@@ -181,6 +181,7 @@ function buildWritePath(
   scope: RepoTaskScope,
   stager: RepoChangeStager,
   reader: RepoTreeReader,
+  authorize: () => Promise<boolean>,
 ): RepoTaskToolEntry {
   // Closed over the exact allowed path strings, copied and frozen: nothing the
   // scope object does later can widen them.
@@ -257,6 +258,11 @@ function buildWritePath(
       // Counted from the moment the stager is called: a stage that fails
       // still counts toward max_changed_files (fail-closed; nothing reaches
       // the worktree either way).
+      // Authority once more, immediately before the stage: the lookups above
+      // take time, and a tick that expired during them authorizes nothing.
+      if (!(await authorize())) {
+        return deny("repo_write_path: the authority lapsed before the write");
+      }
       written.add(path);
       await stager.stage(path, bytes);
       return { status: "completed", result: { ok: true, data: { path, bytes: bytes.length } } };
@@ -292,12 +298,18 @@ function buildWritePath(
 export function buildRepoTaskTools(
   tools: ReadonlySet<RepoChangeTool>,
   scope: RepoTaskScope,
-  ports: { readonly reader: RepoTreeReader; readonly stager: RepoChangeStager },
+  ports: {
+    readonly reader: RepoTreeReader;
+    readonly stager: RepoChangeStager;
+    /** The run's authority check at this moment; consulted immediately before every stage. */
+    readonly authorize: () => Promise<boolean>;
+  },
 ): { registry: RepoTaskToolRegistry; expected: RepoTaskExpectedTools } {
   const entries: RepoTaskToolEntry[] = [];
   // Fixed order, independent of the tick's spelling.
   if (tools.has("repo_read_blob")) entries.push(buildReadBlob(ports.reader));
-  if (tools.has("repo_write_path")) entries.push(buildWritePath(scope, ports.stager, ports.reader));
+  if (tools.has("repo_write_path"))
+    entries.push(buildWritePath(scope, ports.stager, ports.reader, ports.authorize));
   const registry: RepoTaskToolRegistry = Object.freeze({ entries: Object.freeze(entries) });
   const expected = new Map(entries.map((e) => [e.definition.name, e] as const));
   return { registry, expected };

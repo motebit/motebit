@@ -497,9 +497,36 @@ describe("isolated git: no git process runs on the real git directory", () => {
     }
   });
 
-  it("a git call past its timeout is killed and fails", async () => {
-    await expect(session.run(["rev-list", "--all"], { timeoutMs: 1 })).rejects.toThrow(/timed out/);
-    await expect(session.run(["rev-parse", tip])).resolves.toBeDefined();
+  it("a git call past its timeout is killed and fails, and the session ends", async () => {
+    const s2 = await openIsolatedGit({ gitEntry: path.join(repo, ".git"), objectFormat: "sha1" });
+    await expect(s2.run(["rev-list", "--all"], { timeoutMs: 1 })).rejects.toThrow(/timed out/);
+    expect(fs.existsSync(s2.sessionDir)).toBe(false);
+    await expect(s2.run(["rev-parse", tip])).rejects.toThrow(/closed/);
+  });
+
+  it("a git killed while its stdin is still being written rejects; the process survives", async () => {
+    const s2 = await openIsolatedGit({ gitEntry: path.join(repo, ".git"), objectFormat: "sha1" });
+    const big = new Uint8Array(4 * 1024 * 1024).fill(0x61);
+    // An unhandled EPIPE on the child's stdin is an uncaught exception, which
+    // would crash the CLI. Capture uncaught exceptions for the call's
+    // duration (the test runner's own handlers set aside, then restored).
+    const uncaught: unknown[] = [];
+    const saved = process.listeners("uncaughtException");
+    process.removeAllListeners("uncaughtException");
+    const capture = (e: unknown) => void uncaught.push(e);
+    process.on("uncaughtException", capture);
+    try {
+      await expect(
+        s2.run(["hash-object", "--stdin"], { input: big, timeoutMs: 1 }),
+      ).rejects.toThrow(/timed out|stopped reading its input/);
+      await new Promise((r) => setTimeout(r, 100));
+    } finally {
+      process.off("uncaughtException", capture);
+      for (const l of saved) process.on("uncaughtException", l);
+    }
+    expect(uncaught.map((e) => (e instanceof Error ? e.message : String(e)))).toEqual([]);
+    expect(fs.existsSync(s2.sessionDir)).toBe(false);
+    expect(process.exitCode ?? 0).toBe(0);
   });
 });
 

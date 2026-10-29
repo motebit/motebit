@@ -139,7 +139,11 @@ describe("repo task: no other tool is offered on any model call", () => {
     const { registry, expected } = buildRepoTaskTools(
       new Set(["repo_read_blob", "repo_write_path"] as const),
       (await makeBundle()).scope,
-      { reader: MemTree.withFile("docs/a.md", "x"), stager: new MemWriter() },
+      {
+        reader: MemTree.withFile("docs/a.md", "x"),
+        stager: new MemWriter(),
+        authorize: () => Promise.resolve(true),
+      },
     );
     expect(Object.isFrozen(registry)).toBe(true);
     expect(Object.isFrozen(registry.entries)).toBe(true);

@@ -223,6 +223,24 @@ describe("repo task: the run cannot write without a valid tick", () => {
     expect(model.packs).toHaveLength(2);
   });
 
+  it("a tick that expires during the write's own lookup stages nothing and is denied", async () => {
+    let now = T0 + 60_000;
+    const tree = MemTree.withFile("docs/a.md", "teh typo\n");
+    const realLookup = tree.lookup.bind(tree);
+    // The handler's tree lookup returns after the tick has expired.
+    tree.lookup = (path: string) => {
+      now = T0 + HOUR + 1;
+      return realLookup(path);
+    };
+    const { input, writer, sink } = await setup(
+      [[call("c1", "repo_write_path", { path: "docs/a.md", content: "the typo\n" })], "done"],
+      { clock: () => now, tree },
+    );
+    await runRepoTask(input);
+    expect(writer.calls).toHaveLength(0);
+    expect(sink.list().map((r) => r.status)).toEqual(["denied"]);
+  });
+
   it("a revocation present at preflight is never outrun by a valid-looking call", async () => {
     const { input, writer } = await setup(
       [[call("c1", "repo_write_path", { path: "docs/a.md", content: "x" })]],

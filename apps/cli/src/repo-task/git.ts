@@ -20,8 +20,9 @@
  *     -c core.splitIndex=false -c i18n.commitEncoding=UTF-8
  *     -c core.hooksPath=/dev/null`.
  *   - cwd is the private directory, never the caller's.
- *   - argv only (never a shell); path bytes travel on stdin, never as an
- *     argument, so no path is shell-, glob- or option-interpreted.
+ *   - argv only (never a shell). The stager passes every path on stdin;
+ *     the reader passes one path in argv, always after `--` and with literal
+ *     pathspecs, so no path is shell-, glob- or option-interpreted.
  *
  * Alternates: the real object store's `info/alternates` IS honoured — git
  * reads it from the object directory it is given, and a repository cloned
@@ -135,6 +136,13 @@ function spawnGit(
         );
       }
     });
+    // A git that dies (or is killed) before reading all of its input makes
+    // the write fail with EPIPE: reject, never let it crash the process.
+    child.stdin.on("error", (e) => {
+      clearTimeout(timer);
+      child.kill("SIGKILL");
+      reject(new Error(`git ${args[0] ?? ""} stopped reading its input: ${e.message}`));
+    });
     child.stdin.end(input ?? new Uint8Array());
   });
 }
@@ -157,7 +165,7 @@ export interface IsolatedGit {
       readonly timeoutMs?: number;
     },
   ): Promise<Buffer>;
-  /** Remove the private session directory. */
+  /** Remove the private session directory. A call that times out or breaks its input closes the session too. */
   close(): void;
 }
 
@@ -254,6 +262,11 @@ export async function openIsolatedGit(opts: {
     fs.rmSync(sessionDir, { recursive: true, force: true });
     throw err;
   }
+  let closed = false;
+  const close = (): void => {
+    closed = true;
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+  };
   const env = (extra: Readonly<Record<string, string>> = {}): NodeJS.ProcessEnv => ({
     ...BASE_ENV(),
     GIT_DIR: privateRepo,
@@ -264,7 +277,19 @@ export async function openIsolatedGit(opts: {
     objectDirectory,
     objectFormat,
     sessionDir,
-    run: (args, o = {}) => spawnGit(args, env(o.env), sessionDir, o.input, o.timeoutMs),
-    close: () => fs.rmSync(sessionDir, { recursive: true, force: true }),
+    run: async (args, o = {}) => {
+      if (closed) throw new Error("isolated git: the session is closed");
+      try {
+        return await spawnGit(args, env(o.env), sessionDir, o.input, o.timeoutMs);
+      } catch (err) {
+        // A killed or broken call can leave state in the private repository
+        // (a lock, a half-written file): the session ends, fail closed, and
+        // its directory goes with it.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/timed out|stopped reading its input/.test(msg)) close();
+        throw err;
+      }
+    },
+    close,
   };
 }

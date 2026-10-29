@@ -27,17 +27,24 @@ import type { KeyPair, StandingDelegation } from "@motebit/crypto";
 import type { RepoChangeRepairCode } from "@motebit/protocol";
 import { verifyRepoChange } from "@motebit/verifier";
 
-import { checkRepoTaskAuthority } from "../repo-task/index.js";
+import { InMemoryToolReceiptSink } from "../tool-receipt-sink.js";
+import { checkRepoTaskAuthority, runRepoTask } from "../repo-task/index.js";
 import type { RepoTaskAuthorityBundle, RepoTaskPin } from "../repo-task/index.js";
 import {
+  agentA,
   A_ID,
+  call,
   F_ID,
   hex,
   HOUR,
+  ids,
   keys,
   makeBundle,
+  MemTree,
+  MemWriter,
   REPO,
   revokeGrant,
+  scriptedModel,
   T0,
   type BundleOpts,
 } from "./repo-task-fixtures.js";
@@ -416,5 +423,107 @@ describe("repo task: the run and the verifier judge authority by one law", () =>
     expect(authority.scope.repo).toBe(REPO);
     // Every rule, not only the judgeable ones: nothing but authority can fail.
     expect(await verifierCodes(authority, agent, k.a, NOW, true)).toEqual(new Set());
+  });
+});
+
+describe("repo task: a call that names no tool leaves the bundle verifiable", () => {
+  it("run -> bundle -> verifyRepoChange: the empty-name call is a denied placeholder, no failure", async () => {
+    const k = await keys();
+    const authority = await makeBundle();
+    const { scope, grant, tick } = authority;
+    const content = "the typo\n";
+    const blob = gitBlobId(content);
+    const result = await runRepoTask({
+      authority,
+      agent: await agentA(),
+      provider: scriptedModel([
+        [call("c0", "", { path: "docs/a.md" })],
+        [call("c1", "repo_write_path", { path: "docs/a.md", content })],
+        "done",
+      ]),
+      providerName: "scripted",
+      reader: MemTree.withFile("docs/a.md", "teh typo\n"),
+      stager: new MemWriter(),
+      receipts: new InMemoryToolReceiptSink(),
+      runtimeVersion: "9.9.9",
+      clock: () => T0 + 60_000,
+      newId: ids,
+    });
+    expect(result.tool_receipts.map((r) => [r.tool_name, r.status])).toEqual([
+      ["repo_task_unnamed_tool", "denied"],
+      ["repo_write_path", "completed"],
+    ]);
+    const record = {
+      spec: "motebit/repo-change@1.0" as const,
+      grant_id: grant.grant_id,
+      grant_digest: sha(await canonicalSha256(grant)),
+      tick_digest: sha(await canonicalSha256(tick)),
+      scope_digest: sha(await canonicalSha256(scope)),
+      repo: scope.repo,
+      object_format: scope.object_format,
+      parent_commit: "1".repeat(40),
+      head_commit: "2".repeat(40),
+      entries: [{ path: "docs/a.md", mode: "100644", blob }],
+      tool_receipt_digests: await Promise.all(
+        result.tool_receipts.map(async (t) => sha(await canonicalSha256(t))),
+      ),
+      system_prompt_digest: result.system_prompt_digest,
+      provider: result.provider,
+      model: result.model,
+      runtime_version: result.runtime_version,
+    };
+    const text = canonicalJson(record);
+    const receipt = await signExecutionReceipt(
+      {
+        task_id: result.task_id,
+        motebit_id: A_ID,
+        public_key: hex(k.a),
+        device_id: "dev-a",
+        submitted_at: result.submitted_at,
+        completed_at: result.completed_at,
+        status: "completed",
+        result: text,
+        tools_used: [...result.tools_used],
+        memories_formed: result.memories_formed,
+        prompt_hash: result.prompt_hash,
+        result_hash: await hash(enc.encode(text)),
+        delegated_scope: result.delegated_scope,
+        invocation_origin: "ai-loop",
+      },
+      k.a.privateKey,
+    );
+    const bundle = {
+      spec: "motebit/repo-change-bundle@1.0",
+      scope,
+      grant,
+      tick,
+      tool_receipts: result.tool_receipts,
+      receipt,
+    };
+    const verification = await verifyRepoChange({
+      bundle: enc.encode(canonicalJson(bundle)),
+      entries: [
+        {
+          kind: "modify",
+          path: enc.encode("docs/a.md"),
+          mode: "100644",
+          previousMode: "100644",
+          blob,
+          containsNul: false,
+        },
+      ],
+      trackedPaths: [enc.encode("docs/a.md")],
+      pins: { principal: authority.principal, agents: authority.agents },
+      isPathPermitted: authority.isPathPermitted,
+      revocations: {
+        set: authority.revocations.set,
+        failures: authority.revocations.failures,
+        freshness: { basis: "asserted", asOf: {} },
+      },
+      spent: authority.spent,
+      expectedRepo: authority.expectedRepo,
+      mode: { kind: "pull_request", shapeFailures: [], now: T0 + 120_000 },
+    });
+    expect(verification.diagnostics.failures.map((f) => f.code)).toEqual([]);
   });
 });
