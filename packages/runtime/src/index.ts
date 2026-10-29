@@ -436,3 +436,12 @@ export type { AgentCommandVerdict } from "@motebit/crypto";
 export { toolPolicy } from "./tool-policy.js";
 export type { ToolPolicy, ToolProjection, ToolEndState } from "./tool-policy.js";
 export { describeToolStep } from "./tool-narration.js";
+
+// Durable tool-receipt sink (fail-closed record of every signed
+// ToolInvocationReceipt; RuntimeConfig.toolReceiptSink).
+export { InMemoryToolReceiptSink } from "./tool-receipt-sink.js";
+export type { ToolReceiptSink } from "./tool-receipt-sink.js";
+
+// Governed repo change — the ephemeral no-interior run and its frozen
+// two-tool registry (docs/proposals/governed-repo-change-v1.md, step 2).
+export * from "./repo-task/index.js";

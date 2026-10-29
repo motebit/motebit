@@ -623,9 +623,9 @@ function buildDynamicSuffix(
   }
 
   // Packed context (state + events + memories)
-  const packed = packContext(contextPack);
-  const contextLines = packed.split("\n").filter((l) => !l.startsWith("[User]"));
-  const context = contextLines.join("\n");
+  // The user's message never enters the system prompt — omitted at the
+  // source, so no line of a multi-line message can leak past a filter.
+  const context = packContext(contextPack, { omitUserMessage: true });
   if (context.trim()) {
     sections.push(context);
   }

@@ -91,6 +91,16 @@ import { InMemoryPlanStore as InMemoryPlanStoreImpl, PlanEngine } from "@motebit
 import { createSubGoalDefinition } from "@motebit/tools/web-safe";
 import type { GoalRunScope } from "../index";
 import { generateKeypair } from "@motebit/encryption";
+import { runRepoTask } from "../repo-task/index.js";
+import { InMemoryToolReceiptSink } from "../tool-receipt-sink.js";
+import {
+  agentA,
+  ids as repoTaskIds,
+  makeBundle as makeRepoTaskBundle,
+  MemTree,
+  MemWriter,
+  T0 as REPO_TASK_T0,
+} from "./repo-task-fixtures.js";
 
 const CANARY = {
   message: "CNRYMESSAGE01",
@@ -351,6 +361,12 @@ async function makeRuntime() {
   let entry = "seed";
   const store = conversationStore();
   let rt: MotebitRuntime | null = null;
+  const provider = recordingProvider(
+    sent,
+    () => mode,
+    () => entry,
+    () => rt == null || ![SensitivityLevel.None, SensitivityLevel.Personal].includes(tierOf(rt)),
+  );
   const runtime = new MotebitRuntime(
     {
       motebitId: "owner",
@@ -365,13 +381,7 @@ async function makeRuntime() {
     {
       storage: { ...createInMemoryStorage(), conversationStore: store },
       renderer: new NullRenderer(),
-      ai: recordingProvider(
-        sent,
-        () => mode,
-        () => entry,
-        () =>
-          rt == null || ![SensitivityLevel.None, SensitivityLevel.Personal].includes(tierOf(rt)),
-      ),
+      ai: provider,
     },
   );
   rt = runtime;
@@ -411,7 +421,7 @@ async function makeRuntime() {
       target.onDevice ? SensitivityLevel.Secret : SensitivityLevel.Personal,
     );
   };
-  return { runtime, sent, setMode, setEntry, planId: "", target, toTarget, store };
+  return { runtime, provider, sent, setMode, setEntry, planId: "", target, toTarget, store };
 }
 
 const tierOf = (runtime: MotebitRuntime): SensitivityLevel =>
@@ -733,6 +743,23 @@ const ENTRY_POINTS: Record<string, (h: Harness) => Promise<void>> = {
       expect(refused).toEqual([]);
     }
   },
+  // The repo-task run is not a runtime method: it is handed the same
+  // provider, on the same machine whose interior was just seeded at Secret,
+  // and must carry none of it — its packs are built from the scope alone.
+  "runRepoTask (no-interior repo task)": async ({ provider }) => {
+    await runRepoTask({
+      authority: await makeRepoTaskBundle(),
+      agent: await agentA(),
+      provider,
+      providerName: "recording",
+      reader: MemTree.withFile("docs/a.md", "teh\n"),
+      writer: new MemWriter(),
+      receipts: new InMemoryToolReceiptSink(),
+      runtimeVersion: "canary",
+      clock: () => REPO_TASK_T0 + 60_000,
+      newId: repoTaskIds,
+    });
+  },
   "handleAgentTask (foreign principal)": async ({ runtime }) => {
     const kp = await generateKeypair();
     const task: AgentTask = {
@@ -1049,6 +1076,10 @@ const COVERED_CALL_SITES: Record<string, { count: number; coveredBy: string }> =
     count: 2,
     coveredBy:
       "generateCompletion (also the conversation's title dep: autoTitle; spatial heartbeat); memory consolidation classify (memory-formation turn)",
+  },
+  "packages/runtime/src/repo-task/run.ts": {
+    count: 1,
+    coveredBy: "runRepoTask (no-interior repo task) — packs built from the verified scope only",
   },
   "packages/runtime/src/secret-redacting-provider.ts": {
     count: 2,

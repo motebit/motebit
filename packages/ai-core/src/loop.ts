@@ -190,7 +190,13 @@ export function detectUntaggedMemoryPatterns(
 const EXTERNAL_DATA_START = "[EXTERNAL_DATA source=";
 const EXTERNAL_DATA_END = "[/EXTERNAL_DATA]";
 
-function wrapExternalData(data: unknown, toolName: string): string {
+/**
+ * Wrap tool output in `[EXTERNAL_DATA]` boundary markers (escaping any markers
+ * inside it) before it enters model-visible history. Exported for runners
+ * that dispatch tools outside this loop (the repo-task run) and must hand the
+ * model the same boundary.
+ */
+export function wrapExternalData(data: unknown, toolName: string): string {
   const text = typeof data === "string" ? data : JSON.stringify(data);
   const escaped = text
     .replace(/\[EXTERNAL_DATA\b/g, "[ESCAPED_DATA")
@@ -727,6 +733,9 @@ export interface TurnOptions {
   sessionState?: import("@motebit/sdk").SessionStateSnapshot;
 }
 
+/** Terminal status of one tool call — the `ToolInvocationReceipt.status` vocabulary. */
+export type ToolCallOutcome = "completed" | "failed" | "denied";
+
 export type AgenticChunk =
   | { type: "text"; text: string }
   | {
@@ -823,6 +832,17 @@ export type AgenticChunk =
        * value they care about or ignore the field.
        */
       reason?: string;
+      /**
+       * Terminal status of the call, set on every `done` chunk ai-core
+       * emits: `completed` (the handler returned `ok: true`), `failed` (it
+       * threw or returned `ok: false`), `denied` (a policy gate, the
+       * money meter or the offering refused it before execution). The
+       * runtime signs it as the `ToolInvocationReceipt.status`, so the
+       * receipt says what happened, never "completed" by default.
+       * Optional on the type for legacy hand-built streams; a `done`
+       * chunk without it gets no receipt (the signer never guesses).
+       */
+      outcome?: ToolCallOutcome;
     }
   | {
       type: "approval_request";
@@ -1421,8 +1441,14 @@ export async function* runTurnStreaming(
             type: "tool_status",
             name: toolCall.name,
             status: "done",
+            outcome: "denied",
             result: decision.reason,
             tool_call_id: toolCall.id,
+            // No "calling" chunk preceded a refusal: the done chunk carries
+            // the args and the decision time so the receipt signer can still
+            // sign the `denied` receipt this call is owed.
+            args: toolCall.args,
+            started_at: Date.now(),
             mode: toolDef.embodimentMode,
             slabProjection: toolDef.slabProjection,
             // Owner channel only — the history push below stays coarse.
@@ -1495,8 +1521,11 @@ export async function* runTurnStreaming(
                 type: "tool_status",
                 name: toolCall.name,
                 status: "done",
+                outcome: "denied",
                 result: reason,
                 tool_call_id: toolCall.id,
+                args: toolCall.args,
+                started_at: Date.now(),
                 mode: toolDef.embodimentMode,
                 slabProjection: toolDef.slabProjection,
               };
@@ -1556,6 +1585,7 @@ export async function* runTurnStreaming(
             type: "tool_status",
             name: toolCall.name,
             status: "done",
+            outcome: "failed",
             result: msg,
             tool_call_id: toolCall.id,
             mode: toolDef.embodimentMode,
@@ -1661,6 +1691,10 @@ export async function* runTurnStreaming(
                 type: "tool_status",
                 name: toolCall.name,
                 status: "done",
+                // The tool RAN and returned; only its result is withheld
+                // from the model. The receipt states the call's own outcome
+                // (a `denied` would claim the call never ran).
+                outcome: result.ok ? "completed" : "failed",
                 result: reason,
                 tool_call_id: toolCall.id,
                 mode: toolDef.embodimentMode,
@@ -1704,6 +1738,9 @@ export async function* runTurnStreaming(
           type: "tool_status",
           name: toolCall.name,
           status: "done",
+          // The handler's own verdict: `{ok:false}` is a failed call, never
+          // a completed one.
+          outcome: result.ok ? "completed" : "failed",
           result: result.data ?? result.error,
           tool_call_id: toolCall.id,
           mode: toolDef.embodimentMode,
@@ -1742,8 +1779,11 @@ export async function* runTurnStreaming(
           type: "tool_status",
           name: toolCall.name,
           status: "done",
+          outcome: "denied",
           result: "Tool not available",
           tool_call_id: toolCall.id,
+          args: toolCall.args,
+          started_at: Date.now(),
           // No mode — toolDef wasn't found; can't infer embodiment.
         };
         conversationHistory.push({
@@ -1794,6 +1834,7 @@ export async function* runTurnStreaming(
           type: "tool_status",
           name: toolCall.name,
           status: "done",
+          outcome: "failed",
           result: msg,
           tool_call_id: toolCall.id,
           mode: toolDef?.embodimentMode,
@@ -1822,6 +1863,7 @@ export async function* runTurnStreaming(
         type: "tool_status",
         name: toolCall.name,
         status: "done",
+        outcome: result.ok ? "completed" : "failed",
         result: result.data ?? result.error,
         tool_call_id: toolCall.id,
         mode: toolDef?.embodimentMode,

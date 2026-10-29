@@ -125,6 +125,17 @@ export interface RuntimeConfig {
    */
   onToolInvocation?: (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void;
   /**
+   * Durable sink for every signed `ToolInvocationReceipt` this runtime
+   * produces — AI-loop calls (completed / failed / denied), approval
+   * resumes, and `invokeLocalTool`. Awaited per receipt in call order,
+   * before the in-session buffer and `onToolInvocation` see it.
+   * Fail-closed: when set, a sink rejection, a missing signing key or a
+   * signing fault throws out of the turn (or the `invokeLocalTool` call),
+   * so nothing continues as though an unrecorded receipt exists. See
+   * `tool-receipt-sink.ts`. Absent: today's buffer + bus behaviour.
+   */
+  toolReceiptSink?: import("./tool-receipt-sink.js").ToolReceiptSink;
+  /**
    * Optional sink for a signed human-consent decision over a
    * governance-gated tool call (the "approve" governance band made
    * verifiable). Fires once per final approval verdict with the
@@ -431,6 +442,13 @@ export type StreamChunk =
        * breaking existing consumers.
        */
       reason?: string;
+      /**
+       * Terminal status of the call on a "done" chunk — the same value
+       * the call's signed `ToolInvocationReceipt.status` carries
+       * (`completed` / `failed` / `denied`). Pass-through from
+       * `AgenticChunk.tool_status.outcome`.
+       */
+      outcome?: "completed" | "failed" | "denied";
     }
   | {
       type: "approval_request";

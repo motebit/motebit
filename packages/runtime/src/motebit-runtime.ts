@@ -895,6 +895,8 @@ export class MotebitRuntime {
    */
   private _onToolInvocation:
     ((receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void) | null;
+  /** Durable, fail-closed receipt record (`RuntimeConfig.toolReceiptSink`); null when not wired. */
+  private _toolReceiptSink: import("./tool-receipt-sink.js").ToolReceiptSink | null;
   /**
    * Live activity sink for slab items in virtual_browser mode and
    * any other surface that needs the raw args/result alongside the
@@ -970,6 +972,7 @@ export class MotebitRuntime {
         }
       }
     };
+    this._toolReceiptSink = config.toolReceiptSink ?? null;
     this._onToolActivity = config.onToolActivity ?? null;
     this._onApprovalDecision = config.onApprovalDecision ?? null;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
@@ -1610,6 +1613,10 @@ export class MotebitRuntime {
       getSigningPublicKey: () => this._signingKeys?.publicKey ?? null,
       onToolInvocation:
         this._onToolInvocation != null ? (receipt) => this._onToolInvocation?.(receipt) : undefined,
+      appendToolReceipt:
+        this._toolReceiptSink != null
+          ? (receipt) => this._toolReceiptSink!.append(receipt)
+          : undefined,
       onToolActivity: this._onToolActivity ? (event) => this._onToolActivity?.(event) : undefined,
       onApprovalDecision: (decision) => this.recordApprovalDecision(decision),
     };
@@ -2057,28 +2064,40 @@ export class MotebitRuntime {
     // and a fresh per-invocation TurnContext carries none, so R4 always blocks
     // here. `validate()` writes the audit entry internally, so every decision —
     // allow or deny — is recorded. Enforced by `check-local-tool-gated`.
+    // Every refusal below is a call that did not run: it gets a signed
+    // `denied` receipt, the same as an AI-loop refusal does.
+    const refuseLocalCall = async (error: string): Promise<ToolResult> => {
+      await this.signLocalToolReceipt({
+        invocationId,
+        name,
+        args,
+        startedAt,
+        completedAt: Date.now(),
+        status: "denied",
+        visibleResult: error,
+        origin,
+      });
+      return { ok: false, error };
+    };
     const toolDef = this.toolRegistry.list().find((t) => t.name === name);
     if (!toolDef) {
       // Unknown, or scoped out of the current presence mode: unclassifiable,
       // so the gate cannot risk-assess it. Fail closed — it must not run.
-      return { ok: false, error: `Tool "${name}" is not available` };
+      return refuseLocalCall(`Tool "${name}" is not available`);
     }
     const turnCtx = this.policy.createTurnContext(options.runId);
     const decision = this.policy.validate(toolDef, args, turnCtx);
     if (!decision.allowed) {
-      return { ok: false, error: decision.reason ?? `Tool "${name}" blocked by policy` };
+      return refuseLocalCall(decision.reason ?? `Tool "${name}" blocked by policy`);
     }
     if (decision.requiresApproval) {
       const tapSatisfiesApproval =
         (origin === "user-tap" || options.humanApproved === true) &&
         classifyTool(toolDef).risk < RiskLevel.R4_MONEY;
       if (!tapSatisfiesApproval) {
-        return {
-          ok: false,
-          error:
-            decision.reason ??
-            `Tool "${name}" requires approval a ${origin} invocation cannot grant`,
-        };
+        return refuseLocalCall(
+          decision.reason ?? `Tool "${name}" requires approval a ${origin} invocation cannot grant`,
+        );
       }
       // Ledger: the paused decision is proceeding on a human's say-so.
       // Written BEFORE the call so a death after it holds as unknown.
@@ -2130,45 +2149,89 @@ export class MotebitRuntime {
       }
     }
 
-    // Sign + fire the receipt. Fail-closed: no signing key → no
-    // receipt (consistent with the StreamingManager path).
-    if (this._onToolInvocation && this._signingKeys) {
-      try {
-        const argsHash = await hashToolPayload(args);
-        const resultHash = await hashToolPayload(visibleResult);
-        const signed = await signToolInvocationReceipt(
-          {
-            invocation_id: invocationId,
-            // Standalone invocation — no enclosing task_id. Use the
-            // invocation_id as the task_id so the receipt is still a
-            // valid signed artifact.
-            task_id: invocationId,
-            motebit_id: this.motebitId,
-            device_id: this._deviceId,
-            tool_name: name,
-            started_at: startedAt,
-            completed_at: completedAt,
-            status: result.ok ? "completed" : "failed",
-            args_hash: argsHash,
-            result_hash: resultHash,
-            invocation_origin: origin,
-          },
-          this._signingKeys.privateKey,
-          this._signingKeys.publicKey,
-        );
-        try {
-          this._onToolInvocation(signed);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          this._logger.warn(`[runtime] onToolInvocation sink threw: ${msg}`);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this._logger.warn(`[runtime] tool-invocation-receipt sign failed: ${msg}`);
-      }
-    }
+    // Sign + fire the receipt with the handler's verdict as status
+    // (consistent with the StreamingManager path).
+    await this.signLocalToolReceipt({
+      invocationId,
+      name,
+      args,
+      startedAt,
+      completedAt,
+      status: result.ok ? "completed" : "failed",
+      visibleResult,
+      origin,
+    });
 
     return result;
+  }
+
+  /**
+   * Sign one `invokeLocalTool` receipt and deliver it: the durable sink first
+   * (awaited, fail-closed — a missing key, a signing fault or a rejection
+   * throws to the caller), then the buffer + surface bus. Without a durable
+   * sink, a missing key means no receipt and a signing fault is logged, as
+   * on the StreamingManager path.
+   */
+  private async signLocalToolReceipt(p: {
+    invocationId: string;
+    name: string;
+    args: Record<string, unknown>;
+    startedAt: number;
+    completedAt: number;
+    status: "completed" | "failed" | "denied";
+    visibleResult: unknown;
+    origin: IntentOrigin;
+  }): Promise<void> {
+    const durable = this._toolReceiptSink;
+    if (!this._signingKeys || this._signingKeysErased) {
+      if (durable) {
+        throw new Error(
+          `tool receipt for ${p.name} cannot be signed (no signing identity); the durable receipt sink requires one`,
+        );
+      }
+      return;
+    }
+    let signed: import("@motebit/crypto").SignableToolInvocationReceipt;
+    try {
+      const argsHash = await hashToolPayload(p.args);
+      const resultHash = await hashToolPayload(p.visibleResult ?? null);
+      signed = await signToolInvocationReceipt(
+        {
+          invocation_id: p.invocationId,
+          // Standalone invocation — no enclosing task_id. Use the
+          // invocation_id as the task_id so the receipt is still a
+          // valid signed artifact.
+          task_id: p.invocationId,
+          motebit_id: this.motebitId,
+          device_id: this._deviceId,
+          tool_name: p.name,
+          started_at: p.startedAt,
+          completed_at: p.completedAt,
+          status: p.status,
+          args_hash: argsHash,
+          result_hash: resultHash,
+          invocation_origin: p.origin,
+        },
+        this._signingKeys.privateKey,
+        this._signingKeys.publicKey,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (durable) {
+        throw new Error(`tool receipt for ${p.name} could not be signed: ${msg}`, { cause: err });
+      }
+      this._logger.warn(`[runtime] tool-invocation-receipt sign failed: ${msg}`);
+      return;
+    }
+    if (durable) await durable.append(signed);
+    if (this._onToolInvocation) {
+      try {
+        this._onToolInvocation(signed);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this._logger.warn(`[runtime] onToolInvocation sink threw: ${msg}`);
+      }
+    }
   }
 
   /**
