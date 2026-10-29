@@ -1,5 +1,44 @@
 # @motebit/verifier
 
+## 1.15.0
+
+### Minor Changes
+
+- 33a1d37: Governed repo change: `verifyRepoChange` closes two fail-open holes found in cold review, and `RepoChangeRepairCode` gains three appended codes (`authority.repo_change.grant_not_yet_valid`, `authority.repo_change.window_inverted`, `authority.repo_change.tick_predates_grant`).
+
+  An evaluation time that is not a finite number (absent, `NaN`, `±Infinity`) now reads `authority: "unknown"` instead of being judged against a fallback clock. The 24-hour lifetime now bounds the authority window: a grant or tick that starts after it expires, or a tick issued before its grant, is `insufficient`; an evaluation time before the grant's or the tick's start (`max(issued_at, not_before)`) is `not_yet_valid`; the lifetime counts from the grant's start. Crypto semantics are unchanged. A bundle's tick must now carry `grant_id` (`RepoChangeBundle.tick` is typed accordingly), a path segment ending in `.` is non-canonical, and a tracked path that is not UTF-8 fails the case-collision rule closed.
+
+- 33a1d37: Governed repo change, build step 1: the wire artifacts and the verifier core (`spec/repo-change-v1.md`, `motebit/repo-change@1.0`, the thirty-eighth spec; design of record `docs/proposals/governed-repo-change-v1.md`).
+
+  `@motebit/protocol`: the scope `RepoTaskScope` (`motebit/repo-task-scope@1.0`, `schema: "motebit.repo-task-scope.v1"`), the change record `RepoChangeResult` (`motebit/repo-change@1.0`, the `ExecutionReceipt` `result` payload) with `RepoChangeEntry`, the bundle `RepoChangeBundle` (`motebit/repo-change-bundle@1.0`) and its receipt profiles `RepoChangeExecutionReceipt` / `RepoChangeToolInvocationReceipt`, `RepoChangeTool`, `GitObjectFormat`, and the closed, append-only `RepoChangeRepairCode` list (`ALL_REPO_CHANGE_REPAIR_CODES`). Two additive appends to the verdict vocabulary: the `VerdictSubject` value `"repo_change"`, and the `TemporalBasis` value `"operator_recorded"` — a wall-clock time an operator recorded and signed, accepted only under a pinned key of that operator, which is how a landed change is judged at its squash commit's committer time. No existing value changes meaning; a consumer with an exhaustive switch over either union gains one arm.
+
+  `@motebit/verifier`: `verifyRepoChange`, a pure function (no git, no file I/O, no repository policy) over the bundle bytes and the inputs a caller computes from git — entries, tracked paths, role-typed `(motebit_id, public_key)` pins, the path predicate as data, strictly parsed revocations with freshness, spent status, the expected repository, the mode's ancestry and shape results, and the evaluation time. It returns `{verdict, outcome, diagnostics}`: a `VerificationVerdict` of `type: "repo_change"` in which every failed rule lands on one of the four axes with a repo-change repair code, so `isFullyVerified` is false whenever any rule failed; the receipt's `status` as `outcome`; and every failed rule in `diagnostics`. Crypto is reused, never re-implemented (`verifyDelegationTokenVerdict`, `verifySubjectBinding`, `findGrantRevocation`, `verifyExecutionReceipt`, `verifyToolInvocationReceipt`).
+
+- ce129e1: Sovereign payment receipts now bind every hash to the bytes it names. `signSovereignPaymentReceipt` sets `result_hash` to `hex(SHA-256(UTF-8(result)))` of the receipt's own synthesized `result` text, so the receipt verifies under strict hash binding (`motebit-verify`, `motebit verify receipt`). Before this change it signed the caller-supplied hash of the paid service's result as `result_hash`, so a strict verifier rejected every real sovereign payment receipt.
+
+  The paid service's result hash now travels in a new optional, signature-bound `ExecutionReceipt` field, `service_result_hash`: the SHA-256 of the paid service's result bytes, as asserted by the payer and signed by the payee (`spec/settlement-v1.md` §7). The field is additive. It is absent on every other receipt, and receipts without it sign and verify byte-identically to before. When present, strict verifiers (`motebit-verify`, `motebit verify receipt`, `verifyReceipt(…, { strictHashBinding: true })`) check that it is a 64-character lowercase hex digest, and every verifier reports it. The signature-only defaults (`verifyReceipt` / `verify` / `verifyArtifact` without strict binding, `verifyReceiptVerdict`) do not check its shape and return exactly their previous verdicts. Deprecation note: the defaults will check the shape too in the next major of `@motebit/crypto` / `@motebit/verifier`; a producer should emit only a SHA-256 hex digest there today. `signSovereignPaymentReceipt` refuses an input `result_hash` that is not such a digest. Receipts issued before this change still verify signature-only (`--lenient`); under strict binding they fail, because their `result_hash` does not bind their `result`.
+
+### Patch Changes
+
+- 0ab2e3d: The published package now includes its own `CHANGELOG.md`. Until now the `files` allowlist left it out, so npm, yarn and the CDN mirrors showed no changelog, or the repository's root changelog, which stops at 0.3.0. No code changed.
+- Updated dependencies [972de5e]
+- Updated dependencies [8df8acb]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [3156fc4]
+- Updated dependencies [0ab2e3d]
+- Updated dependencies [796deb8]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [33a1d37]
+- Updated dependencies [33a1d37]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+  - @motebit/crypto@4.1.0
+  - @motebit/protocol@3.20.0
+
 ## 1.14.2
 
 ### Patch Changes
