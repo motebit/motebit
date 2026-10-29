@@ -188,6 +188,7 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
     principal: structuredClone(input.authority.principal),
     expectedRepo: input.authority.expectedRepo,
     isPathPermitted: input.authority.isPathPermitted,
+    spent: input.authority.spent,
   });
   const agent: RepoTaskAgent = deepFreeze({
     motebitId: input.agent.motebitId,

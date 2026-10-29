@@ -54,6 +54,7 @@ import {
   checkRepoChangeGrantShape,
   checkRepoChangeParties,
   checkRepoChangeRevocationSet,
+  checkRepoChangeSpent,
   checkRepoChangeTickStructure,
   checkRepoChangeWindow,
   hasExactKeys,
@@ -943,11 +944,7 @@ export async function verifyRepoChange(
       `scope.repo ${JSON.stringify(scope.repo)} != the expected repository`,
     );
   }
-  if (input.spent)
-    fail(
-      "authority.repo_change.grant_spent",
-      "the grant's bundle already exists on the judged history",
-    );
+  checkRepoChangeSpent(input.spent, fail);
   const delegated =
     receipt.delegated_scope === undefined ? null : strictTools(receipt.delegated_scope);
   if (delegated === null || [...delegated].some((t) => !authorized.has(t))) {

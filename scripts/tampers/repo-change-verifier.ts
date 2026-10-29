@@ -708,7 +708,7 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "authority: spent grant not checked (B5b)",
     `${AUT} B5b: a grant whose bundle already landed is spent`,
-    off("  if (input.spent)"),
+    off("  if (spent) {"),
   ),
   entry(
     "authority: absent delegated_scope accepted",

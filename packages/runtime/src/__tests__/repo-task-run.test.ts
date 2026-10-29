@@ -467,6 +467,58 @@ describe("repo task: a path counts toward max_changed_files once the stager is c
   });
 });
 
+describe("repo task: repo_write_path refuses a directory/file conflict (the verifier's prefix rule)", () => {
+  async function writeTo(target: string, tree: MemTree, allowedPaths: string[]) {
+    const s = await setup(
+      [[call("c1", "repo_write_path", { path: target, content: "x" })], "done"],
+      {
+        tree,
+        bundle: {
+          scope: (sc) => void ((sc.allowed_paths = allowedPaths), (sc.max_changed_files = 2)),
+        },
+      },
+    );
+    await runRepoTask(s.input);
+    return s;
+  }
+
+  for (const kind of [
+    { kind: "blob" as const, mode: "100644" },
+    { kind: "symlink" as const, mode: "120000" },
+    { kind: "gitlink" as const, mode: "160000" },
+  ]) {
+    it(`a write under a path tracked as a ${kind.kind} is denied, before staging`, async () => {
+      const tree = new MemTree().set("docs", { ...kind, oid: "9".repeat(40) });
+      const { sink, writer } = await writeTo("docs/x.md", tree, ["docs/x.md"]);
+      expect(sink.list().map((r) => r.status)).toEqual(["denied"]);
+      expect(writer.calls).toHaveLength(0);
+    });
+  }
+
+  it("a write over a tracked directory is denied", async () => {
+    const tree = MemTree.withFile("docs/a.md", "x");
+    const { sink, writer } = await writeTo("docs", tree, ["docs"]);
+    expect(sink.list().map((r) => r.status)).toEqual(["denied"]);
+    expect(writer.calls).toHaveLength(0);
+  });
+
+  it("two allowed paths in a prefix relation (a and a/b) are refused", async () => {
+    for (const target of ["a", "a/b"]) {
+      const { sink, writer } = await writeTo(target, new MemTree(), ["a", "a/b"]);
+      expect(sink.list().map((r) => r.status)).toEqual(["denied"]);
+      expect(writer.calls).toHaveLength(0);
+    }
+  });
+
+  it("siblings are not a prefix relation (positive control)", async () => {
+    const { sink } = await writeTo("docs/a.md", MemTree.withFile("docs/b.md", "x"), [
+      "docs/a.md",
+      "docs/ab.md",
+    ]);
+    expect(sink.list().map((r) => r.status)).toEqual(["completed"]);
+  });
+});
+
 describe("repo task: no host detail reaches the model", () => {
   it("a port error is a fixed code to the model; the detail stays in the local record", async () => {
     const tree = MemTree.withFile("docs/a.md", "x");

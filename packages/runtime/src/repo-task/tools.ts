@@ -26,7 +26,11 @@
 
 import type { RepoChangeTool, RepoTaskScope, ToolDefinition, ToolResult } from "@motebit/protocol";
 import { RiskLevel } from "@motebit/protocol";
-import { repoPathCaseCollision, repoPathCaseIndex } from "@motebit/verifier";
+import {
+  repoPathCaseCollision,
+  repoPathCaseIndex,
+  repoPathPrefixConflict,
+} from "@motebit/verifier";
 
 /** One entry of the tip's tree at a path, as git records it. */
 export interface RepoTreeEntry {
@@ -183,11 +187,16 @@ function buildWritePath(
   const allowed: ReadonlySet<string> = new Set([...scope.allowed_paths]);
   const maxChanged = scope.max_changed_files;
   const written = new Set<string>();
-  // The tip's tracked paths, read once (the tip is fixed for the run) and
-  // folded with every allowed path by the verifier's own case rule.
-  let caseIndexAtTip: Promise<ReadonlyMap<string, ReadonlySet<string>> | null> | null = null;
-  const loadCaseIndex = (): Promise<ReadonlyMap<string, ReadonlySet<string>> | null> => {
-    caseIndexAtTip ??= reader.listTrackedPaths().then((tracked) => {
+  // The tip's tracked paths, read once (the tip is fixed for the run): the
+  // non-tree set for the verifier's directory/file rule, and the case index
+  // (tip ∪ allowed) for its case rule.
+  interface TipPaths {
+    readonly caseIndex: ReadonlyMap<string, ReadonlySet<string>>;
+    readonly trackedNonTree: ReadonlySet<string>;
+  }
+  let tipPaths: Promise<TipPaths | null> | null = null;
+  const loadTipPaths = (): Promise<TipPaths | null> => {
+    tipPaths ??= reader.listTrackedPaths().then((tracked) => {
       const names: string[] = [];
       for (const bytes of tracked) {
         try {
@@ -198,9 +207,12 @@ function buildWritePath(
           return null;
         }
       }
-      return repoPathCaseIndex([...names, ...allowed]);
+      return {
+        caseIndex: repoPathCaseIndex([...names, ...allowed]),
+        trackedNonTree: new Set(names),
+      };
     });
-    return caseIndexAtTip;
+    return tipPaths;
   };
   const handler: RepoTaskToolHandler = Object.freeze({
     name: "repo_write_path" as const,
@@ -224,14 +236,19 @@ function buildWritePath(
       // tracked `Docs/A.md` (or another allowed path), so a write to one would
       // land on the other. The verifier's rule, over tip ∪ allowed, before any
       // write I/O.
-      const index = await loadCaseIndex();
-      if (index === null) {
+      const tip = await loadTipPaths();
+      if (tip === null) {
         return deny(
           "repo_write_path: a tracked path is not UTF-8, so no case collision can be ruled out",
         );
       }
-      const collision = repoPathCaseCollision(path, index);
+      const collision = repoPathCaseCollision(path, tip.caseIndex);
       if (collision !== null) return deny(`repo_write_path: ${collision}`);
+      // No directory/file conflict (the verifier's prefix rule): a write under
+      // a tracked file, symlink or gitlink, over a tracked directory, or beside
+      // an allowed path in a prefix relation would delete what it replaces.
+      const conflict = repoPathPrefixConflict(path, tip.trackedNonTree, allowed);
+      if (conflict !== null) return deny(`repo_write_path: ${conflict}`);
       const tracked = await reader.lookup(path);
       if (tracked !== null && (tracked.kind !== "blob" || tracked.mode !== REGULAR_FILE_MODE)) {
         return deny(`repo_write_path: ${path} is tracked as ${tracked.kind} ${tracked.mode}`);

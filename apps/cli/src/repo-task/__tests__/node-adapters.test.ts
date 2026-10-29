@@ -26,12 +26,15 @@ import type { AIResponse, ContextPack, ToolCall } from "@motebit/sdk";
 
 import { createGitTreeReader } from "../git-tree-reader.js";
 import { createReceiptFileSink, readReceiptFile } from "../receipt-file-sink.js";
-import { createGitChangeStager } from "../git-change-stager.js";
+import { createGitChangeStager, gitTimestamp } from "../git-change-stager.js";
+import { openIsolatedGit } from "../git.js";
+import type { IsolatedGit } from "../git.js";
 
 let root = "";
 let repo = "";
 let outside = "";
 let tip = "";
+let session: IsolatedGit;
 
 function gitEnv(): NodeJS.ProcessEnv {
   return {
@@ -49,7 +52,7 @@ function git(...args: string[]): string {
   return execFileSync("git", args, { cwd: repo, env: gitEnv(), encoding: "utf8" }).trim();
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "repo-task-adapters-")));
   repo = path.join(root, "repo");
   outside = path.join(root, "outside");
@@ -70,22 +73,24 @@ beforeAll(() => {
   // The worktree diverges from the tip: an edit and an untracked file.
   fs.writeFileSync(path.join(repo, "docs", "a.md"), "edited in the worktree\n");
   fs.writeFileSync(path.join(repo, "untracked.md"), "not tracked\n");
+  session = await openIsolatedGit(path.join(repo, ".git"));
 });
 
 afterAll(() => {
+  session.close();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("git tree reader: the tip's tree, never the worktree", () => {
   it("reads a tracked blob as committed, not as edited in the worktree", async () => {
-    const reader = createGitTreeReader({ gitDir: path.join(repo, ".git"), tip });
+    const reader = createGitTreeReader({ git: session, tip });
     const entry = await reader.lookup("docs/a.md");
     expect(entry).toMatchObject({ kind: "blob", mode: "100644" });
     expect(new TextDecoder().decode(await reader.readBlob(entry!.oid))).toBe("teh typo\n");
   });
 
   it("reports executables, symlinks, gitlinks and trees by kind", async () => {
-    const reader = createGitTreeReader({ gitDir: path.join(repo, ".git"), tip });
+    const reader = createGitTreeReader({ git: session, tip });
     expect(await reader.lookup("bin/run.sh")).toMatchObject({ kind: "blob", mode: "100755" });
     expect(await reader.lookup("link")).toMatchObject({ kind: "symlink", mode: "120000" });
     expect(await reader.lookup("sub")).toMatchObject({ kind: "gitlink", mode: "160000" });
@@ -93,7 +98,7 @@ describe("git tree reader: the tip's tree, never the worktree", () => {
   });
 
   it("sees nothing untracked, nothing through a symlinked directory, no glob", async () => {
-    const reader = createGitTreeReader({ gitDir: path.join(repo, ".git"), tip });
+    const reader = createGitTreeReader({ git: session, tip });
     expect(await reader.lookup("untracked.md")).toBeNull();
     expect(await reader.lookup("escape/secret.txt")).toBeNull();
     expect(await reader.lookup("docs/*.md")).toBeNull();
@@ -104,13 +109,13 @@ describe("git tree reader: the tip's tree, never the worktree", () => {
   });
 
   it("lists every tracked path at the tip, as git's bytes", async () => {
-    const reader = createGitTreeReader({ gitDir: path.join(repo, ".git"), tip });
+    const reader = createGitTreeReader({ git: session, tip });
     const listed = (await reader.listTrackedPaths()).map((b) => new TextDecoder().decode(b)).sort();
     expect(listed).toEqual(["bin/run.sh", "docs/a.md", "escape", "link", "sub"]);
   });
 
   it("refuses a tip that is not a full object id", () => {
-    expect(() => createGitTreeReader({ gitDir: path.join(repo, ".git"), tip: "HEAD" })).toThrow();
+    expect(() => createGitTreeReader({ git: session, tip: "HEAD" })).toThrow();
   });
 });
 
@@ -125,6 +130,24 @@ function snapshot(dir: string, withGit = false): Map<string, string> {
       if (e.isSymbolicLink()) out.set(rel, `symlink:${fs.readlinkSync(full)}`);
       else if (e.isDirectory()) walk(full);
       else out.set(rel, fs.readFileSync(full).toString("hex"));
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+/** Every entry under a git directory (relative path → content hash or "dir"/"socket"). */
+function snapshotGitDir(dir: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (d: string): void => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, e.name);
+      const rel = path.relative(dir, full);
+      if (e.isDirectory()) {
+        out.set(rel, "dir");
+        walk(full);
+      } else if (e.isFile()) out.set(rel, fs.readFileSync(full).toString("base64"));
+      else out.set(rel, "special");
     }
   };
   walk(dir);
@@ -155,7 +178,7 @@ describe("git change stager: blobs and a private index, never the worktree", () 
     const before = snapshot(repo);
     const outsideBefore = snapshot(outside);
     const stateBefore = repoState();
-    const stager = createGitChangeStager({ gitDir: path.join(repo, ".git"), tip });
+    const stager = createGitChangeStager({ git: session, tip });
     await stager.stage("docs/a.md", new TextEncoder().encode("fixed\n"));
     await stager.stage("docs/new.md", new TextEncoder().encode("new\n"));
     const { headCommit, entries } = await stager.buildChangeCommit(COMMIT);
@@ -188,7 +211,7 @@ describe("git change stager: blobs and a private index, never the worktree", () 
   });
 
   it("a later stage of the same path replaces the earlier one; an unchanged path is no entry", async () => {
-    const stager = createGitChangeStager({ gitDir: path.join(repo, ".git"), tip });
+    const stager = createGitChangeStager({ git: session, tip });
     await stager.stage("docs/a.md", new TextEncoder().encode("first\n"));
     await stager.stage("docs/a.md", new TextEncoder().encode("teh typo\n"));
     const { entries } = await stager.buildChangeCommit(COMMIT);
@@ -197,7 +220,7 @@ describe("git change stager: blobs and a private index, never the worktree", () 
 
   it("paths go in as exact bytes: spaces, a leading dash and option-like names are never interpreted", async () => {
     const before = snapshot(repo);
-    const stager = createGitChangeStager({ gitDir: path.join(repo, ".git"), tip });
+    const stager = createGitChangeStager({ git: session, tip });
     const names = ["docs/with space.md", "-rf.md", "--output=pwned", "docs/-n"];
     for (const n of names) await stager.stage(n, new TextEncoder().encode(`${n}\n`));
     const { headCommit, entries } = await stager.buildChangeCommit(COMMIT);
@@ -215,10 +238,158 @@ describe("git change stager: blobs and a private index, never the worktree", () 
   });
 
   it("refuses a path that is not repository-relative and a tip that is not an object id", async () => {
-    const stager = createGitChangeStager({ gitDir: path.join(repo, ".git"), tip });
+    const stager = createGitChangeStager({ git: session, tip });
     await expect(stager.stage("/etc/passwd", new Uint8Array())).rejects.toThrow();
     await expect(stager.stage("a\0b", new Uint8Array())).rejects.toThrow();
-    expect(() => createGitChangeStager({ gitDir: path.join(repo, ".git"), tip: "HEAD" })).toThrow();
+    expect(() => createGitChangeStager({ git: session, tip: "HEAD" })).toThrow();
+  });
+});
+
+describe("git change stager: fail-closed postcondition and timestamps", () => {
+  it("staging both a and a/b (a directory/file collision) throws and returns no commit", async () => {
+    const stager = createGitChangeStager({ git: session, tip });
+    await stager.stage("dfx", new TextEncoder().encode("file\n"));
+    await stager.stage("dfx/inner.md", new TextEncoder().encode("inner\n"));
+    await expect(stager.buildChangeCommit(COMMIT)).rejects.toThrow(
+      /not exactly the staged|missing/,
+    );
+  });
+
+  it("a path under a tracked file throws (it would delete the file)", async () => {
+    const stager = createGitChangeStager({ git: session, tip });
+    await stager.stage("docs/a.md/x.md", new TextEncoder().encode("x\n"));
+    await expect(stager.buildChangeCommit(COMMIT)).rejects.toThrow(
+      /not exactly the staged|missing/,
+    );
+  });
+
+  it("a path over a tracked symlink or gitlink throws (a type change, not a modify)", async () => {
+    for (const p of ["link", "sub"]) {
+      const stager = createGitChangeStager({ git: session, tip });
+      await stager.stage(p, new TextEncoder().encode("x\n"));
+      await expect(stager.buildChangeCommit(COMMIT)).rejects.toThrow(/not exactly the staged/);
+    }
+  });
+
+  it("a path over a tracked directory throws (it would delete the directory)", async () => {
+    const stager = createGitChangeStager({ git: session, tip });
+    await stager.stage("docs", new TextEncoder().encode("x\n"));
+    await expect(stager.buildChangeCommit(COMMIT)).rejects.toThrow(
+      /not exactly the staged|missing/,
+    );
+  });
+
+  it("the timestamp is integer seconds, formatted as git's @<secs> +0000", async () => {
+    expect(gitTimestamp(1_900_000_000)).toBe("@1900000000 +0000");
+    for (const bad of [1.5, -1, Number.NaN, 1_900_000_000_000, 2 ** 60]) {
+      expect(() => gitTimestamp(bad)).toThrow(/integer seconds/);
+    }
+    const stager = createGitChangeStager({ git: session, tip });
+    await stager.stage("docs/a.md", new TextEncoder().encode("ts\n"));
+    await expect(stager.buildChangeCommit({ ...COMMIT, timestamp: Date.now() })).rejects.toThrow(
+      /integer seconds/,
+    );
+    const { headCommit } = await stager.buildChangeCommit(COMMIT);
+    expect(git("cat-file", "-p", headCommit)).toContain("> 1900000000 +0000");
+  });
+});
+
+describe("isolated git: the repository's own config is never read", () => {
+  it("a hostile repo config (fsmonitor script and daemon, splitIndex, commitEncoding, include, hooksPath) steers nothing", async () => {
+    // A second repository, identical content, with a clean config first.
+    const hostile = path.join(root, "hostile");
+    fs.mkdirSync(hostile);
+    const g = (...args: string[]): string =>
+      execFileSync("git", args, {
+        cwd: hostile,
+        env: { ...gitEnv(), GIT_AUTHOR_DATE: "@1 +0000", GIT_COMMITTER_DATE: "@1 +0000" },
+        encoding: "utf8",
+      }).trim();
+    g("init", "-q", "-b", "main");
+    fs.writeFileSync(path.join(hostile, "a.md"), "a\n");
+    g("add", "a.md");
+    g("commit", "-q", "-m", "init");
+    const hostileTip = g("rev-parse", "HEAD");
+
+    const build = async (): Promise<string> => {
+      const s2 = await openIsolatedGit(path.join(hostile, ".git"));
+      try {
+        const reader = createGitTreeReader({ git: s2, tip: hostileTip });
+        expect(await reader.lookup("a.md")).toMatchObject({ kind: "blob" });
+        await reader.listTrackedPaths();
+        const stager = createGitChangeStager({ git: s2, tip: hostileTip });
+        await stager.stage("a.md", new TextEncoder().encode("changed\n"));
+        return (await stager.buildChangeCommit(COMMIT)).headCommit;
+      } finally {
+        s2.close();
+      }
+    };
+    const clean = await build();
+
+    // Now the hostile config, set in the repository and in an included file.
+    const marker = path.join(root, "fsmonitor-ran");
+    const script = path.join(root, "fsmonitor.sh");
+    fs.writeFileSync(script, `#!/bin/sh\necho ran >> "${marker}"\nexit 0\n`, { mode: 0o755 });
+    const hooks = path.join(root, "hooks");
+    fs.mkdirSync(hooks);
+    for (const h of ["pre-commit", "post-commit", "post-index-change", "reference-transaction"]) {
+      fs.writeFileSync(path.join(hooks, h), `#!/bin/sh\necho ${h} >> "${marker}"\n`, {
+        mode: 0o755,
+      });
+    }
+    const included = path.join(root, "included.config");
+    fs.writeFileSync(included, `[core]\n\tfsmonitor = ${script}\n`);
+    g("config", "core.splitIndex", "true");
+    g("config", "i18n.commitEncoding", "ISO-8859-1");
+    g("config", "core.hooksPath", hooks);
+    // Not among the pinned keys at all: only the private GIT_DIR keeps it
+    // out. Honoured, it would make every new object file and directory
+    // unreadable to others (0660 sharing).
+    g("config", "core.sharedRepository", "0660");
+    g("config", "include.path", included);
+    const gitDirBefore = snapshotGitDir(path.join(hostile, ".git"));
+
+    expect(await build()).toBe(clean); // the commit bytes match a clean config's
+    g("config", "--unset-all", "include.path");
+    g("config", "core.fsmonitor", "true"); // the built-in daemon
+    expect(await build()).toBe(clean);
+
+    // New objects under the hostile config (content no clean build made).
+    {
+      const s3 = await openIsolatedGit(path.join(hostile, ".git"));
+      try {
+        const stager = createGitChangeStager({ git: s3, tip: hostileTip });
+        await stager.stage(
+          "fresh.md",
+          new TextEncoder().encode("only made under the hostile config\n"),
+        );
+        await stager.buildChangeCommit(COMMIT);
+      } finally {
+        s3.close();
+      }
+    }
+
+    expect(fs.existsSync(marker)).toBe(false); // no script, no hook ever ran
+    // No daemon socket, no split-index shard, no file at all in the real
+    // .git apart from new objects.
+    const after = snapshotGitDir(path.join(hostile, ".git"));
+    const added = [...after.keys()].filter(
+      (k) => !gitDirBefore.has(k) && !k.startsWith("objects/"),
+    );
+    expect(added.filter((k) => k !== "config")).toEqual([]);
+    for (const [k, v] of gitDirBefore) {
+      if (k !== "config") expect(after.get(k), k).toBe(v);
+    }
+    // core.sharedRepository was never applied: every new object stays
+    // readable by others, as git's default (umask 022) makes it.
+    const newObjects = [...after.keys()].filter(
+      (k) => k.startsWith("objects/") && !gitDirBefore.has(k),
+    );
+    expect(newObjects.length).toBeGreaterThan(0);
+    for (const k of newObjects) {
+      const mode = fs.statSync(path.join(hostile, ".git", k)).mode;
+      expect(mode & 0o004, `${k} mode ${mode.toString(8)}`).toBe(0o004);
+    }
   });
 });
 
@@ -321,7 +492,7 @@ describe("a repo-task run over the Node adapters", () => {
     const worktreeBefore = snapshot(repo);
     const outsideBefore = snapshot(outside);
     const stateBefore = repoState();
-    const stager = createGitChangeStager({ gitDir: path.join(repo, ".git"), tip });
+    const stager = createGitChangeStager({ git: session, tip });
     const result = await runRepoTask({
       authority: {
         scope,
@@ -331,6 +502,7 @@ describe("a repo-task run over the Node adapters", () => {
         principal: { motebit_id: "f", public_key: bytesToHex(f.publicKey) },
         expectedRepo: "motebit/motebit",
         isPathPermitted: () => true,
+        spent: false,
       },
       agent: {
         motebitId: "a",
@@ -340,7 +512,7 @@ describe("a repo-task run over the Node adapters", () => {
       },
       provider,
       providerName: "scripted",
-      reader: createGitTreeReader({ gitDir: path.join(repo, ".git"), tip }),
+      reader: createGitTreeReader({ git: session, tip }),
       stager,
       receipts: sink,
       runtimeVersion: "test",

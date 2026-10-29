@@ -67,6 +67,7 @@ const JUDGEABLE: ReadonlySet<RepoChangeRepairCode> = new Set<RepoChangeRepairCod
   "authority.repo_change.spend_ceiling_present",
   "authority.repo_change.cadence_below_lifetime",
   "authority.repo_change.repo_mismatch",
+  "authority.repo_change.grant_spent",
   "authority.repo_change.scope_path_not_permitted",
   "authority.repo_change.grant_not_yet_valid",
   "authority.repo_change.window_inverted",
@@ -183,7 +184,7 @@ async function verifierCodes(
       failures: authority.revocations.failures,
       freshness: { basis: "asserted", asOf: {} },
     },
-    spent: false,
+    spent: authority.spent,
     expectedRepo: authority.expectedRepo,
     mode: { kind: "pull_request", shapeFailures: [], now },
   });
@@ -302,6 +303,7 @@ const CASES: Array<[string, BundleOpts, number]> = [
     NOW,
   ],
   ["a revoked grant", { revocations: async (k, g) => [await revokeGrant(k, g)] }, NOW],
+  ["a spent grant", { spent: true }, NOW],
   [
     "a forged-signature revocation of this grant",
     { revocations: async (k, g) => [await revocation(g, k.x)] },

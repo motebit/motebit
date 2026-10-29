@@ -108,6 +108,9 @@ export function checkRepoChangeRevocationSet(grant: Pick<StandingDelegation, "gr
 }>;
 
 // @public
+export function checkRepoChangeSpent(spent: boolean, fail: RepoChangeRuleSink): void;
+
+// @public
 export function checkRepoChangeTickStructure(grant: StandingDelegation, tick: DelegationToken, fail: RepoChangeRuleSink): void;
 
 // @public
@@ -289,6 +292,9 @@ export function repoPathCaseCollision(p: string, index: ReadonlyMap<string, Read
 
 // @public
 export function repoPathCaseIndex(paths: Iterable<string>): Map<string, Set<string>>;
+
+// @public
+export function repoPathPrefixConflict(p: string, trackedNonTree: ReadonlySet<string>, allowed: Iterable<string>): string | null;
 
 export { RepoTaskScope }
 

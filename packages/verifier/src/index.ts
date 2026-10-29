@@ -227,6 +227,7 @@ export {
   checkRepoChangeGrantShape,
   checkRepoChangeParties,
   checkRepoChangeRevocationSet,
+  checkRepoChangeSpent,
   checkRepoChangeTickStructure,
   checkRepoChangeWindow,
   isCanonicalBase64Url,
@@ -236,6 +237,7 @@ export {
   isRepoTaskScopeShape,
   caseIndex as repoPathCaseIndex,
   caseCollision as repoPathCaseCollision,
+  repoPathPrefixConflict,
   parseRepoChangeTools,
   repoChangeAuthorityWindow,
 } from "./repo-change-rules.js";

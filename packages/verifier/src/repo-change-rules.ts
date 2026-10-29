@@ -557,3 +557,52 @@ export function caseCollision(
   }
   return null;
 }
+
+// -- Directory/file (path-prefix) conflicts --
+
+/**
+ * The directory/file rule for one path `p` the change may write, over the
+ * tip's tracked non-tree paths (blobs, symlinks, gitlinks — what `git
+ * ls-tree -r` lists) and the scope's allowed paths. Returns the first
+ * conflict as a message, or `null`. A path conflicts when:
+ *
+ *   - a proper prefix of it is tracked as a non-tree (writing `docs/x.md`
+ *     where `docs` is a file, symlink or gitlink replaces `docs`);
+ *   - it names a tracked tree (writing `docs` where `docs/a.md` is tracked
+ *     replaces the directory);
+ *   - another allowed path stands in a prefix relation to it (`a` and `a/b`
+ *     cannot both be files).
+ *
+ * Any of these turns an add-or-modify into a deletion, which a governed
+ * change never authorizes.
+ */
+export function repoPathPrefixConflict(
+  p: string,
+  trackedNonTree: ReadonlySet<string>,
+  allowed: Iterable<string>,
+): string | null {
+  const parts = p.split("/");
+  for (let k = 1; k < parts.length; k++) {
+    const q = parts.slice(0, k).join("/");
+    if (trackedNonTree.has(q)) return `${q} is tracked as a non-tree, so ${p} cannot be under it`;
+  }
+  for (const t of trackedNonTree) {
+    if (t.startsWith(`${p}/`)) return `${p} is a tracked directory`;
+  }
+  for (const a of allowed) {
+    if (a !== p && (a.startsWith(`${p}/`) || p.startsWith(`${a}/`))) {
+      return `${p} and ${a} stand in a prefix relation`;
+    }
+  }
+  return null;
+}
+
+/** The spent rule (spec §7): one grant backs one landing. */
+export function checkRepoChangeSpent(spent: boolean, fail: RepoChangeRuleSink): void {
+  if (spent) {
+    fail(
+      "authority.repo_change.grant_spent",
+      "the grant's bundle already exists on the judged history",
+    );
+  }
+}

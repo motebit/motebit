@@ -29,6 +29,7 @@ import {
   checkRepoChangeGrantShape,
   checkRepoChangeParties,
   checkRepoChangeRevocationSet,
+  checkRepoChangeSpent,
   checkRepoChangeTickStructure,
   checkRepoChangeWindow,
   isCanonicalBase64Url,
@@ -76,6 +77,12 @@ export interface RepoTaskAuthorityBundle {
   readonly expectedRepo: string;
   /** The repository's path predicate at the tip, interpreted from data. Pure. */
   readonly isPathPermitted: (path: string) => boolean;
+  /**
+   * The grant's bundle path already exists on the tip's first-parent
+   * history (spec §7: one grant backs one landing). Step 4's preflight
+   * computes it from git; the run judges it with the verifier's rule.
+   */
+  readonly spent: boolean;
 }
 
 /** One failed rule, with the repo-change repair code the verifier would report. */
@@ -212,6 +219,7 @@ export async function checkRepoTaskAuthority(
   checkRepoChangeTickStructure(grant, tick, fail);
   checkRepoChangeWindow({ grant, tick, now: clock, wallClock: verdict, failures }, fail);
   const tickTools = checkRepoChangeGrantShape(grant, tick, fail);
+  checkRepoChangeSpent(bundle.spent !== false, fail);
 
   // -- Revocation: the set read at preflight, parsed strictly by the
   // verifier's own rule — a malformed entry is set_malformed, never skipped.

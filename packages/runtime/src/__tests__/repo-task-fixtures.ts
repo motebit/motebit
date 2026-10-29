@@ -72,6 +72,7 @@ export interface BundleOpts {
   revocationFailures?: string[];
   principal?: (k: Keys) => { motebit_id: string; public_key: string };
   isPathPermitted?: (p: string) => boolean;
+  spent?: boolean;
 }
 
 export async function makeBundle(opts: BundleOpts = {}): Promise<RepoTaskAuthorityBundle> {
@@ -138,6 +139,7 @@ export async function makeBundle(opts: BundleOpts = {}): Promise<RepoTaskAuthori
     principal: opts.principal?.(k) ?? { motebit_id: F_ID, public_key: hex(k.f) },
     expectedRepo: REPO,
     isPathPermitted: opts.isPathPermitted ?? (() => true),
+    spent: opts.spent ?? false,
   };
 }
 

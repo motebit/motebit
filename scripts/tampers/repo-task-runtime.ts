@@ -38,6 +38,7 @@ const RT = "packages/runtime/src/motebit-runtime.ts";
 const LOOP = "packages/ai-core/src/loop.ts";
 const CORE = "packages/ai-core/src/core.ts";
 const STAGER = "apps/cli/src/repo-task/git-change-stager.ts";
+const GITSESSION = "apps/cli/src/repo-task/git.ts";
 const READER = "apps/cli/src/repo-task/git-tree-reader.ts";
 const SINK = "apps/cli/src/repo-task/receipt-file-sink.ts";
 const WEB_PULSE = "apps/web/src/ui/cobrowse-chrome.ts";
@@ -686,18 +687,9 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   adapter(
-    "stager: builds on the repository's own index (no private GIT_INDEX_FILE)",
-    "git change stager: blobs and a private index, never the worktree stages content as blobs and builds the change commit; worktree, index and refs untouched",
-    edit(
-      STAGER,
-      '      const env = { GIT_INDEX_FILE: path.join(dir, "index") };',
-      "      const env: Record<string, string> = {};",
-    ),
-  ),
-  adapter(
     "stager: the tree is built without the tip (read-tree removed)",
     "git change stager: blobs and a private index, never the worktree stages content as blobs and builds the change commit; worktree, index and refs untouched",
-    edit(STAGER, '        await runGit(gitDir, ["read-tree", tip], { env });\n', ""),
+    edit(STAGER, '        await git.run(["read-tree", tip], { env });\n', ""),
   ),
   adapter(
     "stager: the change commit is not parented on the tip",
@@ -723,8 +715,8 @@ const TAMPERS: TamperEntry[] = [
     "git change stager: blobs and a private index, never the worktree stages content as blobs and builds the change commit; worktree, index and refs untouched",
     edit(
       STAGER,
-      "          tip,\n          headCommit,\n        ]);",
-      "          headCommit,\n          headCommit,\n        ]);",
+      '["diff-tree", "-r", "-z", "--no-renames", tip, tree]',
+      '["diff-tree", "-r", "-z", "--no-renames", tree, tree]',
     ),
   ),
   adapter(
@@ -744,6 +736,80 @@ const TAMPERS: TamperEntry[] = [
       '      if (p.length === 0 || p.includes("\\0") || p.startsWith("/")) {',
       "      if ((false as boolean) && p.length === 0) {",
     ),
+  ),
+  adapter(
+    "isolated git: the real repository's GIT_DIR (its config is read)",
+    "isolated git: the repository's own config is never read a hostile repo config (fsmonitor script and daemon, splitIndex, commitEncoding, include, hooksPath) steers nothing",
+    edit(GITSESSION, "    GIT_DIR: privateRepo,", "    GIT_DIR: real,"),
+  ),
+  adapter(
+    "stager: the postcondition does not throw (a D/F collision commits a deletion)",
+    "git change stager: fail-closed postcondition and timestamps staging both a and a/b (a directory/file collision) throws and returns no commit",
+    edit(
+      STAGER,
+      "            throw new Error(\n              `git change stager: the change tree is not exactly the staged adds and modifies",
+      "            if (dstMode === undefined || dstBlob === undefined) throw new Error(\n              `git change stager: the change tree is not exactly the staged adds and modifies",
+    ),
+    edit(
+      STAGER,
+      '          throw new Error("git change stager: a staged change is missing from the change tree");',
+      '          void new Error("git change stager: a staged change is missing from the change tree");',
+    ),
+  ),
+  adapter(
+    "stager: the postcondition accepts a type change (symlink/gitlink overwritten)",
+    "git change stager: fail-closed postcondition and timestamps a path over a tracked symlink or gitlink throws (a type change, not a modify)",
+    edit(STAGER, '            (status !== "A" && status !== "M") ||\n', ""),
+  ),
+  adapter(
+    "stager: any timestamp accepted (milliseconds, fractions)",
+    "git change stager: fail-closed postcondition and timestamps the timestamp is integer seconds, formatted as git's @<secs> +0000",
+    edit(
+      STAGER,
+      "  if (!Number.isSafeInteger(seconds) || seconds < 0 || seconds >= MAX_TIMESTAMP_SECONDS) {",
+      "  if ((false as boolean) && seconds < 0) {",
+    ),
+  ),
+  run(
+    "write: the prefix rule not applied (under a tracked file)",
+    "repo task: repo_write_path refuses a directory/file conflict (the verifier's prefix rule) a write under a path tracked as a blob is denied, before staging",
+    edit(
+      TOOLS,
+      "      if (conflict !== null) return deny(",
+      "      if ((false as boolean) && conflict !== null) return deny(",
+    ),
+  ),
+  run(
+    "write: the prefix rule not applied (over a tracked directory)",
+    "repo task: repo_write_path refuses a directory/file conflict (the verifier's prefix rule) a write over a tracked directory is denied",
+    edit(
+      TOOLS,
+      "      if (conflict !== null) return deny(",
+      "      if ((false as boolean) && conflict !== null) return deny(",
+    ),
+  ),
+  verifierRule(
+    "verifier rule: a prefix tracked as a non-tree not refused",
+    "repo task: repo_write_path refuses a directory/file conflict (the verifier's prefix rule) a write under a path tracked as a gitlink is denied, before staging",
+    edit(
+      RULES,
+      "    if (trackedNonTree.has(q)) return",
+      "    if ((false as boolean) && trackedNonTree.has(q)) return",
+    ),
+  ),
+  verifierRule(
+    "verifier rule: allowed paths in a prefix relation not refused",
+    "repo task: repo_write_path refuses a directory/file conflict (the verifier's prefix rule) two allowed paths in a prefix relation (a and a/b) are refused",
+    edit(
+      RULES,
+      "    if (a !== p && (a.startsWith(`${p}/`) || p.startsWith(`${a}/`))) {",
+      "    if ((false as boolean) && a !== p) {",
+    ),
+  ),
+  agree(
+    "preflight: the spent rule not called",
+    `${AGREE} agree on a spent grant`,
+    edit(AUTH, "  checkRepoChangeSpent(bundle.spent !== false, fail);\n", ""),
   ),
   adapter(
     "receipt file: an older run's file appended to",
@@ -770,13 +836,13 @@ const TAMPERS: TamperEntry[] = [
     "repo task: repo_write_path refuses a case alias (the verifier's case rule) two allowed paths that alias by case are both refused",
     edit(
       TOOLS,
-      "      return repoPathCaseIndex([...names, ...allowed]);",
-      "      return repoPathCaseIndex([...names, path0]);",
+      "        caseIndex: repoPathCaseIndex([...names, ...allowed]),",
+      "        caseIndex: repoPathCaseIndex([...names, path0]),",
     ),
     edit(
       TOOLS,
-      "  let caseIndexAtTip:",
-      '  const path0 = scope.allowed_paths[0] ?? "";\n  let caseIndexAtTip:',
+      "  let tipPaths:",
+      '  const path0 = scope.allowed_paths[0] ?? "";\n  let tipPaths:',
     ),
   ),
   run(
@@ -784,8 +850,8 @@ const TAMPERS: TamperEntry[] = [
     "repo task: repo_write_path refuses a case alias (the verifier's case rule) a tracked path that is not UTF-8 refuses every write (no collision can be ruled out)",
     edit(
       TOOLS,
-      "          return null;\n        }\n      }\n      return repoPathCaseIndex(",
-      "          continue;\n        }\n      }\n      return repoPathCaseIndex(",
+      "          return null;\n        }\n      }\n      return {",
+      "          continue;\n        }\n      }\n      return {",
     ),
   ),
   run(
