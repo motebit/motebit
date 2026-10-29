@@ -73,6 +73,8 @@ export interface RepoTaskAuthorityBundle {
   readonly revocations: RepoTaskRevocations;
   /** The principal pin at the tip (`.motebit/principals/principal.md`). */
   readonly principal: RepoTaskPin;
+  /** The agent pins at the tip (`.motebit/principals/agents/*.md`), filled by step 4's preflight. */
+  readonly agents: readonly RepoTaskPin[];
   /** The repository the change lands in; the scope's `repo` must equal it byte for byte. */
   readonly expectedRepo: string;
   /** The repository's path predicate at the tip, interpreted from data. Pure. */
@@ -212,8 +214,23 @@ export async function checkRepoTaskAuthority(
     fail("integrity.repo_change.signature_invalid", "the tick's signature does not verify");
   }
 
-  // -- Identity: the verifier's pin rules, with this agent as the one agent pin.
-  checkRepoChangeParties(grant, { principal, agents: [agent] }, fail);
+  // -- Identity: the verifier's pin rules over the repository's own pins
+  // (delegator = principal pin, delegate = an agent pin, two identities)...
+  checkRepoChangeParties(grant, { principal, agents: bundle.agents }, fail);
+  // ...and this runtime is the grant's delegate: it signs every receipt, and
+  // every receipt's signer must be the delegate.
+  if (grant.delegate_id !== agent.motebit_id || grant.delegate_public_key !== agent.public_key) {
+    fail("identity.repo_change.signer_not_delegate", "this agent is not the grant's delegate");
+  }
+  if (
+    tick.delegate_id !== grant.delegate_id ||
+    tick.delegate_public_key !== grant.delegate_public_key
+  ) {
+    fail(
+      "identity.repo_change.signer_not_delegate",
+      "the tick's delegate is not the grant's delegate",
+    );
+  }
 
   // -- Authority: the verifier's tick-structure, window and grant rules, at the run's clock.
   checkRepoChangeTickStructure(grant, tick, fail);

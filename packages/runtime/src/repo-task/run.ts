@@ -186,6 +186,7 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
     tick: structuredClone(input.authority.tick),
     revocations: structuredClone(input.authority.revocations),
     principal: structuredClone(input.authority.principal),
+    agents: structuredClone(input.authority.agents),
     expectedRepo: input.authority.expectedRepo,
     isPathPermitted: input.authority.isPathPermitted,
     spent: input.authority.spent,

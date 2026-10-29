@@ -143,7 +143,11 @@ const TAMPERS: TamperEntry[] = [
   run(
     "preflight: the pin rules not called",
     `${PRE} refuses a delegator that is not the principal pin before any model call`,
-    edit(AUTH, "  checkRepoChangeParties(grant, { principal, agents: [agent] }, fail);\n", ""),
+    edit(
+      AUTH,
+      "  checkRepoChangeParties(grant, { principal, agents: bundle.agents }, fail);\n",
+      "",
+    ),
   ),
   agree(
     "preflight: the tick signature not checked",
@@ -284,8 +288,8 @@ const TAMPERS: TamperEntry[] = [
     `${PRE} refuses an agent that is not the grant's delegate`,
     edit(
       AUTH,
-      "  checkRepoChangeParties(grant, { principal, agents: [agent] }, fail);\n",
-      "  checkRepoChangeParties(\n    grant,\n    { principal, agents: [{ motebit_id: grant.delegate_id, public_key: grant.delegate_public_key }] },\n    fail,\n  );\n",
+      "  if (grant.delegate_id !== agent.motebit_id || grant.delegate_public_key !== agent.public_key) {",
+      "  if ((false as boolean) && grant.delegate_id !== agent.motebit_id) {",
     ),
     edit(
       RUN,
@@ -740,7 +744,7 @@ const TAMPERS: TamperEntry[] = [
   adapter(
     "isolated git: the real repository's GIT_DIR (its config is read)",
     "isolated git: the repository's own config is never read a hostile repo config (fsmonitor script and daemon, splitIndex, commitEncoding, include, hooksPath) steers nothing",
-    edit(GITSESSION, "    GIT_DIR: privateRepo,", "    GIT_DIR: real,"),
+    edit(GITSESSION, "    GIT_DIR: privateRepo,", "    GIT_DIR: path.dirname(objectDirectory),"),
   ),
   adapter(
     "stager: the postcondition does not throw (a D/F collision commits a deletion)",
@@ -757,9 +761,16 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   adapter(
+    // Both layers: the A/M status rule and the old-mode rule each refuse a
+    // type change on their own.
     "stager: the postcondition accepts a type change (symlink/gitlink overwritten)",
     "git change stager: fail-closed postcondition and timestamps a path over a tracked symlink or gitlink throws (a type change, not a modify)",
     edit(STAGER, '            (status !== "A" && status !== "M") ||\n', ""),
+    edit(
+      STAGER,
+      '            (status === "A" ? srcMode !== "000000" : srcMode !== REGULAR_FILE_MODE) ||\n',
+      "",
+    ),
   ),
   adapter(
     "stager: any timestamp accepted (milliseconds, fractions)",
@@ -810,6 +821,48 @@ const TAMPERS: TamperEntry[] = [
     "preflight: the spent rule not called",
     `${AGREE} agree on a spent grant`,
     edit(AUTH, "  checkRepoChangeSpent(bundle.spent !== false, fail);\n", ""),
+  ),
+  adapter(
+    "isolated git: a git probe runs on the real git directory again",
+    "isolated git: no git process runs on the real git directory garbage in .git/config, or an include.path to garbage or to a FIFO, affects nothing",
+    edit(
+      GITSESSION,
+      "  const objectDirectory = resolveObjectDirectory(opts.gitEntry);\n",
+      '  const objectDirectory = resolveObjectDirectory(opts.gitEntry);\n  await spawnGit(["rev-parse", "--git-dir"], { ...BASE_ENV(), GIT_DIR: path.dirname(objectDirectory) }, path.dirname(objectDirectory));\n',
+    ),
+  ),
+  adapter(
+    "isolated git: a symlinked directory accepted (stat, not lstat)",
+    "isolated git: no git process runs on the real git directory a symlinked objects directory, a symlinked .git and a malformed .git file are refused",
+    edit(GITSESSION, "    st = fs.lstatSync(p);", "    st = fs.statSync(p);"),
+  ),
+  adapter(
+    "isolated git: commondir ignored (a linked worktree reads the wrong objects)",
+    "isolated git: no git process runs on the real git directory a linked worktree (.git file plus commondir) works",
+    edit(
+      GITSESSION,
+      "  let commondirPresent = true;",
+      "  let commondirPresent = false as boolean;",
+    ),
+  ),
+  adapter(
+    "isolated git: the per-call timeout never fires",
+    "isolated git: no git process runs on the real git directory a git call past its timeout is killed and fails",
+    edit(GITSESSION, '      timedOut = true;\n      child.kill("SIGKILL");\n', ""),
+  ),
+  adapter(
+    "stager: the old mode not required (a 100755 file rewritten)",
+    "git change stager: fail-closed postcondition and timestamps a tracked 100755 file is refused by the stager itself (the old mode must be 100644)",
+    edit(
+      STAGER,
+      '            (status === "A" ? srcMode !== "000000" : srcMode !== REGULAR_FILE_MODE) ||\n',
+      "",
+    ),
+  ),
+  agree(
+    "preflight: the repository's agent pins ignored (this agent taken as pinned)",
+    `${AGREE} agree on an agent not pinned (another key under its id)`,
+    edit(AUTH, "{ principal, agents: bundle.agents }", "{ principal, agents: [agent] }"),
   ),
   adapter(
     "receipt file: an older run's file appended to",

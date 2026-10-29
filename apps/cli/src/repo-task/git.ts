@@ -29,8 +29,15 @@
  * are only ever read; every new object is written to the real primary
  * object directory.
  *
- * The one read of the real repository: resolving its object directory and
- * object format (`git rev-parse`), which consults no index and runs no hook.
+ * NO git process ever runs on the real git directory. Its object directory
+ * is resolved without git (`resolveObjectDirectory`): the `.git` entry (a
+ * directory, or a `gitdir:` file for a linked worktree), then `commondir`
+ * when present, each parsed strictly, each required to be a real directory
+ * and not a symlink; the object directory is `<common gitdir>/objects`.
+ * `GIT_OBJECT_DIRECTORY` comes only from that resolution, never from the
+ * caller's environment. The object format is the verified scope's
+ * `object_format`; a mismatch fails closed at the first object lookup. Every
+ * call has a timeout (kill, fail closed) as defence in depth.
  */
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -81,11 +88,15 @@ function privateConfig(objectFormat: string): string {
   ].join("\n");
 }
 
+/** Default per-call ceiling: a git call that takes longer is killed and fails. */
+export const GIT_CALL_TIMEOUT_MS = 20_000;
+
 function spawnGit(
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   cwd: string,
   input?: Uint8Array,
+  timeoutMs: number = GIT_CALL_TIMEOUT_MS,
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", [...PINNED, ...args], {
@@ -94,6 +105,11 @@ function spawnGit(
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
     });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     let size = 0;
@@ -103,9 +119,14 @@ function spawnGit(
       else out.push(d);
     });
     child.stderr.on("data", (d: Buffer) => err.push(d));
-    child.on("error", reject);
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
     child.on("close", (code) => {
-      if (code === 0 && size <= MAX_GIT_OUTPUT_BYTES) resolve(Buffer.concat(out));
+      clearTimeout(timer);
+      if (timedOut) reject(new Error(`git ${args[0] ?? ""} timed out after ${timeoutMs} ms`));
+      else if (code === 0 && size <= MAX_GIT_OUTPUT_BYTES) resolve(Buffer.concat(out));
       else {
         reject(
           new Error(
@@ -118,7 +139,7 @@ function spawnGit(
   });
 }
 
-/** A git session that never reads the real repository's config. */
+/** A git session in which no git process ever runs on the real git directory. */
 export interface IsolatedGit {
   /** The real repository's object directory every call reads and writes. */
   readonly objectDirectory: string;
@@ -129,34 +150,94 @@ export interface IsolatedGit {
   /** Run `git <args>` in the session; optional stdin and extra environment. */
   run(
     args: readonly string[],
-    opts?: { readonly input?: Uint8Array; readonly env?: Readonly<Record<string, string>> },
+    opts?: {
+      readonly input?: Uint8Array;
+      readonly env?: Readonly<Record<string, string>>;
+      /** Per-call ceiling; default `GIT_CALL_TIMEOUT_MS`. */
+      readonly timeoutMs?: number;
+    },
   ): Promise<Buffer>;
   /** Remove the private session directory. */
   close(): void;
 }
 
-/**
- * Open a session on the repository whose git directory is `realGitDir`:
- * resolve its object directory and format once, create the private bare
- * repository, write its config.
- */
-export async function openIsolatedGit(realGitDir: string): Promise<IsolatedGit> {
-  const real = path.resolve(realGitDir);
-  const probeEnv = { ...BASE_ENV(), GIT_DIR: real };
-  const objectDirectory = (
-    await spawnGit(["rev-parse", "--path-format=absolute", "--git-path", "objects"], probeEnv, real)
-  )
-    .toString("utf8")
-    .trim();
-  const objectFormat = (await spawnGit(["rev-parse", "--show-object-format"], probeEnv, real))
-    .toString("utf8")
-    .trim();
-  if (!path.isAbsolute(objectDirectory) || !fs.statSync(objectDirectory).isDirectory()) {
-    throw new Error("isolated git: the repository's object directory could not be resolved");
+/** `p` exists as a real directory, not a symlink (lstat). */
+function realDirectory(p: string, what: string): string {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(p);
+  } catch {
+    throw new Error(`isolated git: ${what} does not exist`);
   }
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    throw new Error(`isolated git: ${what} is not a real directory`);
+  }
+  return p;
+}
+
+/** A one-line pointer file (`gitdir: <path>` or a bare path), parsed strictly. */
+function readPointer(file: string, prefix: string, what: string): string {
+  const st = fs.lstatSync(file);
+  if (!st.isFile() || st.size > 4096)
+    throw new Error(`isolated git: ${what} is not a small regular file`);
+  const text = fs.readFileSync(file, "utf8");
+  const m = /^([^\n\r\0]+)\n?$/.exec(text);
+  if (!m || !m[1]!.startsWith(prefix)) throw new Error(`isolated git: ${what} is malformed`);
+  const target = m[1]!.slice(prefix.length);
+  if (target.length === 0 || target !== target.trim()) {
+    throw new Error(`isolated git: ${what} is malformed`);
+  }
+  return path.resolve(path.dirname(file), target);
+}
+
+/**
+ * The real repository's object directory, resolved WITHOUT running git:
+ * `gitEntry` is the worktree's `.git` — a directory, or a file holding
+ * `gitdir: <path>` (a linked worktree); a `commondir` file in that git
+ * directory points at the common one. Each step must be a real directory
+ * (no symlink); anything unexpected throws.
+ */
+export function resolveObjectDirectory(gitEntry: string): string {
+  const entry = path.resolve(gitEntry);
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(entry);
+  } catch {
+    throw new Error("isolated git: the .git entry does not exist");
+  }
+  let gitDir: string;
+  if (st.isDirectory() && !st.isSymbolicLink()) gitDir = entry;
+  else if (st.isFile())
+    gitDir = realDirectory(readPointer(entry, "gitdir: ", "the .git file"), "the gitdir");
+  else throw new Error("isolated git: the .git entry is neither a directory nor a gitdir file");
+  let common = gitDir;
+  const commondir = path.join(gitDir, "commondir");
+  let commondirPresent = true;
+  try {
+    fs.lstatSync(commondir);
+  } catch {
+    commondirPresent = false;
+  }
+  if (commondirPresent) {
+    common = realDirectory(readPointer(commondir, "", "commondir"), "the common git directory");
+  }
+  return realDirectory(path.join(common, "objects"), "the object directory");
+}
+
+/**
+ * Open a session on the repository whose `.git` entry is `gitEntry`, for a
+ * repository of the verified scope's `objectFormat`: resolve its object
+ * directory (no git), create the private bare repository, write its config.
+ */
+export async function openIsolatedGit(opts: {
+  readonly gitEntry: string;
+  readonly objectFormat: "sha1" | "sha256";
+}): Promise<IsolatedGit> {
+  const { objectFormat } = opts;
   if (objectFormat !== "sha1" && objectFormat !== "sha256") {
     throw new Error(`isolated git: unsupported object format ${JSON.stringify(objectFormat)}`);
   }
+  const objectDirectory = resolveObjectDirectory(opts.gitEntry);
   // mkdtemp creates the directory 0700: owner-only.
   const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), "motebit-git-"));
   const privateRepo = path.join(sessionDir, "private.git");
@@ -183,7 +264,7 @@ export async function openIsolatedGit(realGitDir: string): Promise<IsolatedGit> 
     objectDirectory,
     objectFormat,
     sessionDir,
-    run: (args, opts = {}) => spawnGit(args, env(opts.env), sessionDir, opts.input),
+    run: (args, o = {}) => spawnGit(args, env(o.env), sessionDir, o.input, o.timeoutMs),
     close: () => fs.rmSync(sessionDir, { recursive: true, force: true }),
   };
 }

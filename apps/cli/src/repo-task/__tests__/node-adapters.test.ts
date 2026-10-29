@@ -27,7 +27,7 @@ import type { AIResponse, ContextPack, ToolCall } from "@motebit/sdk";
 import { createGitTreeReader } from "../git-tree-reader.js";
 import { createReceiptFileSink, readReceiptFile } from "../receipt-file-sink.js";
 import { createGitChangeStager, gitTimestamp } from "../git-change-stager.js";
-import { openIsolatedGit } from "../git.js";
+import { openIsolatedGit, resolveObjectDirectory } from "../git.js";
 import type { IsolatedGit } from "../git.js";
 
 let root = "";
@@ -73,7 +73,7 @@ beforeAll(async () => {
   // The worktree diverges from the tip: an edit and an untracked file.
   fs.writeFileSync(path.join(repo, "docs", "a.md"), "edited in the worktree\n");
   fs.writeFileSync(path.join(repo, "untracked.md"), "not tracked\n");
-  session = await openIsolatedGit(path.join(repo, ".git"));
+  session = await openIsolatedGit({ gitEntry: path.join(repo, ".git"), objectFormat: "sha1" });
 });
 
 afterAll(() => {
@@ -271,6 +271,12 @@ describe("git change stager: fail-closed postcondition and timestamps", () => {
     }
   });
 
+  it("a tracked 100755 file is refused by the stager itself (the old mode must be 100644)", async () => {
+    const stager = createGitChangeStager({ git: session, tip });
+    await stager.stage("bin/run.sh", new TextEncoder().encode("#!/bin/sh\necho changed\n"));
+    await expect(stager.buildChangeCommit(COMMIT)).rejects.toThrow(/not exactly the staged/);
+  });
+
   it("a path over a tracked directory throws (it would delete the directory)", async () => {
     const stager = createGitChangeStager({ git: session, tip });
     await stager.stage("docs", new TextEncoder().encode("x\n"));
@@ -312,7 +318,10 @@ describe("isolated git: the repository's own config is never read", () => {
     const hostileTip = g("rev-parse", "HEAD");
 
     const build = async (): Promise<string> => {
-      const s2 = await openIsolatedGit(path.join(hostile, ".git"));
+      const s2 = await openIsolatedGit({
+        gitEntry: path.join(hostile, ".git"),
+        objectFormat: "sha1",
+      });
       try {
         const reader = createGitTreeReader({ git: s2, tip: hostileTip });
         expect(await reader.lookup("a.md")).toMatchObject({ kind: "blob" });
@@ -356,7 +365,10 @@ describe("isolated git: the repository's own config is never read", () => {
 
     // New objects under the hostile config (content no clean build made).
     {
-      const s3 = await openIsolatedGit(path.join(hostile, ".git"));
+      const s3 = await openIsolatedGit({
+        gitEntry: path.join(hostile, ".git"),
+        objectFormat: "sha1",
+      });
       try {
         const stager = createGitChangeStager({ git: s3, tip: hostileTip });
         await stager.stage(
@@ -390,6 +402,104 @@ describe("isolated git: the repository's own config is never read", () => {
       const mode = fs.statSync(path.join(hostile, ".git", k)).mode;
       expect(mode & 0o004, `${k} mode ${mode.toString(8)}`).toBe(0o004);
     }
+  });
+});
+
+describe("isolated git: no git process runs on the real git directory", () => {
+  /** A small repository with one commit; returns its dir and tip. */
+  function makeRepo(name: string): { dir: string; tip: string; g: (...a: string[]) => string } {
+    const dir = path.join(root, name);
+    fs.mkdirSync(dir);
+    const g = (...args: string[]): string =>
+      execFileSync("git", args, {
+        cwd: dir,
+        env: { ...gitEnv(), GIT_AUTHOR_DATE: "@1 +0000", GIT_COMMITTER_DATE: "@1 +0000" },
+        encoding: "utf8",
+      }).trim();
+    g("init", "-q", "-b", "main");
+    fs.writeFileSync(path.join(dir, "a.md"), "a\n");
+    g("add", "a.md");
+    g("commit", "-q", "-m", "init");
+    return { dir, tip: g("rev-parse", "HEAD"), g };
+  }
+
+  async function readAndStage(gitEntry: string, tip: string): Promise<string> {
+    const s2 = await openIsolatedGit({ gitEntry, objectFormat: "sha1" });
+    try {
+      const reader = createGitTreeReader({ git: s2, tip });
+      expect(await reader.lookup("a.md")).toMatchObject({ kind: "blob" });
+      const stager = createGitChangeStager({ git: s2, tip });
+      await stager.stage("a.md", new TextEncoder().encode("changed\n"));
+      return (await stager.buildChangeCommit(COMMIT)).headCommit;
+    } finally {
+      s2.close();
+    }
+  }
+
+  it("garbage in .git/config, or an include.path to garbage or to a FIFO, affects nothing", async () => {
+    const { dir, tip } = makeRepo("garbage-config");
+    const clean = await readAndStage(path.join(dir, ".git"), tip);
+    const config = path.join(dir, ".git", "config");
+    fs.writeFileSync(config, "[[[ this is not git config \u0000\n");
+    expect(await readAndStage(path.join(dir, ".git"), tip)).toBe(clean);
+    const garbage = path.join(root, "garbage.inc");
+    fs.writeFileSync(garbage, "]]] nope");
+    fs.writeFileSync(config, `[include]\n\tpath = ${garbage}\n`);
+    expect(await readAndStage(path.join(dir, ".git"), tip)).toBe(clean);
+    // A FIFO include would block any git that parsed this config, forever.
+    const fifo = path.join(root, "include.fifo");
+    execFileSync("mkfifo", [fifo]);
+    fs.writeFileSync(config, `[include]\n\tpath = ${fifo}\n`);
+    expect(await readAndStage(path.join(dir, ".git"), tip)).toBe(clean);
+  });
+
+  it("a linked worktree (.git file plus commondir) works", async () => {
+    const { dir, tip, g } = makeRepo("linked");
+    const wt = path.join(root, "linked-wt");
+    g("worktree", "add", "-q", "--detach", wt, tip);
+    expect(fs.lstatSync(path.join(wt, ".git")).isFile()).toBe(true);
+    expect(resolveObjectDirectory(path.join(wt, ".git"))).toBe(
+      fs.realpathSync(path.join(dir, ".git", "objects")),
+    );
+    const viaWorktree = await readAndStage(path.join(wt, ".git"), tip);
+    expect(await readAndStage(path.join(dir, ".git"), tip)).toBe(viaWorktree);
+  });
+
+  it("a symlinked objects directory, a symlinked .git and a malformed .git file are refused", async () => {
+    const { dir } = makeRepo("symlinked-objects");
+    const moved = path.join(root, "moved-objects");
+    fs.renameSync(path.join(dir, ".git", "objects"), moved);
+    fs.symlinkSync(moved, path.join(dir, ".git", "objects"));
+    expect(() => resolveObjectDirectory(path.join(dir, ".git"))).toThrow(/not a real directory/);
+    const linkedGit = path.join(root, "linked-dot-git");
+    fs.symlinkSync(path.join(dir, ".git"), linkedGit);
+    expect(() => resolveObjectDirectory(linkedGit)).toThrow();
+    const badFile = path.join(root, "bad-dot-git");
+    fs.writeFileSync(badFile, "gitdir: \n");
+    expect(() => resolveObjectDirectory(badFile)).toThrow(/malformed/);
+    fs.writeFileSync(badFile, `gitdir:${dir}\n`);
+    expect(() => resolveObjectDirectory(badFile)).toThrow(/malformed/);
+    await expect(
+      openIsolatedGit({ gitEntry: path.join(dir, ".git"), objectFormat: "sha1" }),
+    ).rejects.toThrow();
+  });
+
+  it("an object format that is not the repository's fails closed at the first lookup", async () => {
+    const { dir, tip } = makeRepo("format-mismatch");
+    const s2 = await openIsolatedGit({ gitEntry: path.join(dir, ".git"), objectFormat: "sha256" });
+    try {
+      const reader = createGitTreeReader({ git: s2, tip });
+      await expect(reader.lookup("a.md")).rejects.toThrow();
+      const stager = createGitChangeStager({ git: s2, tip });
+      await expect(stager.buildChangeCommit(COMMIT)).rejects.toThrow();
+    } finally {
+      s2.close();
+    }
+  });
+
+  it("a git call past its timeout is killed and fails", async () => {
+    await expect(session.run(["rev-list", "--all"], { timeoutMs: 1 })).rejects.toThrow(/timed out/);
+    await expect(session.run(["rev-parse", tip])).resolves.toBeDefined();
   });
 });
 
@@ -500,6 +610,7 @@ describe("a repo-task run over the Node adapters", () => {
         tick,
         revocations: { set: [], failures: [], readAt: tip },
         principal: { motebit_id: "f", public_key: bytesToHex(f.publicKey) },
+        agents: [{ motebit_id: "a", public_key: bytesToHex(a.publicKey) }],
         expectedRepo: "motebit/motebit",
         isPathPermitted: () => true,
         spent: false,

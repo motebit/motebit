@@ -71,6 +71,7 @@ export interface BundleOpts {
   ) => Promise<DelegationRevocation[]> | DelegationRevocation[];
   revocationFailures?: string[];
   principal?: (k: Keys) => { motebit_id: string; public_key: string };
+  agents?: (k: Keys) => Array<{ motebit_id: string; public_key: string }>;
   isPathPermitted?: (p: string) => boolean;
   spent?: boolean;
 }
@@ -137,6 +138,7 @@ export async function makeBundle(opts: BundleOpts = {}): Promise<RepoTaskAuthori
       readAt: "a".repeat(40),
     },
     principal: opts.principal?.(k) ?? { motebit_id: F_ID, public_key: hex(k.f) },
+    agents: opts.agents?.(k) ?? [{ motebit_id: A_ID, public_key: hex(k.a) }],
     expectedRepo: REPO,
     isPathPermitted: opts.isPathPermitted ?? (() => true),
     spent: opts.spent ?? false,

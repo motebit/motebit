@@ -54,6 +54,7 @@ const JUDGEABLE: ReadonlySet<RepoChangeRepairCode> = new Set<RepoChangeRepairCod
   "identity.repo_change.delegator_not_principal",
   "identity.repo_change.delegate_not_agent",
   "identity.repo_change.delegator_is_delegate",
+  "identity.repo_change.signer_not_delegate",
   "authority.repo_change.tick_expired",
   "authority.repo_change.tick_not_yet_valid",
   "authority.repo_change.tick_insufficient",
@@ -177,7 +178,7 @@ async function verifierCodes(
       },
     ],
     trackedPaths: [enc.encode("docs/a.md")],
-    pins: { principal: authority.principal, agents: [agent] },
+    pins: { principal: authority.principal, agents: authority.agents },
     isPathPermitted: authority.isPathPermitted,
     revocations: {
       set: authority.revocations.set,
@@ -305,6 +306,22 @@ const CASES: Array<[string, BundleOpts, number]> = [
   ["a revoked grant", { revocations: async (k, g) => [await revokeGrant(k, g)] }, NOW],
   ["a spent grant", { spent: true }, NOW],
   [
+    "an agent not pinned (another key under its id)",
+    { agents: (k) => [{ motebit_id: A_ID, public_key: hex(k.x) }] },
+    NOW,
+  ],
+  ["no agent pins at all", { agents: () => [] }, NOW],
+  [
+    "the agent pinned beside others (positive control)",
+    {
+      agents: (k) => [
+        { motebit_id: "someone", public_key: hex(k.x) },
+        { motebit_id: A_ID, public_key: hex(k.a) },
+      ],
+    },
+    NOW,
+  ],
+  [
     "a forged-signature revocation of this grant",
     { revocations: async (k, g) => [await revocation(g, k.x)] },
     NOW,
@@ -376,7 +393,7 @@ describe("repo task: the run and the verifier judge authority by one law", () =>
     const fromVerifier = await verifierCodes(authority, agent, k.x, NOW);
     const fromRun = await runtimeCodes(authority, agent, NOW);
     expect([...fromRun].sort()).toEqual([...fromVerifier].sort());
-    expect(fromRun.has("identity.repo_change.delegate_not_agent")).toBe(true);
+    expect(fromRun.has("identity.repo_change.signer_not_delegate")).toBe(true);
   });
 
   it("agree when the delegator delegates to itself", async () => {

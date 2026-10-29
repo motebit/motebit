@@ -19,13 +19,15 @@
  *     POSTCONDITION, then `commit-tree -p <tip>`. No worktree file,
  *     repository index or ref is touched.
  *   - The postcondition: `diff-tree` from the tip to the written tree must
- *     be exactly the staged paths whose content changed — each an add or a
- *     modify, mode 100644, with the staged blob — and nothing else. A
+ *     be exactly the staged paths whose content changed — each an add (no
+ *     old entry) or a modify of a 100644 file, new mode 100644, with the
+ *     staged blob — and nothing else. A
  *     directory/file collision (staging `a` and `a/b`, or a path under a
  *     tracked file) would delete something; any such tree throws and no
  *     commit is made.
  *
- * Every git call runs in an isolated session (`git.ts`) that never reads the
+ * Every git call runs in an isolated session (`git.ts`): no git process ever
+ * runs on the real git directory, so git never reads the
  * repository's own config. Not wired to any command yet: build step 4's
  * `motebit repo-task run` constructs it on the pinned tip.
  */
@@ -136,11 +138,14 @@ export function createGitChangeStager(
           if (!meta.startsWith(":")) break;
           const p = fields[i + 1]!;
           changedRecords++;
-          const [, dstMode, , dstBlob, status] = meta.slice(1).split(" ");
+          const [srcMode, dstMode, , dstBlob, status] = meta.slice(1).split(" ");
           const want = expected.get(p);
           if (
             want === undefined ||
             (status !== "A" && status !== "M") ||
+            // The old mode: absent for an add, a regular 100644 file for a
+            // modify — an executable or any other kind is never rewritten.
+            (status === "A" ? srcMode !== "000000" : srcMode !== REGULAR_FILE_MODE) ||
             dstMode !== REGULAR_FILE_MODE ||
             dstBlob !== want
           ) {
