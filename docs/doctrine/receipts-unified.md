@@ -1,5 +1,7 @@
 # Receipts — three types, one family
 
+> **Layer:** law — enforced by `check-signed-artifact-verifiers`
+
 Motebit's signed-receipt surface is three types in three packages, unified by one cryptographic shape and one verification path. The positioning sentence's "receipts" claim points at this family, not at any single type. This memo names the family so future contributors find the unification by reading, not by reconstruction.
 
 ## The three types

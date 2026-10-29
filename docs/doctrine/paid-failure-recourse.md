@@ -1,5 +1,7 @@
 # Paid failure and recourse
 
+> **Layer:** narrative
+
 What happens when a buyer pays for work that does not arrive.
 
 This is the decision #610 asked for. It is settled here rather than left open, and it is settled **against** building escrow — on measurement, with a named trigger that re-measures itself.

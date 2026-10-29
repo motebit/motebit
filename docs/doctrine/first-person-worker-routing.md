@@ -1,5 +1,7 @@
 # First-person worker routing
 
+> **Layer:** law — enforced by `packages/semiring/src/__tests__/worker-selection.test.ts`
+
 **The sovereign chooses who to hire from its own accumulated trust — never a global score, never the relay's arbitrary order.**
 
 ## The gap this closes

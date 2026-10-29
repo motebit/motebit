@@ -1,5 +1,7 @@
 # Agency proof integration — consume the floor, don't fork it
 
+> **Layer:** law — enforced by `check-api-surface`
+
 agency.computer is the first repo-blind consumer of the motebit proof floor: a first-party product, built from the published packages alone, with no access to the monorepo. It is therefore the live **protocol-primacy conformance test**: "does the floor work identically for a non-subscriber?" — answered by a consumer that sees only what a non-subscriber sees. It is dogfood, not external adoption; it does not count toward external-integration evidence. This document is the contract that integration codes against. Every clause points at a gate or a test, not at prose — lore is not an authority.
 
 The discipline that produced it: **running beats reviewing.** Both the catches that mattered came from executing, not discussing — an outsider running the real verifier found the demo receipt verifies as `sovereign: false` (integrity-only), and going to build a "hex receipt" fixture found that no such valid artifact exists. Each clause below survived a run.

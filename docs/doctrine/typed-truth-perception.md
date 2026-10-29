@@ -1,5 +1,7 @@
 # Typed-truth perception
 
+> **Layer:** law — enforced by `check-typed-truth-perception`, `check-self-state-registry`
+
 The AI never interprets natural-language outcomes. Every tool result carries semantic-intent truth as structured fields; the prompt's `PERCEPTION_DOCTRINE` teaches the AI to read them and branch; the dispatch enforces the same condition structurally so the AI's behavior is never the only protection.
 
 ## The anti-pattern

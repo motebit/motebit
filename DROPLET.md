@@ -1,5 +1,7 @@
 # Motebit: A Droplet of Intelligence Under Surface Tension
 
+> **Layer:** law (body) — enforced by `check-doctrine-cited-constants`, `check-liquescent-ontology`, `packages/render-engine/src/__tests__/index.test.ts`
+
 ---
 
 ## Abstract

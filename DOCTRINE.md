@@ -31,3 +31,12 @@ This file is the canonical index. The README, [CLAUDE.md](CLAUDE.md), and the do
 Read in order. The numbering above is one valid linearization of the citation DAG; the abstracts cite each other in a partial order, not a flat one. A capability the README declares is the surface expression of one or more links in this chain — the chain is the depth, the capabilities are what you see.
 
 When the chain extends, the new document lands here. The README points to this file; this file points to the documents. That's the synchronization invariant doing its job.
+
+## Two layers
+
+Doctrine is split the way an RFC splits normative from informative text. Every document in the chain above and every document under [`docs/doctrine/`](docs/doctrine/) declares its layer on the line directly after its title.
+
+- **Law** — the normative layer. The document's central claims are enforced, and its layer line names the gate, test file or code path that enforces them (`> **Layer:** law — enforced by …`). A law document is a decision procedure.
+- **Narrative** — the informative layer. Origin, lens and explanation (`> **Layer:** narrative`). It informs a decision; it does not bind one.
+
+The chain is where motebit comes from, and it governs the body: where its numbers are pinned by code and tests, a chain document is law for the body layer (`law (body)`). Above the body, a decision is bound by the law layer, and each law document names its enforcement. A claim nobody enforces is narrative until something does; when in doubt, a document is narrative, because under-claiming is the safe direction. `check-doctrine-layer` keeps every declaration present and every named enforcement real.

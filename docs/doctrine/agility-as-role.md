@@ -1,5 +1,7 @@
 # Agility as role
 
+> **Layer:** law — enforced by `check-closed-registry-canonical`, `check-suite-declared`, `check-suite-dispatch`
+
 Every architectural axis where motebit reserves the right to swap concretes follows the same shape: name the **role** in code, gates, types, and prose; treat the **instance** as a registry entry whose value can change without touching consumers. Migration becomes a registry append, not a wire-format break or a codebase rewrite.
 
 The pattern is unstated but load-bearing. Seven instances run through it today, with a typed admission predicate layered atop the intelligence-source pair. Future architectural decisions involving a chosen technology should ask the test in [§ When to apply](#when-to-apply) on day one — the cost of indirection is one type alias, the cost of retrofitting later is the migration that motivates the decision.

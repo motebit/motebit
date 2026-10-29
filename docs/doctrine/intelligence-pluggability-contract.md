@@ -1,5 +1,7 @@
 # Intelligence pluggability contract
 
+> **Layer:** law — enforced by `check-prompt-budget`, `check-prompt-density`
+
 > **Intelligence is pluggable only when motebit's runtime invariants remain constant while prompt, tools, and context budgets adapt to the selected model. The runtime does not become smaller for smaller models. The prompt does.**
 
 This is the connective doctrine between [`protocol-primacy.md`](protocol-primacy.md) (the WHAT: identity / governance / trust / receipts are protocol-level across all tiers) and [`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md) (the discipline: runtime enforces, prompt teaches). Without this clause both doctrines hold individually and still admit the failure mode named below.

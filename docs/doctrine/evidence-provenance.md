@@ -1,5 +1,7 @@
 # Evidence provenance — verifiable locality, from signatures to evidence
 
+> **Layer:** law — enforced by `packages/crypto/src/__tests__/evidence-provenance.test.ts`, `packages/crypto/src/__tests__/evidence-provenance-conformance.test.ts`
+
 The `VerificationVerdict`'s `evidenceBasis: EvidenceRef[]` was an emerging axis: a list of `{ kind, ref }` POINTERS naming what a verdict used, but not independently re-checkable. This arc (co-designed with agency.computer, 2026-06, the second verify-family consumer — the same consumer-forces-need / producer-forces-shape loop as the [VerificationVerdict reshape](verify-family-fail-closed.md)) makes that pointer **resolve to a re-verifiable provenance**, extending the system's deepest property — _verify the claim without trusting the claimant_ — from a SIGNATURE ("is this artifact authentic?") to EVIDENCE ("is this claim backed by a primary record?").
 
 ## The law

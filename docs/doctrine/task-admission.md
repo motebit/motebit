@@ -1,5 +1,7 @@
 # Task admission — priced work enters through the relay's gate
 
+> **Layer:** law — enforced by `check-worker-no-master-token`, `packages/molecule-runner/src/__tests__/task-admission.test.ts`, `services/relay/src/__tests__/one-task-one-body.test.ts`
+
 A worker that charges for its work must not do that work for a caller whose payment nobody saw. Transport authentication answers _who is calling_; it says nothing about _whether this task was paid for_. Before this arc the two were conflated: a first-party atom accepted any relay-registered identity's signed bearer and ran `motebit_task` straight into the provider call, while the relay's settlement gate (`TASK_P2P_PROOF_REQUIRED`, balance holds, carve-outs) protected only the relay path. The relay verified the money; the worker never learned that it had. Every priced atom was, to a stranger with a free identity, an unmetered inference endpoint.
 
 ## The primitive

@@ -2072,6 +2072,21 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       ),
   },
   {
+    script: "check-doctrine-layer",
+    proves:
+      "flags a doctrine law line that names a gate which is not registered in scripts/check.ts — the phantom-enforcement shape, where a doc reads as enforced law while the gate it cites does not exist or never runs",
+    perturb: () =>
+      // Swap the registered gate on registry-pattern-canonical.md's layer line
+      // for a name no GATES / EXCLUDED_CHECKS entry carries. The line stays
+      // well-formed, so only the registration check can fire.
+      mutateFile("docs/doctrine/registry-pattern-canonical.md", (src) =>
+        src.replace(
+          /^(> \*\*Layer:\*\* law — enforced by )`check-closed-registry-canonical`/m,
+          "$1`check-gate-probe-phantom-enforcement`",
+        ),
+      ),
+  },
+  {
     script: "check-skill-corpus",
     proves:
       "flags a committed reference skill whose SKILL.md body bytes have drifted away from the body_hash committed in skill-envelope.json (the exact pre-push incident this gate caught when prettier reformatted SKILL.md after signing)",

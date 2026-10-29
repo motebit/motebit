@@ -1,5 +1,7 @@
 # Felt accumulation — the interior at work
 
+> **Layer:** law — enforced by `check-accrual-basis-canonical`
+
 [`felt-interior.md`](felt-interior.md) gave the owner two registers of the accruing
 interior: it **changed** (the consolidation act, the `tending` cue) and it **holds**
 (the resting `Felt*` records — memory, trust, consolidation), both now shipped across

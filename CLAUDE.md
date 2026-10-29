@@ -4,7 +4,7 @@ A motebit is a droplet of intelligence under surface tension: identity forms the
 
 The body is passive. The interior is active. Memory, trust, identity, tool use are interior structures. The policy gate, the privacy layer, the governance are the surface tension. Maximum interiority, minimum display.
 
-See [`DOCTRINE.md`](DOCTRINE.md) for the foundational derivation chain — nine documents from droplet physics through sovereign interior, metabolic boundary, and self-signing body to multi-agent conferencing. Every decision traces to droplet physics or it doesn't belong.
+See [`DOCTRINE.md`](DOCTRINE.md) for the foundational derivation chain — nine documents from droplet physics through sovereign interior, metabolic boundary, and self-signing body to multi-agent conferencing. The chain is where motebit comes from, and it governs the body. Above the body, a decision is bound by the law layer: each law doc names the gate or test that enforces it (see DOCTRINE.md).
 
 ## The three things no one else is building together
 

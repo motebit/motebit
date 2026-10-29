@@ -1,5 +1,7 @@
 # The machine roster — a motebit knows its machines; a relay only knows who is connected
 
+> **Layer:** law — enforced by `packages/crypto/src/__tests__/host-roster.test.ts`, `packages/crypto/src/__tests__/host-roster-properties.test.ts`
+
 **"Every machine" is a statement about a set. The sovereign signs the set's membership; the relay observes only its liveness; and no surface may say "every", "all" or "nothing" about a motebit's machines from liveness alone.**
 
 This is [`settlement-authority-binding.md`](settlement-authority-binding.md)'s move applied to topology. There, a relay transports where an agent is paid and never creates that authority. Here, a relay transports which machines a motebit runs on and never creates that fact by noticing who happens to be connected.

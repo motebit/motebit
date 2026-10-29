@@ -1,5 +1,7 @@
 # Memory provenance — source is assigned, never claimed
 
+> **Layer:** law — enforced by `check-memory-source-canonical`
+
 **Status:** shipped (tenth registered registry, 2026-06-10).
 **Code:** `packages/protocol/src/memory-source.ts`, formation threading across `packages/memory-graph` / `packages/ai-core` / `packages/runtime` / `packages/reflection` / `packages/mcp-server`.
 **Gate:** `check-memory-source-canonical` (drift-defenses #122).

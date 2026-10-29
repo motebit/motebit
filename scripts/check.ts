@@ -431,6 +431,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-doctrine-format",
   },
   {
+    name: "check-doctrine-layer",
+    defends:
+      'every docs/doctrine/*.md and every DOCTRINE.md chain document declares exactly one layer line directly after its H1 — `> **Layer:** narrative` or `> **Layer:** law — enforced by …` — and every enforcement a law line names is real: each `check-*` is registered in scripts/check.ts (GATES, or a hard EXCLUDED_CHECKS job; soft/advisory entries are rejected) with a runnable source, and each named test file or code path exists. The RFC normative/informative split applied to doctrine (DOCTRINE.md § "Two layers"): the 2026-10-29 doctrine audit found the corpus read uniformly as law while only part of it was enforced, so a reader could not tell a gated claim from a lens; a law line naming a gate that does not exist or does not run is phantom enforcement — the class check-gate-references defends for CLAUDE.md, applied to doctrine. Whether the named enforcement covers a doc\'s central claims is reviewer judgement, not gated; under-claiming (narrative) is the safe direction (invariant #178, docs/drift-defenses.md)',
+    script: "check-doctrine-layer",
+  },
+  {
     name: "check-license-doc-sync",
     defends:
       "every workspace package.json declares a SPDX-canonical license (Apache-2.0 or BUSL-1.1) and the permissive-floor membership agrees across LICENSING.md (table + quick reference) and CONTRIBUTING.md; the canonical truth is the package.json license field, the prose surfaces are the siblings (invariant #52, full history in docs/drift-defenses.md)",

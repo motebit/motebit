@@ -1,5 +1,7 @@
 # Security boundaries
 
+> **Layer:** law — enforced by `check-audience-canonical`, `check-worker-no-master-token`, `check-money-authority`, `check-sensitivity-routing`
+
 ## Sybil defense (five layers)
 
 Self-delegation must not farm trust.

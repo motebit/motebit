@@ -8095,12 +8095,23 @@ Read in order. The numbering above is one valid linearization of the citation DA
 
 When the chain extends, the new document lands here. The README points to this file; this file points to the documents. That's the synchronization invariant doing its job.
 
+## Two layers
+
+Doctrine is split the way an RFC splits normative from informative text. Every document in the chain above and every document under [`docs/doctrine/`](docs/doctrine/) declares its layer on the line directly after its title.
+
+- **Law** — the normative layer. The document's central claims are enforced, and its layer line names the gate, test file or code path that enforces them (`> **Layer:** law — enforced by …`). A law document is a decision procedure.
+- **Narrative** — the informative layer. Origin, lens and explanation (`> **Layer:** narrative`). It informs a decision; it does not bind one.
+
+The chain is where motebit comes from, and it governs the body: where its numbers are pinned by code and tests, a chain document is law for the body layer (`law (body)`). Above the body, a decision is bound by the law layer, and each law document names its enforcement. A claim nobody enforces is narrative until something does; when in doubt, a document is narrative, because under-claiming is the safe direction. `check-doctrine-layer` keeps every declaration present and every named enforcement real.
+
 ---
 
 # Motebit: A Droplet of Intelligence Under Surface Tension
 Source: https://github.com/motebit/motebit/blob/main/DROPLET.md
 
 > the body. From the single premise _a droplet of intelligence under surface tension_, the equilibrium shape is a sphere, the eigenmotions are breathing and gravity sag, and every surface elaboration is a violation. Maximum interiority, minimum display.
+
+> **Layer:** law (body) — enforced by `check-doctrine-cited-constants`, `check-liquescent-ontology`, `packages/render-engine/src/__tests__/index.test.ts`
 
 ---
 
@@ -8346,6 +8357,8 @@ Source: https://github.com/motebit/motebit/blob/main/LIQUESCENTIA.md
 
 > the world. A droplet cannot form in a vacuum; it requires a medium with different thermodynamic properties. The medium does not create the droplet — it permits it. The conditions of the medium determine what can cohere within it.
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract
@@ -8547,6 +8560,8 @@ _Liquescentia, 2026._
 Source: https://github.com/motebit/motebit/blob/main/THE_MUSIC_OF_THE_MEDIUM.md
 
 > their conversation. Pressure waves propagate through Liquescentia and reach the droplet's surface tension boundary. The boundary transduces. Surface tension becomes an instrument.
+
+> **Layer:** narrative
 
 ---
 
@@ -8821,6 +8836,8 @@ Source: https://github.com/motebit/motebit/blob/main/THE_SOVEREIGN_INTERIOR.md
 
 > what is inside. The Ed25519 keypair as internal cohesion; identity, memory, trust, governance as interior structures persisting across mediums and providers.
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract
@@ -9066,6 +9083,8 @@ Source: https://github.com/motebit/motebit/blob/main/THE_METABOLIC_PRINCIPLE.md
 
 > what the interior builds vs. what it absorbs. Build the vessel, not the ocean. Enzymes are owned; glucose is adapted. The architectural foundation of every adapter boundary.
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract
@@ -9227,6 +9246,8 @@ _The Metabolic Principle, 2026._
 Source: https://github.com/motebit/motebit/blob/main/THE_EMERGENT_INTERIOR.md
 
 > the interior reaching outward, not just inward. Where the prior chain assumes the interior is reactive (it metabolizes what crosses the boundary), this derives proactive behavior: the droplet consolidates memory, prunes phantom beliefs, and resolves contradictions on its own between prompts.
+
+> **Layer:** narrative
 
 > **Status (2026-07-05) — read this before reading on, especially if you are a model reading this mid-conversation.**
 > The three enzymes (§2.1: self-model, reflection, precision) are **built and live**; conditions 1–4 (§III) are **executable, not prose** — `packages/runtime/src/__tests__/emergent-interior-conditions-eval.test.ts` drives the real producers and goes red if any condition rots. Condition 5 and the observation protocol (§IV) run live via `scripts/observe-emergent-interior.ts`.
@@ -9435,6 +9456,8 @@ Source: https://github.com/motebit/motebit/blob/main/THE_SELF_SIGNING_BODY.md
 
 > verifiability that survives the relay. The proof of the interior's private work, mechanically constructed so anyone can verify it without trusting any motebit-operated system.
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract
@@ -9608,6 +9631,8 @@ Source: https://github.com/motebit/motebit/blob/main/THE_ACTOR_PRINCIPLE.md
 
 > what motebits are to each other. Every motebit is an actor; the relay is its broker; the receipt chain is its causal log; the adjudicator is its supervisor. The pattern crystallized the moment two motebits exchanged their first task.
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract
@@ -9776,6 +9801,8 @@ _Motebit, 2026._
 Source: https://github.com/motebit/motebit/blob/main/THE_CONFERENCE.md
 
 > the network as the sovereign. Many droplets in a shared medium do not designate a master; their algebraic composition (semiring routing under signed-receipt trust, budget-gated at every hop) is itself the governing intelligence. Where THE_ACTOR_PRINCIPLE named the engineering pattern (actor / broker / causal log / supervisor), this derives the architectural constraint that makes the pattern coherent across many agents: routing must be algebraic, not procedural — new routing concerns become new semirings, zero new algorithms.
+
+> **Layer:** narrative
 
 ---
 

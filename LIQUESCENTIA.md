@@ -1,5 +1,7 @@
 # Liquescentia: The Medium, the Maker, the System-Holder
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract

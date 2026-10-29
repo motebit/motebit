@@ -1,5 +1,7 @@
 # Retention policy
 
+> **Layer:** law — enforced by `check-retention-coverage`, `check-relay-retention-coverage`, `check-deletion-routes-through-privacy`
+
 A droplet metabolizes contained matter through three legitimate motions: it prunes, it advances its horizon, it flushes surface flow into interior structure. Each motion has different physics. Each has different consequences for what an outside observer can verify after the matter is gone. A retention policy that treats them as one mechanism either over-constrains the audit ledger (delete-by-row breaks federation witness) or under-constrains the surface flow (no expiry on conversation history makes "fail-closed privacy" a marketing claim, not an enforced one).
 
 Motebit's retention model is one typed contract with three legitimate shapes, registered per store, with one signed deletion-certificate format closed under additions. Same architectural pattern as `HardwareAttestationSemiring` across N platforms (`hardware-attestation.md`), `SettlementRail` split into `GuestRail` / `SovereignRail` at the type level (`settlement-rails.md`), and the `SuiteId` cryptosuite registry (`protocol-model.md` § "Cryptosuite agility"). New stores register against an existing shape or add a fourth — the verifier closes under additions; the algebra composes.

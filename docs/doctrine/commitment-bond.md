@@ -1,5 +1,7 @@
 # Commitment bond — an anti-sybil staked signal (NOT collateral, NOT recourse)
 
+> **Layer:** law — enforced by `check-bond-address-binding`, `check-bond-surface-honesty`
+
 The relay's revenue rests on a coordination moat — trusted, dispute-grade history — but its
 recourse today is dispute-resolution-only with no capital behind it: `executeFundAction`
 (`services/relay/src/disputes.ts`) **no-ops on a P2P / zero-locked dispute**, exactly where money

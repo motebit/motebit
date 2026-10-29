@@ -1,5 +1,7 @@
 # Proactive interior
 
+> **Layer:** law — enforced by `check-consolidation-primitives`
+
 A motebit's interior is active. The body is passive. Idle is not absence — idle is the time the motebit uses to consolidate what it knows. This doctrine names what proactive means, what's allowed, and what protects the user from runaway action.
 
 ## Three pillars

@@ -1,5 +1,7 @@
 # Surface-controller extraction
 
+> **Layer:** law — enforced by `check-surface-controller-adoption`
+
 A _surface controller_ is the daemon/lifecycle logic a flat surface runs in-app: managing MCP servers, driving relay sync, scheduling goals. Sibling of [`panels-pattern.md`](panels-pattern.md) — that doc decides where a panel's _projection_ state lives; this one decides where a controller's _behavior_ lives. The home for genuinely-shared controller logic is `@motebit/surface-kit` (Layer 3); the first and so far only resident is `McpManager` (`packages/surface-kit/src/mcp-manager.ts`).
 
 The default is **per-surface**. Extraction is the exception, justified only when the four-question test below passes. The audit framing of "~16k lines of cross-surface duplication to dedup" is wrong: most of those lines are platform-specific by design, with the reusable cores already living in packages. Reading the bytes — not the line counts — is the discipline.

@@ -1,5 +1,7 @@
 # Surface determinism
 
+> **Layer:** law — enforced by `check-affordance-routing`
+
 A user who taps an affordance has authorized a specific capability invocation. The implementation must honor that authorization deterministically — not route it through a model and hope the model agrees.
 
 ## The anti-pattern

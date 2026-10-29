@@ -1,5 +1,7 @@
 # Runtime invariants over prompt rules
 
+> **Layer:** law — enforced by `check-prompt-density`, `check-typed-truth-perception`
+
 When a problem can be solved either by adding a prompt clause that teaches the AI to behave a certain way OR by adding a runtime contract that makes the failure mode structurally impossible, **prefer the runtime contract**. The prompt teaches what's true about the world; the runtime enforces what must hold.
 
 This doctrine is named because of a recurring drift pattern: a witnessed bug produces a prompt clause that tells the AI "don't do X" or "always do Y." Each clause is justifiable individually. Stack 50 of them and the prompt becomes a configuration file disguised as a teaching — the AI is a rule-follower rather than an emergent agent, and the §4 thesis from [`THE_EMERGENT_INTERIOR.md`](../../THE_EMERGENT_INTERIOR.md) (architecture-shapes-emergence, do not pressure the system prompt) starts contaminating.

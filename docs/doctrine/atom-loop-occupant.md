@@ -1,5 +1,7 @@
 # The atom, the loop, and the occupant
 
+> **Layer:** narrative
+
 What is the smallest invariant that cannot be removed without collapsing accountable agency? Not the trust graph — remove it and the system gets amnesiac, not unaccountable. Not the policy gate — remove it and the agent is ungoverned, not unattributable. Not receipts-as-a-schema — any signed statement of an act would do. Not even the `motebit_id`-commits-to-genesis-key lever — remove it and accountability doesn't collapse, it _recentralizes_ into a registry's claim (the custodial model, degraded but standing; see [identity-binding-verification](identity-binding-verification.md)). The irreducible atom is a single predicate with two inseparable clauses:
 
 > `verify(canonicalize(claim), pk)` — **and** — _`sk` never crosses the membrane._

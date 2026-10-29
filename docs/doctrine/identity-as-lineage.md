@@ -1,5 +1,7 @@
 # Identity is a lineage of authorized transitions
 
+> **Layer:** narrative
+
 Accountable identity is not a persistent object. It is not a model hash, a private key, a memory archive, a running process, an account, or a name — every one of those can be copied, rotated, rewritten, migrated, or forked, and none of them alone survives autonomous change. Accountable identity is a **verifiable lineage of authorized transitions**: the answer to _who was authorized, under which policy, linked to what prior state, with what evidence a third party can re-check without trusting the actor's own narrative._
 
 This is the move ledger-native money made: a coin is defined by its valid transaction history, not by persistent substance. Applied to an agent, the actor is the valid passage from state to state, not the implementation carried between states.

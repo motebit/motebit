@@ -1,5 +1,7 @@
 # Spatial as endgame — the AR-glasses companion thesis
 
+> **Layer:** narrative
+
 The motebit's spatial surface is not "AR/VR/WebXR generically." It is the **prototype of the AR-glasses companion** — the form factor that, on a 5–10 year horizon, replaces the phone the way the phone replaced the flip phone. Every pattern developed in the spatial surface is load-bearing for that endgame. Discipline there, not preciousness.
 
 This doctrine pins what spatial is for, why motebit's architecture is naturally a glasses architecture, and the operational rules that follow — including a fifth spatial primitive (presentation) the original "no panels" rule was missing.

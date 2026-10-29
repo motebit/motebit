@@ -176,6 +176,7 @@
     "check-llms-txt-fresh": "npx tsx scripts/check-llms-txt-fresh.ts",
     "check-self-knowledge-corpus-fresh": "npx tsx scripts/check-self-knowledge-corpus-fresh.ts",
     "check-doctrine-format": "npx tsx scripts/check-doctrine-format.ts",
+    "check-doctrine-layer": "npx tsx scripts/check-doctrine-layer.ts",
     "check-license-doc-sync": "npx tsx scripts/check-license-doc-sync.ts",
     "check-liquescent-ontology": "npx tsx scripts/check-liquescent-ontology.ts",
     "check-tsup-define-conventions": "npx tsx scripts/check-tsup-define-conventions.ts",

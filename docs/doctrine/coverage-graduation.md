@@ -1,5 +1,7 @@
 # Coverage graduation
 
+> **Layer:** law — enforced by `check-coverage-graduation`
+
 Two policies, one direction.
 
 **Floor (invariant).** Coverage thresholds never lower. Every `vitest.config.ts` declares its measured baseline; CI fails if a regression lands. Enforced by `turbo run test:coverage` (drift-defenses #5) and the `defineMotebitTest` factory in `vitest.shared.ts` (which makes thresholds a required argument). Anchored in the `feedback_coverage_thresholds` memory.

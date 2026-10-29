@@ -1,5 +1,7 @@
 # Daemon ⟷ desktop unification: host election by first bind, capability bridging
 
+> **Layer:** law — enforced by `check-runtime-host-election`
+
 The keystone invariant in [`surface-authority-model.md`](surface-authority-model.md) — one sovereign runtime per machine, frontends attach — left one sub-question to build time: **which process runs the single coordinator, and how do the others find it.** This memo records the decision (2026-06-11, grounded against the real keyring-sharing and process inventory) and scopes the build.
 
 ## Ground truth the rule is built against

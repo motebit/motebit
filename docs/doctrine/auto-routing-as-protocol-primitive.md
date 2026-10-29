@@ -1,5 +1,7 @@
 # Auto-routing as protocol primitive
 
+> **Layer:** law — enforced by `check-routing-decision-coverage`, `packages/policy/src/__tests__/auto-router.test.ts`
+
 The auto-router's render is **`f(TaskShape × ProviderCapability × Constraints) → RoutingDecision`**, not a hardcoded `Record<task, model>` map living in one consumer's source. Every surface that picks a model for a task — motebit-cloud, BYOK, on-device — consumes the same dispatcher with its own provider catalog and own routing policy. This is the same matrix-as-primitive shape that [`chrome-as-state-render.md`](chrome-as-state-render.md) applied to slab chrome, now applied to model selection.
 
 The mistake this doctrine corrects: routing logic that lives at the proxy is a SaaS-style feature gate. Routing logic that lives at the protocol layer with the proxy as one consumer is a sovereign primitive — BYOK users get the same auto-routing over their own provider keys, on-device users get the same auto-routing over local models. The protocol works without motebit-cloud; motebit-cloud earns its stake by adding aggregator-scale routing intelligence on top of the same dispatcher.

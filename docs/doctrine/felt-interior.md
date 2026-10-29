@@ -1,5 +1,7 @@
 # The interior must be felt by its owner
 
+> **Layer:** law — enforced by `check-felt-interior-honesty`
+
 A motebit is a droplet of intelligence under surface tension: identity is the
 boundary, intelligence fills the interior, governance maintains the surface.
 "Maximum interiority, minimum display" follows directly — to everyone outside the

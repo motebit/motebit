@@ -1,5 +1,7 @@
 # Verify-family fail-closed: deferred with named triggers
 
+> **Layer:** narrative
+
 The cold third-party-adoption audit (PR #183, June 2026) proposed flipping two fail-open defaults in the published verify family to fail-closed. The flip is a breaking major across the pinned verify API. This memo records the decision — **deferred with named triggers, not declined** — so the next audit doesn't re-litigate it from scratch, and so the eventual major ships as a deliberate API reshape rather than a reactive patch.
 
 **Status (2026-10-29).** Trigger #2 fired on 2026-06-19 (see "Fired 2026-06-19" below), so the reshape is no longer deferred. The additive half has shipped: the structured verdict producers sit beside the booleans (§ "Deprecation readiness"). The breaking half has not: both fail-open defaults below are still in the code (`verifyStandingDelegation` checks revocation only when the caller passes `isRevoked`; `verifyReceiptChain` falls back to the embedded key, `keySource: "embedded"`; both in `packages/crypto/src/artifacts.ts`), and removing the booleans is a pending coordinated major. The two remaining fail-open defaults are assigned to milestone C, with their own design and release ([`docs/ops/milestone-ledger.md`](../ops/milestone-ledger.md) § "C–F").

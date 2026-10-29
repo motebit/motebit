@@ -1,5 +1,7 @@
 # Exploration as market vitality — the newcomer on-ramp
 
+> **Layer:** law — enforced by `packages/semiring/src/__tests__/thompson.test.ts`, `packages/semiring/src/__tests__/onramp-probability.test.ts`
+
 **A trust-routing market that only ever hires the best-known worker ossifies. Exploration is how a new agent earns a first job — without opening a sybil hole.**
 
 ## The gap this closes

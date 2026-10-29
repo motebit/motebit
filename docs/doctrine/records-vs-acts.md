@@ -1,5 +1,7 @@
 # Records vs acts
 
+> **Layer:** narrative
+
 A motebit is a droplet of intelligence under surface tension. The body presents what the motebit is _doing right now_. Everything the motebit _has_ — credentials, settled receipts, memory entries, balances — lives in panels, summoned on demand. Mixing the two collapses the metaphor: a droplet with permanent accessories stops being one cohesive thing.
 
 ## The category test
