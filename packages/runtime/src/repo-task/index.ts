@@ -3,10 +3,11 @@
  * Design of record: docs/proposals/governed-repo-change-v1.md; wire:
  * spec/repo-change-v1.md.
  */
-export { checkRepoTaskAuthority, isCanonicalRepoPath, parseRepoTaskTools } from "./authority.js";
+export { checkRepoTaskAuthority } from "./authority.js";
 export type {
   RepoTaskAuthorityBundle,
   RepoTaskAuthorityCheck,
+  RepoTaskAuthorityFailure,
   RepoTaskPin,
   RepoTaskRevocations,
 } from "./authority.js";

@@ -68,6 +68,9 @@
     },
     {
       "path": "../sync-engine"
+    },
+    {
+      "path": "../verifier"
     }
   ]
 }

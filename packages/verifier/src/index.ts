@@ -220,6 +220,21 @@ export type { RoutingDecisionTranscript, TranscriptCandidate } from "@motebit/pr
 // failure carries a repo-change repair code, the receipt's status as
 // `outcome`, and every failed rule in `diagnostics`.
 export { verifyRepoChange } from "./repo-change.js";
+// The shared repo-change rules — one implementation of the law both judges
+// run: this verifier over a landed bundle, and the repo-task run
+// (`@motebit/runtime`) before it starts and on every tool call.
+export {
+  checkRepoChangeGrantShape,
+  checkRepoChangeParties,
+  checkRepoChangeTickStructure,
+  checkRepoChangeWindow,
+  isCanonicalBase64Url,
+  isCanonicalRepoPath,
+  isRepoTaskScopeShape,
+  parseRepoChangeTools,
+  repoChangeAuthorityWindow,
+} from "./repo-change-rules.js";
+export type { RepoChangeRuleSink } from "./repo-change-rules.js";
 export type {
   VerifyRepoChangeInput,
   RepoChangeVerification,

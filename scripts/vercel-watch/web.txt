@@ -41,6 +41,7 @@ packages/surface-kit
 packages/sync-engine
 packages/tools
 packages/treasury-reconciliation
+packages/verifier
 packages/virtual-accounts
 packages/voice
 packages/wallet-solana

@@ -29,6 +29,7 @@ import { runTampers, type TamperEdit, type TamperEntry } from "../lib/tamper-run
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const AUTH = "packages/runtime/src/repo-task/authority.ts";
+const RULES = "packages/verifier/src/repo-change-rules.ts";
 const RUN = "packages/runtime/src/repo-task/run.ts";
 const TOOLS = "packages/runtime/src/repo-task/tools.ts";
 const PROMPT = "packages/runtime/src/repo-task/system-prompt.ts";
@@ -41,6 +42,7 @@ const READER = "apps/cli/src/repo-task/git-tree-reader.ts";
 const SINK = "apps/cli/src/repo-task/receipt-file-sink.ts";
 
 const RUN_TEST = "src/__tests__/repo-task-run.test.ts";
+const AGREE_TEST = "src/__tests__/repo-task-authority-agreement.test.ts";
 const IDENTITY_TEST = "src/__tests__/repo-task-tool-identity.test.ts";
 const INTERIOR_TEST = "src/__tests__/repo-task-no-interior.test.ts";
 const STATUS_TEST = "src/__tests__/tool-receipt-status.test.ts";
@@ -48,6 +50,7 @@ const OUTCOME_TEST = "src/__tests__/tool-outcome.test.ts";
 const ADAPTER_TEST = "src/repo-task/__tests__/node-adapters.test.ts";
 
 const PRE = "repo task: the run cannot start without a valid tick";
+const AGREE = "repo task: the run and the verifier judge authority by one law";
 const WRITE_AUTH = "repo task: the run cannot write without a valid tick";
 const STATUS = "repo task: every call's real status, durably recorded";
 const WRITE = "repo task: repo_write_path is closed over the allowed paths";
@@ -63,12 +66,6 @@ const UNGATED = "tool outcome on every done chunk (no policy gate)";
 
 const edit = (file: string, from: string, to: string): TamperEdit => ({ file, from, to });
 
-/** Neutralize one `fail(...)` call of the authority check (keeps it valid code). */
-const unfail = (call: string): TamperEdit => edit(AUTH, `fail(${call}`, `void (${call}`);
-
-/** The verdict's own authority — the second layer under every window / structure check. */
-const VERDICT_AUTHORITY = unfail("`the tick's authority is ${verdict.authority}`)");
-
 function entry(
   pkg: string,
   test: string,
@@ -80,6 +77,13 @@ function entry(
 }
 const run = (name: string, red: string, ...edits: TamperEdit[]) =>
   entry("@motebit/runtime", RUN_TEST, name, red, ...edits);
+const agree = (name: string, red: string, ...edits: TamperEdit[]) =>
+  entry("@motebit/runtime", AGREE_TEST, name, red, ...edits);
+/** A verifier edit, read by the runtime test through the verifier's dist: rebuild it first. */
+const verifierRule = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry => ({
+  ...run(name, red, ...edits),
+  rebuild: ["@motebit/verifier"],
+});
 const offer = (name: string, red: string, ...edits: TamperEdit[]) =>
   entry("@motebit/runtime", IDENTITY_TEST, name, red, ...edits);
 const interior = (name: string, red: string, ...edits: TamperEdit[]) =>
@@ -99,40 +103,72 @@ const IDENTITY_ASSERTION = edit(
 
 const TAMPERS: TamperEntry[] = [
   // ── authority before start ─────────────────────────────────────────────
+  // The rules are the verifier's (one law, one implementation): each entry
+  // drops the run's CALL of one rule, or weakens the rule in the verifier
+  // itself and rebuilds it — the run's test must go red either way.
   run(
-    "preflight: tick expiry not judged",
+    "preflight: the window rule not called",
     `${PRE} refuses an expired tick before any model call`,
-    unfail('"the tick has expired")'),
-    VERDICT_AUTHORITY,
+    edit(
+      AUTH,
+      "  checkRepoChangeWindow({ grant, tick, now: clock, wallClock: verdict, failures }, fail);\n",
+      "",
+    ),
   ),
   run(
-    "preflight: tick not_before not judged",
+    "preflight: the window rule not called (not_before)",
     `${PRE} refuses a tick not yet valid before any model call`,
-    unfail('"the tick is not yet valid")'),
-    VERDICT_AUTHORITY,
+    edit(
+      AUTH,
+      "  checkRepoChangeWindow({ grant, tick, now: clock, wallClock: verdict, failures }, fail);\n",
+      "",
+    ),
+  ),
+  agree(
+    "preflight: the tick-structure rule not called",
+    `${AGREE} agree on a tick issued before the grant`,
+    edit(AUTH, "  checkRepoChangeTickStructure(grant, tick, fail);\n", ""),
   ),
   run(
-    "preflight: tick grant_id not compared",
-    `${PRE} refuses a tick of another grant before any model call`,
-    unfail(`"the tick's grant_id is not the grant's")`),
-    VERDICT_AUTHORITY,
+    "preflight: the grant rules not called",
+    `${PRE} refuses a grant with a spend ceiling before any model call`,
+    edit(
+      AUTH,
+      "  const tickTools = checkRepoChangeGrantShape(grant, tick, fail);",
+      '  const tickTools = new Set(["repo_read_blob", "repo_write_path"] as const);',
+    ),
   ),
   run(
-    "preflight: tick signature not checked",
-    `${PRE} refuses a tick whose signature does not verify before any model call`,
-    unfail(`"the tick's signature does not verify")`),
-    VERDICT_AUTHORITY,
+    "preflight: the pin rules not called",
+    `${PRE} refuses a delegator that is not the principal pin before any model call`,
+    edit(AUTH, "  checkRepoChangeParties(grant, { principal, agents: [agent] }, fail);\n", ""),
   ),
-  run(
-    "preflight: tick signer not checked",
-    `${PRE} refuses a tick signed by another key before any model call`,
-    unfail(`"the tick's signature does not verify")`),
-    VERDICT_AUTHORITY,
+  agree(
+    "preflight: the tick signature not checked",
+    `${AGREE} agree on a tick whose signature does not verify`,
+    edit(
+      AUTH,
+      '  if (verdict !== null && verdict.integrity !== "verified") {',
+      '  if ((false as boolean) && verdict !== null && verdict.integrity !== "verified") {',
+    ),
+  ),
+  agree(
+    "preflight: the grant signature not checked",
+    `${AGREE} agree on a grant signed by another key`,
+    edit(
+      AUTH,
+      "    !(await verifyStandingDelegation(grant, { checkExpiry: false, now: Number.MAX_SAFE_INTEGER }))",
+      "    (false as boolean) &&\n    !(await verifyStandingDelegation(grant, { checkExpiry: false, now: Number.MAX_SAFE_INTEGER }))",
+    ),
   ),
   run(
     "preflight: revocation not consulted",
     `${PRE} refuses a revoked grant before any model call`,
-    unfail("`the grant's revocation status is ${verdict.revocation.status}`)"),
+    edit(
+      AUTH,
+      "    verdict !== null &&\n    (verdict.revocation",
+      "    verdict !== null &&\n    (false as boolean) &&\n    (verdict.revocation",
+    ),
   ),
   run(
     "preflight: a malformed revocation file ignored",
@@ -144,10 +180,44 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   run(
-    "preflight: tool list accepts names outside the two tools",
-    `${PRE} refuses a scope wider than the two tools before any model call`,
+    "preflight: scope not matched against the grant's binding",
+    `${PRE} refuses a scope the grant does not bind before any model call`,
+    edit(AUTH, "    if (!match.valid) {", "    if ((false as boolean) && !match.valid) {"),
+  ),
+  run(
+    "preflight: non-canonical allowed path accepted",
+    `${PRE} refuses a non-canonical allowed path before any model call`,
     edit(
       AUTH,
+      "      if (!isCanonicalRepoPath(p)) {",
+      "      if ((false as boolean) && !isCanonicalRepoPath(p)) {",
+    ),
+  ),
+  run(
+    "preflight: path predicate not applied",
+    `${PRE} refuses an allowed path the predicate refuses before any model call`,
+    edit(
+      AUTH,
+      "      } else if (!bundle.isPathPermitted(p)) {",
+      "      } else if ((false as boolean) && !bundle.isPathPermitted(p)) {",
+    ),
+  ),
+  run(
+    "preflight: repository not compared",
+    `${PRE} refuses a scope for another repository before any model call`,
+    edit(
+      AUTH,
+      "  if (scope.repo !== bundle.expectedRepo) {",
+      "  if ((false as boolean) && scope.repo !== bundle.expectedRepo) {",
+    ),
+  ),
+  // The verifier's own rule weakened (and the verifier rebuilt): the run,
+  // which calls it, goes red — evidence the run runs the one implementation.
+  verifierRule(
+    "verifier rule: tool lists accept names outside the two tools",
+    `${PRE} refuses a scope wider than the two tools before any model call`,
+    edit(
+      RULES,
       "    if (tool === undefined || out.has(tool)) return null;\n    out.add(tool);",
       "    if (out.has((tool ?? part) as RepoChangeTool)) return null;\n    out.add((tool ?? part) as RepoChangeTool);",
     ),
@@ -157,66 +227,49 @@ const TAMPERS: TamperEntry[] = [
       "if (offered.length !== expected.size) {",
     ),
   ),
-  run(
-    "preflight: tick scope not narrowed within the grant's",
-    `${PRE} refuses a tick wider than the grant before any model call`,
-    unfail(`"the tick's scope is wider than the grant's")`),
-    VERDICT_AUTHORITY,
-  ),
-  run(
-    "preflight: scope not matched against the grant's binding",
-    `${PRE} refuses a scope the grant does not bind before any model call`,
-    unfail("`the scope is not the one the grant binds"),
-  ),
-  run(
-    "preflight: subject_binding not required",
-    `${PRE} refuses a grant with no subject_binding before any model call`,
-    unfail('"the grant carries no subject_binding")'),
-  ),
-  run(
-    "preflight: subject not checked",
-    `${PRE} refuses a grant for another subject before any model call`,
-    unfail("`the grant's subject is not"),
-  ),
-  run(
-    "preflight: spend_ceiling allowed",
-    `${PRE} refuses a grant with a spend ceiling before any model call`,
-    unfail('"the grant carries a spend_ceiling")'),
-  ),
-  run(
-    "preflight: 24-hour lifetime not enforced",
+  verifierRule(
+    "verifier rule: the 24-hour lifetime not enforced",
     `${PRE} refuses a grant living longer than 24 hours before any model call`,
-    unfail('"the grant lives longer than 24 hours")'),
+    edit(
+      RULES,
+      "  if (lifetime > REPO_CHANGE_MAX_GRANT_LIFETIME_MS) {",
+      "  if ((false as boolean) && lifetime > REPO_CHANGE_MAX_GRANT_LIFETIME_MS) {",
+    ),
   ),
-  run(
-    "preflight: cadence below the lifetime allowed",
-    `${PRE} refuses a cadence below the lifetime before any model call`,
-    unfail(`"the grant's cadence_ms is less than its lifetime")`),
-  ),
-  run(
-    "preflight: delegator not matched to the principal pin",
-    `${PRE} refuses a delegator that is not the principal pin before any model call`,
-    unfail(`"the grant's delegator is not the principal pin")`),
-  ),
-  run(
-    "preflight: non-canonical allowed path accepted",
+  verifierRule(
+    "verifier rule: the canonical path rule accepts `..`",
     `${PRE} refuses a non-canonical allowed path before any model call`,
-    unfail("`allowed path ${JSON.stringify(p)} is not canonical`)"),
+    edit(
+      RULES,
+      '    if (seg.endsWith(".") || seg.toLowerCase() === ".git") return false;',
+      '    if (seg.toLowerCase() === ".git") return false;',
+    ),
   ),
-  run(
-    "preflight: path predicate not applied",
-    `${PRE} refuses an allowed path the predicate refuses before any model call`,
-    unfail("`allowed path ${JSON.stringify(p)} fails the repository's path predicate`)"),
-  ),
-  run(
-    "preflight: repository not compared",
-    `${PRE} refuses a scope for another repository before any model call`,
-    unfail('"the scope names another repository")'),
+  verifierRule(
+    // Both branches that refuse an expired tick (the expiry branch and the
+    // "crypto refuses the tick at this time" branch below it) — one alone is
+    // GREEN by design, the verifier's own layering.
+    "verifier rule: tick expiry not judged",
+    `${PRE} refuses an expired tick before any model call`,
+    edit(
+      RULES,
+      '  } else if (wallClock.authority === "expired" || now > grant.expires_at) {',
+      '  } else if ((false as boolean) && (wallClock.authority === "expired" || now > grant.expires_at)) {',
+    ),
+    edit(
+      RULES,
+      '    wallClock.authority !== "valid" &&\n',
+      '    (false as boolean) &&\n    wallClock.authority !== "valid" &&\n',
+    ),
   ),
   run(
     "preflight: agent not matched to the grant's delegate",
     `${PRE} refuses an agent that is not the grant's delegate`,
-    unfail(`"this agent is not the grant's delegate")`),
+    edit(
+      AUTH,
+      "  checkRepoChangeParties(grant, { principal, agents: [agent] }, fail);\n",
+      "  checkRepoChangeParties(\n    grant,\n    { principal, agents: [{ motebit_id: grant.delegate_id, public_key: grant.delegate_public_key }] },\n    fail,\n  );\n",
+    ),
     edit(
       RUN,
       "if (!(await verifyToolInvocationReceipt(probe, delegateKey))) {",

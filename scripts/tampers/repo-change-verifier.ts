@@ -15,6 +15,7 @@
  *
  *   npx tsx scripts/tampers/repo-change-verifier.ts
  */
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +27,8 @@ function escapeRegExp(text: string): string {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SRC = "packages/verifier/src/repo-change.ts";
+/** The shared rules `verifyRepoChange` calls (and the repo-task run calls too). */
+const RULES = "packages/verifier/src/repo-change-rules.ts";
 const TEST = "src/__tests__/repo-change.test.ts";
 
 const POS = "verifyRepoChange positive controls";
@@ -35,9 +38,15 @@ const AUT = "verifyRepoChange authority";
 const ENT = `${AUT} a change entry outside the scope`;
 const REV = "verifyRepoChange revocation";
 
-/** One edit to the verifier source. */
+/**
+ * One edit to the verifier source: in `repo-change.ts`, or in the shared
+ * rules module when the text lives there (the rules moved out of the core so
+ * the runtime runs the same implementation). The runner still requires the
+ * text to occur exactly once in the file chosen.
+ */
 function edit(from: string, to: string): TamperEdit {
-  return { file: SRC, from, to };
+  const inRules = readFileSync(path.join(ROOT, RULES), "utf8").includes(from);
+  return { file: inRules ? RULES : SRC, from, to };
 }
 
 /** Prefix a check's condition with `false &&`, so the check never fires. */

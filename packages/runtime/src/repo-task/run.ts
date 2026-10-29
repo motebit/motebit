@@ -49,7 +49,11 @@ import type { AIResponse, ConversationMessage } from "@motebit/sdk";
 
 import type { ToolReceiptSink } from "../tool-receipt-sink.js";
 import { checkRepoTaskAuthority } from "./authority.js";
-import type { RepoTaskAuthorityBundle, RepoTaskPin } from "./authority.js";
+import type {
+  RepoTaskAuthorityBundle,
+  RepoTaskAuthorityFailure,
+  RepoTaskPin,
+} from "./authority.js";
 import { buildRepoTaskPack, repoTaskFrame, repoTaskSystemPrompt } from "./system-prompt.js";
 import { assertOfferedTools, buildRepoTaskTools } from "./tools.js";
 import type { RepoPathWriter, RepoTaskToolOutcome, RepoTreeReader } from "./tools.js";
@@ -123,9 +127,12 @@ export interface RepoTaskRunResult {
 
 /** The run refused to start: authority (or the agent's own key) failed before any model call. */
 export class RepoTaskRefusedError extends Error {
-  readonly failures: readonly string[];
-  constructor(failures: readonly string[]) {
-    super(`repo task refused before the first model call: ${failures.join("; ")}`);
+  /** Every failed rule, each with the repo-change repair code the verifier would report. */
+  readonly failures: readonly RepoTaskAuthorityFailure[];
+  constructor(failures: readonly RepoTaskAuthorityFailure[]) {
+    super(
+      `repo task refused before the first model call: ${failures.map((f) => `${f.code}: ${f.detail}`).join("; ")}`,
+    );
     this.name = "RepoTaskRefusedError";
     this.failures = failures;
   }
@@ -204,7 +211,10 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
   });
   if (!(await verifyToolInvocationReceipt(probe, delegateKey))) {
     throw new RepoTaskRefusedError([
-      "the agent's private key does not sign as the grant's delegate",
+      {
+        code: "identity.repo_change.signer_not_delegate",
+        detail: "the agent's private key does not sign as the grant's delegate",
+      },
     ]);
   }
 
@@ -299,7 +309,10 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
         lapsed = true;
         outcome = {
           status: "denied",
-          result: { ok: false, error: `authority: ${check.failures.join("; ")}` },
+          result: {
+            ok: false,
+            error: `authority: ${check.failures.map((f) => f.code).join("; ")}`,
+          },
         };
       } else if (entry === undefined) {
         outcome = {

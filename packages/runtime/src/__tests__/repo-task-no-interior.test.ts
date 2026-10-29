@@ -144,6 +144,7 @@ describe("repo task: no interior", () => {
       "@motebit/crypto",
       "@motebit/protocol",
       "@motebit/sdk",
+      "@motebit/verifier",
       "../tool-receipt-sink.js",
       "./authority.js",
       "./system-prompt.js",
