@@ -1,6 +1,6 @@
 # Felt accumulation — the interior at work
 
-> **Layer:** law (accrual basis) — enforced by `check-accrual-basis-canonical`, `packages/memory-graph/src/__tests__/accrual.test.ts`
+> **Layer:** law (a basis is minted only above the consequential bar) — enforced by `packages/memory-graph/src/__tests__/accrual.test.ts`
 
 [`felt-interior.md`](felt-interior.md) gave the owner two registers of the accruing
 interior: it **changed** (the consolidation act, the `tending` cue) and it **holds**

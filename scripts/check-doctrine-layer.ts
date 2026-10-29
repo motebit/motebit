@@ -46,15 +46,18 @@
  *      service `src/`. A `scripts/check-*.ts` path is refused: a gate is
  *      named by its gate name, so the registration and advisory checks
  *      cannot be bypassed by naming its file.
- *   5. Every law doc has a recorded tamper proof: an entry in
- *      `scripts/tampers/doctrine-law-labels.ts` whose `doc` is that doc and
- *      whose `named` is one of the items its law line names. The entry
- *      breaks the doc's claim (or its scoped claim) and the shared tamper
- *      runner proves `named` goes red. No entry, no law label; an entry for
- *      a doc that is not law, or naming an item its line does not name, is
- *      stale and fails too. A gate's own check-gates-effective probe is NOT
- *      such a proof — a probe breaks the gate's invariant, which is often
- *      narrower than the doc's claim.
+ *   5. A law line's scope is mandatory (`law (<claim>; <claim>)`), and
+ *      every claim it lists has a live proof: an entry in the `PROOFS`
+ *      exported by `scripts/tampers/doctrine-law-labels.ts` (imported, never
+ *      scanned as text) with that `doc` and `claim` and a `named` item from
+ *      the line. The entry breaks the claim and the shared tamper runner
+ *      proves `named` goes red. No proof, no claim; a proof for a doc that is
+ *      not law, a claim the scope does not list, or an item the line does
+ *      not name is stale and fails too. A command-mode proof must run the
+ *      item it names (`npx tsx <the gate's source>`, or the named test's
+ *      package typecheck); a vitest-mode proof must name a test file. A
+ *      gate's own check-gates-effective probe is NOT a proof — it breaks the
+ *      gate's invariant, which is often narrower than the doc's claim.
  *
  * Scope: every `docs/doctrine/*.md` (top level; `docs/doctrine/audits/` holds
  * dated audit records, not doctrine) plus every root chain document parsed
@@ -85,10 +88,10 @@ const CHAIN_BULLET_RE = /^\d+\.\s+\*\*\[([^\]]+)\]\([^)]+\)\*\*\s+—\s+(.+)$/gm
 
 const LAYER_PREFIX = "> **Layer:**";
 const NARRATIVE_LINE = "> **Layer:** narrative";
-const LAW_RE = /^> \*\*Layer:\*\* law(?: \(([^)]+)\))? — enforced by (.+)$/;
+/** A law line: the scope is MANDATORY — `law (<claim>; <claim>) — enforced by …`. A bare `law` is refused. */
+const LAW_RE = /^> \*\*Layer:\*\* law \(([^)]+)\) — enforced by (.+)$/;
 const TOKEN_RE = /^`([^`]+)`$/;
 const GATE_TOKEN_RE = /^check-[a-z0-9-]+$/;
-/** A named test file: `*.test.ts(x)` / `*.spec.ts(x)`, or anything under `__tests__/`. */
 /** A named test file: `*.test.*` / `*.spec.*` (ts, tsx, mts, js, mjs). Being under `__tests__/` is not enough. */
 const TEST_FILE_RE = /\.(?:test|spec)\.(?:ts|tsx|mts|js|mjs)$/;
 /** A source file under a workspace package, app or service `src/`. */
@@ -248,15 +251,19 @@ function checkDoc(
     });
     return null;
   }
-  if (line === NARRATIVE_LINE) return { layer: "narrative", tokens: [] };
+  if (line === NARRATIVE_LINE) return { layer: "narrative", tokens: [], claims: [] };
 
   const law = LAW_RE.exec(line);
   if (!law) {
     findings.push({
       site,
-      problem: `malformed layer line "${line}" — expected "${NARRATIVE_LINE}" or "> **Layer:** law — enforced by <comma-separated backticked gates/paths>"`,
+      problem: `malformed layer line "${line}" — expected "${NARRATIVE_LINE}" or "> **Layer:** law (<claim>; <claim>) — enforced by <comma-separated backticked gates/paths>" (the scope is mandatory)`,
     });
     return null;
+  }
+  const claims = law[1]!.split(";").map((c) => c.trim());
+  if (claims.some((c) => c === "")) {
+    findings.push({ site, problem: `law scope "${law[1]}" has an empty claim` });
   }
   const tokens = law[2]!.split(", ");
   const named: string[] = [];
@@ -324,36 +331,89 @@ function checkDoc(
       findings.push({ site, problem: `named ${kind} \`${tok}\` is not a regular file` });
     }
   }
-  return { layer: "law", tokens: named };
+  return { layer: "law", tokens: named, claims };
 }
 
 interface DocLayer {
   layer: "law" | "narrative";
   /** The backticked enforcement tokens a law line names (empty for narrative). */
   tokens: string[];
+  /** The claims a law line's scope lists (empty for narrative). */
+  claims: string[];
 }
 
 /** The recorded law proofs: `scripts/tampers/doctrine-law-labels.ts`. */
 export const LAW_PROOFS_FILE = "scripts/tampers/doctrine-law-labels.ts";
 
+/** One recorded law proof, as the gate reads it from the tamper file's live `PROOFS`. */
+export interface LawProof {
+  doc: string;
+  claim: string;
+  named: string;
+  command?: string[];
+}
+
 /**
- * Every `{ doc: "…", named: "…", … }` entry in the law-proof tamper file
- * (comment lines may sit between `{` and `doc`). The tamper file is the
- * executable record (each entry breaks the doc's claim and the shared runner
- * proves `named` goes red); this gate reads it statically so a law label can
- * never exist without one. `doc` and `named` must be the first two keys, as
- * string literals.
+ * The live `PROOFS` the law-proof tamper file exports — imported, never
+ * scanned as text, so a commented-out entry or an unused array that merely
+ * looks like a proof counts for nothing. The module guards its own run, so
+ * importing it runs no tamper.
  */
-export function readLawProofs(root: string): { doc: string; named: string }[] {
+export async function loadLawProofs(root: string): Promise<LawProof[]> {
   const abs = join(root, LAW_PROOFS_FILE);
   if (!existsSync(abs)) return [];
-  const src = readFileSync(abs, "utf-8");
-  return [...src.matchAll(/\{\s*(?:\/\/[^\n]*\n\s*)*doc:\s*"([^"]+)",\s*named:\s*"([^"]+)"/g)].map(
-    (m) => ({
-      doc: m[1]!,
-      named: m[2]!,
-    }),
-  );
+  const mod = (await import(pathToFileURL(abs).href)) as { PROOFS?: unknown };
+  const raw: unknown[] = Array.isArray(mod.PROOFS) ? (mod.PROOFS as unknown[]) : [];
+  const out: LawProof[] = [];
+  for (const e of raw) {
+    const r = e as Record<string, unknown>;
+    if (typeof r.doc !== "string" || typeof r.claim !== "string" || typeof r.named !== "string") {
+      continue;
+    }
+    const command =
+      Array.isArray(r.command) && r.command.every((c) => typeof c === "string")
+        ? (r.command as string[])
+        : undefined;
+    out.push({ doc: r.doc, claim: r.claim, named: r.named, ...(command ? { command } : {}) });
+  }
+  return out;
+}
+
+/** The pnpm package name of the workspace package a repo path sits in (`packages/x/…` → its `name`). */
+function packageNameOf(root: string, rel: string): string | null {
+  const pj = join(root, rel.split("/").slice(0, 2).join("/"), "package.json");
+  if (!existsSync(pj)) return null;
+  try {
+    return (JSON.parse(readFileSync(pj, "utf-8")) as { name?: string }).name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A proof's run must exercise the item it names. Command mode: a named gate
+ * runs as exactly `npx tsx <its resolved source>`; a named test file runs as
+ * its own package's `pnpm --filter <pkg> typecheck` (type-level tests).
+ * vitest mode (no command): the named item must be a test file.
+ */
+function proofRunProblem(root: string, p: LawProof): string | null {
+  if (p.command) {
+    if (GATE_TOKEN_RE.test(p.named)) {
+      const src = gateSource(root, p.named);
+      const want = ["npx", "tsx", src ?? "<unresolved>"];
+      return JSON.stringify(p.command) === JSON.stringify(want)
+        ? null
+        : `its command ${JSON.stringify(p.command)} does not run the gate it names (\`${p.named}\` runs as ${JSON.stringify(want)})`;
+    }
+    const pkg = packageNameOf(root, p.named);
+    const want = ["pnpm", "--filter", pkg ?? "<unknown package>", "typecheck"];
+    return JSON.stringify(p.command) === JSON.stringify(want)
+      ? null
+      : `its command ${JSON.stringify(p.command)} does not exercise \`${p.named}\` (expected ${JSON.stringify(want)})`;
+  }
+  return TEST_FILE_RE.test(p.named)
+    ? null
+    : `it runs vitest but names \`${p.named}\`, which is not a test file — a gate is proven in command mode`;
 }
 
 /** The key a proof uses for a doc: `docs/doctrine/x.md` → `x`, a chain doc keeps its filename. */
@@ -370,51 +430,58 @@ export interface LayerReport {
   registeredGates: number;
   scheduledProbes: number;
   proofs: number;
+  claims: number;
   findings: Finding[];
 }
 
-/** The whole check over the tree at `root`; pure apart from reading files. */
-export function checkDoctrineLayer(root: string): LayerReport {
+/** The whole check over the tree at `root`; pure apart from reading files (and importing its proofs). */
+export async function checkDoctrineLayer(root: string): Promise<LayerReport> {
   const gates = readRegisteredGates(root);
   const docs = docsInScope(root);
   const findings: Finding[] = [];
   let law = 0;
   let narrative = 0;
-  const lawTokens = new Map<string, string[]>();
+  const lawLines = new Map<string, { tokens: string[]; claims: string[] }>();
   for (const rel of docs) {
     const r = checkDoc(root, rel, gates, findings);
     if (r?.layer === "law") {
       law++;
-      lawTokens.set(docKey(rel), r.tokens);
+      lawLines.set(docKey(rel), { tokens: r.tokens, claims: r.claims });
     } else if (r?.layer === "narrative") narrative++;
   }
 
-  // Every law label rests on a recorded tamper proof: an entry in the
-  // law-proof tamper file that breaks the doc's claim and turns one of the
-  // items its law line names red. No entry, no law label.
-  const proofs = readLawProofs(root);
-  for (const [key, tokens] of lawTokens) {
-    if (!proofs.some((p) => p.doc === key && tokens.includes(p.named))) {
-      findings.push({
-        site: key,
-        problem: `law label has no recorded tamper proof — no \`{ doc: "${key}", named: <one of its named items>, … }\` entry in ${LAW_PROOFS_FILE} that breaks its claim and turns that item red`,
-      });
+  // Every claim a law line's scope lists rests on a recorded tamper proof: a
+  // live PROOFS entry with that doc and claim, naming an item the line names,
+  // that breaks the claim and turns the item red. No proof, no claim.
+  const proofs = await loadLawProofs(root);
+  let claims = 0;
+  for (const [key, line] of lawLines) {
+    for (const claim of line.claims) {
+      claims++;
+      if (
+        !proofs.some((p) => p.doc === key && p.claim === claim && line.tokens.includes(p.named))
+      ) {
+        findings.push({
+          site: key,
+          problem: `claim "${claim}" has no recorded tamper proof — add a PROOFS entry in ${LAW_PROOFS_FILE} with doc "${key}", claim "${claim}" and a named item from its law line, or drop the claim from the scope`,
+        });
+      }
     }
   }
-  // A proof must point at a live law label and one of its named items, or it
-  // proves nothing (the doc was relabelled, or the item was dropped).
+  // A proof must point at a live law label, one of its listed claims and one
+  // of its named items, and its run must exercise that item — or it proves
+  // nothing.
   for (const p of proofs) {
-    const tokens = lawTokens.get(p.doc);
-    if (!tokens) {
-      findings.push({
-        site: LAW_PROOFS_FILE,
-        problem: `proof for "${p.doc}" points at a doc that is not a law doc`,
-      });
-    } else if (!tokens.includes(p.named)) {
-      findings.push({
-        site: LAW_PROOFS_FILE,
-        problem: `proof for "${p.doc}" names \`${p.named}\`, which its law line does not name`,
-      });
+    const line = lawLines.get(p.doc);
+    let problem: string | null = null;
+    if (!line) problem = "points at a doc that is not a law doc";
+    else if (!line.claims.includes(p.claim))
+      problem = `claims "${p.claim}", which its law line's scope does not list`;
+    else if (!line.tokens.includes(p.named))
+      problem = `names \`${p.named}\`, which its law line does not name`;
+    else problem = proofRunProblem(root, p);
+    if (problem) {
+      findings.push({ site: LAW_PROOFS_FILE, problem: `proof for "${p.doc}" ${problem}` });
     }
   }
 
@@ -426,19 +493,20 @@ export function checkDoctrineLayer(root: string): LayerReport {
     registeredGates: gates.hard.size - scheduledProbes,
     scheduledProbes,
     proofs: proofs.length,
+    claims,
     findings,
   };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   process.stderr.write(
-    "▸ check-doctrine-layer — every docs/doctrine/*.md and every DOCTRINE.md chain doc declares exactly one layer line after its H1 (`law — enforced by …` or `narrative`); every gate a law line names is registered in scripts/check.ts and every named test or source file exists as a regular file\n",
+    "▸ check-doctrine-layer — every docs/doctrine/*.md and every DOCTRINE.md chain doc declares exactly one layer line after its H1 (`law (<claims>) — enforced by …` or `narrative`); every gate a law line names is registered in scripts/check.ts, every named test or source file exists as a regular file, and every scoped claim has a live tamper proof\n",
   );
-  const r = checkDoctrineLayer(resolve(import.meta.dirname, ".."));
+  const r = await checkDoctrineLayer(resolve(import.meta.dirname, ".."));
 
   if (r.findings.length === 0) {
     process.stderr.write(
-      `✓ check-doctrine-layer: ${r.docs.length} doc(s) scanned (${r.law} law, ${r.narrative} narrative); every law line's enforcement resolves against ${r.registeredGates} registered gate(s) (${r.scheduledProbes} scheduled external probe(s) refused) and the filesystem, and every law doc has a recorded tamper proof (${r.proofs} proof(s) in ${LAW_PROOFS_FILE}).\n`,
+      `✓ check-doctrine-layer: ${r.docs.length} doc(s) scanned (${r.law} law, ${r.narrative} narrative); every law line's enforcement resolves against ${r.registeredGates} registered gate(s) (${r.scheduledProbes} scheduled external probe(s) refused) and the filesystem, and every one of the ${r.claims} scoped law claim(s) has a recorded tamper proof (${r.proofs} proof(s) in ${LAW_PROOFS_FILE}).\n`,
     );
     return;
   }
@@ -451,9 +519,10 @@ function main(): void {
         'DOCTRINE.md § "Two layers" (the rule) and scripts/check.ts (the registered gates)',
       fix:
         "put exactly one layer line directly after the H1 — `> **Layer:** narrative`, or " +
-        "`> **Layer:** law — enforced by `check-x`, `path/to/x.test.ts`` naming only gates " +
-        "registered in scripts/check.ts and files that exist. If the named enforcement is gone or " +
-        "never existed, change the line to narrative (under-claiming is the safe direction).",
+        "`> **Layer:** law (<claim>; <claim>) — enforced by `check-x`, `path/to/x.test.ts`` naming only gates " +
+        "registered in scripts/check.ts and files that exist, with a PROOFS entry in " +
+        "scripts/tampers/doctrine-law-labels.ts for every listed claim. A claim without a proof leaves " +
+        "the scope; if no claim is proven, change the line to narrative (under-claiming is the safe direction).",
       doctrine: "docs/doctrine/gate-repair-instructions.md",
     }),
   );
@@ -462,5 +531,10 @@ function main(): void {
 
 // Run only when invoked directly; the unit test imports checkDoctrineLayer.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main();
+  main().catch((err: unknown) => {
+    process.stderr.write(
+      `check-doctrine-layer: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(1);
+  });
 }

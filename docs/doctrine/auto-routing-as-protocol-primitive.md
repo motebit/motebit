@@ -1,6 +1,6 @@
 # Auto-routing as protocol primitive
 
-> **Layer:** law — enforced by `check-routing-decision-coverage`, `packages/policy/src/__tests__/auto-router.test.ts`
+> **Layer:** law (the dispatcher filters the catalog by constraints) — enforced by `packages/policy/src/__tests__/auto-router.test.ts`
 
 The auto-router's render is **`f(TaskShape × ProviderCapability × Constraints) → RoutingDecision`**, not a hardcoded `Record<task, model>` map living in one consumer's source. Every surface that picks a model for a task — motebit-cloud, BYOK, on-device — consumes the same dispatcher with its own provider catalog and own routing policy. This is the same matrix-as-primitive shape that [`chrome-as-state-render.md`](chrome-as-state-render.md) applied to slab chrome, now applied to model selection.
 

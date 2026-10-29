@@ -2081,7 +2081,7 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       // well-formed, so only the registration check can fire.
       mutateFile("docs/doctrine/registry-pattern-canonical.md", (src) =>
         src.replace(
-          /^(> \*\*Layer:\*\* law — enforced by )`check-closed-registry-canonical`/m,
+          /^(> \*\*Layer:\*\* law \([^)]*\) — enforced by )`check-closed-registry-canonical`/m,
           "$1`check-gate-probe-phantom-enforcement`",
         ),
       ),

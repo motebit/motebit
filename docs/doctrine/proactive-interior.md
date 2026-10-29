@@ -1,6 +1,6 @@
 # Proactive interior
 
-> **Layer:** law — enforced by `check-consolidation-primitives`, `packages/runtime/src/__tests__/proactive-wire.test.ts`
+> **Layer:** law (tending may call only memory tools) — enforced by `packages/runtime/src/__tests__/proactive-wire.test.ts`
 
 A motebit's interior is active. The body is passive. Idle is not absence — idle is the time the motebit uses to consolidate what it knows. This doctrine names what proactive means, what's allowed, and what protects the user from runaway action.
 

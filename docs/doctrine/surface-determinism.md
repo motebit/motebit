@@ -1,6 +1,6 @@
 # Surface determinism
 
-> **Layer:** law (runtime invocation path) — enforced by `check-affordance-routing`, `packages/runtime/src/__tests__/invoke-capability.test.ts`
+> **Layer:** law (capability invocation bypasses the AI loop) — enforced by `packages/runtime/src/__tests__/invoke-capability.test.ts`
 
 A user who taps an affordance has authorized a specific capability invocation. The implementation must honor that authorization deterministically — not route it through a model and hope the model agrees.
 

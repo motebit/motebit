@@ -1,6 +1,6 @@
 # Exploration as market vitality — the newcomer on-ramp
 
-> **Layer:** law — enforced by `packages/semiring/src/__tests__/thompson.test.ts`, `packages/semiring/src/__tests__/onramp-probability.test.ts`, `packages/runtime/src/__tests__/execute-granted-delegation.test.ts`
+> **Layer:** law (the draw is reproducible from its seed; newcomers get exploration draws; the seed is the signed token; stakes scale exploration strength) — enforced by `packages/semiring/src/__tests__/thompson.test.ts`, `packages/semiring/src/__tests__/onramp-probability.test.ts`, `packages/runtime/src/__tests__/execute-granted-delegation.test.ts`
 
 **A trust-routing market that only ever hires the best-known worker ossifies. Exploration is how a new agent earns a first job — without opening a sybil hole.**
 

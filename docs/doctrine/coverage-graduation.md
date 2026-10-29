@@ -1,6 +1,6 @@
 # Coverage graduation
 
-> **Layer:** law — enforced by `check-coverage-graduation`
+> **Layer:** law (a past-date unmet commitment fails) — enforced by `check-coverage-graduation`
 
 Two policies, one direction.
 

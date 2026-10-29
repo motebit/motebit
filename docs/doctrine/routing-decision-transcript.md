@@ -1,6 +1,6 @@
 # Routing-decision transcript — a hire you can prove, not just replay
 
-> **Layer:** law (emission, verification) — enforced by `check-routing-transcript-emission`, `packages/crypto/src/__tests__/routing-transcript.test.ts`
+> **Layer:** law (the signature binds the transcript; the winner is in the frozen set; recomputation reproduces the hire) — enforced by `packages/crypto/src/__tests__/routing-transcript.test.ts`, `packages/semiring/src/__tests__/worker-selection-transcript.test.ts`
 
 **The routing arc made the hire deterministic and reproducible; the transcript makes it provable. A signed, self-contained record of why this worker won — the routing moment entering the receipt family as dispute-grade history.**
 
