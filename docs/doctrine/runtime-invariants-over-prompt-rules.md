@@ -1,6 +1,6 @@
 # Runtime invariants over prompt rules
 
-> **Layer:** law — enforced by `check-prompt-density`, `check-typed-truth-perception`
+> **Layer:** narrative
 
 When a problem can be solved either by adding a prompt clause that teaches the AI to behave a certain way OR by adding a runtime contract that makes the failure mode structurally impossible, **prefer the runtime contract**. The prompt teaches what's true about the world; the runtime enforces what must hold.
 

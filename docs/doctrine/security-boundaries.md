@@ -1,6 +1,6 @@
 # Security boundaries
 
-> **Layer:** law — enforced by `check-audience-canonical`, `check-worker-no-master-token`, `check-money-authority`, `check-sensitivity-routing`
+> **Layer:** narrative
 
 ## Sybil defense (five layers)
 

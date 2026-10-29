@@ -1,6 +1,6 @@
 # Intelligence pluggability contract
 
-> **Layer:** law — enforced by `check-prompt-budget`, `check-prompt-density`
+> **Layer:** narrative
 
 > **Intelligence is pluggable only when motebit's runtime invariants remain constant while prompt, tools, and context budgets adapt to the selected model. The runtime does not become smaller for smaller models. The prompt does.**
 

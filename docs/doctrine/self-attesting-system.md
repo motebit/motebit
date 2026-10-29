@@ -1,6 +1,6 @@
 # Self-attesting system
 
-> **Layer:** law — enforced by `check-state-export-signed`, `check-state-export-consumer-verifies`, `check-signed-artifact-verifiers`
+> **Layer:** narrative
 
 A motebit primitive makes a claim about something in the world — an identity file says _"this motebit_id is controlled by this key,"_ an execution receipt says _"this agent did this work,"_ a credential says _"this issuer attests this capability about this subject."_ Every such claim is signed by the party making it, verifiable by any third party, and requires no trust in the system that emitted it. When the system extends the same pattern to claims it makes about itself, it is **self-attesting**.
 

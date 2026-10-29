@@ -1,6 +1,6 @@
 # Agility as role
 
-> **Layer:** law — enforced by `check-closed-registry-canonical`, `check-suite-declared`, `check-suite-dispatch`
+> **Layer:** narrative
 
 Every architectural axis where motebit reserves the right to swap concretes follows the same shape: name the **role** in code, gates, types, and prose; treat the **instance** as a registry entry whose value can change without touching consumers. Migration becomes a registry append, not a wire-format break or a codebase rewrite.
 

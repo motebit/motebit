@@ -1,6 +1,6 @@
 # The surface authority model
 
-> **Layer:** law — enforced by `check-local-tool-gated`, `check-runtime-host-election`
+> **Layer:** narrative
 
 Motebit has eleven app surfaces. The recurring mistake — ours and the market's — is to ask "which surface should we build?" as if surfaces competed. They don't. A surface is either a place the agent **acts** (and therefore must hold the pipeline) or a place the agent is **seen and steered** (and therefore must not). The question is never "web or desktop." It is: **which surfaces hold authority, which are frontends onto it, and what is the one authority they all present.**
 

@@ -188,7 +188,10 @@ const EXCLUDED_PATTERNS: ReadonlyArray<RegExp> = [
  * makes it a new, unallowed line and the gate fails until a reviewer
  * re-reads it and updates `text` here. An entry whose text no longer occurs
  * in its file is stale and fails the gate too, so the allowlist cannot
- * outlive the sentence it allows.
+ * outlive the sentence it allows. Each entry must match EXACTLY ONE line of
+ * its file: a verbatim copy elsewhere in the file is not allowed by the
+ * entry (both copies are reported), so one review never covers two
+ * placements.
  *
  * Line numbers were the anchor until 2026-10-29: adding one layer line at
  * the top of LIQUESCENTIA.md shifted both sentences by two and broke the
@@ -227,8 +230,10 @@ function walk(dir: string, out: string[]): void {
   }
 }
 
+type AllowlistEntry = (typeof ALLOWLIST)[number];
+
 /** The allowlist entry whose file and exact line text match, if any. */
-function allowlistEntry(relPath: string, line: string): (typeof ALLOWLIST)[number] | undefined {
+function allowlistEntry(relPath: string, line: string): AllowlistEntry | undefined {
   return ALLOWLIST.find((entry) => relPath === entry.file && line === entry.text);
 }
 
@@ -248,7 +253,8 @@ function main(): void {
   walk(REPO_ROOT, files);
 
   const findings: Finding[] = [];
-  const usedEntries = new Set<(typeof ALLOWLIST)[number]>();
+  /** Lines in each entry's file whose text equals the entry's text. */
+  const matchCount = new Map<AllowlistEntry, number>(ALLOWLIST.map((e) => [e, 0]));
   let scanned = 0;
 
   for (const absPath of files) {
@@ -258,6 +264,10 @@ function main(): void {
     scanned++;
     const content = fs.readFileSync(absPath, "utf-8");
     const lines = content.split("\n");
+    for (const entry of ALLOWLIST) {
+      if (entry.file !== relPath) continue;
+      matchCount.set(entry, lines.filter((l) => l === entry.text).length);
+    }
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -267,10 +277,8 @@ function main(): void {
       for (const { pattern, name } of FORBIDDEN_PATTERNS) {
         if (pattern.test(cleaned)) {
           const allowed = allowlistEntry(relPath, line);
-          if (allowed) {
-            usedEntries.add(allowed);
-            continue;
-          }
+          // Allowed only while the entry pins exactly one line.
+          if (allowed && matchCount.get(allowed) === 1) continue;
           findings.push({
             file: relPath,
             line: lineNo,
@@ -282,13 +290,14 @@ function main(): void {
     }
   }
 
-  // An entry that matched no line is stale: its sentence was edited or
-  // removed, so the allowance it grants no longer points at anything.
-  const stale = ALLOWLIST.filter((entry) => !usedEntries.has(entry));
+  // An entry must match exactly one line. Zero: its sentence was edited or
+  // removed, so the allowance points at nothing (stale). Two or more: a
+  // verbatim copy appeared, which one reviewed entry must not cover.
+  const stale = ALLOWLIST.filter((entry) => matchCount.get(entry) !== 1);
 
   if (findings.length === 0 && stale.length === 0) {
     process.stdout.write(
-      `✓ check-liquescent-ontology — no glass-as-ontology drift found: ${scanned} file(s) scanned, ${usedEntries.size} of ${ALLOWLIST.length} allowlisted line(s) matched by exact text\n`,
+      `✓ check-liquescent-ontology — no glass-as-ontology drift found: ${scanned} file(s) scanned, ${ALLOWLIST.length} of ${ALLOWLIST.length} allowlisted line(s) matched exactly once by exact text\n`,
     );
     return;
   }
@@ -305,14 +314,17 @@ function main(): void {
   }
   if (stale.length > 0) {
     process.stderr.write(
-      `\n${stale.length} stale ALLOWLIST entr(ies) in scripts/check-liquescent-ontology.ts — no line of the file has this exact text any more:\n\n`,
+      `\n${stale.length} ALLOWLIST entr(ies) in scripts/check-liquescent-ontology.ts do not match exactly one line:\n\n`,
     );
     for (const entry of stale) {
-      process.stderr.write(`  ${entry.file}\n    text: ${entry.text.slice(0, 200)}\n\n`);
+      process.stderr.write(
+        `  ${entry.file} — ${matchCount.get(entry)} line(s) with this exact text (must be exactly 1)\n    text: ${entry.text.slice(0, 200)}\n\n`,
+      );
     }
     process.stderr.write(
-      "Fix: if the sentence was edited on purpose and is still Layer 2 physics-borrowing,\n" +
-        "update the entry's `text` to the new line exactly; if it was removed, delete the entry.\n\n",
+      "Fix: 0 lines — if the sentence was edited on purpose and is still Layer 2 physics-borrowing,\n" +
+        "update the entry's `text` to the new line exactly; if it was removed, delete the entry.\n" +
+        "2+ lines — remove the verbatim copy, or reword it so each placement is reviewed on its own.\n\n",
     );
   }
   process.stderr.write(

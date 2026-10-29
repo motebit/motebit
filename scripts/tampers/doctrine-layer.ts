@@ -89,12 +89,50 @@ const TAMPERS: TamperEntry[] = [
   off(
     "a missing test file is accepted",
     "a law line naming a missing test file fails",
-    "    if (!existsSync(join(root, tok))) {",
+    "    if (!existsSync(abs)) {",
   ),
   off(
-    "a missing code path is accepted (same guard, second case)",
-    "a law line naming a missing code path fails",
-    "    if (!existsSync(join(root, tok))) {",
+    "a missing source file is accepted (same guard, second case)",
+    "a law line naming a missing source file fails",
+    "    if (!existsSync(abs)) {",
+  ),
+  off(
+    "a path that is neither a test nor a source file is accepted",
+    "a law line naming a path that is neither a test nor a source file fails",
+    "    if (!isTest && !SOURCE_FILE_RE.test(tok)) {",
+  ),
+  off(
+    "the repo root directory is accepted as a path (same guard, second case)",
+    "a law line naming the repo root directory fails",
+    "    if (!isTest && !SOURCE_FILE_RE.test(tok)) {",
+  ),
+  off(
+    "a directory is accepted as a test file",
+    "a law line naming a directory under __tests__ fails",
+    "    } else if (!statSync(abs).isFile()) {",
+  ),
+  off(
+    "a gate named by its source path is not refused",
+    "a law line naming a gate by its source path fails",
+    "    if (GATE_PATH_RE.test(tok)) {",
+  ),
+  entry(
+    "GATES is parsed to the end of the file, not to the end of its literal",
+    "a script entry outside the GATES array literal does not register",
+    '  const gates = literalBlock(src, "const GATES", "];");',
+    '  const gates = src.slice(src.indexOf("const GATES"));',
+  ),
+  entry(
+    "commented-out lines are not removed before parsing",
+    "a commented-out GATES entry does not register",
+    "    .filter((l) => !/^\\s*(?:\\/\\/|\\/\\*|\\*)/.test(l))",
+    "    .filter((l) => l.length >= 0)",
+  ),
+  entry(
+    "advisory detection narrowed back to 'soft signal|advisory'",
+    "a gate whose EXCLUDED_CHECKS reason says warn-only, non-blocking or informational is refused",
+    "  /\\bsoft\\b|advisory|warn(?:ing)?[- ]only|non[- ]blocking|informational|continue-on-error/i;",
+    "  /soft signal|advisory/i;",
   ),
   entry(
     "the chain docs DOCTRINE.md lists drop out of scope",

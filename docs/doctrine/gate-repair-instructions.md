@@ -1,6 +1,6 @@
 # Gate repair instructions
 
-> **Layer:** law — enforced by `check-gates-effective`, `scripts/__tests__/gate-report.test.ts`
+> **Layer:** law (repair instructions) — enforced by `check-gates-effective`, `scripts/__tests__/gate-report.test.ts`
 
 A drift gate that fails must tell the reader **how to fix it**, not just **that** something broke. The agentic-era invariant: an agent (or human) who hits a red gate should be able to close the loop from the failure text alone — without opening the gate's source to reverse-engineer what it wanted.
 

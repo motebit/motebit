@@ -28,15 +28,20 @@
  *      and the doc carries no second `> **Layer:**` line anywhere.
  *   2. A law line names at least one enforcement token, each backticked and
  *      comma-separated.
- *   3. Every `check-*` token is a gate registered in `scripts/check.ts` — in
- *      `GATES` (run by `pnpm check`) or in `EXCLUDED_CHECKS` as a hard gate
- *      run by its own CI job — and its root package.json script resolves to
- *      an existing file exactly as `pnpm check` launches it
- *      (`scripts/lib/gate-launch.ts`).
- *      An EXCLUDED_CHECKS entry whose reason marks it soft or advisory is
- *      not enforcement and is rejected.
- *   4. Every other token is a repo path that exists (a named test file —
- *      `*.test.ts(x)` / `*.spec.ts` — or a cited code path).
+ *   3. Every `check-*` token is a gate registered in `scripts/check.ts` —
+ *      inside the `GATES` array literal (run by `pnpm check`) or in
+ *      `EXCLUDED_CHECKS` as a hard gate run by its own CI job; commented-out
+ *      lines register nothing — and its root package.json script resolves
+ *      to an existing file exactly as `pnpm check` launches it
+ *      (`scripts/lib/gate-launch.ts`). An EXCLUDED_CHECKS entry whose reason
+ *      says it does not block (soft, advisory, warn-only, non-blocking,
+ *      informational, continue-on-error) is not enforcement and is rejected.
+ *   4. Every other token is a path to a REGULAR FILE that exists and is
+ *      either a test file (`*.test.ts(x)` / `*.spec.ts(x)`, or under
+ *      `__tests__/`) or a source file under a package, app or service
+ *      `src/`. A `scripts/check-*.ts` path is refused: a gate is named by its
+ *      gate name, so the registration and advisory checks cannot be bypassed
+ *      by naming its file.
  *
  * Scope: every `docs/doctrine/*.md` (top level; `docs/doctrine/audits/` holds
  * dated audit records, not doctrine) plus every root chain document parsed
@@ -52,7 +57,7 @@
  *   tsx scripts/check-doctrine-layer.ts        # exit 1 on violation
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveGateFiles } from "./lib/gate-launch.js";
@@ -69,12 +74,40 @@ const NARRATIVE_LINE = "> **Layer:** narrative";
 const LAW_RE = /^> \*\*Layer:\*\* law(?: \(([^)]+)\))? — enforced by (.+)$/;
 const TOKEN_RE = /^`([^`]+)`$/;
 const GATE_TOKEN_RE = /^check-[a-z0-9-]+$/;
-const TEST_FILE_RE = /\.(?:test|spec)\.tsx?$/;
-const ADVISORY_RE = /soft signal|advisory/i;
+/** A named test file: `*.test.ts(x)` / `*.spec.ts(x)`, or anything under `__tests__/`. */
+const TEST_FILE_RE = /(?:\.(?:test|spec)\.tsx?$)|(?:(?:^|\/)__tests__\/)/;
+/** A source file under a workspace package, app or service `src/`. */
+const SOURCE_FILE_RE = /^(?:packages|apps|services)\/[^/]+\/src\/.+\.(?:ts|tsx|mts|js|mjs)$/;
+/** A gate's own source: name the gate by its gate name instead. */
+const GATE_PATH_RE = /^scripts\/check-[^/]+\.ts$/;
+/**
+ * `EXCLUDED_CHECKS` is `Record<string, string>` — there is no structured
+ * hard/soft field, so the reason text decides. Any wording that says the
+ * check does not block counts as advisory.
+ */
+const ADVISORY_RE =
+  /\bsoft\b|advisory|warn(?:ing)?[- ]only|non[- ]blocking|informational|continue-on-error/i;
 
 export interface RegisteredGates {
   hard: Set<string>;
   advisory: Set<string>;
+}
+
+/**
+ * The text of the literal that starts at `marker` (`const GATES … = [` or
+ * `const EXCLUDED_CHECKS … = {`) up to its closing line (`];` / `};` at
+ * column 0), with comment lines removed so a commented-out entry never
+ * registers.
+ */
+function literalBlock(src: string, marker: string, close: string): string {
+  const start = src.indexOf(marker);
+  const end = start < 0 ? -1 : src.indexOf(`\n${close}`, start);
+  if (start < 0 || end < 0) throw new Error(`${CHECK_TS}: could not find the ${marker} literal`);
+  return src
+    .slice(start, end)
+    .split("\n")
+    .filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l))
+    .join("\n");
 }
 
 /** GATES and EXCLUDED_CHECKS as `scripts/check.ts` under `root` declares them. */
@@ -83,16 +116,12 @@ export function readRegisteredGates(root: string): RegisteredGates {
   const hard = new Set<string>();
   const advisory = new Set<string>();
 
-  const gatesStart = src.indexOf("const GATES");
-  if (gatesStart < 0) throw new Error(`${CHECK_TS}: could not find the GATES array`);
-  for (const m of src.slice(gatesStart).matchAll(/script:\s*"(check-[a-z0-9-]+)"/g)) {
+  const gates = literalBlock(src, "const GATES", "];");
+  for (const m of gates.matchAll(/script:\s*"(check-[a-z0-9-]+)"/g)) {
     hard.add(m[1]!);
   }
 
-  const exStart = src.indexOf("const EXCLUDED_CHECKS");
-  const exEnd = exStart < 0 ? -1 : src.indexOf("\n};", exStart);
-  if (exStart < 0 || exEnd < 0) throw new Error(`${CHECK_TS}: could not find EXCLUDED_CHECKS`);
-  const block = src.slice(exStart, exEnd);
+  const block = literalBlock(src, "const EXCLUDED_CHECKS", "};");
   // Each entry: `"check-x":` then its reason string(s) up to the next entry.
   const entries = [...block.matchAll(/"(check-[a-z0-9-]+)":/g)];
   entries.forEach((m, i) => {
@@ -206,9 +235,27 @@ function checkDoc(
       }
       continue;
     }
-    if (!existsSync(join(root, tok))) {
-      const kind = TEST_FILE_RE.test(tok) ? "test file" : "code path";
+    if (GATE_PATH_RE.test(tok)) {
+      findings.push({
+        site,
+        problem: `\`${tok}\` is a gate's source path — name the gate by its gate name (\`${tok.slice("scripts/".length, -".ts".length)}\`) so its registration is checked`,
+      });
+      continue;
+    }
+    const isTest = TEST_FILE_RE.test(tok);
+    if (!isTest && !SOURCE_FILE_RE.test(tok)) {
+      findings.push({
+        site,
+        problem: `\`${tok}\` is neither a test file (\`*.test.ts\` / \`*.spec.ts\` or under \`__tests__/\`) nor a source file under a package, app or service \`src/\``,
+      });
+      continue;
+    }
+    const kind = isTest ? "test file" : "source file";
+    const abs = join(root, tok);
+    if (!existsSync(abs)) {
       findings.push({ site, problem: `named ${kind} \`${tok}\` does not exist` });
+    } else if (!statSync(abs).isFile()) {
+      findings.push({ site, problem: `named ${kind} \`${tok}\` is not a regular file` });
     }
   }
   return "law";
@@ -239,7 +286,7 @@ export function checkDoctrineLayer(root: string): LayerReport {
 
 function main(): void {
   process.stderr.write(
-    "▸ check-doctrine-layer — every docs/doctrine/*.md and every DOCTRINE.md chain doc declares exactly one layer line after its H1 (`law — enforced by …` or `narrative`); every gate a law line names is registered in scripts/check.ts and every named test file or code path exists\n",
+    "▸ check-doctrine-layer — every docs/doctrine/*.md and every DOCTRINE.md chain doc declares exactly one layer line after its H1 (`law — enforced by …` or `narrative`); every gate a law line names is registered in scripts/check.ts and every named test or source file exists as a regular file\n",
   );
   const r = checkDoctrineLayer(resolve(import.meta.dirname, ".."));
 

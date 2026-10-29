@@ -21,13 +21,20 @@ const CHECK_TS = `
 const EXCLUDED_CHECKS: Record<string, string> = {
   "check-soft": "soft signal (knip) — CI uses continue-on-error, not a hard gate",
   "check-ext": "meta-probe — runs as a separate CI job scoped to scripts/* changes.",
+  "check-warn": "warn-only — prints findings, exits 0",
+  "check-nonblocking": "non-blocking report, runs nightly",
+  "check-info": "informational summary for reviewers",
 };
 
 const GATES = [
   { name: "check-real", defends: "x", script: "check-real" },
   { name: "check-renamed", defends: "x", script: "check-renamed" },
   { name: "check-nosource", defends: "x", script: "check-nosource" },
+  // { name: "check-commented", defends: "x", script: "check-commented" },
 ];
+
+// A later literal that is not GATES.
+const OTHER = [{ script: "check-after" }];
 `;
 
 const PACKAGE_JSON = JSON.stringify({
@@ -38,11 +45,16 @@ const PACKAGE_JSON = JSON.stringify({
     "check-soft": "npx tsx scripts/check-soft.ts",
     "check-unregistered": "npx tsx scripts/check-unregistered.ts",
     "check-nosource": "npx tsx scripts/check-nosource.ts",
+    "check-warn": "npx tsx scripts/check-warn.ts",
+    "check-nonblocking": "npx tsx scripts/check-nonblocking.ts",
+    "check-info": "npx tsx scripts/check-info.ts",
+    "check-commented": "npx tsx scripts/check-commented.ts",
+    "check-after": "npx tsx scripts/check-after.ts",
   },
 });
 
 const LAW_LINE =
-  "> **Layer:** law — enforced by `check-real`, `check-renamed`, `check-ext`, `pkg/src/__tests__/x.test.ts`, `pkg/src/code.ts`";
+  "> **Layer:** law — enforced by `check-real`, `check-renamed`, `check-ext`, `packages/pkg/src/__tests__/x.test.ts`, `packages/pkg/src/code.ts`";
 
 let root: string;
 
@@ -65,11 +77,24 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "doctrine-layer-"));
   put("scripts/check.ts", CHECK_TS);
   put("package.json", PACKAGE_JSON);
-  for (const f of ["check-real", "renamed-gate", "check-ext", "check-soft", "check-unregistered"]) {
+  for (const f of [
+    "check-real",
+    "renamed-gate",
+    "check-ext",
+    "check-soft",
+    "check-unregistered",
+    "check-warn",
+    "check-nonblocking",
+    "check-info",
+    "check-commented",
+    "check-after",
+  ]) {
     put(`scripts/${f}.ts`, "export {};\n");
   }
-  put("pkg/src/__tests__/x.test.ts", "export {};\n");
-  put("pkg/src/code.ts", "export {};\n");
+  put("packages/pkg/src/__tests__/x.test.ts", "export {};\n");
+  put("packages/pkg/src/__tests__/fixtures/data.json", "{}\n");
+  put("packages/pkg/src/code.ts", "export {};\n");
+  put("README.md", "# Readme\n");
   put(
     "DOCTRINE.md",
     "# Doctrine\n\n## The chain\n\n1. **[CHAIN.md](CHAIN.md)** — derives the thing.\n",
@@ -176,17 +201,20 @@ describe("check-doctrine-layer failure cases", () => {
   it("a law line naming a missing test file fails", () => {
     put(
       "docs/doctrine/law.md",
-      doc("Law doc", "> **Layer:** law — enforced by `pkg/src/__tests__/gone.test.ts`"),
+      doc("Law doc", "> **Layer:** law — enforced by `packages/pkg/src/__tests__/gone.test.ts`"),
     );
     expect(problems()).toEqual([
-      "docs/doctrine/law.md:3 — named test file `pkg/src/__tests__/gone.test.ts` does not exist",
+      "docs/doctrine/law.md:3 — named test file `packages/pkg/src/__tests__/gone.test.ts` does not exist",
     ]);
   });
 
-  it("a law line naming a missing code path fails", () => {
-    put("docs/doctrine/law.md", doc("Law doc", "> **Layer:** law — enforced by `pkg/src/gone.ts`"));
+  it("a law line naming a missing source file fails", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc("Law doc", "> **Layer:** law — enforced by `packages/pkg/src/gone.ts`"),
+    );
     expect(problems()).toEqual([
-      "docs/doctrine/law.md:3 — named code path `pkg/src/gone.ts` does not exist",
+      "docs/doctrine/law.md:3 — named source file `packages/pkg/src/gone.ts` does not exist",
     ]);
   });
 
@@ -203,5 +231,68 @@ describe("check-doctrine-layer failure cases", () => {
       "# Doctrine\n\n1. **[CHAIN.md](CHAIN.md)** — derives the thing.\n2. **[GONE.md](GONE.md)** — derives more.\n",
     );
     expect(problems()).toEqual(["GONE.md — listed in scope but the file does not exist"]);
+  });
+  it("a law line naming a path that is neither a test nor a source file fails", () => {
+    put("docs/doctrine/law.md", doc("Law doc", "> **Layer:** law — enforced by `README.md`"));
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — `README.md` is neither a test file (`*.test.ts` / `*.spec.ts` or under `__tests__/`) nor a source file under a package, app or service `src/`",
+    ]);
+  });
+
+  it("a law line naming the repo root directory fails", () => {
+    put("docs/doctrine/law.md", doc("Law doc", "> **Layer:** law — enforced by `.`"));
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — `.` is neither a test file (`*.test.ts` / `*.spec.ts` or under `__tests__/`) nor a source file under a package, app or service `src/`",
+    ]);
+  });
+
+  it("a law line naming a directory under __tests__ fails", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc("Law doc", "> **Layer:** law — enforced by `packages/pkg/src/__tests__/fixtures`"),
+    );
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — named test file `packages/pkg/src/__tests__/fixtures` is not a regular file",
+    ]);
+  });
+
+  it("a law line naming a gate by its source path fails", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc("Law doc", "> **Layer:** law — enforced by `scripts/check-sibling-boundaries.ts`"),
+    );
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — `scripts/check-sibling-boundaries.ts` is a gate's source path — name the gate by its gate name (`check-sibling-boundaries`) so its registration is checked",
+    ]);
+  });
+
+  it("a script entry outside the GATES array literal does not register", () => {
+    put("docs/doctrine/law.md", doc("Law doc", "> **Layer:** law — enforced by `check-after`"));
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — gate `check-after` is not registered in scripts/check.ts (neither GATES nor EXCLUDED_CHECKS)",
+    ]);
+  });
+
+  it("a commented-out GATES entry does not register", () => {
+    put("docs/doctrine/law.md", doc("Law doc", "> **Layer:** law — enforced by `check-commented`"));
+    expect(problems()).toEqual([
+      "docs/doctrine/law.md:3 — gate `check-commented` is not registered in scripts/check.ts (neither GATES nor EXCLUDED_CHECKS)",
+    ]);
+  });
+
+  it("a gate whose EXCLUDED_CHECKS reason says warn-only, non-blocking or informational is refused", () => {
+    put(
+      "docs/doctrine/law.md",
+      doc(
+        "Law doc",
+        "> **Layer:** law — enforced by `check-warn`, `check-nonblocking`, `check-info`",
+      ),
+    );
+    expect(problems()).toEqual(
+      ["check-warn", "check-nonblocking", "check-info"].map(
+        (g) =>
+          `docs/doctrine/law.md:3 — gate \`${g}\` is registered as soft/advisory in EXCLUDED_CHECKS, so it enforces nothing`,
+      ),
+    );
   });
 });
