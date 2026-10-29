@@ -54,10 +54,10 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveGateFiles } from "./lib/gate-launch.js";
 import { formatRepair } from "./lib/gate-report.js";
 
-const ROOT = resolve(import.meta.dirname, "..");
 const DOCTRINE_DIR = "docs/doctrine";
 const CHECK_TS = "scripts/check.ts";
 
@@ -72,13 +72,14 @@ const GATE_TOKEN_RE = /^check-[a-z0-9-]+$/;
 const TEST_FILE_RE = /\.(?:test|spec)\.tsx?$/;
 const ADVISORY_RE = /soft signal|advisory/i;
 
-interface RegisteredGates {
+export interface RegisteredGates {
   hard: Set<string>;
   advisory: Set<string>;
 }
 
-function readRegisteredGates(): RegisteredGates {
-  const src = readFileSync(join(ROOT, CHECK_TS), "utf-8");
+/** GATES and EXCLUDED_CHECKS as `scripts/check.ts` under `root` declares them. */
+export function readRegisteredGates(root: string): RegisteredGates {
+  const src = readFileSync(join(root, CHECK_TS), "utf-8");
   const hard = new Set<string>();
   const advisory = new Set<string>();
 
@@ -101,36 +102,38 @@ function readRegisteredGates(): RegisteredGates {
   return { hard, advisory };
 }
 
-function docsInScope(): string[] {
-  const doctrine = readdirSync(join(ROOT, DOCTRINE_DIR))
+/** Every `docs/doctrine/*.md` (top level) plus every chain doc DOCTRINE.md lists. */
+export function docsInScope(root: string): string[] {
+  const doctrine = readdirSync(join(root, DOCTRINE_DIR))
     .filter((f) => f.endsWith(".md"))
     .sort()
     .map((f) => `${DOCTRINE_DIR}/${f}`);
-  const chainSrc = readFileSync(join(ROOT, "DOCTRINE.md"), "utf-8");
+  const chainSrc = readFileSync(join(root, "DOCTRINE.md"), "utf-8");
   const chain = [...chainSrc.matchAll(CHAIN_BULLET_RE)].map((m) => m[1]!);
   return [...doctrine, ...chain];
 }
 
 /** The gate source file, resolved exactly as `pnpm check` launches it (scripts/lib/gate-launch.ts). */
-function gateSource(name: string): string | null {
+function gateSource(root: string, name: string): string | null {
   try {
-    return resolveGateFiles(ROOT, [name]).get(name) ?? null;
+    return resolveGateFiles(root, [name]).get(name) ?? null;
   } catch {
     return null;
   }
 }
 
-interface Finding {
+export interface Finding {
   site: string;
   problem: string;
 }
 
 function checkDoc(
+  root: string,
   rel: string,
   gates: RegisteredGates,
   findings: Finding[],
 ): "law" | "narrative" | null {
-  const path = join(ROOT, rel);
+  const path = join(root, rel);
   if (!existsSync(path)) {
     findings.push({ site: rel, problem: "listed in scope but the file does not exist" });
     return null;
@@ -195,7 +198,7 @@ function checkDoc(
           site,
           problem: `gate \`${tok}\` is not registered in ${CHECK_TS} (neither GATES nor EXCLUDED_CHECKS)`,
         });
-      } else if (gateSource(tok) === null) {
+      } else if (gateSource(root, tok) === null) {
         findings.push({
           site,
           problem: `gate \`${tok}\` has no runnable source (root package.json script must be \`npx tsx scripts/<file>.ts\` naming an existing file)`,
@@ -203,7 +206,7 @@ function checkDoc(
       }
       continue;
     }
-    if (!existsSync(join(ROOT, tok))) {
+    if (!existsSync(join(root, tok))) {
       const kind = TEST_FILE_RE.test(tok) ? "test file" : "code path";
       findings.push({ site, problem: `named ${kind} \`${tok}\` does not exist` });
     }
@@ -211,32 +214,46 @@ function checkDoc(
   return "law";
 }
 
-function main(): void {
-  process.stderr.write(
-    "▸ check-doctrine-layer — every docs/doctrine/*.md and every DOCTRINE.md chain doc declares exactly one layer line after its H1 (`law — enforced by …` or `narrative`); every gate a law line names is registered in scripts/check.ts and every named test file or code path exists\n",
-  );
-  const gates = readRegisteredGates();
-  const docs = docsInScope();
+export interface LayerReport {
+  docs: string[];
+  law: number;
+  narrative: number;
+  registeredGates: number;
+  findings: Finding[];
+}
+
+/** The whole check over the tree at `root`; pure apart from reading files. */
+export function checkDoctrineLayer(root: string): LayerReport {
+  const gates = readRegisteredGates(root);
+  const docs = docsInScope(root);
   const findings: Finding[] = [];
   let law = 0;
   let narrative = 0;
   for (const rel of docs) {
-    const layer = checkDoc(rel, gates, findings);
+    const layer = checkDoc(root, rel, gates, findings);
     if (layer === "law") law++;
     else if (layer === "narrative") narrative++;
   }
+  return { docs, law, narrative, registeredGates: gates.hard.size, findings };
+}
 
-  if (findings.length === 0) {
+function main(): void {
+  process.stderr.write(
+    "▸ check-doctrine-layer — every docs/doctrine/*.md and every DOCTRINE.md chain doc declares exactly one layer line after its H1 (`law — enforced by …` or `narrative`); every gate a law line names is registered in scripts/check.ts and every named test file or code path exists\n",
+  );
+  const r = checkDoctrineLayer(resolve(import.meta.dirname, ".."));
+
+  if (r.findings.length === 0) {
     process.stderr.write(
-      `✓ check-doctrine-layer: ${docs.length} doc(s) scanned (${law} law, ${narrative} narrative); every law line's enforcement resolves against ${gates.hard.size} registered gate(s) and the filesystem.\n`,
+      `✓ check-doctrine-layer: ${r.docs.length} doc(s) scanned (${r.law} law, ${r.narrative} narrative); every law line's enforcement resolves against ${r.registeredGates} registered gate(s) and the filesystem.\n`,
     );
     return;
   }
 
   process.stderr.write(
     formatRepair({
-      invariant: `check-doctrine-layer: ${findings.length} violation(s) across ${docs.length} doc(s) scanned`,
-      sites: findings.map((f) => `${f.site} — ${f.problem}`),
+      invariant: `check-doctrine-layer: ${r.findings.length} violation(s) across ${r.docs.length} doc(s) scanned`,
+      sites: r.findings.map((f) => `${f.site} — ${f.problem}`),
       canonical:
         'DOCTRINE.md § "Two layers" (the rule) and scripts/check.ts (the registered gates)',
       fix:
@@ -250,4 +267,7 @@ function main(): void {
   process.exit(1);
 }
 
-main();
+// Run only when invoked directly; the unit test imports checkDoctrineLayer.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main();
+}
