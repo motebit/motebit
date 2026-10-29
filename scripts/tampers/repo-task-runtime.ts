@@ -10,7 +10,7 @@
  *   - the repo-task run: authority before start and on every call, the
  *     frozen two-tool registry with its handler-identity assertion, the
  *     scope-built handlers' refusals, no interior, one system prompt;
- *   - the Node adapters (git tree reader, worktree writer, receipt file).
+ *   - the Node adapters (git tree reader, git change stager, receipt file).
  *
  * Each entry removes ONE guard (or every redundant layer of one guard, so
  * the condition is actually let through) and names the test that must go
@@ -37,7 +37,7 @@ const STREAM = "packages/runtime/src/streaming.ts";
 const RT = "packages/runtime/src/motebit-runtime.ts";
 const LOOP = "packages/ai-core/src/loop.ts";
 const CORE = "packages/ai-core/src/core.ts";
-const WRITER = "apps/cli/src/repo-task/worktree-writer.ts";
+const STAGER = "apps/cli/src/repo-task/git-change-stager.ts";
 const READER = "apps/cli/src/repo-task/git-tree-reader.ts";
 const SINK = "apps/cli/src/repo-task/receipt-file-sink.ts";
 const WEB_PULSE = "apps/web/src/ui/cobrowse-chrome.ts";
@@ -49,7 +49,6 @@ const INTERIOR_TEST = "src/__tests__/repo-task-no-interior.test.ts";
 const STATUS_TEST = "src/__tests__/tool-receipt-status.test.ts";
 const OUTCOME_TEST = "src/__tests__/tool-outcome.test.ts";
 const ADAPTER_TEST = "src/repo-task/__tests__/node-adapters.test.ts";
-const RACE_TEST = "src/repo-task/__tests__/worktree-writer-race.test.ts";
 
 const PRE = "repo task: the run cannot start without a valid tick";
 const AGREE = "repo task: the run and the verifier judge authority by one law";
@@ -96,8 +95,6 @@ const outcome = (name: string, red: string, ...edits: TamperEdit[]) =>
   entry("@motebit/ai-core", OUTCOME_TEST, name, red, ...edits);
 const adapter = (name: string, red: string, ...edits: TamperEdit[]) =>
   entry("motebit", ADAPTER_TEST, name, red, ...edits);
-const race = (name: string, red: string, ...edits: TamperEdit[]) =>
-  entry("motebit", RACE_TEST, name, red, ...edits);
 
 const IDENTITY_ASSERTION = edit(
   RUN,
@@ -434,11 +431,6 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   run(
-    "write: a writer refusal reported as completed",
-    `${WRITE} a writer refusal (symlink component) is denied`,
-    edit(TOOLS, "      if (!outcome.ok) {", "      if ((false as boolean) && !outcome.ok) {"),
-  ),
-  run(
     "write: max_changed_files not enforced",
     `${WRITE} refuses a write past max_changed_files`,
     edit(
@@ -680,44 +672,6 @@ const TAMPERS: TamperEntry[] = [
 
   // ── Node adapters ──────────────────────────────────────────────────────
   adapter(
-    "writer: follows a symlinked directory out of the worktree",
-    "worktree writer: by real path, never through a symlink refuses a symlinked directory component and leaves the target untouched",
-    edit(WRITER, "    return fs.lstatSync(p);", "    return fs.statSync(p);"),
-    edit(
-      WRITER,
-      '      if (realDir !== dir || !inside(root, realDir)) {\n        return Promise.resolve(refuse("outside_worktree"));\n      }',
-      "      void inside;",
-    ),
-  ),
-  adapter(
-    "writer: writes through a symlink as the final component",
-    "worktree writer: by real path, never through a symlink refuses a symlink as the final component",
-    edit(WRITER, "    return fs.lstatSync(p);", "    return fs.statSync(p);"),
-    edit(
-      WRITER,
-      "fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW,",
-      "fs.constants.O_WRONLY | fs.constants.O_CREAT,",
-    ),
-  ),
-  adapter(
-    "writer: .git and traversal spellings walked",
-    "worktree writer: by real path, never through a symlink refuses traversal, absolute and .git spellings",
-    edit(
-      WRITER,
-      'segments.some((s) => s === "" || s === "." || s === ".." || s.toLowerCase() === ".git")',
-      'segments.some((s) => s === "")',
-    ),
-  ),
-  adapter(
-    "writer: case-variant names accepted (no exact-name check)",
-    "worktree writer: by real path, never through a symlink refuses a name that exists only under another case (no case-variant match)",
-    edit(
-      WRITER,
-      "function listedExactly(dir: string, name: string): boolean {\n  return fs.readdirSync(dir).includes(name);",
-      "function listedExactly(dir: string, name: string): boolean {\n  return fs.readdirSync(dir).length >= 0 || name === dir;",
-    ),
-  ),
-  adapter(
     "reader: an entry at another path answered (exact path compare removed)",
     "git tree reader: the tip's tree, never the worktree sees nothing untracked, nothing through a symlinked directory, no glob",
     edit(READER, "if (!got.equals(want) || mode === undefined", "if (mode === undefined"),
@@ -732,72 +686,63 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   adapter(
-    "writer: creates a missing directory",
-    "worktree writer: by real path, never through a symlink refuses a path under a missing directory and creates none",
+    "stager: builds on the repository's own index (no private GIT_INDEX_FILE)",
+    "git change stager: blobs and a private index, never the worktree stages content as blobs and builds the change commit; worktree, index and refs untouched",
     edit(
-      WRITER,
-      '        if (st === null) return Promise.resolve(refuse("missing_directory"));',
-      "        if (st === null) {\n          fs.mkdirSync(next);\n          dir = next;\n          continue;\n        }",
-    ),
-  ),
-  race(
-    "writer: truncates on open (O_TRUNC), before the descriptor is proven",
-    "worktree writer: a swap between the walk and the write is refused a directory swapped for a symlink before the open: nothing outside is truncated or written",
-    edit(
-      WRITER,
-      "fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW,",
-      "fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,",
-    ),
-  ),
-  race(
-    "writer: the parent's real path not re-checked after the open",
-    "worktree writer: a swap between the walk and the write is refused a directory swapped for a symlink before the open: nothing outside is truncated or written",
-    edit(WRITER, "          fs.realpathSync.native(dir) !== realDir ||\n", ""),
-  ),
-  race(
-    "writer: the opened file not matched to the walked one",
-    "worktree writer: a swap between the walk and the write is refused the file replaced right after the open: the swapped-in file is not written",
-    edit(WRITER, "          opened.ino !== expected.ino ||\n", ""),
-  ),
-  adapter(
-    "writer: a hard-linked file written (both nlink checks removed)",
-    "worktree writer: by real path, never through a symlink refuses a file with a second hard link (the other name could be outside)",
-    edit(
-      WRITER,
-      '      if (st !== null && st.nlink !== 1) return Promise.resolve(refuse("hard_link"));\n',
-      "",
-    ),
-    edit(
-      WRITER,
-      '        if (opened.nlink !== 1) return Promise.resolve(refuse("hard_link"));\n',
-      "",
-    ),
-  ),
-  race(
-    "writer: a hard link added after the open not re-checked",
-    "worktree writer: a swap between the walk and the write is refused a second hard link added right after the open: refused, the other name untouched",
-    edit(
-      WRITER,
-      '        if (opened.nlink !== 1) return Promise.resolve(refuse("hard_link"));\n',
-      "",
+      STAGER,
+      '      const env = { GIT_INDEX_FILE: path.join(dir, "index") };',
+      "      const env: Record<string, string> = {};",
     ),
   ),
   adapter(
-    "writer: Windows device names accepted",
-    "worktree writer: by real path, never through a symlink refuses Windows device names in any segment, with any extension, in any case",
+    "stager: the tree is built without the tip (read-tree removed)",
+    "git change stager: blobs and a private index, never the worktree stages content as blobs and builds the change commit; worktree, index and refs untouched",
+    edit(STAGER, '        await runGit(gitDir, ["read-tree", tip], { env });\n', ""),
+  ),
+  adapter(
+    "stager: the change commit is not parented on the tip",
+    "git change stager: blobs and a private index, never the worktree stages content as blobs and builds the change commit; worktree, index and refs untouched",
+    edit(STAGER, '["commit-tree", tree, "-p", tip, "-F", "-"]', '["commit-tree", tree, "-F", "-"]'),
+  ),
+  adapter(
+    "stager: a stage records no blob",
+    "git change stager: blobs and a private index, never the worktree stages content as blobs and builds the change commit; worktree, index and refs untouched",
+    edit(STAGER, "      staging.set(p, blob);", "      void blob;"),
+  ),
+  adapter(
+    "stager: the content is not written to the object store",
+    "git change stager: blobs and a private index, never the worktree stages content as blobs and builds the change commit; worktree, index and refs untouched",
     edit(
-      WRITER,
-      '      if (segments.some(isWindowsDeviceName)) return Promise.resolve(refuse("reserved_name"));\n',
-      "      void isWindowsDeviceName;\n",
+      STAGER,
+      '["hash-object", "-w", "--no-filters", "--stdin"]',
+      '["hash-object", "--no-filters", "--stdin"]',
     ),
   ),
-  race(
-    "writer: constructed without O_NOFOLLOW",
-    "worktree writer: a swap between the walk and the write is refused a platform without O_NOFOLLOW: the writer refuses to exist",
+  adapter(
+    "stager: entries not computed against the tip",
+    "git change stager: blobs and a private index, never the worktree stages content as blobs and builds the change commit; worktree, index and refs untouched",
     edit(
-      WRITER,
-      '  if (typeof fs.constants.O_NOFOLLOW !== "number") {',
-      '  if ((false as boolean) && typeof fs.constants.O_NOFOLLOW !== "number") {',
+      STAGER,
+      "          tip,\n          headCommit,\n        ]);",
+      "          headCommit,\n          headCommit,\n        ]);",
+    ),
+  ),
+  adapter(
+    "stager: an unchanged path reported as an entry",
+    "git change stager: blobs and a private index, never the worktree a later stage of the same path replaces the earlier one; an unchanged path is no entry",
+    edit(
+      STAGER,
+      "        for (let i = 0; i + 1 < fields.length; i += 2) {",
+      '        for (const [p0, b0] of staging) entries.push({ path: p0, mode: "100644", blob: b0 });\n        for (let i = fields.length; i + 1 < fields.length; i += 2) {',
+    ),
+  ),
+  adapter(
+    "stager: a non-relative path accepted",
+    "git change stager: blobs and a private index, never the worktree refuses a path that is not repository-relative and a tip that is not an object id",
+    edit(
+      STAGER,
+      '      if (p.length === 0 || p.includes("\\0") || p.startsWith("/")) {',
+      "      if ((false as boolean) && p.length === 0) {",
     ),
   ),
   adapter(
@@ -844,21 +789,12 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   run(
-    "write: a path counted only after a successful write",
-    "repo task: a path counts toward max_changed_files once the writer may open it a write that fails part-way is failed and still counts",
+    "write: a path counted only after a successful stage",
+    "repo task: a path counts toward max_changed_files once the stager is called a write that fails part-way is failed and still counts",
     edit(
       TOOLS,
-      "      written.add(path);\n      const outcome = await writer.write(path, bytes);",
-      "      const outcome = await writer.write(path, bytes);\n      written.add(path);",
-    ),
-  ),
-  run(
-    "write: a post-open race gives the slot back",
-    "repo task: a path counts toward max_changed_files once the writer may open it a race refused after the open still counts",
-    edit(
-      TOOLS,
-      'const opened = outcome.refusal === "path_raced" || outcome.refusal === "hard_link";',
-      "const opened = false as boolean;",
+      "      written.add(path);\n      await stager.stage(path, bytes);",
+      "      await stager.stage(path, bytes);\n      written.add(path);",
     ),
   ),
   agree(
@@ -907,6 +843,20 @@ const TAMPERS: TamperEntry[] = [
     only: true,
     edits: [edit(WEB_PULSE, '    if (receipt.status !== "completed") return;\n', "")],
   },
+  status(
+    "runtime: the void runs outside the turn's try (a rejected receipt wedges the runtime)",
+    "a durable sink that rejects a void's receipt never wedges the runtime turn 1 pauses, turn 2's void receipt is rejected (that turn fails), turn 3 runs",
+    edit(
+      RT,
+      "      const voidedApproval = principal.foreign ? null : await this.streaming.voidPendingApproval();\n",
+      "      const voidedApproval = voidedEarly;\n",
+    ),
+    edit(
+      RT,
+      "    const turnStartedAt = Date.now();\n",
+      "    const turnStartedAt = Date.now();\n    const voidedEarly = principal.foreign ? null : await this.streaming.voidPendingApproval();\n",
+    ),
+  ),
   status(
     "streaming: a superseded approval request gets no receipt",
     "every proposed call that is not executed gets a denied receipt two calls needing approval in one response: the superseded one is denied, the kept one approved",

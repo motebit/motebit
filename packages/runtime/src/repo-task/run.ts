@@ -9,7 +9,8 @@
  * form — `memories_formed` is the literal `0` because there is no code path
  * that forms one, not because none happened to. It never reads
  * `~/.motebit/config.json` or any file: its only I/O is the four injected
- * ports (the model, the tip's tree, the worktree writer, the receipt sink).
+ * ports (the model, the tip's tree, the git change stager, the receipt sink).
+ * It writes no file: new content goes to git's object store as blobs.
  *
  * What it guarantees, each fail-closed:
  *   - **Authority before start.** `checkRepoTaskAuthority` over the
@@ -56,7 +57,7 @@ import type {
 } from "./authority.js";
 import { buildRepoTaskPack, repoTaskFrame, repoTaskSystemPrompt } from "./system-prompt.js";
 import { assertOfferedTools, buildRepoTaskTools } from "./tools.js";
-import type { RepoPathWriter, RepoTaskToolOutcome, RepoTreeReader } from "./tools.js";
+import type { RepoChangeStager, RepoTaskToolOutcome, RepoTreeReader } from "./tools.js";
 
 /** The agent identity A: it signs every receipt, and must be the grant's delegate. */
 export interface RepoTaskAgent {
@@ -75,7 +76,8 @@ export interface RepoTaskRunInput {
   /** The provider's name, recorded in the change record (informational). */
   readonly providerName: string;
   readonly reader: RepoTreeReader;
-  readonly writer: RepoPathWriter;
+  /** Stages content as blobs in git's object store and builds the change commit; never writes the worktree. */
+  readonly stager: RepoChangeStager;
   /** Durable record of every signed tool receipt. */
   readonly receipts: ToolReceiptSink;
   readonly runtimeVersion: string;
@@ -114,7 +116,7 @@ export interface RepoTaskRunResult {
   readonly prompt_hash: string;
   readonly system_prompt: string;
   readonly system_prompt_digest: DigestRef;
-  /** Allowed paths written, in first-write order. */
+  /** Allowed paths staged, in first-stage order. */
   readonly written_paths: readonly string[];
   /** The model's last text. */
   readonly response: string;
@@ -256,7 +258,7 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
   // -- The frozen registry, from the verified scope only.
   const { registry, expected } = buildRepoTaskTools(authorized, scope, {
     reader: input.reader,
-    writer: input.writer,
+    stager: input.stager,
   });
   const toolNames = registry.entries.map((e) => e.definition.name as RepoChangeTool);
   const frame = repoTaskFrame(scope, toolNames, input.runtimeVersion);

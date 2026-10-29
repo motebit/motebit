@@ -1,9 +1,10 @@
 /**
  * The repo-task Node adapters against a real temporary git repository:
- * the tree reader sees only the tip's tree (never the worktree), the writer
- * refuses symlink components and anything outside the worktree, the receipt
- * file sink is durable and append-only — and a whole run over them writes
- * exactly the allowed file and records every receipt.
+ * the tree reader sees only the tip's tree (never the worktree), the change
+ * stager writes only git objects and builds the change commit on a private
+ * index (the worktree, the repository's index and its refs are untouched),
+ * the receipt file sink is durable and append-only — and a whole run over
+ * them stages exactly the allowed file and records every receipt.
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -25,7 +26,7 @@ import type { AIResponse, ContextPack, ToolCall } from "@motebit/sdk";
 
 import { createGitTreeReader } from "../git-tree-reader.js";
 import { createReceiptFileSink, readReceiptFile } from "../receipt-file-sink.js";
-import { createWorktreeWriter } from "../worktree-writer.js";
+import { createGitChangeStager } from "../git-change-stager.js";
 
 let root = "";
 let repo = "";
@@ -113,126 +114,111 @@ describe("git tree reader: the tip's tree, never the worktree", () => {
   });
 });
 
-describe("worktree writer: by real path, never through a symlink", () => {
-  it("writes a new allowed file 0644 in an existing directory", async () => {
-    const writer = createWorktreeWriter({ root: repo });
-    expect(await writer.write("docs/b.md", new TextEncoder().encode("b\n"))).toEqual({
-      ok: true,
-    });
-    expect(fs.readFileSync(path.join(repo, "docs", "b.md"), "utf8")).toBe("b\n");
-    expect(fs.statSync(path.join(repo, "docs", "b.md")).mode & 0o777).toBe(0o644);
-  });
+/** Every file under `dir` (relative path → bytes, hex), `.git` excluded unless asked. */
+function snapshot(dir: string, withGit = false): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (d: string): void => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, e.name);
+      const rel = path.relative(dir, full);
+      if (!withGit && rel === ".git") continue;
+      if (e.isSymbolicLink()) out.set(rel, `symlink:${fs.readlinkSync(full)}`);
+      else if (e.isDirectory()) walk(full);
+      else out.set(rel, fs.readFileSync(full).toString("hex"));
+    }
+  };
+  walk(dir);
+  return out;
+}
 
-  it("refuses a path under a missing directory and creates none", async () => {
-    const writer = createWorktreeWriter({ root: repo });
-    expect(await writer.write("docs/new/b.md", new TextEncoder().encode("b\n"))).toEqual({
-      ok: false,
-      refusal: "missing_directory",
-    });
-    expect(fs.existsSync(path.join(repo, "docs", "new"))).toBe(false);
-  });
+/** The repository's own index, HEAD and refs (what a change commit must not move). */
+function repoState(): Map<string, string> {
+  const gitDir = path.join(repo, ".git");
+  const out = new Map<string, string>();
+  for (const f of ["index", "HEAD"]) {
+    const full = path.join(gitDir, f);
+    out.set(f, fs.existsSync(full) ? fs.readFileSync(full).toString("hex") : "absent");
+  }
+  out.set("refs", git("for-each-ref", "--format=%(refname) %(objectname)"));
+  return out;
+}
 
-  it("refuses a symlinked directory component and leaves the target untouched", async () => {
-    const writer = createWorktreeWriter({ root: repo });
-    expect(await writer.write("escape/secret.txt", new TextEncoder().encode("pwned"))).toEqual({
-      ok: false,
-      refusal: "symlink_component",
-    });
-    expect(fs.readFileSync(path.join(outside, "secret.txt"), "utf8")).toBe("outside\n");
-  });
+const COMMIT = {
+  message: "governed change\n",
+  authorName: "motebit-agent",
+  authorEmail: "agent@example.com",
+  timestamp: 1_900_000_000,
+};
 
-  it("refuses a symlink as the final component", async () => {
-    const writer = createWorktreeWriter({ root: repo });
-    expect(await writer.write("link", new TextEncoder().encode("x"))).toEqual({
-      ok: false,
-      refusal: "symlink_component",
-    });
-    expect(fs.readFileSync(path.join(repo, "docs", "a.md"), "utf8")).toBe(
-      "edited in the worktree\n",
+describe("git change stager: blobs and a private index, never the worktree", () => {
+  it("stages content as blobs and builds the change commit; worktree, index and refs untouched", async () => {
+    const before = snapshot(repo);
+    const outsideBefore = snapshot(outside);
+    const stateBefore = repoState();
+    const stager = createGitChangeStager({ gitDir: path.join(repo, ".git"), tip });
+    await stager.stage("docs/a.md", new TextEncoder().encode("fixed\n"));
+    await stager.stage("docs/new.md", new TextEncoder().encode("new\n"));
+    const { headCommit, entries } = await stager.buildChangeCommit(COMMIT);
+
+    // Nothing on disk moved: the worktree, everything outside it, the
+    // repository's own index, HEAD and refs are byte-identical.
+    expect(snapshot(repo)).toEqual(before);
+    expect(snapshot(outside)).toEqual(outsideBefore);
+    expect(repoState()).toEqual(stateBefore);
+
+    // The change commit sits on the tip and differs from it only at the
+    // staged paths, as 100644 blobs of exactly the staged bytes.
+    expect(git("rev-parse", `${headCommit}^`)).toBe(tip);
+    const blobOf = (text: string): string =>
+      execFileSync("git", ["hash-object", "--stdin"], { cwd: repo, env: gitEnv(), input: text })
+        .toString()
+        .trim();
+    expect(entries).toEqual([
+      { path: "docs/a.md", mode: "100644", blob: blobOf("fixed\n") },
+      { path: "docs/new.md", mode: "100644", blob: blobOf("new\n") },
+    ]);
+    const diff = git("diff-tree", "-r", "--no-renames", "--name-status", tip, headCommit);
+    expect(diff.split("\n").sort()).toEqual(["A\tdocs/new.md", "M\tdocs/a.md"]);
+    expect(git("cat-file", "-p", `${headCommit}:docs/a.md`)).toBe("fixed");
+    // Everything else is the tip's, including the symlinks and the gitlink.
+    expect(git("rev-parse", `${headCommit}:link`)).toBe(git("rev-parse", `${tip}:link`));
+    expect(git("rev-parse", `${headCommit}:bin/run.sh`)).toBe(
+      git("rev-parse", `${tip}:bin/run.sh`),
     );
   });
 
-  it("refuses a directory at the path and a file as a directory component", async () => {
-    const writer = createWorktreeWriter({ root: repo });
-    expect(await writer.write("docs", new TextEncoder().encode("x"))).toEqual({
-      ok: false,
-      refusal: "not_a_regular_file",
-    });
-    expect(await writer.write("docs/a.md/x", new TextEncoder().encode("x"))).toEqual({
-      ok: false,
-      refusal: "not_a_regular_file",
-    });
+  it("a later stage of the same path replaces the earlier one; an unchanged path is no entry", async () => {
+    const stager = createGitChangeStager({ gitDir: path.join(repo, ".git"), tip });
+    await stager.stage("docs/a.md", new TextEncoder().encode("first\n"));
+    await stager.stage("docs/a.md", new TextEncoder().encode("teh typo\n"));
+    const { entries } = await stager.buildChangeCommit(COMMIT);
+    expect(entries).toEqual([]);
   });
 
-  it("refuses traversal, absolute and .git spellings", async () => {
-    const writer = createWorktreeWriter({ root: repo });
-    for (const p of ["../outside/secret.txt", "/etc/x", "docs/../../x", ".git/config", "a\\b"]) {
-      expect(await writer.write(p, new TextEncoder().encode("x"))).toEqual({
-        ok: false,
-        refusal: "outside_worktree",
-      });
+  it("paths go in as exact bytes: spaces, a leading dash and option-like names are never interpreted", async () => {
+    const before = snapshot(repo);
+    const stager = createGitChangeStager({ gitDir: path.join(repo, ".git"), tip });
+    const names = ["docs/with space.md", "-rf.md", "--output=pwned", "docs/-n"];
+    for (const n of names) await stager.stage(n, new TextEncoder().encode(`${n}\n`));
+    const { headCommit, entries } = await stager.buildChangeCommit(COMMIT);
+    expect(entries.map((e) => e.path).sort()).toEqual([...names].sort());
+    for (const n of names) {
+      expect(
+        execFileSync("git", ["cat-file", "blob", `${headCommit}:${n}`], {
+          cwd: repo,
+          env: gitEnv(),
+        }).toString(),
+      ).toBe(`${n}\n`);
     }
-    expect(fs.readFileSync(path.join(outside, "secret.txt"), "utf8")).toBe("outside\n");
+    expect(fs.existsSync(path.join(repo, "pwned"))).toBe(false);
+    expect(snapshot(repo)).toEqual(before);
   });
 
-  it("refuses a name that exists only under another case (no case-variant match)", async () => {
-    fs.mkdirSync(path.join(repo, "Upper"));
-    fs.writeFileSync(path.join(repo, "Upper", "B.md"), "upper\n");
-    fs.writeFileSync(path.join(repo, "docs", "C.md"), "capital\n");
-    const caseInsensitive = fs.existsSync(path.join(repo, "UPPER"));
-    const writer = createWorktreeWriter({ root: repo });
-    const dirVariant = await writer.write("upper/b.md", new TextEncoder().encode("x"));
-    const nameVariant = await writer.write("docs/c.md", new TextEncoder().encode("x"));
-    if (caseInsensitive) {
-      expect(dirVariant).toEqual({ ok: false, refusal: "case_variant" });
-      expect(nameVariant).toEqual({ ok: false, refusal: "case_variant" });
-    } else {
-      // A case-sensitive filesystem: the lowercase names are other paths.
-      expect(dirVariant).toEqual({ ok: false, refusal: "missing_directory" });
-      expect(nameVariant).toEqual({ ok: true });
-    }
-    expect(fs.readFileSync(path.join(repo, "Upper", "B.md"), "utf8")).toBe("upper\n");
-    expect(fs.readFileSync(path.join(repo, "docs", "C.md"), "utf8")).toBe("capital\n");
-  });
-
-  it("refuses a file with a second hard link (the other name could be outside)", async () => {
-    fs.writeFileSync(path.join(outside, "linked.txt"), "outside original\n");
-    fs.linkSync(path.join(outside, "linked.txt"), path.join(repo, "docs", "h.md"));
-    const writer = createWorktreeWriter({ root: repo });
-    expect(await writer.write("docs/h.md", new TextEncoder().encode("pwned\n"))).toEqual({
-      ok: false,
-      refusal: "hard_link",
-    });
-    expect(fs.readFileSync(path.join(outside, "linked.txt"), "utf8")).toBe("outside original\n");
-  });
-
-  it("refuses Windows device names in any segment, with any extension, in any case", async () => {
-    const writer = createWorktreeWriter({ root: repo });
-    for (const p of [
-      "docs/con.md",
-      "docs/NUL",
-      "docs/Aux.tar.gz",
-      "docs/com1.txt",
-      "lpt9/x.md",
-      "docs/prn",
-    ]) {
-      expect(await writer.write(p, new TextEncoder().encode("x"))).toEqual({
-        ok: false,
-        refusal: "reserved_name",
-      });
-    }
-    // Lookalikes are ordinary names.
-    expect(await writer.write("docs/console.md", new TextEncoder().encode("x"))).toEqual({
-      ok: true,
-    });
-  });
-
-  it("keeps an existing file's mode", async () => {
-    const writer = createWorktreeWriter({ root: repo });
-    expect(await writer.write("bin/run.sh", new TextEncoder().encode("#!/bin/sh\necho\n"))).toEqual(
-      { ok: true },
-    );
-    expect(fs.statSync(path.join(repo, "bin", "run.sh")).mode & 0o777).toBe(0o755);
+  it("refuses a path that is not repository-relative and a tip that is not an object id", async () => {
+    const stager = createGitChangeStager({ gitDir: path.join(repo, ".git"), tip });
+    await expect(stager.stage("/etc/passwd", new Uint8Array())).rejects.toThrow();
+    await expect(stager.stage("a\0b", new Uint8Array())).rejects.toThrow();
+    expect(() => createGitChangeStager({ gitDir: path.join(repo, ".git"), tip: "HEAD" })).toThrow();
   });
 });
 
@@ -256,7 +242,7 @@ describe("receipt file sink: durable, one run per file", () => {
 });
 
 describe("a repo-task run over the Node adapters", () => {
-  it("writes exactly the allowed file, refuses the rest, and records every receipt on disk", async () => {
+  it("stages exactly the allowed file, refuses the rest, writes nothing on disk, and records every receipt", async () => {
     const f = await generateKeypair();
     const a = await generateKeypair();
     const T0 = Date.now();
@@ -332,6 +318,10 @@ describe("a repo-task run over the Node adapters", () => {
     };
     const file = path.join(root, "run.jsonl");
     const sink = createReceiptFileSink(file);
+    const worktreeBefore = snapshot(repo);
+    const outsideBefore = snapshot(outside);
+    const stateBefore = repoState();
+    const stager = createGitChangeStager({ gitDir: path.join(repo, ".git"), tip });
     const result = await runRepoTask({
       authority: {
         scope,
@@ -351,14 +341,19 @@ describe("a repo-task run over the Node adapters", () => {
       provider,
       providerName: "scripted",
       reader: createGitTreeReader({ gitDir: path.join(repo, ".git"), tip }),
-      writer: createWorktreeWriter({ root: repo }),
+      stager,
       receipts: sink,
       runtimeVersion: "test",
     });
     await sink.close();
     expect(result.ended).toBe("model_done");
-    expect(fs.readFileSync(path.join(repo, "docs", "a.md"), "utf8")).toBe("the typo\n");
-    expect(fs.readFileSync(path.join(outside, "secret.txt"), "utf8")).toBe("outside\n");
+    // The run wrote nothing on disk: the worktree, outside it, the index and refs.
+    expect(snapshot(repo)).toEqual(worktreeBefore);
+    expect(snapshot(outside)).toEqual(outsideBefore);
+    expect(repoState()).toEqual(stateBefore);
+    const { headCommit, entries } = await stager.buildChangeCommit(COMMIT);
+    expect(entries.map((e) => [e.path, e.mode])).toEqual([["docs/a.md", "100644"]]);
+    expect(git("cat-file", "-p", `${headCommit}:docs/a.md`)).toBe("the typo");
     const onDisk = readReceiptFile(file) as Array<{
       tool_name: string;
       status: string;

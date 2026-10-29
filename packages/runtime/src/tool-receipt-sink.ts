@@ -1,7 +1,15 @@
 /**
- * Durable tool-receipt sink — the port every signed `ToolInvocationReceipt`
- * the runtime produces is appended to, in call order, before the run moves
- * on.
+ * Durable tool-receipt sink — the port the runtime appends a signed
+ * `ToolInvocationReceipt` to, in call order, before the run moves on, for
+ * the paths that sign one: the streaming AI loop (completed / failed /
+ * denied), the approval resume / refusal / supersede / void / expiry paths,
+ * `invokeLocalTool`, and the repo-task run.
+ *
+ * NOT YET FED (they execute tools without signing a tool receipt at all):
+ * the non-streaming `sendMessage` turn, `executeToolGated` (MCP direct and
+ * relay dispatch), and the attached-surface `tool_call` frame
+ * (`attached-surface.ts`). The end-game is one tool-execution choke point
+ * that signs every call; it is its own change, not this one.
  *
  * Why a port: the in-session buffer (`getRecentReceipts`, capped at
  * `RECEIPTS_BUFFER_CAP`) and the fire-and-forget `onToolInvocation` bus are

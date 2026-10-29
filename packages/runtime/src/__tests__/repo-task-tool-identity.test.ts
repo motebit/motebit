@@ -80,7 +80,7 @@ async function run(tamper: Tamper) {
     provider: model,
     providerName: "scripted",
     reader: MemTree.withFile("docs/a.md", "x"),
-    writer,
+    stager: writer,
     receipts: sink,
     runtimeVersion: "9.9.9",
     clock: () => T0 + 60_000,
@@ -139,7 +139,7 @@ describe("repo task: no other tool is offered on any model call", () => {
     const { registry, expected } = buildRepoTaskTools(
       new Set(["repo_read_blob", "repo_write_path"] as const),
       (await makeBundle()).scope,
-      { reader: MemTree.withFile("docs/a.md", "x"), writer: new MemWriter() },
+      { reader: MemTree.withFile("docs/a.md", "x"), stager: new MemWriter() },
     );
     expect(Object.isFrozen(registry)).toBe(true);
     expect(Object.isFrozen(registry.entries)).toBe(true);

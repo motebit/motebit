@@ -14,12 +14,9 @@
  * names. Not wired to any command yet: `motebit repo-task run` (build step 4)
  * constructs it after its preflight pins the tip.
  */
-import { execFile } from "node:child_process";
-
 import type { RepoTreeEntry, RepoTreeReader } from "@motebit/runtime";
 
-const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-const MAX_BLOB_BYTES = 16 * 1024 * 1024;
+import { OID, runGit } from "./git.js";
 
 export interface GitTreeReaderOptions {
   /** The repository's git directory (`.git`, or a bare repository). */
@@ -28,33 +25,7 @@ export interface GitTreeReaderOptions {
   readonly tip: string;
 }
 
-/** The environment every git call runs under: nothing outside the repository steers it. */
-export function isolatedGitEnv(gitDir: string): NodeJS.ProcessEnv {
-  return {
-    PATH: process.env.PATH,
-    GIT_DIR: gitDir,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_NO_REPLACE_OBJECTS: "1",
-    GIT_LITERAL_PATHSPECS: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    LC_ALL: "C",
-  };
-}
-
-function git(gitDir: string, args: readonly string[]): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      "git",
-      [...args],
-      { env: isolatedGitEnv(gitDir), encoding: "buffer", maxBuffer: MAX_BLOB_BYTES + 1024 },
-      (err, stdout) => {
-        if (err) reject(new Error(`git ${args[0] ?? ""} failed: ${err.message}`, { cause: err }));
-        else resolve(stdout);
-      },
-    );
-  });
-}
+const git = (gitDir: string, args: readonly string[]): Promise<Buffer> => runGit(gitDir, args);
 
 function kindOf(mode: string, type: string): RepoTreeEntry["kind"] | null {
   if (type === "blob" && (mode === "100644" || mode === "100755")) return "blob";

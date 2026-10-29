@@ -3450,7 +3450,6 @@ export class MotebitRuntime {
     // brake, and re-proposal re-prompts the human. (The voided call does get
     // its signed `denied` receipt, reason VOIDED_BY_NEW_MESSAGE: a record that
     // it never ran, not a "no".)
-    const voidedApproval = principal.foreign ? null : await this.streaming.voidPendingApproval();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
 
@@ -3463,6 +3462,10 @@ export class MotebitRuntime {
     const turnStartedAt = Date.now();
 
     try {
+      // Inside the try: the void signs a receipt, and a durable sink that
+      // rejects it must fail THIS turn, never wedge the runtime — the
+      // finally below releases the processing hold either way.
+      const voidedApproval = principal.foreign ? null : await this.streaming.voidPendingApproval();
       // Render the void FIRST — before any model output — so the surface
       // that started this turn sees what its message displaced (#462).
       if (voidedApproval != null) {

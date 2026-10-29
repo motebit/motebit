@@ -276,7 +276,9 @@ export interface StreamingDeps {
   onToolInvocation?: (receipt: SignableToolInvocationReceipt) => void;
   /**
    * Durable receipt sink (`ToolReceiptSink.append`, `tool-receipt-sink.ts`).
-   * Awaited for every signed receipt, in call order, BEFORE the turn moves
+   * Awaited for every receipt THIS manager signs (the streaming loop and the
+   * approval paths — not every tool path of the runtime; see
+   * `RuntimeConfig.toolReceiptSink`), in call order, BEFORE the turn moves
    * on and before `onToolInvocation` fans out. Fail-closed: when it is
    * wired, a rejection — or a receipt that cannot be signed (no key, a
    * signing fault) — throws out of the turn, so the run never continues

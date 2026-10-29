@@ -753,7 +753,7 @@ const ENTRY_POINTS: Record<string, (h: Harness) => Promise<void>> = {
       provider,
       providerName: "recording",
       reader: MemTree.withFile("docs/a.md", "teh\n"),
-      writer: new MemWriter(),
+      stager: new MemWriter(),
       receipts: new InMemoryToolReceiptSink(),
       runtimeVersion: "canary",
       clock: () => REPO_TASK_T0 + 60_000,

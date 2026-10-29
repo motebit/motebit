@@ -13,11 +13,15 @@
  * I/O is two ports (adapter pattern; the runtime is Ring 1):
  *   - `RepoTreeReader` — the tip's tree and blobs, read through git, never the
  *     filesystem (Node adapter: `apps/cli/src/repo-task/git-tree-reader.ts`);
- *   - `RepoPathWriter` — writes inside the worktree, refusing a symlink
- *     component and anything whose real path leaves the worktree (Node
- *     adapter: `apps/cli/src/repo-task/worktree-writer.ts`).
- * Every refusal that can be decided without I/O is decided here, BEFORE a
- * port is touched. A refusal is `denied`; a port that throws is `failed`.
+ *   - `RepoChangeStager` — stages a file's new content as a blob in git's
+ *     object store and builds the change commit from the staged map on a
+ *     private index; the worktree filesystem is never written (Node adapter:
+ *     `apps/cli/src/repo-task/git-change-stager.ts`). Amended 2026-10-29: a
+ *     path-based worktree writer cannot be made race-free without `openat`
+ *     (a two-swap race escaped), so no write goes through a filesystem path.
+ * Every refusal is about the path string or the tip's tree, and is decided
+ * here, BEFORE the stager is touched. A refusal is `denied`; a port that
+ * throws is `failed`.
  */
 
 import type { RepoChangeTool, RepoTaskScope, ToolDefinition, ToolResult } from "@motebit/protocol";
@@ -44,38 +48,34 @@ export interface RepoTreeReader {
   listTrackedPaths(): Promise<readonly Uint8Array[]>;
 }
 
-/** Why the writer refused a write (each is a `denied` call). */
-export type RepoPathWriteRefusal =
-  /** A component of the path is a symlink in the worktree. */
-  | "symlink_component"
-  /** The path's real location is outside the worktree. */
-  | "outside_worktree"
-  /** Something other than a regular file (a directory, a socket) is at the path. */
-  | "not_a_regular_file"
-  /** A directory on the path does not exist (the writer creates files, never directories). */
-  | "missing_directory"
-  /**
-   * A component exists only under another case spelling (a case-insensitive
-   * filesystem would have resolved the requested name to it).
-   */
-  | "case_variant"
-  /** The file has more than one hard link: writing it would write its other names too. */
-  | "hard_link"
-  /** A segment is a Windows device name (`con`, `nul`, `com1`, … with any extension). */
-  | "reserved_name"
-  /**
-   * The file opened was not the one the walk resolved (a directory or the
-   * file was swapped between the walk and the open). Reported after the open,
-   * so the path counts as touched.
-   */
-  | "path_raced";
+/** One path the change adds or modifies: git's own entry for it in the change commit. */
+export interface RepoStagedEntry {
+  readonly path: string;
+  /** Always `100644`: the stager writes regular files only. */
+  readonly mode: string;
+  /** The blob id the content was stored under. */
+  readonly blob: string;
+}
 
-export type RepoPathWriteResult =
-  { readonly ok: true } | { readonly ok: false; readonly refusal: RepoPathWriteRefusal };
-
-/** Writes one file inside the worktree, by its real path. */
-export interface RepoPathWriter {
-  write(path: string, content: Uint8Array): Promise<RepoPathWriteResult>;
+/**
+ * Stages new file content into git's object store — never the worktree —
+ * and builds the change commit from what was staged.
+ */
+export interface RepoChangeStager {
+  /** Store `content` as a blob and record `path → {100644, blob}`; a later stage of the same path replaces it. */
+  stage(path: string, content: Uint8Array): Promise<void>;
+  /**
+   * Build the change commit on the tip from the staged map, on a private
+   * index (no worktree, no repository index, no ref moved). Returns the
+   * commit and the entries that differ from the tip, sorted by path bytes.
+   */
+  buildChangeCommit(commit: {
+    readonly message: string;
+    readonly authorName: string;
+    readonly authorEmail: string;
+    /** Seconds since the epoch, for author and committer. */
+    readonly timestamp: number;
+  }): Promise<{ readonly headCommit: string; readonly entries: readonly RepoStagedEntry[] }>;
 }
 
 /** What a scope-built handler did: its receipt status and the result the model sees. */
@@ -175,7 +175,7 @@ function buildReadBlob(reader: RepoTreeReader): RepoTaskToolEntry {
 
 function buildWritePath(
   scope: RepoTaskScope,
-  writer: RepoPathWriter,
+  stager: RepoChangeStager,
   reader: RepoTreeReader,
 ): RepoTaskToolEntry {
   // Closed over the exact allowed path strings, copied and frozen: nothing the
@@ -237,18 +237,11 @@ function buildWritePath(
         return deny(`repo_write_path: ${path} is tracked as ${tracked.kind} ${tracked.mode}`);
       }
       const bytes = ENCODER.encode(content);
-      // Counted from the moment the writer may open the file: a write that
-      // fails part-way has still touched the path, so it counts toward
-      // max_changed_files. Only a refusal the writer made before opening
-      // anything gives the slot back.
-      const wasWritten = written.has(path);
+      // Counted from the moment the stager is called: a stage that fails
+      // still counts toward max_changed_files (fail-closed; nothing reaches
+      // the worktree either way).
       written.add(path);
-      const outcome = await writer.write(path, bytes);
-      if (!outcome.ok) {
-        const opened = outcome.refusal === "path_raced" || outcome.refusal === "hard_link";
-        if (!opened && !wasWritten) written.delete(path);
-        return deny(`repo_write_path: refused (${outcome.refusal})`);
-      }
+      await stager.stage(path, bytes);
       return { status: "completed", result: { ok: true, data: { path, bytes: bytes.length } } };
     },
   });
@@ -282,12 +275,12 @@ function buildWritePath(
 export function buildRepoTaskTools(
   tools: ReadonlySet<RepoChangeTool>,
   scope: RepoTaskScope,
-  ports: { readonly reader: RepoTreeReader; readonly writer: RepoPathWriter },
+  ports: { readonly reader: RepoTreeReader; readonly stager: RepoChangeStager },
 ): { registry: RepoTaskToolRegistry; expected: RepoTaskExpectedTools } {
   const entries: RepoTaskToolEntry[] = [];
   // Fixed order, independent of the tick's spelling.
   if (tools.has("repo_read_blob")) entries.push(buildReadBlob(ports.reader));
-  if (tools.has("repo_write_path")) entries.push(buildWritePath(scope, ports.writer, ports.reader));
+  if (tools.has("repo_write_path")) entries.push(buildWritePath(scope, ports.stager, ports.reader));
   const registry: RepoTaskToolRegistry = Object.freeze({ entries: Object.freeze(entries) });
   const expected = new Map(entries.map((e) => [e.definition.name, e] as const));
   return { registry, expected };

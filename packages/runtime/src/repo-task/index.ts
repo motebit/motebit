@@ -13,9 +13,8 @@ export type {
 } from "./authority.js";
 export { assertOfferedTools, buildRepoTaskTools, RepoTaskToolMismatchError } from "./tools.js";
 export type {
-  RepoPathWriteRefusal,
-  RepoPathWriteResult,
-  RepoPathWriter,
+  RepoChangeStager,
+  RepoStagedEntry,
   RepoTaskExpectedTools,
   RepoTaskToolEntry,
   RepoTaskToolHandler,

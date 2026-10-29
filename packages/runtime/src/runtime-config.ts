@@ -125,9 +125,15 @@ export interface RuntimeConfig {
    */
   onToolInvocation?: (receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void;
   /**
-   * Durable sink for every signed `ToolInvocationReceipt` this runtime
-   * produces — AI-loop calls (completed / failed / denied), approval
-   * resumes, and `invokeLocalTool`. Awaited per receipt in call order,
+   * Durable sink for the signed `ToolInvocationReceipt`s this runtime
+   * produces. FED BY: the streaming AI loop (`sendMessageStreaming` and the
+   * turns built on it — completed / failed / denied), the approval resume,
+   * refusal, supersede, void and expiry paths, and `invokeLocalTool`. NOT
+   * YET FED — these execute tools without signing a tool receipt at all:
+   * the non-streaming `sendMessage` turn, `executeToolGated` (MCP direct and
+   * relay dispatch) and the attached-surface `tool_call` frame; the single
+   * signing choke point for every tool execution is its own change. Awaited
+   * per receipt in call order,
    * before the in-session buffer and `onToolInvocation` see it.
    * Fail-closed: when set, a sink rejection, a missing signing key or a
    * signing fault throws out of the turn (or the `invokeLocalTool` call),

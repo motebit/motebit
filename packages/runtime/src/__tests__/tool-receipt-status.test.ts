@@ -1,6 +1,9 @@
 /**
- * Honest tool-receipt status on every path of the general runtime, recorded
- * in the durable sink (`RuntimeConfig.toolReceiptSink`):
+ * Honest tool-receipt status on the receipt-signing paths of the general
+ * runtime (the streaming loop, the approval paths, `invokeLocalTool` — not
+ * yet the non-streaming `sendMessage`, `executeToolGated` or the attached
+ * surface, which sign no tool receipt), recorded in the durable sink
+ * (`RuntimeConfig.toolReceiptSink`):
  *   - AI loop: success ⇒ completed, a throw or `ok:false` ⇒ failed, a policy
  *     refusal ⇒ denied — WITH a receipt (refusals used to get none);
  *   - approval resume: approved ⇒ the executed call's status, refused ⇒ denied;
@@ -255,6 +258,33 @@ describe("every proposed call that is not executed gets a denied receipt", () =>
     expect(second.some((c) => c.type === "approval_request")).toBe(true);
     expect(runtime.hasPendingApproval).toBe(true);
     expect(spies.gated).not.toHaveBeenCalled();
+  });
+});
+
+describe("a durable sink that rejects a void's receipt never wedges the runtime", () => {
+  it("turn 1 pauses, turn 2's void receipt is rejected (that turn fails), turn 3 runs", async () => {
+    let rejectNext = false;
+    const recorded = new InMemoryToolReceiptSink();
+    const sink: ToolReceiptSink = {
+      append: (r) => {
+        if (rejectNext) {
+          rejectNext = false;
+          return Promise.reject(new Error("sink unavailable"));
+        }
+        return recorded.append(r);
+      },
+    };
+    const { runtime } = await makeRuntime(["gated"], sink);
+    await drain(runtime.sendMessageStreaming("go"));
+    expect(runtime.hasPendingApproval).toBe(true);
+    rejectNext = true;
+    await expect(drain(runtime.sendMessageStreaming("something else"))).rejects.toThrow(
+      "sink unavailable",
+    );
+    // The processing hold was released: a third turn is not refused as busy.
+    const third = await drain(runtime.sendMessageStreaming("and now?"));
+    expect(third.some((c) => c.type === "result")).toBe(true);
+    expect(runtime.hasPendingApproval).toBe(false);
   });
 });
 

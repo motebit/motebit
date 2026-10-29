@@ -59,7 +59,7 @@ async function setup(
     provider: model,
     providerName: "scripted",
     reader: tree,
-    writer,
+    stager: writer,
     receipts: sink,
     runtimeVersion: "9.9.9",
     clock: opts.clock ?? (() => T0 + 60_000),
@@ -129,6 +129,16 @@ describe("repo task: the run cannot start without a valid tick", () => {
     [
       "a non-canonical allowed path",
       { scope: (s) => void (s.allowed_paths = ["docs/../a.md"]) },
+      undefined,
+    ],
+    [
+      "a unicode allowed path (ſ, a case-fold alias of s) the scope's rules reject",
+      { scope: (s) => void (s.allowed_paths = ["docs/ſ.md"]) },
+      undefined,
+    ],
+    [
+      "an allowed path with a space",
+      { scope: (s) => void (s.allowed_paths = ["docs/a b.md"]) },
       undefined,
     ],
     ["an allowed path the predicate refuses", { isPathPermitted: () => false }, undefined],
@@ -342,17 +352,7 @@ describe("repo task: repo_write_path is closed over the allowed paths", () => {
     }
   });
 
-  it("a writer refusal (symlink component) is denied", async () => {
-    const s = await setup([
-      [call("c1", "repo_write_path", { path: "docs/a.md", content: "x" })],
-      "done",
-    ]);
-    s.writer.refuse = { ok: false, refusal: "symlink_component" };
-    await runRepoTask(s.input);
-    expect(s.sink.list()[0]!.status).toBe("denied");
-  });
-
-  it("a writer that throws is failed", async () => {
+  it("a stager that throws is failed", async () => {
     const s = await setup([
       [call("c1", "repo_write_path", { path: "docs/a.md", content: "x" })],
       "done",
@@ -446,7 +446,7 @@ describe("repo task: repo_write_path refuses a case alias (the verifier's case r
   });
 });
 
-describe("repo task: a path counts toward max_changed_files once the writer may open it", () => {
+describe("repo task: a path counts toward max_changed_files once the stager is called", () => {
   const twoPaths: BundleOpts = {
     scope: (s) => void (s.allowed_paths = ["docs/a.md", "docs/b.md"]),
   };
@@ -464,21 +464,6 @@ describe("repo task: a path counts toward max_changed_files once the writer may 
     await runRepoTask(s.input);
     expect(s.sink.list().map((r) => r.status)).toEqual(["failed", "denied"]);
     expect(s.writer.calls.map((c) => c.path)).toEqual(["docs/a.md"]);
-  });
-
-  it("a race refused after the open still counts", async () => {
-    const s = await setup(twoWrites, { bundle: twoPaths });
-    s.writer.refuseNext = [{ ok: false, refusal: "path_raced" }];
-    await runRepoTask(s.input);
-    expect(s.sink.list().map((r) => r.status)).toEqual(["denied", "denied"]);
-    expect(s.writer.calls.map((c) => c.path)).toEqual(["docs/a.md"]);
-  });
-
-  it("a refusal made before anything was opened gives the slot back", async () => {
-    const s = await setup(twoWrites, { bundle: twoPaths });
-    s.writer.refuseNext = [{ ok: false, refusal: "symlink_component" }];
-    await runRepoTask(s.input);
-    expect(s.sink.list().map((r) => r.status)).toEqual(["denied", "completed"]);
   });
 });
 

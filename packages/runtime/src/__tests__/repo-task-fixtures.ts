@@ -23,8 +23,8 @@ import type { RepoTaskScope } from "@motebit/protocol";
 import type { AIResponse, ContextPack, ToolCall } from "@motebit/sdk";
 
 import type {
-  RepoPathWriter,
-  RepoPathWriteResult,
+  RepoChangeStager,
+  RepoStagedEntry,
   RepoTaskAgent,
   RepoTaskAuthorityBundle,
   RepoTreeEntry,
@@ -209,29 +209,31 @@ export class MemTree implements RepoTreeReader {
   }
 }
 
-/** The worktree writer, in memory. Records every write it was asked for. */
-export class MemWriter implements RepoPathWriter {
+/** The change stager, in memory. Records every stage it was asked for. */
+export class MemWriter implements RepoChangeStager {
   readonly calls: Array<{ path: string; text: string }> = [];
   readonly files = new Map<string, string>();
-  refuse: RepoPathWriteResult | null = null;
-  /** Refusals for the next calls, in order (then `refuse`). */
-  refuseNext: RepoPathWriteResult[] = [];
   throwOnWrite = false;
-  /** Throw on the next N calls (a write that fails after the file was opened). */
+  /** Throw on the next N calls (a stage that fails part-way). */
   throwNext = 0;
-  write(path: string, content: Uint8Array): Promise<RepoPathWriteResult> {
+  stage(path: string, content: Uint8Array): Promise<void> {
     const text = new TextDecoder().decode(content);
     this.calls.push({ path, text });
-    if (this.throwOnWrite) return Promise.reject(new Error("disk full"));
+    if (this.throwOnWrite) return Promise.reject(new Error("object store unwritable"));
     if (this.throwNext > 0) {
       this.throwNext--;
-      return Promise.reject(new Error("disk full mid-write"));
+      return Promise.reject(new Error("object store failed mid-write"));
     }
-    const next = this.refuseNext.shift();
-    if (next) return Promise.resolve(next);
-    if (this.refuse) return Promise.resolve(this.refuse);
     this.files.set(path, text);
-    return Promise.resolve({ ok: true });
+    return Promise.resolve();
+  }
+  buildChangeCommit(): Promise<{ headCommit: string; entries: RepoStagedEntry[] }> {
+    return Promise.resolve({
+      headCommit: "2".repeat(40),
+      entries: [...this.files.keys()]
+        .sort()
+        .map((path) => ({ path, mode: "100644", blob: "3".repeat(40) })),
+    });
   }
 }
 

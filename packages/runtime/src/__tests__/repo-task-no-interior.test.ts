@@ -56,7 +56,7 @@ async function runArmed(turns: Parameters<typeof scriptedModel>[0]) {
     provider: model,
     providerName: "scripted",
     reader: MemTree.withFile("docs/a.md", "teh\n"),
-    writer: new MemWriter(),
+    stager: new MemWriter(),
     receipts: new InMemoryToolReceiptSink(),
     runtimeVersion: "9.9.9",
     clock: () => T0 + 60_000,
