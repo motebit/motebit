@@ -79,12 +79,12 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 
-interface Finding {
+export interface Finding {
   readonly file: string;
   readonly line: number;
   readonly phrase: string;
@@ -197,10 +197,12 @@ const EXCLUDED_PATTERNS: ReadonlyArray<RegExp> = [
  * the top of LIQUESCENTIA.md shifted both sentences by two and broke the
  * gate with no change to either sentence.
  */
-const ALLOWLIST: ReadonlyArray<{
+export interface AllowlistEntry {
   readonly file: string;
   readonly text: string;
-}> = [
+}
+
+export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
   {
     file: "LIQUESCENTIA.md",
     text: "A glass droplet in a spectrally uniform medium is invisible. Transmission at 0.94 means 94% of incident light passes through. If the light entering from every direction has the same color and intensity, the transmitted light is indistinguishable from the ambient field. The droplet vanishes — not because it is absent, but because the medium offers nothing for its optics to differentiate.",
@@ -213,28 +215,30 @@ const ALLOWLIST: ReadonlyArray<{
 
 const ALLOWED_EXTENSIONS = new Set([".md", ".mdx", ".ts", ".tsx"]);
 
-function walk(dir: string, out: string[]): void {
+function walk(root: string, dir: string, out: string[]): void {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     // Match against the path RELATIVE to the repo root: when this checkout is
     // itself an agent worktree, every absolute path contains
     // `/.claude/worktrees/`, and matching the absolute path excluded the whole
     // repo — the gate scanned nothing and passed.
-    const rel = "/" + path.relative(REPO_ROOT, full);
+    const rel = "/" + path.relative(root, full);
     if (EXCLUDED_PATTERNS.some((p) => p.test(rel))) continue;
     if (entry.isDirectory()) {
-      walk(full, out);
+      walk(root, full, out);
     } else if (entry.isFile() && ALLOWED_EXTENSIONS.has(path.extname(entry.name))) {
       out.push(full);
     }
   }
 }
 
-type AllowlistEntry = (typeof ALLOWLIST)[number];
-
 /** The allowlist entry whose file and exact line text match, if any. */
-function allowlistEntry(relPath: string, line: string): AllowlistEntry | undefined {
-  return ALLOWLIST.find((entry) => relPath === entry.file && line === entry.text);
+function allowlistEntry(
+  allowlist: ReadonlyArray<AllowlistEntry>,
+  relPath: string,
+  line: string,
+): AllowlistEntry | undefined {
+  return allowlist.find((entry) => relPath === entry.file && line === entry.text);
 }
 
 /**
@@ -248,23 +252,34 @@ function stripBacktickCitations(line: string): string {
   return line.replace(/`[^`]+`/g, "");
 }
 
-function main(): void {
+export interface OntologyReport {
+  scanned: number;
+  findings: Finding[];
+  /** Allowlist entries that do not match exactly one line, with the count they do match. */
+  badEntries: { entry: AllowlistEntry; count: number }[];
+}
+
+/** The whole check over the tree at `root`; pure apart from reading files. */
+export function checkLiquescentOntology(
+  root: string,
+  allowlist: ReadonlyArray<AllowlistEntry> = ALLOWLIST,
+): OntologyReport {
   const files: string[] = [];
-  walk(REPO_ROOT, files);
+  walk(root, root, files);
 
   const findings: Finding[] = [];
   /** Lines in each entry's file whose text equals the entry's text. */
-  const matchCount = new Map<AllowlistEntry, number>(ALLOWLIST.map((e) => [e, 0]));
+  const matchCount = new Map<AllowlistEntry, number>(allowlist.map((e) => [e, 0]));
   let scanned = 0;
 
   for (const absPath of files) {
-    const relPath = path.relative(REPO_ROOT, absPath);
+    const relPath = path.relative(root, absPath);
     if (EXCLUDED_FILES.has(relPath)) continue;
 
     scanned++;
     const content = fs.readFileSync(absPath, "utf-8");
     const lines = content.split("\n");
-    for (const entry of ALLOWLIST) {
+    for (const entry of allowlist) {
       if (entry.file !== relPath) continue;
       matchCount.set(entry, lines.filter((l) => l === entry.text).length);
     }
@@ -276,7 +291,7 @@ function main(): void {
 
       for (const { pattern, name } of FORBIDDEN_PATTERNS) {
         if (pattern.test(cleaned)) {
-          const allowed = allowlistEntry(relPath, line);
+          const allowed = allowlistEntry(allowlist, relPath, line);
           // Allowed only while the entry pins exactly one line.
           if (allowed && matchCount.get(allowed) === 1) continue;
           findings.push({
@@ -293,7 +308,14 @@ function main(): void {
   // An entry must match exactly one line. Zero: its sentence was edited or
   // removed, so the allowance points at nothing (stale). Two or more: a
   // verbatim copy appeared, which one reviewed entry must not cover.
-  const stale = ALLOWLIST.filter((entry) => matchCount.get(entry) !== 1);
+  const badEntries = allowlist
+    .filter((entry) => matchCount.get(entry) !== 1)
+    .map((entry) => ({ entry, count: matchCount.get(entry) ?? 0 }));
+  return { scanned, findings, badEntries };
+}
+
+function main(): void {
+  const { scanned, findings, badEntries: stale } = checkLiquescentOntology(REPO_ROOT);
 
   if (findings.length === 0 && stale.length === 0) {
     process.stdout.write(
@@ -316,9 +338,9 @@ function main(): void {
     process.stderr.write(
       `\n${stale.length} ALLOWLIST entr(ies) in scripts/check-liquescent-ontology.ts do not match exactly one line:\n\n`,
     );
-    for (const entry of stale) {
+    for (const { entry, count } of stale) {
       process.stderr.write(
-        `  ${entry.file} — ${matchCount.get(entry)} line(s) with this exact text (must be exactly 1)\n    text: ${entry.text.slice(0, 200)}\n\n`,
+        `  ${entry.file} — ${count} line(s) with this exact text (must be exactly 1)\n    text: ${entry.text.slice(0, 200)}\n\n`,
       );
     }
     process.stderr.write(
@@ -341,4 +363,7 @@ function main(): void {
   process.exit(1);
 }
 
-main();
+// Run only when invoked directly; the unit test imports checkLiquescentOntology.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main();
+}
