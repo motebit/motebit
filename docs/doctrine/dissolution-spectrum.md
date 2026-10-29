@@ -1,5 +1,7 @@
 # Dissolution spectrum — persistence's multi-axis physics
 
+> **Layer:** narrative
+
 [`LIQUESCENTIA.md`](../../LIQUESCENTIA.md) §V.5 names persistence: the medium permits a motebit to cohere "as long as its internal cohesion exceeds the medium's dissolution pressure." Until this doctrine, that pressure was metaphor — evocative, but unlike breathing rhythm (`~0.3 Hz` derived from `ω² = n(n-1)(n+2)σ/ρR³`, see [`liquescentia-as-substrate.md`](liquescentia-as-substrate.md) §V.2), it had no equation, no constant, no code-anchored derivation.
 
 This doctrine closes that asymmetry. Dissolution pressure is **multi-axis** — a spectrum of decay constants, one per persistence axis — and each axis has a real value in code today. The aggregate determines whether the motebit's interior cohesion exceeds the medium's claim on it.

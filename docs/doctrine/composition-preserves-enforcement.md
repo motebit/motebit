@@ -1,5 +1,7 @@
 # Composition preserves enforcement
 
+> **Layer:** narrative
+
 > **Motebit must prove not only that its components are correct, but that its intended guarantees remain enforced when those components are composed into the deployed system.**
 
 This is the obligation the gate suite does not individually carry. Every gate proves a _local_ property of a part; none of them proves that the part is actually reached, with the right inputs, in the artifact that ships. The gap between those two is where a month of real defects lived — so the obligation gets named, and its enforcement mechanism gets built, rather than being rediscovered one production incident at a time.

@@ -1,5 +1,7 @@
 # The sensorium — one perception root, typed at every ingress
 
+> **Layer:** narrative
+
 **Status:** doctrine (connector class — links-only, governs construction; the same register as [`agentic-era-engineering.md`](agentic-era-engineering.md)). No new gate: this memo names the structure the existing gates already enforce piecewise, so a future sense cannot arrive outside it.
 
 **The claim.** The motebit has exactly one sensorium, and it is rooted in the runtime — never in a surface. Every fact the interior can know arrives through a typed ingress that carries its own provenance, and every layer of that sensorium is already marked at the dispatch layer, not by prompt willpower. Surfaces vary only in how much _body_ they display and how much _world_ they share; they never vary in what the interior perceives. A CLI motebit and a spatial motebit perceive identically — Ring 1 (capability rings, root `CLAUDE.md`) applied to perception.

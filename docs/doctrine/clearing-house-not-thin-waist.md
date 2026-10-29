@@ -1,5 +1,7 @@
 # Clearing house, not thin waist
 
+> **Layer:** narrative
+
 **The protocol is the thin waist motebit gives away to earn the routing. The business is the clearing house the routing accrues back to. They are different layers, and conflating them is the founding strategic error this memo exists to forbid.**
 
 This is the resolution of a recurring founder-surface question: _"is motebit the TCP/IP, the Linux, or the Kubernetes of the agentic economy?"_ The honest answer is that those three are not three flavors of one compliment — they are three mutually incompatible theories of **where value pools**, and reaching for all three at once hides the one trap that can kill the company. This memo names the trap and pins the correct category so the answer stops drifting back into "thin waist" marketing language.

@@ -1,5 +1,7 @@
 # The Music of the Medium
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract

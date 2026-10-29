@@ -1,5 +1,7 @@
 # Treasury custody — two phases, one decision deferred
 
+> **Layer:** narrative
+
 A motebit relay that holds USDC settlement fees has two structurally different custody questions, with different blast radii. Conflating them produces either over-built phase-1 setups (hot custody for funds you only receive) or under-built phase-2 setups (manual sweeps that don't scale to real volume). Naming them separately lets phase 1 ship today and phase 2 wait for evidence.
 
 ## The two phases

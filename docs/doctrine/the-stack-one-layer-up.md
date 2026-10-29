@@ -1,5 +1,7 @@
 # The stack, one layer up
 
+> **Layer:** narrative
+
 Hosted agent platforms have converged on five primitives. The same five primitives motebit has been building. The five map across the two architectures one-to-one — though motebit's surface is a superset, adding receipts, settlement, federation, and signed migration that hosted platforms typically don't expose. The structural difference that matters is which layer owns the identity.
 
 This doctrine is the first stop for a reader who has used a hosted agent platform — Claude Code, Cursor, Replit Agent, OpenAI tasks, any of them — and is asking where motebit fits.

@@ -1,5 +1,7 @@
 # README as glass
 
+> **Layer:** narrative
+
 The motebit README is a surface. The interior — derivations, incident histories, mathematical justifications, six-paper chains of reasoning — lives behind it.
 
 An external reader traced the pattern precisely:

@@ -2815,6 +2815,17 @@ export const CORPUS_INDEX: CorpusIndex = {
       length: 62,
     },
     {
+      id: "DROPLET.md#motebit-a-droplet-of-intelligence-under-surface-tension",
+      source: "DROPLET.md",
+      title: "Motebit: A Droplet of Intelligence Under Surface Tension",
+      content: "> **Layer:** narrative\n\n---",
+      termFrequencies: {
+        layer: 1,
+        narrative: 1,
+      },
+      length: 2,
+    },
+    {
       id: "DROPLET.md#abstract",
       source: "DROPLET.md",
       title: "Abstract",
@@ -4305,6 +4316,17 @@ export const CORPUS_INDEX: CorpusIndex = {
         motebit: 1,
       },
       length: 80,
+    },
+    {
+      id: "THE_SOVEREIGN_INTERIOR.md#motebit-the-sovereign-interior",
+      source: "THE_SOVEREIGN_INTERIOR.md",
+      title: "Motebit: The Sovereign Interior",
+      content: "> **Layer:** narrative\n\n---",
+      termFrequencies: {
+        layer: 1,
+        narrative: 1,
+      },
+      length: 2,
     },
     {
       id: "THE_SOVEREIGN_INTERIOR.md#abstract",
@@ -6159,6 +6181,17 @@ export const CORPUS_INDEX: CorpusIndex = {
       length: 79,
     },
     {
+      id: "THE_METABOLIC_PRINCIPLE.md#the-metabolic-principle",
+      source: "THE_METABOLIC_PRINCIPLE.md",
+      title: "The Metabolic Principle",
+      content: "> **Layer:** narrative\n\n---",
+      termFrequencies: {
+        layer: 1,
+        narrative: 1,
+      },
+      length: 2,
+    },
+    {
       id: "THE_METABOLIC_PRINCIPLE.md#abstract",
       source: "THE_METABOLIC_PRINCIPLE.md",
       title: "Abstract",
@@ -7896,7 +7929,7 @@ export const CORPUS_INDEX: CorpusIndex = {
     throughout: 1,
     layered: 1,
     deps: 1,
-    layer: 3,
+    layer: 6,
     violations: 1,
     break: 2,
     split: 1,
@@ -8225,6 +8258,7 @@ export const CORPUS_INDEX: CorpusIndex = {
     something: 4,
     broken: 1,
     let: 1,
+    narrative: 3,
     present: 3,
     artificial: 2,
     whose: 2,
@@ -9412,8 +9446,8 @@ export const CORPUS_INDEX: CorpusIndex = {
     ensuring: 1,
     commodity: 1,
   },
-  averageLength: 100.73563218390805,
-  totalDocuments: 87,
-  sourceHash: "59387a501e49bab26798164b5870182f30b3db106985cf67c64f263cad608e6a",
-  generatedAt: "sha256:59387a501e49bab2",
+  averageLength: 97.44444444444444,
+  totalDocuments: 90,
+  sourceHash: "9a15bb2e6ea28f0af5ad2c95a86cc0024f1f0c6e05045a23534033ba66e1e47b",
+  generatedAt: "sha256:9a15bb2e6ea28f0a",
 };

@@ -1,5 +1,7 @@
 # Motebit: The Sovereign Interior
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract

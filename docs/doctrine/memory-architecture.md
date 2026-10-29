@@ -1,5 +1,7 @@
 # Memory architecture — a signed, sovereign, bi-temporal knowledge graph that decays
 
+> **Layer:** narrative
+
 Memory is not a feature bolted onto the chat surface. It is the **interior that accumulates** — the substance of the second of the three things no one else is building together (persistent identity, _accumulated trust_, governance at the boundary). Identity is the boundary; the model is the fuel; memory is what the metabolism leaves behind. So memory is held to the same bar as identity, receipts, policy, and settlement: typed, signed, sovereign, governed. The one-line end state:
 
 > **A signed, sovereign, bi-temporal knowledge graph that decays.**

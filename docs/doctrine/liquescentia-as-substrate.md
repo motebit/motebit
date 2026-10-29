@@ -1,5 +1,7 @@
 # Liquescentia as substrate — the medium in code
 
+> **Layer:** narrative
+
 [`LIQUESCENTIA.md`](../../LIQUESCENTIA.md) derives the medium's five properties from droplet physics. This doctrine maps each property to its canonical code home and names the AR-glasses endgame.
 
 Liquescentia is the shared physics every motebit-rendering surface obeys. Web, desktop, mobile, spatial, and future glasses all render Liquescentia conditions — spatial is the surface where the medium is most visible, but the physics inherits everywhere.

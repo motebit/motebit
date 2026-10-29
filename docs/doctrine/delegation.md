@@ -1,5 +1,7 @@
 # Delegation
 
+> **Layer:** narrative
+
 Delegation is the architectural primitive that turns motebit's other five primitives into a system rather than a catalog.
 
 ## The spine: delegation is the connector, not the sixth sibling

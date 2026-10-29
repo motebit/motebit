@@ -1,5 +1,7 @@
 # NIST alignment as derivation, not certification
 
+> **Layer:** narrative
+
 Motebit's relationship to NIST standards is not "we comply with X." It is "the primitives NIST is converging on are the primitives we derived from droplet physics." The alignment is the **consequence** of the architecture being correct, not an external compliance posture pulling the architecture into shape. This document is the canonical map — both for our own coherence and for any reader (federal, enterprise, NCCoE) asking how motebit's protocol surface meets the standards landscape.
 
 The April 2, 2026 NCCoE submission ([`nist-submission.md`](../../nist-submission.md)) is the frozen historical artifact of that engagement; this doctrine is the living version. The submission cited a snapshot; the doctrine moves with the code and is structurally bound to it via `check-doctrine-citations` (drift-defense #84). Standards we cite resolve; ones we don't claim don't appear.

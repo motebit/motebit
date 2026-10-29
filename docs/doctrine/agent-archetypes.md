@@ -1,5 +1,7 @@
 # Agent archetypes — first citizens of the market
 
+> **Layer:** narrative
+
 **The protocol births the grammar. The runtime proves it with first citizens.**
 
 An archetype is a first-party molecule — a marketplace agent built and operated by the protocol's own operator — whose job is threefold: prove the delegation loop in production every day, set the blueprint other builders fork, and generate the first dispute-grade history the clearing house accrues ([`clearing-house-not-thin-waist.md`](clearing-house-not-thin-waist.md)). The v1 slate is **the Researcher** (the existing research molecule, whose citations already carry re-verifiable evidence provenance — `services/research/src/research.ts`), **the Auditor** (a new, deliberately LLM-free molecule that measures other agents against the public verification surface and signs the measurement as an eval attestation, [`evals-as-attestations.md`](evals-as-attestations.md)), and **the Clerk** (§6 — the money-execution pole: a molecule that _spends_ under a signed standing-delegation grant, `services/clerk/src/clerk.ts`), over the atom fleet (web-search, read-url, summarize).

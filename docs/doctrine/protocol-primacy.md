@@ -1,5 +1,7 @@
 # Protocol primacy
 
+> **Layer:** narrative
+
 **Motebit is a protocol with a company on top, not a company with a protocol on the side.**
 
 This is the constitutional invariant. Every drift gate, every architectural split, every other doctrine memo in this directory is downstream of this single commitment. The protocol exists and functions identically whether the user pays motebit-cloud, brings their own keys, or runs entirely on-device. The business is a service-bundling convenience layer that captures margin on top of a substrate that works without it.

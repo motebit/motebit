@@ -1,5 +1,7 @@
 # Memory never confers authority
 
+> **Layer:** law (grantless R4 needs approval; the grant's signature is verified; a grant binds its presenter) — enforced by `packages/policy/src/__tests__/grant-authorizes-r4.test.ts`, `packages/runtime/src/__tests__/grant-verifier.test.ts`, `packages/runtime/src/__tests__/grant-presenter-binding.test.ts`
+
 **Status:** shipped (invariant + producer seam, 2026-06-10). Grant store / inbound-token plumbing / relay revocation feed deferred behind the named triggers in `docs/proposals/standing-delegation-v1.md` §6b.
 **Code:** `packages/policy/src/policy-gate.ts` (step 8b), `packages/runtime/src/grant-verifier.ts` (`verifyGrantForTurn`), `packages/runtime/src/interactive-delegation.ts` (explicit `riskHint`).
 **Gate:** `check-money-authority`.

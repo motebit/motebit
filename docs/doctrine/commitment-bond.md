@@ -1,5 +1,7 @@
 # Commitment bond — an anti-sybil staked signal (NOT collateral, NOT recourse)
 
+> **Layer:** law (the bonded address is key-derived; an under-funded bond reads underbacked) — enforced by `packages/crypto/src/__tests__/bond.test.ts`, `services/relay/src/__tests__/commitment-bond.test.ts`
+
 The relay's revenue rests on a coordination moat — trusted, dispute-grade history — but its
 recourse today is dispute-resolution-only with no capital behind it: `executeFundAction`
 (`services/relay/src/disputes.ts`) **no-ops on a P2P / zero-locked dispute**, exactly where money

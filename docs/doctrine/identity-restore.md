@@ -1,5 +1,7 @@
 # Identity restore
 
+> **Layer:** narrative
+
 **You own the identity, so you can also reclaim it.** Restore-from-backup is the missing half of identity export. Without it, "you own your motebit" carries an asterisk: _as long as your device's keystore stays intact_. The arc that shipped 2026-05-15 closes that asterisk on every flat surface.
 
 This doctrine codifies the architectural shape of the restore flow, the cross-surface invariants that make it composable, and the design calls baked into the v1 contract.

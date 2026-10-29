@@ -1,5 +1,7 @@
 # Motebit: The Self-Signing Body
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract

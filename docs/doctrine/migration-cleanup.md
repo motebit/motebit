@@ -1,5 +1,7 @@
 # Migration cleanup
 
+> **Layer:** narrative
+
 Backwards-compatibility code — schema migrations, legacy-format migrators, version-guarded branches — accumulates faster than it retires. Left unchecked, a project's "how we got here" outgrows its "how it works today." The question "when can we strip this?" has a durable answer that doesn't drift with release schedules.
 
 ## The wrong question

@@ -1,5 +1,7 @@
 # Security boundaries
 
+> **Layer:** narrative
+
 ## Sybil defense (five layers)
 
 Self-delegation must not farm trust.

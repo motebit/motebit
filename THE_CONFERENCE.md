@@ -1,5 +1,7 @@
 # The Conference of Agents
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract

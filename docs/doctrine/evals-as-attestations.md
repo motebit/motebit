@@ -1,5 +1,7 @@
 # Evals as attestations, not receipts
 
+> **Layer:** narrative
+
 Signed evaluation artifacts are an attestation, not a receipt. This memo names the category split so future contributors don't re-litigate whether an `EvalReceipt` should join the [three-type receipt family](receipts-unified.md), and records the trigger for promoting the deferred protocol primitive when a real consumer arrives.
 
 > **Status (2026-07-08): promotion trigger fired — the primitive ships.** See [§Promotion](#promotion-2026-07-08) below. The deferral sections are kept as the historical record of the discipline that sequenced it.

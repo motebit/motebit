@@ -1,5 +1,7 @@
 # Memory provenance — source is assigned, never claimed
 
+> **Layer:** law (spoofed provenance markers are escaped; the marker sits outside the data boundary) — enforced by `packages/ai-core/src/__tests__/index.test.ts`
+
 **Status:** shipped (tenth registered registry, 2026-06-10).
 **Code:** `packages/protocol/src/memory-source.ts`, formation threading across `packages/memory-graph` / `packages/ai-core` / `packages/runtime` / `packages/reflection` / `packages/mcp-server`.
 **Gate:** `check-memory-source-canonical` (drift-defenses #122).

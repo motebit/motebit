@@ -1,5 +1,7 @@
 # Motebit: A Droplet of Intelligence Under Surface Tension
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract

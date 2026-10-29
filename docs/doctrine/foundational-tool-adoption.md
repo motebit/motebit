@@ -1,5 +1,7 @@
 # Foundational-tool adoption is gated on defensive-gate compatibility
 
+> **Layer:** narrative
+
 Adopting a new major of a foundational tool — TypeScript, Node, vitest, the bundler, the linter — is not gated on the tool being _available_ and the build being _green_. It is gated on the tool's **downstream defensive gates** (typed-linting, coverage, drift gates) continuing to work cleanly under it. A tool upgrade that leaves a safety gate silently degraded is a regression in defensive posture even when the tool itself is correct and the code still compiles.
 
 ## The failure shape

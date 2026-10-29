@@ -1,5 +1,7 @@
 # Identity is boundary-universal
 
+> **Layer:** narrative
+
 The sovereign Ed25519 identity is the same primitive at every boundary the agent
 touches. It is not a relay credential, a payment key, and a web signature that
 happen to share a curve — it is **one identity, presented at many membranes.**

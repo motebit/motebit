@@ -1,5 +1,7 @@
 # Motebit: The Actor Principle
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract
