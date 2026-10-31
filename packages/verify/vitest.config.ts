@@ -15,21 +15,19 @@ export default defineMotebitTest({
   // pointed at was not measured.
   coverageExclude: ["src/index.ts"],
   thresholds: {
-    // Package floor, measured with cli.ts included. Lower DIGITS than the old
-    // 90/75/100/90, but strictly more enforcement: that number guarded 8
-    // statements, this one guards 345. Do not read the drop as a ratchet-down
-    // — read `git log` for this file.
+    // Package floor, measured with cli.ts included (357 statements guarded).
     //
-    // Functions sit lowest (9/19) because the remaining ten are the command
-    // bodies, which the existing suite drives through `spawnSync`. That is
-    // real end-to-end verification the parent process cannot instrument, so
-    // the measured function number understates what is actually tested.
-    // Closing it means making the command bodies callable in-process, which
-    // is the named lever in coverage-graduation.json.
-    statements: 58,
-    branches: 50,
-    functions: 47,
-    lines: 56,
+    // GRADUATED 2026-10-31 (coverage-graduation.json): 58/50/47/56 -> the
+    // floor below. The command bodies used to be reached only through
+    // `spawnSync`, which the parent's v8 cannot instrument; they now also run
+    // in-process through `src/__tests__/helpers/run-main.ts`, which drives
+    // the real `main()` (no seam added to cli.ts). Measured 96.9/94.6/100/97.0;
+    // the floor keeps the repo's 2-point CI-variance margin (bf254dd88),
+    // functions held at 100 (near-full metrics take no margin).
+    statements: 94,
+    branches: 92,
+    functions: 100,
+    lines: 94,
     // adapters.ts keeps its own high bar so widening the package scope costs
     // no enforcement on the file that already had it. It measures 100% on all
     // four axes today; this floor is ABOVE the 90/75/100/90 it previously sat

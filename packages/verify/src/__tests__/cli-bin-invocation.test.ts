@@ -59,6 +59,13 @@ describe("isMainModule (symlink-robust entry-point guard)", () => {
   it("returns false when there is no argv[1]", () => {
     expect(isMainModule(import.meta.url, undefined)).toBe(false);
   });
+
+  it("returns false (never throws) when argv[1] does not resolve on disk", () => {
+    // realpathSync throws ENOENT; the guard must swallow it and decline to
+    // run main(), so a library import under an odd argv never crashes.
+    const missing = join(tmpdir(), "mv-guard-does-not-exist", "nope.js");
+    expect(isMainModule(import.meta.url, missing)).toBe(false);
+  });
 });
 
 describe("motebit-verify built binary, invoked through a symlink (e2e)", () => {
