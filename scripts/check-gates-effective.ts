@@ -339,11 +339,15 @@ export const PROBES: ReadonlyArray<Probe> = [
     proves:
       "flags a graduation commitment whose target_date has passed while its live coverage thresholds still fall short of the target — the raise-by promise rotting silently past its deadline",
     perturb: () =>
-      // Back-date every entry that STILL has a gap. The deadline gate then
-      // fires: past target_date + target unmet. Cleanup restores verbatim.
+      // INJECT a synthetic broken commitment: an extra entry, past its
+      // target_date, whose target sits above ANY possible live threshold
+      // (101 on every axis; vitest thresholds top out at 100). The deadline
+      // gate must fire on it: past target_date + target unmet. Cleanup
+      // restores the manifest verbatim.
       //
-      // Selected by GAP, never by a literal. Two prior forms of this probe
-      // went vacuous, each coupled to manifest data that legitimately moved:
+      // Injected, never selected from the real entries. Three prior forms of
+      // this probe went vacuous, each coupled to manifest data that
+      // legitimately moved:
       //
       //   1. It back-dated core-identity by name, and proved nothing once
       //      that package graduated (2026-08-13) — entry present, targets met.
@@ -352,35 +356,52 @@ export const PROBES: ReadonlyArray<Probe> = [
       //      2026-11-30 — the literal then matched only graduated records, so
       //      main went red on the push after the PR (the PR itself did not
       //      touch scripts/, so gate-effectiveness never ran on it).
+      //   3. It back-dated whichever entries still had a gap, and had nothing
+      //      to back-date once verify graduated (2026-10-31) and every entry
+      //      met its target. Graduating every commitment is the policy
+      //      SUCCEEDING; a probe that breaks when it does asserts the opposite
+      //      of the policy it defends.
       //
-      // The manifest is data the probe must not know by value. Parse it and
-      // back-date whichever entries have `current < target` on any axis —
-      // exactly the predicate the gate enforces (`meetsTarget`), so the probe
-      // tracks the cohort as packages graduate, re-baseline, or move dates.
-      //
-      // If no entry has a gap, throw rather than return the file unchanged: a
-      // silent no-op reads as "gate exited 0" and points the reader at the
-      // gate, when the truth is the gate has no live commitment left to
-      // enforce and the probe (not the gate) needs a decision.
+      // The synthetic entry reuses a REAL package and its vitest config, so
+      // the gate reads real live thresholds exactly as it does for every
+      // entry: preferably one already in the manifest (a config the gate is
+      // known to parse); when the manifest is empty, @motebit/crypto, which
+      // is on the identity path by definition. Its `current` copies the
+      // borrowed entry's so the probe adds no DRIFT noise of its own (in the
+      // empty-manifest fallback the gate prints one DRIFT line, which never
+      // affects its exit code).
       mutateFile("coverage-graduation.json", (src) => {
         type Axes = Record<"statements" | "branches" | "functions" | "lines", number>;
-        const manifest = JSON.parse(src) as {
-          packages: Array<{ package: string; current: Axes; target: Axes; target_date: string }>;
+        type Entry = {
+          package: string;
+          vitest_config: string;
+          current: Axes;
+          target: Axes;
+          target_date: string;
+          rationale: string;
         };
-        const axes = ["statements", "branches", "functions", "lines"] as const;
-        const gapped = manifest.packages.filter((e) =>
-          axes.some((axis) => e.current[axis] < e.target[axis]),
-        );
-        if (gapped.length === 0) {
+        const manifest = JSON.parse(src) as { packages: Entry[] };
+        const unreachable: Axes = { statements: 101, branches: 101, functions: 101, lines: 101 };
+        const borrowed: Pick<Entry, "package" | "vitest_config" | "current"> = manifest
+          .packages[0] ?? {
+          package: "@motebit/crypto",
+          vitest_config: "packages/crypto/vitest.config.ts",
+          current: unreachable,
+        };
+        if (!existsSync(resolve(ROOT, borrowed.vitest_config))) {
           throw new Error(
-            "probe vacuous: every coverage-graduation.json entry already meets its target, so " +
-              "there is no commitment for check-coverage-graduation to enforce. Either the " +
-              "registry is genuinely fully graduated (retire the probe and the gate together) or " +
-              "an entry's `current` snapshot has drifted above its `target` — see " +
-              "docs/doctrine/coverage-graduation.md.",
+            `check-coverage-graduation probe: borrowed vitest config ${borrowed.vitest_config} ` +
+              "does not exist — point the probe's fallback at a real package's vitest.config.ts.",
           );
         }
-        for (const entry of gapped) entry.target_date = "2020-01-01";
+        manifest.packages.push({
+          package: borrowed.package,
+          vitest_config: borrowed.vitest_config,
+          current: { ...borrowed.current },
+          target: unreachable,
+          target_date: "2020-01-01",
+          rationale: "check-gates-effective synthetic probe entry (restored after the run).",
+        });
         return `${JSON.stringify(manifest, null, 2)}\n`;
       }),
   },
