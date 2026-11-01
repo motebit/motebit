@@ -124,6 +124,25 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+/** The registered settlement address the stubbed relay holds per worker (= the discovered one). */
+const REGISTERED_ADDRESS: Record<string, string> = {
+  "worker-a": "WorkerAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "worker-b": "WorkerBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+};
+
+/**
+ * The current relay's `/p2p-eligibility` answer: cold-start pairs are eligible
+ * only with the ack, and the worker's REGISTERED settlement address is
+ * confirmed (the payer refuses a pre-flight that confirms none).
+ */
+function eligibilityResponse(url: string): Response {
+  const workerId = /\/agents\/([^/]+)\/p2p-eligibility/.exec(url)?.[1] ?? "";
+  return jsonResponse({
+    allowed: url.includes("acknowledge_no_history_risk=true"),
+    settlement_address: REGISTERED_ADDRESS[decodeURIComponent(workerId)],
+  });
+}
+
 /** Two rankable local workers so the selector runs a REAL ranked pass. */
 function stubRelayAndRpcFetch() {
   vi.stubGlobal(
@@ -154,8 +173,7 @@ function stubRelayAndRpcFetch() {
             },
           ],
         });
-      if (url.includes("/p2p-eligibility"))
-        return jsonResponse({ allowed: url.includes("acknowledge_no_history_risk=true") });
+      if (url.includes("/p2p-eligibility")) return eligibilityResponse(url);
       if (url.includes("/listing"))
         return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.05 }] });
       if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
@@ -460,8 +478,7 @@ describe("defaultCreateMoneyRuntime — money-without-authority fails CLOSED at 
               },
             ],
           });
-        if (url.includes("/p2p-eligibility"))
-          return jsonResponse({ allowed: url.includes("acknowledge_no_history_risk=true") });
+        if (url.includes("/p2p-eligibility")) return eligibilityResponse(url);
         if (url.includes("/listing"))
           return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.05 }] });
         // Fail the submission fast and definitively (no #885 retry) — the

@@ -562,9 +562,10 @@ describe("invokeCapability — P2P path selection", () => {
         });
       }
       // Pre-flight must confirm eligibility before the irreversible broadcast
-      // (fail-closed); an eligible worker returns allowed:true.
+      // (fail-closed); an eligible worker returns allowed:true and the relay
+      // confirms the worker's registered settlement address.
       if (url.includes("/p2p-eligibility")) {
-        return jsonResp(200, { allowed: true });
+        return jsonResp(200, { allowed: true, settlement_address: "BobAddr" });
       }
       if (url.includes("/listing")) {
         return jsonResp(200, { pricing: [{ capability: "review_pr", unit_cost: 0.5 }] });

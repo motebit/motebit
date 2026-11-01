@@ -162,7 +162,10 @@ function relayFetch(unitCost = 0.05) {
     // executeGrantedDelegation drops acknowledgeNoHistoryRisk, this returns
     // allowed:false and the spend fail-closes p2p_ineligible.
     if (url.includes("/p2p-eligibility")) {
-      return jsonResponse({ allowed: url.includes("acknowledge_no_history_risk=true") });
+      return jsonResponse({
+        allowed: url.includes("acknowledge_no_history_risk=true"),
+        settlement_address: WORKER_ADDR,
+      });
     }
     if (url.includes("/listing"))
       return jsonResponse({ pricing: [{ capability: "research", unit_cost: unitCost }] });
@@ -363,7 +366,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
               },
             ],
           });
-        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/p2p-eligibility"))
+          return jsonResponse({ allowed: true, settlement_address: WORKER_ADDR });
         if (url.includes("/listing"))
           return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.05 }] });
         if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
@@ -526,7 +530,11 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
               },
             ],
           });
-        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/p2p-eligibility"))
+          return jsonResponse({
+            allowed: true,
+            settlement_address: url.includes("/alice-worker/") ? ALICE_ADDR : WORKER_ADDR,
+          });
         if (url.includes("/listing"))
           return jsonResponse({ pricing: [{ capability: "research", unit_cost: 1.5 }] });
         if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
@@ -625,7 +633,11 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
               },
             ],
           });
-        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/p2p-eligibility"))
+          return jsonResponse({
+            allowed: true,
+            settlement_address: url.includes("/alice-worker/") ? ALICE_ADDR : WORKER_ADDR,
+          });
         if (url.includes("/listing"))
           return jsonResponse({ pricing: [{ capability: "research", unit_cost: 1.5 }] });
         if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
@@ -757,7 +769,11 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
               },
             ],
           });
-        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/p2p-eligibility"))
+          return jsonResponse({
+            allowed: true,
+            settlement_address: url.includes("/alice-worker/") ? ALICE_ADDR : WORKER_ADDR,
+          });
         if (url.includes("/listing"))
           return jsonResponse({ pricing: [{ capability: "research", unit_cost: 1.5 }] });
         if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
@@ -864,7 +880,11 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
               },
             ],
           });
-        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/p2p-eligibility"))
+          return jsonResponse({
+            allowed: true,
+            settlement_address: url.includes("/alice-worker/") ? ALICE_ADDR : WORKER_ADDR,
+          });
         if (url.includes("/listing"))
           return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.003 }] });
         if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
@@ -1057,7 +1077,8 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
               },
             ],
           });
-        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/p2p-eligibility"))
+          return jsonResponse({ allowed: true, settlement_address: WORKER_ADDR });
         if (url.includes("/listing"))
           return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.05 }] });
         if (url.endsWith("/task")) return jsonResponse({ task_id: "t-paid" }, 201);

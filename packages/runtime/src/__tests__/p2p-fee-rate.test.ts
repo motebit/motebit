@@ -110,8 +110,12 @@ function stubFetch(handlers: {
     if (url === `${RELAY_URL}/.well-known/motebit.json`) return handlers.relayMetadata!();
     if (url === `${PEER_URL}/.well-known/motebit.json`) return handlers.peerMetadata!();
     if (url.includes("/api/v1/agents/discover")) return handlers.discover();
+    // The default models the current relay: it confirms the worker's registered
+    // settlement address (the local worker's, which discovery advertises).
     if (url.includes("/p2p-eligibility"))
-      return (handlers.eligibility ?? (() => json(200, { allowed: true })))();
+      return (
+        handlers.eligibility ?? (() => json(200, { allowed: true, settlement_address: "BobAddr" }))
+      )();
     if (url.includes("/listing")) return handlers.listing!();
     throw new Error(`unexpected fetch: ${url}`);
   });

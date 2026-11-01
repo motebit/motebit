@@ -101,7 +101,11 @@ describe("motebit delegate --sovereign: a lost send whose own tx landed (#885)",
           ],
         });
       }
-      if (path.endsWith("/p2p-eligibility")) return json(200, { allowed: true });
+      if (path.endsWith("/p2p-eligibility"))
+        return json(200, {
+          allowed: true,
+          settlement_address: "WorkerAddr11111111111111111111111111111111",
+        });
       if (path.endsWith("/listing")) return json(200, { pricing });
       if (method === "POST" && path === `/agent/${ME}/task`) {
         const body = JSON.parse(init!.body as string) as { payment_proof: P2pPaymentProof };

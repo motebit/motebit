@@ -131,7 +131,7 @@ function world(opts: {
   /** A worker hosted by the origin relay (2-leg path) instead of a federated one. */
   local?: boolean;
   /** The local `/p2p-eligibility` answer on its SECOND read. */
-  reEligibility?: "allowed" | "refused" | "address_changed" | "amounts_changed";
+  reEligibility?: "allowed" | "refused" | "address_changed" | "address_absent" | "amounts_changed";
 }): World {
   const w: World = { broadcasts: [], submits: [], credentialsGone: false };
   let discovers = 0;
@@ -199,10 +199,14 @@ function world(opts: {
           ...(refused ? { reason: "Active dispute d-1 between agents" } : {}),
           expected_amount_micro: again === "amounts_changed" ? 2_000_000 : 1_000_000,
           expected_fee_micro: again === "amounts_changed" ? 100_000 : 50_000,
-          settlement_address:
-            again === "address_changed"
-              ? base58Encode(otherPeer.publicKey)
-              : base58Encode(worker.publicKey),
+          ...(again === "address_absent"
+            ? {}
+            : {
+                settlement_address:
+                  again === "address_changed"
+                    ? base58Encode(otherPeer.publicKey)
+                    : base58Encode(worker.publicKey),
+              }),
         });
       }
       if (method === "POST" && url.endsWith(`/agent/${ME}/task`)) {
@@ -432,6 +436,18 @@ describe("M3 — invariant: broadcasts == 0 whenever admission was not secured",
     if (!result.ok) {
       expect(result.error.code).toBe("p2p_ineligible");
       expect(result.error.message).toContain("registered settlement address changed");
+    }
+  });
+
+  it("(b, narrowed) relay no longer confirms the local worker's registered address before broadcast ⇒ nothing broadcast", async () => {
+    const w = world({ submit: "201", local: true, reEligibility: "address_absent" });
+    const result = await delegate(w);
+    expect(w.broadcasts).toHaveLength(0);
+    expect(w.submits).toHaveLength(0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("p2p_ineligible");
+      expect(result.error.message).toContain("no longer confirms");
     }
   });
 

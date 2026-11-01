@@ -70,7 +70,11 @@ function stub(deliverable: Set<string>, failPolls = false): { submits: () => num
         ],
       });
     }
-    if (url.includes("/p2p-eligibility")) return json(200, { allowed: true });
+    if (url.includes("/p2p-eligibility"))
+      return json(200, {
+        allowed: true,
+        settlement_address: "BobWorkerAddr1111111111111111111111111111111",
+      });
     if (url.includes(`/api/v1/agents/${WORKER}/listing`)) return json(200, { pricing });
     if (method === "POST" && url.endsWith(`/agent/${ME}/task`)) {
       submits++;

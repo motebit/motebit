@@ -330,7 +330,8 @@ function stubRelay(poll: () => Response): { submits: () => number; methods: stri
         ],
       });
     }
-    if (url.includes("/p2p-eligibility")) return json(200, { allowed: true });
+    if (url.includes("/p2p-eligibility"))
+      return json(200, { allowed: true, settlement_address: proof.to_address });
     if (url.includes(`/api/v1/agents/${WORKER}/listing`)) {
       return json(200, { pricing: [{ capability: "web_search", unit_cost: 0.25 }] });
     }
