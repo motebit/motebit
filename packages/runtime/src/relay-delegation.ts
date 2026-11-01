@@ -2040,12 +2040,16 @@ export async function resolveP2pPaymentRequest(
         // registry read (not the merged discover shelf) is the evidence. A
         // discovered address the registry does not hold is never paid —
         // custody separation stays legal (the address need not derive from the
-        // key; it must be the one the worker registered). An older relay omits
-        // the field; the locality gate above already refused every peer entry.
-        if (
-          typeof data.settlement_address === "string" &&
-          data.settlement_address !== worker.settlement_address
-        ) {
+        // key; it must be the one the worker registered). An absent field — an
+        // older relay, or a worker with no registered address — is no evidence,
+        // so it refuses too: a discovered address is paid only when confirmed.
+        if (typeof data.settlement_address !== "string") {
+          return fail(
+            "worker_settlement_unbound",
+            `The relay did not confirm a registered settlement address for "${worker.motebit_id}"; refusing to pay an unconfirmed destination.`,
+          );
+        }
+        if (data.settlement_address !== worker.settlement_address) {
           return fail(
             "worker_settlement_unbound",
             `Discovered settlement address for "${worker.motebit_id}" is not the one the worker registered; refusing to pay an unbound destination.`,
@@ -2221,10 +2225,10 @@ async function recheckP2pPreflight(
         settlement_address?: string | null;
       };
       if (data.allowed !== true) return refuse(data.reason ?? "the pair is no longer P2P-eligible");
-      if (
-        typeof data.settlement_address === "string" &&
-        data.settlement_address !== resolved.workerAddress
-      ) {
+      if (typeof data.settlement_address !== "string") {
+        return refuse("the relay no longer confirms the worker's registered settlement address");
+      }
+      if (data.settlement_address !== resolved.workerAddress) {
         return refuse("the worker's registered settlement address changed");
       }
       if (
