@@ -30,13 +30,15 @@ import type { RepoTaskPin } from "@motebit/runtime";
 import {
   RepoTaskDelegationRefusedError,
   delegateToDirectory,
+  grantIdRefusals,
+  grantRefusals,
   mintRepoTaskDelegation,
   readDelegationDirectory,
   revokeToDirectory,
   writeCanonicalFiles,
 } from "../delegation.js";
 import type { RepoTaskDelegation, RepoTaskDelegationRequest } from "../delegation.js";
-import { readAgentPin, resolveDelegationDirectory } from "../../subcommands/repo-task.js";
+import { readAgentPin, resolveRevokeArgument } from "../../subcommands/repo-task.js";
 
 const HOUR = 3_600_000;
 const NOW = 1_900_000_000_000;
@@ -295,7 +297,7 @@ describe("repo-task revoke: a revocation that binds the grant, from its delegato
     const { delegation } = await delegateToDirectory(request(), dir);
     const out = path.join(tmp, "revocations");
     const { revocation, file } = await revokeToDirectory(
-      { delegation, principal: principal(), now: NOW + HOUR },
+      { target: delegation.grant, principal: principal(), now: NOW + HOUR },
       out,
     );
     expect(path.basename(file)).toBe(`${delegation.grant.grant_id}.json`);
@@ -312,7 +314,7 @@ describe("repo-task revoke: a revocation that binds the grant, from its delegato
     const { delegation } = await delegateToDirectory(request(), path.join(tmp, "d"));
     const out = path.join(tmp, "revocations");
     const err = await revokeToDirectory(
-      { delegation, principal: principal(x), now: NOW + HOUR },
+      { target: delegation.grant, principal: principal(x), now: NOW + HOUR },
       out,
     ).then(
       () => null,
@@ -326,56 +328,83 @@ describe("repo-task revoke: a revocation that binds the grant, from its delegato
   });
 });
 
-describe("repo-task revoke: only a grant the principal signed, read from its own file", () => {
-  it("refuses a grant whose signature does not verify (a forged grant_id)", async () => {
-    const dir = path.join(tmp, "d");
-    await delegateToDirectory(request(), dir);
-    const grantFile = path.join(dir, "grant.json");
-    const real = JSON.parse(fs.readFileSync(grantFile, "utf8"));
-    const forgedId = "01a19a05-7e29-789d-8c54-cbf64a01a088";
-    fs.writeFileSync(grantFile, canonicalJson({ ...real, grant_id: forgedId }));
-    const out = path.join(tmp, "revocations");
-    const err = await revokeToDirectory(
-      { delegation: readDelegationDirectory(dir), principal: principal(), now: NOW + HOUR },
-      out,
-    ).then(
-      () => null,
-      (e: unknown) => e,
+describe("repo-task revoke: by grant_id and delegator key alone", () => {
+  it("a revocation by grant_id alone binds the grant that key signed", async () => {
+    const { delegation } = await mintRepoTaskDelegation(request()).then((d) => ({ delegation: d }));
+    const { revocation } = await revokeToDirectory(
+      {
+        target: {
+          grant_id: delegation.grant.grant_id,
+          delegator_id: f.pin.motebit_id,
+          delegator_public_key: f.pin.public_key,
+        },
+        principal: principal(),
+        now: NOW,
+      },
+      path.join(tmp, "rev"),
     );
-    expect(err).toBeInstanceOf(RepoTaskDelegationRefusedError);
-    expect((err as RepoTaskDelegationRefusedError).failures.map((f) => f.code)).toContain(
-      "integrity.repo_change.signature_invalid",
-    );
+    expect(await findGrantRevocation(delegation.grant, [revocation])).toEqual(revocation);
+  });
+
+  it("a grant_id not in its one spelling is refused by the revocation-set rule", async () => {
+    const id = "01A19A05-7E29-789D-8C54-CBF64A01A088";
+    expect((await grantIdRefusals(id)).map((r) => r.code)).toEqual([
+      "revocation.repo_change.set_malformed",
+    ]);
+    expect(await grantIdRefusals(id.toLowerCase())).toEqual([]);
+    const out = path.join(tmp, "rev");
+    await expect(
+      revokeToDirectory(
+        {
+          target: {
+            grant_id: id,
+            delegator_id: f.pin.motebit_id,
+            delegator_public_key: f.pin.public_key,
+          },
+          principal: principal(),
+          now: NOW,
+        },
+        out,
+      ),
+    ).rejects.toBeInstanceOf(RepoTaskDelegationRefusedError);
     expect(fs.existsSync(out)).toBe(false);
   });
 
-  it("a malformed tick is reported as malformed, never as a wrong key", async () => {
-    const dir = path.join(tmp, "d");
-    await delegateToDirectory(request(), dir);
-    const tickFile = path.join(dir, "tick.json");
-    const { grant_id: _dropped, ...tick } = JSON.parse(fs.readFileSync(tickFile, "utf8"));
-    fs.writeFileSync(tickFile, canonicalJson(tick));
-    const err = await revokeToDirectory(
-      { delegation: readDelegationDirectory(dir), principal: principal(), now: NOW + HOUR },
-      path.join(tmp, "revocations"),
-    ).then(
-      () => null,
-      (e: unknown) => e,
-    );
-    const codes = (err as RepoTaskDelegationRefusedError).failures.map((f) => f.code);
-    expect(codes).toContain("integrity.repo_change.bundle_malformed");
-    expect(codes).not.toContain("revoke.not_delegator");
+  it("a grant file is judged on its own: shape, signature, and the principal's key", async () => {
+    const { grant } = await mintRepoTaskDelegation(request());
+    expect(await grantRefusals(grant, f.pin)).toEqual([]);
+    const forged = { ...grant, grant_id: "01a19a05-7e29-789d-8c54-cbf64a01a088" };
+    expect((await grantRefusals(forged, f.pin)).map((r) => r.code)).toEqual([
+      "integrity.repo_change.signature_invalid",
+    ]);
+    expect((await grantRefusals(grant, x.pin)).map((r) => r.code)).toEqual([
+      "revoke.not_delegator",
+    ]);
+    const { scope: _s, ...noScope } = grant;
+    expect((await grantRefusals(noScope, f.pin)).map((r) => r.code)).toEqual([
+      "integrity.repo_change.bundle_malformed",
+    ]);
   });
 
-  it("a file argument is read only as the delegation's grant.json", async () => {
+  it("a file argument is read only as grant.json; anything else is a grant_id", async () => {
     const dir = path.join(tmp, "d");
     await delegateToDirectory(request(), dir);
     fs.copyFileSync(path.join(dir, "grant.json"), path.join(dir, "grant-B.json"));
-    expect(resolveDelegationDirectory(dir)).toBe(dir);
-    expect(resolveDelegationDirectory(path.join(dir, "grant.json"))).toBe(dir);
-    expect(() => resolveDelegationDirectory(path.join(dir, "grant-B.json"))).toThrow(
-      /is not a delegation's grant\.json/,
+    expect(resolveRevokeArgument(dir)).toEqual({
+      kind: "grant-file",
+      file: path.join(dir, "grant.json"),
+    });
+    expect(resolveRevokeArgument(path.join(dir, "grant.json"))).toEqual({
+      kind: "grant-file",
+      file: path.join(dir, "grant.json"),
+    });
+    expect(() => resolveRevokeArgument(path.join(dir, "grant-B.json"))).toThrow(
+      /is not a grant\.json/,
     );
+    expect(resolveRevokeArgument("01a19a05-7e29-789d-8c54-cbf64a01a088")).toEqual({
+      kind: "grant-id",
+      grantId: "01a19a05-7e29-789d-8c54-cbf64a01a088",
+    });
   });
 });
 

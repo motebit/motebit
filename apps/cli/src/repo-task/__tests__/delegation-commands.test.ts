@@ -14,6 +14,7 @@ import {
   bytesToHex,
   canonicalJson,
   deriveSovereignMotebitId,
+  findGrantRevocation,
   generateKeypair,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
@@ -136,8 +137,17 @@ describe(DELEGATE, () => {
   it("a --scope outside the repo-change tools", async () => {
     await refusesBeforeKey(delegateArgs("--scope", "repo_read_blob,shell"));
   });
-  it("self-delegation", async () => {
+  it("self-delegation (the same identity)", async () => {
     await refusesBeforeKey(delegateArgs(), deps({ delegate: f.pin }));
+  });
+  it("self-delegation by key under another id", async () => {
+    await refusesBeforeKey(
+      delegateArgs(),
+      deps({ delegate: { ...a.pin, public_key: f.pin.public_key } }),
+    );
+  });
+  it("a delegate with an empty motebit_id", async () => {
+    await refusesBeforeKey(delegateArgs(), deps({ delegate: { ...a.pin, motebit_id: "" } }));
   });
   it("a --base-ref other than main", async () => {
     await refusesBeforeKey(delegateArgs("--base-ref", "dev"));
@@ -148,10 +158,12 @@ describe(DELEGATE, () => {
   });
 });
 
-const REVOKE = "repo-task revoke: a delegation the principal did not sign never unlocks the key";
+const REVOKE = "repo-task revoke: needs only the grant (or its id), never the scope or the tick";
 
 describe(REVOKE, () => {
   const out = () => path.join(tmp, "out");
+  const rev = () => path.join(tmp, "rev");
+  const grantOf = () => JSON.parse(fs.readFileSync(path.join(out(), "grant.json"), "utf8"));
   const rewrite = (
     name: string,
     change: (v: Record<string, unknown>) => Record<string, unknown>,
@@ -159,28 +171,80 @@ describe(REVOKE, () => {
     const file = path.join(out(), name);
     fs.writeFileSync(file, canonicalJson(change(JSON.parse(fs.readFileSync(file, "utf8")))));
   };
-  const refusesBeforeKey = async () => {
+  const revoke = (arg: string, d = deps()) =>
+    handleRepoTaskRevoke(parseCliArgs(["repo-task", "revoke", arg, "--output", rev()]), d);
+  const revokesBindingly = async (arg: string) => {
     events = [];
-    const revoke = parseCliArgs(["repo-task", "revoke", out()]);
-    await expect(handleRepoTaskRevoke(revoke, deps())).rejects.toBeInstanceOf(ExitCalled);
+    await revoke(arg);
+    expect(events).toEqual(["load", "erase"]);
+    const grant = grantOf();
+    const written = JSON.parse(fs.readFileSync(path.join(rev(), `${grant.grant_id}.json`), "utf8"));
+    expect(await findGrantRevocation(grant, [written])).toEqual(written);
+  };
+  const refusesBeforeKey = async (arg: string, message: RegExp, d = deps()) => {
+    events = [];
+    const lines: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...x: unknown[]) => {
+      lines.push(x.map(String).join(" "));
+    });
+    await expect(revoke(arg, d)).rejects.toBeInstanceOf(ExitCalled);
     expect(events).toEqual(["exit 1"]);
-    expect(fs.readdirSync(out()).sort()).toEqual(["grant.json", "scope.json", "tick.json"]);
+    expect(lines.join("\n")).toMatch(message);
+    expect(fs.existsSync(rev())).toBe(false);
   };
 
-  it("a forged grant_id (the grant's signature fails)", async () => {
+  it("by grant_id, with no files at all", async () => {
     await handleRepoTaskDelegate(delegateArgs(), deps());
-    rewrite("grant.json", (g) => ({ ...g, grant_id: "01a19a05-7e29-789d-8c54-cbf64a01a088" }));
-    await refusesBeforeKey();
+    const grant = grantOf();
+    fs.rmSync(out(), { recursive: true });
+    events = [];
+    await revoke(grant.grant_id);
+    expect(events).toEqual(["load", "erase"]);
+    const written = JSON.parse(fs.readFileSync(path.join(rev(), `${grant.grant_id}.json`), "utf8"));
+    expect(await findGrantRevocation(grant, [written])).toEqual(written);
   });
-  it("a malformed tick", async () => {
+  it("a grant_id not in its one spelling is refused before the key", async () => {
+    await refusesBeforeKey("01A19A05-7E29-789D-8C54-CBF64A01A088", /not a lowercase UUID/);
+  });
+  it("beside a damaged tick", async () => {
     await handleRepoTaskDelegate(delegateArgs(), deps());
     rewrite("tick.json", ({ grant_id: _dropped, ...t }) => t);
-    await refusesBeforeKey();
+    await revokesBindingly(out());
   });
-  it("a scope that is not the bound one", async () => {
+  it("beside an edited scope", async () => {
     await handleRepoTaskDelegate(delegateArgs(), deps());
     rewrite("scope.json", (sc) => ({ ...sc, task: "something else" }));
-    await refusesBeforeKey();
+    await revokesBindingly(path.join(out(), "grant.json"));
+  });
+  it("with the tick and the scope missing", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
+    fs.rmSync(path.join(out(), "tick.json"));
+    fs.rmSync(path.join(out(), "scope.json"));
+    await revokesBindingly(out());
+  });
+  it("a forged grant.json is refused before the key, as not signed by its key", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
+    rewrite("grant.json", (g) => ({ ...g, grant_id: "01a19a05-7e29-789d-8c54-cbf64a01a088" }));
+    await refusesBeforeKey(
+      out(),
+      /signature_invalid: the grant's signature does not verify under its own delegator key/,
+    );
+  });
+  it("a grant of another principal is refused before the key", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
+    await refusesBeforeKey(out(), /revoke\.not_delegator/, deps({ principal: a }));
+  });
+  it("a second revoke into the same place is a clean refusal, the key erased first", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
+    await revoke(out());
+    events = [];
+    const lines: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...x: unknown[]) => {
+      lines.push(x.map(String).join(" "));
+    });
+    await expect(revoke(out())).rejects.toBeInstanceOf(ExitCalled);
+    expect(events).toEqual(["load", "erase", "exit 1"]);
+    expect(lines.join("\n")).toMatch(/a revocation for [0-9a-f-]{36} already exists at /);
   });
 });
 
@@ -211,18 +275,5 @@ describe("repo-task delegate and revoke: the key is erased before any exit", () 
       "scope.json",
       "tick.json",
     ]);
-  });
-
-  it("revoke from another key refuses before unlocking it", async () => {
-    await handleRepoTaskDelegate(delegateArgs(), deps());
-    events = [];
-    const revoke = parseCliArgs(["repo-task", "revoke", path.join(tmp, "out")]);
-    await expect(handleRepoTaskRevoke(revoke, deps({ principal: a }))).rejects.toBeInstanceOf(
-      ExitCalled,
-    );
-    expect(events).toEqual(["exit 1"]);
-    events = [];
-    await handleRepoTaskRevoke(revoke, deps());
-    expect(events).toEqual(["load", "erase"]);
   });
 });

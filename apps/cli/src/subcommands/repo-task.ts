@@ -27,24 +27,26 @@ import { loadFullConfig } from "../config.js";
 import { loadActiveSigningKey } from "../identity.js";
 import type { ActiveSigningKey } from "../identity.js";
 import type { FullConfig } from "../config.js";
+import type { RevocationTarget } from "../repo-task/delegation.js";
 import {
   DELEGATION_FILES,
   RepoTaskDelegationRefusedError,
   delegateToDirectory,
+  CanonicalFileExistsError,
+  grantIdRefusals,
+  grantRefusals,
   precheckRepoTaskDelegation,
-  precheckRepoTaskRevocation,
-  readDelegationDirectory,
+  readGrantFile,
   revokeToDirectory,
 } from "../repo-task/delegation.js";
 
 const HOUR_MS = 3_600_000;
 const DEFAULT_TOOLS = "repo_read_blob,repo_write_path";
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const DELEGATE_USAGE =
   "Usage: motebit repo-task delegate --repo <owner/name> --path <path> [--path <path> ...] (--task <text> | --task-file <file>) --delegate <agent motebit.md> [--hours 24] [--max-files <n>] [--not-before <iso|ms>] [--object-format sha1] [--scope repo_read_blob,repo_write_path] [--output <dir>]";
 const REVOKE_USAGE =
-  "Usage: motebit repo-task revoke <grant.json | delegation dir | grant_id> [--output <dir>]";
+  "Usage: motebit repo-task revoke <grant_id | grant.json | its directory> [--output <dir>]";
 
 /** A refusal the command prints and exits 1 on; thrown, so `finally` blocks run first. */
 export class RepoTaskCliRefusal extends Error {
@@ -117,9 +119,10 @@ async function withPrincipalKey<T>(
     return await use(active);
   } catch (err) {
     if (err instanceof RepoTaskDelegationRefusedError) {
-      throw new RepoTaskCliRefusal(
-        refusalText("Refused, nothing written — the artifacts would not verify:", err),
-      );
+      throw new RepoTaskCliRefusal(refusalText("Refused, nothing written:", err));
+    }
+    if (err instanceof CanonicalFileExistsError) {
+      throw new RepoTaskCliRefusal(`Refused, nothing overwritten: ${err.file} already exists.`);
     }
     throw err;
   } finally {
@@ -178,7 +181,7 @@ export function handleRepoTaskDelegate(
     if (pre.length > 0) {
       refuse(
         ["Refused before signing — this delegation could not verify:"]
-          .concat(pre.map((f) => `  ${f.detail}`))
+          .concat(pre.map((f) => `  ${f.code}: ${f.detail}`))
           .join("\n"),
       );
     }
@@ -212,32 +215,38 @@ export function handleRepoTaskDelegate(
     }
     console.log(`  expires   ${new Date(grant.expires_at).toISOString()}`);
     console.log("");
-    console.log("One grant backs one landing. Hand the directory to the agent's machine.");
-    console.log(
-      `Revoke it: motebit repo-task revoke ${path.join(result.dir, DELEGATION_FILES.grant)}`,
-    );
+    console.log("One grant backs one landing. Hand the directory to the agent's machine,");
+    console.log("and keep a copy of grant.json. Revoking needs only the grant_id:");
+    console.log("");
+    console.log(`  motebit repo-task revoke ${grant.grant_id}`);
   });
 }
 
 // === motebit repo-task revoke =========================================
 
+/** What a revoke argument names: a grant file, or a bare grant_id (no files needed). */
+export type RevokeArgument =
+  | { readonly kind: "grant-file"; readonly file: string }
+  | { readonly kind: "grant-id"; readonly grantId: string };
+
 /**
- * The delegation directory a revoke argument names: the directory itself, its
- * `grant.json`, or a grant_id (`./repo-task-<grant_id>`). A file of any other
- * name is refused: the grant is always read as `grant.json` beside its
- * `scope.json` and `tick.json`, so naming `grant-B.json` would revoke whatever
- * `grant.json` sits next to it.
+ * A revoke argument: an existing directory (its `grant.json`), an existing
+ * file named `grant.json`, or anything else as a grant_id. A file of another
+ * name is refused rather than guessed at. Only `grant.json` is ever read —
+ * never the scope or the tick: a revocation binds by `grant_id` and the
+ * grant's delegator key alone (standing-delegation-v1 §5).
  */
-export function resolveDelegationDirectory(arg: string): string {
+export function resolveRevokeArgument(arg: string): RevokeArgument {
   if (fs.existsSync(arg)) {
-    if (fs.statSync(arg).isDirectory()) return arg;
-    if (path.basename(arg) === DELEGATION_FILES.grant) return path.dirname(arg);
-    throw new Error(
-      `${arg} is not a delegation's ${DELEGATION_FILES.grant} — name the delegation directory or its ${DELEGATION_FILES.grant}`,
+    if (fs.statSync(arg).isDirectory()) {
+      return { kind: "grant-file", file: path.join(arg, DELEGATION_FILES.grant) };
+    }
+    if (path.basename(arg) === DELEGATION_FILES.grant) return { kind: "grant-file", file: arg };
+    throw new RepoTaskCliRefusal(
+      `${arg} is not a ${DELEGATION_FILES.grant} — name the grant file, its directory, or the grant_id`,
     );
   }
-  if (UUID.test(arg)) return path.resolve(`repo-task-${arg}`);
-  throw new Error(`${arg} is neither a grant file, a delegation directory nor a grant_id`);
+  return { kind: "grant-id", grantId: arg };
 }
 
 export function handleRepoTaskRevoke(
@@ -247,40 +256,57 @@ export function handleRepoTaskRevoke(
   return runCommand(deps, async () => {
     const arg = config.positionals[2];
     if (arg == null || arg === "") refuse(REVOKE_USAGE);
-    let dir: string;
-    let delegation: ReturnType<typeof readDelegationDirectory>;
-    try {
-      dir = resolveDelegationDirectory(arg);
-      delegation = readDelegationDirectory(dir);
-    } catch (err) {
-      refuse(
-        `${err instanceof Error ? err.message : String(err)}\nA revoke reads the delegation directory \`motebit repo-task delegate\` wrote (${Object.values(DELEGATION_FILES).join(", ")}).`,
-      );
-    }
-
     const fullConfig = deps.loadFullConfig();
     const principalPin = requireIdentity(fullConfig);
-    // Said before the passphrase prompt; the mint's self-check is the authority.
-    if (principalPin.public_key !== delegation.grant.delegator_public_key) {
-      refuse(
-        "Refused — this motebit's key is not the grant's delegator key, so its revocation would bind nothing (spec/standing-delegation-v1.md §5). Revoke from the principal that signed the grant.",
-      );
-    }
-    // The delegation's integrity needs no key: a forged or malformed grant,
-    // tick or scope is refused before the passphrase prompt.
-    const pre = await precheckRepoTaskRevocation(delegation, principalPin, deps.now());
-    if (pre.length > 0) {
-      refuse(
-        ["Refused before signing — this is not a delegation the principal signed:"]
-          .concat(pre.map((f) => `  ${f.code}: ${f.detail}`))
-          .join("\n"),
-      );
+
+    // Everything below needs no key, and is decided before the passphrase prompt.
+    const what = resolveRevokeArgument(arg);
+    let target: RevocationTarget;
+    let outDir: string;
+    if (what.kind === "grant-id") {
+      // A revocation under the principal's key binds only grants that key
+      // signed, so no grant file is needed.
+      const pre = await grantIdRefusals(what.grantId);
+      if (pre.length > 0) {
+        refuse(
+          [`Refused — ${arg} is neither a grant file, its directory, nor a grant_id:`]
+            .concat(pre.map((f) => `  ${f.detail}`))
+            .join("\n"),
+        );
+      }
+      target = {
+        grant_id: what.grantId,
+        delegator_id: principalPin.motebit_id,
+        delegator_public_key: principalPin.public_key,
+      };
+      outDir = config.output ?? process.cwd();
+    } else {
+      let grant: unknown;
+      try {
+        grant = readGrantFile(what.file);
+      } catch (err) {
+        refuse(err instanceof Error ? err.message : String(err));
+      }
+      const pre = await grantRefusals(grant, principalPin);
+      if (pre.length > 0) {
+        refuse(
+          [`Refused — ${what.file} cannot be revoked by this motebit:`]
+            .concat(pre.map((f) => `  ${f.code}: ${f.detail}`))
+            .join("\n"),
+        );
+      }
+      target = grant as RevocationTarget;
+      outDir = config.output ?? path.dirname(what.file);
     }
 
     const { file } = await withPrincipalKey(deps, fullConfig, (active) =>
       deps.revokeToDirectory(
         {
-          delegation,
+          target: {
+            grant_id: target.grant_id,
+            delegator_id: target.delegator_id,
+            delegator_public_key: target.delegator_public_key,
+          },
           principal: {
             motebitId: principalPin.motebit_id,
             publicKeyHex: active.publicKey,
@@ -288,15 +314,15 @@ export function handleRepoTaskRevoke(
           },
           now: deps.now(),
         },
-        config.output ?? dir,
+        outDir,
       ),
     );
 
-    console.log(`Revocation signed: ${delegation.grant.grant_id}`);
+    console.log(`Revocation signed: ${target.grant_id}`);
     console.log(`  wrote  ${file}`);
     console.log("");
     console.log(
-      `It counts from the commit that lands it on main: .motebit/revocations/${delegation.grant.grant_id}.json (a founder-approved PR).`,
+      `It counts from the commit that lands it on main: .motebit/revocations/${target.grant_id}.json (a founder-approved PR).`,
     );
   });
 }

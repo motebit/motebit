@@ -613,8 +613,8 @@ Commands:
     --object-format <f>       sha1 (default) or sha256; --base-ref main is the only base
     --scope <tools>           Tools granted (default repo_read_blob,repo_write_path)
     --output <dir>            Output directory (default ./repo-task-<grant_id>)
-  repo-task revoke <grant.json|dir|grant_id> [--output <dir>]
-                            Sign the grant's revocation as <grant_id>.json, to land in .motebit/revocations/
+  repo-task revoke <grant_id|grant.json|dir> [--output <dir>]
+                            Sign the grant's revocation as <grant_id>.json (for .motebit/revocations/); a grant_id alone needs no files
   withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail

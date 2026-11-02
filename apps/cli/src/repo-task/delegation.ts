@@ -35,6 +35,7 @@ import {
   signDelegation,
   signDelegationRevocation,
   signStandingDelegation,
+  verifyStandingDelegation,
 } from "@motebit/encryption";
 import type {
   DelegationRevocation,
@@ -47,10 +48,14 @@ import type {
   RepoTaskAuthorityFailure,
   RepoTaskPin,
 } from "@motebit/runtime";
-import { isCanonicalRepoPath, isRepoTaskScopeShape, parseRepoChangeTools } from "@motebit/verifier";
+import {
+  checkRepoChangeParties,
+  checkRepoChangeRevocationSet,
+  isCanonicalBase64Url,
+  isRepoChangeGrantShape,
+} from "@motebit/verifier";
 import {
   ALL_REPO_CHANGE_TOOLS,
-  REPO_CHANGE_MAX_GRANT_LIFETIME_MS,
   REPO_CHANGE_SUBJECT,
   REPO_TASK_SCOPE_SCHEMA,
   REPO_TASK_SCOPE_SPEC_ID,
@@ -107,8 +112,7 @@ export interface RepoTaskDelegation {
  * that would bind nothing) `revoke.not_delegator`.
  */
 export interface RepoTaskRefusal {
-  readonly code:
-    RepoTaskAuthorityFailure["code"] | "revoke.not_delegator" | "revoke.does_not_bind" | "precheck";
+  readonly code: RepoTaskAuthorityFailure["code"] | "revoke.not_delegator" | "file.exists";
   readonly detail: string;
 }
 
@@ -185,104 +189,140 @@ function windowOpens(d: RepoTaskDelegation): number {
 }
 
 /**
- * The refusals that need no key, judged BEFORE the principal's key is unlocked
- * so a delegation that cannot verify never prompts for a passphrase: the
- * scope's strict shape, every path canonical and unique, the tool list, the
- * lifetime, and the delegate not being the principal. Each is the verifier's
- * own predicate (`@motebit/verifier`'s shared repo-change rules); the
- * post-sign self-check in `mintRepoTaskDelegation` stays the authority.
+ * Every refusal that needs no principal key, judged BEFORE the key is unlocked
+ * so a delegation that cannot verify never prompts for a passphrase. Not a
+ * second copy of any rule — the authority's own rules over the inputs:
+ *
+ *   1. A dry run of the real mint under an EPHEMERAL key, generated here and
+ *      erased at once, standing in for the principal's: the same signers and
+ *      the same post-sign self-check (`checkRepoTaskAuthority` over the
+ *      verifier's shared rules) judge every input-only rule — scope shape,
+ *      paths, tools, lifetime, the delegate's identity and key spelling.
+ *   2. The rule the dry run cannot see, because it involves the principal's
+ *      real key: the verifier's own party rule (`checkRepoChangeParties`) over
+ *      the dry-run grant with the configured principal pair put back, so a
+ *      delegate that is this motebit (by id or by key) is refused.
+ *
+ * The post-sign self-check with the real key stays the authority.
  */
 export async function precheckRepoTaskDelegation(
   req: Omit<RepoTaskDelegationRequest, "principal">,
   principal: RepoTaskPin,
 ): Promise<RepoTaskRefusal[]> {
+  const probe = await generateKeypair();
+  let dryRun: RepoTaskDelegation;
+  try {
+    dryRun = await mintRepoTaskDelegation({
+      ...req,
+      principal: {
+        motebitId: principal.motebit_id,
+        publicKeyHex: bytesToHex(probe.publicKey),
+        privateKey: probe.privateKey,
+      },
+    });
+  } catch (err) {
+    if (err instanceof RepoTaskDelegationRefusedError) return [...err.failures];
+    throw err;
+  } finally {
+    secureErase(probe.privateKey);
+  }
   const out: RepoTaskRefusal[] = [];
-  const refuse = (detail: string): void => {
-    out.push({ code: "precheck", detail });
-  };
-  if (!isRepoTaskScopeShape(buildScope(req))) {
-    refuse(
-      "the scope is not of the strict shape (base_ref main, object_format sha1|sha256, a non-empty repo, task and path list, max_changed_files ≥ 1)",
-    );
-  }
-  const seen = new Set<string>();
-  for (const p of req.allowedPaths) {
-    if (!isCanonicalRepoPath(p)) refuse(`path ${JSON.stringify(p)} is not canonical`);
-    if (seen.has(p)) refuse(`path ${JSON.stringify(p)} repeats`);
-    seen.add(p);
-  }
-  if (parseRepoChangeTools(canonicalToolOrder(req.tools)) === null) {
-    refuse(`--scope ${JSON.stringify(req.tools)} is not a list of repo-change tools`);
-  }
-  if (
-    !Number.isSafeInteger(req.lifetimeMs) ||
-    req.lifetimeMs <= 0 ||
-    req.lifetimeMs > REPO_CHANGE_MAX_GRANT_LIFETIME_MS
-  ) {
-    refuse(`the lifetime must be at most ${REPO_CHANGE_MAX_GRANT_LIFETIME_MS / 3_600_000} hours`);
-  }
-  if (
-    req.delegate.motebit_id === principal.motebit_id ||
-    req.delegate.public_key === principal.public_key
-  ) {
-    refuse("the delegate is this motebit: a principal cannot delegate to itself");
-  }
-  const keyFault = await delegateKeyFault(req.delegate);
-  if (keyFault !== null) refuse(keyFault);
+  checkRepoChangeParties(
+    {
+      ...dryRun.grant,
+      delegator_id: principal.motebit_id,
+      delegator_public_key: principal.public_key,
+    },
+    { principal, agents: [req.delegate] },
+    (code, detail) => out.push({ code, detail }),
+  );
   return out;
 }
 
 /**
- * The delegate key's one spelling (standing-delegation-v1 §5), judged by the
- * signer's own rule without the principal's key: sign a throwaway token naming
- * the delegate under an ephemeral key generated here and erased at once. The
- * signer refuses a non-canonical party key before it signs, so a refusal here
- * is exactly the refusal the real mint would meet. `null` when canonical.
+ * A grant_id's one spelling, judged before any key by the revocation-set rule
+ * itself (`checkRepoChangeRevocationSet`, the strict parse a run and the
+ * verifier apply to `.motebit/revocations/`): a revocation of it, signed under
+ * an ephemeral key generated and erased here, must parse as well-formed.
  */
-async function delegateKeyFault(delegate: RepoTaskPin): Promise<string | null> {
+export async function grantIdRefusals(grantId: string): Promise<RepoTaskRefusal[]> {
   const probe = await generateKeypair();
+  const key = bytesToHex(probe.publicKey);
   try {
-    await signDelegation(
+    const rev = await signDelegationRevocation(
       {
+        grant_id: grantId,
         delegator_id: "repo-task-precheck",
-        delegator_public_key: bytesToHex(probe.publicKey),
-        delegate_id: delegate.motebit_id,
-        delegate_public_key: delegate.public_key,
-        scope: ALL_REPO_CHANGE_TOOLS.join(","),
-        issued_at: 0,
-        expires_at: 1,
+        delegator_public_key: key,
+        revoked_at: 0,
       },
       probe.privateKey,
     );
-    return null;
-  } catch (err) {
-    return `the delegate's key: ${err instanceof Error ? err.message : String(err)}`;
+    const out: RepoTaskRefusal[] = [];
+    await checkRepoChangeRevocationSet(
+      { grant_id: grantId, delegator_public_key: key },
+      { set: [rev], failures: [] },
+      (code, detail) => {
+        if (code === "revocation.repo_change.set_malformed") {
+          out.push({
+            code,
+            detail: `grant_id ${JSON.stringify(grantId)} is not a lowercase UUID (${detail})`,
+          });
+        }
+      },
+    );
+    return out;
   } finally {
     secureErase(probe.privateKey);
   }
 }
 
 /**
- * The integrity of a delegation read from disk, judged BEFORE the principal's
- * key is unlocked: the run's authority law over the scope, grant and tick
- * (strict shapes, canonical values, the grant's and the tick's signatures, the
- * subject binding) needs no private key. Only its integrity axis is kept — a
- * revocation may revoke an expired grant. The post-sign self-check in
- * `mintRepoTaskRevocation` stays the authority.
+ * A grant read from its own file, judged before the principal's key is
+ * unlocked: the verifier's strict grant shape, a canonical base64url
+ * signature, a canonical grant_id (the revocation-set rule), a signature that
+ * verifies under the grant's own `delegator_public_key` (`verifyStandingDelegation`,
+ * which also refuses a non-canonical key), and that key being the configured
+ * principal's — the only key whose revocation can bind it. Nothing else is
+ * read: a revocation binds by `grant_id` and the delegator key alone
+ * (standing-delegation-v1 §5).
  */
-export async function precheckRepoTaskRevocation(
-  delegation: RepoTaskDelegation,
+export async function grantRefusals(
+  grant: unknown,
   principal: RepoTaskPin,
-  now: number,
 ): Promise<RepoTaskRefusal[]> {
-  const { grant } = delegation;
-  const delegate = { motebit_id: grant.delegate_id, public_key: grant.delegate_public_key };
-  const check = await checkRepoTaskAuthority(
-    selfCheckBundle(delegation, principal, delegate, []),
-    delegate,
-    now,
-  );
-  return check.ok ? [] : check.failures.filter((f) => f.code.startsWith("integrity."));
+  if (!isRepoChangeGrantShape(grant)) {
+    return [
+      {
+        code: "integrity.repo_change.bundle_malformed",
+        detail: "grant.json is not a StandingDelegation of the strict shape",
+      },
+    ];
+  }
+  const out: RepoTaskRefusal[] = [...(await grantIdRefusals(grant.grant_id))];
+  if (!isCanonicalBase64Url(grant.signature)) {
+    out.push({
+      code: "integrity.repo_change.value_not_canonical",
+      detail: "the grant's signature is not canonical base64url",
+    });
+  }
+  if (
+    !(await verifyStandingDelegation(grant, { checkExpiry: false, now: Number.MAX_SAFE_INTEGER }))
+  ) {
+    out.push({
+      code: "integrity.repo_change.signature_invalid",
+      detail:
+        "the grant's signature does not verify under its own delegator key: it is not a grant that key signed",
+    });
+  }
+  if (grant.delegator_public_key !== principal.public_key) {
+    out.push({
+      code: "revoke.not_delegator",
+      detail:
+        "this motebit's key is not the grant's delegator key, so its revocation would bind nothing (spec/standing-delegation-v1.md §5)",
+    });
+  }
+  return out;
 }
 
 function buildScope(req: Omit<RepoTaskDelegationRequest, "principal">): RepoTaskScope {
@@ -388,6 +428,17 @@ function serialize(files: Record<string, unknown>): [string, string][] {
   return Object.entries(files).map(([name, value]) => [name, canonicalJsonForSigning(value)]);
 }
 
+/** An output file already exists; nothing was overwritten. */
+export class CanonicalFileExistsError extends Error {
+  constructor(
+    readonly dir: string,
+    readonly file: string,
+  ) {
+    super(`could not write ${dir}: ${file} already exists`);
+    this.name = "CanonicalFileExistsError";
+  }
+}
+
 /** The file-system calls the writer makes; a seam so a test can fail a write midway. */
 export interface CanonicalFileIo {
   readonly writeSync: (fd: number, data: Uint8Array) => number;
@@ -420,10 +471,12 @@ export function writeCanonicalFiles(
   const contents = serialize(files);
   const created = firstMissingAncestor(dir);
   const written: string[] = [];
+  let failedFile: string | null = null;
   try {
     mkdirOwnerOnly(dir);
     for (const [name, text] of contents) {
       const file = path.join(dir, name);
+      failedFile = file;
       const fd = fs.openSync(file, "wx", 0o600);
       written.push(file);
       try {
@@ -446,6 +499,9 @@ export function writeCanonicalFiles(
         }
         if (d === created) break;
       }
+    }
+    if ((err as NodeJS.ErrnoException).code === "EEXIST" && failedFile !== null) {
+      throw new CanonicalFileExistsError(dir, failedFile);
     }
     throw new Error(`could not write ${dir}: ${err instanceof Error ? err.message : String(err)}`, {
       cause: err,
@@ -472,63 +528,63 @@ export async function delegateToDirectory(
   return { delegation, dir: out, files };
 }
 
+/** What a revocation binds: a grant's id and its delegator key (standing-delegation-v1 §5). */
+export interface RevocationTarget {
+  readonly grant_id: string;
+  readonly delegator_id: string;
+  readonly delegator_public_key: string;
+}
+
 /**
- * Sign the grant's revocation with the loaded principal key, and self-check
- * it with the strict revocation-set rule a run and the verifier apply: it must
- * be well-formed AND bind the grant (standing-delegation-v1 §5 — same
- * `grant_id`, `delegator_public_key` equal to that grant's delegator key). A
- * key that is not the grant's delegator key yields a revocation that binds
+ * Sign a revocation of `target` with the loaded principal key, and self-check
+ * it with the revocation-set rule a run and the verifier apply to
+ * `.motebit/revocations/` (`checkRepoChangeRevocationSet`: strict parse, then
+ * `findGrantRevocation`): it must be well-formed AND bind the target. A key
+ * that is not the target's delegator key yields a revocation that binds
  * nothing, so it is refused, never written.
  */
 export async function mintRepoTaskRevocation(input: {
-  readonly delegation: RepoTaskDelegation;
+  readonly target: RevocationTarget;
   readonly principal: RepoTaskPrincipal;
   readonly now: number;
 }): Promise<DelegationRevocation> {
-  const { delegation, principal, now } = input;
-  const { grant } = delegation;
-  const revocation = await signDelegationRevocation(
+  const { target, principal, now } = input;
+  const signed = await signDelegationRevocation(
     {
-      grant_id: grant.grant_id,
-      delegator_id: grant.delegator_id,
+      grant_id: target.grant_id,
+      delegator_id: target.delegator_id,
       // The key that actually signs: a revocation states who signed it.
       delegator_public_key: principal.publicKeyHex,
       revoked_at: now,
     },
     principal.privateKey,
-  );
-  const delegate = { motebit_id: grant.delegate_id, public_key: grant.delegate_public_key };
-  const principalPin = { motebit_id: principal.motebitId, public_key: principal.publicKeyHex };
-  const check = await checkRepoTaskAuthority(
-    selfCheckBundle(delegation, principalPin, delegate, [revocation]),
-    delegate,
-    now,
-  );
-  // A revocation that binds makes the check fail with `revoked` on the
-  // revocation axis. Temporal and structural authority faults (expired, not
-  // yet valid) are no reason not to revoke a grant; an INTEGRITY fault is: a
-  // grant, tick or scope that is malformed, non-canonical or not signed by its
-  // delegator is not a grant the principal made, and a revocation of it would
-  // revoke nothing real.
-  const failures = check.ok ? [] : check.failures;
-  const integrity = failures.filter((f) => f.code.startsWith("integrity."));
-  if (integrity.length > 0) throw new RepoTaskDelegationRefusedError(integrity);
-  const malformed = failures.filter((f) => f.code === "revocation.repo_change.set_malformed");
-  if (malformed.length > 0) throw new RepoTaskDelegationRefusedError(malformed);
-  // With integrity sound the revocation axis was evaluated, so a revocation
-  // that does not bind is exactly a key that is not the grant's delegator key.
-  if (!failures.some((f) => f.code === "revocation.repo_change.revoked")) {
+  ).catch((err: unknown) => {
     throw new RepoTaskDelegationRefusedError([
-      principal.publicKeyHex !== grant.delegator_public_key
-        ? {
-            code: "revoke.not_delegator",
-            detail:
-              "the revocation would bind nothing: the loaded key is not the grant's delegator key",
-          }
-        : { code: "revoke.does_not_bind", detail: "the revocation would bind nothing" },
+      {
+        code: "integrity.repo_change.value_not_canonical",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+    ]);
+  });
+  const malformed: RepoTaskRefusal[] = [];
+  const { binding } = await checkRepoChangeRevocationSet(
+    target,
+    { set: [signed], failures: [] },
+    (code, detail) => {
+      if (code === "revocation.repo_change.set_malformed") malformed.push({ code, detail });
+    },
+  );
+  if (malformed.length > 0) throw new RepoTaskDelegationRefusedError(malformed);
+  if (binding === null) {
+    throw new RepoTaskDelegationRefusedError([
+      {
+        code: "revoke.not_delegator",
+        detail:
+          "the revocation would bind nothing: the loaded key is not the grant's delegator key",
+      },
     ]);
   }
-  return revocation;
+  return signed;
 }
 
 /** Mint and self-check the revocation, then write it into `dir` as `<grant_id>.json`. */
@@ -537,8 +593,31 @@ export async function revokeToDirectory(
   dir: string,
 ): Promise<{ revocation: DelegationRevocation; file: string }> {
   const revocation = await mintRepoTaskRevocation(input);
-  const [file] = writeCanonicalFiles(dir, { [`${revocation.grant_id}.json`]: revocation });
-  return { revocation, file: file! };
+  try {
+    const [file] = writeCanonicalFiles(dir, { [`${revocation.grant_id}.json`]: revocation });
+    return { revocation, file: file! };
+  } catch (err) {
+    if (err instanceof CanonicalFileExistsError) {
+      throw new RepoTaskDelegationRefusedError([
+        {
+          code: "file.exists",
+          detail: `a revocation for ${revocation.grant_id} already exists at ${err.file}`,
+        },
+      ]);
+    }
+    throw err;
+  }
+}
+
+/** Read a grant file as JSON (shape is judged by `grantRefusals`). */
+export function readGrantFile(file: string): unknown {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
+  } catch (err) {
+    throw new Error(`could not read ${file}: ${err instanceof Error ? err.message : String(err)}`, {
+      cause: err,
+    });
+  }
 }
 
 /** Read a delegation directory (`scope.json`, `grant.json`, `tick.json`). */

@@ -25,15 +25,15 @@ const CMD_TEST = "src/repo-task/__tests__/delegation-commands.test.ts";
 const OK = "repo-task delegate: the principal signs a scope, a grant and one tick";
 const NO = "repo-task delegate: a delegation that would not verify writes nothing";
 const REV = "repo-task revoke: a revocation that binds the grant, from its delegator only";
-const REV2 = "repo-task revoke: only a grant the principal signed, read from its own file";
 const FILES = "repo-task files: owner-only, exclusive, all or nothing";
 const PRE = "repo-task delegate: a refusal that needs no key never unlocks it";
 const ERASE = "repo-task delegate and revoke: the key is erased before any exit";
-const PRE_REV = "repo-task revoke: a delegation the principal did not sign never unlocks the key";
-const NO_REVOKE_PRECHECK = {
+const REV3 = "repo-task revoke: needs only the grant (or its id), never the scope or the tick";
+/** The delegate's key-free refusals, before the passphrase prompt. */
+const NO_DELEGATE_PRECHECK = {
   file: "apps/cli/src/subcommands/repo-task.ts",
-  from: '    if (pre.length > 0) {\n      refuse(\n        ["Refused before signing — this is not a delegation',
-  to: '    if ((false as boolean) && pre.length > 0) {\n      refuse(\n        ["Refused before signing — this is not a delegation',
+  from: "    const pre = await precheckRepoTaskDelegation(request, principalPin);\n    if (pre.length > 0) {\n",
+  to: "    const pre = await precheckRepoTaskDelegation(request, principalPin);\n    if ((false as boolean) && pre.length > 0) {\n",
 };
 
 const edit = (from: string, to: string, file = MINT): TamperEdit => ({ file, from, to });
@@ -117,37 +117,9 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "revoke: a revocation that binds nothing is accepted",
     `${REV} refuses a key that is not the grant's delegator key`,
-    edit(
-      '  if (!failures.some((f) => f.code === "revocation.repo_change.revoked")) {\n',
-      '  if ((false as boolean) && !failures.some((f) => f.code === "revocation.repo_change.revoked")) {\n',
-    ),
+    edit("  if (binding === null) {\n", "  if ((false as boolean) && binding === null) {\n"),
   ),
-  // ── cold review round 1 ───────────────────────────────────────────────
-  entry(
-    "revoke: an integrity fault of the grant is tolerated (forged grant_id)",
-    `${REV2} refuses a grant whose signature does not verify (a forged grant_id)`,
-    edit(
-      "  if (integrity.length > 0) throw new RepoTaskDelegationRefusedError(integrity);\n",
-      "  void integrity;\n",
-    ),
-  ),
-  entry(
-    "revoke: a malformed tick falls through to the wrong-key report",
-    `${REV2} a malformed tick is reported as malformed, never as a wrong key`,
-    edit(
-      "  if (integrity.length > 0) throw new RepoTaskDelegationRefusedError(integrity);\n",
-      "  void integrity;\n",
-    ),
-  ),
-  entry(
-    "revoke: any file name is read as its directory's grant.json",
-    `${REV2} a file argument is read only as the delegation's grant.json`,
-    edit(
-      "    if (path.basename(arg) === DELEGATION_FILES.grant) return path.dirname(arg);\n",
-      "    return path.dirname(arg);\n",
-      CMD,
-    ),
-  ),
+  // ── cold review rounds 1–3 ────────────────────────────────────────────
   entry(
     "files: a file is recorded only after its write (a partial survives)",
     `${FILES} a write that fails midway leaves no file, no partial and no directory it created`,
@@ -184,48 +156,6 @@ const TAMPERS: TamperEntry[] = [
     edit("    mkdirOwnerOnly(dir);\n", "    fs.mkdirSync(dir, { recursive: true });\n"),
   ),
   command(
-    "precheck: no lifetime rule before the key",
-    `${PRE} --hours 25`,
-    edit("    req.lifetimeMs > REPO_CHANGE_MAX_GRANT_LIFETIME_MS\n", "    (false as boolean)\n"),
-  ),
-  command(
-    "precheck: no canonical-path rule before the key",
-    `${PRE} a non-canonical --path`,
-    edit(
-      "    if (!isCanonicalRepoPath(p)) refuse(`path ${JSON.stringify(p)} is not canonical`);\n",
-      "",
-    ),
-  ),
-  command(
-    "precheck: no repeated-path rule before the key",
-    `${PRE} a repeated --path`,
-    edit("    if (seen.has(p)) refuse(`path ${JSON.stringify(p)} repeats`);\n", ""),
-  ),
-  command(
-    "precheck: no tool-list rule before the key",
-    `${PRE} a --scope outside the repo-change tools`,
-    edit(
-      "  if (parseRepoChangeTools(canonicalToolOrder(req.tools)) === null) {\n",
-      "  if ((false as boolean) && parseRepoChangeTools(canonicalToolOrder(req.tools)) === null) {\n",
-    ),
-  ),
-  command(
-    "precheck: no self-delegation rule before the key",
-    `${PRE} self-delegation`,
-    edit(
-      "    req.delegate.motebit_id === principal.motebit_id ||\n    req.delegate.public_key === principal.public_key\n",
-      "    (false as boolean)\n",
-    ),
-  ),
-  command(
-    "precheck: no scope-shape rule before the key",
-    `${PRE} a --base-ref other than main`,
-    edit(
-      "  if (!isRepoTaskScopeShape(buildScope(req))) {\n",
-      "  if ((false as boolean) && !isRepoTaskScopeShape(buildScope(req))) {\n",
-    ),
-  ),
-  command(
     "erase: the process exits on a post-key refusal before the key is erased",
     `${ERASE} a refusal after the key is unlocked erases it first`,
     edit(
@@ -239,30 +169,6 @@ const TAMPERS: TamperEntry[] = [
     `${ERASE} a delegation that verifies is written and the key erased`,
     edit("    deps.secureErase(active.privateKey);\n", "    void active;\n", CMD),
   ),
-  // ── cold review round 2 ───────────────────────────────────────────────
-  command(
-    "precheck: no delegate-key spelling rule before the key",
-    `${PRE} a delegate key in another spelling`,
-    edit(
-      "  const keyFault = await delegateKeyFault(req.delegate);\n  if (keyFault !== null) refuse(keyFault);\n",
-      "",
-    ),
-  ),
-  command(
-    "revoke precheck: a forged grant reaches the key",
-    `${PRE_REV} a forged grant_id (the grant's signature fails)`,
-    NO_REVOKE_PRECHECK,
-  ),
-  command(
-    "revoke precheck: a malformed tick reaches the key",
-    `${PRE_REV} a malformed tick`,
-    NO_REVOKE_PRECHECK,
-  ),
-  command(
-    "revoke precheck: an unbound scope reaches the key",
-    `${PRE_REV} a scope that is not the bound one`,
-    NO_REVOKE_PRECHECK,
-  ),
   command(
     "erase: a revoke exits on a post-key refusal before the key is erased",
     `${ERASE} a revoke refused after the key is unlocked erases it first`,
@@ -270,6 +176,88 @@ const TAMPERS: TamperEntry[] = [
       "    if (err instanceof RepoTaskDelegationRefusedError) {\n      throw new RepoTaskCliRefusal(",
       "    if (err instanceof RepoTaskDelegationRefusedError) {\n      (deps.exit as (code: number) => void)(1);\n      throw new RepoTaskCliRefusal(",
       CMD,
+    ),
+  ),
+  ...[
+    "--hours 25",
+    "a non-canonical --path",
+    "a repeated --path",
+    "a --scope outside the repo-change tools",
+    "a --base-ref other than main",
+    "a delegate key in another spelling",
+    "a delegate with an empty motebit_id",
+    "self-delegation (the same identity)",
+    "self-delegation by key under another id",
+  ].map((t) =>
+    command(
+      `precheck: no key-free refusal before the key (${t})`,
+      `${PRE} ${t}`,
+      NO_DELEGATE_PRECHECK,
+    ),
+  ),
+  command(
+    "precheck: the party rule over the configured principal not run",
+    `${PRE} self-delegation by key under another id`,
+    edit(
+      "    (code, detail) => out.push({ code, detail }),\n",
+      "    (code, detail) => void [code, detail],\n",
+    ),
+  ),
+  command(
+    "revoke: a grant_id's spelling not judged before the key",
+    `${REV3} a grant_id not in its one spelling is refused before the key`,
+    edit(
+      "      const pre = await grantIdRefusals(what.grantId);\n      if (pre.length > 0) {\n",
+      "      const pre = await grantIdRefusals(what.grantId);\n      if ((false as boolean) && pre.length > 0) {\n",
+      CMD,
+    ),
+  ),
+  ...[
+    "a forged grant.json is refused before the key, as not signed by its key",
+    "a grant of another principal is refused before the key",
+  ].map((t) =>
+    command(
+      `revoke: the grant file not judged before the key (${t})`,
+      `${REV3} ${t}`,
+      edit(
+        "      const pre = await grantRefusals(grant, principalPin);\n      if (pre.length > 0) {\n",
+        "      const pre = await grantRefusals(grant, principalPin);\n      if ((false as boolean) && pre.length > 0) {\n",
+        CMD,
+      ),
+    ),
+  ),
+  command(
+    "revoke: the grant's own signature not verified",
+    `${REV3} a forged grant.json is refused before the key, as not signed by its key`,
+    edit(
+      "    !(await verifyStandingDelegation(grant, { checkExpiry: false, now: Number.MAX_SAFE_INTEGER }))\n",
+      "    (false as boolean)\n",
+    ),
+  ),
+  command(
+    "revoke: the grant's delegator key not compared with the principal's",
+    `${REV3} a grant of another principal is refused before the key`,
+    edit(
+      "  if (grant.delegator_public_key !== principal.public_key) {\n",
+      "  if ((false as boolean) && grant.delegator_public_key !== principal.public_key) {\n",
+    ),
+  ),
+  command(
+    "revoke: reads the scope and the tick beside the grant",
+    `${REV3} with the tick and the scope missing`,
+    edit(
+      "        grant = readGrantFile(what.file);\n",
+      "        grant = readGrantFile(what.file);\n        readDelegationDirectory(path.dirname(what.file));\n",
+      CMD,
+    ),
+    edit("  readGrantFile,\n", "  readGrantFile,\n  readDelegationDirectory,\n", CMD),
+  ),
+  command(
+    "revoke: an existing revocation file surfaces as a crash, not a refusal",
+    `${REV3} a second revoke into the same place is a clean refusal, the key erased first`,
+    edit(
+      "    if (err instanceof CanonicalFileExistsError) {\n      throw new RepoTaskDelegationRefusedError([",
+      "    if ((false as boolean) && err instanceof CanonicalFileExistsError) {\n      throw new RepoTaskDelegationRefusedError([",
     ),
   ),
 ];
