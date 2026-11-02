@@ -184,14 +184,29 @@ export function isRepoChangeGrantShape(v: unknown): v is StandingDelegation;
 export function isRepoChangeTickShape(v: unknown): v is DelegationToken;
 
 // @public
+export function isRepoPathIncluded(policy: RepoPathPolicy, path: string): boolean;
+
+// @public
+export function isRepoPathPermitted(policy: RepoPathPolicy, path: string): boolean;
+
+// @public
 export function isRepoTaskScopeShape(v: unknown): v is RepoTaskScope;
 
 // @public
 export function parseRepoChangeTools(scope: string): Set<RepoChangeTool> | null;
 
+// @public
+export function parseRepoPathPolicy(text: string): RepoPathPolicy;
+
 export { ProjectionClass }
 
 export { RepairInstruction }
+
+// @public
+export const REPO_PATH_POLICY_FILE = ".motebit/repo-path-policy.json";
+
+// @public
+export const REPO_PATH_POLICY_SPEC = "motebit/repo-path-policy@1.0";
 
 // @public
 export function repoChangeAuthorityWindow(grant: StandingDelegation, tick: DelegationToken): {
@@ -292,6 +307,20 @@ export function repoPathCaseCollision(p: string, index: ReadonlyMap<string, Read
 
 // @public
 export function repoPathCaseIndex(paths: Iterable<string>): Map<string, Set<string>>;
+
+// @public
+export type RepoPathExclusion = "exact" | "case_folded";
+
+// @public
+export function repoPathExclusion(policy: RepoPathPolicy, path: string): RepoPathExclusion | null;
+
+// @public
+export interface RepoPathPolicy {
+    readonly exclude: readonly string[];
+    readonly include: readonly string[];
+    // (undocumented)
+    readonly spec: typeof REPO_PATH_POLICY_SPEC;
+}
 
 // @public
 export function repoPathPrefixConflict(p: string, trackedNonTree: ReadonlySet<string>, allowed: Iterable<string>): string | null;

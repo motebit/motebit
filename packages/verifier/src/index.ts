@@ -242,6 +242,19 @@ export {
   repoChangeAuthorityWindow,
 } from "./repo-change-rules.js";
 export type { RepoChangeRuleSink } from "./repo-change-rules.js";
+// The repository path policy (`motebit/repo-path-policy@1.0`, spec §7.2): the
+// one interpreter of `.motebit/repo-path-policy.json`, the path predicate as
+// data. Dependency-free, so the autonomy-tier classifier loads the same module
+// by source path; a caller builds `isPathPermitted` from it.
+export {
+  REPO_PATH_POLICY_FILE,
+  REPO_PATH_POLICY_SPEC,
+  isRepoPathIncluded,
+  isRepoPathPermitted,
+  parseRepoPathPolicy,
+  repoPathExclusion,
+} from "./repo-path-policy.js";
+export type { RepoPathExclusion, RepoPathPolicy } from "./repo-path-policy.js";
 export type {
   VerifyRepoChangeInput,
   RepoChangeVerification,

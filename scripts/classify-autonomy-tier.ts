@@ -5,7 +5,8 @@
  *
  * DENY BY DEFAULT. A diff is T0 (a machine reviewer may approve) only when
  * EVERY changed path
- *   1. is in the closed ALLOWLIST below (and in none of its exclusions),
+ *   1. is in the closed allowlist of `.motebit/repo-path-policy.json` (and in
+ *      none of its exclusions),
  *   2. is a plain added or modified text file — no rename, deletion, mode
  *      change, symlink, submodule or binary content,
  *   3. differs only by case from no excluded path, no tracked path and no
@@ -20,18 +21,20 @@
  * toolchain, enforcement code and config, test weakening) are subsumed: none
  * of those paths is on the allowlist, so none can be T0. A denylist of them was
  * tried first and a cold review built 16 T0 diffs that weakened enforcement
- * through paths it did not list. Widening T0 is an edit to ALLOWLIST in this
- * file, which CODEOWNERS owns — so every widening is itself a T1 change.
+ * through paths it did not list. Widening T0 is an edit to
+ * `.motebit/repo-path-policy.json`, which CODEOWNERS owns and which is outside
+ * its own includes — so every widening is itself a T1 change.
  *
- * PURE core (`classifyDiff`): diff text + CODEOWNERS text + the trusted
- * base's tracked paths in, verdict out.
- * Path matching for both the allowlist and CODEOWNERS is
- * `scripts/lib/codeowners.ts` (`patternToRegex`, `decidingRule`).
+ * PURE core (`classifyDiff`): diff text + CODEOWNERS text + path-policy text +
+ * the trusted base's tracked paths in, verdict out.
+ * The allowlist is interpreted by `packages/verifier/src/repo-path-policy.ts`
+ * (the one interpreter, shared with the repo-change verifier); CODEOWNERS
+ * matching is `scripts/lib/codeowners.ts` (`parseCodeowners`, `decidingRule`).
  *
  * CLI:
  *   tsx scripts/classify-autonomy-tier.ts --repo <dir> --base <rev> --head <rev>
  *   tsx scripts/classify-autonomy-tier.ts --diff <file|->
- * CODEOWNERS and the tracked paths are read from THIS script's checkout (the trusted base), never
+ * CODEOWNERS, the path policy and the tracked paths are read from THIS script's checkout (the trusted base), never
  * from the diff's head. Prints one JSON line, then a one-line summary. Exit 0
  * on any classification (T0 or T1); exit 2 only on a classifier error, after
  * printing a T1 `classifier-error` verdict — callers treat non-zero as T1.
@@ -41,89 +44,73 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { decidingRule, parseCodeowners, patternToRegex } from "./lib/codeowners.js";
+// By relative SOURCE path, never the `@motebit/verifier` specifier: that
+// resolves to dist/, which the autonomy-tier workflow never builds. The module
+// imports nothing, so tsx loads it as it stands in the trusted checkout.
+import {
+  REPO_PATH_POLICY_FILE,
+  isRepoPathPermitted,
+  parseRepoPathPolicy,
+  repoPathExclusion,
+  type RepoPathPolicy,
+} from "../packages/verifier/src/repo-path-policy.js";
+import { decidingRule, parseCodeowners } from "./lib/codeowners.js";
 import { cleanEnv } from "./lib/differential-tree.js";
 
 // ── The allowlist ────────────────────────────────────────────────────────────
 
 /**
- * The ONLY paths a T0 diff may touch (CODEOWNERS pattern syntax, repo-relative).
- * Closed and documented: the test suite asserts it is exactly this set, so a
- * widening is a visible diff in this owned file.
+ * The ONLY paths a T0 diff may touch live in `.motebit/repo-path-policy.json`
+ * (`motebit/repo-path-policy@1.0`, spec/repo-change-v1.md §7.2) — the path
+ * predicate as DATA, interpreted by the one interpreter the repo-change
+ * verifier also uses (`packages/verifier/src/repo-path-policy.ts`, loaded by
+ * source path: it imports nothing, so no build step is needed). The file is
+ * closed and documented: the test suite asserts it is exactly the set below,
+ * and it is owned in CODEOWNERS and outside its own includes, so every
+ * widening is a visible, T1 diff.
+ *
+ * What the set is, and why (audited 2026-10-26, listed in the PR):
+ *   include — `docs/**` markdown and each bench's `prompts.json`. Every
+ *     consumer reads them as inert text or data: markdown under docs/ is only
+ *     matched and counted by gates — the one gate that EXECUTES doc content
+ *     (check-image-provenance, cosign lines) reads docs/operator/self-host.md,
+ *     which is excluded; each bench's prompts.json is `JSON.parse`d as prompts
+ *     by a workflow_dispatch-only bench with network-free tools (only that
+ *     file: any other JSON there may be tool config — package.json,
+ *     tsconfig.json, .eslintrc.json, .prettierrc.json — and
+ *     route-c.example.json is a format example nothing parses).
+ *     `apps/docs/content` is NOT included: fumadocs-mdx evaluates MDX ESM at
+ *     build, and check-docs-quickstart-runs runs a code block from it under
+ *     CI env. An include names FILES: never a directory of that name
+ *     (`.../prompts.json/x.ts`).
+ *   exclude — inside an include, still T1: agent-facing doctrine, the
+ *     autonomy design itself, runbooks, designs, the drift inventory,
+ *     operator-facing docs (deploy pins and security posture), security docs
+ *     (the accepted-CVE ledger), and agent instructions under any name or
+ *     depth. Exclusions cover what is beneath them and hold whatever the case
+ *     (a case-insensitive filesystem, or a reader that folds case).
  */
-export const ALLOWLIST = {
-  /**
-   * Every consumer of these paths reads them as inert text or data (audited
-   * 2026-10-26, listed in the PR): markdown under docs/ is only matched and
-   * counted by gates — the one gate that EXECUTES doc content
-   * (check-image-provenance, cosign lines) reads docs/operator/self-host.md,
-   * which is excluded; each bench's prompts.json is `JSON.parse`d as prompts
-   * by a workflow_dispatch-only bench with network-free tools (only that file:
-   * any other JSON there may be tool config — package.json, tsconfig.json,
-   * .eslintrc.json, .prettierrc.json — and route-c.example.json is a format
-   * example nothing parses). `apps/docs/content`
-   * is NOT here: fumadocs-mdx evaluates MDX ESM at build, and
-   * check-docs-quickstart-runs runs a code block from it under CI env.
-   */
-  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],
-  /**
-   * Inside an include, still T1: agent-facing doctrine, the autonomy design
-   * itself, runbooks, designs, the drift inventory, operator-facing docs (deploy
-   * pins and security posture), security docs (the accepted-CVE ledger), and
-   * agent instructions under any name or depth. Matched case-insensitively.
-   */
-  exclude: [
-    "docs/doctrine/**",
-    "docs/proposals/**",
-    "docs/ops/**",
-    "docs/design/**",
-    "docs/drift-defenses.md",
-    "docs/operator/**",
-    "docs/security/**",
-    "**/CLAUDE.md",
-    "**/CLAUDE.local.md",
-    "**/AGENTS.md",
-    "**/GEMINI.md",
-    "**/copilot-instructions.md",
-    "**/.claude/**",
-    "**/.cursor/**",
-    "**/.agents/**",
-    "**/SKILL.md",
-    "skills/**",
-  ],
-} as const;
-
-/**
- * An include names FILES: CODEOWNERS syntax lets a pattern whose last segment
- * has no `*` also cover a directory of that name (`.../prompts.json/x.ts`), so
- * that descent is cut off here. Exclusions keep it (wider is safer there).
- */
-const DESCENT_SUFFIX = "(?:\\/.+)?$";
-const INCLUDE = ALLOWLIST.include.map((p) => {
-  const src = patternToRegex(p).source;
-  return new RegExp(
-    src.endsWith(DESCENT_SUFFIX) ? `${src.slice(0, -DESCENT_SUFFIX.length)}$` : src,
-  );
-});
-const EXCLUDE = ALLOWLIST.exclude.map(patternToRegex);
-/** Exclusions hold whatever the case (a case-insensitive filesystem, or a reader that folds case). */
-const EXCLUDE_ANY_CASE = EXCLUDE.map((r) => new RegExp(r.source, "i"));
-
-export function isAllowlisted(path: string): boolean {
-  return INCLUDE.some((r) => r.test(path)) && !EXCLUDE_ANY_CASE.some((r) => r.test(path));
+let trustedPolicy: RepoPathPolicy | undefined;
+/** The trusted base's policy, parsed once (throws when it does not parse: callers fail closed). */
+function trustedPathPolicy(): RepoPathPolicy {
+  return (trustedPolicy ??= parseRepoPathPolicy(readTrustedPathPolicy()));
 }
 
-/**
- * Why `path` collides by case, or null: it is excluded only once case is
- * folded (it differs only by case from an exclusion), or it — or one of its
- * directories — differs only by case from a tracked path or another path of
- * the same diff.
- */
-export function caseCollision(
+function allowlisted(policy: RepoPathPolicy, path: string): boolean {
+  return isRepoPathPermitted(policy, path);
+}
+
+/** Whether `path` is on the T0 allowlist of the trusted base's `.motebit/repo-path-policy.json`. */
+export function isAllowlisted(path: string): boolean {
+  return allowlisted(trustedPathPolicy(), path);
+}
+
+function collision(
+  policy: RepoPathPolicy,
   path: string,
   known: ReadonlyMap<string, ReadonlySet<string>>,
 ): string | null {
-  if (EXCLUDE_ANY_CASE.some((r) => r.test(path)) && !EXCLUDE.some((r) => r.test(path))) {
+  if (repoPathExclusion(policy, path) === "case_folded") {
     return `${path} differs only by case from an excluded path`;
   }
   const parts = path.split("/");
@@ -133,6 +120,19 @@ export function caseCollision(
     if (other !== undefined) return `${q} differs only by case from ${other}`;
   }
   return null;
+}
+
+/**
+ * Why `path` collides by case, or null: it is excluded only once case is
+ * folded (it differs only by case from an exclusion), or it — or one of its
+ * directories — differs only by case from a tracked path or another path of
+ * the same diff. Judged against the trusted base's policy.
+ */
+export function caseCollision(
+  path: string,
+  known: ReadonlyMap<string, ReadonlySet<string>>,
+): string | null {
+  return collision(trustedPathPolicy(), path, known);
 }
 
 /** Lower-cased path and directory → the exact spellings that exist. */
@@ -402,6 +402,8 @@ export interface ClassifyInput {
   diff: string;
   /** Text of `.github/CODEOWNERS` (from the trusted base). */
   codeowners: string;
+  /** Text of `.motebit/repo-path-policy.json` (from the trusted base). It must parse strictly. */
+  pathPolicy: string;
   /** Every path tracked at the trusted base (`git ls-files`), for the case-collision rule. */
   trackedPaths: readonly string[];
 }
@@ -418,6 +420,7 @@ export function classifyDiff(input: ClassifyInput): Classification {
       throw new Error(`CODEOWNERS has lines the parser refuses: ${errors.join("; ")}`);
     if (rules.length === 0)
       throw new Error("CODEOWNERS has no rules — refusing to classify against nothing");
+    const policy = parseRepoPathPolicy(input.pathPolicy);
 
     if (input.diff.trim() === "") {
       fire("empty-diff", null, "the diff is empty");
@@ -454,9 +457,9 @@ export function classifyDiff(input: ClassifyInput): Classification {
       }
       // Both names of a rename are judged.
       for (const p of new Set([f.oldPath, f.newPath].filter((x): x is string => x !== null))) {
-        if (!isAllowlisted(p)) fire("not-allowlisted", p, `${p} is outside the T0 allowlist`);
-        const collision = caseCollision(p, known);
-        if (collision !== null) fire("case-collision", p, collision);
+        if (!allowlisted(policy, p)) fire("not-allowlisted", p, `${p} is outside the T0 allowlist`);
+        const caseHit = collision(policy, p, known);
+        if (caseHit !== null) fire("case-collision", p, caseHit);
         const r = decidingRule(rules, p);
         if (r && r.owners.length > 0) {
           fire(
@@ -509,6 +512,11 @@ export function readTrustedCodeowners(root: string = SELF_ROOT): string {
   return readFileSync(join(root, ".github/CODEOWNERS"), "utf-8");
 }
 
+/** Text of the trusted checkout's `.motebit/repo-path-policy.json` (never the diff's head). */
+export function readTrustedPathPolicy(root: string = SELF_ROOT): string {
+  return readFileSync(join(root, REPO_PATH_POLICY_FILE), "utf-8");
+}
+
 /** Every path tracked in the trusted checkout. */
 export function readTrustedPaths(root: string = SELF_ROOT): string[] {
   return execFileSync("git", ["ls-files", "-z"], {
@@ -558,9 +566,25 @@ export function classifyRevisions(
       0,
     );
   }
+  let pathPolicy: string;
+  try {
+    pathPolicy = readTrustedPathPolicy();
+  } catch (err) {
+    return finish(
+      [
+        {
+          rule: "classifier-error",
+          path: null,
+          detail: `could not read the trusted path policy: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ],
+      0,
+    );
+  }
   return classifyDiff({
     diff,
     codeowners: readTrustedCodeowners(),
+    pathPolicy,
     trackedPaths: readTrustedPaths(),
   });
 }
@@ -582,6 +606,7 @@ export function main(argv: readonly string[]): number {
       result = classifyDiff({
         diff,
         codeowners: readTrustedCodeowners(),
+        pathPolicy: readTrustedPathPolicy(),
         trackedPaths: readTrustedPaths(),
       });
     } else if (repo !== undefined && baseRev !== undefined && headRev !== undefined) {

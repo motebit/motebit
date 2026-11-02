@@ -17,7 +17,9 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
-  ALLOWLIST,
+  caseCollision,
+  caseIndex,
+  readTrustedPathPolicy,
   readTrustedPaths,
   RULES,
   classifyDiff,
@@ -33,6 +35,9 @@ import { cleanEnv } from "../lib/differential-tree.js";
 
 const ROOT = resolve(__dirname, "..", "..");
 const CODEOWNERS = readFileSync(resolve(ROOT, ".github/CODEOWNERS"), "utf-8");
+/** The T0 allowlist, as data (`motebit/repo-path-policy@1.0`). */
+const POLICY_FILE = ".motebit/repo-path-policy.json";
+const PATH_POLICY = readFileSync(resolve(ROOT, POLICY_FILE), "utf-8");
 
 // ── Diff builders (valid git unified diffs) ──────────────────────────────────
 
@@ -86,8 +91,8 @@ function del(path: string, lines: string[]): string {
 /** The real tracked tree, so case-collision fixtures collide with what exists. */
 const TRACKED = readTrustedPaths(ROOT);
 
-function classify(diff: string, codeowners = CODEOWNERS): Classification {
-  return classifyDiff({ diff, codeowners, trackedPaths: TRACKED });
+function classify(diff: string, codeowners = CODEOWNERS, pathPolicy = PATH_POLICY): Classification {
+  return classifyDiff({ diff, codeowners, pathPolicy, trackedPaths: TRACKED });
 }
 
 const fired = (c: Classification): Set<RuleId> => new Set(c.firings.map((f) => f.rule));
@@ -768,7 +773,9 @@ describe("the rule table and the allowlist", () => {
   });
 
   it("the allowlist is exactly the documented set (widening it is a visible diff in an owned file)", () => {
-    expect(ALLOWLIST).toEqual({
+    expect(readTrustedPathPolicy(ROOT)).toBe(PATH_POLICY);
+    expect(JSON.parse(PATH_POLICY)).toEqual({
+      spec: "motebit/repo-path-policy@1.0",
       include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],
       exclude: [
         "docs/doctrine/**",
@@ -837,6 +844,8 @@ describe("the rule table and the allowlist", () => {
       "docs/sub/copilot-instructions.md",
       "README.md",
       "xdocs/a.md",
+      POLICY_FILE,
+      "packages/verifier/src/repo-path-policy.ts",
     ])
       expect(isAllowlisted(p), p).toBe(false);
   });
@@ -853,6 +862,367 @@ describe("the rule table and the allowlist", () => {
   });
 });
 
+// ── The path policy as data ──────────────────────────────────────────────────
+
+/**
+ * THE FORMER PREDICATE, FROZEN: `ALLOWLIST`, the include descent cut and the
+ * case-insensitive exclusions of scripts/classify-autonomy-tier.ts, and
+ * `patternToRegex` of scripts/lib/codeowners.ts, copied verbatim as of
+ * 6131d65d7 (the last commit with the allowlist in code). Never edit this
+ * copy to make the differential below pass: it is the oracle.
+ */
+const OLD_ALLOWLIST = {
+  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],
+  exclude: [
+    "docs/doctrine/**",
+    "docs/proposals/**",
+    "docs/ops/**",
+    "docs/design/**",
+    "docs/drift-defenses.md",
+    "docs/operator/**",
+    "docs/security/**",
+    "**/CLAUDE.md",
+    "**/CLAUDE.local.md",
+    "**/AGENTS.md",
+    "**/GEMINI.md",
+    "**/copilot-instructions.md",
+    "**/.claude/**",
+    "**/.cursor/**",
+    "**/.agents/**",
+    "**/SKILL.md",
+    "skills/**",
+  ],
+} as const;
+function oldEscapeRegex(s: string): string {
+  return s.replace(/[.+^${}()|\\]/g, "\\$&");
+}
+function oldPatternToRegex(pattern: string): RegExp {
+  let p = pattern;
+  const dirOnly = p.endsWith("/");
+  if (dirOnly) p = p.replace(/\/+$/, "");
+  const anchored = p.startsWith("/") || p.includes("/");
+  p = p.replace(/^\/+/, "");
+  let body = "";
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i]!;
+    if (c === "*" && p[i + 1] === "*") {
+      const atStart = i === 0;
+      const followedBySlash = p[i + 2] === "/";
+      if (followedBySlash) {
+        body += "(?:.*/)?";
+        i += 2;
+      } else if (atStart || p[i - 1] === "/") {
+        body += ".*";
+        i += 1;
+      } else {
+        body += "[^/]*";
+        i += 1;
+      }
+    } else if (c === "*") {
+      body += "[^/]*";
+    } else if (c === "?") {
+      body += "[^/]";
+    } else {
+      body += oldEscapeRegex(c);
+    }
+  }
+  const prefix = anchored ? "^" : "^(?:.*/)?";
+  const last = p.slice(p.lastIndexOf("/") + 1);
+  const noDescent = last.includes("*") && !last.includes("**");
+  const suffix = dirOnly ? "/.+$" : noDescent ? "$" : "(?:/.+)?$";
+  return new RegExp(prefix + body + suffix);
+}
+const OLD_DESCENT_SUFFIX = "(?:\\/.+)?$";
+const OLD_INCLUDE = OLD_ALLOWLIST.include.map((p) => {
+  const src = oldPatternToRegex(p).source;
+  return new RegExp(
+    src.endsWith(OLD_DESCENT_SUFFIX) ? `${src.slice(0, -OLD_DESCENT_SUFFIX.length)}$` : src,
+  );
+});
+const OLD_EXCLUDE = OLD_ALLOWLIST.exclude.map(oldPatternToRegex);
+const OLD_EXCLUDE_ANY_CASE = OLD_EXCLUDE.map((r) => new RegExp(r.source, "i"));
+function oldIsAllowlisted(path: string): boolean {
+  return OLD_INCLUDE.some((r) => r.test(path)) && !OLD_EXCLUDE_ANY_CASE.some((r) => r.test(path));
+}
+function oldCaseCollision(
+  path: string,
+  known: ReadonlyMap<string, ReadonlySet<string>>,
+): string | null {
+  if (OLD_EXCLUDE_ANY_CASE.some((r) => r.test(path)) && !OLD_EXCLUDE.some((r) => r.test(path))) {
+    return `${path} differs only by case from an excluded path`;
+  }
+  const parts = path.split("/");
+  for (let k = 1; k <= parts.length; k++) {
+    const q = parts.slice(0, k).join("/");
+    const other = [...(known.get(q.toLowerCase()) ?? [])].find((x) => x !== q);
+    if (other !== undefined) return `${q} differs only by case from ${other}`;
+  }
+  return null;
+}
+
+/** ECMAScript's line terminators, the one place the frozen regexes (`.`) and the interpreter part. */
+const LINE_TERMINATORS = ["\n", "\r", String.fromCharCode(0x2028), String.fromCharCode(0x2029)];
+const hasLineTerminator = (p: string): boolean => LINE_TERMINATORS.some((t) => p.includes(t));
+
+const swapCase = (s: string): string =>
+  [...s].map((c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase())).join("");
+/** Case variants: the path, all lower, all upper, swapped, and each segment capitalised alone. */
+function caseVariants(p: string): string[] {
+  const segs = p.split("/");
+  const out = [p, p.toLowerCase(), p.toUpperCase(), swapCase(p)];
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i]!;
+    for (const v of [s.toUpperCase(), s.toLowerCase(), s.charAt(0).toUpperCase() + s.slice(1)]) {
+      out.push([...segs.slice(0, i), v, ...segs.slice(i + 1)].join("/"));
+    }
+  }
+  return out;
+}
+
+/** Concrete paths a pattern stands for: `**` and `*` filled in several ways, with and without descent. */
+function instances(pattern: string): string[] {
+  const fills: string[][] = [[]];
+  for (const seg of pattern.split("/")) {
+    const opts =
+      seg === "**"
+        ? [[], ["x"], ["x", "y"], [".claude"], [""]]
+        : [[seg.replace(/\*/g, "")], [seg.replace(/\*/g, "x")], [seg.replace(/\*/g, "a.b")]];
+    const next: string[][] = [];
+    for (const f of fills) for (const o of opts) next.push([...f, ...o]);
+    fills.splice(0, fills.length, ...next);
+  }
+  const out: string[] = [];
+  for (const f of fills) {
+    const base = f.join("/");
+    for (const pre of ["", "docs/", "docs/sub/", "x/"]) {
+      for (const post of ["", "/a.md", "/x", "/", "//a.md", "/a/b.md"]) out.push(pre + base + post);
+    }
+  }
+  return out;
+}
+
+const ADVERSARIAL = [
+  // descent
+  "scripts/bench/x/prompts.json/x",
+  "scripts/bench/x/prompts.json/",
+  "scripts/bench/x/prompts.json/evil.ts",
+  "scripts/bench/x/prompts.json/a/b.md",
+  "docs/a.md/b.md",
+  "docs/a.md/",
+  "docs/drift-defenses.md/x.md",
+  "docs/drift-defenses.md/",
+  "docs/drift-defenses.md//x.md",
+  "docs/CLAUDE.md/x.md",
+  "docs/CLAUDE.md/",
+  // agent instructions at depth
+  "docs/x/CLAUDE.md",
+  "docs/x/y/z/CLAUDE.md",
+  "docs/x/y/claude.md",
+  "docs/a/b/c/.claude/d.md",
+  "docs/a/.CLAUDE/b.md",
+  "docs/.claude.md",
+  "docs/x.claude/a.md",
+  "docs/.claudex/a.md",
+  ".claude/docs/a.md",
+  "docs/a/b/c/d/e/f/.claude/g/h.md",
+  "docs/a/b/c/d/e/f/SKILL.md",
+  "docs/a/SKILL.md.md",
+  "docs/a/xSKILL.md",
+  // non-ASCII
+  "docs/ſkill.md",
+  "docs/x/ſKILL.md",
+  "docs/x/SKİLL.md",
+  "docs/x/skıll.md",
+  "docs/doctrİne/a.md",
+  "docs/doctrıne/a.md",
+  `docs/${String.fromCharCode(0x212a)}it.md`,
+  `docs/x/CLAUDE.md${String.fromCharCode(0x301)}`,
+  `docs/x/CLAUDE${String.fromCharCode(0x200b)}.md`,
+  "ｄocs/a.md",
+  "docs/é.md",
+  "docs/é.md".normalize("NFD"),
+  "docs/DOCTRINEé/a.md",
+  "docs/Ｄoctrine/a.md",
+  "docs/ä/ö/ü.md",
+  "docs/日本語.md",
+  "docs/😀/a.md",
+  `docs/${String.fromCharCode(0xd800)}.md`,
+  // empty segments, dot segments, trailing slash, leading slash
+  "",
+  "/",
+  "//",
+  "docs",
+  "docs/",
+  "docs//",
+  "docs//a.md",
+  "/docs/a.md",
+  "docs/a.md/",
+  "docs///CLAUDE.md",
+  "docs/doctrine//a.md",
+  "docs//doctrine/a.md",
+  "docs/doctrine/",
+  "docs/doctrine",
+  "docs/../a.md",
+  "docs/../.github/x.md",
+  "docs/./a.md",
+  "docs/doctrine/../a.md",
+  "docs/../docs/doctrine/a.md",
+  "../docs/a.md",
+  "docs/..",
+  "docs/...md",
+  "docs/.md",
+  "docs/..md",
+  "docs/a/",
+  "skills/",
+  "skills",
+  "docs/skills/a.md",
+  "docs/x/.claude/",
+  // other characters
+  "docs\\doctrine\\a.md",
+  "docs/a .md",
+  "docs/a\tb.md",
+  "docs/doctrine/a\tb.md",
+  "docs/DOCTRINE/a\tb.md",
+  "docs/a\0b.md",
+  "docs/a*b.md",
+  "docs/a?.md",
+  "docs/[x].md",
+  "scripts/bench/*/prompts.json",
+  "scripts/bench//prompts.json",
+  "scripts/bench/x/PROMPTS.json",
+];
+
+/** Every path the differential judges: the tracked tree and its case variants, plus generated and adversarial paths. */
+function corpus(): string[] {
+  const out = new Set<string>();
+  for (const p of TRACKED) out.add(p);
+  for (const p of TRACKED)
+    if (p.startsWith("docs/") || p.startsWith("scripts/bench/"))
+      for (const v of caseVariants(p)) out.add(v);
+  for (const pat of [...OLD_ALLOWLIST.include, ...OLD_ALLOWLIST.exclude]) {
+    for (const p of instances(pat)) for (const v of caseVariants(p)) out.add(v);
+  }
+  for (const p of ADVERSARIAL) for (const v of caseVariants(p)) out.add(v);
+  // Every path of up to three segments over a pool of the patterns' own words, and four under docs/.
+  const POOL = [
+    "docs",
+    "DOCS",
+    "doctrine",
+    "Doctrine",
+    "operator",
+    "x",
+    "",
+    ".",
+    "..",
+    ".claude",
+    ".Claude",
+    "CLAUDE.md",
+    "claude.md",
+    "SKILL.md",
+    "prompts.json",
+    "bench",
+    "scripts",
+    "skills",
+    "a.md",
+    "drift-defenses.md",
+    "ſ.md",
+  ];
+  const walk = (prefix: string[], depth: number): void => {
+    if (prefix.length > 0) out.add(prefix.join("/"));
+    if (depth === 0) return;
+    for (const s of POOL) walk([...prefix, s], depth - 1);
+  };
+  walk([], 3);
+  for (const s of POOL) walk(["docs", s], 2);
+  for (const s of POOL) walk(["scripts", "bench", s], 1);
+  return [...out];
+}
+
+describe("the path policy as data (.motebit/repo-path-policy.json)", () => {
+  const KNOWN = caseIndex(TRACKED);
+  const CORPUS = corpus();
+  const plain = CORPUS.filter((p) => !hasLineTerminator(p));
+
+  it("differential: the interpreter gives the frozen regex predicate's isAllowlisted and caseCollision on every tracked, generated and adversarial path", () => {
+    const mismatches: string[] = [];
+    let allowed = 0;
+    let folded = 0;
+    for (const p of plain) {
+      const a = isAllowlisted(p);
+      const o = oldIsAllowlisted(p);
+      if (a !== o) mismatches.push(`isAllowlisted(${JSON.stringify(p)}): ${a}, frozen ${o}`);
+      const c = caseCollision(p, KNOWN);
+      const oc = oldCaseCollision(p, KNOWN);
+      if (c !== oc) mismatches.push(`caseCollision(${JSON.stringify(p)}): ${c}, frozen ${oc}`);
+      if (a) allowed++;
+      if (c?.endsWith("differs only by case from an excluded path")) folded++;
+    }
+    expect(mismatches.slice(0, 20)).toEqual([]);
+    // Not vacuous: the whole tracked tree, tens of thousands of other paths, and both outcomes.
+    expect(plain.length).toBeGreaterThan(TRACKED.length + 20_000);
+    expect(allowed).toBeGreaterThan(100);
+    expect(plain.length - allowed).toBeGreaterThan(20_000);
+    expect(folded).toBeGreaterThan(1_000);
+  });
+
+  it("differential: on a path with a line terminator the interpreter only narrows (the frozen regex's `.` stops at one)", () => {
+    const seeds = [
+      ...CORPUS.filter((p) => p.startsWith("docs/") && p.endsWith(".md")).slice(0, 400),
+    ];
+    const paths = new Set<string>();
+    for (const s of [...seeds, ...ADVERSARIAL]) {
+      for (const t of LINE_TERMINATORS) {
+        paths.add(`${s}${t}`);
+        paths.add(`${t}${s}`);
+        const i = s.indexOf("/", 5);
+        if (i > 0) paths.add(`${s.slice(0, i)}${t}${s.slice(i)}`);
+        paths.add(s.replace(/\.md$/, `${t}.md`));
+      }
+    }
+    const widened: string[] = [];
+    const lostCollision: string[] = [];
+    let narrowed = 0;
+    for (const p of paths) {
+      if (!hasLineTerminator(p)) continue;
+      if (isAllowlisted(p)) widened.push(JSON.stringify(p));
+      if (oldIsAllowlisted(p)) narrowed++;
+      if (oldCaseCollision(p, KNOWN) !== null && caseCollision(p, KNOWN) === null)
+        lostCollision.push(JSON.stringify(p));
+    }
+    expect(widened).toEqual([]);
+    expect(lostCollision).toEqual([]);
+    // The one divergence, stated: the frozen predicate allowlisted an excluded doctrine path.
+    expect(oldIsAllowlisted("docs/doctrine/a\nb.md")).toBe(true);
+    expect(isAllowlisted("docs/doctrine/a\nb.md")).toBe(false);
+    expect(narrowed).toBeGreaterThan(0);
+  });
+
+  const MALFORMED: Array<[string, string]> = [
+    ["empty text", ""],
+    ["not JSON", "{"],
+    ["an unknown key", PATH_POLICY.replace('"include"', '"extra": 1, "include"')],
+    ["a missing exclude", JSON.stringify({ spec: "motebit/repo-path-policy@1.0", include: [] })],
+    ["another spec", PATH_POLICY.replace("repo-path-policy@1.0", "repo-path-policy@2.0")],
+    ["an out-of-grammar include", PATH_POLICY.replace('"docs/**/*.md"', '"docs/**/*.{md,ts}"')],
+    ["an out-of-grammar exclude", PATH_POLICY.replace('"skills/**"', '"!skills/**"')],
+    ["a duplicate exclude", PATH_POLICY.replace('"skills/**"', '"skills/**", "skills/**"')],
+    ["a non-string pattern", PATH_POLICY.replace('"skills/**"', "7")],
+  ];
+  for (const [name, text] of MALFORMED) {
+    it(`a path policy with ${name} is a T1 classifier-error, never a classification`, () => {
+      expect(text).not.toBe(PATH_POLICY);
+      const c = classify(modify("docs/guide.md", ["a"], ["b"]), CODEOWNERS, text);
+      expect(c.tier).toBe("T1");
+      expect(c.rule).toBe("classifier-error");
+      expect(c.firings[0]!.detail).toMatch(/repo path policy/);
+    });
+  }
+
+  it("the same doc edit is T0 under the committed policy (the malformed cases differ only by the policy)", () => {
+    expect(classify(modify("docs/guide.md", ["a"], ["b"])).tier).toBe("T0");
+  });
+});
+
 describe("the boundary is owned", () => {
   const { rules } = parseCodeowners(CODEOWNERS);
   for (const p of [
@@ -861,6 +1231,8 @@ describe("the boundary is owned", () => {
     ".github/workflows/autonomy-tier.yml",
     ".github/CODEOWNERS",
     "scripts/lib/codeowners.ts",
+    POLICY_FILE,
+    "packages/verifier/src/repo-path-policy.ts",
   ]) {
     it(`${p} is owned by @hakimlabs`, () => {
       expect(ownersOf(rules, p)).toContain("@hakimlabs");
@@ -999,6 +1371,35 @@ describe("against a real git repository (git diff --find-renames base...head)", 
     const c = classifyRevisions(dir, baseSha, git("rev-parse", "HEAD"));
     expect(c.firings).toEqual([]);
     expect(c.tier).toBe("T0");
+  });
+
+  it("reads the path policy from the trusted checkout, never from the subject repository or the diff's head", () => {
+    // The subject's own policy (at its base AND its head) admits notes/*.txt.
+    const widened = JSON.stringify({
+      spec: "motebit/repo-path-policy@1.0",
+      include: ["notes/*.txt"],
+      exclude: [],
+    });
+    git("checkout", "-q", "-b", "own-policy", baseSha);
+    write(POLICY_FILE, widened);
+    write("notes/a.txt", "one\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "subject policy");
+    const subjectBase = git("rev-parse", "HEAD");
+    write("notes/a.txt", "two\n");
+    git("commit", "-q", "-am", "edit a note");
+    const c = classifyRevisions(dir, subjectBase, git("rev-parse", "HEAD"));
+    expect(c.tier).toBe("T1");
+    expect(c.firings).toEqual([
+      {
+        rule: "not-allowlisted",
+        path: "notes/a.txt",
+        detail: "notes/a.txt is outside the T0 allowlist",
+      },
+    ]);
+    // Positive control: under the subject's policy the same diff would be T0.
+    const diff = git("diff", `${subjectBase}...HEAD`) + "\n";
+    expect(classify(diff, CODEOWNERS, widened).tier).toBe("T0");
   });
 
   it("fails closed when a revision cannot be resolved", () => {
