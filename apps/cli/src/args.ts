@@ -63,6 +63,20 @@ export interface CliConfig {
   days: string | undefined;
   cadenceHours: string | undefined;
   grant: string | undefined;
+  /**
+   * `repo-task delegate` scope flags (spec/repo-change-v1.md §3.1). `paths`
+   * are the exact strings given, one per `--path`, never split or trimmed.
+   */
+  repo?: string;
+  baseRef?: string;
+  objectFormat?: string;
+  paths?: string[];
+  maxFiles?: string;
+  task?: string;
+  taskFile?: string;
+  delegateIdentity?: string;
+  hours?: string;
+  notBefore?: string;
   target: string | undefined;
   budget: string | undefined;
   price: string | undefined;
@@ -224,6 +238,19 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "cadence-hours": { type: "string" },
       // Chat: present a stored standing grant each turn (in-process only).
       grant: { type: "string" },
+      // `motebit repo-task delegate` — the governed repo change scope, grant
+      // and tick (spec/repo-change-v1.md §3.1, §5). `--path` repeats; each
+      // value is taken byte for byte.
+      repo: { type: "string" },
+      "base-ref": { type: "string" },
+      "object-format": { type: "string" },
+      path: { type: "string", multiple: true },
+      "max-files": { type: "string" },
+      task: { type: "string" },
+      "task-file": { type: "string" },
+      delegate: { type: "string" },
+      hours: { type: "string" },
+      "not-before": { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -310,6 +337,16 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     days: values.days,
     cadenceHours: values["cadence-hours"],
     grant: values.grant,
+    repo: values.repo,
+    baseRef: values["base-ref"],
+    objectFormat: values["object-format"],
+    paths: values.path ?? [],
+    maxFiles: values["max-files"],
+    task: values.task,
+    taskFile: values["task-file"],
+    delegateIdentity: values.delegate,
+    hours: values.hours,
+    notBefore: values["not-before"],
     target: values.target,
     budget: values.budget,
     price: values.price,
@@ -567,6 +604,18 @@ Commands:
   grant list                List stored grants (state, subject, ceiling)
   grant show <id>           Show a grant + its tick schedule
   grant revoke <id>         Sign the terminal revocation + propagate to the relay cache
+  repo-task delegate --repo <owner/name> --path <p> [--path <p> ...] --task <text> --delegate <motebit.md>
+                            Sign a governed repo change's scope, grant and single tick (principal side)
+    --task-file <file>        Task text from a file instead of --task
+    --hours <n>               Grant lifetime (default 24; at most 24)
+    --max-files <n>           Most files the change may touch (default: the number of paths)
+    --not-before <iso|ms>     Activation time (default: now)
+    --object-format <f>       sha1 (default) or sha256; --base-ref main is the only base
+    --scope <tools>           Tools granted (default repo_read_blob,repo_write_path)
+    --output <dir>            Output directory (default ./repo-task-<grant_id>)
+  repo-task revoke <grant_id|grant.json|dir> [--output <dir>]
+                            Sign the grant's revocation as <grant_id>.json (for .motebit/revocations/); a grant_id alone needs no files
+                            (a revocation signed after a key rotation does not bind grants the old key signed)
   withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail

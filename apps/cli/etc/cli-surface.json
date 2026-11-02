@@ -47,6 +47,7 @@
     "relay": [
       "up"
     ],
+    "repo-task": [],
     "restore": [],
     "resume": [],
     "rotate": [],
@@ -106,6 +107,10 @@
       "default": false
     },
     {
+      "name": "base-ref",
+      "type": "string"
+    },
+    {
       "name": "block-commands",
       "type": "string"
     },
@@ -127,6 +132,10 @@
     },
     {
       "name": "db-path",
+      "type": "string"
+    },
+    {
+      "name": "delegate",
       "type": "string"
     },
     {
@@ -180,6 +189,10 @@
       "short": "h"
     },
     {
+      "name": "hours",
+      "type": "string"
+    },
+    {
       "name": "identity",
       "type": "string"
     },
@@ -202,6 +215,10 @@
       "type": "string"
     },
     {
+      "name": "max-files",
+      "type": "string"
+    },
+    {
       "name": "max-tokens",
       "type": "string"
     },
@@ -217,6 +234,14 @@
       "name": "no-stream",
       "type": "boolean",
       "default": false
+    },
+    {
+      "name": "not-before",
+      "type": "string"
+    },
+    {
+      "name": "object-format",
+      "type": "string"
     },
     {
       "name": "once",
@@ -237,6 +262,11 @@
       "name": "passphrase",
       "type": "boolean",
       "default": false
+    },
+    {
+      "name": "path",
+      "type": "string",
+      "multiple": true
     },
     {
       "name": "pay-new-agents",
@@ -287,6 +317,10 @@
       "name": "remote",
       "type": "boolean",
       "default": false
+    },
+    {
+      "name": "repo",
+      "type": "string"
     },
     {
       "name": "routing-strategy",
@@ -347,6 +381,14 @@
     },
     {
       "name": "target",
+      "type": "string"
+    },
+    {
+      "name": "task",
+      "type": "string"
+    },
+    {
+      "name": "task-file",
       "type": "string"
     },
     {

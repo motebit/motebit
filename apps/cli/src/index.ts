@@ -83,6 +83,8 @@ import {
   handleGrantList,
   handleGrantShow,
   handleGrantRevoke,
+  handleRepoTaskDelegate,
+  handleRepoTaskRevoke,
   createGrantPresenter,
   loadStoredGrant,
   handleGoalAdd,
@@ -496,6 +498,21 @@ async function main(): Promise<void> {
       await handleGrantRevoke(config.positionals[2]);
     } else {
       console.error("Usage: motebit grant [create|list|show|revoke]");
+      process.exit(1);
+    }
+    return;
+  }
+
+  // The principal side of a governed repo change (spec/repo-change-v1.md §5):
+  // a sibling of `grant`, never an extension of its money path.
+  if (subcommand === "repo-task") {
+    const repoTaskCmd = config.positionals[1];
+    if (repoTaskCmd === "delegate") {
+      await handleRepoTaskDelegate(config);
+    } else if (repoTaskCmd === "revoke") {
+      await handleRepoTaskRevoke(config);
+    } else {
+      console.error("Usage: motebit repo-task [delegate|revoke]");
       process.exit(1);
     }
     return;

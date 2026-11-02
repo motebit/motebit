@@ -112,6 +112,7 @@
     "@motebit/sync-engine": "workspace:*",
     "@motebit/tools": "workspace:*",
     "@motebit/verify": "workspace:*",
+    "@motebit/verifier": "workspace:*",
     "@motebit/voice": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "@motebit/wire-schemas": "workspace:*",
