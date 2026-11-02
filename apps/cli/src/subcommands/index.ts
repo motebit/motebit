@@ -60,6 +60,7 @@ export { handleMigrate } from "./migrate.js";
 export { handleMigrateKeyring } from "./migrate-keyring.js";
 export { handleBalance, handleFund, handleWithdraw } from "./market.js";
 export { handleRegister } from "./register.js";
+export { handleRepoTaskDelegate, handleRepoTaskRevoke } from "./repo-task.js";
 export { handleRestore } from "./restore.js";
 export { handleSeed, seedBackupStatus } from "./seed.js";
 export { handleKeychain } from "./keychain.js";

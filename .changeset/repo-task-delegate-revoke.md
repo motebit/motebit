@@ -1,0 +1,11 @@
+---
+"motebit": minor
+---
+
+Governed repo change, the principal's side: `motebit repo-task delegate` and `motebit repo-task revoke` (docs/proposals/governed-repo-change-v1.md, build step 3; spec/repo-change-v1.md §3.1, §5).
+
+`repo-task delegate --repo <owner/name> --path <p> [--path <p> ...] --task <text> --delegate <agent motebit.md>` signs, with this motebit's key, a canonical `RepoTaskScope`, a `StandingDelegation` to the agent bound to that scope (`subject: "repo-change"`, `subject_binding`, no `spend_ceiling`, a lifetime of at most 24 hours with `cadence_ms` equal to it) and the single pre-minted tick (`grant_id` set, ending with the grant). It writes them as canonical JSON — `scope.json`, `grant.json`, `tick.json` — into `--output` or `./repo-task-<grant_id>`, never overwriting a file. `--path` repeats and each value is taken byte for byte; `--hours` (default 24), `--max-files` (default: the number of paths), `--not-before`, `--object-format` (default `sha1`), `--base-ref` (`main`) and `--scope` (default `repo_read_blob,repo_write_path`) shape the rest.
+
+`repo-task revoke <grant.json | directory | grant_id>` signs the grant's `DelegationRevocation` and writes it as `<grant_id>.json`, ready to land in `.motebit/revocations/`.
+
+Both commands self-check what they produce before writing anything, with the repo-task run's own authority law (`checkRepoTaskAuthority`, which calls `@motebit/verifier`'s shared repo-change rules): a delegation that would not verify — self-delegation, a non-canonical or repeated path, a lifetime over 24 hours, a tool outside the two repo-change tools — and a revocation that would not bind the grant (a key other than the grant's delegator key) are refused with the verifier's repair codes, and no file is written. A sibling of `motebit grant`, never an extension of its money path; no key material is printed.
