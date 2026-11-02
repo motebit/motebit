@@ -44,8 +44,10 @@ import type {
   RepoTaskAuthorityFailure,
   RepoTaskPin,
 } from "@motebit/runtime";
+import { isCanonicalRepoPath, isRepoTaskScopeShape, parseRepoChangeTools } from "@motebit/verifier";
 import {
   ALL_REPO_CHANGE_TOOLS,
+  REPO_CHANGE_MAX_GRANT_LIFETIME_MS,
   REPO_CHANGE_SUBJECT,
   REPO_TASK_SCOPE_SCHEMA,
   REPO_TASK_SCOPE_SPEC_ID,
@@ -102,7 +104,8 @@ export interface RepoTaskDelegation {
  * that would bind nothing) `revoke.not_delegator`.
  */
 export interface RepoTaskRefusal {
-  readonly code: RepoTaskAuthorityFailure["code"] | "revoke.not_delegator";
+  readonly code:
+    RepoTaskAuthorityFailure["code"] | "revoke.not_delegator" | "revoke.does_not_bind" | "precheck";
   readonly detail: string;
 }
 
@@ -179,14 +182,53 @@ function windowOpens(d: RepoTaskDelegation): number {
 }
 
 /**
- * Build, sign and self-check the scope, the grant and the tick. Throws
- * `RepoTaskDelegationRefusedError` when the result would not verify.
+ * The refusals that need no key, judged BEFORE the principal's key is unlocked
+ * so a delegation that cannot verify never prompts for a passphrase: the
+ * scope's strict shape, every path canonical and unique, the tool list, the
+ * lifetime, and the delegate not being the principal. Each is the verifier's
+ * own predicate (`@motebit/verifier`'s shared repo-change rules); the
+ * post-sign self-check in `mintRepoTaskDelegation` stays the authority.
  */
-export async function mintRepoTaskDelegation(
-  req: RepoTaskDelegationRequest,
-): Promise<RepoTaskDelegation> {
-  const { principal, delegate, now, lifetimeMs } = req;
-  const scope = {
+export function precheckRepoTaskDelegation(
+  req: Omit<RepoTaskDelegationRequest, "principal">,
+  principal: RepoTaskPin,
+): RepoTaskRefusal[] {
+  const out: RepoTaskRefusal[] = [];
+  const refuse = (detail: string): void => {
+    out.push({ code: "precheck", detail });
+  };
+  if (!isRepoTaskScopeShape(buildScope(req))) {
+    refuse(
+      "the scope is not of the strict shape (base_ref main, object_format sha1|sha256, a non-empty repo, task and path list, max_changed_files ≥ 1)",
+    );
+  }
+  const seen = new Set<string>();
+  for (const p of req.allowedPaths) {
+    if (!isCanonicalRepoPath(p)) refuse(`path ${JSON.stringify(p)} is not canonical`);
+    if (seen.has(p)) refuse(`path ${JSON.stringify(p)} repeats`);
+    seen.add(p);
+  }
+  if (parseRepoChangeTools(canonicalToolOrder(req.tools)) === null) {
+    refuse(`--scope ${JSON.stringify(req.tools)} is not a list of repo-change tools`);
+  }
+  if (
+    !Number.isSafeInteger(req.lifetimeMs) ||
+    req.lifetimeMs <= 0 ||
+    req.lifetimeMs > REPO_CHANGE_MAX_GRANT_LIFETIME_MS
+  ) {
+    refuse(`the lifetime must be at most ${REPO_CHANGE_MAX_GRANT_LIFETIME_MS / 3_600_000} hours`);
+  }
+  if (
+    req.delegate.motebit_id === principal.motebit_id ||
+    req.delegate.public_key === principal.public_key
+  ) {
+    refuse("the delegate is this motebit: a principal cannot delegate to itself");
+  }
+  return out;
+}
+
+function buildScope(req: Omit<RepoTaskDelegationRequest, "principal">): RepoTaskScope {
+  return {
     schema: REPO_TASK_SCOPE_SCHEMA,
     spec: REPO_TASK_SCOPE_SPEC_ID,
     repo: req.repo,
@@ -196,6 +238,17 @@ export async function mintRepoTaskDelegation(
     max_changed_files: req.maxChangedFiles,
     task: req.task,
   } as RepoTaskScope;
+}
+
+/**
+ * Build, sign and self-check the scope, the grant and the tick. Throws
+ * `RepoTaskDelegationRefusedError` when the result would not verify.
+ */
+export async function mintRepoTaskDelegation(
+  req: RepoTaskDelegationRequest,
+): Promise<RepoTaskDelegation> {
+  const { principal, delegate, now, lifetimeMs } = req;
+  const scope = buildScope(req);
   const tools = canonicalToolOrder(req.tools);
   const grantId = req.grantId ?? generateUUIDv7(now);
   const notBefore = req.notBefore ?? null;
@@ -277,23 +330,65 @@ function serialize(files: Record<string, unknown>): [string, string][] {
   return Object.entries(files).map(([name, value]) => [name, canonicalJsonForSigning(value)]);
 }
 
+/** The file-system calls the writer makes; a seam so a test can fail a write midway. */
+export interface CanonicalFileIo {
+  readonly writeSync: (fd: number, data: Uint8Array) => number;
+}
+const NODE_IO: CanonicalFileIo = { writeSync: (fd, data) => fs.writeSync(fd, data) };
+
+/** The outermost directory on the way to `dir` that does not exist yet, or null. */
+function firstMissingAncestor(dir: string): string | null {
+  let missing: string | null = null;
+  for (let d = path.resolve(dir); !fs.existsSync(d); d = path.dirname(d)) {
+    missing = d;
+    if (path.dirname(d) === d) break;
+  }
+  return missing;
+}
+
 /**
- * Write canonical JSON files into `dir` (created owner-only if absent). Every
- * file is created exclusively — an existing file is never overwritten — and on
- * any failure the files this call created are removed. Returns their paths.
+ * Write canonical JSON files into `dir` (created owner-only if absent; files
+ * 0600). Every file is created exclusively — an existing file is never
+ * overwritten — and on any failure everything this call created is removed:
+ * each file it opened (recorded before a byte is written, so a write that
+ * fails midway leaves no truncated file) and the directories it made.
+ * Returns the files' paths.
  */
-export function writeCanonicalFiles(dir: string, files: Record<string, unknown>): string[] {
+export function writeCanonicalFiles(
+  dir: string,
+  files: Record<string, unknown>,
+  io: CanonicalFileIo = NODE_IO,
+): string[] {
   const contents = serialize(files);
-  mkdirOwnerOnly(dir);
+  const created = firstMissingAncestor(dir);
   const written: string[] = [];
   try {
+    mkdirOwnerOnly(dir);
     for (const [name, text] of contents) {
       const file = path.join(dir, name);
-      fs.writeFileSync(file, text, { flag: "wx", mode: 0o600 });
+      const fd = fs.openSync(file, "wx", 0o600);
       written.push(file);
+      try {
+        const bytes = new TextEncoder().encode(text);
+        for (let off = 0; off < bytes.length;) off += io.writeSync(fd, bytes.subarray(off));
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
     }
   } catch (err) {
     for (const file of written) fs.rmSync(file, { force: true });
+    if (created !== null) {
+      // Only the directories this call made, innermost first, and only when empty.
+      for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+        try {
+          fs.rmdirSync(d);
+        } catch {
+          break;
+        }
+        if (d === created) break;
+      }
+    }
     throw new Error(`could not write ${dir}: ${err instanceof Error ? err.message : String(err)}`, {
       cause: err,
     });
@@ -351,21 +446,28 @@ export async function mintRepoTaskRevocation(input: {
     delegate,
     now,
   );
-  // A revocation that binds makes the check fail with exactly `revoked` on
-  // the revocation axis; the grant's other faults (expired, say) are no
-  // reason not to revoke it.
+  // A revocation that binds makes the check fail with `revoked` on the
+  // revocation axis. Temporal and structural authority faults (expired, not
+  // yet valid) are no reason not to revoke a grant; an INTEGRITY fault is: a
+  // grant, tick or scope that is malformed, non-canonical or not signed by its
+  // delegator is not a grant the principal made, and a revocation of it would
+  // revoke nothing real.
   const failures = check.ok ? [] : check.failures;
+  const integrity = failures.filter((f) => f.code.startsWith("integrity."));
+  if (integrity.length > 0) throw new RepoTaskDelegationRefusedError(integrity);
   const malformed = failures.filter((f) => f.code === "revocation.repo_change.set_malformed");
-  const binds = failures.some((f) => f.code === "revocation.repo_change.revoked");
   if (malformed.length > 0) throw new RepoTaskDelegationRefusedError(malformed);
-  if (!binds) {
+  // With integrity sound the revocation axis was evaluated, so a revocation
+  // that does not bind is exactly a key that is not the grant's delegator key.
+  if (!failures.some((f) => f.code === "revocation.repo_change.revoked")) {
     throw new RepoTaskDelegationRefusedError([
-      ...failures,
-      {
-        code: "revoke.not_delegator",
-        detail:
-          "the revocation would bind nothing: the loaded key is not the grant's delegator key",
-      },
+      principal.publicKeyHex !== grant.delegator_public_key
+        ? {
+            code: "revoke.not_delegator",
+            detail:
+              "the revocation would bind nothing: the loaded key is not the grant's delegator key",
+          }
+        : { code: "revoke.does_not_bind", detail: "the revocation would bind nothing" },
     ]);
   }
   return revocation;

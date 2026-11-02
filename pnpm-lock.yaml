@@ -288,6 +288,9 @@ importers:
       '@motebit/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      '@motebit/verifier':
+        specifier: workspace:*
+        version: link:../../packages/verifier
       '@motebit/verify':
         specifier: workspace:*
         version: link:../../packages/verify

@@ -33,9 +33,10 @@ import {
   mintRepoTaskDelegation,
   readDelegationDirectory,
   revokeToDirectory,
+  writeCanonicalFiles,
 } from "../delegation.js";
 import type { RepoTaskDelegation, RepoTaskDelegationRequest } from "../delegation.js";
-import { readAgentPin } from "../../subcommands/repo-task.js";
+import { readAgentPin, resolveDelegationDirectory } from "../../subcommands/repo-task.js";
 
 const HOUR = 3_600_000;
 const NOW = 1_900_000_000_000;
@@ -322,5 +323,96 @@ describe("repo-task revoke: a revocation that binds the grant, from its delegato
       "revoke.not_delegator",
     );
     expect(fs.existsSync(out)).toBe(false);
+  });
+});
+
+describe("repo-task revoke: only a grant the principal signed, read from its own file", () => {
+  it("refuses a grant whose signature does not verify (a forged grant_id)", async () => {
+    const dir = path.join(tmp, "d");
+    await delegateToDirectory(request(), dir);
+    const grantFile = path.join(dir, "grant.json");
+    const real = JSON.parse(fs.readFileSync(grantFile, "utf8"));
+    const forgedId = "01a19a05-7e29-789d-8c54-cbf64a01a088";
+    fs.writeFileSync(grantFile, canonicalJson({ ...real, grant_id: forgedId }));
+    const out = path.join(tmp, "revocations");
+    const err = await revokeToDirectory(
+      { delegation: readDelegationDirectory(dir), principal: principal(), now: NOW + HOUR },
+      out,
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(RepoTaskDelegationRefusedError);
+    expect((err as RepoTaskDelegationRefusedError).failures.map((f) => f.code)).toContain(
+      "integrity.repo_change.signature_invalid",
+    );
+    expect(fs.existsSync(out)).toBe(false);
+  });
+
+  it("a malformed tick is reported as malformed, never as a wrong key", async () => {
+    const dir = path.join(tmp, "d");
+    await delegateToDirectory(request(), dir);
+    const tickFile = path.join(dir, "tick.json");
+    const { grant_id: _dropped, ...tick } = JSON.parse(fs.readFileSync(tickFile, "utf8"));
+    fs.writeFileSync(tickFile, canonicalJson(tick));
+    const err = await revokeToDirectory(
+      { delegation: readDelegationDirectory(dir), principal: principal(), now: NOW + HOUR },
+      path.join(tmp, "revocations"),
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    const codes = (err as RepoTaskDelegationRefusedError).failures.map((f) => f.code);
+    expect(codes).toContain("integrity.repo_change.bundle_malformed");
+    expect(codes).not.toContain("revoke.not_delegator");
+  });
+
+  it("a file argument is read only as the delegation's grant.json", async () => {
+    const dir = path.join(tmp, "d");
+    await delegateToDirectory(request(), dir);
+    fs.copyFileSync(path.join(dir, "grant.json"), path.join(dir, "grant-B.json"));
+    expect(resolveDelegationDirectory(dir)).toBe(dir);
+    expect(resolveDelegationDirectory(path.join(dir, "grant.json"))).toBe(dir);
+    expect(() => resolveDelegationDirectory(path.join(dir, "grant-B.json"))).toThrow(
+      /is not a delegation's grant\.json/,
+    );
+  });
+});
+
+describe("repo-task files: owner-only, exclusive, all or nothing", () => {
+  /** Fail the `n`th file's write after writing part of it. */
+  const failingIo = (n: number) => {
+    let call = 0;
+    return {
+      writeSync: (fd: number, data: Uint8Array) => {
+        if (++call === n) {
+          fs.writeSync(fd, data.subarray(0, 3));
+          throw Object.assign(new Error("EFBIG: file too large"), { code: "EFBIG" });
+        }
+        return fs.writeSync(fd, data);
+      },
+    };
+  };
+  const files = { "a.json": { a: 1 }, "b.json": { b: 2 }, "c.json": { c: 3 } };
+
+  it("a write that fails midway leaves no file, no partial and no directory it created", () => {
+    const dir = path.join(tmp, "new", "deeper");
+    expect(() => writeCanonicalFiles(dir, files, failingIo(2))).toThrow(/EFBIG/);
+    expect(fs.existsSync(path.join(tmp, "new"))).toBe(false);
+  });
+
+  it("a write that fails midway in an existing directory removes only what it wrote", () => {
+    const dir = path.join(tmp, "existing");
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, "keep.txt"), "mine");
+    expect(() => writeCanonicalFiles(dir, files, failingIo(2))).toThrow(/EFBIG/);
+    expect(fs.readdirSync(dir)).toEqual(["keep.txt"]);
+  });
+
+  it("files are 0600 and a directory it creates is 0700", async () => {
+    const dir = path.join(tmp, "modes");
+    const { files: written } = await delegateToDirectory(request(), dir);
+    expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+    for (const f of written) expect(fs.statSync(f).mode & 0o777).toBe(0o600);
   });
 });
