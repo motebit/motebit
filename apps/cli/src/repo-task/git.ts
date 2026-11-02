@@ -100,12 +100,13 @@ function spawnGit(
   timeoutMs: number = GIT_CALL_TIMEOUT_MS,
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", [...PINNED, ...args], {
-      env,
-      cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-    });
+    // No input ⇒ no stdin pipe (git reads /dev/null): a git that exits
+    // before an empty write lands would otherwise raise EPIPE on a success.
+    const argv = [...PINNED, ...args];
+    const child =
+      input == null
+        ? spawn("git", argv, { env, cwd, stdio: ["ignore", "pipe", "pipe"], shell: false })
+        : spawn("git", argv, { env, cwd, stdio: ["pipe", "pipe", "pipe"], shell: false });
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -136,14 +137,16 @@ function spawnGit(
         );
       }
     });
+    const stdin = child.stdin;
+    if (input == null || stdin == null) return;
     // A git that dies (or is killed) before reading all of its input makes
     // the write fail with EPIPE: reject, never let it crash the process.
-    child.stdin.on("error", (e) => {
+    stdin.on("error", (e) => {
       clearTimeout(timer);
       child.kill("SIGKILL");
       reject(new Error(`git ${args[0] ?? ""} stopped reading its input: ${e.message}`));
     });
-    child.stdin.end(input ?? new Uint8Array());
+    stdin.end(input);
   });
 }
 
