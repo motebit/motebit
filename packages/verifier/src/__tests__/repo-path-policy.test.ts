@@ -86,6 +86,29 @@ describe("parseRepoPathPolicy strict shape", () => {
     const forged = { spec: SPEC, include: ["docs/[a].md"], exclude: [] } as RepoPathPolicy;
     expect(() => isRepoPathPermitted(forged, "docs/a.md")).toThrow(/outside the grammar/);
   });
+
+  it("refuses a member name repeated in one object (a later copy would replace the list a reviewer read)", () => {
+    const head = `{"spec":"${SPEC}","include":["docs/*.md"],"exclude":["docs/secret.md"]`;
+    expect(() => parseRepoPathPolicy(`${head},"exclude":[]}`)).toThrow(/"exclude" is repeated/);
+    // The same name spelt with an escape is the same name.
+    expect(() => parseRepoPathPolicy(`${head},"exclud\\u0065":[]}`)).toThrow(/is repeated/);
+    expect(() => parseRepoPathPolicy(`${head},"include":["apps/**"]}`)).toThrow(/is repeated/);
+  });
+
+  it("a repeated string that is not a member name is not a repeated member", () => {
+    // Strings equal to member names, inside the lists, are values; an escape inside a value is skipped whole.
+    const p = parseRepoPathPolicy(
+      `{"spec":"${SPEC}","include":["spec","exclude","docs\\/a.md"],"exclude":["include"]}`,
+    );
+    expect(p.include).toEqual(["spec", "exclude", "docs/a.md"]);
+  });
+
+  it("a policy object built by hand is judged as it is at each use, never from a stale compile", () => {
+    const handBuilt = { spec: SPEC, include: ["docs/*.md", "apps/**"], exclude: [] as string[] };
+    expect(isRepoPathPermitted(handBuilt, "apps/x.ts")).toBe(true);
+    handBuilt.include.pop();
+    expect(isRepoPathPermitted(handBuilt, "apps/x.ts")).toBe(false);
+  });
 });
 
 describe("parseRepoPathPolicy closed grammar", () => {

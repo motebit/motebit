@@ -266,7 +266,7 @@ Each failed rule carries exactly one code from the closed list `ALL_REPO_CHANGE_
 
 The path predicate is data: the file `.motebit/repo-path-policy.json` at the judged commit, `motebit/repo-path-policy@1.0`. A caller MUST parse it strictly, and a caller that cannot parse it MUST NOT supply a predicate, so the change is not judged (the reference interpreter throws).
 
-**File.** UTF-8 JSON, exactly the object `{"spec": "motebit/repo-path-policy@1.0", "include": [...], "exclude": [...]}`: all three keys and no other, `spec` exactly that string, and each list an array of strings, with no repeats, each one a pattern in the grammar below. Anything else is a parse error.
+**File.** UTF-8 JSON, exactly the object `{"spec": "motebit/repo-path-policy@1.0", "include": [...], "exclude": [...]}`: all three keys and no other, `spec` exactly that string, and each list an array of strings, with no repeats, each one a pattern in the grammar below. A member name that occurs twice in one object is a parse error, even where a general JSON parser would keep the last occurrence. Anything else is a parse error.
 
 **Grammar.**
 

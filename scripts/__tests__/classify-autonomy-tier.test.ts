@@ -1207,6 +1207,7 @@ describe("the path policy as data (.motebit/repo-path-policy.json)", () => {
     ["an out-of-grammar exclude", PATH_POLICY.replace('"skills/**"', '"!skills/**"')],
     ["a duplicate exclude", PATH_POLICY.replace('"skills/**"', '"skills/**", "skills/**"')],
     ["a non-string pattern", PATH_POLICY.replace('"skills/**"', "7")],
+    ["a repeated member name", PATH_POLICY.replace(/\}\s*$/, ', "exclude": []}')],
   ];
   for (const [name, text] of MALFORMED) {
     it(`a path policy with ${name} is a T1 classifier-error, never a classification`, () => {

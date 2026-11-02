@@ -145,7 +145,7 @@ function compilePolicy(value: unknown): Compiled {
 
 /**
  * Parse `.motebit/repo-path-policy.json` strictly. Throws on invalid JSON, a
- * missing or unknown key, a `spec` other than `motebit/repo-path-policy@1.0`,
+ * member name repeated within one object, a missing or unknown key, a `spec` other than `motebit/repo-path-policy@1.0`,
  * a list that is not an array of strings, a duplicate pattern, or any pattern
  * outside the grammar.
  */
@@ -156,6 +156,8 @@ export function parseRepoPathPolicy(text: string): RepoPathPolicy {
   } catch (err) {
     throw new Error("repo path policy: not valid JSON", { cause: err });
   }
+  const repeated = repeatedMemberName(text);
+  if (repeated !== null) fail(`member name ${JSON.stringify(repeated)} is repeated in one object`);
   const compiled = compilePolicy(value);
   const o = value as { include: string[]; exclude: string[] };
   const policy: RepoPathPolicy = Object.freeze({
@@ -167,14 +169,47 @@ export function parseRepoPathPolicy(text: string): RepoPathPolicy {
   return policy;
 }
 
-/** The compiled form; a policy built by hand is checked as strictly as a parsed one. */
+/**
+ * The compiled form; a policy built by hand is checked as strictly as a parsed
+ * one. Only parsed policies (deeply frozen) are cached: a hand-built object
+ * may be mutated after use, so it is compiled afresh on every call.
+ */
 function compiledOf(policy: RepoPathPolicy): Compiled {
-  let c = compiledCache.get(policy);
-  if (c === undefined) {
-    c = compilePolicy(policy);
-    compiledCache.set(policy, c);
+  return compiledCache.get(policy) ?? compilePolicy(policy);
+}
+
+/**
+ * The first member name that occurs twice in one object of `text`, or null.
+ * `JSON.parse` keeps the last of repeated names, so a later copy could
+ * silently replace a list a reviewer read; the file must be unambiguous.
+ * `text` is already known to be valid JSON.
+ */
+function repeatedMemberName(text: string): string | null {
+  const stack: { names: Set<string> | null; expectName: boolean }[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const top = stack[stack.length - 1];
+    if (c === '"') {
+      let j = i + 1;
+      while (text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      if (top !== undefined && top.names !== null && top.expectName) {
+        const name = JSON.parse(text.slice(i, j + 1)) as string;
+        if (top.names.has(name)) return name;
+        top.names.add(name);
+        top.expectName = false;
+      }
+      i = j;
+    } else if (c === "{") {
+      stack.push({ names: new Set(), expectName: true });
+    } else if (c === "[") {
+      stack.push({ names: null, expectName: false });
+    } else if (c === "}" || c === "]") {
+      stack.pop();
+    } else if (c === "," && top !== undefined && top.names !== null) {
+      top.expectName = true;
+    }
   }
-  return c;
+  return null;
 }
 
 /** ASCII letters to lower case; every other character is left as it is. */

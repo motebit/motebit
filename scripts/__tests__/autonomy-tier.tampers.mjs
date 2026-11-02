@@ -226,6 +226,22 @@ const TAMPERS = [
     red: `${POLICY_DATA} differential: on a path with a line terminator the interpreter only narrows (the frozen regex's \`.\` stops at one)`,
   },
   {
+    name: "interpreter: a repeated member name is accepted (the last copy wins)",
+    file: INTERPRETER,
+    text: "  if (repeated !== null) fail(`member name ${JSON.stringify(repeated)} is repeated in one object`);\n",
+    replacement: "",
+    red: `${POLICY_DATA} a path policy with a repeated member name is a T1 classifier-error, never a classification`,
+  },
+  {
+    name: "interpreter: a hand-built policy is cached by identity (a later mutation is not seen)",
+    file: INTERPRETER,
+    text: "  return compiledCache.get(policy) ?? compilePolicy(policy);",
+    replacement:
+      "  let c = compiledCache.get(policy);\n  if (c === undefined) {\n    c = compilePolicy(policy);\n    compiledCache.set(policy, c);\n  }\n  return c;",
+    red: "parseRepoPathPolicy strict shape a policy object built by hand is judged as it is at each use, never from a stale compile",
+    test: "packages/verifier/src/__tests__/repo-path-policy.test.ts",
+  },
+  {
     name: "interpreter: a last ** also covers zero segments (the directory itself)",
     file: INTERPRETER,
     text: "    if (i === pat.length - 1) return segs.length - j >= 1;",
