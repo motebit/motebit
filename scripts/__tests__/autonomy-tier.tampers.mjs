@@ -3,9 +3,10 @@
 // and autonomy-tier-workflow.test.ts (the contract phase of the trigger migration).
 //
 // Each entry reverts (part of) one rule of the autonomy boundary — an
-// allowlist exclusion, a widening of the allowlist, a fail-closed rule, the
-// CODEOWNERS defence in depth, or a verdict rule — and names the test
-// expected to go red. The shared runner (scripts/lib/tamper-runner.ts)
+// allowlist exclusion, a widening of the allowlist, a rule of the path-policy
+// interpreter (strict parse, grammar, case folding, include descent), where the
+// policy is read from, a fail-closed rule, the CODEOWNERS defence in depth, or
+// a verdict rule — and names the test expected to go red. The shared runner (scripts/lib/tamper-runner.ts)
 // applies each tamper in an isolated copy of the tree.
 //
 //   node scripts/__tests__/autonomy-tier.tampers.mjs
@@ -16,6 +17,9 @@ import { runTampers } from "../lib/tamper-runner.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLASSIFIER = "scripts/classify-autonomy-tier.ts";
+// The T0 allowlist, as data, and its one interpreter (shared with the repo-change verifier).
+const POLICY = ".motebit/repo-path-policy.json";
+const INTERPRETER = "packages/verifier/src/repo-path-policy.ts";
 const VERDICT = "scripts/autonomy-tier-verdict.ts";
 const CLASSIFIER_TEST = "scripts/__tests__/classify-autonomy-tier.test.ts";
 const VERDICT_TEST = "scripts/__tests__/autonomy-tier-verdict.test.ts";
@@ -46,6 +50,8 @@ const POLICY_REF =
   "${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event_name == 'pull_request_target' && github.sha || (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.sha || 'no-policy-revision-for-this-event' }}";
 
 const T1 = (name) => `must-T1 fixtures T1: ${name}`;
+const POLICY_DATA = "the path policy as data (.motebit/repo-path-policy.json)";
+const DIFFERENTIAL = `${POLICY_DATA} differential: the interpreter gives the frozen regex predicate's isAllowlisted and caseCollision on every tracked, generated and adversarial path`;
 const OFF = (text) => text.replace(/^(\s*(?:else )?)if \(/, "$1if ((false as boolean) && ");
 const off = (text, red, test) => ({
   file: test === VERDICT_TEST ? VERDICT : CLASSIFIER,
@@ -54,7 +60,7 @@ const off = (text, red, test) => ({
   red,
   test,
 });
-const dropLine = (line) => ({ file: CLASSIFIER, text: `${line}\n`, replacement: "" });
+const dropLine = (line) => ({ file: POLICY, text: `${line}\n`, replacement: "" });
 
 const TAMPERS = [
   // One per allowlist exclusion.
@@ -112,46 +118,47 @@ const TAMPERS = [
   // Widening.
   {
     name: "allowlist re-admits apps/docs content (mdx)",
-    file: CLASSIFIER,
-    text: '  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
+    file: POLICY,
+    text: '  "include": ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
     replacement:
-      '  include: ["docs/**/*.md", "apps/docs/content/**/*.mdx", "scripts/bench/*/prompts.json"],',
+      '  "include": ["docs/**/*.md", "apps/docs/content/**/*.mdx", "scripts/bench/*/prompts.json"],',
     red: T1("the docs quickstart's runnable block exfiltrates CI env (check-docs-quickstart-runs)"),
   },
   {
     name: "allowlist re-admits apps/docs content (md)",
-    file: CLASSIFIER,
-    text: '  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
+    file: POLICY,
+    text: '  "include": ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
     replacement:
-      '  include: ["docs/**/*.md", "apps/docs/content/**/*.md", "scripts/bench/*/prompts.json"],',
+      '  "include": ["docs/**/*.md", "apps/docs/content/**/*.md", "scripts/bench/*/prompts.json"],',
     red: T1("an apps/docs markdown page (same pipeline as MDX)"),
   },
   {
     name: "allowlist widened to **/*.md (README becomes T0)",
-    file: CLASSIFIER,
-    text: '  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
-    replacement: '  include: ["**/*.md", "scripts/bench/*/prompts.json"],',
+    file: POLICY,
+    text: '  "include": ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
+    replacement: '  "include": ["**/*.md", "scripts/bench/*/prompts.json"],',
     red: T1("README.md"),
   },
   {
     name: "allowlist widened to **/*.md (DOCTRINE.md becomes T0)",
-    file: CLASSIFIER,
-    text: '  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
-    replacement: '  include: ["**/*.md", "scripts/bench/*/prompts.json"],',
+    file: POLICY,
+    text: '  "include": ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
+    replacement: '  "include": ["**/*.md", "scripts/bench/*/prompts.json"],',
     red: T1("DOCTRINE.md"),
   },
   {
     name: "allowlist widened back to scripts/bench/**/*.json (bench tool config becomes T0)",
-    file: CLASSIFIER,
-    text: '  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
-    replacement: '  include: ["docs/**/*.md", "scripts/bench/**/*.json"],',
+    file: POLICY,
+    text: '  "include": ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
+    replacement: '  "include": ["docs/**/*.md", "scripts/bench/**/*.json"],',
     red: T1("bench tool config: package.json (flips the bench's module format)"),
   },
   {
-    name: "an include covers a directory named like its file",
-    file: CLASSIFIER,
-    text: "    src.endsWith(DESCENT_SUFFIX) ? `${src.slice(0, -DESCENT_SUFFIX.length)}$` : src,",
-    replacement: "    src,",
+    name: "interpreter: an include covers a directory named like its file (include descent)",
+    file: INTERPRETER,
+    text: "  return compiledOf(policy).include.some((pat) => matchesFile(pat, path));",
+    replacement:
+      "  return compiledOf(policy).include.some((pat) => matchesWithDescent(pat, path, false));",
     red: T1(
       "a directory named prompts.json (an include names files, never a directory's contents)",
     ),
@@ -188,14 +195,76 @@ const TAMPERS = [
   },
   // Case.
   {
-    name: "case: exclusions match case-sensitively",
-    file: CLASSIFIER,
-    text: 'const EXCLUDE_ANY_CASE = EXCLUDE.map((r) => new RegExp(r.source, "i"));',
-    replacement: "const EXCLUDE_ANY_CASE = EXCLUDE;",
+    name: "interpreter: exclusions match case-sensitively (case folding dropped)",
+    file: INTERPRETER,
+    text: "  return s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));",
+    replacement: "  return s;",
     red: T1("a lower-case claude.md (exclusions hold whatever the case)"),
   },
+  // The path policy: strict parse, closed grammar, the differential's edges,
+  // and where it is read from.
+  {
+    name: "interpreter: an unknown key in the policy is accepted",
+    file: INTERPRETER,
+    text: "    if (!(POLICY_KEYS as readonly string[]).includes(k)) fail(`unknown key \\`${k}\\``);",
+    replacement:
+      "    if ((false as boolean) && !(POLICY_KEYS as readonly string[]).includes(k)) fail(`unknown key \\`${k}\\``);",
+    red: `${POLICY_DATA} a path policy with an unknown key is a T1 classifier-error, never a classification`,
+  },
+  {
+    name: "interpreter: a pattern outside the grammar is accepted",
+    file: INTERPRETER,
+    text: "    if (!GLOB.test(seg)) {",
+    replacement: "    if ((false as boolean) && !GLOB.test(seg)) {",
+    red: `${POLICY_DATA} a path policy with an out-of-grammar include is a T1 classifier-error, never a classification`,
+  },
+  {
+    name: "interpreter: a path with a line terminator is no longer refused",
+    file: INTERPRETER,
+    text: "  if (LINE_TERMINATORS.some((t) => path.includes(t))) return false;\n",
+    replacement: "",
+    red: `${POLICY_DATA} differential: on a path with a line terminator the interpreter only narrows (the frozen regex's \`.\` stops at one)`,
+  },
+  {
+    name: "interpreter: a repeated member name is accepted (the last copy wins)",
+    file: INTERPRETER,
+    text: "  if (repeated !== null) fail(`member name ${JSON.stringify(repeated)} is repeated in one object`);\n",
+    replacement: "",
+    red: `${POLICY_DATA} a path policy with a repeated member name is a T1 classifier-error, never a classification`,
+  },
+  {
+    name: "interpreter: a hand-built policy is cached by identity (a later mutation is not seen)",
+    file: INTERPRETER,
+    text: "  return compiledCache.get(policy) ?? compilePolicy(policy);",
+    replacement:
+      "  let c = compiledCache.get(policy);\n  if (c === undefined) {\n    c = compilePolicy(policy);\n    compiledCache.set(policy, c);\n  }\n  return c;",
+    red: "parseRepoPathPolicy strict shape a policy object built by hand is judged as it is at each use, never from a stale compile",
+    test: "packages/verifier/src/__tests__/repo-path-policy.test.ts",
+  },
+  {
+    name: "interpreter: a last ** also covers zero segments (the directory itself)",
+    file: INTERPRETER,
+    text: "    if (i === pat.length - 1) return segs.length - j >= 1;",
+    replacement: "    if (i === pat.length - 1) return segs.length - j >= 0;",
+    red: DIFFERENTIAL,
+  },
+  {
+    name: "interpreter: exclude descent through a bare trailing slash",
+    file: INTERPRETER,
+    text: '    if (segs.slice(k).join("/") === "") continue;\n',
+    replacement: "",
+    red: DIFFERENTIAL,
+  },
+  {
+    name: "classifier: the path policy is read from the diff's head, not the trusted base",
+    file: CLASSIFIER,
+    text: "    pathPolicy = readTrustedPathPolicy();",
+    replacement:
+      '    pathPolicy = execFileSync("git", ["show", `${headRev}:${REPO_PATH_POLICY_FILE}`], { cwd: repo, env: cleanEnv(), encoding: "utf-8" });',
+    red: "against a real git repository (git diff --find-renames base...head) reads the path policy from the trusted checkout, never from the subject repository or the diff's head",
+  },
   off(
-    '        if (collision !== null) fire("case-collision"',
+    '        if (caseHit !== null) fire("case-collision"',
     T1("docs/Proofs/live-sovereign-migration.md (case of a tracked directory)"),
   ),
   // Fail-closed.

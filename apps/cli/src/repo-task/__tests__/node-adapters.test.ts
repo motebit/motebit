@@ -499,7 +499,16 @@ describe("isolated git: no git process runs on the real git directory", () => {
 
   it("a git call past its timeout is killed and fails, and the session ends", async () => {
     const s2 = await openIsolatedGit({ gitEntry: path.join(repo, ".git"), objectFormat: "sha1" });
-    await expect(s2.run(["rev-list", "--all"], { timeoutMs: 1 })).rejects.toThrow(/timed out/);
+    // `run` spawns git and arms its timer synchronously. Hold the event loop
+    // past the deadline: when it resumes, the timers phase runs before the
+    // child's exit is polled, so the call is past its deadline whatever the
+    // runner's speed (a fast git once finished inside 1 ms and resolved).
+    const call = s2.run(["rev-list", "--all"], { timeoutMs: 1 });
+    const until = Date.now() + 50;
+    while (Date.now() < until) {
+      // busy-wait: the deadline passes while git runs or exits
+    }
+    await expect(call).rejects.toThrow(/timed out/);
     expect(fs.existsSync(s2.sessionDir)).toBe(false);
     await expect(s2.run(["rev-parse", tip])).rejects.toThrow(/closed/);
   });

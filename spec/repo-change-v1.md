@@ -24,7 +24,7 @@ None of the three carries a signature of its own. The principal's `StandingDeleg
 
 - **Not merge authority.** A verified change confers nothing by itself; whatever merges a change does so under its own rules.
 - **Not proof of correctness.** The verifier proves who signed what, within which limits, which entries changed, and that the landed commit carries exactly that change. It does not prove that the change is correct, or that the model did what the task text asked.
-- **Not repository policy.** The verifier interprets an injected path predicate; it never executes repository code to obtain one.
+- **Not repository policy.** The verifier interprets an injected path predicate (§7.2); it never executes repository code to obtain one.
 
 ## 2. Roles and pins
 
@@ -224,7 +224,7 @@ The verifier core is a **pure function**: no git, no file I/O, no repository pol
 - the computed entries — for every path the change commit's tree differs from its parent's in, computed by listing both trees completely (never from `git diff`): kind (`add`, `modify`, `delete`; a rename is a `delete` plus an `add`), path bytes, mode, previous mode, blob, and whether the content contains a NUL byte;
 - the paths tracked at the parent the change lands on;
 - the pins, as `(motebit_id, public_key)` pairs by role;
-- the path predicate, interpreted from data at the judged commit;
+- the path predicate, interpreted from data at the judged commit (§7.2);
 - the strictly parsed revocations (file name = `grant_id`, canonical key and base64url, verifying signature) with their freshness and the files that failed;
 - the spent status (the grant's bundle path ever existed on the judged first-parent history);
 - the expected repository;
@@ -262,6 +262,32 @@ Each failed rule carries exactly one code from the closed list `ALL_REPO_CHANGE_
 | `authority`       | `tick_expired`, `tick_not_yet_valid`, `tick_insufficient`, `tick_outlives_grant`, `time_unavailable`, `subject_binding_absent`, `subject_binding_wrong_schema`, `subject_wrong`, `scope_tools_outside`, `lifetime_exceeded`, `spend_ceiling_present`, `cadence_below_lifetime`, `repo_mismatch`, `grant_spent`, `delegated_scope_outside`, `tools_used_outside`, `tool_receipt_outside_scope`, `tools_used_mismatch`, `memories_formed`, `scope_path_not_permitted`, `entry_not_add_or_modify`, `entry_symlink`, `entry_submodule`, `entry_mode`, `entry_binary`, `entry_case_collision`, `entry_path_not_allowed`, `entry_path_not_permitted`, `entries_exceed_max`, `entries_mismatch`, `grant_not_yet_valid`, `window_inverted`, `tick_predates_grant` |
 | `revocation`      | `revoked`, `unchecked`, `set_malformed`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
+### 7.2 The path predicate (foundation law)
+
+The path predicate is data: the file `.motebit/repo-path-policy.json` at the judged commit, `motebit/repo-path-policy@1.0`. A caller MUST parse it strictly, and a caller that cannot parse it MUST NOT supply a predicate, so the change is not judged (the reference interpreter throws).
+
+**File.** UTF-8 JSON, exactly the object `{"spec": "motebit/repo-path-policy@1.0", "include": [...], "exclude": [...]}`: all three keys and no other, `spec` exactly that string, and each list an array of strings, with no repeats, each one a pattern in the grammar below. A member name that occurs twice in one object is a parse error, even where a general JSON parser would keep the last occurrence. Anything else is a parse error.
+
+**Grammar.**
+
+```
+pattern = segment *( "/" segment )
+segment = "**" / glob
+glob    = 1*( char / "*" )
+char    = "A"-"Z" / "a"-"z" / "0"-"9" / "." / "_" / "-"
+```
+
+A glob has no two `*` in a row and is not `.` or `..`. No two `**` segments are adjacent, and a pattern is not `**` alone. A pattern matches from the repository root; a leading `**` segment is how it matches at any depth.
+
+**Matching.** A path is split at every `/` into segments (an empty segment is a segment like any other). A pattern matches a path when its segments match the path's segments in order:
+
+- a glob matches one segment: `*` matches any run of characters, possibly empty, and every other character matches itself;
+- a `**` segment that is not the last matches zero or more segments; a last `**` matches one or more.
+
+An **include** matches exactly the paths its pattern matches, in their own case, and never a path beneath one: an include names files. An **exclude** matches the paths its pattern matches and every path that is one of them followed by `/` and at least one more character, comparing with the ASCII letters `A`–`Z` and `a`–`z` folded to one case (no other folding or normalization). A path that an exclude matches only once case is folded differs only by case from an excluded path, and a consumer MAY treat it as a case collision. A path is **permitted** iff it contains no LF, CR, U+2028 or U+2029, some include matches it, and no exclude matches it.
+
+Reference interpreter: `parseRepoPathPolicy`, `isRepoPathPermitted` and `repoPathExclusion` in `@motebit/verifier`.
+
 ## 8. Declared deviations
 
 1. **The change record is the `result` for every status.** [`execution-ledger-v1.md`](execution-ledger-v1.md) §11.1 gives `result` as the task output when `completed` and an error message when `failed` or `denied`. A repo-change receipt carries the canonical-JSON change record for every status, so a denial or failure still names the grant, tick, scope and entries it concerns.
@@ -282,7 +308,7 @@ Each failed rule carries exactly one code from the closed list `ALL_REPO_CHANGE_
 - **Custody, not immutability.** The protected branch is a custody and enforcement boundary. A rewrite of its history (dropping or reordering a record against a revocation) is detectable only against an independent witness of its tip; every motebit signature in every bundle still verifies, so no forged change passes.
 - **Replay.** A grant is spent once its bundle is on the judged history. Two changes under one grant add the same bundle path with different bytes, so git refuses to merge the second.
 - **Git object lookups are not trusted offline.** A caller computing entries reads raw objects, re-hashes each against its id, parses trees itself and refuses malformed ones, with replace objects, grafts and commit-graph disabled; it never takes entries from `git diff`.
-- **The predicate is data.** A verifier never executes repository code to obtain the path predicate; it interprets a data file read at the judged commit.
+- **The predicate is data.** A verifier never executes repository code to obtain the path predicate; it interprets a data file read at the judged commit (§7.2).
 
 ## 11. Relationship to other specs
 
