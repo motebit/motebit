@@ -60,18 +60,18 @@ beforeAll(async () => {
   fs.mkdirSync(outside);
   fs.writeFileSync(path.join(outside, "secret.txt"), "outside\n");
   git("init", "-q", "-b", "main");
-  fs.mkdirSync(path.join(repo, "docs"));
-  fs.writeFileSync(path.join(repo, "docs", "a.md"), "teh typo\n");
+  fs.mkdirSync(path.join(repo, "notes"));
+  fs.writeFileSync(path.join(repo, "notes", "a.md"), "teh typo\n");
   fs.mkdirSync(path.join(repo, "bin"));
   fs.writeFileSync(path.join(repo, "bin", "run.sh"), "#!/bin/sh\n", { mode: 0o755 });
-  fs.symlinkSync("docs/a.md", path.join(repo, "link"));
+  fs.symlinkSync("notes/a.md", path.join(repo, "link"));
   fs.symlinkSync(outside, path.join(repo, "escape"));
-  git("add", "docs/a.md", "bin/run.sh", "link", "escape");
+  git("add", "notes/a.md", "bin/run.sh", "link", "escape");
   git("update-index", "--add", "--cacheinfo", `160000,${"1".repeat(40)},sub`);
   git("commit", "-q", "-m", "init");
   tip = git("rev-parse", "HEAD");
   // The worktree diverges from the tip: an edit and an untracked file.
-  fs.writeFileSync(path.join(repo, "docs", "a.md"), "edited in the worktree\n");
+  fs.writeFileSync(path.join(repo, "notes", "a.md"), "edited in the worktree\n");
   fs.writeFileSync(path.join(repo, "untracked.md"), "not tracked\n");
   session = await openIsolatedGit({ gitEntry: path.join(repo, ".git"), objectFormat: "sha1" });
 });
@@ -84,7 +84,7 @@ afterAll(() => {
 describe("git tree reader: the tip's tree, never the worktree", () => {
   it("reads a tracked blob as committed, not as edited in the worktree", async () => {
     const reader = createGitTreeReader({ git: session, tip });
-    const entry = await reader.lookup("docs/a.md");
+    const entry = await reader.lookup("notes/a.md");
     expect(entry).toMatchObject({ kind: "blob", mode: "100644" });
     expect(new TextDecoder().decode(await reader.readBlob(entry!.oid))).toBe("teh typo\n");
   });
@@ -94,24 +94,24 @@ describe("git tree reader: the tip's tree, never the worktree", () => {
     expect(await reader.lookup("bin/run.sh")).toMatchObject({ kind: "blob", mode: "100755" });
     expect(await reader.lookup("link")).toMatchObject({ kind: "symlink", mode: "120000" });
     expect(await reader.lookup("sub")).toMatchObject({ kind: "gitlink", mode: "160000" });
-    expect(await reader.lookup("docs")).toMatchObject({ kind: "tree", mode: "040000" });
+    expect(await reader.lookup("notes")).toMatchObject({ kind: "tree", mode: "040000" });
   });
 
   it("sees nothing untracked, nothing through a symlinked directory, no glob", async () => {
     const reader = createGitTreeReader({ git: session, tip });
     expect(await reader.lookup("untracked.md")).toBeNull();
     expect(await reader.lookup("escape/secret.txt")).toBeNull();
-    expect(await reader.lookup("docs/*.md")).toBeNull();
-    expect(await reader.lookup("docs/a")).toBeNull();
+    expect(await reader.lookup("notes/*.md")).toBeNull();
+    expect(await reader.lookup("notes/a")).toBeNull();
     expect(await reader.lookup("DOCS/a.md")).toBeNull();
     // A directory spelling lists the directory's children: none of them is the path asked for.
-    expect(await reader.lookup("docs/")).toBeNull();
+    expect(await reader.lookup("notes/")).toBeNull();
   });
 
   it("lists every tracked path at the tip, as git's bytes", async () => {
     const reader = createGitTreeReader({ git: session, tip });
     const listed = (await reader.listTrackedPaths()).map((b) => new TextDecoder().decode(b)).sort();
-    expect(listed).toEqual(["bin/run.sh", "docs/a.md", "escape", "link", "sub"]);
+    expect(listed).toEqual(["bin/run.sh", "escape", "link", "notes/a.md", "sub"]);
   });
 
   it("refuses a tip that is not a full object id", () => {
@@ -179,8 +179,8 @@ describe("git change stager: blobs and a private index, never the worktree", () 
     const outsideBefore = snapshot(outside);
     const stateBefore = repoState();
     const stager = createGitChangeStager({ git: session, tip });
-    await stager.stage("docs/a.md", new TextEncoder().encode("fixed\n"));
-    await stager.stage("docs/new.md", new TextEncoder().encode("new\n"));
+    await stager.stage("notes/a.md", new TextEncoder().encode("fixed\n"));
+    await stager.stage("notes/new.md", new TextEncoder().encode("new\n"));
     const { headCommit, entries } = await stager.buildChangeCommit(COMMIT);
 
     // Nothing on disk moved: the worktree, everything outside it, the
@@ -197,12 +197,12 @@ describe("git change stager: blobs and a private index, never the worktree", () 
         .toString()
         .trim();
     expect(entries).toEqual([
-      { path: "docs/a.md", mode: "100644", blob: blobOf("fixed\n") },
-      { path: "docs/new.md", mode: "100644", blob: blobOf("new\n") },
+      { path: "notes/a.md", mode: "100644", blob: blobOf("fixed\n") },
+      { path: "notes/new.md", mode: "100644", blob: blobOf("new\n") },
     ]);
     const diff = git("diff-tree", "-r", "--no-renames", "--name-status", tip, headCommit);
-    expect(diff.split("\n").sort()).toEqual(["A\tdocs/new.md", "M\tdocs/a.md"]);
-    expect(git("cat-file", "-p", `${headCommit}:docs/a.md`)).toBe("fixed");
+    expect(diff.split("\n").sort()).toEqual(["A\tnotes/new.md", "M\tnotes/a.md"]);
+    expect(git("cat-file", "-p", `${headCommit}:notes/a.md`)).toBe("fixed");
     // Everything else is the tip's, including the symlinks and the gitlink.
     expect(git("rev-parse", `${headCommit}:link`)).toBe(git("rev-parse", `${tip}:link`));
     expect(git("rev-parse", `${headCommit}:bin/run.sh`)).toBe(
@@ -212,8 +212,8 @@ describe("git change stager: blobs and a private index, never the worktree", () 
 
   it("a later stage of the same path replaces the earlier one; an unchanged path is no entry", async () => {
     const stager = createGitChangeStager({ git: session, tip });
-    await stager.stage("docs/a.md", new TextEncoder().encode("first\n"));
-    await stager.stage("docs/a.md", new TextEncoder().encode("teh typo\n"));
+    await stager.stage("notes/a.md", new TextEncoder().encode("first\n"));
+    await stager.stage("notes/a.md", new TextEncoder().encode("teh typo\n"));
     const { entries } = await stager.buildChangeCommit(COMMIT);
     expect(entries).toEqual([]);
   });
@@ -221,7 +221,7 @@ describe("git change stager: blobs and a private index, never the worktree", () 
   it("paths go in as exact bytes: spaces, a leading dash and option-like names are never interpreted", async () => {
     const before = snapshot(repo);
     const stager = createGitChangeStager({ git: session, tip });
-    const names = ["docs/with space.md", "-rf.md", "--output=pwned", "docs/-n"];
+    const names = ["notes/with space.md", "-rf.md", "--output=pwned", "notes/-n"];
     for (const n of names) await stager.stage(n, new TextEncoder().encode(`${n}\n`));
     const { headCommit, entries } = await stager.buildChangeCommit(COMMIT);
     expect(entries.map((e) => e.path).sort()).toEqual([...names].sort());
@@ -257,7 +257,7 @@ describe("git change stager: fail-closed postcondition and timestamps", () => {
 
   it("a path under a tracked file throws (it would delete the file)", async () => {
     const stager = createGitChangeStager({ git: session, tip });
-    await stager.stage("docs/a.md/x.md", new TextEncoder().encode("x\n"));
+    await stager.stage("notes/a.md/x.md", new TextEncoder().encode("x\n"));
     await expect(stager.buildChangeCommit(COMMIT)).rejects.toThrow(
       /not exactly the staged|missing/,
     );
@@ -279,7 +279,7 @@ describe("git change stager: fail-closed postcondition and timestamps", () => {
 
   it("a path over a tracked directory throws (it would delete the directory)", async () => {
     const stager = createGitChangeStager({ git: session, tip });
-    await stager.stage("docs", new TextEncoder().encode("x\n"));
+    await stager.stage("notes", new TextEncoder().encode("x\n"));
     await expect(stager.buildChangeCommit(COMMIT)).rejects.toThrow(
       /not exactly the staged|missing/,
     );
@@ -291,7 +291,7 @@ describe("git change stager: fail-closed postcondition and timestamps", () => {
       expect(() => gitTimestamp(bad)).toThrow(/integer seconds/);
     }
     const stager = createGitChangeStager({ git: session, tip });
-    await stager.stage("docs/a.md", new TextEncoder().encode("ts\n"));
+    await stager.stage("notes/a.md", new TextEncoder().encode("ts\n"));
     await expect(stager.buildChangeCommit({ ...COMMIT, timestamp: Date.now() })).rejects.toThrow(
       /integer seconds/,
     );
@@ -560,9 +560,9 @@ describe("a repo-task run over the Node adapters", () => {
       repo: "motebit/motebit",
       base_ref: "main",
       object_format: "sha1",
-      allowed_paths: ["docs/a.md"],
+      allowed_paths: ["notes/a.md"],
       max_changed_files: 1,
-      task: "Fix the typo in docs/a.md.",
+      task: "Fix the typo in notes/a.md.",
     };
     const parties = {
       delegator_id: "f",
@@ -602,9 +602,9 @@ describe("a repo-task run over the Node adapters", () => {
     );
     const turns: ToolCall[][] = [
       [
-        { id: "1", name: "repo_read_blob", args: { path: "docs/a.md" } },
+        { id: "1", name: "repo_read_blob", args: { path: "notes/a.md" } },
         { id: "2", name: "repo_write_path", args: { path: "escape/secret.txt", content: "x" } },
-        { id: "3", name: "repo_write_path", args: { path: "docs/a.md", content: "the typo\n" } },
+        { id: "3", name: "repo_write_path", args: { path: "notes/a.md", content: "the typo\n" } },
       ],
     ];
     let n = 0;
@@ -662,8 +662,8 @@ describe("a repo-task run over the Node adapters", () => {
     expect(snapshot(outside)).toEqual(outsideBefore);
     expect(repoState()).toEqual(stateBefore);
     const { headCommit, entries } = await stager.buildChangeCommit(COMMIT);
-    expect(entries.map((e) => [e.path, e.mode])).toEqual([["docs/a.md", "100644"]]);
-    expect(git("cat-file", "-p", `${headCommit}:docs/a.md`)).toBe("the typo");
+    expect(entries.map((e) => [e.path, e.mode])).toEqual([["notes/a.md", "100644"]]);
+    expect(git("cat-file", "-p", `${headCommit}:notes/a.md`)).toBe("the typo");
     const onDisk = readReceiptFile(file) as Array<{
       tool_name: string;
       status: string;
