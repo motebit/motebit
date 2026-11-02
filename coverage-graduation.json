@@ -97,10 +97,10 @@
       "package": "@motebit/verify",
       "vitest_config": "packages/verify/vitest.config.ts",
       "current": {
-        "statements": 58,
-        "branches": 50,
-        "functions": 47,
-        "lines": 56
+        "statements": 94,
+        "branches": 92,
+        "functions": 100,
+        "lines": 94
       },
       "target": {
         "statements": 85,
@@ -109,7 +109,7 @@
         "lines": 85
       },
       "target_date": "2026-11-30",
-      "rationale": "RE-BASELINED 2026-08-22 (#568). The previous entry (90/75/100/90 -> branches 80 by 09-30) described a measurement that did not exist: src/cli.ts sat in coverageExclude as \"the bin shim\", so the thresholds were enforced against 8 statements in adapters.ts -- 2.3% of the package -- while the stated lever was \"the CLI's unsupported-suite / post-quantum-pending branches\", which live in the excluded file. The lever could not move the number because there was effectively no number. (The thresholds themselves were real, not vacuous: a deliberate severing fails them. #568's \"measures zero files\" reading came from the empty text-reporter table, the same artifact that caused the #575/#576 revert -- coverage-final.json always had adapters.ts at 100%.) cli.ts is now measured, and 45 in-process parseArgs branch tests took the package from 39.4/32.4/47.4/39.8 to 60/51.7/47.4/58.1. The floor is set just under that. Digits are lower than the old 90/75/100/90 but enforcement is 43x wider: 345 statements guarded instead of 8, and adapters.ts keeps a per-glob 100/100/100/100 floor so nothing regressed. Target is the registry's identity floor. Lever: the remaining gap is the command bodies (cli.ts ~640-1012, and the 10 uncovered functions), which the existing suite drives through spawnSync -- real end-to-end verification the parent process cannot instrument. Extract a runCli(argv) seam so those tests execute in-process and their coverage counts. Date moved 09-30 -> 11-30 because that is a refactor of the CLI's entry seam plus five test files, not the fixture pass the old rationale assumed; re-baselining on new information rather than quietly missing the date."
+      "rationale": "GRADUATED 2026-10-31, 30 days ahead of the 2026-11-30 raise-by date, by tests only (no source change). Before: 59.9/51.8/47.4/58.0 measured (floor 58/50/47/56). After: 96.9/94.6/100/97.0 measured; floor raised to 94/92/100/94 (the 2-point CI-variance margin of bf254dd88; functions held at 100 as near-full). The named lever (extract a runCli(argv) seam) was NOT needed: src/__tests__/helpers/run-main.ts reproduces the entry-point condition in-process (process.argv[1] = cli.ts, fresh module evaluation, stdout/stderr/exit intercepted at the process boundary only), so the real main() and both subcommand bodies run under v8 instrumentation against real signed fixtures. cli-main-in-process.test.ts asserts exit code, stream and named reason for every command path; cli-main-in-process.tampers.mjs breaks 11 CLI behaviours and each turns its test red. The 16 branches left uncovered were listed, not excluded: 4 defensive guards parseArgs makes unreachable (args.file/args.manifest undefined in the command bodies and main), 6 non-Error-throw arms of err instanceof Error, 2 in getPackageVersion (cache hit within one process; package.json without a version), and 4 fallbacks for fields the upstream verifiers always set (inner signerDid/reason/detail absent, outer content-artifact reason absent); plus the statement-only hexToBytes catch, which cannot throw. History: re-baselined 2026-08-22 (#568) when cli.ts entered measurement. Retained as a closed record so the commitment and its outcome stay auditable."
     }
   ]
 }
