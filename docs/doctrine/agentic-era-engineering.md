@@ -1,5 +1,7 @@
 # Agentic-era engineering
 
+> **Layer:** narrative
+
 A checksum over how this repository is built — not a new architecture project. It names the worldview the codebase already enforces, so the practice stops being tacit and starts being something a build can be checked against. Every claim below links to the code, gate, or named seam that makes it real; nothing here is aspirational, and no term is introduced unless it changes a decision.
 
 ## The thesis

@@ -1,5 +1,7 @@
 # Settlement authority is agent-owned — a relay transports it, never creates it
 
+> **Layer:** narrative
+
 **Discovery informs where an agent claims to be paid; only an agent-owned binding authorizes a pay-to destination. A relay — origin or federated peer — transports the binding, it never manufactures the authority by returning JSON.**
 
 This is [`memory-never-confers-authority.md`](memory-never-confers-authority.md) one level out. That invariant says memory may inform but only a signed artifact authorizes money _movement_ (`verifiedGrant`); this one says peer JSON may inform but only an agent-owned binding authorizes money _destination_. Same shape, same reason: the thing that decides where value goes must be rooted in the sovereign's own key, not in a coordination layer that can lie.

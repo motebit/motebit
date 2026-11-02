@@ -1,5 +1,7 @@
 # Attention is directional
 
+> **Layer:** narrative
+
 **The body is omnidirectional. Attention is directional.**
 
 The motebit's liquescent body refracts, attenuates, breathes, and holds from every angle. Its face does not. The face is not a texture wrapped around the sphere, nor an interface that follows the camera. It is the visible expression of attention's direction — interior structures held in the front hemisphere, made legible through the body's transmissive boundary.

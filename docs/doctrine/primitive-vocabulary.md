@@ -1,5 +1,7 @@
 # Primitive vocabulary — the concept map
 
+> **Layer:** narrative
+
 This is the single canonical map of motebit's concepts. It answers "what are motebit's primitives, and how do they relate?" once. Every other primitive list in the repo — README hero table, positioning lines, pitch decks, architecture pages — is a narrative compression of this map and MUST link here rather than restate it as if it were a separate taxonomy.
 
 The terms named below are defined normatively in [`spec/terminology-v1.md`](../../spec/terminology-v1.md). How terms are formed and which layer may use metaphor is [`naming-by-layer.md`](naming-by-layer.md). This map adds only the grouping and the relationships.

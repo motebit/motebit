@@ -1,5 +1,7 @@
 # Panel temporal registers
 
+> **Layer:** narrative
+
 Records aren't homogeneous. The six side-rail panels split along a temporal axis into two registers that demand different UX shapes. This doctrine names the split, anchors it in motebit's five protocol primitives, and tells future panels which register they belong to before any pixels move.
 
 Composes with [`records-vs-acts`](records-vs-acts.md) as parent: that doctrine assigns each UI element to body (act) or panel (record); this one adds the temporal mode axis to the records side. Where they conflict, records-vs-acts governs — this doctrine only refines what happens _inside_ the records side.

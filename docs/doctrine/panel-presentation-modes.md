@@ -1,5 +1,7 @@
 # Panel presentation modes
 
+> **Layer:** narrative
+
 Panels are records (per [`records-vs-acts`](records-vs-acts.md)). Records have a temporal axis (per [`panel-temporal-registers`](panel-temporal-registers.md)). This memo adds the third axis: **how a panel embodies on the surface it currently lives on**. Same panel, same controller, same state — the embodiment changes; the information does not.
 
 The axis is named `PanelPresentationMode`. It's a closed registry. It composes with the closed `EmbodimentMode` registry in [`chrome-as-state-render`](chrome-as-state-render.md) by the same logic: information shape is constant; render shape is a function of the mode. New modes are registry additions, never wire-format breaks.

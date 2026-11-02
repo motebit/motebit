@@ -1,5 +1,7 @@
 # The creature canon
 
+> **Layer:** law (canonical poses stay inside the orbit envelope and the backdrop dome; surfaces consume the canonical camera) — enforced by `packages/render-engine/src/__tests__/camera-envelope.test.ts`, `check-creature-canon`
+
 **The creature is the show. Every frame is a product shot.**
 
 The motebit body is the first claim a stranger evaluates — before any receipt, any proof, any doctrine. It is registered trade dress ([`TRADEMARK.md`](../../TRADEMARK.md), "Trade Dress — The Liquescent Droplet Creature"). Render fidelity is therefore a trust surface: a seam in the sky or a dead eye at an oblique angle quietly argues against "this thing can hold your money." This memo fixes the canon — what is frozen, what is choreographed, what is toleranced, and how the rendered body proves itself.

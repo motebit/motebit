@@ -1,5 +1,7 @@
 # Naming by layer
 
+> **Layer:** narrative
+
 Vocabulary is layered the way the code is. A word that is the right word in a positioning sentence can be the wrong word in a wire field, because the two layers make different promises: doctrine explains, the wire binds. This doc states the naming laws. The terms themselves are admitted and defined in [`spec/terminology-v1.md`](../../spec/terminology-v1.md); how they group into domains is [`primitive-vocabulary.md`](primitive-vocabulary.md).
 
 ## The principle: vocabulary by layer

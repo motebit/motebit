@@ -1,5 +1,7 @@
 # Privileged atoms — the credential-holding atom, deferred
 
+> **Layer:** narrative
+
 A "privileged atom" — an atom that holds a real credential behind the membrane and exposes only typed verbs to the molecule that composes it — is a tempting primitive with, today, exactly one would-be consumer: relay trust-root disaster recovery, where the operator acts on their own infrastructure. This memo names the open question and records the trigger for crystallizing the primitive when a **second, independent** consumer arrives — so a contributor doesn't mint a typed class on N=1. It also fixes the emphasis: the novel, defensible half is **not** credential isolation; it is the signed, delegation-chained, causal-closure receipt that proves a bounded action ran under named authority.
 
 ## The shape, and what is actually new

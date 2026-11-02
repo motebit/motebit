@@ -1,5 +1,7 @@
 # Identity binding is verifiable — trust-minimized, never standalone
 
+> **Layer:** narrative
+
 A signed receipt proves two separate things, and a verifier must never conflate them: **integrity** ("these bytes were signed by _some_ key and weren't tampered") and **binding** ("that key belongs to the claimed `motebit_id`"). Integrity is checkable offline from the receipt alone. Binding is not — and never can be from the receipt alone. This memo names how binding _is_ verified, why it is trust-minimized rather than trust-free, and the tiers and triggers for building the path from the honest integrity-only floor that ships today.
 
 ## Integrity is math; binding needs a root

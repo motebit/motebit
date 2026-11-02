@@ -1,5 +1,7 @@
 # Panel pattern
 
+> **Layer:** narrative
+
 When a UI panel ships on more than one surface, where does its state live? Four answers, chosen per panel, documented here so the next extraction stays consistent.
 
 ## The four shapes

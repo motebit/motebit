@@ -1,5 +1,7 @@
 # Agents are a first-person trust graph
 
+> **Layer:** narrative
+
 The Agents panel is where the whole thesis becomes visible or hides itself. It is
 the one surface that renders, in a single glance, who an agent is, what it offers,
 and whether it can be trusted — and it is the surface most likely to drift into a

@@ -1,5 +1,7 @@
 # Motebit Computer — the slab
 
+> **Layer:** narrative
+
 The slab is the motebit's **workstation, rendered as a liquescent plane** beside the creature. It holds pages the motebit has read, terminals it is using, responses it has streamed, delegations in flight, peer replies returning with signed receipts. Work stays available until the user dismisses it or the session ends.
 
 - **Chat is second-person** — you ↔ motebit, words exchanged.

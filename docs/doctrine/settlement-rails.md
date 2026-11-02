@@ -1,5 +1,7 @@
 # Settlement rails
 
+> **Layer:** law (the registry refuses sovereign rails) — enforced by `packages/settlement-rails/src/__tests__/custody-boundary.test.ts`
+
 External money movement uses three interfaces in `@motebit/protocol` (Layer 0), split by custody as a compile-time discriminant.
 
 ## The custody split

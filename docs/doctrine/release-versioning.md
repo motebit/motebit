@@ -1,5 +1,7 @@
 # Release versioning
 
+> **Layer:** narrative
+
 Versions are promises. A package number is a claim — to its consumers and to its own future maintainers — about what changed between this release and the last. Lockstep grouping breaks that promise by minting versions for packages that did not change. From 1.0 onward motebit publishes packages independently.
 
 ## The rule

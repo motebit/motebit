@@ -1,5 +1,7 @@
 # Goals vs tasks
 
+> **Layer:** narrative
+
 A motebit acts on behalf of its user. The user declares **what** they want; the motebit figures out **how**. The user-declared thing is a **goal**. The how is **tasks**. Collapsing the two erases the line between the human's intent and the motebit's autonomy.
 
 ## The distinction

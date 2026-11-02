@@ -1,5 +1,7 @@
 # Protocol model
 
+> **Layer:** law (the permissive floor declares no BSL dependency) — enforced by `check-deps`
+
 Motebit is a protocol, not a platform. This has concrete architectural consequences that bend every design decision.
 
 ## TL;DR

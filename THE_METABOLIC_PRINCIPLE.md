@@ -1,5 +1,7 @@
 # The Metabolic Principle
 
+> **Layer:** narrative
+
 ---
 
 ## Abstract
