@@ -240,6 +240,36 @@ export async function precheckRepoTaskDelegation(
 }
 
 /**
+ * A public key's one spelling (64 lowercase hex, standing-delegation-v1 §5),
+ * judged by the signer's own rule without any real key: a throwaway token
+ * naming `key` as a party, signed under an ephemeral key generated and erased
+ * here. The signer refuses a non-canonical party key before it signs. `null`
+ * when canonical.
+ */
+export async function keySpellingFault(key: string): Promise<string | null> {
+  const probe = await generateKeypair();
+  try {
+    await signDelegation(
+      {
+        delegator_id: "repo-task-precheck",
+        delegator_public_key: bytesToHex(probe.publicKey),
+        delegate_id: "repo-task-precheck",
+        delegate_public_key: key,
+        scope: ALL_REPO_CHANGE_TOOLS.join(","),
+        issued_at: 0,
+        expires_at: 1,
+      },
+      probe.privateKey,
+    );
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  } finally {
+    secureErase(probe.privateKey);
+  }
+}
+
+/**
  * A grant_id's one spelling, judged before any key by the revocation-set rule
  * itself (`checkRepoChangeRevocationSet`, the strict parse a run and the
  * verifier apply to `.motebit/revocations/`): a revocation of it, signed under

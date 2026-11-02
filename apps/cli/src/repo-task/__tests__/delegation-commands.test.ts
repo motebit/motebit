@@ -69,12 +69,21 @@ const postKeyRefusal = () =>
   );
 
 function deps(
-  over: { principal?: Party; delegate?: RepoTaskPin; refuseAfterKey?: boolean } = {},
+  over: {
+    principal?: Party;
+    delegate?: RepoTaskPin;
+    refuseAfterKey?: boolean;
+    configKey?: string;
+    revokeToDirectory?: RepoTaskCommandDeps["revokeToDirectory"];
+  } = {},
 ): RepoTaskCommandDeps {
   const p = over.principal ?? f;
   return {
     loadFullConfig: () =>
-      ({ motebit_id: p.pin.motebit_id, device_public_key: p.pin.public_key }) as FullConfig,
+      ({
+        motebit_id: p.pin.motebit_id,
+        device_public_key: over.configKey ?? p.pin.public_key,
+      }) as FullConfig,
     loadActiveSigningKey: () => {
       events.push("load");
       return Promise.resolve({
@@ -89,7 +98,8 @@ function deps(
     },
     readAgentPin: () => Promise.resolve(over.delegate ?? a.pin),
     delegateToDirectory: over.refuseAfterKey ? postKeyRefusal : delegateToDirectory,
-    revokeToDirectory: over.refuseAfterKey ? postKeyRefusal : revokeToDirectory,
+    revokeToDirectory:
+      over.revokeToDirectory ?? (over.refuseAfterKey ? postKeyRefusal : revokeToDirectory),
     exit: (code) => {
       events.push(`exit ${code}`);
       throw new ExitCalled();
@@ -146,6 +156,16 @@ describe(DELEGATE, () => {
       deps({ delegate: { ...a.pin, public_key: f.pin.public_key } }),
     );
   });
+  it("an uppercase configured principal key", async () => {
+    await refusesBeforeKey(delegateArgs(), deps({ configKey: f.pin.public_key.toUpperCase() }));
+  });
+  it("an output file that already exists", async () => {
+    fs.mkdirSync(path.join(tmp, "out"));
+    fs.writeFileSync(path.join(tmp, "out", "tick.json"), "{}");
+    await expect(handleRepoTaskDelegate(delegateArgs(), deps())).rejects.toBeInstanceOf(ExitCalled);
+    expect(events).toEqual(["exit 1"]);
+    expect(fs.readdirSync(path.join(tmp, "out"))).toEqual(["tick.json"]);
+  });
   it("a delegate with an empty motebit_id", async () => {
     await refusesBeforeKey(delegateArgs(), deps({ delegate: { ...a.pin, motebit_id: "" } }));
   });
@@ -181,7 +201,7 @@ describe(REVOKE, () => {
     const written = JSON.parse(fs.readFileSync(path.join(rev(), `${grant.grant_id}.json`), "utf8"));
     expect(await findGrantRevocation(grant, [written])).toEqual(written);
   };
-  const refusesBeforeKey = async (arg: string, message: RegExp, d = deps()) => {
+  const refusesBeforeKey = async (arg: string, message: RegExp, d = deps(), revExists = false) => {
     events = [];
     const lines: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...x: unknown[]) => {
@@ -190,7 +210,7 @@ describe(REVOKE, () => {
     await expect(revoke(arg, d)).rejects.toBeInstanceOf(ExitCalled);
     expect(events).toEqual(["exit 1"]);
     expect(lines.join("\n")).toMatch(message);
-    expect(fs.existsSync(rev())).toBe(false);
+    if (!revExists) expect(fs.existsSync(rev())).toBe(false);
   };
 
   it("by grant_id, with no files at all", async () => {
@@ -234,17 +254,47 @@ describe(REVOKE, () => {
     await handleRepoTaskDelegate(delegateArgs(), deps());
     await refusesBeforeKey(out(), /revoke\.not_delegator/, deps({ principal: a }));
   });
-  it("a second revoke into the same place is a clean refusal, the key erased first", async () => {
+  it("an existing revocation file is refused before the key", async () => {
     await handleRepoTaskDelegate(delegateArgs(), deps());
     await revoke(out());
+    await refusesBeforeKey(out(), /already exists/, deps(), true);
+  });
+  it("a revocation file that appears after the key is a clean refusal, the key erased first", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
     events = [];
     const lines: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...x: unknown[]) => {
       lines.push(x.map(String).join(" "));
     });
-    await expect(revoke(out())).rejects.toBeInstanceOf(ExitCalled);
+    const racing: RepoTaskCommandDeps["revokeToDirectory"] = (input, dir) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${input.target.grant_id}.json`), "{}");
+      return revokeToDirectory(input, dir);
+    };
+    await expect(revoke(out(), deps({ revokeToDirectory: racing }))).rejects.toBeInstanceOf(
+      ExitCalled,
+    );
     expect(events).toEqual(["load", "erase", "exit 1"]);
     expect(lines.join("\n")).toMatch(/a revocation for [0-9a-f-]{36} already exists at /);
+  });
+  it("an uppercase configured principal key is refused before the key", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
+    const grant = grantOf();
+    await refusesBeforeKey(
+      grant.grant_id,
+      /device_public_key .* is not in its one spelling/,
+      deps({ configKey: f.pin.public_key.toUpperCase() }),
+    );
+  });
+  it("by grant_id, the target key is the loaded key, never the config string", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
+    const grant = grantOf();
+    events = [];
+    // The config names another (canonical) key; the loaded key is the grant's signer.
+    await revoke(grant.grant_id, deps({ configKey: a.pin.public_key }));
+    expect(events).toEqual(["load", "erase"]);
+    const written = JSON.parse(fs.readFileSync(path.join(rev(), `${grant.grant_id}.json`), "utf8"));
+    expect(await findGrantRevocation(grant, [written])).toEqual(written);
   });
 });
 

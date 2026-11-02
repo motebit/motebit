@@ -390,21 +390,35 @@ describe("repo-task revoke: by grant_id and delegator key alone", () => {
     const dir = path.join(tmp, "d");
     await delegateToDirectory(request(), dir);
     fs.copyFileSync(path.join(dir, "grant.json"), path.join(dir, "grant-B.json"));
-    expect(resolveRevokeArgument(dir)).toEqual({
+    expect(await resolveRevokeArgument(dir)).toEqual({
       kind: "grant-file",
       file: path.join(dir, "grant.json"),
     });
-    expect(resolveRevokeArgument(path.join(dir, "grant.json"))).toEqual({
+    expect(await resolveRevokeArgument(path.join(dir, "grant.json"))).toEqual({
       kind: "grant-file",
       file: path.join(dir, "grant.json"),
     });
-    expect(() => resolveRevokeArgument(path.join(dir, "grant-B.json"))).toThrow(
+    await expect(resolveRevokeArgument(path.join(dir, "grant-B.json"))).rejects.toThrow(
       /is not a grant\.json/,
     );
-    expect(resolveRevokeArgument("01a19a05-7e29-789d-8c54-cbf64a01a088")).toEqual({
+    expect(await resolveRevokeArgument("01a19a05-7e29-789d-8c54-cbf64a01a088")).toEqual({
       kind: "grant-id",
       grantId: "01a19a05-7e29-789d-8c54-cbf64a01a088",
     });
+  });
+
+  it("a directory named for a grant_id but holding no grant.json is the grant_id", async () => {
+    // Relative to the working directory, as a shell would pass it.
+    const id = "01a19a05-7e29-789d-8c54-" + Date.now().toString(16).padStart(12, "0").slice(-12);
+    fs.mkdirSync(path.resolve(id));
+    try {
+      expect(await resolveRevokeArgument(id)).toEqual({ kind: "grant-id", grantId: id });
+    } finally {
+      fs.rmdirSync(path.resolve(id));
+    }
+    const other = path.join(tmp, "empty");
+    fs.mkdirSync(other);
+    await expect(resolveRevokeArgument(other)).rejects.toThrow(/holds no grant\.json/);
   });
 });
 

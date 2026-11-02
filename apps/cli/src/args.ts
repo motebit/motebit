@@ -615,6 +615,7 @@ Commands:
     --output <dir>            Output directory (default ./repo-task-<grant_id>)
   repo-task revoke <grant_id|grant.json|dir> [--output <dir>]
                             Sign the grant's revocation as <grant_id>.json (for .motebit/revocations/); a grant_id alone needs no files
+                            (a revocation signed after a key rotation does not bind grants the old key signed)
   withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail

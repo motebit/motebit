@@ -254,11 +254,46 @@ const TAMPERS: TamperEntry[] = [
   ),
   command(
     "revoke: an existing revocation file surfaces as a crash, not a refusal",
-    `${REV3} a second revoke into the same place is a clean refusal, the key erased first`,
+    `${REV3} a revocation file that appears after the key is a clean refusal, the key erased first`,
     edit(
       "    if (err instanceof CanonicalFileExistsError) {\n      throw new RepoTaskDelegationRefusedError([",
       "    if ((false as boolean) && err instanceof CanonicalFileExistsError) {\n      throw new RepoTaskDelegationRefusedError([",
     ),
+  ),
+  // ── confirmation review ───────────────────────────────────────────────
+  ...[
+    [PRE, "an uppercase configured principal key"],
+    [REV3, "an uppercase configured principal key is refused before the key"],
+  ].map(([d, t]) =>
+    command(
+      `principal: a non-canonical configured key accepted (${t})`,
+      `${d} ${t}`,
+      edit("  if (fault !== null) {\n", "  if ((false as boolean) && fault !== null) {\n", CMD),
+    ),
+  ),
+  command(
+    "revoke by id: the target key taken from the config string",
+    `${REV3} by grant_id, the target key is the loaded key, never the config string`,
+    edit("? active.publicKey :", "? principalPin.public_key :", CMD),
+  ),
+  command(
+    "delegate: existing output files not refused before the key",
+    `${PRE} an output file that already exists`,
+    edit(
+      "    if (config.output !== undefined) {\n",
+      "    if ((false as boolean) && config.output !== undefined) {\n",
+      CMD,
+    ),
+  ),
+  command(
+    "revoke: an existing revocation file not refused before the key",
+    `${REV3} an existing revocation file is refused before the key`,
+    edit("    refuseExisting([path.join(outDir,", "    void ([path.join(outDir,", CMD),
+  ),
+  entry(
+    "revoke: a directory named for a grant_id without grant.json is refused",
+    "repo-task revoke: by grant_id and delegator key alone a directory named for a grant_id but holding no grant.json is the grant_id",
+    edit('      if (await isGrantId()) return { kind: "grant-id", grantId: arg };\n', "", CMD),
   ),
 ];
 

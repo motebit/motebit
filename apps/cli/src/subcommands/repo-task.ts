@@ -34,6 +34,7 @@ import {
   delegateToDirectory,
   CanonicalFileExistsError,
   grantIdRefusals,
+  keySpellingFault,
   grantRefusals,
   precheckRepoTaskDelegation,
   readGrantFile,
@@ -130,13 +131,38 @@ async function withPrincipalKey<T>(
   }
 }
 
-function requireIdentity(fullConfig: FullConfig): RepoTaskPin {
+/**
+ * The configured principal, refused up front unless its key is in its one
+ * spelling: every comparison against it (the grant's delegator key, the
+ * revocation's) is byte-exact, while the key loader compares case-blind and
+ * returns the derived lowercase key — so an uppercase config key would make a
+ * grant unrevocable. Judged before any mint or prompt.
+ */
+async function requirePrincipal(fullConfig: FullConfig): Promise<RepoTaskPin> {
   const motebitId = fullConfig.motebit_id;
   const publicKey = fullConfig.device_public_key;
   if (motebitId == null || motebitId === "" || publicKey == null || publicKey === "") {
     refuse("No motebit identity configured — run `motebit init` first.");
   }
+  const fault = await keySpellingFault(publicKey);
+  if (fault !== null) {
+    refuse(
+      `Refused — device_public_key in this motebit's config.json is not in its one spelling (${fault}). Rewrite it as the 64 lowercase hex characters of the same key, then retry.`,
+    );
+  }
   return { motebit_id: motebitId, public_key: publicKey };
+}
+
+/** Advisory, before the prompt: refuse when an output file already exists (exclusive create stays the guard). */
+function refuseExisting(files: readonly string[]): void {
+  const existing = files.filter((f) => fs.existsSync(f));
+  if (existing.length > 0) {
+    refuse(
+      [`Refused, nothing overwritten — already exists:`, ...existing.map((f) => `  ${f}`)].join(
+        "\n",
+      ),
+    );
+  }
 }
 
 // === motebit repo-task delegate =======================================
@@ -156,7 +182,7 @@ export function handleRepoTaskDelegate(
     const maxChangedFiles = parseMaxFiles(config.maxFiles, paths.length);
 
     const fullConfig = deps.loadFullConfig();
-    const principalPin = requireIdentity(fullConfig);
+    const principalPin = await requirePrincipal(fullConfig);
     let delegate: RepoTaskPin;
     try {
       delegate = await deps.readAgentPin(config.delegateIdentity);
@@ -177,6 +203,9 @@ export function handleRepoTaskDelegate(
       now: deps.now(),
     };
     // Every refusal that needs no key, before the passphrase prompt.
+    if (config.output !== undefined) {
+      refuseExisting(Object.values(DELEGATION_FILES).map((n) => path.join(config.output!, n)));
+    }
     const pre = await precheckRepoTaskDelegation(request, principalPin);
     if (pre.length > 0) {
       refuse(
@@ -236,10 +265,15 @@ export type RevokeArgument =
  * never the scope or the tick: a revocation binds by `grant_id` and the
  * grant's delegator key alone (standing-delegation-v1 §5).
  */
-export function resolveRevokeArgument(arg: string): RevokeArgument {
+export async function resolveRevokeArgument(arg: string): Promise<RevokeArgument> {
+  const isGrantId = async (): Promise<boolean> => (await grantIdRefusals(arg)).length === 0;
   if (fs.existsSync(arg)) {
     if (fs.statSync(arg).isDirectory()) {
-      return { kind: "grant-file", file: path.join(arg, DELEGATION_FILES.grant) };
+      const file = path.join(arg, DELEGATION_FILES.grant);
+      if (fs.existsSync(file)) return { kind: "grant-file", file };
+      // A directory that happens to carry a grant_id's name, holding no grant.
+      if (await isGrantId()) return { kind: "grant-id", grantId: arg };
+      throw new RepoTaskCliRefusal(`${arg} holds no ${DELEGATION_FILES.grant}`);
     }
     if (path.basename(arg) === DELEGATION_FILES.grant) return { kind: "grant-file", file: arg };
     throw new RepoTaskCliRefusal(
@@ -257,10 +291,10 @@ export function handleRepoTaskRevoke(
     const arg = config.positionals[2];
     if (arg == null || arg === "") refuse(REVOKE_USAGE);
     const fullConfig = deps.loadFullConfig();
-    const principalPin = requireIdentity(fullConfig);
+    const principalPin = await requirePrincipal(fullConfig);
 
     // Everything below needs no key, and is decided before the passphrase prompt.
-    const what = resolveRevokeArgument(arg);
+    const what = await resolveRevokeArgument(arg);
     let target: RevocationTarget;
     let outDir: string;
     if (what.kind === "grant-id") {
@@ -274,10 +308,12 @@ export function handleRepoTaskRevoke(
             .join("\n"),
         );
       }
+      // The target key is the loaded key's derived public key, filled once
+      // the key is held — never the config string.
       target = {
         grant_id: what.grantId,
         delegator_id: principalPin.motebit_id,
-        delegator_public_key: principalPin.public_key,
+        delegator_public_key: "",
       };
       outDir = config.output ?? process.cwd();
     } else {
@@ -299,13 +335,16 @@ export function handleRepoTaskRevoke(
       outDir = config.output ?? path.dirname(what.file);
     }
 
+    refuseExisting([path.join(outDir, `${target.grant_id}.json`)]);
+
     const { file } = await withPrincipalKey(deps, fullConfig, (active) =>
       deps.revokeToDirectory(
         {
           target: {
             grant_id: target.grant_id,
             delegator_id: target.delegator_id,
-            delegator_public_key: target.delegator_public_key,
+            delegator_public_key:
+              what.kind === "grant-id" ? active.publicKey : target.delegator_public_key,
           },
           principal: {
             motebitId: principalPin.motebit_id,
@@ -320,6 +359,11 @@ export function handleRepoTaskRevoke(
 
     console.log(`Revocation signed: ${target.grant_id}`);
     console.log(`  wrote  ${file}`);
+    if (what.kind === "grant-id") {
+      console.log(
+        "  note   it binds only a grant with exactly this grant_id signed by the current key — check the id against what `motebit repo-task delegate` printed",
+      );
+    }
     console.log("");
     console.log(
       `It counts from the commit that lands it on main: .motebit/revocations/${target.grant_id}.json (a founder-approved PR).`,
