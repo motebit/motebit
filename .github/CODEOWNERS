@@ -86,6 +86,8 @@
 /packages/crypto-tpm/package.json @hakimlabs
 /packages/crypto-webauthn/src/ @hakimlabs
 /packages/crypto-webauthn/package.json @hakimlabs
+/packages/crypto-openpgp/src/ @hakimlabs
+/packages/crypto-openpgp/package.json @hakimlabs
 /packages/verify/src/ @hakimlabs
 /packages/verify/package.json @hakimlabs
 /packages/verifier/src/ @hakimlabs

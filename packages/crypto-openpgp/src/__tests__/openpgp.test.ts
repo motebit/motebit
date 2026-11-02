@@ -1,21 +1,23 @@
 /**
- * The OpenPGP shape the offline mode accepts (`git/openpgp.ts`), unit by
+ * The OpenPGP shape the offline mode accepts (`openpgp.ts`), unit by
  * unit: the pinned-keys file (armored v4 RSA primary keys, fingerprints
  * computed, never labelled), packet framing, armor, and the commit payload
  * rule. The end-to-end refusals over real commits live in
- * `repo-change-landed.test.ts`.
+ * `@motebit/verify`'s `repo-change-landed.test.ts`.
  */
 import { describe, expect, it } from "vitest";
 
-import { parsePinnedSigningKeys, splitSignedCommit, verifyCommitSignature } from "../git/index.js";
+import { parsePinnedSigningKeys, splitSignedCommit, verifyCommitSignature } from "../index.js";
 import {
   armor,
   commitPayload,
   packet,
   signPayload,
+  subpacket,
   testSigningKey,
   withSignature,
 } from "./helpers/github-signer.js";
+import type { SignOptions } from "./helpers/github-signer.js";
 
 const KEY = "PGP PUBLIC KEY BLOCK";
 const A = testSigningKey();
@@ -243,6 +245,247 @@ describe("the commit's signature", () => {
     expect(verifyCommitSignature(raw, "sha1", parsePinnedSigningKeys(A.armored))).toEqual({
       ok: false,
       reason: "the signature: the packet is of tag 13, not a signature (2)",
+    });
+  });
+});
+
+describe("the signature packet, refusal by refusal", () => {
+  const keys = parsePinnedSigningKeys(A.armored);
+  const payload = commitPayload({ tree: TREE, parents: ["b".repeat(40)], seconds: T });
+  const time = (s: number): Buffer => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32BE(s);
+    return b;
+  };
+  const check = (o: SignOptions, key = A) =>
+    verifyCommitSignature(withSignature(payload, signPayload(payload, key, T, o)), "sha1", keys);
+  /** The offset of the left 16 bits: after the hashed area and the unhashed area. */
+  const left16At = (b: Buffer): number => {
+    const hashedEnd = 6 + b.readUInt16BE(4);
+    return hashedEnd + 2 + b.readUInt16BE(hashedEnd);
+  };
+  const patch = (at: (b: Buffer) => number, f: (b: Buffer, i: number) => void) => (b: Buffer) => {
+    const c = Buffer.from(b);
+    f(c, at(c));
+    return c;
+  };
+
+  const refused: Array<[string, SignOptions, string]> = [
+    ["a v3 signature", { version: 3 }, "a version 3 signature, not 4"],
+    ["a text signature", { sigType: 0x01 }, "signature type 0x1, not binary (0x00)"],
+    ["a DSA signature", { pkAlgo: 17 }, "public-key algorithm 17, not RSA (1)"],
+    ["a SHA-512 signature", { hashAlgo: 10 }, "hash algorithm 10, not SHA-256 (8)"],
+    ["no creation time", { created: null }, "no signature creation time"],
+    [
+      "two creation times",
+      { extraHashed: [subpacket(2, time(T + 1))] },
+      "more than one creation time",
+    ],
+    [
+      "a malformed creation time",
+      { created: null, extraHashed: [subpacket(2, Buffer.alloc(3))] },
+      "a malformed creation time",
+    ],
+    [
+      "a creation time in the unhashed area",
+      {
+        created: null,
+        unhashed: [subpacket(2, time(T)), subpacket(16, Buffer.from(A.keyId, "hex"))],
+      },
+      "a creation time outside the hashed area",
+    ],
+    [
+      "a signature expiration",
+      { extraHashed: [subpacket(3, time(60))] },
+      "a signature-expiration subpacket",
+    ],
+    [
+      "a malformed issuer key id",
+      { unhashed: [subpacket(16, Buffer.alloc(4))] },
+      "a malformed issuer key id",
+    ],
+    [
+      "two different issuer key ids",
+      {
+        unhashed: [
+          subpacket(16, Buffer.from(A.keyId, "hex")),
+          subpacket(16, Buffer.from(B.keyId, "hex")),
+        ],
+      },
+      "two different issuer key ids",
+    ],
+    [
+      "a malformed issuer fingerprint",
+      { extraHashed: [subpacket(33, Buffer.concat([Buffer.from([5]), Buffer.alloc(20)]))] },
+      "a malformed issuer fingerprint",
+    ],
+    [
+      "two different issuer fingerprints",
+      {
+        extraHashed: [
+          subpacket(33, Buffer.concat([Buffer.from([4]), Buffer.from(B.fingerprint, "hex")])),
+        ],
+      },
+      "two different issuer fingerprints",
+    ],
+    [
+      "an unknown critical subpacket",
+      { extraHashed: [subpacket(0x80 | 20, Buffer.from([0]))] },
+      "a critical subpacket of type 20",
+    ],
+    ["no issuer", { noFingerprint: true, unhashed: [] }, "no issuer"],
+    [
+      "a key id that is not the fingerprint's",
+      { unhashed: [subpacket(16, Buffer.from(B.keyId, "hex"))] },
+      "the issuer key id is not the issuer fingerprint's",
+    ],
+    [
+      "a subpacket that runs past its area",
+      { extraHashed: [Buffer.from([10, 20])] },
+      "a subpacket runs past its area",
+    ],
+    [
+      "a zero-length subpacket",
+      { extraHashed: [Buffer.from([0])] },
+      "a subpacket runs past its area",
+    ],
+    [
+      "a two-octet subpacket length cut short",
+      { extraHashed: [Buffer.from([200])] },
+      "a subpacket length is cut short",
+    ],
+    [
+      "a five-octet subpacket length cut short",
+      { extraHashed: [Buffer.from([255, 0])] },
+      "a subpacket length is cut short",
+    ],
+    [
+      "a second packet after the signature",
+      { trailing: packet(13, Buffer.from("x")) },
+      "the signature holds 2 packets, not one",
+    ],
+    [
+      "trailing bytes inside the signature packet",
+      { body: (b) => Buffer.concat([b, Buffer.from([0])]) },
+      "the signature packet has trailing bytes",
+    ],
+    ["a packet cut short", { body: (b) => b.subarray(0, 4) }, "the signature is cut short"],
+    [
+      "a hashed area longer than the packet",
+      {
+        body: patch(
+          () => 4,
+          (b, i) => b.writeUInt16BE(0xffff, i),
+        ),
+      },
+      "the hashed area runs past the packet",
+    ],
+    [
+      "an unhashed area longer than the packet",
+      {
+        body: patch(
+          (b) => 6 + b.readUInt16BE(4),
+          (b, i) => b.writeUInt16BE(0xffff, i),
+        ),
+      },
+      "the unhashed area runs past the packet",
+    ],
+  ];
+  it.each(refused)("refuses %s", (_name, o, reason) => {
+    expect(check(o)).toEqual({ ok: false, reason: `the signature: ${reason}` });
+  });
+
+  it("refuses wrong left 16 bits, then a signature that does not verify", () => {
+    expect(check({ body: patch(left16At, (b, i) => (b[i] ^= 1)) })).toEqual({
+      ok: false,
+      reason: "the signature's left 16 bits do not match the digest",
+    });
+    expect(
+      check({
+        body: patch(
+          (b) => b.length - 1,
+          (b, i) => (b[i] ^= 1),
+        ),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "the RSA signature does not verify under the pinned key",
+    });
+  });
+
+  it("refuses a signer that is not pinned, by fingerprint or by key id", () => {
+    expect(check({}, B)).toEqual({
+      ok: false,
+      reason: `the signer ${B.fingerprint} is not a pinned key`,
+    });
+    expect(check({ noFingerprint: true }, B)).toEqual({
+      ok: false,
+      reason: `the signer ${B.keyId} is not a pinned key`,
+    });
+  });
+
+  it("accepts the issuer by key id alone, and skips a non-critical unknown subpacket of any length form", () => {
+    expect(check({ noFingerprint: true })).toMatchObject({ ok: true });
+    expect(check({ extraHashed: [subpacket(20, Buffer.from([0]))] })).toMatchObject({ ok: true });
+    const long = Buffer.alloc(200);
+    const twoOctet = Buffer.concat([
+      Buffer.from([((long.length + 1 - 192) >> 8) + 192, (long.length + 1 - 192) & 0xff, 20]),
+      long,
+    ]);
+    const fiveOctet = Buffer.from([255, 0, 0, 0, 2, 20, 0]);
+    expect(check({ extraHashed: [twoOctet, fiveOctet] })).toMatchObject({ ok: true });
+  });
+});
+
+describe("the commit's signature header", () => {
+  const keys = parsePinnedSigningKeys(A.armored);
+  const payload = commitPayload({ tree: TREE, parents: [], seconds: T });
+  const sig = signPayload(payload, A, T);
+
+  it("refuses an unsigned commit, two signatures, and a mergetag or encoding header", () => {
+    expect(verifyCommitSignature(payload, "sha1", keys)).toEqual({
+      ok: false,
+      reason: "the commit has no gpgsig signature",
+    });
+    expect(
+      verifyCommitSignature(withSignature(withSignature(payload, sig), sig), "sha1", keys),
+    ).toEqual({
+      ok: false,
+      reason: "the commit has more than one gpgsig signature",
+    });
+    for (const h of ["mergetag", "encoding"]) {
+      const raw = Buffer.from(payload.toString("latin1").replace("\n\n", `\n${h} x\n\n`), "latin1");
+      expect(verifyCommitSignature(withSignature(raw, sig), "sha1", keys)).toEqual({
+        ok: false,
+        reason: `the commit carries a ${h} header`,
+      });
+    }
+  });
+
+  it("refuses broken armor: no END line, a malformed armor header, a wrong CRC-24", () => {
+    const at = (armored: string) =>
+      verifyCommitSignature(withSignature(payload, armored), "sha1", keys);
+    expect(at(sig.replace("-----END PGP SIGNATURE-----", "-----END X-----"))).toEqual({
+      ok: false,
+      reason: "the signature: the PGP SIGNATURE is not terminated",
+    });
+    expect(
+      at(
+        sig.replace(
+          "-----BEGIN PGP SIGNATURE-----\n",
+          "-----BEGIN PGP SIGNATURE-----\nbad header\n",
+        ),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "the signature: the PGP SIGNATURE has a malformed armor header",
+    });
+    const lines = sig.replace(/\n$/, "").split("\n");
+    const crc = lines[lines.length - 2]!;
+    lines[lines.length - 2] = `=${crc.slice(1, 4)}${crc[4] === "A" ? "B" : "A"}`;
+    expect(at(`${lines.join("\n")}\n`)).toEqual({
+      ok: false,
+      reason: "the signature: the PGP SIGNATURE CRC-24 does not match",
     });
   });
 });

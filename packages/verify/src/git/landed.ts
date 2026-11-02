@@ -22,7 +22,7 @@
  *   - the evaluation time: the squash commit's committer time
  *     (`operator_recorded`), accepted only when the committer is exactly
  *     `GitHub <noreply@github.com>` AND the commit's OpenPGP signature
- *     verifies under one of the pinned keys (`openpgp.ts`) AND the
+ *     verifies under one of the pinned keys (`@motebit/crypto-openpgp`) AND the
  *     signature's creation time equals the committer time to the second;
  *     otherwise `landedAt` is `null`, so `authority` is `unknown`;
  *   - revocation freshness `asserted`, as of the accepted landing time (the
@@ -50,8 +50,8 @@ import type {
 
 import { openRawObjects } from "./objects.js";
 import type { RawObjects } from "./objects.js";
-import { parsePinnedSigningKeys, verifyCommitSignature } from "./openpgp.js";
-import type { PinnedSigningKey } from "./openpgp.js";
+import { parsePinnedSigningKeys, verifyCommitSignature } from "@motebit/crypto-openpgp";
+import type { PinnedSigningKey } from "@motebit/crypto-openpgp";
 import { computeEntries, looseRecord } from "./repo-change.js";
 import { openIsolatedGit, resolveGitDirectories } from "./session.js";
 import type { IsolatedGit } from "./session.js";

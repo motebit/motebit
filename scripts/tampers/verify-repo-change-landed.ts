@@ -24,7 +24,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
 
 const LANDED = "packages/verify/src/git/landed.ts";
 const OBJECTS = "packages/verify/src/git/objects.ts";
-const PGP = "packages/verify/src/git/openpgp.ts";
+const PGP = "packages/crypto-openpgp/src/openpgp.ts";
 const CLI = "packages/verify/src/repo-change-cli.ts";
 const TEST = "src/__tests__/repo-change-landed.test.ts";
 const UNIT = "src/__tests__/openpgp.test.ts";
@@ -40,6 +40,7 @@ const COMMAND = "motebit-verify repo-change --landed: the command";
 const KEYS = "the pinned signing keys file";
 
 const edit = (file: string, from: string, to: string): TamperEdit => ({ file, from, to });
+/** An end-to-end entry; verify loads the leaf from its build, so a leaf edit rebuilds it. */
 const entry = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry => ({
   name,
   pkg: "@motebit/verify",
@@ -47,10 +48,16 @@ const entry = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry =
   red,
   only: true,
   edits,
+  ...(edits.some((e) => e.file === PGP) ? { rebuild: ["@motebit/crypto-openpgp"] } : {}),
 });
+/** A unit entry in the leaf, whose tests import its source. */
 const unit = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry => ({
-  ...entry(name, red, ...edits),
+  name,
+  pkg: "@motebit/crypto-openpgp",
   test: UNIT,
+  red,
+  only: true,
+  edits,
 });
 /** Disable an `if (<guard>` whose condition is one `&&` chain (no top-level `||`). */
 const off = (file: string, guard: string): TamperEdit =>

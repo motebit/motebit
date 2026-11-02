@@ -1,0 +1,72 @@
+{
+  "name": "@motebit/crypto-openpgp",
+  "version": "0.0.0",
+  "description": "Apache-2.0 verifier for the one OpenPGP signature shape git hosting operators put on squash commits (a v4 RSA/SHA-256 gpgsig header) — offline, against signing keys pinned by the caller. Lets @motebit/verify accept a landed governed repo change's committer time without trusting the network.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "license": "Apache-2.0",
+  "keywords": [
+    "motebit",
+    "openpgp",
+    "rfc4880",
+    "gpgsig",
+    "git",
+    "commit-signature",
+    "rsa",
+    "verify"
+  ],
+  "homepage": "https://github.com/motebit/motebit/tree/main/packages/crypto-openpgp#readme",
+  "bugs": {
+    "url": "https://github.com/motebit/motebit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/motebit/motebit",
+    "directory": "packages/crypto-openpgp"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "motebit": {
+    "implements": [
+      "spec/repo-change-v1.md"
+    ]
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint --parser-options=project:tsconfig.eslint.json src/",
+    "lint:pack": "publint --strict && attw --pack --profile esm-only",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

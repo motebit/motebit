@@ -9,7 +9,7 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 
-import { crc24 } from "../../git/openpgp.js";
+import { crc24 } from "@motebit/crypto-openpgp";
 
 export interface TestSigningKey {
   readonly privateKey: KeyObject;

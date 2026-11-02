@@ -97,6 +97,7 @@ export const MONEY_IDENTITY_PATH: ReadonlyMap<string, PathTier> = new Map([
   ["@motebit/crypto-android-keystore", "identity"],
   ["@motebit/crypto-tpm", "identity"],
   ["@motebit/crypto-webauthn", "identity"],
+  ["@motebit/crypto-openpgp", "identity"], // accepts a landed governed change's time — the authority path. Member-by-declaration (NOT a trigger), like verifier
   ["@motebit/verify", "identity"], // canonical motebit-verify aggregator — verification IS the identity path
   ["@motebit/verifier", "identity"], // dep-thin verification library third parties (agency) consume — verification IS the identity path. Member-by-declaration (NOT a trigger), like crypto
 ]);

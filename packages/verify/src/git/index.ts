@@ -7,7 +7,8 @@
  * `verifyRepoChange` (`@motebit/verifier`) needs in CI-on-PR mode — and,
  * offline on a landed change, the same inputs from raw re-hashed objects,
  * with the squash commit's committer time accepted only under pinned
- * OpenPGP keys (`computeLandedRepoChangeInputs`).
+ * OpenPGP keys (`computeLandedRepoChangeInputs`; the signature check is
+ * `@motebit/crypto-openpgp`'s, re-exported here).
  *
  * One implementation for both judges: `motebit-verify repo-change` and the
  * self-check of `motebit repo-task run`, which imports this subpath.
@@ -34,8 +35,8 @@ export {
   parsePinnedSigningKeys,
   splitSignedCommit,
   verifyCommitSignature,
-} from "./openpgp.js";
-export type { CommitSignatureCheck, PinnedSigningKey } from "./openpgp.js";
+} from "@motebit/crypto-openpgp";
+export type { CommitSignatureCheck, PinnedSigningKey } from "@motebit/crypto-openpgp";
 export {
   LANDING_COMMITTER,
   acceptLandingTime,

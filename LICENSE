@@ -66,6 +66,7 @@ to the Business Source License:
   packages/crypto-android-keystore/  @motebit/crypto-android-keystore — Android Hardware-Backed Keystore Attestation chain verifier
   packages/crypto-tpm/               @motebit/crypto-tpm — TPM 2.0 EK chain verifier
   packages/crypto-webauthn/          @motebit/crypto-webauthn — WebAuthn packed-attestation verifier
+  packages/crypto-openpgp/           @motebit/crypto-openpgp — git commit-signature (OpenPGP) verifier
   packages/create-motebit/           create-motebit — identity scaffolding CLI
   packages/github-action/            motebit-verify GitHub Action
 

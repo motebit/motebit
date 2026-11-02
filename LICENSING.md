@@ -19,6 +19,7 @@ The protocol specification, type definitions, identity verification, scaffolding
 | `packages/crypto-android-keystore/` | `@motebit/crypto-android-keystore` | Android Hardware-Backed Keystore Attestation chain verifier (pinned Google attestation roots)  |
 | `packages/crypto-tpm/`              | `@motebit/crypto-tpm`              | TPM 2.0 EK chain verifier (pinned vendor roots)                                                |
 | `packages/crypto-webauthn/`         | `@motebit/crypto-webauthn`         | WebAuthn packed-attestation verifier (pinned FIDO roots)                                       |
+| `packages/crypto-openpgp/`          | `@motebit/crypto-openpgp`          | Git commit-signature verifier (v4 RSA/SHA-256 `gpgsig`; operator keys pinned by the caller)    |
 | `packages/create-motebit/`          | `create-motebit`                   | Identity scaffolding CLI (0 deps)                                                              |
 | `packages/github-action/`           | —                                  | GitHub Action for identity verification                                                        |
 
@@ -104,7 +105,8 @@ After four years, the recipe is free. By then, the network of sovereign agents w
 ```
 Apache-2.0 (now, any use):  protocol · sdk · crypto · verifier · verify · state-export-client ·
                             crypto-appattest · crypto-android-keystore · crypto-tpm ·
-                            crypto-webauthn · create-motebit · spec · github-action
+                            crypto-webauthn · crypto-openpgp · create-motebit · spec ·
+                            github-action
 BSL-1.1 (source-visible):   runtime · engines · apps · services · everything else
 BSL → Apache-2.0 conversion: 4 years per version, automatic, irrevocable
 End state:                  Apache-2.0 everywhere

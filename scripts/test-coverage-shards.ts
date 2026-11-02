@@ -74,6 +74,7 @@ export const SHARD_WEIGHTS: Record<string, number> = {
   "packages/crypto": 50,
   "packages/crypto-android-keystore": 5,
   "packages/crypto-appattest": 6,
+  "packages/crypto-openpgp": 2,
   "packages/crypto-tpm": 7,
   "packages/crypto-webauthn": 6,
   "packages/deposit-detector": 3,
