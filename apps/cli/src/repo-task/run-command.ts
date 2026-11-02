@@ -29,7 +29,6 @@
  * written: the commits are objects in the repository's store, reachable from
  * nothing until the operator pushes the bundle commit.
  */
-import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { StreamingProvider } from "@motebit/ai-core";
@@ -56,6 +55,7 @@ import type { FullConfig } from "../config.js";
 import { mkdirOwnerOnly } from "../durable-file.js";
 import type { ActiveSigningKey, LoadActiveSigningKeyOptions } from "../identity.js";
 import { agentKeyConfig, isDefaultConfigDir, readAgentIdentity } from "./agent-identity.js";
+import { isWithinEntry } from "./fs-identity.js";
 import {
   buildRepoChangeRecord,
   bundlePath,
@@ -132,26 +132,6 @@ function refuse(...lines: string[]): never {
   throw new RepoTaskPreflightError(lines);
 }
 
-/** `child` is `parent` or inside it (both resolved to real paths where they exist). */
-function isInside(child: string, parent: string): boolean {
-  const real = (p: string): string => {
-    let cur = path.resolve(p);
-    const rest: string[] = [];
-    for (;;) {
-      try {
-        return path.join(fs.realpathSync(cur), ...rest);
-      } catch {
-        const up = path.dirname(cur);
-        if (up === cur) return path.resolve(p);
-        rest.unshift(path.basename(cur));
-        cur = up;
-      }
-    }
-  };
-  const rel = path.relative(real(parent), real(child));
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
 /**
  * Run a governed repo change. Every refusal before the run is a
  * `RepoTaskPreflightError` (no prompt, no model call, nothing written);
@@ -204,7 +184,8 @@ export async function runGovernedRepoTask(
   }
   const { tip } = tipInfo;
   const outputDir = path.resolve(opts.outputDir ?? opts.delegationDir);
-  if (isInside(outputDir, repoDir)) {
+  // By filesystem identity, not spelling: a case alias of the repository is the repository.
+  if (isWithinEntry(outputDir, repoDir)) {
     refuse(
       `the output directory ${outputDir} is inside the repository: the run never writes the worktree`,
     );

@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import type { FullConfig } from "../config.js";
+import { isSameEntry } from "./fs-identity.js";
 
 /** The identity and key material of A, and nothing else. */
 export interface AgentIdentity {
@@ -53,10 +54,19 @@ export function defaultConfigDirs(
   return dirs.map(realOrResolved);
 }
 
-/** `dir` is (resolves to) one of the default config directories. */
+/**
+ * `dir` is one of the default config directories, or its `config.json` is
+ * theirs: judged by filesystem identity (fs-identity.ts), so a case alias or a
+ * hard-linked config is caught; the spelling compare stays for paths that do
+ * not exist yet.
+ */
 export function isDefaultConfigDir(dir: string, defaults: readonly string[]): boolean {
-  const target = realOrResolved(dir);
-  return defaults.includes(target);
+  if (defaults.includes(realOrResolved(dir))) return true;
+  return defaults.some(
+    (d) =>
+      isSameEntry(dir, d) ||
+      isSameEntry(path.join(dir, "config.json"), path.join(d, "config.json")),
+  );
 }
 
 function isHexString(v: unknown): v is string {

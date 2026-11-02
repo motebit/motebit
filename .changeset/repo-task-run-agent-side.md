@@ -13,3 +13,5 @@ motebit repo-task run --agent <agent config dir> --delegation <dir> [--repo <wor
 - The provider is built from `--provider`/`--model` and that provider's API-key environment variable only, with the default personality. The motebit cloud provider is refused.
 - After the run come the change commit and the bundle commit (`.motebit/bundles/<grant_id>.json`, the canonical JSON of the bundle), each built on a private index. The agent signs an `ExecutionReceipt` whose `result` is the canonical change record. No ref is created or moved, nothing is pushed, and the worktree is never written.
 - A self-check (`verifyRepoChange`, CI-on-PR mode, inputs computed from the two trees) prints the verdict, and the command exits non-zero unless the change is fully verified and `completed`. On success it prints `parent_commit`, `head_commit`, `bundle_commit` and the publisher's push command.
+
+It judges path identity by the filesystem (device and inode), never by spelling, so a case alias or a hard link of the default config directory, or of the repository, is refused like the path itself.

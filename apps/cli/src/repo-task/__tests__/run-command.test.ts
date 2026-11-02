@@ -777,6 +777,49 @@ describe("repo-task run: every preflight rule refuses before the first model cal
     );
     expect(fs.existsSync(path.join(fx.repo, "out"))).toBe(false);
   });
+
+  // Path identity is the filesystem's, never the spelling's. A case alias
+  // exists only on a case-insensitive filesystem (APFS by default); a hard
+  // link exists everywhere.
+  const caseInsensitive = (dir: string): boolean =>
+    fs.existsSync(dir.replace(/[a-z](?=[^/]*$)/, (c) => c.toUpperCase()));
+
+  it("--agent naming the default config directory by a case alias", async (ctx) => {
+    const fx = await fixture();
+    const dflt = path.join(home, ".motebit");
+    if (!caseInsensitive(dflt)) ctx.skip();
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { agent: path.join(home, ".MOTEBIT") }), h.deps),
+      /default motebit config directory/,
+    );
+  });
+
+  it("--agent whose config.json is a hard link to the default config", async () => {
+    const fx = await fixture();
+    const linked = fs.mkdtempSync(path.join(os.tmpdir(), "motebit-agent-link-"));
+    fs.linkSync(path.join(home, ".motebit", "config.json"), path.join(linked, "config.json"));
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { agent: linked }), h.deps),
+      /default motebit config directory/,
+    );
+  });
+
+  it("an output directory naming the repository by a case alias", async (ctx) => {
+    const fx = await fixture();
+    if (!caseInsensitive(fx.repo)) ctx.skip();
+    const alias = fx.repo.replace(/[a-z](?=[^/]*$)/, (c) => c.toUpperCase());
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { output: path.join(alias, "out") }), h.deps),
+      /inside the repository/,
+    );
+    expect(fs.existsSync(path.join(fx.repo, "out"))).toBe(false);
+  });
 });
 
 // -- What the tip says, never the filesystem -----------------------------------

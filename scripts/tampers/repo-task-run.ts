@@ -186,8 +186,8 @@ const TAMPERS: TamperEntry[] = [
     `${REFUSE} an output directory inside the repository`,
     edit(
       RUN,
-      "  if (isInside(outputDir, repoDir)) {\n",
-      "  if ((false as boolean) && isInside(outputDir, repoDir)) {\n",
+      "  if (isWithinEntry(outputDir, repoDir)) {\n",
+      "  if ((false as boolean) && isWithinEntry(outputDir, repoDir)) {\n",
     ),
   ),
   // ── preflight: the authority law before the key ────────────────────────
@@ -267,6 +267,34 @@ const TAMPERS: TamperEntry[] = [
       RUN,
       "    // -- The self-check. EVIDENCE, NOT AUTHORITY",
       '    fs.appendFileSync(path.join(repoDir, "docs", "guide.md"), "x");\n    // -- The self-check. EVIDENCE, NOT AUTHORITY',
+    ),
+  ),
+  // ── path identity by the filesystem, never by spelling ─────────────────
+  entry(
+    "agent: the default config dir judged by spelling only (hard-linked config)",
+    `${REFUSE} --agent whose config.json is a hard link to the default config`,
+    edit(
+      "apps/cli/src/repo-task/agent-identity.ts",
+      "  if (defaults.includes(realOrResolved(dir))) return true;\n  return defaults.some(",
+      "  if (defaults.includes(realOrResolved(dir))) return true;\n  return [].some(",
+    ),
+  ),
+  entry(
+    "agent: the default config dir judged by spelling only (case alias)",
+    `${REFUSE} --agent naming the default config directory by a case alias`,
+    edit(
+      "apps/cli/src/repo-task/agent-identity.ts",
+      "  if (defaults.includes(realOrResolved(dir))) return true;\n  return defaults.some(",
+      "  if (defaults.includes(realOrResolved(dir))) return true;\n  return [].some(",
+    ),
+  ),
+  entry(
+    "output: inside-the-repository judged by spelling only (case alias)",
+    `${REFUSE} an output directory naming the repository by a case alias`,
+    edit(
+      "apps/cli/src/repo-task/fs-identity.ts",
+      "    if (fileIdentity(cur) === target) return true;\n",
+      "    if (cur === path.resolve(parent)) return true;\n",
     ),
   ),
   // ── the agent's key ────────────────────────────────────────────────────
