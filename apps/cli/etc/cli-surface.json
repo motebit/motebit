@@ -84,6 +84,10 @@
       "default": false
     },
     {
+      "name": "agent",
+      "type": "string"
+    },
+    {
       "name": "all",
       "type": "boolean",
       "default": false
@@ -136,6 +140,10 @@
     },
     {
       "name": "delegate",
+      "type": "string"
+    },
+    {
+      "name": "delegation",
       "type": "string"
     },
     {

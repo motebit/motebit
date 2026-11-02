@@ -77,6 +77,13 @@ export interface CliConfig {
   delegateIdentity?: string;
   hours?: string;
   notBefore?: string;
+  /**
+   * `repo-task run`: the agent identity A's config directory (never the
+   * default ~/.motebit) and the delegation directory `delegate` wrote. The
+   * worktree is `--repo` (default cwd).
+   */
+  agent?: string;
+  delegation?: string;
   target: string | undefined;
   budget: string | undefined;
   price: string | undefined;
@@ -251,6 +258,10 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       delegate: { type: "string" },
       hours: { type: "string" },
       "not-before": { type: "string" },
+      // `motebit repo-task run` — the agent side: A's config directory and
+      // the delegation directory (`--repo` is the worktree there).
+      agent: { type: "string" },
+      delegation: { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -347,6 +358,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     delegateIdentity: values.delegate,
     hours: values.hours,
     notBefore: values["not-before"],
+    agent: values.agent,
+    delegation: values.delegation,
     target: values.target,
     budget: values.budget,
     price: values.price,
@@ -616,6 +629,9 @@ Commands:
   repo-task revoke <grant_id|grant.json|dir> [--output <dir>]
                             Sign the grant's revocation as <grant_id>.json (for .motebit/revocations/); a grant_id alone needs no files
                             (a revocation signed after a key rotation does not bind grants the old key signed)
+  repo-task run --agent <dir> --delegation <dir> [--repo <worktree>] [--provider <p>] [--model <m>]
+                            Run the governed change as agent A (its own config dir): preflight at the tip, two commits, self-check; moves no ref, pushes nothing
+    --output <dir>            Where the receipt file goes (default: the delegation directory; never inside the repository)
   withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail
