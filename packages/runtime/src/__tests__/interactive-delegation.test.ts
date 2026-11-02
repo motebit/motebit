@@ -388,10 +388,16 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
         );
       }
       if (url.includes("/p2p-eligibility")) {
-        return new Response(JSON.stringify({ allowed: true }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            allowed: true,
+            settlement_address: "BobWorkerAddr1111111111111111111111111111111",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       }
       if (url.includes("/api/v1/agents/bob-worker/listing")) {
         return new Response(

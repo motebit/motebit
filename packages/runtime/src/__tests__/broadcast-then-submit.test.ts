@@ -104,7 +104,8 @@ function relay(script: SubmitAnswer[] = ["201"]): RelayStub {
         ],
       });
     }
-    if (url.includes("/p2p-eligibility")) return json(200, { allowed: true });
+    if (url.includes("/p2p-eligibility"))
+      return json(200, { allowed: true, settlement_address: WORKER_ADDR });
     if (url.includes(`/api/v1/agents/${WORKER}/listing`)) return json(200, { pricing });
     if (method === "POST" && url.endsWith(`/agent/${ME}/task`)) {
       const body = JSON.parse(init!.body as string) as {

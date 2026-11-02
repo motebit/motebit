@@ -87,7 +87,8 @@ describe("motebit delegate --sovereign records into the durable ledger (#874)", 
           ],
         });
       }
-      if (path.endsWith("/p2p-eligibility")) return json(200, { allowed: true });
+      if (path.endsWith("/p2p-eligibility"))
+        return json(200, { allowed: true, settlement_address: proof.to_address });
       if (path.endsWith("/listing")) {
         return json(200, { pricing: [{ capability: "web_search", unit_cost: 0.25 }] });
       }

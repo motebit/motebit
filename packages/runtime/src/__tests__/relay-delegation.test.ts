@@ -358,13 +358,33 @@ function routedFetch(handlers: {
     if (url.includes("/api/v1/agents/discover")) return handlers.discover!();
     // Pre-flight eligibility (single-op LOCAL branch). Default eligible so the
     // existing pricing/broadcast tests aren't blocked; override to test denial.
-    if (url.includes("/p2p-eligibility"))
-      return (handlers.eligibility ?? (() => jsonResponse(200, { allowed: true })))();
+    // The default models the current relay: it returns the worker's REGISTERED
+    // settlement address, which in these tests is the one discovery advertised.
+    if (url.includes("/p2p-eligibility")) {
+      if (handlers.eligibility) return handlers.eligibility();
+      return jsonResponse(200, {
+        allowed: true,
+        settlement_address: await registeredAddress(url, handlers.discover),
+      });
+    }
     if (url.includes("/listing")) return handlers.listing!();
     if (url.endsWith("/task") && init?.method === "POST") return handlers.submit!();
     if (url.includes("/task/")) return handlers.poll!();
     throw new Error(`unexpected fetch: ${url}`);
   });
+}
+
+/** The address a stubbed relay holds as registered for the worker in an eligibility URL. */
+async function registeredAddress(
+  url: string,
+  discover: (() => Response) | undefined,
+): Promise<string | undefined> {
+  const workerId = /\/api\/v1\/agents\/([^/]+)\/p2p-eligibility/.exec(url)?.[1];
+  if (!discover || !workerId) return undefined;
+  const { agents } = (await discover().json()) as {
+    agents?: Array<{ motebit_id?: string; settlement_address?: string }>;
+  };
+  return agents?.find((a) => a.motebit_id === decodeURIComponent(workerId))?.settlement_address;
 }
 
 const discoverOk = (agents: unknown[]) => () => jsonResponse(200, { agents });
@@ -668,6 +688,7 @@ describe("resolveAndSubmitP2pDelegation", () => {
         eligibility: () =>
           jsonResponse(200, {
             allowed: true,
+            settlement_address: "BobAddr",
             expected_amount_micro: 500000,
             expected_fee_micro: 26316,
           }),
@@ -702,7 +723,7 @@ describe("resolveAndSubmitP2pDelegation", () => {
         discover: discoverOk([
           { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
         ]),
-        eligibility: () => jsonResponse(200, { allowed: true }), // no amounts
+        eligibility: () => jsonResponse(200, { allowed: true, settlement_address: "BobAddr" }), // no amounts
         listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
         submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
       }),
@@ -1234,7 +1255,8 @@ describe("selectAndRunDelegation", () => {
             agents: [{ motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" }],
           });
         }
-        if (url.includes("/p2p-eligibility")) return jsonResponse(200, { allowed: true });
+        if (url.includes("/p2p-eligibility"))
+          return jsonResponse(200, { allowed: true, settlement_address: "BobAddr" });
         if (url.includes("/listing"))
           return jsonResponse(200, { pricing: [{ capability: "review_pr", unit_cost: 0.5 }] });
         if (url.endsWith("/task") && init?.method === "POST")

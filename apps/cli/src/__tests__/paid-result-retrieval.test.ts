@@ -88,7 +88,8 @@ function stubRelay(): { fetch: typeof fetch; submits: () => number } {
         ],
       });
     }
-    if (path === `/api/v1/agents/${WORKER}/p2p-eligibility`) return json(200, { allowed: true });
+    if (path === `/api/v1/agents/${WORKER}/p2p-eligibility`)
+      return json(200, { allowed: true, settlement_address: proof.to_address });
     if (path === `/api/v1/agents/${WORKER}/listing`) {
       return json(200, { pricing: [{ capability: "web_search", unit_cost: 0.25 }] });
     }

@@ -62,7 +62,9 @@ describe("payer binds every candidate before broadcast", () => {
         hop_distance: 1,
         source_relay: "ghost-relay",
       },
-      { allowed: true, ...AMOUNTS },
+      // Even a pre-flight that confirmed this address must not reach: the
+      // locality gate alone refuses it.
+      { allowed: true, settlement_address: ATTACKER, ...AMOUNTS },
     );
     const r = await resolveP2pPaymentRequest(await params());
     expect(r.ok).toBe(false);
@@ -78,7 +80,7 @@ describe("payer binds every candidate before broadcast", () => {
         hop_distance: 2,
         source_relay: "far-relay",
       },
-      { allowed: true, ...AMOUNTS },
+      { allowed: true, settlement_address: ATTACKER, ...AMOUNTS },
     );
     const r = await resolveP2pPaymentRequest({ ...(await params()), targetWorkerId: "bob" });
     expect(r.ok).toBe(false);
@@ -105,13 +107,25 @@ describe("payer binds every candidate before broadcast", () => {
     if (r.ok) expect(r.workerAddress).toBe(CUSTODY);
   });
 
-  it("an older relay (no hop_distance, no confirmed address) keeps today's local behaviour", async () => {
-    stub(
+  it("an older relay that confirms no registered address ⇒ worker_settlement_unbound, nothing priced", async () => {
+    const fetchFn = stub(
       { motebit_id: "bob", settlement_address: CUSTODY, settlement_modes: "p2p" },
       { allowed: true, ...AMOUNTS },
     );
     const r = await resolveP2pPaymentRequest(await params());
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("worker_settlement_unbound");
+    expect(fetchFn).toHaveBeenCalledTimes(2); // discover + pre-flight, nothing priced
+  });
+
+  it("an older relay (no hop_distance) that confirms the matching address keeps today's local behaviour", async () => {
+    stub(
+      { motebit_id: "bob", settlement_address: CUSTODY, settlement_modes: "p2p" },
+      { allowed: true, settlement_address: CUSTODY, ...AMOUNTS },
+    );
+    const r = await resolveP2pPaymentRequest(await params());
     expect(r.ok).toBe(true);
+    if (r.ok) expect(r.workerAddress).toBe(CUSTODY);
   });
 });
 
@@ -135,7 +149,7 @@ describe("only a would-be candidate counts as unbindable", () => {
   };
 
   it("unpinned, no p2p candidate + a far relay-only entry ⇒ no_routing", async () => {
-    stub([FAR_RELAY_ONLY], { allowed: true, ...AMOUNTS });
+    stub([FAR_RELAY_ONLY], { allowed: true, settlement_address: ATTACKER, ...AMOUNTS });
     const r = await resolveP2pPaymentRequest(await params());
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe("no_routing");
@@ -185,7 +199,7 @@ describe("only a would-be candidate counts as unbindable", () => {
         },
         FAR_RELAY_ONLY,
       ],
-      { allowed: true, ...AMOUNTS },
+      { allowed: true, settlement_address: CUSTODY, ...AMOUNTS },
     );
     const r = await resolveP2pPaymentRequest({ ...(await params()), targetWorkerId: "carol" });
     expect(r.ok).toBe(false);
@@ -195,6 +209,7 @@ describe("only a would-be candidate counts as unbindable", () => {
   it("control: the pinned p2p candidate itself unbindable ⇒ worker_settlement_unbound", async () => {
     stub([{ ...FAR_RELAY_ONLY, motebit_id: "bob", settlement_modes: "p2p" }, FAR_RELAY_ONLY], {
       allowed: true,
+      settlement_address: ATTACKER,
       ...AMOUNTS,
     });
     const r = await resolveP2pPaymentRequest({ ...(await params()), targetWorkerId: "bob" });
