@@ -175,6 +175,21 @@ function defaultNewId(): string {
 }
 
 export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunResult> {
+  // The run signs with its own copy of the agent key (a caller that erases or
+  // mutates its buffer mid-run cannot change what signs), and erases that
+  // copy on every exit; the caller still owns and erases its own buffer.
+  const privateKey = new Uint8Array(input.agent.privateKey);
+  try {
+    return await runWithKey(input, privateKey);
+  } finally {
+    privateKey.fill(0);
+  }
+}
+
+async function runWithKey(
+  input: RepoTaskRunInput,
+  privateKey: Uint8Array,
+): Promise<RepoTaskRunResult> {
   const clock = input.clock ?? Date.now;
   const newId = input.newId ?? defaultNewId;
   const maxModelCalls = input.maxModelCalls ?? DEFAULT_MAX_MODEL_CALLS;
@@ -197,7 +212,7 @@ export async function runRepoTask(input: RepoTaskRunInput): Promise<RepoTaskRunR
   const agent: RepoTaskAgent = deepFreeze({
     motebitId: input.agent.motebitId,
     deviceId: input.agent.deviceId,
-    privateKey: new Uint8Array(input.agent.privateKey),
+    privateKey,
     publicKey: new Uint8Array(input.agent.publicKey),
   });
   const { scope, grant, tick } = authority;

@@ -273,6 +273,18 @@ const TAMPERS: TamperEntry[] = [
   ...["on success", "on a refusal after the key is unlocked", "on a thrown error"].map((t) =>
     entry(`erase: the key never erased (${t})`, `${ERASE} ${t}`, NO_ERASE),
   ),
+  // The runtime's own copy of the key (the CLI erases only its own buffer).
+  ...[
+    "after a completed run, the buffer that signed is all zeros; the caller's is untouched",
+    "after a run that throws mid-way, the buffer that signed is all zeros",
+  ].map((t) => ({
+    name: `erase: the runtime's key copy never erased (${t.split(",")[0]})`,
+    pkg: "@motebit/runtime",
+    test: "src/__tests__/repo-task-key-erasure.test.ts",
+    red: `repo task: the run's copy of the agent key is erased on every exit ${t}`,
+    only: true,
+    edits: [edit("packages/runtime/src/repo-task/run.ts", "    privateKey.fill(0);\n", "")],
+  })),
 ];
 
 void runTampers(TAMPERS, { root: ROOT });
