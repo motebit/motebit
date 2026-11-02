@@ -849,6 +849,76 @@ describe("repo-task run: every preflight rule refuses before the first model cal
     expect(fs.existsSync(path.join(mainWorktree, "out"))).toBe(false);
   });
 
+  it("an output directory inside the main worktree of a repository with a separate git dir", async () => {
+    const fx = await fixture();
+    const store = path.join(path.dirname(fx.repo), "store.git");
+    git(fx.repo, "init", "-q", `--separate-git-dir=${store}`);
+    git(fx.repo, "branch", "side");
+    git(fx.repo, "checkout", "-q", "side");
+    const wt = path.join(path.dirname(fx.repo), "wt-sep");
+    git(fx.repo, "worktree", "add", "-q", wt, "main");
+    const h = harness();
+    await expectRefusal(
+      h,
+      () =>
+        handleRepoTaskRun(args({ ...fx, repo: wt }, { output: path.join(fx.repo, "out") }), h.deps),
+      /inside the repository/,
+    );
+    expect(fs.existsSync(path.join(fx.repo, "out"))).toBe(false);
+  });
+
+  // A separate git directory sits under no worktree: only the git-directory
+  // check (by filesystem identity) stands between --output and its refs.
+  async function separateGitDir(): Promise<{ fx: Fixture; store: string }> {
+    const fx = await fixture();
+    const store = path.join(path.dirname(fx.repo), "store.git");
+    git(fx.repo, "init", "-q", `--separate-git-dir=${store}`);
+    return { fx, store };
+  }
+
+  it("an output directory inside a separate git directory", async () => {
+    const { fx, store } = await separateGitDir();
+    const heads = path.join(store, "refs", "heads");
+    const before = fs.readdirSync(heads).sort();
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { output: heads }), h.deps),
+      /inside the repository/,
+    );
+    expect(fs.readdirSync(heads).sort()).toEqual(before);
+  });
+
+  it("an output directory inside a separate git directory named by a case alias", async (ctx) => {
+    const { fx, store } = await separateGitDir();
+    if (!caseInsensitive(store)) ctx.skip();
+    const heads = path.join(store, "refs", "heads");
+    const before = fs.readdirSync(heads).sort();
+    const alias = path.join(path.dirname(store), "STORE.git", "refs", "heads");
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { output: alias }), h.deps),
+      /inside the repository/,
+    );
+    expect(fs.readdirSync(heads).sort()).toEqual(before);
+  });
+
+  it("an output directory inside a linked worktree moved without a repair", async () => {
+    const fx = await fixture();
+    const wt = path.join(path.dirname(fx.repo), "wt-old");
+    git(fx.repo, "worktree", "add", "-q", "-b", "side", wt);
+    const moved = path.join(path.dirname(fx.repo), "wt-moved");
+    fs.renameSync(wt, moved);
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { output: path.join(moved, "out") }), h.deps),
+      /inside the repository/,
+    );
+    expect(fs.existsSync(path.join(moved, "out"))).toBe(false);
+  });
+
   it("an output directory naming the repository by a case alias", async (ctx) => {
     const fx = await fixture();
     if (!caseInsensitive(fx.repo)) ctx.skip();

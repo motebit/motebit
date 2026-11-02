@@ -184,11 +184,7 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "output: a receipt directory inside the repository accepted",
     `${REFUSE} an output directory inside the repository`,
-    edit(
-      RUN,
-      "  if (forbidden.some((root) => isWithinEntry(outputDir, root))) {\n",
-      "  if ((false as boolean) && forbidden.some((root) => isWithinEntry(outputDir, root))) {\n",
-    ),
+    edit(RUN, "  if (inside !== null) {\n", "  if ((false as boolean) && inside !== null) {\n"),
   ),
   // ── preflight: the authority law before the key ────────────────────────
   ...["an expired tick", "a tick signature re-spelled in non-canonical base64url"].map((t) =>
@@ -290,24 +286,34 @@ const TAMPERS: TamperEntry[] = [
   ),
   entry(
     "output: inside-the-repository judged by spelling only (case alias)",
-    `${REFUSE} an output directory naming the repository by a case alias`,
+    `${REFUSE} an output directory inside a separate git directory named by a case alias`,
     edit(
       "apps/cli/src/repo-task/fs-identity.ts",
       "    if (fileIdentity(cur) === target) return true;\n",
       "    if (cur === path.resolve(parent)) return true;\n",
     ),
   ),
+  entry(
+    "output: the repository's git directories not forbidden",
+    `${REFUSE} an output directory inside a separate git directory`,
+    edit(
+      RUN,
+      "  if (isWithinEntry(outputDir, tipInfo.gitDir) || isWithinEntry(outputDir, tipInfo.commonDir)) {\n",
+      "  if ((false as boolean) && isWithinEntry(outputDir, tipInfo.gitDir)) {\n",
+    ),
+  ),
   ...[
-    "an output directory inside the common git directory of a linked worktree",
     "an output directory inside another worktree of the same repository",
+    "an output directory inside the main worktree of a repository with a separate git dir",
+    "an output directory inside a linked worktree moved without a repair",
   ].map((t) =>
     entry(
-      `output: only the worktree root is forbidden (${t.split(" inside ")[1]})`,
+      `output: another worktree of the repository not recognised (${t.split(" inside ")[1]})`,
       `${REFUSE} ${t}`,
       edit(
         RUN,
-        "  const forbidden = repositoryRoots(repoDir, tipInfo);\n",
-        "  const forbidden = [repoDir];\n",
+        "      if (isSameEntry(common, tipInfo.commonDir)) return `inside the repository's worktree ${cur}`;\n",
+        "",
       ),
     ),
   ),

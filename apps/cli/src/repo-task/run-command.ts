@@ -56,7 +56,7 @@ import type { FullConfig } from "../config.js";
 import { mkdirOwnerOnly } from "../durable-file.js";
 import type { ActiveSigningKey, LoadActiveSigningKeyOptions } from "../identity.js";
 import { agentKeyConfig, isDefaultConfigDir, readAgentIdentity } from "./agent-identity.js";
-import { isWithinEntry } from "./fs-identity.js";
+import { fileIdentity, isSameEntry, isWithinEntry } from "./fs-identity.js";
 import {
   buildRepoChangeRecord,
   bundlePath,
@@ -71,7 +71,7 @@ import type { HarnessCommit } from "./bundle.js";
 import { keySpellingFault, readDelegationDirectory } from "./delegation.js";
 import { createGitChangeStager } from "./git-change-stager.js";
 import { createGitTreeReader } from "./git-tree-reader.js";
-import { openIsolatedGit } from "./git.js";
+import { openIsolatedGit, resolveGitDirectories } from "./git.js";
 import {
   RepoTaskPreflightError,
   isGrantSpentAtTip,
@@ -135,30 +135,43 @@ function refuse(...lines: string[]): never {
 }
 
 /**
- * Every root the run must never write into: the worktree, its git directory,
- * the common git directory, the main worktree (the common directory's parent
- * when it is a `.git` directory) and each linked worktree listed under
- * `<common>/worktrees/*\/gitdir`. An entry that cannot be read names no root.
+ * `outputDir` lies in this repository: inside its git directory or its
+ * common git directory, or below a directory holding a `.git` entry whose
+ * common git directory is this repository's (by filesystem identity). That
+ * covers this worktree, the main worktree and every linked worktree without
+ * trusting git's worktree list, which a moved worktree or a separate git
+ * directory leaves incomplete. An ancestor `.git` that cannot be resolved
+ * might be this repository's, so it fails closed.
  */
-function repositoryRoots(repoDir: string, tipInfo: RepoTip): string[] {
-  const roots = [repoDir, tipInfo.gitDir, tipInfo.commonDir];
-  if (path.basename(tipInfo.commonDir) === ".git") roots.push(path.dirname(tipInfo.commonDir));
-  const listed = path.join(tipInfo.commonDir, "worktrees");
-  let names: string[] = [];
-  try {
-    names = fs.readdirSync(listed);
-  } catch {
-    names = [];
+function isInsideRepository(outputDir: string, tipInfo: RepoTip): string | null {
+  if (isWithinEntry(outputDir, tipInfo.gitDir) || isWithinEntry(outputDir, tipInfo.commonDir)) {
+    return "inside the repository's git directory";
   }
-  for (const name of names) {
-    try {
-      const gitdir = fs.readFileSync(path.join(listed, name, "gitdir"), "utf8").trim();
-      if (gitdir !== "") roots.push(path.dirname(path.resolve(listed, name, gitdir)));
-    } catch {
-      // a stale or unreadable entry names no worktree
+  let cur = path.resolve(outputDir);
+  for (;;) {
+    const dotGit = path.join(cur, ".git");
+    if (fileIdentity(dotGit) !== null || isSymlink(dotGit)) {
+      let common: string;
+      try {
+        common = resolveGitDirectories(dotGit).commonDir;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return `below ${cur}, whose .git cannot be resolved (${msg}), so it may be this repository`;
+      }
+      if (isSameEntry(common, tipInfo.commonDir)) return `inside the repository's worktree ${cur}`;
     }
+    const up = path.dirname(cur);
+    if (up === cur) return null;
+    cur = up;
   }
-  return roots;
+}
+
+function isSymlink(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -214,15 +227,10 @@ export async function runGovernedRepoTask(
   const { tip } = tipInfo;
   const outputDir = path.resolve(opts.outputDir ?? opts.delegationDir);
   // By filesystem identity, not spelling: a case alias of the repository is
-  // the repository. "The repository" is every place the run must never write:
-  // this worktree, its git directory and the common git directory (outside
-  // the worktree for a linked worktree or a separate git dir), and every
-  // other worktree of the same repository.
-  const forbidden = repositoryRoots(repoDir, tipInfo);
-  if (forbidden.some((root) => isWithinEntry(outputDir, root))) {
-    refuse(
-      `the output directory ${outputDir} is inside the repository (a worktree or a git directory): the run never writes it`,
-    );
+  // the repository, and every worktree of it is the repository.
+  const inside = isInsideRepository(outputDir, tipInfo);
+  if (inside !== null) {
+    refuse(`the output directory ${outputDir} is ${inside}: the run never writes the repository`);
   }
 
   const git = await openIsolatedGit({
