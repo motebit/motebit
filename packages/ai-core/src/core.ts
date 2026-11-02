@@ -251,7 +251,18 @@ function renderMemoryLine(mem: {
   return `  ${prefix}[from:${marker}] [confidence=${mem.confidence.toFixed(2)}] [MEMORY_DATA]${escapeMemoryContent(mem.content)}[/MEMORY_DATA]`;
 }
 
-export function packContext(contextPack: ContextPack): string {
+export function packContext(
+  contextPack: ContextPack,
+  opts?: {
+    /**
+     * Leave the `[User]` line out — for the system prompt, which must never
+     * carry the user's text. Omitting it here (rather than filtering lines
+     * that start with `[User]` afterwards) is what keeps the second and later
+     * lines of a multi-line message out of the system role too.
+     */
+    omitUserMessage?: boolean;
+  },
+): string {
   const parts: string[] = [];
 
   // Current state summary
@@ -335,7 +346,7 @@ export function packContext(contextPack: ContextPack): string {
   }
 
   // User message (omitted for activation — directive is in system prompt)
-  if (!contextPack.activationPrompt) {
+  if (!contextPack.activationPrompt && opts?.omitUserMessage !== true) {
     parts.push(`[User] ${contextPack.user_message}`);
   }
 

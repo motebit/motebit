@@ -1989,6 +1989,9 @@ importers:
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../sync-engine
+      '@motebit/verifier':
+        specifier: workspace:*
+        version: link:../verifier
     devDependencies:
       '@motebit/browser-persistence':
         specifier: workspace:*

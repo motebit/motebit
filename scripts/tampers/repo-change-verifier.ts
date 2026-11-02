@@ -15,6 +15,7 @@
  *
  *   npx tsx scripts/tampers/repo-change-verifier.ts
  */
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +27,8 @@ function escapeRegExp(text: string): string {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SRC = "packages/verifier/src/repo-change.ts";
+/** The shared rules `verifyRepoChange` calls (and the repo-task run calls too). */
+const RULES = "packages/verifier/src/repo-change-rules.ts";
 const TEST = "src/__tests__/repo-change.test.ts";
 
 const POS = "verifyRepoChange positive controls";
@@ -35,9 +38,15 @@ const AUT = "verifyRepoChange authority";
 const ENT = `${AUT} a change entry outside the scope`;
 const REV = "verifyRepoChange revocation";
 
-/** One edit to the verifier source. */
+/**
+ * One edit to the verifier source: in `repo-change.ts`, or in the shared
+ * rules module when the text lives there (the rules moved out of the core so
+ * the runtime runs the same implementation). The runner still requires the
+ * text to occur exactly once in the file chosen.
+ */
 function edit(from: string, to: string): TamperEdit {
-  return { file: SRC, from, to };
+  const inRules = readFileSync(path.join(ROOT, RULES), "utf8").includes(from);
+  return { file: inRules ? RULES : SRC, from, to };
 }
 
 /** Prefix a check's condition with `false &&`, so the check never fires. */
@@ -699,7 +708,7 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "authority: spent grant not checked (B5b)",
     `${AUT} B5b: a grant whose bundle already landed is spent`,
-    off("  if (input.spent)"),
+    off("  if (spent) {"),
   ),
   entry(
     "authority: absent delegated_scope accepted",
@@ -987,34 +996,34 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "revocation: caller's parse failures ignored",
     `${REV} a file that failed the caller's strict parse makes revocation unchecked`,
-    edit("    let malformed = revs.failures.length > 0;", "    let malformed = false as boolean;"),
+    edit("  let malformed = revs.failures.length > 0;", "  let malformed = false as boolean;"),
   ),
   entry(
     "revocation: caller's parse failures not reported",
     `${REV} a file that failed the caller's strict parse makes revocation unchecked`,
-    edit("    for (const f of revs.failures) fail(", "    for (const f of [] as string[]) fail("),
+    edit("  for (const f of revs.failures) fail(", "  for (const f of [] as string[]) fail("),
   ),
   entry(
     "revocation: strict shape not re-checked",
     `${REV} a revocation with a key the spec does not name makes revocation unchecked`,
-    edit("        isRevocationShape(r) &&\n", ""),
+    edit("      isRevocationShape(r) &&\n", ""),
   ),
   entry(
     "revocation: grant_id UUID not re-checked",
     `${REV} a revocation whose grant_id is not a lowercase UUID makes revocation unchecked`,
-    edit("        CANONICAL_UUID.test(r.grant_id) &&\n", ""),
+    edit("      CANONICAL_UUID.test(r.grant_id) &&\n", ""),
   ),
   entry(
     "revocation: canonical signature not re-checked",
     `${REV} a revocation with a re-spelled signature makes revocation unchecked`,
-    edit("        isCanonicalBase64Url(r.signature) &&\n", ""),
+    edit("      isCanonicalBase64Url(r.signature) &&\n", ""),
   ),
   entry(
     "revocation: signature not re-checked",
     `${REV} a revocation whose signature does not verify makes revocation unchecked`,
     edit(
-      "        isCanonicalBase64Url(r.signature) &&\n        (await verifyDelegationRevocation(r));",
-      "        isCanonicalBase64Url(r.signature);",
+      "      isCanonicalBase64Url(r.signature) &&\n      (await verifyDelegationRevocation(r));",
+      "      isCanonicalBase64Url(r.signature);",
     ),
   ),
   entry(

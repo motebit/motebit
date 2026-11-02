@@ -19,7 +19,7 @@ export { discoverModels } from "./model-catalog.js";
 export type { CatalogModel, ModelCatalog, DiscoverModelsParams } from "./model-catalog.js";
 
 // Loop: agentic turn execution (requires memory-graph → onnxruntime-node)
-export { runTurn, runTurnStreaming, projectProviderClearance } from "./loop.js";
+export { runTurn, runTurnStreaming, projectProviderClearance, wrapExternalData } from "./loop.js";
 // The live-state boundary clause — exported so evals outside ai-core can
 // assert the absorbed-content rule travels with the assembled prompt.
 export { PERCEPTION_DOCTRINE } from "./prompt.js";
@@ -29,6 +29,7 @@ export type {
   TurnLatency,
   TurnOptions,
   AgenticChunk,
+  ToolCallOutcome,
   LoopMemoryGovernor,
 } from "./loop.js";
 

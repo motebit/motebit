@@ -275,6 +275,18 @@ export interface StreamingDeps {
    */
   onToolInvocation?: (receipt: SignableToolInvocationReceipt) => void;
   /**
+   * Durable receipt sink (`ToolReceiptSink.append`, `tool-receipt-sink.ts`).
+   * Awaited for every receipt THIS manager signs (the streaming loop and the
+   * approval paths — not every tool path of the runtime; see
+   * `RuntimeConfig.toolReceiptSink`), in call order, BEFORE the turn moves
+   * on and before `onToolInvocation` fans out. Fail-closed: when it is
+   * wired, a rejection — or a receipt that cannot be signed (no key, a
+   * signing fault) — throws out of the turn, so the run never continues
+   * as though a receipt exists that was never durably recorded. Absent:
+   * the fire-and-forget `onToolInvocation` contract above is unchanged.
+   */
+  appendToolReceipt?: (receipt: SignableToolInvocationReceipt) => Promise<void>;
+  /**
    * Sink for a signed human-consent decision over a governance-gated tool call.
    * Fires once per FINAL approval verdict (single-approver, deny, or quorum-met)
    * at the resolution point in `resumeAfterApproval`, with the
@@ -477,9 +489,16 @@ export class StreamingManager {
    * - fires the voided callback so the OWNING surface renders the void
    *   (the new turn's surface gets the `approval_voided` chunk instead).
    *
+   * The voided call was never executed, so it gets a signed `denied`
+   * receipt whose result names the void (`VOIDED_BY_NEW_MESSAGE`). That is a
+   * record of what happened to the call, not a refusal: nothing enters the
+   * refusal brake (`deniedIntents` / `deniedToolsThisExchange`), so a "void is
+   * not a no" still holds for trust and memory — re-proposal re-prompts the
+   * human.
+   *
    * Returns the voided approval so the caller can emit the typed chunk.
    */
-  voidPendingApproval(): { toolName: string } | null {
+  async voidPendingApproval(): Promise<{ toolName: string } | null> {
     const voided = this._pendingApproval;
     if (!voided) return null;
     this._pendingApproval = null;
@@ -497,6 +516,16 @@ export class StreamingManager {
       },
     );
     this.approvalVoidedCallback?.(voided.toolName);
+    await this.emitToolInvocationReceipt({
+      invocation_id: voided.toolCallId,
+      task_id: voided.runId,
+      tool_name: voided.toolName,
+      args: voided.args,
+      result: "VOIDED_BY_NEW_MESSAGE",
+      started_at: voided.requestedAt,
+      completed_at: Date.now(),
+      status: "denied",
+    });
     return { toolName: voided.toolName };
   }
 
@@ -629,21 +658,28 @@ export class StreamingManager {
           }
           this.deps.pushStateUpdate({ processing: 0.6 });
           this.deps.logToolUsed(chunk.name, chunk.result);
-          // Per-tool-call signed receipt: match with the earlier
-          // "calling" snapshot by tool_call_id, compose, sign, fire
-          // the invocation sink. Fail-closed at every branch — no
-          // unsigned or half-composed artifact leaves the runtime.
+          // Per-tool-call signed receipt with the call's REAL status
+          // (`chunk.outcome`, set by ai-core on every done chunk):
+          // completed / failed (threw or `ok:false`) / denied (refused
+          // before execution — no "calling" chunk preceded it, so the
+          // args and decision time ride the done chunk). A done chunk
+          // with no outcome gets no receipt: the signer never guesses a
+          // status. Fail-closed at every branch — no unsigned or
+          // half-composed artifact leaves the runtime.
           if (typeof chunk.tool_call_id === "string") {
             const pending = pendingToolCalls.get(chunk.tool_call_id);
+            if (pending) pendingToolCalls.delete(chunk.tool_call_id);
+            const args = pending?.args ?? chunk.args;
+            const startedAt = pending?.startedAt ?? chunk.started_at;
+            const completedAt = Date.now();
+            // Fire the ephemeral activity channel FIRST for a call that was
+            // dispatched — slab items in virtual_browser mode respond to
+            // this immediately; the signed receipt follows microseconds
+            // later. Each sink is independent and fail-closed, so activity
+            // is NOT evidence of signing: a surface that renders a "signed"
+            // claim triggers on the receipt sink. A refused call was never
+            // dispatched, so it has no activity, only its `denied` receipt.
             if (pending) {
-              pendingToolCalls.delete(chunk.tool_call_id);
-              const completedAt = Date.now();
-              // Fire the ephemeral activity channel FIRST — slab
-              // items in virtual_browser mode respond to this
-              // immediately; the signed receipt follows microseconds
-              // later. Each sink is independent and fail-closed, so
-              // activity is NOT evidence of signing: a surface that
-              // renders a "signed" claim triggers on the receipt sink.
               this.fireToolActivity({
                 invocation_id: chunk.tool_call_id,
                 task_id: runId,
@@ -653,14 +689,21 @@ export class StreamingManager {
                 started_at: pending.startedAt,
                 completed_at: completedAt,
               });
+            }
+            if (
+              chunk.outcome !== undefined &&
+              args !== undefined &&
+              typeof startedAt === "number"
+            ) {
               await this.emitToolInvocationReceipt({
                 invocation_id: chunk.tool_call_id,
                 task_id: runId,
                 tool_name: chunk.name,
-                args: pending.args,
+                args,
                 result: chunk.result,
-                started_at: pending.startedAt,
+                started_at: startedAt,
                 completed_at: completedAt,
+                status: chunk.outcome,
               });
             }
           }
@@ -773,6 +816,18 @@ export class StreamingManager {
             })}]`,
           },
         );
+        // The suppressed re-proposal is a refusal: it gets its `denied`
+        // receipt like every other refused call.
+        await this.emitToolInvocationReceipt({
+          invocation_id: chunk.tool_call_id,
+          task_id: runId,
+          tool_name: chunk.name,
+          args: chunk.args,
+          result: "REFUSED_BY_HUMAN_ALREADY",
+          started_at: Date.now(),
+          completed_at: Date.now(),
+          status: "denied",
+        });
         yield {
           type: "text" as const,
           text: `\n[refused already — not asking again: ${chunk.name}]\n`,
@@ -806,6 +861,16 @@ export class StreamingManager {
             })}]`,
           },
         );
+        await this.emitToolInvocationReceipt({
+          invocation_id: chunk.tool_call_id,
+          task_id: runId,
+          tool_name: chunk.name,
+          args: chunk.args,
+          result: "REFUSED_BY_HUMAN_THIS_EXCHANGE",
+          started_at: Date.now(),
+          completed_at: Date.now(),
+          status: "denied",
+        });
         yield {
           type: "text" as const,
           text: `\n[you already declined ${chunk.name} this turn — not asking again]\n`,
@@ -815,6 +880,22 @@ export class StreamingManager {
 
       // Approval request: capture pending state and start timeout
       if (chunk.type === "approval_request") {
+        // One pause at a time: a later approval request in the same response
+        // supersedes an earlier one, which is then never executed — so it
+        // gets its `denied` receipt here, naming why, instead of vanishing.
+        const superseded = this._pendingApproval;
+        if (superseded) {
+          await this.emitToolInvocationReceipt({
+            invocation_id: superseded.toolCallId,
+            task_id: superseded.runId,
+            tool_name: superseded.toolName,
+            args: superseded.args,
+            result: "SUPERSEDED_BY_A_LATER_APPROVAL_REQUEST",
+            started_at: superseded.requestedAt,
+            completed_at: Date.now(),
+            status: "denied",
+          });
+        }
         this._pendingApproval = {
           toolCallId: chunk.tool_call_id,
           toolName: chunk.name,
@@ -982,11 +1063,23 @@ export class StreamingManager {
           principal.foreign &&
           toolRegistry.list().some((t) => t.name === pending.toolName && t.localOnly === true)
         ) {
+          const refusal = `Tool "${pending.toolName}" acts for this motebit's owner and is not available to another principal's task`;
+          await this.emitToolInvocationReceipt({
+            invocation_id: pending.toolCallId,
+            task_id: pending.runId,
+            tool_name: pending.toolName,
+            args: pending.args,
+            result: refusal,
+            started_at: pending.requestedAt,
+            completed_at: Date.now(),
+            status: "denied",
+          });
           yield {
             type: "tool_status" as const,
             name: pending.toolName,
             status: "done" as const,
-            result: `Tool "${pending.toolName}" acts for this motebit's owner and is not available to another principal's task`,
+            outcome: "denied" as const,
+            result: refusal,
           };
           this.deps.discardPausedMoneyCalls?.();
           return;
@@ -1027,6 +1120,17 @@ export class StreamingManager {
             args: pending.args,
             ok: false,
             durationMs: Date.now() - dispatchedAt,
+          });
+          // The approved call ran and threw: its receipt says `failed`.
+          await this.emitToolInvocationReceipt({
+            invocation_id: pending.toolCallId,
+            task_id: pending.runId,
+            tool_name: pending.toolName,
+            args: pending.args,
+            result: err instanceof Error ? err.message : String(err),
+            started_at: dispatchedAt,
+            completed_at: Date.now(),
+            status: "failed",
           });
           throw err;
         }
@@ -1087,10 +1191,23 @@ export class StreamingManager {
           }
         }
 
+        // The approved call's own receipt — this path executes outside the
+        // loop, so it signs here, with the handler's verdict as status.
+        await this.emitToolInvocationReceipt({
+          invocation_id: pending.toolCallId,
+          task_id: pending.runId,
+          tool_name: pending.toolName,
+          args: pending.args,
+          result: sanitized.data ?? sanitized.error,
+          started_at: dispatchedAt,
+          completed_at: Date.now(),
+          status: result.ok ? "completed" : "failed",
+        });
         yield {
           type: "tool_status" as const,
           name: pending.toolName,
           status: "done" as const,
+          outcome: result.ok ? ("completed" as const) : ("failed" as const),
           result: sanitized.data ?? sanitized.error,
         };
         this.deps.logToolUsed(pending.toolName, sanitized.data ?? sanitized.error);
@@ -1106,6 +1223,19 @@ export class StreamingManager {
       } else {
         // The human refused: the paused money call can never be minted for.
         this.deps.discardPausedMoneyCalls?.();
+        // The refused call's `denied` receipt (the approver's signed
+        // ApprovalDecision above is the consent artifact; this is the
+        // agent's record of the call it did not make).
+        await this.emitToolInvocationReceipt({
+          invocation_id: pending.toolCallId,
+          task_id: pending.runId,
+          tool_name: pending.toolName,
+          args: pending.args,
+          result: "REFUSED_BY_HUMAN",
+          started_at: pending.requestedAt,
+          completed_at: Date.now(),
+          status: "denied",
+        });
         // Record the refusal BEFORE the continuation turn runs, so a
         // re-proposal of this exact intent is short-circuited rather than
         // re-prompting the human (#433).
@@ -1329,6 +1459,23 @@ export class StreamingManager {
       }
       this.deps.pushStateUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
+      // The expired call is a refusal: its `denied` receipt. The timer fires
+      // outside any turn, so there is no run to abort — a durable-sink
+      // rejection here is logged, never swallowed silently.
+      this.emitToolInvocationReceipt({
+        invocation_id: expired.toolCallId,
+        task_id: expired.runId,
+        tool_name: expired.toolName,
+        args: expired.args,
+        result: `Approval timed out after ${this.deps.approvalTimeoutMs}ms`,
+        started_at: expired.requestedAt,
+        completed_at: Date.now(),
+        status: "denied",
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console -- an expired call's receipt was not recorded
+        console.warn(`[streaming] expired-approval receipt not recorded: ${msg}`);
+      });
       this.approvalExpiredCallback?.();
     }, this.deps.approvalTimeoutMs);
   }
@@ -1360,16 +1507,22 @@ export class StreamingManager {
   }
 
   /**
-   * Compose and sign a `ToolInvocationReceipt` for one matched
-   * calling→done pair, then deliver it to the invocation sink.
+   * Compose and sign a `ToolInvocationReceipt` for one terminal tool call,
+   * with its real `status`, then deliver it: the durable sink first
+   * (awaited), then the fire-and-forget invocation sink.
    *
-   * Fail-closed at every dependency boundary:
+   * Without a durable sink (`appendToolReceipt`), fail-closed means
+   * silence, as before:
    *   - no `onToolInvocation` sink → drop silently (consumer opted out)
    *   - no device_id, private key, or motebit_id → drop silently (key
    *     not yet unlocked, or this deps shape predates the hook)
    *   - signing throws → log a warning and drop (never leak partial)
    *   - sink throws → log and swallow (receipt is delivered; the
    *     consumer's handler fault is theirs)
+   *
+   * With a durable sink, fail-closed means the turn stops: a missing key,
+   * a signing fault or a sink rejection throws, so nothing downstream runs
+   * as though the receipt exists.
    *
    * Hashing is via `hashToolPayload` (JCS canonical + SHA-256) on the
    * args and on the result bytes that will actually ship to the UI —
@@ -1385,14 +1538,24 @@ export class StreamingManager {
     result: unknown;
     started_at: number;
     completed_at: number;
+    status: SignableToolInvocationReceipt["status"];
   }): Promise<void> {
     const sink = this.deps.onToolInvocation;
-    if (!sink) return;
+    const durable = this.deps.appendToolReceipt;
+    if (!sink && !durable) return;
     const deviceId = this.deps.getDeviceId?.() ?? null;
     const privateKey = this.deps.getSigningPrivateKey?.() ?? null;
     const publicKey = this.deps.getSigningPublicKey?.() ?? null;
-    if (!deviceId || !privateKey || !this.deps.motebitId) return;
+    if (!deviceId || !privateKey || !this.deps.motebitId) {
+      if (durable) {
+        throw new Error(
+          `tool receipt for ${params.tool_name} cannot be signed (no signing identity); the durable receipt sink requires one`,
+        );
+      }
+      return;
+    }
 
+    let signed: SignableToolInvocationReceipt;
     try {
       const argsHash = await hashToolPayload(params.args);
       const resultHash = await hashToolPayload(params.result === undefined ? null : params.result);
@@ -1404,15 +1567,27 @@ export class StreamingManager {
         tool_name: params.tool_name,
         started_at: params.started_at,
         completed_at: params.completed_at,
-        // status is "completed" for any tool that yielded a "done" chunk;
-        // finer-grained discrimination (failed / denied) lands when
-        // ai-core threads an explicit status through the chunk shape.
-        status: "completed",
+        status: params.status,
         args_hash: argsHash,
         result_hash: resultHash,
         invocation_origin: "ai-loop",
       };
-      const signed = await signToolInvocationReceipt(unsigned, privateKey, publicKey ?? undefined);
+      signed = await signToolInvocationReceipt(unsigned, privateKey, publicKey ?? undefined);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (durable) {
+        throw new Error(`tool receipt for ${params.tool_name} could not be signed: ${msg}`, {
+          cause: err,
+        });
+      }
+      // Signing failure: no partial artifact leaks. Log and drop.
+      // eslint-disable-next-line no-console -- diagnostic on sign fault
+      console.warn(`[streaming] tool-invocation-receipt sign failed: ${msg}`);
+      return;
+    }
+    // Durable first, awaited: a rejection propagates and stops the turn.
+    if (durable) await durable(signed);
+    if (sink) {
       try {
         sink(signed);
       } catch (err) {
@@ -1422,11 +1597,6 @@ export class StreamingManager {
         // eslint-disable-next-line no-console -- diagnostic on consumer fault
         console.warn(`[streaming] onToolInvocation sink threw: ${msg}`);
       }
-    } catch (err) {
-      // Signing failure: no partial artifact leaks. Log and drop.
-      const msg = err instanceof Error ? err.message : String(err);
-      // eslint-disable-next-line no-console -- diagnostic on sign fault
-      console.warn(`[streaming] tool-invocation-receipt sign failed: ${msg}`);
     }
   }
 }

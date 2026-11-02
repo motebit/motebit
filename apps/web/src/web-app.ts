@@ -1299,10 +1299,11 @@ export class UnbootedWebApp {
       this.applyChromeToCurrentState();
     });
 
-    // chrome-1c — animate the mark on every signed receipt. The
-    // pulse is a "this was signed" claim, so it is driven by the
-    // receipts bus (fires only after a receipt is actually signed;
-    // signing is fail-closed). The activity bus fires before signing
+    // chrome-1c — animate the mark on every completed signed receipt
+    // (a receipt whose status is "failed" or "denied" never pulses).
+    // The pulse is a "this was done and signed" claim, so it is driven
+    // by the receipts bus (fires only after a receipt is actually
+    // signed; signing is fail-closed). The activity bus fires before signing
     // and only supplies the raw `args` needed to discriminate
     // `computer({kind: "screenshot"})` from `computer({kind: "click"})`
     // — the receipt carries `args_hash`. `wireReceiptSignPulse` joins

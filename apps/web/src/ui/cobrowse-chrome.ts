@@ -1358,13 +1358,18 @@ export interface ReceiptPulseActivity {
 export interface ReceiptPulseReceipt {
   invocation_id: string;
   tool_name: string;
+  /** The call's real terminal status, as signed. Only `completed` pulses. */
+  status: "completed" | "failed" | "denied";
 }
 
 /**
  * Wire the chrome-1c receipt-sign pulse to the runtime's buses.
- * `onSigned` is the pulse — it fires once per tool call whose
- * receipt was actually signed, never for an act that was only
- * attempted. Returns an unsubscribe thunk.
+ * `onSigned` is the pulse — it fires once per tool call that COMPLETED
+ * and whose receipt was actually signed: never for an act that was only
+ * attempted, and never for one whose signed receipt says it `failed`
+ * or was `denied` (every call now gets a receipt with its real status,
+ * so "a receipt arrived" no longer means "the act happened"). Returns
+ * an unsubscribe thunk.
  */
 export function wireReceiptSignPulse(
   buses: {
@@ -1389,6 +1394,7 @@ export function wireReceiptSignPulse(
   const offReceipts = buses.subscribeToolInvocations((receipt) => {
     const args = argsByInvocation.get(receipt.invocation_id);
     argsByInvocation.delete(receipt.invocation_id);
+    if (receipt.status !== "completed") return;
     onSigned(receipt.tool_name, args);
   });
   return () => {

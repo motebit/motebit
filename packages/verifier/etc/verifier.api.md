@@ -92,6 +92,38 @@ export { ArtifactType }
 
 export { AuthorityVerdict }
 
+// @public
+export function checkRepoChangeGrantShape(grant: StandingDelegation, tick: DelegationToken, fail: RepoChangeRuleSink): Set<RepoChangeTool> | null;
+
+// @public
+export function checkRepoChangeParties(grant: StandingDelegation, pins: RepoChangePins, fail: RepoChangeRuleSink): void;
+
+// @public
+export function checkRepoChangeRevocationSet(grant: Pick<StandingDelegation, "grant_id" | "delegator_public_key">, revs: {
+    readonly set: readonly DelegationRevocation[];
+    readonly failures: readonly string[];
+}, fail: RepoChangeRuleSink): Promise<{
+    binding: DelegationRevocation | null;
+    malformed: boolean;
+}>;
+
+// @public
+export function checkRepoChangeSpent(spent: boolean, fail: RepoChangeRuleSink): void;
+
+// @public
+export function checkRepoChangeTickStructure(grant: StandingDelegation, tick: DelegationToken, fail: RepoChangeRuleSink): void;
+
+// @public
+export function checkRepoChangeWindow(input: {
+    readonly grant: StandingDelegation;
+    readonly tick: DelegationToken;
+    readonly now: number | null;
+    readonly wallClock: Pick<VerificationVerdict, "authority"> | null;
+    readonly failures: readonly {
+        readonly code: RepoChangeRepairCode;
+    }[];
+}, fail: RepoChangeRuleSink): void;
+
 export { costAttestationDigest }
 
 export { CostAttestationV1 }
@@ -137,11 +169,35 @@ export { InvoiceV1 }
 
 export { InvoiceVerdict }
 
+// @public
+export function isCanonicalBase64Url(s: string): boolean;
+
+// @public
+export function isCanonicalRepoPath(p: string): boolean;
+
 export { isFullyVerified }
+
+// @public
+export function isRepoChangeGrantShape(v: unknown): v is StandingDelegation;
+
+// @public
+export function isRepoChangeTickShape(v: unknown): v is DelegationToken;
+
+// @public
+export function isRepoTaskScopeShape(v: unknown): v is RepoTaskScope;
+
+// @public
+export function parseRepoChangeTools(scope: string): Set<RepoChangeTool> | null;
 
 export { ProjectionClass }
 
 export { RepairInstruction }
+
+// @public
+export function repoChangeAuthorityWindow(grant: StandingDelegation, tick: DelegationToken): {
+    grantStart: number;
+    tickStart: number;
+};
 
 export { RepoChangeBundle }
 
@@ -216,6 +272,9 @@ export interface RepoChangeRevocationSet {
     readonly set: readonly DelegationRevocation[];
 }
 
+// @public
+export type RepoChangeRuleSink = (code: RepoChangeRepairCode, detail: string) => void;
+
 export { RepoChangeTool }
 
 export { RepoChangeToolInvocationReceipt }
@@ -227,6 +286,15 @@ export interface RepoChangeVerification {
     readonly outcome: "completed" | "failed" | "denied" | null;
     readonly verdict: VerificationVerdict;
 }
+
+// @public
+export function repoPathCaseCollision(p: string, index: ReadonlyMap<string, ReadonlySet<string>>): string | null;
+
+// @public
+export function repoPathCaseIndex(paths: Iterable<string>): Map<string, Set<string>>;
+
+// @public
+export function repoPathPrefixConflict(p: string, trackedNonTree: ReadonlySet<string>, allowed: Iterable<string>): string | null;
 
 export { RepoTaskScope }
 

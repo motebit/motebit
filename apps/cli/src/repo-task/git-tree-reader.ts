@@ -1,0 +1,83 @@
+/**
+ * Node adapter for the repo-task run's `RepoTreeReader` port
+ * (`@motebit/runtime`, packages/runtime/src/repo-task/tools.ts).
+ *
+ * Reads the tip commit's tree through git — `git ls-tree` for the entry at
+ * one exact path, `git cat-file blob` for its bytes — and never the working
+ * tree: a file the agent wrote, an untracked file, or anything outside the
+ * repository is invisible to it. The refusal logic (untracked, symlink,
+ * gitlink, tree, out-of-tree spellings) is the runtime handler's; this
+ * adapter only reports what git records.
+ *
+ * Git runs in an isolated session (`git.ts`): never the repository's own
+ * config, no system or global config, no replace objects, literal
+ * pathspecs — so no config file, replace ref or glob can change what a path
+ * names. Not wired to any command yet: `motebit repo-task run` (build step 4)
+ * constructs it after its preflight pins the tip.
+ */
+import type { RepoTreeEntry, RepoTreeReader } from "@motebit/runtime";
+
+import { OID } from "./git.js";
+import type { IsolatedGit } from "./git.js";
+
+export interface GitTreeReaderOptions {
+  /** The isolated git session on the repository (`openIsolatedGit`): its config is never read. */
+  readonly git: IsolatedGit;
+  /** The tip commit, as a full lowercase object id (pinned by the preflight). */
+  readonly tip: string;
+}
+
+function kindOf(mode: string, type: string): RepoTreeEntry["kind"] | null {
+  if (type === "blob" && (mode === "100644" || mode === "100755")) return "blob";
+  if (type === "blob" && mode === "120000") return "symlink";
+  if (type === "commit" && mode === "160000") return "gitlink";
+  if (type === "tree" && mode === "040000") return "tree";
+  return null;
+}
+
+export function createGitTreeReader(opts: GitTreeReaderOptions): RepoTreeReader {
+  if (!OID.test(opts.tip))
+    throw new Error("git tree reader: tip must be a full lowercase object id");
+  const { git, tip } = opts;
+  return {
+    async lookup(path: string): Promise<RepoTreeEntry | null> {
+      if (path.length === 0 || path.includes("\0")) return null;
+      // `-z`: NUL-terminated records, paths unquoted. `--full-tree`: paths are
+      // repository-relative whatever the working directory.
+      const out = await git.run(["ls-tree", "-z", "--full-tree", tip, "--", path]);
+      const want = Buffer.from(path, "utf8");
+      for (const rec of out.toString("latin1").split("\0")) {
+        if (rec.length === 0) continue;
+        const tab = rec.indexOf("\t");
+        if (tab < 0) continue;
+        const [mode, type, oid] = rec.slice(0, tab).split(" ");
+        // Compare git's own path bytes with the requested bytes, exactly.
+        const got = Buffer.from(rec.slice(tab + 1), "latin1");
+        if (!got.equals(want) || mode === undefined || type === undefined || oid === undefined)
+          continue;
+        const kind = kindOf(mode, type);
+        if (kind === null || !OID.test(oid)) return null;
+        return { kind, mode, oid };
+      }
+      return null;
+    },
+    async readBlob(oid: string): Promise<Uint8Array> {
+      if (!OID.test(oid)) throw new Error("git tree reader: not an object id");
+      const bytes = await git.run(["cat-file", "blob", oid]);
+      return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    },
+    async listTrackedPaths(): Promise<readonly Uint8Array[]> {
+      // Every path of the tip's tree, recursively, as git's own bytes
+      // (`-z`: NUL-separated, never quoted or re-encoded).
+      const out = await git.run(["ls-tree", "-r", "-z", "--full-tree", "--name-only", tip]);
+      const paths: Uint8Array[] = [];
+      let start = 0;
+      for (let i = 0; i < out.length; i++) {
+        if (out[i] !== 0) continue;
+        if (i > start) paths.push(new Uint8Array(out.subarray(start, i)));
+        start = i + 1;
+      }
+      return paths;
+    },
+  };
+}
