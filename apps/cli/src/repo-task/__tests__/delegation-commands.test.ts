@@ -10,12 +10,22 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bytesToHex, deriveSovereignMotebitId, generateKeypair } from "@motebit/encryption";
+import {
+  bytesToHex,
+  canonicalJson,
+  deriveSovereignMotebitId,
+  generateKeypair,
+} from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import type { RepoTaskPin } from "@motebit/runtime";
 
 import { parseCliArgs } from "../../args.js";
 import type { FullConfig } from "../../config.js";
+import {
+  RepoTaskDelegationRefusedError,
+  delegateToDirectory,
+  revokeToDirectory,
+} from "../delegation.js";
 import { handleRepoTaskDelegate, handleRepoTaskRevoke } from "../../subcommands/repo-task.js";
 import type { RepoTaskCommandDeps } from "../../subcommands/repo-task.js";
 
@@ -49,7 +59,17 @@ afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-function deps(over: { principal?: Party; delegate?: RepoTaskPin } = {}): RepoTaskCommandDeps {
+/** A refusal met only once the key is held (as the post-sign self-check would). */
+const postKeyRefusal = () =>
+  Promise.reject(
+    new RepoTaskDelegationRefusedError([
+      { code: "integrity.repo_change.signature_invalid", detail: "injected" },
+    ]),
+  );
+
+function deps(
+  over: { principal?: Party; delegate?: RepoTaskPin; refuseAfterKey?: boolean } = {},
+): RepoTaskCommandDeps {
   const p = over.principal ?? f;
   return {
     loadFullConfig: () =>
@@ -67,6 +87,8 @@ function deps(over: { principal?: Party; delegate?: RepoTaskPin } = {}): RepoTas
       key.fill(0);
     },
     readAgentPin: () => Promise.resolve(over.delegate ?? a.pin),
+    delegateToDirectory: over.refuseAfterKey ? postKeyRefusal : delegateToDirectory,
+    revokeToDirectory: over.refuseAfterKey ? postKeyRefusal : revokeToDirectory,
     exit: (code) => {
       events.push(`exit ${code}`);
       throw new ExitCalled();
@@ -120,18 +142,65 @@ describe(DELEGATE, () => {
   it("a --base-ref other than main", async () => {
     await refusesBeforeKey(delegateArgs("--base-ref", "dev"));
   });
+  it("a delegate key in another spelling", async () => {
+    const upper = { ...a.pin, public_key: a.pin.public_key.toUpperCase() };
+    await refusesBeforeKey(delegateArgs(), deps({ delegate: upper }));
+  });
+});
+
+const REVOKE = "repo-task revoke: a delegation the principal did not sign never unlocks the key";
+
+describe(REVOKE, () => {
+  const out = () => path.join(tmp, "out");
+  const rewrite = (
+    name: string,
+    change: (v: Record<string, unknown>) => Record<string, unknown>,
+  ) => {
+    const file = path.join(out(), name);
+    fs.writeFileSync(file, canonicalJson(change(JSON.parse(fs.readFileSync(file, "utf8")))));
+  };
+  const refusesBeforeKey = async () => {
+    events = [];
+    const revoke = parseCliArgs(["repo-task", "revoke", out()]);
+    await expect(handleRepoTaskRevoke(revoke, deps())).rejects.toBeInstanceOf(ExitCalled);
+    expect(events).toEqual(["exit 1"]);
+    expect(fs.readdirSync(out()).sort()).toEqual(["grant.json", "scope.json", "tick.json"]);
+  };
+
+  it("a forged grant_id (the grant's signature fails)", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
+    rewrite("grant.json", (g) => ({ ...g, grant_id: "01a19a05-7e29-789d-8c54-cbf64a01a088" }));
+    await refusesBeforeKey();
+  });
+  it("a malformed tick", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
+    rewrite("tick.json", ({ grant_id: _dropped, ...t }) => t);
+    await refusesBeforeKey();
+  });
+  it("a scope that is not the bound one", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
+    rewrite("scope.json", (sc) => ({ ...sc, task: "something else" }));
+    await refusesBeforeKey();
+  });
 });
 
 describe("repo-task delegate and revoke: the key is erased before any exit", () => {
   it("a refusal after the key is unlocked erases it first", async () => {
-    // A delegate key in another spelling passes the key-free checks; the
-    // signer refuses it once the key is held.
-    const upper = { ...a.pin, public_key: a.pin.public_key.toUpperCase() };
     await expect(
-      handleRepoTaskDelegate(delegateArgs(), deps({ delegate: upper })),
+      handleRepoTaskDelegate(delegateArgs(), deps({ refuseAfterKey: true })),
     ).rejects.toBeInstanceOf(ExitCalled);
     expect(events).toEqual(["load", "erase", "exit 1"]);
     expect(fs.existsSync(path.join(tmp, "out"))).toBe(false);
+  });
+
+  it("a revoke refused after the key is unlocked erases it first", async () => {
+    await handleRepoTaskDelegate(delegateArgs(), deps());
+    events = [];
+    const revoke = parseCliArgs(["repo-task", "revoke", path.join(tmp, "out")]);
+    await expect(
+      handleRepoTaskRevoke(revoke, deps({ refuseAfterKey: true })),
+    ).rejects.toBeInstanceOf(ExitCalled);
+    expect(events).toEqual(["load", "erase", "exit 1"]);
   });
 
   it("a delegation that verifies is written and the key erased", async () => {

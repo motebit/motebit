@@ -29,6 +29,12 @@ const REV2 = "repo-task revoke: only a grant the principal signed, read from its
 const FILES = "repo-task files: owner-only, exclusive, all or nothing";
 const PRE = "repo-task delegate: a refusal that needs no key never unlocks it";
 const ERASE = "repo-task delegate and revoke: the key is erased before any exit";
+const PRE_REV = "repo-task revoke: a delegation the principal did not sign never unlocks the key";
+const NO_REVOKE_PRECHECK = {
+  file: "apps/cli/src/subcommands/repo-task.ts",
+  from: '    if (pre.length > 0) {\n      refuse(\n        ["Refused before signing — this is not a delegation',
+  to: '    if ((false as boolean) && pre.length > 0) {\n      refuse(\n        ["Refused before signing — this is not a delegation',
+};
 
 const edit = (from: string, to: string, file = MINT): TamperEdit => ({ file, from, to });
 const entry = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry => ({
@@ -232,6 +238,39 @@ const TAMPERS: TamperEntry[] = [
     "erase: the key is never erased",
     `${ERASE} a delegation that verifies is written and the key erased`,
     edit("    deps.secureErase(active.privateKey);\n", "    void active;\n", CMD),
+  ),
+  // ── cold review round 2 ───────────────────────────────────────────────
+  command(
+    "precheck: no delegate-key spelling rule before the key",
+    `${PRE} a delegate key in another spelling`,
+    edit(
+      "  const keyFault = await delegateKeyFault(req.delegate);\n  if (keyFault !== null) refuse(keyFault);\n",
+      "",
+    ),
+  ),
+  command(
+    "revoke precheck: a forged grant reaches the key",
+    `${PRE_REV} a forged grant_id (the grant's signature fails)`,
+    NO_REVOKE_PRECHECK,
+  ),
+  command(
+    "revoke precheck: a malformed tick reaches the key",
+    `${PRE_REV} a malformed tick`,
+    NO_REVOKE_PRECHECK,
+  ),
+  command(
+    "revoke precheck: an unbound scope reaches the key",
+    `${PRE_REV} a scope that is not the bound one`,
+    NO_REVOKE_PRECHECK,
+  ),
+  command(
+    "erase: a revoke exits on a post-key refusal before the key is erased",
+    `${ERASE} a revoke refused after the key is unlocked erases it first`,
+    edit(
+      "    if (err instanceof RepoTaskDelegationRefusedError) {\n      throw new RepoTaskCliRefusal(",
+      "    if (err instanceof RepoTaskDelegationRefusedError) {\n      (deps.exit as (code: number) => void)(1);\n      throw new RepoTaskCliRefusal(",
+      CMD,
+    ),
   ),
 ];
 

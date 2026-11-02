@@ -27,7 +27,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import {
+  bytesToHex,
   canonicalJsonForSigning,
+  generateKeypair,
+  secureErase,
   canonicalSha256,
   signDelegation,
   signDelegationRevocation,
@@ -189,10 +192,10 @@ function windowOpens(d: RepoTaskDelegation): number {
  * own predicate (`@motebit/verifier`'s shared repo-change rules); the
  * post-sign self-check in `mintRepoTaskDelegation` stays the authority.
  */
-export function precheckRepoTaskDelegation(
+export async function precheckRepoTaskDelegation(
   req: Omit<RepoTaskDelegationRequest, "principal">,
   principal: RepoTaskPin,
-): RepoTaskRefusal[] {
+): Promise<RepoTaskRefusal[]> {
   const out: RepoTaskRefusal[] = [];
   const refuse = (detail: string): void => {
     out.push({ code: "precheck", detail });
@@ -224,7 +227,62 @@ export function precheckRepoTaskDelegation(
   ) {
     refuse("the delegate is this motebit: a principal cannot delegate to itself");
   }
+  const keyFault = await delegateKeyFault(req.delegate);
+  if (keyFault !== null) refuse(keyFault);
   return out;
+}
+
+/**
+ * The delegate key's one spelling (standing-delegation-v1 §5), judged by the
+ * signer's own rule without the principal's key: sign a throwaway token naming
+ * the delegate under an ephemeral key generated here and erased at once. The
+ * signer refuses a non-canonical party key before it signs, so a refusal here
+ * is exactly the refusal the real mint would meet. `null` when canonical.
+ */
+async function delegateKeyFault(delegate: RepoTaskPin): Promise<string | null> {
+  const probe = await generateKeypair();
+  try {
+    await signDelegation(
+      {
+        delegator_id: "repo-task-precheck",
+        delegator_public_key: bytesToHex(probe.publicKey),
+        delegate_id: delegate.motebit_id,
+        delegate_public_key: delegate.public_key,
+        scope: ALL_REPO_CHANGE_TOOLS.join(","),
+        issued_at: 0,
+        expires_at: 1,
+      },
+      probe.privateKey,
+    );
+    return null;
+  } catch (err) {
+    return `the delegate's key: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    secureErase(probe.privateKey);
+  }
+}
+
+/**
+ * The integrity of a delegation read from disk, judged BEFORE the principal's
+ * key is unlocked: the run's authority law over the scope, grant and tick
+ * (strict shapes, canonical values, the grant's and the tick's signatures, the
+ * subject binding) needs no private key. Only its integrity axis is kept — a
+ * revocation may revoke an expired grant. The post-sign self-check in
+ * `mintRepoTaskRevocation` stays the authority.
+ */
+export async function precheckRepoTaskRevocation(
+  delegation: RepoTaskDelegation,
+  principal: RepoTaskPin,
+  now: number,
+): Promise<RepoTaskRefusal[]> {
+  const { grant } = delegation;
+  const delegate = { motebit_id: grant.delegate_id, public_key: grant.delegate_public_key };
+  const check = await checkRepoTaskAuthority(
+    selfCheckBundle(delegation, principal, delegate, []),
+    delegate,
+    now,
+  );
+  return check.ok ? [] : check.failures.filter((f) => f.code.startsWith("integrity."));
 }
 
 function buildScope(req: Omit<RepoTaskDelegationRequest, "principal">): RepoTaskScope {

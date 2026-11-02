@@ -32,6 +32,7 @@ import {
   RepoTaskDelegationRefusedError,
   delegateToDirectory,
   precheckRepoTaskDelegation,
+  precheckRepoTaskRevocation,
   readDelegationDirectory,
   revokeToDirectory,
 } from "../repo-task/delegation.js";
@@ -66,6 +67,9 @@ export interface RepoTaskCommandDeps {
   ) => Promise<ActiveSigningKey>;
   readonly secureErase: (key: Uint8Array) => void;
   readonly readAgentPin: (file: string) => Promise<RepoTaskPin>;
+  /** The signing operations, run while the key is held. */
+  readonly delegateToDirectory: typeof delegateToDirectory;
+  readonly revokeToDirectory: typeof revokeToDirectory;
   readonly exit: (code: number) => never;
   readonly now: () => number;
 }
@@ -77,6 +81,8 @@ const NODE_DEPS: RepoTaskCommandDeps = {
   loadActiveSigningKey: (config, options) => loadActiveSigningKey(config, options),
   secureErase: (key) => secureErase(key),
   readAgentPin: (file) => readAgentPin(file),
+  delegateToDirectory: (req, dir) => delegateToDirectory(req, dir),
+  revokeToDirectory: (input, dir) => revokeToDirectory(input, dir),
   exit: (code) => process.exit(code),
   now: () => Date.now(),
 };
@@ -168,7 +174,7 @@ export function handleRepoTaskDelegate(
       now: deps.now(),
     };
     // Every refusal that needs no key, before the passphrase prompt.
-    const pre = precheckRepoTaskDelegation(request, principalPin);
+    const pre = await precheckRepoTaskDelegation(request, principalPin);
     if (pre.length > 0) {
       refuse(
         ["Refused before signing — this delegation could not verify:"]
@@ -178,7 +184,7 @@ export function handleRepoTaskDelegate(
     }
 
     const result = await withPrincipalKey(deps, fullConfig, (active) =>
-      delegateToDirectory(
+      deps.delegateToDirectory(
         {
           ...request,
           principal: {
@@ -260,9 +266,19 @@ export function handleRepoTaskRevoke(
         "Refused — this motebit's key is not the grant's delegator key, so its revocation would bind nothing (spec/standing-delegation-v1.md §5). Revoke from the principal that signed the grant.",
       );
     }
+    // The delegation's integrity needs no key: a forged or malformed grant,
+    // tick or scope is refused before the passphrase prompt.
+    const pre = await precheckRepoTaskRevocation(delegation, principalPin, deps.now());
+    if (pre.length > 0) {
+      refuse(
+        ["Refused before signing — this is not a delegation the principal signed:"]
+          .concat(pre.map((f) => `  ${f.code}: ${f.detail}`))
+          .join("\n"),
+      );
+    }
 
     const { file } = await withPrincipalKey(deps, fullConfig, (active) =>
-      revokeToDirectory(
+      deps.revokeToDirectory(
         {
           delegation,
           principal: {
