@@ -114,7 +114,7 @@ describe("parseRepoPathPolicy strict shape", () => {
 describe("parseRepoPathPolicy closed grammar", () => {
   const ACCEPTED = [
     "docs/**/*.md",
-    "scripts/bench/*/prompts.json",
+    "tools/bench/*/prompts.json",
     "docs/doctrine/**",
     "**/CLAUDE.md",
     "**/.claude/**",
@@ -168,9 +168,9 @@ describe("parseRepoPathPolicy closed grammar", () => {
 
 describe("repo path policy matching", () => {
   it("an include names files: it never covers a directory of that name", () => {
-    const p = policy(["scripts/bench/*/prompts.json", "docs/drift.md"]);
-    expect(isRepoPathPermitted(p, "scripts/bench/x/prompts.json")).toBe(true);
-    expect(isRepoPathPermitted(p, "scripts/bench/x/prompts.json/evil.ts")).toBe(false);
+    const p = policy(["tools/bench/*/prompts.json", "docs/drift.md"]);
+    expect(isRepoPathPermitted(p, "tools/bench/x/prompts.json")).toBe(true);
+    expect(isRepoPathPermitted(p, "tools/bench/x/prompts.json/evil.ts")).toBe(false);
     expect(isRepoPathPermitted(p, "docs/drift.md")).toBe(true);
     expect(isRepoPathPermitted(p, "docs/drift.md/x")).toBe(false);
     expect(isRepoPathIncluded(p, "docs/drift.md/x")).toBe(false);
@@ -184,9 +184,9 @@ describe("repo path policy matching", () => {
   });
 
   it("`*` stays within one segment and may be empty", () => {
-    const p = policy(["scripts/bench/*/prompts.json", "a/*.md"]);
-    expect(isRepoPathPermitted(p, "scripts/bench/x/y/prompts.json")).toBe(false);
-    expect(isRepoPathPermitted(p, "scripts/bench//prompts.json")).toBe(true);
+    const p = policy(["tools/bench/*/prompts.json", "a/*.md"]);
+    expect(isRepoPathPermitted(p, "tools/bench/x/y/prompts.json")).toBe(false);
+    expect(isRepoPathPermitted(p, "tools/bench//prompts.json")).toBe(true);
     expect(isRepoPathPermitted(p, "a/.md")).toBe(true);
     expect(isRepoPathPermitted(p, "a/b/c.md")).toBe(false);
   });
