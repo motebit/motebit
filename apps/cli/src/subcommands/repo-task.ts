@@ -1,7 +1,8 @@
 /**
  * `motebit repo-task delegate` and `motebit repo-task revoke` — the principal's
  * side of a governed repo change (docs/proposals/governed-repo-change-v1.md,
- * "Build order" step 3).
+ * "Build order" step 3) — and `motebit repo-task run`, the agent's side
+ * (build step 4; the orchestration is `../repo-task/run-command.ts`).
  *
  * The shell around `../repo-task/delegation.ts`: parse the flags, read the
  * delegate's identity file, unlock the principal's key the way `motebit grant`
@@ -17,16 +18,20 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { secureErase } from "@motebit/encryption";
-import { identityVerifyOutcome, verify } from "@motebit/identity-file";
 import type { RepoTaskPin } from "@motebit/runtime";
 import { REPO_TASK_BASE_REF } from "@motebit/sdk";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 
 import type { CliConfig } from "../args.js";
-import { loadFullConfig } from "../config.js";
-import { loadActiveSigningKey } from "../identity.js";
+import { VERSION, loadFullConfig } from "../config.js";
+import { loadActiveSigningKey, promptPassphrase } from "../identity.js";
 import type { ActiveSigningKey } from "../identity.js";
 import type { FullConfig } from "../config.js";
+import { createProvider } from "../runtime-factory.js";
+import { defaultConfigDirs } from "../repo-task/agent-identity.js";
+import { RepoTaskPreflightError, pinFromIdentityFile } from "../repo-task/preflight.js";
+import { runGovernedRepoTask } from "../repo-task/run-command.js";
+import type { RepoTaskRunDeps, RepoTaskRunReport } from "../repo-task/run-command.js";
 import type { RevocationTarget } from "../repo-task/delegation.js";
 import {
   DELEGATION_FILES,
@@ -91,7 +96,10 @@ const NODE_DEPS: RepoTaskCommandDeps = {
 };
 
 /** Run a handler body; a refusal is printed sanitized (it may carry file names) and exits 1. */
-async function runCommand(deps: RepoTaskCommandDeps, body: () => Promise<void>): Promise<void> {
+async function runCommand(
+  deps: Pick<RepoTaskCommandDeps, "exit">,
+  body: () => Promise<void>,
+): Promise<void> {
   try {
     await body();
   } catch (err) {
@@ -425,15 +433,119 @@ export async function readAgentPin(file: string): Promise<RepoTaskPin> {
       cause: err,
     });
   }
-  const result = await verify(content, { expectedType: "identity" });
-  const outcome = identityVerifyOutcome(result);
-  if (result.type !== "identity" || !outcome.valid || !result.identity) {
-    throw new Error(
-      `--delegate: ${file} is not an intact identity file (${outcome.error ?? "verification failed"})`,
-    );
-  }
+  return pinFromIdentityFile(content, `--delegate: ${file}`);
+}
+
+// === motebit repo-task run ============================================
+
+const RUN_USAGE =
+  "Usage: motebit repo-task run --agent <agent config dir> --delegation <dir> [--repo <worktree>] [--provider <p>] [--model <m>] [--output <dir>]";
+
+/** The providers a run may use: a vendor or a local server, keyed from the environment; never the motebit cloud (it authenticates with an identity). */
+const RUN_PROVIDERS: readonly CliConfig["provider"][] = [
+  "anthropic",
+  "openai",
+  "google",
+  "deepseek",
+  "groq",
+  "local-server",
+];
+
+/** A's passphrase: `MOTEBIT_AGENT_PASSPHRASE`, else a prompt — never the principal's session cache or keychain. */
+async function agentPassphrase(label: string): Promise<string> {
+  const env = process.env["MOTEBIT_AGENT_PASSPHRASE"];
+  if (env != null && env !== "") return env;
+  return promptPassphrase(label);
+}
+
+/** The process-touching calls `repo-task run` makes. */
+export interface RepoTaskRunCommandDeps extends RepoTaskRunDeps {
+  readonly exit: (code: number) => never;
+  readonly log: (line: string) => void;
+}
+
+function nodeRunDeps(config: CliConfig): RepoTaskRunCommandDeps {
   return {
-    motebit_id: result.identity.motebit_id,
-    public_key: result.identity.identity.public_key,
+    loadActiveSigningKey: (c, o) => loadActiveSigningKey(c, o),
+    secureErase: (key) => secureErase(key),
+    // Flags only: `createProvider` reads the --provider/--model flags and the
+    // provider's API-key environment variable, with the default personality.
+    createProvider: () => createProvider(config),
+    getPassphrase: agentPassphrase,
+    defaultConfigDirs: () => defaultConfigDirs(),
+    now: () => Date.now(),
+    runtimeVersion: `motebit ${VERSION}`,
+    exit: (code) => process.exit(code),
+    log: (line) => console.log(line),
   };
+}
+
+export function handleRepoTaskRun(
+  config: CliConfig,
+  deps: RepoTaskRunCommandDeps = nodeRunDeps(config),
+): Promise<void> {
+  return runCommand(deps, async () => {
+    const agentDir = config.agent;
+    const delegationDir = config.delegation;
+    if (agentDir === undefined || delegationDir === undefined) refuse(RUN_USAGE);
+    if (!RUN_PROVIDERS.includes(config.provider)) {
+      refuse(
+        `--provider ${config.provider} is not available to a repo task: use one of ${RUN_PROVIDERS.join(", ")}`,
+      );
+    }
+    let report: RepoTaskRunReport;
+    try {
+      report = await runGovernedRepoTask(
+        {
+          agentDir,
+          delegationDir,
+          repoDir: config.repo ?? process.cwd(),
+          ...(config.output !== undefined ? { outputDir: config.output } : {}),
+          providerName: config.provider,
+        },
+        deps,
+      );
+    } catch (err) {
+      if (err instanceof RepoTaskPreflightError) {
+        refuse(
+          [
+            "Refused before the first model call — nothing ran:",
+            ...err.refusals.map((r) => `  ${r}`),
+          ].join("\n"),
+        );
+      }
+      throw err;
+    }
+    const { verification: v } = report;
+    const log = deps.log;
+    log(`Repo task ${report.grantId}: ${report.status} (${report.run.ended})`);
+    log(`  parent_commit  ${report.parentCommit}`);
+    log(`  head_commit    ${report.headCommit}`);
+    log(`  bundle_commit  ${report.bundleCommit}`);
+    log(`  bundle         ${report.bundlePath}`);
+    log(`  receipts       ${report.receiptsFile} (${report.run.tool_receipts.length})`);
+    if (report.run.tool_failures.length > 0) {
+      log(
+        `  tool failures  ${report.run.tool_failures.length} (local detail in the run, never shown to the model)`,
+      );
+    }
+    log("");
+    log(
+      `Self-check (verifyRepoChange, CI-on-PR mode): integrity ${v.verdict.integrity}, identityBinding ${v.verdict.identityBinding}, authority ${v.verdict.authority}, revocation ${v.verdict.revocation.status}; outcome ${v.outcome ?? "none"}`,
+    );
+    for (const f of v.diagnostics.failures) log(`  ${f.code}: ${sanitizeRelayText(f.detail, 500)}`);
+    if (!report.accepted) {
+      console.error(
+        "Not verified as a completed change. Nothing was published: the commits are unreachable objects (no ref names them) and git's garbage collection removes them.",
+      );
+      deps.exit(1);
+    }
+    log("");
+    log("Verified as a completed change. No ref was created or moved and nothing was pushed.");
+    log("To publish, the operator pushes the bundle commit as a new branch:");
+    log("");
+    log(
+      `  git push <publisher-remote> ${report.bundleCommit}:refs/heads/repo-task/${report.grantId}`,
+    );
+  });
 }

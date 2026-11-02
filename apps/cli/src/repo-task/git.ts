@@ -201,14 +201,32 @@ function readPointer(file: string, prefix: string, what: string): string {
   return path.resolve(path.dirname(file), target);
 }
 
+/** A repository's git directories, resolved without git (`resolveGitDirectories`). */
+export interface GitDirectories {
+  /** This worktree's git directory (`HEAD` lives here). */
+  readonly gitDir: string;
+  /** The common git directory (`refs/`, `packed-refs`, `objects/`, `shallow` live here). */
+  readonly commonDir: string;
+}
+
 /**
- * The real repository's object directory, resolved WITHOUT running git:
- * `gitEntry` is the worktree's `.git` — a directory, or a file holding
- * `gitdir: <path>` (a linked worktree); a `commondir` file in that git
- * directory points at the common one. Each step must be a real directory
- * (no symlink); anything unexpected throws.
+ * The real repository's object directory, resolved WITHOUT running git
+ * (`resolveGitDirectories`, then `<common gitdir>/objects`, itself a real
+ * directory, not a symlink).
  */
 export function resolveObjectDirectory(gitEntry: string): string {
+  const { commonDir } = resolveGitDirectories(gitEntry);
+  return realDirectory(path.join(commonDir, "objects"), "the object directory");
+}
+
+/**
+ * A repository's git directories, resolved WITHOUT running git: `gitEntry`
+ * is the worktree's `.git` — a directory, or a file holding `gitdir: <path>`
+ * (a linked worktree); a `commondir` file in that git directory points at the
+ * common one. Each step must be a real directory (no symlink); anything
+ * unexpected throws.
+ */
+export function resolveGitDirectories(gitEntry: string): GitDirectories {
   const entry = path.resolve(gitEntry);
   let st: fs.Stats;
   try {
@@ -232,7 +250,7 @@ export function resolveObjectDirectory(gitEntry: string): string {
   if (commondirPresent) {
     common = realDirectory(readPointer(commondir, "", "commondir"), "the common git directory");
   }
-  return realDirectory(path.join(common, "objects"), "the object directory");
+  return { gitDir, commonDir: common };
 }
 
 /**

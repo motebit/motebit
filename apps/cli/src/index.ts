@@ -85,6 +85,7 @@ import {
   handleGrantRevoke,
   handleRepoTaskDelegate,
   handleRepoTaskRevoke,
+  handleRepoTaskRun,
   createGrantPresenter,
   loadStoredGrant,
   handleGoalAdd,
@@ -503,16 +504,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  // The principal side of a governed repo change (spec/repo-change-v1.md §5):
-  // a sibling of `grant`, never an extension of its money path.
+  // A governed repo change (spec/repo-change-v1.md): the principal side
+  // (`delegate`, `revoke`; a sibling of `grant`, never an extension of its
+  // money path) and the agent side (`run`).
   if (subcommand === "repo-task") {
     const repoTaskCmd = config.positionals[1];
     if (repoTaskCmd === "delegate") {
       await handleRepoTaskDelegate(config);
     } else if (repoTaskCmd === "revoke") {
       await handleRepoTaskRevoke(config);
+    } else if (repoTaskCmd === "run") {
+      await handleRepoTaskRun(config);
     } else {
-      console.error("Usage: motebit repo-task [delegate|revoke]");
+      console.error("Usage: motebit repo-task [delegate|revoke|run]");
       process.exit(1);
     }
     return;
