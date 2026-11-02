@@ -64,16 +64,20 @@ export const REPO_CHANGE_PUBLISHER = "motebit-agent";
  * Every path `to`'s tree differs from `from`'s in, computed by listing both
  * trees completely and comparing in-process (spec §7: never from `git diff`).
  * A type change appears as a delete plus an add.
+ *
+ * `blob` reads a blob's bytes (for the NUL flag); default `cat-file blob`
+ * through the session. The offline mode passes its re-hashing reader.
  */
 export async function computeEntries(
   git: IsolatedGit,
   fromTree: readonly TreeEntry[],
   toTree: readonly TreeEntry[],
+  blob: (oid: string) => Promise<Uint8Array> = async (oid) => git.run(["cat-file", "blob", oid]),
 ): Promise<RepoChangeComputedEntry[]> {
   const before = new Map(fromTree.map((e) => [pathKey(e.path), e]));
   const after = new Map(toTree.map((e) => [pathKey(e.path), e]));
   const containsNul = async (e: TreeEntry): Promise<boolean> =>
-    e.type === "blob" && (await git.run(["cat-file", "blob", e.oid])).includes(0);
+    e.type === "blob" && (await blob(e.oid)).includes(0);
   const out: RepoChangeComputedEntry[] = [];
   for (const [k, e] of after) {
     const was = before.get(k);
@@ -160,15 +164,31 @@ export interface RepoChangeInputs {
   readonly state: RepoState;
 }
 
-interface LooseRecord {
+/** The bundle fields the shape checks need (`looseRecord`). */
+export interface LooseRecord {
   readonly grantId: string | null;
   readonly parentCommit: string | null;
   readonly headCommit: string | null;
+  /** The record's `entries`, when every one is a `{path, mode, blob}` of strings. */
+  readonly entries: readonly { path: string; mode: string; blob: string }[] | null;
+}
+
+/** A record's `entries`, read loosely: each a `{path, mode, blob}` of strings, else `null`. */
+function looseEntries(v: unknown): { path: string; mode: string; blob: string }[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: { path: string; mode: string; blob: string }[] = [];
+  for (const e of v as unknown[]) {
+    if (e === null || typeof e !== "object" || Array.isArray(e)) return null;
+    const { path: p, mode, blob } = e as Record<string, unknown>;
+    if (typeof p !== "string" || typeof mode !== "string" || typeof blob !== "string") return null;
+    out.push({ path: p, mode, blob });
+  }
+  return out;
 }
 
 /** The fields the shape checks need, read loosely: the verifier judges the strict shape. */
-function looseRecord(bytes: Uint8Array): LooseRecord {
-  const none: LooseRecord = { grantId: null, parentCommit: null, headCommit: null };
+export function looseRecord(bytes: Uint8Array): LooseRecord {
+  const none: LooseRecord = { grantId: null, parentCommit: null, headCommit: null, entries: null };
   let bundle: unknown;
   try {
     bundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
@@ -193,6 +213,7 @@ function looseRecord(bytes: Uint8Array): LooseRecord {
     grantId,
     parentCommit: str(record?.parent_commit),
     headCommit: str(record?.head_commit),
+    entries: looseEntries(record?.entries),
   };
 }
 

@@ -10,6 +10,7 @@
  * repository by real git, independently of the command's own self-check.
  */
 import { execFileSync } from "node:child_process";
+import { createHash, generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -40,7 +41,13 @@ import { generate } from "@motebit/identity-file";
 import type { RepoTaskPin } from "@motebit/runtime";
 import type { AIResponse, ContextPack, ToolCall } from "@motebit/sdk";
 import { isFullyVerified } from "@motebit/verifier";
-import { listTree, openIsolatedGit, verifyRepoChangePullRequest } from "@motebit/verify/git";
+import {
+  crc24,
+  listTree,
+  openIsolatedGit,
+  verifyRepoChangeLanded,
+  verifyRepoChangePullRequest,
+} from "@motebit/verify/git";
 
 import { parseCliArgs } from "../../args.js";
 import { encryptPrivateKey, loadActiveSigningKey } from "../../identity.js";
@@ -109,6 +116,76 @@ function git(repo: string, ...args: string[]): string {
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
+/**
+ * A test stand-in for GitHub's commit signer: an ephemeral RSA key, its
+ * OpenPGP v4 public key block (the pinned-keys file), and `sign`, which
+ * inserts a v4 binary RSA/SHA-256 signature over the commit as its `gpgsig`
+ * header (RFC 4880 §5.2.3, §5.2.4, §6). No network, no real GitHub key.
+ */
+function testGithubSigner(): {
+  armored: string;
+  sign: (payload: Buffer, seconds: number) => Buffer;
+} {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const jwk = publicKey.export({ format: "jwk" });
+  const mpi = (v: Buffer): Buffer => {
+    const head = Buffer.alloc(2);
+    head.writeUInt16BE((v.length - 1) * 8 + (32 - Math.clz32(v[0]!)));
+    return Buffer.concat([head, v]);
+  };
+  const pkt = (tag: number, body: Buffer): Buffer => {
+    const n = body.length - 192;
+    const len =
+      body.length < 192 ? Buffer.from([body.length]) : Buffer.from([(n >> 8) + 192, n & 0xff]);
+    return Buffer.concat([Buffer.from([0xc0 | tag]), len, body]);
+  };
+  const armor = (label: string, data: Buffer): string => {
+    const crc = Buffer.alloc(3);
+    crc.writeUIntBE(crc24(data), 0, 3);
+    const lines = data.toString("base64").match(/.{1,64}/g)!;
+    return [
+      `-----BEGIN ${label}-----`,
+      "",
+      ...lines,
+      `=${crc.toString("base64")}`,
+      `-----END ${label}-----`,
+    ].join("\n");
+  };
+  const keyBody = Buffer.concat([
+    Buffer.from([4, 0x65, 0x53, 0xf1, 0x00, 1]),
+    mpi(Buffer.from(jwk.n!, "base64url")),
+    mpi(Buffer.from(jwk.e!, "base64url")),
+  ]);
+  const fingerprint = createHash("sha1")
+    .update(Buffer.from([0x99, keyBody.length >> 8, keyBody.length & 0xff]))
+    .update(keyBody)
+    .digest();
+  return {
+    armored: `${armor("PGP PUBLIC KEY BLOCK", pkt(6, keyBody))}\n`,
+    sign: (payload, seconds) => {
+      const time = Buffer.alloc(4);
+      time.writeUInt32BE(seconds);
+      const hashed = Buffer.concat([
+        Buffer.from([5, 2]),
+        time,
+        Buffer.from([22, 33, 4]),
+        fingerprint,
+      ]);
+      const portion = Buffer.concat([Buffer.from([4, 0x00, 1, 8, 0, hashed.length]), hashed]);
+      const trailer = Buffer.from([4, 0xff, 0, 0, 0, portion.length]);
+      const signed = Buffer.concat([payload, portion, trailer]);
+      const digest = createHash("sha256").update(signed).digest();
+      const sig = cryptoSign("sha256", signed, privateKey);
+      const body = Buffer.concat([portion, Buffer.from([0, 0]), digest.subarray(0, 2), mpi(sig)]);
+      const lines = armor("PGP SIGNATURE", pkt(2, body)).split("\n");
+      const header = [`gpgsig ${lines[0]!}`, ...lines.slice(1).map((l) => ` ${l}`)].join("\n");
+      const text = payload.toString("latin1");
+      const end = text.indexOf("\n\n");
+      return Buffer.from(`${text.slice(0, end)}\n${header}${text.slice(end)}`, "latin1");
+    },
+  };
+}
+
 /** The common git directory of `repo` (its own `.git` for an ordinary repository). */
 function gitCommonDir(repo: string): string {
   return path.resolve(repo, git(repo, "rev-parse", "--git-common-dir").trim());
@@ -562,6 +639,54 @@ describe("repo-task run: a governed change, end to end", () => {
     const bad = await check(forged);
     expect(bad.accepted).toBe(false);
     expect(isFullyVerified(bad.verification.verdict)).toBe(false);
+  });
+
+  it("motebit-verify repo-change --landed agrees: the run's output, squash-landed and signed, verifies offline", async () => {
+    const fx = await fixture();
+    const h = harness();
+    await handleRepoTaskRun(args(fx), h.deps);
+    const bundleCommit = h.lines
+      .find((l) => l.trim().startsWith("bundle_commit"))!
+      .trim()
+      .split(/\s+/)[1]!;
+    // The merge queue's squash: the pull request head's tree on the tip,
+    // committed and signed by (a test stand-in for) GitHub.
+    const signer = testGithubSigner();
+    const seconds = Math.floor(NOW / 1000);
+    const payload = Buffer.from(
+      [
+        `tree ${git(fx.repo, "rev-parse", `${bundleCommit}^{tree}`)}`,
+        `parent ${fx.tip}`,
+        `author motebit-agent <agent@example.com> ${seconds} +0000`,
+        `committer GitHub <noreply@github.com> ${seconds} +0000`,
+        "",
+        "Fix the typo (#1)\n",
+      ].join("\n"),
+    );
+    const squash = execFileSync(
+      "git",
+      ["hash-object", "-w", "-t", "commit", "--literally", "--stdin"],
+      { cwd: fx.repo, env: gitEnv(), input: signer.sign(payload, seconds), encoding: "utf8" },
+    ).trim();
+    git(fx.repo, "update-ref", "refs/heads/main", squash);
+    const landed = (keys: string) =>
+      verifyRepoChangeLanded({
+        repo: fx.repo,
+        landed: squash,
+        trustedTip: squash,
+        repository: REPO,
+        signingKeys: keys,
+      });
+    const ok = await landed(signer.armored);
+    expect(ok.verification.diagnostics.failures).toEqual([]);
+    expect(ok.computed.shapeFailures).toEqual([]);
+    expect(ok.computed.time.landedAt).toBe(seconds * 1000);
+    expect(ok.verification.verdict.temporalBasis).toBe("operator_recorded");
+    expect(ok.accepted).toBe(true);
+    // Under another pinned key, the landing time is not accepted.
+    const other = await landed(testGithubSigner().armored);
+    expect(other.verification.verdict.authority).toBe("unknown");
+    expect(other.accepted).toBe(false);
   });
 
   it("a self-check that does not fully verify exits non-zero, publishing nothing", async () => {

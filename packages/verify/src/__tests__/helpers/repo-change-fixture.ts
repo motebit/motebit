@@ -95,7 +95,7 @@ function home(): string {
   return gitHome;
 }
 
-function gitEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+export function gitEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
     HOME: home(),

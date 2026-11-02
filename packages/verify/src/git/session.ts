@@ -174,8 +174,142 @@ export interface IsolatedGit {
       readonly timeoutMs?: number;
     },
   ): Promise<Buffer>;
+  /**
+   * A long-lived `git cat-file --batch` over the session, with the
+   * commit-graph off and grafts and replace objects ignored: raw object
+   * bytes only, for a caller that re-hashes every object against its id
+   * (`objects.ts`).
+   */
+  objectStream(opts?: { readonly timeoutMs?: number }): ObjectStream;
   /** Remove the private session directory. A call that times out or breaks its input closes the session too. */
   close(): void;
+}
+
+/** One raw object as the store returned it: unverified until its bytes are re-hashed. */
+export interface StoredObject {
+  /** The type the store named (`commit`, `tree`, `blob`, `tag`). */
+  readonly type: string;
+  readonly content: Buffer;
+}
+
+/** Raw object reads, one at a time, through one `git cat-file --batch` process. */
+export interface ObjectStream {
+  /** The object's type and bytes as the store returned them, or `null` when it does not hold it. */
+  read(oid: string): Promise<StoredObject | null>;
+  /** Stop the process. Idempotent. */
+  close(): void;
+}
+
+/**
+ * A `git cat-file --batch` process that stays up for many reads. Requests
+ * are serialized; each read has a deadline (kill, fail closed, and the
+ * session closes). The store can still lie (a forged pack index, a loose
+ * object at another object's path), so the caller MUST re-hash every object
+ * it receives. Replace objects and grafts are off and the commit-graph is
+ * never read.
+ */
+function openObjectStream(
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  onFatal: () => void,
+  timeoutMs: number,
+): ObjectStream {
+  const argv = [...PINNED, "-c", "core.commitGraph=false", "cat-file", "--batch"];
+  const child = spawn("git", argv, {
+    env: { ...env, GIT_GRAFT_FILE: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1" },
+    cwd,
+    stdio: ["pipe", "pipe", "ignore"],
+    shell: false,
+  });
+  let buf: Buffer = Buffer.alloc(0);
+  let dead: Error | null = null;
+  let waiter: (() => void) | null = null;
+  let chain: Promise<unknown> = Promise.resolve();
+  const wake = (): void => {
+    const w = waiter;
+    waiter = null;
+    w?.();
+  };
+  const kill = (why: Error): Error => {
+    if (dead === null) dead = why;
+    child.kill("SIGKILL");
+    wake();
+    return dead;
+  };
+  child.stdout.on("data", (d: Buffer) => {
+    buf = buf.length === 0 ? d : Buffer.concat([buf, d]);
+    if (buf.length > MAX_GIT_OUTPUT_BYTES + 256)
+      kill(new Error("git cat-file: an object is too large"));
+    wake();
+  });
+  // A spawn failure or a broken stdin (git died) ends the stream: fail closed.
+  child.on("error", kill);
+  child.stdin.on("error", kill);
+  child.on("close", () => kill(new Error("git cat-file --batch exited")));
+
+  /** Wait until `have()` holds, the process dies, or the deadline passes. */
+  const until = async (have: () => boolean, deadline: number): Promise<void> => {
+    while (!have()) {
+      if (dead !== null) throw dead;
+      const left = deadline - Date.now();
+      if (left <= 0) {
+        const err = kill(new Error(`git cat-file timed out after ${timeoutMs} ms`));
+        onFatal();
+        throw err;
+      }
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, left);
+        waiter = () => {
+          clearTimeout(t);
+          resolve();
+        };
+      });
+    }
+  };
+
+  const readOne = async (oid: string): Promise<StoredObject | null> => {
+    if (!OID.test(oid)) {
+      throw new Error(`git cat-file: ${JSON.stringify(oid)} is not a full object id`);
+    }
+    if (dead !== null) throw dead;
+    const deadline = Date.now() + timeoutMs;
+    child.stdin.write(`${oid}\n`);
+    await until(() => buf.indexOf(0x0a) >= 0, deadline);
+    const nl = buf.indexOf(0x0a);
+    const header = buf.subarray(0, nl).toString("latin1");
+    if (header === `${oid} missing`) {
+      buf = buf.subarray(nl + 1);
+      return null;
+    }
+    const m = /^([0-9a-f]+) (commit|tree|blob|tag) (0|[1-9][0-9]{0,9})$/.exec(header);
+    if (!m || m[1] !== oid) {
+      throw kill(
+        new Error(`git cat-file: an unexpected reply ${JSON.stringify(header.slice(0, 120))}`),
+      );
+    }
+    const size = Number(m[3]);
+    if (size > MAX_GIT_OUTPUT_BYTES) throw kill(new Error("git cat-file: an object is too large"));
+    await until(() => buf.length >= nl + 1 + size + 1, deadline);
+    if (buf[nl + 1 + size] !== 0x0a) {
+      throw kill(new Error("git cat-file: a reply is not newline-terminated"));
+    }
+    const content = Buffer.from(buf.subarray(nl + 1, nl + 1 + size));
+    buf = buf.subarray(nl + 1 + size + 1);
+    return { type: m[2]!, content };
+  };
+
+  return {
+    read: (oid) => {
+      const next = chain.then(() => readOne(oid));
+      chain = next.catch(() => undefined);
+      return next;
+    },
+    close: () => {
+      if (dead === null) dead = new Error("git cat-file: the stream is closed");
+      child.stdin.end();
+      child.kill("SIGKILL");
+    },
+  };
 }
 
 /** `p` exists as a real directory, not a symlink (lstat). */
@@ -316,6 +450,10 @@ export async function openIsolatedGit(opts: {
         if (/timed out|stopped reading its input/.test(msg)) close();
         throw err;
       }
+    },
+    objectStream: (o = {}) => {
+      if (closed) throw new Error("isolated git: the session is closed");
+      return openObjectStream(env(), sessionDir, close, o.timeoutMs ?? GIT_CALL_TIMEOUT_MS);
     },
     close,
   };

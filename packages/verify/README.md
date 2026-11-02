@@ -89,6 +89,10 @@ motebit-verify approval-decision decision.json --expect-verdict approved
 # Governed repo change — judge a pull request in CI (both commits already fetched)
 motebit-verify repo-change --repo . --base <trusted main tip> --head <pr head> \
   --repository owner/name --base-ref main --pr-author motebit-agent [--now <ms>] [--json]
+
+# Governed repo change — judge the landed squash commit offline (no network)
+motebit-verify repo-change --landed <squash commit> --trusted-tip <main tip you trust> \
+  --repository owner/name --github-keys github-keys.asc --repo . [--json]
 ```
 
 ### State exports — `content-artifact`
@@ -110,7 +114,15 @@ motebit-verify repo-change --repo . --base <trusted main tip> --head <pr head> \
 
 Every axis is computed and printed even when a shape check fails. The evaluation time is the local clock unless `--now` is given, recorded as `local_clock`. Exit `0` only when the verdict is fully verified **and** the outcome is `completed`; `1` on any other verdict; `2` on a usage or I/O error, or a change that cannot be judged (no parsable path policy at `--base`, a shallow clone).
 
-The same reader is a subpath export, `@motebit/verify/git` — `verifyRepoChangePullRequest`, `computeRepoChangeInputs`, the isolated session `openIsolatedGit`, `resolveRepoTip`, `listTree`, `readRepoState`, `isGrantSpent` and `computeEntries`. `motebit repo-task run` imports it for its self-check, so the producer and CI compute the inputs with one implementation.
+**Offline, on a landed change — `--landed`.** `motebit-verify repo-change --landed <squash commit> --trusted-tip <commit> --repository <owner/name> --github-keys <file> --repo <clone>` judges the commit that landed on `main` (spec §9, "Offline on a landed change"). The two modes are mutually exclusive: `--landed` refuses `--base`, `--head`, `--base-ref`, `--pr-author` and `--now`, and `--trusted-tip` / `--github-keys` require `--landed`. Git's object lookups are not trusted at all: every commit, tree and blob is read raw (`cat-file --batch`, commit-graph off, grafts and replace refs ignored) and **re-hashed against its id**; trees are parsed in-process and refused unless canonical (no duplicate names, git's order, git's five modes); first-parent chains are walked from the commits' own bytes; a shallow clone is refused. Then:
+
+- the shape checks: the squash commit has exactly one parent; its entries against that parent are exactly one `A 100644` at `.motebit/bundles/<grant_id>.json` plus entries equal to the record's `entries`; `parent_commit` is a first-parent ancestor of (or is) the squash commit's parent; the squash commit is on `--trusted-tip`'s first-parent chain;
+- pins, revocations, the path policy and the tracked paths are read **at the squash commit's parent**; spent: the bundle path ever existed on the parent's first-parent history;
+- the evaluation time is the squash commit's committer time, `operator_recorded`, accepted **only** when the committer is exactly `GitHub <noreply@github.com>` and the commit's `gpgsig` verifies under a key in `--github-keys` with a creation time equal to the committer time. Otherwise `authority` is `unknown` and the change does not verify. Revocation freshness is `asserted` as of that time, with the parent in `diagnostics`.
+
+`--github-keys` is one or more ASCII-armored `PGP PUBLIC KEY BLOCK`s — the bytes the operator publishes (for GitHub, its web-flow commit-signing key). Every primary key must be a v4 RSA key; its fingerprint is computed from the key packet, never taken from a label; user IDs, signatures and subkeys are allowed and skipped (subkeys are never candidates). The signature accepted is exactly one v4 binary (type `0x00`) RSA/SHA-256 signature packet with a CRC-checked armor, a hashed creation time, and its issuer named by fingerprint or key id; anything else is refused. Verification uses `node:crypto` only.
+
+The same reader is a subpath export, `@motebit/verify/git` — `verifyRepoChangePullRequest`, `computeRepoChangeInputs`, the isolated session `openIsolatedGit`, `resolveRepoTip`, `listTree`, `readRepoState`, `isGrantSpent` and `computeEntries` — and, for the offline mode, `verifyRepoChangeLanded`, `computeLandedRepoChangeInputs`, `openRawObjects`, `parsePinnedSigningKeys` and `verifyCommitSignature`. `motebit repo-task run` imports it for its self-check, so the producer and CI compute the inputs with one implementation.
 
 > **`@motebit/verify` vs `@motebit/verifier` vs `@motebit/crypto`.** This package (`verify`) is the **CLI binary** a human installs. [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) is the **browser-safe library** (file I/O + formatting; also re-exports `verifyApprovalDecision`). [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) is the **zero-dependency primitive** that carries the actual verify/sign functions — import it directly for browser/client-side verification.
 
