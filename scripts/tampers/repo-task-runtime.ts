@@ -1009,8 +1009,8 @@ const TAMPERS: TamperEntry[] = [
     "isolated git: no git process runs on the real git directory a git killed while its stdin is still being written rejects; the process survives",
     edit(
       GITSESSION,
-      '    child.stdin.on("error", (e) => {',
-      '    if (false as boolean) child.stdin.on("error", (e) => {',
+      '    stdin.on("error", (e) => {',
+      '    if (false as boolean) stdin.on("error", (e) => {',
     ),
   ),
   adapter(
