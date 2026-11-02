@@ -38,7 +38,9 @@ const RT = "packages/runtime/src/motebit-runtime.ts";
 const LOOP = "packages/ai-core/src/loop.ts";
 const CORE = "packages/ai-core/src/core.ts";
 const STAGER = "apps/cli/src/repo-task/git-change-stager.ts";
-const GITSESSION = "apps/cli/src/repo-task/git.ts";
+// Moved to the Apache-2.0 `@motebit/verify/git` (step 4c-i); the CLI reads its
+// `dist`, so an entry editing it rebuilds it (`entry` below).
+const GITSESSION = "packages/verify/src/git/session.ts";
 const READER = "apps/cli/src/repo-task/git-tree-reader.ts";
 const SINK = "apps/cli/src/repo-task/receipt-file-sink.ts";
 const WEB_PULSE = "apps/web/src/ui/cobrowse-chrome.ts";
@@ -75,7 +77,17 @@ function entry(
   red: string,
   ...edits: TamperEdit[]
 ): TamperEntry {
-  return { name, pkg, test, red, only: true, edits };
+  return {
+    name,
+    pkg,
+    test,
+    red,
+    only: true,
+    edits,
+    ...(edits.some((e) => e.file.startsWith("packages/verify/"))
+      ? { rebuild: ["@motebit/verify"] }
+      : {}),
+  };
 }
 const run = (name: string, red: string, ...edits: TamperEdit[]) =>
   entry("@motebit/runtime", RUN_TEST, name, red, ...edits);

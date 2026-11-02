@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./git": {
+      "types": "./dist/git/index.d.ts",
+      "default": "./dist/git/index.js"
     }
   },
   "bin": {

@@ -9,16 +9,16 @@
  * gitlink, tree, out-of-tree spellings) is the runtime handler's; this
  * adapter only reports what git records.
  *
- * Git runs in an isolated session (`git.ts`): never the repository's own
- * config, no system or global config, no replace objects, literal
- * pathspecs — so no config file, replace ref or glob can change what a path
- * names. Not wired to any command yet: `motebit repo-task run` (build step 4)
- * constructs it after its preflight pins the tip.
+ * Git runs in an isolated session (`@motebit/verify/git`): never the
+ * repository's own config, no system or global config, no replace objects,
+ * literal pathspecs — so no config file, replace ref or glob can change what
+ * a path names. `motebit repo-task run` constructs it after its preflight
+ * pins the tip. Stays in the CLI (BUSL-1.1): it implements a
+ * `@motebit/runtime` port.
  */
 import type { RepoTreeEntry, RepoTreeReader } from "@motebit/runtime";
-
-import { OID } from "./git.js";
-import type { IsolatedGit } from "./git.js";
+import { OID } from "@motebit/verify/git";
+import type { IsolatedGit } from "@motebit/verify/git";
 
 export interface GitTreeReaderOptions {
   /** The isolated git session on the repository (`openIsolatedGit`): its config is never read. */

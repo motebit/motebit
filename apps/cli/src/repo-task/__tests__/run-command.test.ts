@@ -40,6 +40,7 @@ import { generate } from "@motebit/identity-file";
 import type { RepoTaskPin } from "@motebit/runtime";
 import type { AIResponse, ContextPack, ToolCall } from "@motebit/sdk";
 import { isFullyVerified } from "@motebit/verifier";
+import { listTree, openIsolatedGit, verifyRepoChangePullRequest } from "@motebit/verify/git";
 
 import { parseCliArgs } from "../../args.js";
 import { encryptPrivateKey, loadActiveSigningKey } from "../../identity.js";
@@ -47,8 +48,7 @@ import { handleRepoTaskRun } from "../../subcommands/repo-task.js";
 import type { RepoTaskRunCommandDeps } from "../../subcommands/repo-task.js";
 import { defaultConfigDirs } from "../agent-identity.js";
 import { delegateToDirectory, mintRepoTaskRevocation } from "../delegation.js";
-import { openIsolatedGit } from "../git.js";
-import { listTree, readTipState } from "../preflight.js";
+import { readTipState } from "../preflight.js";
 
 const NOW = 1_900_000_000_000;
 const HOUR = 3_600_000;
@@ -512,6 +512,56 @@ describe("repo-task run: a governed change, end to end", () => {
     // The receipts went outside the repository, beside the delegation.
     const receiptsFiles = fs.readdirSync(fx.delegation).filter((n) => n.startsWith("receipts-"));
     expect(receiptsFiles).toHaveLength(1);
+  });
+
+  it("motebit-verify repo-change agrees: fully verified; one byte of the bundle changed fails", async () => {
+    const fx = await fixture();
+    const h = harness();
+    await handleRepoTaskRun(args(fx), h.deps);
+    const bundleCommit = h.lines
+      .find((l) => l.trim().startsWith("bundle_commit"))!
+      .trim()
+      .split(/\s+/)[1]!;
+    const check = (head: string) =>
+      verifyRepoChangePullRequest({
+        repo: fx.repo,
+        base: fx.tip,
+        head,
+        repository: REPO,
+        baseRef: "main",
+        prAuthor: "motebit-agent",
+        now: NOW,
+      });
+    // The CI verifier, from the repository alone: the producer's output passes.
+    const ok = await check(bundleCommit);
+    expect(ok.verification.diagnostics.failures).toEqual([]);
+    expect(ok.computed.shapeFailures).toEqual([]);
+    expect(ok.accepted).toBe(true);
+
+    // The same pull request with one byte of the bundle changed: a sibling
+    // bundle commit on the same change commit, built with plumbing on a
+    // private index.
+    const changeCommit = git(fx.repo, "rev-parse", `${bundleCommit}^`);
+    const bundleFile = `.motebit/bundles/${fx.grantId}.json`;
+    const bytes = execFileSync("git", ["cat-file", "blob", `${bundleCommit}:${bundleFile}`], {
+      cwd: fx.repo,
+      env: gitEnv(),
+    });
+    const i = bytes.indexOf(Buffer.from('"status":"completed"'));
+    expect(i).toBeGreaterThan(0);
+    const tampered = Buffer.from(bytes);
+    tampered[i + 10] = "C".charCodeAt(0); // "completed" → "Completed"
+    const env = { ...gitEnv(), GIT_INDEX_FILE: path.join(tmp, "tamper-index") };
+    const run = (argv: string[], input?: Buffer) =>
+      execFileSync("git", argv, { cwd: fx.repo, env, input, encoding: "utf8" }).trim();
+    const blob = run(["hash-object", "-w", "--stdin"], tampered);
+    run(["read-tree", changeCommit]);
+    run(["update-index", "--add", "--cacheinfo", `100644,${blob},${bundleFile}`]);
+    const tree = run(["write-tree"]);
+    const forged = run(["commit-tree", tree, "-p", changeCommit, "-m", "bundle"]);
+    const bad = await check(forged);
+    expect(bad.accepted).toBe(false);
+    expect(isFullyVerified(bad.verification.verdict)).toBe(false);
   });
 
   it("a self-check that does not fully verify exits non-zero, publishing nothing", async () => {

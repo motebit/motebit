@@ -19,11 +19,15 @@
  *      or the ref named twice, is a refusal).
  *
  * A reftable repository is refused: its refs are not files this parser reads.
+ *
+ * Used by the producer (`motebit repo-task run`, which needs the tip it builds
+ * on); `motebit-verify repo-change` takes its trusted tip as `--base` instead.
+ * Apache-2.0 (moved from the BUSL-1.1 CLI on 2026-11-02). Node built-ins only.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { resolveGitDirectories } from "./git.js";
+import { resolveGitDirectories } from "./session.js";
 
 /** The longest a ref file, HEAD or packed-refs may be before it is refused. */
 const MAX_REF_FILE_BYTES = 64 * 1024 * 1024;
