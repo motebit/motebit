@@ -262,7 +262,7 @@ const TAMPERS: TamperEntry[] = [
     edit(
       RUN,
       "    // -- The self-check. EVIDENCE, NOT AUTHORITY",
-      '    fs.appendFileSync(path.join(repoDir, "docs", "guide.md"), "x");\n    // -- The self-check. EVIDENCE, NOT AUTHORITY',
+      '    fs.appendFileSync(path.join(repoDir, "notes", "guide.md"), "x");\n    // -- The self-check. EVIDENCE, NOT AUTHORITY',
     ),
   ),
   // ── path identity by the filesystem, never by spelling ─────────────────
@@ -285,12 +285,20 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   entry(
+    // Case is handled twice (the on-disk case from realpathSync.native, then
+    // identity by (dev, ino)); the rule is "a case alias is the entry", so the
+    // tamper removes both: the caller's spelling kept, compared by spelling.
     "output: inside-the-repository judged by spelling only (case alias)",
     `${REFUSE} an output directory inside a separate git directory named by a case alias`,
     edit(
       "apps/cli/src/repo-task/fs-identity.ts",
       "    if (fileIdentity(cur) === target) return true;\n",
       "    if (cur === path.resolve(parent)) return true;\n",
+    ),
+    edit(
+      "apps/cli/src/repo-task/fs-identity.ts",
+      "      return path.join(fs.realpathSync.native(cur), ...rest);\n",
+      "      return path.join(fs.realpathSync(cur), ...rest);\n",
     ),
   ),
   entry(
@@ -315,6 +323,20 @@ const TAMPERS: TamperEntry[] = [
         "      if (isSameEntry(common, tipInfo.commonDir)) return `inside the repository's worktree ${cur}`;\n",
         "",
       ),
+    ),
+  ),
+  entry(
+    "output: the worktree walk follows the caller's spelling, not the real path",
+    `${REFUSE} an output directory reached through a symlink to a subdirectory of the worktree`,
+    edit(RUN, "  let cur = canonicalPath(outputDir);\n", "  let cur = path.resolve(outputDir);\n"),
+  ),
+  entry(
+    "output: the git-directory check follows the caller's spelling, not the real path",
+    `${REFUSE} an output directory reached through a symlink into a separate git directory`,
+    edit(
+      "apps/cli/src/repo-task/fs-identity.ts",
+      "  let cur = canonicalPath(child);\n",
+      "  let cur = path.resolve(child);\n",
     ),
   ),
   // ── the agent's key ────────────────────────────────────────────────────

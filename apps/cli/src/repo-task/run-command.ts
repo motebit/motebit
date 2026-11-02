@@ -56,7 +56,7 @@ import type { FullConfig } from "../config.js";
 import { mkdirOwnerOnly } from "../durable-file.js";
 import type { ActiveSigningKey, LoadActiveSigningKeyOptions } from "../identity.js";
 import { agentKeyConfig, isDefaultConfigDir, readAgentIdentity } from "./agent-identity.js";
-import { fileIdentity, isSameEntry, isWithinEntry } from "./fs-identity.js";
+import { canonicalPath, fileIdentity, isSameEntry, isWithinEntry } from "./fs-identity.js";
 import {
   buildRepoChangeRecord,
   bundlePath,
@@ -147,7 +147,8 @@ function isInsideRepository(outputDir: string, tipInfo: RepoTip): string | null 
   if (isWithinEntry(outputDir, tipInfo.gitDir) || isWithinEntry(outputDir, tipInfo.commonDir)) {
     return "inside the repository's git directory";
   }
-  let cur = path.resolve(outputDir);
+  // Walk the real path: a symlink into the repository is the repository.
+  let cur = canonicalPath(outputDir);
   for (;;) {
     const dotGit = path.join(cur, ".git");
     if (fileIdentity(dotGit) !== null || isSymlink(dotGit)) {

@@ -54,10 +54,10 @@ const NOW = 1_900_000_000_000;
 const HOUR = 3_600_000;
 const REPO = "motebit/motebit";
 const PASS = "agent passphrase";
-const DOC = "docs/guide.md";
+const DOC = "notes/guide.md";
 const POLICY = JSON.stringify({
   spec: "motebit/repo-path-policy@1.0",
-  include: ["docs/*.md"],
+  include: ["notes/*.md"],
   exclude: [".motebit"],
 });
 
@@ -217,7 +217,7 @@ async function fixture(o: FixtureOptions = {}): Promise<Fixture> {
       objectFormat: "sha1",
       allowedPaths: o.paths ?? [DOC],
       maxChangedFiles: 1,
-      task: "Fix the typo in docs/guide.md.",
+      task: "Fix the typo in notes/guide.md.",
       tools: "repo_read_blob,repo_write_path",
       lifetimeMs: HOUR,
       now: NOW - 60_000,
@@ -630,7 +630,7 @@ describe("repo-task run: every preflight rule refuses before the first model cal
 
   it("an invalid path policy", async () => {
     const fx = await fixture({
-      policy: '{"spec":"motebit/repo-path-policy@1.0","include":["docs/*.md"]}',
+      policy: '{"spec":"motebit/repo-path-policy@1.0","include":["notes/*.md"]}',
     });
     const h = harness();
     await expectRefusal(
@@ -685,7 +685,7 @@ describe("repo-task run: every preflight rule refuses before the first model cal
   it("a dirty worktree: a type change", async () => {
     const fx = await fixture();
     fs.rmSync(path.join(fx.repo, "src/code.ts"));
-    fs.symlinkSync("../docs/guide.md", path.join(fx.repo, "src/code.ts"));
+    fs.symlinkSync("../notes/guide.md", path.join(fx.repo, "src/code.ts"));
     const h = harness();
     await expectRefusal(
       h,
@@ -899,6 +899,36 @@ describe("repo-task run: every preflight rule refuses before the first model cal
     await expectRefusal(
       h,
       () => handleRepoTaskRun(args(fx, { output: alias }), h.deps),
+      /inside the repository/,
+    );
+    expect(fs.readdirSync(heads).sort()).toEqual(before);
+  });
+
+  // A symlink outside the repository whose target is inside it: the walk is
+  // over the real path, never the caller's spelling.
+  it("an output directory reached through a symlink to a subdirectory of the worktree", async () => {
+    const fx = await fixture();
+    const link = path.join(path.dirname(fx.repo), "link-into-worktree");
+    fs.symlinkSync(path.join(fx.repo, "notes"), link);
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { output: path.join(link, "out") }), h.deps),
+      /inside the repository/,
+    );
+    expect(fs.existsSync(path.join(fx.repo, "notes", "out"))).toBe(false);
+  });
+
+  it("an output directory reached through a symlink into a separate git directory", async () => {
+    const { fx, store } = await separateGitDir();
+    const link = path.join(path.dirname(store), "link-into-store");
+    fs.symlinkSync(path.join(store, "refs"), link);
+    const heads = path.join(store, "refs", "heads");
+    const before = fs.readdirSync(heads).sort();
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { output: path.join(link, "heads") }), h.deps),
       /inside the repository/,
     );
     expect(fs.readdirSync(heads).sort()).toEqual(before);
