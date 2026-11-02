@@ -186,8 +186,8 @@ const TAMPERS: TamperEntry[] = [
     `${REFUSE} an output directory inside the repository`,
     edit(
       RUN,
-      "  if (isWithinEntry(outputDir, repoDir)) {\n",
-      "  if ((false as boolean) && isWithinEntry(outputDir, repoDir)) {\n",
+      "  if (forbidden.some((root) => isWithinEntry(outputDir, root))) {\n",
+      "  if ((false as boolean) && forbidden.some((root) => isWithinEntry(outputDir, root))) {\n",
     ),
   ),
   // ── preflight: the authority law before the key ────────────────────────
@@ -295,6 +295,20 @@ const TAMPERS: TamperEntry[] = [
       "apps/cli/src/repo-task/fs-identity.ts",
       "    if (fileIdentity(cur) === target) return true;\n",
       "    if (cur === path.resolve(parent)) return true;\n",
+    ),
+  ),
+  ...[
+    "an output directory inside the common git directory of a linked worktree",
+    "an output directory inside another worktree of the same repository",
+  ].map((t) =>
+    entry(
+      `output: only the worktree root is forbidden (${t.split(" inside ")[1]})`,
+      `${REFUSE} ${t}`,
+      edit(
+        RUN,
+        "  const forbidden = repositoryRoots(repoDir, tipInfo);\n",
+        "  const forbidden = [repoDir];\n",
+      ),
     ),
   ),
   // ── the agent's key ────────────────────────────────────────────────────

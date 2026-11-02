@@ -29,6 +29,7 @@
  * written: the commits are objects in the repository's store, reachable from
  * nothing until the operator pushes the bundle commit.
  */
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { StreamingProvider } from "@motebit/ai-core";
@@ -80,6 +81,7 @@ import {
 } from "./preflight.js";
 import { createReceiptFileSink } from "./receipt-file-sink.js";
 import { RepoTipError, resolveRepoTip } from "./tip.js";
+import type { RepoTip } from "./tip.js";
 
 export interface RepoTaskRunOptions {
   /** A's config directory (`--agent`). */
@@ -130,6 +132,33 @@ const COMMIT_AUTHOR = { authorName: "motebit repo-task", authorEmail: "repo-task
 
 function refuse(...lines: string[]): never {
   throw new RepoTaskPreflightError(lines);
+}
+
+/**
+ * Every root the run must never write into: the worktree, its git directory,
+ * the common git directory, the main worktree (the common directory's parent
+ * when it is a `.git` directory) and each linked worktree listed under
+ * `<common>/worktrees/*\/gitdir`. An entry that cannot be read names no root.
+ */
+function repositoryRoots(repoDir: string, tipInfo: RepoTip): string[] {
+  const roots = [repoDir, tipInfo.gitDir, tipInfo.commonDir];
+  if (path.basename(tipInfo.commonDir) === ".git") roots.push(path.dirname(tipInfo.commonDir));
+  const listed = path.join(tipInfo.commonDir, "worktrees");
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(listed);
+  } catch {
+    names = [];
+  }
+  for (const name of names) {
+    try {
+      const gitdir = fs.readFileSync(path.join(listed, name, "gitdir"), "utf8").trim();
+      if (gitdir !== "") roots.push(path.dirname(path.resolve(listed, name, gitdir)));
+    } catch {
+      // a stale or unreadable entry names no worktree
+    }
+  }
+  return roots;
 }
 
 /**
@@ -184,10 +213,15 @@ export async function runGovernedRepoTask(
   }
   const { tip } = tipInfo;
   const outputDir = path.resolve(opts.outputDir ?? opts.delegationDir);
-  // By filesystem identity, not spelling: a case alias of the repository is the repository.
-  if (isWithinEntry(outputDir, repoDir)) {
+  // By filesystem identity, not spelling: a case alias of the repository is
+  // the repository. "The repository" is every place the run must never write:
+  // this worktree, its git directory and the common git directory (outside
+  // the worktree for a linked worktree or a separate git dir), and every
+  // other worktree of the same repository.
+  const forbidden = repositoryRoots(repoDir, tipInfo);
+  if (forbidden.some((root) => isWithinEntry(outputDir, root))) {
     refuse(
-      `the output directory ${outputDir} is inside the repository: the run never writes the worktree`,
+      `the output directory ${outputDir} is inside the repository (a worktree or a git directory): the run never writes it`,
     );
   }
 

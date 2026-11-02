@@ -109,6 +109,11 @@ function git(repo: string, ...args: string[]): string {
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
+/** The common git directory of `repo` (its own `.git` for an ordinary repository). */
+function gitCommonDir(repo: string): string {
+  return path.resolve(repo, git(repo, "rev-parse", "--git-common-dir").trim());
+}
+
 function writeFile(repo: string, rel: string, content: string): void {
   fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true });
   fs.writeFileSync(path.join(repo, rel), content);
@@ -806,6 +811,42 @@ describe("repo-task run: every preflight rule refuses before the first model cal
       () => handleRepoTaskRun(args(fx, { agent: linked }), h.deps),
       /default motebit config directory/,
     );
+  });
+
+  // A linked worktree's git directory and the common git directory lie
+  // outside its root; the repository's other worktrees are the repository too.
+  async function linkedWorktree(): Promise<{ fx: Fixture; wt: string }> {
+    const fx = await fixture();
+    git(fx.repo, "branch", "side");
+    git(fx.repo, "checkout", "-q", "side");
+    const wt = path.join(path.dirname(fx.repo), "wt");
+    git(fx.repo, "worktree", "add", "-q", wt, "main");
+    return { fx: { ...fx, repo: wt }, wt };
+  }
+
+  it("an output directory inside the common git directory of a linked worktree", async () => {
+    const { fx } = await linkedWorktree();
+    const refsHeads = path.join(gitCommonDir(fx.repo), "refs", "heads");
+    const before = fs.readdirSync(refsHeads).sort();
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { output: refsHeads }), h.deps),
+      /inside the repository/,
+    );
+    expect(fs.readdirSync(refsHeads).sort()).toEqual(before);
+  });
+
+  it("an output directory inside another worktree of the same repository", async () => {
+    const { fx } = await linkedWorktree();
+    const mainWorktree = path.dirname(gitCommonDir(fx.repo));
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { output: path.join(mainWorktree, "out") }), h.deps),
+      /inside the repository/,
+    );
+    expect(fs.existsSync(path.join(mainWorktree, "out"))).toBe(false);
   });
 
   it("an output directory naming the repository by a case alias", async (ctx) => {
