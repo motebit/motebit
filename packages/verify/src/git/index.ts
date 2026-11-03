@@ -30,12 +30,7 @@ export {
   parseTree,
 } from "./objects.js";
 export type { RawCommit, RawObjects, RawTreeEntry } from "./objects.js";
-export {
-  crc24,
-  parsePinnedSigningKeys,
-  splitSignedCommit,
-  verifyCommitSignature,
-} from "@motebit/crypto-openpgp";
+export { parsePinnedSigningKeys, verifyCommitSignature } from "@motebit/crypto-openpgp";
 export type { CommitSignatureCheck, PinnedSigningKey } from "@motebit/crypto-openpgp";
 export {
   LANDING_COMMITTER,

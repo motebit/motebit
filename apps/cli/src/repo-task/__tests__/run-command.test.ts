@@ -42,7 +42,6 @@ import type { RepoTaskPin } from "@motebit/runtime";
 import type { AIResponse, ContextPack, ToolCall } from "@motebit/sdk";
 import { isFullyVerified } from "@motebit/verifier";
 import {
-  crc24,
   listTree,
   openIsolatedGit,
   verifyRepoChangeLanded,
@@ -116,6 +115,19 @@ function git(repo: string, ...args: string[]): string {
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
+/** CRC-24 (RFC 4880 §6.1), the test signer's own copy: the code under test is never its oracle. */
+function crc24(bytes: Uint8Array): number {
+  let crc = 0xb704ce;
+  for (const b of bytes) {
+    crc ^= b << 16;
+    for (let i = 0; i < 8; i++) {
+      crc <<= 1;
+      if (crc & 0x1000000) crc ^= 0x1864cfb;
+    }
+  }
+  return crc & 0xffffff;
+}
+
 /**
  * A test stand-in for GitHub's commit signer: an ephemeral RSA key, its
  * OpenPGP v4 public key block (the pinned-keys file), and `sign`, which
