@@ -51,9 +51,9 @@
     "@x402/core": "^2.22.0",
     "@x402/evm": "^2.22.0",
     "@x402/hono": "^2.22.0",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "hono": "^4.13.13",
-    "stripe": "^22.5.0"
+    "stripe": "^23.0.0"
   },
   "devDependencies": {
     "@motebit/ai-core": "workspace:*",
