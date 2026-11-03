@@ -128,7 +128,12 @@ function testGithubSigner(): {
 } {
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const jwk = publicKey.export({ format: "jwk" });
-  const mpi = (v: Buffer): Buffer => {
+  // Minimal (RFC 4880 §3.2): a signature from `sign()` is modulus-length and
+  // may start with a zero byte, which an exact bit count must not carry.
+  const mpi = (value: Buffer): Buffer => {
+    let i = 0;
+    while (i < value.length - 1 && value[i] === 0) i++;
+    const v = value.subarray(i);
     const head = Buffer.alloc(2);
     head.writeUInt16BE((v.length - 1) * 8 + (32 - Math.clz32(v[0]!)));
     return Buffer.concat([head, v]);
