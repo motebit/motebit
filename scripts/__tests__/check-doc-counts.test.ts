@@ -125,11 +125,11 @@ describe("check-doc-counts — every count claim in the swept docs", () => {
   // green. If the finder ever stops reaching one, this fails before the
   // per-location cases silently shrink.
   it.each([
-    ["README.md", "12 publish to npm"],
+    ["README.md", "13 publish to npm"],
     ["README.md", "62 are workspace-private"],
-    ["README.md", "53 under `packages/`"],
+    ["README.md", "54 under `packages/`"],
     ["README.md", "11 apps and 11 services"],
-    ["CLAUDE.md", "12 publish to npm"],
+    ["CLAUDE.md", "13 publish to npm"],
     ["CLAUDE.md", "62 are workspace-private"],
     ["CLAUDE.md", "11 apps + 11 services"],
     ["CLAUDE.md", "5 surfaces + 6 supporting apps"],
@@ -137,7 +137,7 @@ describe("check-doc-counts — every count claim in the swept docs", () => {
     ["apps/docs/content/docs/operator/architecture.mdx", "62 are workspace-private"],
     ["docs/doctrine/deprecation-lifecycle.md", "62 internal packages"],
     ["docs/doctrine/deprecation-lifecycle.md", "62 `0.0.0-private` packages"],
-    ["docs/doctrine/deprecation-lifecycle.md", "publishes 12 packages"],
+    ["docs/doctrine/deprecation-lifecycle.md", "publishes 13 packages"],
     ["CONTRIBUTING.md", "1 relay + 4 molecules + 5 atoms + 1 glue"],
   ] as const)("the finder reaches %s %s", (file, phrase) => {
     const text = readFileSync(resolve(ROOT, file), "utf8");
