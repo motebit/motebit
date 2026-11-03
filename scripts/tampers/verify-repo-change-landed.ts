@@ -125,11 +125,14 @@ const TAMPERS: TamperEntry[] = [
     `${SIGNATURE} refuses a signature made before its key was created`,
     off(PGP, "sig.createdAt < key.createdAt) {"),
   ),
-  unit(
-    "armor: the CRC-24 polynomial changed",
-    "the armor checksum CRC-24 gives the RFC 4880 check value",
-    edit(PGP, "if (crc & 0x1000000) crc ^= 0x1864cfb;", "if (crc & 0x1000000) crc ^= 0x1864cfa;"),
-  ),
+  {
+    ...unit(
+      "armor: the CRC-24 polynomial changed",
+      "the armor checksum CRC-24 gives the RFC 4880 check value",
+      edit(PGP, "if (crc & 0x1000000) crc ^= 0x1864cfb;", "if (crc & 0x1000000) crc ^= 0x1864cfa;"),
+    ),
+    test: "src/__tests__/crc24.test.ts",
+  },
   unit(
     "armor: a body line longer than 76 characters accepted",
     `${HEADER} refuses broken armor: no END line, a malformed armor header, a wrong CRC-24`,
