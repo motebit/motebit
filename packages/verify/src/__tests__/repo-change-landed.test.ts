@@ -18,12 +18,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isFullyVerified } from "@motebit/verifier";
 
 import {
+  acceptLandingTime,
   gitObjectId,
   openIsolatedGit,
   openRawObjects,
+  parsePinnedSigningKeys,
   verifyRepoChangeLanded,
 } from "../git/index.js";
-import type { LandedRepoChangeReport } from "../git/index.js";
+import type { LandedRepoChangeReport, OperatorSigningKey } from "../git/index.js";
 import { subpacket, testSigningKey } from "./helpers/github-signer.js";
 import {
   LANDED_SECONDS,
@@ -269,6 +271,28 @@ describe("motebit-verify repo-change --landed: the landing time is GitHub's, und
     expect(r.computed.time.landedAt).toBe(LANDED_SECONDS * 1000);
     expect(r.computed.time.signer).toBe(pinned().fingerprint);
     expect(r.accepted).toBe(true);
+  });
+
+  it("the window is the verifying key's, never another pinned key's", async () => {
+    const fx = await landedFixture(tmp);
+    const closed = { key: pinned(), trustedUntil: LANDED_SECONDS };
+    for (const keys of [
+      pinFile([closed, { key: stranger() }]),
+      pinFile([{ key: stranger() }, closed]),
+    ]) {
+      const r = await check(fx, { keys });
+      expectNoTime(r, /at or after the pinned key's trusted_until/);
+    }
+  });
+
+  it("a pinned key with no window field is refused, never open", async () => {
+    const fx = await landedFixture(tmp);
+    const raw = execFileSync("git", ["-C", fx.repo, "cat-file", "commit", fx.squash]);
+    const committer = /^committer (.*)$/m.exec(raw.toString("latin1"))![1]!;
+    const bare = parsePinnedSigningKeys(pinned().armored) as unknown as OperatorSigningKey[];
+    const t = acceptLandingTime(raw, committer, "sha1", bare);
+    expect(t.landedAt).toBeNull();
+    expect(t.problem ?? "").toMatch(/trusted_until \(undefined\)/);
   });
 
   it("the signature was created before the committer time", async () => {

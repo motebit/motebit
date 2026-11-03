@@ -165,9 +165,12 @@ export function acceptLandingTime(
       sig.fingerprint,
     );
   }
-  if (key.trustedUntil !== null && seconds >= key.trustedUntil) {
+  // Open only when the pinned set says so (`null`); a key with no window
+  // field at all (an unparsed key, cast in) is refused, never left open.
+  const until: unknown = key.trustedUntil;
+  if (until !== null && !(typeof until === "number" && seconds < until)) {
     return no(
-      `the committer time (${seconds}) is at or after the pinned key's trusted_until (${key.trustedUntil})`,
+      `the committer time (${seconds}) is at or after the pinned key's trusted_until (${typeof until === "number" ? until : typeof until})`,
       sig.fingerprint,
     );
   }

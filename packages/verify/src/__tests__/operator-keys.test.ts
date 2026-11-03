@@ -28,6 +28,12 @@ describe("the pinned set file", () => {
     expect(keys[0]!.createdAt).toBeTypeOf("number");
   });
 
+  it("reads a trusted_until written as plain digits, up to 2^53 - 1", () => {
+    for (const n of [0, 1_800_000_000, Number.MAX_SAFE_INTEGER]) {
+      expect(parseOperatorSigningKeys(file([entry(A, n)]))[0]!.trustedUntil).toBe(n);
+    }
+  });
+
   it.each<[string, string, RegExp]>([
     ["invalid JSON", "{", /not valid JSON/],
     ["not an object", "[]", /the file is not a JSON object/],
@@ -65,10 +71,22 @@ describe("the pinned set file", () => {
     ],
     ["a fingerprint not a string", file([{ ...entry(), fingerprint: 1 }]), /40 lowercase hex/],
     ["a key pinned twice", file([entry(A), entry(A, 5)]), /pinned twice/],
-    ["a negative trusted_until", file([entry(A, -1)]), /trusted_until/],
-    ["a fractional trusted_until", file([entry(A, 1.5)]), /trusted_until/],
+    ["a negative trusted_until", file([entry(A, -1)]), /the number -1 is not written/],
+    ["a fractional trusted_until", file([entry(A, 1.5)]), /the number 1.5 is not written/],
     ["a string trusted_until", file([entry(A, "1")]), /trusted_until/],
     ["an unsafe trusted_until", file([entry(A, 2 ** 53)]), /trusted_until/],
+    ...(
+      ["1800000000.0000001", "4503599627370496.5", "1e-400", "1e3", "1E3", "1.0", "-0"] as const
+    ).map((n): [string, string, RegExp] => [
+      `a trusted_until written ${n}`,
+      file([entry()]).replace('"trusted_until":null', `"trusted_until":${n}`),
+      /is not written as a plain non-negative integer/,
+    ]),
+    [
+      "a trusted_until with a leading zero (not JSON)",
+      file([entry()]).replace('"trusted_until":null', '"trusted_until":01'),
+      /not valid JSON/,
+    ],
     ["armored not a string", file([{ ...entry(), armored: 1 }]), /`armored` is not a string/],
     [
       "armored that does not parse",

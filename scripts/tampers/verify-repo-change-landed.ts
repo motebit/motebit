@@ -126,21 +126,31 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "time: a key's trusted_until ignored",
     `${TIME} the committer time is at or after the pinned key's trusted_until`,
-    off(LANDED, "key.trustedUntil !== null && seconds >= key.trustedUntil) {"),
+    off(LANDED, 'until !== null && !(typeof until === "number" && seconds < until)) {'),
   ),
   entry(
     "time: a landing at exactly trusted_until accepted",
     `${TIME} the committer time is at or after the pinned key's trusted_until`,
-    edit(LANDED, "seconds >= key.trustedUntil) {", "seconds > key.trustedUntil) {"),
+    edit(LANDED, "&& seconds < until)) {", "&& seconds <= until)) {"),
   ),
   entry(
     "time: a retired key refused for its earlier landings",
     `${TIME} a retired key still vouches for a landing made before its trusted_until`,
+    edit(LANDED, '!(typeof until === "number" && seconds < until)', "true"),
+  ),
+  entry(
+    "time: the window read from another pinned key than the signer",
+    `${TIME} the window is the verifying key's, never another pinned key's`,
     edit(
       LANDED,
-      "key.trustedUntil !== null && seconds >= key.trustedUntil",
-      "key.trustedUntil !== null",
+      "const key = keys.find((k) => k.fingerprint === sig.fingerprint);",
+      "const key = keys.find((k) => k.trustedUntil === null) ?? keys.find((k) => k.fingerprint === sig.fingerprint);",
     ),
+  ),
+  entry(
+    "time: a key with no window field left open",
+    `${TIME} a pinned key with no window field is refused, never open`,
+    edit(LANDED, "if (until !== null && !(", "if (until != null && !("),
   ),
   pinSet(
     "pinned set: the armored key not matched to its fingerprint",
@@ -164,12 +174,23 @@ const TAMPERS: TamperEntry[] = [
   ),
   pinSet(
     "pinned set: a malformed trusted_until accepted",
-    `${PIN_SET} refuses a fractional trusted_until`,
-    edit(
-      KEYS_FILE,
-      "if (until !== null && !(Number.isSafeInteger(until) && (until as number) >= 0)) {",
-      "if ((false as boolean) && until !== null) {",
-    ),
+    `${PIN_SET} refuses an unsafe trusted_until`,
+    off(KEYS_FILE, "until !== null && !Number.isSafeInteger(until)) {"),
+  ),
+  pinSet(
+    "pinned set: a trusted_until read from its value, not its text",
+    `${PIN_SET} refuses a trusted_until written 1800000000.0000001`,
+    off(KEYS_FILE, "number !== null) fail"),
+  ),
+  pinSet(
+    "pinned set: another spec accepted",
+    `${PIN_SET} refuses another spec`,
+    off(KEYS_FILE, "file.spec !== OPERATOR_SIGNING_KEYS_SPEC) {"),
+  ),
+  pinSet(
+    "pinned set: an empty keys accepted",
+    `${PIN_SET} refuses no keys`,
+    edit(KEYS_FILE, " || file.keys.length === 0) fail", ") fail"),
   ),
   pinSet(
     "pinned set: an unknown entry key accepted",

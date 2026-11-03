@@ -49,7 +49,8 @@ function exactKeys(o: unknown, keys: readonly string[], where: string): Record<s
  * JSON, a member name repeated within one object, a missing or unknown key,
  * a `spec` other than that string, an empty `keys`, a fingerprint that is
  * not 40 lowercase hex digits or is pinned twice, a `trusted_until` that is
- * neither `null` nor a non-negative safe integer, or an `armored` block that
+ * neither `null` nor a non-negative safe integer, any number written with a
+ * sign, fraction, exponent or leading zero, or an `armored` block that
  * does not hold exactly one key with that fingerprint.
  */
 export function parseOperatorSigningKeys(text: string): OperatorSigningKey[] {
@@ -61,6 +62,8 @@ export function parseOperatorSigningKeys(text: string): OperatorSigningKey[] {
   }
   const repeated = repeatedMemberName(text);
   if (repeated !== null) fail(`member name ${JSON.stringify(repeated)} is repeated in one object`);
+  const number = nonIntegerNumber(text);
+  if (number !== null) fail(`the number ${number} is not written as a plain non-negative integer`);
   const file = exactKeys(value, FILE_KEYS, "the file");
   if (file.spec !== OPERATOR_SIGNING_KEYS_SPEC) {
     fail(
@@ -79,7 +82,8 @@ export function parseOperatorSigningKeys(text: string): OperatorSigningKey[] {
     if (seen.has(fp)) fail(`${where}: fingerprint ${fp} is pinned twice`);
     seen.add(fp);
     const until = e.trusted_until;
-    if (until !== null && !(Number.isSafeInteger(until) && (until as number) >= 0)) {
+    // A sign, fraction or exponent was already refused from the text.
+    if (until !== null && !Number.isSafeInteger(until)) {
       fail(`${where}: \`trusted_until\` is neither null nor a non-negative integer of seconds`);
     }
     if (typeof e.armored !== "string") fail(`${where}: \`armored\` is not a string`);
@@ -98,6 +102,30 @@ export function parseOperatorSigningKeys(text: string): OperatorSigningKey[] {
     }
     return { ...key, trustedUntil: until as number | null };
   });
+}
+
+/**
+ * The first number token in `text` not written as `0` or a digit run with no
+ * leading zero (no sign, fraction or exponent), or null. A window is read
+ * from the file's text, so `1800000000.0000001` or `1e3` must not parse as
+ * an integer the reviewer did not see. `text` is already valid JSON.
+ */
+function nonIntegerNumber(text: string): string | null {
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '"') {
+      let j = i + 1;
+      while (text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      i = j;
+    } else if (c === "-" || (c >= "0" && c <= "9")) {
+      let j = i;
+      while (j < text.length && /[-+0-9.eE]/.test(text[j]!)) j++;
+      const token = text.slice(i, j);
+      if (!/^(?:0|[1-9][0-9]*)$/.test(token)) return token;
+      i = j - 1;
+    }
+  }
+  return null;
 }
 
 /**
