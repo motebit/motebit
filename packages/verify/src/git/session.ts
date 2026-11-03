@@ -1,6 +1,12 @@
 /**
- * The one way the repo-task adapters run git — and the allowlist shape of
- * it: git never reads the repository's own config at all.
+ * The one way the governed-repo-change code runs git — `motebit-verify
+ * repo-change` here, and `motebit repo-task run` (its reader, stager and
+ * self-check), which imports this module rather than keeping a copy — and the
+ * allowlist shape of it: git never reads the repository's own config at all.
+ *
+ * Apache-2.0 (moved from the BUSL-1.1 CLI on 2026-11-02, a founder decision:
+ * the verifier's git reader belongs on the permissive floor with the
+ * verifier). Node built-ins only.
  *
  * A repository's `.git/config` (and anything it includes) can steer git:
  * `core.fsmonitor` runs a program and can leave a daemon behind,

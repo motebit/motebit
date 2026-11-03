@@ -3,23 +3,15 @@
  * know about the repository before the first model call
  * (docs/proposals/governed-repo-change-v1.md § "The chain", step 4), read
  * from the TIP'S TREE through the isolated git session, never from the
- * filesystem:
+ * filesystem.
  *
- *   - the pins, typed by role: `.motebit/principals/principal.md` and
- *     `.motebit/principals/agents/*.md`, each an intact identity file whose
- *     `(motebit_id, public_key)` pair is the pin — compared byte for byte by
- *     the verifier's party rule, never through a time-windowed key check;
- *   - the revocations under `.motebit/revocations/`, parsed strictly: a file
- *     that is not a regular `<grant_id>.json` blob of strict UTF-8 JSON naming
- *     that `grant_id` is a FAILURE, handed with the rest to the verifier's
- *     strict revocation-set rule (`checkRepoChangeRevocationSet`, run by
- *     `checkRepoTaskAuthority`) — so a malformed revocation refuses the run,
- *     never reads as "not revoked";
- *   - the path policy `.motebit/repo-path-policy.json`, interpreted by the
- *     verifier's one interpreter (`parseRepoPathPolicy`, spec §7.2) — a
- *     missing or unparsable policy is a refusal;
- *   - the spent status: the grant's bundle path ever existed on the tip's
- *     first-parent history;
+ * The reading itself is `@motebit/verify/git` (Apache-2.0), the same code
+ * `motebit-verify repo-change` reads the trusted base with: the pins, the
+ * strictly parsed revocations, the path policy (`readRepoState`) and the spent
+ * status (`isGrantSpent`). What is the run's own lives here:
+ *
+ *   - a refusal on ANY rule that did not hold (`readTipState`): the verifier
+ *     judges a missing pin as "not a pin", the run refuses to start;
  *   - the worktree is clean at the tip: every tracked path is in the worktree
  *     with the same type and mode, and its bytes hash (in-process, the scope's
  *     object format) to the tip's blob — read through no symlinked directory.
@@ -30,24 +22,20 @@
  * and the run's authority law (`checkRepoTaskAuthority` → the verifier's own
  * rules) judges them.
  */
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { identityVerifyOutcome, verify } from "@motebit/identity-file";
 import type { RepoTaskPin, RepoTaskRevocations } from "@motebit/runtime";
-import { REPO_PATH_POLICY_FILE, isRepoPathPermitted, parseRepoPathPolicy } from "@motebit/verifier";
+import { isRepoPathPermitted } from "@motebit/verifier";
 import type { RepoPathPolicy } from "@motebit/verifier";
-
-import type { IsolatedGit } from "./git.js";
-
-/** Where the role-typed pins live at the tip. */
-export const PRINCIPAL_PIN_FILE = ".motebit/principals/principal.md";
-export const AGENT_PIN_DIR = ".motebit/principals/agents/";
-/** Where the strictly parsed revocations live at the tip. */
-export const REVOCATIONS_DIR = ".motebit/revocations/";
-/** Where a grant's bundle lands (spec/repo-change-v1.md §3.6). */
-export const BUNDLES_DIR = ".motebit/bundles/";
+import {
+  RepoStateError,
+  gitBlobId,
+  isGrantSpent,
+  pinFromIdentityFile as pinFromIdentityFileAt,
+  readRepoState,
+} from "@motebit/verify/git";
+import type { IsolatedGit, TreeEntry } from "@motebit/verify/git";
 
 /** One or more preflight rules did not hold; nothing ran. */
 export class RepoTaskPreflightError extends Error {
@@ -57,65 +45,9 @@ export class RepoTaskPreflightError extends Error {
   }
 }
 
-/** One entry of a commit's full tree, as git records it (`ls-tree -r -z --full-tree`). */
-export interface TreeEntry {
-  readonly mode: string;
-  readonly type: string;
-  readonly oid: string;
-  /** Git's own path bytes. */
-  readonly path: Uint8Array;
-}
-
-const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-
-function decode(bytes: Uint8Array): string | null {
-  try {
-    return STRICT_UTF8.decode(bytes);
-  } catch {
-    return null;
-  }
-}
-
-/** Every entry of `commit`'s tree, recursively, with git's own path bytes. */
-export async function listTree(git: IsolatedGit, commit: string): Promise<TreeEntry[]> {
-  const out = await git.run(["ls-tree", "-r", "-z", "--full-tree", commit]);
-  const entries: TreeEntry[] = [];
-  let start = 0;
-  for (let i = 0; i < out.length; i++) {
-    if (out[i] !== 0) continue;
-    const rec = out.subarray(start, i);
-    start = i + 1;
-    const tab = rec.indexOf(0x09);
-    if (tab < 0) throw new Error("ls-tree: a record has no path");
-    const [mode, type, oid] = rec.subarray(0, tab).toString("latin1").split(" ");
-    if (mode === undefined || type === undefined || oid === undefined) {
-      throw new Error("ls-tree: a malformed record");
-    }
-    entries.push({ mode, type, oid, path: new Uint8Array(rec.subarray(tab + 1)) });
-  }
-  if (start !== out.length) throw new Error("ls-tree: the listing is not NUL-terminated");
-  return entries;
-}
-
-/** A blob's bytes, through the isolated session. */
-async function readBlob(git: IsolatedGit, oid: string): Promise<Uint8Array> {
-  const bytes = await git.run(["cat-file", "blob", oid]);
-  return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-}
-
 /** The pin an identity file holds: its verified `(motebit_id, public_key)` pair. Throws when not intact. */
 export async function pinFromIdentityFile(content: string, what: string): Promise<RepoTaskPin> {
-  const result = await verify(content, { expectedType: "identity" });
-  const outcome = identityVerifyOutcome(result);
-  if (result.type !== "identity" || !outcome.valid || !result.identity) {
-    throw new Error(
-      `${what} is not an intact identity file (${outcome.error ?? "verification failed"})`,
-    );
-  }
-  return {
-    motebit_id: result.identity.motebit_id,
-    public_key: result.identity.identity.public_key,
-  };
+  return pinFromIdentityFileAt(content, what);
 }
 
 /** What the tip says: pins, revocations, the path policy. */
@@ -137,128 +69,28 @@ export async function readTipState(
   tip: string,
   tree: readonly TreeEntry[],
 ): Promise<TipState> {
-  const refusals: string[] = [];
-  const byPath = new Map<string, TreeEntry>();
-  for (const e of tree) {
-    const p = decode(e.path);
-    if (p !== null) byPath.set(p, e);
+  const state = await readRepoState(git, tip, tree);
+  const { principal, policy } = state;
+  if (state.problems.length > 0 || principal === null || policy === null) {
+    throw new RepoTaskPreflightError(state.problems);
   }
-  const regularBlob = (e: TreeEntry | undefined): e is TreeEntry =>
-    e !== undefined && e.type === "blob" && e.mode === "100644";
-  const text = async (e: TreeEntry): Promise<string | null> => decode(await readBlob(git, e.oid));
-
-  // -- The principal pin.
-  let principal: RepoTaskPin | null = null;
-  const pf = byPath.get(PRINCIPAL_PIN_FILE);
-  if (pf === undefined) refusals.push(`no principal pin at the tip (${PRINCIPAL_PIN_FILE})`);
-  else if (!regularBlob(pf)) refusals.push(`${PRINCIPAL_PIN_FILE} is not a regular 100644 file`);
-  else {
-    const t = await text(pf);
-    try {
-      if (t === null) throw new Error(`${PRINCIPAL_PIN_FILE} is not UTF-8`);
-      principal = await pinFromIdentityFile(t, PRINCIPAL_PIN_FILE);
-    } catch (err) {
-      refusals.push(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  // -- The agent pins and the revocations: every entry under each directory.
-  const agents: RepoTaskPin[] = [];
-  const set: unknown[] = [];
-  const failures: string[] = [];
-  for (const e of tree) {
-    const p = decode(e.path);
-    const raw = Buffer.from(e.path).toString("latin1");
-    if (raw.startsWith(AGENT_PIN_DIR)) {
-      const name = p?.slice(AGENT_PIN_DIR.length);
-      if (p === null || name === undefined || name.includes("/") || !/^[^/]+\.md$/.test(name)) {
-        refusals.push(`${JSON.stringify(raw)} is not an agent pin file (<name>.md)`);
-      } else if (!regularBlob(e)) {
-        refusals.push(`${p} is not a regular 100644 file`);
-      } else {
-        const t = await text(e);
-        try {
-          if (t === null) throw new Error(`${p} is not UTF-8`);
-          agents.push(await pinFromIdentityFile(t, p));
-        } catch (err) {
-          refusals.push(err instanceof Error ? err.message : String(err));
-        }
-      }
-    } else if (raw.startsWith(REVOCATIONS_DIR)) {
-      // Every file here either parses strictly or is a failure — never skipped.
-      const name = p?.slice(REVOCATIONS_DIR.length);
-      if (p === null || name === undefined || name.includes("/") || !name.endsWith(".json")) {
-        failures.push(`${JSON.stringify(raw)} is not a <grant_id>.json file`);
-        continue;
-      }
-      if (!regularBlob(e)) {
-        failures.push(`${p} is not a regular 100644 file`);
-        continue;
-      }
-      const t = await text(e);
-      let value: unknown;
-      try {
-        if (t === null) throw new Error("not UTF-8");
-        value = JSON.parse(t) as unknown;
-      } catch {
-        failures.push(`${p} is not UTF-8 JSON`);
-        continue;
-      }
-      const grantId =
-        value !== null && typeof value === "object" && !Array.isArray(value)
-          ? (value as { grant_id?: unknown }).grant_id
-          : undefined;
-      if (typeof grantId !== "string" || `${grantId}.json` !== name) {
-        failures.push(`${p}: the file name is not its revocation's grant_id`);
-        continue;
-      }
-      set.push(value);
-    }
-  }
-  if (agents.length === 0 && !refusals.some((r) => r.includes(AGENT_PIN_DIR))) {
-    refusals.push(`no agent pin at the tip (${AGENT_PIN_DIR}*.md)`);
-  }
-
-  // -- The path policy: data at the tip, the verifier's one interpreter.
-  let policy: RepoPathPolicy | null = null;
-  const pol = byPath.get(REPO_PATH_POLICY_FILE);
-  if (pol === undefined) refusals.push(`no path policy at the tip (${REPO_PATH_POLICY_FILE})`);
-  else if (!regularBlob(pol))
-    refusals.push(`${REPO_PATH_POLICY_FILE} is not a regular 100644 file`);
-  else {
-    const t = await text(pol);
-    try {
-      if (t === null) throw new Error("not UTF-8");
-      policy = parseRepoPathPolicy(t);
-    } catch (err) {
-      refusals.push(
-        `${REPO_PATH_POLICY_FILE} does not parse: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
-  if (refusals.length > 0 || principal === null || policy === null) {
-    throw new RepoTaskPreflightError(refusals);
-  }
-  const parsed = policy;
   return {
     principal,
-    agents,
+    agents: state.agents,
     revocations: {
-      set: set as RepoTaskRevocations["set"],
-      failures,
+      set: state.revocations.set,
+      failures: state.revocations.failures,
       readAt: tip,
     },
-    policy: parsed,
-    isPathPermitted: (p: string) => isRepoPathPermitted(parsed, p),
+    policy,
+    isPathPermitted: (p: string) => isRepoPathPermitted(policy, p),
   };
 }
 
 /**
  * Spent (spec §7): the grant's bundle path ever existed on the tip's
- * first-parent history. Git's commit-graph and grafts are ignored (they can
- * hide a parent), and a shallow repository is refused: its history is cut,
- * so "never existed" cannot be established.
+ * first-parent history (`isGrantSpent`); a shallow repository or a
+ * malformed grant id is a refusal.
  */
 export async function isGrantSpentAtTip(
   git: IsolatedGit,
@@ -266,34 +98,12 @@ export async function isGrantSpentAtTip(
   grantId: string,
   commonDir: string,
 ): Promise<boolean> {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(grantId)) {
-    throw new RepoTaskPreflightError([
-      `grant_id ${JSON.stringify(grantId)} is not a lowercase UUID`,
-    ]);
+  try {
+    return await isGrantSpent(git, tip, grantId, commonDir);
+  } catch (err) {
+    if (err instanceof RepoStateError) throw new RepoTaskPreflightError(err.problems);
+    throw err;
   }
-  if (fs.existsSync(path.join(commonDir, "shallow"))) {
-    throw new RepoTaskPreflightError([
-      "the repository is shallow: whether the grant was already spent cannot be established",
-    ]);
-  }
-  const out = await git.run(
-    [
-      "-c",
-      "core.commitGraph=false",
-      "rev-list",
-      "--first-parent",
-      tip,
-      "--",
-      `${BUNDLES_DIR}${grantId}.json`,
-    ],
-    { env: { GIT_GRAFT_FILE: "/dev/null" } },
-  );
-  return out.toString("latin1").trim().length > 0;
-}
-
-/** Git's object id of a blob with these bytes, in the repository's object format. */
-export function gitBlobId(bytes: Uint8Array, objectFormat: "sha1" | "sha256"): string {
-  return createHash(objectFormat).update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 }
 
 /**

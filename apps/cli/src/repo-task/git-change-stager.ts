@@ -26,19 +26,19 @@
  *     tracked file) would delete something; any such tree throws and no
  *     commit is made.
  *
- * Every git call runs in an isolated session (`git.ts`): no git process ever
- * runs on the real git directory, so git never reads the
- * repository's own config. Not wired to any command yet: build step 4's
- * `motebit repo-task run` constructs it on the pinned tip.
+ * Every git call runs in an isolated session (`@motebit/verify/git`): no git
+ * process ever runs on the real git directory, so git never reads the
+ * repository's own config. `motebit repo-task run` constructs it on the
+ * pinned tip. Stays in the CLI (BUSL-1.1): it implements a `@motebit/runtime`
+ * port.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 import type { RepoChangeStager, RepoStagedEntry } from "@motebit/runtime";
-
-import { OID } from "./git.js";
-import type { IsolatedGit } from "./git.js";
+import { OID } from "@motebit/verify/git";
+import type { IsolatedGit } from "@motebit/verify/git";
 
 export interface GitChangeStagerOptions {
   /** The isolated git session on the repository (`openIsolatedGit`). */

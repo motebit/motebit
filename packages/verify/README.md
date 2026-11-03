@@ -85,6 +85,10 @@ motebit-verify content-artifact export.json --manifest manifest.json --expect se
 motebit-verify approval-decision decision.json
 motebit-verify approval-decision decision.json --producer-key <hex>   # pin the approver
 motebit-verify approval-decision decision.json --expect-verdict approved
+
+# Governed repo change — judge a pull request in CI (both commits already fetched)
+motebit-verify repo-change --repo . --base <trusted main tip> --head <pr head> \
+  --repository owner/name --base-ref main --pr-author motebit-agent [--now <ms>] [--json]
 ```
 
 ### State exports — `content-artifact`
@@ -94,6 +98,19 @@ motebit-verify approval-decision decision.json --expect-verdict approved
 ### The governance triad — approve / deny / auto
 
 `motebit-verify approval-decision <file>` verifies a signed `ApprovalDecision` — **proof of permission before a gated act** (the "approve" band). The deny band (`ExecutionReceipt{status:"denied"}`) and auto band (`ToolInvocationReceipt`) verify through the ordinary receipt path. A verified `ApprovalDecision` is **signature-authentic against a key you pin, not authority-bound** — pin the approver with `--producer-key`; verifying against the embedded key alone is circular. Full model, the binding-ladder placement, and the **browser path** (`import { verifyApprovalDecision } from "@motebit/crypto"` — zero-dep, no server): see [the governance-triad guide](https://docs.motebit.com/docs/developer/governance-triad).
+
+### Governed repo change — `repo-change`
+
+`motebit-verify repo-change` judges a governed repo change's pull request in CI-on-PR mode ([`spec/repo-change-v1.md`](https://github.com/motebit/motebit/blob/main/spec/repo-change-v1.md) §7, §9). It computes every input `verifyRepoChange` (`@motebit/verifier`) needs from the clone — never running git on the clone's own git directory (every call runs against a private, empty bare repository whose config the tool writes), never fetching:
+
+- the bundle: the one file the pull request adds under `.motebit/bundles/`, its exact bytes;
+- the entries: the change commit's full tree against `--base`'s, compared in-process (never `git diff`), and the paths tracked at `--base`;
+- the pins, revocations and path policy read **at `--base`, never from the pull request**, and spent: the bundle path ever existed on `--base`'s first-parent history;
+- the shape checks: `parent_commit` is `--base`; the pull request is exactly the change commit and the bundle commit, linear; `head_commit..pr_head` is exactly one `A 100644` at the grant's bundle path; the base ref is `main`; the author is `motebit-agent`; the scope's `repo` is `--repository`; nothing under `.motebit/bundles/` is modified or deleted.
+
+Every axis is computed and printed even when a shape check fails. The evaluation time is the local clock unless `--now` is given, recorded as `local_clock`. Exit `0` only when the verdict is fully verified **and** the outcome is `completed`; `1` on any other verdict; `2` on a usage or I/O error, or a change that cannot be judged (no parsable path policy at `--base`, a shallow clone).
+
+The same reader is a subpath export, `@motebit/verify/git` — `verifyRepoChangePullRequest`, `computeRepoChangeInputs`, the isolated session `openIsolatedGit`, `resolveRepoTip`, `listTree`, `readRepoState`, `isGrantSpent` and `computeEntries`. `motebit repo-task run` imports it for its self-check, so the producer and CI compute the inputs with one implementation.
 
 > **`@motebit/verify` vs `@motebit/verifier` vs `@motebit/crypto`.** This package (`verify`) is the **CLI binary** a human installs. [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) is the **browser-safe library** (file I/O + formatting; also re-exports `verifyApprovalDecision`). [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) is the **zero-dependency primitive** that carries the actual verify/sign functions — import it directly for browser/client-side verification.
 

@@ -10,8 +10,10 @@
  *   - the bundle commit: one commit on `head_commit` adding exactly
  *     `.motebit/bundles/<grant_id>.json`, built by the same private-index
  *     stager as the change commit — no worktree file, index or ref touched;
- *   - the self-check inputs, computed from the two trees (never `git diff`),
- *     for `verifyRepoChange` in CI-on-PR mode.
+ *
+ * The self-check's inputs are not computed here: they are
+ * `computeRepoChangeInputs` (`@motebit/verify/git`), the same function
+ * `motebit-verify repo-change` runs in CI.
  *
  * Canonical JSON, digests and signing are the crypto primitives the verifier
  * itself calls (`canonicalJson`, `canonicalSha256`, `hash`,
@@ -34,21 +36,15 @@ import {
   REPO_CHANGE_BUNDLE_SPEC_ID,
   REPO_CHANGE_MAX_TOOL_RECEIPTS,
   REPO_CHANGE_SPEC_ID,
-  REPO_TASK_BASE_REF,
 } from "@motebit/sdk";
-import type { RepoChangeComputedEntry } from "@motebit/verifier";
+import { bundlePath, listTree } from "@motebit/verify/git";
+import type { IsolatedGit } from "@motebit/verify/git";
 
 import { createGitChangeStager } from "./git-change-stager.js";
-import type { IsolatedGit } from "./git.js";
-import { BUNDLES_DIR, listTree } from "./preflight.js";
-import type { TreeEntry } from "./preflight.js";
+
+export { bundlePath };
 
 const ENCODER = new TextEncoder();
-
-/** Where a grant's bundle lands. */
-export function bundlePath(grantId: string): string {
-  return `${BUNDLES_DIR}${grantId}.json`;
-}
 
 const sha256Ref = (value: string): DigestRef => ({ algorithm: "sha-256", value });
 
@@ -193,124 +189,4 @@ export async function commitBundle(
     throw new Error("the bundle commit would not be exactly one 100644 add of the bundle");
   }
   return headCommit;
-}
-
-/** A commit's parents, from its raw object. */
-export async function commitParents(git: IsolatedGit, commit: string): Promise<string[]> {
-  const raw = (await git.run(["cat-file", "commit", commit])).toString("latin1");
-  const header = raw.slice(0, raw.indexOf("\n\n") >= 0 ? raw.indexOf("\n\n") : raw.length);
-  return header
-    .split("\n")
-    .filter((l) => l.startsWith("parent "))
-    .map((l) => l.slice("parent ".length));
-}
-
-/**
- * Every path `to`'s tree differs from `from`'s in, computed by listing both
- * trees completely and comparing in-process (spec §7: never from `git diff`).
- * A type change appears as a delete plus an add.
- */
-export async function computeEntries(
-  git: IsolatedGit,
-  fromTree: readonly TreeEntry[],
-  toTree: readonly TreeEntry[],
-): Promise<RepoChangeComputedEntry[]> {
-  const key = (e: TreeEntry): string => Buffer.from(e.path).toString("latin1");
-  const before = new Map(fromTree.map((e) => [key(e), e]));
-  const after = new Map(toTree.map((e) => [key(e), e]));
-  const containsNul = async (e: TreeEntry): Promise<boolean> =>
-    e.type === "blob" && (await git.run(["cat-file", "blob", e.oid])).includes(0);
-  const out: RepoChangeComputedEntry[] = [];
-  for (const [k, e] of after) {
-    const was = before.get(k);
-    if (was !== undefined && was.type !== e.type) {
-      out.push({
-        kind: "delete",
-        path: was.path,
-        mode: was.mode,
-        previousMode: was.mode,
-        blob: was.oid,
-        containsNul: false,
-      });
-    }
-    if (was === undefined || was.type !== e.type) {
-      out.push({
-        kind: "add",
-        path: e.path,
-        mode: e.mode,
-        blob: e.oid,
-        containsNul: await containsNul(e),
-      });
-    } else if (was.mode !== e.mode || was.oid !== e.oid) {
-      out.push({
-        kind: "modify",
-        path: e.path,
-        mode: e.mode,
-        previousMode: was.mode,
-        blob: e.oid,
-        containsNul: await containsNul(e),
-      });
-    }
-  }
-  for (const [k, was] of before) {
-    if (!after.has(k)) {
-      out.push({
-        kind: "delete",
-        path: was.path,
-        mode: was.mode,
-        previousMode: was.mode,
-        blob: was.oid,
-        containsNul: false,
-      });
-    }
-  }
-  return out;
-}
-
-/**
- * The CI-on-PR mode's ancestry and shape checks (spec §9), as far as they
- * exist before a pull request does, computed from the commit objects and the
- * trees: `parent_commit` is the tip; the change commit's only parent is the
- * tip and the bundle commit's only parent is the change commit; the bundle
- * commit adds exactly one 100644 file at the grant's bundle path; the base
- * is `main`; no change entry touches `.motebit/bundles/`. (The publisher
- * account and the PR's base are the CI check's: no PR exists yet.)
- */
-export async function shapeFailures(i: {
-  readonly git: IsolatedGit;
-  readonly tip: string;
-  readonly record: RepoChangeResult;
-  readonly bundleCommit: string;
-  readonly scope: RepoTaskScope;
-  readonly changeEntries: readonly RepoChangeComputedEntry[];
-  readonly headTree: readonly TreeEntry[];
-  readonly bundleTree: readonly TreeEntry[];
-}): Promise<string[]> {
-  const out: string[] = [];
-  if (i.record.parent_commit !== i.tip) out.push("parent_commit is not the tip of the base ref");
-  const headParents = await commitParents(i.git, i.record.head_commit);
-  if (headParents.length !== 1 || headParents[0] !== i.tip) {
-    out.push("the change commit is not one non-merge commit on the tip");
-  }
-  const bundleParents = await commitParents(i.git, i.bundleCommit);
-  if (bundleParents.length !== 1 || bundleParents[0] !== i.record.head_commit) {
-    out.push("the bundle commit is not one commit on the change commit");
-  }
-  const added = await computeEntries(i.git, i.headTree, i.bundleTree);
-  const target = bundlePath(i.record.grant_id);
-  if (
-    added.length !== 1 ||
-    added[0]!.kind !== "add" ||
-    added[0]!.mode !== "100644" ||
-    Buffer.from(added[0]!.path).toString("latin1") !== target
-  ) {
-    out.push(`head_commit..bundle_commit is not exactly one A 100644 at ${target}`);
-  }
-  if (i.scope.base_ref !== REPO_TASK_BASE_REF) out.push("the base ref is not main");
-  for (const e of i.changeEntries) {
-    if (Buffer.from(e.path).toString("latin1").startsWith(BUNDLES_DIR)) {
-      out.push("a change entry touches .motebit/bundles/");
-    }
-  }
-  return out;
 }

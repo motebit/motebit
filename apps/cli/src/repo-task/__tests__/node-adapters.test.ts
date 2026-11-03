@@ -23,12 +23,12 @@ import type { StreamingProvider } from "@motebit/ai-core";
 import { runRepoTask } from "@motebit/runtime";
 import type { RepoTaskScope } from "@motebit/protocol";
 import type { AIResponse, ContextPack, ToolCall } from "@motebit/sdk";
+import { openIsolatedGit, resolveObjectDirectory } from "@motebit/verify/git";
+import type { IsolatedGit } from "@motebit/verify/git";
 
 import { createGitTreeReader } from "../git-tree-reader.js";
 import { createReceiptFileSink, readReceiptFile } from "../receipt-file-sink.js";
 import { createGitChangeStager, gitTimestamp } from "../git-change-stager.js";
-import { openIsolatedGit, resolveObjectDirectory } from "../git.js";
-import type { IsolatedGit } from "../git.js";
 
 let root = "";
 let repo = "";

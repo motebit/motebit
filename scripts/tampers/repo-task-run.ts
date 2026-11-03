@@ -19,7 +19,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
 
 const RUN = "apps/cli/src/repo-task/run-command.ts";
 const PRE = "apps/cli/src/repo-task/preflight.ts";
-const TIP = "apps/cli/src/repo-task/tip.ts";
+// The git reader moved to the Apache-2.0 `@motebit/verify/git` (step 4c-i):
+// the tip, and the pins, revocations, policy and spent read at a commit. The
+// CLI reads its `dist`, so those entries rebuild it.
+const TIP = "packages/verify/src/git/tip.ts";
+const STATE = "packages/verify/src/git/state.ts";
 const BUNDLE = "apps/cli/src/repo-task/bundle.ts";
 const CMD = "apps/cli/src/subcommands/repo-task.ts";
 const TEST = "src/repo-task/__tests__/run-command.test.ts";
@@ -38,6 +42,9 @@ const entry = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry =
   red,
   only: true,
   edits,
+  ...(edits.some((e) => e.file.startsWith("packages/verify/"))
+    ? { rebuild: ["@motebit/verify"] }
+    : {}),
 });
 
 const NO_AUTHORITY_PREFLIGHT = edit(
@@ -97,7 +104,7 @@ const TAMPERS: TamperEntry[] = [
     "pins: a missing principal pin not named",
     `${REFUSE} a missing principal pin`,
     edit(
-      PRE,
+      STATE,
       "  if (pf === undefined) refusals.push(`no principal pin at the tip (${PRINCIPAL_PIN_FILE})`);\n",
       "  if (pf === undefined) void PRINCIPAL_PIN_FILE;\n",
     ),
@@ -106,7 +113,7 @@ const TAMPERS: TamperEntry[] = [
     "pins: the principal pin read from the worktree, not the tip",
     `${TIP_TREE} a pin edited in the worktree is not the pin`,
     edit(
-      PRE,
+      STATE,
       "  else {\n    const t = await text(pf);\n",
       '  else {\n    const t = fs.readFileSync(path.join(git.objectDirectory, "..", "..", PRINCIPAL_PIN_FILE), "utf8");\n',
     ),
@@ -115,7 +122,7 @@ const TAMPERS: TamperEntry[] = [
     "policy: read from the worktree, not the tip",
     `${TIP_TREE} a policy edited in the worktree is not the policy`,
     edit(
-      PRE,
+      STATE,
       "    const t = await text(pol);\n",
       '    const t = fs.readFileSync(path.join(git.objectDirectory, "..", "..", REPO_PATH_POLICY_FILE), "utf8");\n',
     ),
@@ -124,7 +131,7 @@ const TAMPERS: TamperEntry[] = [
     "policy: a missing policy not named",
     `${REFUSE} a missing path policy`,
     edit(
-      PRE,
+      STATE,
       "  if (pol === undefined) refusals.push(`no path policy at the tip (${REPO_PATH_POLICY_FILE})`);\n",
       "  if (pol === undefined) void REPO_PATH_POLICY_FILE;\n",
     ),
@@ -151,7 +158,7 @@ const TAMPERS: TamperEntry[] = [
     "revocations: a file not named for its grant_id accepted",
     `${REFUSE} a malformed revocation file (its name is not its grant_id)`,
     edit(
-      PRE,
+      STATE,
       '      if (typeof grantId !== "string" || `${grantId}.json` !== name) {\n',
       '      if (typeof grantId !== "string") {\n',
     ),
@@ -159,12 +166,16 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "revocations: an unparsable file skipped, not a failure",
     `${REFUSE} an unparsable revocation file`,
-    edit(PRE, "        failures.push(`${p} is not UTF-8 JSON`);\n", "        void p;\n"),
+    edit(STATE, "        failures.push(`${p} is not UTF-8 JSON`);\n", "        void p;\n"),
   ),
   entry(
     "spent: never spent",
     `${REFUSE} a grant already spent on the tip's first-parent history`,
-    edit(PRE, '  return out.toString("latin1").trim().length > 0;\n', "  return out.length < 0;\n"),
+    edit(
+      STATE,
+      '  return out.toString("latin1").trim().length > 0;\n',
+      "  return out.length < 0;\n",
+    ),
   ),
   // ── preflight: the worktree ───────────────────────────────────────────
   ...[

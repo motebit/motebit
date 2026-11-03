@@ -15,6 +15,11 @@
  *   motebit-verify <file> --expect credential
  *   motebit-verify <file> --clock-skew 30
  *
+ *   # A governed repo change's pull request, in CI (spec/repo-change-v1.md §9).
+ *   motebit-verify repo-change --repo <clone> --base <trusted tip> \
+ *     --head <pr head> --repository <owner/name> --base-ref main \
+ *     --pr-author motebit-agent [--now <ms>] [--json]
+ *
  *   # Platform-specific overrides (all optional; defaults match
  *   # motebit's canonical identifiers).
  *   motebit-verify <file> \
@@ -55,6 +60,13 @@ import {
 import { formatHuman, verifyFile } from "@motebit/verifier";
 
 import { buildHardwareVerifiers } from "./adapters.js";
+import {
+  REPO_CHANGE_HELP,
+  REPO_CHANGE_SUBCOMMAND,
+  parseRepoChangeArgs,
+  runRepoChangeCli,
+} from "./repo-change-cli.js";
+import type { RepoChangeArgs } from "./repo-change-cli.js";
 
 const EXPECT_VALUES: readonly ArtifactType[] = [
   "identity",
@@ -94,7 +106,14 @@ export const LENIENT_WARNING =
 
 interface ParsedArgs {
   readonly mode:
-    "verify" | "verify-content-artifact" | "verify-approval-decision" | "help" | "version";
+    | "verify"
+    | "verify-content-artifact"
+    | "verify-approval-decision"
+    | "verify-repo-change"
+    | "help"
+    | "version";
+  /** Repo-change mode: the parsed `repo-change` arguments. */
+  readonly repoChange?: RepoChangeArgs;
   readonly file?: string;
   readonly json: boolean;
   readonly expectedType?: ArtifactType;
@@ -130,6 +149,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   }
   if (argv[0] === APPROVAL_DECISION_SUBCOMMAND) {
     return parseApprovalDecisionArgs(argv.slice(1));
+  }
+  if (argv[0] === REPO_CHANGE_SUBCOMMAND) {
+    const parsed = parseRepoChangeArgs(argv.slice(1));
+    if (parsed.kind === "help") return { mode: "help", json: false };
+    if (parsed.kind === "usage") return usage(parsed.message);
+    return { mode: "verify-repo-change", json: parsed.args.json, repoChange: parsed.args };
   }
 
   let file: string | undefined;
@@ -455,6 +480,8 @@ function renderHelp(): string {
     "  motebit-verify <path> [options]",
     "  motebit-verify content-artifact <body-file> --manifest <header-or-path> [options]",
     "  motebit-verify approval-decision <decision-file> [options]",
+    "  motebit-verify repo-change --repo <clone> --base <commit> --head <commit> \\",
+    "    --repository <owner/name> --base-ref <ref> --pr-author <login> [--now <ms>] [--json]",
     "",
     "  <path> may be a single file (identity, receipt, credential, presentation,",
     "  or a skill envelope JSON) OR a skill directory containing SKILL.md +",
@@ -528,6 +555,8 @@ function renderHelp(): string {
     "                            if the decision's embedded public_key differs.",
     "  --expect-verdict <v>      Assert the verdict is `approved` or `denied`;",
     "                            fails loud (verdict_mismatch) on the other value.",
+    "",
+    ...REPO_CHANGE_HELP,
     "",
     "  -h, --help                Show this help.",
     "  -V, --version             Print version.",
@@ -973,6 +1002,14 @@ async function main(): Promise<number> {
 
   if (args.mode === "verify-approval-decision") {
     return verifyApprovalDecisionCli(args, args.json);
+  }
+
+  if (args.mode === "verify-repo-change") {
+    return runRepoChangeCli(args.repoChange!, {
+      stdout: (t) => process.stdout.write(t),
+      stderr: (t) => process.stderr.write(t),
+      clock: () => Date.now(),
+    });
   }
 
   if (args.file === undefined) {

@@ -21,9 +21,10 @@
  *      canonical change record.
  *   5. THE BUNDLE COMMIT (step 7) — one commit adding exactly
  *      `.motebit/bundles/<grant_id>.json`.
- *   6. THE SELF-CHECK — `verifyRepoChange` over the bundle bytes with inputs
- *      computed from the two trees (CI-on-PR mode, parent = tip, the run's
- *      clock).
+ *   6. THE SELF-CHECK — `verifyRepoChange` over the committed bundle, with
+ *      inputs computed by `motebit-verify repo-change`'s own function
+ *      (`computeRepoChangeInputs`: CI-on-PR mode, base = tip, head = the
+ *      bundle commit, the run's clock).
  *
  * No ref is created or moved, nothing is pushed, the worktree is never
  * written: the commits are objects in the repository's store, reachable from
@@ -51,6 +52,15 @@ import {
   verifyRepoChange,
 } from "@motebit/verifier";
 import type { RepoChangeVerification } from "@motebit/verifier";
+import {
+  RepoTipError,
+  computeRepoChangeInputs,
+  listTree,
+  openIsolatedGit,
+  resolveGitDirectories,
+  resolveRepoTip,
+} from "@motebit/verify/git";
+import type { RepoTip } from "@motebit/verify/git";
 
 import type { FullConfig } from "../config.js";
 import { mkdirOwnerOnly } from "../durable-file.js";
@@ -61,27 +71,21 @@ import {
   buildRepoChangeRecord,
   bundlePath,
   commitBundle,
-  computeEntries,
   repoChangeBundleBytes,
   repoTaskOutcome,
-  shapeFailures,
   signRepoChangeReceipt,
 } from "./bundle.js";
 import type { HarnessCommit } from "./bundle.js";
 import { keySpellingFault, readDelegationDirectory } from "./delegation.js";
 import { createGitChangeStager } from "./git-change-stager.js";
 import { createGitTreeReader } from "./git-tree-reader.js";
-import { openIsolatedGit, resolveGitDirectories } from "./git.js";
 import {
   RepoTaskPreflightError,
   isGrantSpentAtTip,
-  listTree,
   readTipState,
   worktreeDifferences,
 } from "./preflight.js";
 import { createReceiptFileSink } from "./receipt-file-sink.js";
-import { RepoTipError, resolveRepoTip } from "./tip.js";
-import type { RepoTip } from "./tip.js";
 
 export interface RepoTaskRunOptions {
   /** A's config directory (`--agent`). */
@@ -351,37 +355,25 @@ export async function runGovernedRepoTask(
     // (docs/doctrine/memory-never-confers-authority.md), and authority comes
     // from a principal who is not the delegate (spec/repo-change-v1.md §2
     // rule 3) — so the agent's own verdict over its own work can never stand
-    // in for the check CI runs from the protected base. Inputs are computed
-    // from the two trees, in CI-on-PR mode, parent = tip, at the run's clock.
-    const headTree = await listTree(git, made.record.head_commit);
-    const bundleTree = await listTree(git, bundleCommit);
-    const changeEntries = await computeEntries(git, tree, headTree);
-    const shapes = await shapeFailures({
+    // in for the check CI runs from the protected base. The inputs are
+    // computed by the SAME function `motebit-verify repo-change` runs in CI
+    // (`computeRepoChangeInputs`, `@motebit/verify/git`), from the committed
+    // objects — base = the tip, head = the bundle commit — at the run's
+    // clock. No pull request exists yet, so its author is CI's check; the
+    // base ref is the scope's, the expected repository the scope's (the run
+    // reads no git config and no remote; CI holds `repo` to its repository).
+    const computed = await computeRepoChangeInputs({
       git,
-      tip,
-      record: made.record,
-      bundleCommit,
-      scope,
-      changeEntries,
-      headTree,
-      bundleTree,
+      commonDir: tipInfo.commonDir,
+      base: tip,
+      head: bundleCommit,
+      repository: scope.repo,
+      baseRef: scope.base_ref,
+      prAuthor: null,
+      now: deps.now(),
+      revocationsAsOf: preflightAt,
     });
-    const verification = await verifyRepoChange({
-      bundle: made.bundleBytes,
-      entries: changeEntries,
-      trackedPaths: tree.map((e) => e.path),
-      pins: { principal, agents },
-      isPathPermitted: tipState.isPathPermitted,
-      revocations: {
-        set: tipState.revocations.set,
-        failures: tipState.revocations.failures,
-        freshness: { basis: "asserted", asOf: { timestamp_ms: preflightAt } },
-        readAt: tip,
-      },
-      spent,
-      expectedRepo: scope.repo,
-      mode: { kind: "pull_request", shapeFailures: shapes, now: deps.now() },
-    });
+    const verification = await verifyRepoChange(computed.input);
     const accepted = isFullyVerified(verification.verdict) && verification.outcome === "completed";
     return {
       grantId: grant.grant_id,
