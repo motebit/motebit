@@ -60,7 +60,7 @@ export interface RepoChangeLandedArgs {
   readonly landed: string;
   readonly trustedTip: string;
   readonly repository: string;
-  /** Path of the pinned signing keys file (armored OpenPGP public key blocks). */
+  /** Path of the pinned set, `motebit/operator-signing-keys@1.0` (strict UTF-8 JSON). */
   readonly githubKeys: string;
   readonly json: boolean;
 }
@@ -292,7 +292,11 @@ export async function runRepoChangeCli(args: RepoChangeArgs, io: RepoChangeIo): 
 async function runLanded(args: RepoChangeLandedArgs, io: RepoChangeIo): Promise<number> {
   let report: LandedRepoChangeReport;
   try {
-    const keys = fs.readFileSync(args.githubKeys, "utf8");
+    // Strict UTF-8: an invalid byte is refused, never replaced with U+FFFD;
+    // a byte-order mark is kept, so the JSON parse refuses it.
+    const keys = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      fs.readFileSync(args.githubKeys),
+    );
     report = await verifyRepoChangeLanded({
       repo: args.repo,
       landed: args.landed,

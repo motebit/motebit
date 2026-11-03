@@ -295,6 +295,19 @@ describe("motebit-verify repo-change --landed: the landing time is GitHub's, und
     expect(t.problem ?? "").toMatch(/trusted_until \(undefined\)/);
   });
 
+  it("a pinned key with no usable creation time is refused, never open", async () => {
+    const fx = await landedFixture(tmp);
+    const raw = execFileSync("git", ["-C", fx.repo, "cat-file", "commit", fx.squash]);
+    const committer = /^committer (.*)$/m.exec(raw.toString("latin1"))![1]!;
+    const [key] = parsePinnedSigningKeys(pinned().armored);
+    for (const createdAt of [undefined, Number.NaN]) {
+      const k = { ...key!, createdAt, trustedUntil: null } as unknown as OperatorSigningKey;
+      const t = acceptLandingTime(raw, committer, "sha1", [k]);
+      expect(t.landedAt).toBeNull();
+      expect(t.problem ?? "").toMatch(/before the pinned key was created/);
+    }
+  });
+
   it("the signature was created before the committer time", async () => {
     const { r } = await judge({ sign: { created: LANDED_SECONDS - 1 } });
     expectNoTime(r, /creation time .* is before the committer time/);
@@ -999,6 +1012,39 @@ describe("motebit-verify repo-change --landed: the command", () => {
     const bad = await runMain(cliArgs(fx));
     expect(bad.code).toBe(2);
     expect(bad.stderr).toMatch(/not judged: operator signing keys: not valid JSON/);
+    // Bytes that are not UTF-8 are refused, never replaced.
+    // An armor comment holding 0xFF 0xFE: a lenient decoder reads U+FFFD there,
+    // which the armor header grammar would accept.
+    const commented = pinFile([{ key: pinned() }]).replace(
+      "-----BEGIN PGP PUBLIC KEY BLOCK-----\\n",
+      "-----BEGIN PGP PUBLIC KEY BLOCK-----\\nComment: @@\\n",
+    );
+    const at = commented.indexOf("@@");
+    expect(at).toBeGreaterThan(0);
+    fs.writeFileSync(
+      fx.keysFile,
+      Buffer.concat([
+        Buffer.from(commented.slice(0, at)),
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from(commented.slice(at + 2)),
+      ]),
+    );
+    const notUtf8First = await runMain(cliArgs(fx));
+    // Control: the same comment in ASCII is read and the change verifies.
+    fs.writeFileSync(fx.keysFile, commented.replace("@@", "ok"));
+    expect((await runMain(cliArgs(fx))).code).toBe(0);
+    fs.writeFileSync(
+      fx.keysFile,
+      Buffer.concat([
+        Buffer.from(commented.slice(0, at)),
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from(commented.slice(at + 2)),
+      ]),
+    );
+    const notUtf8 = await runMain(cliArgs(fx));
+    expect(notUtf8First.code).toBe(2);
+    expect(notUtf8.code).toBe(2);
+    expect(notUtf8.stderr).toMatch(/not judged: .*(encoded|decode|invalid)/i);
     // A bare armored key file (no windows) is not a pinned set.
     fs.writeFileSync(fx.keysFile, pinned().armored);
     const bare = await runMain(cliArgs(fx));

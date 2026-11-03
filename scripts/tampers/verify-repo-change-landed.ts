@@ -148,6 +148,20 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   entry(
+    "time: a key with no usable creation time left open",
+    `${TIME} a pinned key with no usable creation time is refused, never open`,
+    edit(
+      LANDED,
+      "key === undefined || !Number.isSafeInteger(key.createdAt) || ",
+      "key === undefined || ",
+    ),
+  ),
+  entry(
+    "command: the pinned set decoded leniently",
+    `${COMMAND} exits 2 when the pinned keys do not parse, or the file is missing`,
+    edit(CLI, "{ fatal: true, ignoreBOM: true }", "{ fatal: false, ignoreBOM: true }"),
+  ),
+  entry(
     "time: a key with no window field left open",
     `${TIME} a pinned key with no window field is refused, never open`,
     edit(LANDED, "if (until !== null && !(", "if (until != null && !("),
@@ -193,6 +207,47 @@ const TAMPERS: TamperEntry[] = [
     edit(KEYS_FILE, " || file.keys.length === 0) fail", ") fail"),
   ),
   pinSet(
+    "pinned set: a malformed fingerprint accepted",
+    `${PIN_SET} refuses an uppercase fingerprint`,
+    edit(
+      KEYS_FILE,
+      'if (typeof fp !== "string" || !FINGERPRINT.test(fp)) {',
+      "if ((false as boolean) && !FINGERPRINT.test(fp as string)) {",
+    ),
+  ),
+  pinSet(
+    "pinned set: a non-object accepted as an entry",
+    `${PIN_SET} refuses an entry not an object`,
+    edit(
+      KEYS_FILE,
+      'if (typeof o !== "object" || o === null || Array.isArray(o))',
+      'if ((false as boolean) && (typeof o !== "object" || o === null || Array.isArray(o)))',
+    ),
+  ),
+  pinSet(
+    "pinned set: a missing key accepted",
+    `${PIN_SET} refuses a missing key`,
+    edit(
+      KEYS_FILE,
+      "    if (!Object.prototype.hasOwnProperty.call(r, k)) fail(",
+      "    if ((false as boolean) && !Object.prototype.hasOwnProperty.call(r, k)) fail(",
+    ),
+  ),
+  pinSet(
+    "pinned set: keys not an array accepted",
+    `${PIN_SET} refuses keys not an array`,
+    edit(
+      KEYS_FILE,
+      "if (!Array.isArray(file.keys) || file.keys.length",
+      "if ((file.keys as unknown[]).length",
+    ),
+  ),
+  pinSet(
+    "pinned set: armored not a string accepted",
+    `${PIN_SET} refuses armored not a string`,
+    off(KEYS_FILE, 'typeof e.armored !== "string") fail'),
+  ),
+  pinSet(
     "pinned set: an unknown entry key accepted",
     `${PIN_SET} refuses an unknown entry key`,
     edit(
@@ -206,8 +261,8 @@ const TAMPERS: TamperEntry[] = [
     `${TIME} the committer time is before the pinned key was created`,
     edit(
       LANDED,
-      "if (key === undefined || seconds < key.createdAt) {",
-      "if (key === undefined || ((false as boolean) && seconds < key.createdAt)) {",
+      "if (key === undefined || !Number.isSafeInteger(key.createdAt) || seconds < key.createdAt) {",
+      "if (key === undefined || !Number.isSafeInteger(key.createdAt) || ((false as boolean) && seconds < key.createdAt)) {",
     ),
   ),
   unit(

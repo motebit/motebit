@@ -159,7 +159,7 @@ export function acceptLandingTime(
     );
   }
   const key = keys.find((k) => k.fingerprint === sig.fingerprint);
-  if (key === undefined || seconds < key.createdAt) {
+  if (key === undefined || !Number.isSafeInteger(key.createdAt) || seconds < key.createdAt) {
     return no(
       `the committer time (${seconds}) is before the pinned key was created (${key?.createdAt ?? "?"})`,
       sig.fingerprint,
