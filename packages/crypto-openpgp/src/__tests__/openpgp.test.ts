@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parsePinnedSigningKeys, verifyCommitSignature } from "../index.js";
-import { splitSignedCommit } from "../openpgp.js";
+import { crc24, splitSignedCommit } from "../openpgp.js";
 import {
   armor,
   commitPayload,
@@ -38,6 +38,13 @@ function oldPacket(tag: number, body: Buffer): Buffer {
     body,
   ]);
 }
+
+describe("the armor checksum", () => {
+  it("CRC-24 gives the RFC 4880 check value", () => {
+    expect(crc24(Buffer.from("123456789"))).toBe(0x21cf02);
+    expect(crc24(new Uint8Array())).toBe(0xb704ce);
+  });
+});
 
 describe("the pinned signing keys file", () => {
   it("one or more armored blocks; every primary key a candidate, its fingerprint computed", () => {

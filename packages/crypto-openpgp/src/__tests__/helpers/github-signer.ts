@@ -9,7 +9,18 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 
-import { crc24 } from "../../openpgp.js";
+/** CRC-24 (RFC 4880 §6.1), the test signer's own copy: the code under test is never its oracle. */
+function crc24(bytes: Uint8Array): number {
+  let crc = 0xb704ce;
+  for (const b of bytes) {
+    crc ^= b << 16;
+    for (let i = 0; i < 8; i++) {
+      crc <<= 1;
+      if (crc & 0x1000000) crc ^= 0x1864cfb;
+    }
+  }
+  return crc & 0xffffff;
+}
 
 export interface TestSigningKey {
   readonly privateKey: KeyObject;

@@ -115,12 +115,6 @@ function git(repo: string, ...args: string[]): string {
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
-/**
- * A test stand-in for GitHub's commit signer: an ephemeral RSA key, its
- * OpenPGP v4 public key block (the pinned-keys file), and `sign`, which
- * inserts a v4 binary RSA/SHA-256 signature over the commit as its `gpgsig`
- * header (RFC 4880 §5.2.3, §5.2.4, §6). No network, no real GitHub key.
- */
 /** CRC-24 (RFC 4880 §6.1), the test signer's own copy: the code under test is never its oracle. */
 function crc24(bytes: Uint8Array): number {
   let crc = 0xb704ce;
@@ -134,6 +128,12 @@ function crc24(bytes: Uint8Array): number {
   return crc & 0xffffff;
 }
 
+/**
+ * A test stand-in for GitHub's commit signer: an ephemeral RSA key, its
+ * OpenPGP v4 public key block (the pinned-keys file), and `sign`, which
+ * inserts a v4 binary RSA/SHA-256 signature over the commit as its `gpgsig`
+ * header (RFC 4880 §5.2.3, §5.2.4, §6). No network, no real GitHub key.
+ */
 function testGithubSigner(): {
   armored: string;
   sign: (payload: Buffer, seconds: number) => Buffer;
