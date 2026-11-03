@@ -4,7 +4,11 @@
  * git directory: the isolated session, tip resolution from the ref files,
  * tree and blob reads, the pins, revocations and path policy at a commit, the
  * spent check, the entries between two trees, and every input
- * `verifyRepoChange` (`@motebit/verifier`) needs in CI-on-PR mode.
+ * `verifyRepoChange` (`@motebit/verifier`) needs in CI-on-PR mode — and,
+ * offline on a landed change, the same inputs from raw re-hashed objects,
+ * with the squash commit's committer time accepted only under pinned
+ * OpenPGP keys (`computeLandedRepoChangeInputs`; the signature check is
+ * `@motebit/crypto-openpgp`'s, re-exported here).
  *
  * One implementation for both judges: `motebit-verify repo-change` and the
  * self-check of `motebit repo-task run`, which imports this subpath.
@@ -17,7 +21,36 @@ export {
   resolveGitDirectories,
   resolveObjectDirectory,
 } from "./session.js";
-export type { GitDirectories, IsolatedGit } from "./session.js";
+export type { GitDirectories, IsolatedGit, ObjectStream, StoredObject } from "./session.js";
+export {
+  ObjectStoreError,
+  gitObjectId,
+  openRawObjects,
+  parseCommit,
+  parseTree,
+} from "./objects.js";
+export type { RawCommit, RawObjects, RawTreeEntry } from "./objects.js";
+export {
+  crc24,
+  parsePinnedSigningKeys,
+  splitSignedCommit,
+  verifyCommitSignature,
+} from "@motebit/crypto-openpgp";
+export type { CommitSignatureCheck, PinnedSigningKey } from "@motebit/crypto-openpgp";
+export {
+  LANDING_COMMITTER,
+  LANDING_SIGNATURE_WINDOW_S,
+  acceptLandingTime,
+  computeLandedRepoChangeInputs,
+  verifyRepoChangeLanded,
+} from "./landed.js";
+export type {
+  LandedRepoChange,
+  LandedRepoChangeCheck,
+  LandedRepoChangeInputs,
+  LandedRepoChangeReport,
+  LandedTime,
+} from "./landed.js";
 export { RepoTipError, resolveRepoTip } from "./tip.js";
 export type { RepoTip } from "./tip.js";
 export { commitParents, gitBlobId, listTree, pathKey, readBlob } from "./tree.js";

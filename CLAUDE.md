@@ -16,7 +16,7 @@ MCP standardizes tool access and its authorization. A2A standardizes agent disco
 
 ## Architecture
 
-pnpm monorepo, Turborepo, TypeScript. Node ≥ 22, pnpm 9.15. 53 directories under `packages/`: 52 workspace libraries on the 7-layer DAG (enforced by `pnpm check-deps`) plus the standalone `github-action` (no `package.json`, outside the DAG). 5 surfaces + 6 supporting apps, 11 services, 38 open protocol specs. 74 workspace packages in total (52 libraries + 11 apps + 11 services): 12 publish to npm, the other 62 are workspace-private.
+pnpm monorepo, Turborepo, TypeScript. Node ≥ 22, pnpm 9.15. 54 directories under `packages/`: 53 workspace libraries on the 7-layer DAG (enforced by `pnpm check-deps`) plus the standalone `github-action` (no `package.json`, outside the DAG). 5 surfaces + 6 supporting apps, 11 services, 38 open protocol specs. 75 workspace packages in total (53 libraries + 11 apps + 11 services): 13 publish to npm, the other 62 are workspace-private.
 
 Layout and per-package roles: [`README.md`](README.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (canonical; enforced by `check-docs-tree`).
 
@@ -30,6 +30,7 @@ Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enf
 - [`packages/crypto-android-keystore/CLAUDE.md`](packages/crypto-android-keystore/CLAUDE.md) — Android Hardware-Backed Keystore Attestation verifier; pinned Google roots (RSA + ECDSA P-384); the canonical sovereign-verifiable Android primitive (replaces the removed `crypto-play-integrity`)
 - [`packages/crypto-tpm/CLAUDE.md`](packages/crypto-tpm/CLAUDE.md) — Windows / Linux TPM 2.0 EK chain verifier; pinned vendor roots, injected at call site
 - [`packages/crypto-webauthn/CLAUDE.md`](packages/crypto-webauthn/CLAUDE.md) — WebAuthn platform-authenticator packed-attestation verifier; pinned FIDO roots (Apple, Yubico, Microsoft)
+- [`packages/crypto-openpgp/CLAUDE.md`](packages/crypto-openpgp/CLAUDE.md) — git commit-signature verifier (one v4 RSA/SHA-256 `gpgsig` shape); operator signing keys pinned, injected at call site; Node built-ins only
 - [`packages/verify/CLAUDE.md`](packages/verify/CLAUDE.md) — canonical `motebit-verify` CLI; Apache-2.0 aggregator that bundles the canonical Apache-2.0 platform leaves with motebit-canonical defaults
 - [`packages/state-export-client/CLAUDE.md`](packages/state-export-client/CLAUDE.md) — browser-safe verifier for `X-Motebit-Content-Manifest`; trust-on-first-use bootstrap from `/.well-known/motebit-transparency.json`; the consumer-side counterpart to the relay's state-export-signed producer surface
 - [`packages/circuit-breaker/CLAUDE.md`](packages/circuit-breaker/CLAUDE.md) — per-peer three-state engine, no I/O, injected clock

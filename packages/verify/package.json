@@ -70,6 +70,7 @@
     "@motebit/crypto": "workspace:*",
     "@motebit/crypto-android-keystore": "workspace:*",
     "@motebit/crypto-appattest": "workspace:*",
+    "@motebit/crypto-openpgp": "workspace:*",
     "@motebit/crypto-tpm": "workspace:*",
     "@motebit/crypto-webauthn": "workspace:*",
     "@motebit/protocol": "workspace:*",

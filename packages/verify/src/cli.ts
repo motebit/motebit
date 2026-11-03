@@ -20,6 +20,10 @@
  *     --head <pr head> --repository <owner/name> --base-ref main \
  *     --pr-author motebit-agent [--now <ms>] [--json]
  *
+ *   # The same change offline, once landed (spec/repo-change-v1.md §9).
+ *   motebit-verify repo-change --landed <squash commit> --trusted-tip <commit> \
+ *     --repository <owner/name> --github-keys <file> --repo <clone> [--json]
+ *
  *   # Platform-specific overrides (all optional; defaults match
  *   # motebit's canonical identifiers).
  *   motebit-verify <file> \
@@ -482,6 +486,8 @@ function renderHelp(): string {
     "  motebit-verify approval-decision <decision-file> [options]",
     "  motebit-verify repo-change --repo <clone> --base <commit> --head <commit> \\",
     "    --repository <owner/name> --base-ref <ref> --pr-author <login> [--now <ms>] [--json]",
+    "  motebit-verify repo-change --landed <commit> --trusted-tip <commit> \\",
+    "    --repository <owner/name> --github-keys <file> --repo <clone> [--json]",
     "",
     "  <path> may be a single file (identity, receipt, credential, presentation,",
     "  or a skill envelope JSON) OR a skill directory containing SKILL.md +",

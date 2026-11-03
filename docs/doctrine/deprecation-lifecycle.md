@@ -143,7 +143,7 @@ The two doctrines compose: addition writes the contract that future removal reli
 
 ## Cross-package coordination
 
-Motebit publishes 12 packages, each versioning independently on its own merit (see [release-versioning](release-versioning.md)). This shapes deprecation mechanics:
+Motebit publishes 13 packages, each versioning independently on its own merit (see [release-versioning](release-versioning.md)). This shapes deprecation mechanics:
 
 - **`removed in <version>` is scoped to the package it annotates.** A `removed in 2.0.0` on `@motebit/sdk` means the removal happens when `@motebit/sdk` itself reaches 2.0.0 — not when other packages do. Each package's own major is its own commitment.
 - **Cross-package replacements are valid but require explicit synchronization.** Deprecating `X` in `@motebit/sdk` in favor of `Y` in `@motebit/verifier` works, but the migration window depends on **both** packages' release cadences. Document the assumed minimum versions of both replacement and deprecator in the `@deprecated` annotation.

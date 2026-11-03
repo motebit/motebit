@@ -1348,6 +1348,18 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@22.20.5)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.3.5(@types/node@22.20.5)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
 
+  packages/crypto-openpgp:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.5
+        version: 22.20.5
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.5)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.3.5(@types/node@22.20.5)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+
   packages/crypto-tpm:
     dependencies:
       '@motebit/crypto':
@@ -2325,6 +2337,9 @@ importers:
       '@motebit/crypto-appattest':
         specifier: workspace:*
         version: link:../crypto-appattest
+      '@motebit/crypto-openpgp':
+        specifier: workspace:*
+        version: link:../crypto-openpgp
       '@motebit/crypto-tpm':
         specifier: workspace:*
         version: link:../crypto-tpm

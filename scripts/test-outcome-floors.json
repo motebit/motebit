@@ -18,6 +18,7 @@
     "packages/crypto": 896,
     "packages/crypto-android-keystore": 37,
     "packages/crypto-appattest": 39,
+    "packages/crypto-openpgp": 67,
     "packages/crypto-tpm": 39,
     "packages/crypto-webauthn": 40,
     "packages/deposit-detector": 18,

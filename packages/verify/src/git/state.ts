@@ -117,11 +117,16 @@ export interface RepoState {
  * Read the pins, revocations and path policy from `commit`'s tree (`tree`, its
  * full listing), through the isolated session. Never throws for what the tree
  * holds: every rule that did not hold is named in `problems`.
+ *
+ * `blob` reads a blob's bytes; default `readBlob` through the session. The
+ * offline mode passes its re-hashing reader (`objects.ts`), so no byte it
+ * judges is the store's word alone.
  */
 export async function readRepoState(
   git: IsolatedGit,
   commit: string,
   tree: readonly TreeEntry[],
+  blob: (oid: string) => Promise<Uint8Array> = (oid) => readBlob(git, oid),
 ): Promise<RepoState> {
   const refusals: string[] = [];
   const byPath = new Map<string, TreeEntry>();
@@ -131,7 +136,7 @@ export async function readRepoState(
   }
   const regularBlob = (e: TreeEntry | undefined): e is TreeEntry =>
     e !== undefined && e.type === "blob" && e.mode === "100644";
-  const text = async (e: TreeEntry): Promise<string | null> => decode(await readBlob(git, e.oid));
+  const text = async (e: TreeEntry): Promise<string | null> => decode(await blob(e.oid));
 
   // -- The principal pin.
   let principal: RepoChangePin | null = null;

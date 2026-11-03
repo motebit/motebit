@@ -12,6 +12,7 @@
     { "path": "../crypto" },
     { "path": "../crypto-android-keystore" },
     { "path": "../crypto-appattest" },
+    { "path": "../crypto-openpgp" },
     { "path": "../crypto-tpm" },
     { "path": "../crypto-webauthn" },
     { "path": "../protocol" },

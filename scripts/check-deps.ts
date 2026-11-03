@@ -42,6 +42,8 @@ const LAYER: Record<string, number> = {
   "@motebit/protocol": 0,
   "@motebit/sdk": 0,
   "@motebit/crypto": 0,
+  // Node built-ins only: the commit-signature leaf @motebit/verify bundles.
+  "@motebit/crypto-openpgp": 0,
 
   // Layer 1 — Primitives (depend only on Layer 0)
   // The published Apache-2.0 verification libraries: each depends only on
@@ -163,6 +165,7 @@ const PERMISSIVE_PACKAGES = new Set([
   "@motebit/state-export-client",
   "@motebit/crypto-android-keystore",
   "@motebit/crypto-appattest",
+  "@motebit/crypto-openpgp",
   "@motebit/crypto-tpm",
   "@motebit/crypto-webauthn",
 ]);
@@ -181,6 +184,7 @@ const PERMISSIVE_IMPORT_ALLOWED = new Set([
   "@motebit/state-export-client",
   "@motebit/crypto-android-keystore",
   "@motebit/crypto-appattest",
+  "@motebit/crypto-openpgp",
   "@motebit/crypto-tpm",
   "@motebit/crypto-webauthn",
 ]);

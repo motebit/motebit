@@ -3,7 +3,7 @@ title: Changelog
 description: Where to find what changed across motebit's published packages.
 ---
 
-Motebit ships 12 packages to npm — 11 Apache-2.0 packages on the [public surface](/docs/concepts/public-surface) and 1 BSL-1.1 reference runtime. Each carries its own `CHANGELOG.md` written by [Changesets](https://github.com/changesets/changesets), so "what changed" lives next to the code that changed.
+Motebit ships 13 packages to npm — 12 Apache-2.0 packages on the [public surface](/docs/concepts/public-surface) and 1 BSL-1.1 reference runtime. Each carries its own `CHANGELOG.md` written by [Changesets](https://github.com/changesets/changesets), so "what changed" lives next to the code that changed.
 
 ## Authoritative sources
 
@@ -18,7 +18,7 @@ The doctrine is **one canonical source per synchronization invariant**. A root C
 
 ## Published packages
 
-The 11 Apache-2.0 packages on the permissive floor:
+The 12 Apache-2.0 packages on the permissive floor:
 
 | Package                            | npm                                                                   | Changelog                                                                                               |
 | ---------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -32,6 +32,7 @@ The 11 Apache-2.0 packages on the permissive floor:
 | `@motebit/crypto-android-keystore` | [npm](https://www.npmjs.com/package/@motebit/crypto-android-keystore) | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-android-keystore/CHANGELOG.md) |
 | `@motebit/crypto-tpm`              | [npm](https://www.npmjs.com/package/@motebit/crypto-tpm)              | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-tpm/CHANGELOG.md)              |
 | `@motebit/crypto-webauthn`         | [npm](https://www.npmjs.com/package/@motebit/crypto-webauthn)         | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-webauthn/CHANGELOG.md)         |
+| `@motebit/crypto-openpgp`          | [npm](https://www.npmjs.com/package/@motebit/crypto-openpgp)          | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/crypto-openpgp/CHANGELOG.md)          |
 | `create-motebit`                   | [npm](https://www.npmjs.com/package/create-motebit)                   | [CHANGELOG](https://github.com/motebit/motebit/blob/main/packages/create-motebit/CHANGELOG.md)          |
 
 The BSL-1.1 reference runtime:
@@ -48,4 +49,4 @@ The 62 workspace-private packages (everything not in the table above) are pinned
 
 Each published package follows [semver 2.0.0](https://semver.org/). Breaking changes require a `major` changeset with a non-empty `## Migration` section per `check-changeset-discipline`. Four of the Apache-2.0 packages — `@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk`, `@motebit/verifier` — use `check-api-surface` to enforce that the type-extracted baseline (`packages/<name>/etc/<name>.api.md`) cannot drift without an explicit major bump. The `motebit` CLI uses `check-cli-surface` against `apps/cli/etc/cli-surface.json` for the operator-facing surface (subcommands, flags, exit codes, paths).
 
-10 of the 12 packages converged on `1.0.0` in the coordinated initial release (five of them had shipped pre-1.0 versions to npm before it); `@motebit/state-export-client` joined later (first published version `0.2.0`, 2026-05-13). Each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.
+10 of the 13 packages converged on `1.0.0` in the coordinated initial release (five of them had shipped pre-1.0 versions to npm before it); `@motebit/state-export-client` joined later (first published version `0.2.0`, 2026-05-13), and `@motebit/crypto-openpgp` joins at `1.0.0` on its first release. Each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.

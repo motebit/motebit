@@ -1989,8 +1989,8 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
     proves:
       "flags a numeric count claim in README.md / CLAUDE.md / architecture.mdx that disagrees with the filesystem (packages/specs/apps/services)",
     perturb: () =>
-      // Mutate the README architecture banner from "47 packages" to "37
-      // packages" — exactly the drift shape this gate was built for
+      // Lower the README architecture banner's package count by ten —
+      // exactly the drift shape this gate was built for
       // (the 2026-04-24 incident found three doc surfaces drifted to
       // 36/40/37 against an actual filesystem; same shape resurfaced
       // 2026-04-26 when crypto-android-keystore landed and four doc
@@ -1999,17 +1999,17 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       // count claims (specs, the second package mention) stay correct,
       // so only the perturbed line should appear in the gate's
       // findings — proves the gate is per-line precise, not just a
-      // pass/fail of the whole doc. Probe-literal drift (the count
-      // bumping over time as packages are added) is itself caught by
-      // check-gates-effective: a stale literal makes the perturbation
-      // a no-op and the gate exits 0, surfaced as "did NOT catch the
-      // perturbation" — so the probe self-rots are visible.
-      mutateFile("README.md", (src) =>
-        src.replace(
-          "**53 packages across 7 architectural layers",
-          "**37 packages across 7 architectural layers",
-        ),
-      ),
+      // pass/fail of the whole doc. By PREDICATE (whatever the banner
+      // says, minus ten), not a literal: a literal went stale each time a
+      // package landed (last on 2026-11-02, @motebit/crypto-openpgp).
+      mutateFile("README.md", (src) => {
+        const banner = /\*\*(\d+) packages across 7 architectural layers/;
+        if (!banner.test(src)) throw new Error("README.md has no architecture banner");
+        return src.replace(
+          banner,
+          (_m, n: string) => `**${Number(n) - 10} packages across 7 architectural layers`,
+        );
+      }),
   },
   {
     script: "check-doc-diagrams",
