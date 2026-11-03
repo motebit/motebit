@@ -107,6 +107,34 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   entry(
+    "time: a signature made long after the committer time accepted",
+    `${TIME} the signature was made more than five minutes after the committer time`,
+    off(LANDED, "sig.createdAt - seconds > LANDING_SIGNATURE_WINDOW_S) {"),
+  ),
+  entry(
+    "time: a committer time before the pinned key existed accepted",
+    `${TIME} the committer time is before the pinned key was created`,
+    edit(
+      LANDED,
+      "if (key === undefined || seconds < key.createdAt) {",
+      "if (key === undefined || ((false as boolean) && seconds < key.createdAt)) {",
+    ),
+  ),
+  unit(
+    "signature: a signature made before its key accepted",
+    `${SIGNATURE} refuses a signature made before its key was created`,
+    off(PGP, "sig.createdAt < key.createdAt) {"),
+  ),
+  unit(
+    "armor: a body line longer than 76 characters accepted",
+    `${HEADER} refuses broken armor: no END line, a malformed armor header, a wrong CRC-24`,
+    edit(
+      PGP,
+      "l.length === 0 || l.length > 76 || !B64_LINE.test(l)",
+      "l.length === 0 || !B64_LINE.test(l)",
+    ),
+  ),
+  entry(
     "time: a signature made before the committer time accepted",
     `${TIME} the signature was created before the committer time`,
     off(LANDED, "sig.createdAt < seconds) {"),
@@ -340,6 +368,15 @@ const TAMPERS: TamperEntry[] = [
     "parent: the revocations not supplied",
     `${PARENT} a revocation at the parent`,
     edit(LANDED, "      set: state.revocations.set,\n", "      set: [],\n"),
+  ),
+  entry(
+    "spent: judged at a non-canonical grant id's path",
+    `${PARENT} spent is never judged at a non-canonical grant id's path`,
+    edit(
+      LANDED,
+      "record.grantId !== null && isCanonicalGrantId(record.grantId) ? target : null",
+      "record.grantId !== null ? target : null",
+    ),
   ),
   entry(
     "parent: a malformed revocation file read as none",

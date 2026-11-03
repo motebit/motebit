@@ -24,7 +24,7 @@ import {
   verifyRepoChangeLanded,
 } from "../git/index.js";
 import type { LandedRepoChangeReport } from "../git/index.js";
-import { subpacket } from "./helpers/github-signer.js";
+import { subpacket, testSigningKey } from "./helpers/github-signer.js";
 import {
   LANDED_SECONDS,
   gitIn,
@@ -232,6 +232,20 @@ describe("motebit-verify repo-change --landed: the landing time is GitHub's, und
     // Signed in the same second, minimal MPI, no blank line: accepted too.
     const same = await judge({ sign: { created: LANDED_SECONDS, minimalMpi: true } });
     expect(same.r.computed.time.landedAt).toBe(LANDED_SECONDS * 1000);
+  });
+
+  it("the signature was made more than five minutes after the committer time", async () => {
+    const late = await judge({ sign: { created: LANDED_SECONDS + 301 } });
+    expectNoTime(late.r, /made 301 s after the committer time, more than 300 s/);
+    const edge = await judge({ sign: { created: LANDED_SECONDS + 300 } });
+    expect(edge.r.computed.time.landedAt).toBe(LANDED_SECONDS * 1000);
+  });
+
+  it("the committer time is before the pinned key was created", async () => {
+    const young = testSigningKey(2048, LANDED_SECONDS + 1);
+    const fx = await landedFixture(tmp, { signer: young });
+    const r = await check(fx, { keys: young.armored });
+    expectNoTime(r, /committer time .* is before the pinned key was created/);
   });
 
   it("the signature was created before the committer time", async () => {
@@ -539,6 +553,15 @@ describe("motebit-verify repo-change --landed: inputs are read at the squash com
     const { r } = await judge({ baseExtra: { ".motebit/revocations/junk.json": "not json" } });
     expectRule(r, "revocation.repo_change.set_malformed", "junk.json");
     expect(r.verification.verdict.revocation.status).toBe("unchecked");
+  });
+
+  it("spent is never judged at a non-canonical grant id's path", async () => {
+    const { r } = await judge({
+      baseExtra: { ".motebit/bundles/NOT-A-UUID.json": "{}" },
+      bundle: (b) => (b.grant = { ...(b.grant as object), grant_id: "NOT-A-UUID" }),
+    });
+    expect(r.computed.input.spent).toBe(false);
+    expect(r.accepted).toBe(false);
   });
 
   it("the tracked paths are the parent's, never the squash commit's", async () => {

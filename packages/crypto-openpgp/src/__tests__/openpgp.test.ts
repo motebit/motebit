@@ -428,6 +428,19 @@ describe("the signature packet, refusal by refusal", () => {
     });
   });
 
+  it("refuses a signature made before its key was created", () => {
+    const young = testSigningKey(2048, T + 10);
+    const raw = withSignature(payload, signPayload(payload, young, T));
+    expect(verifyCommitSignature(raw, "sha1", parsePinnedSigningKeys(young.armored))).toEqual({
+      ok: false,
+      reason: "the signature was made before its key was created",
+    });
+    const atCreation = withSignature(payload, signPayload(payload, young, T + 10));
+    expect(
+      verifyCommitSignature(atCreation, "sha1", parsePinnedSigningKeys(young.armored)),
+    ).toMatchObject({ ok: true });
+  });
+
   it("refuses a signer that is not pinned, by fingerprint or by key id", () => {
     expect(check({}, B)).toEqual({
       ok: false,
@@ -531,6 +544,19 @@ describe("the commit's signature header", () => {
     ).toEqual({
       ok: false,
       reason: "the signature: the PGP SIGNATURE has a malformed armor header",
+    });
+    const body = sig.replace(/\n$/, "").split("\n");
+    const blank = body.indexOf("");
+    // Two 64-character base64 lines joined: a 128-character line, longer than armor's 76.
+    const long = [
+      ...body.slice(0, blank + 1),
+      body[blank + 1]! + body[blank + 2]!,
+      ...body.slice(blank + 3),
+    ];
+    expect(body[blank + 1]!.length + body[blank + 2]!.length).toBeGreaterThan(76);
+    expect(at(`${long.join("\n")}\n`)).toEqual({
+      ok: false,
+      reason: "the signature: the PGP SIGNATURE body is not base64 lines",
     });
     const lines = sig.replace(/\n$/, "").split("\n");
     const crc = lines[lines.length - 2]!;

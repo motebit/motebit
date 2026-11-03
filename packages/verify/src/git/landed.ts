@@ -23,8 +23,10 @@
  *     (`operator_recorded`), accepted only when the committer is exactly
  *     `GitHub <noreply@github.com>` AND the commit's OpenPGP signature
  *     verifies under one of the pinned keys (`@motebit/crypto-openpgp`) AND the
- *     signature was not created before the committer time (GitHub signs
- *     seconds after it records the landing);
+ *     signature was made within LANDING_SIGNATURE_WINDOW_S after the committer
+ *     time, never before it (GitHub signs seconds after it records the
+ *     landing) AND the committer time is not before the pinned key's own
+ *     creation time;
  *     otherwise `landedAt` is `null`, so `authority` is `unknown`;
  *   - revocation freshness `asserted`, as of the accepted landing time (the
  *     parent was the tip when the squash commit was built on it), with the
@@ -68,6 +70,14 @@ import { pathKey } from "./tree.js";
 
 /** The hosting operator whose recorded time the offline mode accepts (design: "Squash commits on `main` are signed by GitHub with GitHub as committer"). */
 export const LANDING_COMMITTER = { name: "GitHub", email: "noreply@github.com" } as const;
+
+/**
+ * How long after the committer time the operator's signature may be made.
+ * GitHub signs 0–17 s after it records a landing (all 740 of its squash
+ * commits on motebit's main, 2026-11-02); five minutes keeps every real one
+ * and refuses a signature made long after the time it vouches for.
+ */
+export const LANDING_SIGNATURE_WINDOW_S = 300;
 
 /** What a landed change is judged against. */
 export interface LandedRepoChange {
@@ -137,6 +147,19 @@ export function acceptLandingTime(
   if (sig.createdAt < seconds) {
     return no(
       `the signature's creation time (${sig.createdAt}) is before the committer time (${seconds})`,
+      sig.fingerprint,
+    );
+  }
+  if (sig.createdAt - seconds > LANDING_SIGNATURE_WINDOW_S) {
+    return no(
+      `the signature was made ${sig.createdAt - seconds} s after the committer time, more than ${LANDING_SIGNATURE_WINDOW_S} s`,
+      sig.fingerprint,
+    );
+  }
+  const key = keys.find((k) => k.fingerprint === sig.fingerprint);
+  if (key === undefined || seconds < key.createdAt) {
+    return no(
+      `the committer time (${seconds}) is before the pinned key was created (${key?.createdAt ?? "?"})`,
       sig.fingerprint,
     );
   }

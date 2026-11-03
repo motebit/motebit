@@ -39,6 +39,7 @@ export {
 export type { CommitSignatureCheck, PinnedSigningKey } from "@motebit/crypto-openpgp";
 export {
   LANDING_COMMITTER,
+  LANDING_SIGNATURE_WINDOW_S,
   acceptLandingTime,
   computeLandedRepoChangeInputs,
   verifyRepoChangeLanded,

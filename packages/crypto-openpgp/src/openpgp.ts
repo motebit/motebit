@@ -473,6 +473,9 @@ export function verifyCommitSignature(
   if (sig.keyId !== null && key.keyId !== sig.keyId) {
     return { ok: false, reason: "the issuer key id is not the pinned key's" };
   }
+  if (sig.createdAt < key.createdAt) {
+    return { ok: false, reason: "the signature was made before its key was created" };
+  }
   const trailer = Buffer.alloc(6);
   trailer[0] = 0x04;
   trailer[1] = 0xff;

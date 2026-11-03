@@ -67,13 +67,13 @@ export function armor(label: string, data: Buffer, headers: readonly string[] = 
 const CREATED = 1_700_000_000;
 
 /** A fresh RSA signing key and its OpenPGP v4 public key block. */
-export function testSigningKey(bits = 2048): TestSigningKey {
+export function testSigningKey(bits = 2048, keyCreated = CREATED): TestSigningKey {
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: bits });
   const jwk = publicKey.export({ format: "jwk" });
   const n = Buffer.from(jwk.n!, "base64url");
   const e = Buffer.from(jwk.e!, "base64url");
   const created = Buffer.alloc(4);
-  created.writeUInt32BE(CREATED);
+  created.writeUInt32BE(keyCreated);
   const keyBody = Buffer.concat([Buffer.from([4]), created, Buffer.from([1]), mpi(n), mpi(e)]);
   const fingerprint = createHash("sha1")
     .update(Buffer.from([0x99, keyBody.length >> 8, keyBody.length & 0xff]))
