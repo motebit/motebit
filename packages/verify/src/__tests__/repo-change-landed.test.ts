@@ -1045,6 +1045,11 @@ describe("motebit-verify repo-change --landed: the command", () => {
     expect(notUtf8First.code).toBe(2);
     expect(notUtf8.code).toBe(2);
     expect(notUtf8.stderr).toMatch(/not judged: .*(encoded|decode|invalid)/i);
+    // A byte-order mark is not part of the pinned set's JSON.
+    fs.writeFileSync(fx.keysFile, `\uFEFF${pinFile([{ key: pinned() }])}`);
+    const bom = await runMain(cliArgs(fx));
+    expect(bom.code).toBe(2);
+    expect(bom.stderr).toMatch(/not judged: operator signing keys: not valid JSON/);
     // A bare armored key file (no windows) is not a pinned set.
     fs.writeFileSync(fx.keysFile, pinned().armored);
     const bare = await runMain(cliArgs(fx));

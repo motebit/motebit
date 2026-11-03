@@ -43,6 +43,14 @@ describe("the pinned set file", () => {
       /member name "keys" is repeated/,
     ],
     [
+      "a member name repeated in an entry, one copy escaped",
+      file([entry()]).replace(
+        '"trusted_until":null',
+        '"trusted_until":null,"trusted\\u005funtil":5',
+      ),
+      /member name "trusted_until" is repeated/,
+    ],
+    [
       "a member name repeated in an entry",
       file([entry()]).replace('"trusted_until":null', '"trusted_until":null,"trusted_until":1'),
       /member name "trusted_until" is repeated/,

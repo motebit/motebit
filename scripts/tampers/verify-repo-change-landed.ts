@@ -157,6 +157,11 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   entry(
+    "command: a byte-order mark dropped before parsing",
+    `${COMMAND} exits 2 when the pinned keys do not parse, or the file is missing`,
+    edit(CLI, "{ fatal: true, ignoreBOM: true }", "{ fatal: true, ignoreBOM: false }"),
+  ),
+  entry(
     "command: the pinned set decoded leniently",
     `${COMMAND} exits 2 when the pinned keys do not parse, or the file is missing`,
     edit(CLI, "{ fatal: true, ignoreBOM: true }", "{ fatal: false, ignoreBOM: true }"),
@@ -246,6 +251,15 @@ const TAMPERS: TamperEntry[] = [
     "pinned set: armored not a string accepted",
     `${PIN_SET} refuses armored not a string`,
     off(KEYS_FILE, 'typeof e.armored !== "string") fail'),
+  ),
+  pinSet(
+    "pinned set: a repeated name compared before unescaping",
+    `${PIN_SET} refuses a member name repeated in an entry, one copy escaped`,
+    edit(
+      KEYS_FILE,
+      "const name = JSON.parse(text.slice(i, j + 1)) as string;",
+      "const name = text.slice(i + 1, j);",
+    ),
   ),
   pinSet(
     "pinned set: an unknown entry key accepted",
