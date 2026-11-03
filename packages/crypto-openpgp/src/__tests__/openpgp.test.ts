@@ -7,7 +7,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { parsePinnedSigningKeys, splitSignedCommit, verifyCommitSignature } from "../index.js";
+import { parsePinnedSigningKeys, verifyCommitSignature } from "../index.js";
+import { splitSignedCommit } from "../openpgp.js";
 import {
   armor,
   commitPayload,

@@ -30,12 +30,7 @@ else console.error(check.reason);
 3. **The signature packet.** Type 0x00 (binary document), RSA, SHA-256; a creation time exactly once in the hashed area; the issuer named by fingerprint and/or key id, which must agree with each other and with the pinned key; no critical subpacket except the creation time; no signature expiration.
 4. **The signature.** Not made before its key was created. Over the commit with the signature header removed (git's payload rule) plus the v4 trailer: the digest's left 16 bits must match, then RSA PKCS#1 v1.5 must verify (`node:crypto`). The signature MPI may declare the modulus's full width with leading zero bits (GitHub's form); a key's MPIs must be exact.
 
-Refusals are returned as `{ ok: false, reason }`, never thrown.
-
-## Lower-level primitives
-
-- `splitSignedCommit(raw, objectFormat)` — the signature header's armored text and the payload with that header removed (git's payload rule), or `{ reason }` when the header is missing, repeated, or sits beside a `mergetag` / `encoding` header.
-- `crc24(bytes)` — the RFC 4880 §6.1 armor checksum. `parsePinnedSigningKeys` throws, because a bad pin file is a configuration error, not a verdict.
+`verifyCommitSignature` returns refusals as `{ ok: false, reason }`, never thrown. `parsePinnedSigningKeys` throws, because a bad pin file is a configuration error, not a verdict.
 
 ## What a passing verification proves — and what it does not
 

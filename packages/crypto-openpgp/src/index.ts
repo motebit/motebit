@@ -6,10 +6,5 @@
  * Node built-ins only; no network; the pinned keys are injected at the call
  * site, never fetched.
  */
-export {
-  crc24,
-  parsePinnedSigningKeys,
-  splitSignedCommit,
-  verifyCommitSignature,
-} from "./openpgp.js";
+export { parsePinnedSigningKeys, verifyCommitSignature } from "./openpgp.js";
 export type { CommitSignatureCheck, PinnedSigningKey } from "./openpgp.js";
