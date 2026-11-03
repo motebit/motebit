@@ -216,8 +216,8 @@ const TAMPERS: TamperEntry[] = [
     `${PIN_SET} refuses an uppercase fingerprint`,
     edit(
       KEYS_FILE,
-      'if (typeof fp !== "string" || !FINGERPRINT.test(fp)) {',
-      "if ((false as boolean) && !FINGERPRINT.test(fp as string)) {",
+      "const FINGERPRINT = /^[0-9a-f]{40}$/;",
+      "const FINGERPRINT = /^[0-9a-fA-F]{39,40}$/;",
     ),
   ),
   pinSet(
@@ -243,14 +243,20 @@ const TAMPERS: TamperEntry[] = [
     `${PIN_SET} refuses keys not an array`,
     edit(
       KEYS_FILE,
-      "if (!Array.isArray(file.keys) || file.keys.length",
-      "if ((file.keys as unknown[]).length",
+      "if (!Array.isArray(file.keys) || file.keys.length === 0) fail",
+      "if ((file.keys as unknown[]).length === 0) fail",
     ),
+    edit(KEYS_FILE, "return file.keys.map(", "return (file.keys as unknown[]).map("),
   ),
   pinSet(
     "pinned set: armored not a string accepted",
     `${PIN_SET} refuses armored not a string`,
     off(KEYS_FILE, 'typeof e.armored !== "string") fail'),
+    edit(
+      KEYS_FILE,
+      "parsePinnedSigningKeys(e.armored)",
+      "parsePinnedSigningKeys(e.armored as string)",
+    ),
   ),
   pinSet(
     "pinned set: a repeated name compared before unescaping",
