@@ -26,9 +26,9 @@ else console.error(check.reason);
 ## What it verifies
 
 1. **The pinned keys.** One or more ASCII-armored `PGP PUBLIC KEY BLOCK`s. Every primary key must be v4 RSA; its fingerprint is computed (RFC 4880 §12.2), never taken from a label. User ID, signature, trust and subkey packets are skipped; subkeys are never candidates. Any other packet, or the same key pinned twice, is refused.
-2. **The signature header.** `gpgsig` (`gpgsig-sha256` in a sha256 repository) present exactly once, holding one armored `PGP SIGNATURE` with a correct CRC-24, whose body is one v4 signature packet and nothing after it.
+2. **The signature header.** `gpgsig` (`gpgsig-sha256` in a sha256 repository) present exactly once, holding one armored `PGP SIGNATURE` with a correct CRC-24, whose body is one v4 signature packet and nothing after it. One empty continuation line after the END line, as GitHub writes it, is read as the armor's trailing newline.
 3. **The signature packet.** Type 0x00 (binary document), RSA, SHA-256; a creation time exactly once in the hashed area; the issuer named by fingerprint and/or key id, which must agree with each other and with the pinned key; no critical subpacket except the creation time; no signature expiration.
-4. **The signature.** Over the commit with the signature header removed (git's payload rule) plus the v4 trailer: the digest's left 16 bits must match, then RSA PKCS#1 v1.5 must verify (`node:crypto`).
+4. **The signature.** Over the commit with the signature header removed (git's payload rule) plus the v4 trailer: the digest's left 16 bits must match, then RSA PKCS#1 v1.5 must verify (`node:crypto`). The signature MPI may declare the modulus's full width with leading zero bits (GitHub's form); a key's MPIs must be exact.
 
 Refusals are returned as `{ ok: false, reason }`, never thrown.
 

@@ -21,6 +21,8 @@ import type { SignOptions, TestSigningKey } from "./github-signer.js";
 
 /** The committer time of a landing inside the fixture grant's window. */
 export const LANDED_SECONDS = Math.floor(NOW / 1000);
+/** GitHub signs a squash commit seconds after its committer time (15–17 s on motebit's main). */
+export const SIGN_DELAY = 16;
 
 let pinnedKey: TestSigningKey | null = null;
 /** The test stand-in for GitHub's signing key: the one the pinned-keys file holds. */
@@ -118,7 +120,7 @@ export async function landedFixture(root: string, o: LandedOptions = {}): Promis
       ? payload
       : withSignature(
           payload,
-          signPayload(payload, o.signer ?? pinned(), LANDED_SECONDS, o.sign ?? {}),
+          signPayload(payload, o.signer ?? pinned(), LANDED_SECONDS + SIGN_DELAY, o.sign ?? {}),
         );
   if (o.raw) raw = o.raw(raw);
   const squash = writeCommit(repo, raw);

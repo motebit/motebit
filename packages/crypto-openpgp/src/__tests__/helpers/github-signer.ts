@@ -84,6 +84,13 @@ export function testSigningKey(bits = 2048): TestSigningKey {
   return { privateKey, fingerprint, keyId: fingerprint.slice(-16), armored, keyBody };
 }
 
+/** An MPI declaring all of `value`'s bytes as bits, leading zero bits kept (GitHub's form). */
+export function fullWidthMpi(value: Buffer): Buffer {
+  const head = Buffer.alloc(2);
+  head.writeUInt16BE(value.length * 8);
+  return Buffer.concat([head, value]);
+}
+
 /** One subpacket: `[len][type][data]`. */
 export function subpacket(type: number, data: Buffer): Buffer {
   return Buffer.concat([Buffer.from([data.length + 1, type]), data]);
@@ -108,6 +115,8 @@ export interface SignOptions {
   armored?: (a: string) => string;
   /** Bytes after the signature packet, inside the armor. */
   trailing?: Buffer;
+  /** Write the signature MPI minimally (default: at the modulus's full width, as GitHub does). */
+  minimalMpi?: boolean;
 }
 
 /** An armored v4 binary signature over `payload` by `key`. */
@@ -154,7 +163,7 @@ export function signPayload(
     unhashedLen,
     unhashedArea,
     digest.subarray(0, 2),
-    mpi(sig),
+    o.minimalMpi ? mpi(sig) : fullWidthMpi(sig),
   ]);
   if (o.body) body = o.body(body);
   const data = Buffer.concat([packet(2, body), o.trailing ?? Buffer.alloc(0)]);
@@ -162,11 +171,21 @@ export function signPayload(
   return o.armored ? o.armored(armored) : armored;
 }
 
-/** Insert `armored` as the commit's `gpgsig` header (at the end of the header, as git does). */
-export function withSignature(payload: Buffer, armored: string, header = "gpgsig"): Buffer {
+/**
+ * Insert `armored` as the commit's `gpgsig` header (at the end of the header,
+ * as git does). By default the header ends with one empty continuation line
+ * (` `) after the END line, as GitHub writes it.
+ */
+export function withSignature(
+  payload: Buffer,
+  armored: string,
+  header = "gpgsig",
+  githubTail = true,
+): Buffer {
   const text = payload.toString("latin1");
   const end = text.indexOf("\n\n");
   const lines = armored.replace(/\n$/, "").split("\n");
+  if (githubTail) lines.push("");
   const value = [`${header} ${lines[0]!}`, ...lines.slice(1).map((l) => ` ${l}`)].join("\n");
   return Buffer.from(`${text.slice(0, end)}\n${value}${text.slice(end)}`, "latin1");
 }

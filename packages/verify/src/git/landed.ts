@@ -23,7 +23,8 @@
  *     (`operator_recorded`), accepted only when the committer is exactly
  *     `GitHub <noreply@github.com>` AND the commit's OpenPGP signature
  *     verifies under one of the pinned keys (`@motebit/crypto-openpgp`) AND the
- *     signature's creation time equals the committer time to the second;
+ *     signature was not created before the committer time (GitHub signs
+ *     seconds after it records the landing);
  *     otherwise `landedAt` is `null`, so `authority` is `unknown`;
  *   - revocation freshness `asserted`, as of the accepted landing time (the
  *     parent was the tip when the squash commit was built on it), with the
@@ -133,9 +134,9 @@ export function acceptLandingTime(
   const seconds = Number(m[3]);
   const sig = verifyCommitSignature(raw, objectFormat, keys);
   if (!sig.ok) return no(sig.reason);
-  if (sig.createdAt !== seconds) {
+  if (sig.createdAt < seconds) {
     return no(
-      `the signature's creation time (${sig.createdAt}) is not the committer time (${seconds})`,
+      `the signature's creation time (${sig.createdAt}) is before the committer time (${seconds})`,
       sig.fingerprint,
     );
   }

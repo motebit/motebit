@@ -320,6 +320,21 @@ describe("the signature packet, refusal by refusal", () => {
       "a malformed issuer fingerprint",
     ],
     [
+      "an issuer fingerprint of the wrong length",
+      { extraHashed: [subpacket(33, Buffer.concat([Buffer.from([4]), Buffer.alloc(19)]))] },
+      "a malformed issuer fingerprint",
+    ],
+    [
+      "an MPI that declares fewer bytes than it carries",
+      {
+        body: patch(
+          (b) => left16At(b) + 2,
+          (b, i) => b.writeUInt16BE(b.readUInt16BE(i) - 8, i),
+        ),
+      },
+      "the signature packet has trailing bytes",
+    ],
+    [
       "two different issuer fingerprints",
       {
         extraHashed: [
@@ -441,6 +456,43 @@ describe("the commit's signature header", () => {
   const keys = parsePinnedSigningKeys(A.armored);
   const payload = commitPayload({ tree: TREE, parents: [], seconds: T });
   const sig = signPayload(payload, A, T);
+
+  it("reads GitHub's form (full-width MPI, one blank last header line) and gpg's (minimal, none)", () => {
+    const github = withSignature(payload, sig);
+    expect(github.toString("latin1")).toContain("-----END PGP SIGNATURE-----\n \n\n");
+    expect(verifyCommitSignature(github, "sha1", keys)).toMatchObject({ ok: true });
+    // Full width differs from minimal only when the signature's top bit is
+    // zero (about half of all signatures): find a commit whose signature has one.
+    for (let i = 0; ; i++) {
+      const p = commitPayload({ tree: TREE, parents: [], seconds: T, message: `m${i}\n` });
+      let top = 0xff;
+      const armored = signPayload(p, A, T, {
+        body: (b) => {
+          const hashedEnd = 6 + b.readUInt16BE(4);
+          top = b[hashedEnd + 2 + b.readUInt16BE(hashedEnd) + 4]!;
+          return b;
+        },
+      });
+      if (top >= 0x80) continue;
+      expect(verifyCommitSignature(withSignature(p, armored), "sha1", keys)).toMatchObject({
+        ok: true,
+      });
+      break;
+    }
+    const gpg = withSignature(
+      payload,
+      signPayload(payload, A, T, { minimalMpi: true }),
+      "gpgsig",
+      false,
+    );
+    expect(verifyCommitSignature(gpg, "sha1", keys)).toMatchObject({ ok: true });
+    // The blank line is dropped once, and only at the end.
+    const twice = withSignature(payload, `${sig}\n`);
+    expect(verifyCommitSignature(twice, "sha1", keys)).toEqual({
+      ok: false,
+      reason: "the signature: the PGP SIGNATURE is not terminated",
+    });
+  });
 
   it("refuses an unsigned commit, two signatures, and a mergetag or encoding header", () => {
     expect(verifyCommitSignature(payload, "sha1", keys)).toEqual({

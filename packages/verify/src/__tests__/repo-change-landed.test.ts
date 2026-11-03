@@ -222,9 +222,21 @@ describe("motebit-verify repo-change --landed: the landing time is GitHub's, und
     expectNoTime((await judge({ sign: { version: 5 } })).r, /a version 5 signature, not 4/);
   });
 
-  it("the creation time is not the committer time", async () => {
-    const { r } = await judge({ sign: { created: LANDED_SECONDS + 1 } });
-    expectNoTime(r, /creation time .* is not the committer time/);
+  it("GitHub's own form is accepted at the committer time: signed seconds later, a full-width MPI, a blank last header line", async () => {
+    // The fixture's default is that form (SIGN_DELAY; the helpers' defaults).
+    const { fx, r } = await judge();
+    const raw = execGit(fx.repo, ["cat-file", "commit", fx.squash]).toString("latin1");
+    expect(raw).toContain("-----END PGP SIGNATURE-----\n \n\n");
+    expect(r.computed.time.landedAt).toBe(LANDED_SECONDS * 1000);
+    expect(r.accepted).toBe(true);
+    // Signed in the same second, minimal MPI, no blank line: accepted too.
+    const same = await judge({ sign: { created: LANDED_SECONDS, minimalMpi: true } });
+    expect(same.r.computed.time.landedAt).toBe(LANDED_SECONDS * 1000);
+  });
+
+  it("the signature was created before the committer time", async () => {
+    const { r } = await judge({ sign: { created: LANDED_SECONDS - 1 } });
+    expectNoTime(r, /creation time .* is before the committer time/);
     expect(r.computed.time.signer).toBe(pinned().fingerprint);
   });
 
@@ -364,6 +376,19 @@ describe("motebit-verify repo-change --landed: the landing time is GitHub's, und
         },
         /bit count is not exact|malformed/,
       ],
+      [
+        {
+          body: (b) => {
+            // The MPI declares fewer bytes than it carries.
+            const hashedEnd = 6 + b.readUInt16BE(4);
+            const at = hashedEnd + 2 + b.readUInt16BE(hashedEnd) + 2;
+            const c = Buffer.from(b);
+            c.writeUInt16BE(c.readUInt16BE(at) - 8, at);
+            return c;
+          },
+        },
+        /trailing bytes/,
+      ],
     ];
     for (const [sign, reason] of cases) expectNoTime((await judge({ sign })).r, reason);
   });
@@ -393,6 +418,21 @@ describe("motebit-verify repo-change --landed: every offline shape check folds i
       squashTree: (repo) => git(repo, "rev-parse", `pr~1^{tree}`),
     });
     expectShape(r, "does not add exactly one regular file under .motebit/bundles/ (it adds 0)");
+    expect(r.computed.bundlePath).toBeNull();
+  });
+
+  it("a bundle added as an executable file", async () => {
+    const { r } = await judge({
+      squashTree: (repo, head) => {
+        const line = git(repo, "ls-tree", "-r", head, "--", ".motebit/bundles/");
+        const [, blob, file] = /^100644 blob ([0-9a-f]+)\t(.+)$/.exec(line)!;
+        const idx = { GIT_INDEX_FILE: path.join(repo, ".git", `idx-${crypto.randomUUID()}`) };
+        gitIn(repo, ["read-tree", head], undefined, idx);
+        gitIn(repo, ["update-index", "--cacheinfo", `100755,${blob},${file}`], undefined, idx);
+        return gitIn(repo, ["write-tree"], undefined, idx);
+      },
+    });
+    expectShape(r, "does not add exactly one regular file under .motebit/bundles/ (it adds 1)");
     expect(r.computed.bundlePath).toBeNull();
   });
 
@@ -493,6 +533,20 @@ describe("motebit-verify repo-change --landed: inputs are read at the squash com
     });
     expectRule(r, "identity.repo_change.delegator_not_principal");
     expect(r.computed.state.principal).toBeNull();
+  });
+
+  it("a revocation file at the parent that fails strict parsing is unchecked, never fresh", async () => {
+    const { r } = await judge({ baseExtra: { ".motebit/revocations/junk.json": "not json" } });
+    expectRule(r, "revocation.repo_change.set_malformed", "junk.json");
+    expect(r.verification.verdict.revocation.status).toBe("unchecked");
+  });
+
+  it("the tracked paths are the parent's, never the squash commit's", async () => {
+    const { fx, r } = await judge();
+    const atParent = git(fx.repo, "ls-tree", "-r", "--name-only", fx.base).split("\n");
+    const tracked = r.computed.input.trackedPaths.map((p) => Buffer.from(p).toString("utf8"));
+    expect(tracked.sort()).toEqual(atParent.sort());
+    expect(tracked).not.toContain(fx.bundleFile);
   });
 
   it("a revocation at the parent", async () => {
@@ -602,6 +656,19 @@ describe("motebit-verify repo-change --landed: the object store is not trusted",
       [
         (repo, head) => Buffer.concat([Buffer.from("100644 ..\0"), blobOf(repo, head)]),
         /entry name "\.\." is malformed/,
+      ],
+      [
+        (repo, head) => Buffer.concat([Buffer.from("100644 .\0"), blobOf(repo, head)]),
+        /entry name "\." is malformed/,
+      ],
+      [
+        (repo, head) => Buffer.concat([Buffer.from("100644 \0"), blobOf(repo, head)]),
+        /entry name "" is malformed/,
+      ],
+      [
+        // A blob named `a/b` would sit at the same path as a real `a/` tree's `b`.
+        (repo, head) => Buffer.concat([Buffer.from("100644 a/b\0"), blobOf(repo, head)]),
+        /entry name "a\/b" is malformed/,
       ],
       [
         (repo, head) =>

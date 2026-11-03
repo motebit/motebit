@@ -5,9 +5,10 @@
  * keys). It reads exactly:
  *
  *   - a commit's `gpgsig` header (`gpgsig-sha256` in a sha256 repository),
- *     present once, holding one ASCII-armored `PGP SIGNATURE` whose CRC-24 is
- *     present and right, whose body is ONE v4 signature packet with nothing
- *     after it: signature type 0x00 (binary document), public-key algorithm
+ *     present once (one empty last continuation line, GitHub's form, read
+ *     as the armor's trailing newline), holding one ASCII-armored `PGP
+ *     SIGNATURE` whose CRC-24 is present and right, whose body is ONE v4
+ *     signature packet with nothing after it: signature type 0x00 (binary document), public-key algorithm
  *     RSA (1), hash algorithm SHA-256 (8); a signature creation time (subpacket
  *     2) exactly once, in the hashed area; the issuer named by fingerprint
  *     (33, version 4) and/or key id (16), which must agree; no critical
@@ -186,16 +187,27 @@ function packets(data: Buffer): Packet[] {
   return out;
 }
 
-/** An MPI (RFC 4880 §3.2) at `at`: its value bytes (minimal, no leading zero) and the next offset. */
-function mpi(body: Buffer, at: number, what: string): { value: Buffer; next: number } {
+/**
+ * An MPI (RFC 4880 §3.2) at `at`: its value bytes and the next offset. A key's
+ * MPIs must have an exact bit count (minimal, no leading zero). A signature's
+ * may declare the modulus's full width with leading zero bits: GitHub writes
+ * every RSA signature as 4096 bits, and git and gpg accept it. Its value is
+ * left-padded to the modulus length before RSA verification either way.
+ */
+function mpi(
+  body: Buffer,
+  at: number,
+  what: string,
+  exact = true,
+): { value: Buffer; next: number } {
   if (at + 2 > body.length) throw new PgpError(`${what} is cut short`);
   const bits = body.readUInt16BE(at);
   const n = (bits + 7) >> 3;
   if (bits === 0 || at + 2 + n > body.length) throw new PgpError(`${what} is malformed`);
   const value = body.subarray(at + 2, at + 2 + n);
-  // The bit count must be exact: the top byte's highest set bit is bit (bits-1) mod 8.
+  // Exact: the top byte's highest set bit is bit (bits-1) mod 8.
   const top = value[0]!;
-  if (top === 0 || 32 - Math.clz32(top) !== ((bits - 1) % 8) + 1) {
+  if (exact && (top === 0 || 32 - Math.clz32(top) !== ((bits - 1) % 8) + 1)) {
     throw new PgpError(`${what}'s bit count is not exact`);
   }
   return { value, next: at + 2 + n };
@@ -297,6 +309,9 @@ export function splitSignedCommit(
       count++;
       const s = [l.slice(header.length + 1)];
       while (i + 1 < lines.length && lines[i + 1]!.startsWith(" ")) s.push(lines[++i]!.slice(1));
+      // GitHub ends the header with one empty continuation line (` `) after the
+      // END line; it is the armor's trailing newline, not part of the block.
+      if (s.length > 1 && s[s.length - 1] === "") s.pop();
       sig = s;
       continue;
     }
@@ -416,7 +431,7 @@ function parseSignature(armored: string): ParsedSignature {
     throw new PgpError("the issuer key id is not the issuer fingerprint's");
   }
   const left16 = b.subarray(unhashedEnd, unhashedEnd + 2);
-  const s = mpi(b, unhashedEnd + 2, "the RSA signature");
+  const s = mpi(b, unhashedEnd + 2, "the RSA signature", false);
   if (s.next !== b.length) throw new PgpError("the signature packet has trailing bytes");
   return {
     hashedPortion: b.subarray(0, hashedEnd),

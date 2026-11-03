@@ -38,6 +38,17 @@ const PARENT = "motebit-verify repo-change --landed: inputs are read at the squa
 const STORE = "motebit-verify repo-change --landed: the object store is not trusted";
 const COMMAND = "motebit-verify repo-change --landed: the command";
 const KEYS = "the pinned signing keys file";
+const SIGNATURE = "the signature packet, refusal by refusal";
+const HEADER = "the commit's signature header";
+const GITHUB_FORM =
+  "GitHub's own form is accepted at the committer time: signed seconds later, a full-width MPI, a blank last header line";
+const GITHUB_HEADER =
+  "reads GitHub's form (full-width MPI, one blank last header line) and gpg's (minimal, none)";
+const POP = '      if (s.length > 1 && s[s.length - 1] === "") s.pop();\n';
+const LAX_MPI = 'mpi(b, unhashedEnd + 2, "the RSA signature", false)';
+const STRICT_MPI = 'mpi(b, unhashedEnd + 2, "the RSA signature", true)';
+const NAME_GUARD =
+  'if (name.length === 0 || name.includes(0x2f) || nameKey === "." || nameKey === "..") {';
 
 const edit = (file: string, from: string, to: string): TamperEdit => ({ file, from, to });
 /** An end-to-end entry; verify loads the leaf from its build, so a leaf edit rebuilds it. */
@@ -62,6 +73,7 @@ const unit = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry =>
 /** Disable an `if (<guard>` whose condition is one `&&` chain (no top-level `||`). */
 const off = (file: string, guard: string): TamperEdit =>
   edit(file, `if (${guard}`, `if ((false as boolean) && ${guard}`);
+const TREE_RULES = "a tree out of canonical order, or with a malformed entry, is rejected";
 const ACCEPT = "{ landedAt: seconds * 1000, committer, signer: null, problem: null }";
 
 const TAMPERS: TamperEntry[] = [
@@ -95,9 +107,39 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   entry(
-    "time: the creation time not compared with the committer time",
-    `${TIME} the creation time is not the committer time`,
-    off(LANDED, "sig.createdAt !== seconds) {"),
+    "time: a signature made before the committer time accepted",
+    `${TIME} the signature was created before the committer time`,
+    off(LANDED, "sig.createdAt < seconds) {"),
+  ),
+  entry(
+    "time: GitHub's blank last header line kept in the armor",
+    `${TIME} ${GITHUB_FORM}`,
+    edit(PGP, POP, "      void 0;\n"),
+  ),
+  unit(
+    "header: GitHub's blank last header line kept in the armor",
+    `${HEADER} ${GITHUB_HEADER}`,
+    edit(PGP, POP, "      void 0;\n"),
+  ),
+  unit(
+    "header: more than one blank last header line dropped",
+    `${HEADER} ${GITHUB_HEADER}`,
+    edit(PGP, POP, '      while (s.length > 1 && s[s.length - 1] === "") s.pop();\n'),
+  ),
+  unit(
+    "packets: GitHub's full-width signature MPI refused",
+    `${HEADER} ${GITHUB_HEADER}`,
+    edit(PGP, LAX_MPI, STRICT_MPI),
+  ),
+  unit(
+    "keys: a key MPI's inexact bit count allowed",
+    `${KEYS} refuses a modulus whose bit count is not exact`,
+    edit(PGP, "if (exact && (top === 0", "if ((false as boolean) && exact && (top === 0"),
+  ),
+  unit(
+    "subpackets: the issuer fingerprint's length not checked",
+    `${SIGNATURE} refuses an issuer fingerprint of the wrong length`,
+    edit(PGP, "data.length !== 21 || data[0] !== 4", "data[0] !== 4"),
   ),
   entry(
     "signature: RSA not verified",
@@ -192,6 +234,11 @@ const TAMPERS: TamperEntry[] = [
     off(PGP, "body[5] !== 1)\n    throw"),
   ),
   // ── shape checks ───────────────────────────────────────────────────────
+  entry(
+    "shape: a bundle added as an executable file accepted",
+    `${SHAPE} a bundle added as an executable file`,
+    edit(LANDED, 'added.length === 1 && added[0]!.mode === "100644"', "added.length === 1"),
+  ),
   entry(
     "shape: more than one parent allowed",
     `${SHAPE} two parents`,
@@ -295,6 +342,16 @@ const TAMPERS: TamperEntry[] = [
     edit(LANDED, "      set: state.revocations.set,\n", "      set: [],\n"),
   ),
   entry(
+    "parent: a malformed revocation file read as none",
+    `${PARENT} a revocation file at the parent that fails strict parsing is unchecked, never fresh`,
+    edit(LANDED, "      failures: state.revocations.failures,\n", "      failures: [],\n"),
+  ),
+  entry(
+    "parent: the tracked paths taken from the squash commit",
+    `${PARENT} the tracked paths are the parent's, never the squash commit's`,
+    edit(LANDED, "trackedPaths: parentTree.map", "trackedPaths: squashTree.map"),
+  ),
+  entry(
     "spent: never computed",
     `${PARENT} spent: the bundle path once existed on the parent's first-parent history`,
     edit(
@@ -336,6 +393,30 @@ const TAMPERS: TamperEntry[] = [
     "store: a duplicate name in a tree allowed",
     `${STORE} a duplicate-name tree is rejected`,
     off(OBJECTS, "names.has(nameKey)) {"),
+  ),
+  entry(
+    "store: a tree entry's name not checked",
+    `${STORE} ${TREE_RULES}`,
+    edit(
+      OBJECTS,
+      NAME_GUARD,
+      NAME_GUARD.replace("if (", "if ((false as boolean) && (").replace(") {", ")) {"),
+    ),
+  ),
+  entry(
+    "store: an empty tree entry name allowed",
+    `${STORE} ${TREE_RULES}`,
+    edit(OBJECTS, NAME_GUARD, NAME_GUARD.replace("name.length === 0 || ", "")),
+  ),
+  entry(
+    "store: a tree entry name with a slash allowed",
+    `${STORE} ${TREE_RULES}`,
+    edit(OBJECTS, NAME_GUARD, NAME_GUARD.replace(" || name.includes(0x2f)", "")),
+  ),
+  entry(
+    "store: a tree entry named . allowed",
+    `${STORE} ${TREE_RULES}`,
+    edit(OBJECTS, NAME_GUARD, NAME_GUARD.replace(' || nameKey === "."', "")),
   ),
   entry(
     "store: a tree's canonical order not checked",
