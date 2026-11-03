@@ -30,6 +30,23 @@ export function pinned(): TestSigningKey {
   if (pinnedKey === null) pinnedKey = testSigningKey();
   return pinnedKey;
 }
+/** A `motebit/operator-signing-keys@1.0` file pinning `entries` (each window open unless `trustedUntil`). */
+export function pinFile(
+  entries: readonly { readonly key: TestSigningKey; readonly trustedUntil?: number | null }[],
+): string {
+  return `${JSON.stringify(
+    {
+      spec: "motebit/operator-signing-keys@1.0",
+      keys: entries.map((e) => ({
+        fingerprint: e.key.fingerprint,
+        armored: e.key.armored,
+        trusted_until: e.trustedUntil ?? null,
+      })),
+    },
+    null,
+    2,
+  )}\n`;
+}
 let otherKey: TestSigningKey | null = null;
 /** A key nobody pinned. */
 export function stranger(): TestSigningKey {
@@ -128,8 +145,8 @@ export async function landedFixture(root: string, o: LandedOptions = {}): Promis
     ? gitIn(repo, ["commit-tree", `${fx.base}^{tree}`, "-p", fx.base, "-p", squash, "-m", "merge"])
     : gitIn(repo, ["commit-tree", `${squash}^{tree}`, "-p", squash, "-m", "later"]);
   gitIn(repo, ["update-ref", "refs/heads/main", tip]);
-  const keys = pinned().armored;
-  const keysFile = path.join(root, `keys-${crypto.randomUUID()}.asc`);
+  const keys = pinFile([{ key: pinned() }]);
+  const keysFile = path.join(root, `keys-${crypto.randomUUID()}.json`);
   fs.writeFileSync(keysFile, keys);
   return { ...fx, squash, parent, tip, keysFile, keys };
 }

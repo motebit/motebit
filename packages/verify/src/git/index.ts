@@ -32,6 +32,8 @@ export {
 export type { RawCommit, RawObjects, RawTreeEntry } from "./objects.js";
 export { parsePinnedSigningKeys, verifyCommitSignature } from "@motebit/crypto-openpgp";
 export type { CommitSignatureCheck, PinnedSigningKey } from "@motebit/crypto-openpgp";
+export { OPERATOR_SIGNING_KEYS_SPEC, parseOperatorSigningKeys } from "./operator-keys.js";
+export type { OperatorSigningKey } from "./operator-keys.js";
 export {
   LANDING_COMMITTER,
   LANDING_SIGNATURE_WINDOW_S,

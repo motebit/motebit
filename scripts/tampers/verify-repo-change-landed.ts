@@ -28,6 +28,9 @@ const PGP = "packages/crypto-openpgp/src/openpgp.ts";
 const CLI = "packages/verify/src/repo-change-cli.ts";
 const TEST = "src/__tests__/repo-change-landed.test.ts";
 const UNIT = "src/__tests__/openpgp.test.ts";
+const KEYS_FILE = "packages/verify/src/git/operator-keys.ts";
+const KEYS_UNIT = "src/__tests__/operator-keys.test.ts";
+const PIN_SET = "the pinned set file";
 
 const OK =
   "motebit-verify repo-change --landed: a landed governed change is fully verified, pinned, fresh, with outcome completed, at the operator-recorded time";
@@ -66,6 +69,15 @@ const unit = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry =>
   name,
   pkg: "@motebit/crypto-openpgp",
   test: UNIT,
+  red,
+  only: true,
+  edits,
+});
+/** A unit entry for verify's pinned-set parser. */
+const pinSet = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry => ({
+  name,
+  pkg: "@motebit/verify",
+  test: KEYS_UNIT,
   red,
   only: true,
   edits,
@@ -110,6 +122,63 @@ const TAMPERS: TamperEntry[] = [
     "time: a signature made long after the committer time accepted",
     `${TIME} the signature was made more than five minutes after the committer time`,
     off(LANDED, "sig.createdAt - seconds > LANDING_SIGNATURE_WINDOW_S) {"),
+  ),
+  entry(
+    "time: a key's trusted_until ignored",
+    `${TIME} the committer time is at or after the pinned key's trusted_until`,
+    off(LANDED, "key.trustedUntil !== null && seconds >= key.trustedUntil) {"),
+  ),
+  entry(
+    "time: a landing at exactly trusted_until accepted",
+    `${TIME} the committer time is at or after the pinned key's trusted_until`,
+    edit(LANDED, "seconds >= key.trustedUntil) {", "seconds > key.trustedUntil) {"),
+  ),
+  entry(
+    "time: a retired key refused for its earlier landings",
+    `${TIME} a retired key still vouches for a landing made before its trusted_until`,
+    edit(
+      LANDED,
+      "key.trustedUntil !== null && seconds >= key.trustedUntil",
+      "key.trustedUntil !== null",
+    ),
+  ),
+  pinSet(
+    "pinned set: the armored key not matched to its fingerprint",
+    `${PIN_SET} refuses armored holding another key than the fingerprint`,
+    off(KEYS_FILE, "key.fingerprint !== fp) {"),
+  ),
+  pinSet(
+    "pinned set: more than one key per entry accepted",
+    `${PIN_SET} refuses armored holding two keys`,
+    off(KEYS_FILE, "keys.length !== 1) fail"),
+  ),
+  pinSet(
+    "pinned set: a repeated member name accepted",
+    `${PIN_SET} refuses a member name repeated in an entry`,
+    off(KEYS_FILE, "repeated !== null) fail"),
+  ),
+  pinSet(
+    "pinned set: a key pinned twice accepted",
+    `${PIN_SET} refuses a key pinned twice`,
+    off(KEYS_FILE, "seen.has(fp)) fail"),
+  ),
+  pinSet(
+    "pinned set: a malformed trusted_until accepted",
+    `${PIN_SET} refuses a fractional trusted_until`,
+    edit(
+      KEYS_FILE,
+      "if (until !== null && !(Number.isSafeInteger(until) && (until as number) >= 0)) {",
+      "if ((false as boolean) && until !== null) {",
+    ),
+  ),
+  pinSet(
+    "pinned set: an unknown entry key accepted",
+    `${PIN_SET} refuses an unknown entry key`,
+    edit(
+      KEYS_FILE,
+      "    if (!keys.includes(k)) fail(",
+      "    if ((false as boolean) && !keys.includes(k)) fail(",
+    ),
   ),
   entry(
     "time: a committer time before the pinned key existed accepted",

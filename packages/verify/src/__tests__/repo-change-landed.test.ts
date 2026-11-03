@@ -29,6 +29,7 @@ import {
   LANDED_SECONDS,
   gitIn,
   landedFixture,
+  pinFile,
   pinned,
   stranger,
   writeCommit,
@@ -244,8 +245,30 @@ describe("motebit-verify repo-change --landed: the landing time is GitHub's, und
   it("the committer time is before the pinned key was created", async () => {
     const young = testSigningKey(2048, LANDED_SECONDS + 1);
     const fx = await landedFixture(tmp, { signer: young });
-    const r = await check(fx, { keys: young.armored });
+    const r = await check(fx, { keys: pinFile([{ key: young }]) });
     expectNoTime(r, /committer time .* is before the pinned key was created/);
+  });
+
+  it("the committer time is at or after the pinned key's trusted_until", async () => {
+    const fx = await landedFixture(tmp);
+    const at = await check(fx, {
+      keys: pinFile([{ key: pinned(), trustedUntil: LANDED_SECONDS }]),
+    });
+    expectNoTime(at, /committer time .* is at or after the pinned key's trusted_until/);
+    const before = await check(fx, {
+      keys: pinFile([{ key: pinned(), trustedUntil: LANDED_SECONDS - 1 }]),
+    });
+    expectNoTime(before, /at or after the pinned key's trusted_until/);
+  });
+
+  it("a retired key still vouches for a landing made before its trusted_until", async () => {
+    const fx = await landedFixture(tmp);
+    const r = await check(fx, {
+      keys: pinFile([{ key: stranger() }, { key: pinned(), trustedUntil: LANDED_SECONDS + 1 }]),
+    });
+    expect(r.computed.time.landedAt).toBe(LANDED_SECONDS * 1000);
+    expect(r.computed.time.signer).toBe(pinned().fingerprint);
+    expect(r.accepted).toBe(true);
   });
 
   it("the signature was created before the committer time", async () => {
@@ -951,7 +974,12 @@ describe("motebit-verify repo-change --landed: the command", () => {
     fs.writeFileSync(fx.keysFile, "not a key\n");
     const bad = await runMain(cliArgs(fx));
     expect(bad.code).toBe(2);
-    expect(bad.stderr).toMatch(/not judged: the pinned signing keys do not parse/);
+    expect(bad.stderr).toMatch(/not judged: operator signing keys: not valid JSON/);
+    // A bare armored key file (no windows) is not a pinned set.
+    fs.writeFileSync(fx.keysFile, pinned().armored);
+    const bare = await runMain(cliArgs(fx));
+    expect(bare.code).toBe(2);
+    expect(bare.stderr).toMatch(/not judged: operator signing keys: not valid JSON/);
     fs.rmSync(fx.keysFile);
     const missing = await runMain(cliArgs(fx));
     expect(missing.code).toBe(2);

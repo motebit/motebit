@@ -310,9 +310,17 @@ Offline, a verifier MUST accept the squash commit's committer time `T` (seconds)
 1. **The committer is the hosting operator.** The committer name and email are exactly the operator's committing identity (for GitHub, `GitHub <noreply@github.com>`).
 2. **One signature, verified under a pinned key.** The commit carries exactly one signature header (`gpgsig`, or `gpgsig-sha256` in a sha256 repository) holding exactly one signature, and that signature verifies over the commit with the header removed under a key in the verifier's pinned set for that operator. The signer is identified by the key the signature verifies under, never by a label in the signature or the pin file.
 3. **Signed at landing.** The signature's creation time `S` satisfies `T ≤ S ≤ T + 300`. A signature made before the time it records, or more than 300 seconds after it, does not establish that time.
-4. **The key existed.** The pinned key's creation time is at or before `T`.
+4. **Inside the key's window.** The pinned key's creation time is at or before `T`, and when the pinned set gives the key a `trusted_until` `U`, `T < U`.
 
-The pinned set is the verifier's trust decision about the operator's keys. Revocation and expiry statements carried inside the key material are not evaluated, so a key the operator has retired is still accepted until it is removed from the pinned set; retiring a key is an edit to that set.
+The pinned set is the verifier's trust decision about the operator's keys. Revocation and expiry statements carried inside the key material are not evaluated. **A key is retired by closing its window, never by removing it**: its `trusted_until` is set to the time from which it is no longer trusted, so a landing it signed before then still verifies and a later one does not. Removing a key would make every landing it ever signed unverifiable.
+
+**File.** The pinned set is UTF-8 JSON, `motebit/operator-signing-keys@1.0`: exactly the object `{"spec": "motebit/operator-signing-keys@1.0", "keys": [...]}`, both keys and no other, `spec` exactly that string, and `keys` a non-empty array. Each element is exactly the object `{"fingerprint": ..., "armored": ..., "trusted_until": ...}`, all three keys and no other:
+
+- `fingerprint` — 40 lowercase hexadecimal digits, the key's v4 fingerprint; no two elements share one;
+- `armored` — a string holding ASCII-armored OpenPGP public key material with exactly one primary key, whose computed v4 fingerprint equals `fingerprint`;
+- `trusted_until` — `null` (the window is open) or a non-negative integer of seconds since the epoch, at most 2^53 − 1.
+
+A member name that occurs twice in one object is a parse error. Anything else is a parse error, and a verifier that cannot parse the pinned set MUST NOT accept a landing time. Reference interpreter: `parseOperatorSigningKeys` in `@motebit/verify/git`.
 
 ## 10. Security considerations
 
