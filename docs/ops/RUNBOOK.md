@@ -355,8 +355,17 @@ In this repo, exactly two jobs can publish to npm, both in `.github/workflows/re
 both wait in the `npm-publish` environment (main only, founder is the required reviewer):
 
 - `train-publish` publishes what the Version Packages PR versioned. It runs after a push only
-  when main carries a public package ahead of npm and no changesets are pending.
+  when main carries a public package ahead of npm and no changesets are pending. It refuses
+  before building when npm has never seen a public package on main: npm cannot add a trusted
+  publisher to a name it has not got, and `changeset publish` would still publish that
+  package's dependents.
 - `security-publish` publishes an exact named list on a manual dispatch (below).
+
+A new public package's first publish is therefore the founder's, from a laptop: build it from
+main, `pnpm publish --access public --no-git-checks` in its directory (pnpm, not npm: only pnpm
+rewrites `workspace:` dependencies), add its trusted publisher (below), then
+re-run the refused `release.yml` run. That one version carries no provenance; every later one
+comes from the train.
 
 A push to `main` runs `release` (prepare), which versions changesets into the Version Packages
 PR. It has no `id-token` and no publish step, so it cannot publish whatever npm accepts.

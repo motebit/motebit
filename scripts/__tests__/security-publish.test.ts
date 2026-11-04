@@ -6,7 +6,9 @@
  * founder-approved `npm-publish` environment. An ordinary push to main runs
  * only the prepare job, which has neither.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, it, expect } from "vitest";
@@ -15,6 +17,7 @@ import { parse } from "yaml";
 
 import type { PublishablePackage, RegistryAnswer } from "../lib/publish-freshness.js";
 import {
+  firstPublishes,
   packagesAhead,
   parsePackageList,
   planSecurityPublish,
@@ -129,6 +132,19 @@ describe("planSecurityPublish", () => {
     expect(packagesAhead(workspace, down)).toBeNull();
   });
 
+  it("firstPublishes names every package npm has never seen, and refuses to guess", () => {
+    expect(firstPublishes(workspace, registry)).toEqual([]);
+    const first = new Map(registry)
+      .set("@m/crypto", { kind: "absent" })
+      .set("cli", { kind: "absent" });
+    expect(firstPublishes(workspace, first)).toEqual(["@m/crypto", "cli"]);
+    const down = new Map(first).set("@m/sdk", { kind: "unreachable", detail: "x" });
+    expect(firstPublishes(workspace, down)).toBeNull();
+    const unasked = new Map(registry);
+    unasked.delete("@m/verifier");
+    expect(firstPublishes(workspace, unasked)).toBeNull();
+  });
+
   it("splits the dispatch input on spaces and commas", () => {
     expect(parsePackageList(" @m/crypto,@m/verifier \n cli ")).toEqual([
       "@m/crypto",
@@ -141,6 +157,7 @@ describe("planSecurityPublish", () => {
 type Permissions = Record<string, string> | string | undefined;
 interface Step {
   name?: string;
+  if?: string;
   uses?: string;
   run?: string;
   with?: Record<string, unknown>;
@@ -350,6 +367,29 @@ describe("publish authority across every workflow", () => {
     expect(check).toMatch(/\[ "\$HEAD" = "\$INPUT_SHA" \] \|\| \{[^}]*exit 1; \}/);
   });
 
+  it("train-publish refuses a first publish before it builds or publishes anything", () => {
+    const steps = jobs["train-publish"]!.steps ?? [];
+    const GUARD = 'npx tsx scripts/security-publish.ts first-publish "$RUNNER_TEMP/first-publish"';
+    // The step's whole run is the guard: an earlier `exit 0` or a trailing
+    // `|| true` in the same step would let it pass without refusing.
+    const guard = steps.findIndex((s) => (s.run ?? "").trim() === GUARD);
+    const install = steps.findIndex((s) => /^pnpm install\b/.test((s.run ?? "").trim()));
+    const firstBuildOrPublish = steps.findIndex(
+      (s) =>
+        /\bpnpm (build|release)\b|\bchangeset publish\b/.test(s.run ?? "") ||
+        canPublish({ steps: [s] }, {}).length > 0,
+    );
+    expect(install).toBeGreaterThanOrEqual(0);
+    expect(guard).toBe(install + 1);
+    expect(firstBuildOrPublish).toBeGreaterThan(guard);
+    expect(
+      (steps[guard] as Step & { "continue-on-error"?: unknown })["continue-on-error"],
+    ).toBeUndefined();
+    expect(steps[guard]!.if).toBeUndefined();
+    // A custom shell could run anything but the guard.
+    expect(Object.keys(steps[guard]!).sort()).toEqual(["name", "run"]);
+  });
+
   it("each publish job installs npm 11 only after its last test and before its publish", () => {
     // npm 11 prints config warnings on stderr, which CLI tests asserting exact
     // stderr read as failures: the 2026-10-18 rehearsal stopped there.
@@ -400,5 +440,52 @@ describe("publish authority across every workflow", () => {
         expect({ at: `${name}:${step.name}`, run: step.run ?? "" }).not.toMatchObject({
           run: expect.stringMatching(/\$\{\{[^}]*\b(inputs|github\.event)\b/),
         });
+  });
+});
+
+describe("first-publish mode", () => {
+  // The real script against a stubbed registry: a preload replaces fetch, so
+  // nothing reaches the network and the exit code is the script's own.
+  const ROOT = join(__dirname, "..", "..");
+  function run(status: number): { status: number | null; stderr: string; stdout: string } {
+    const dir = mkdtempSync(join(tmpdir(), "first-publish-"));
+    const stub = join(dir, "fetch-stub.mjs");
+    writeFileSync(
+      stub,
+      `globalThis.fetch = async () => new Response(${JSON.stringify(
+        JSON.stringify({ "dist-tags": { latest: "999.0.0" } }),
+      )}, { status: ${status} });\n`,
+    );
+    const r = spawnSync(
+      join(ROOT, "node_modules/.bin/tsx"),
+      [
+        "--import",
+        stub,
+        join(ROOT, "scripts/security-publish.ts"),
+        "first-publish",
+        join(dir, "out"),
+      ],
+      { cwd: ROOT, encoding: "utf-8" },
+    );
+    return { status: r.status, stderr: r.stderr, stdout: r.stdout };
+  }
+
+  it("refuses when npm has never seen a public package", () => {
+    const r = run(404);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("@motebit/protocol has never been published to npm");
+    expect(r.stderr).toContain("pnpm publish --access public");
+  });
+
+  it("refuses when the registry does not answer", () => {
+    const r = run(503);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("refusing to guess whether one is a first publish");
+  });
+
+  it("passes when npm has seen every public package", () => {
+    const r = run(200);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("no first publish in this train");
   });
 });

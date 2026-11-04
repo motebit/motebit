@@ -318,6 +318,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # A name npm has never seen cannot be trusted-published (npm has no
+      # pending publisher), and `changeset publish` would still publish its
+      # dependents. Refuse the train before anything builds; the first publish
+      # is the owner's, by hand, then the package's Trusted Publisher entry.
+      - name: Refuse a first publish
+        run: npx tsx scripts/security-publish.ts first-publish "$RUNNER_TEMP/first-publish"
+
       - name: Build all packages
         run: pnpm build
 
