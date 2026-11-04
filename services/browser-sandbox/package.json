@@ -23,7 +23,7 @@
     "browser:install": "npx playwright install chromium"
   },
   "dependencies": {
-    "@hono/node-server": "^1.19.17",
+    "@hono/node-server": "^2.1.3",
     "@motebit/crypto": "workspace:*",
     "@motebit/protocol": "workspace:*",
     "@motebit/sdk": "workspace:*",
