@@ -25,7 +25,7 @@ Once the trigger conditions hold, the sequence is mechanical. Each step has a ch
 Edit `packages/<name>/package.json`:
 
 - Remove `"private": true` (or set to `false`).
-- Set `"version": "1.0.0"` (the convention motebit's other published packages use; pre-1.0 with explicit `@experimental` annotations is the alternative if API stability is uncertain — see step 4).
+- Set `"version": "0.0.0"`. Step 7's `major` changeset takes it to `1.0.0` (the convention motebit's other published packages use; pre-1.0 with explicit `@experimental` annotations is the alternative if API stability is uncertain — see step 4). Setting `1.0.0` here would make the release `2.0.0`, and the hand-published first version (step 7) would hold `1.0.0` without provenance.
 - Confirm `"name"` matches the npm scope motebit owns (`@motebit/<name>` or one of the unscoped names like `motebit` and `create-motebit`).
 
 This change alone removes the package from the `check-doc-private-imports` (#50) gate's tracked set — wraps that referenced this package will no longer be required. **Do not delete those wraps until step 6 is done**; the wraps are still doctrinally correct until consumers can install the package.
@@ -82,7 +82,13 @@ pnpm changeset
 
 Pick `major` for the new package. The body MUST include a `## Migration` section explaining what consumers gain and what — if anything — they need to do (this is the change _this_ package makes; the migration is from "you couldn't install it" to "you can"). `check-changeset-discipline` (#43) enforces the section's presence on `major` bumps.
 
-The first publish flows through the normal Changesets release pipeline. GitHub Releases auto-generates human-readable release notes per [`apps/docs/content/docs/changelog.mdx`](../../apps/docs/content/docs/changelog.mdx).
+**The first publish is by hand; every later one comes from the release pipeline.** `release.yml` publishes only through npm trusted publishing, and npm attaches a trusted publisher only to a name it has already seen. So the pipeline refuses a train that contains a never-published name, before it builds anything (`security-publish.ts first-publish`). Before the Version Packages PR that carries this `major` merges, the founder:
+
+1. Publishes the version on `main` (`0.0.0`, per step 1) from a clean checkout: build the package, then `pnpm publish --access public --no-git-checks` in its directory. Use pnpm, not npm: only pnpm rewrites `workspace:` dependencies. This one version carries no provenance.
+2. Adds the package's trusted publisher on npmjs.com: `motebit/motebit`, `release.yml`, environment `npm-publish`, with direct publish allowed (as for every other public package). npm marks it pending until a publish uses it, and shows a deadline for that publish (two days, the day this was written), so step 3 must finish before then.
+3. Merges the Version Packages PR and approves the `npm-publish` environment. The pipeline publishes `1.0.0` with provenance, and GitHub Releases auto-generates human-readable release notes per [`apps/docs/content/docs/changelog.mdx`](../../apps/docs/content/docs/changelog.mdx).
+
+The commands and the checks the founder makes on npmjs.com are in [`docs/ops/RUNBOOK.md`](../ops/RUNBOOK.md) § Publish authority.
 
 ## What changes after promotion
 
