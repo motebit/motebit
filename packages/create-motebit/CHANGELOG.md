@@ -1,5 +1,12 @@
 # create-motebit Changelog
 
+## 1.2.13
+
+### Patch Changes
+
+- ce129e1: `create-motebit rotate` signs its key-succession record through a guarded canonicalizer (the inlined mirror of `@motebit/crypto`'s `canonicalJsonForSigning`): a succession `reason` holding an unpaired UTF-16 surrogate is refused before signing instead of being signed in a form with no UTF-8 encoding (spec/execution-ledger-v1.md §11.4).
+- 0ab2e3d: The published package now includes its own `CHANGELOG.md`. Until now the `files` allowlist left it out, so npm, yarn and the CDN mirrors showed no changelog, or the repository's root changelog, which stops at 0.3.0. No code changed.
+
 ## 1.2.12
 
 ### Patch Changes

@@ -1,5 +1,28 @@
 # @motebit/crypto-tpm
 
+## 1.1.41
+
+### Patch Changes
+
+- 0ab2e3d: The published package now includes its own `CHANGELOG.md`. Until now the `files` allowlist left it out, so npm, yarn and the CDN mirrors showed no changelog, or the repository's root changelog, which stops at 0.3.0. No code changed.
+- Updated dependencies [972de5e]
+- Updated dependencies [8df8acb]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [3156fc4]
+- Updated dependencies [0ab2e3d]
+- Updated dependencies [796deb8]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [33a1d37]
+- Updated dependencies [33a1d37]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+  - @motebit/crypto@4.1.0
+  - @motebit/protocol@3.20.0
+
 ## 1.1.40
 
 ### Patch Changes

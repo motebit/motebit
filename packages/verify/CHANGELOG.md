@@ -1,5 +1,70 @@
 # @motebit/verify
 
+## 1.10.0
+
+### Minor Changes
+
+- ce129e1: Sovereign payment receipts now bind every hash to the bytes it names. `signSovereignPaymentReceipt` sets `result_hash` to `hex(SHA-256(UTF-8(result)))` of the receipt's own synthesized `result` text, so the receipt verifies under strict hash binding (`motebit-verify`, `motebit verify receipt`). Before this change it signed the caller-supplied hash of the paid service's result as `result_hash`, so a strict verifier rejected every real sovereign payment receipt.
+
+  The paid service's result hash now travels in a new optional, signature-bound `ExecutionReceipt` field, `service_result_hash`: the SHA-256 of the paid service's result bytes, as asserted by the payer and signed by the payee (`spec/settlement-v1.md` §7). The field is additive. It is absent on every other receipt, and receipts without it sign and verify byte-identically to before. When present, strict verifiers (`motebit-verify`, `motebit verify receipt`, `verifyReceipt(…, { strictHashBinding: true })`) check that it is a 64-character lowercase hex digest, and every verifier reports it. The signature-only defaults (`verifyReceipt` / `verify` / `verifyArtifact` without strict binding, `verifyReceiptVerdict`) do not check its shape and return exactly their previous verdicts. Deprecation note: the defaults will check the shape too in the next major of `@motebit/crypto` / `@motebit/verifier`; a producer should emit only a SHA-256 hex digest there today. `signSovereignPaymentReceipt` refuses an input `result_hash` that is not such a digest. Receipts issued before this change still verify signature-only (`--lenient`); under strict binding they fail, because their `result_hash` does not bind their `result`.
+
+- 4e75b09: Add `motebit-verify repo-change`, the CI-on-PR judge of a governed repo change (milestone B, build step 4c-i; spec/repo-change-v1.md §7, §9), and the `@motebit/verify/git` subpath export it is built on.
+
+  ```bash
+  motebit-verify repo-change --repo <clone> --base <trusted tip commit> --head <pr head commit> \
+    --repository <owner/name> --base-ref <ref name> --pr-author <login> [--now <ms>] [--json]
+  ```
+
+  - Every input `verifyRepoChange` (`@motebit/verifier`) needs is computed from the clone: the bundle the pull request adds under `.motebit/bundles/` (its exact bytes), the entries from the full trees (never `git diff`), the paths tracked at `--base`, and the pins, revocations and path policy read at `--base`, never from the pull request. Spent is whether the bundle path ever existed on `--base`'s first-parent history.
+  - The shape checks fold into `integrity`: `parent_commit` is `--base`; the pull request is exactly the change commit and the bundle commit, linear; `head_commit..pr_head` is exactly one `A 100644` at the grant's bundle path; the base ref is `main`; the author is `motebit-agent`; nothing under `.motebit/bundles/` is modified or deleted. Every axis is still computed and printed when one fails.
+  - Git never runs on the clone's own git directory, and nothing is fetched: every call runs against a private, empty bare repository whose config the tool writes, reading the real object store. A bare clone works as well as a worktree.
+  - The evaluation time is the local clock unless `--now` is given, recorded as `local_clock`. Exit 0 only when fully verified with outcome `completed`; 1 on any other verdict; 2 on a usage or I/O error, or when the change cannot be judged (no parsable path policy at `--base`, a shallow clone).
+
+  `@motebit/verify/git` exports the reader: `verifyRepoChangePullRequest`, `computeRepoChangeInputs`, `computeEntries`, the isolated session (`openIsolatedGit`, `resolveGitDirectories`, `resolveObjectDirectory`), `resolveRepoTip`, `listTree`, `readBlob`, `commitParents`, `gitBlobId`, `readRepoState`, `isGrantSpent` and `pinFromIdentityFile`. It moved here from the `motebit` CLI (relicensed BUSL-1.1 → Apache-2.0), and the CLI now imports it, so there is one implementation.
+
+- eb5f0f1: `motebit-verify repo-change --landed`: judge a governed repo change offline, on the squash commit that landed it (spec/repo-change-v1.md §9, "Offline on a landed change"). `--landed <squash commit> --trusted-tip <commit> --repository <owner/name> --github-keys <file> --repo <clone>`, mutually exclusive with the CI-on-PR flags.
+
+  - Git's object lookups are not trusted: every commit, tree and blob is read raw through one `cat-file --batch` (commit-graph off, grafts and replace refs ignored) and re-hashed against its id; trees are parsed in-process and refused unless canonical (no duplicate names, git's order, git's five modes); first-parent chains are walked from the commits' own bytes, never by `rev-list`; a shallow clone is refused.
+  - Shape checks: one parent; the squash entries are exactly one `A 100644` at `.motebit/bundles/<grant_id>.json` plus the record's `entries`; `parent_commit` is a first-parent ancestor of the parent; the squash commit is on the trusted tip's first-parent chain. Pins, revocations, the path policy and tracked paths are read at the parent; spent is the parent's first-parent history.
+  - The evaluation time is the squash commit's committer time (`operator_recorded`), accepted only when the committer is `GitHub <noreply@github.com>` and its `gpgsig` — exactly one v4 binary RSA/SHA-256 OpenPGP signature, CRC-checked, made within five minutes after the committer time — verifies under a pinned key, and the committer time is inside that key's window. The pinned set is a `motebit/operator-signing-keys@1.0` file (spec §9.1): each v4 RSA key armored with its fingerprint (computed, and cross-checked) and its `trusted_until` (`null` = open). A key is retired by closing its window, so the landings it signed earlier still verify. Otherwise `authority` is `unknown`. The signature check is the new `@motebit/crypto-openpgp` leaf's.
+
+  New on `@motebit/verify/git`: `verifyRepoChangeLanded`, `computeLandedRepoChangeInputs`, `acceptLandingTime`, `LANDING_SIGNATURE_WINDOW_S`, `openRawObjects`, `parseTree`, `parseCommit`, `gitObjectId`, `ObjectStoreError`, `parseOperatorSigningKeys`, `OPERATOR_SIGNING_KEYS_SPEC`, `OperatorSigningKey`, `parsePinnedSigningKeys`, `verifyCommitSignature` (re-exported from `@motebit/crypto-openpgp`), and `IsolatedGit.objectStream()`. `readRepoState` and `computeEntries` take an optional blob reader (default unchanged).
+
+- ce129e1: `motebit-verify` is now strict by default for `ExecutionReceipt`s: besides the signature, it checks that `result_hash` equals `hex(SHA-256(UTF-8(result)))`, and a validly signed receipt whose hash does not bind its own `result` is reported `INVALID` (exit 1) with the `result_hash` mismatch named. Previously such a receipt read `VALID` unless `--strict` was passed. The new `--lenient` flag restores signature-only checking and prints a one-line stderr warning that the result is not bound to the signature; `--strict` is still accepted as a no-op alias (combining it with `--lenient` is a usage error). The `@motebit/verifier` library's API and defaults are unchanged — `verifyFile` / `verifyArtifact` remain signature-only unless `strictHashBinding: true` is passed.
+
+### Patch Changes
+
+- 0ab2e3d: The published package now includes its own `CHANGELOG.md`. Until now the `files` allowlist left it out, so npm, yarn and the CDN mirrors showed no changelog, or the repository's root changelog, which stops at 0.3.0. No code changed.
+- ce129e1: `verifyReceipt` without `strictHashBinding` (and so `verify`, `@motebit/verifier`'s `verifyArtifact` / `verifyFile` defaults) returns exactly the verdicts it returned before this release line, byte for byte: its existing `public_key` decode and length check, its keyless early return (no extra `§11.5` errors), and its handling of a `delegation_receipts` entry that is not an object. The 64-hex key rule, the full nested walk and the `§11.4` / `§11.5` strictness apply only under `strictHashBinding`. `motebit-verify --lenient` reports a receipt the signature-only verifier throws on as invalid (exit 1) instead of as an unreadable file (exit 2).
+- ce129e1: `motebit-verify`'s strict-by-default `result_hash` check now covers every nested `delegation_receipts` entry at every depth: a signed outer receipt carrying a child whose `result_hash` does not bind its own `result` is `INVALID` (exit 1), and the error names the child's delegation depth and `task_id`. `--lenient` remains signature-only at every depth, with its one-line warning.
+- Updated dependencies [972de5e]
+- Updated dependencies [8df8acb]
+- Updated dependencies [eb5f0f1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [3156fc4]
+- Updated dependencies [0ab2e3d]
+- Updated dependencies [796deb8]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [33a1d37]
+- Updated dependencies [6131d65]
+- Updated dependencies [33a1d37]
+- Updated dependencies [ce129e1]
+- Updated dependencies [ce129e1]
+- Updated dependencies [285b209]
+  - @motebit/crypto@4.1.0
+  - @motebit/crypto-openpgp@1.0.0
+  - @motebit/crypto-android-keystore@1.1.40
+  - @motebit/crypto-appattest@1.0.42
+  - @motebit/crypto-tpm@1.1.41
+  - @motebit/crypto-webauthn@1.0.42
+  - @motebit/protocol@3.20.0
+  - @motebit/state-export-client@0.7.2
+  - @motebit/verifier@1.15.0
+
 ## 1.9.2
 
 ### Patch Changes

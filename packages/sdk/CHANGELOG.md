@@ -1,5 +1,24 @@
 # @motebit/sdk Changelog
 
+## 2.11.0
+
+### Minor Changes
+
+- fe487ad: New defaults: Anthropic `DEFAULT_ANTHROPIC_MODEL` is now `claude-sonnet-5-5` (was `claude-sonnet-5`), and OpenAI `DEFAULT_OPENAI_MODEL` is now the full `gpt-5.4` (was `gpt-5.4-mini`). The Anthropic picker's fast tier is now Claude Haiku 5.5 (`claude-haiku-5-5`), added to `ANTHROPIC_MODELS` after the scheduled catalog check found it live and missing (#654). A model you already chose is kept; only an unset model picks up the new default.
+- 149fa5b: Long conversations no longer lose their beginning on large-window models. A turn used to carry at most ~7,000 tokens of history whatever the model, so on Claude, GPT or Gemini a conversation a few pages long dropped its first turns: the intelligence-parity bench scored an answer that needed turn 1 at 4.6/10 through motebit against 9.3/10 with the full history. History now gets 64,000 tokens on Anthropic, current OpenAI and Google models and on Motebit Cloud's `auto` (new `historyTokenBudget`, `LARGE_WINDOW_HISTORY_TOKENS`, `DEFAULT_HISTORY_TOKENS` in `@motebit/sdk`), and keeps 8,000 on local servers, other vendors, legacy small-window OpenAI ids and unknown models. The in-memory conversation window grows from 40 to 100 messages, and a summarization pass now carries only the newest messages that fit the same budget.
+
+### Patch Changes
+
+- bca7acb: `MODEL_DEFAULT_REVIEW_BY` records the 2026-10-26 review of the Google, DeepSeek, Groq, local-server and Motebit Cloud defaults. Each default is kept, and each review-by date moves to 2027-01-31. The live catalogs of Google, DeepSeek and Groq were not witnessed, because the drift gate holds no keys for them, so those defaults are kept on purpose rather than verified as current.
+- 0ab2e3d: The published package now includes its own `CHANGELOG.md`. Until now the `files` allowlist left it out, so npm, yarn and the CDN mirrors showed no changelog, or the repository's root changelog, which stops at 0.3.0. No code changed.
+- Updated dependencies [0ab2e3d]
+- Updated dependencies [796deb8]
+- Updated dependencies [ce129e1]
+- Updated dependencies [33a1d37]
+- Updated dependencies [33a1d37]
+- Updated dependencies [ce129e1]
+  - @motebit/protocol@3.20.0
+
 ## 2.10.0
 
 ### Minor Changes
