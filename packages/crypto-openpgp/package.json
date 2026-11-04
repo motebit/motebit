@@ -1,6 +1,6 @@
 {
   "name": "@motebit/crypto-openpgp",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Apache-2.0 verifier for the one OpenPGP signature shape git hosting operators put on squash commits (a v4 RSA/SHA-256 gpgsig header) — offline, against signing keys pinned by the caller. Lets @motebit/verify accept a landed governed repo change's committer time without trusting the network.",
   "type": "module",
   "main": "./dist/index.js",
