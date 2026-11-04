@@ -376,7 +376,9 @@ a publish command, or a changesets `publish:` input outside `npm-publish`. The o
 What the repo cannot enforce, and the founder checks on npmjs.com for every public package:
 
 - **Trusted publishers.** npm allows up to 10 per package. Each one must name motebit/motebit,
-  `release.yml` and environment `npm-publish`, and no other.
+  `release.yml` and environment `npm-publish`, and no other, with "Allow npm publish" ticked
+  (the train publishes directly, not staged). A new one stays "Pending validation" until a
+  publish uses it, by a deadline npm shows on the package's settings page.
 - **Tokens.** Trusted publishing does not disable token publishing. Publishing access should be
   "Require two-factor authentication and disallow tokens", and the account should hold no
   write-capable automation tokens.
