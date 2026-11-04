@@ -14,6 +14,10 @@
  *           <out>/publish.md for the run summary.
  *   ahead   → `count=<n>` in $GITHUB_OUTPUT: public packages on main ahead of
  *           npm. Exit 1 if the registry does not answer for every package.
+ *   first-publish
+ *           → exit 1 if npm has never seen a public package on main, or does
+ *           not answer for every package. train-publish runs it before
+ *           anything publishes.
  *   verify  <out>/artifacts.json → polls the registry until each version is
  *           served with EXACTLY the integrity that was packed and carries a
  *           provenance attestation, then installs them all into an empty
@@ -42,6 +46,7 @@ import {
   type RegistryAnswer,
 } from "./lib/publish-freshness.js";
 import {
+  firstPublishes,
   packagesAhead,
   parsePackageList,
   planSecurityPublish,
@@ -61,7 +66,8 @@ function fail(lines: string[]): never {
 
 function outDir(): string {
   const dir = process.argv[3];
-  if (!dir) fail(["usage: security-publish.ts <plan|pack|ahead|publish|verify> <out-dir>"]);
+  if (!dir)
+    fail(["usage: security-publish.ts <plan|pack|ahead|first-publish|publish|verify> <out-dir>"]);
   mkdirSync(dir, { recursive: true });
   return resolve(dir);
 }
@@ -81,6 +87,27 @@ async function plan(out: string): Promise<void> {
   }
   for (const p of result.packages) console.log(`  ✓ ${p.name} ${p.previous} → ${p.version}`);
   writeFileSync(join(out, "plan.json"), JSON.stringify(result.packages, null, 2));
+}
+
+async function firstPublish(): Promise<void> {
+  const workspace = publishablePackages(REPO_ROOT, workspaceGlobs(REPO_ROOT));
+  const registry = new Map<string, RegistryAnswer>();
+  for (const p of workspace) registry.set(p.name, await askRegistry(REGISTRY, p.name, fetch));
+  const unseen = firstPublishes(workspace, registry);
+  if (unseen === null)
+    fail([
+      "the registry did not answer for every public package; refusing to guess whether one is a first publish",
+    ]);
+  if (unseen.length > 0)
+    fail([
+      ...unseen.map((name) => `${name} has never been published to npm`),
+      "npm cannot trust a publisher for a name it has not got, so its trusted publish here would fail while its dependents publish",
+      "Fix: the owner publishes each one by hand from a clean checkout of main (`pnpm publish --access public --no-git-checks` in its package directory, after a build; pnpm, not npm, rewrites workspace: dependencies),",
+      "then adds its Trusted Publisher entry at npmjs.com (motebit/motebit, release.yml, environment npm-publish), then re-runs this run",
+    ]);
+  console.log(
+    `  ✓ npm has seen all ${workspace.length} public package(s); no first publish in this train.`,
+  );
 }
 
 async function ahead(): Promise<void> {
@@ -223,9 +250,13 @@ async function main(): Promise<void> {
   if (mode === "plan") await plan(out);
   else if (mode === "pack") pack(out);
   else if (mode === "ahead") await ahead();
+  else if (mode === "first-publish") await firstPublish();
   else if (mode === "publish") publish(out);
   else if (mode === "verify") await verify(out);
-  else fail([`unknown mode ${mode ?? "(none)"}; expected plan, pack, ahead, publish or verify`]);
+  else
+    fail([
+      `unknown mode ${mode ?? "(none)"}; expected plan, pack, ahead, first-publish, publish or verify`,
+    ]);
 }
 
 main().catch((err) => {

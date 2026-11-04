@@ -164,6 +164,27 @@ export function packagesAhead(
   return ahead;
 }
 
+/**
+ * The public packages on main that npm has never seen, or `null` when the
+ * registry did not answer for one. The train refuses to publish while this is
+ * non-empty: npm cannot trust a publisher for a name it has not got, so a
+ * never-seen package's OIDC publish fails while the train publishes its
+ * dependents anyway, referencing a version npm will not serve. A first publish
+ * is an owner act, by hand, followed by the package's Trusted Publisher entry.
+ */
+export function firstPublishes(
+  workspace: readonly PublishablePackage[],
+  registry: ReadonlyMap<string, RegistryAnswer>,
+): string[] | null {
+  const unseen: string[] = [];
+  for (const pkg of workspace) {
+    const answer = registry.get(pkg.name);
+    if (!answer || answer.kind === "unreachable") return null;
+    if (answer.kind === "absent") unseen.push(pkg.name);
+  }
+  return unseen;
+}
+
 export interface PackedArtifact {
   name: string;
   version: string;
