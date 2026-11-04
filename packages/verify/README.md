@@ -92,7 +92,7 @@ motebit-verify repo-change --repo . --base <trusted main tip> --head <pr head> \
 
 # Governed repo change — judge the landed squash commit offline (no network)
 motebit-verify repo-change --landed <squash commit> --trusted-tip <main tip you trust> \
-  --repository owner/name --github-keys github-keys.asc --repo . [--json]
+  --repository owner/name --github-keys github-keys.json --repo . [--json]
 ```
 
 ### State exports — `content-artifact`
@@ -118,11 +118,26 @@ Every axis is computed and printed even when a shape check fails. The evaluation
 
 - the shape checks: the squash commit has exactly one parent; its entries against that parent are exactly one `A 100644` at `.motebit/bundles/<grant_id>.json` plus entries equal to the record's `entries`; `parent_commit` is a first-parent ancestor of (or is) the squash commit's parent; the squash commit is on `--trusted-tip`'s first-parent chain;
 - pins, revocations, the path policy and the tracked paths are read **at the squash commit's parent**; spent: the bundle path ever existed on the parent's first-parent history;
-- the evaluation time is the squash commit's committer time, `operator_recorded`, accepted **only** when the committer is exactly `GitHub <noreply@github.com>` and the commit's `gpgsig` verifies under a key in `--github-keys`, signed at most five minutes after the committer time and never before it (GitHub signs seconds after it records the landing), by a key that already existed at the committer time. Otherwise `authority` is `unknown` and the change does not verify. Revocation freshness is `asserted` as of that time, with the parent in `diagnostics`.
+- the evaluation time is the squash commit's committer time, `operator_recorded`, accepted **only** when the committer is exactly `GitHub <noreply@github.com>` and the commit's `gpgsig` verifies under a key in `--github-keys`, signed at most five minutes after the committer time and never before it (GitHub signs seconds after it records the landing), with the committer time inside that key's window: not before the key was created, and before its `trusted_until` when it has one. Otherwise `authority` is `unknown` and the change does not verify. Revocation freshness is `asserted` as of that time, with the parent in `diagnostics`.
 
-`--github-keys` is one or more ASCII-armored `PGP PUBLIC KEY BLOCK`s — the bytes the operator publishes (for GitHub, its web-flow commit-signing key). Every primary key must be a v4 RSA key; its fingerprint is computed from the key packet, never taken from a label; user IDs, signatures and subkeys are allowed and skipped (subkeys are never candidates). The signature accepted is exactly one v4 binary (type `0x00`) RSA/SHA-256 signature packet with a CRC-checked armor, a hashed creation time, and its issuer named by fingerprint or key id; anything else is refused. The signature check is [`@motebit/crypto-openpgp`](https://www.npmjs.com/package/@motebit/crypto-openpgp)'s (Node built-ins only), re-exported from `@motebit/verify/git`.
+`--github-keys` is the pinned set, `motebit/operator-signing-keys@1.0` (spec §9.1): strict JSON listing each key with its window.
 
-The same reader is a subpath export, `@motebit/verify/git` — `verifyRepoChangePullRequest`, `computeRepoChangeInputs`, the isolated session `openIsolatedGit`, `resolveRepoTip`, `listTree`, `readRepoState`, `isGrantSpent` and `computeEntries` — and, for the offline mode, `verifyRepoChangeLanded`, `computeLandedRepoChangeInputs`, `openRawObjects`, `parsePinnedSigningKeys` and `verifyCommitSignature`. `motebit repo-task run` imports it for its self-check, so the producer and CI compute the inputs with one implementation.
+```json
+{
+  "spec": "motebit/operator-signing-keys@1.0",
+  "keys": [
+    {
+      "fingerprint": "<40 lowercase hex>",
+      "armored": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...",
+      "trusted_until": null
+    }
+  ]
+}
+```
+
+Each `armored` holds the bytes the operator publishes for exactly one key (for GitHub, a web-flow commit-signing key). Its fingerprint is computed from the key packet and must equal `fingerprint`, and the key must be v4 RSA. User IDs, signatures and subkeys are allowed and skipped; subkeys are never candidates. `trusted_until` is `null` while the key is current. **Retire a key by setting `trusted_until` to when it stopped being trusted, never by deleting it**, so the landings it signed before then still verify. Revocation and expiry inside the key material are not read: this file is the trust decision. The parser is `parseOperatorSigningKeys` in `@motebit/verify/git`. The signature accepted is exactly one v4 binary (type `0x00`) RSA/SHA-256 signature packet with a CRC-checked armor, a hashed creation time, and its issuer named by fingerprint or key id; anything else is refused. The signature check is [`@motebit/crypto-openpgp`](https://www.npmjs.com/package/@motebit/crypto-openpgp)'s (Node built-ins only), re-exported from `@motebit/verify/git`.
+
+The same reader is a subpath export, `@motebit/verify/git` — `verifyRepoChangePullRequest`, `computeRepoChangeInputs`, the isolated session `openIsolatedGit`, `resolveRepoTip`, `listTree`, `readRepoState`, `isGrantSpent` and `computeEntries` — and, for the offline mode, `verifyRepoChangeLanded`, `computeLandedRepoChangeInputs`, `openRawObjects`, the pinned-set parser `parseOperatorSigningKeys` (with `OPERATOR_SIGNING_KEYS_SPEC` and the `OperatorSigningKey` type), and the leaf's `parsePinnedSigningKeys` and `verifyCommitSignature`. `motebit repo-task run` imports it for its self-check, so the producer and CI compute the inputs with one implementation.
 
 > **`@motebit/verify` vs `@motebit/verifier` vs `@motebit/crypto`.** This package (`verify`) is the **CLI binary** a human installs. [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) is the **browser-safe library** (file I/O + formatting; also re-exports `verifyApprovalDecision`). [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) is the **zero-dependency primitive** that carries the actual verify/sign functions — import it directly for browser/client-side verification.
 

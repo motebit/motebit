@@ -60,7 +60,7 @@ export interface RepoChangeLandedArgs {
   readonly landed: string;
   readonly trustedTip: string;
   readonly repository: string;
-  /** Path of the pinned signing keys file (armored OpenPGP public key blocks). */
+  /** Path of the pinned set, `motebit/operator-signing-keys@1.0` (strict UTF-8 JSON). */
   readonly githubKeys: string;
   readonly json: boolean;
 }
@@ -292,7 +292,11 @@ export async function runRepoChangeCli(args: RepoChangeArgs, io: RepoChangeIo): 
 async function runLanded(args: RepoChangeLandedArgs, io: RepoChangeIo): Promise<number> {
   let report: LandedRepoChangeReport;
   try {
-    const keys = fs.readFileSync(args.githubKeys, "utf8");
+    // Strict UTF-8: an invalid byte is refused, never replaced with U+FFFD;
+    // a byte-order mark is kept, so the JSON parse refuses it.
+    const keys = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      fs.readFileSync(args.githubKeys),
+    );
     report = await verifyRepoChangeLanded({
       repo: args.repo,
       landed: args.landed,
@@ -381,12 +385,13 @@ export const REPO_CHANGE_HELP: readonly string[] = [
   "  --trusted-tip <commit>    A trusted tip of main (an independent witness); the",
   "                            squash commit must be on its first-parent chain.",
   "  --repository <owner/name> The repository; the scope's repo must equal it.",
-  "  --github-keys <file>      The pinned signing keys: armored OpenPGP public key",
-  "                            blocks (v4 RSA primary keys). The squash commit's",
-  "                            committer time counts only when the committer is",
-  "                            GitHub <noreply@github.com> and its signature verifies",
-  "                            under one of them (operator_recorded); otherwise",
-  "                            authority is unknown.",
+  "  --github-keys <file>      The pinned set, motebit/operator-signing-keys@1.0:",
+  "                            each v4 RSA key with its trusted_until (null = open).",
+  "                            The squash commit's committer time counts only when",
+  "                            the committer is GitHub <noreply@github.com>, its",
+  "                            signature verifies under a pinned key, and the time",
+  "                            is inside that key's window (operator_recorded);",
+  "                            otherwise authority is unknown.",
   "  --repo <clone>            The clone. Pins, revocations, the path policy and spent",
   "                            are read at the squash commit's parent.",
   "                            Not with --base, --head, --base-ref, --pr-author, --now.",

@@ -28,6 +28,9 @@ const PGP = "packages/crypto-openpgp/src/openpgp.ts";
 const CLI = "packages/verify/src/repo-change-cli.ts";
 const TEST = "src/__tests__/repo-change-landed.test.ts";
 const UNIT = "src/__tests__/openpgp.test.ts";
+const KEYS_FILE = "packages/verify/src/git/operator-keys.ts";
+const KEYS_UNIT = "src/__tests__/operator-keys.test.ts";
+const PIN_SET = "the pinned set file";
 
 const OK =
   "motebit-verify repo-change --landed: a landed governed change is fully verified, pinned, fresh, with outcome completed, at the operator-recorded time";
@@ -66,6 +69,15 @@ const unit = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry =>
   name,
   pkg: "@motebit/crypto-openpgp",
   test: UNIT,
+  red,
+  only: true,
+  edits,
+});
+/** A unit entry for verify's pinned-set parser. */
+const pinSet = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry => ({
+  name,
+  pkg: "@motebit/verify",
+  test: KEYS_UNIT,
   red,
   only: true,
   edits,
@@ -112,12 +124,165 @@ const TAMPERS: TamperEntry[] = [
     off(LANDED, "sig.createdAt - seconds > LANDING_SIGNATURE_WINDOW_S) {"),
   ),
   entry(
+    "time: a key's trusted_until ignored",
+    `${TIME} the committer time is at or after the pinned key's trusted_until`,
+    off(LANDED, 'until !== null && !(typeof until === "number" && seconds < until)) {'),
+  ),
+  entry(
+    "time: a landing at exactly trusted_until accepted",
+    `${TIME} the committer time is at or after the pinned key's trusted_until`,
+    edit(LANDED, "&& seconds < until)) {", "&& seconds <= until)) {"),
+  ),
+  entry(
+    "time: a retired key refused for its earlier landings",
+    `${TIME} a retired key still vouches for a landing made before its trusted_until`,
+    edit(LANDED, '!(typeof until === "number" && seconds < until)', "true"),
+  ),
+  entry(
+    "time: the window read from another pinned key than the signer",
+    `${TIME} the window is the verifying key's, never another pinned key's`,
+    edit(
+      LANDED,
+      "const key = keys.find((k) => k.fingerprint === sig.fingerprint);",
+      "const key = keys.find((k) => k.trustedUntil === null) ?? keys.find((k) => k.fingerprint === sig.fingerprint);",
+    ),
+  ),
+  entry(
+    "time: a key with no usable creation time left open",
+    `${TIME} a pinned key with no usable creation time is refused, never open`,
+    edit(
+      LANDED,
+      "key === undefined || !Number.isSafeInteger(key.createdAt) || ",
+      "key === undefined || ",
+    ),
+  ),
+  entry(
+    "command: a byte-order mark dropped before parsing",
+    `${COMMAND} exits 2 when the pinned keys do not parse, or the file is missing`,
+    edit(CLI, "{ fatal: true, ignoreBOM: true }", "{ fatal: true, ignoreBOM: false }"),
+  ),
+  entry(
+    "command: the pinned set decoded leniently",
+    `${COMMAND} exits 2 when the pinned keys do not parse, or the file is missing`,
+    edit(CLI, "{ fatal: true, ignoreBOM: true }", "{ fatal: false, ignoreBOM: true }"),
+  ),
+  entry(
+    "time: a key with no window field left open",
+    `${TIME} a pinned key with no window field is refused, never open`,
+    edit(LANDED, "if (until !== null && !(", "if (until != null && !("),
+  ),
+  pinSet(
+    "pinned set: the armored key not matched to its fingerprint",
+    `${PIN_SET} refuses armored holding another key than the fingerprint`,
+    off(KEYS_FILE, "key.fingerprint !== fp) {"),
+  ),
+  pinSet(
+    "pinned set: more than one key per entry accepted",
+    `${PIN_SET} refuses armored holding two keys`,
+    off(KEYS_FILE, "keys.length !== 1) fail"),
+  ),
+  pinSet(
+    "pinned set: a repeated member name accepted",
+    `${PIN_SET} refuses a member name repeated in an entry`,
+    off(KEYS_FILE, "repeated !== null) fail"),
+  ),
+  pinSet(
+    "pinned set: a key pinned twice accepted",
+    `${PIN_SET} refuses a key pinned twice`,
+    off(KEYS_FILE, "seen.has(fp)) fail"),
+  ),
+  pinSet(
+    "pinned set: a malformed trusted_until accepted",
+    `${PIN_SET} refuses an unsafe trusted_until`,
+    off(KEYS_FILE, "until !== null && !Number.isSafeInteger(until)) {"),
+  ),
+  pinSet(
+    "pinned set: a trusted_until read from its value, not its text",
+    `${PIN_SET} refuses a trusted_until written 1800000000.0000001`,
+    off(KEYS_FILE, "number !== null) fail"),
+  ),
+  pinSet(
+    "pinned set: another spec accepted",
+    `${PIN_SET} refuses another spec`,
+    off(KEYS_FILE, "file.spec !== OPERATOR_SIGNING_KEYS_SPEC) {"),
+  ),
+  pinSet(
+    "pinned set: an empty keys accepted",
+    `${PIN_SET} refuses no keys`,
+    edit(KEYS_FILE, " || file.keys.length === 0) fail", ") fail"),
+  ),
+  pinSet(
+    "pinned set: a malformed fingerprint accepted",
+    `${PIN_SET} refuses an uppercase fingerprint`,
+    edit(
+      KEYS_FILE,
+      "const FINGERPRINT = /^[0-9a-f]{40}$/;",
+      "const FINGERPRINT = /^[0-9a-fA-F]{39,40}$/;",
+    ),
+  ),
+  pinSet(
+    "pinned set: a non-object accepted as an entry",
+    `${PIN_SET} refuses an entry not an object`,
+    edit(
+      KEYS_FILE,
+      'if (typeof o !== "object" || o === null || Array.isArray(o))',
+      'if ((false as boolean) && (typeof o !== "object" || o === null || Array.isArray(o)))',
+    ),
+  ),
+  pinSet(
+    "pinned set: a missing key accepted",
+    `${PIN_SET} refuses a missing key`,
+    edit(
+      KEYS_FILE,
+      "    if (!Object.prototype.hasOwnProperty.call(r, k)) fail(",
+      "    if ((false as boolean) && !Object.prototype.hasOwnProperty.call(r, k)) fail(",
+    ),
+  ),
+  pinSet(
+    "pinned set: keys not an array accepted",
+    `${PIN_SET} refuses keys not an array`,
+    edit(
+      KEYS_FILE,
+      "if (!Array.isArray(file.keys) || file.keys.length === 0) fail",
+      "if ((file.keys as unknown[]).length === 0) fail",
+    ),
+    edit(KEYS_FILE, "return file.keys.map(", "return (file.keys as unknown[]).map("),
+  ),
+  pinSet(
+    "pinned set: armored not a string accepted",
+    `${PIN_SET} refuses armored not a string`,
+    off(KEYS_FILE, 'typeof e.armored !== "string") fail'),
+    edit(
+      KEYS_FILE,
+      "parsePinnedSigningKeys(e.armored)",
+      "parsePinnedSigningKeys(e.armored as string)",
+    ),
+  ),
+  pinSet(
+    "pinned set: a repeated name compared before unescaping",
+    `${PIN_SET} refuses a member name repeated in an entry, one copy escaped`,
+    edit(
+      KEYS_FILE,
+      "const name = JSON.parse(text.slice(i, j + 1)) as string;",
+      "const name = text.slice(i + 1, j);",
+    ),
+  ),
+  pinSet(
+    "pinned set: an unknown entry key accepted",
+    `${PIN_SET} refuses an unknown entry key`,
+    edit(
+      KEYS_FILE,
+      "    if (!keys.includes(k)) fail(",
+      "    if ((false as boolean) && !keys.includes(k)) fail(",
+    ),
+  ),
+  entry(
     "time: a committer time before the pinned key existed accepted",
     `${TIME} the committer time is before the pinned key was created`,
     edit(
       LANDED,
-      "if (key === undefined || seconds < key.createdAt) {",
-      "if (key === undefined || ((false as boolean) && seconds < key.createdAt)) {",
+      "if (key === undefined || !Number.isSafeInteger(key.createdAt) || seconds < key.createdAt) {",
+      "if (key === undefined || !Number.isSafeInteger(key.createdAt) || ((false as boolean) && seconds < key.createdAt)) {",
     ),
   ),
   unit(

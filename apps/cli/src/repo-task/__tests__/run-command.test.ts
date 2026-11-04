@@ -136,6 +136,7 @@ function crc24(bytes: Uint8Array): number {
  */
 function testGithubSigner(): {
   armored: string;
+  fingerprint: string;
   sign: (payload: Buffer, seconds: number) => Buffer;
 } {
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -179,6 +180,7 @@ function testGithubSigner(): {
     .digest();
   return {
     armored: `${armor("PGP PUBLIC KEY BLOCK", pkt(6, keyBody))}\n`,
+    fingerprint: fingerprint.toString("hex"),
     sign: (payload, seconds) => {
       const time = Buffer.alloc(4);
       time.writeUInt32BE(seconds);
@@ -686,6 +688,12 @@ describe("repo-task run: a governed change, end to end", () => {
       { cwd: fx.repo, env: gitEnv(), input: signer.sign(payload, seconds), encoding: "utf8" },
     ).trim();
     git(fx.repo, "update-ref", "refs/heads/main", squash);
+    // The pinned set (`motebit/operator-signing-keys@1.0`), one open window.
+    const pinSet = (s: { armored: string; fingerprint: string }) =>
+      JSON.stringify({
+        spec: "motebit/operator-signing-keys@1.0",
+        keys: [{ fingerprint: s.fingerprint, armored: s.armored, trusted_until: null }],
+      });
     const landed = (keys: string) =>
       verifyRepoChangeLanded({
         repo: fx.repo,
@@ -694,14 +702,14 @@ describe("repo-task run: a governed change, end to end", () => {
         repository: REPO,
         signingKeys: keys,
       });
-    const ok = await landed(signer.armored);
+    const ok = await landed(pinSet(signer));
     expect(ok.verification.diagnostics.failures).toEqual([]);
     expect(ok.computed.shapeFailures).toEqual([]);
     expect(ok.computed.time.landedAt).toBe(seconds * 1000);
     expect(ok.verification.verdict.temporalBasis).toBe("operator_recorded");
     expect(ok.accepted).toBe(true);
     // Under another pinned key, the landing time is not accepted.
-    const other = await landed(testGithubSigner().armored);
+    const other = await landed(pinSet(testGithubSigner()));
     expect(other.verification.verdict.authority).toBe("unknown");
     expect(other.accepted).toBe(false);
   });

@@ -18,17 +18,20 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isFullyVerified } from "@motebit/verifier";
 
 import {
+  acceptLandingTime,
   gitObjectId,
   openIsolatedGit,
   openRawObjects,
+  parsePinnedSigningKeys,
   verifyRepoChangeLanded,
 } from "../git/index.js";
-import type { LandedRepoChangeReport } from "../git/index.js";
+import type { LandedRepoChangeReport, OperatorSigningKey } from "../git/index.js";
 import { subpacket, testSigningKey } from "./helpers/github-signer.js";
 import {
   LANDED_SECONDS,
   gitIn,
   landedFixture,
+  pinFile,
   pinned,
   stranger,
   writeCommit,
@@ -244,8 +247,65 @@ describe("motebit-verify repo-change --landed: the landing time is GitHub's, und
   it("the committer time is before the pinned key was created", async () => {
     const young = testSigningKey(2048, LANDED_SECONDS + 1);
     const fx = await landedFixture(tmp, { signer: young });
-    const r = await check(fx, { keys: young.armored });
+    const r = await check(fx, { keys: pinFile([{ key: young }]) });
     expectNoTime(r, /committer time .* is before the pinned key was created/);
+  });
+
+  it("the committer time is at or after the pinned key's trusted_until", async () => {
+    const fx = await landedFixture(tmp);
+    const at = await check(fx, {
+      keys: pinFile([{ key: pinned(), trustedUntil: LANDED_SECONDS }]),
+    });
+    expectNoTime(at, /committer time .* is at or after the pinned key's trusted_until/);
+    const before = await check(fx, {
+      keys: pinFile([{ key: pinned(), trustedUntil: LANDED_SECONDS - 1 }]),
+    });
+    expectNoTime(before, /at or after the pinned key's trusted_until/);
+  });
+
+  it("a retired key still vouches for a landing made before its trusted_until", async () => {
+    const fx = await landedFixture(tmp);
+    const r = await check(fx, {
+      keys: pinFile([{ key: stranger() }, { key: pinned(), trustedUntil: LANDED_SECONDS + 1 }]),
+    });
+    expect(r.computed.time.landedAt).toBe(LANDED_SECONDS * 1000);
+    expect(r.computed.time.signer).toBe(pinned().fingerprint);
+    expect(r.accepted).toBe(true);
+  });
+
+  it("the window is the verifying key's, never another pinned key's", async () => {
+    const fx = await landedFixture(tmp);
+    const closed = { key: pinned(), trustedUntil: LANDED_SECONDS };
+    for (const keys of [
+      pinFile([closed, { key: stranger() }]),
+      pinFile([{ key: stranger() }, closed]),
+    ]) {
+      const r = await check(fx, { keys });
+      expectNoTime(r, /at or after the pinned key's trusted_until/);
+    }
+  });
+
+  it("a pinned key with no window field is refused, never open", async () => {
+    const fx = await landedFixture(tmp);
+    const raw = execFileSync("git", ["-C", fx.repo, "cat-file", "commit", fx.squash]);
+    const committer = /^committer (.*)$/m.exec(raw.toString("latin1"))![1]!;
+    const bare = parsePinnedSigningKeys(pinned().armored) as unknown as OperatorSigningKey[];
+    const t = acceptLandingTime(raw, committer, "sha1", bare);
+    expect(t.landedAt).toBeNull();
+    expect(t.problem ?? "").toMatch(/trusted_until \(undefined\)/);
+  });
+
+  it("a pinned key with no usable creation time is refused, never open", async () => {
+    const fx = await landedFixture(tmp);
+    const raw = execFileSync("git", ["-C", fx.repo, "cat-file", "commit", fx.squash]);
+    const committer = /^committer (.*)$/m.exec(raw.toString("latin1"))![1]!;
+    const [key] = parsePinnedSigningKeys(pinned().armored);
+    for (const createdAt of [undefined, Number.NaN]) {
+      const k = { ...key!, createdAt, trustedUntil: null } as unknown as OperatorSigningKey;
+      const t = acceptLandingTime(raw, committer, "sha1", [k]);
+      expect(t.landedAt).toBeNull();
+      expect(t.problem ?? "").toMatch(/before the pinned key was created/);
+    }
   });
 
   it("the signature was created before the committer time", async () => {
@@ -951,7 +1011,50 @@ describe("motebit-verify repo-change --landed: the command", () => {
     fs.writeFileSync(fx.keysFile, "not a key\n");
     const bad = await runMain(cliArgs(fx));
     expect(bad.code).toBe(2);
-    expect(bad.stderr).toMatch(/not judged: the pinned signing keys do not parse/);
+    expect(bad.stderr).toMatch(/not judged: operator signing keys: not valid JSON/);
+    // Bytes that are not UTF-8 are refused, never replaced.
+    // An armor comment holding 0xFF 0xFE: a lenient decoder reads U+FFFD there,
+    // which the armor header grammar would accept.
+    const commented = pinFile([{ key: pinned() }]).replace(
+      "-----BEGIN PGP PUBLIC KEY BLOCK-----\\n",
+      "-----BEGIN PGP PUBLIC KEY BLOCK-----\\nComment: @@\\n",
+    );
+    const at = commented.indexOf("@@");
+    expect(at).toBeGreaterThan(0);
+    fs.writeFileSync(
+      fx.keysFile,
+      Buffer.concat([
+        Buffer.from(commented.slice(0, at)),
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from(commented.slice(at + 2)),
+      ]),
+    );
+    const notUtf8First = await runMain(cliArgs(fx));
+    // Control: the same comment in ASCII is read and the change verifies.
+    fs.writeFileSync(fx.keysFile, commented.replace("@@", "ok"));
+    expect((await runMain(cliArgs(fx))).code).toBe(0);
+    fs.writeFileSync(
+      fx.keysFile,
+      Buffer.concat([
+        Buffer.from(commented.slice(0, at)),
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from(commented.slice(at + 2)),
+      ]),
+    );
+    const notUtf8 = await runMain(cliArgs(fx));
+    expect(notUtf8First.code).toBe(2);
+    expect(notUtf8.code).toBe(2);
+    expect(notUtf8.stderr).toMatch(/not judged: .*(encoded|decode|invalid)/i);
+    // A byte-order mark is not part of the pinned set's JSON.
+    fs.writeFileSync(fx.keysFile, `\uFEFF${pinFile([{ key: pinned() }])}`);
+    const bom = await runMain(cliArgs(fx));
+    expect(bom.code).toBe(2);
+    expect(bom.stderr).toMatch(/not judged: operator signing keys: not valid JSON/);
+    // A bare armored key file (no windows) is not a pinned set.
+    fs.writeFileSync(fx.keysFile, pinned().armored);
+    const bare = await runMain(cliArgs(fx));
+    expect(bare.code).toBe(2);
+    expect(bare.stderr).toMatch(/not judged: operator signing keys: not valid JSON/);
     fs.rmSync(fx.keysFile);
     const missing = await runMain(cliArgs(fx));
     expect(missing.code).toBe(2);

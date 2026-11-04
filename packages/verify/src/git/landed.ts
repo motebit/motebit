@@ -25,8 +25,9 @@
  *     verifies under one of the pinned keys (`@motebit/crypto-openpgp`) AND the
  *     signature was made within LANDING_SIGNATURE_WINDOW_S after the committer
  *     time, never before it (GitHub signs seconds after it records the
- *     landing) AND the committer time is not before the pinned key's own
- *     creation time;
+ *     landing) AND the committer time is inside the pinned key's window: not
+ *     before the key's own creation time, and before its `trusted_until`
+ *     when the pinned set gives one (`operator-keys.ts`);
  *     otherwise `landedAt` is `null`, so `authority` is `unknown`;
  *   - revocation freshness `asserted`, as of the accepted landing time (the
  *     parent was the tip when the squash commit was built on it), with the
@@ -53,8 +54,9 @@ import type {
 
 import { openRawObjects } from "./objects.js";
 import type { RawObjects } from "./objects.js";
-import { parsePinnedSigningKeys, verifyCommitSignature } from "@motebit/crypto-openpgp";
-import type { PinnedSigningKey } from "@motebit/crypto-openpgp";
+import { verifyCommitSignature } from "@motebit/crypto-openpgp";
+import { parseOperatorSigningKeys } from "./operator-keys.js";
+import type { OperatorSigningKey } from "./operator-keys.js";
 import { computeEntries, looseRecord } from "./repo-change.js";
 import { openIsolatedGit, resolveGitDirectories } from "./session.js";
 import type { IsolatedGit } from "./session.js";
@@ -91,8 +93,8 @@ export interface LandedRepoChange {
   readonly trustedTip: string;
   /** The repository (`owner/name`); the scope's `repo` must equal it. */
   readonly repository: string;
-  /** The pinned signing keys of the hosting operator (`parsePinnedSigningKeys`). */
-  readonly signingKeys: readonly PinnedSigningKey[];
+  /** The hosting operator's pinned keys and their windows (`parseOperatorSigningKeys`). */
+  readonly signingKeys: readonly OperatorSigningKey[];
 }
 
 /** Whether the squash commit's committer time was accepted, and why not. */
@@ -128,7 +130,7 @@ export function acceptLandingTime(
   raw: Buffer,
   committer: string,
   objectFormat: "sha1" | "sha256",
-  keys: readonly PinnedSigningKey[],
+  keys: readonly OperatorSigningKey[],
 ): LandedTime {
   const no = (problem: string, signer: string | null = null): LandedTime => ({
     landedAt: null,
@@ -157,9 +159,18 @@ export function acceptLandingTime(
     );
   }
   const key = keys.find((k) => k.fingerprint === sig.fingerprint);
-  if (key === undefined || seconds < key.createdAt) {
+  if (key === undefined || !Number.isSafeInteger(key.createdAt) || seconds < key.createdAt) {
     return no(
       `the committer time (${seconds}) is before the pinned key was created (${key?.createdAt ?? "?"})`,
+      sig.fingerprint,
+    );
+  }
+  // Open only when the pinned set says so (`null`); a key with no window
+  // field at all (an unparsed key, cast in) is refused, never left open.
+  const until: unknown = key.trustedUntil;
+  if (until !== null && !(typeof until === "number" && seconds < until)) {
+    return no(
+      `the committer time (${seconds}) is at or after the pinned key's trusted_until (${typeof until === "number" ? until : typeof until})`,
       sig.fingerprint,
     );
   }
@@ -337,7 +348,7 @@ export interface LandedRepoChangeCheck {
   readonly landed: string;
   readonly trustedTip: string;
   readonly repository: string;
-  /** The pinned signing keys file's text (`parsePinnedSigningKeys`). */
+  /** The pinned set file's text, `motebit/operator-signing-keys@1.0` (`parseOperatorSigningKeys`). */
   readonly signingKeys: string;
 }
 
@@ -358,7 +369,7 @@ export interface LandedRepoChangeReport {
 export async function verifyRepoChangeLanded(
   c: LandedRepoChangeCheck,
 ): Promise<LandedRepoChangeReport> {
-  const signingKeys = parsePinnedSigningKeys(c.signingKeys);
+  const signingKeys = parseOperatorSigningKeys(c.signingKeys);
   const repo = path.resolve(c.repo);
   let gitEntry = path.join(repo, ".git");
   try {
