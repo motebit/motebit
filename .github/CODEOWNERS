@@ -49,6 +49,9 @@
 /scripts/__tests__/autonomy-tier-workflow.test.ts @hakimlabs
 /scripts/__tests__/autonomy-tier.tampers.mjs @hakimlabs
 /.motebit/repo-path-policy.json @hakimlabs
+# The pinned operator signing keys (spec/repo-change-v1.md §9.1): the trust decision
+# for when a governed change landed. A key retires by closing its window here.
+/.motebit/operator-keys/ @hakimlabs
 # The wire contract (protocol primacy): the spec and the protocol types define what
 # every implementer must do, so a change here is constitutional (founder decision 2026-10-11).
 /spec/ @hakimlabs

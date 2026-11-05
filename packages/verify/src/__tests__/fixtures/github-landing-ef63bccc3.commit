@@ -1,0 +1,65 @@
+tree 0935f8f2ca1149e18003313d0d5b06aa4b87dd06
+parent a689710643bd3d22ccaaaf61b71a9e3718c8228f
+author motebit-agent <danielhakimcompany+motebit-agent@gmail.com> 1793810432 +0000
+committer GitHub <noreply@github.com> 1793810432 +0000
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJq62AQCRC1aQ7uu5UhlAAAF7AQAIIC2mNdjWC0vs8u0Qq3dZjd
+ 5YridcXt4mNTTVVQMdnhhwzBQ3o0+BOe9P0qdn8K4ExWm9qXZLRoq3opU6BRTqPC
+ 7be805rIiq4SFufJPdrfBN4ARM0bLvQpSF26Y73PeaHc2By1yf8WUyccNTHdAzI2
+ KinGorKONGvzfwi8BDTgUf3dLADyUVpexnl0BGa1B5cVwQljqprL41uSoVYGTV15
+ XNUcCjnLVM5wKoED+vpfoGaxXB3OgWOJpOTWCQ7EwmPvgO/sRIQeJko78IxsymCJ
+ ftJfIiJEbtDbuMoVUyq4Y0C+5BOuVmxuYuzppDINNSigXTsvIosnFWqhwKKc01Tn
+ Sd1eJJnZ+KIGP+x9X0i2ib597Szr1U8ye/XgU6YqB7ba9zVa9VmLB0DXa2eFBs2v
+ rX+z0oScuvG9hjBzTleuzxUNL20CL6C1PGZxK5bRndsJ/abcRi8oozwObErxzRpt
+ GnG4GcXGyNsfPhRXY71rDyBJcgo+rXWepMj5tKUOtKOeVWTL0OuLuDfT8QNl+6V6
+ 8rvGnTXDaaYCt6sm84vi6dES40VkeZpFqPKenwBDPONV8ja9iAaVr+yC5z9iUbm7
+ Kc7ApNw6uP7Om0CrRT+WZkJ4ogYoX7WuMEmBeI3V69y4Pr97lmH/TVLWxirxJ+mv
+ wSGG3Ur1m0mA+/VKlcQL
+ =5Pxk
+ -----END PGP SIGNATURE-----
+ 
+
+docs(doctrine): a new public package's first publish is by hand (#1226)
+
+## Why
+
+`docs/doctrine/promoting-private-to-public.md` §7 said a promoted
+package's first publish "flows through the normal Changesets release
+pipeline". Under trusted publishing that is false: npm attaches a
+trusted publisher only to a name it has already seen, so the pipeline
+cannot make a first publish, and since #1225 the train refuses a
+never-published name before it builds anything. The crypto-openpgp
+release on 2026-11-04 went the real way, by hand first.
+
+Step 1 also set `"version": "1.0.0"`. With step 7's `major` changeset
+that releases `2.0.0`, and the hand publish takes `1.0.0` without
+provenance. crypto-openpgp sat at `0.0.0` on `main`, which is what the
+playbook now says.
+
+## Evidence
+
+- §7 now gives the order that ran on 2026-11-04: hand publish of `0.0.0`
+with `pnpm publish` (only pnpm rewrites `workspace:` dependencies), then
+the trusted publisher, then the Version Packages PR (#1092) and the
+`npm-publish` approval.
+- The trusted-publisher form on npmjs.com has an "Allow npm publish"
+setting (otherwise staged publishing only) and leaves a new entry
+"Pending validation" with a deadline until a publish uses it; both
+observed on `@motebit/crypto-openpgp` and matched against
+`@motebit/verify`'s existing entry.
+- `pnpm check`: all 161 drift defenses pass. Prettier clean.
+
+## Review
+
+- Procedure only. No change to the workflow, the guard, or who can
+publish.
+- `docs/ops/RUNBOOK.md` § Publish authority gains the same two npm
+facts, so the doctrine and the runbook agree.
+
+## Deferred
+
+- Whether to deprecate `@motebit/crypto-openpgp@0.0.0` once 1.0.0 is on
+npm. The founder's call.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
