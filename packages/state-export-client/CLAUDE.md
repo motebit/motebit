@@ -1,6 +1,6 @@
 # @motebit/state-export-client
 
-Browser-safe verifier for motebit state-export responses. Apache-2.0 (permissive floor), Layer 6 (Applications). Wraps `fetch` to verify the `X-Motebit-Content-Manifest` HTTP header against the response body bytes; provides the trust-on-first-use (TOFU) bootstrap from `/.well-known/motebit-transparency.json` that produces a pinned `TransparencyAnchor`.
+Browser-safe verifier for motebit state-export responses. Apache-2.0 (permissive floor), Layer 1 (Primitives; it depends only on layer 0). Wraps `fetch` to verify the `X-Motebit-Content-Manifest` HTTP header against the response body bytes; provides the trust-on-first-use (TOFU) bootstrap from `/.well-known/motebit-transparency.json` that produces a pinned `TransparencyAnchor`.
 
 Closes the consumer side of the doctrine §8 self-attesting loop. The producer side ships in `services/relay/src/state-export.ts` (`emitSignedExport` helper, drift-locked by `check-state-export-signed` #86). This package is the symmetric counterpart that turns producer-side signing into an operational invariant: an operator who stops signing breaks every shipping consumer that demands verification, instead of silently degrading without anyone noticing.
 
