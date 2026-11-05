@@ -31,6 +31,10 @@ const UNIT = "src/__tests__/openpgp.test.ts";
 const KEYS_FILE = "packages/verify/src/git/operator-keys.ts";
 const KEYS_UNIT = "src/__tests__/operator-keys.test.ts";
 const PIN_SET = "the pinned set file";
+const REAL_TEST = "src/__tests__/repo-change-landed-github.test.ts";
+const PINS = ".motebit/operator-keys/github.json";
+const LANDING_FIXTURE = "packages/verify/src/__tests__/fixtures/github-landing-ef63bccc3.commit";
+const REAL = "real GitHub landings on main, under the committed pinned set";
 
 const OK =
   "motebit-verify repo-change --landed: a landed governed change is fully verified, pinned, fresh, with outcome completed, at the operator-recorded time";
@@ -85,8 +89,14 @@ const pinSet = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry 
 /** Disable an `if (<guard>` whose condition is one `&&` chain (no top-level `||`). */
 const off = (file: string, guard: string): TamperEdit =>
   edit(file, `if (${guard}`, `if ((false as boolean) && ${guard}`);
+/** An entry against the real-vector test (GitHub's committed keys, a real landing). */
+const real = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry => ({
+  ...entry(name, red, ...edits),
+  test: REAL_TEST,
+});
 const TREE_RULES = "a tree out of canonical order, or with a malformed entry, is rejected";
 const ACCEPT = "{ landedAt: seconds * 1000, committer, signer: null, problem: null }";
+const UNPINNED_ACCEPTED = `  if (!sig.ok) return sig.reason.includes("is not a pinned key") ? ${ACCEPT} : no(sig.reason);\n`;
 
 const TAMPERS: TamperEntry[] = [
   // ── the landing time ───────────────────────────────────────────────────
@@ -665,6 +675,77 @@ const TAMPERS: TamperEntry[] = [
       CLI,
       'has(flag)) return { kind: "usage", message: `repo-change: ${flag} requires --landed` };',
     ),
+  ),
+  // ── real GitHub landings under the committed pinned set ───────────────
+  real(
+    "real: an unpinned signer accepted (only the retired key pinned)",
+    `${REAL} refuses the landing when only the retired key is pinned`,
+    edit(LANDED, "  if (!sig.ok) return no(sig.reason);\n", UNPINNED_ACCEPTED),
+  ),
+  real(
+    "real: an unpinned signer accepted (only an ephemeral key pinned)",
+    `${REAL} refuses the landing when only an ephemeral key is pinned`,
+    edit(LANDED, "  if (!sig.ok) return no(sig.reason);\n", UNPINNED_ACCEPTED),
+  ),
+  real(
+    "real: the RSA verification ignored",
+    `${REAL} refuses the landing with one byte of the RSA signature flipped (a valid armor and CRC)`,
+    off(
+      PGP,
+      '!ok) return { ok: false, reason: "the RSA signature does not verify under the pinned key" };',
+    ),
+  ),
+  real(
+    "real: an altered payload accepted (left 16 bits and RSA ignored)",
+    `${REAL} refuses the landing with one byte of the signed payload flipped`,
+    off(PGP, "!digest.subarray(0, 2).equals(sig.left16)) {"),
+    off(
+      PGP,
+      '!ok) return { ok: false, reason: "the RSA signature does not verify under the pinned key" };',
+    ),
+  ),
+  real(
+    "real: the signature armor's CRC-24 not checked",
+    `${REAL} refuses the landing with one character of the armored signature flipped`,
+    edit(
+      PGP,
+      "  if (crc.length !== 3 || crc.readUIntBE(0, 3) !== crc24(data)) {\n",
+      "  if ((false as boolean) && (crc.length !== 3 || crc.readUIntBE(0, 3) !== crc24(data))) {\n",
+    ),
+  ),
+  real(
+    "real: the signer's trusted_until ignored",
+    `${REAL} refuses the landing when the current key's window closed at or before the committer time`,
+    off(LANDED, 'until !== null && !(typeof until === "number" && seconds < until)) {'),
+  ),
+  real(
+    "real: a landing at exactly the signer's trusted_until accepted",
+    `${REAL} refuses the landing when the current key's window closed at or before the committer time`,
+    edit(LANDED, "&& seconds < until)) {", "&& seconds <= until)) {"),
+  ),
+  real(
+    "real: the window read from the retired key, not the signer",
+    `${REAL} accepts the landing when only the retired key's window is closed, at any time`,
+    edit(
+      LANDED,
+      "const key = keys.find((k) => k.fingerprint === sig.fingerprint);",
+      "const key = keys.find((k) => k.trustedUntil !== null) ?? keys.find((k) => k.fingerprint === sig.fingerprint);",
+    ),
+  ),
+  real(
+    "real: the committed set's current key closed before the landing",
+    `${REAL} accepts the landing at its committer time, signed by the current key`,
+    edit(PINS, '"trusted_until": null', '"trusted_until": 1793810431'),
+  ),
+  real(
+    "real: the committed set's retired key left open",
+    `${REAL} the committed set pins both web-flow keys, the 2017 key retired at 2024-01-16T20:00:00Z`,
+    edit(PINS, '"trusted_until": 1705435200', '"trusted_until": null'),
+  ),
+  real(
+    "real: the landing fixture's bytes altered",
+    `${REAL} the fixture is the landing's exact object bytes, committed and signed by GitHub`,
+    edit(LANDING_FIXTURE, "(#1226)\n", "(#1227)\n"),
   ),
 ];
 
