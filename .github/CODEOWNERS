@@ -57,6 +57,13 @@
 /.motebit/principals/ @hakimlabs
 /.motebit/revocations/ @hakimlabs
 /.motebit/bundles/ @hakimlabs
+# The governed-change check (docs/proposals/governed-repo-change-v1.md): its report
+# script, its workflow (also under /.github/), and the tests that pin the workflow's
+# exact shape and its tampers. Owned so a change cannot rewrite the check that judges it.
+/scripts/governed-change-report.ts @hakimlabs
+/.github/workflows/governed-change.yml @hakimlabs
+/scripts/__tests__/governed-change-workflow.test.ts @hakimlabs
+/scripts/__tests__/governed-change.tampers.mjs @hakimlabs
 # The wire contract (protocol primacy): the spec and the protocol types define what
 # every implementer must do, so a change here is constitutional (founder decision 2026-10-11).
 /spec/ @hakimlabs
