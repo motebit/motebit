@@ -52,6 +52,11 @@
 # The pinned operator signing keys (spec/repo-change-v1.md §9.1): the trust decision
 # for when a governed change landed. A key retires by closing its window here.
 /.motebit/operator-keys/ @hakimlabs
+# Governed repo changes (docs/proposals/governed-repo-change-v1.md): the role-typed
+# pins, the revocations and the bundles, each landed only by a founder-approved PR.
+/.motebit/principals/ @hakimlabs
+/.motebit/revocations/ @hakimlabs
+/.motebit/bundles/ @hakimlabs
 # The wire contract (protocol primacy): the spec and the protocol types define what
 # every implementer must do, so a change here is constitutional (founder decision 2026-10-11).
 /spec/ @hakimlabs
