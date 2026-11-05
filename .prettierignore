@@ -6,6 +6,9 @@ dist
 *.tsbuildinfo
 pnpm-lock.yaml
 **/motebit.md
+# The pins of governed repo changes are signed identity files: their exact bytes
+# are what the signature covers, so a reformat would break every pin.
+.motebit/principals/
 services/proxy/tsconfig.json
 
 # VS Code extension build artifacts. Compiled from apps/vscode/src/ by
