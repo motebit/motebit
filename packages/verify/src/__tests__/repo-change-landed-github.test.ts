@@ -35,7 +35,7 @@ const PINS = fs.readFileSync(PINS_PATH, "utf8");
 /** Squash commit of #1226 on main, committed and signed by GitHub. */
 const LANDING = "ef63bccc33ad3d28b70873f2d29a6a55e81a4e9c";
 const RAW = fs.readFileSync(new URL("./fixtures/github-landing-ef63bccc3.commit", import.meta.url));
-/** Its committer time, 2026-11-04T19:20:32Z. */
+/** Its committer time, 2026-11-04T16:40:32Z. */
 const T = 1_793_810_432;
 
 /** GitHub's key from 2017-08-16, retired 2024-01-16T20:00:00Z. */
