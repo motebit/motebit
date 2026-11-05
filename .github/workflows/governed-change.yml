@@ -1,0 +1,133 @@
+name: Governed change
+
+# The `governed-change` check of docs/proposals/governed-repo-change-v1.md
+# ("External enforcement"; build step 5), in its EXPAND state. It judges a
+# governed repo change in the CI-on-PR mode of spec/repo-change-v1.md §9 with
+# `motebit-verify repo-change`, built from the trusted checkout, and writes
+# every verdict axis to the job summary.
+#
+# ## Expand -> verify -> contract (this file is EXPAND)
+#
+#  - expand (this file): pull_request_target only. The check REPORTS; it is
+#    not required (no ruleset names it), and the autonomy-tier verdict never
+#    reads it (scripts/autonomy-tier-verdict.ts reads reviews, not checks). A
+#    result reflects the PR as of its last event and can be stale: the head
+#    is the event's, never re-read from the API.
+#  - verify: acceptance tests B1-B6 pass live.
+#  - contract (a founder decision, after milestone C, in its own reviewed
+#    design): make it required, decide how a required check treats a PR not
+#    published by motebit-agent (today such a PR concludes success with "not a
+#    governed change", which a required check would read as a pass), and add
+#    a merge_group mode.
+#
+# NOT merge_group: on that event the workflow file comes from the queue
+# commit, which a queued PR can change, and the base can be a queue entry not
+# yet on main. Running there needs its own mode, with policy and inputs from a
+# merge_group.base_sha that must be on main or the run fails closed: contract.
+#
+# ## What a run concludes
+#
+#  - not a governed change: the PR adds, modifies or deletes nothing under
+#    .motebit/bundles/ (from its merge base with the base tip, ASCII case
+#    folded). There is no bundle to judge, so nothing is judged and the run
+#    succeeds with a summary saying so. It is never reported as verified.
+#  - VERIFIED: fully verified AND outcome `completed` (spec §7). Success.
+#  - NOT VERIFIED: any other verdict. Failure, every axis in the summary.
+#  - NOT JUDGED: the change cannot be judged (no parsable path policy at the
+#    base, a missing object, ...) or the run's own provenance self-check
+#    failed. Failure.
+#
+# The decision is scripts/governed-change-report.ts, run from the trusted
+# checkout (`trusted/`); the verifier is `@motebit/verify`, built there.
+#
+# ## pull_request_target safety (mirrors autonomy-tier.yml)
+#
+# - No PR-head code runs, and none is checked out. The only checkout is the
+#   base tip (`github.sha` on pull_request_target; any other event resolves
+#   to no revision, so the checkout fails closed). The change's commits are
+#   fetched as git objects into a bare repository (`subject.git`, no working
+#   tree) from THIS repository, never the fork, with fetch.fsckObjects, and
+#   are only read: by git plumbing and by the verifier's isolated session,
+#   which re-hashes every object it reads.
+# - Read-only token (contents, pull-requests), no secrets, no token passed to
+#   any step, and persist-credentials: false on the checkout.
+# - No expression is interpolated into a `run:` script; event fields reach the
+#   scripts through the event file and step env only.
+# - No dependency cache (a cache is the one thing a PR run could write that a
+#   base run reads).
+#
+# scripts/__tests__/governed-change-workflow.test.ts pins this file's exact
+# shape; scripts/__tests__/governed-change.tampers.mjs proves the pins bite.
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: governed-change-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Least privilege: read the repository and the PR; nothing else.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  governed-change:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the base tip (the verifier, pins and policy that judge)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The base tip; never PR code.
+          ref: ${{ github.event_name == 'pull_request_target' && github.sha || 'no-policy-revision-for-this-event' }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Fetch the change as git objects only (no working tree, never executed)
+        working-directory: trusted
+        env:
+          POLICY_SHA: ${{ github.event_name == 'pull_request_target' && github.sha || 'no-policy-revision-for-this-event' }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # Full history of both (spent reads the base's first-parent history;
+        # the governed test needs the merge base), from this repository,
+        # never the fork; every received object is fsck-checked.
+        run: >-
+          git init --quiet --bare "$GITHUB_WORKSPACE/subject.git" &&
+          git -C "$GITHUB_WORKSPACE/subject.git" -c fetch.fsckObjects=true
+          fetch --quiet --no-tags
+          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          "+$POLICY_SHA:refs/governed-change/base"
+          "+$EVENT_HEAD_SHA:refs/governed-change/head"
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+        with:
+          package_json_file: trusted/package.json
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          # NO dependency cache: a cache a PR-scoped run wrote could poison
+          # tsx, the verifier or a dependency in the trusted checkout.
+          package-manager-cache: false
+
+      - name: Install the base tip's dependencies (uncached)
+        working-directory: trusted
+        run: pnpm install --frozen-lockfile
+
+      - name: Build motebit-verify from the base tip
+        working-directory: trusted
+        run: pnpm --filter "@motebit/verify..." run build
+
+      - name: Judge the change (motebit-verify repo-change, CI-on-PR mode)
+        working-directory: trusted
+        env:
+          # The base tip the checkout was told to take (same expression).
+          EXPECTED_POLICY_SHA: ${{ github.event_name == 'pull_request_target' && github.sha || 'no-policy-revision-for-this-event' }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          pnpm exec tsx scripts/governed-change-report.ts
+          --event-path "$GITHUB_EVENT_PATH"
+          --repository "$GITHUB_REPOSITORY"
+          --subject "$GITHUB_WORKSPACE/subject.git"
