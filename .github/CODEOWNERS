@@ -40,14 +40,12 @@
 /scripts/check-codeowners-authority.ts @hakimlabs
 /scripts/lib/codeowners.ts @hakimlabs
 # The autonomy boundary (docs/proposals/repo-autonomy-v1.md): the T0/T1 classifier,
-# the autonomy-tier verdict, its workflow (also under /.github/), and the tests that
-# pin the workflow's exact shape and its tampers. Owned so a T0
-# change cannot move the boundary that decides what T0 is.
+# the autonomy-tier verdict and its workflow (also under /.github/). Owned so a T0
+# change cannot move the boundary that decides what T0 is. The tests that pin the
+# workflow's shape stay CI-only, like every test (the exclusions at the end).
 /scripts/classify-autonomy-tier.ts @hakimlabs
 /scripts/autonomy-tier-verdict.ts @hakimlabs
 /.github/workflows/autonomy-tier.yml @hakimlabs
-/scripts/__tests__/autonomy-tier-workflow.test.ts @hakimlabs
-/scripts/__tests__/autonomy-tier.tampers.mjs @hakimlabs
 /.motebit/repo-path-policy.json @hakimlabs
 # The pinned operator signing keys (spec/repo-change-v1.md §9.1): the trust decision
 # for when a governed change landed. A key retires by closing its window here.
