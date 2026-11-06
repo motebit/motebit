@@ -11,7 +11,8 @@
  *     dropping its store, passing `grantSpendStore: undefined`, or naming it
  *     only in a string, the serve site reverted behind a `const MR =
  *     MotebitRuntime` alias, an opaque `...NO_STORE` spread after the store,
- *     and a store on one conditional branch only: check-money-authority
+ *     a store on one conditional branch only, and a local same-named
+ *     `cliRuntimeConfig` that drops the store: check-money-authority
  *     assertion 7 goes red;
  *   - the daemon builder deciding `syncConfigured` itself (ignoring the
  *     intent relay, #962 round 5): the behavioural case and the AST guard in
@@ -126,6 +127,24 @@ const TAMPERS: TamperEntry[] = [
           "const NO_STORE: { grantSpendStore?: undefined } = {};\n",
       },
       { file: FACTORY, from: REPL_STORE, to: `${REPL_STORE}        ...NO_STORE,\n` },
+    ],
+    ...GATE,
+  },
+  {
+    name: "REPL builds through a local same-named `cliRuntimeConfig` that drops the store",
+    edits: [
+      {
+        file: FACTORY,
+        from: 'import { cliRuntimeConfig } from "./sync-configured.js";\n',
+        to:
+          "function cliRuntimeConfig(\n" +
+          '  base: Omit<import("@motebit/runtime").RuntimeConfig, "syncConfigured">,\n' +
+          "  relay: { syncUrl: string | undefined; intentUrl?: string | undefined },\n" +
+          '): import("@motebit/runtime").RuntimeConfig {\n' +
+          "  const { grantSpendStore: _dropped, ...rest } = base;\n" +
+          "  return { ...rest, syncConfigured: relay.syncUrl != null };\n" +
+          "}\n",
+      },
     ],
     ...GATE,
   },

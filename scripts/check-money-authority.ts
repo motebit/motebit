@@ -52,11 +52,14 @@
  *      to this runtime's identity.
  *
  *   7. **A runtime that can verify a grant meters it durably.** Every
- *      MotebitRuntime construction (found by type, through aliases) whose
- *      config sets `identityPublicKeyHex` on any branch carries a
- *      `grantSpendStore` store on every branch; a config the gate cannot
- *      follow FAILS closed. Otherwise the meter falls back to the in-memory
- *      store and the grant's lifetime ceiling re-arms on restart.
+ *      `new`/`super` whose target resolves by type to MotebitRuntime (and
+ *      every `new` of a declared subclass, which is UNRESOLVED) whose config
+ *      sets `identityPublicKeyHex` on any branch carries a `grantSpendStore`
+ *      store on every branch; a config part the gate cannot follow FAILS
+ *      closed. Otherwise the meter falls back to the in-memory store and the
+ *      grant's lifetime ceiling re-arms on restart. NOT seen: mixins,
+ *      generic factories, Reflect.construct, union-typed and structurally
+ *      typed constructors (see the assertion's own comment).
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -681,32 +684,49 @@ let SCAN: { program: ts.Program; files: string[] } | null = null;
 // ceilings re-arm on every restart (#436 finding 6; the `motebit run` /
 // `motebit serve` daemons shipped exactly this).
 //
-// FAIL CLOSED. Sites are found with assertion 5's type-aware program: every
-// `new` expression whose constructed type is `MotebitRuntime` (through any
-// alias, renamed import or namespace), every `super(...)` in a class that
-// extends it, and every `new` of such a subclass (always UNRESOLVED: its
-// constructor decides the config). A site's config is followed only through:
-// an object literal; the audited builders `cliRuntimeConfig` /
-// `daemonRuntimeConfig` (first argument followed, later object-literal
-// arguments merged in order, other arguments carry no config); and, inside a
-// literal, spreads of object literals, `?:`, `&&`/`||`/`??`, parentheses and
-// casts of those, and `undefined`/`null`/`false`. Each `?:`/logical branch is
-// a separate possible shape. Anything else (an identifier, a call, a computed
-// key) is OPAQUE: it may set anything, so it erases any store before it. A
-// site is held to the rule when any shape sets `identityPublicKeyHex`; the
-// rule is that EVERY shape carries a `grantSpendStore` property whose value is
-// not `undefined`/`void`/`null`. An opaque site passes only when every shape
-// sets the store after the last opaque part; otherwise it is UNRESOLVED and
-// FAILS, unless it is in UNRESOLVED_ALLOW below (empty; a stale entry fails).
-// NOT checked: whether a passed store is durable — that is proven by
+// WHAT FINDS SITES (assertion 5's type-aware program): a `new` or `super(...)`
+// whose target resolves by type to `MotebitRuntime` — through aliases,
+// renamed or namespace imports, and a dynamic-import destructure — and a `new`
+// of a declared class that extends it (always UNRESOLVED: its constructor
+// decides the config). NOT seen: mixins and intersection-typed constructors,
+// generic factories (`new C()` with `C` a type parameter), `Reflect.construct`,
+// union-typed and structurally typed constructors. Static site-finding cannot
+// be closed; the structural guarantee belongs to runtime assembly, not here.
+//
+// HOW A CONFIG IS FOLLOWED (fail closed, for config-following only): an
+// object literal; a call whose callee resolves (by symbol) to the real
+// `cliRuntimeConfig` (apps/cli/src/sync-configured.ts: its first argument; the
+// relay argument contributes nothing) or `daemonRuntimeConfig`
+// (apps/cli/src/daemon.ts: its first argument, then its third argument when it
+// is an object literal, merged after); and, inside a literal, spreads of
+// object literals, `?:`, `&&`/`||`/`??`, parentheses and casts of those, and
+// `undefined`/`null`/`false`. Each `?:`/logical branch is a separate possible
+// shape. Any other callee, identifier, call spread or computed key is OPAQUE:
+// it may set anything, so it erases any store before it. A site is held to the
+// rule when any shape sets `identityPublicKeyHex`; the rule is that EVERY shape
+// carries a `grantSpendStore` property whose value is not
+// `undefined`/`void`/`null`. An opaque site passes only when every shape sets
+// the store after the last opaque part; otherwise it is UNRESOLVED and FAILS,
+// unless its site id is in UNRESOLVED_ALLOW below (empty; a stale entry fails).
+// NOT decided: a value-level optional (`opts.store`, typed optional) counts as
+// a store. NOT checked: whether a passed store is durable — that is proven by
 // apps/cli/src/__tests__/daemon-grant-spend-store.test.ts. NOT held to the
 // rule: a resolved site whose identity comes from `signingKeys` alone (the
 // runtime derives its identity from them too); counted and printed.
 {
-  /** Unresolved sites accepted on purpose, by file, with the reason. Empty. */
-  const UNRESOLVED_ALLOW: ReadonlyArray<{ file: string; reason: string }> = [];
-  const BUILDERS = new Set(["cliRuntimeConfig", "daemonRuntimeConfig"]);
+  /**
+   * Unresolved sites accepted on purpose, by site id (`<file>#<enclosing
+   * declaration>#<ordinal>`, as the failure prints it), with the reason. Empty.
+   */
+  const UNRESOLVED_ALLOW: ReadonlyArray<{ site: string; reason: string }> = [];
+  /** The audited config builders, by name → the file that must declare them. */
+  const BUILDER_DECLS: Readonly<Record<string, string>> = {
+    cliRuntimeConfig: "apps/cli/src/sync-configured.ts",
+    daemonRuntimeConfig: "apps/cli/src/daemon.ts",
+  };
   const MAX_SHAPES = 64;
+  /** Which audited builder a call resolves to; set once the checker exists. */
+  let builderOf: (call: ts.CallExpression) => "cli" | "daemon" | null = () => null;
 
   /** One possible config: its properties (value null = shorthand), and whether an opaque part was seen. */
   interface Shape {
@@ -790,18 +810,15 @@ let SCAN: { program: ts.Program; files: string[] } | null = null;
     if (arg == null) return OPAQUE;
     const x = unwrap(arg);
     if (ts.isObjectLiteralExpression(x)) return literalShapes(x);
-    if (
-      ts.isCallExpression(x) &&
-      ts.isIdentifier(x.expression) &&
-      BUILDERS.has(x.expression.text)
-    ) {
-      let acc = spreadShapes(x.arguments[0] ?? ts.factory.createIdentifier("undefined"));
-      for (const a of x.arguments.slice(1)) {
-        if (ts.isObjectLiteralExpression(unwrap(a))) acc = merge(acc, spreadShapes(a));
-      }
-      return acc;
-    }
-    return OPAQUE;
+    const builder = ts.isCallExpression(x) ? builderOf(x) : null;
+    if (builder === null || !ts.isCallExpression(x)) return OPAQUE;
+    const first = x.arguments[0];
+    let acc = first == null ? [empty()] : spreadShapes(first);
+    // cliRuntimeConfig's relay argument contributes nothing; daemonRuntimeConfig
+    // merges its third argument (`{ grantSpendStore }`) after the base.
+    const third = x.arguments[2];
+    if (builder === "daemon" && third != null) acc = merge(acc, spreadShapes(third));
+    return acc;
   };
   const hasStore = (s: Shape): boolean => {
     if (!s.props.has("grantSpendStore")) return false;
@@ -816,6 +833,22 @@ let SCAN: { program: ts.Program; files: string[] } | null = null;
   } else {
     const { program, files } = SCAN;
     const checker = program.getTypeChecker();
+    builderOf = (call) => {
+      let sym = checker.getSymbolAtLocation(call.expression);
+      if (sym != null && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+      if (sym == null) return null;
+      const name = sym.getName();
+      const declFile = BUILDER_DECLS[name];
+      if (declFile === undefined) return null;
+      const real = (sym.getDeclarations() ?? []).some(
+        (d) =>
+          ts.isFunctionDeclaration(d) &&
+          d.getSourceFile().fileName.endsWith(declFile) &&
+          d.getSourceFile().fileName === resolve(ROOT, declFile),
+      );
+      if (!real) return null;
+      return name === "cliRuntimeConfig" ? "cli" : "daemon";
+    };
     const RUNTIME_DECL = /packages\/runtime\/(src|dist)\/motebit-runtime\.(d\.)?ts$/;
     const isRuntimeSymbol = (sym: ts.Symbol | undefined): boolean =>
       sym != null &&
@@ -835,8 +868,8 @@ let SCAN: { program: ts.Program; files: string[] } | null = null;
     let identitySites = 0;
     let keysOnlyUnmetered = 0;
     const violations: string[] = [];
-    const unresolved: Array<{ file: string; where: string; why: string }> = [];
-    const check = (rel: string, where: string, arg: ts.Expression | undefined): void => {
+    const unresolved: Array<{ site: string; where: string; why: string }> = [];
+    const check = (site: string, where: string, arg: ts.Expression | undefined): void => {
       sites++;
       const shapes = configShapes(arg);
       const storeEverywhere = shapes.every(hasStore);
@@ -845,7 +878,7 @@ let SCAN: { program: ts.Program; files: string[] } | null = null;
         return;
       }
       if (shapes.some((s) => s.opaque)) {
-        unresolved.push({ file: rel, where, why: "its config is not followed to a store" });
+        unresolved.push({ site, where, why: "its config is not followed to a store" });
         return;
       }
       if (shapes.some((s) => s.props.has("identityPublicKeyHex"))) {
@@ -860,14 +893,42 @@ let SCAN: { program: ts.Program; files: string[] } | null = null;
       if (sf == null) continue;
       const at = (n: ts.Node): string =>
         `${rel}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+      // A site id that survives line drift: the nearest named enclosing
+      // declaration, plus the site's ordinal within it.
+      const ordinals = new Map<string, number>();
+      const siteId = (n: ts.Node): string => {
+        let scope = "<module>";
+        for (let a: ts.Node | undefined = n.parent; a != null; a = a.parent) {
+          const named = a as ts.Node & { name?: ts.Node };
+          if (
+            (ts.isFunctionDeclaration(a) ||
+              ts.isMethodDeclaration(a) ||
+              ts.isClassDeclaration(a) ||
+              ts.isVariableDeclaration(a) ||
+              ts.isPropertyDeclaration(a)) &&
+            named.name != null &&
+            ts.isIdentifier(named.name)
+          ) {
+            scope = named.name.text;
+            break;
+          }
+          if (ts.isConstructorDeclaration(a)) {
+            scope = "constructor";
+            break;
+          }
+        }
+        const k = (ordinals.get(scope) ?? 0) + 1;
+        ordinals.set(scope, k);
+        return `${rel}#${scope}#${k}`;
+      };
       const visit = (node: ts.Node): void => {
         if (ts.isNewExpression(node)) {
           const kind = classify(checker.getTypeAtLocation(node));
-          if (kind === "runtime") check(rel, at(node), node.arguments?.[0]);
+          if (kind === "runtime") check(siteId(node), at(node), node.arguments?.[0]);
           else if (kind === "subclass") {
             sites++;
             unresolved.push({
-              file: rel,
+              site: siteId(node),
               where: at(node),
               why: "it constructs a subclass of MotebitRuntime",
             });
@@ -883,16 +944,16 @@ let SCAN: { program: ts.Program; files: string[] } | null = null;
           const base = cls?.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)
             ?.types[0];
           if (base != null && classify(checker.getTypeAtLocation(base)) === "runtime") {
-            check(rel, at(node), node.arguments[0]);
+            check(siteId(node), at(node), node.arguments[0]);
           }
         }
         ts.forEachChild(node, visit);
       };
       visit(sf);
     }
-    const allowed = new Set(UNRESOLVED_ALLOW.map((a) => a.file));
-    const failing = unresolved.filter((u) => !allowed.has(u.file));
-    const stale = UNRESOLVED_ALLOW.filter((a) => !unresolved.some((u) => u.file === a.file));
+    const allowed = new Set(UNRESOLVED_ALLOW.map((a) => a.site));
+    const failing = unresolved.filter((u) => !allowed.has(u.site));
+    const stale = UNRESOLVED_ALLOW.filter((a) => !unresolved.some((u) => u.site === a.site));
     if (violations.length > 0) {
       fail(
         `assertion 7: ${violations.length} \`new MotebitRuntime(\` site(s) set \`identityPublicKeyHex\` ` +
@@ -907,16 +968,16 @@ let SCAN: { program: ts.Program; files: string[] } | null = null;
     }
     if (failing.length > 0) {
       fail(
-        `assertion 7: ${failing.length} MotebitRuntime site(s) are UNRESOLVED (the gate fails closed):\n  ` +
-          failing.map((u) => `${u.where} — ${u.why}`).join("\n  ") +
+        `assertion 7: ${failing.length} MotebitRuntime site(s) are UNRESOLVED (config-following fails closed):\n  ` +
+          failing.map((u) => `${u.where} [${u.site}] — ${u.why}`).join("\n  ") +
           "\nFix: inline the config at the call (an object literal, or `cliRuntimeConfig({...}, relay)`), " +
           "or pass `grantSpendStore` explicitly after the last spread. Only if neither is possible, add " +
-          "the file with a reason to UNRESOLVED_ALLOW in scripts/check-money-authority.ts.",
+          "the bracketed site id with a reason to UNRESOLVED_ALLOW in scripts/check-money-authority.ts.",
       );
     }
     if (stale.length > 0) {
       fail(
-        `assertion 7: UNRESOLVED_ALLOW names file(s) with no unresolved site: ${stale.map((s) => s.file).join(", ")}. ` +
+        `assertion 7: UNRESOLVED_ALLOW names site(s) that are not unresolved: ${stale.map((s) => s.site).join(", ")}. ` +
           "Fix: remove the stale entry from scripts/check-money-authority.ts.",
       );
     }
@@ -924,13 +985,18 @@ let SCAN: { program: ts.Program; files: string[] } | null = null;
       console.log(
         `check-money-authority: durable grant metering — ${files.length} source files type-checked ` +
           `(.ts/.tsx under packages/*/src, apps/*/src, services/*/src; tests excluded), ${sites} ` +
-          `MotebitRuntime construction site(s) (new, alias, namespace, super, subclass): ` +
-          `${identitySites} set identityPublicKeyHex and all ${identitySites} pass a grantSpendStore on ` +
-          `every branch; ${unresolved.length} unresolved (${UNRESOLVED_ALLOW.length} allowlisted). ` +
-          `Followed: object literals, cliRuntimeConfig/daemonRuntimeConfig, literal spreads, ?:, &&/||/??, ` +
-          `casts; anything else fails closed. NOT checked: durability of a passed store. NOT held to ` +
-          `this rule: ${keysOnlyUnmetered} site(s) whose identity comes from signingKeys alone and that ` +
-          `pass no grantSpendStore.`,
+          `MotebitRuntime site(s) — \`new\`/\`super\` whose target resolves by type to MotebitRuntime ` +
+          `(aliases, renamed/namespace imports, dynamic-import destructure) and \`new\` of a declared ` +
+          `subclass (UNRESOLVED): ${identitySites} set identityPublicKeyHex and all ${identitySites} pass ` +
+          `a grantSpendStore on every branch; ${unresolved.length} unresolved ` +
+          `(${UNRESOLVED_ALLOW.length} allowlisted). Config followed through object literals, the ` +
+          `symbol-resolved cliRuntimeConfig (first arg) / daemonRuntimeConfig (first + third arg), ` +
+          `literal spreads, ?:, &&/||/??, casts; any other config part is opaque and fails closed. ` +
+          `NOT seen: mixins/intersection constructors, generic factories, Reflect.construct, ` +
+          `union-typed and structurally typed constructors. NOT decided: a value-level optional ` +
+          `store (opts.store). NOT checked: durability of a passed store. NOT held to this rule: ` +
+          `${keysOnlyUnmetered} site(s) whose identity comes from signingKeys alone and that pass no ` +
+          `grantSpendStore.`,
       );
     }
   }
@@ -944,5 +1010,5 @@ console.log(
     "delegate_to_agent declares explicit riskHint (R4 on payment rail); verifiedGrant has a single " +
     "audited producer; executeGrantedDelegation re-composes the R4 AND (fail-closed verify + scope + meter-wrapped builder); " +
     "every tool-registry execute is a sanctioned gated site; an R4_MONEY handler is unreachable " +
-    "without the runtime money capability; every followed runtime config with identityPublicKeyHex passes a grantSpendStore on every branch (unfollowable configs fail closed).",
+    "without the runtime money capability; every runtime site found by type whose config sets identityPublicKeyHex passes a grantSpendStore on every branch (an unfollowable config fails closed).",
 );
