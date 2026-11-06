@@ -7575,12 +7575,19 @@
         background: rgba(0, 0, 0, 0.55);
         z-index: 100;
         opacity: 0;
+        visibility: hidden;
         pointer-events: none;
-        transition: opacity 0.15s;
+        transition:
+          opacity 0.15s,
+          visibility 0s linear 0.15s;
       }
       #skills-consent-backdrop.open {
         opacity: 1;
+        visibility: visible;
         pointer-events: auto;
+        transition:
+          opacity 0.15s,
+          visibility 0s;
       }
       #skills-consent-modal {
         position: fixed;
@@ -7594,13 +7601,25 @@
         padding: 24px 24px 20px 24px;
         z-index: 101;
         opacity: 0;
+        /* visibility:hidden (not just opacity:0), as #pin-backdrop does: closed,
+           the dialog leaves the accessibility tree and the tab order, so no
+           screen reader or agent reads an "Install Sensitive Skill?" modal
+           that is not open, and Tab cannot reach its hidden Install button.
+           Delayed on close so the fade still plays. */
+        visibility: hidden;
         pointer-events: none;
-        transition: opacity 0.15s;
+        transition:
+          opacity 0.15s,
+          visibility 0s linear 0.15s;
         box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
       }
       #skills-consent-modal.open {
         opacity: 1;
+        visibility: visible;
         pointer-events: auto;
+        transition:
+          opacity 0.15s,
+          visibility 0s;
       }
       .skills-consent-title {
         font-size: 11px;
