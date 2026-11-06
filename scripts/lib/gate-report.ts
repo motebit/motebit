@@ -1,3 +1,4 @@
+// milestone B paired session (M4 re-run): throwaway, never merged.
 /**
  * Gate failure reporting — the repair-instruction contract for drift gates.
  *
