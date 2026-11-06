@@ -34,9 +34,11 @@ import {
   workspaceCoveragePackages,
 } from "../verify-test-outcomes.js";
 import {
+  NO_FLOOR_PACKAGE,
   RED_VARIANTS,
   greenFixture,
   materialize,
+  withNoFloorPackage,
   type OutcomeFixture,
 } from "../lib/test-outcomes-fixture.js";
 import { readPackageThresholds } from "../lib/vitest-thresholds.js";
@@ -74,11 +76,70 @@ describe("verifyOutcomes over fixture artifacts", () => {
     });
   }
 
-  it("names apps/cli when a -t filter skipped its whole suite (apps/cli has no coverage floor)", () => {
+  it("names apps/cli when a -t filter skipped its whole suite", () => {
     const f = greenFixture();
     RED_VARIANTS["all-skipped-name-filter"]!.mutate(f);
     const r = withFixture(f, ({ root, artifacts }) => verifyOutcomes(root, artifacts));
     expect(r.violations.join("\n")).toMatch(/apps\/cli: 0 of 7 tests passed/);
+  });
+
+  // The no-floor cases. The package that declares no thresholds is the
+  // fixture's own (NO_FLOOR_PACKAGE), allowed by an allowance the fixture
+  // injects — never by the real NO_THRESHOLD_PACKAGES, which is empty.
+  const verifyFixture = (f: OutcomeFixture) =>
+    withFixture(f, ({ root, artifacts }) =>
+      verifyOutcomes(root, artifacts, { noThresholdPackages: f.noThresholdPackages ?? {} }),
+    );
+  const noFloorResults = (f: OutcomeFixture) =>
+    f.shards["coverage-shard-1"]![NO_FLOOR_PACKAGE]!.results!;
+
+  it("is GREEN with a no-floor package the injected allowance carries", () => {
+    const r = verifyFixture(withNoFloorPackage(greenFixture()));
+    expect(r.violations).toEqual([]);
+    expect(r.packages).toContain(NO_FLOOR_PACKAGE);
+    expect(r.passed[NO_FLOOR_PACKAGE]).toBe(7);
+  });
+
+  it("is RED on a no-floor package the allowance does not carry", () => {
+    const r = verifyFixture(withNoFloorPackage(greenFixture(), { allowlisted: false }));
+    expect(r.violations).toEqual([
+      `${NO_FLOOR_PACKAGE}: its vitest config declares no parseable coverage thresholds (and no NO_THRESHOLD_PACKAGES entry)`,
+    ]);
+  });
+
+  it("is RED on an allowance entry for a package that declares thresholds (stale)", () => {
+    const f = greenFixture();
+    f.noThresholdPackages = { "apps/cli": "stale" };
+    expect(verifyFixture(f).violations).toEqual([
+      "apps/cli: declares coverage thresholds but is listed in NO_THRESHOLD_PACKAGES — remove the stale entry",
+    ]);
+  });
+
+  it("names the no-floor package when a -t filter skipped its whole suite (it has no coverage floor)", () => {
+    const f = withNoFloorPackage(greenFixture());
+    const r0 = noFloorResults(f);
+    r0.numPassedTests = 0;
+    r0.numPendingTests = r0.numTotalTests;
+    expect(verifyFixture(f).violations.join("\n")).toContain(
+      `${NO_FLOOR_PACKAGE}: 0 of 7 tests passed`,
+    );
+  });
+
+  it("a no-floor suite narrowed to one file is RED by its floor alone — every other rule passes it", () => {
+    const f = withNoFloorPackage(greenFixture());
+    const r0 = noFloorResults(f);
+    r0.numTotalTests = 1;
+    r0.numPassedTests = 1;
+    r0.testResults = (r0.testResults as unknown[]).slice(0, 1);
+    const r = verifyFixture(f);
+    expect(r.violations).toEqual(r.floorViolations);
+    expect(r.violations).toHaveLength(1);
+    expect(
+      r.violations[0]?.startsWith(
+        `${NO_FLOOR_PACKAGE}: 1 test(s) passed, below its committed floor of 7`,
+      ),
+      r.violations[0],
+    ).toBe(true);
   });
 
   it("a suite narrowed to one file is RED by its floor alone — every other rule passes it", () => {

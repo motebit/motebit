@@ -179,11 +179,20 @@ export const SKIP_HEAVY_PACKAGES: Record<string, { minRunShare: number; reason: 
  * reason. The summary must still exist (coverage ran); only the floor
  * comparison is skipped. An entry for a package that declares thresholds is
  * stale and RED.
+ *
+ * Empty since apps/cli declared its floor (2026-11-06; check-coverage-config-present
+ * now requires one of every published or money-executing app). The fixture
+ * exercises the allowance with a package of its own, passed in through
+ * `VerifyOptions.noThresholdPackages`, so an empty list here never leaves the
+ * path untested.
  */
-export const NO_THRESHOLD_PACKAGES: Record<string, string> = {
-  "apps/cli":
-    "bare vitest config, no shared factory — collects coverage without per-package thresholds (apps/cli/vitest.config.ts)",
-};
+export const NO_THRESHOLD_PACKAGES: Record<string, string> = {};
+
+/** Injection seams for the fixture; production callers pass nothing. */
+export interface VerifyOptions {
+  /** Defaults to NO_THRESHOLD_PACKAGES. */
+  noThresholdPackages?: Readonly<Record<string, string>>;
+}
 
 /** vitest's own lookup order: a vitest config, else the vite config's `test` block. */
 export const CONFIG_NAMES = [
@@ -292,7 +301,9 @@ export function packageViolations(
   pkg: string,
   dir: string,
   notBefore?: number,
+  opts: VerifyOptions = {},
 ): string[] {
+  const noThresholdPackages = opts.noThresholdPackages ?? NO_THRESHOLD_PACKAGES;
   const v: string[] = [];
   const resultsPath = join(dir, RESULTS_FILE);
   if (!existsSync(resultsPath)) return [`${pkg}: no ${RESULTS_FILE} — its suite never reported`];
@@ -391,7 +402,7 @@ export function packageViolations(
   const summaryPath = join(dir, SUMMARY_FILE);
   const config = CONFIG_NAMES.map((n) => join(root, pkg, n)).find((p) => existsSync(p));
   const floors = config ? readPackageThresholds(config) : null;
-  const noFloorOk = pkg in NO_THRESHOLD_PACKAGES;
+  const noFloorOk = pkg in noThresholdPackages;
   if (floors && noFloorOk)
     v.push(
       `${pkg}: declares coverage thresholds but is listed in NO_THRESHOLD_PACKAGES — remove the stale entry`,
@@ -474,7 +485,11 @@ export function trackedCoverageFiles(root: string): string[] | { error: string }
  * reported by exactly one shard artifact, each passing packageViolations, and
  * no results for a package the workspace does not declare.
  */
-export function verifyOutcomes(root: string, artifacts: string): OutcomeReport {
+export function verifyOutcomes(
+  root: string,
+  artifacts: string,
+  opts: VerifyOptions = {},
+): OutcomeReport {
   const packages = workspaceCoveragePackages(root);
   const violations: string[] = [];
   if (!existsSync(artifacts))
@@ -559,7 +574,9 @@ export function verifyOutcomes(root: string, artifacts: string): OutcomeReport {
         `${pkg}: reported by ${where.length} shards (${where.join(", ")}), not exactly one`,
       );
     for (const s of where) {
-      violations.push(...packageViolations(root, pkg, join(artifacts, s, pkg), notBefore.get(s)));
+      violations.push(
+        ...packageViolations(root, pkg, join(artifacts, s, pkg), notBefore.get(s), opts),
+      );
       const r = readJson(join(artifacts, s, pkg, RESULTS_FILE)) as { numPassedTests?: unknown };
       if (typeof r.numPassedTests === "number") {
         tests += r.numPassedTests;

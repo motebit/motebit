@@ -3,7 +3,11 @@
  * rule in scripts/check-coverage-config-present.ts, removed alone, must turn
  * its case in scripts/__tests__/check-coverage-config-present.test.ts red; and
  * removing the CLI's declared floor from apps/cli/vitest.config.ts must turn
- * the gate itself red over the real tree.
+ * the gate itself red over the real tree. The last entries cover the
+ * follow-up in scripts/verify-test-outcomes.ts: with the real
+ * NO_THRESHOLD_PACKAGES now empty, its fixture's no-floor case runs under an
+ * injected allowance, and each seam of that injection, removed alone, must
+ * turn a case in scripts/__tests__/verify-test-outcomes.test.ts red.
  *
  *   node scripts/tampers/coverage-config-present.ts
  *
@@ -23,6 +27,9 @@ const FAIL = "check-coverage-config-present failure cases";
 const REAL =
   "check-coverage-config-present over the real repo passes, and holds the published, money-signing CLI to a floor";
 const CLI_CONFIG = "apps/cli/vitest.config.ts";
+const VERIFIER = "scripts/verify-test-outcomes.ts";
+const VERIFIER_TEST = "scripts/__tests__/verify-test-outcomes.test.ts";
+const FIXTURE_CASES = "verifyOutcomes over fixture artifacts";
 const CLI_THRESHOLDS =
   "      thresholds: { statements: 47, branches: 43, functions: 59, lines: 46 },\n";
 
@@ -78,6 +85,42 @@ const TAMPERS: TamperEntry[] = [
     edits: [{ file: CLI_CONFIG, from: CLI_THRESHOLDS, to: "" }],
     test: TEST,
     red: REAL,
+  },
+  {
+    name: "the verifier ignores the injected allowance (reads only the real, empty constant)",
+    edits: [
+      {
+        file: VERIFIER,
+        from: "  const noFloorOk = pkg in noThresholdPackages;",
+        to: "  const noFloorOk = pkg in NO_THRESHOLD_PACKAGES;",
+      },
+    ],
+    test: VERIFIER_TEST,
+    red: `${FIXTURE_CASES} is GREEN with a no-floor package the injected allowance carries`,
+  },
+  {
+    name: "verifyOutcomes drops its options before the per-package check",
+    edits: [
+      {
+        file: VERIFIER,
+        from: "join(artifacts, s, pkg), notBefore.get(s), opts),",
+        to: "join(artifacts, s, pkg), notBefore.get(s)),",
+      },
+    ],
+    test: VERIFIER_TEST,
+    red: `${FIXTURE_CASES} is GREEN with a no-floor package the injected allowance carries`,
+  },
+  {
+    name: "the stale-allowance check is gone (an allowance for a floored package passes)",
+    edits: [
+      {
+        file: VERIFIER,
+        from: "  if (floors && noFloorOk)",
+        to: "  if ((false as boolean) && floors && noFloorOk)",
+      },
+    ],
+    test: VERIFIER_TEST,
+    red: `${FIXTURE_CASES} is RED on an allowance entry for a package that declares thresholds (stale)`,
   },
 ];
 
