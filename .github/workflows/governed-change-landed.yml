@@ -62,7 +62,9 @@ name: Governed change landed
 #
 # ## It judges, never writes
 #
-# Read-only token (contents: read), no secrets, no token passed to any step,
+# Read-only token (contents: read), no secrets, no token passed explicitly
+# (checkout and setup-node take the read-only token by default; none reaches
+# the judge or its container),
 # persist-credentials: false, no dependency cache, no expression interpolated
 # into a `run:` script (inputs reach scripts through step env only; the
 # landed commit is checked to be exactly 40 lowercase hex digits before use).

@@ -634,7 +634,7 @@ describe("the judge container: no network, no capabilities, non-root, read-only 
     expect(judgeStep.run).toContain('--user "$(id -u):$(id -g)"');
   });
 
-  it("the root filesystem and the clone are read-only; only /tmp (noexec) and the fresh output directory are writable", () => {
+  it("the root filesystem and the clone are read-only; the only host directory it can write is the fresh output directory", () => {
     const r = runJudge({ rc: 0, summary: "ok\n" });
     const flags = dockerFlags(r.argv!);
     expect(flags).toContain("--read-only");

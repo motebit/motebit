@@ -68,7 +68,7 @@ const NO_CAPS = BOX(
 );
 const NON_ROOT = BOX("runs as the runner's own non-root uid and gid");
 const READ_ONLY = BOX(
-  "the root filesystem and the clone are read-only; only /tmp (noexec) and the fresh output directory are writable",
+  "the root filesystem and the clone are read-only; the only host directory it can write is the fresh output directory",
 );
 const VARS = BOX("gets only the named variables, and the summary path inside the output directory");
 const IMAGE_RUN = BOX(
