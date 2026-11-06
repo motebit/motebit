@@ -80,7 +80,7 @@ describe("daemon runtime: the grant spend store is persistent", () => {
         daemonRuntimeConfig(
           { motebitId, identityPublicKeyHex: publicKeyHex },
           { syncUrl: undefined },
-          moteDb.grantSpendStore,
+          { grantSpendStore: moteDb.grantSpendStore },
         ),
         { storage: buildStorageAdapters(moteDb), renderer: new NullRenderer() },
       );

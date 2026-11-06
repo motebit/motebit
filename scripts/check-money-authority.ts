@@ -52,14 +52,16 @@
  *      to this runtime's identity.
  *
  *   7. **A runtime that can verify a grant meters it durably.** Every
- *      `new MotebitRuntime(` whose call text sets `identityPublicKeyHex` also
- *      passes `grantSpendStore`; otherwise the meter falls back to the
- *      in-memory store and the grant's lifetime ceiling re-arms on restart.
+ *      `new MotebitRuntime(` whose config (parsed) sets `identityPublicKeyHex`
+ *      also carries a `grantSpendStore` property with a store value; otherwise
+ *      the meter falls back to the in-memory store and the grant's lifetime
+ *      ceiling re-arms on restart.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { createScanProgram, scanFile, workspaceSourceFiles } from "./lib/registry-execute-refs.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -671,63 +673,82 @@ function fail(message: string): void {
 // meter then needs a durable `grantSpendStore`: without one the runtime falls
 // back to `InMemoryGrantSpendStore` and the grant's window and LIFETIME
 // ceilings re-arm on every restart (#436 finding 6; the `motebit run` /
-// `motebit serve` daemons shipped exactly this). So every `new MotebitRuntime(`
-// whose argument text sets `identityPublicKeyHex` must also name
-// `grantSpendStore` (comments are stripped first, so a comment cannot satisfy
-// it). Aperture: every `.ts` (not `.tsx`) under packages/*/src, apps/*/src,
-// services/*/src (tests excluded), by call text. NOT seen: a config object
-// built in a variable outside the call, or a store passed that is itself
-// volatile — the persistence is proven by
+// `motebit serve` daemons shipped exactly this).
+//
+// Parsed with the TypeScript compiler API, not matched as text: each
+// `new MotebitRuntime(` NewExpression's config argument is resolved when it
+// is an object literal, or a call (`cliRuntimeConfig(...)`,
+// `daemonRuntimeConfig(...)`) whose arguments include object literals. The
+// config's PROPERTIES are read through spreads, parentheses, conditionals,
+// `&&`/`||` and `as`/`satisfies`. A config that sets `identityPublicKeyHex`
+// must carry a `grantSpendStore` property whose value is not `undefined`,
+// `void …` or `null`; a comment, a string or a computed key never counts.
+//
+// Aperture: every `.ts` (not `.tsx`) under packages/*/src, apps/*/src,
+// services/*/src (tests excluded). NOT seen: a config built in a variable
+// outside the call (counted and printed as unresolved). NOT checked: whether
+// a passed store is durable — that is proven by
 // apps/cli/src/__tests__/daemon-grant-spend-store.test.ts. NOT held to the
 // rule: a site whose identity comes from `signingKeys` alone (the runtime
-// derives its identity from them too); the gate counts those sites and prints
-// the number, so the gap stays visible until those surfaces wire the store.
+// derives its identity from them too); counted and printed, so the gap stays
+// visible until those surfaces wire the store.
 {
-  /** The source with every comment removed (string and template contents kept). */
-  const stripComments = (src: string): string => {
-    let out = "";
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i]!;
-      const next = src[i + 1];
-      if (c === "/" && next === "/") {
-        while (i < src.length && src[i] !== "\n") i++;
-      } else if (c === "/" && next === "*") {
-        const end = src.indexOf("*/", i + 2);
-        i = end === -1 ? src.length : end + 2;
-      } else if (c === '"' || c === "'" || c === "`") {
-        let j = i + 1;
-        while (j < src.length && src[j] !== c) j += src[j] === "\\" ? 2 : 1;
-        out += src.slice(i, j + 1);
-        i = j + 1;
-      } else {
-        out += c;
-        i++;
-      }
+  const unwrap = (e: ts.Expression): ts.Expression => {
+    let cur = e;
+    while (
+      ts.isParenthesizedExpression(cur) ||
+      ts.isAsExpression(cur) ||
+      ts.isSatisfiesExpression(cur) ||
+      ts.isNonNullExpression(cur) ||
+      ts.isTypeAssertionExpression(cur)
+    ) {
+      cur = cur.expression;
     }
-    return out;
+    return cur;
   };
-  /** The balanced-paren argument text starting at `open` (the `(` index). */
-  const argText = (src: string, open: number): string => {
-    let depth = 0;
-    let i = open;
-    while (i < src.length) {
-      const c = src[i]!;
-      if (c === '"' || c === "'" || c === "`") {
-        let j = i + 1;
-        while (j < src.length && src[j] !== c) j += src[j] === "\\" ? 2 : 1;
-        i = j + 1;
-        continue;
+  const propName = (name: ts.PropertyName): string | null =>
+    ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)
+      ? name.text
+      : null;
+  /** Every property the config object can carry, by name → its value (null for shorthand). */
+  const collect = (e: ts.Expression, out: Map<string, ts.Expression | null>): void => {
+    const x = unwrap(e);
+    if (ts.isObjectLiteralExpression(x)) {
+      for (const p of x.properties) {
+        if (ts.isPropertyAssignment(p)) {
+          const n = propName(p.name);
+          if (n !== null) out.set(n, p.initializer);
+        } else if (ts.isShorthandPropertyAssignment(p)) {
+          out.set(p.name.text, null);
+        } else if (ts.isSpreadAssignment(p)) {
+          collect(p.expression, out);
+        }
       }
-      if (c === "(") depth++;
-      else if (c === ")" && --depth === 0) return src.slice(open, i + 1);
-      i++;
+    } else if (ts.isConditionalExpression(x)) {
+      collect(x.whenTrue, out);
+      collect(x.whenFalse, out);
+    } else if (
+      ts.isBinaryExpression(x) &&
+      (x.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        x.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        x.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+    ) {
+      collect(x.left, out);
+      collect(x.right, out);
     }
-    return src.slice(open);
   };
-  const MARKER = "new MotebitRuntime(";
+  /** A store value that is no store at all. */
+  const isAbsent = (v: ts.Expression): boolean => {
+    const x = unwrap(v);
+    return (
+      (ts.isIdentifier(x) && x.text === "undefined") ||
+      ts.isVoidExpression(x) ||
+      x.kind === ts.SyntaxKind.NullKeyword
+    );
+  };
   let files = 0;
   let sites = 0;
+  let unresolved = 0;
   let identitySites = 0;
   let keysOnlyUnmetered = 0;
   const violations: string[] = [];
@@ -737,29 +758,49 @@ function fail(message: string): void {
       const raw = readFile(rel);
       if (raw === null) continue;
       files++;
-      if (!raw.includes(MARKER)) continue;
-      const code = stripComments(raw);
-      for (let at = code.indexOf(MARKER); at !== -1; at = code.indexOf(MARKER, at + 1)) {
-        sites++;
-        const args = argText(code, at + MARKER.length - 1);
-        if (!/\bidentityPublicKeyHex\b/.test(args)) {
-          if (/\bsigningKeys\b/.test(args) && !/\bgrantSpendStore\b/.test(args))
-            keysOnlyUnmetered++;
-          continue;
+      if (!raw.includes("MotebitRuntime")) continue;
+      const sf = ts.createSourceFile(rel, raw, ts.ScriptTarget.Latest, true);
+      const visit = (node: ts.Node): void => {
+        if (
+          ts.isNewExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === "MotebitRuntime"
+        ) {
+          sites++;
+          const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+          const arg = node.arguments?.[0] ? unwrap(node.arguments[0]) : undefined;
+          const parts: ts.Expression[] = [];
+          if (arg && ts.isObjectLiteralExpression(arg)) parts.push(arg);
+          else if (arg && ts.isCallExpression(arg)) {
+            for (const a of arg.arguments) {
+              if (ts.isObjectLiteralExpression(unwrap(a))) parts.push(a);
+            }
+          }
+          if (parts.length === 0) {
+            unresolved++;
+          } else {
+            const props = new Map<string, ts.Expression | null>();
+            for (const p of parts) collect(p, props);
+            const store = props.get("grantSpendStore");
+            const hasStore = props.has("grantSpendStore") && (store === null || !isAbsent(store!));
+            if (props.has("identityPublicKeyHex")) {
+              identitySites++;
+              if (!hasStore) violations.push(`${rel}:${line}`);
+            } else if (props.has("signingKeys") && !hasStore) {
+              keysOnlyUnmetered++;
+            }
+          }
         }
-        identitySites++;
-        if (!/\bgrantSpendStore\b/.test(args)) {
-          const line = code.slice(0, at).split("\n").length;
-          violations.push(`${rel} (call ${sites}, ~line ${line} of the comment-stripped source)`);
-        }
-      }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
     }
   }
   if (violations.length > 0) {
     fail(
       `${violations.length} \`new MotebitRuntime(\` site(s) set \`identityPublicKeyHex\` (so a standing ` +
-        `grant authorizes R4 spending) but pass no \`grantSpendStore\`, so the money meter falls back to ` +
-        `the in-memory store and the grant's lifetime ceiling re-arms on restart:\n  ` +
+        `grant authorizes R4 spending) but pass no \`grantSpendStore\` property with a store value, so ` +
+        `the money meter falls back to the in-memory store and the grant's lifetime ceiling re-arms on restart:\n  ` +
         violations.join("\n  ") +
         "\nFix: pass the persistent store (`grantSpendStore: moteDb.grantSpendStore`, the " +
         "`SqliteGrantSpendStore` from `@motebit/persistence`), as `apps/cli/src/runtime-factory.ts` " +
@@ -768,11 +809,12 @@ function fail(message: string): void {
   } else {
     console.log(
       `check-money-authority: durable grant metering — ${files} source files scanned ` +
-        `(.ts under packages/*/src, apps/*/src, services/*/src; tests excluded), ${sites} ` +
-        `\`new MotebitRuntime(\` site(s), ${identitySites} set identityPublicKeyHex and all ` +
-        `${identitySites} pass grantSpendStore. NOT seen: a config built outside the call text. ` +
-        `NOT held to this rule: ${keysOnlyUnmetered} site(s) whose identity comes from signingKeys ` +
-        `alone and that pass no grantSpendStore.`,
+        `(.ts under packages/*/src, apps/*/src, services/*/src; tests excluded; parsed, not matched), ` +
+        `${sites} \`new MotebitRuntime(\` site(s), ${sites - unresolved} with a resolvable config: ` +
+        `${identitySites} set identityPublicKeyHex and all ${identitySites} pass a grantSpendStore property. ` +
+        `NOT seen: ${unresolved} site(s) whose config is built outside the call. NOT checked: whether a ` +
+        `passed store is durable. NOT held to this rule: ${keysOnlyUnmetered} site(s) whose identity ` +
+        `comes from signingKeys alone and that pass no grantSpendStore.`,
     );
   }
 }

@@ -83,14 +83,15 @@ import {
  * runtime's in-memory default re-arms the money meter's window and LIFETIME
  * ceilings on every restart (#436 finding 6). Pass the daemon's own MoteDb
  * `grantSpendStore` (the persistent `SqliteGrantSpendStore`), the same store
- * the REPL wires in `runtime-factory.ts`.
+ * the REPL wires in `runtime-factory.ts`. It is passed as a `grantSpendStore`
+ * property so `check-money-authority` (assertion 7) sees it at the call.
  */
 export function daemonRuntimeConfig(
   base: Omit<RuntimeConfig, "syncConfigured" | "grantSpendStore">,
   relay: Parameters<typeof cliRuntimeConfig>[1],
-  grantSpendStore: GrantSpendStore,
+  durable: { grantSpendStore: GrantSpendStore },
 ): RuntimeConfig {
-  return cliRuntimeConfig({ ...base, grantSpendStore }, relay);
+  return cliRuntimeConfig({ ...base, grantSpendStore: durable.grantSpendStore }, relay);
 }
 
 /**
@@ -247,7 +248,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
       },
       relay,
       // The persistent spend store: the meter's ceilings survive a restart.
-      moteDb.grantSpendStore,
+      { grantSpendStore: moteDb.grantSpendStore },
     ),
     {
       storage: buildStorageAdapters(moteDb),
@@ -1219,7 +1220,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
       },
       relay,
       // The persistent spend store: the meter's ceilings survive a restart.
-      moteDb.grantSpendStore,
+      { grantSpendStore: moteDb.grantSpendStore },
     ),
     {
       storage: buildStorageAdapters(moteDb),
