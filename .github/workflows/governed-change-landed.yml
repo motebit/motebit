@@ -32,39 +32,33 @@ name: Governed change landed
 #    (§9.1, `temporalBasis: operator_recorded`). It is the operator's word,
 #    weighed as such.
 #  - "Fresh clone": the checkout below, full history (fetch-depth 0), into an
-#    empty runner. Installing and building the verifier use the network; the
-#    judgment does not.
+#    empty runner. Everything that uses the network (the clone, the install,
+#    the build, the judge image) happens before the judge step.
 #
-# ## No network for the judgment
+# ## What is claimed, exactly
 #
-# What the judge step sets up, and nothing more is claimed:
+# The verifier ran in a container with no network interface but loopback, no
+# capabilities, as a non-root user, on a read-only view of the clone; this
+# proves the landed verification needs no network. Before the verifier runs,
+# the report script proves it from inside (proveNoNetwork): every network
+# interface is loopback, github.com does not resolve, and a TCP connect to
+# 1.1.1.1:443 fails with no route (ENETUNREACH / EHOSTUNREACH); each probe is
+# bounded and a timeout is a failed proof; a failed proof is NOT JUDGED and
+# the verifier never runs.
 #
-#  - a new network namespace (`unshare --net`) with loopback only, and a new
-#    mount namespace (`--mount --propagation private`, so no mount leaks to
-#    the host) in which, as root, a fresh tmpfs is mounted over /run (and
-#    over /var/run when it is not a symlink to /run): the path sockets that
-#    live there (systemd-resolved's varlink socket, the D-Bus system bus,
-#    docker.sock) do not exist in the judge's view;
-#  - then the runner user, with supplementary groups CLEARED (so no `docker`
-#    group) and no_new_privs (so no sudo back to root), and a clean env.
+# It is NOT a sandbox against hostile code, and claims nothing of the kind:
+# the code that runs is main's own verifier and report script at the trusted
+# tip, and the landed commit is data the verifier reads.
 #
-# Inside, BEFORE the verifier runs, the step fails unless every probe holds:
-# `curl https://github.com` fails with exit 6 exactly (the name did not
-# resolve; 7 would mean it did), `curl https://1.1.1.1` fails with 6 or 7,
-# `getent hosts github.com` reports not found (exit 2), and none of
-# /run/systemd/resolve/io.systemd.Resolve, /run/dbus/system_bus_socket and
-# /var/run/docker.sock exists. The step before is the control: both curl
-# requests succeed from the runner, so the failures inside are the
-# namespace's, not an outage. The probes are what is proven; other
-# filesystem-reachable channels (an abstract socket is per network
-# namespace; a path socket outside /run is not probed) are not claimed.
+# The judge image is the node:22-slim digest services/relay/Dockerfile pins,
+# plus Debian's `git` package (the verifier's git reader spawns git). That git
+# is whatever version Debian serves for that image at build time: the base is
+# pinned, the git package is not.
 #
-# A namespace, not a host firewall (iptables -P OUTPUT DROP): the runner agent
-# itself talks to GitHub over HTTPS for logs, status and job completion, and
-# cutting the host's network would cut it too. The setup has never run on a
-# live runner before its first dispatch, which is the real check; a setup
-# failure (no unshare, no setpriv, a mount refused) fails the step closed,
-# never reports VERIFIED.
+# The container setup has never run on a live runner before its first
+# dispatch, which is the real check; a setup failure (an image that does not
+# build, a refused flag, no summary written) fails the step closed and never
+# reports VERIFIED.
 #
 # ## It judges, never writes
 #
@@ -72,6 +66,8 @@ name: Governed change landed
 # persist-credentials: false, no dependency cache, no expression interpolated
 # into a `run:` script (inputs reach scripts through step env only; the
 # landed commit is checked to be exactly 40 lowercase hex digits before use).
+# The clone is mounted read-only; the container writes only a fresh directory
+# under RUNNER_TEMP, whose summary the same step appends to the job summary.
 # Nothing is pushed, commented or labelled. It is not a required check.
 #
 # scripts/__tests__/governed-change-landed-workflow.test.ts pins this file's
@@ -138,11 +134,14 @@ jobs:
         working-directory: trusted
         run: pnpm --filter "@motebit/verify..." run build
 
-      - name: "Control: the runner reaches the network (so the failures below are the namespace's)"
+      - name: Build the judge image (the pinned node:22-slim digest plus Debian's git)
         working-directory: trusted
+        # No build context: the Dockerfile is this heredoc and nothing else.
         run: |
-          curl -sS --max-time 10 -o /dev/null https://github.com
-          curl -sS --max-time 10 -o /dev/null https://1.1.1.1
+          docker build --iidfile "$RUNNER_TEMP/governed-change-landed.iid" - <<'DOCKERFILE'
+          FROM node:22-slim@sha256:d415caac2f1f77b98caaf9415c5f807e14bc8d7bdea62561ea2fef4fbd08a73c
+          RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+          DOCKERFILE
 
       - name: Judge the landed change with no network (motebit-verify repo-change --landed)
         working-directory: trusted
@@ -150,49 +149,28 @@ jobs:
           LANDED_COMMIT: ${{ inputs.landed_commit }}
           # main's tip at dispatch (the checkout's expression).
           TRUSTED_TIP: ${{ github.ref == 'refs/heads/main' && github.sha || 'no-trusted-tip-off-main' }}
-        # New network and mount namespaces; as root, loopback up and /run
-        # masked; then the runner user, groups cleared, no_new_privs, a
-        # clean environment. Inside: every probe (header), then judge. The
-        # verifier's exit decides the step.
+        # One container: no network, no capabilities, no_new_privs, a
+        # read-only root and clone, the runner's uid, a fresh output
+        # directory. Its exit code is the step's; its summary is appended.
         run: |
-          sudo -- unshare --net --mount --propagation private -- sh -c '
-            set -e
-            ip link set lo up
-            mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 tmpfs /run
-            if [ ! -L /var/run ]; then mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 tmpfs /var/run; fi
-            exec "$@"
-          ' offline \
-            setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups --no-new-privs -- \
-            env -i PATH="$PATH" HOME="$HOME" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
-              GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" GITHUB_REF="$GITHUB_REF" GITHUB_SHA="$GITHUB_SHA" \
-              LANDED_COMMIT="$LANDED_COMMIT" TRUSTED_TIP="$TRUSTED_TIP" \
-            sh -c '
-              rc=0
-              curl -sS --max-time 10 -o /dev/null https://github.com || rc=$?
-              if [ "$rc" -ne 6 ]; then
-                echo "github.com: curl exit $rc inside the namespace (only 6, could not resolve, is no network)" >&2
-                exit 1
-              fi
-              rc=0
-              curl -sS --max-time 10 -o /dev/null https://1.1.1.1 || rc=$?
-              case "$rc" in
-                6|7) ;;
-                *) echo "1.1.1.1: curl exit $rc inside the namespace (only 6 or 7 is no network)" >&2; exit 1 ;;
-              esac
-              rc=0
-              getent hosts github.com >/dev/null 2>&1 || rc=$?
-              if [ "$rc" -ne 2 ]; then
-                echo "getent hosts github.com: exit $rc inside the namespace (only 2, not found, is no resolver)" >&2
-                exit 1
-              fi
-              for sock in /run/systemd/resolve/io.systemd.Resolve /run/dbus/system_bus_socket /var/run/docker.sock; do
-                if [ -e "$sock" ] || [ -L "$sock" ]; then
-                  echo "$sock exists inside the namespace" >&2
-                  exit 1
-                fi
-              done
-              echo "no network: github.com unresolved, 1.1.1.1 unreachable, getent not found, no resolver, bus or docker socket"
-              exec ./node_modules/.bin/tsx scripts/governed-change-report.ts landed \
-                --repository motebit/motebit --repo "$PWD" \
-                --github-keys .motebit/operator-keys/github.json
-            '
+          out="$RUNNER_TEMP/governed-change-landed-out"
+          mkdir "$out"
+          rc=0
+          docker run --rm --pull never --network none --cap-drop ALL \
+            --security-opt no-new-privileges --read-only \
+            --user "$(id -u):$(id -g)" \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec \
+            -v "$PWD:/repo:ro" -v "$out:/out" -w /repo \
+            -e HOME=/tmp -e GITHUB_STEP_SUMMARY=/out/summary.md \
+            -e GITHUB_EVENT_NAME -e GITHUB_REF -e GITHUB_SHA -e LANDED_COMMIT -e TRUSTED_TIP \
+            "$(cat "$RUNNER_TEMP/governed-change-landed.iid")" \
+            node --import tsx scripts/governed-change-report.ts landed \
+            --repository motebit/motebit --repo /repo \
+            --github-keys .motebit/operator-keys/github.json || rc=$?
+          if [ -f "$out/summary.md" ]; then
+            cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$rc" -eq 0 ]; then
+            echo "the judge wrote no summary" >&2
+            rc=1
+          fi
+          exit "$rc"

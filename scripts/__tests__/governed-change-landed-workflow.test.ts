@@ -14,12 +14,15 @@
  * governed-change-workflow.test.ts; the semantic tests below stay for their
  * readable failures. Two of the workflow's own scripts are EXECUTED from the
  * parsed file: the guard step (against a matrix of refs and inputs) and the
- * in-namespace script (against stub curl, getent and tsx, the socket paths
- * under a fake root), so the proof of the cut is tested as code, not as
- * text. The namespaces themselves (`unshare --net --mount`, the tmpfs over
- * /run, setpriv) need Linux and root; they are pinned by shape here and
- * observed in the recorded job. The end-to-end tests need
- * `packages/verify/dist` (CI's gate-self-tests job builds first).
+ * judge step (against a stub `docker` that records the exact argv it is
+ * given, so every container flag is checked as passed, and that exits and
+ * writes a summary as told, so the exit-code and summary rules are run). The
+ * container itself needs Docker on Linux; it is pinned by that argv here and
+ * observed in the recorded job. The no-network proof runs inside the
+ * container in the report script (`proveNoNetwork`), tested here with
+ * injected probes and once with the real probes on this (networked) host,
+ * where it must fail. The end-to-end tests need `packages/verify/dist` (CI's
+ * gate-self-tests job builds first).
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -34,10 +37,17 @@ import {
   LANDED_COMMIT_ID,
   LANDED_EVENT,
   LANDED_REF,
-  main,
+  NO_ROUTE_CODES,
+  PROBE_ADDRESS,
+  PROBE_NAME,
+  PROBE_PORT,
+  REAL_PROBES,
   mainLanded,
+  proveNoNetwork,
   renderLandedSummary,
+  run as runReport,
 } from "../governed-change-report.js";
+import type { NetworkProbes } from "../governed-change-report.js";
 import { landedFixture } from "../../packages/verify/src/__tests__/helpers/landed-fixture.js";
 import type {
   LandedFixture,
@@ -48,6 +58,7 @@ import { REPO } from "../../packages/verify/src/__tests__/helpers/repo-change-fi
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WORKFLOW = path.join(ROOT, ".github", "workflows", "governed-change-landed.yml");
 const AUTONOMY_WORKFLOW = path.join(ROOT, ".github", "workflows", "autonomy-tier.yml");
+const RELAY_DOCKERFILE = path.join(ROOT, "services", "relay", "Dockerfile");
 const VERIFY_CLI = path.join(ROOT, "packages", "verify", "dist", "cli.js");
 const source = fs.readFileSync(WORKFLOW, "utf-8");
 
@@ -75,7 +86,8 @@ const checkouts = steps.filter((s) => s.uses?.startsWith("actions/checkout@"));
 const guardStep = steps[0]!;
 const judgeIndex = steps.findIndex((s) => s.name?.startsWith("Judge the landed change"));
 const judgeStep = steps[judgeIndex]!;
-const controlIndex = steps.findIndex((s) => s.name?.startsWith("Control:"));
+const imageIndex = steps.findIndex((s) => s.name?.startsWith("Build the judge image"));
+const imageStep = steps[imageIndex]!;
 
 // ── A minimal evaluator for this workflow's expressions ──────────────────────
 // (string literals, context paths, ==, &&, ||; GitHub's value-returning && /
@@ -145,6 +157,9 @@ const INPUT = "${{ inputs.landed_commit }}";
 const CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const PNPM = "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86";
 const NODE = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
+/** The base image: the digest services/relay/Dockerfile pins (checked below). */
+const BASE_IMAGE =
+  "node:22-slim@sha256:d415caac2f1f77b98caaf9415c5f807e14bc8d7bdea62561ea2fef4fbd08a73c";
 
 const GUARD_RUN = [
   'if [ "$GITHUB_REF" != "refs/heads/main" ]; then',
@@ -160,75 +175,47 @@ const GUARD_RUN = [
   "fi",
 ].join("\n");
 
-const CONTROL_RUN = [
-  "curl -sS --max-time 10 -o /dev/null https://github.com",
-  "curl -sS --max-time 10 -o /dev/null https://1.1.1.1",
-].join("\n");
-
-/** The judge's start: new network and mount namespaces, mounts private. */
-const NAMESPACES = "sudo -- unshare --net --mount --propagation private -- sh -c '\n";
-/** What runs as root inside them, before the drop to the runner user. */
-const ROOT_PRELUDE = [
-  "  set -e",
-  "  ip link set lo up",
-  "  mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 tmpfs /run",
-  "  if [ ! -L /var/run ]; then mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 tmpfs /var/run; fi",
-  '  exec "$@"',
-  "",
-].join("\n");
-/** The drop: the runner user, supplementary groups cleared, no_new_privs. */
-const DROP = '  setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups --no-new-privs -- \\';
-/** The sockets that must not exist inside (masked by the tmpfs over /run). */
-const SOCKETS = [
-  "/run/systemd/resolve/io.systemd.Resolve",
-  "/run/dbus/system_bus_socket",
-  "/var/run/docker.sock",
+const IID = '"$RUNNER_TEMP/governed-change-landed.iid"';
+const DOCKERFILE = [
+  `FROM ${BASE_IMAGE}`,
+  "RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*",
 ];
+const IMAGE_RUN = [
+  `docker build --iidfile ${IID} - <<'DOCKERFILE'`,
+  ...DOCKERFILE,
+  "DOCKERFILE",
+].join("\n");
 
 const JUDGE_RUN = [
-  NAMESPACES + ROOT_PRELUDE + "' offline \\",
-  DROP,
-  '  env -i PATH="$PATH" HOME="$HOME" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \\',
-  '    GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" GITHUB_REF="$GITHUB_REF" GITHUB_SHA="$GITHUB_SHA" \\',
-  '    LANDED_COMMIT="$LANDED_COMMIT" TRUSTED_TIP="$TRUSTED_TIP" \\',
-  "  sh -c '",
-  "    rc=0",
-  "    curl -sS --max-time 10 -o /dev/null https://github.com || rc=$?",
-  '    if [ "$rc" -ne 6 ]; then',
-  '      echo "github.com: curl exit $rc inside the namespace (only 6, could not resolve, is no network)" >&2',
-  "      exit 1",
-  "    fi",
-  "    rc=0",
-  "    curl -sS --max-time 10 -o /dev/null https://1.1.1.1 || rc=$?",
-  '    case "$rc" in',
-  "      6|7) ;;",
-  '      *) echo "1.1.1.1: curl exit $rc inside the namespace (only 6 or 7 is no network)" >&2; exit 1 ;;',
-  "    esac",
-  "    rc=0",
-  "    getent hosts github.com >/dev/null 2>&1 || rc=$?",
-  '    if [ "$rc" -ne 2 ]; then',
-  '      echo "getent hosts github.com: exit $rc inside the namespace (only 2, not found, is no resolver)" >&2',
-  "      exit 1",
-  "    fi",
-  `    for sock in ${SOCKETS.join(" ")}; do`,
-  '      if [ -e "$sock" ] || [ -L "$sock" ]; then',
-  '        echo "$sock exists inside the namespace" >&2',
-  "        exit 1",
-  "      fi",
-  "    done",
-  '    echo "no network: github.com unresolved, 1.1.1.1 unreachable, getent not found, no resolver, bus or docker socket"',
-  "    exec ./node_modules/.bin/tsx scripts/governed-change-report.ts landed \\",
-  '      --repository motebit/motebit --repo "$PWD" \\',
-  "      --github-keys .motebit/operator-keys/github.json",
-  "  '",
+  'out="$RUNNER_TEMP/governed-change-landed-out"',
+  'mkdir "$out"',
+  "rc=0",
+  "docker run --rm --pull never --network none --cap-drop ALL \\",
+  "  --security-opt no-new-privileges --read-only \\",
+  '  --user "$(id -u):$(id -g)" \\',
+  "  --tmpfs /tmp:rw,nosuid,nodev,noexec \\",
+  '  -v "$PWD:/repo:ro" -v "$out:/out" -w /repo \\',
+  "  -e HOME=/tmp -e GITHUB_STEP_SUMMARY=/out/summary.md \\",
+  "  -e GITHUB_EVENT_NAME -e GITHUB_REF -e GITHUB_SHA -e LANDED_COMMIT -e TRUSTED_TIP \\",
+  `  "$(cat ${IID})" \\`,
+  "  node --import tsx scripts/governed-change-report.ts landed \\",
+  "  --repository motebit/motebit --repo /repo \\",
+  "  --github-keys .motebit/operator-keys/github.json || rc=$?",
+  'if [ -f "$out/summary.md" ]; then',
+  '  cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"',
+  'elif [ "$rc" -eq 0 ]; then',
+  '  echo "the judge wrote no summary" >&2',
+  "  rc=1",
+  "fi",
+  'exit "$rc"',
 ].join("\n");
 
 /**
  * THE AUTHORITY: the workflow's exact shape, deny by default. A text scan
- * cannot close a bypass assembled at run time (a step that restores the
- * network, `|| true` after the judge, a line appended to $GITHUB_ENV); an
- * exact shape does. `run:` bodies are compared after trimming trailing
- * whitespace only.
+ * cannot close a bypass assembled at run time (a flag that gives the
+ * container a network, `|| true` after the judge, a line appended to
+ * $GITHUB_ENV); an exact shape does. `run:` bodies are compared after
+ * trimming trailing whitespace only.
  */
 const EXPECTED_WORKFLOW = {
   name: "Governed change landed",
@@ -278,9 +265,9 @@ const EXPECTED_WORKFLOW = {
           run: 'pnpm --filter "@motebit/verify..." run build',
         },
         {
-          name: "Control: the runner reaches the network (so the failures below are the namespace's)",
+          name: "Build the judge image (the pinned node:22-slim digest plus Debian's git)",
           "working-directory": "trusted",
-          run: CONTROL_RUN,
+          run: IMAGE_RUN,
         },
         {
           name: "Judge the landed change with no network (motebit-verify repo-change --landed)",
@@ -482,25 +469,7 @@ describe("the guard step refuses a dispatch off main and a landed commit that is
   });
 });
 
-// ── The network cut ──────────────────────────────────────────────────────────
-
-/** The script the namespace runs: the body of the judge step's last `sh -c '...'`. */
-function innerScript(): string {
-  const run = judgeStep.run!;
-  const open = run.lastIndexOf("sh -c '\n");
-  const close = run.lastIndexOf("'");
-  if (open < 0 || close <= open + 7) throw new Error("the judge step has no inner sh -c script");
-  return run.slice(open + "sh -c '".length, close);
-}
-
-/** What runs as root in the namespaces: the body of the judge step's first `sh -c '...'`. */
-function rootPrelude(): string {
-  const run = judgeStep.run!;
-  const open = run.indexOf("sh -c '\n");
-  const close = run.indexOf("' offline \\\n");
-  if (open < 0 || close <= open) throw new Error("the judge step has no root prelude");
-  return run.slice(open + "sh -c '\n".length, close);
-}
+// ── The judge step, executed against a stub docker ───────────────────────────
 
 let tmp = "";
 beforeEach(() => {
@@ -510,193 +479,351 @@ afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-interface InnerOptions {
-  /** curl's exit for the request by name (`null` and `address: null`: no curl at all). */
-  name?: number | null;
-  /** curl's exit for the request by address. */
-  address?: number | null;
-  /** getent's exit (`null`: no getent at all). */
-  getent?: number | null;
-  /** Which of SOCKETS exist (as files under the run's fake root). */
-  present?: string[];
+interface JudgeRun {
+  code: number;
+  /** The argv the judge step gave docker, or null when docker never ran. */
+  argv: string[] | null;
+  /** What the step appended to the job summary. */
+  summary: string;
+  repo: string;
+  out: string;
 }
 
 /**
- * Run the in-namespace script with stub curl and getent, PATH holding
- * nothing else, the SOCKETS paths rewritten under a fake root (so the host's
- * own /var/run/docker.sock never decides a test), and a stub tsx that
- * records its arguments.
+ * Run the judge step's own `run:` body with bash -e (GitHub's default
+ * shell), a stub `docker` that records its argv (one argument per line),
+ * writes `summary` into the output directory when given, and exits `rc`.
  */
-function runInner(o: InnerOptions = {}): { code: number; tsxArgs: string | null; dir: string } {
-  const name = o.name === undefined ? 6 : o.name;
-  const address = o.address === undefined ? 7 : o.address;
-  const getent = o.getent === undefined ? 2 : o.getent;
-  const dir = fs.mkdtempSync(path.join(tmp, "inner-"));
+function runJudge(o: { rc: number; summary?: string; leftoverOut?: boolean }): JudgeRun {
+  const dir = fs.mkdtempSync(path.join(tmp, "judge-"));
   const bin = path.join(dir, "bin");
-  fs.mkdirSync(bin);
-  if (name !== null && address !== null) {
-    fs.writeFileSync(
-      path.join(bin, "curl"),
-      `#!/bin/sh\ncase "$*" in *github.com*) exit ${name} ;; *) exit ${address} ;; esac\n`,
-      { mode: 0o755 },
-    );
-  }
-  if (getent !== null) {
-    fs.writeFileSync(path.join(bin, "getent"), `#!/bin/sh\nexit ${getent}\n`, { mode: 0o755 });
-  }
-  const fakeRoot = path.join(dir, "root");
-  for (const s of o.present ?? []) {
-    fs.mkdirSync(path.dirname(path.join(fakeRoot, s)), { recursive: true });
-    fs.writeFileSync(path.join(fakeRoot, s), "");
-  }
-  const tsxDir = path.join(dir, "node_modules", ".bin");
-  fs.mkdirSync(tsxDir, { recursive: true });
-  const marker = path.join(dir, "tsx-ran");
+  const runnerTemp = path.join(dir, "runner-temp");
+  const repo = path.join(dir, "trusted");
+  for (const d of [bin, runnerTemp, repo]) fs.mkdirSync(d);
+  const out = path.join(runnerTemp, "governed-change-landed-out");
+  if (o.leftoverOut) fs.mkdirSync(out);
+  fs.writeFileSync(path.join(runnerTemp, "governed-change-landed.iid"), "sha256:judgeimage\n");
+  const argvFile = path.join(dir, "docker-argv");
+  const stubSummary = path.join(dir, "stub-summary");
+  if (o.summary !== undefined) fs.writeFileSync(stubSummary, o.summary);
   fs.writeFileSync(
-    path.join(tsxDir, "tsx"),
-    `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(marker)}\nexit 0\n`,
+    path.join(bin, "docker"),
+    [
+      "#!/bin/sh",
+      `printf '%s\\n' "$@" > ${JSON.stringify(argvFile)}`,
+      `if [ -f ${JSON.stringify(stubSummary)} ]; then cat ${JSON.stringify(stubSummary)} > ${JSON.stringify(path.join(out, "summary.md"))}; fi`,
+      `exit ${o.rc}`,
+      "",
+    ].join("\n"),
     { mode: 0o755 },
   );
-  let script = innerScript();
-  for (const s of SOCKETS) script = script.split(s).join(path.join(fakeRoot, s));
-  // PATH holds only the stubs: sh's builtins (echo, printf, [, command) need nothing else.
-  const r = spawnSync("/bin/sh", ["-c", script], {
-    cwd: dir,
-    env: { PATH: bin },
+  const jobSummary = path.join(dir, "job-summary.md");
+  fs.writeFileSync(jobSummary, "");
+  const r = spawnSync("bash", ["-e", "-c", judgeStep.run!], {
+    cwd: repo,
+    env: {
+      PATH: [bin, "/usr/bin", "/bin"].join(":"),
+      RUNNER_TEMP: runnerTemp,
+      GITHUB_STEP_SUMMARY: jobSummary,
+    },
     encoding: "utf8",
   });
   return {
     code: r.status ?? -1,
-    tsxArgs: fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : null,
-    dir,
+    argv: fs.existsSync(argvFile)
+      ? fs.readFileSync(argvFile, "utf8").split("\n").slice(0, -1)
+      : null,
+    summary: fs.readFileSync(jobSummary, "utf8"),
+    repo,
+    out,
   };
 }
 
-/** The verifier did not run and the step failed. */
-function refused(o: InnerOptions, why: string): void {
-  const r = runInner(o);
-  expect(r.code, why).toBe(1);
-  expect(r.tsxArgs, why).toBeNull();
+/** The flags (and their values) before the image in the judge's docker argv. */
+function dockerFlags(argv: string[]): string[] {
+  const at = argv.indexOf("sha256:judgeimage");
+  if (at < 0) throw new Error("the judge's docker argv names no image");
+  return argv.slice(1, at);
 }
 
-describe("the network is cut before the verifier runs, and the cut is proven", () => {
-  it("the judge step is the last step, after the control, and wraps everything in new network and mount namespaces", () => {
+const UID = typeof process.getuid === "function" ? process.getuid() : -1;
+const GID = typeof process.getgid === "function" ? process.getgid() : -1;
+
+describe("the judge container: no network, no capabilities, non-root, read-only clone", () => {
+  it("passes docker exactly the expected argv", () => {
+    const r = runJudge({ rc: 0, summary: "ok\n" });
+    expect(r.argv).toEqual([
+      "run",
+      "--rm",
+      "--pull",
+      "never",
+      "--network",
+      "none",
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges",
+      "--read-only",
+      "--user",
+      `${UID}:${GID}`,
+      "--tmpfs",
+      "/tmp:rw,nosuid,nodev,noexec",
+      "-v",
+      `${r.repo}:/repo:ro`,
+      "-v",
+      `${r.out}:/out`,
+      "-w",
+      "/repo",
+      "-e",
+      "HOME=/tmp",
+      "-e",
+      "GITHUB_STEP_SUMMARY=/out/summary.md",
+      "-e",
+      "GITHUB_EVENT_NAME",
+      "-e",
+      "GITHUB_REF",
+      "-e",
+      "GITHUB_SHA",
+      "-e",
+      "LANDED_COMMIT",
+      "-e",
+      "TRUSTED_TIP",
+      "sha256:judgeimage",
+      "node",
+      "--import",
+      "tsx",
+      "scripts/governed-change-report.ts",
+      "landed",
+      "--repository",
+      "motebit/motebit",
+      "--repo",
+      "/repo",
+      "--github-keys",
+      ".motebit/operator-keys/github.json",
+    ]);
+  });
+
+  it("has no network: --network none, and no host namespace, device or daemon socket", () => {
+    const flags = dockerFlags(runJudge({ rc: 0, summary: "ok\n" }).argv!);
+    const net = flags.indexOf("--network");
+    expect(net).toBeGreaterThan(-1);
+    expect(flags[net + 1]).toBe("none");
+    expect(
+      flags.filter((f) => f === "--network" || f.startsWith("--network=") || f === "--net"),
+    ).toHaveLength(1);
+    const text = flags.join(" ");
+    expect(text).not.toMatch(
+      /docker\.sock|--pid|--ipc|--uts|--userns|--device|--volumes-from|--add-host|--dns/,
+    );
+  });
+
+  it("has no capabilities and no_new_privs: --cap-drop ALL, nothing added back, never privileged", () => {
+    const flags = dockerFlags(runJudge({ rc: 0, summary: "ok\n" }).argv!);
+    expect(flags[flags.indexOf("--cap-drop") + 1]).toBe("ALL");
+    expect(flags[flags.indexOf("--security-opt") + 1]).toBe("no-new-privileges");
+    expect(flags.filter((f) => f === "--security-opt")).toHaveLength(1);
+    expect(flags.join(" ")).not.toMatch(/--cap-add|--privileged|unconfined/);
+  });
+
+  it("runs as the runner's own non-root uid and gid", () => {
+    const flags = dockerFlags(runJudge({ rc: 0, summary: "ok\n" }).argv!);
+    expect(
+      flags.filter((f) => f === "--user" || f.startsWith("--user=") || f === "-u"),
+    ).toHaveLength(1);
+    expect(flags[flags.indexOf("--user") + 1]).toBe(`${UID}:${GID}`);
+    expect(judgeStep.run).toContain('--user "$(id -u):$(id -g)"');
+  });
+
+  it("the root filesystem and the clone are read-only; only /tmp (noexec) and the fresh output directory are writable", () => {
+    const r = runJudge({ rc: 0, summary: "ok\n" });
+    const flags = dockerFlags(r.argv!);
+    expect(flags).toContain("--read-only");
+    const mounts = flags.flatMap((f, i) => (f === "-v" || f === "--volume" ? [flags[i + 1]!] : []));
+    expect(mounts).toEqual([`${r.repo}:/repo:ro`, `${r.out}:/out`]);
+    expect(flags.join(" ")).not.toMatch(/--mount/);
+    const tmpfs = flags.flatMap((f, i) => (f === "--tmpfs" ? [flags[i + 1]!] : []));
+    expect(tmpfs).toEqual(["/tmp:rw,nosuid,nodev,noexec"]);
+  });
+
+  it("gets only the named variables, and the summary path inside the output directory", () => {
+    const flags = dockerFlags(runJudge({ rc: 0, summary: "ok\n" }).argv!);
+    const vars = flags.flatMap((f, i) => (f === "-e" || f === "--env" ? [flags[i + 1]!] : []));
+    expect(vars).toEqual([
+      "HOME=/tmp",
+      "GITHUB_STEP_SUMMARY=/out/summary.md",
+      "GITHUB_EVENT_NAME",
+      "GITHUB_REF",
+      "GITHUB_SHA",
+      "LANDED_COMMIT",
+      "TRUSTED_TIP",
+    ]);
+    expect(flags.join(" ")).not.toMatch(/--env-file/);
+  });
+
+  it("runs the image this job built, never a pulled one, and the report script's landed mode", () => {
+    const argv = runJudge({ rc: 0, summary: "ok\n" }).argv!;
+    const flags = dockerFlags(argv);
+    expect(flags[flags.indexOf("--pull") + 1]).toBe("never");
+    expect(argv.slice(argv.indexOf("sha256:judgeimage") + 1)).toEqual([
+      "node",
+      "--import",
+      "tsx",
+      "scripts/governed-change-report.ts",
+      "landed",
+      "--repository",
+      "motebit/motebit",
+      "--repo",
+      "/repo",
+      "--github-keys",
+      ".motebit/operator-keys/github.json",
+    ]);
+  });
+
+  it("the image is built from the digest services/relay/Dockerfile pins, adds only git, with no build context", () => {
+    expect(imageIndex).toBe(judgeIndex - 1);
+    expect(imageStep.run?.trimEnd()).toBe(IMAGE_RUN);
+    const relayFrom = fs
+      .readFileSync(RELAY_DOCKERFILE, "utf8")
+      .split("\n")
+      .filter((l) => l.startsWith("FROM "))
+      .map((l) => l.split(" ")[1]);
+    expect(relayFrom).toContain(BASE_IMAGE);
+    expect(BASE_IMAGE).toMatch(/@sha256:[0-9a-f]{64}$/);
+    expect(imageStep.run).toMatch(/docker build --iidfile \S+ - <</);
+  });
+});
+
+describe("the judge step's exit code and summary", () => {
+  it("the step's exit code is the container's, and the container's summary is appended", () => {
+    for (const rc of [0, 1, 2, 137]) {
+      const r = runJudge({ rc, summary: `## from the container ${rc}\n` });
+      expect(r.code, `rc ${rc}`).toBe(rc);
+      expect(r.summary, `rc ${rc}`).toBe(`## from the container ${rc}\n`);
+    }
+  });
+
+  it("a container that writes no summary never passes", () => {
+    expect(runJudge({ rc: 0 }).code).toBe(1);
+    expect(runJudge({ rc: 3 }).code).toBe(3);
+  });
+
+  it("the output directory must be fresh: a leftover one fails the step before docker runs", () => {
+    const r = runJudge({ rc: 0, summary: "ok\n", leftoverOut: true });
+    expect(r.code).not.toBe(0);
+    expect(r.argv).toBeNull();
+  });
+
+  it("the judge is the last step, and the only step that runs the report script or the verifier", () => {
     expect(judgeIndex).toBe(steps.length - 1);
-    expect(controlIndex).toBe(judgeIndex - 1);
-    const run = judgeStep.run!;
-    expect(run.startsWith(NAMESPACES)).toBe(true);
-    expect(run).toContain("env -i ");
-    // Exactly one sudo, the namespace's; the verifier never runs as root.
-    expect(run.match(/\bsudo\b/g)).toHaveLength(1);
-    expect(run.indexOf("setpriv --reuid=")).toBeLessThan(run.indexOf("exec ./node_modules"));
-  });
-
-  it("as root, before the drop, loopback comes up and a fresh tmpfs masks /run (and /var/run when it is not a symlink)", () => {
-    expect(rootPrelude()).toBe(ROOT_PRELUDE);
-    const run = judgeStep.run!;
-    expect(run.indexOf("tmpfs /run")).toBeLessThan(run.indexOf("setpriv "));
-  });
-
-  it("the drop clears supplementary groups (no docker group) and sets no_new_privs", () => {
-    const run = judgeStep.run!;
-    expect(run).toContain(DROP);
-    expect(run).not.toContain("--init-groups");
-    expect(run).not.toContain("--keep-groups");
-    expect(run).not.toMatch(/--groups[ =]/);
-  });
-
-  it("only the judge step runs the report script or the verifier", () => {
     for (const [i, s] of steps.entries()) {
       if (i === judgeIndex) continue;
       expect(JSON.stringify({ ...s, name: undefined }), s.name).not.toMatch(
-        /governed-change-report|motebit-verify|repo-change|dist\/cli/,
+        /governed-change-report|motebit-verify|repo-change|dist\/cli|docker run/,
       );
     }
   });
-
-  it("every probe precedes the verifier inside the namespace", () => {
-    const inner = innerScript();
-    const verifier = inner.indexOf("exec ./node_modules/.bin/tsx");
-    for (const probe of [
-      "curl -sS --max-time 10 -o /dev/null https://github.com",
-      "curl -sS --max-time 10 -o /dev/null https://1.1.1.1",
-      "getent hosts github.com",
-      `for sock in ${SOCKETS.join(" ")}; do`,
-    ]) {
-      const at = inner.indexOf(probe);
-      expect(at, probe).toBeGreaterThan(-1);
-      expect(at, probe).toBeLessThan(verifier);
-    }
-  });
-
-  it("the control step makes the same requests outside the namespace and must succeed", () => {
-    const control = steps[controlIndex]!;
-    expect(control.run?.trimEnd()).toBe(CONTROL_RUN);
-    expect(control.run).not.toMatch(/\|\||!|unshare/);
-  });
-
-  it("the verifier runs when every probe holds (name 6; address 6 or 7; getent 2; no socket)", () => {
-    for (const address of [6, 7]) {
-      const r = runInner({ name: 6, address });
-      expect(r.code, `address ${address}`).toBe(0);
-      expect(r.tsxArgs, `address ${address}`).toBe(
-        [
-          "scripts/governed-change-report.ts",
-          "landed",
-          "--repository",
-          "motebit/motebit",
-          "--repo",
-          r.dir,
-          "--github-keys",
-          ".motebit/operator-keys/github.json",
-          "",
-        ].join("\n"),
-      );
-    }
-  });
-
-  it("a name that resolved (curl exit 7 for github.com) is not proof of no network", () => {
-    refused({ name: 7, address: 7 }, "name 7");
-  });
-
-  it("a request that succeeds inside the namespace fails the step and the verifier never runs", () => {
-    refused({ name: 0, address: 7 }, "name 0");
-    refused({ name: 6, address: 0 }, "address 0");
-    refused({ name: 0, address: 0 }, "both 0");
-  });
-
-  it("any other curl failure (a timeout, an HTTP or TLS error) is not proof of no network", () => {
-    refused({ name: 28 }, "name 28");
-    refused({ name: 22 }, "name 22");
-    refused({ address: 35 }, "address 35");
-    refused({ address: 28 }, "address 28");
-  });
-
-  it("a missing curl is not proof of no network", () => {
-    refused({ name: null, address: null }, "no curl");
-  });
-
-  it("a name getent resolves, or any getent result but not-found, is not proof of no resolver", () => {
-    refused({ getent: 0 }, "getent 0");
-    refused({ getent: 1 }, "getent 1");
-    refused({ getent: 3 }, "getent 3");
-  });
-
-  it("a missing getent is not proof of no resolver", () => {
-    refused({ getent: null }, "no getent");
-  });
-
-  for (const sock of SOCKETS) {
-    it(`${sock} present inside the namespace fails the step and the verifier never runs`, () => {
-      refused({ present: [sock] }, sock);
-    });
-  }
 
   it("the pinned keys the judge reads are the repository's motebit/operator-signing-keys@1.0 file", () => {
     const keys = JSON.parse(
       fs.readFileSync(path.join(ROOT, ".motebit", "operator-keys", "github.json"), "utf8"),
     ) as { spec?: unknown };
     expect(keys.spec).toBe("motebit/operator-signing-keys@1.0");
+  });
+});
+
+// ── The no-network proof (in the report script, run inside the container) ────
+
+const err = (code: string): Error => Object.assign(new Error(code), { code });
+const never = (): Promise<never> => new Promise(() => {});
+const OFFLINE: NetworkProbes = {
+  interfaces: () => ({
+    lo: [
+      {
+        address: "127.0.0.1",
+        netmask: "255.0.0.0",
+        family: "IPv4",
+        mac: "00:00:00:00:00:00",
+        internal: true,
+        cidr: "127.0.0.1/8",
+      },
+    ],
+  }),
+  lookup: () => Promise.reject(err("EAI_AGAIN")),
+  connect: () => Promise.reject(err("ENETUNREACH")),
+};
+const WITH_ETH0: NetworkProbes["interfaces"] = () => ({
+  ...OFFLINE.interfaces(),
+  eth0: [
+    {
+      address: "10.1.0.4",
+      netmask: "255.255.0.0",
+      family: "IPv4",
+      mac: "00:0d:3a:00:00:01",
+      internal: false,
+      cidr: "10.1.0.4/16",
+    },
+  ],
+});
+const prove = (over: Partial<NetworkProbes>): Promise<string[]> =>
+  proveNoNetwork({ ...OFFLINE, ...over }, 50);
+
+describe("the no-network proof", () => {
+  it("probes github.com and 1.1.1.1:443, and only ENETUNREACH / EHOSTUNREACH count as no route", () => {
+    expect([PROBE_NAME, PROBE_ADDRESS, PROBE_PORT]).toEqual(["github.com", "1.1.1.1", 443]);
+    expect([...NO_ROUTE_CODES].sort()).toEqual(["EHOSTUNREACH", "ENETUNREACH"]);
+  });
+
+  it("holds when only loopback exists, the name does not resolve and the connect has no route", async () => {
+    expect(await prove({})).toEqual([]);
+    expect(await prove({ connect: () => Promise.reject(err("EHOSTUNREACH")) })).toEqual([]);
+  });
+
+  it("a network interface other than loopback fails the proof", async () => {
+    expect(await prove({ interfaces: WITH_ETH0 })).toEqual([
+      "a network interface other than loopback: eth0",
+    ]);
+  });
+
+  it("unreadable network interfaces fail the proof", async () => {
+    const problems = await prove({
+      interfaces: () => {
+        throw new Error("EACCES");
+      },
+    });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/unreadable/);
+  });
+
+  it("a name that resolves fails the proof", async () => {
+    expect(await prove({ lookup: () => Promise.resolve({ address: "140.82.112.3" }) })).toEqual([
+      "github.com resolved",
+    ]);
+  });
+
+  it("a lookup that never settles fails the proof (a timeout is not proof)", async () => {
+    expect(await prove({ lookup: never })).toEqual([
+      "the lookup of github.com did not settle in time",
+    ]);
+  });
+
+  it("a connect that is made fails the proof", async () => {
+    expect(await prove({ connect: () => Promise.resolve() })).toEqual([
+      "a TCP connection to 1.1.1.1:443 was made",
+    ]);
+  });
+
+  it("a connect refused, timed out or failing with no code is not proof of no route", async () => {
+    for (const e of [err("ECONNREFUSED"), err("ETIMEDOUT"), err("EACCES"), new Error("x")]) {
+      const problems = await prove({ connect: () => Promise.reject(e) });
+      expect(problems, e.message).toHaveLength(1);
+      expect(problems[0], e.message).toMatch(/not with no route/);
+    }
+  });
+
+  it("a connect that never settles fails the proof (a timeout is not proof)", async () => {
+    expect(await prove({ connect: never })).toEqual([
+      "the connect to 1.1.1.1:443 did not settle in time",
+    ]);
   });
 });
 
@@ -758,11 +885,19 @@ function stubCli(code: number, stdout: string, stderr = ""): string {
   return p;
 }
 
-/** Run the report script's landed mode as the judge step runs it, against a landed fixture. */
-function runLanded(
+/**
+ * Run the report script's landed mode as the container runs it, against a
+ * landed fixture, with the OFFLINE probes unless `network` is given.
+ */
+async function runLanded(
   fx: LandedFixture,
-  o: { cli?: string; env?: Record<string, string>; viaMain?: boolean } = {},
-): Run {
+  o: {
+    cli?: string;
+    env?: Record<string, string>;
+    viaRun?: boolean;
+    network?: NetworkProbes;
+  } = {},
+): Promise<Run> {
   const summaryPath = path.join(tmp, "summary.md");
   fs.writeFileSync(summaryPath, "");
   const argv = ["--repository", REPO, "--repo", fx.repo, "--github-keys", fx.keysFile];
@@ -780,8 +915,9 @@ function runLanded(
     },
     policyRoot: fx.repo,
     verifyCli: o.cli ?? VERIFY_CLI,
+    network: o.network ?? OFFLINE,
   };
-  const code = o.viaMain ? main(["landed", ...argv], opts) : mainLanded(argv, opts);
+  const code = o.viaRun ? await runReport(["landed", ...argv], opts) : await mainLanded(argv, opts);
   return {
     code,
     summary: fs.readFileSync(summaryPath, "utf-8"),
@@ -808,7 +944,7 @@ const NOT_ACCEPTED_JSON = JSON.stringify({
 describe("governed-change-report landed end to end", () => {
   it("a landed change that verifies concludes VERIFIED (exit 0), the inputs and every axis in the summary", async () => {
     const fx = await landed();
-    const r = runLanded(fx, { viaMain: true });
+    const r = await runLanded(fx, { viaRun: true });
     expect(r.summary).toContain("## governed-change landed: VERIFIED");
     for (const row of [
       `| landed commit | ${fx.squash} |`,
@@ -829,7 +965,7 @@ describe("governed-change-report landed end to end", () => {
 
   it("a revoked change concludes NOT VERIFIED (exit 1), revocation revoked in the summary", async () => {
     const fx = await landed({ revoked: true });
-    const r = runLanded(fx);
+    const r = await runLanded(fx);
     expect(r.summary).toContain("## governed-change landed: NOT VERIFIED");
     expect(r.summary).toContain("| revocation | revoked |");
     expect(r.code).toBe(1);
@@ -837,7 +973,7 @@ describe("governed-change-report landed end to end", () => {
 
   it("an unsigned landing (no accepted landing time) concludes NOT VERIFIED (exit 1), authority unknown", async () => {
     const fx = await landed({ sign: false });
-    const r = runLanded(fx);
+    const r = await runLanded(fx);
     expect(r.summary).toContain("## governed-change landed: NOT VERIFIED");
     expect(r.summary).toContain("| authority | unknown |");
     expect(r.code).toBe(1);
@@ -845,7 +981,7 @@ describe("governed-change-report landed end to end", () => {
 
   it("a verifier that exits 0 without accepted: true is not VERIFIED", async () => {
     const fx = await landed();
-    const r = runLanded(fx, { cli: stubCli(0, NOT_ACCEPTED_JSON) });
+    const r = await runLanded(fx, { cli: stubCli(0, NOT_ACCEPTED_JSON) });
     expect(r.stubRan).toBe(true);
     expect(r.summary).toContain("## governed-change landed: NOT VERIFIED");
     expect(r.code).toBe(1);
@@ -854,7 +990,7 @@ describe("governed-change-report landed end to end", () => {
   it("a verifier that reports accepted: true but exits 1 is not VERIFIED", async () => {
     const fx = await landed();
     const json = JSON.stringify({ ...JSON.parse(NOT_ACCEPTED_JSON), accepted: true });
-    const r = runLanded(fx, { cli: stubCli(1, json) });
+    const r = await runLanded(fx, { cli: stubCli(1, json) });
     expect(r.summary).toContain("## governed-change landed: NOT VERIFIED");
     expect(r.code).toBe(1);
   }, 60_000);
@@ -862,7 +998,7 @@ describe("governed-change-report landed end to end", () => {
   it("the verifier unable to judge (its exit 2) concludes NOT JUDGED (exit 1), its error in the summary", async () => {
     const fx = await landed();
     const cli = stubCli(2, "", "motebit-verify: repo-change: not judged: shallow clone");
-    const r = runLanded(fx, { cli });
+    const r = await runLanded(fx, { cli });
     expect(r.stubRan).toBe(true);
     expect(r.summary).toContain("## governed-change landed: NOT JUDGED");
     expect(r.summary).toContain("not judged: shallow clone");
@@ -871,8 +1007,37 @@ describe("governed-change-report landed end to end", () => {
 
   it("a squash commit not on the trusted tip's first-parent chain is not VERIFIED", async () => {
     const fx = await landed({ sideBranch: true });
-    const r = runLanded(fx);
+    const r = await runLanded(fx);
     expect(r.summary).not.toContain("## governed-change landed: VERIFIED");
+    expect(r.code).toBe(1);
+  }, 60_000);
+});
+
+describe("governed-change-report landed end to end: the no-network proof precedes the verifier", () => {
+  it("a failed proof is NOT JUDGED (exit 1) and the verifier never runs", async () => {
+    const fx = await landed();
+    const r = await runLanded(fx, {
+      cli: stubCli(0, '{"accepted":true}'),
+      network: { ...OFFLINE, interfaces: WITH_ETH0 },
+    });
+    expect(r.stubRan).toBe(false);
+    expect(r.summary).toContain("## governed-change landed: NOT JUDGED");
+    expect(r.summary).toContain("no-network proof failed");
+    expect(r.code).toBe(1);
+  }, 60_000);
+
+  // The real interface probe only: it reads this host's interfaces and sends
+  // nothing. The real lookup and connect would make network traffic in a
+  // test run, so they stay stubbed (their rules are the unit tests above).
+  it("on this test host the REAL interface probe fails the proof and the verifier never runs", async () => {
+    const fx = await landed();
+    const r = await runLanded(fx, {
+      cli: stubCli(0, '{"accepted":true}'),
+      network: { ...OFFLINE, interfaces: REAL_PROBES.interfaces },
+    });
+    expect(r.stubRan).toBe(false);
+    expect(r.summary).toContain("no-network proof failed");
+    expect(r.summary).toContain("a network interface other than loopback");
     expect(r.code).toBe(1);
   }, 60_000);
 });
@@ -890,7 +1055,7 @@ describe("governed-change-report landed end to end: the provenance self-check", 
   for (const [title, env] of cases) {
     it(`${title} is NOT JUDGED (exit 1), the verifier never run`, async () => {
       const fx = await landed();
-      const r = runLanded(fx, { cli: stubCli(0, '{"accepted":true}'), env: env(fx) });
+      const r = await runLanded(fx, { cli: stubCli(0, '{"accepted":true}'), env: env(fx) });
       expect(r.stubRan).toBe(false);
       expect(r.summary).toContain("## governed-change landed: NOT JUDGED");
       expect(r.summary).toContain("provenance self-check failed");
@@ -903,7 +1068,7 @@ describe("governed-change-report landed end to end: the provenance self-check", 
     const refs = (): string =>
       execFileSync("git", ["for-each-ref"], { cwd: fx.repo, encoding: "utf8" });
     const before = refs();
-    runLanded(fx);
+    await runLanded(fx);
     expect(refs()).toBe(before);
   }, 60_000);
 });

@@ -6,12 +6,15 @@
 // Each entry reverts (part of) one rule — the dispatch-only trigger, the
 // token's permissions, the checkout (main's tip, full history, no
 // credentials), an action pin, the dependency cache, the no-expression-in-run
-// rule, the guard step's ref and input checks, the network namespace and the
-// proof that it has no network, which step runs the verifier, the landed
-// mode's provenance self-check, its VERIFIED rule and exit codes, or the
-// summary's fencing — and names the test expected to go red. The shared
-// runner (scripts/lib/tamper-runner.ts) applies each tamper in an isolated
-// copy of the tree.
+// rule, the guard step's ref and input checks, the judge container's
+// isolation (no network, no capabilities, no_new_privs, read-only root and
+// clone, non-root user, no host namespace or daemon socket, the built image
+// from the pinned digest), the step's exit code and summary rules, the
+// no-network proof that precedes the verifier, the landed mode's provenance
+// self-check, its VERIFIED rule and exit codes, or the summary's fencing —
+// and names the test expected to go red. The shared runner
+// (scripts/lib/tamper-runner.ts) applies each tamper in an isolated copy of
+// the tree.
 //
 //   node scripts/__tests__/governed-change-landed.tampers.mjs
 
@@ -30,9 +33,14 @@ const TRIG = (t) => `the governed-change-landed workflow's trigger ${t}`;
 const SAFE = (t) => `the governed-change-landed workflow's safety ${t}`;
 const GUARD = (t) =>
   `the guard step refuses a dispatch off main and a landed commit that is not 40 lowercase hex ${t}`;
-const NET = (t) => `the network is cut before the verifier runs, and the cut is proven ${t}`;
+const BOX = (t) =>
+  `the judge container: no network, no capabilities, non-root, read-only clone ${t}`;
+const EXIT = (t) => `the judge step's exit code and summary ${t}`;
+const PROOF = (t) => `the no-network proof ${t}`;
 const SUMMARY = (t) => `governed-change-report landed: the summary ${t}`;
 const E2E = (t) => `governed-change-report landed end to end ${t}`;
+const FIRST = (t) =>
+  `governed-change-report landed end to end: the no-network proof precedes the verifier ${t}`;
 const PROV = (t) =>
   `governed-change-report landed end to end: the provenance self-check ${t} is NOT JUDGED (exit 1), the verifier never run`;
 
@@ -51,33 +59,35 @@ const PINS = SAFE(
   "every action is pinned to a full commit sha, the same pin autonomy-tier.yml uses",
 );
 const BAD_COMMIT = GUARD("refuses every landed commit that is not exactly 40 lowercase hex digits");
-const WRAPS = NET(
-  "the judge step is the last step, after the control, and wraps everything in new network and mount namespaces",
+const ARGV = BOX("passes docker exactly the expected argv");
+const NO_NET = BOX(
+  "has no network: --network none, and no host namespace, device or daemon socket",
 );
-const PRELUDE = NET(
-  "as root, before the drop, loopback comes up and a fresh tmpfs masks /run (and /var/run when it is not a symlink)",
+const NO_CAPS = BOX(
+  "has no capabilities and no_new_privs: --cap-drop ALL, nothing added back, never privileged",
 );
-const DROP = NET("the drop clears supplementary groups (no docker group) and sets no_new_privs");
-const SUCCEEDS = NET(
-  "a request that succeeds inside the namespace fails the step and the verifier never runs",
+const NON_ROOT = BOX("runs as the runner's own non-root uid and gid");
+const READ_ONLY = BOX(
+  "the root filesystem and the clone are read-only; only /tmp (noexec) and the fresh output directory are writable",
 );
-const OTHER_FAILURE = NET(
-  "any other curl failure (a timeout, an HTTP or TLS error) is not proof of no network",
+const VARS = BOX("gets only the named variables, and the summary path inside the output directory");
+const IMAGE_RUN = BOX(
+  "runs the image this job built, never a pulled one, and the report script's landed mode",
 );
-const NAME_RESOLVED = NET(
-  "a name that resolved (curl exit 7 for github.com) is not proof of no network",
+const IMAGE_BUILD = BOX(
+  "the image is built from the digest services/relay/Dockerfile pins, adds only git, with no build context",
 );
-const GETENT = NET(
-  "a name getent resolves, or any getent result but not-found, is not proof of no resolver",
+const EXIT_CODE = EXIT(
+  "the step's exit code is the container's, and the container's summary is appended",
 );
-const NO_GETENT = NET("a missing getent is not proof of no resolver");
-const SOCKET = (s) =>
-  NET(`${s} present inside the namespace fails the step and the verifier never runs`);
-const RUNS = NET(
-  "the verifier runs when every probe holds (name 6; address 6 or 7; getent 2; no socket)",
+const NO_SUMMARY = EXIT("a container that writes no summary never passes");
+const FRESH = EXIT(
+  "the output directory must be fresh: a leftover one fails the step before docker runs",
 );
-const SOCKETS_LINE =
-  "for sock in /run/systemd/resolve/io.systemd.Resolve /run/dbus/system_bus_socket /var/run/docker.sock; do";
+const LAST = EXIT(
+  "the judge is the last step, and the only step that runs the report script or the verifier",
+);
+const PROOF_FAILED = FIRST("a failed proof is NOT JUDGED (exit 1) and the verifier never runs");
 const VERIFIED_E2E = E2E(
   "a landed change that verifies concludes VERIFIED (exit 0), the inputs and every axis in the summary",
 );
@@ -95,6 +105,10 @@ const JUDGE_ENV_TIP =
   "          TRUSTED_TIP: ${{ github.ref == 'refs/heads/main' && github.sha || 'no-trusted-tip-off-main' }}\n";
 const CHECKOUT_REF =
   "          ref: ${{ github.ref == 'refs/heads/main' && github.sha || 'no-trusted-tip-off-main' }}\n";
+const DOCKER_RUN = "docker run --rm --pull never --network none --cap-drop ALL \\\n";
+const SEC = "            --security-opt no-new-privileges --read-only \\\n";
+const MOUNTS = '            -v "$PWD:/repo:ro" -v "$out:/out" -w /repo \\\n';
+const LAST_LINE = "--github-keys .motebit/operator-keys/github.json || rc=$?\n";
 
 const TAMPERS = [
   // ── Trigger ──
@@ -170,8 +184,8 @@ const TAMPERS = [
   // ── No expression in a run script ──
   wf(
     "workflow: the input interpolated into the judge's script",
-    '      LANDED_COMMIT="$LANDED_COMMIT" TRUSTED_TIP="$TRUSTED_TIP" \\\n',
-    '      LANDED_COMMIT="${{ inputs.landed_commit }}" TRUSTED_TIP="$TRUSTED_TIP" \\\n',
+    "-e LANDED_COMMIT -e TRUSTED_TIP",
+    '-e LANDED_COMMIT="${{ inputs.landed_commit }}" -e TRUSTED_TIP',
     NO_EXPR,
   ),
   wf(
@@ -231,148 +245,204 @@ const TAMPERS = [
     '      - name: Early\n        run: "true"\n\n      - name: Refuse a dispatch off main',
     GUARD("is the first step, before the checkout"),
   ),
-  // ── The network cut and its proof ──
+  // ── The judge container ──
   wf(
-    "workflow: no namespaces (the judge runs on the host's network and filesystem)",
-    "sudo -- unshare --net --mount --propagation private -- sh -c '\n",
-    "sudo -- sh -c '\n",
-    WRAPS,
+    "workflow: the container gets the default bridge network",
+    DOCKER_RUN,
+    "docker run --rm --pull never --cap-drop ALL \\\n",
+    NO_NET,
+  ),
+  wf("workflow: the container gets the host network", "--network none", "--network host", NO_NET),
+  wf(
+    "workflow: the docker socket mounted into the container",
+    MOUNTS,
+    '            -v "$PWD:/repo:ro" -v "$out:/out" -v /var/run/docker.sock:/var/run/docker.sock -w /repo \\\n',
+    NO_NET,
   ),
   wf(
-    "workflow: no mount namespace (the tmpfs would cover the host's /run)",
-    "unshare --net --mount --propagation private --",
-    "unshare --net --",
-    WRAPS,
+    "workflow: the host PID namespace (/proc/<pid>/root reaches host sockets)",
+    SEC,
+    "            --security-opt no-new-privileges --read-only --pid host \\\n",
+    NO_NET,
   ),
   wf(
-    "workflow: shared mount propagation (a mount could leak to the host)",
-    "--mount --propagation private -- sh",
-    "--mount --propagation shared -- sh",
-    WRAPS,
+    "workflow: the host IPC namespace",
+    SEC,
+    "            --security-opt no-new-privileges --read-only --ipc host \\\n",
+    NO_NET,
   ),
   wf(
-    "workflow: /run not masked (resolver, bus and docker sockets reachable)",
-    "            mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 tmpfs /run\n",
+    "workflow: capabilities kept",
+    DOCKER_RUN,
+    "docker run --rm --pull never --network none \\\n",
+    NO_CAPS,
+  ),
+  wf(
+    "workflow: a capability added back",
+    SEC,
+    "            --security-opt no-new-privileges --read-only --cap-add NET_ADMIN \\\n",
+    NO_CAPS,
+  ),
+  wf(
+    "workflow: a privileged container",
+    SEC,
+    "            --security-opt no-new-privileges --read-only --privileged \\\n",
+    NO_CAPS,
+  ),
+  wf("workflow: no_new_privs dropped", SEC, "            --read-only \\\n", NO_CAPS),
+  wf(
+    "workflow: a writable root filesystem",
+    SEC,
+    "            --security-opt no-new-privileges \\\n",
+    READ_ONLY,
+  ),
+  wf("workflow: the clone mounted read-write", '-v "$PWD:/repo:ro"', '-v "$PWD:/repo"', READ_ONLY),
+  wf(
+    "workflow: an executable /tmp",
+    "--tmpfs /tmp:rw,nosuid,nodev,noexec",
+    "--tmpfs /tmp:rw,nosuid,nodev",
+    READ_ONLY,
+  ),
+  wf(
+    "workflow: the container runs as root",
+    '--user "$(id -u):$(id -g)"',
+    '--user "0:0"',
+    NON_ROOT,
+  ),
+  wf(
+    "workflow: the container runs as the image's default user",
+    '            --user "$(id -u):$(id -g)" \\\n',
     "",
-    PRELUDE,
+    NON_ROOT,
   ),
   wf(
-    "workflow: /var/run not masked when it is a directory",
-    "            if [ ! -L /var/run ]; then mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 tmpfs /var/run; fi\n",
-    "",
-    PRELUDE,
+    "workflow: the whole host environment passed in",
+    "            -e HOME=/tmp -e GITHUB_STEP_SUMMARY=/out/summary.md \\\n",
+    "            -e HOME=/tmp -e GITHUB_STEP_SUMMARY=/out/summary.md -e RUNNER_TEMP -e ACTIONS_RUNTIME_TOKEN \\\n",
+    VARS,
   ),
+  wf("workflow: the image may be pulled", "--pull never", "--pull missing", IMAGE_RUN),
   wf(
-    "workflow: a failed mount ignored (no set -e in the root prelude)",
-    "            set -e\n",
-    "",
-    PRELUDE,
-  ),
-  wf(
-    "workflow: supplementary groups restored (--init-groups: the docker group reaches docker.sock)",
-    "--clear-groups",
-    "--init-groups",
-    DROP,
-  ),
-  wf(
-    "workflow: no_new_privs dropped (the judge could sudo out of the namespace)",
-    " --clear-groups --no-new-privs -- \\\n",
-    " --clear-groups -- \\\n",
-    DROP,
-  ),
-  wf(
-    "workflow: a step after the judge",
-    "--github-keys .motebit/operator-keys/github.json\n            '\n",
-    '--github-keys .motebit/operator-keys/github.json\n            \'\n\n      - name: After\n        run: "true"\n',
-    WRAPS,
-  ),
-  wf(
-    "workflow: the name probe accepts curl exit 7 (the name resolved)",
-    'if [ "$rc" -ne 6 ]; then',
-    'if [ "$rc" -ne 6 ] && [ "$rc" -ne 7 ]; then',
-    NAME_RESOLVED,
-  ),
-  wf(
-    "workflow: the name probe's result not checked",
-    'if [ "$rc" -ne 6 ]; then',
-    "if false; then",
-    SUCCEEDS,
-  ),
-  wf(
-    "workflow: the name probe's curl exit not the one checked",
-    "https://github.com || rc=$?",
-    "https://github.com || rc=6",
-    OTHER_FAILURE,
-  ),
-  wf("workflow: any address-probe exit counts as no network", "6|7) ;;", "*) ;;", SUCCEEDS),
-  wf(
-    "workflow: a timeout or TLS error on the address probe counts as no network",
-    "6|7) ;;",
-    "6|7|28|35) ;;",
-    OTHER_FAILURE,
-  ),
-  wf(
-    "workflow: the getent probe's result not checked",
-    'if [ "$rc" -ne 2 ]; then',
-    "if false; then",
-    GETENT,
-  ),
-  wf(
-    "workflow: a missing getent counts as no resolver",
-    'if [ "$rc" -ne 2 ]; then',
-    'if [ "$rc" -ne 2 ] && [ "$rc" -ne 127 ]; then',
-    NO_GETENT,
-  ),
-  wf(
-    "workflow: the resolver socket not probed",
-    SOCKETS_LINE,
-    SOCKETS_LINE.replace(" /run/systemd/resolve/io.systemd.Resolve", ""),
-    SOCKET("/run/systemd/resolve/io.systemd.Resolve"),
-  ),
-  wf(
-    "workflow: the system bus socket not probed",
-    SOCKETS_LINE,
-    SOCKETS_LINE.replace(" /run/dbus/system_bus_socket", ""),
-    SOCKET("/run/dbus/system_bus_socket"),
-  ),
-  wf(
-    "workflow: the docker socket not probed",
-    SOCKETS_LINE,
-    SOCKETS_LINE.replace(" /var/run/docker.sock", ""),
-    SOCKET("/var/run/docker.sock"),
-  ),
-  wf(
-    "workflow: the verifier runs before the probes",
-    "            sh -c '\n              rc=0\n",
-    '            sh -c \'\n              ./node_modules/.bin/tsx scripts/governed-change-report.ts landed --repository motebit/motebit --repo "$PWD" --github-keys .motebit/operator-keys/github.json\n              rc=0\n',
-    SUCCEEDS,
+    "workflow: the container's command is not the landed report",
+    "node --import tsx scripts/governed-change-report.ts landed",
+    "node --import tsx scripts/governed-change-report.ts",
+    IMAGE_RUN,
   ),
   wf(
     "workflow: the judge's repository is the dispatching repository, not motebit/motebit",
-    "--repository motebit/motebit --repo",
-    '--repository "$GITHUB_REPOSITORY" --repo',
-    RUNS,
+    "--repository motebit/motebit --repo /repo",
+    '--repository "$GITHUB_REPOSITORY" --repo /repo',
+    ARGV,
   ),
   wf(
-    "workflow: the control tolerated to fail",
-    "curl -sS --max-time 10 -o /dev/null https://1.1.1.1\n\n",
-    "curl -sS --max-time 10 -o /dev/null https://1.1.1.1 || true\n\n",
-    NET("the control step makes the same requests outside the namespace and must succeed"),
+    "workflow: the image built from a tag, not the pinned digest",
+    "FROM node:22-slim@sha256:d415caac2f1f77b98caaf9415c5f807e14bc8d7bdea62561ea2fef4fbd08a73c\n",
+    "FROM node:22-slim\n",
+    IMAGE_BUILD,
   ),
   wf(
-    "workflow: the report script run outside the namespace too",
+    "workflow: the image build gets a build context",
+    '--iidfile "$RUNNER_TEMP/governed-change-landed.iid" - <<',
+    '--iidfile "$RUNNER_TEMP/governed-change-landed.iid" -f - . <<',
+    IMAGE_BUILD,
+  ),
+  // ── Exit code and summary ──
+  wf(
+    "workflow: the container's exit code swallowed",
+    LAST_LINE,
+    LAST_LINE.replace("|| rc=$?", "|| true"),
+    EXIT_CODE,
+  ),
+  wf(
+    "workflow: the step always exits 0",
+    '          exit "$rc"\n',
+    "          exit 0\n",
+    EXIT_CODE,
+  ),
+  wf(
+    "workflow: a missing summary passes",
+    '          elif [ "$rc" -eq 0 ]; then\n            echo "the judge wrote no summary" >&2\n            rc=1\n',
+    '          elif [ "$rc" -eq 0 ]; then\n            echo "the judge wrote no summary" >&2\n',
+    NO_SUMMARY,
+  ),
+  wf("workflow: a leftover output directory reused", 'mkdir "$out"', 'mkdir -p "$out"', FRESH),
+  wf(
+    "workflow: a step after the judge",
+    '          exit "$rc"\n',
+    '          exit "$rc"\n\n      - name: After\n        run: "true"\n',
+    LAST,
+  ),
+  wf(
+    "workflow: the report script run outside the container too",
     'run: pnpm --filter "@motebit/verify..." run build\n',
     'run: pnpm --filter "@motebit/verify..." run build && pnpm exec tsx scripts/governed-change-report.ts landed\n',
-    NET("only the judge step runs the report script or the verifier"),
-  ),
-  // ── What only the exact shape catches ──
-  wf(
-    "workflow: the judge's exit code swallowed (|| true)",
-    "--github-keys .motebit/operator-keys/github.json\n            '\n",
-    "--github-keys .motebit/operator-keys/github.json\n            ' || true\n",
-    EXACT,
+    LAST,
   ),
   wf("workflow: the timeout raised", "timeout-minutes: 20", "timeout-minutes: 360", EXACT),
+
+  // ── The no-network proof ──
+  rp(
+    "report: the proof skipped",
+    "  const offline = await proveNoNetwork(opts.network ?? REAL_PROBES);",
+    "  const offline: string[] = [];",
+    PROOF_FAILED,
+  ),
+  rp(
+    "report: a failed proof does not stop the verifier",
+    "  if (offline.length > 0) {",
+    OFF("  if (offline.length > 0) {"),
+    PROOF_FAILED,
+  ),
+  rp(
+    "report: a non-loopback interface accepted",
+    "      .filter(([, addrs]) => (addrs ?? []).some((a) => !a.internal))",
+    "      .filter(([, addrs]) => (addrs ?? []).some((a) => !a.internal && false))",
+    PROOF("a network interface other than loopback fails the proof"),
+  ),
+  rp(
+    "report: unreadable interfaces accepted",
+    "    problems.push(\n      `the network interfaces are unreadable:",
+    "    ([] as string[]).push(\n      `the network interfaces are unreadable:",
+    PROOF("unreadable network interfaces fail the proof"),
+  ),
+  rp(
+    "report: a name that resolves accepted",
+    '  if (name.kind === "ok") problems.push',
+    '  if ((false as boolean) && name.kind === "ok") problems.push',
+    PROOF("a name that resolves fails the proof"),
+  ),
+  rp(
+    "report: a lookup that times out accepted",
+    '  if (name.kind === "timeout") problems.push',
+    '  if ((false as boolean) && name.kind === "timeout") problems.push',
+    PROOF("a lookup that never settles fails the proof (a timeout is not proof)"),
+  ),
+  rp(
+    "report: a connect that is made accepted",
+    '  if (tcp.kind === "ok")',
+    '  if ((false as boolean) && tcp.kind === "ok")',
+    PROOF("a connect that is made fails the proof"),
+  ),
+  rp(
+    "report: a connect that times out accepted",
+    '  if (tcp.kind === "timeout") {',
+    OFF('  if (tcp.kind === "timeout") {'),
+    PROOF("a connect that never settles fails the proof (a timeout is not proof)"),
+  ),
+  rp(
+    "report: any connect error counts as no route",
+    "    if (!NO_ROUTE_CODES.has(code)) {",
+    OFF("    if (!NO_ROUTE_CODES.has(code)) {"),
+    PROOF("a connect refused, timed out or failing with no code is not proof of no route"),
+  ),
+  rp(
+    "report: ECONNREFUSED counts as no route",
+    'new Set(["ENETUNREACH", "EHOSTUNREACH"])',
+    'new Set(["ENETUNREACH", "EHOSTUNREACH", "ECONNREFUSED"])',
+    PROOF(
+      "probes github.com and 1.1.1.1:443, and only ENETUNREACH / EHOSTUNREACH count as no route",
+    ),
+  ),
 
   // ── The report script's landed mode: VERIFIED and exit codes ──
   rp(
