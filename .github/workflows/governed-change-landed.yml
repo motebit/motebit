@@ -1,0 +1,178 @@
+name: Governed change landed
+
+# The offline half of acceptance test B1 (docs/proposals/governed-repo-change-v1.md
+# § "Acceptance tests"): after a governed change lands, "offline PASS on a
+# fresh clone against a trusted tip, in a recorded workflow job with no network
+# after the clone". It runs the offline landed mode of the verifier
+# (spec/repo-change-v1.md §9, §9.1):
+#
+#   motebit-verify repo-change --landed <squash commit> --trusted-tip <commit>
+#     --repository motebit/motebit --github-keys <file> --repo <clone> --json
+#
+# through scripts/governed-change-report.ts (its `landed` mode), which writes
+# the inputs and every verdict axis to the job summary.
+#
+# ## Why workflow_dispatch only
+#
+# The run is a recorded witness someone asks for, after the landing, about one
+# named squash commit (the `landed_commit` input). No push, pull request or
+# merge-group event names that commit, and none should: on those events the
+# workflow file or the tip can come from a change still in flight. A dispatch
+# off main fails closed: the first step refuses it, the checkout ref resolves
+# to no revision, and the report script's self-check refuses it again.
+#
+# ## Trust assumptions
+#
+#  - The trusted tip is `github.sha`, main's tip at dispatch. It is the
+#    independent witness §9 asks for: the squash commit must be on its
+#    first-parent chain. The verifier, its build, the report script and the
+#    pinned keys (.motebit/operator-keys/github.json) all come from that tip.
+#  - The landing time is GitHub's: the squash commit's committer time, accepted
+#    only when GitHub signed it under a pinned key, inside that key's window
+#    (§9.1, `temporalBasis: operator_recorded`). It is the operator's word,
+#    weighed as such.
+#  - "Fresh clone": the checkout below, full history (fetch-depth 0), into an
+#    empty runner. Everything that uses the network (the clone, the install,
+#    the build, the judge image) happens before the judge step.
+#
+# ## What is claimed, exactly
+#
+# The verifier ran in a container with no network interface but loopback, no
+# capabilities, as a non-root user, on a read-only view of the clone; this
+# proves the landed verification needs no network. Before the verifier runs,
+# the report script proves it from inside (proveNoNetwork): every network
+# interface is loopback, github.com does not resolve, and a TCP connect to
+# 1.1.1.1:443 fails with no route (ENETUNREACH / EHOSTUNREACH); each probe is
+# bounded and a timeout is a failed proof; a failed proof is NOT JUDGED and
+# the verifier never runs.
+#
+# It is NOT a sandbox against hostile code, and claims nothing of the kind:
+# the code that runs is main's own verifier and report script at the trusted
+# tip, and the landed commit is data the verifier reads.
+#
+# The judge image is the node:22-slim digest services/relay/Dockerfile pins,
+# plus Debian's `git` package (the verifier's git reader spawns git). That git
+# is whatever version Debian serves for that image at build time: the base is
+# pinned, the git package is not.
+#
+# The container setup has never run on a live runner before its first
+# dispatch, which is the real check; a setup failure (an image that does not
+# build, a refused flag, no summary written) fails the step closed and never
+# reports VERIFIED.
+#
+# ## It judges, never writes
+#
+# Read-only token (contents: read), no secrets, no token passed explicitly
+# (checkout and setup-node take the read-only token by default; none reaches
+# the judge or its container),
+# persist-credentials: false, no dependency cache, no expression interpolated
+# into a `run:` script (inputs reach scripts through step env only; the
+# landed commit is checked to be exactly 40 lowercase hex digits before use).
+# The clone is mounted read-only; the container writes only a fresh directory
+# under RUNNER_TEMP, whose summary the same step appends to the job summary.
+# Nothing is pushed, commented or labelled. It is not a required check.
+#
+# scripts/__tests__/governed-change-landed-workflow.test.ts pins this file's
+# exact shape; scripts/__tests__/governed-change-landed.tampers.mjs proves the
+# pins bite.
+on:
+  workflow_dispatch:
+    inputs:
+      landed_commit:
+        description: "The squash commit that landed the governed change (40 lowercase hex digits)"
+        required: true
+        type: string
+
+# Least privilege: read the repository; nothing else.
+permissions:
+  contents: read
+
+jobs:
+  governed-change-landed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Refuse a dispatch off main or a landed commit that is not a full commit id
+        env:
+          LANDED_COMMIT: ${{ inputs.landed_commit }}
+        # Never echo either value: a line starting with :: is a workflow command.
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "governed-change-landed runs only from refs/heads/main" >&2
+            exit 1
+          fi
+          case "$LANDED_COMMIT" in
+            *[!0-9a-f]*) echo "landed_commit must be 40 lowercase hex digits" >&2; exit 1 ;;
+          esac
+          if [ "${#LANDED_COMMIT}" -ne 40 ]; then
+            echo "landed_commit must be 40 lowercase hex digits" >&2
+            exit 1
+          fi
+
+      - name: Check out main's tip, full history (the fresh clone and the trusted tip)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # main's tip at dispatch; any other ref resolves to no revision.
+          ref: ${{ github.ref == 'refs/heads/main' && github.sha || 'no-trusted-tip-off-main' }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+        with:
+          package_json_file: trusted/package.json
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          # NO dependency cache: the judgment runs only what this tip installs.
+          package-manager-cache: false
+
+      - name: Install the trusted tip's dependencies (uncached)
+        working-directory: trusted
+        run: pnpm install --frozen-lockfile
+
+      - name: Build motebit-verify from the trusted tip
+        working-directory: trusted
+        run: pnpm --filter "@motebit/verify..." run build
+
+      - name: Build the judge image (the pinned node:22-slim digest plus Debian's git)
+        working-directory: trusted
+        # No build context: the Dockerfile is this heredoc and nothing else.
+        run: |
+          docker build --iidfile "$RUNNER_TEMP/governed-change-landed.iid" - <<'DOCKERFILE'
+          FROM node:22-slim@sha256:d415caac2f1f77b98caaf9415c5f807e14bc8d7bdea62561ea2fef4fbd08a73c
+          RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+          DOCKERFILE
+
+      - name: Judge the landed change with no network (motebit-verify repo-change --landed)
+        working-directory: trusted
+        env:
+          LANDED_COMMIT: ${{ inputs.landed_commit }}
+          # main's tip at dispatch (the checkout's expression).
+          TRUSTED_TIP: ${{ github.ref == 'refs/heads/main' && github.sha || 'no-trusted-tip-off-main' }}
+        # One container: no network, no capabilities, no_new_privs, a
+        # read-only root and clone, the runner's uid, a fresh output
+        # directory. Its exit code is the step's; its summary is appended.
+        run: |
+          out="$RUNNER_TEMP/governed-change-landed-out"
+          mkdir "$out"
+          rc=0
+          docker run --rm --pull never --network none --cap-drop ALL \
+            --security-opt no-new-privileges --read-only \
+            --user "$(id -u):$(id -g)" \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec \
+            -v "$PWD:/repo:ro" -v "$out:/out" -w /repo \
+            -e HOME=/tmp -e GITHUB_STEP_SUMMARY=/out/summary.md \
+            -e GITHUB_EVENT_NAME -e GITHUB_REF -e GITHUB_SHA -e LANDED_COMMIT -e TRUSTED_TIP \
+            "$(cat "$RUNNER_TEMP/governed-change-landed.iid")" \
+            node --import tsx scripts/governed-change-report.ts landed \
+            --repository motebit/motebit --repo /repo \
+            --github-keys .motebit/operator-keys/github.json || rc=$?
+          if [ -f "$out/summary.md" ]; then
+            cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$rc" -eq 0 ]; then
+            echo "the judge wrote no summary" >&2
+            rc=1
+          fi
+          exit "$rc"
