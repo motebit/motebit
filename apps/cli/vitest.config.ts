@@ -6,8 +6,7 @@ import { MOTEBIT_TEST_REPORTERS, REAL_MODEL_GUARD_ALIAS } from "../../vitest.sha
 // shared config, and the turbo `test` task builds first (`dependsOn: build`),
 // so without an explicit exclude vitest would discover compiled `*.test.js`
 // under dist/ alongside the real src tests — running stale artifacts. Restore
-// the standard excludes. (Coverage THRESHOLDS are intentionally omitted: this
-// package's `test:coverage` collects without per-package thresholds.)
+// the standard excludes.
 export default defineConfig({
   // No unit test loads the real embedding model — the same guard every
   // defineMotebitTest package gets (vitest.real-model-guard.ts).
@@ -43,8 +42,28 @@ export default defineConfig({
     // The shared reporters (vitest.shared.ts): CI's verdict reads the JSON
     // results file they write, so this bare config must emit it too.
     reporters: MOTEBIT_TEST_REPORTERS,
-    // vitest's coverage defaults + json-summary: the verdict requires the
-    // summary even where, as here, no thresholds are declared.
-    coverage: { reporter: ["text", "html", "clover", "json", "json-summary"] },
+    // Coverage: the same shape `defineMotebitTest` gives every other package
+    // (vitest.shared.ts), spelled out here because this package resolves its
+    // own vitest copy and keeps a bare config.
+    //
+    // `include` is load-bearing. Without it vitest counts only the modules the
+    // tests happen to import, so an untested module is absent from the
+    // denominator instead of counted as 0% — a missing include reads as a good
+    // number, not a low one (#546).
+    //
+    // `thresholds` are the floor, never lowered (docs/doctrine/coverage-graduation.md).
+    // This package signs money transactions (`wallet swap`, `withdraw`,
+    // `delegate --sovereign`, `grant create`, the daemon's R4 path) and had no
+    // floor until 2026-11-06; check-coverage-config-present now holds every
+    // money-executing or published app to one. Set at the measured level,
+    // rounded down (2026-11-06, full src/ denominator of 107 files: 47.03
+    // statements / 43.16 branches / 59.21 functions / 46.84 lines). Raise them
+    // as tests land; never lower them.
+    coverage: {
+      include: ["src/**/*.ts"],
+      exclude: ["src/__tests__/**", "src/**/*.d.ts"],
+      thresholds: { statements: 47, branches: 43, functions: 59, lines: 46 },
+      reporter: ["text", "html", "clover", "json", "json-summary"],
+    },
   },
 });
