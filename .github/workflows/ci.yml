@@ -352,9 +352,30 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The nine font packages `--with-deps` adds (17.5 MB) came at 26.7 kB/s
+      # from the Azure Ubuntu mirror on run 42107295557. They are cached here
+      # and seeded into apt's archive, so a normal run does not fetch them.
+      # apt checks every archive file against the signed package index, so a
+      # cached file that does not match is fetched again, never installed.
+      # The packages installed are unchanged, so the golden frames' fonts are.
+      - name: Cache Playwright's apt packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/e2e-apt/
+          key: e2e-apt-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            e2e-apt-
+
       - name: Install Playwright (Chromium only)
         timeout-minutes: 12
-        run: pnpm --filter @motebit/web exec playwright install --with-deps chromium
+        run: |
+          mkdir -p ~/.cache/e2e-apt
+          if compgen -G "$HOME/.cache/e2e-apt/*.deb" > /dev/null; then
+            sudo cp "$HOME"/.cache/e2e-apt/*.deb /var/cache/apt/archives/
+          fi
+          pnpm --filter @motebit/web exec playwright install --with-deps chromium
+          cp /var/cache/apt/archives/*.deb ~/.cache/e2e-apt/ 2> /dev/null || true
+          echo "apt packages cached: $(ls ~/.cache/e2e-apt | wc -l)"
 
       - name: Download build artifacts
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4
