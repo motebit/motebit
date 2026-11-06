@@ -9,7 +9,10 @@
  *     MoteDb, a real MotebitRuntime, a restart) goes red;
  *   - each daemon site reverted to its pre-fix shape, and the REPL site
  *     dropping its store, passing `grantSpendStore: undefined`, or naming it
- *     only in a string: check-money-authority assertion 7 goes red;
+ *     only in a string, the serve site reverted behind a `const MR =
+ *     MotebitRuntime` alias, an opaque `...NO_STORE` spread after the store,
+ *     and a store on one conditional branch only: check-money-authority
+ *     assertion 7 goes red;
  *   - the daemon builder deciding `syncConfigured` itself (ignoring the
  *     intent relay, #962 round 5): the behavioural case and the AST guard in
  *     cli-sync-configured-962.test.ts each go red.
@@ -27,8 +30,17 @@ const FACTORY = "apps/cli/src/runtime-factory.ts";
 
 const GATE: Pick<TamperEntry, "command" | "redMarker"> = {
   command: ["npx", "tsx", "scripts/check-money-authority.ts"],
-  redMarker: "but pass no `grantSpendStore`",
+  redMarker: "assertion 7:",
 };
+
+const RUN_HEAD =
+  "      {\n        motebitId,\n        mcpServers,\n        policy: {\n          operatorMode: config.operator,\n          maxRiskLevel: maxRiskAuto,";
+const SERVE_HEAD =
+  "      {\n        motebitId,\n        mcpServers,\n        policy: {\n          operatorMode: config.operator,\n          pathAllowList: config.allowedPaths,";
+const SERVE_IDENTITY = "          ? { identityPublicKeyHex: publicKeyHex }";
+const SITE_OPEN =
+  "  const runtime = new MotebitRuntime(\n" +
+  "    // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.\n";
 
 const STORE_ARG =
   "      relay,\n" +
@@ -79,17 +91,53 @@ const TAMPERS: TamperEntry[] = [
   {
     name: "`motebit run` site back to main's shape (identity key, no store)",
     edits: revertSite(
-      "      {\n        motebitId,\n        mcpServers,\n        policy: {\n          operatorMode: config.operator,\n          maxRiskLevel: maxRiskAuto,",
+      RUN_HEAD,
       "          ? { identityPublicKeyHex: fullConfig.device_public_key }",
     ),
     ...GATE,
   },
   {
     name: "`motebit serve` site back to main's shape (identity key, no store)",
-    edits: revertSite(
-      "      {\n        motebitId,\n        mcpServers,\n        policy: {\n          operatorMode: config.operator,\n          pathAllowList: config.allowedPaths,",
-      "          ? { identityPublicKeyHex: publicKeyHex }",
-    ),
+    edits: revertSite(SERVE_HEAD, SERVE_IDENTITY),
+    ...GATE,
+  },
+  {
+    name: "`motebit serve` site back to main's shape, constructed through `const MR = MotebitRuntime`",
+    edits: [
+      {
+        file: DAEMON,
+        from: `${SITE_OPEN}    daemonRuntimeConfig(\n${SERVE_HEAD}`,
+        to:
+          "  const MR = MotebitRuntime;\n" +
+          `${SITE_OPEN.replace("new MotebitRuntime(", "new MR(")}    cliRuntimeConfig(\n${SERVE_HEAD}`,
+      },
+      revertSite(SERVE_HEAD, SERVE_IDENTITY)[1]!,
+    ],
+    ...GATE,
+  },
+  {
+    name: "REPL spreads an opaque `...NO_STORE` after its store",
+    edits: [
+      {
+        file: FACTORY,
+        from: 'import { cliRuntimeConfig } from "./sync-configured.js";\n',
+        to:
+          'import { cliRuntimeConfig } from "./sync-configured.js";\n' +
+          "const NO_STORE: { grantSpendStore?: undefined } = {};\n",
+      },
+      { file: FACTORY, from: REPL_STORE, to: `${REPL_STORE}        ...NO_STORE,\n` },
+    ],
+    ...GATE,
+  },
+  {
+    name: "REPL passes its store on one conditional branch only",
+    edits: [
+      {
+        file: FACTORY,
+        from: REPL_STORE,
+        to: '        ...(process.env["MOTEBIT_TAMPER"] ? { grantSpendStore: moteDb.grantSpendStore } : {}),\n',
+      },
+    ],
     ...GATE,
   },
   {
