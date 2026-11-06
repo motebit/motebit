@@ -3,7 +3,8 @@
  * rule in scripts/check-coverage-config-present.ts, removed alone, must turn
  * its case in scripts/__tests__/check-coverage-config-present.test.ts red; and
  * removing the CLI's declared floor from apps/cli/vitest.config.ts must turn
- * the gate itself red over the real tree. The last entries cover the
+ * the gate itself red over the real tree, and so must removing its
+ * `coverage.include` (a floor over a partial denominator). The last entries cover the
  * follow-up in scripts/verify-test-outcomes.ts: with the real
  * NO_THRESHOLD_PACKAGES now empty, its fixture's no-floor case runs under an
  * injected allowance, and each seam of that injection, removed alone, must
@@ -30,6 +31,8 @@ const CLI_CONFIG = "apps/cli/vitest.config.ts";
 const VERIFIER = "scripts/verify-test-outcomes.ts";
 const VERIFIER_TEST = "scripts/__tests__/verify-test-outcomes.test.ts";
 const FIXTURE_CASES = "verifyOutcomes over fixture artifacts";
+const CLI_INCLUDE = '      include: ["src/**/*.ts"],\n';
+const DENOM = "check-coverage-config-present denominator";
 const CLI_THRESHOLDS =
   "      thresholds: { statements: 47, branches: 43, functions: 59, lines: 46 },\n";
 
@@ -122,6 +125,48 @@ const TAMPERS: TamperEntry[] = [
     test: VERIFIER_TEST,
     red: `${FIXTURE_CASES} is RED on an allowance entry for a package that declares thresholds (stale)`,
   },
+  {
+    name: "the CLI's coverage.include is removed (the gate over the real tree)",
+    edits: [{ file: CLI_CONFIG, from: CLI_INCLUDE, to: "" }],
+    command: ["pnpm", "exec", "tsx", GATE],
+    redMarker: "✗ motebit [partial-denominator]",
+  },
+  {
+    name: "the CLI's coverage.include is removed (the real-repo case)",
+    edits: [{ file: CLI_CONFIG, from: CLI_INCLUDE, to: "" }],
+    test: TEST,
+    red: REAL,
+  },
+  entry(
+    "the denominator check never runs for a package or service",
+    `${FAIL} a bare floored package or service with no coverage.include fails too`,
+    "      const v = presenceViolation(name, config) ?? denominatorViolation(name, config, bareConfigs);",
+    "      const v = presenceViolation(name, config);",
+  ),
+  entry(
+    "the denominator check never runs for an app",
+    `${FAIL} a bare floored config with no coverage.include fails (the denominator is only what the tests import)`,
+    "        presenceViolation(pkg.name, config) ?? denominatorViolation(pkg.name, config, bareConfigs);",
+    "        presenceViolation(pkg.name, config);",
+  ),
+  entry(
+    "any include counts, however narrow",
+    `${FAIL} a bare floored config whose coverage.include names only some files fails`,
+    "  if (includes?.some((g) => FULL_SRC_INCLUDE.test(g))) return null;",
+    "  if (includes !== null) return null;",
+  ),
+  entry(
+    "an include anywhere in the config counts (not only the coverage block's)",
+    `${FAIL} a test.include outside the coverage block does not count as the coverage include`,
+    "  const m = block?.match(",
+    "  const m = src.match(",
+  ),
+  entry(
+    "a factory config is held to the bare-config rule",
+    `${DENOM} a defineMotebitTest config needs no include of its own (the factory supplies src/)`,
+    "  if (/\\bdefineMotebitTest\\(/.test(src)) return null; // the factory's default include is src/**/*.ts",
+    "  if ((false as boolean) && /\\bdefineMotebitTest\\(/.test(src)) return null;",
+  ),
 ];
 
 await runTampers(TAMPERS, { root: ROOT });

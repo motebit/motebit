@@ -48,11 +48,30 @@
  *    never implicit, and a private app that gains a trigger dependency enters
  *    scope by itself.
  *
+ *    The rule sees what the package.json says, not what the code does. An
+ *    app that moves money only over HTTP — e.g. `apps/operator`, which drives
+ *    the relay's admin API and depends on no trigger — is outside its view.
+ *    It does not claim "every money-executing app"; it claims "every published
+ *    app and every app with a money/identity trigger dependency".
+ *
  *    Tier FLOORS still apply to registry members only. Extending membership to
  *    services or apps is a separate decision with real consequences — the relay
  *    would owe money-tier 90/85/90/90 against a measured 61 branches — and
  *    belongs in the registry and graduation manifest with a raise-by date, not
  *    in this gate.
+ *
+ *  (Denominator) Every config the presence pass accepts that does NOT go
+ *  through `defineMotebitTest` (vitest.shared.ts, whose default
+ *  `coverage.include` is every `.ts` file under `src/`) MUST declare a
+ *  `coverage.include` entry covering its whole `src/` tree (`FULL_SRC_INCLUDE`:
+ *  the recursive `src/` glob over `.ts`, or a brace form that lists `ts`).
+ *  A floor is only as honest as its
+ *  denominator: without the include, vitest counts only the files the tests
+ *  import, so a CLI run narrowed to one test file reported 94.7% and passed
+ *  its 47% floor. A `defineMotebitTest` config that narrows `coverageInclude`
+ *  on purpose (services/proxy names its pure modules) is a visible, reviewed
+ *  choice and is not this check's subject; a bare config that forgets the
+ *  include is an invisible one.
  *
  *  (Floor) Every member of the money/identity-path registry
  *  (`scripts/money-identity-path.ts`) MUST declare thresholds at or above its
@@ -109,7 +128,7 @@ function graduatingPackages(root: string): Set<string> {
 
 export interface Violation {
   package: string;
-  kind: "missing-config" | "below-floor";
+  kind: "missing-config" | "below-floor" | "partial-denominator";
   detail: string;
 }
 
@@ -163,6 +182,8 @@ export interface CoverageConfigReport {
   apps: AppScope[];
   registrySize: number;
   graduating: number;
+  /** Floored configs that bypass defineMotebitTest, checked for a full-src coverage.include. */
+  bareConfigs: string[];
 }
 
 export interface CheckOptions {
@@ -185,6 +206,52 @@ function presenceViolation(name: string, config: string): Violation | null {
   };
 }
 
+// A `coverage.include` entry covering the whole src/ tree: "src/**/*.ts", or
+// a brace form that lists ts ("src/**/*.{ts,tsx}").
+const FULL_SRC_INCLUDE = /^src\/\*\*\/\*\.(?:ts|\{[^}]*\bts\b[^}]*\})$/;
+
+/** The body of the first `coverage: { … }` block, brace-balanced; null when absent. */
+function coverageBlock(src: string): string | null {
+  const key = src.match(/\bcoverage:\s*\{/);
+  if (key?.index == null) return null;
+  const open = src.indexOf("{", key.index);
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(open + 1, i);
+  }
+  return null;
+}
+
+/** The string entries of the coverage block's `include: [ … ]`; null when it has none. */
+export function coverageIncludes(src: string): string[] | null {
+  const block = coverageBlock(src);
+  const m = block?.match(/\binclude:\s*\[([^\]]*)\]/);
+  if (!m) return null;
+  return [...m[1]!.matchAll(/["'`]([^"'`]+)["'`]/g)].map((e) => e[1]!);
+}
+
+/**
+ * (Denominator) a floored config that bypasses defineMotebitTest must count
+ * its whole src/ tree. `bare` collects the names of the configs checked.
+ */
+function denominatorViolation(name: string, config: string, bare: string[]): Violation | null {
+  if (!existsSync(config) || readThresholds(config) === null) return null; // presence reports it
+  const src = readFileSync(config, "utf-8");
+  if (/\bdefineMotebitTest\(/.test(src)) return null; // the factory's default include is src/**/*.ts
+  bare.push(name);
+  const includes = coverageIncludes(src);
+  if (includes?.some((g) => FULL_SRC_INCLUDE.test(g))) return null;
+  return {
+    package: name,
+    kind: "partial-denominator",
+    detail:
+      `vitest.config.ts declares coverage.thresholds without defineMotebitTest, and its coverage.include ` +
+      `(${includes === null ? "absent" : JSON.stringify(includes)}) does not cover src/ — vitest then counts only ` +
+      "the files the tests import, so a run narrowed to one test file reports a high percentage and passes the floor",
+  };
+}
+
 export function checkCoverageConfigPresent(
   root: string,
   opts: CheckOptions = {},
@@ -193,6 +260,7 @@ export function checkCoverageConfigPresent(
   const triggers = opts.triggers ?? MEMBERSHIP_TRIGGERS;
   const violations: Violation[] = [];
   const graduating = graduatingPackages(root);
+  const bareConfigs: string[] = [];
 
   // Map package name → dir, for the floor pass.
   const nameToDir = new Map<string, string>();
@@ -230,7 +298,8 @@ export function checkCoverageConfigPresent(
 
       if (!existsSync(join(dir, "src", "__tests__"))) continue;
       scannedPackages++;
-      const v = presenceViolation(name, join(dir, "vitest.config.ts"));
+      const config = join(dir, "vitest.config.ts");
+      const v = presenceViolation(name, config) ?? denominatorViolation(name, config, bareConfigs);
       if (v) violations.push(v);
     }
   }
@@ -254,7 +323,9 @@ export function checkCoverageConfigPresent(
       };
       apps.push(scope);
       if (scope.reasons.length === 0 || !scope.hasTests) continue;
-      const v = presenceViolation(pkg.name, join(dir, "vitest.config.ts"));
+      const config = join(dir, "vitest.config.ts");
+      const v =
+        presenceViolation(pkg.name, config) ?? denominatorViolation(pkg.name, config, bareConfigs);
       if (v) violations.push(v);
     }
   }
@@ -290,6 +361,7 @@ export function checkCoverageConfigPresent(
     apps,
     registrySize: registry.size,
     graduating: graduating.size,
+    bareConfigs,
   };
 }
 
@@ -306,11 +378,12 @@ export function formatReport(report: CoverageConfigReport, root: string): string
         `    ${relative(root, a.dir)} (${a.name}): ${a.reasons.join("; ")}${a.hasTests ? "" : " — no src/__tests__/, nothing to floor"}`,
     ),
     `  apps out of scope (${outScope.length} apps — private, no trigger dependency): ${outScope.map((a) => relative(root, a.dir)).join(", ") || "none"}`,
+    `  ${report.bareConfigs.length} floored configs bypass defineMotebitTest and were checked for a coverage.include covering src/: ${report.bareConfigs.join(", ") || "none"}`,
     "",
   ];
   if (report.violations.length === 0) {
     lines.push(
-      "✓ Every test-bearing package and in-scope app declares a coverage floor; every registry member meets its tier floor.",
+      "✓ Every test-bearing package and in-scope app declares a coverage floor over its whole src/; every registry member meets its tier floor.",
     );
     return lines.join("\n");
   }
@@ -322,7 +395,9 @@ export function formatReport(report: CoverageConfigReport, root: string): string
     "",
     "Fix: add coverage.thresholds to each missing-config entry's vitest.config.ts at its measured level, rounded down " +
       "(`pnpm --filter <pkg> test:coverage` measures it, with coverage.include set so untested files count), or raise a below-floor " +
-      "member's tests to its tier floor. The scope rule lives in scripts/check-coverage-config-present.ts; the registry and tier " +
+      'member\'s tests to its tier floor. For a partial-denominator entry, add `include: ["src/**/*.ts"]` to its coverage block ' +
+      "(re-measure: the floor may drop to the honest number) or move the config to defineMotebitTest. " +
+      "The scope rule lives in scripts/check-coverage-config-present.ts; the registry and tier " +
       "floors in scripts/money-identity-path.ts.",
   );
   return lines.join("\n");

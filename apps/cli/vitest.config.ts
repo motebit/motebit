@@ -54,9 +54,10 @@ export default defineConfig({
     // `thresholds` are the floor, never lowered (docs/doctrine/coverage-graduation.md).
     // This package signs money transactions (`wallet swap`, `withdraw`,
     // `delegate --sovereign`, `grant create`, the daemon's R4 path) and had no
-    // floor until 2026-11-06; check-coverage-config-present now holds every
-    // money-executing or published app to one. Set at the measured level,
-    // rounded down (2026-11-06, full src/ denominator of 107 files: 47.03
+    // floor until 2026-11-06. check-coverage-config-present now holds every
+    // published app, and every app with a money/identity trigger dependency,
+    // to one, and, because this config is bare (no defineMotebitTest), also
+    // requires the `include` below. Set at the measured level, rounded down (2026-11-06, full src/ denominator of 107 files: 47.03
     // statements / 43.16 branches / 59.21 functions / 46.84 lines). Raise them
     // as tests land; never lower them.
     coverage: {

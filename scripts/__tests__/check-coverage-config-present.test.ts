@@ -22,7 +22,14 @@ const TRIGGER = "@motebit/fixture-wallet";
 const TRIGGERS: ReadonlySet<string> = new Set([TRIGGER]);
 const NO_REGISTRY: ReadonlyMap<string, PathTier> = new Map();
 
-const FLOORED = `export default { test: { coverage: { thresholds: { statements: 47, branches: 43, functions: 59, lines: 46 } } } };\n`;
+const AXES = "statements: 47, branches: 43, functions: 59, lines: 46";
+/** A bare (non-factory) floored config with a full-src include. */
+const FLOORED = `export default { test: { coverage: { include: ["src/**/*.ts"], thresholds: { ${AXES} } } } };\n`;
+/** A bare floored config with the given coverage.include source (null = no include key). */
+const bare = (include: string | null) =>
+  `export default { test: { coverage: { ${include === null ? "" : `include: ${include}, `}thresholds: { ${AXES} } } } };\n`;
+/** A factory config: defineMotebitTest supplies the full-src include itself. */
+const FACTORY = `import { defineMotebitTest } from "../../vitest.shared.js";\nexport default defineMotebitTest({ thresholds: { ${AXES} } });\n`;
 const UNFLOORED = `export default { test: { coverage: { reporter: ["text"] } } };\n`;
 
 let root: string;
@@ -128,11 +135,78 @@ describe("check-coverage-config-present failure cases", () => {
     ]);
   });
 
+  it("a bare floored config with no coverage.include fails (the denominator is only what the tests import)", () => {
+    plant("apps/cli", { pkg: { name: "motebit" }, config: bare(null) });
+    expect(flagged()).toEqual(["motebit [partial-denominator]"]);
+  });
+
+  it("a bare floored config whose coverage.include names only some files fails", () => {
+    plant("apps/cli", {
+      pkg: { name: "motebit" },
+      config: bare('["src/index.ts", "src/lib/**/*.ts"]'),
+    });
+    expect(flagged()).toEqual(["motebit [partial-denominator]"]);
+  });
+
+  it("a bare floored package or service with no coverage.include fails too", () => {
+    plant("packages/bare-pkg", {
+      pkg: { name: "@motebit/bare-pkg", private: true },
+      config: bare(null),
+    });
+    plant("services/bare-svc", {
+      pkg: { name: "@motebit/bare-svc", private: true },
+      config: bare(null),
+    });
+    expect(flagged().sort()).toEqual([
+      "@motebit/bare-pkg [partial-denominator]",
+      "@motebit/bare-svc [partial-denominator]",
+    ]);
+  });
+
+  it("a test.include outside the coverage block does not count as the coverage include", () => {
+    plant("apps/cli", {
+      pkg: { name: "motebit" },
+      config: `export default { test: { include: ["src/**/*.ts"], coverage: { thresholds: { ${AXES} } } } };\n`,
+    });
+    expect(flagged()).toEqual(["motebit [partial-denominator]"]);
+  });
+
   it("the failure output carries a repair instruction", () => {
     plant("apps/cli", { pkg: { name: "motebit" }, config: UNFLOORED });
     const out = formatReport(run(), root);
     expect(out).toContain("✗ motebit [missing-config]");
     expect(hasRepairInstruction(out)).toEqual({ ok: true });
+  });
+});
+
+describe("check-coverage-config-present denominator", () => {
+  it("a defineMotebitTest config needs no include of its own (the factory supplies src/)", () => {
+    plant("apps/cli", { pkg: { name: "motebit" }, config: FACTORY });
+    const report = run();
+    expect(report.violations).toEqual([]);
+    expect(report.bareConfigs).not.toContain("motebit");
+  });
+
+  it("a brace-form include that lists ts covers src/", () => {
+    plant("apps/cli", { pkg: { name: "motebit" }, config: bare('["src/**/*.{ts,tsx}"]') });
+    const report = run();
+    expect(report.violations).toEqual([]);
+    expect(report.bareConfigs).toContain("motebit");
+  });
+
+  it("the partial-denominator failure carries a repair instruction naming the include", () => {
+    plant("apps/cli", { pkg: { name: "motebit" }, config: bare(null) });
+    const out = formatReport(run(), root);
+    expect(out).toContain("✗ motebit [partial-denominator]");
+    expect(out).toContain('include: [\"src/**/*.ts\"]');
+    expect(hasRepairInstruction(out)).toEqual({ ok: true });
+  });
+
+  it("the passing output names the bare configs it checked", () => {
+    const out = formatReport(run(), root);
+    expect(out).toContain(
+      "3 floored configs bypass defineMotebitTest and were checked for a coverage.include covering src/: @motebit/lib, @motebit/svc, @motebit/surface",
+    );
   });
 });
 
@@ -181,5 +255,9 @@ describe("check-coverage-config-present over the real repo", () => {
     expect(cli?.hasTests).toBe(true);
     expect(cli?.reasons).toContain("published");
     expect(cli?.reasons.some((r) => r.includes("@motebit/wallet-solana"))).toBe(true);
+  });
+
+  it("checks the CLI's bare config for a coverage.include covering src/", () => {
+    expect(checkCoverageConfigPresent(REPO_ROOT).bareConfigs).toContain("motebit");
   });
 });
