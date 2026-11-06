@@ -9,6 +9,12 @@ pnpm-lock.yaml
 # The pins of governed repo changes are signed identity files: their exact bytes
 # are what the signature covers, so a reformat would break every pin.
 .motebit/principals/
+# Governed repo change bundles and revocations are written as canonical JSON
+# (spec/repo-change-v1.md: the bundle's bytes are exactly its canonical JSON),
+# and a governed pull request is exactly two commits, so it cannot carry a
+# reformat: without these lines every governed PR fails `format`.
+.motebit/bundles/
+.motebit/revocations/
 services/proxy/tsconfig.json
 
 # VS Code extension build artifacts. Compiled from apps/vscode/src/ by
