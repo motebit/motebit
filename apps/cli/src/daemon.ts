@@ -14,7 +14,7 @@ import {
   servedToolNames,
   TaskClaimCoordinator,
 } from "@motebit/runtime";
-import type { MintToken } from "@motebit/runtime";
+import type { MintToken, RuntimeConfig } from "@motebit/runtime";
 import { attachedServePrincipalDeps, servePrincipalDeps } from "./serve-deps.js";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import { embedText } from "@motebit/memory-graph";
@@ -37,6 +37,7 @@ import { mintAudienceToken, verifySignedToken, secureErase } from "@motebit/encr
 import { verify, identityVerifyOutcome, governanceToPolicyConfig } from "@motebit/identity-file";
 import { McpServerAdapter, assertOwnerPrincipal } from "@motebit/mcp-server";
 import { MemoryClass } from "@motebit/policy";
+import type { GrantSpendStore } from "@motebit/policy";
 import type {
   MotebitServerDeps,
   McpServerConfig as McpServerAdapterConfig,
@@ -74,6 +75,24 @@ import {
   buildStorageAdapters,
   deriveGovernanceForRuntime,
 } from "./runtime-factory.js";
+
+/**
+ * The runtime config both daemons (`motebit run`, `motebit serve`) build.
+ * The grant spend store is a REQUIRED argument, not an optional field: a
+ * daemon is the unattended process a standing grant spends through, and the
+ * runtime's in-memory default re-arms the money meter's window and LIFETIME
+ * ceilings on every restart (#436 finding 6). Pass the daemon's own MoteDb
+ * `grantSpendStore` (the persistent `SqliteGrantSpendStore`), the same store
+ * the REPL wires in `runtime-factory.ts`. It is passed as a `grantSpendStore`
+ * property so `check-money-authority` (assertion 7) sees it at the call.
+ */
+export function daemonRuntimeConfig(
+  base: Omit<RuntimeConfig, "syncConfigured" | "grantSpendStore">,
+  relay: Parameters<typeof cliRuntimeConfig>[1],
+  durable: { grantSpendStore: GrantSpendStore },
+): RuntimeConfig {
+  return cliRuntimeConfig({ ...base, grantSpendStore: durable.grantSpendStore }, relay);
+}
 
 /**
  * Per-process replay memory for remote commands. The daemon is the only
@@ -207,7 +226,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
   const syncUrl = relay.syncUrl;
   const runtime = new MotebitRuntime(
     // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
-    cliRuntimeConfig(
+    daemonRuntimeConfig(
       {
         motebitId,
         mcpServers,
@@ -228,6 +247,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
           : {}),
       },
       relay,
+      // The persistent spend store: the meter's ceilings survive a restart.
+      { grantSpendStore: moteDb.grantSpendStore },
     ),
     {
       storage: buildStorageAdapters(moteDb),
@@ -1171,7 +1192,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
   const syncUrl = relay.syncUrl;
   const runtime = new MotebitRuntime(
     // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
-    cliRuntimeConfig(
+    daemonRuntimeConfig(
       {
         motebitId,
         mcpServers,
@@ -1198,6 +1219,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
           : {}),
       },
       relay,
+      // The persistent spend store: the meter's ceilings survive a restart.
+      { grantSpendStore: moteDb.grantSpendStore },
     ),
     {
       storage: buildStorageAdapters(moteDb),
