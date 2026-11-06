@@ -140,14 +140,35 @@ describe("#962 C2 — the CLI's syncConfigured wiring", () => {
   it("every `new MotebitRuntime(` in apps/cli/src builds its config with cliRuntimeConfig", () => {
     // A secondary guard: `cliRuntimeConfig` sets `syncConfigured` LAST, so no
     // spread at a site can override it. The behaviour of each site is held by
-    // every-configured-surface-pushes-962.test.ts.
+    // every-configured-surface-pushes-962.test.ts. The daemons build theirs
+    // through `daemonRuntimeConfig` (which also requires the grant spend
+    // store) — it returns `cliRuntimeConfig(...)`, held by the next test.
     const sites = runtimeSites();
     // Aperture: the sites this scan found — the REPL, both daemons, delegate.
     expect(sites.map((s) => s.file).sort()).toEqual(
       ["daemon.ts", "daemon.ts", "runtime-factory.ts", join("subcommands", "delegate.ts")].sort(),
     );
     for (const site of sites) {
-      expect(site).toEqual({ file: site.file, builtBy: "cliRuntimeConfig" });
+      const builtBy = site.file === "daemon.ts" ? "daemonRuntimeConfig" : "cliRuntimeConfig";
+      expect(site).toEqual({ file: site.file, builtBy });
     }
+  });
+
+  it("daemonRuntimeConfig is cliRuntimeConfig: the relay decides syncConfigured, last", async () => {
+    const { daemonRuntimeConfig } = await import("../daemon.js");
+    const { InMemoryGrantSpendStore } = await import("@motebit/policy");
+    const store = new InMemoryGrantSpendStore();
+    const on = daemonRuntimeConfig({ motebitId: "m" }, { syncUrl: "https://r" }, store);
+    expect(on.syncConfigured).toBe(true);
+    expect(on.grantSpendStore).toBe(store);
+    expect(
+      daemonRuntimeConfig({ motebitId: "m" }, { syncUrl: undefined }, store).syncConfigured,
+    ).toBe(false);
+    const smuggled = { motebitId: "m", syncConfigured: false } as Parameters<
+      typeof daemonRuntimeConfig
+    >[0];
+    expect(daemonRuntimeConfig(smuggled, { syncUrl: "https://r" }, store).syncConfigured).toBe(
+      true,
+    );
   });
 });

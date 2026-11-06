@@ -50,6 +50,11 @@
  *      single-use, name+args-bound capability minted only on gate-decided
  *      runtime paths (`money-capability.ts`); the grant's delegator is pinned
  *      to this runtime's identity.
+ *
+ *   7. **A runtime that can verify a grant meters it durably.** Every
+ *      `new MotebitRuntime(` whose call text sets `identityPublicKeyHex` also
+ *      passes `grantSpendStore`; otherwise the meter falls back to the
+ *      in-memory store and the grant's lifetime ceiling re-arms on restart.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -660,6 +665,118 @@ function fail(message: string): void {
   }
 }
 
+// === 7. A runtime that can verify a grant meters it durably ==============
+// `identityPublicKeyHex` is what lets a runtime accept a standing grant (the
+// grant's delegator is pinned to it) and so auto-execute R4 money. The money
+// meter then needs a durable `grantSpendStore`: without one the runtime falls
+// back to `InMemoryGrantSpendStore` and the grant's window and LIFETIME
+// ceilings re-arm on every restart (#436 finding 6; the `motebit run` /
+// `motebit serve` daemons shipped exactly this). So every `new MotebitRuntime(`
+// whose argument text sets `identityPublicKeyHex` must also name
+// `grantSpendStore` (comments are stripped first, so a comment cannot satisfy
+// it). Aperture: every `.ts` (not `.tsx`) under packages/*/src, apps/*/src,
+// services/*/src (tests excluded), by call text. NOT seen: a config object
+// built in a variable outside the call, or a store passed that is itself
+// volatile — the persistence is proven by
+// apps/cli/src/__tests__/daemon-grant-spend-store.test.ts. NOT held to the
+// rule: a site whose identity comes from `signingKeys` alone (the runtime
+// derives its identity from them too); the gate counts those sites and prints
+// the number, so the gap stays visible until those surfaces wire the store.
+{
+  /** The source with every comment removed (string and template contents kept). */
+  const stripComments = (src: string): string => {
+    let out = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i]!;
+      const next = src[i + 1];
+      if (c === "/" && next === "/") {
+        while (i < src.length && src[i] !== "\n") i++;
+      } else if (c === "/" && next === "*") {
+        const end = src.indexOf("*/", i + 2);
+        i = end === -1 ? src.length : end + 2;
+      } else if (c === '"' || c === "'" || c === "`") {
+        let j = i + 1;
+        while (j < src.length && src[j] !== c) j += src[j] === "\\" ? 2 : 1;
+        out += src.slice(i, j + 1);
+        i = j + 1;
+      } else {
+        out += c;
+        i++;
+      }
+    }
+    return out;
+  };
+  /** The balanced-paren argument text starting at `open` (the `(` index). */
+  const argText = (src: string, open: number): string => {
+    let depth = 0;
+    let i = open;
+    while (i < src.length) {
+      const c = src[i]!;
+      if (c === '"' || c === "'" || c === "`") {
+        let j = i + 1;
+        while (j < src.length && src[j] !== c) j += src[j] === "\\" ? 2 : 1;
+        i = j + 1;
+        continue;
+      }
+      if (c === "(") depth++;
+      else if (c === ")" && --depth === 0) return src.slice(open, i + 1);
+      i++;
+    }
+    return src.slice(open);
+  };
+  const MARKER = "new MotebitRuntime(";
+  let files = 0;
+  let sites = 0;
+  let identitySites = 0;
+  let keysOnlyUnmetered = 0;
+  const violations: string[] = [];
+  for (const srcDir of workspaceSrcDirs()) {
+    for (const rel of walkTsFiles(srcDir)) {
+      if (rel.includes("__tests__") || rel.endsWith(".test.ts")) continue;
+      const raw = readFile(rel);
+      if (raw === null) continue;
+      files++;
+      if (!raw.includes(MARKER)) continue;
+      const code = stripComments(raw);
+      for (let at = code.indexOf(MARKER); at !== -1; at = code.indexOf(MARKER, at + 1)) {
+        sites++;
+        const args = argText(code, at + MARKER.length - 1);
+        if (!/\bidentityPublicKeyHex\b/.test(args)) {
+          if (/\bsigningKeys\b/.test(args) && !/\bgrantSpendStore\b/.test(args))
+            keysOnlyUnmetered++;
+          continue;
+        }
+        identitySites++;
+        if (!/\bgrantSpendStore\b/.test(args)) {
+          const line = code.slice(0, at).split("\n").length;
+          violations.push(`${rel} (call ${sites}, ~line ${line} of the comment-stripped source)`);
+        }
+      }
+    }
+  }
+  if (violations.length > 0) {
+    fail(
+      `${violations.length} \`new MotebitRuntime(\` site(s) set \`identityPublicKeyHex\` (so a standing ` +
+        `grant authorizes R4 spending) but pass no \`grantSpendStore\`, so the money meter falls back to ` +
+        `the in-memory store and the grant's lifetime ceiling re-arms on restart:\n  ` +
+        violations.join("\n  ") +
+        "\nFix: pass the persistent store (`grantSpendStore: moteDb.grantSpendStore`, the " +
+        "`SqliteGrantSpendStore` from `@motebit/persistence`), as `apps/cli/src/runtime-factory.ts` " +
+        "and `daemonRuntimeConfig` in `apps/cli/src/daemon.ts` do.",
+    );
+  } else {
+    console.log(
+      `check-money-authority: durable grant metering — ${files} source files scanned ` +
+        `(.ts under packages/*/src, apps/*/src, services/*/src; tests excluded), ${sites} ` +
+        `\`new MotebitRuntime(\` site(s), ${identitySites} set identityPublicKeyHex and all ` +
+        `${identitySites} pass grantSpendStore. NOT seen: a config built outside the call text. ` +
+        `NOT held to this rule: ${keysOnlyUnmetered} site(s) whose identity comes from signingKeys ` +
+        `alone and that pass no grantSpendStore.`,
+    );
+  }
+}
+
 if (failed) {
   process.exit(1);
 }
@@ -668,5 +785,5 @@ console.log(
     "delegate_to_agent declares explicit riskHint (R4 on payment rail); verifiedGrant has a single " +
     "audited producer; executeGrantedDelegation re-composes the R4 AND (fail-closed verify + scope + meter-wrapped builder); " +
     "every tool-registry execute is a sanctioned gated site; an R4_MONEY handler is unreachable " +
-    "without the runtime money capability.",
+    "without the runtime money capability; every runtime given identityPublicKeyHex passes a grantSpendStore.",
 );
