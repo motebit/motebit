@@ -1128,7 +1128,7 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-prepush-subset",
     proves:
-      "flags the `check` job's outcome verifier accepting a suite that passed FEWER tests than its committed floor — here the GREEN fixture's apps/cli narrowed to 1 passing test (the single-file `test:coverage` shape: exit 0, success true, nothing skipped, apps/cli has no coverage floor), which every rule but the test floor passes",
+      "flags the `check` job's outcome verifier accepting a suite that passed FEWER tests than its committed floor — here the GREEN fixture's apps/cli narrowed to 1 passing test (the single-file `test:coverage` shape: exit 0, success true, nothing skipped, and the fixture's coverage summary left untouched), which every rule but the test floor passes",
     perturb: () =>
       mutateFile("scripts/lib/test-outcomes-fixture.ts", (src) =>
         src.replace(

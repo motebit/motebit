@@ -41,6 +41,13 @@ export interface OutcomeFixture {
    * Absent = FIXTURE_FLOOR for every package with test:coverage.
    */
   floors?: Record<string, number> | null;
+  /**
+   * The NO_THRESHOLD_PACKAGES allowance this fixture runs under, passed to
+   * `verifyOutcomes` as `VerifyOptions.noThresholdPackages` (absent = none).
+   * Never the real constant: the fixture's no-floor case must not depend on
+   * which real package happens to lack a floor.
+   */
+  noThresholdPackages?: Record<string, string>;
 }
 
 /** Each fixture suite passes 7 tests (passingReport); its committed floor. */
@@ -93,7 +100,7 @@ export function greenFixture(): OutcomeFixture {
       "services/relay": { thresholds: F80 },
       "packages/circuit-breaker": { thresholds: F80 },
       "apps/web": { thresholds: F80, globs: { "**/adapters.ts": F100 } },
-      "apps/cli": { thresholds: null },
+      "apps/cli": { thresholds: F80 },
       "packages/types-only": { thresholds: null, coverage: false },
     },
     shards: {
@@ -105,6 +112,30 @@ export function greenFixture(): OutcomeFixture {
       "coverage-shard-2": { "apps/web": passingReport("apps/web") },
     },
   };
+}
+
+/** The fixture-only package that declares no coverage thresholds. */
+export const NO_FLOOR_PACKAGE = "apps/unfloored";
+
+/**
+ * Adds NO_FLOOR_PACKAGE to `f`: a passing suite whose vitest config declares
+ * no thresholds, reported by shard 1. `allowlisted` (default true) also puts
+ * it in the fixture's own `noThresholdPackages`, the allowance the verifier
+ * then runs under. Returns `f`.
+ */
+export function withNoFloorPackage(
+  f: OutcomeFixture,
+  { allowlisted = true }: { allowlisted?: boolean } = {},
+): OutcomeFixture {
+  f.workspace[NO_FLOOR_PACKAGE] = { thresholds: null };
+  f.shards["coverage-shard-1"]![NO_FLOOR_PACKAGE] = passingReport(NO_FLOOR_PACKAGE);
+  if (f.floors) f.floors = { ...f.floors, [NO_FLOOR_PACKAGE]: FIXTURE_FLOOR };
+  if (allowlisted)
+    f.noThresholdPackages = {
+      ...f.noThresholdPackages,
+      [NO_FLOOR_PACKAGE]: "fixture: a suite that collects coverage without thresholds",
+    };
+  return f;
 }
 
 type Mutate = (f: OutcomeFixture) => void;
@@ -240,7 +271,7 @@ export const RED_VARIANTS: Record<string, { what: string; mutate: Mutate }> = {
     },
   },
   "all-skipped-name-filter": {
-    what: "a test-name filter that matches nothing (`-- -t zzzz-nomatch`, measured on apps/cli: exit 0, numTotalTests 1016, numPassedTests 0, numPendingTests 1016, success true, every file 'passed') — apps/cli has no coverage floor to catch it",
+    what: "a test-name filter that matches nothing (`-- -t zzzz-nomatch`, measured on apps/cli: exit 0, numTotalTests 1016, numPassedTests 0, numPendingTests 1016, success true, every file 'passed') — the fixture leaves its coverage summary untouched, so only the run-share rule catches it, as it must for a package with no coverage floor",
     mutate: (f) => {
       const r = results(f, "coverage-shard-1", "apps/cli");
       r.numPassedTests = 0;
@@ -290,7 +321,7 @@ export const RED_VARIANTS: Record<string, { what: string; mutate: Mutate }> = {
     },
   },
   "narrowed-to-one-file": {
-    what: "the suite's DECLARATION narrowed (measured on apps/cli: test:coverage = `vitest run src/__tests__/approval-render.test.ts --coverage` ran 11 of 1017 tests — exit 0, success true, nothing skipped, so the run-share rule sees 11/11; apps/cli has no coverage floor) — only the committed test floor catches it",
+    what: "the suite's DECLARATION narrowed (measured on apps/cli: test:coverage = `vitest run src/__tests__/approval-render.test.ts --coverage` ran 11 of 1017 tests — exit 0, success true, nothing skipped, so the run-share rule sees 11/11; measured before apps/cli had a coverage floor) — only the committed test floor catches it",
     mutate: (f) => {
       const r = results(f, "coverage-shard-1", "apps/cli");
       r.numTotalTests = 1;
