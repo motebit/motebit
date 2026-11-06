@@ -249,6 +249,8 @@
 # CLI — direct task doors and the grant subcommand.
 # daemon task doors
 /apps/cli/src/daemon.ts @hakimlabs
+# cliRuntimeConfig: the money gate (check-money-authority assertion 7) trusts it to carry grantSpendStore through
+/apps/cli/src/sync-configured.ts @hakimlabs
 # issues standing-delegation grants
 /apps/cli/src/subcommands/grant.ts @hakimlabs
 # grant pre-flight refusals
