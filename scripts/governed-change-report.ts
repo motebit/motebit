@@ -37,6 +37,20 @@
  * and the checkout's HEAD equals both EXPECTED_POLICY_SHA (what the workflow
  * told the checkout to take) and GITHUB_SHA (the base tip GitHub set), and
  * the payload's head equals EVENT_HEAD_SHA (what the fetch step fetched).
+ *
+ * ## The landed mode (`governed-change-report.ts landed ...`)
+ *
+ * Run by `.github/workflows/governed-change-landed.yml` (acceptance test B1's
+ * offline half) inside a network namespace with no route out: it judges a
+ * change that already landed with `motebit-verify repo-change --landed`
+ * (spec §9 offline mode, §9.1 landing time) against the trusted tip, which is
+ * this checkout's HEAD. VERIFIED is the same rule as above (the verifier's
+ * exit 0 AND `accepted: true`, i.e. fully verified with outcome `completed`);
+ * anything else is NOT VERIFIED or NOT JUDGED, exit 1. Its provenance
+ * self-check: the event is `workflow_dispatch`, the ref is `refs/heads/main`,
+ * LANDED_COMMIT is exactly 40 lowercase hex digits, and the checkout's HEAD
+ * equals both GITHUB_SHA and TRUSTED_TIP (what the workflow told the checkout
+ * to take). It judges; it never writes to the repository.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -51,6 +65,14 @@ export const BUNDLES_DIR = ".motebit/bundles/";
 export const JUDGED_EVENT = "pull_request_target";
 /** The check's phase (docs/proposals/governed-repo-change-v1.md, "External enforcement"). */
 export const PHASE = "expand";
+/** The landed mode's subcommand (the first argument). */
+export const LANDED_SUBCOMMAND = "landed";
+/** The only event the landed mode judges. */
+export const LANDED_EVENT = "workflow_dispatch";
+/** The only ref the landed mode judges from: its HEAD is the trusted tip. */
+export const LANDED_REF = "refs/heads/main";
+/** A landed commit as the workflow takes it: a full sha1 commit id, lowercase. */
+export const LANDED_COMMIT_ID = /^[0-9a-f]{40}$/;
 
 const POLICY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -129,6 +151,12 @@ export interface CliReport {
   changeCommit?: unknown;
   spent?: unknown;
   diagnostics?: { failures?: Array<{ code?: unknown; detail?: unknown }> };
+  /** Landed mode only (spec §9 offline). */
+  landed?: unknown;
+  parent?: unknown;
+  trustedTip?: unknown;
+  signer?: unknown;
+  timeProblem?: unknown;
 }
 
 export type Conclusion = "not-governed" | "verified" | "not-verified" | "not-judged";
@@ -188,6 +216,59 @@ export function renderSummary(r: ReportInput): string {
       "",
     );
   }
+  if (r.reason !== undefined) lines.push(fenced(r.reason), "");
+  if (r.stderr !== undefined && r.stderr !== "") {
+    lines.push("The verifier's error:", "", fenced(r.stderr.trimEnd()), "");
+  }
+  if (r.report !== undefined) {
+    lines.push(
+      "The verifier's full report:",
+      "",
+      fenced(JSON.stringify(r.report, null, 2), "json"),
+      "",
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/** What the landed-mode summary shows. */
+export interface LandedReportInput {
+  conclusion: Exclude<Conclusion, "not-governed">;
+  landed: string | null;
+  trustedTip: string | null;
+  reason?: string;
+  report?: CliReport;
+  stderr?: string;
+}
+
+/** The landed-mode job summary: the inputs, every axis, repository-controlled values fenced. */
+export function renderLandedSummary(r: LandedReportInput): string {
+  const lines: string[] = [`## governed-change landed: ${HEADLINE[r.conclusion]}`, ""];
+  lines.push(
+    "Offline (spec/repo-change-v1.md §9): judged inside a network namespace with no route out, " +
+      "against the trusted tip (main's tip at dispatch); the landing time is accepted only under §9.1. " +
+      "This run judges; it writes nothing to the repository.",
+    "",
+  );
+  lines.push("| field | value |", "| --- | --- |");
+  lines.push(`| landed commit | ${token(r.landed)} |`);
+  lines.push(`| trusted tip | ${token(r.trustedTip)} |`);
+  if (r.report !== undefined) {
+    const v = r.report.verdict ?? {};
+    lines.push(`| parent | ${token(r.report.parent)} |`);
+    lines.push(`| evaluation basis | ${token(r.report.temporalBasis)} |`);
+    lines.push(`| evaluated at | ${token(r.report.evaluatedAt)} |`);
+    lines.push(`| signer | ${token(r.report.signer)} |`);
+    lines.push(`| time problem | ${token(r.report.timeProblem)} |`);
+    lines.push(`| integrity | ${token(v.integrity)} |`);
+    lines.push(`| identityBinding | ${token(v.identityBinding)} |`);
+    lines.push(`| authority | ${token(v.authority)} |`);
+    lines.push(`| revocation | ${token(v.revocation?.status)} |`);
+    lines.push(`| outcome | ${token(r.report.outcome)} |`);
+    lines.push(`| accepted | ${token(r.report.accepted)} |`);
+    lines.push(`| spent | ${token(r.report.spent)} |`);
+  }
+  lines.push("");
   if (r.reason !== undefined) lines.push(fenced(r.reason), "");
   if (r.stderr !== undefined && r.stderr !== "") {
     lines.push("The verifier's error:", "", fenced(r.stderr.trimEnd()), "");
@@ -269,8 +350,114 @@ export interface MainOptions {
   now?: number;
 }
 
+/** The trusted checkout's HEAD, or null when unreadable. */
+function checkoutHead(policyRoot: string, env: NodeJS.ProcessEnv): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: policyRoot,
+      env: cleanEnv(env),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The landed mode: `landed --repository <owner/name> --repo <clone>
+ * --github-keys <file>`, with LANDED_COMMIT and TRUSTED_TIP from the step env.
+ */
+export function mainLanded(argv: readonly string[], opts: MainOptions = {}): number {
+  const env = opts.env ?? process.env;
+  const policyRoot = opts.policyRoot ?? POLICY_ROOT;
+  const verifyCli = opts.verifyCli ?? join(policyRoot, "packages", "verify", "dist", "cli.js");
+  const repository = argValue(argv, "--repository");
+  const repo = argValue(argv, "--repo");
+  const githubKeys = argValue(argv, "--github-keys");
+  const write = (summary: string): void => {
+    process.stdout.write(summary);
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
+  };
+  if (!repository || !repo || !githubKeys) {
+    process.stderr.write(
+      "usage: governed-change-report landed --repository <owner/name> --repo <clone> --github-keys <file> (GITHUB_EVENT_NAME, GITHUB_REF, GITHUB_SHA, LANDED_COMMIT, TRUSTED_TIP set)\n",
+    );
+    return 2;
+  }
+  const landedRaw = env.LANDED_COMMIT ?? "";
+  const landed = LANDED_COMMIT_ID.test(landedRaw) ? landedRaw : null;
+  const head = checkoutHead(policyRoot, env);
+  const trustedTip = head !== null && FULL_SHA.test(head) ? head : null;
+
+  // ── Provenance self-check.
+  const problems: string[] = [];
+  if (env.GITHUB_EVENT_NAME !== LANDED_EVENT) problems.push(`the event is not ${LANDED_EVENT}`);
+  if (env.GITHUB_REF !== LANDED_REF) problems.push(`the ref is not ${LANDED_REF}`);
+  if (landed === null) {
+    problems.push("LANDED_COMMIT is not exactly 40 lowercase hexadecimal digits");
+  }
+  if (trustedTip === null) {
+    problems.push("the trusted checkout's HEAD is unreadable");
+  } else {
+    if (env.TRUSTED_TIP !== trustedTip) problems.push("the trusted checkout is not TRUSTED_TIP");
+    if (env.GITHUB_SHA !== trustedTip) problems.push("the trusted checkout is not GITHUB_SHA");
+  }
+  if (problems.length > 0) {
+    write(
+      renderLandedSummary({
+        conclusion: "not-judged",
+        landed,
+        trustedTip,
+        reason: `provenance self-check failed:\n${problems.join("\n")}`,
+      }),
+    );
+    return 1;
+  }
+
+  const run = spawnSync(
+    process.execPath,
+    [
+      verifyCli,
+      "repo-change",
+      "--landed",
+      landed!,
+      "--trusted-tip",
+      trustedTip!,
+      "--repository",
+      repository,
+      "--github-keys",
+      githubKeys,
+      "--repo",
+      repo,
+      "--json",
+    ],
+    { env: cleanEnv(env), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  const stderr = run.stderr ?? "";
+  if (run.status === 0 || run.status === 1) {
+    let report: CliReport | null = null;
+    try {
+      report = JSON.parse(run.stdout) as CliReport;
+    } catch {
+      report = null;
+    }
+    if (report !== null) {
+      // VERIFIED: the same rule as the pull-request mode (exit 0 AND accepted).
+      const verified = report.accepted === true && run.status === 0;
+      const conclusion = verified ? "verified" : "not-verified";
+      write(renderLandedSummary({ conclusion, landed, trustedTip, report, stderr }));
+      return verified ? 0 : 1;
+    }
+  }
+  const reason = `motebit-verify repo-change --landed exited ${run.status ?? `on signal ${run.signal ?? "?"}`}${run.error ? `: ${run.error.message}` : ""}`;
+  write(renderLandedSummary({ conclusion: "not-judged", landed, trustedTip, reason, stderr }));
+  return 1;
+}
+
 /** The CLI; resolves with the exit code. */
 export function main(argv: readonly string[], opts: MainOptions = {}): number {
+  if (argv[0] === LANDED_SUBCOMMAND) return mainLanded(argv.slice(1), opts);
   const env = opts.env ?? process.env;
   const policyRoot = opts.policyRoot ?? POLICY_ROOT;
   const verifyCli = opts.verifyCli ?? join(policyRoot, "packages", "verify", "dist", "cli.js");

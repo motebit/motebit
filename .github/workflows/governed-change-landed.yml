@@ -1,0 +1,157 @@
+name: Governed change landed
+
+# The offline half of acceptance test B1 (docs/proposals/governed-repo-change-v1.md
+# § "Acceptance tests"): after a governed change lands, "offline PASS on a
+# fresh clone against a trusted tip, in a recorded workflow job with no network
+# after the clone". It runs the offline landed mode of the verifier
+# (spec/repo-change-v1.md §9, §9.1):
+#
+#   motebit-verify repo-change --landed <squash commit> --trusted-tip <commit>
+#     --repository motebit/motebit --github-keys <file> --repo <clone> --json
+#
+# through scripts/governed-change-report.ts (its `landed` mode), which writes
+# the inputs and every verdict axis to the job summary.
+#
+# ## Why workflow_dispatch only
+#
+# The run is a recorded witness someone asks for, after the landing, about one
+# named squash commit (the `landed_commit` input). No push, pull request or
+# merge-group event names that commit, and none should: on those events the
+# workflow file or the tip can come from a change still in flight. A dispatch
+# off main fails closed: the first step refuses it, the checkout ref resolves
+# to no revision, and the report script's self-check refuses it again.
+#
+# ## Trust assumptions
+#
+#  - The trusted tip is `github.sha`, main's tip at dispatch. It is the
+#    independent witness §9 asks for: the squash commit must be on its
+#    first-parent chain. The verifier, its build, the report script and the
+#    pinned keys (.motebit/operator-keys/github.json) all come from that tip.
+#  - The landing time is GitHub's: the squash commit's committer time, accepted
+#    only when GitHub signed it under a pinned key, inside that key's window
+#    (§9.1, `temporalBasis: operator_recorded`). It is the operator's word,
+#    weighed as such.
+#  - "Fresh clone": the checkout below, full history (fetch-depth 0), into an
+#    empty runner. Installing and building the verifier use the network; the
+#    judgment does not.
+#
+# ## No network for the judgment
+#
+# The judge step runs the verifier inside a new network namespace (`unshare
+# --net`, loopback only), as the runner user with no_new_privs, so neither it
+# nor any child can regain root and leave the namespace. A namespace, not a
+# host firewall (iptables -P OUTPUT DROP): the runner agent itself talks to
+# GitHub over HTTPS for logs, status and job completion, and cutting the
+# host's network would cut it too; the namespace cuts the network of exactly
+# the processes that judge. Inside the namespace, BEFORE the verifier runs,
+# an outbound request by name and one by address must each fail with a curl
+# network error (6, could not resolve; 7, could not connect), or the step
+# fails. The step before it is the control: the same requests succeed from
+# the runner, so the failures inside are the namespace's, not an outage.
+#
+# ## It judges, never writes
+#
+# Read-only token (contents: read), no secrets, no token passed to any step,
+# persist-credentials: false, no dependency cache, no expression interpolated
+# into a `run:` script (inputs reach scripts through step env only; the
+# landed commit is checked to be exactly 40 lowercase hex digits before use).
+# Nothing is pushed, commented or labelled. It is not a required check.
+#
+# scripts/__tests__/governed-change-landed-workflow.test.ts pins this file's
+# exact shape; scripts/__tests__/governed-change-landed.tampers.mjs proves the
+# pins bite.
+on:
+  workflow_dispatch:
+    inputs:
+      landed_commit:
+        description: "The squash commit that landed the governed change (40 lowercase hex digits)"
+        required: true
+        type: string
+
+# Least privilege: read the repository; nothing else.
+permissions:
+  contents: read
+
+jobs:
+  governed-change-landed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Refuse a dispatch off main or a landed commit that is not a full commit id
+        env:
+          LANDED_COMMIT: ${{ inputs.landed_commit }}
+        # Never echo either value: a line starting with :: is a workflow command.
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "governed-change-landed runs only from refs/heads/main" >&2
+            exit 1
+          fi
+          case "$LANDED_COMMIT" in
+            *[!0-9a-f]*) echo "landed_commit must be 40 lowercase hex digits" >&2; exit 1 ;;
+          esac
+          if [ "${#LANDED_COMMIT}" -ne 40 ]; then
+            echo "landed_commit must be 40 lowercase hex digits" >&2
+            exit 1
+          fi
+
+      - name: Check out main's tip, full history (the fresh clone and the trusted tip)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # main's tip at dispatch; any other ref resolves to no revision.
+          ref: ${{ github.ref == 'refs/heads/main' && github.sha || 'no-trusted-tip-off-main' }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+        with:
+          package_json_file: trusted/package.json
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          # NO dependency cache: the judgment runs only what this tip installs.
+          package-manager-cache: false
+
+      - name: Install the trusted tip's dependencies (uncached)
+        working-directory: trusted
+        run: pnpm install --frozen-lockfile
+
+      - name: Build motebit-verify from the trusted tip
+        working-directory: trusted
+        run: pnpm --filter "@motebit/verify..." run build
+
+      - name: "Control: the runner reaches the network (so the failures below are the namespace's)"
+        working-directory: trusted
+        run: |
+          curl -sS --max-time 10 -o /dev/null https://github.com
+          curl -sS --max-time 10 -o /dev/null https://1.1.1.1
+
+      - name: Judge the landed change with no network (motebit-verify repo-change --landed)
+        working-directory: trusted
+        env:
+          LANDED_COMMIT: ${{ inputs.landed_commit }}
+          # main's tip at dispatch (the checkout's expression).
+          TRUSTED_TIP: ${{ github.ref == 'refs/heads/main' && github.sha || 'no-trusted-tip-off-main' }}
+        # A new network namespace (loopback only); back to the runner user
+        # with no_new_privs; a clean environment. Inside: prove the network
+        # is cut, then judge. The verifier's exit decides the step.
+        run: |
+          sudo -- unshare --net -- sh -c 'ip link set lo up && exec "$@"' offline \
+            setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups --no-new-privs -- \
+            env -i PATH="$PATH" HOME="$HOME" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
+              GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" GITHUB_REF="$GITHUB_REF" GITHUB_SHA="$GITHUB_SHA" \
+              LANDED_COMMIT="$LANDED_COMMIT" TRUSTED_TIP="$TRUSTED_TIP" \
+            sh -c '
+              for url in https://github.com https://1.1.1.1; do
+                rc=0
+                curl -sS --max-time 10 -o /dev/null "$url" || rc=$?
+                case "$rc" in
+                  6|7) echo "no network: $url unreachable (curl exit $rc)" ;;
+                  *) echo "network reachable inside the namespace: $url (curl exit $rc)" >&2; exit 1 ;;
+                esac
+              done
+              exec ./node_modules/.bin/tsx scripts/governed-change-report.ts landed \
+                --repository motebit/motebit --repo "$PWD" \
+                --github-keys .motebit/operator-keys/github.json
+            '
