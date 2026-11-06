@@ -14,11 +14,12 @@
  * governed-change-workflow.test.ts; the semantic tests below stay for their
  * readable failures. Two of the workflow's own scripts are EXECUTED from the
  * parsed file: the guard step (against a matrix of refs and inputs) and the
- * in-namespace script (against a stub curl and a stub tsx), so the proof of
- * the cut is tested as code, not as text. The namespace itself (`unshare
- * --net`) needs Linux and root; it is pinned by shape here and observed in
- * the recorded job. The end-to-end tests need `packages/verify/dist` (CI's
- * gate-self-tests job builds first).
+ * in-namespace script (against stub curl, getent and tsx, the socket paths
+ * under a fake root), so the proof of the cut is tested as code, not as
+ * text. The namespaces themselves (`unshare --net --mount`, the tmpfs over
+ * /run, setpriv) need Linux and root; they are pinned by shape here and
+ * observed in the recorded job. The end-to-end tests need
+ * `packages/verify/dist` (CI's gate-self-tests job builds first).
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -164,21 +165,58 @@ const CONTROL_RUN = [
   "curl -sS --max-time 10 -o /dev/null https://1.1.1.1",
 ].join("\n");
 
+/** The judge's start: new network and mount namespaces, mounts private. */
+const NAMESPACES = "sudo -- unshare --net --mount --propagation private -- sh -c '\n";
+/** What runs as root inside them, before the drop to the runner user. */
+const ROOT_PRELUDE = [
+  "  set -e",
+  "  ip link set lo up",
+  "  mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 tmpfs /run",
+  "  if [ ! -L /var/run ]; then mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 tmpfs /var/run; fi",
+  '  exec "$@"',
+  "",
+].join("\n");
+/** The drop: the runner user, supplementary groups cleared, no_new_privs. */
+const DROP = '  setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups --no-new-privs -- \\';
+/** The sockets that must not exist inside (masked by the tmpfs over /run). */
+const SOCKETS = [
+  "/run/systemd/resolve/io.systemd.Resolve",
+  "/run/dbus/system_bus_socket",
+  "/var/run/docker.sock",
+];
+
 const JUDGE_RUN = [
-  `sudo -- unshare --net -- sh -c 'ip link set lo up && exec "$@"' offline \\`,
-  '  setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups --no-new-privs -- \\',
+  NAMESPACES + ROOT_PRELUDE + "' offline \\",
+  DROP,
   '  env -i PATH="$PATH" HOME="$HOME" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \\',
   '    GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" GITHUB_REF="$GITHUB_REF" GITHUB_SHA="$GITHUB_SHA" \\',
   '    LANDED_COMMIT="$LANDED_COMMIT" TRUSTED_TIP="$TRUSTED_TIP" \\',
   "  sh -c '",
-  "    for url in https://github.com https://1.1.1.1; do",
-  "      rc=0",
-  '      curl -sS --max-time 10 -o /dev/null "$url" || rc=$?',
-  '      case "$rc" in',
-  '        6|7) echo "no network: $url unreachable (curl exit $rc)" ;;',
-  '        *) echo "network reachable inside the namespace: $url (curl exit $rc)" >&2; exit 1 ;;',
-  "      esac",
+  "    rc=0",
+  "    curl -sS --max-time 10 -o /dev/null https://github.com || rc=$?",
+  '    if [ "$rc" -ne 6 ]; then',
+  '      echo "github.com: curl exit $rc inside the namespace (only 6, could not resolve, is no network)" >&2',
+  "      exit 1",
+  "    fi",
+  "    rc=0",
+  "    curl -sS --max-time 10 -o /dev/null https://1.1.1.1 || rc=$?",
+  '    case "$rc" in',
+  "      6|7) ;;",
+  '      *) echo "1.1.1.1: curl exit $rc inside the namespace (only 6 or 7 is no network)" >&2; exit 1 ;;',
+  "    esac",
+  "    rc=0",
+  "    getent hosts github.com >/dev/null 2>&1 || rc=$?",
+  '    if [ "$rc" -ne 2 ]; then',
+  '      echo "getent hosts github.com: exit $rc inside the namespace (only 2, not found, is no resolver)" >&2',
+  "      exit 1",
+  "    fi",
+  `    for sock in ${SOCKETS.join(" ")}; do`,
+  '      if [ -e "$sock" ] || [ -L "$sock" ]; then',
+  '        echo "$sock exists inside the namespace" >&2',
+  "        exit 1",
+  "      fi",
   "    done",
+  '    echo "no network: github.com unresolved, 1.1.1.1 unreachable, getent not found, no resolver, bus or docker socket"',
   "    exec ./node_modules/.bin/tsx scripts/governed-change-report.ts landed \\",
   '      --repository motebit/motebit --repo "$PWD" \\',
   "      --github-keys .motebit/operator-keys/github.json",
@@ -455,6 +493,15 @@ function innerScript(): string {
   return run.slice(open + "sh -c '".length, close);
 }
 
+/** What runs as root in the namespaces: the body of the judge step's first `sh -c '...'`. */
+function rootPrelude(): string {
+  const run = judgeStep.run!;
+  const open = run.indexOf("sh -c '\n");
+  const close = run.indexOf("' offline \\\n");
+  if (open < 0 || close <= open) throw new Error("the judge step has no root prelude");
+  return run.slice(open + "sh -c '\n".length, close);
+}
+
 let tmp = "";
 beforeEach(() => {
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "governed-change-landed-")));
@@ -463,28 +510,44 @@ afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+interface InnerOptions {
+  /** curl's exit for the request by name (`null` and `address: null`: no curl at all). */
+  name?: number | null;
+  /** curl's exit for the request by address. */
+  address?: number | null;
+  /** getent's exit (`null`: no getent at all). */
+  getent?: number | null;
+  /** Which of SOCKETS exist (as files under the run's fake root). */
+  present?: string[];
+}
+
 /**
- * Run the in-namespace script with a stub curl (exit `byName` for the
- * request by name, `byAddress` for the one by address; null = no curl at all)
- * and a stub tsx that records its arguments.
+ * Run the in-namespace script with stub curl and getent, PATH holding
+ * nothing else, the SOCKETS paths rewritten under a fake root (so the host's
+ * own /var/run/docker.sock never decides a test), and a stub tsx that
+ * records its arguments.
  */
-function runInner(
-  byName: number | null,
-  byAddress: number | null,
-): {
-  code: number;
-  tsxArgs: string | null;
-  dir: string;
-} {
+function runInner(o: InnerOptions = {}): { code: number; tsxArgs: string | null; dir: string } {
+  const name = o.name === undefined ? 6 : o.name;
+  const address = o.address === undefined ? 7 : o.address;
+  const getent = o.getent === undefined ? 2 : o.getent;
   const dir = fs.mkdtempSync(path.join(tmp, "inner-"));
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
-  if (byName !== null && byAddress !== null) {
+  if (name !== null && address !== null) {
     fs.writeFileSync(
       path.join(bin, "curl"),
-      `#!/bin/sh\ncase "$*" in *github.com*) exit ${byName} ;; *) exit ${byAddress} ;; esac\n`,
+      `#!/bin/sh\ncase "$*" in *github.com*) exit ${name} ;; *) exit ${address} ;; esac\n`,
       { mode: 0o755 },
     );
+  }
+  if (getent !== null) {
+    fs.writeFileSync(path.join(bin, "getent"), `#!/bin/sh\nexit ${getent}\n`, { mode: 0o755 });
+  }
+  const fakeRoot = path.join(dir, "root");
+  for (const s of o.present ?? []) {
+    fs.mkdirSync(path.dirname(path.join(fakeRoot, s)), { recursive: true });
+    fs.writeFileSync(path.join(fakeRoot, s), "");
   }
   const tsxDir = path.join(dir, "node_modules", ".bin");
   fs.mkdirSync(tsxDir, { recursive: true });
@@ -494,12 +557,12 @@ function runInner(
     `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(marker)}\nexit 0\n`,
     { mode: 0o755 },
   );
-  // The stub curl shadows any system curl; with no stub, PATH holds no curl at all.
-  const shPath = [bin, "/bin", "/usr/bin"].join(":");
-  const hasSystemCurl = ["/bin/curl", "/usr/bin/curl"].some((p) => fs.existsSync(p));
-  const r = spawnSync("/bin/sh", ["-c", innerScript()], {
+  let script = innerScript();
+  for (const s of SOCKETS) script = script.split(s).join(path.join(fakeRoot, s));
+  // PATH holds only the stubs: sh's builtins (echo, printf, [, command) need nothing else.
+  const r = spawnSync("/bin/sh", ["-c", script], {
     cwd: dir,
-    env: { PATH: byName === null && hasSystemCurl ? [bin, "/nonexistent"].join(":") : shPath },
+    env: { PATH: bin },
     encoding: "utf8",
   });
   return {
@@ -509,17 +572,37 @@ function runInner(
   };
 }
 
+/** The verifier did not run and the step failed. */
+function refused(o: InnerOptions, why: string): void {
+  const r = runInner(o);
+  expect(r.code, why).toBe(1);
+  expect(r.tsxArgs, why).toBeNull();
+}
+
 describe("the network is cut before the verifier runs, and the cut is proven", () => {
-  it("the judge step is the last step, after the control, and wraps everything in a new network namespace", () => {
+  it("the judge step is the last step, after the control, and wraps everything in new network and mount namespaces", () => {
     expect(judgeIndex).toBe(steps.length - 1);
     expect(controlIndex).toBe(judgeIndex - 1);
     const run = judgeStep.run!;
-    expect(run.startsWith("sudo -- unshare --net -- ")).toBe(true);
-    expect(run).toContain("--no-new-privs");
+    expect(run.startsWith(NAMESPACES)).toBe(true);
     expect(run).toContain("env -i ");
     // Exactly one sudo, the namespace's; the verifier never runs as root.
     expect(run.match(/\bsudo\b/g)).toHaveLength(1);
     expect(run.indexOf("setpriv --reuid=")).toBeLessThan(run.indexOf("exec ./node_modules"));
+  });
+
+  it("as root, before the drop, loopback comes up and a fresh tmpfs masks /run (and /var/run when it is not a symlink)", () => {
+    expect(rootPrelude()).toBe(ROOT_PRELUDE);
+    const run = judgeStep.run!;
+    expect(run.indexOf("tmpfs /run")).toBeLessThan(run.indexOf("setpriv "));
+  });
+
+  it("the drop clears supplementary groups (no docker group) and sets no_new_privs", () => {
+    const run = judgeStep.run!;
+    expect(run).toContain(DROP);
+    expect(run).not.toContain("--init-groups");
+    expect(run).not.toContain("--keep-groups");
+    expect(run).not.toMatch(/--groups[ =]/);
   });
 
   it("only the judge step runs the report script or the verifier", () => {
@@ -531,12 +614,19 @@ describe("the network is cut before the verifier runs, and the cut is proven", (
     }
   });
 
-  it("inside the namespace, a request by name and by address must fail before the verifier runs", () => {
+  it("every probe precedes the verifier inside the namespace", () => {
     const inner = innerScript();
-    const firstCurl = inner.indexOf("curl ");
-    expect(firstCurl).toBeGreaterThan(-1);
-    expect(firstCurl).toBeLessThan(inner.indexOf("exec ./node_modules/.bin/tsx"));
-    expect(inner).toContain("for url in https://github.com https://1.1.1.1; do");
+    const verifier = inner.indexOf("exec ./node_modules/.bin/tsx");
+    for (const probe of [
+      "curl -sS --max-time 10 -o /dev/null https://github.com",
+      "curl -sS --max-time 10 -o /dev/null https://1.1.1.1",
+      "getent hosts github.com",
+      `for sock in ${SOCKETS.join(" ")}; do`,
+    ]) {
+      const at = inner.indexOf(probe);
+      expect(at, probe).toBeGreaterThan(-1);
+      expect(at, probe).toBeLessThan(verifier);
+    }
   });
 
   it("the control step makes the same requests outside the namespace and must succeed", () => {
@@ -545,15 +635,11 @@ describe("the network is cut before the verifier runs, and the cut is proven", (
     expect(control.run).not.toMatch(/\|\||!|unshare/);
   });
 
-  it("the verifier runs when both requests fail with a network error (6 or 7)", () => {
-    for (const [a, b] of [
-      [6, 7],
-      [7, 7],
-      [6, 6],
-    ] as const) {
-      const r = runInner(a, b);
-      expect(r.code, `${a},${b}`).toBe(0);
-      expect(r.tsxArgs, `${a},${b}`).toBe(
+  it("the verifier runs when every probe holds (name 6; address 6 or 7; getent 2; no socket)", () => {
+    for (const address of [6, 7]) {
+      const r = runInner({ name: 6, address });
+      expect(r.code, `address ${address}`).toBe(0);
+      expect(r.tsxArgs, `address ${address}`).toBe(
         [
           "scripts/governed-change-report.ts",
           "landed",
@@ -569,35 +655,42 @@ describe("the network is cut before the verifier runs, and the cut is proven", (
     }
   });
 
+  it("a name that resolved (curl exit 7 for github.com) is not proof of no network", () => {
+    refused({ name: 7, address: 7 }, "name 7");
+  });
+
   it("a request that succeeds inside the namespace fails the step and the verifier never runs", () => {
-    for (const [a, b] of [
-      [0, 7],
-      [6, 0],
-      [0, 0],
-    ] as const) {
-      const r = runInner(a, b);
-      expect(r.code, `${a},${b}`).toBe(1);
-      expect(r.tsxArgs, `${a},${b}`).toBeNull();
-    }
+    refused({ name: 0, address: 7 }, "name 0");
+    refused({ name: 6, address: 0 }, "address 0");
+    refused({ name: 0, address: 0 }, "both 0");
   });
 
   it("any other curl failure (a timeout, an HTTP or TLS error) is not proof of no network", () => {
-    for (const [a, b] of [
-      [28, 7],
-      [6, 35],
-      [22, 22],
-    ] as const) {
-      const r = runInner(a, b);
-      expect(r.code, `${a},${b}`).toBe(1);
-      expect(r.tsxArgs, `${a},${b}`).toBeNull();
-    }
+    refused({ name: 28 }, "name 28");
+    refused({ name: 22 }, "name 22");
+    refused({ address: 35 }, "address 35");
+    refused({ address: 28 }, "address 28");
   });
 
   it("a missing curl is not proof of no network", () => {
-    const r = runInner(null, null);
-    expect(r.code).toBe(1);
-    expect(r.tsxArgs).toBeNull();
+    refused({ name: null, address: null }, "no curl");
   });
+
+  it("a name getent resolves, or any getent result but not-found, is not proof of no resolver", () => {
+    refused({ getent: 0 }, "getent 0");
+    refused({ getent: 1 }, "getent 1");
+    refused({ getent: 3 }, "getent 3");
+  });
+
+  it("a missing getent is not proof of no resolver", () => {
+    refused({ getent: null }, "no getent");
+  });
+
+  for (const sock of SOCKETS) {
+    it(`${sock} present inside the namespace fails the step and the verifier never runs`, () => {
+      refused({ present: [sock] }, sock);
+    });
+  }
 
   it("the pinned keys the judge reads are the repository's motebit/operator-signing-keys@1.0 file", () => {
     const keys = JSON.parse(

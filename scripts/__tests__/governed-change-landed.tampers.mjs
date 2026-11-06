@@ -52,15 +52,32 @@ const PINS = SAFE(
 );
 const BAD_COMMIT = GUARD("refuses every landed commit that is not exactly 40 lowercase hex digits");
 const WRAPS = NET(
-  "the judge step is the last step, after the control, and wraps everything in a new network namespace",
+  "the judge step is the last step, after the control, and wraps everything in new network and mount namespaces",
 );
+const PRELUDE = NET(
+  "as root, before the drop, loopback comes up and a fresh tmpfs masks /run (and /var/run when it is not a symlink)",
+);
+const DROP = NET("the drop clears supplementary groups (no docker group) and sets no_new_privs");
 const SUCCEEDS = NET(
   "a request that succeeds inside the namespace fails the step and the verifier never runs",
 );
 const OTHER_FAILURE = NET(
   "any other curl failure (a timeout, an HTTP or TLS error) is not proof of no network",
 );
-const RUNS = NET("the verifier runs when both requests fail with a network error (6 or 7)");
+const NAME_RESOLVED = NET(
+  "a name that resolved (curl exit 7 for github.com) is not proof of no network",
+);
+const GETENT = NET(
+  "a name getent resolves, or any getent result but not-found, is not proof of no resolver",
+);
+const NO_GETENT = NET("a missing getent is not proof of no resolver");
+const SOCKET = (s) =>
+  NET(`${s} present inside the namespace fails the step and the verifier never runs`);
+const RUNS = NET(
+  "the verifier runs when every probe holds (name 6; address 6 or 7; getent 2; no socket)",
+);
+const SOCKETS_LINE =
+  "for sock in /run/systemd/resolve/io.systemd.Resolve /run/dbus/system_bus_socket /var/run/docker.sock; do";
 const VERIFIED_E2E = E2E(
   "a landed change that verifies concludes VERIFIED (exit 0), the inputs and every axis in the summary",
 );
@@ -216,16 +233,52 @@ const TAMPERS = [
   ),
   // ── The network cut and its proof ──
   wf(
-    "workflow: no network namespace (the judge runs on the host's network)",
-    "sudo -- unshare --net -- sh -c 'ip link set lo up && exec \"$@\"' offline \\\n",
-    "sudo -- sh -c 'exec \"$@\"' offline \\\n",
+    "workflow: no namespaces (the judge runs on the host's network and filesystem)",
+    "sudo -- unshare --net --mount --propagation private -- sh -c '\n",
+    "sudo -- sh -c '\n",
     WRAPS,
   ),
   wf(
-    "workflow: no_new_privs dropped (the judge could sudo out of the namespace)",
-    " --init-groups --no-new-privs -- \\\n",
-    " --init-groups -- \\\n",
+    "workflow: no mount namespace (the tmpfs would cover the host's /run)",
+    "unshare --net --mount --propagation private --",
+    "unshare --net --",
     WRAPS,
+  ),
+  wf(
+    "workflow: shared mount propagation (a mount could leak to the host)",
+    "--mount --propagation private -- sh",
+    "--mount --propagation shared -- sh",
+    WRAPS,
+  ),
+  wf(
+    "workflow: /run not masked (resolver, bus and docker sockets reachable)",
+    "            mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 tmpfs /run\n",
+    "",
+    PRELUDE,
+  ),
+  wf(
+    "workflow: /var/run not masked when it is a directory",
+    "            if [ ! -L /var/run ]; then mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 tmpfs /var/run; fi\n",
+    "",
+    PRELUDE,
+  ),
+  wf(
+    "workflow: a failed mount ignored (no set -e in the root prelude)",
+    "            set -e\n",
+    "",
+    PRELUDE,
+  ),
+  wf(
+    "workflow: supplementary groups restored (--init-groups: the docker group reaches docker.sock)",
+    "--clear-groups",
+    "--init-groups",
+    DROP,
+  ),
+  wf(
+    "workflow: no_new_privs dropped (the judge could sudo out of the namespace)",
+    " --clear-groups --no-new-privs -- \\\n",
+    " --clear-groups -- \\\n",
+    DROP,
   ),
   wf(
     "workflow: a step after the judge",
@@ -234,33 +287,64 @@ const TAMPERS = [
     WRAPS,
   ),
   wf(
-    "workflow: any curl exit counts as no network",
-    "        6|7) echo",
-    "        [0-9]*) echo",
+    "workflow: the name probe accepts curl exit 7 (the name resolved)",
+    'if [ "$rc" -ne 6 ]; then',
+    'if [ "$rc" -ne 6 ] && [ "$rc" -ne 7 ]; then',
+    NAME_RESOLVED,
+  ),
+  wf(
+    "workflow: the name probe's result not checked",
+    'if [ "$rc" -ne 6 ]; then',
+    "if false; then",
     SUCCEEDS,
   ),
   wf(
-    "workflow: a timeout or HTTP error counts as no network",
-    "        6|7) echo",
-    "        6|7|22|28|35) echo",
+    "workflow: the name probe's curl exit not the one checked",
+    "https://github.com || rc=$?",
+    "https://github.com || rc=6",
+    OTHER_FAILURE,
+  ),
+  wf("workflow: any address-probe exit counts as no network", "6|7) ;;", "*) ;;", SUCCEEDS),
+  wf(
+    "workflow: a timeout or TLS error on the address probe counts as no network",
+    "6|7) ;;",
+    "6|7|28|35) ;;",
     OTHER_FAILURE,
   ),
   wf(
-    "workflow: the curl exit code is not the one checked",
-    '"$url" || rc=$?',
-    '"$url" || rc=6',
-    OTHER_FAILURE,
+    "workflow: the getent probe's result not checked",
+    'if [ "$rc" -ne 2 ]; then',
+    "if false; then",
+    GETENT,
   ),
   wf(
-    "workflow: only the request by name is checked",
-    "for url in https://github.com https://1.1.1.1; do",
-    "for url in https://github.com; do",
-    SUCCEEDS,
+    "workflow: a missing getent counts as no resolver",
+    'if [ "$rc" -ne 2 ]; then',
+    'if [ "$rc" -ne 2 ] && [ "$rc" -ne 127 ]; then',
+    NO_GETENT,
   ),
   wf(
-    "workflow: the verifier runs before the proof",
-    "for url in https://github.com https://1.1.1.1; do\n",
-    './node_modules/.bin/tsx scripts/governed-change-report.ts landed --repository motebit/motebit --repo "$PWD" --github-keys .motebit/operator-keys/github.json\n              for url in https://github.com https://1.1.1.1; do\n',
+    "workflow: the resolver socket not probed",
+    SOCKETS_LINE,
+    SOCKETS_LINE.replace(" /run/systemd/resolve/io.systemd.Resolve", ""),
+    SOCKET("/run/systemd/resolve/io.systemd.Resolve"),
+  ),
+  wf(
+    "workflow: the system bus socket not probed",
+    SOCKETS_LINE,
+    SOCKETS_LINE.replace(" /run/dbus/system_bus_socket", ""),
+    SOCKET("/run/dbus/system_bus_socket"),
+  ),
+  wf(
+    "workflow: the docker socket not probed",
+    SOCKETS_LINE,
+    SOCKETS_LINE.replace(" /var/run/docker.sock", ""),
+    SOCKET("/var/run/docker.sock"),
+  ),
+  wf(
+    "workflow: the verifier runs before the probes",
+    "            sh -c '\n              rc=0\n",
+    '            sh -c \'\n              ./node_modules/.bin/tsx scripts/governed-change-report.ts landed --repository motebit/motebit --repo "$PWD" --github-keys .motebit/operator-keys/github.json\n              rc=0\n',
     SUCCEEDS,
   ),
   wf(
