@@ -1206,7 +1206,8 @@ export const CI_EXPRESSION_FUNCTIONS: Record<string, string> = {
   format:
     "env DIFF_BASE of github-action-smoke + desktop-rust (`format('origin/{0}', github.base_ref)`)",
   // A hash of files in the checkout (the cargo cache key); reads no context.
-  hashfiles: "desktop-rust cache `with.key` (`hashFiles('apps/desktop/src-tauri/Cargo.lock')`)",
+  hashfiles:
+    "desktop-rust cache `with.key` (`hashFiles('apps/desktop/src-tauri/Cargo.lock')`); e2e apt cache `with.key` (`hashFiles('pnpm-lock.yaml')`)",
 };
 
 /**
