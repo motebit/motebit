@@ -329,13 +329,15 @@ jobs:
     # starts as soon as the static job is green instead of after every shard.
     needs: check-static
     runs-on: ubuntu-latest
-    # Playwright Chromium download (~150 MB) + artifact download + 14 tests
-    # have historically run in 2m56s–3m21s, leaving only ~1.5m of headroom
-    # under the prior 5m ceiling. Run 25372469696 hit 5m6s during cleanup
-    # despite all 14 tests passing in 2.0m — the variance is normal CI
-    # behavior, not a test regression. 10m matches the build job's safety
-    # margin and absorbs runner-side fluctuation without masking real hangs.
-    timeout-minutes: 10
+    # Each step carries its own budget, so a slow apt mirror cannot spend the
+    # tests' time and a hung test is still caught. Measured on six green runs
+    # (2026-11-05): Playwright install 16–36s, smoke 8–11s, golden-matrix build
+    # 9–13s, golden frames 142–199s, the whole job 4–5m. Twice (runs
+    # 41872803299 and 42083662092) `--with-deps` spent 7.5–8m fetching font
+    # packages from the Azure Ubuntu mirror, and the old 10m job ceiling
+    # cancelled e2e before any test ran. The job ceiling only backs the step
+    # budgets up.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -351,6 +353,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright (Chromium only)
+        timeout-minutes: 12
         run: pnpm --filter @motebit/web exec playwright install --with-deps chromium
 
       - name: Download build artifacts
@@ -360,6 +363,7 @@ jobs:
           path: apps/web/dist/
 
       - name: Run E2E smoke tests
+        timeout-minutes: 3
         run: pnpm --filter @motebit/web test:e2e --project=chromium
 
       # Golden-frame visual regression (docs/doctrine/creature-canon.md
@@ -371,8 +375,10 @@ jobs:
       # @motebit/sdk at Playwright config time, so this small dist chain must
       # exist here even though the app itself runs from the web-build artifact.
       - name: Build golden-matrix import chain
+        timeout-minutes: 3
         run: pnpm --filter @motebit/render-engine... build
       - name: Run golden-frame visual regression
+        timeout-minutes: 7
         run: pnpm --filter @motebit/web test:e2e --project=golden
 
       - name: Upload failure screenshots
