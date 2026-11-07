@@ -84,6 +84,8 @@ export interface CliConfig {
    */
   agent?: string;
   delegation?: string;
+  /** `repo-task run --author "Name <email>"`: the git author and committer of both commits. */
+  author?: string;
   target: string | undefined;
   budget: string | undefined;
   price: string | undefined;
@@ -262,6 +264,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       // the delegation directory (`--repo` is the worktree there).
       agent: { type: "string" },
       delegation: { type: "string" },
+      author: { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -360,6 +363,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     notBefore: values["not-before"],
     agent: values.agent,
     delegation: values.delegation,
+    author: values.author,
     target: values.target,
     budget: values.budget,
     price: values.price,
@@ -632,6 +636,7 @@ Commands:
   repo-task run --agent <dir> --delegation <dir> [--repo <worktree>] [--provider <p>] [--model <m>]
                             Run the governed change as agent A (its own config dir): preflight at the tip, two commits, self-check; moves no ref, pushes nothing
     --output <dir>            Where the receipt file goes (default: the delegation directory; never inside the repository)
+    --author "Name <email>"   Git author and committer of both commits (default: motebit repo-task <repo-task@motebit.invalid>)
   withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail
