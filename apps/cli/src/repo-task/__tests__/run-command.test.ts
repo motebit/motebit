@@ -787,6 +787,12 @@ describe("repo-task run: every preflight rule refuses before the first model cal
     "Name\n <a@example.com>",
     "Na\nme <a@example.com>",
     "Na\u001bme <a@example.com>",
+    "'Quoted' <a@example.com>",
+    "Name; <a@example.com>",
+    'Name <"a@example.com">',
+    "Name <a@example.com,>",
+    "; <a@example.com>",
+    "Name. <a@example.com>",
     " Name <a@example.com>",
     "Name  <a@example.com>",
   ])("a malformed --author %j", async (author) => {

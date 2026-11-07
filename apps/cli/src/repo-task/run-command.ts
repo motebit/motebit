@@ -144,10 +144,13 @@ const DEFAULT_COMMIT_AUTHOR = {
   authorEmail: "repo-task@motebit.invalid",
 };
 
+/** What git strips from both ends of a name and an email (ident.c `crud`), with space and the control characters checked separately. */
+const GIT_IDENT_CRUD = new Set([".", ",", ":", ";", '"', "'", "\\"]);
+
 /**
  * `Name <email>`, strictly: a name and an email that git records verbatim
- * (no angle bracket, no control character, no surrounding space; no
- * whitespace in the email), or null.
+ * (no angle bracket, no control character, no whitespace in the email, and
+ * neither begins or ends with a space or a character git strips), or null.
  */
 function parseCommitAuthor(text: string): { authorName: string; authorEmail: string } | null {
   for (const ch of text) {
@@ -157,8 +160,12 @@ function parseCommitAuthor(text: string): { authorName: string; authorEmail: str
   const m = /^([^<>]+) <([^<>\s]+)>$/.exec(text);
   if (m === null) return null;
   const name = m[1]!;
+  const email = m[2]!;
   if (name.trim() !== name) return null;
-  return { authorName: name, authorEmail: m[2]! };
+  for (const part of [name, email]) {
+    if (GIT_IDENT_CRUD.has(part[0]!) || GIT_IDENT_CRUD.has(part.at(-1)!)) return null;
+  }
+  return { authorName: name, authorEmail: email };
 }
 
 function refuse(...lines: string[]): never {
