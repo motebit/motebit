@@ -106,6 +106,10 @@
       "type": "string"
     },
     {
+      "name": "author",
+      "type": "string"
+    },
+    {
       "name": "auto-approve",
       "type": "boolean",
       "default": false
