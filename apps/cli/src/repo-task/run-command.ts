@@ -98,6 +98,13 @@ export interface RepoTaskRunOptions {
   readonly outputDir?: string;
   /** The provider's name, recorded in the change record (informational). */
   readonly providerName: string;
+  /**
+   * The git author and committer of both commits (`--author "Name <email>"`).
+   * It is not attribution: who acted is the signed bundle's to say. It is what
+   * the publishing repository's own checks read (a CLA check links the email
+   * to an account), so the operator chooses it.
+   */
+  readonly author?: string;
 }
 
 /** The process-touching calls the run makes; injected so tests watch the key and the clock. */
@@ -132,7 +139,42 @@ export interface RepoTaskRunReport {
   readonly accepted: boolean;
 }
 
-const COMMIT_AUTHOR = { authorName: "motebit repo-task", authorEmail: "repo-task@motebit.invalid" };
+const DEFAULT_COMMIT_AUTHOR = {
+  authorName: "motebit repo-task",
+  authorEmail: "repo-task@motebit.invalid",
+};
+
+/** What git strips from both ends of a name and an email (ident.c `crud`), with space and the control characters checked separately. */
+const MAX_IDENT_PART_BYTES = 256;
+
+const GIT_IDENT_CRUD = new Set([".", ",", ":", ";", '"', "'", "\\"]);
+
+/**
+ * `Name <email>`, strictly: a name and an email that git records verbatim
+ * (well-formed Unicode with no U+FFFD, no angle bracket, no control character, no
+ * whitespace in the email, and neither begins or ends with a space or a
+ * character git strips), each at most `MAX_IDENT_PART_BYTES`, or null. The
+ * bound keeps the two copies the stager puts in git's environment far under
+ * the platform's argument limit, so git cannot refuse after the model calls.
+ */
+function parseCommitAuthor(text: string): { authorName: string; authorEmail: string } | null {
+  // A lone surrogate, or U+FFFD: what Node makes of argv bytes that are not UTF-8.
+  if (/[\p{Cs}\uFFFD]/u.test(text)) return null;
+  for (const ch of text) {
+    const c = ch.codePointAt(0)!;
+    if (c < 0x20 || c === 0x7f) return null;
+  }
+  const m = /^([^<>]+) <([^<>\s]+)>$/.exec(text);
+  if (m === null) return null;
+  const name = m[1]!;
+  const email = m[2]!;
+  if (name.trim() !== name) return null;
+  for (const part of [name, email]) {
+    if (Buffer.byteLength(part, "utf8") > MAX_IDENT_PART_BYTES) return null;
+    if (GIT_IDENT_CRUD.has(part[0]!) || GIT_IDENT_CRUD.has(part.at(-1)!)) return null;
+  }
+  return { authorName: name, authorEmail: email };
+}
 
 function refuse(...lines: string[]): never {
   throw new RepoTaskPreflightError(lines);
@@ -188,6 +230,15 @@ export async function runGovernedRepoTask(
   opts: RepoTaskRunOptions,
   deps: RepoTaskRunDeps,
 ): Promise<RepoTaskRunReport> {
+  let commitAuthor = DEFAULT_COMMIT_AUTHOR;
+  if (opts.author !== undefined) {
+    const parsed = parseCommitAuthor(opts.author);
+    if (parsed === null) {
+      refuse(`--author must be "Name <email>": ${JSON.stringify(opts.author)}`);
+    }
+    commitAuthor = parsed;
+  }
+
   // -- A: never the default config directory, then only identity and key fields.
   if (isDefaultConfigDir(opts.agentDir, deps.defaultConfigDirs())) {
     refuse(
@@ -302,7 +353,7 @@ export async function runGovernedRepoTask(
     const stager = createGitChangeStager({ git, tip });
     const commitAt = (message: string): HarnessCommit => ({
       message,
-      ...COMMIT_AUTHOR,
+      ...commitAuthor,
       timestamp: Math.floor(deps.now() / 1000),
     });
     let made: Awaited<ReturnType<typeof runAndRecord>>;

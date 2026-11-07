@@ -431,7 +431,10 @@ function harness(
   return { deps, events, lines, loaded, erased, provider };
 }
 
-function args(fx: Fixture, over: { agent?: string; delegation?: string; output?: string } = {}) {
+function args(
+  fx: Fixture,
+  over: { agent?: string; delegation?: string; output?: string; author?: string } = {},
+) {
   return parseCliArgs([
     "repo-task",
     "run",
@@ -442,6 +445,7 @@ function args(fx: Fixture, over: { agent?: string; delegation?: string; output?:
     "--repo",
     fx.repo,
     ...(over.output !== undefined ? ["--output", over.output] : []),
+    ...(over.author !== undefined ? ["--author", over.author] : []),
   ]);
 }
 
@@ -737,6 +741,40 @@ describe("repo-task run: a governed change, end to end", () => {
     expect(refState(fx.repo)).toEqual(refsBefore);
   });
 
+  it("both commits carry the default identity, or exactly the --author given", async () => {
+    const idents = (fx: Fixture, lines: string[]): string[] => {
+      const bundleCommit = lines
+        .find((l) => l.trim().startsWith("bundle_commit"))!
+        .trim()
+        .split(/\s+/)[1]!;
+      return git(fx.repo, "log", "--format=%an <%ae>|%cn <%ce>", `${fx.tip}..${bundleCommit}`)
+        .trim()
+        .split("\n");
+    };
+    const fx = await fixture();
+    const h = harness();
+    await handleRepoTaskRun(args(fx), h.deps);
+    const byDefault = "motebit repo-task <repo-task@motebit.invalid>";
+    expect(idents(fx, h.lines)).toEqual([`${byDefault}|${byDefault}`, `${byDefault}|${byDefault}`]);
+
+    const fx2 = await fixture();
+    const h2 = harness();
+    // Interior punctuation, non-ASCII, and a name and an email of exactly 256 bytes are kept verbatim.
+    const given = `${"é".repeat(128)} <${"a".repeat(244)}@example.com>`;
+    await handleRepoTaskRun(args(fx2, { author: given }), h2.deps);
+    expect(idents(fx2, h2.lines)).toEqual([`${given}|${given}`, `${given}|${given}`]);
+    expect(h2.lines.join("\n")).toMatch(/outcome completed/);
+
+    const fx3 = await fixture();
+    const h3 = harness();
+    const punctuated = `motebit repo-task (A), "B": é <agent+repo@example.com>`;
+    await handleRepoTaskRun(args(fx3, { author: punctuated }), h3.deps);
+    expect(idents(fx3, h3.lines)).toEqual([
+      `${punctuated}|${punctuated}`,
+      `${punctuated}|${punctuated}`,
+    ]);
+  });
+
   it("a run that changes nothing is failed, and exits non-zero", async () => {
     const fx = await fixture();
     const h = harness({ provider: scripted([]) });
@@ -749,6 +787,40 @@ describe("repo-task run: a governed change, end to end", () => {
 // -- Refusals before the first model call -------------------------------------
 
 describe("repo-task run: every preflight rule refuses before the first model call", () => {
+  it.each([
+    "no-brackets@example.com",
+    "<only@example.com>",
+    "Name <>",
+    "Name <a b@example.com>",
+    "Name <a@example.com> trailing",
+    "Na<me <a@example.com>",
+    "Name\n <a@example.com>",
+    "Na\nme <a@example.com>",
+    "Na\u001bme <a@example.com>",
+    "'Quoted' <a@example.com>",
+    "Name; <a@example.com>",
+    'Name <"a@example.com">',
+    "Name <a@example.com,>",
+    "; <a@example.com>",
+    "Name. <a@example.com>",
+    "Name: <a@example.com>",
+    "Name <a@example.com\\>",
+    `${"a".repeat(257)} <a@example.com>`,
+    `Name <${"a".repeat(245)}@example.com>`,
+    "Na\ud800me <a@example.com>",
+    "Na\ufffdme <a@example.com>",
+    " Name <a@example.com>",
+    "Name  <a@example.com>",
+  ])("a malformed --author %j", async (author) => {
+    const fx = await fixture();
+    const h = harness();
+    await expectRefusal(
+      h,
+      () => handleRepoTaskRun(args(fx, { author }), h.deps),
+      /--author must be/,
+    );
+  });
+
   it("an expired tick", async () => {
     const fx = await fixture();
     const h = harness({ now: () => NOW + 2 * HOUR });
