@@ -98,6 +98,13 @@ export interface RepoTaskRunOptions {
   readonly outputDir?: string;
   /** The provider's name, recorded in the change record (informational). */
   readonly providerName: string;
+  /**
+   * The git author and committer of both commits (`--author "Name <email>"`).
+   * It is not attribution: who acted is the signed bundle's to say. It is what
+   * the publishing repository's own checks read (a CLA check links the email
+   * to an account), so the operator chooses it.
+   */
+  readonly author?: string;
 }
 
 /** The process-touching calls the run makes; injected so tests watch the key and the clock. */
@@ -132,7 +139,27 @@ export interface RepoTaskRunReport {
   readonly accepted: boolean;
 }
 
-const COMMIT_AUTHOR = { authorName: "motebit repo-task", authorEmail: "repo-task@motebit.invalid" };
+const DEFAULT_COMMIT_AUTHOR = {
+  authorName: "motebit repo-task",
+  authorEmail: "repo-task@motebit.invalid",
+};
+
+/**
+ * `Name <email>`, strictly: a name and an email that git records verbatim
+ * (no angle bracket, no control character, no surrounding space; no
+ * whitespace in the email), or null.
+ */
+function parseCommitAuthor(text: string): { authorName: string; authorEmail: string } | null {
+  for (const ch of text) {
+    const c = ch.codePointAt(0)!;
+    if (c < 0x20 || c === 0x7f) return null;
+  }
+  const m = /^([^<>]+) <([^<>\s]+)>$/.exec(text);
+  if (m === null) return null;
+  const name = m[1]!;
+  if (name.trim() !== name) return null;
+  return { authorName: name, authorEmail: m[2]! };
+}
 
 function refuse(...lines: string[]): never {
   throw new RepoTaskPreflightError(lines);
@@ -188,6 +215,15 @@ export async function runGovernedRepoTask(
   opts: RepoTaskRunOptions,
   deps: RepoTaskRunDeps,
 ): Promise<RepoTaskRunReport> {
+  let commitAuthor = DEFAULT_COMMIT_AUTHOR;
+  if (opts.author !== undefined) {
+    const parsed = parseCommitAuthor(opts.author);
+    if (parsed === null) {
+      refuse(`--author must be "Name <email>": ${JSON.stringify(opts.author)}`);
+    }
+    commitAuthor = parsed;
+  }
+
   // -- A: never the default config directory, then only identity and key fields.
   if (isDefaultConfigDir(opts.agentDir, deps.defaultConfigDirs())) {
     refuse(
@@ -302,7 +338,7 @@ export async function runGovernedRepoTask(
     const stager = createGitChangeStager({ git, tip });
     const commitAt = (message: string): HarnessCommit => ({
       message,
-      ...COMMIT_AUTHOR,
+      ...commitAuthor,
       timestamp: Math.floor(deps.now() / 1000),
     });
     let made: Awaited<ReturnType<typeof runAndRecord>>;

@@ -439,7 +439,7 @@ export async function readAgentPin(file: string): Promise<RepoTaskPin> {
 // === motebit repo-task run ============================================
 
 const RUN_USAGE =
-  "Usage: motebit repo-task run --agent <agent config dir> --delegation <dir> [--repo <worktree>] [--provider <p>] [--model <m>] [--output <dir>]";
+  'Usage: motebit repo-task run --agent <agent config dir> --delegation <dir> [--repo <worktree>] [--provider <p>] [--model <m>] [--output <dir>] [--author "Name <email>"]';
 
 /** The providers a run may use: a vendor or a local server, keyed from the environment; never the motebit cloud (it authenticates with an identity). */
 const RUN_PROVIDERS: readonly CliConfig["provider"][] = [
@@ -501,6 +501,7 @@ export function handleRepoTaskRun(
           delegationDir,
           repoDir: config.repo ?? process.cwd(),
           ...(config.output !== undefined ? { outputDir: config.output } : {}),
+          ...(config.author !== undefined ? { author: config.author } : {}),
           providerName: config.provider,
         },
         deps,
