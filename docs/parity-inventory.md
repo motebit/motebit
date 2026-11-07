@@ -1,6 +1,7 @@
 # Wire-schema type-parity inventory
 
 **Status:** Branch A (read-only forensic inventory). Generated 2026-05-31 against `main @ f037d4b4`.
+**Resolved:** the casts were removed in `796b21fed`; the parity check is live, and `check-wire-schema-parity-bites` (#115) keeps it that way. This inventory is kept as the record of how that arc began.
 **Source of truth:** an index-signature-safe `_PDiff` mapped-type probe (the `_PD2` form) injected into each of the 18 failing `packages/wire-schemas/src/*.ts` files, reusing each file's own local `Inferred`/`BrandedToString` types so the surfaced divergences match the existing parity checks' assignability semantics exactly. Probe restored after capture; this doc is the only artifact.
 
 This inventory exists because the `_*_TYPE_PARITY` blocks are **inert**: their value lines are written `forward: true as _ForwardCheck`, and `true as never` is a legal assertion, so a check that resolves to `never` on drift is swallowed and `tsc` passes. Empirically: adding a required field to `ExecutionReceipt` and rebuilding leaves `wire-schemas` `tsc --noEmit` at **exit 0**. Stripping the 130 `: true as _\w+` casts surfaces failures in **exactly 18 of 27** parity files. See `wire-schemas/CLAUDE.md` rule 5 (the claim "keeps the zod shape and the protocol type in perfect sync" — false today) and memory `wire_schema_parity_cast_hole`.
