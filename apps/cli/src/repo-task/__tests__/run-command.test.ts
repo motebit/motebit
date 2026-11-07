@@ -759,11 +759,20 @@ describe("repo-task run: a governed change, end to end", () => {
 
     const fx2 = await fixture();
     const h2 = harness();
-    // Interior punctuation and the longest name allowed are kept verbatim.
-    const given = `motebit repo-task (A), "B": ${"é".repeat(100)} <agent+repo@example.com>`;
+    // Interior punctuation, non-ASCII, and a name and an email of exactly 256 bytes are kept verbatim.
+    const given = `${"é".repeat(128)} <${"a".repeat(244)}@example.com>`;
     await handleRepoTaskRun(args(fx2, { author: given }), h2.deps);
     expect(idents(fx2, h2.lines)).toEqual([`${given}|${given}`, `${given}|${given}`]);
     expect(h2.lines.join("\n")).toMatch(/outcome completed/);
+
+    const fx3 = await fixture();
+    const h3 = harness();
+    const punctuated = `motebit repo-task (A), "B": é <agent+repo@example.com>`;
+    await handleRepoTaskRun(args(fx3, { author: punctuated }), h3.deps);
+    expect(idents(fx3, h3.lines)).toEqual([
+      `${punctuated}|${punctuated}`,
+      `${punctuated}|${punctuated}`,
+    ]);
   });
 
   it("a run that changes nothing is failed, and exits non-zero", async () => {
@@ -799,6 +808,7 @@ describe("repo-task run: every preflight rule refuses before the first model cal
     `${"a".repeat(257)} <a@example.com>`,
     `Name <${"a".repeat(245)}@example.com>`,
     "Na\ud800me <a@example.com>",
+    "Na\ufffdme <a@example.com>",
     " Name <a@example.com>",
     "Name  <a@example.com>",
   ])("a malformed --author %j", async (author) => {

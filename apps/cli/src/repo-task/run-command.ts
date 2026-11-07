@@ -151,14 +151,15 @@ const GIT_IDENT_CRUD = new Set([".", ",", ":", ";", '"', "'", "\\"]);
 
 /**
  * `Name <email>`, strictly: a name and an email that git records verbatim
- * (well-formed Unicode, no angle bracket, no control character, no
+ * (well-formed Unicode with no U+FFFD, no angle bracket, no control character, no
  * whitespace in the email, and neither begins or ends with a space or a
  * character git strips), each at most `MAX_IDENT_PART_BYTES`, or null. The
  * bound keeps the two copies the stager puts in git's environment far under
  * the platform's argument limit, so git cannot refuse after the model calls.
  */
 function parseCommitAuthor(text: string): { authorName: string; authorEmail: string } | null {
-  if (/\p{Cs}/u.test(text)) return null;
+  // A lone surrogate, or U+FFFD: what Node makes of argv bytes that are not UTF-8.
+  if (/[\p{Cs}\uFFFD]/u.test(text)) return null;
   for (const ch of text) {
     const c = ch.codePointAt(0)!;
     if (c < 0x20 || c === 0x7f) return null;
