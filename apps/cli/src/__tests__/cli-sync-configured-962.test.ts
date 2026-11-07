@@ -78,6 +78,36 @@ function runtimeSites(): Array<{ file: string; builtBy: string | null }> {
   return sites;
 }
 
+interface BuilderShape {
+  statements: number;
+  callee: string | null;
+  relay: string | null;
+}
+
+/** `daemonRuntimeConfig`'s body in daemon.ts: statement count, the returned callee, its relay argument. */
+function daemonBuilderReturn(): BuilderShape | null {
+  const file = join(SRC, "daemon.ts");
+  const sf = ts.createSourceFile(file, readFileSync(file, "utf-8"), ts.ScriptTarget.Latest, true);
+  let found: BuilderShape | null = null;
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "daemonRuntimeConfig" && node.body) {
+      const stmts = node.body.statements;
+      const ret = stmts[stmts.length - 1];
+      const expr = ret && ts.isReturnStatement(ret) ? ret.expression : undefined;
+      const call = expr && ts.isCallExpression(expr) ? expr : undefined;
+      const relayArg = call?.arguments[1];
+      found = {
+        statements: stmts.length,
+        callee: call && ts.isIdentifier(call.expression) ? call.expression.text : null,
+        relay: relayArg && ts.isIdentifier(relayArg) ? relayArg.text : null,
+      };
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+
 /** The callees `daemon.ts` calls, by name, with how many call sites each. */
 function daemonCalls(): Map<string, number> {
   const file = join(SRC, "daemon.ts");
@@ -140,14 +170,51 @@ describe("#962 C2 — the CLI's syncConfigured wiring", () => {
   it("every `new MotebitRuntime(` in apps/cli/src builds its config with cliRuntimeConfig", () => {
     // A secondary guard: `cliRuntimeConfig` sets `syncConfigured` LAST, so no
     // spread at a site can override it. The behaviour of each site is held by
-    // every-configured-surface-pushes-962.test.ts.
+    // every-configured-surface-pushes-962.test.ts. The daemons build theirs
+    // through `daemonRuntimeConfig` (which also requires the grant spend
+    // store) — it returns `cliRuntimeConfig(...)`, held by the next test.
     const sites = runtimeSites();
     // Aperture: the sites this scan found — the REPL, both daemons, delegate.
     expect(sites.map((s) => s.file).sort()).toEqual(
       ["daemon.ts", "daemon.ts", "runtime-factory.ts", join("subcommands", "delegate.ts")].sort(),
     );
     for (const site of sites) {
-      expect(site).toEqual({ file: site.file, builtBy: "cliRuntimeConfig" });
+      const builtBy = site.file === "daemon.ts" ? "daemonRuntimeConfig" : "cliRuntimeConfig";
+      expect(site).toEqual({ file: site.file, builtBy });
     }
+    // And `daemonRuntimeConfig` is exactly one statement, `return
+    // cliRuntimeConfig(<config>, relay)`: the relay object it was given goes
+    // through untouched, so no daemon decides `syncConfigured` itself.
+    expect(daemonBuilderReturn()).toEqual({
+      statements: 1,
+      callee: "cliRuntimeConfig",
+      relay: "relay",
+    });
+  });
+
+  it("daemonRuntimeConfig is cliRuntimeConfig: the relay decides syncConfigured, last", async () => {
+    const { daemonRuntimeConfig } = await import("../daemon.js");
+    const { InMemoryGrantSpendStore } = await import("@motebit/policy");
+    const store = { grantSpendStore: new InMemoryGrantSpendStore() };
+    const on = daemonRuntimeConfig({ motebitId: "m" }, { syncUrl: "https://r" }, store);
+    expect(on.syncConfigured).toBe(true);
+    expect(on.grantSpendStore).toBe(store.grantSpendStore);
+    expect(
+      daemonRuntimeConfig({ motebitId: "m" }, { syncUrl: undefined }, store).syncConfigured,
+    ).toBe(false);
+    expect(daemonRuntimeConfig({ motebitId: "m" }, { syncUrl: "" }, store).syncConfigured).toBe(
+      false,
+    );
+    // #962 round 5: stdio serve has no sync URL, only an intent relay.
+    expect(
+      daemonRuntimeConfig({ motebitId: "m" }, { syncUrl: undefined, intentUrl: "https://r" }, store)
+        .syncConfigured,
+    ).toBe(true);
+    const smuggled = { motebitId: "m", syncConfigured: false } as Parameters<
+      typeof daemonRuntimeConfig
+    >[0];
+    expect(daemonRuntimeConfig(smuggled, { syncUrl: "https://r" }, store).syncConfigured).toBe(
+      true,
+    );
   });
 });
