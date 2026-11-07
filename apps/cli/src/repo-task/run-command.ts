@@ -145,14 +145,20 @@ const DEFAULT_COMMIT_AUTHOR = {
 };
 
 /** What git strips from both ends of a name and an email (ident.c `crud`), with space and the control characters checked separately. */
+const MAX_IDENT_PART_BYTES = 256;
+
 const GIT_IDENT_CRUD = new Set([".", ",", ":", ";", '"', "'", "\\"]);
 
 /**
  * `Name <email>`, strictly: a name and an email that git records verbatim
- * (no angle bracket, no control character, no whitespace in the email, and
- * neither begins or ends with a space or a character git strips), or null.
+ * (well-formed Unicode, no angle bracket, no control character, no
+ * whitespace in the email, and neither begins or ends with a space or a
+ * character git strips), each at most `MAX_IDENT_PART_BYTES`, or null. The
+ * bound keeps the two copies the stager puts in git's environment far under
+ * the platform's argument limit, so git cannot refuse after the model calls.
  */
 function parseCommitAuthor(text: string): { authorName: string; authorEmail: string } | null {
+  if (/\p{Cs}/u.test(text)) return null;
   for (const ch of text) {
     const c = ch.codePointAt(0)!;
     if (c < 0x20 || c === 0x7f) return null;
@@ -163,6 +169,7 @@ function parseCommitAuthor(text: string): { authorName: string; authorEmail: str
   const email = m[2]!;
   if (name.trim() !== name) return null;
   for (const part of [name, email]) {
+    if (Buffer.byteLength(part, "utf8") > MAX_IDENT_PART_BYTES) return null;
     if (GIT_IDENT_CRUD.has(part[0]!) || GIT_IDENT_CRUD.has(part.at(-1)!)) return null;
   }
   return { authorName: name, authorEmail: email };

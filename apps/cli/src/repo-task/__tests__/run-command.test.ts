@@ -759,7 +759,8 @@ describe("repo-task run: a governed change, end to end", () => {
 
     const fx2 = await fixture();
     const h2 = harness();
-    const given = "motebit repo-task <agent+repo@example.com>";
+    // Interior punctuation and the longest name allowed are kept verbatim.
+    const given = `motebit repo-task (A), "B": ${"é".repeat(100)} <agent+repo@example.com>`;
     await handleRepoTaskRun(args(fx2, { author: given }), h2.deps);
     expect(idents(fx2, h2.lines)).toEqual([`${given}|${given}`, `${given}|${given}`]);
     expect(h2.lines.join("\n")).toMatch(/outcome completed/);
@@ -793,6 +794,11 @@ describe("repo-task run: every preflight rule refuses before the first model cal
     "Name <a@example.com,>",
     "; <a@example.com>",
     "Name. <a@example.com>",
+    "Name: <a@example.com>",
+    "Name <a@example.com\\>",
+    `${"a".repeat(257)} <a@example.com>`,
+    `Name <${"a".repeat(245)}@example.com>`,
+    "Na\ud800me <a@example.com>",
     " Name <a@example.com>",
     "Name  <a@example.com>",
   ])("a malformed --author %j", async (author) => {
