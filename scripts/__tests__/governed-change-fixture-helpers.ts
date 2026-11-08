@@ -19,6 +19,7 @@ import type { RepoTaskPin } from "@motebit/runtime";
 import type { AIResponse, ToolCall } from "@motebit/sdk";
 
 import { encryptPrivateKey, loadActiveSigningKey } from "../../apps/cli/src/identity.js";
+import type { ActiveSigningKey } from "../../apps/cli/src/identity.js";
 import { defaultConfigDirs } from "../../apps/cli/src/repo-task/agent-identity.js";
 import {
   delegateToDirectory,
@@ -163,6 +164,16 @@ export interface FixtureRepoOptions {
   revoked?: boolean;
   /** A real governed change under the grant lands on main first (b5b). */
   landed?: boolean;
+  /** The grant's bundle path landed as an executable file instead (b5b's 100644 guard). */
+  landedExecutable?: boolean;
+  /** The agent pins at the tip; default [A]. */
+  agentPins?: Party[];
+  /** The scope's allowed paths; default [DOC]. */
+  allowedPaths?: string[];
+  /** Extra path-policy excludes. */
+  exclude?: string[];
+  /** Extra tracked files at the tip. */
+  files?: Record<string, string>;
 }
 
 export interface FixtureRepo {
@@ -196,7 +207,7 @@ export async function fixtureRepo(
       repo: REPO,
       baseRef: "main",
       objectFormat: "sha1",
-      allowedPaths: [DOC],
+      allowedPaths: o.allowedPaths ?? [DOC],
       maxChangedFiles: o.maxChangedFiles ?? 2,
       task: "Fix the typo in notes/guide.md.",
       tools: "repo_read_blob,repo_write_path",
@@ -211,14 +222,26 @@ export async function fixtureRepo(
   writeFile(repo, DOC, "teh typo\n");
   writeFile(repo, "src/code.ts", "export const x = 1;\n");
   writeFile(repo, ".motebit/principals/principal.md", await identityFileOf(f));
-  writeFile(
-    repo,
-    `.motebit/principals/agents/${a.pin.motebit_id.slice(0, 12)}.md`,
-    await identityFileOf(a),
-  );
-  writeFile(repo, ".motebit/repo-path-policy.json", POLICY);
+  for (const p of o.agentPins ?? [a]) {
+    writeFile(
+      repo,
+      `.motebit/principals/agents/${p.pin.motebit_id.slice(0, 12)}.md`,
+      await identityFileOf(p),
+    );
+  }
+  const policy = JSON.parse(POLICY) as { exclude: string[] };
+  policy.exclude.push(...(o.exclude ?? []));
+  writeFile(repo, ".motebit/repo-path-policy.json", JSON.stringify(policy));
+  for (const [rel, content] of Object.entries(o.files ?? {})) writeFile(repo, rel, content);
   git(home, repo, "add", "-A");
   git(home, repo, "commit", "-q", "-m", "init");
+  if (o.landedExecutable) {
+    const rel = `.motebit/bundles/${grantId}.json`;
+    writeFile(repo, rel, "{}");
+    fs.chmodSync(path.join(repo, rel), 0o755);
+    git(home, repo, "add", "-A");
+    git(home, repo, "commit", "-q", "-m", "landed (executable)");
+  }
   if (o.landed) {
     // A real `repo-task run` under the grant, its bundle commit landed on main.
     const report = await runGovernedRepoTask(
@@ -270,7 +293,16 @@ export interface Harness {
  * The fixture's deps with every key operation watched. `now` defaults to
  * NOW; `onErase` lets a test move the clock once a key is erased.
  */
-export function harness(o: { now?: () => number; onErase?: () => void } = {}): Harness {
+export function harness(
+  o: {
+    now?: () => number;
+    onErase?: () => void;
+    /** The directories `--agent` may never name; default the redirected home's. */
+    defaultConfigDirs?: () => string[];
+    /** Rewrite what the CLI's loader returned (the decrypted-key guard). */
+    unlocked?: (k: ActiveSigningKey) => ActiveSigningKey;
+  } = {},
+): Harness {
   const events: string[] = [];
   const lines: string[] = [];
   const errors: string[] = [];
@@ -284,7 +316,7 @@ export function harness(o: { now?: () => number; onErase?: () => void } = {}): H
       configs.push({ ...c });
       const k = await loadActiveSigningKey(c, opts);
       loaded.push(k.privateKey);
-      return k;
+      return o.unlocked ? o.unlocked(k) : k;
     },
     secureErase: (key) => {
       events.push("erase");
@@ -299,7 +331,7 @@ export function harness(o: { now?: () => number; onErase?: () => void } = {}): H
       ephemeral.push(k.privateKey);
       return k;
     },
-    defaultConfigDirs: () => defaultConfigDirs(),
+    defaultConfigDirs: o.defaultConfigDirs ?? (() => defaultConfigDirs()),
     now: o.now ?? (() => NOW),
     runtimeVersion: "motebit test",
     log: (line) => lines.push(line),

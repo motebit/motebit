@@ -128,6 +128,7 @@ interface Modules {
   readonly git: typeof import("@motebit/verify/git");
   readonly crypto: typeof import("@motebit/crypto");
   readonly encryption: typeof import("@motebit/encryption");
+  readonly syncEngine: typeof import("@motebit/sync-engine");
 }
 
 let loaded: Promise<Modules> | undefined;
@@ -138,6 +139,7 @@ function modules(): Promise<Modules> {
     git: await fromCli<Modules["git"]>("@motebit/verify/git"),
     crypto: await fromCli<Modules["crypto"]>("@motebit/crypto"),
     encryption: await fromCli<Modules["encryption"]>("@motebit/encryption"),
+    syncEngine: await fromCli<Modules["syncEngine"]>("@motebit/sync-engine"),
   }))();
   return loaded;
 }
@@ -170,6 +172,7 @@ export const DEPARTURES: Readonly<Record<FixtureCase, readonly string[]>> = {
   b5a: [
     "no model call: a scripted provider makes the edit (provider governed-change-fixture, model scripted)",
     "the run uses the tick as signed; the bundle and the record carry tick.signature re-spelled in non-canonical base64url (the same signature bytes), and A signs the record over it",
+    "the acceptance row names B1's tick, but B1's grant is spent and expired: b5a needs a fresh, unexpired grant that never landed (G3)",
   ],
   b5b: [
     "no model call: a scripted provider makes the edit (provider governed-change-fixture, model scripted)",
@@ -428,6 +431,22 @@ export function judge(
   return { matches, rows, missing, unexpected };
 }
 
+/**
+ * A second spelling of the same bytes: the last character of an unpadded
+ * base64url string with its lowest unused bit set, or null when there is
+ * none (no unused bits, or the bit is already set). The tick's signature is
+ * canonical (the authority check holds it so), so a second spelling of its
+ * bytes is non-canonical; the self-check confirms value_not_canonical.
+ */
+export function respellBase64Url(s: string): string | null {
+  const last = s.at(-1);
+  if (last === undefined || !BASE64URL.includes(last)) return null;
+  const respelled = s.slice(0, -1) + BASE64URL[BASE64URL.indexOf(last) | 1];
+  if (respelled === s) return null;
+  if (!Buffer.from(respelled, "base64url").equals(Buffer.from(s, "base64url"))) return null;
+  return respelled;
+}
+
 // -- The scripted provider --------------------------------------------------------
 
 /** A scripted model: read the path, write the content, then answer. No model call. */
@@ -646,14 +665,22 @@ export async function runGovernedChangeFixture(
       const dir = path.posix.dirname(editPath);
       const ext = path.posix.extname(editPath);
       outsidePath = `${dir === "." ? "" : `${dir}/`}governed-change-fixture-b3${ext}`;
-      if (
-        !m.verifier.isCanonicalRepoPath(outsidePath) ||
-        scope.allowed_paths.includes(outsidePath) ||
-        !tipState.isPathPermitted(outsidePath) ||
-        (await reader.lookup(outsidePath)) !== null
-      ) {
+      // Canonical by construction: the directory of a canonical allowed path
+      // (the authority check passed, so it is canonical), a fixed ASCII name,
+      // and the extension of a canonical segment (never ending in "."). A
+      // path that were not would read value_not_canonical in the self-check,
+      // and the verdict would not match.
+      if (scope.allowed_paths.includes(outsidePath)) {
+        refuse(`--case b3's out-of-scope path ${JSON.stringify(outsidePath)} is in allowed_paths`);
+      }
+      if (!tipState.isPathPermitted(outsidePath)) {
         refuse(
-          `--case b3's out-of-scope path ${JSON.stringify(outsidePath)} must be canonical, outside allowed_paths, permitted by the tip's path policy and untracked at the tip`,
+          `--case b3's out-of-scope path ${JSON.stringify(outsidePath)} fails the tip's path policy (entry_path_not_permitted would be a second defect)`,
+        );
+      }
+      if ((await reader.lookup(outsidePath)) !== null) {
+        refuse(
+          `--case b3's out-of-scope path ${JSON.stringify(outsidePath)} is tracked at the tip: it must be an add`,
         );
       }
     }
@@ -661,13 +688,9 @@ export async function runGovernedChangeFixture(
     // -- b5a: the tick's signature, re-spelled: the same bytes, a second spelling.
     let bundleTick: DelegationToken = tick;
     if (c === "b5a") {
-      const sig = tick.signature;
-      const respelled = sig.slice(0, -1) + BASE64URL[BASE64URL.indexOf(sig.at(-1)!) | 1];
-      if (
-        m.verifier.isCanonicalBase64Url(respelled) ||
-        !Buffer.from(respelled, "base64url").equals(Buffer.from(sig, "base64url"))
-      ) {
-        refuse("--case b5a: the tick's signature has no non-canonical spelling of the same bytes");
+      const respelled = respellBase64Url(tick.signature);
+      if (respelled === null) {
+        refuse("--case b5a: the tick's signature has no second spelling of the same bytes");
       }
       bundleTick = { ...tick, signature: respelled };
     }
@@ -810,7 +833,6 @@ export async function runGovernedChangeFixture(
     const bundleCommit =
       c === "b5b"
         ? await commitBundleOverLanded(
-            m,
             git,
             made.headCommit,
             target,
@@ -977,14 +999,14 @@ async function handSignedRun(i: {
  * stager's postcondition admits only an add or a modify of a 100644 file,
  * and the commit must be exactly that one modify.
  */
-async function commitBundleOverLanded(
-  m: Modules,
+export async function commitBundleOverLanded(
   git: IsolatedGit,
   head: string,
   target: string,
   bytes: Uint8Array,
   commit: HarnessCommit,
 ): Promise<string> {
+  const m = await modules();
   const landed = (await m.git.listTree(git, head)).find(
     (e) => Buffer.from(e.path).toString("latin1") === target,
   );
@@ -1048,6 +1070,11 @@ export async function governedChangeFixtureCommand(
     deps.error(USAGE);
     deps.exit(1);
   }
+  const { syncEngine, git: verifyGit } = await modules();
+  const clean = (text: string): string => syncEngine.sanitizeRelayText(text, 1000);
+  deps.log(
+    "Before a live run, rebuild the verifier the fixture judges with (it loads the built dist): pnpm --filter @motebit/verifier --filter @motebit/verify build",
+  );
   let report: FixtureReport;
   try {
     report = await runGovernedChangeFixture(
@@ -1064,7 +1091,9 @@ export async function governedChangeFixtureCommand(
   } catch (err) {
     if (err instanceof RepoTaskPreflightError) {
       deps.error("Refused — no bundle was made, nothing was pushed:");
-      for (const r of err.refusals) deps.error(`  ${r}`);
+      for (const r of err.refusals) {
+        for (const line of r.split("\n")) deps.error(`  ${clean(line)}`);
+      }
       deps.exit(1);
     }
     throw err;
@@ -1088,12 +1117,16 @@ export async function governedChangeFixtureCommand(
     );
   }
   log("  failures (actual):");
-  for (const f of report.verification.diagnostics.failures) log(`    ${f.code}: ${f.detail}`);
+  for (const f of report.verification.diagnostics.failures) {
+    log(`    ${f.code}: ${clean(f.detail)}`);
+  }
   for (const f of report.judgement.missing) {
-    log(`  DIFF expected and missing: ${f.code}${f.detail !== undefined ? `: ${f.detail}` : ""}`);
+    log(
+      `  DIFF expected and missing: ${f.code}${f.detail !== undefined ? `: ${clean(f.detail)}` : ""}`,
+    );
   }
   for (const f of report.judgement.unexpected) {
-    log(`  DIFF not expected: ${f.code}: ${f.detail}`);
+    log(`  DIFF not expected: ${f.code}: ${clean(f.detail)}`);
   }
   if (!report.judgement.matches) {
     deps.error(
@@ -1107,6 +1140,12 @@ export async function governedChangeFixtureCommand(
   );
   log(
     "To publish this deliberately failing change (record its verdict, then close the pull request), the operator pushes the bundle commit as a new branch:",
+  );
+  log(
+    `  - the pull request must be opened by ${verifyGit.REPO_CHANGE_PUBLISHER} (another author adds a shape failure);`,
+  );
+  log(
+    `  - its base must be main and main's tip must still be ${report.parentCommit} when CI runs (a moved tip adds shape failures, and the verdict is no longer this one).`,
   );
   log("");
   log(

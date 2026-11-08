@@ -33,9 +33,11 @@ import { defaultConfigDirs } from "../../apps/cli/src/repo-task/agent-identity.j
 import { runGovernedRepoTask } from "../../apps/cli/src/repo-task/run-command.js";
 import {
   FIXTURE_CASES,
+  commitBundleOverLanded,
   expectedVerdict,
   governedChangeFixtureCommand,
   judge,
+  respellBase64Url,
 } from "../governed-change-fixture.js";
 import type { FixtureCase } from "../governed-change-fixture.js";
 import { cleanEnv } from "../lib/differential-tree.js";
@@ -53,6 +55,7 @@ import {
   field,
   fixtureArgs,
   fixtureRepo,
+  fromCli,
   git,
   gitBytes,
   gitVars,
@@ -234,6 +237,13 @@ describe("governed-change fixture: each case makes exactly its one defect", LONG
         `git push <publisher-remote> ${bundleCommit}:refs/heads/repo-task/${fx.grantId}-${c}`,
       );
       expect(h.events).not.toContain("exit 1");
+      // What the publish needs to stay this verdict, and the build it was judged with.
+      const out = h.lines.join("\n");
+      expect(out).toContain("must be opened by motebit-agent");
+      expect(out).toContain(`main's tip must still be ${fx.tip} when CI runs`);
+      expect(out).toMatch(
+        /rebuild the verifier .*pnpm --filter @motebit\/verifier --filter @motebit\/verify build/,
+      );
 
       // CI's verdict, computed here: the case's axis, and only it, fails.
       const r = await ciVerdict(fx, bundleCommit);
@@ -600,5 +610,273 @@ describe("governed-change fixture: every key is erased on every exit path", LONG
     expect(h.erased).toEqual([h.ephemeral[0]]);
     expect(zeroed(h.ephemeral[0]!)).toBe(true);
     expect(h.events.at(-1)).toBe("erase");
+  });
+});
+
+// -- judge(): every row and every detail gate the push command -------------------------
+
+describe("governed-change fixture: judge holds every row and every failure detail", () => {
+  const CTX = {
+    grantId: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+    changeCommit: "a".repeat(40),
+    toolReceipts: 2,
+  };
+  /** A b5a verdict that matches its expectation exactly. */
+  function matching() {
+    const want = expectedVerdict("b5a", CTX);
+    const computed = {
+      input: { spent: false },
+      bundlePath: want.bundlePath,
+      changeCommit: want.changeCommit,
+      shapeFailures: [] as string[],
+    };
+    const verification = {
+      verdict: {
+        integrity: "invalid",
+        identityBinding: "pinned",
+        authority: "valid",
+        revocation: { status: "fresh" },
+      },
+      outcome: "completed",
+      diagnostics: {
+        failures: [
+          {
+            code: "integrity.repo_change.value_not_canonical",
+            axis: "integrity",
+            detail: "tick.signature is not canonical base64url",
+          },
+        ],
+      },
+    };
+    return { want, computed, verification };
+  }
+  type Parts = ReturnType<typeof matching>;
+  const verdictOf = (p: Parts) =>
+    judge(
+      p.want,
+      p.computed as unknown as Parameters<typeof judge>[1],
+      p.verification as unknown as Parameters<typeof judge>[2],
+    );
+
+  it("a verdict equal to the expectation matches", () => {
+    expect(verdictOf(matching()).matches).toBe(true);
+  });
+
+  it.each<[string, (p: Parts) => void]>([
+    [
+      "the same code with another detail (value_not_canonical on receipt.signature)",
+      (p) => {
+        p.verification.diagnostics.failures[0]!.detail =
+          "receipt.signature is not canonical base64url";
+      },
+    ],
+    [
+      "outcome failed",
+      (p) => {
+        p.verification.outcome = "failed";
+      },
+    ],
+    [
+      "another bundle path",
+      (p) => {
+        p.computed.bundlePath = ".motebit/bundles/other.json";
+      },
+    ],
+    [
+      "another change commit",
+      (p) => {
+        p.computed.changeCommit = "b".repeat(40);
+      },
+    ],
+  ])("one change, %s, is not a match", (_name, change) => {
+    const p = matching();
+    change(p);
+    expect(verdictOf(p).matches).toBe(false);
+  });
+});
+
+// -- Every guard refuses ----------------------------------------------------------------
+
+describe("governed-change fixture: every preflight and postcondition guard refuses", LONG, () => {
+  /** Refused, and no key was ever unlocked or generated. */
+  async function refusedBeforeKey(h: Harness, args: string[], text: RegExp): Promise<void> {
+    await expectRefused(h, () => governedChangeFixtureCommand(args, h.deps), text);
+    expect(h.events).toEqual(["exit 1"]);
+  }
+
+  it("--agent naming a default config directory (an injected throwaway, never ~/.motebit)", async () => {
+    const fx = await fixtureRepo(env, tmp);
+    const h = harness({ defaultConfigDirs: () => [env.agentDir] });
+    await refusedBeforeKey(h, fixtureArgs(env, fx, "b3"), /default motebit config directory/);
+  });
+
+  it("a dirty worktree", async () => {
+    const fx = await fixtureRepo(env, tmp);
+    fs.writeFileSync(path.join(fx.repo, "src/code.ts"), "export const x = 2;\n");
+    await refusedBeforeKey(
+      harness(),
+      fixtureArgs(env, fx, "b3"),
+      /the worktree is not clean at the tip/,
+    );
+  });
+
+  it("--agent is the principal", async () => {
+    const fx = await fixtureRepo(env, tmp, { agentPins: [env.a, env.f] });
+    const asF = fs.mkdtempSync(path.join(tmp, "as-f-"));
+    fs.writeFileSync(
+      path.join(asF, "config.json"),
+      JSON.stringify({
+        ...(await agentConfigOf(env.a)),
+        motebit_id: env.f.pin.motebit_id,
+        device_public_key: env.f.pin.public_key,
+      }),
+    );
+    const args = fixtureArgs({ ...env, agentDir: asF }, fx, "b3");
+    await refusedBeforeKey(harness(), args, /--agent is the principal/);
+  });
+
+  it("--agent is not an agent pin at the tip", async () => {
+    const x = await party();
+    const fx = await fixtureRepo(env, tmp, { agentPins: [x] });
+    await refusedBeforeKey(
+      harness(),
+      fixtureArgs(env, fx, "b3"),
+      /--agent is not an agent pin at the tip/,
+    );
+  });
+
+  it("b5b: the landed bundle is not a regular 100644 file", async () => {
+    const fx = await fixtureRepo(env, tmp, { landedExecutable: true });
+    await refusedBeforeKey(
+      harness(),
+      fixtureArgs(env, fx, "b5b"),
+      /is not a regular file at the tip/,
+    );
+  });
+
+  it("b3: the out-of-scope path is in allowed_paths", async () => {
+    const fx = await fixtureRepo(env, tmp, { allowedPaths: [DOC, OUTSIDE] });
+    await refusedBeforeKey(harness(), fixtureArgs(env, fx, "b3"), /is in allowed_paths/);
+  });
+
+  it("b3: the out-of-scope path fails the tip's path policy", async () => {
+    const fx = await fixtureRepo(env, tmp, { exclude: [OUTSIDE] });
+    await refusedBeforeKey(harness(), fixtureArgs(env, fx, "b3"), /fails the tip's path policy/);
+  });
+
+  it("b3: the out-of-scope path is tracked at the tip", async () => {
+    const fx = await fixtureRepo(env, tmp, { files: { [OUTSIDE]: "tracked\n" } });
+    await refusedBeforeKey(harness(), fixtureArgs(env, fx, "b3"), /is tracked at the tip/);
+  });
+
+  it("the decrypted key is not the config's device_public_key: refused, the key erased", async () => {
+    const fx = await fixtureRepo(env, tmp);
+    const other = await party();
+    const h = harness({ unlocked: (k) => ({ ...k, publicKey: other.pin.public_key }) });
+    await expectRefused(
+      h,
+      () => governedChangeFixtureCommand(fixtureArgs(env, fx, "b3"), h.deps),
+      /the decrypted key is not the config's device_public_key/,
+    );
+    expect(h.events).toEqual(["unlock", "erase", "exit 1"]);
+    expect(h.erased).toEqual([h.loaded[0]]);
+    expect(zeroed(h.loaded[0]!)).toBe(true);
+  });
+
+  it("the scripted run did not make its edit: refused, the key erased", async () => {
+    const fx = await fixtureRepo(env, tmp);
+    // Inside the window for the preflight, the run's start and its key probe;
+    // past it from the first tool call, so the run ends authority_lapsed.
+    let n = 0;
+    const h = harness({ now: () => (n++ < 3 ? NOW : NOW + 2 * HOUR) });
+    await expectRefused(
+      h,
+      () => governedChangeFixtureCommand(fixtureArgs(env, fx, "b5a"), h.deps),
+      /the scripted run did not make its edit \(ended authority_lapsed/,
+    );
+    expect(h.events).toEqual(["unlock", "erase", "exit 1"]);
+    expect(zeroed(h.loaded[0]!)).toBe(true);
+  });
+});
+
+// -- b5a's respelling and b5b's bundle commit, directly -----------------------------------
+
+describe("governed-change fixture: b5a's respelling and b5b's bundle commit", LONG, () => {
+  it("a canonical 64-byte signature has a second, non-canonical spelling of the same bytes", async () => {
+    const sig = Buffer.from(crypto.getRandomValues(new Uint8Array(64))).toString("base64url");
+    const respelled = respellBase64Url(sig);
+    expect(respelled).not.toBeNull();
+    expect(respelled).not.toBe(sig);
+    expect(Buffer.from(respelled!, "base64url")).toEqual(Buffer.from(sig, "base64url"));
+    const { isCanonicalBase64Url } =
+      await fromCli<typeof import("@motebit/verifier")>("@motebit/verifier");
+    expect(isCanonicalBase64Url(sig)).toBe(true);
+    expect(isCanonicalBase64Url(respelled!)).toBe(false);
+  });
+
+  it("a spelling with no unused bits has no second spelling", () => {
+    expect(respellBase64Url("AAAA")).toBeNull();
+  });
+
+  it("a spelling whose unused bit is already set is not re-spelled to itself", () => {
+    expect(respellBase64Url("AAB")).toBeNull();
+  });
+
+  const commit = {
+    message: "bundle\n",
+    authorName: "t",
+    authorEmail: "t@example.com",
+    timestamp: 1_800_000_000,
+  };
+  async function session(fx: FixtureRepo) {
+    const { openIsolatedGit } = await verifyGit();
+    return openIsolatedGit({ gitEntry: path.join(fx.repo, ".git"), objectFormat: "sha1" });
+  }
+
+  it("modifies the landed bundle: exactly one M of the bundle path", async () => {
+    const fx = await fixtureRepo(env, tmp, { landed: true });
+    const target = `.motebit/bundles/${fx.grantId}.json`;
+    const g = await session(fx);
+    try {
+      const out = await commitBundleOverLanded(
+        g,
+        fx.tip,
+        target,
+        new TextEncoder().encode("{}"),
+        commit,
+      );
+      expect(
+        git(env.home, fx.repo, "diff-tree", "-r", "--no-commit-id", "--name-status", fx.tip, out),
+      ).toBe(`M\t${target}`);
+    } finally {
+      g.close();
+    }
+  });
+
+  it("refuses the landed bytes again (no change: not exactly one modify)", async () => {
+    const fx = await fixtureRepo(env, tmp, { landed: true });
+    const target = `.motebit/bundles/${fx.grantId}.json`;
+    const same = gitBytes(env.home, fx.repo, "cat-file", "blob", `${fx.tip}:${target}`);
+    const g = await session(fx);
+    try {
+      await expect(
+        commitBundleOverLanded(g, fx.tip, target, new Uint8Array(same), commit),
+      ).rejects.toThrow(/would not be exactly one modify of the landed bundle/);
+    } finally {
+      g.close();
+    }
+  });
+
+  it("refuses a landed bundle that is not a 100644 file", async () => {
+    const fx = await fixtureRepo(env, tmp, { landedExecutable: true });
+    const target = `.motebit/bundles/${fx.grantId}.json`;
+    const g = await session(fx);
+    try {
+      await expect(
+        commitBundleOverLanded(g, fx.tip, target, new TextEncoder().encode("{}\n"), commit),
+      ).rejects.toThrow(/is not a regular file at the change commit/);
+    } finally {
+      g.close();
+    }
   });
 });
