@@ -320,6 +320,58 @@ describe("motebit-verify repo-change: a pull request that modifies or deletes a 
     expect(v.outcome).toBeNull();
   });
 
+  // The file judged is exactly one regular file the pull request modifies, and
+  // only when it adds none (§9). Each guard below has its own test.
+  async function amendedHead(
+    fx: Fixture,
+    change: (repo: string) => void,
+  ): Promise<RepoChangeReport> {
+    git(fx.repo, "checkout", "-q", "--detach", fx.head);
+    change(fx.repo);
+    git(fx.repo, "commit", "-q", "--amend", "--no-edit");
+    const head = git(fx.repo, "rev-parse", "HEAD");
+    git(fx.repo, "checkout", "-q", "main");
+    return verifyRepoChangePullRequest(argsFor(fx, { head }));
+  }
+
+  function expectNoBundleJudged(r: RepoChangeReport): void {
+    expect(r.computed.bundlePath).toBeNull();
+    expect(r.computed.input.bundle.length).toBe(0);
+    expect(r.computed.input.spent).toBe(false);
+    expect(r.verification.verdict.authority).toBe("unknown");
+    expect(r.accepted).toBe(false);
+  }
+
+  it("a modified bundle that is not a regular file (executable) is not judged", async () => {
+    const fx = await fixture(tmp, { bundleOnBase: "{}" });
+    const r = await amendedHead(fx, (repo) => {
+      fs.chmodSync(path.join(repo, fx.bundleFile), 0o755);
+      git(repo, "add", fx.bundleFile);
+    });
+    expectShape(r, `modifies or deletes ${JSON.stringify(fx.bundleFile)}`);
+    expectNoBundleJudged(r);
+  });
+
+  it("two modified bundles: neither is judged", async () => {
+    const fx = await fixture(tmp, { bundleOnBase: "{}", otherBundle: true });
+    const r = await amendedHead(fx, (repo) => {
+      fs.writeFileSync(path.join(repo, ".motebit/bundles/landed.json"), "{ }\n");
+      git(repo, "add", ".motebit/bundles/landed.json");
+    });
+    expectShape(r, `modifies or deletes ${JSON.stringify(".motebit/bundles/landed.json")}`);
+    expectNoBundleJudged(r);
+  });
+
+  it("a modified bundle beside an added file under .motebit/bundles/ is not judged", async () => {
+    const fx = await fixture(tmp, { bundleOnBase: "{}" });
+    const r = await amendedHead(fx, (repo) => {
+      fs.writeFileSync(path.join(repo, ".motebit/bundles/extra.json"), "{}\n", { mode: 0o755 });
+      fs.chmodSync(path.join(repo, ".motebit/bundles/extra.json"), 0o755);
+      git(repo, "add", ".motebit/bundles/extra.json");
+    });
+    expectNoBundleJudged(r);
+  });
+
   it("a pull request that only deletes a landed bundle has no bundle to judge", async () => {
     const fx = await fixture(tmp);
     // The governed change landed (main is its head); a follow-up deletes its bundle.

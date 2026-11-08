@@ -107,7 +107,7 @@ motebit-verify repo-change --landed <squash commit> --trusted-tip <main tip you 
 
 `motebit-verify repo-change` judges a governed repo change's pull request in CI-on-PR mode ([`spec/repo-change-v1.md`](https://github.com/motebit/motebit/blob/main/spec/repo-change-v1.md) §7, §9). It computes every input `verifyRepoChange` (`@motebit/verifier`) needs from the clone — never running git on the clone's own git directory (every call runs against a private, empty bare repository whose config the tool writes), never fetching:
 
-- the bundle: the one file the pull request adds under `.motebit/bundles/`, its exact bytes;
+- the bundle: the one file the pull request adds under `.motebit/bundles/` or, when it adds none and modifies exactly one regular file there, that file at the pull request head; its exact bytes;
 - the entries: the change commit's full tree against `--base`'s, compared in-process (never `git diff`), and the paths tracked at `--base`;
 - the pins, revocations and path policy read **at `--base`, never from the pull request**, and spent: the bundle path ever existed on `--base`'s first-parent history;
 - the shape checks: `parent_commit` is `--base`; the pull request is exactly the change commit and the bundle commit, linear; `head_commit..pr_head` is exactly one `A 100644` at the grant's bundle path; the base ref is `main`; the author is `motebit-agent`; the scope's `repo` is `--repository`; nothing under `.motebit/bundles/` is modified or deleted.

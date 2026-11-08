@@ -237,6 +237,33 @@ const TAMPERS: TamperEntry[] = [
       '      (e) => e.kind !== "add" && pathKey(e.path).startsWith(BUNDLES_DIR),\n',
     ),
   ),
+  entry(
+    "modified bundle: an executable file read as the bundle (the regular-file guard dropped)",
+    `${MODIFY} a modified bundle that is not a regular file (executable) is not judged`,
+    edit(
+      RC,
+      'added.length === 0 && modified.length === 1 && modified[0]!.mode === "100644"',
+      "added.length === 0 && modified.length === 1",
+    ),
+  ),
+  entry(
+    "modified bundle: the first of two modified files read (the exactly-one guard dropped)",
+    `${MODIFY} two modified bundles: neither is judged`,
+    edit(
+      RC,
+      'added.length === 0 && modified.length === 1 && modified[0]!.mode === "100644"',
+      'added.length === 0 && modified.length >= 1 && modified[0]!.mode === "100644"',
+    ),
+  ),
+  entry(
+    "modified bundle: read beside an added file (the adds-none guard dropped)",
+    `${MODIFY} a modified bundle beside an added file under .motebit/bundles/ is not judged`,
+    edit(
+      RC,
+      'added.length === 0 && modified.length === 1 && modified[0]!.mode === "100644"',
+      'modified.length === 1 && modified[0]!.mode === "100644"',
+    ),
+  ),
   // ── isolation ──────────────────────────────────────────────────────────
   entry(
     "isolation: git run on the repository's own git directory (its config read)",
