@@ -275,6 +275,78 @@ describe("motebit-verify repo-change: every shape check folds into integrity", (
   });
 });
 
+// -- A pull request that modifies or deletes a bundle ------------------------------
+//
+// §9: no entry modifies or deletes anything under .motebit/bundles/, and every
+// axis is still computed when a shape check fails. A modified bundle is the
+// bundle judged; a deleted one leaves no bundle at the head.
+
+describe("motebit-verify repo-change: a pull request that modifies or deletes a bundle", () => {
+  it("a second bundle under a grant whose first bundle landed is judged on every axis: spent", async () => {
+    const { fx, r } = await judge({ bundleOnBase: "{}" });
+    const v = r.verification;
+    // The shape failures, exactly as strong as for any modify.
+    expectShape(r, `modifies or deletes ${JSON.stringify(fx.bundleFile)}`);
+    expectShape(r, "does not add exactly one regular file under .motebit/bundles/ (it adds 0)");
+    expectShape(r, "head_commit..bundle_commit is not exactly one A 100644");
+    // And the bundle at the head, judged.
+    expect(r.computed.bundlePath).toBe(fx.bundleFile);
+    expect(Buffer.from(r.computed.input.bundle).equals(Buffer.from(fx.bundleBytes))).toBe(true);
+    expect(r.computed.input.spent).toBe(true);
+    expectRule(r, "authority.repo_change.grant_spent");
+    expect(codes(v)).not.toContain("integrity.repo_change.bundle_malformed");
+    expect(v.verdict.integrity).toBe("invalid");
+    expect(v.verdict.identityBinding).toBe("pinned");
+    expect(v.verdict.authority).toBe("insufficient");
+    expect(v.verdict.revocation.status).toBe("fresh");
+    expect(v.outcome).toBe("completed");
+    expect(r.accepted).toBe(false);
+  });
+
+  it("a modified bundle that is garbage at the head is malformed, never a crash", async () => {
+    const { fx, r } = await judge({
+      bundleOnBase: "{}",
+      bytes: () => new TextEncoder().encode("not json"),
+    });
+    const v = r.verification;
+    expectShape(r, `modifies or deletes ${JSON.stringify(fx.bundleFile)}`);
+    expectRule(r, "integrity.repo_change.bundle_malformed");
+    expect(r.computed.bundlePath).toBe(fx.bundleFile);
+    expect(r.computed.input.spent).toBe(false);
+    expect(v.verdict.integrity).toBe("invalid");
+    expect(v.verdict.identityBinding).toBe("unverified");
+    expect(v.verdict.authority).toBe("unknown");
+    expect(v.verdict.revocation.status).toBe("unchecked");
+    expect(v.outcome).toBeNull();
+  });
+
+  it("a pull request that only deletes a landed bundle has no bundle to judge", async () => {
+    const fx = await fixture(tmp);
+    // The governed change landed (main is its head); a follow-up deletes its bundle.
+    git(fx.repo, "checkout", "-q", "-B", "main", fx.head);
+    git(fx.repo, "checkout", "-q", "-b", "del");
+    fs.writeFileSync(path.join(fx.repo, "notes/other.md"), "x\n");
+    git(fx.repo, "add", "-A");
+    git(fx.repo, "commit", "-q", "-m", "change");
+    git(fx.repo, "rm", "-q", fx.bundleFile);
+    git(fx.repo, "commit", "-q", "-m", "delete the bundle");
+    const head = git(fx.repo, "rev-parse", "HEAD");
+    git(fx.repo, "checkout", "-q", "main");
+    const r = await verifyRepoChangePullRequest(argsFor(fx, { base: fx.head, head }));
+    const v = r.verification;
+    expectShape(r, `modifies or deletes ${JSON.stringify(fx.bundleFile)}`);
+    expectShape(r, "does not add exactly one regular file under .motebit/bundles/ (it adds 0)");
+    expectRule(r, "integrity.repo_change.bundle_malformed");
+    expect(r.computed.bundlePath).toBeNull();
+    expect(r.computed.input.bundle.length).toBe(0);
+    expect(r.computed.input.spent).toBe(false);
+    expect(v.verdict.identityBinding).toBe("unverified");
+    expect(v.verdict.authority).toBe("unknown");
+    expect(v.verdict.revocation.status).toBe("unchecked");
+    expect(v.outcome).toBeNull();
+  });
+});
+
 // -- Isolation -------------------------------------------------------------------
 
 describe("motebit-verify repo-change: the repository's own config is never read", () => {

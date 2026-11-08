@@ -26,6 +26,7 @@ const OK =
   "motebit-verify repo-change: a governed pull request is fully verified, pinned, fresh, with outcome completed";
 const INPUT = "motebit-verify repo-change: every input source can fail the verdict";
 const SHAPE = "motebit-verify repo-change: every shape check folds into integrity";
+const MODIFY = "motebit-verify repo-change: a pull request that modifies or deletes a bundle";
 const ISOLATION =
   "motebit-verify repo-change: the repository's own config is never read a core.fsmonitor program in .git/config never runs, and a config git cannot parse is never read";
 
@@ -214,6 +215,26 @@ const TAMPERS: TamperEntry[] = [
       RC,
       "  const input: VerifyRepoChangeInput = {\n",
       "  if (shapes.length > 0) bundle = new Uint8Array();\n  const input: VerifyRepoChangeInput = {\n",
+    ),
+  ),
+  // ── a modified or deleted bundle (§9: every axis still computed) ────────
+  entry(
+    "modified bundle: only an added bundle read (a modify judged as no bundle)",
+    `${MODIFY} a second bundle under a grant whose first bundle landed is judged on every axis: spent`,
+    off(RC, "added.length === 0 && modified.length === 1"),
+  ),
+  entry(
+    "modified bundle: garbage at the head not read (no bundle path reported)",
+    `${MODIFY} a modified bundle that is garbage at the head is malformed, never a crash`,
+    off(RC, "added.length === 0 && modified.length === 1"),
+  ),
+  entry(
+    "deleted bundle: the deleted blob read as the bundle judged",
+    `${MODIFY} a pull request that only deletes a landed bundle has no bundle to judge`,
+    edit(
+      RC,
+      '      (e) => e.kind === "modify" && pathKey(e.path).startsWith(BUNDLES_DIR),\n',
+      '      (e) => e.kind !== "add" && pathKey(e.path).startsWith(BUNDLES_DIR),\n',
     ),
   ),
   // ── isolation ──────────────────────────────────────────────────────────
