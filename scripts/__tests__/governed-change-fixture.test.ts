@@ -33,10 +33,13 @@ import { defaultConfigDirs } from "../../apps/cli/src/repo-task/agent-identity.j
 import { runGovernedRepoTask } from "../../apps/cli/src/repo-task/run-command.js";
 import {
   FIXTURE_CASES,
+  TICK_MARGIN_MS,
+  cliRuntimeVersion,
   commitBundleOverLanded,
   expectedVerdict,
   governedChangeFixtureCommand,
   judge,
+  nodeFixtureDeps,
   respellBase64Url,
 } from "../governed-change-fixture.js";
 import type { FixtureCase } from "../governed-change-fixture.js";
@@ -240,6 +243,9 @@ describe("governed-change fixture: each case makes exactly its one defect", LONG
       // What the publish needs to stay this verdict, and the build it was judged with.
       const out = h.lines.join("\n");
       expect(out).toContain("must be opened by motebit-agent");
+      expect(out).toContain(
+        "the pull request's title and body must not contain the word \"committer\": GitHub's merge queue re-wraps the squash message",
+      );
       expect(out).toContain(`main's tip must still be ${fx.tip} when CI runs`);
       expect(out).toMatch(
         /rebuild the verifier .*pnpm --filter @motebit\/verifier --filter @motebit\/verify build/,
@@ -688,10 +694,52 @@ describe("governed-change fixture: judge holds every row and every failure detai
         p.computed.changeCommit = "b".repeat(40);
       },
     ],
+    [
+      "the expected failure absent from the actual",
+      (p) => {
+        p.verification.diagnostics.failures.length = 0;
+      },
+    ],
   ])("one change, %s, is not a match", (_name, change) => {
     const p = matching();
     change(p);
     expect(verdictOf(p).matches).toBe(false);
+  });
+
+  it("b3: entry_path_not_allowed naming another path is not a match", () => {
+    const want = expectedVerdict("b3", { ...CTX, outsidePath: "notes/a.md" });
+    const computed = {
+      input: { spent: false },
+      bundlePath: want.bundlePath,
+      changeCommit: want.changeCommit,
+      shapeFailures: [] as string[],
+    };
+    const verification = (path: string) => ({
+      verdict: {
+        integrity: "verified",
+        identityBinding: "pinned",
+        authority: "insufficient",
+        revocation: { status: "fresh" },
+      },
+      outcome: "completed",
+      diagnostics: {
+        failures: [
+          {
+            code: "authority.repo_change.entry_path_not_allowed",
+            axis: "authority",
+            detail: `${JSON.stringify(path)} is not an allowed path`,
+          },
+        ],
+      },
+    });
+    const j = (path: string) =>
+      judge(
+        want,
+        computed as unknown as Parameters<typeof judge>[1],
+        verification(path) as unknown as Parameters<typeof judge>[2],
+      ).matches;
+    expect(j("notes/a.md")).toBe(true);
+    expect(j("notes/b.md")).toBe(false);
   });
 });
 
@@ -708,6 +756,117 @@ describe("governed-change fixture: every preflight and postcondition guard refus
     const fx = await fixtureRepo(env, tmp);
     const h = harness({ defaultConfigDirs: () => [env.agentDir] });
     await refusedBeforeKey(h, fixtureArgs(env, fx, "b3"), /default motebit config directory/);
+  });
+
+  /** A config directory: A's config with the given identity fields replaced. */
+  async function agentDirWith(fields: Record<string, string>): Promise<string> {
+    const dir = fs.mkdtempSync(path.join(tmp, "agent-"));
+    fs.writeFileSync(
+      path.join(dir, "config.json"),
+      JSON.stringify({ ...(await agentConfigOf(env.a)), ...fields }),
+    );
+    return dir;
+  }
+
+  it("--agent's device_public_key not in its one spelling", async () => {
+    const fx = await fixtureRepo(env, tmp);
+    const dir = await agentDirWith({ device_public_key: env.a.pin.public_key.toUpperCase() });
+    await refusedBeforeKey(
+      harness(),
+      fixtureArgs({ ...env, agentDir: dir }, fx, "b3"),
+      /device_public_key is not in its one spelling/,
+    );
+  });
+
+  it.each([
+    ["scope", /scope\.json is not a repo-task scope of the strict shape/],
+    ["grant", /grant\.json is not a grant of the strict shape/],
+    ["tick", /tick\.json is not a tick of the strict shape/],
+  ])("%s.json with an extra key is not of the strict shape", async (name, text) => {
+    const fx = await fixtureRepo(env, tmp);
+    const file = path.join(fx.delegation, `${name}.json`);
+    const value = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+    fs.chmodSync(file, 0o600);
+    fs.writeFileSync(file, JSON.stringify({ ...value, extra: 1 }));
+    await refusedBeforeKey(harness(), fixtureArgs(env, fx, "b3"), text);
+  });
+
+  it("the scope's first allowed path is not a regular file at the tip", async () => {
+    const fx = await fixtureRepo(env, tmp, { docSymlink: true });
+    await refusedBeforeKey(
+      harness(),
+      fixtureArgs(env, fx, "b3"),
+      /notes\/guide\.md is not a regular file at the tip/,
+    );
+  });
+
+  it.each([
+    ["the principal's motebit_id with A's key", "f", "a"],
+    ["A's motebit_id with the principal's key", "a", "f"],
+  ])("--agent is the principal by one half: %s", async (_name, id, key) => {
+    const fx = await fixtureRepo(env, tmp);
+    const pick = (w: string) => (w === "f" ? env.f : env.a);
+    const dir = await agentDirWith({
+      motebit_id: pick(id).pin.motebit_id,
+      device_public_key: pick(key).pin.public_key,
+    });
+    await refusedBeforeKey(
+      harness(),
+      fixtureArgs({ ...env, agentDir: dir }, fx, "b3"),
+      /--agent is the principal/,
+    );
+  });
+
+  it.each([
+    ["A's motebit_id with another key", true],
+    ["another motebit_id with A's key", false],
+  ])("--agent matches an agent pin by one half only: %s", async (_name, keepId) => {
+    const fx = await fixtureRepo(env, tmp);
+    const x = await party();
+    const dir = await agentDirWith(
+      keepId ? { device_public_key: x.pin.public_key } : { motebit_id: x.pin.motebit_id },
+    );
+    await refusedBeforeKey(
+      harness(),
+      fixtureArgs({ ...env, agentDir: dir }, fx, "b3"),
+      /--agent is not an agent pin at the tip/,
+    );
+  });
+
+  it("b5b: a grant revoked but never landed is not b5b's", async () => {
+    const fx = await fixtureRepo(env, tmp, { revoked: true });
+    await refusedBeforeKey(harness(), fixtureArgs(env, fx, "b5b"), /records as spent/);
+  });
+
+  it("b5b: a grant both landed and revoked is a second defect", async () => {
+    const fx = await fixtureRepo(env, tmp, { landed: true, revoked: true });
+    await refusedBeforeKey(
+      harness(),
+      fixtureArgs(env, fx, "b5b"),
+      /records as spent[\s\S]*revocation\.repo_change\.revoked/,
+    );
+  });
+
+  it("b4: the tick does not grant the scripted read", async () => {
+    const fx = await fixtureRepo(env, tmp, { tools: "repo_write_path" });
+    const h = harness();
+    await expectRefused(
+      h,
+      () => governedChangeFixtureCommand(fixtureArgs(env, fx, "b4"), h.deps),
+      /--case b4: the tick does not grant repo_read_blob/,
+    );
+    expect(h.events).toEqual(["ephemeral", "erase", "exit 1"]);
+  });
+
+  it("b4: a scripted call that does not complete", async () => {
+    const fx = await fixtureRepo(env, tmp, { omitDoc: true });
+    const h = harness();
+    await expectRefused(
+      h,
+      () => governedChangeFixtureCommand(fixtureArgs(env, fx, "b4"), h.deps),
+      /--case b4: the scripted repo_read_blob did not complete \(denied\)/,
+    );
+    expect(h.events).toEqual(["ephemeral", "erase", "exit 1"]);
   });
 
   it("a dirty worktree", async () => {
@@ -880,3 +1039,50 @@ describe("governed-change fixture: b5a's respelling and b5b's bundle commit", LO
     }
   });
 });
+
+// -- Time and the recorded runtime -----------------------------------------------------
+
+describe(
+  "governed-change fixture: the tick must outlast CI, and the run records the CLI's version",
+  LONG,
+  () => {
+    async function expiresAt(fx: FixtureRepo): Promise<number> {
+      const tick = JSON.parse(fs.readFileSync(path.join(fx.delegation, "tick.json"), "utf8")) as {
+        expires_at: number;
+      };
+      return tick.expires_at;
+    }
+
+    it("exactly the margin left at the self-check: the push command, with the expiry", async () => {
+      const fx = await fixtureRepo(env, tmp);
+      const at = (await expiresAt(fx)) - TICK_MARGIN_MS;
+      const h = harness({ now: () => at });
+      await governedChangeFixtureCommand(fixtureArgs(env, fx, "b3"), h.deps);
+      const out = h.lines.join("\n");
+      expect(out).toContain(
+        `CI must judge before ${new Date(at + TICK_MARGIN_MS).toISOString()}, when the tick expires`,
+      );
+      expect(out).toMatch(/git push <publisher-remote>/);
+    });
+
+    it("less than the margin left: refused, no push command", async () => {
+      const fx = await fixtureRepo(env, tmp);
+      const at = (await expiresAt(fx)) - TICK_MARGIN_MS + 1;
+      const h = harness({ now: () => at });
+      await expectRefused(
+        h,
+        () => governedChangeFixtureCommand(fixtureArgs(env, fx, "b3"), h.deps),
+        /less than the 30 minutes CI needs/,
+      );
+    });
+
+    it("the runtime version is the CLI package's, as a real run records it", async () => {
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(__dirname, "..", "..", "apps", "cli", "package.json"), "utf8"),
+      ) as { version: string };
+      expect(cliRuntimeVersion()).toBe(`motebit ${pkg.version}`);
+      expect(cliRuntimeVersion()).not.toBe("motebit 0.0.0-dev");
+      expect((await nodeFixtureDeps()).runtimeVersion).toBe(`motebit ${pkg.version}`);
+    });
+  },
+);

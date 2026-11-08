@@ -174,6 +174,12 @@ export interface FixtureRepoOptions {
   exclude?: string[];
   /** Extra tracked files at the tip. */
   files?: Record<string, string>;
+  /** The grant's and the tick's tools; default both. */
+  tools?: string;
+  /** DOC is not tracked at the tip. */
+  omitDoc?: boolean;
+  /** DOC is tracked as a symlink. */
+  docSymlink?: boolean;
 }
 
 export interface FixtureRepo {
@@ -210,7 +216,7 @@ export async function fixtureRepo(
       allowedPaths: o.allowedPaths ?? [DOC],
       maxChangedFiles: o.maxChangedFiles ?? 2,
       task: "Fix the typo in notes/guide.md.",
-      tools: "repo_read_blob,repo_write_path",
+      tools: o.tools ?? "repo_read_blob,repo_write_path",
       lifetimeMs: HOUR,
       now: NOW - 60_000,
       grantId,
@@ -219,7 +225,12 @@ export async function fixtureRepo(
   );
   fs.mkdirSync(repo);
   git(home, repo, "init", "-q", "-b", "main");
-  writeFile(repo, DOC, "teh typo\n");
+  if (o.docSymlink) {
+    writeFile(repo, "notes/target.md", "teh typo\n");
+    fs.symlinkSync("target.md", path.join(repo, DOC));
+  } else if (!o.omitDoc) {
+    writeFile(repo, DOC, "teh typo\n");
+  }
   writeFile(repo, "src/code.ts", "export const x = 1;\n");
   writeFile(repo, ".motebit/principals/principal.md", await identityFileOf(f));
   for (const p of o.agentPins ?? [a]) {

@@ -604,6 +604,10 @@ describe("repo-task run: a governed change, end to end", () => {
       `git push <publisher-remote> ${bundleCommit}:refs/heads/repo-task/${fx.grantId}`,
     );
     expect(h.events).not.toContain("exit 1");
+    // GitHub's merge queue corrupts its own signature after a line starting "committer".
+    expect(h.lines.join("\n")).toContain(
+      'the pull request\'s title and body must not contain the word "committer"',
+    );
 
     // No ref moved, the worktree is byte-identical, ~/.motebit untouched.
     expect(refState(fx.repo)).toEqual(refsBefore);

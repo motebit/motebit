@@ -27,6 +27,8 @@ const ERASE = "governed-change fixture: every key is erased on every exit path";
 const JUDGE = "governed-change fixture: judge holds every row and every failure detail";
 const GUARD = "governed-change fixture: every preflight and postcondition guard refuses";
 const DIRECT = "governed-change fixture: b5a's respelling and b5b's bundle commit";
+const TIME =
+  "governed-change fixture: the tick must outlast CI, and the run records the CLI's version";
 /** Disable an `if (` whose condition is one term (no top-level `||`) on the same line. */
 const off = (from: string): TamperEdit =>
   edit(SCRIPT, from, from.replace("if (", "if ((false as boolean) && "));
@@ -63,7 +65,7 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "b5a: the tick's signature is re-spelled to itself (no defect)",
     CASE("b5a"),
-    edit(SCRIPT, "BASE64URL.indexOf(last) | 1]", "BASE64URL.indexOf(last)]"),
+    edit(SCRIPT, "BASE64URL.indexOf(s.at(-1)!) | 1]", "BASE64URL.indexOf(s.at(-1)!)]"),
   ),
   entry(
     "b5b: the run is told the real spent status (the run refuses; no fixture)",
@@ -239,8 +241,8 @@ const TAMPERS: TamperEntry[] = [
     `${GUARD} the scripted run did not make its edit: refused, the key erased`,
     edit(
       SCRIPT,
-      '            run.ended !== "model_done" ||\n            run.written_paths.length !== 1 ||\n            run.written_paths[0] !== editPath\n',
-      "            (false as boolean)\n",
+      '          if (run.written_paths.join("\\0") !== editPath) {\n',
+      '          if ((false as boolean) && run.written_paths.join("\\0") !== editPath) {\n',
     ),
   ),
   entry(
@@ -275,6 +277,148 @@ const TAMPERS: TamperEntry[] = [
       "    void 0;\n",
     ),
   ),
+  // ── round 3: each remaining guard, and each term of the compound ones ──
+  entry(
+    "--agent's key spelling is not checked",
+    `${GUARD} --agent's device_public_key not in its one spelling`,
+    off("  if (fault !== null) refuse("),
+  ),
+  entry(
+    "scope.json's strict shape is not checked",
+    `${GUARD} scope.json with an extra key is not of the strict shape`,
+    off("  if (!m.verifier.isRepoTaskScopeShape(scope)) {\n"),
+  ),
+  entry(
+    "grant.json's strict shape is not checked",
+    `${GUARD} grant.json with an extra key is not of the strict shape`,
+    off("  if (!m.verifier.isRepoChangeGrantShape(grant)) {\n"),
+  ),
+  entry(
+    "tick.json's strict shape is not checked",
+    `${GUARD} tick.json with an extra key is not of the strict shape`,
+    off("  if (!m.verifier.isRepoChangeTickShape(tick))\n"),
+  ),
+  entry(
+    "the run's authority check before the key is skipped",
+    `${REFUSE} b3: a grant also revoked at the tip is a second defect, refused before the key`,
+    off("    if (!check.ok) {\n"),
+    // Keeps the edit valid code: the narrowing the guard gave is now a cast.
+    edit(
+      SCRIPT,
+      "            signer,\n            check,\n",
+      "            signer,\n            check: check as RepoTaskAuthorityCheck & { ok: true },\n",
+    ),
+  ),
+  entry(
+    "the edit path need not be a regular file",
+    `${GUARD} the scope's first allowed path is not a regular file at the tip`,
+    off('    if (atTip !== null && atTip.kind !== "blob") {\n'),
+  ),
+  entry(
+    "b4 calls a tool the tick does not grant",
+    `${GUARD} b4: the tick does not grant the scripted read`,
+    off("    if (entry === undefined) refuse("),
+    edit(SCRIPT, "await entry.handler.invoke(call.args)", "await entry!.handler.invoke(call.args)"),
+  ),
+  entry(
+    "b4 records a call that did not complete",
+    `${GUARD} b4: a scripted call that does not complete`,
+    off('    if (outcome.status !== "completed") {\n'),
+  ),
+  entry(
+    "is-principal ignores the motebit_id",
+    `${GUARD} --agent is the principal by one half: the principal's motebit_id with A's key`,
+    edit(
+      SCRIPT,
+      "      agentPin.motebit_id === principal.motebit_id ||\n",
+      "      (false as boolean) ||\n",
+    ),
+  ),
+  entry(
+    "is-principal ignores the key",
+    `${GUARD} --agent is the principal by one half: A's motebit_id with the principal's key`,
+    edit(
+      SCRIPT,
+      "      agentPin.public_key === principal.public_key\n    ) {\n",
+      "      (false as boolean)\n    ) {\n",
+    ),
+  ),
+  entry(
+    "the agent-pin match ignores the key",
+    `${GUARD} --agent matches an agent pin by one half only: A's motebit_id with another key`,
+    edit(SCRIPT, "&& p.public_key === agentPin.public_key,", "&& true,"),
+  ),
+  entry(
+    "the agent-pin match ignores the motebit_id",
+    `${GUARD} --agent matches an agent pin by one half only: another motebit_id with A's key`,
+    edit(
+      SCRIPT,
+      "(p) => p.motebit_id === agentPin.motebit_id && p.public_key",
+      "(p) => true && p.public_key",
+    ),
+  ),
+  entry(
+    "b5b/b6 accept the wrong single rule",
+    `${GUARD} b5b: a grant revoked but never landed is not b5b's`,
+    edit(
+      SCRIPT,
+      "      if (got.length !== 1 || got[0] !== want) {\n",
+      "      if (got.length !== 1) {\n",
+    ),
+  ),
+  entry(
+    "b5b/b6 accept the case's rule beside another",
+    `${GUARD} b5b: a grant both landed and revoked is a second defect`,
+    edit(
+      SCRIPT,
+      "      if (got.length !== 1 || got[0] !== want) {\n",
+      "      if (got[0] !== want) {\n",
+    ),
+  ),
+  entry(
+    "judge ignores an expected failure that is missing",
+    `${JUDGE} one change, the expected failure absent from the actual, is not a match`,
+    edit(SCRIPT, " && missing.length === 0 && ", " && "),
+  ),
+  entry(
+    "b3's expectation accepts any detail",
+    `${JUDGE} b3: entry_path_not_allowed naming another path is not a match`,
+    edit(
+      SCRIPT,
+      "            detail: `${JSON.stringify(ctx.outsidePath)} is not an allowed path`,\n",
+      "",
+    ),
+  ),
+  entry(
+    "the push command prints with the tick about to expire",
+    `${TIME} less than the margin left: refused, no push command`,
+    off("  if (left < TICK_MARGIN_MS) {\n"),
+  ),
+  entry(
+    "the runtime version is the unsubstituted build constant",
+    `${TIME} the runtime version is the CLI package's, as a real run records it`,
+    edit(SCRIPT, "  return `motebit ${pkg.version}`;\n", '  return "motebit 0.0.0-dev";\n'),
+  ),
+  // ── the "committer" publish condition, in the fixture and in repo-task run ──
+  entry(
+    "the fixture omits the committer publish condition",
+    CASE("b3"),
+    edit(SCRIPT, "  log(`  - ${COMMITTER_CONDITION}.`);\n", ""),
+  ),
+  {
+    name: "repo-task run omits the committer publish condition",
+    pkg: "motebit",
+    test: "src/repo-task/__tests__/run-command.test.ts",
+    red: "repo-task run: a governed change, end to end makes the change commit and the bundle commit, verified, moving no ref",
+    only: true,
+    edits: [
+      edit(
+        "apps/cli/src/subcommands/repo-task.ts",
+        "      `  - the pull request's title and body must not contain the word \"committer\": GitHub's merge queue re-wraps the squash message and corrupts its own signature after any line starting with that word, so the landing would never verify offline.`,\n",
+        '      "",\n',
+      ),
+    ],
+  },
 ];
 
 void runTampers(TAMPERS, { root: ROOT });

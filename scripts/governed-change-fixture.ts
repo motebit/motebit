@@ -58,6 +58,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -71,7 +72,6 @@ import type {
   RepoTaskAuthorityCheck,
   RepoTaskPin,
   RepoTaskRunResult,
-  RepoStagedEntry,
 } from "@motebit/runtime";
 import type { RepoChangeVerification } from "@motebit/verifier";
 import type { IsolatedGit, RepoChangeInputs } from "@motebit/verify/git";
@@ -79,7 +79,6 @@ import type { IsolatedGit, RepoChangeInputs } from "@motebit/verify/git";
 import { mkdirOwnerOnly } from "../apps/cli/src/durable-file.js";
 import { loadActiveSigningKey, promptPassphrase } from "../apps/cli/src/identity.js";
 import type { ActiveSigningKey, LoadActiveSigningKeyOptions } from "../apps/cli/src/identity.js";
-import { VERSION } from "../apps/cli/src/config.js";
 import type { FullConfig } from "../apps/cli/src/config.js";
 import {
   agentKeyConfig,
@@ -158,34 +157,57 @@ export const ACCEPTANCE_ROW: Readonly<Record<FixtureCase, string>> = {
   b6: "B6: a PR on the tip with a grant whose revocation landed",
 };
 
+/** What every case departs from a real run in, besides its own defect. */
+const COMMON_DEPARTURES: readonly string[] = [
+  "the edit appends a fixture marker line to the scope's first allowed path",
+  'both commit messages carry a fixture marker, "(governed-change fixture <case>)", so the commits never pass as a real run\'s',
+  "the receipts file is named fixture-<case>-receipts-<grant_id>-<ms>.jsonl",
+];
+
 /** Every departure from a real `motebit repo-task run`, per case; printed with the output. */
 export const DEPARTURES: Readonly<Record<FixtureCase, readonly string[]>> = {
   b3: [
     "no model call: a scripted provider makes the edit (provider governed-change-fixture, model scripted)",
     "after the run, one path outside allowed_paths is staged past the run's write handler (which refuses it); no tool receipt covers it",
     "A signs the record and the receipt over the real entries, the out-of-scope one included",
+    ...COMMON_DEPARTURES,
   ],
   b4: [
     "no run: runRepoTask refuses an agent that is not the grant's delegate, so the scope's real tool handlers are invoked directly with the scripted edit (provider governed-change-fixture, model scripted)",
     "an ephemeral Ed25519 key, generated in memory and erased, signs every tool receipt and the receipt in A's place (A's motebit_id and device_id, the ephemeral public key); A's key is never unlocked",
+    ...COMMON_DEPARTURES,
   ],
   b5a: [
     "no model call: a scripted provider makes the edit (provider governed-change-fixture, model scripted)",
     "the run uses the tick as signed; the bundle and the record carry tick.signature re-spelled in non-canonical base64url (the same signature bytes), and A signs the record over it",
     "the acceptance row names B1's tick, but B1's grant is spent and expired: b5a needs a fresh, unexpired grant that never landed (G3)",
+    ...COMMON_DEPARTURES,
   ],
   b5b: [
     "no model call: a scripted provider makes the edit (provider governed-change-fixture, model scripted)",
     "the run is told spent: false (local only; the tip says the grant's bundle landed)",
     "the bundle commit modifies the landed bundle path (commitBundle refuses an existing path; a fixture-local commit on the same private-index stager makes it)",
+    ...COMMON_DEPARTURES,
   ],
   b6: [
     "no model call: a scripted provider makes the edit (provider governed-change-fixture, model scripted)",
     "the run is told the revocation set is empty (local only; the landed revocation stays in the repository)",
+    ...COMMON_DEPARTURES,
   ],
 };
 
 export const FIXTURE_PROVIDER = "governed-change-fixture";
+
+/**
+ * The least time the tick must have left at the self-check before a push
+ * command is printed: CI judges at its own clock, and once the tick expires
+ * it adds tick_expired, a second defect.
+ */
+export const TICK_MARGIN_MS = 30 * 60_000;
+
+/** As `motebit repo-task run` prints it (apps/cli/src/subcommands/repo-task.ts). */
+export const COMMITTER_CONDITION = `the pull request's title and body must not contain the word "committer": GitHub's merge queue re-wraps the squash message and corrupts its own signature after any line starting with that word, so the landing would never verify offline`;
+
 export const FIXTURE_MODEL = "scripted";
 
 /** The line the scripted edit appends to the scope's first allowed path. */
@@ -238,6 +260,10 @@ export interface FixtureReport {
   readonly verification: RepoChangeVerification;
   readonly expected: ExpectedVerdict;
   readonly judgement: Judgement;
+  /** The tick's expiry (ms): CI must judge before it. */
+  readonly tickExpiresAt: number;
+  /** The self-check's clock (ms). */
+  readonly selfCheckAt: number;
 }
 
 function refuse(...lines: string[]): never {
@@ -439,9 +465,9 @@ export function judge(
  * bytes is non-canonical; the self-check confirms value_not_canonical.
  */
 export function respellBase64Url(s: string): string | null {
-  const last = s.at(-1);
-  if (last === undefined || !BASE64URL.includes(last)) return null;
-  const respelled = s.slice(0, -1) + BASE64URL[BASE64URL.indexOf(last) | 1];
+  // A last character outside the alphabet (or none) has indexOf -1, so the
+  // respelling ends in "undefined": different bytes, refused below.
+  const respelled = s.slice(0, -1) + BASE64URL[BASE64URL.indexOf(s.at(-1)!) | 1];
   if (respelled === s) return null;
   if (!Buffer.from(respelled, "base64url").equals(Buffer.from(s, "base64url"))) return null;
   return respelled;
@@ -607,10 +633,10 @@ export async function runGovernedChangeFixture(
       spent,
     };
     const preflightAt = deps.now();
-    const honestCheck = await m.runtime.checkRepoTaskAuthority(honest, agentPin, preflightAt);
     const target = bundlePath(grant.grant_id);
     let told: RepoTaskAuthorityBundle = honest;
     if (c === "b5b" || c === "b6") {
+      const honestCheck = await m.runtime.checkRepoTaskAuthority(honest, agentPin, preflightAt);
       // The real law must fail on exactly the case's one rule: the departure
       // hides that rule, and only it, from the run.
       const want =
@@ -636,9 +662,10 @@ export async function runGovernedChangeFixture(
           revocations: { set: [], failures: [], readAt: honest.revocations.readAt },
         };
       }
-    } else if (!honestCheck.ok) {
-      refuse("the delegation does not authorize this run:", ...checkLines(honestCheck));
     }
+    // b3, b4, b5a: told IS the honest bundle, so this is the real run's check.
+    // b5b, b6: the real check failed on exactly the hidden rule, so this one
+    // passes unless something else is wrong (it cannot be, by the check above).
     const check = await m.runtime.checkRepoTaskAuthority(told, agentPin, preflightAt);
     if (!check.ok) {
       refuse("the delegation does not authorize this run:", ...checkLines(check));
@@ -688,11 +715,11 @@ export async function runGovernedChangeFixture(
     // -- b5a: the tick's signature, re-spelled: the same bytes, a second spelling.
     let bundleTick: DelegationToken = tick;
     if (c === "b5a") {
-      const respelled = respellBase64Url(tick.signature);
-      if (respelled === null) {
-        refuse("--case b5a: the tick's signature has no second spelling of the same bytes");
-      }
-      bundleTick = { ...tick, signature: respelled };
+      // Never null here: the authority check holds tick.signature to a
+      // verifying (so 64-byte) Ed25519 signature in canonical base64url, and
+      // 64 bytes spell with 4 unused bits. A null would put no signature in
+      // the bundle, and the verdict would not match.
+      bundleTick = { ...tick, signature: respellBase64Url(tick.signature) as string };
     }
 
     // -- The run (or b4's hand-signed stand-in), the key held only inside.
@@ -810,11 +837,11 @@ export async function runGovernedChangeFixture(
             }
             throw err;
           }
-          if (
-            run.ended !== "model_done" ||
-            run.written_paths.length !== 1 ||
-            run.written_paths[0] !== editPath
-          ) {
+          // Exactly [editPath] (a path holds no NUL). With the scripted
+          // provider a run that wrote it ended model_done (its last model
+          // call has no tool call to lapse on), and the record's status would
+          // show it otherwise, so how the run ended needs no term of its own.
+          if (run.written_paths.join("\0") !== editPath) {
             refuse(
               `the scripted run did not make its edit (ended ${run.ended}, wrote ${JSON.stringify(run.written_paths)})`,
             );
@@ -849,6 +876,7 @@ export async function runGovernedChangeFixture(
 
     // -- The self-check, as `repo-task run`'s: CI-on-PR mode, base = the tip,
     // head = the bundle commit, the run's clock. Evidence, never authority.
+    const selfCheckAt = deps.now();
     const computed = await m.git.computeRepoChangeInputs({
       git,
       commonDir: tipInfo.commonDir,
@@ -857,7 +885,7 @@ export async function runGovernedChangeFixture(
       repository: scope.repo,
       baseRef: scope.base_ref,
       prAuthor: null,
-      now: deps.now(),
+      now: selfCheckAt,
       revocationsAsOf: preflightAt,
     });
     const verification = await m.verifier.verifyRepoChange(computed.input);
@@ -880,6 +908,8 @@ export async function runGovernedChangeFixture(
       verification,
       expected,
       judgement: judge(expected, computed, verification),
+      tickExpiresAt: tick.expires_at,
+      selfCheckAt,
     };
   } finally {
     git.close();
@@ -1016,14 +1046,11 @@ export async function commitBundleOverLanded(
   const stager = createGitChangeStager({ git, tip: head });
   await stager.stage(target, bytes);
   const { headCommit, entries } = await stager.buildChangeCommit(commit);
-  const only: RepoStagedEntry | undefined = entries[0];
-  if (
-    entries.length !== 1 ||
-    only === undefined ||
-    only.path !== target ||
-    only.mode !== "100644" ||
-    only.blob === landed.oid
-  ) {
+  // Only `target` was staged, and the stager's own postcondition admits
+  // nothing but a 100644 add or modify carrying the staged blob, of a path
+  // whose content changed: so one entry is the modify of `target`, and none
+  // means the bytes were the landed ones.
+  if (entries.length !== 1) {
     throw new Error("the bundle commit would not be exactly one modify of the landed bundle");
   }
   return headCommit;
@@ -1134,6 +1161,14 @@ export async function governedChangeFixtureCommand(
     );
     deps.exit(1);
   }
+  const expiry = new Date(report.tickExpiresAt).toISOString();
+  const left = report.tickExpiresAt - report.selfCheckAt;
+  if (left < TICK_MARGIN_MS) {
+    deps.error(
+      `The tick expires at ${expiry}, ${Math.max(0, Math.floor(left / 60_000))} minute(s) after this self-check: less than the ${TICK_MARGIN_MS / 60_000} minutes CI needs, and CI judging after it adds tick_expired, a second defect. No push command; make the fixture again under a fresh grant.`,
+    );
+    deps.exit(1);
+  }
   log("");
   log(
     `The verdict is exactly ${report.case}'s expectation. No ref was created or moved and nothing was pushed.`,
@@ -1145,8 +1180,12 @@ export async function governedChangeFixtureCommand(
     `  - the pull request must be opened by ${verifyGit.REPO_CHANGE_PUBLISHER} (another author adds a shape failure);`,
   );
   log(
-    `  - its base must be main and main's tip must still be ${report.parentCommit} when CI runs (a moved tip adds shape failures, and the verdict is no longer this one).`,
+    `  - its base must be main and main's tip must still be ${report.parentCommit} when CI runs (a moved tip adds shape failures, and the verdict is no longer this one);`,
   );
+  log(
+    `  - CI must judge before ${expiry}, when the tick expires, or tick_expired is a second defect;`,
+  );
+  log(`  - ${COMMITTER_CONDITION}.`);
   log("");
   log(
     `  git push <publisher-remote> ${report.bundleCommit}:refs/heads/repo-task/${report.grantId}-${report.case}`,
@@ -1160,6 +1199,18 @@ async function agentPassphrase(label: string): Promise<string> {
   return promptPassphrase(label);
 }
 
+/**
+ * `motebit <version>`, the runtime version a real `repo-task run` records.
+ * Read from apps/cli/package.json: under tsx the CLI's build-time version
+ * constant is not substituted, and would read 0.0.0-dev.
+ */
+export function cliRuntimeVersion(): string {
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(ROOT, "apps", "cli", "package.json"), "utf8"),
+  ) as { version: string };
+  return `motebit ${pkg.version}`;
+}
+
 export async function nodeFixtureDeps(): Promise<FixtureCommandDeps> {
   const { crypto, encryption } = await modules();
   return {
@@ -1169,7 +1220,7 @@ export async function nodeFixtureDeps(): Promise<FixtureCommandDeps> {
     ephemeralKeypair: () => crypto.generateKeypair(),
     defaultConfigDirs: () => defaultConfigDirs(),
     now: () => Date.now(),
-    runtimeVersion: `motebit ${VERSION}`,
+    runtimeVersion: cliRuntimeVersion(),
     log: (line) => console.log(line),
     error: (line) => console.error(line),
     exit: (code) => process.exit(code),
