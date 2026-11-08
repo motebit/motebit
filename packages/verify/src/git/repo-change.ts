@@ -9,7 +9,9 @@
  * Given the trusted tip `base` and the pull request's head:
  *
  *   - the bundle: the one file the pull request adds under
- *     `.motebit/bundles/` (its exact bytes, never re-serialized);
+ *     `.motebit/bundles/` (its exact bytes, never re-serialized) or, when
+ *     it adds none and modifies exactly one there, that file at the head
+ *     (the shape checks still fail; every axis is judged from it);
  *   - the entries: the change commit's full tree against the base's,
  *     compared in-process, never from `git diff`; the change commit is the
  *     pull request head's only parent;
@@ -154,7 +156,10 @@ export interface RepoChangePullRequest {
 export interface RepoChangeInputs {
   /** Exactly what `verifyRepoChange` takes, in `pull_request` mode. */
   readonly input: VerifyRepoChangeInput;
-  /** The bundle file the pull request adds, or `null` when it adds no single one. */
+  /**
+   * The bundle file judged: the one the pull request adds, else the one it
+   * modifies when it adds none and modifies exactly one; `null` otherwise.
+   */
   readonly bundlePath: string | null;
   /** The pull request head's only parent, or `null` when it has none or several. */
   readonly changeCommit: string | null;
@@ -253,6 +258,18 @@ export async function computeRepoChangeInputs(
     shapes.push(
       `the pull request does not add exactly one regular file under ${BUNDLES_DIR} (it adds ${added.length})`,
     );
+    // It adds none but modifies exactly one regular file there: that file at
+    // the head is the bundle judged. The shape checks still fail (it adds
+    // none, and it modifies a bundle), and every axis is computed from it
+    // (§9), so a second bundle under a spent grant reads as spent. A delete
+    // has no bundle at the head.
+    const modified = prEntries.filter(
+      (e) => e.kind === "modify" && pathKey(e.path).startsWith(BUNDLES_DIR),
+    );
+    if (added.length === 0 && modified.length === 1 && modified[0]!.mode === "100644") {
+      bundle = await readBlob(git, modified[0]!.blob);
+      foundPath = pathKey(modified[0]!.path);
+    }
   }
   const record = looseRecord(bundle);
 

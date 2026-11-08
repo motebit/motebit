@@ -143,6 +143,11 @@ export interface FixtureOptions {
   revoked?: boolean;
   /** The bundle path once existed on main's first-parent history, then was deleted. */
   spent?: boolean;
+  /**
+   * The grant's bundle path already on main at the base, with these bytes
+   * (a first bundle under the grant landed): the bundle commit then MODIFIES it.
+   */
+  bundleOnBase?: string;
   /** An unrelated bundle already on main (default false). */
   otherBundle?: boolean;
   /** Extra files the change commit writes, outside the scope. */
@@ -199,6 +204,9 @@ export async function fixture(root: string, o: FixtureOptions = {}): Promise<Fix
   );
   writeFile(repo, ".motebit/repo-path-policy.json", o.basePolicy ?? POLICY);
   if (o.otherBundle) writeFile(repo, ".motebit/bundles/landed.json", "{}");
+  if (o.bundleOnBase !== undefined) {
+    writeFile(repo, `.motebit/bundles/${grantId}.json`, o.bundleOnBase);
+  }
   for (const [p, c] of Object.entries(o.baseExtra ?? {})) writeFile(repo, p, c);
   let base = commitAll(repo, "init");
   if (o.spent) {
