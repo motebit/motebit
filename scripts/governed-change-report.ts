@@ -35,8 +35,10 @@
  * the commit it inserts a copy of its `gpgsig` block into the message after
  * every line that begins with "committer", so the stored commit fails its own
  * signature and the landed change never verifies offline (spec §9.1). The
- * re-wrap moves words, so the word anywhere is the hazard. The workflow runs
- * on `edited`, so removing the word re-runs the check.
+ * re-wrap moves words in the body (the title is never wrapped), so the word
+ * anywhere in the body is the hazard; the title is matched the same way, for
+ * simplicity. The workflow runs on `edited`, so removing the word re-runs the
+ * check.
  *
  * Every verdict axis goes to the job summary ($GITHUB_STEP_SUMMARY). Values
  * the PR controls (paths, failure details) appear only inside a fenced code
@@ -144,7 +146,7 @@ export function renderHazards(hazards: readonly LandingHazard[]): string[] {
         `the commit, inserts a copy of its gpgsig block after every message line that begins with "${COMMITTER_HAZARD_WORD}". ` +
         "The stored commit then fails its own signature (GitHub shows it Unverified), so the offline landed check " +
         `(${COMMITTER_HAZARD_CANONICAL}) cannot accept the landing time, authority is unknown, and the landed change ` +
-        "never verifies. The re-wrap moves words, so the word anywhere in the title or body is the hazard.",
+        "never verifies. The re-wrap moves words in the body, so the word anywhere there is the hazard; the title is matched the same way.",
       "",
       `Fix: remove the word "${COMMITTER_HAZARD_WORD}" (any case, including inside a longer word) from the pull ` +
         "request's title and body; editing them re-runs this check.",
