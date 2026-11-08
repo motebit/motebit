@@ -139,7 +139,7 @@ export interface RepoTaskRunReport {
   readonly accepted: boolean;
 }
 
-const DEFAULT_COMMIT_AUTHOR = {
+export const DEFAULT_COMMIT_AUTHOR = {
   authorName: "motebit repo-task",
   authorEmail: "repo-task@motebit.invalid",
 };
@@ -157,7 +157,9 @@ const GIT_IDENT_CRUD = new Set([".", ",", ":", ";", '"', "'", "\\"]);
  * bound keeps the two copies the stager puts in git's environment far under
  * the platform's argument limit, so git cannot refuse after the model calls.
  */
-function parseCommitAuthor(text: string): { authorName: string; authorEmail: string } | null {
+export function parseCommitAuthor(
+  text: string,
+): { authorName: string; authorEmail: string } | null {
   // A lone surrogate, or U+FFFD: what Node makes of argv bytes that are not UTF-8.
   if (/[\p{Cs}\uFFFD]/u.test(text)) return null;
   for (const ch of text) {
@@ -189,7 +191,7 @@ function refuse(...lines: string[]): never {
  * directory leaves incomplete. An ancestor `.git` that cannot be resolved
  * might be this repository's, so it fails closed.
  */
-function isInsideRepository(outputDir: string, tipInfo: RepoTip): string | null {
+export function isInsideRepository(outputDir: string, tipInfo: RepoTip): string | null {
   if (isWithinEntry(outputDir, tipInfo.gitDir) || isWithinEntry(outputDir, tipInfo.commonDir)) {
     return "inside the repository's git directory";
   }
