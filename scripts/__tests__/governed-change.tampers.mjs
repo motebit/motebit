@@ -29,6 +29,10 @@ const SAFE = (t) => `the governed-change workflow's pull_request_target safety $
 const PURE = (t) => `governed-change-report: the pure core ${t}`;
 const GOV = (t) => `governed-change-report end to end: a governed change ${t}`;
 const WHICH = (t) => `governed-change-report end to end: which pull requests are judged ${t}`;
+const HAZ = (t) => `governed-change-report end to end: the committer landing hazard ${t}`;
+const HAZ_BODY = HAZ(
+  "a governed PR with the word in the body reports the hazard and fails (exit 1), the verdict still VERIFIED",
+);
 const PROV = (t) =>
   `governed-change-report end to end: the provenance self-check ${t} is NOT JUDGED (exit 1), the verifier never run`;
 
@@ -298,17 +302,74 @@ const TAMPERS = [
   ),
   rp(
     "report: NOT VERIFIED exits 0",
-    "      return accepted ? 0 : 1;",
+    "      return accepted && hazards.length === 0 ? 0 : 1;",
     "      return 0;",
     GOV("that is revoked concludes NOT VERIFIED (exit 1), revocation revoked in the summary"),
   ),
   rp(
     "report: NOT JUDGED exits 0",
-    "      stderr,\n    }),\n  );\n  return 1;\n}",
-    "      stderr,\n    }),\n  );\n  return 0;\n}",
+    "      hazards,\n    }),\n  );\n  return 1;\n}",
+    "      hazards,\n    }),\n  );\n  return 0;\n}",
     GOV(
       "the verifier unable to judge (its exit 2) concludes NOT JUDGED (exit 1), its error in the summary",
     ),
+  ),
+  // ── The committer landing hazard ──
+  rp(
+    "report: the body is not checked for the word",
+    '  if (has(body)) fields.push("body");',
+    OFF('  if (has(body)) fields.push("body");'),
+    HAZ_BODY,
+  ),
+  rp(
+    "report: the title is not checked for the word",
+    '  if (has(title)) fields.push("title");',
+    OFF('  if (has(title)) fields.push("title");'),
+    HAZ("a governed PR with the word in the title reports the hazard and fails (exit 1)"),
+  ),
+  rp(
+    "report: the word matched case-sensitively",
+    '    typeof v === "string" && asciiLowerString(v).includes(COMMITTER_HAZARD_WORD);',
+    '    typeof v === "string" && v.includes(COMMITTER_HAZARD_WORD);',
+    HAZ("the word is matched in any case (Committer) and fails (exit 1)"),
+  ),
+  rp(
+    "report: a near-miss (commit) flagged",
+    'export const COMMITTER_HAZARD_WORD = "committer";',
+    'export const COMMITTER_HAZARD_WORD = "commit";',
+    HAZ(
+      "without the word (a near-miss such as commit included) there is no hazard: VERIFIED, exit 0",
+    ),
+  ),
+  rp(
+    "report: a hazard does not fail a VERIFIED run",
+    "      return accepted && hazards.length === 0 ? 0 : 1;",
+    "      return accepted ? 0 : 1;",
+    HAZ_BODY,
+  ),
+  rp(
+    "report: the hazard not written to the summary",
+    "  if (r.hazards !== undefined && r.hazards.length > 0) lines.push(...renderHazards(r.hazards));",
+    "",
+    HAZ_BODY,
+  ),
+  rp(
+    "report: a NOT JUDGED change drops the hazard",
+    "      stderr,\n      hazards,\n    }),\n  );\n  return 1;\n}",
+    "      stderr,\n    }),\n  );\n  return 1;\n}",
+    HAZ("a NOT JUDGED governed change still reports the hazard"),
+  ),
+  rp(
+    "report: a non-governed PR is flagged",
+    '    write(renderSummary({ conclusion: "not-governed", number, policySha: base, headSha: head }));\n    return 0;',
+    '    write(renderSummary({ conclusion: "not-governed", number, policySha: base, headSha: head, hazards: landingHazards(pr?.title, pr?.body) }));\n    return landingHazards(pr?.title, pr?.body).length > 0 ? 1 : 0;',
+    HAZ("a non-governed PR containing the word is not flagged: exit 0"),
+  ),
+  rp(
+    "report: landingHazards ignores the body (pure core)",
+    '  if (has(body)) fields.push("body");',
+    "",
+    "governed-change-report: the committer landing hazard (pure core) landingHazards names the field carrying the word, ASCII case folded, and nothing else",
   ),
   // ── The summary ──
   rp(

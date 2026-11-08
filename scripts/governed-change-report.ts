@@ -27,6 +27,17 @@
  *   NOT JUDGED    the verifier could not judge the change (its exit 2), or
  *                 this run's provenance self-check failed: exit 1.
  *
+ * Landing hazards (`landingHazards`) are judged beside the verdict, never
+ * folded into it: for a governed change whose title or body contains
+ * "committer" (ASCII case folded), the summary names the hazard on its own
+ * line and the run exits 1 even when the verdict is VERIFIED. The merge
+ * queue re-wraps the squash message to about 72 columns, and when it signs
+ * the commit it inserts a copy of its `gpgsig` block into the message after
+ * every line that begins with "committer", so the stored commit fails its own
+ * signature and the landed change never verifies offline (spec §9.1). The
+ * re-wrap moves words, so the word anywhere is the hazard. The workflow runs
+ * on `edited`, so removing the word re-runs the check.
+ *
  * Every verdict axis goes to the job summary ($GITHUB_STEP_SUMMARY). Values
  * the PR controls (paths, failure details) appear only inside a fenced code
  * block whose fence is longer than any backtick run in them, so a PR cannot
@@ -70,6 +81,14 @@ import { cleanEnv } from "./lib/differential-tree.js";
 export const BUNDLES_DIR = ".motebit/bundles/";
 /** The only event this phase judges. */
 export const JUDGED_EVENT = "pull_request_target";
+/**
+ * The word whose presence in a governed change's title or body corrupts the
+ * signed squash commit (see the header): compared with ASCII case folded.
+ */
+export const COMMITTER_HAZARD_WORD = "committer";
+/** Where the repair instruction points: the landed check that the corruption defeats. */
+export const COMMITTER_HAZARD_CANONICAL = "spec/repo-change-v1.md §9.1";
+
 /** The check's phase (docs/proposals/governed-repo-change-v1.md, "External enforcement"). */
 export const PHASE = "expand";
 /** The landed mode's subcommand (the first argument). */
@@ -85,6 +104,55 @@ const POLICY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 // ── Pure core ────────────────────────────────────────────────────────────────
+
+/** A landing hazard: an input the PR controls that would destroy the evidence once landed. */
+export interface LandingHazard {
+  /** The hazard's name (a fixed token, never PR text). */
+  name: "committer-in-message";
+  /** Which of the PR's fields carry it (fixed names, never PR text). */
+  fields: Array<"title" | "body">;
+}
+
+/** ASCII-only lower case of a string: `A`-`Z` folded, every other character kept. */
+function asciiLowerString(text: string): string {
+  return text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+}
+
+/**
+ * The landing hazards in a governed change's title and body. A value that is
+ * not a string (a null body) carries none. Returns an empty list when clear.
+ */
+export function landingHazards(title: unknown, body: unknown): LandingHazard[] {
+  const fields: Array<"title" | "body"> = [];
+  const has = (v: unknown): boolean =>
+    typeof v === "string" && asciiLowerString(v).includes(COMMITTER_HAZARD_WORD);
+  if (has(title)) fields.push("title");
+  if (has(body)) fields.push("body");
+  return fields.length > 0 ? [{ name: "committer-in-message", fields }] : [];
+}
+
+/** The summary's lines for each hazard: the word, why, and the repair. Fixed text only. */
+export function renderHazards(hazards: readonly LandingHazard[]): string[] {
+  const lines: string[] = [];
+  for (const h of hazards) {
+    const where = h.fields.map((f) => `the ${f}`).join(" and ");
+    lines.push(
+      `**Landing hazard (${h.name}): the word "${COMMITTER_HAZARD_WORD}" in ${where}.** ` +
+        "This run fails for the hazard, whatever the verdict above.",
+      "",
+      "Why: the merge queue re-wraps the squash commit's message to about 72 columns and, when it signs " +
+        `the commit, inserts a copy of its gpgsig block after every message line that begins with "${COMMITTER_HAZARD_WORD}". ` +
+        "The stored commit then fails its own signature (GitHub shows it Unverified), so the offline landed check " +
+        `(${COMMITTER_HAZARD_CANONICAL}) cannot accept the landing time, authority is unknown, and the landed change ` +
+        "never verifies. The re-wrap moves words, so the word anywhere in the title or body is the hazard.",
+      "",
+      `Fix: remove the word "${COMMITTER_HAZARD_WORD}" (any case, including inside a longer word) from the pull ` +
+        "request's title and body; editing them re-runs this check.",
+      "",
+    );
+  }
+  return lines;
+}
 
 /** ASCII-only lower case: `A`-`Z` folded, every other byte kept. */
 function asciiLower(bytes: Buffer): Buffer {
@@ -179,6 +247,8 @@ export interface ReportInput {
   report?: CliReport;
   /** The verifier's stderr (not-judged). */
   stderr?: string;
+  /** Landing hazards of a governed change, reported apart from the verdict. */
+  hazards?: readonly LandingHazard[];
 }
 
 const HEADLINE: Record<Conclusion, string> = {
@@ -215,6 +285,7 @@ export function renderSummary(r: ReportInput): string {
     lines.push(`| change commit | ${token(r.report.changeCommit)} |`);
   }
   lines.push("");
+  if (r.hazards !== undefined && r.hazards.length > 0) lines.push(...renderHazards(r.hazards));
   if (r.conclusion === "not-governed") {
     lines.push(
       `The pull request adds, modifies or deletes nothing under \`${BUNDLES_DIR}\` (from its merge base with the base tip), ` +
@@ -341,6 +412,8 @@ function argValue(argv: readonly string[], flag: string): string | undefined {
 interface EventPayload {
   pull_request?: {
     number?: number;
+    title?: unknown;
+    body?: unknown;
     head?: { sha?: string };
     base?: { ref?: string };
     user?: { login?: string };
@@ -660,6 +733,8 @@ export function main(argv: readonly string[], opts: MainOptions = {}): number {
     write(renderSummary({ conclusion: "not-governed", number, policySha: base, headSha: head }));
     return 0;
   }
+  // A governed change: its landing hazards, judged apart from the verdict.
+  const hazards = landingHazards(pr?.title, pr?.body);
 
   const args = [
     verifyCli,
@@ -702,9 +777,10 @@ export function main(argv: readonly string[], opts: MainOptions = {}): number {
           headSha: head,
           report,
           stderr,
+          hazards,
         }),
       );
-      return accepted ? 0 : 1;
+      return accepted && hazards.length === 0 ? 0 : 1;
     }
   }
   write(
@@ -715,6 +791,7 @@ export function main(argv: readonly string[], opts: MainOptions = {}): number {
       headSha: head,
       reason: `motebit-verify repo-change exited ${run.status ?? `on signal ${run.signal ?? "?"}`}${run.error ? `: ${run.error.message}` : ""}`,
       stderr,
+      hazards,
     }),
   );
   return 1;
