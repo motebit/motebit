@@ -27,9 +27,11 @@ import { parse } from "yaml";
 
 import {
   BUNDLES_DIR,
+  COMMITTER_HAZARD_WORD,
   JUDGED_EVENT,
   PHASE,
   fenced,
+  landingHazards,
   main,
   renderSummary,
   touchesBundles,
@@ -536,6 +538,8 @@ function runCheck(
     cli?: string;
     login?: string;
     env?: Record<string, string>;
+    title?: string;
+    body?: string | null;
   } = {},
 ): Run {
   const env = {
@@ -557,6 +561,8 @@ function runCheck(
     JSON.stringify({
       pull_request: {
         number: 7,
+        ...(o.title !== undefined ? { title: o.title } : {}),
+        ...(o.body !== undefined ? { body: o.body } : {}),
         head: { sha: head },
         base: { ref: "main", sha: base },
         user: { login: o.login ?? "motebit-agent" },
@@ -730,4 +736,117 @@ describe("governed-change-report end to end: the provenance self-check", () => {
       expect(r.code).toBe(1);
     }, 60_000);
   }
+});
+
+// ── The committer landing hazard ─────────────────────────────────────────────
+// The merge queue re-wraps a squash message and, when it signs the commit,
+// inserts a gpgsig copy after every message line that begins with
+// "committer" (f01e1f6a5, eb5f0f190 on main): the landed change then never
+// verifies offline. A governed change carrying the word fails this check.
+
+const VERIFIED_JSON = JSON.stringify({
+  accepted: true,
+  verdict: {
+    integrity: "verified",
+    identityBinding: "pinned",
+    authority: "valid",
+    revocation: { status: "fresh" },
+  },
+  outcome: "completed",
+  diagnostics: { failures: [] },
+});
+const HAZARD = `Landing hazard (committer-in-message): the word "${COMMITTER_HAZARD_WORD}"`;
+
+describe("governed-change-report: the committer landing hazard (pure core)", () => {
+  it("landingHazards names the field carrying the word, ASCII case folded, and nothing else", () => {
+    expect(landingHazards("t", "as author and committer;")).toEqual([
+      { name: "committer-in-message", fields: ["body"] },
+    ]);
+    expect(landingHazards("the COMMITTER time", null)).toEqual([
+      { name: "committer-in-message", fields: ["title"] },
+    ]);
+    expect(landingHazards("Committers", "committer")).toEqual([
+      { name: "committer-in-message", fields: ["title", "body"] },
+    ]);
+    expect(landingHazards("commit the change", "a commit, committed, recommit")).toEqual([]);
+    expect(landingHazards(undefined, null)).toEqual([]);
+    expect(landingHazards(7, { committer: 1 })).toEqual([]);
+  });
+});
+
+describe("governed-change-report end to end: the committer landing hazard", () => {
+  it("a governed PR with the word in the body reports the hazard and fails (exit 1), the verdict still VERIFIED", async () => {
+    const fx = await governed();
+    const r = runCheck(fx.repo, fx.base, fx.head, {
+      cli: stubCli(0, VERIFIED_JSON),
+      title: "feat: a governed change",
+      body: "Sets the identity used as author and committer; nothing else.",
+    });
+    expect(r.stubRan).toBe(true);
+    expect(r.summary).toContain("## governed-change: VERIFIED");
+    expect(r.summary).toContain(`${HAZARD} in the body.**`);
+    expect(r.summary).toContain("spec/repo-change-v1.md §9.1");
+    expect(r.summary).toMatch(/Fix: remove the word "committer"/);
+    expect(r.code).toBe(1);
+  }, 60_000);
+
+  it("a governed PR with the word in the title reports the hazard and fails (exit 1)", async () => {
+    const fx = await governed();
+    const r = runCheck(fx.repo, fx.base, fx.head, {
+      cli: stubCli(0, VERIFIED_JSON),
+      title: "fix: the committer time",
+      body: "plain",
+    });
+    expect(r.summary).toContain("## governed-change: VERIFIED");
+    expect(r.summary).toContain(`${HAZARD} in the title.**`);
+    expect(r.code).toBe(1);
+  }, 60_000);
+
+  it("the word is matched in any case (Committer) and fails (exit 1)", async () => {
+    const fx = await governed();
+    const r = runCheck(fx.repo, fx.base, fx.head, {
+      cli: stubCli(0, VERIFIED_JSON),
+      title: "plain",
+      body: "Committer identity",
+    });
+    expect(r.summary).toContain(`${HAZARD} in the body.**`);
+    expect(r.code).toBe(1);
+  }, 60_000);
+
+  it("without the word (a near-miss such as commit included) there is no hazard: VERIFIED, exit 0", async () => {
+    const fx = await governed();
+    const r = runCheck(fx.repo, fx.base, fx.head, {
+      cli: stubCli(0, VERIFIED_JSON),
+      title: "commit: the change",
+      body: "Each commit is committed by the queue.",
+    });
+    expect(r.summary).toContain("## governed-change: VERIFIED");
+    expect(r.summary).not.toContain("Landing hazard");
+    expect(r.code).toBe(0);
+  }, 60_000);
+
+  it("a NOT JUDGED governed change still reports the hazard", async () => {
+    const fx = await governed();
+    const r = runCheck(fx.repo, fx.base, fx.head, {
+      cli: stubCli(2, "", "not judged"),
+      body: "author and committer",
+    });
+    expect(r.summary).toContain("## governed-change: NOT JUDGED");
+    expect(r.summary).toContain(`${HAZARD} in the body.**`);
+    expect(r.code).toBe(1);
+  }, 60_000);
+
+  it("a non-governed PR containing the word is not flagged: exit 0", async () => {
+    const fx = await governed();
+    const head = branch(fx.repo, "plain", fx.base, { "notes/other.md": "hello\n" });
+    const r = runCheck(fx.repo, fx.base, head, {
+      cli: stubCli(1, NOT_VERIFIED_JSON),
+      title: "the committer field",
+      body: "Committer",
+    });
+    expect(r.stubRan).toBe(false);
+    expect(r.summary).toContain("## governed-change: not a governed change (not judged)");
+    expect(r.summary).not.toContain("Landing hazard");
+    expect(r.code).toBe(0);
+  }, 60_000);
 });
