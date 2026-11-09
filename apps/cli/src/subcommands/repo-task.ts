@@ -544,6 +544,9 @@ export function handleRepoTaskRun(
     log("");
     log("Verified as a completed change. No ref was created or moved and nothing was pushed.");
     log("To publish, the operator pushes the bundle commit as a new branch:");
+    log(
+      `  - the pull request's title and body must not contain the word "committer": GitHub's merge queue re-wraps the squash message and corrupts its own signature after any line starting with that word, so the landing would never verify offline.`,
+    );
     log("");
     log(
       `  git push <publisher-remote> ${report.bundleCommit}:refs/heads/repo-task/${report.grantId}`,
