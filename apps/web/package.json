@@ -51,7 +51,7 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
-    "@hono/node-server": "^1.19.17",
+    "@hono/node-server": "^1.19.18",
     "@motebit/relay": "workspace:*",
     "@noble/ed25519": "~3.2.0",
     "@noble/hashes": "^2.4.0",
