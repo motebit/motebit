@@ -88,7 +88,7 @@ self-attesting principle (`docs/doctrine/self-attesting-system.md`).
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Multi-operator / cross-trust-domain**         | **Not proven.** Both relays run under one operator (one Fly account, `sjc`). This is infrastructure + protocol-path validation, **not** trust-graph validation.                        |
 | Adversarial / hostile-operator model            | Partially — adversarial _inputs_ are tested; an adversarial _operator_ is not modeled here                                                                                             |
-| Rotated-key binding (succession chain)          | Not exercised — the sovereign-binding tier covers never-rotated keys; the `identity_file` succession tier (§8.2 step 6) is deferred until `performMigration` carries the identity file |
+| Rotated-key binding (succession chain)          | Not exercised live — the succession tier (§8.2 step 6) is implemented (`becd04927`), but `scripts/migrate-live.ts` passes no identity file, so the run above used a never-rotated key. |
 | Reputation continuity at scale                  | Not proven — the attestation carries trust + counts; scale behavior is untested                                                                                                        |
 | Economic settlement continuity across migration | Not proven here                                                                                                                                                                        |
 
@@ -125,8 +125,9 @@ equivalent — two relays in one Node process — is `pnpm demo-migration`.
 1. A relay run by an **independent operator** as the destination.
 2. An **independent verifier** confirming the agent's identity + receipt history
    remain verifiable post-migration.
-3. The **rotated-key** tier: `performMigration` carries the `identity_file`; the
-   destination validates the succession chain (§8.2 step 6).
+3. The **rotated-key** tier, live: `scripts/migrate-live.ts` migrates an agent
+   whose key has rotated, passing its `identity_file`, and the destination
+   validates the succession chain (§8.2 step 6).
 4. **Settlement / trust continuity** surviving the move.
 
 ## References
