@@ -362,6 +362,10 @@ The **state a relay accumulates** — trust graph, federation routing, signed ex
 
 "Motebit" is a trademark of Motebit, Inc. See [TRADEMARK.md](TRADEMARK.md).
 
+## No token
+
+Motebit has not issued or endorsed any cryptocurrency token or airdrop. Tokens using the Motebit name, logo, or imagery are not affiliated with Motebit, Inc.
+
 ## Community
 
 - [Contributing](CONTRIBUTING.md) — how to contribute, including the development setup and PR process

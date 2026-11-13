@@ -70,6 +70,8 @@ The sections are not exclusive. A developer building a service agent will read t
 
 For the boundary between motebit's published packages and its workspace-internal source, see [Public surface](/docs/concepts/public-surface).
 
+Motebit has not issued or endorsed any cryptocurrency token or airdrop. Tokens using the Motebit name, logo, or imagery are not affiliated with Motebit, Inc.
+
 ## Next steps
 
 <Cards>
