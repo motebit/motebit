@@ -136,3 +136,5 @@ equivalent — two relays in one Node process — is `pnpm demo-migration`.
 - `services/relay/src/migration.ts` — relay-side `accept-migration`
 - `spec/migration-v1.md` — the protocol
 - `docs/doctrine/self-attesting-system.md` — evidence over doctrine; the verifier-is-called invariant (#108)
+
+Governed-change fixture b4: a deliberately failing acceptance test (B4).
