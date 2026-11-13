@@ -136,10 +136,10 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: '>=1.19.10 <2.0.0'
-        version: 1.19.17(hono@4.13.13)
+        version: 2.1.6(hono@4.13.13)
       '@hono/node-ws':
         specifier: ^1.3.1
-        version: 1.3.1(@hono/node-server@1.19.17(hono@4.13.13))(bufferutil@4.1.0)(hono@4.13.13)(utf-8-validate@6.0.6)
+        version: 1.3.1(@hono/node-server@2.1.6(hono@4.13.13))(bufferutil@4.1.0)(hono@4.13.13)(utf-8-validate@6.0.6)
       '@modelcontextprotocol/sdk':
         specifier: ^1.31.0
         version: 1.32.1(zod@4.6.7)
@@ -435,7 +435,7 @@ importers:
     devDependencies:
       '@hono/node-server':
         specifier: '>=1.19.10 <2.0.0'
-        version: 1.19.17(hono@4.13.13)
+        version: 2.1.6(hono@4.13.13)
       '@motebit/relay':
         specifier: workspace:*
         version: link:../../services/relay
@@ -783,7 +783,7 @@ importers:
         version: 7.29.7(@babel/core@7.29.7)
       '@hono/node-server':
         specifier: '>=1.19.10 <2.0.0'
-        version: 1.19.17(hono@4.13.13)
+        version: 2.1.6(hono@4.13.13)
       '@motebit/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
@@ -920,7 +920,7 @@ importers:
     devDependencies:
       '@hono/node-server':
         specifier: '>=1.19.10 <2.0.0'
-        version: 1.19.17(hono@4.13.13)
+        version: 2.1.6(hono@4.13.13)
       '@motebit/relay':
         specifier: workspace:*
         version: link:../../services/relay
@@ -1073,7 +1073,7 @@ importers:
     devDependencies:
       '@hono/node-server':
         specifier: '>=1.19.10 <2.0.0'
-        version: 1.19.17(hono@4.13.13)
+        version: 2.1.6(hono@4.13.13)
       '@motebit/relay':
         specifier: workspace:*
         version: link:../../services/relay
@@ -2488,7 +2488,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: '>=1.19.10 <2.0.0'
-        version: 1.19.17(hono@4.13.13)
+        version: 2.1.6(hono@4.13.13)
       '@motebit/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
@@ -2710,10 +2710,10 @@ importers:
         version: 2.1.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
       '@hono/node-server':
         specifier: '>=1.19.10 <2.0.0'
-        version: 1.19.17(hono@4.13.13)
+        version: 2.1.6(hono@4.13.13)
       '@hono/node-ws':
         specifier: ^1.3.1
-        version: 1.3.1(@hono/node-server@1.19.17(hono@4.13.13))(bufferutil@4.1.0)(hono@4.13.13)(utf-8-validate@6.0.6)
+        version: 1.3.1(@hono/node-server@2.1.6(hono@4.13.13))(bufferutil@4.1.0)(hono@4.13.13)(utf-8-validate@6.0.6)
       '@motebit/circuit-breaker':
         specifier: workspace:*
         version: link:../../packages/circuit-breaker
@@ -3490,8 +3490,8 @@ packages:
     peerDependencies:
       '@babel/core': ^7.0.0-0
 
-  '@babel/runtime@7.29.10':
-    resolution: {integrity: sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA==}
+  '@babel/runtime@7.29.14':
+    resolution: {integrity: sha512-Y5tqevQaUAZhhj82BpYMNC1ssvLQTVAfwKdm8iy8qwmhvC2/CpcAu8OC+QEtjM7pMk7knx83u1Qj8gzkicyelw==}
     engines: {node: '>=6.9.0'}
 
   '@babel/runtime@7.29.2':
@@ -4205,9 +4205,15 @@ packages:
   '@fumari/image-size@0.1.0':
     resolution: {integrity: sha512-x2o9u6P8uKUK15B8XgEoRhR3PgLoLSbQKK6FUCd14JzumEw+e8FXZPelij/dZ4VQVMp4r61VD3DcvSo3aEhLAA==}
 
-  '@hono/node-server@1.19.17':
-    resolution: {integrity: sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ==}
+  '@hono/node-server@1.19.19':
+    resolution: {integrity: sha512-Fy9R7PACOzHU9LDpfnuzVyuVYevKQRcEG2mZhmfc+DRdmayEd3RVfa2XOt2IgGcPNgA77Yk63KBszepcMFK5Ng==}
     engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: '>=4.13.5 <5.0.0'
+
+  '@hono/node-server@2.1.6':
+    resolution: {integrity: sha512-p/KH9MnfNcsm3sR6x4lNgm5j+QN4Et8srKredl9DZfXiyZ1UQ3aQ2YVpFLbqktYN5JI+DB+VZFKM2PqE5hLKjQ==}
+    engines: {node: '>=20'}
     peerDependencies:
       hono: '>=4.13.5 <5.0.0'
 
@@ -7110,6 +7116,7 @@ packages:
 
   axios-retry@4.5.0:
     resolution: {integrity: sha512-aR99oXhpEDGo0UuAlYcn2iGRds30k366Zfa05XWScR9QaQD4JYiP3/1Qt1u7YlefUOK+cn0CcwoL1oefavQUlQ==}
+    deprecated: axios-retry is no longer maintained. See https://github.com/softonic/axios-retry for alternatives.
     peerDependencies:
       axios: '>=1.20.0 <2.0.0'
 
@@ -12004,8 +12011,8 @@ packages:
       utf-8-validate:
         optional: true
 
-  ws@8.22.0:
-    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
+  ws@8.23.0:
+    resolution: {integrity: sha512-wCkmX8QMOrKjgO8HW2WyDbTSGeqkocxgDzS9iR79rEAexty6/2qzilx3Ag8Tqf9ykop3irLKle0MtVn5qjVnoQ==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -12726,7 +12733,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@babel/runtime@7.29.10': {}
+  '@babel/runtime@7.29.14': {}
 
   '@babel/runtime@7.29.2': {}
 
@@ -13609,13 +13616,17 @@ snapshots:
 
   '@fumari/image-size@0.1.0': {}
 
-  '@hono/node-server@1.19.17(hono@4.13.13)':
+  '@hono/node-server@1.19.19(hono@4.13.13)':
     dependencies:
       hono: 4.13.13
 
-  '@hono/node-ws@1.3.1(@hono/node-server@1.19.17(hono@4.13.13))(bufferutil@4.1.0)(hono@4.13.13)(utf-8-validate@6.0.6)':
+  '@hono/node-server@2.1.6(hono@4.13.13)':
     dependencies:
-      '@hono/node-server': 1.19.17(hono@4.13.13)
+      hono: 4.13.13
+
+  '@hono/node-ws@1.3.1(@hono/node-server@2.1.6(hono@4.13.13))(bufferutil@4.1.0)(hono@4.13.13)(utf-8-validate@6.0.6)':
+    dependencies:
+      '@hono/node-server': 2.1.6(hono@4.13.13)
       hono: 4.13.13
       ws: 8.21.3(bufferutil@4.1.0)(utf-8-validate@6.0.6)
     transitivePeerDependencies:
@@ -13962,7 +13973,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.32.1(zod@4.6.7)':
     dependencies:
-      '@hono/node-server': 1.19.17(hono@4.13.13)
+      '@hono/node-server': 1.19.19(hono@4.13.13)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -16059,7 +16070,7 @@ snapshots:
   '@testing-library/dom@10.4.1':
     dependencies:
       '@babel/code-frame': 7.29.7
-      '@babel/runtime': 7.29.10
+      '@babel/runtime': 7.29.14
       '@types/aria-query': 5.0.4
       aria-query: 5.3.0
       dom-accessibility-api: 0.5.16
@@ -16476,7 +16487,7 @@ snapshots:
       obug: 2.1.3
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@types/node@26.6.5)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+      vitest: 4.1.10(@types/node@22.20.5)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.3.5(@types/node@22.20.5)(esbuild@0.27.3)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
 
   '@vitest/expect@4.1.10':
     dependencies:
@@ -18031,7 +18042,7 @@ snapshots:
       '@types/node': 22.7.5
       aes-js: 4.0.0-beta.5
       tslib: 2.7.0
-      ws: 8.22.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      ws: 8.23.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -22860,7 +22871,7 @@ snapshots:
       bufferutil: 4.1.0
       utf-8-validate: 6.0.6
 
-  ws@8.22.0(bufferutil@4.1.0)(utf-8-validate@6.0.6):
+  ws@8.23.0(bufferutil@4.1.0)(utf-8-validate@6.0.6):
     optionalDependencies:
       bufferutil: 4.1.0
       utf-8-validate: 6.0.6
