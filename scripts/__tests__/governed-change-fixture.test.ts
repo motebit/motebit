@@ -40,7 +40,9 @@ import {
   governedChangeFixtureCommand,
   judge,
   nodeFixtureDeps,
+  fixtureMarker,
   respellBase64Url,
+  withFixtureMarker,
 } from "../governed-change-fixture.js";
 import type { FixtureCase } from "../governed-change-fixture.js";
 import { cleanEnv } from "../lib/differential-tree.js";
@@ -1086,3 +1088,24 @@ describe(
     });
   },
 );
+
+// -- The scripted edit's content passes the format check --------------------------------
+
+describe("governed-change fixture: the marker is a paragraph of its own", () => {
+  it("one blank line separates it from any content, none precedes it in an empty file", () => {
+    expect(withFixtureMarker("", "b3")).toBe(fixtureMarker("b3"));
+    expect(withFixtureMarker("a\n", "b3")).toBe(`a\n\n${fixtureMarker("b3")}`);
+    expect(withFixtureMarker("a", "b3")).toBe(`a\n\n${fixtureMarker("b3")}`);
+  });
+
+  it("appended after a Markdown list, the file still passes prettier (the format check)", async () => {
+    const prettier = await import("prettier");
+    const filepath = path.join(process.cwd(), "docs/proofs/fixture-format-probe.md");
+    const options = { ...(await prettier.resolveConfig(filepath)), filepath };
+    const before = "# Title\n\n- `a` — one\n- `b` — two\n";
+    expect(await prettier.check(before, options)).toBe(true);
+    for (const c of FIXTURE_CASES) {
+      expect(await prettier.check(withFixtureMarker(before, c), options)).toBe(true);
+    }
+  });
+});

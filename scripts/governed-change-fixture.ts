@@ -159,7 +159,7 @@ export const ACCEPTANCE_ROW: Readonly<Record<FixtureCase, string>> = {
 
 /** What every case departs from a real run in, besides its own defect. */
 const COMMON_DEPARTURES: readonly string[] = [
-  "the edit appends a fixture marker line to the scope's first allowed path",
+  "the edit appends a fixture marker paragraph to the scope's first allowed path",
   'both commit messages carry a fixture marker, "(governed-change fixture <case>)", so the commits never pass as a real run\'s',
   "the receipts file is named fixture-<case>-receipts-<grant_id>-<ms>.jsonl",
 ];
@@ -213,6 +213,18 @@ export const FIXTURE_MODEL = "scripted";
 /** The line the scripted edit appends to the scope's first allowed path. */
 export function fixtureMarker(c: FixtureCase): string {
   return `Governed-change fixture ${c}: a deliberately failing acceptance test (${ACCEPTANCE_ROW[c].split(":")[0]}).\n`;
+}
+
+/**
+ * The scripted edit's content: the file as at the tip, then the marker as a
+ * paragraph of its own (one blank line before it). Appended straight after a
+ * Markdown list it would read as the list's continuation, which the format
+ * check rejects, a second red check on a pull request that must fail in
+ * exactly one way.
+ */
+export function withFixtureMarker(before: string, c: FixtureCase): string {
+  const gap = before === "" ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+  return `${before}${gap}${fixtureMarker(c)}`;
 }
 
 // -- Options, deps, report ------------------------------------------------------
@@ -679,7 +691,7 @@ export async function runGovernedChangeFixture(
       refuse(`${editPath} is not a regular file at the tip`);
     }
     const before = atTip === null ? "" : Buffer.from(await reader.readBlob(atTip.oid)).toString();
-    const content = `${before}${before === "" || before.endsWith("\n") ? "" : "\n"}${fixtureMarker(c)}`;
+    const content = withFixtureMarker(before, c);
 
     // -- b3: the out-of-scope path, permitted by the policy so it is the only defect.
     let outsidePath: string | undefined;
