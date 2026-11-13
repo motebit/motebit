@@ -203,16 +203,22 @@ describe("@motebit/verify/git: the isolated session", () => {
 
   it("a git that cannot be started fails closed and leaves no session directory", async () => {
     const repo = repoWith({});
-    const before = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("motebit-git-")).length;
-    const saved = process.env.PATH;
+    // A private temp root: other test files open sessions in the shared
+    // os.tmpdir() concurrently, so counting there races.
+    const root = path.join(tmp, "tmpdir");
+    fs.mkdirSync(root);
+    const saved = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR };
     process.env.PATH = path.join(tmp, "no-git-here");
+    process.env.TMPDIR = root;
     try {
+      expect(os.tmpdir()).toBe(root);
       await expect(session(repo)).rejects.toThrow();
     } finally {
-      process.env.PATH = saved;
+      process.env.PATH = saved.PATH;
+      if (saved.TMPDIR === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = saved.TMPDIR;
     }
-    const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("motebit-git-")).length;
-    expect(after).toBeLessThanOrEqual(before);
+    expect(fs.readdirSync(root)).toEqual([]);
   });
 
   it("a failing call names git's error; stdin is passed through", async () => {
