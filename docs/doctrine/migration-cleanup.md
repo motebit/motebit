@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § migration-cleanup](../ops/doctrine-status.md#migration-cleanupmd)
+
 Backwards-compatibility code — schema migrations, legacy-format migrators, version-guarded branches — accumulates faster than it retires. Left unchecked, a project's "how we got here" outgrows its "how it works today." The question "when can we strip this?" has a durable answer that doesn't drift with release schedules.
 
 ## The wrong question
@@ -77,10 +79,10 @@ For migrations specifically: the append-only chain IS a structural invariant. Ea
 
 The 2026-04-24 squash-and-revert on `services/relay/src/migrations.ts` (15 → 1 → 15 across commits 21a29fc4 → revert) is the canonical example. The doctrine entry that called it out as a cleanup target treated "1 holder, cheap audit" as permission to squash; it should have required an argument for squash being a win on its own architectural terms. At 15 migrations, that argument didn't exist.
 
-## How to apply at motebit (as of 2026-04-23)
+## How to apply at motebit
 
-- **Relay DB migrations** (`services/relay/src/migrations.ts`): 1 controlled holder. The squash target has been rescinded. Keep the chain append-only; new schema changes land as `v16`, `v17`, … appended below. Revisit only if the chain reaches hundreds of migrations or CI migration-apply time becomes measurable.
-- **Config-shape migrators** — `migrateLegacyProvider` in `@motebit/sdk` was this row's canonical example through 2026-04-23. An empirical npm-download survey reclassified it zero-holder (no external `@motebit/sdk` consumers, `motebit` CLI at 2 downloads); stripped in `adc87d19`. The bucket itself is still live in principle; the other former example, `verifyIdentityFile`, was likewise reclassified zero-holder and removed in the 3.0.0 crypto major (2026-06-06).
+- **Relay DB migrations** (`services/relay/src/migrations.ts`): 1 controlled holder. Not a squash target (see [Cheap is not a reason](#cheap-is-not-a-reason)). Keep the chain append-only; every new schema change lands as the next version, appended below. Revisit only if the chain reaches hundreds of migrations or CI migration-apply time becomes measurable.
+- **Config-shape migrators** — the N-uncontrolled bucket is live in principle, but a presumed external holder is checked (npm downloads, real call sites) before a deprecation window is paid for it; both of this row's former examples turned out to be zero-holder (see the table above).
 - **Runtime version branches**: audit for `if (!artifact.suite)` or `if (artifact.version < X)` after cryptosuite agility made those paths fail-closed. Zero-holder candidates.
 - **Protocol-level cross-relay migration** (`spec/migration-v1.md`, `services/relay/src/migration.ts`): permanent. Never a cleanup target.
 - **Client-side SQLite / IndexedDB schemas** (`@motebit/persistence`, `@motebit/browser-persistence`): per-user-per-device. Pre-1.0 users can reset; post-1.0 treat as N-holder and deprecate-then-strip.
@@ -101,12 +103,12 @@ At the **read site**, co-located with the shape it migrates. Not in a central mi
 
 ### Three mechanical shapes (matched to holder bucket)
 
-| Holder bucket                                                   | Migrator shape                                                                                                              | Example                                                                                                                         |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| **0 holders**                                                   | No migrator. Strip the reader branch.                                                                                       | Post-strip `LegacyProviderConfig` — reader returns `null`, consumer falls back to defaults.                                     |
-| **1 holder you control**                                        | In-place rewrite on read, re-persist canonical shape, remove migrator next release.                                         | Single-operator relay row shape changes — migrate on load, save canonical, strip next release.                                  |
-| **N uncontrolled (reachable on every load)**                    | In-place rewrite on read, persist canonical shape immediately (shrinks holder count each load), keep migrator until sunset. | `extractPersonality` in `apps/cli/src/config.ts` — `"ollama"` → `"local-server"` on every read. Marked `@permanent` by policy.  |
-| **Malformed beyond migration** (corruption, truncation, tamper) | Hard error with explicit "reset" instruction. No silent fallback, no best-effort recovery.                                  | PIN-encrypted key migration in `packages/runtime/src/operator.ts` — malformed ciphertext → reset error, not legacy-format read. |
+| Holder bucket                                                   | Migrator shape                                                                                                              | Example                                                                                                                                |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **0 holders**                                                   | No migrator. Strip the reader branch.                                                                                       | Post-strip `LegacyProviderConfig` — reader returns `null`, consumer falls back to defaults.                                            |
+| **1 holder you control**                                        | In-place rewrite on read, re-persist canonical shape, remove migrator next release.                                         | Single-operator relay row shape changes — migrate on load, save canonical, strip next release.                                         |
+| **N uncontrolled (reachable on every load)**                    | In-place rewrite on read, persist canonical shape immediately (shrinks holder count each load), keep migrator until sunset. | `extractPersonality` in `apps/cli/src/config.ts` — `"ollama"` → `"local-server"` on every read. Marked `@permanent` by policy.         |
+| **Malformed beyond migration** (corruption, truncation, tamper) | Hard error with explicit "reset" instruction. No silent fallback, no best-effort recovery.                                  | Operator PIN check in `packages/runtime/src/operator.ts` — a stored hash that is not `salt:key` → reset error, not legacy-format read. |
 
 ### Canonical pattern
 
@@ -163,7 +165,7 @@ Force reset (hard error, no migration path) only when:
 - The legacy shape is indistinguishable from corruption — no reliable discriminator.
 - Security requires it — migrating would perpetuate a vulnerability (e.g. plaintext secret that must be re-encrypted under a fresh KDF the user actively chose).
 
-The PIN-encrypted-key case in `operator.ts` meets the third criterion: plain-hex private keys were a security downgrade; migrating them silently would have left derivable bytes on disk. Explicit reset is correct there.
+The operator-PIN case in `operator.ts` meets the third criterion: legacy unsalted plain-hex PIN hashes were a security downgrade, and a stored hash that does not split as `salt:key` is indistinguishable from corruption. Explicit reset is correct there.
 
 ## Cross-references
 

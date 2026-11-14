@@ -2,7 +2,9 @@
 
 > **Layer:** narrative
 
-**Status:** doctrine (connector class — links-only, governs construction; the same register as [`agentic-era-engineering.md`](agentic-era-engineering.md)). No new gate: this memo names the structure the existing gates already enforce piecewise, so a future sense cannot arrive outside it.
+**Status:** [doctrine-status.md § sensorium](../ops/doctrine-status.md#sensoriummd)
+
+**Register:** doctrine (connector class — links-only, governs construction; the same register as [`agentic-era-engineering.md`](agentic-era-engineering.md)). No new gate: this memo names the structure the existing gates already enforce piecewise, so a future sense cannot arrive outside it.
 
 **The claim.** The motebit has exactly one sensorium, and it is rooted in the runtime — never in a surface. Every fact the interior can know arrives through a typed ingress that carries its own provenance, and every layer of that sensorium is already marked at the dispatch layer, not by prompt willpower. Surfaces vary only in how much _body_ they display and how much _world_ they share; they never vary in what the interior perceives. A CLI motebit and a spatial motebit perceive identically — Ring 1 (capability rings, root `CLAUDE.md`) applied to perception.
 
@@ -24,9 +26,9 @@ Three registers, three sources, and the rule that keeps them from bleeding: _ana
 
 **When the motebit enters a new domain, it enters with a pair: an eye and a hand. The eye ships as a typed-truth triple (wire field + prompt clause + dispatch enforcement, all three — [`typed-truth-perception.md`](typed-truth-perception.md)); the hand ships with an explicit risk classification and crosses the policy gate ([`memory-never-confers-authority.md`](memory-never-confers-authority.md)). Never a hand without an eye; never an eye without provenance.**
 
-Worked instances — both live:
+Worked instances:
 
-- **The web.** Eye: the virtual-browser perception surface with its typed-truth fields (fourteen registered in `scripts/check-typed-truth-perception.ts` as of 2026-11-13). Hand: browser actions under control-state gates (`not_in_control`) and the sensitivity boundary.
+- **The web.** Eye: the virtual-browser perception surface with its typed-truth fields (registered in `scripts/check-typed-truth-perception.ts`). Hand: browser actions under control-state gates (`not_in_control`) and the sensitivity boundary.
 - **The market.** Eye: `discover_agents` — the live roster read, stamped `roster_source: "live_relay_read"`, names surfaced as `claimed_name` so the claim framing travels into the model's context. Hand: `delegate_to_agent` — explicit `riskHint` (R4_MONEY with a payment rail, R2_WRITE without; never inferred from the name), late-bound money under `check-money-authority`, and the receipt's signer surfaced back (`[delegated_to: …]`) so the act is attributable.
 
 **Why a pair and not the slab's eye/hand/mind triad — deliberated, settled.** The mind does not multiply per domain: eyes and hands are domain organs, but there is exactly one mind — the pluggable interior every pair plugs into ([`intelligence-pluggability-contract.md`](intelligence-pluggability-contract.md); THE_METABOLIC_PRINCIPLE: intelligence is absorbed, never built per-domain). Writing "mind" into the entry law would imply each domain ships its own reasoning — the LLM-conflation error this repo's competitive reads catalog in others. The mind is nonetheless IN the law, as the middle leg of every triple: the prompt clause is the mind's share — each new eye arrives with its lesson for the one mind (what `roster_source` means, what the `[SELF_DESCRIPTION]` banner means). And the slab's eye/hand/mind ([`motebit-computer.md`](motebit-computer.md)) is a different axis entirely — a DISPLAY taxonomy (the three content registers the human sees of the work), not this ENTRY discipline; same words, orthogonal structures, do not unify them.

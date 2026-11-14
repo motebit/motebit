@@ -2,15 +2,17 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § paid-failure-recourse](../ops/doctrine-status.md#paid-failure-recoursemd)
+
 What happens when a buyer pays for work that does not arrive.
 
 This is the decision #610 asked for. It is settled here rather than left open, and it is settled **against** building escrow — on measurement, with a named trigger that re-measures itself.
 
 ## The situation
 
-On the sovereign rail the delegator's payment is broadcast and confirmed **before** the task is submitted (`packages/runtime/src/relay-delegation.ts:1365-1396`). The relay never holds the funds, so it has no claw-back authority over a sovereign wallet, and a P2P dispute moves zero money by construction (`services/relay/src/disputes.ts:1846`). Relay-custody refunds `failed` and `denied` identically (full release, zero fee — `packages/market/src/settlement.ts:148`), but Arc 3.5's `TASK_P2P_PROOF_REQUIRED` made that rail unreachable for paid cross-agent delegation.
+On the sovereign rail the delegator's payment is broadcast and confirmed **before** the task is submitted (`packages/runtime/src/relay-delegation.ts`). The relay never holds the funds, so it has no claw-back authority over a sovereign wallet, and a P2P dispute moves zero money by construction (`services/relay/src/disputes.ts`, a trust-layer dispute with `amount_locked = 0`). Relay-custody refunds `failed` and `denied` identically (full release, zero fee — `packages/market/src/settlement.ts:148`), but Arc 3.5's `TASK_P2P_PROOF_REQUIRED` made that rail unreachable for paid cross-agent delegation.
 
-So: **the rail with refunds is the one we deprecated; the rail we made mandatory has none.** The buyer's only consequence today is a trust-graph debit.
+So: **the rail with refunds is the one we deprecated; the rail we made mandatory has none.** The buyer's only recourse on that rail is a trust-graph debit.
 
 ## What we measured
 
@@ -23,7 +25,7 @@ The question is not "is this bad in principle" but "how often, and of what kind.
 
 **Every observed paid failure was the same class: a worker that could never have done the work at all.** Zero instances of the class escrow exists for — a worker that burned real inference, tried, and failed.
 
-That class is now structurally prevented rather than compensated. A molecule that detects a durable inability to perform withholds its heartbeat and decays out of discovery instead of accepting paid work it can only refuse (`createProviderReadiness`, `@motebit/molecule-runner`; the mechanism is in [`settlement-rails.md`](settlement-rails.md)). Prevention shipped as ~200 lines. Escrow is 3–6 weeks plus an audit (`spec/settlement-v1.md` §9.2, "deferred until demand").
+That class is structurally prevented rather than compensated. A molecule that detects a durable inability to perform withholds its heartbeat and decays out of discovery instead of accepting paid work it can only refuse (`createProviderReadiness`, `@motebit/molecule-runner`; the mechanism is in [`settlement-rails.md`](settlement-rails.md)). Prevention shipped as ~200 lines. Escrow is 3–6 weeks plus an audit (`spec/settlement-v1.md` §9.2, "deferred until demand").
 
 Building escrow now would be building for a failure mode with **no observed instances**, at thirty times the cost of the fix for the one that actually happened.
 
@@ -42,7 +44,7 @@ This is not a novel position. It is the one [`commitment-bond.md`](commitment-bo
 - **Escrow / two-phase capture as the answer to today's evidence.** Permitted by `spec/settlement-v1.md` §9.2 and genuinely trustless — an on-chain program is not relay custody, so it would not violate the coordination-not-custody line. It is refused on _evidence_, not principle: zero observed instances of the failure it addresses. When the trigger below fires, this is the first thing to reconsider.
 - **Relay-mediated reversal.** Would require the relay to hold or claw back user funds. The out-flow user-funds transmitter surface is structurally zero and stays that way; this is not a cost question.
 - **A blanket "failed ⇒ refund" rule on the sovereign rail.** It is unenforceable without escrow (the relay cannot compel a sovereign wallet), so it would be a promise the protocol cannot keep — worse than an honest "no."
-- **Treating a paid failure as equivalent to a free one in the trust graph.** Not refused — and no longer the behaviour: since 2026-09-15 a paid failure weighs more than a free one (`paidFailureWeight`, `packages/runtime/src/agent-trust.ts`); see Open below.
+- **Treating a paid failure as equivalent to a free one in the trust graph.** Not refused — but not the behaviour: a paid failure weighs more than a free one (`paidFailureWeight`, `packages/runtime/src/agent-trust.ts`); see [The delegator's loss in the trust ledger](#the-delegators-loss-in-the-trust-ledger) below.
 
 ## The trigger, and why it re-measures
 
@@ -58,6 +60,6 @@ Escalation, in order, when the trigger fires with volume:
 2. **Bond recourse** — the deferred half of `commitment-bond.md`, which brings the per-bond reservation ledger with it.
 3. **On-chain escrow** (§9.2) — only if 1 and 2 prove insufficient at volume.
 
-## Open
+## The delegator's loss in the trust ledger
 
-**CLOSED 2026-09-15 — the delegator's money loss is now a first-person fact.** Until then `agent_trust` counted `failed_tasks`, so a failed paid hire and a failed free one weighed identically in the reliability posterior that [`first-person-worker-routing.md`](first-person-worker-routing.md) ranks on — the recourse this decision named was described, not enforced. Now a verified failed receipt for a hire the delegator PAID for adds, beyond the one failure it always added, `paidFailureWeight(paidUsd) − 1` integer pseudo-failures to the capability bucket's `paid_failure_penalty` (`packages/runtime/src/agent-trust.ts`): weight 1 for free, 2 at an atom's $0.003, capped at 5 by $0.04 — scaled by what was lost, capped so one bad hire cannot erase a long record. The selector reads `failed_tasks + paid_failure_penalty` per capability (`competenceCounts`). Integer by construction, so the seeded Thompson draw and the routing transcript still recompute exactly. Measured with the real selector (2000 seeded draws, P(re-hire next draw) vs an equal rival): no failure 0.50, one free failure 0.29, one atom-priced paid failure 0.17, one molecule-priced paid failure 0.06; a 60-success incumbent vs a cold rival moves 0.98 → 0.95 — expensive, never annihilating (pinned in `paid-failure-weight.test.ts`). The pairwise `trust_level` transitions read raw counts and are untouched: this is a competence signal, not a relationship verdict. No new money path; the recourse is the ledger, as decided.
+**The delegator's money loss is a first-person fact.** Counting `failed_tasks` alone would weigh a failed paid hire and a failed free one identically in the reliability posterior that [`first-person-worker-routing.md`](first-person-worker-routing.md) ranks on — the recourse this decision names would be described, not enforced. So a verified failed receipt for a hire the delegator PAID for adds, beyond the one failure it always added, `paidFailureWeight(paidUsd) − 1` integer pseudo-failures to the capability bucket's `paid_failure_penalty` (`packages/runtime/src/agent-trust.ts`): weight 1 for free, 2 at an atom's $0.003, capped at 5 by $0.04 — scaled by what was lost, capped so one bad hire cannot erase a long record. The selector reads `failed_tasks + paid_failure_penalty` per capability (`competenceCounts`). Integer by construction, so the seeded Thompson draw and the routing transcript still recompute exactly. Measured with the real selector (2000 seeded draws, P(re-hire next draw) vs an equal rival): no failure 0.50, one free failure 0.29, one atom-priced paid failure 0.17, one molecule-priced paid failure 0.06; a 60-success incumbent vs a cold rival moves 0.98 → 0.95 — expensive, never annihilating (pinned in `paid-failure-weight.test.ts`). The pairwise `trust_level` transitions read raw counts and are untouched: this is a competence signal, not a relationship verdict. No new money path; the recourse is the ledger, as decided.

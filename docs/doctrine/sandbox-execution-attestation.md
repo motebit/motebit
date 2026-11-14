@@ -2,7 +2,9 @@
 
 > **Layer:** narrative
 
-**Status: trust model proven (prototype), shape discovered (repo), wire format deferred to a deliberate producer arc.** This is the governed-execution analogue of the receipt: a way to prove an action ran inside motebit's governed sandbox — not the agent's word for it. Same discipline as [`evals-as-attestations.md`](evals-as-attestations.md) and [`privileged-atoms.md`](privileged-atoms.md): the design is locked, the wire primitive waits for its forcing function.
+**Status:** [doctrine-status.md § sandbox-execution-attestation](../ops/doctrine-status.md#sandbox-execution-attestationmd)
+
+This is the governed-execution analogue of the receipt: a way to prove an action ran inside motebit's governed sandbox — not the agent's word for it. Same discipline as [`evals-as-attestations.md`](evals-as-attestations.md) and [`privileged-atoms.md`](privileged-atoms.md): the design is locked, the wire primitive waits for its forcing function.
 
 ## The need (consumer-forced, present)
 

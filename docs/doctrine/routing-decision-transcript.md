@@ -2,13 +2,15 @@
 
 > **Layer:** law (the signature binds the transcript; the winner is in the frozen set; recomputation reproduces the hire) — enforced by `packages/crypto/src/__tests__/routing-transcript.test.ts`, `packages/semiring/src/__tests__/worker-selection-transcript.test.ts`
 
+**Status:** [doctrine-status.md § routing-decision-transcript](../ops/doctrine-status.md#routing-decision-transcriptmd)
+
 **The routing arc made the hire deterministic and reproducible; the transcript makes it provable. A signed, self-contained record of why this worker won — the routing moment entering the receipt family as dispute-grade history.**
 
 ## The gap this closes
 
 [`exploration-as-market-vitality.md`](exploration-as-market-vitality.md) already names the honest limit of what shipped: the structured `routing.worker_selected` log is a **reproducibility aid, not an independently-auditable proof**. Recomputing the draw needs the frozen admissible candidate set, the first-person trust snapshot (the α/β come from mutable, private `agent_trust` records — not in any receipt), the weights, the prior mapping, the evidence-cap rule, and an algorithm-version tag. A caller who omits a candidate, or mutates its trust ledger after the fact, cannot be caught from the seed alone. The transcript is the artifact that carries those inputs, signed by the delegator at decision time.
 
-Why this is worth an arc at all is [`clearing-house-not-thin-waist.md`](clearing-house-not-thin-waist.md): the moat is dispute-grade history a fork cannot reproduce — never the protocol, never the coordination software. The routing machinery decides which agent gets paid work; the transcript is what turns "the newcomer won on merit" from the operator's word into a checkable sentence. The exploration doctrine spent design effort making every draw a pure function of signed, recorded context precisely so this artifact could exist; until the transcript ships, that reproducibility is a property with no consumer.
+Why this is worth an arc at all is [`clearing-house-not-thin-waist.md`](clearing-house-not-thin-waist.md): the moat is dispute-grade history a fork cannot reproduce — never the protocol, never the coordination software. The routing machinery decides which agent gets paid work; the transcript is what turns "the newcomer won on merit" from the operator's word into a checkable sentence. The exploration doctrine spent design effort making every draw a pure function of signed, recorded context precisely so this artifact could exist; without the transcript, that reproducibility is a property with no consumer.
 
 ## Shape: receipt, not attestation
 
@@ -33,15 +35,11 @@ The verification law is **recomputation**: `selectWorker` and `sampleBeta` are p
 
 ## Consumer #1 — trigger honesty
 
-The exploration doctrine deferred this artifact with the trigger "the first consumer that has to _prove_ a routing choice rather than reproduce it." That consumer is the **archetype conformance probe** ([`agent-archetypes.md`](agent-archetypes.md)): the market-activation proof — a newcomer earning a job on merit — currently rests on the runtime's own log. Asserting a verified transcript in the scheduled probe makes it accept-on-proof, the same shape as the paid-P2P `sub_settlements` assertion that closed the "green whether or not the tree settles" gap. The trigger is fired by our own living-conformance contract, not by an external ask — named plainly so this doc doesn't read as a trigger retro-fitted to a decision.
+The exploration doctrine deferred this artifact with the trigger "the first consumer that has to _prove_ a routing choice rather than reproduce it." That consumer is the **archetype conformance probe** ([`agent-archetypes.md`](agent-archetypes.md)): the market-activation proof — a newcomer earning a job on merit — would otherwise rest on the runtime's own log. Asserting a verified transcript in the scheduled probe makes it accept-on-proof, the same shape as the paid-P2P `sub_settlements` assertion that closed the "green whether or not the tree settles" gap. The trigger is fired by our own living-conformance contract, not by an external ask — named plainly so this doc doesn't read as a trigger retro-fitted to a decision.
 
 ## Increments
 
-- **Inc 0 (this doc) — SHIPPED** (#345): shape settled — receipt-family, dispute-scoped disclosure, bond as prerequisite.
-- **Inc 1 — bond-in-discovery (prerequisite) — SHIPPED** (#347). The relay's discover surface carries a verified-bond signal per candidate; the runtime closure joins it into `RankableWorker.bonded`. Closes the standing bond-live-wiring deferral; the sybil-swarm bound goes live on real hops.
-- **Inc 2 — type + law — SHIPPED** (#348; `spec/routing-transcript-v1.md`, spec #34, 12-case conformance corpus). `RoutingDecisionTranscript` in `@motebit/protocol` (+ wire-schemas), sign/verify in `@motebit/crypto`, a verifier arm in `@motebit/verifier`. Closed shapes, suite-dispatched, per [`registry-pattern-canonical.md`](registry-pattern-canonical.md) where a vocabulary closes.
-- **Inc 3 — producer — SHIPPED** (#349 + the Inc 4 egress). Minted at the runtime's `WorkerSelector` seam on every ranked (and pinned) paid hire; the transcript digest is bound into the sub-hop's `ExecutionReceipt` so the paid act commits to the choice that caused it; local retention per retention policy.
-- **Inc 4 — proof contract — SHIPPED.** The conformance probe verifies the transcript of its own delegation's routing; a drift gate holds producer coverage (a ranked paid hire without a transcript is a red build, not a log line).
+The arc's order is load-bearing: the shape first (receipt-family, dispute-scoped disclosure, bond as prerequisite); then bond-in-discovery, so the relay's discover surface carries a verified-bond signal per candidate that the runtime closure joins into `RankableWorker.bonded`; then the type and its law (`spec/routing-transcript-v1.md`; `RoutingDecisionTranscript` in `@motebit/protocol` + wire-schemas, sign/verify in `@motebit/crypto`, a verifier arm in `@motebit/verifier`; closed shapes, suite-dispatched); then the producer, minted at the runtime's `WorkerSelector` seam on every ranked paid hire and egressing with the paid act's receipt, retained locally per retention policy; then the proof contract: the conformance probe verifies the transcript of its own delegation's routing, and a ranked paid hire without a transcript is a red build, not a log line (`check-routing-transcript-emission`). Which increments have shipped is in the status ledger.
 
 ## Deferred, with triggers
 

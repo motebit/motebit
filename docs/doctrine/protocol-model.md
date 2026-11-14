@@ -2,6 +2,8 @@
 
 > **Layer:** law (the permissive floor declares no BSL dependency) — enforced by `check-deps`
 
+**Status:** [doctrine-status.md § protocol-model](../ops/doctrine-status.md#protocol-modelmd)
+
 Motebit is a protocol, not a platform. This has concrete architectural consequences that bend every design decision.
 
 ## TL;DR
@@ -16,7 +18,7 @@ Two-clause shorthand (`strategy_open_source_moat` memory anchor): _"Open-source 
 
 Every function the relay performs lives in exactly one of three layers, and each layer has a different shape of ownership:
 
-1. **Protocol** — the open spec anyone can implement. Published in [`spec/`](../../spec/). Consumed via the permissive-floor type packages (Apache-2.0 today: `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `@motebit/verifier`, and the canonical platform-attestation leaves `@motebit/crypto-appattest`, `@motebit/crypto-android-keystore`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn`). A third party reading only the specs and the permissive-floor types can build an interoperating alternative without permission. The architectural role is "permissive floor"; the specific license instance (Apache-2.0) is replaceable.
+1. **Protocol** — the open spec anyone can implement. Published in [`spec/`](../../spec/). Consumed via the permissive-floor type packages (Apache-2.0; among them `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `@motebit/verifier`, and the canonical platform-attestation leaves `@motebit/crypto-appattest`, `@motebit/crypto-android-keystore`, `@motebit/crypto-tpm`, `@motebit/crypto-webauthn`). A third party reading only the specs and the permissive-floor types can build an interoperating alternative without permission. The architectural role is "permissive floor"; the specific license instance (Apache-2.0) is replaceable.
 2. **Reference implementation** — Motebit, Inc.'s code that implements the protocol. BSL-1.1: source-available, commercially restricted during the early phase, automatically converting to Apache-2.0 after the conversion date. Same pattern as MariaDB, CockroachDB, Stripe, Confluent, and Ethereum's commercial clients. Both license families converge to Apache-2.0 at the Change Date — one license in the end state.
 3. **Accumulated state** — trust history, federation graph, network effects, operational data. Never licensed; private to the canonical relay operator. The long-term moat that makes the reference implementation commercially defensible.
 
@@ -59,7 +61,7 @@ This rule is semantic, not syntactic — no mechanical gate catches it. PR revie
 
 The verification recipe — not the primitive name — is foundation law. Every signed wire-format artifact carries a `suite: SuiteId` field alongside its `signature`; `SuiteId` is a closed string-literal union in `@motebit/protocol/crypto-suite.ts`. The suite bundles algorithm + canonicalization + signature encoding + key encoding into one identifier (matches W3C VC 2.0's `cryptosuite: "eddsa-jcs-2022"` and COSE/JOSE algorithm registries).
 
-Five suites ship today:
+The registered suites (`SUITE_REGISTRY` in `@motebit/protocol/crypto-suite.ts` is canonical):
 
 | Suite                           | Used by                                       |
 | ------------------------------- | --------------------------------------------- |
@@ -75,7 +77,7 @@ Verifiers dispatch primitive verification through `verifyBySuite` in `packages/c
 
 ### Settlement (2026-04-08)
 
-The first protocol layer where the operational test passes without any relay dependency. Foundation law lives at receipt / verification / sovereign-floor / relay-optional / plural-rails — not at wallet topology. The Ed25519/Solana curve coincidence (where a motebit's identity public key is natively a valid Solana address) is documented as the **default reference implementation**, not protocol law. Multi-hop sovereign settlement is first-class under the foundation law, even though only relay-mediated multi-hop is currently wired in the runtime; pay-forward, onchain escrow, and hybrid are specified as compliant alternatives. Compatible implementations — multisig treasuries, hardware-backed identity, separate identity/wallet keys with binding attestation, different Ed25519-native chains, post-quantum migration — are first-class citizens, not deviations. Sovereign payment receipts anchor to onchain proofs via `task_id = "{rail}:tx:{txHash}"` and are signed by the motebit's identity key — _the wallet transaction is referenced as data, not as the signing authority_. That structural decoupling lets every alternative wallet topology coexist under the same receipt format.
+The first protocol layer where the operational test passes without any relay dependency. Foundation law lives at receipt / verification / sovereign-floor / relay-optional / plural-rails — not at wallet topology. The Ed25519/Solana curve coincidence (where a motebit's identity public key is natively a valid Solana address) is documented as the **default reference implementation**, not protocol law. Multi-hop sovereign settlement is first-class under the foundation law; pay-forward, onchain escrow, and hybrid are specified as compliant alternatives. Compatible implementations — multisig treasuries, hardware-backed identity, separate identity/wallet keys with binding attestation, different Ed25519-native chains, post-quantum migration — are first-class citizens, not deviations. Sovereign payment receipts anchor to onchain proofs via `task_id = "{rail}:tx:{txHash}"` and are signed by the motebit's identity key — _the wallet transaction is referenced as data, not as the signing authority_. That structural decoupling lets every alternative wallet topology coexist under the same receipt format.
 
 ### Credential anchoring (2026-04-10)
 
@@ -85,9 +87,9 @@ Extends the settlement precedent to trust proof. Payment proof was already oncha
 
 Key revocation events (`agent_revoked`, `key_rotated`) are anchored onchain immediately via Solana Memo (`motebit:revocation:v1:{revoked_public_key_hex}:{timestamp}`). No batching — revocations are rare and urgent. Any party can verify via memo lookup without contacting a relay. Closes the NIST SP 800-63 revocation gap: no CA, no CRL, no OCSP — the chain is the registry. `verifyRevocationAnchor` in `@motebit/crypto` (permissive floor) does offline verification.
 
-### Discovery, migration, dispute code-complete (2026-04-11)
+### Discovery, migration, dispute
 
-Discovery (`services/relay/src/discovery.ts`): `GET /.well-known/motebit.json` signed relay metadata, `GET /api/v1/discover/:motebitId` with federation propagation, hop limits, loop prevention. Migration (`services/relay/src/migration.ts`): MigrationToken, DepartureAttestation, CredentialBundle export, accept-migration with signature verification, cancel/depart lifecycle. Dispute (`services/relay/src/disputes.ts`): allocation→disputed transition, evidence, signed operator resolution with refund/release/split, appeal (one per dispute), trust-layer disputes for p2p. CLI: `motebit discover`, `motebit migrate`. Protocol types (Apache-2.0) for all three in `@motebit/protocol`.
+Discovery (`services/relay/src/discovery.ts`): `GET /.well-known/motebit.json` signed relay metadata, `GET /api/v1/discover/:motebitId` with federation propagation, hop limits, loop prevention. Migration (`services/relay/src/migration.ts`): MigrationToken, DepartureAttestation, CredentialBundle export, accept-migration with signature verification, cancel/depart lifecycle; an arrival is refused until it checks the identity's current key authority and guardian provenance (`services/relay/CLAUDE.md` rule 31). Dispute (`services/relay/src/disputes.ts`): allocation→disputed transition, evidence, signed operator resolution with refund/release/split, appeal (one per dispute), trust-layer disputes for p2p. CLI: `motebit discover`, `motebit migrate`. Protocol types (Apache-2.0) for all three in `@motebit/protocol`.
 
 ## The relay is a convenience layer, not a trust root
 

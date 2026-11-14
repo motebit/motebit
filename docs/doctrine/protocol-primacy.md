@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § protocol-primacy](../ops/doctrine-status.md#protocol-primacymd)
+
 **Motebit is a protocol with a company on top, not a company with a protocol on the side.**
 
 This is the constitutional invariant. Every drift gate, every architectural split, every other doctrine memo in this directory is downstream of this single commitment. The protocol exists and functions identically whether the user pays motebit-cloud, brings their own keys, or runs entirely on-device. The business is a service-bundling convenience layer that captures margin on top of a substrate that works without it.
@@ -114,9 +116,7 @@ When someone proposes a motebit-cloud feature, the question is never "what does 
 
 ## Reference-experience concepts stay out of the protocol
 
-Reference-experience concepts (slab, creature, embodiment modes, eye/hand/mind organs, presentation, satellites, chrome) MUST NOT become protocol data-model concepts, exported protocol identifiers, signed or wire fields, or normative interoperability requirements unless an explicit, recorded decision establishes an implementation-independent need. Renaming does not cure a leak: the test is whether a non-motebit implementation with no slab must populate or interpret the value. Existing cases migrate alias-first ([`deprecation-lifecycle.md`](deprecation-lifecycle.md)).
-
-Known existing cases, tracked as follow-ups (not yet migrated): `DropTarget` `"slab" | "creature"` in `packages/protocol/src/perception.ts`; `SensitivityElevationSource` `"slab_item"`; `ToolDefinition.embodimentMode` / `slabProjection`; `SignableComputerSessionReceipt.embodiment_mode` (`@alpha`).
+Reference-experience concepts (slab, creature, embodiment modes, eye/hand/mind organs, presentation, satellites, chrome) MUST NOT become protocol data-model concepts, exported protocol identifiers, signed or wire fields, or normative interoperability requirements unless an explicit, recorded decision establishes an implementation-independent need. Renaming does not cure a leak: the test is whether a non-motebit implementation with no slab must populate or interpret the value. Existing cases migrate alias-first ([`deprecation-lifecycle.md`](deprecation-lifecycle.md)); the known cases are listed in the status ledger.
 
 ## Cross-cuts
 
