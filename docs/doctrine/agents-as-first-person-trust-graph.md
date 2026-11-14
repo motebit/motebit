@@ -537,14 +537,16 @@ what keeps the cost from eating the property it paid for.
 **State (as of this writing).** Shipped under the gate above: the Ring-1 sigil
 params (`deriveAgentSigil`, `oklchToRgb`, `shortFingerprint`) and the
 human-comparable `wordFingerprint` (BIP-39, SHA-256-verified — adopted, not
-minted) in `@motebit/sdk`; one reference web SVG renderer (`apps/web`, unwired)
-that makes the mark observable; and the first-person **petname data field**
-(`AgentTrustRecord.petname`, local-only — never on the wire — with
-`runtime.setAgentPetname`) — forced and reversible, so the data primitive ships
-even though no UI consumes it yet. Held — unforced or surface-committing: the
-cross-surface renderer set, the desktop/mobile/spatial **hire** affordances (the
-**web** hire shipped 2026-06-05 — §5), the
-petname **UI** (editing / showing it), and petname **auto-suggestion** (the §3
+minted) in `@motebit/sdk`; the sigil rendered on agent rows on web
+(`apps/web/src/ui/gated-panels.ts` via `apps/web/src/identity-sigil-svg.ts`), desktop
+(`apps/desktop/src/ui/agent-sigil.ts`) and mobile
+(`apps/mobile/src/components/agent-sigil.tsx`); and the first-person **petname
+data field** (`AgentTrustRecord.petname`, local-only — never on the wire — with
+`runtime.setAgentPetname`), shown on the row and edited inline on Known rows on
+web and desktop (`gated-panels.ts`, `apps/desktop/src/ui/agents.ts`). Held —
+unforced or surface-committing: the spatial renderer, the desktop/mobile/spatial
+**hire** affordances (the **web** hire shipped 2026-06-05 — §5), the mobile
+petname editor, and petname **auto-suggestion** (the §3
 pincer — gate any auto-suggest behind earned trust, never adopt the self-asserted
 name at discovery). These ship when a concrete consumer pulls (the live demo, or
 a builder), not before.

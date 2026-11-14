@@ -15,7 +15,7 @@ Pattern: `createXController(adapter)` returns a state subscription + action meth
 - State mutations are optimistic where safe (pin flip, delete), authoritative otherwise (refresh after add).
 - Drift gate `check-panel-controllers` matches the family's file-name pattern against relay-endpoint or runtime-API signatures; any match without `@motebit/panels` import fails CI.
 
-Families shipped: **Sovereign**, **Agents**, **Memory**.
+Families shipped: **Sovereign**, **Agents**, **Memory**, **Activity**, **Retention**, **Self-test** (plus **Goals** and **Skills** — see the table below). `check-panel-controllers` registers seven families: these six and Goals.
 
 ### 2. Two-surface controller — same shape, scope-compressed
 
@@ -49,6 +49,10 @@ Rule: when the LOC is dominated by form fields and platform I/O, extract the typ
 | Agents         | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
 | Memory         | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
 | Goals          | desktop, mobile, web (controller + runner) | `@motebit/panels` | `check-panel-controllers`                  |
+| Activity       | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+| Retention      | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+| Self-test      | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+| Skills         | desktop, web, mobile                       | `@motebit/panels` | — (no `check-panel-controllers` entry)     |
 | Voice waveform | desktop, web                               | `@motebit/voice`  | — (rendering primitive, not a state drift) |
 
 ## Evaluated but not extracted

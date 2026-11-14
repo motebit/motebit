@@ -42,7 +42,7 @@ This is not a novel position. It is the one [`commitment-bond.md`](commitment-bo
 - **Escrow / two-phase capture as the answer to today's evidence.** Permitted by `spec/settlement-v1.md` §9.2 and genuinely trustless — an on-chain program is not relay custody, so it would not violate the coordination-not-custody line. It is refused on _evidence_, not principle: zero observed instances of the failure it addresses. When the trigger below fires, this is the first thing to reconsider.
 - **Relay-mediated reversal.** Would require the relay to hold or claw back user funds. The out-flow user-funds transmitter surface is structurally zero and stays that way; this is not a cost question.
 - **A blanket "failed ⇒ refund" rule on the sovereign rail.** It is unenforceable without escrow (the relay cannot compel a sovereign wallet), so it would be a promise the protocol cannot keep — worse than an honest "no."
-- **Treating a paid failure as equivalent to a free one in the trust graph.** Not refused, but not yet built either; see Open below.
+- **Treating a paid failure as equivalent to a free one in the trust graph.** Not refused — and no longer the behaviour: since 2026-09-15 a paid failure weighs more than a free one (`paidFailureWeight`, `packages/runtime/src/agent-trust.ts`); see Open below.
 
 ## The trigger, and why it re-measures
 

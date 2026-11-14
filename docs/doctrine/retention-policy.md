@@ -10,7 +10,7 @@ This document is the doctrine. `spec/retention-policy-v1.md` (when it lands — 
 
 ## Why retention is plural
 
-Today's enforcement asymmetry is the diagnosis:
+The enforcement asymmetry this doctrine was written against is the diagnosis (the table is that starting point, not today's state — every store in it now registers a shape in `RUNTIME_RETENTION_REGISTRY`, `packages/protocol/src/retention-policy.ts`: memory `mutable_pruning`, event log `append_only_horizon`, conversations and tool audit `consolidation_flush`; see "Where it lands — phased"):
 
 | Store         | Sensitivity field                                             | Retention enforcement                                                                                 |
 | ------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -19,7 +19,7 @@ Today's enforcement asymmetry is the diagnosis:
 | Events        | ✗ `EventLogEntry` (`packages/protocol/src/index.ts:382-392`)  | ✗ `packages/event-log/src/index.ts` is append-only by construction                                    |
 | Tool audit    | ✗ `ToolAuditEntry` (`packages/protocol/src/index.ts:465-486`) | ✗ `packages/browser-persistence/src/tool-audit-store.ts` queries but never prunes                     |
 
-`CLAUDE.md:77` claims "Retention enforced via deletion certificates" as the motebit privacy boundary. Today, only memory honors that claim. The fix is not to retrofit memory's prune phase onto the other three — they have different physics, and the prune phase isn't the right enforcement for any of them. The fix is to name the three shapes, type-system them at the protocol layer, and register each store against the shape its physics dictates.
+`CLAUDE.md:77` claims "Retention enforced via deletion certificates" as the motebit privacy boundary. At the time, only memory honored that claim. The fix is not to retrofit memory's prune phase onto the other three — they have different physics, and the prune phase isn't the right enforcement for any of them. The fix is to name the three shapes, type-system them at the protocol layer, and register each store against the shape its physics dictates.
 
 ## The three shapes
 
@@ -149,7 +149,7 @@ type DeletionCertificate =
     };
 ```
 
-This closes the gap that today's `DeletionCertificate` (`packages/encryption/src/index.ts:158-164`) leaves open: it is currently `{ target_id, target_type, deleted_at, deleted_by, tombstone_hash }` — no `suite`, no `signature`, single-source-signing. A self-attesting privacy boundary requires every claim to clear the three-test check (`self-attesting-system.md`); a tombstone hash without a signature fails test 1 (structured artifact) by half. Phase 2 lands the union and the migration in the same PR (decision 6a); the existing field becomes the `mutable_pruning` arm, and the other two arms land additively.
+This closes the gap that the legacy `DeletionCertificate` in `@motebit/encryption` left open: it was `{ target_id, target_type, deleted_at, deleted_by, tombstone_hash }` — no `suite`, no `signature`, single-source-signing. That unsigned type has since been removed; the signed union is the certificate today (sign/verify in `packages/crypto/src/deletion-certificate.ts`). A self-attesting privacy boundary requires every claim to clear the three-test check (`self-attesting-system.md`); a tombstone hash without a signature fails test 1 (structured artifact) by half. Phase 2 lands the union and the migration in the same PR (decision 6a); the existing field becomes the `mutable_pruning` arm, and the other two arms land additively.
 
 ### Decision 2 — sensitivity-tier ceiling is interop law; reference numbers are reference defaults
 
@@ -162,7 +162,7 @@ This closes the gap that today's `DeletionCertificate` (`packages/encryption/src
 - **`MAX_RETENTION_DAYS_BY_SENSITIVITY`** (interop law, no prefix). Protocol-stated ceiling. Compliant implementations MUST enforce a finite ceiling for `medical | financial | secret` and MAY enforce one for `personal`. `none` is Infinity by law. The specific ceiling numbers are protocol-law constants — federation peers compare retention claims against these.
 - **`REFERENCE_RETENTION_DAYS_BY_SENSITIVITY`** (reference default, `REFERENCE_` prefix). What motebit's canonical relay enforces. At-or-below the ceiling. An operator MAY ship a stricter policy and remain interop-compliant; an operator MAY NOT ship a looser one.
 
-Today's numbers in `packages/privacy-layer/src/index.ts:128-143` (`30/90/90/365/Infinity` for `secret/financial/medical/personal/none`) graduate from "hardcoded reference impl" to "named pair" — the ceiling values are exported from `@motebit/protocol`, the reference defaults from `@motebit/privacy-layer`, parity test asserts the reference is at-or-below the ceiling.
+Today's numbers in `packages/privacy-layer/src/index.ts:128-143` (`30/90/90/365/Infinity` for `secret/financial/medical/personal/none`) graduate from "hardcoded reference impl" to "named pair" — both the ceiling values and the reference defaults are defined in `@motebit/protocol` (`packages/protocol/src/retention-policy.ts`) and re-exported by `@motebit/privacy-layer`, parity test asserts the reference is at-or-below the ceiling.
 
 ### Decision 3 — settlement floor is a per-record resolver on `consolidation_flush`, not a fourth shape
 

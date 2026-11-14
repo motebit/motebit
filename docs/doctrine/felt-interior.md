@@ -322,8 +322,9 @@ calm or the sovereignty it depends on.
   reaches a render — is locked by the test suites in `@motebit/panels`,
   `@motebit/runtime`, and `@motebit/crypto`. Verification is current-key, fail-closed
   (a rotated/historical key reads receipt-only, never falsely verified);
-  succession-chain verification is a deferred enhancement for both surfaces. What
-  remains is the one-pass to mobile / spatial
+  succession-chain verification is a deferred enhancement for both surfaces. Mobile
+  has since shipped it too (`apps/mobile/src/components/MemoryPanel.tsx` calls
+  `resolveFeltConsolidation`); what remains is the one-pass to spatial
   ([`panels-pattern.md`](panels-pattern.md)).
 
 ## Related
