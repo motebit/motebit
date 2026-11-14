@@ -22,10 +22,15 @@ const kitIdentityFile = join(kitPkg, "src", "machine-roster-identity-file.ts");
 const V8_DATE_VETO = "  if (bound.length > 0 && !bound.some(signedByAck)) return false;\n";
 const STRICT_DATE = '  if (typeof value !== "string" || !FULL_ISO_8601.test(value)) return null;';
 const LOOSE_DATE = '  if (typeof value !== "string" || FULL_ISO_8601.source === "") return null;';
-/** Round 3's fix: a zero-succession file counts only when signed no later than the acknowledgment. */
-const DATE_CHECK = "    if (bound.createdAtMs != null && bound.createdAtMs <= ackAt) return true;";
-// A revert the package build accepts: no unreachable code, and ackAt still read (tsc -b sets noUnusedParameters).
-const NO_DATE_CHECK = "    if (bound != null || ackAt < 0) return true;";
+/** Round 2's rule, as round 4 wrote it: a zero-succession bound file signed by the acknowledgment. */
+const ZERO_SUCCESSION_RULE =
+  "  return bound.some((b) => b.records.length === 0 && signedByAck(b));";
+const NO_ZERO_SUCCESSION_RULE =
+  "  return bound.some((b) => b.records.length < 0 && signedByAck(b));";
+/** Round 3's fix (the date evidence), as round 4 wrote it: "signed at or before the acknowledgment". */
+const DATE_CHECK = "    b.createdAtMs != null && b.createdAtMs <= ackAt;";
+// Always true, and ackAt still read (tsc -b sets noUnusedParameters).
+const NO_DATE_CHECK = "    b.createdAtMs != null || ackAt === ackAt;";
 
 await runTampers(
   [
@@ -63,8 +68,8 @@ await runTampers(
       edits: [
         {
           file: kitSrc,
-          from: "  return false;\n}",
-          to: "  return true;\n}",
+          from: ZERO_SUCCESSION_RULE,
+          to: "  return true;",
         },
       ],
     },
@@ -155,8 +160,8 @@ await runTampers(
       edits: [
         {
           file: kitSrc,
-          from: "    if (bound == null || bound.records.length !== 0) continue;",
-          to: "    if (bound == null || bound.records.length >= 0) continue;",
+          from: ZERO_SUCCESSION_RULE,
+          to: NO_ZERO_SUCCESSION_RULE,
         },
       ],
     },
@@ -169,8 +174,8 @@ await runTampers(
       edits: [
         {
           file: kitSrc,
-          from: "    if (bound == null || bound.records.length !== 0) continue;",
-          to: "    if (bound == null || bound.records.length >= 0) continue;",
+          from: ZERO_SUCCESSION_RULE,
+          to: NO_ZERO_SUCCESSION_RULE,
         },
       ],
     },
@@ -292,7 +297,7 @@ await runTampers(
         {
           file: kitSrc,
           from: DATE_CHECK,
-          to: "    if (bound.createdAtMs != null && bound.createdAtMs < 0) return true;",
+          to: "    b.createdAtMs != null && b.createdAtMs < 0;",
         },
       ],
     },
