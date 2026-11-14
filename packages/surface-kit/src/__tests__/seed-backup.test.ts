@@ -17,7 +17,11 @@ import {
 import type { KeyPair } from "@motebit/encryption";
 
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "../key-rotation.js";
-import { seedBackupPosture, type SeedBackupAcknowledgment } from "../seed-backup.js";
+import {
+  seedBackupPosture,
+  setAsideReplacedSeedBackup,
+  type SeedBackupAcknowledgment,
+} from "../seed-backup.js";
 
 const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
 const MID = "mid-seed";
@@ -314,5 +318,57 @@ describe("a committed rotation invalidates the previous seed backup", () => {
     expect(postureOf(middle, s.pub).status).toBe("backed_up");
     await performKeyRotation(ports);
     expect(postureOf(middle, s.pub).status).toBe("not_backed_up");
+  });
+});
+
+describe("setAsideReplacedSeedBackup — the never-carried rule", () => {
+  const ack = { seed_backed_up_at: 1000, seed_backed_up_key: "aa", seed_backed_up_motebit_id: "X" };
+
+  it("does nothing when the disk holds no acknowledgment", () => {
+    const write: Record<string, unknown> = { motebit_id: "Y" };
+    setAsideReplacedSeedBackup({ motebit_id: "X" }, write);
+    expect(write).toEqual({ motebit_id: "Y" });
+  });
+
+  it("leaves a rotation alone: same identity, acknowledgment carried", () => {
+    const write: Record<string, unknown> = { motebit_id: "X", ...ack };
+    setAsideReplacedSeedBackup({ motebit_id: "X", ...ack }, write);
+    expect(write).toEqual({ motebit_id: "X", ...ack });
+  });
+
+  it("an identity replacement moves the carried acknowledgment aside and drops it from current", () => {
+    const write: Record<string, unknown> = { motebit_id: "Y", ...ack };
+    setAsideReplacedSeedBackup({ motebit_id: "X", ...ack }, write);
+    expect(write["seed_backed_up_at"]).toBeUndefined();
+    expect(write["seed_backed_up_key"]).toBeUndefined();
+    expect(write["seed_backed_up_motebit_id"]).toBeUndefined();
+    expect(write["seed_backup_prior"]).toEqual([{ at: 1000, key: "aa", motebit_id: "X" }]);
+  });
+
+  it("a fresh acknowledgment (a restore) stays current, and the one it overwrote is kept aside", () => {
+    const write: Record<string, unknown> = {
+      motebit_id: "X",
+      seed_backed_up_at: 2000,
+      seed_backed_up_key: "bb",
+      seed_backed_up_motebit_id: "X",
+    };
+    setAsideReplacedSeedBackup({ motebit_id: "X", ...ack }, write);
+    expect(write["seed_backed_up_at"]).toBe(2000);
+    expect(write["seed_backed_up_key"]).toBe("bb");
+    expect(write["seed_backup_prior"]).toEqual([{ at: 1000, key: "aa", motebit_id: "X" }]);
+  });
+
+  it("a legacy unbound acknowledgment is kept aside with a null key and the disk's identity", () => {
+    const write: Record<string, unknown> = { motebit_id: "Y", seed_backed_up_at: 1000 };
+    setAsideReplacedSeedBackup({ motebit_id: "X", seed_backed_up_at: 1000 }, write);
+    expect(write["seed_backed_up_at"]).toBeUndefined();
+    expect(write["seed_backup_prior"]).toEqual([{ at: 1000, key: null, motebit_id: "X" }]);
+  });
+
+  it("merges prior records from disk and write without dropping or duplicating any", () => {
+    const old = { at: 1, key: "zz", motebit_id: "W" };
+    const write: Record<string, unknown> = { motebit_id: "Y", seed_backup_prior: [old], ...ack };
+    setAsideReplacedSeedBackup({ motebit_id: "X", seed_backup_prior: [old], ...ack }, write);
+    expect(write["seed_backup_prior"]).toEqual([old, { at: 1000, key: "aa", motebit_id: "X" }]);
   });
 });
