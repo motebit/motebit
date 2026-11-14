@@ -71,7 +71,7 @@ motebit grant revoke <id>            # Sign the terminal revocation + propagate 
 ```bash
 motebit id                           # Show your identity (motebit_id, did:key, public key)
 motebit wallet                       # Show your sovereign Solana wallet (address, USDC balance)
-motebit wallet swap <sol>            # Convert SOL → USDC working capital
+motebit wallet swap <sol>            # Disabled: refused until intent-bound validation exists
 motebit export                       # Export signed identity bundle (motebit.md)
 motebit verify motebit.md            # Verify an identity file signature
 motebit rotate --reason "scheduled"  # Rotate keypair with succession chain

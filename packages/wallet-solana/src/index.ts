@@ -84,12 +84,17 @@ export {
   USDC_MINT_MAINNET,
   USDC_MINT_DEVNET,
   InsufficientUsdcBalanceError,
+  InsufficientSolForGasError,
   InvalidSolanaAddressError,
 } from "./constants.js";
 
 export {
   swapUsdcToSol,
   swapSolToUsdc,
+  JupiterSwapDisabledError,
+  JUPITER_SWAP_DISABLED,
+  refuseJupiterSwap,
+  type JupiterSwapOperation,
   GAS_FLOOR_LAMPORTS,
   type JupiterSwapResult,
 } from "./jupiter.js";

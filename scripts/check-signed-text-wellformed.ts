@@ -115,8 +115,6 @@ const NON_JCS_SIGNERS: ReadonlyArray<{ file: string; fn: string; reason: string 
     reason: "signs the motebit.md YAML frontmatter bytes (identity-file-v1), not JCS",
   },
   ...[
-    ["packages/wallet-solana/src/jupiter.ts", "swapUsdcToSol"],
-    ["packages/wallet-solana/src/jupiter.ts", "swapSolToUsdc"],
     ["packages/wallet-solana/src/memo-submitter.ts", "sendMemo"],
     ["packages/wallet-solana/src/web3js-adapter.ts", "signSendConfirm"],
     ["packages/wallet-solana/src/web3js-adapter.ts", "sendLaneTransaction"],

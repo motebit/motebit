@@ -157,7 +157,7 @@ export async function preflightGrant(deps: {
           ? {}
           : {
               remedy:
-                "fund with USDC on the SOLANA network, or convert gas: motebit wallet swap <sol-amount>",
+                "fund with USDC on the SOLANA network, plus at least 0.005 SOL for network fees",
             }),
       });
     } catch {

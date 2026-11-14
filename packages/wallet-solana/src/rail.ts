@@ -29,7 +29,11 @@ import {
   assembleP2pPaymentProof,
   type BuildP2pPaymentProofArgs,
 } from "./p2p-payment-proof.js";
-import { InsufficientUsdcBalanceError, InvalidSolanaAddressError } from "./constants.js";
+import {
+  InsufficientSolForGasError,
+  InsufficientUsdcBalanceError,
+  InvalidSolanaAddressError,
+} from "./constants.js";
 
 export type SendResult = SendUsdcResult;
 
@@ -97,8 +101,8 @@ export type P2pPaymentConfirmation =
 import { GAS_FLOOR_LAMPORTS } from "./jupiter.js";
 
 /**
- * Amount of USDC micro-units to swap for gas when the floor is breached.
- * 2_000_000 micro = $2.00 → buys ~0.01+ SOL at current prices → thousands of txns.
+ * Amount of USDC micro-units the (disabled) gas top-up would swap.
+ * 2_000_000 micro = $2.00. The swap itself refuses — see `./jupiter.ts`.
  */
 const GAS_SWAP_USDC_MICRO = 2_000_000n;
 
@@ -116,10 +120,14 @@ export interface SolanaWalletRailConfig {
   /** RPC commitment level. Defaults to "confirmed". */
   commitment?: "processed" | "confirmed" | "finalized";
   /**
-   * Disable automatic gas management. When false (default), the rail
-   * auto-swaps USDC → SOL via Jupiter when the SOL balance drops below
-   * the gas floor before sending USDC. Set to true in tests or when
-   * gas is managed externally.
+   * @deprecated Has no effect — no replacement; rework the caller to drop
+   * the field. Automatic gas is OFF and cannot be turned on from here.
+   *
+   * Reason: the automatic top-up signed a Jupiter-built transaction with the
+   * identity key without inspecting it. Jupiter swaps are refused until an
+   * intent-bound transaction validator exists (`./jupiter.ts`), so a wallet
+   * below the gas floor must be funded with SOL directly — a transfer then
+   * fails closed with `InsufficientSolForGasError` before anything is signed.
    */
   disableAutoGas?: boolean;
 }
@@ -174,19 +182,22 @@ export class SolanaWalletRail implements SovereignWalletRail {
   }
 
   /**
-   * Ensure the wallet has enough SOL for gas. If below the floor,
-   * auto-swaps a small amount of USDC → SOL via Jupiter.
-   *
-   * @returns true if gas is sufficient (or was replenished), false if
-   *   auto-swap failed or is disabled.
+   * Is there enough SOL for gas? True at or above the floor. Below it,
+   * false — the automatic USDC → SOL top-up is disabled: the Jupiter swap
+   * refuses before any network call or signature (`./jupiter.ts`), and a
+   * rail constructed with the legacy `autoGas: true` reaches only that
+   * refusal.
    */
   async ensureGas(): Promise<boolean> {
-    const solBalance = await this.adapter.getSolBalance();
-    if (solBalance >= GAS_FLOOR_LAMPORTS) return true;
-    if (!this.autoGas || !this.web3Adapter) return false;
+    return (await this.gasStatus()).ok;
+  }
+
+  private async gasStatus(): Promise<{ ok: boolean; balance: bigint }> {
+    const balance = await this.adapter.getSolBalance();
+    if (balance >= GAS_FLOOR_LAMPORTS) return { ok: true, balance };
+    if (!this.autoGas || !this.web3Adapter) return { ok: false, balance };
 
     try {
-      // Lazy-import Jupiter to avoid loading the module when gas is sufficient
       const { swapUsdcToSol } = await import("./jupiter.js");
       await swapUsdcToSol(
         GAS_SWAP_USDC_MICRO,
@@ -195,22 +206,29 @@ export class SolanaWalletRail implements SovereignWalletRail {
         this.web3Adapter.getCommitment(),
         this.web3Adapter.getUsdcMint(),
       );
-      return true;
+      return { ok: true, balance };
     } catch {
-      // Auto-swap failed — caller can still attempt the transaction
-      // (it will fail with insufficient gas, but that's the honest state)
-      return false;
+      // The swap refuses (JupiterSwapDisabledError) — the honest state is
+      // "not enough gas", which the caller turns into a refusal.
+      return { ok: false, balance };
     }
   }
 
   /**
-   * Owner-invoked SOL → USDC swap — the funding-side half of wallet
-   * homeostasis (the owner may fund with whatever asset landed; the
-   * wallet normalizes toward working capital). Delegates to the Jupiter
-   * adapter, which enforces the gas floor fail-closed. Exposed for the
-   * `wallet swap` deterministic affordance; NOT called autonomously
-   * (autonomous posture normalization is deferred-with-trigger and
-   * would ride the standing-grant meter).
+   * Refuse, before anything is signed, a transfer the wallet cannot pay the
+   * network fee for. Without this the transaction would be signed and only
+   * then fail at preflight or onchain.
+   */
+  private async requireGas(): Promise<void> {
+    const { ok, balance } = await this.gasStatus();
+    if (!ok) throw new InsufficientSolForGasError(balance, GAS_FLOOR_LAMPORTS);
+  }
+
+  /**
+   * Owner-invoked SOL → USDC swap. DISABLED: the Jupiter adapter refuses
+   * with `JupiterSwapDisabledError` before any network call or signature,
+   * until an intent-bound transaction validator exists. Kept so the
+   * `wallet swap` affordance receives the typed refusal.
    */
   async swapSolToUsdc(solLamports: bigint): Promise<import("./jupiter.js").JupiterSwapResult> {
     if (!this.web3Adapter) {
@@ -230,13 +248,12 @@ export class SolanaWalletRail implements SovereignWalletRail {
 
   /**
    * Send USDC to a counterparty Solana address. Amount in micro-units.
-   * Auto-swaps USDC → SOL for gas if needed (when autoGas is enabled).
-   * Returns the transaction signature once the network confirms it.
+   * Refuses with `InsufficientSolForGasError`, before signing, when SOL is
+   * below the gas floor. Returns the transaction signature once the network
+   * confirms it.
    */
   async send(toAddress: string, microAmount: bigint): Promise<SendResult> {
-    if (this.autoGas) {
-      await this.ensureGas();
-    }
+    await this.requireGas();
     return this.adapter.sendUsdc({ toAddress, microAmount });
   }
 
@@ -253,9 +270,7 @@ export class SolanaWalletRail implements SovereignWalletRail {
   async sendBatch(
     items: ReadonlyArray<{ toAddress: string; microAmount: bigint }>,
   ): Promise<SendUsdcBatchItemResult[]> {
-    if (this.autoGas) {
-      await this.ensureGas();
-    }
+    await this.requireGas();
     return this.adapter.sendUsdcBatch(items);
   }
 
@@ -266,7 +281,7 @@ export class SolanaWalletRail implements SovereignWalletRail {
    *
    * Delegates to `buildP2pPaymentProof` (the canonical multi-leg builder) so
    * the atomicity guarantee + proof assembly live in exactly one place — the
-   * rail only layers gas management on top. Two legs for single-operator P2P
+   * rail only layers the gas-floor refusal on top. Two legs for single-operator P2P
    * (worker + relay treasury); three for cross-operator federated P2P when
    * the executor-relay fields are present.
    *
@@ -279,9 +294,7 @@ export class SolanaWalletRail implements SovereignWalletRail {
     request: SovereignP2pPaymentRequest,
     hooks?: BroadcastHooks,
   ): Promise<P2pPaymentProof> {
-    if (this.autoGas) {
-      await this.ensureGas();
-    }
+    await this.requireGas();
     return buildP2pPaymentProof(this.adapter, proofArgs(request), hooks);
   }
 
@@ -308,6 +321,7 @@ export class SolanaWalletRail implements SovereignWalletRail {
   async confirmSend(query: ConfirmSendQuery): Promise<SendConfirmation> {
     if (
       query.error instanceof InsufficientUsdcBalanceError ||
+      query.error instanceof InsufficientSolForGasError ||
       query.error instanceof InvalidSolanaAddressError
     ) {
       return { status: "absent" };
@@ -462,5 +476,7 @@ export function createSolanaWalletRail(config: SolanaWalletRailConfig): SolanaWa
     usdcMint: config.usdcMint,
     commitment: config.commitment,
   });
-  return new SolanaWalletRail(adapter, { autoGas: !config.disableAutoGas });
+  // Automatic gas is OFF, whatever `disableAutoGas` says: the top-up signed
+  // a Jupiter-built transaction unvalidated (see `./jupiter.ts`).
+  return new SolanaWalletRail(adapter, { autoGas: false });
 }
