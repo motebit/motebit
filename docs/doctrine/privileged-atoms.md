@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § privileged-atoms](../ops/doctrine-status.md#privileged-atomsmd)
+
 A "privileged atom" — an atom that holds a real credential behind the membrane and exposes only typed verbs to the molecule that composes it — is a tempting primitive with, today, exactly one would-be consumer: relay trust-root disaster recovery, where the operator acts on their own infrastructure. This memo names the open question and records the trigger for crystallizing the primitive when a **second, independent** consumer arrives — so a contributor doesn't mint a typed class on N=1. It also fixes the emphasis: the novel, defensible half is **not** credential isolation; it is the signed, delegation-chained, causal-closure receipt that proves a bounded action ran under named authority.
 
 ## The shape, and what is actually new
@@ -41,11 +43,11 @@ Crystallize a `PrivilegedAtom` typed class (with the eight-artifact closed regis
 
 **Interpretation rule (strict shape-match).** A second secret-holder appearing is the trigger to _evaluate_, not to crystallize. The decision — one primitive, or a family — turns on whether consumer #2 wants the **same** delegation / receipt / revocation shape as relay-key DR, not on the mere fact that both hold a secret. A sovereign, irreplaceable trust root and a rotatable, third-party-issued cloud key may want different shapes; if #2 diverges, that is the signal that "privileged atom" is two families wearing one word. Resist the urge to pre-bake the comparison axes here — naming the likely-distinguishing dimensions in advance is the same premature-crystallization reflex one floor up. Consumer #2 grounds the axes.
 
-## What ships now
+## What N=1 uses instead
 
-The relay trust-root DR tooling — the `relay-key` operator CLI (`export` / `verify` / `import`, with an identity-match guard on restore) and [`services/relay/RUNBOOK-key-recovery.md`](../../services/relay/RUNBOOK-key-recovery.md). It is **not** a privileged atom: the operator holds the credential and runs the verb locally; there is no relay-held secret and no per-invocation delegation receipt. It is a one-off ops script, and that is the correct shape for N=1 — it closes the relay's single-copy trust-root risk without committing to the primitive.
+The relay trust-root DR tooling is the `relay-key` operator CLI (`export` / `verify` / `import`, with an identity-match guard on restore) and [`services/relay/RUNBOOK-key-recovery.md`](../../services/relay/RUNBOOK-key-recovery.md). It is **not** a privileged atom: the operator holds the credential and runs the verb locally; there is no relay-held secret and no per-invocation delegation receipt. It is a one-off ops script, and that is the correct shape for N=1 — it closes the relay's single-copy trust-root risk without committing to the primitive.
 
-The composition machinery — `@motebit/molecule-runner`, the delegation tree, the causal-closure receipt — already exists for the day the trigger fires. The first privileged-atom consumer composes into it; the deferral sequences the work, it does not strand it.
+The composition machinery — `@motebit/molecule-runner`, the delegation tree, the causal-closure receipt — is what the first privileged-atom consumer composes into when the trigger fires. The deferral sequences the work, it does not strand it.
 
 ## Cross-cuts
 

@@ -307,3 +307,293 @@ The bar: reintroduced `#357`, `#358`, `#359` each turn the activation-conformanc
 
 - As of 2026-11-13: the invariant and its producer seam are built (shipped 2026-06-10): policy-gate step 8b (`packages/policy/src/policy-gate.ts`), `verifyGrantForTurn` (`packages/runtime/src/grant-verifier.ts`), gated by `check-money-authority`.
 - As of 2026-11-13: grants are stored and presented. The grant store is `~/.motebit/grants/` (`motebit grant`, `apps/cli/src/subcommands/grant.ts`); `motebit --grant`, `motebit serve --direct --grant` and the molecule-runner self-grant present grants to the runtime; the CLI callers read revocations from the relay's `/api/v1/delegations/revocations` cache; the molecule-runner self-grant presents none (`packages/molecule-runner/src/index.ts`).
+
+## memory-provenance.md
+
+[`memory-provenance.md`](../doctrine/memory-provenance.md)
+
+- As of 2026-11-13: `MemorySource` is the tenth registered registry, shipped 2026-06-10 (`packages/protocol/src/memory-source.ts`), gated by `check-memory-source-canonical`.
+- As of 2026-11-13: closed failure modes: supersede laundering (#880, `supersedeMemoryByNodeId`), foreign-task loop formation (#893, `turnMemorySource` in `packages/ai-core/src/memory-provenance.ts`), foreign-turn conversation history (#904, closed on the call path in #943 round 9 via `ConversationManager.forTurn`), foreign-ness as a call path (#943 round 9), foreign-turn served interior (#943, incl. the MCP doors in round 2, `servedPrincipal` in `packages/mcp-server/src/index.ts`), and isolated foreign formation (#943 round 7, `FormationMode` `isolated_add`). `handleAgentTask` stopped swapping the owner's live history in #943 round 10.
+- As of 2026-11-13: open: #905 (consolidation of a cluster with `peer_agent` members emits `consolidation_derived`, `packages/runtime/src/consolidation-cycle.ts`; also whether a peer `motebit_remember` may supersede owner nodes) and #942 (a foreign turn's `StateUpdated` event logs the caller's words as `user_message` with no peer mark, appended unconditionally in `packages/ai-core/src/loop.ts`).
+- As of 2026-11-13: no owner-over-HTTP door exists, and no owner-marked shareable knowledge tier is built.
+- As of 2026-11-13: the doctrine formerly said `verifyCallerToken` binds no audience and keeps no replay cache, and that the missing `aud` check was a defect on every MCP route. That is no longer true: `verifyCallerToken` (`packages/mcp-server/src/index.ts`) accepts a caller token only with `aud` `mcp:call`, `sub` equal to this server's motebit_id, a bounded lifetime and an unseen `jti` (`checkMcpCallerClaims`, #957). The rule that every HTTP caller is `other` does not depend on it and stands.
+
+## merkle-tree-hash-versioning.md
+
+[`merkle-tree-hash-versioning.md`](../doctrine/merkle-tree-hash-versioning.md)
+
+- As of 2026-11-13: the arc is closed: all six PRs landed with CI and prod-deploy green. PR1 part 1 (registry) `9cf876a8`; part 2a (node tag) `ebd3ff56`; part 2b (leaf tag, `tree_hash_version?` wire field, `check-merkle-tree-hash-canonical`, registration closure as the eighth registered registry, 7 → 8) `19d1584b`; PR2 agent-settlement `63abfe53`; PR3 credential-anchor `c39ddbf4`; PR4 identity-log `aabbecf9`; PR5 consolidation-anchor `9e2931d3`; PR6 federation-settlement `403a7257` (coverage follow-up `0e0f8fec`; CI + Deploy Sync Relay green).
+- As of 2026-11-13: five producers emit `merkle-sha256-rfc6962-v2`: `AGENT_SETTLEMENT_TREE_HASH_VERSION` and `FEDERATION_TREE_HASH_VERSION` (`services/relay/src/anchoring.ts`), `CREDENTIAL_TREE_HASH_VERSION` (`services/relay/src/credential-anchoring.ts`), `IDENTITY_LOG_TREE_HASH_VERSION` (`services/relay/src/identity-log-anchoring.ts`), `CONSOLIDATION_TREE_HASH_VERSION` (`packages/runtime/src/motebit-runtime.ts`). The per-batch / per-anchor columns are added by the relay migrations `agent_anchor_tree_hash_version`, `credential_anchor_tree_hash_version` and `identity_log_anchor_tree_hash_version` (`services/relay/src/migrations.ts`).
+- As of 2026-11-13: four specs carry the Option-A frontmatter (`tree_hash_producer:`): `spec/agent-settlement-anchor-v1.md`, `spec/credential-anchor-v1.md`, `spec/consolidation-receipt-v1.md`, `spec/relay-federation-v1.md`. The doctrine's former "the assertion-4 arm stays at the two declarations PR2 + PR3 activated" was stale.
+- As of 2026-11-13: `LEAF_EXCLUSIONS` in `scripts/check-merkle-tree-hash-canonical.ts` holds one entry, `computeFederationGraphAnchor`; the federation-settlement projection `computeSettlementLeaf` is deleted. The `check-merkle-tree-hash-canonical` description in `scripts/check.ts` still says the federation-settlement leaf is on the exclusions list ("deferred to PR3+") and that no spec declares Option A; that text is stale.
+
+## migration-cleanup.md
+
+[`migration-cleanup.md`](../doctrine/migration-cleanup.md)
+
+- As of 2026-11-13: the relay migration chain in `services/relay/src/migrations.ts` runs to `version: 60`, append-only. The doctrine's former "new schema changes land as `v16`, `v17`, … appended below" (written 2026-04-23) was stale.
+- As of 2026-11-13: `migrateLegacyProvider` in `@motebit/sdk` was the config-shape row's example through 2026-04-23; an npm-download survey (`motebit` CLI at 2 downloads, no external `@motebit/sdk` consumer) reclassified it zero-holder and it was stripped in `adc87d19`. `verifyIdentityFile` was likewise reclassified zero-holder and removed in the 3.0.0 crypto major (2026-06-06).
+- As of 2026-11-13: the operator PIN example was misdescribed in the doctrine as "PIN-encrypted key migration … malformed ciphertext" and "plain-hex private keys". `packages/runtime/src/operator.ts` checks a stored PIN hash: any hash that does not split as `salt:key` returns "Stored PIN hash is malformed — reset your PIN"; the non-functional unsalted plain-hex PIN-hash branch was removed in `adc87d19`. The doctrine now describes it that way.
+- As of 2026-11-13: no gate reports migrations older than N months; the Shopify-trap defense the doctrine describes is not built (no such script in `scripts/`).
+
+## motebit-computer.md
+
+[`motebit-computer.md`](../doctrine/motebit-computer.md)
+
+- As of 2026-11-13: the home register (the home-register arc, shipped 2026-07-09) is web-only: the derived capability-seed `deriveHomeSeed` (`apps/web/src/ui/slab-home-model.ts`), the de-browsered rest chrome with the `Anywhere.` watermark and honest ingress (`ask_or_go` / `go_only`), and the resumption arc over the redacted navigate record. Desktop has no `deriveHomeSeed` caller; the doctrine's former "renders as the slab-beside-the-creature on web/desktop today" was false for desktop. Gate: `check-home-seed-basis`.
+- As of 2026-11-13: the body register's cause bits and `effectiveBodyRegister()` are in `apps/web/src/web-app.ts`; `SlabBodyRegister` is in `packages/render-engine/src/slab-core.ts`. The typed register replaced the implicit one on 2026-05-11.
+- As of 2026-11-13: the runtime's `DropDispatcher` (`packages/runtime/src/perception.ts`) registers default handlers for `url`, `text` and `image` only; `file` and `artifact` have none (dispatch warns and no-ops). Rich image preview with vision integration is not built. `feedPerception` (`packages/runtime/src/motebit-runtime.ts`) rejects any target other than `slab` with `DropTargetGovernanceRequiredError`.
+- As of 2026-11-13: all six embodiment modes have v1 cuts (2026-05-08), with v1.1 (per-dispatcher mode stamping, `normalizeEmbodimentMode`, `check-computer-dispatcher-modes`), v1.2 (`ComputerSessionManager.halt/resume/isHalted`), v1.2b (two-finger hold, `/halt` / `/resume`) and v1.5 (`ComputerSessionReceipt`, `packages/protocol/src/computer-use.ts`) since. `desktop_drive` is desktop-only via the Tauri bridge (`apps/desktop/src-tauri/src/computer_use.rs`); `virtual_browser` is `CloudBrowserDispatcher` (`@motebit/runtime`) over `services/browser-sandbox`; the irreversible-click rules are in `packages/policy-invariants/src/computer-sensitivity.ts`.
+- As of 2026-11-13: `shared_gaze` drag-drop is wired on web and desktop only (`feedPerception` callers: `apps/web/src/ui/drop.ts`, `apps/desktop/src/ui/drop.ts`); mobile and spatial have none. The doctrine's former "`shared_gaze` ships across all surfaces" was false.
+- As of 2026-11-13: deferred: promoting `motebit/computer-use@1.0` from `@alpha` to `@beta` (`spec/computer-use-v1.md` is Draft); hardware-attestation badge, live trust-score composition and the bead-arrival animation on `peer_viewport` cards.
+- As of 2026-11-13: fork (a) was found realized by construction on 2026-05-11 (`creatureGroup.add(this.group)` in `packages/render-engine/src/slab.ts`; `SLAB_OFFSET_X = 0.38`, `SLAB_WIDTH = 0.54`, `BODY_R = 0.14` in `creature.ts`). The ratify-or-soften decision is still at hold.
+- As of 2026-11-13: `apps/web/src/ui/slab-items.ts` (2334 lines) and `apps/desktop/src/ui/slab-items.ts` (2072 lines) differ by ~260 lines, the same as on 2026-05-11.
+- As of 2026-11-13: the screencast moved from CSS3D `<img>` to the WebGL screen-mesh texture on 2026-05-09 (`8fef57e9`); the rounded-card body was reversed to the inscribed rectangle on 2026-05-11 (reverting `be02845c`).
+- As of 2026-11-13: the screencast runs at JPEG quality 90, every frame, 1920×1200 (`SCREENCAST_QUALITY` / `SCREENCAST_EVERY_NTH` in `services/browser-sandbox/src/screencast.ts`). The doctrine's former "every-other-frame, 60% quality" described the earlier v1.3 tier and was stale. The WebCodecs end-game is not built.
+
+## nist-alignment.md
+
+[`nist-alignment.md`](../doctrine/nist-alignment.md)
+
+- As of 2026-11-13 (doctrine note dated 2026-10-14, re-checked): three identity-authority defects were found and disclosed. A guardian named only by a presented identity file could establish key binding; fixed in `@motebit/crypto` 4.0.0 ([GHSA-9jqm-qqxp-39w4](https://github.com/motebit/motebit/security/advisories/GHSA-9jqm-qqxp-39w4)). Relay guardian recovery and relay migration could move an identity to a key that is not its current authority ([GHSA-855c-g46h-2v8w](https://github.com/motebit/motebit/security/advisories/GHSA-855c-g46h-2v8w), [GHSA-8f95-x57f-mfc6](https://github.com/motebit/motebit/security/advisories/GHSA-8f95-x57f-mfc6)); both are still contained by refusal, not fixed: `GUARDIAN_RECOVERY_ENABLED = false` (`services/relay/src/guardian-recovery-containment.ts`) and the `accept-migration` arrival refusal (503, `services/relay/src/migration.ts`), and in `motebit` 2.2.1. The permanent authority fix is in progress.
+- As of 2026-11-13: cryptosuite agility shipped 2026-04-13.
+- As of 2026-11-13: four hardware-attestation leaves: `packages/crypto-appattest`, `packages/crypto-android-keystore`, `packages/crypto-tpm`, `packages/crypto-webauthn`.
+- As of 2026-11-13: the state-export arc shipped 2026-05-11: the then-12 state-export endpoints (13 now, `settlement-summary` added) sign through `emitSignedExport` (`services/relay/src/state-export.ts`, `check-state-export-signed`); `motebit-verify content-artifact` (`packages/verify/src/cli.ts`); `@motebit/state-export-client` consumed by `apps/inspector` (`check-state-export-consumer-verifies`); the onchain transparency anchor (`anchorTransparencyDeclaration`, `services/relay/src/transparency.ts`; `check-transparency-onchain-anchored`); `spec/relay-transparency-v1.md` (Stage 2b-i); the execution-ledger v1.1 `signed_receipts` (`check-execution-ledger-receipts-archived`; the outer manifest had been verifiable since commit `d36cb5fd`). The inner-receipt verifier `verifyInnerSignedReceipts` shipped 2026-05-12 (`check-execution-ledger-inner-receipt-verified`), when `verifyReceipt` was first publicly exported from `@motebit/crypto`.
+- As of 2026-11-13: `goal-result` landed 2026-05-14 as the 13th `ContentArtifactType` entry (`packages/protocol/src/artifact-type.ts`), the goal-results Phase 3 arc.
+- As of 2026-11-13: the doctrine's former per-tool-call gap ("a call that throws is signed as `completed`, a call the policy gate denies gets no receipt") is closed: `ToolCallOutcome` (`completed` | `failed` | `denied`, `packages/ai-core/src/loop.ts`) is signed as the `ToolInvocationReceipt.status`, and `packages/runtime/src/agent-task-handler.ts` signs a `denied` receipt (milestone B step 2, #1212). The CLI still keeps tool receipts only in memory outside a governed repo task: `apps/cli` wires no `onToolInvocation` (desktop `apps/desktop/src/index.ts` and web `apps/web/src/web-app.ts` do), and its only durable `ToolReceiptSink` is `apps/cli/src/repo-task/receipt-file-sink.ts`.
+- As of 2026-11-13: evidence levels of the 2026-10-27 design tenets, as the doctrine last recorded them (levels: **implemented** = code on `main`; **demonstrated live** = a recorded run in [`milestone-ledger.md`](milestone-ledger.md); **partial**; **absent**):
+  1. Identity implemented; binding to an approved runtime configuration absent.
+  2. Implemented; cascade revocation absent.
+  3. Partial: the repository's own publishing credential is standing.
+  4. Implemented for tokens; repository-autonomy revocation demonstrated live (milestone A); continuous authorization absent; two verify defaults remain fail-open by design until a coordinated major release ([`verify-family-fail-closed.md`](../doctrine/verify-family-fail-closed.md)), so current authority is not yet enforced everywhere.
+  5. Implemented; demonstrated live for repository autonomy (milestone A).
+  6. Implemented; not yet demonstrated end to end.
+  7. Implemented.
+  8. Implemented.
+  9. Absent as agent-specific risk signals.
+  10. Implemented; custody apart from the agent not yet demonstrated.
+- As of 2026-11-13: milestone B step 6 is complete (B1–B6 passed live and are recorded in [`milestone-ledger.md`](milestone-ledger.md) § B), so rows 2, 6 and 10 above may now move; which levels B's recorded runs support has not been re-assessed here (unverified).
+
+## off-ramp-as-user-action.md
+
+[`off-ramp-as-user-action.md`](../doctrine/off-ramp-as-user-action.md)
+
+- As of 2026-11-13: Arc 1 is closed (Path 0 `6e1e2c2f`; Bridge user-withdrawal surface deletion `e18f1ba3`). Path 1 was retired 2026-09-29 (#948).
+- As of 2026-11-13: Arc 2 (P2P fee leg) shipped, including the `@motebit/protocol` major bump that made `fee_to_address` + `fee_amount_micro` required on `P2pPaymentProof` and the `TxVerificationResult.confirmed` change from `{from, to, amountMicro}` to `{from, transfers[]}`; the payer-failure rule was corrected 2026-09-28 (#959) and `services/relay/CLAUDE.md` rule 8 amended.
+- As of 2026-11-13: Arc 3 shipped the disjunctive eligibility gate and `WritableSettlementMode`. Arc 3.5's submission gate was prototyped during Arc 3, rolled back because it broke 32 relay-custody E2E tests, and is now live: `TASK_P2P_PROOF_REQUIRED` (`services/relay/src/tasks.ts`), locked by `services/relay/src/__tests__/arc-3.5-gate.test.ts`. The E2E suite was migrated (P2P proofs for trust-flywheel, receipt-persistence, signed-receipt-e2e, permissive-client-only-e2e, peer-credential-e2e; self-delegation for the relay-custody-machinery tests). The `dispute-cycle-e2e` relay-custody fund-refund tests were un-skipped 2026-07-12; they drive the x402-paid relay-custody form via `seedX402PaidTask`.
+- As of 2026-11-13: the single-operator production delegator client shipped 2026-06-02 and is wired on web (`apps/web/src/web-app.ts`), desktop (`apps/desktop/src/sync-controller.ts`) and mobile (`apps/mobile/src/sync-controller.ts`), each calling `getOrPinRelayKey`. The doctrine's former intro line "what remains open is … production delegator-client P2P-proof construction" was stale.
+- As of 2026-11-13: the federated 3-leg delegator client is built: `resolveAndSubmitP2pDelegation` uses `computeFederatedFeeSplit` (`packages/runtime/src/relay-delegation.ts`). The doctrine's obligation list formerly said "the federated 3-leg delegator-client (cross-operator) — still future", contradicting its own federation section; the list was stale.
+- As of 2026-11-13: the 3-leg path was proven onchain 2026-06-02 against a local `solana-test-validator` (byte-identical to devnet for SPL-transfer settlement) with a self-minted 6-decimal test USDC: `packages/wallet-solana/scripts/federated-p2p-onchain-proof.ts` + `services/relay/src/__tests__/federated-p2p-onchain-devnet.test.ts` (origin A $0.05 in treasury A; executor B $0.9025 + $0.0475). The same work fixed the verifier mint: `SOLANA_USDC_MINT` threads into the P2P verifier and the treasury reconciler (`usdcMint` in `services/relay/src/index.ts`).
+- As of 2026-11-13: multi-hop-as-P2P Inc 1 is built: `settleSubReceipt` has a p2p branch (`subEntry.settlement_mode === "p2p"`) alongside the relay-mode residual, whose `ARC-MARKER(multi-hop-as-P2P)` logs `multihop.settlement.relay_residual_fired` (`services/relay/src/tasks.ts`). `services/relay/src/__tests__/settlement-safety.test.ts` has no skipped tests (the doctrine's former "`settlement-safety` multi-hop tests are `it.skip`'d with markers" was stale). The ARC-MARKER is not yet a hard throw.
+- As of 2026-11-13: Inc 2a (`targetWorkerId` on `executeGrantedDelegation`, `packages/runtime/src/motebit-runtime.ts`) and Inc 2b (`paidSubDelegate`, `NOT_PAYABLE_CODES` in `services/research/src/research.ts`) are built. Inc 3a priced the atoms at deploy (`scripts/deploy-archetype-slate.ts`: web-search $0.003, read-url $0.002); the coded defaults are $0.05 (web-search) and $0 (read-url, unpriced by the 2026-09-13 decision recorded in `services/read-url/src/pricing.ts`), so the two files disagree for read-url. Inc 3b (the payer flip) is not done by the slate script; see [agent-archetypes.md](#agent-archetypesmd).
+- As of 2026-11-13: open: the multi-hop-as-P2P arc's remaining increments (the ARC-MARKER throw once direct delegation is P2P-only; Inc 3's conformance proof of verified p2p atom hops); x402-worker-custody; `SettlementAsset` sub-phase B (one literal, `"USDC"`); the counsel meeting.
+
+## operator-transparency.md
+
+[`operator-transparency.md`](../doctrine/operator-transparency.md)
+
+- As of 2026-11-13: Stage 2a (onchain anchor, `anchorTransparencyDeclaration` in `services/relay/src/transparency.ts`, `check-transparency-onchain-anchored`) and Stage 2b-i (`spec/relay-transparency-v1.md`) both shipped 2026-05-11. Stage 2b-i followed commit `605d288b`, which made `transparency.json` the trust anchor for state-export verification. Stage 2b-ii and Stage 3 are deferred (no second operator).
+- As of 2026-11-13: `spec/relay-transparency-v1.md` keeps the onchain anchor optional (a verifier without it is in TOFU mode and SHOULD log the uncertainty, §6). The doctrine formerly said the anchor was "expected to become required" and "becomes mandatory in the wire-format spec"; the spec did not make it mandatory.
+- As of 2026-11-13: the operator view `GET /api/v1/admin/transparency` (`services/relay/src/transparency.ts`) still returns an `onchain_anchor` placeholder saying "Onchain anchoring lands with spec/relay-transparency-v1.md (Stage 2)", which is stale code text since Stage 2a shipped. `DECLARATION_CONTENT.honest_gaps` no longer lists onchain anchoring (it lists Fly/Vercel log retention, the pre-v34/v35 memory backups and the pre-v10 receipt archive).
+- As of 2026-11-13: the relay's comment at `services/relay/src/index.ts` (transparency routes) still says the wire-format spec "remains deferred"; stale since 2b-i shipped.
+- As of 2026-11-13: `relay_auth_events` (`services/relay/src/auth-events.ts`, `AUTH_EVENT_RETENTION_MS` = 30 days) records master-token presentations and refused signed tokens (since 2026-09-14), declared in `DECLARATION_CONTENT.retention.auth_events`.
+
+## paid-failure-recourse.md
+
+[`paid-failure-recourse.md`](../doctrine/paid-failure-recourse.md)
+
+- As of 2026-11-13: the decision's measurement (staging relay, 2026-09-02: 57 paid receipts, 8 failed, all "credit balance too low") is recorded in the doctrine as its decision basis; `scripts/measure-paid-failure-recourse.ts` re-measures it. It has not been re-run for this ledger (unverified whether the trigger has fired since).
+- As of 2026-11-13: the paid-failure weight shipped 2026-09-15 (`paidFailureWeight`, `packages/runtime/src/agent-trust.ts`; pinned in `paid-failure-weight.test.ts`). Before it, `agent_trust` counted `failed_tasks` only.
+- As of 2026-11-13: none of the escalation steps (voluntary signed refund, bond recourse, on-chain escrow) is built.
+
+## panel-presentation-modes.md
+
+[`panel-presentation-modes.md`](../doctrine/panel-presentation-modes.md)
+
+- As of 2026-11-13: `PanelPresentationMode` is `"rail" | "immersive"`; availability is web `rail` + `immersive`, desktop `rail` + `immersive`, mobile `immersive` (`packages/panels/src/registry.ts`).
+- As of 2026-11-13: the slab and scene render on web and desktop. The spatial Presentation/satellite render (the record-embodiments model, 2026-06-04) is not built; it is a render-engine arc of its own.
+- As of 2026-11-13: the Goals form settled as shape 1 on 2026-05-14 (after shape 2 in commit `6dddf10d`); the "Commit motebit to a goal" empty caption is in `apps/desktop/src/ui/goals.ts` and `apps/mobile/src/components/GoalsPanel.tsx`. Whether long-press detach-to-satellite works on any flat-surface panel card is (unverified); the doctrine's former "long-press a card on the web Goals rail today and it could already pin" was hedged and is removed.
+
+## panel-temporal-registers.md
+
+[`panel-temporal-registers.md`](../doctrine/panel-temporal-registers.md)
+
+- As of 2026-11-13: Goals moved to the runtime register on 2026-05-14 (commit `426cfcf9` for the empty register). The doctrine said "across web, desktop, and mobile"; the Goals panel caption is found in `apps/desktop/src/ui/goals.ts` and `apps/mobile/src/components/GoalsPanel.tsx`, and no web Goals panel file was found under `apps/web/src/ui/` (web Goals rendering is (unverified)).
+- As of 2026-11-13: `GoalBudgetAxis = "tokens"` only (`packages/runtime/src/goals.ts`). `checkGoalBudget` is called by `apps/desktop/src/goal-scheduler.ts` and `apps/web/src/goal-engine.ts`; `apps/mobile/src/goal-scheduler.ts` inlines the same token check; no budget gate was found in `apps/cli/src` (the doctrine formerly listed the CLI among the schedulers that call it). Desktop's per-run ceilings are `MAX_TOOL_CALLS_PER_RUN = 50` and `GOAL_WALL_CLOCK_MS` = 10 minutes.
+- As of 2026-11-13: the iteration-boundary `wind_down` signal is not implemented (no `wind_down` in `packages/ai-core/src`).
+- As of 2026-11-13: the Skills → Capabilities migration shipped on web 2026-05-13 (route `/capabilities`, registry id `"capabilities"` in `packages/panels/src/registry.ts`), with desktop (`apps/desktop/src/ui/capabilities.ts`) and mobile (`apps/mobile/src/components/CapabilitiesPanel.tsx`) mirrors in the same arc.
+- As of 2026-11-13: the Ledger went local-first in #594 Inc 3a (`getLocalLedger`). `check-panel-registry-coverage` (#96) landed 2026-05-14.
+
+## panels-pattern.md
+
+[`panels-pattern.md`](../doctrine/panels-pattern.md)
+
+- As of 2026-11-13: families by shape (from the doctrine's former "What's shipped" table, spot-checked):
+
+  | Family         | Surfaces                                   | Home              | Gate                                       |
+  | -------------- | ------------------------------------------ | ----------------- | ------------------------------------------ |
+  | Sovereign      | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+  | Agents         | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+  | Memory         | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+  | Goals          | desktop, mobile, web (controller + runner) | `@motebit/panels` | `check-panel-controllers`                  |
+  | Activity       | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+  | Retention      | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+  | Self-test      | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
+  | Skills         | desktop, web, mobile                       | `@motebit/panels` | — (no `check-panel-controllers` entry)     |
+  | Voice waveform | desktop, web                               | `@motebit/voice`  | — (rendering primitive, not a state drift) |
+
+  `check-panel-controllers` (`scripts/check-panel-controllers.ts`) registers seven families: sovereign, agents, memory, goals, activity, retention, self-test. No family currently fits the two-surface shape (Goals left it in the 2026-04-22 unification).
+
+- As of 2026-11-13: chat drifts closed 2026-04-24: tag stripping (`stripInternalTags`, `packages/ai-core/src/core.ts`) and the desktop tool-status context (`formatToolLabel`, `apps/desktop/src/ui/chat.ts`). Still open: the desktop-only memory footer (web has none) and approval nesting (desktop recursive, web sequential); both await a product decision.
+- As of 2026-11-13: Settings drift 1 (`APPROVAL_PRESET_CONFIGS`) closed 2026-04-24 in `bb35843c` (mobile's divergent `balanced` denyAbove 4 → 3 and `autonomous` requireApprovalAbove 2 → 3 removed). Open audits, as the doctrine last recorded them: (2) desktop hardcodes `maxMemoriesPerTurn: 5` in `apps/desktop/src/ui/settings.ts` (re-checked: still hardcoded) and it is not user-editable there; (3) mobile's `GovernanceTab.tsx` has no `maxMemoriesPerTurn` UI (re-checked); (4) cross-surface model-list seeding after the BYOK overhaul (unverified); (5) desktop ElevenLabs key persistence (unverified); (6) `deriveInteriorColor` is copied into `apps/mobile/src/components/settings/settings-shared.tsx` (re-checked). Recommended next pass: walk 2–6 with policy decisions and the user's preference on 2 and 5.
+
+## privileged-atoms.md
+
+[`privileged-atoms.md`](../doctrine/privileged-atoms.md)
+
+- As of 2026-11-13: no `PrivilegedAtom` class exists; the only would-be consumer is relay trust-root DR (N=1), so the trigger has not fired.
+- As of 2026-11-13: the relay trust-root DR tooling is the `relay-key` operator CLI (`services/relay/src/cli.ts`, `services/relay/src/key-backup.ts`) and `services/relay/RUNBOOK-key-recovery.md`.
+
+## proactive-interior.md
+
+[`proactive-interior.md`](../doctrine/proactive-interior.md)
+
+- As of 2026-11-13: web + mobile parity for the proactive-interior surface (settings toggle, creature presence modulation, memory-panel consolidation log) shipped 2026-04-20; `resolveProactiveAnchor` is called by `apps/desktop/src/index.ts`, `apps/web/src/web-app.ts` and `apps/mobile/src/mobile-app.ts`, as is `inferenceIsFreeToUser` (web also in `apps/web/src/storage.ts`). The spatial follow-on is not built.
+- As of 2026-11-13: the `runHousekeeping` unification landed 2026-04-28. Between 2026-04-20 and then, `housekeeping()` ran only at runtime shutdown, so curiosity-target computation was dead in production for eight days. `packages/runtime/src/housekeeping.ts`, `MotebitRuntime.housekeeping()`, its call in `stop()` and the zero-caller `episodicConsolidation` option were deleted; the CLI, web, mobile and spatial periodic ticks moved to `runtime.consolidationCycle()`. `findCuriosityTargets` and the `computeAndStoreGradient` callback are in `packages/runtime/src/consolidation-cycle.ts`.
+- As of 2026-11-13: `TENDING_ALLOWED_TOOLS` (`packages/runtime/src/motebit-runtime.ts`) is `form_memory`, `rewrite_memory`, `prune_memory`, `search_conversations`.
+
+## promoting-private-to-public.md
+
+[`promoting-private-to-public.md`](../doctrine/promoting-private-to-public.md)
+
+- As of 2026-11-13: when step 7 was written, ignored libraries carried up to ~9 lingering changesets each (apps far more), and npm's pending trusted-publisher deadline was two days (unverified, external).
+- As of 2026-11-13: motebit has never made a public package private.
+- The published and private package counts in the doctrine's lead sentence are not status: `check-doc-counts` re-derives them from `package.json` on every run, so they stay in the doc.
+
+## protocol-model.md
+
+[`protocol-model.md`](../doctrine/protocol-model.md)
+
+- As of 2026-11-13: Apache-2.0 packages (`"license"` in `package.json`): `protocol`, `sdk`, `crypto`, `verifier`, `verify`, `state-export-client`, `crypto-appattest`, `crypto-android-keystore`, `crypto-tpm`, `crypto-webauthn`, `crypto-openpgp`, `create-motebit`.
+- As of 2026-11-13: five suites are registered; see [agility-as-role.md](#agility-as-rolemd).
+- As of 2026-11-13: multi-hop P2P settlement is wired beside relay-mediated multi-hop (see [off-ramp-as-user-action.md](#off-ramp-as-user-actionmd)). The doctrine's former "only relay-mediated multi-hop is currently wired in the runtime" was stale.
+- As of 2026-11-13: discovery, migration and dispute were code-complete on 2026-04-11. Migration arrivals have been refused (503) since the 2026-10-12 P0 containment (`MIGRATION_ARRIVALS_ENABLED = false`, `services/relay/src/migration.ts`).
+
+## protocol-primacy.md
+
+[`protocol-primacy.md`](../doctrine/protocol-primacy.md)
+
+- As of 2026-11-13: reference-experience concepts still in the protocol, not yet migrated: `DropTarget` `"slab" | "creature" | "ambient"` and `SensitivityElevationSource` `"slab_item"` (`packages/protocol/src/perception.ts`); `ToolDefinition.embodimentMode` / `slabProjection` (`packages/protocol/src/index.ts`); `SignableComputerSessionReceipt.embodiment_mode` (`@alpha`, `packages/protocol/src/computer-use.ts`).
+
+## receipts-unified.md
+
+[`receipts-unified.md`](../doctrine/receipts-unified.md)
+
+- As of 2026-11-13: until 2026-05-14 `ContentArtifactManifest` was produced only by the relay's 12 state-export endpoints; the goal-results Phase 3 arc added `goal-result` as the first agent-signed category. No `@motebit/receipts` facade package exists (its trigger has not fired).
+
+## registry-pattern-canonical.md
+
+[`registry-pattern-canonical.md`](../doctrine/registry-pattern-canonical.md)
+
+- As of 2026-11-13: `REGISTERED_REGISTRIES` (`scripts/check-closed-registry-canonical.ts`) holds eleven entries: the five at land (`SuiteId`, `TokenAudience`, `ContentArtifactType`, `TaskShape`, `SensitivityLevel`), then `EventType` (2026-05-14), `SettlementMode` (2026-05-15), `MerkleTreeVersion` (2026-05-30), `AgentRevocationReason` (2026-06-04), `MemorySource` (2026-06-10) and `EvalKind`. `Jurisdiction` is not registered.
+
+## release-versioning.md
+
+[`release-versioning.md`](../doctrine/release-versioning.md)
+
+- As of 2026-11-13: `.github/workflows/release-train.yml` carries `cron: "0 23 * * 2"`. Whether the workflow is enabled on GitHub is a repository setting this ledger cannot read from the code (unverified); the operator's notes record the train as disabled, with the founder merging the `Version Packages` PR by hand.
+
+## retention-policy.md
+
+[`retention-policy.md`](../doctrine/retention-policy.md)
+
+- As of 2026-11-13: phases 1–6 are shipped: 4a + 4b-1 + 4b-2 at `44d25cd8`; 4b-3 across `374a9605` (protocol) → `25ba9771` (crypto) → `a2ce0373` (wire-schemas) → `9e808870` (relay endpoints) → `a7f217c8` (manifest projection + `check-relay-retention-coverage` #68, which also moved `RETENTION_MANIFEST_CONTENT.stores[]` from empty to the five operational ledgers) → a sixth commit (spec bump, `@experimental` → `@spec`); 5 at `0233325e`; 6a (signed manifest + browser re-verifier) at `fda8dd08`; 6b (`check-retention-coverage` #67, landed 2026-04-30) at `79dd6613`. Phase 4 was the variance source; the others were tightly bounded.
+- As of 2026-11-13: `RUNTIME_RETENTION_REGISTRY` (`packages/protocol/src/retention-policy.ts`) registers memory `mutable_pruning`, event_log `append_only_horizon`, conversation_messages, tool_audit and skill_audit `consolidation_flush`.
+- As of 2026-11-13: `check-retention-coverage` took drift-defense #67 because the #52 slot reserved in phase 1 was taken during a renumbering. `check-sensitivity-canonical` (#97) landed 2026-05-14, in the same arc that moved `packages/policy-invariants/src/computer-sensitivity.ts` from a local `LEVEL_RANK` + `higherLevel` table to `rankSensitivity`.
+- As of 2026-11-13: the reference numbers formerly lived hardcoded in `packages/privacy-layer/src/index.ts`; they are now `REFERENCE_RETENTION_DAYS_BY_SENSITIVITY` in `@motebit/protocol`. `spec/retention-policy-v1.md` (stage 2) does not exist.
+
+## routing-decision-transcript.md
+
+[`routing-decision-transcript.md`](../doctrine/routing-decision-transcript.md)
+
+- As of 2026-11-13: all five increments shipped: Inc 0 (doctrine, #345), Inc 1 (bond-in-discovery, #347, which also put the sybil-swarm bound live on real hops), Inc 2 (type + law, #348; `spec/routing-transcript-v1.md`, spec #34, a 12-case conformance corpus), Inc 3 (producer, #349) and Inc 4 (proof contract; `check-routing-transcript-emission`, added 2026-07-21).
+- As of 2026-11-13: the transcript egresses with the molecule's receipt (`routing_transcripts` in `services/research/src/research.ts`; `routingTranscript` on the delegation result in `packages/runtime/src/relay-delegation.ts`). The doctrine formerly said the transcript **digest** is bound into the sub-hop's `ExecutionReceipt`; no such digest field was found in `packages/protocol/src` or `packages/runtime/src` (unverified). The doctrine also said the producer mints on every ranked "(and pinned)" paid hire; `check-routing-transcript-emission` covers ranked hires, and pinned-hire minting is (unverified).
+
+## runtime-invariants-over-prompt-rules.md
+
+[`runtime-invariants-over-prompt-rules.md`](../doctrine/runtime-invariants-over-prompt-rules.md)
+
+- As of 2026-11-13: `check-prompt-density` (#81, added 2026-05-12) holds `BASELINE = 68` (`scripts/check-prompt-density.ts`). The doctrine formerly recorded the baseline at 62 after the 2026-05-12 prune pass and 64 later that day; both were stale.
+
+## sandbox-execution-attestation.md
+
+[`sandbox-execution-attestation.md`](../doctrine/sandbox-execution-attestation.md)
+
+- As of 2026-11-13: the trust model is proven by prototype, the shape is discovered from the repo, and the wire format is deferred to the browser-sandbox attestor producer arc, which has not started. `services/browser-sandbox/src/auth.ts` only verifies relay-signed tokens; the sandbox holds no attestor key.
+
+## security-boundaries.md
+
+[`security-boundaries.md`](../doctrine/security-boundaries.md)
+
+- As of 2026-11-13: `TokenAudience` has 26 values (`ALL_TOKEN_AUDIENCES`, `packages/protocol/src/audience.ts`); the doctrine's former "15 audiences today" was stale. `ContentArtifactType` has 14 (13 relay state-export categories, `settlement-summary` included, plus `goal-result`); the former "12 types today, one per endpoint" was stale.
+- As of 2026-11-13: worker-to-relay self-signed auth closed 2026-09-13 across all seven first-party workers (`check-worker-no-master-token`).
+- As of 2026-11-13: `ServerVerifier` was proven end to end against GitHub's remote MCP server (`api.githubcopilot.com`). Desktop and web (`apps/desktop/src/mcp-manager.ts`, `apps/web/src/web-app.ts`) and mobile and spatial (through `packages/surface-kit/src/mcp-manager.ts`) use `AdvisoryManifestVerifier`; the CLI uses `ManifestPinningVerifier` (`apps/cli/src/slash-commands.ts`). The relay WebSocket still accepts a legacy `?token=` query (`services/relay/src/websocket.ts`).
+- As of 2026-11-13 (from the 2026-06 external audit): the cryptographic core (sign/verify, sovereign binding, succession windowing) and the money gate held. The audit's claim-vs-code reconciliations are done: the desktop key-custody docs and the "signing never reaches a browser" guidance (`apps/docs/content/docs/developer/quickstart.mdx`); the desktop file store was hardened in #763 (key-file durability Lane B, Finding B-0: the `keyring` crate had been compiled with no platform backend). The audit then said "R4 money has zero auto-execution callers"; R4 auto-execution through a verified grant now exists (see [memory-never-confers-authority.md](#memory-never-confers-authoritymd)), so that line was stale.
+- As of 2026-11-13: per-device revocation's cascade half shipped (#702, `services/relay/src/succession-apply.ts`); the per-device kill switch is not built. The desktop OS keychain (#764) is not built.
+- As of 2026-11-13: relay signed tokens carry `jti` but the relay keeps no consume-once replay cache (only the `relay_token_blacklist`, `services/relay/src/auth.ts`), and `SignedTokenPayload` has no `iss`/relay-origin field; exposure is bounded by spend caps, the 24h withdrawal hold and a client-chosen idempotency key.
+- As of 2026-11-13: `VerifiedGrant` carries no as-of/freshness field (none found in `packages/runtime/src/grant-verifier.ts`). The doctrine's trigger for adding one is "wiring the standing-delegation auto-execution path (a grant store + relay `DelegationRevocation` feed)"; a grant store (`~/.motebit/grants/`) and the relay revocation cache exist, so whether that trigger has fired without the freshness field is (unverified) and worth a review.
+- As of 2026-11-13: `SecretRedactingProvider` (`packages/runtime/src/secret-redacting-provider.ts`) shipped, and the public claim in `apps/docs/content/docs/security.mdx` was corrected to its scope. The chat-surface notice is not built.
+
+## sensorium.md
+
+[`sensorium.md`](../doctrine/sensorium.md)
+
+- As of 2026-11-13: both worked instances are live: the web pair, with fourteen typed-truth fields registered in `scripts/check-typed-truth-perception.ts` (count as recorded by the doctrine on this date), and the market pair (`discover_agents` stamps `roster_source: "live_relay_read"`, `packages/tools/src/builtins/discover-agents.ts`). The streaming-perception arc is deferred.
+
+## settlement-authority-binding.md
+
+[`settlement-authority-binding.md`](../doctrine/settlement-authority-binding.md)
+
+- As of 2026-11-13: only the derived rung (Inc 1) is built, at both seams: the payer (`resolveP2pPaymentRequest`, `isDerivedSolanaSettlement`, `worker_settlement_unbound`, `recheckP2pPreflight` in `packages/runtime/src/relay-delegation.ts`) and the relay forward (`federatedP2pIntent`, `services/relay/src/tasks.ts`; `isDerivedSettlementBinding` in `packages/wallet-solana/src/index.ts`). The `SettlementBinding` signed artifact (Inc 2), its producer and transport (Inc 3) and `check-settlement-authority` (Inc 4) do not exist (no such type in `packages/protocol/src`, no such gate in `scripts/`). Never audit the unverified rung as closed.
+- As of 2026-11-13: the reference runner sets `settlementAddress = deriveSolanaAddress(identity.publicKey)` (`packages/molecule-runner/src/index.ts`).
+- As of 2026-11-13: production has no external federated peers (unverified from code; as recorded by the doctrine), which is what keeps the non-derived federated deferral latent.
+- As of 2026-11-13: the rotation-obligation reporting is built: `openObligationsToKey` (`services/relay/src/rotation-obligations.ts`), `GET /api/v1/agents/:id/rotation-obligations`, `checkRotationFunds` (`@motebit/encryption`), `readRotationObligations` (`@motebit/sync-engine`).
+
+## surface-authority-model.md
+
+[`surface-authority-model.md`](../doctrine/surface-authority-model.md)
+
+- As of 2026-11-13: the runtime-host election is built (`apps/desktop/src/runtime-host.ts`, `apps/cli/src/daemon.ts`, gated by `check-runtime-host-election`); the doctrine's former "hosted today by the CLI daemon and the desktop GUI separately, converging on one per machine" was stale. The `invokeLocalTool` gate bypass is closed (`check-local-tool-gated`). No browser extension exists.
+
+## task-admission.md
+
+[`task-admission.md`](../doctrine/task-admission.md)
+
+- As of 2026-11-13: six first-party workers set `taskAdmission: "relay"` explicitly (with the `MOTEBIT_TASK_ADMISSION=open` escape): code-review and research (2026-09-12), auditor, clerk and web-search (2026-09-13), and read-url (after it was unpriced). Each is in `services/<name>/src/index.ts`. Summarize is unpriced and open by the default rule. The priced default (`resolveTaskAdmission`) flipped 2026-09-13.
+- As of 2026-11-13: read-url's coded price is 0 (`services/read-url/src/pricing.ts`, per the 2026-09-13 decision), but `scripts/deploy-archetype-slate.ts` deploys it at `MOTEBIT_UNIT_COST` 0.002; see [agent-archetypes.md](#agent-archetypesmd). The two disagree.
+- As of 2026-11-13: worker self-auth and the CLI sibling (#656) closed 2026-09-13; the dispatch-token-as-bearer hole closed 2026-09-29 (#981). Retry re-admission: worker half 2026-09-13, relay half (`refreshDispatchTokenOnReplay`, `services/relay/src/tasks.ts`) 2026-09-14.
+- As of 2026-11-13: open: the timed-out run that is not stopped (in `@motebit/mcp-server`) and the leaked dispatch token at the admission door (#992); federated dispatch with the executor relay's own token is not built.
+- As of 2026-11-13: `one-execution-matrix.probe.ts` measured 32 of 52 cells red before round 3 and all green after.
+
+## treasury-custody.md
+
+[`treasury-custody.md`](../doctrine/treasury-custody.md)
+
+- As of 2026-11-13: phase 2 is deferred; none of its triggers is recorded as fired. The Solana treasury is the relay's identity key, loaded hot (`relayIdentity.privateKey` as `identitySeed` of `createOperatorSolanaTransfer` and `createSolanaMemoSubmitter`, `services/relay/src/index.ts`).
+- As of 2026-11-13: the CDP facilitator's free tier was 1,000 transactions/month when the doctrine was written (unverified, external).
+- As of 2026-11-13: the relay labels Solana reconciliation rows with the chain id resolved from the RPC (`services/relay/src/solana-network.ts`, rule 27); no relay source imports `SOLANA_MAINNET_CAIP2`. The doctrine's former "`SOLANA_MAINNET_CAIP2` … is the only allowed source for this identifier" predated #954.
+- As of 2026-11-13: the relay-key backup is recorded only as an encrypted offline copy; its restore has not been rehearsed (unverified from the repo; per the operator's notes).
+
+## typed-truth-perception.md
+
+[`typed-truth-perception.md`](../doctrine/typed-truth-perception.md)
+
+- As of 2026-11-13: the instances the doctrine lists are the worked examples, not the full set; the registered typed-truth fields are enumerated in `scripts/check-typed-truth-perception.ts` (fourteen on this date, per [sensorium.md](#sensoriummd)). The cobrowse truth-feedback shipped 2026-05-08; the three-source boundary rule was extended after the 2026-07-05 live finding, pinned by `packages/ai-core/src/__tests__/live-state-boundary.test.ts`.
+
+## verify-family-fail-closed.md
+
+[`verify-family-fail-closed.md`](../doctrine/verify-family-fail-closed.md)
+
+- As of 2026-11-13 (re-checked from the doctrine's 2026-10-29 status note): trigger #2 fired 2026-06-19, so the reshape is no longer deferred. The additive half has shipped: `verifyReceiptVerdict`, `verifyDelegationTokenVerdict`, `isFullyVerified`, the hostile conformance corpus and the `did:key`-delegator sovereign parity fix (crypto 3.12.0, the `token-didkey-delegator-sovereign` vector) (`packages/crypto/src/index.ts`). The breaking half has not: both fail-open defaults are still in `packages/crypto/src/artifacts.ts` (`verifyStandingDelegation` checks revocation only when `options.isRevoked` is passed; `verifyReceiptChain` falls back to the embedded key with `keySource: "embedded"`), and no boolean carries `@deprecated`.
+- As of 2026-11-13: the two fail-open defaults are assigned to milestone C, with their own design and release ([`milestone-ledger.md`](milestone-ledger.md) § "C–F", not started).
+- As of 2026-11-13: the honest-labeling mitigations (`keySource`, `revocation_unchecked` / `not_yet_valid`, fail-closed suite-dispatch) landed in or before PR #183. The token-TTL bound and the R4 fail-closed gate are shipped; the signed freshness staple and the epoch accumulator are not built. Whether the verdict carries the revocation-freshness axis the offline shrink limit requires is (unverified).

@@ -2,11 +2,13 @@
 
 > **Layer:** law (the declaration is signed over its payload; the served hash is the anchored hash) — enforced by `services/relay/src/__tests__/transparency.test.ts`
 
+**Status:** [doctrine-status.md § operator-transparency](../ops/doctrine-status.md#operator-transparencymd)
+
 A motebit relay is the one place in the system that sees more than the user does. The user's identity is sovereign; the user's content is sensitivity-gated; but the operator that runs the relay sees presence (who exists), operational activity (who delegates to whom, who settles, who federates), and the structure of the network. That asymmetry is unavoidable — someone has to run the wires.
 
 The motebit posture is to make that asymmetry **legible and verifiable** rather than asking users to trust it. An operator's observability is published as a signed artifact, anchored onchain like every other claim the relay makes, and structured the same way `motebit.md` and `credential-anchor-v1` are: cryptographic commitments anyone can verify offline.
 
-This document defines the model. `spec/relay-transparency-v1.md` (when it lands) will define the wire format.
+This document defines the model. `spec/relay-transparency-v1.md` defines the wire format of the trust-anchor envelope.
 
 ## The three-layer model
 
@@ -31,7 +33,7 @@ The disappearance test applies as it always does: if the operator vanishes, ever
 
 ## What an operator publishes
 
-Until `spec/relay-transparency-v1.md` lands, the recommended convention is two paired artifacts:
+The convention is two paired artifacts (the spec fixes the signed envelope, not the posture vocabulary inside it):
 
 - A top-level `PRIVACY.md` declaring observability per layer in plain language.
 - A signed JSON declaration at `/.well-known/motebit-transparency.json`.
@@ -45,7 +47,7 @@ A transparency declaration should specify, at minimum:
 - **Third-party processors.** Every external service the relay uses — analytics, AI providers, settlement rails, error tracking — named explicitly, with the data each receives.
 - **Jurisdiction.** The legal authority the operator is subject to, including any data-disclosure framework that could compel content access.
 - **Signature.** Ed25519 over the canonical JSON, suite-tagged per `docs/doctrine/protocol-model.md` § "Cryptosuite agility."
-- **Onchain anchor** _(optional today, expected to become required in the wire-format spec)._ Solana Memo of the declaration's hash, so historical versions are independently auditable.
+- **Onchain anchor** _(optional in `spec/relay-transparency-v1.md`; without it a verifier is in trust-on-first-use mode)._ Solana Memo of the declaration's hash, so historical versions are independently auditable.
 
 A user reads the declaration; a verifier checks the signature; a long-term auditor walks the chain. Three layers of trust scaffolding for one artifact.
 
@@ -76,7 +78,7 @@ This is why operator transparency is a protocol asset and not an operator-specif
 
 Every other layer of motebit passes a disappearance test: if the operator vanishes, identity files, execution receipts, credential anchors, settlement receipts, and revocation memos all remain verifiable using only `@motebit/crypto` and the chain. Operator transparency must clear the same bar.
 
-A signed declaration that lives only on the operator's webserver fails the test the moment the operator deletes it. A signed declaration anchored onchain passes — the hash is permanently recorded; any holder of the original JSON can prove it was the operator's claim at a specific time. The optional anchor in the convention above becomes mandatory in the wire-format spec for exactly this reason.
+A signed declaration that lives only on the operator's webserver fails the test the moment the operator deletes it. A signed declaration anchored onchain passes — the hash is permanently recorded; any holder of the original JSON can prove it was the operator's claim at a specific time. That is why the anchor is what makes a declaration pass the test; a declaration without one stays in trust-on-first-use mode.
 
 ## Staged path
 
@@ -84,9 +86,9 @@ A signed declaration that lives only on the operator's webserver fails the test 
 
 **Stage 2 — split into three independent closures.** The original conflation was a doctrine drift: "wire-format spec," "onchain anchor," and "operator-comparison vocabulary" were bundled under one trigger ("second operator"), but they answer different questions and clear different gaps. The savant-gap critique surfaced the first split (2a from 2b); examining 2b under the same lens surfaced a second split (2b-i from 2b-ii). Each lands when ITS own trigger fires:
 
-- **Stage 2a — onchain anchor (shipped 2026-05-11).** The relay anchors `sha256(canonicalJson(declaration))` to Solana via the Memo program (`motebit:transparency:v1:{hash}` format) at startup whenever `SOLANA_RPC_URL` is configured. Closes the trust-on-first-use savant gap: a verifier with the relay's pinned anchor address (`@motebit/state-export-client::lookupTransparencyAnchor`) cross-checks the declaration's hash against the onchain memo. Without this, the first fetch of `/.well-known/motebit-transparency.json` trusts HTTPS + DNS + CAs — a DNS hijack, malicious ISP, or compromised CA could substitute a different declaration whose self-signature verifies (against the attacker's key). With this, the verifier trusts a separate channel (Solana) that the network provider cannot tamper with. Drift-locked by `check-transparency-onchain-anchored` (drift-defense #88). Lifted forward from the deferred bucket because the trigger ("second operator") and the trust-anchor closure are architecturally independent — single-operator deployments benefit from the anchor immediately. Doctrine: `docs/doctrine/nist-alignment.md` §8 "savant gap closure".
-- **Stage 2b-i — `spec/relay-transparency-v1.md` (shipped 2026-05-11).** The trust-anchor primitive's wire-format spec — `SignedTransparencyDeclaration` envelope shape, hash derivation (`canonicalJson` of the signed payload sans signature), pinned cryptosuite `motebit-jcs-ed25519-hex-v1`, onchain anchor memo format (`motebit:transparency:v1:{hash}` — codifies what 2a shipped), succession rules (refer to `spec/identity-v1.md` §3.8), verification algorithm. The `content` field is operator-extensible per §3.1; the protocol commits to the envelope, not the posture vocabulary inside. Lifted forward because the **trigger was "trust-anchor codification," not "multi-operator field standardization"** — the original deferral conflated them. After commit 605d288b made `transparency.json` load-bearing as the trust anchor for state-export verification, the asymmetry between transparency (no spec) and every other trust anchor in motebit (specs) became the gap to close. Wire types in `@motebit/protocol::SignedTransparencyDeclaration`; zod schema in `@motebit/wire-schemas`; reference implementation in `services/relay/src/transparency.ts` consumes the canonical types. Drift-locked by `check-spec-coverage` + `check-spec-wire-schemas` (existing gates extend automatically).
-- **Stage 2b-ii — operator-comparison vocabulary (still deferred).** `content` field standardization: retention-window encoding, processor schema, jurisdiction format, comparable posture diff shape. Lands once a second motebit-compatible operator forces the question of _"what fields must we standardize?"_ Codifying before then would be guessing rather than observing. Operators today populate `content` per their own posture; the reference relay's `DECLARATION_CONTENT` shape (`services/relay/src/transparency.ts`) is convention, not protocol. Verifiers MUST NOT reject declarations on `content` shape difference — only on envelope failure (per `spec/relay-transparency-v1.md` §3.1).
+- **Stage 2a — onchain anchor.** The relay anchors `sha256(canonicalJson(declaration))` to Solana via the Memo program (`motebit:transparency:v1:{hash}` format) at startup whenever `SOLANA_RPC_URL` is configured. Closes the trust-on-first-use savant gap: a verifier with the relay's pinned anchor address (`@motebit/state-export-client::lookupTransparencyAnchor`) cross-checks the declaration's hash against the onchain memo. Without this, the first fetch of `/.well-known/motebit-transparency.json` trusts HTTPS + DNS + CAs — a DNS hijack, malicious ISP, or compromised CA could substitute a different declaration whose self-signature verifies (against the attacker's key). With this, the verifier trusts a separate channel (Solana) that the network provider cannot tamper with. Drift-locked by `check-transparency-onchain-anchored` (drift-defense #88). Lifted forward from the deferred bucket because the trigger ("second operator") and the trust-anchor closure are architecturally independent — single-operator deployments benefit from the anchor immediately. Doctrine: `docs/doctrine/nist-alignment.md` §8 "savant gap closure".
+- **Stage 2b-i — `spec/relay-transparency-v1.md`.** The trust-anchor primitive's wire-format spec — `SignedTransparencyDeclaration` envelope shape, hash derivation (`canonicalJson` of the signed payload sans signature), pinned cryptosuite `motebit-jcs-ed25519-hex-v1`, onchain anchor memo format (`motebit:transparency:v1:{hash}` — codifies 2a's memo), succession rules (refer to `spec/identity-v1.md` §3.8), verification algorithm. The `content` field is operator-extensible per §3.1; the protocol commits to the envelope, not the posture vocabulary inside. Lifted forward because the **trigger was "trust-anchor codification," not "multi-operator field standardization"** — the original deferral conflated them. Once `transparency.json` is load-bearing as the trust anchor for state-export verification, a transparency anchor without a spec, beside every other trust anchor in motebit having one, is the gap to close. Wire types in `@motebit/protocol::SignedTransparencyDeclaration`; zod schema in `@motebit/wire-schemas`; reference implementation in `services/relay/src/transparency.ts` consumes the canonical types. Drift-locked by `check-spec-coverage` + `check-spec-wire-schemas` (existing gates extend automatically).
+- **Stage 2b-ii — operator-comparison vocabulary (deferred).** `content` field standardization: retention-window encoding, processor schema, jurisdiction format, comparable posture diff shape. Lands once a second motebit-compatible operator forces the question of _"what fields must we standardize?"_ Codifying before then would be guessing rather than observing. Operators populate `content` per their own posture; the reference relay's `DECLARATION_CONTENT` shape (`services/relay/src/transparency.ts`) is convention, not protocol. Verifiers MUST NOT reject declarations on `content` shape difference — only on envelope failure (per `spec/relay-transparency-v1.md` §3.1).
 
 **Stage 3 — ecosystem.** Comparison UIs, CLI commands (`motebit compare-relays`), migration nudges that diff transparency postures, periodic transparency reports published as protocol artifacts rather than legal documents. Lands when there are at least two declarations to compare AND Stage 2b-ii has standardized the comparable fields.
 
@@ -94,16 +96,16 @@ Same staged shape as the rest of motebit: doctrine first, spec when generalizati
 
 ## Reference implementation
 
-Stage 1.5 of this doctrine is live in the canonical relay:
+The canonical relay implements the doctrine as follows:
 
 - **Source of truth:** `services/relay/src/transparency.ts` — `DECLARATION_CONTENT` is the single object both artifacts derive from.
 - **Human-readable:** [`services/relay/PRIVACY.md`](../../services/relay/PRIVACY.md) — committed to the repo, generated from the renderer.
 - **Machine-verifiable:** `GET /.well-known/motebit-transparency.json` — Ed25519-signed under `motebit-jcs-ed25519-hex-v1`, suite-tagged for the dispatcher in `@motebit/crypto`.
-- **Operator view:** `GET /api/v1/admin/transparency` — same declaration plus the onchain-anchor placeholder showing the disappearance-test gap that closes when stage 2 lands. Master-token gated (operator-internal); the public-facing artifact is the signed `/.well-known/` JSON above.
+- **Operator view:** `GET /api/v1/admin/transparency` — the same declaration, for the operator. Master-token gated (operator-internal); the public-facing artifact is the signed `/.well-known/` JSON above.
 - **Sibling-boundary defense:** `services/relay/src/__tests__/transparency.test.ts` asserts `PRIVACY.md` matches `renderMarkdown()` exactly. Drift between the two artifacts breaks the build.
-- **Trust-anchor for content-artifact verification.** The `relay_public_key` embedded in the signed declaration is the canonical trust anchor a third party uses to verify any state-export manifest the relay emits (see `docs/doctrine/nist-alignment.md` §8). Chain: fetch `/.well-known/motebit-transparency.json` → verify its self-signature against the embedded `relay_public_key` (one round-trip, offline-after-first-fetch) → use that key to verify every `X-Motebit-Content-Manifest` HTTP header on subsequent state-export reads. `motebit-verify content-artifact <body> --producer-key <hex>` consumes this chain. The transparency declaration is no longer just the operator's posture statement — it is the trust anchor for the operator's signed assembly of every export it produces.
+- **Trust-anchor for content-artifact verification.** The `relay_public_key` embedded in the signed declaration is the canonical trust anchor a third party uses to verify any state-export manifest the relay emits (see `docs/doctrine/nist-alignment.md` §8). Chain: fetch `/.well-known/motebit-transparency.json` → verify its self-signature against the embedded `relay_public_key` (one round-trip, offline-after-first-fetch) → use that key to verify every `X-Motebit-Content-Manifest` HTTP header on subsequent state-export reads. `motebit-verify content-artifact <body> --producer-key <hex>` consumes this chain. The transparency declaration is not just the operator's posture statement — it is the trust anchor for the operator's signed assembly of every export it produces.
 
-The implementation deliberately stops at stage 1.5: it satisfies the _signed declaration_ and _user-readable form_ halves of the doctrine, and explicitly admits in its own `honest_gaps` field that onchain anchoring lands with stage 2. That admission is the defense against forgetting to close the gap.
+A gap the implementation has not closed is admitted in the declaration's own `honest_gaps` field. That admission is the defense against forgetting to close it.
 
 ## Cross-references
 

@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § motebit-computer](../ops/doctrine-status.md#motebit-computermd)
+
 The slab is the motebit's **workstation, rendered as a liquescent plane** beside the creature. It holds pages the motebit has read, terminals it is using, responses it has streamed, delegations in flight, peer replies returning with signed receipts. Work stays available until the user dismisses it or the session ends.
 
 - **Chat is second-person** — you ↔ motebit, words exchanged.
@@ -69,7 +71,7 @@ The slab's body region (the area below the chrome strip) is in exactly one of th
 | **live**       | The live screencast — the page the motebit is browsing.              | visible     | installed, replaced per-frame           |
 | **transition** | The home view overlays a dim screencast (URL-bar focus mid-session). | hidden      | preserved (resume is cold-start-free)   |
 
-The two **cause-bits** that compose the register live on the surface (web: `_onHomeRegister` from URL state, `_homeOverlayActive` from URL-bar focus state). The composition is `effectiveBodyRegister()` — one mapping, one writer, one reader, no implicit coupling. Prior to 2026-05-11 the register was implicit in `{screenTexture present, screencastSuppressed boolean}` and `home` was indistinguishable from `transition` at the renderer (both rendered as "mesh hidden") despite having opposite texture lifecycles. The typed register names the difference and makes the renderer's derivation honest.
+The two **cause-bits** that compose the register live on the surface (web: `_onHomeRegister` from URL state, `_homeOverlayActive` from URL-bar focus state). The composition is `effectiveBodyRegister()` — one mapping, one writer, one reader, no implicit coupling. A register left implicit in `{screenTexture present, screencastSuppressed boolean}` makes `home` indistinguishable from `transition` at the renderer (both render as "mesh hidden") despite their opposite texture lifecycles. The typed register names the difference and makes the renderer's derivation honest.
 
 ### Home — the could-be register
 
@@ -86,7 +88,7 @@ Doctrine compounds: home is `records-as-resumption` — the records-vs-acts test
 
 > **The slab's home is the motebit's self-knowledge rendered as its resting face.**
 
-Everything below follows from that line. The current default — a URL bar + `"type a URL"` + `"Anywhere."` — is **browser chrome wearing the costume of the workstation** (the eye organ standing in for the whole). The home register is not a browser; it is the slab at rest, showing what this motebit _is_ and _could do next_.
+Everything below follows from that line. A home of only a URL bar + `"type a URL"` + `"Anywhere."` is **browser chrome wearing the costume of the workstation** (the eye organ standing in for the whole). The home register is not a browser; it is the slab at rest, showing what this motebit _is_ and _could do next_.
 
 **Chrome is ingress; the body is the home register.** Reconciles the seam with [`intent-gated-slab`](intent-gated-slab.md) §"Modal — empty is READY" ("the chrome IS the affordance… URL input"): the **chrome strip** is the always-on _way in_ (ask / name a destination); the **slab body** is the home register (the content). Both present, never competing — the URL input is the chrome, this §home is the body. The de-browser fix is in the chrome's _lead_: "ask me, or name where to go" — the URL is one affordance, not the slab's identity.
 
@@ -114,9 +116,9 @@ So the home register is a **what-can-we-do surface whose content shifts from inv
 
 This supersedes the bare "`Anywhere.` — one watermark word, no decorative mark" reading of empty-empty: `Anywhere.` stays as the **watermark soul** (a workstation word — "I can take you anywhere"), but it is the chrome's backdrop, not the body — the capability-seed is the body. A few soul-tinted invitations, breathing; never a launcher grid (the sci-fi-dashboard anti-pattern). Every tile routes deterministically — typed `forwardEvent` for navigation, typed panel-open CustomEvents for record surfaces (the cobrowse-chip precedent), `invokeCapability` for delegation-shaped tiles when they arrive — and NEVER a synthesized prompt ([`surface-determinism`](surface-determinism.md)); the tile-action union is promptless by construction (`HomeTileAction` carries no free-text variant).
 
-**Spatial rehearsal.** The same home register renders as the slab-beside-the-creature on web/desktop today and as the motebit's held-Presentation home on glasses — one controller, render targets per surface ([`panel-presentation-modes`](panel-presentation-modes.md)).
+**Spatial rehearsal.** The same home register is to render as the slab-beside-the-creature on flat surfaces and as the motebit's held-Presentation home on glasses — one controller, render targets per surface ([`panel-presentation-modes`](panel-presentation-modes.md)).
 
-**Status:** SHIPPED (2026-07-09, the home-register arc): the derived capability-seed (`deriveHomeSeed` in `apps/web/src/ui/slab-home-model.ts` — closed `HOME_CONFIG_KEYS`, per-tile `basis`, promptless action union), the de-browsered rest chrome with the `Anywhere.` watermark backdrop + honest ingress (`ask_or_go`/`go_only`), and the resumption arc over the redacted navigate record. Honesty is gate-locked by `check-home-seed-basis` (registry × live-accessor coupling × recede tests × single-producer scan).
+The seed's honesty is gate-locked by `check-home-seed-basis` (registry × live-accessor coupling × recede tests × single-producer scan) over `deriveHomeSeed` (`apps/web/src/ui/slab-home-model.ts` — closed `HOME_CONFIG_KEYS`, per-tile `basis`, promptless action union).
 
 **Disclosure (operator-transparency register).** Resumption tiles fetch favicons from `icons.duckduckgo.com` — the one third-party read the resting face performs, disclosing the (path-redacted) visited hosts to that service on mount. A cache/proxy is deferred-with-trigger: first privacy review of the resting face, or a user report.
 
@@ -162,13 +164,13 @@ Drag-onto-slab is typed end-to-end. A drop lands as a closed-union `DropPayload`
 
 Categorical drop kinds (closed at the protocol layer):
 
-| Kind         | Carries                                                       | v1 status                                                                                  |
-| ------------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| **url**      | Hyperlink + optional source HTML frame                        | shipped — kind=`fetch`, mode=`shared_gaze`                                                 |
-| **text**     | Plain or markdown text                                        | shipped — kind=`stream`, mode=`shared_gaze`                                                |
-| **image**    | Raster bytes + MIME                                           | shipped — kind=`embedding`, mode=`shared_gaze` (rich preview v1.1 with vision integration) |
-| **file**     | Opaque bytes + filename + MIME                                | allowlisted — defers to v1.1                                                               |
-| **artifact** | Motebit-produced signed artifact (bytes + `ExecutionReceipt`) | allowlisted — defers until multi-motebit UX provides a consumer                            |
+| Kind         | Carries                                                       | Default handling                                                           |
+| ------------ | ------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **url**      | Hyperlink + optional source HTML frame                        | kind=`fetch`, mode=`shared_gaze`                                           |
+| **text**     | Plain or markdown text                                        | kind=`stream`, mode=`shared_gaze`                                          |
+| **image**    | Raster bytes + MIME                                           | kind=`embedding`, mode=`shared_gaze`                                       |
+| **file**     | Opaque bytes + filename + MIME                                | allowlisted, no default handler                                            |
+| **artifact** | Motebit-produced signed artifact (bytes + `ExecutionReceipt`) | allowlisted, no default handler until multi-motebit UX provides a consumer |
 
 The mode is `shared_gaze` because the user is the driver, the motebit is the observer, and the source is user-fed external material (Zed-pattern). `mind` would be a category error — `mind` is interior cognition.
 
@@ -178,11 +180,11 @@ A future `mode-grant` kind (drag a permission token: "you may drive my desktop f
 
 **Three drop targets, three governance scopes.** Every payload carries `target: "slab" | "creature" | "ambient"`. Not equivalent drop zones with different visual effects — meaningfully different persistence and governance:
 
-- `slab` — turn/session-scoped perception. Classifier inspects payload; `tier-bounded-by-source` per `shared_gaze`. v1 surfaces default here.
+- `slab` — turn/session-scoped perception. Classifier inspects payload; `tier-bounded-by-source` per `shared_gaze`. Surfaces default here.
 - `creature` — identity-adjacent state mutation (memory graph, trust graph, capability bindings, persona). Persistent across sessions. **Requires explicit confirmation / signed user intent.** Closer to changing the agent's body than feeding task context. Per-target governance UX must ship before the gesture does.
 - `ambient` — workspace-scoped reference with source-consent + expiration. **Invariant: consultable context, not automatic prompt context.** The motebit reaches for them when a turn calls for it; ambient drops never auto-fill the prompt.
 
-v1 surfaces only set `slab`. Dimensionality is not the gate; governance is. `feedPerception` fails closed on `target: "creature"` and `target: "ambient"` until their consumers exist — naming the missing consumer in the error.
+Surfaces only set `slab`. Dimensionality is not the gate; governance is. `feedPerception` fails closed on `target: "creature"` and `target: "ambient"` until their consumers exist — naming the missing consumer in the error.
 
 **Attestation of intentional delivery, not content authenticity.** Each `DropPayload` carries a `UserActionAttestation`. The gesture proves the user meant to deliver; it does NOT prove the payload is unforged. Authenticity comes from separate provenance: source URL the runtime fetched, signature on bytes, `ExecutionReceipt` carried with artifact, content hash from trusted source.
 
@@ -220,7 +222,7 @@ A motebit perceives through many embodiments. The Motebit Computer is **the sing
 
 Every slab item carries a mode. Most tool calls default to `tool_result`; memory surfacing defaults to `mind`; delegation to `peer_viewport`. The runtime can override per item (a `read_url` shipping with a real embedded page upgrades from `tool_result` to `virtual_browser`).
 
-**v1 implementation status (2026-05-08):** all six modes have shipped v1 cuts; v1.1 / v1.2 / v1.5 refinements have landed since. `mind` / `tool_result` are automatic via runtime's built-in slab emission. `desktop_drive` ships on desktop via the Tauri Rust bridge (`apps/desktop/src-tauri/src/computer_use.rs` — `xcap` + `enigo` + macOS Vision OCR). `shared_gaze` ships across all surfaces via the drag-drop perception substrate. `virtual_browser` v1 is `CloudBrowserDispatcher` in `@motebit/runtime` talking to Playwright at `services/browser-sandbox`. Session-scoped consent + per-action approval for irreversible clicks (Submit / Buy / Pay / File / Send / Permanently delete / I agree / Authorize / Upload — `@motebit/policy-invariants`). `peer_viewport` v1 stamps the mode at `delegation_start`, renders `delegation_receipts[]` as per-hop rows with signed-checkmark indicators (✓ / —), fills in-flight body with `Waiting for $peer…`. **Shipped post-v1:** v1.1 per-dispatcher mode stamping + `normalizeEmbodimentMode` + `check-computer-dispatcher-modes` (#79); v1.2 `ComputerSessionManager.halt/resume/isHalted` (spec §3.3); v1.2b two-finger-hold + `/halt` / `/resume` slash commands; v1.5 `ComputerSessionReceipt` (every session crystallizes at close into one signed artifact under `motebit-jcs-ed25519-b64-v1`). **Still deferred to v1.5+:** promote `motebit/computer-use@1.0` from `@alpha` to `@beta`; HA badge / trust-score live composition / bead-arrival animation on `peer_viewport` cards.
+`virtual_browser` takes session-scoped consent plus per-action approval for irreversible clicks (Submit / Buy / Pay / File / Send / Permanently delete / I agree / Authorize / Upload — `@motebit/policy-invariants`). Every computer session crystallizes at close into one signed `ComputerSessionReceipt` under `motebit-jcs-ed25519-b64-v1`. Each dispatcher stamps its mode, enforced by `check-computer-dispatcher-modes` (#79).
 
 ### Mode contract — six declarations per mode
 
@@ -358,13 +360,13 @@ Absent is not a bug. Do not fill it with ghost planes, skeleton loaders, typing 
 - **Idle-state chatter.** Skeleton loaders, "thinking…" text, persistent progress bars in idle. Kill on sight.
 - **Per-surface divergence.** Three surfaces shipping three slabs whose detachment physics subtly differ. The slab's contract is Ring 1 (controller, lifecycle types, embodiment-mode semantics — identical everywhere); the renderer is Ring 3 (requires WebGL). Surfaces with the renderer obey the same physics; surfaces without it fall back to the Ring-1 chat echo, never to a divergent slab.
 
-## Creature-slab relationship — fork (a) shipped by construction
+## Creature-slab relationship — fork (a) by construction
 
-Earlier doctrine named this an open decision between (a) **attached organ** (slab perched on the creature's lower-rim, shares shadow and breath, reads as the body's extended perceptual field) and (b) **invoked-only** (chrome is creature-less, Siri-orb pattern). Grepping the code on 2026-05-11 found fork (a) is **already shipped by construction**, and the doctrine prose had simply not caught up.
+The choice is between (a) **attached organ** (slab perched on the creature's lower-rim, shares shadow and breath, reads as the body's extended perceptual field) and (b) **invoked-only** (chrome is creature-less, Siri-orb pattern). The scene graph realizes fork (a) **by construction**.
 
 The construction:
 
-- **Parented in the scene graph.** `SlabManager` constructor adds `this.group` to `creatureGroup` (slab.ts:432), not to the scene root. The slab inherits every transform applied to the creature group — position drift, buoyancy bob, gravity sag, curiosity tilt — automatically.
+- **Parented in the scene graph.** `SlabManager` constructor adds `this.group` to `creatureGroup` (`slab.ts`), not to the scene root. The slab inherits every transform applied to the creature group — position drift, buoyancy bob, gravity sag, curiosity tilt — automatically.
 - **Overlap by construction.** With `SLAB_OFFSET_X = 0.38m`, `SLAB_WIDTH = 0.54m`, `BODY_R = 0.14m`, the slab's left edge sits at `x = 0.11m` while the creature's right edge sits at `x = 0.14m`. The two silhouettes overlap by **3 cm on the X axis**; with `SLAB_OFFSET_Z = -0.02m`, the slab is slightly behind the creature, so the body's sphere intrudes into the slab's silhouette from the front camera.
 - **Sympathetic breath.** Creature and slab both compute breath as `sin(t · 0.3 · 2π)` damped on the negative half — identical formula, identical frequency, shared `t`. Slab amplitude is the doctrine-pinned 30% of creature amplitude (`SLAB_BREATHE_AMPLITUDE_FACTOR = 0.3`, derived from Rayleigh eigenmode at body scale per `liquescentia-as-substrate.md` §V.2). Inflation phases lock without inter-object signaling.
 - **Shared body coherence.** Soul tint flows through `attenuationColor` on both creature body material and slab front pane + silhouette companion. Soul glow flows through `emissive`. One body, one identity, two organs.
@@ -373,11 +375,11 @@ The visible register: the creature's round body silhouette cuts a curved bite ou
 
 - **Ratify** — pin the offsets as load-bearing, document the bite as the canonical motebit silhouette, the soul-droplet consuming / opening its workstation. Iconic; invites trade-dress comparison.
 - **Soften** — increase `SLAB_OFFSET_X` to ~0.42m so the silhouettes touch without overlapping. Loses the iconography, avoids the comparison.
-- **Hold** — today's position. Document the emergence in doctrine (this section), don't pin or churn, decide later.
+- **Hold** — the current decision. Document the emergence in doctrine (this section), don't pin or churn, decide later.
 
-Today the doctrine is at **hold**. The constants are not yet declared load-bearing; an unrelated refactor that nudged them would silently change the silhouette character. A future doctrine pass that decides ratify-or-soften should also add a doctrine binding (or its absence) to the three load-bearing constants.
+The doctrine is at **hold**: the constants are not declared load-bearing, so an unrelated refactor that nudged them would silently change the silhouette character. A future doctrine pass that decides ratify-or-soften should also add a doctrine binding (or its absence) to the three load-bearing constants.
 
-Fork (b) — invoked-only — remains a future-thinkable but is **not** an active alternative today; the body-coherence work in `liquescentia-as-substrate.md` and the soul-coupling in slab.ts pull strongly toward fork (a)'s "one body, two organs" reading.
+Fork (b) — invoked-only — remains a future-thinkable but is **not** an active alternative; the body-coherence work in `liquescentia-as-substrate.md` and the soul-coupling in slab.ts pull strongly toward fork (a)'s "one body, two organs" reading.
 
 ## Architectural shape
 
@@ -385,7 +387,7 @@ Same shape applies to every layer.
 
 - **`@motebit/render-engine`** (Layer 2, BSL) — types + adapter + renderer. Declares `SlabItemKind`, `SlabItemPhase` (with detach-pinch as a typed phase), `EmbodimentMode`, `SlabItemSpec`, `SlabItemHandle` alongside `RenderAdapter` slab methods (`addSlabItem`, `dissolveSlabItem`, `detachSlabItemAsArtifact`, `clearSlabItems`, `setSlabVisible`, `toggleSlabVisible`) and the Three.js `SlabManager`. **Future:** split protocol-shape members up to `@motebit/protocol` (Layer 0, Apache-2.0) so third-party motebit implementers can target them without depending on the renderer; deferred until the contract has at least one external consumer.
 - **`@motebit/runtime`** (Layer 4, BSL) — controller + bridge. `SlabController` translates LLM turns, tool calls, plan steps, delegations into `openItem` / `updateItem` / `restItem` / `endItem` / `dismissItem`. Surfaces subscribe via `bindSlabControllerToRenderer`.
-- **Per-surface renderers** (Layer 5) — wiring. Each surface wires a `RenderAdapter` slab implementation to its scene graph. Web + desktop today use Three.js with mostly-mirrored per-kind HTML renderers in `slab-items.ts`. **Honest divergence**: web has cobrowse extensions (live-browser screencast + input capture) that desktop does not, so the two files differ by ~260 lines as of 2026-05-11; the rendering of every per-kind item (`stream`, `tool_call`, `plan_step`, `shell`, `fetch`, `embedding`, `delegation`, `memory`) is mirrored. Sibling-boundary discipline applies: changes to a shared kind MUST land on both. Three consumers (web + desktop + spatial slab-as-held-tablet) is the extraction trigger, per the panels-pattern doctrine. Spatial (WebXR held-tablet) and mobile (WebView-hosted) follow.
+- **Per-surface renderers** (Layer 5) — wiring. Each surface wires a `RenderAdapter` slab implementation to its scene graph. Web + desktop use Three.js with mostly-mirrored per-kind HTML renderers in `slab-items.ts`. **Honest divergence**: web has cobrowse extensions (live-browser screencast + input capture) that desktop does not, so the two files differ; the rendering of every per-kind item (`stream`, `tool_call`, `plan_step`, `shell`, `fetch`, `embedding`, `delegation`, `memory`) is mirrored. Sibling-boundary discipline applies: changes to a shared kind MUST land on both. Three consumers (web + desktop + spatial slab-as-held-tablet) is the extraction trigger, per the panels-pattern doctrine. Spatial (WebXR held-tablet) and mobile (WebView-hosted) follow.
 
 One type surface, one event stream, multiple renderers — see [`panels-pattern.md`](panels-pattern.md). Contract is Ring 1; renderer is Ring 3.
 
@@ -393,12 +395,12 @@ One type surface, one event stream, multiple renderers — see [`panels-pattern.
 
 The slab is **one coherent surface, multiple specialized compositing layers, zero unnecessary abstraction**. On the open web, the split is forced by the platform — there is no Metal-equivalent OS compositor — and resolves as:
 
-| Layer                                                            | Tech                                                                       | Why                                                                                                                                                                                                                                                                                                                                            |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Slab plane geometry                                              | Three.js WebGL                                                             | 3D scene primitive: meniscus + sympathetic breathing + depth-shared with the creature.                                                                                                                                                                                                                                                         |
-| Browser content frames (screencast)                              | WebGL texture on the slab's screen-mesh, inside the volume                 | Silhouette clipping by the meniscus geometry, shared depth buffer with the creature (no off-axis through-punch), refraction through the front pane's transmission. CSS3D `<img>` was the prior path; its three structural failures (flat rectangle, no shared depth, no refraction) are why the migration happened on 2026-05-09 (`8fef57e9`). |
-| Interactive chrome — URL input, nav glyphs, slab item HTML cards | CSS3D DOM inside `stageEl`                                                 | Native text input, caret, IME, focus, accessibility, right-click, keyboard shortcuts. Re-rendering these as WebGL would mean rebuilding the OS interaction primitives from scratch — the wrong trade.                                                                                                                                          |
-| Input-capture geometry                                           | Invisible HTML `<img>` (`opacity: 0`) at the screencast's logical position | `getBoundingClientRect()` math for click → Chromium logical-pixel coord translation. Visual register is the WebGL texture; capture register is the DOM rect. Both move together because the live_browser shell positions them together.                                                                                                        |
+| Layer                                                            | Tech                                                                       | Why                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Slab plane geometry                                              | Three.js WebGL                                                             | 3D scene primitive: meniscus + sympathetic breathing + depth-shared with the creature.                                                                                                                                                                                                                                       |
+| Browser content frames (screencast)                              | WebGL texture on the slab's screen-mesh, inside the volume                 | Silhouette clipping by the meniscus geometry, shared depth buffer with the creature (no off-axis through-punch), refraction through the front pane's transmission. CSS3D `<img>` is the rejected path; its three structural failures (flat rectangle, no shared depth, no refraction) are why the frames live in the volume. |
+| Interactive chrome — URL input, nav glyphs, slab item HTML cards | CSS3D DOM inside `stageEl`                                                 | Native text input, caret, IME, focus, accessibility, right-click, keyboard shortcuts. Re-rendering these as WebGL would mean rebuilding the OS interaction primitives from scratch — the wrong trade.                                                                                                                        |
+| Input-capture geometry                                           | Invisible HTML `<img>` (`opacity: 0`) at the screencast's logical position | `getBoundingClientRect()` math for click → Chromium logical-pixel coord translation. Visual register is the WebGL texture; capture register is the DOM rect. Both move together because the live_browser shell positions them together.                                                                                      |
 
 The split disappears on AR-glasses surfaces, where native compositing (RealityKit / Metal / equivalent) handles both pipelines under one OS-level layer. On the web, the split is the right Apple-spirit compromise. Apple's pattern, translated: _rasterized content as a material surface; interactive controls as native-feeling UI._
 
@@ -423,15 +425,15 @@ SCREEN_MESH_HEIGHT = body_region_height − inscribed_inset − top_inset
 SCREEN_MESH_CENTER_Y = body_center + (inscribed_inset − top_inset)/2
 ```
 
-The body mesh's geometry is a plain `THREE.PlaneGeometry` — no rounded corners. The rounded character of the slab is supplied by the silhouette around the mesh, never by the mesh competing with the silhouette. The "rounded card inside rounded slab" pattern (commit `be02845c`) was structurally reversed on 2026-05-11 in favor of "rectangular content inside rounded frame," which is the visionOS-Safari-adapted-for-motebit pattern.
+The body mesh's geometry is a plain `THREE.PlaneGeometry` — no rounded corners. The rounded character of the slab is supplied by the silhouette around the mesh, never by the mesh competing with the silhouette. The "rounded card inside rounded slab" pattern is rejected in favor of "rectangular content inside rounded frame," which is the visionOS-Safari-adapted-for-motebit pattern.
 
 ### Capture-pipeline end-game — JPEG-over-WebSocket → WebCodecs + GPUExternalTexture
 
-Today's screencast pipeline emits JPEG-base64 frames from Playwright's CDP at every-other-frame, 60% quality. Client-side: `<img>.decode()` → `HTMLImageElement` → `texSubImage2D` to the WebGL screen-mesh texture. This is **deliberate v1 — bandwidth + JPEG-encode CPU vs frame fidelity** — and the architecture has a clear end-game:
+The v1 screencast pipeline emits JPEG-base64 frames from Playwright's CDP (`services/browser-sandbox/src/screencast.ts`). Client-side: `<img>.decode()` → `HTMLImageElement` → `texSubImage2D` to the WebGL screen-mesh texture. This is **deliberate v1 — bandwidth + JPEG-encode CPU vs frame fidelity** — and the architecture has a clear end-game:
 
 | Stage    | Wire format                       | Decode path                             | GPU upload path                                                                                              |
 | -------- | --------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Today    | JPEG-base64 over WebSocket        | `<img>.decode()` → `HTMLImageElement`   | `texSubImage2D` (WebGL) / `copyExternalImageToTexture` (WebGPU) — both incur a copy from decoded RGBA to GPU |
+| v1       | JPEG-base64 over WebSocket        | `<img>.decode()` → `HTMLImageElement`   | `texSubImage2D` (WebGL) / `copyExternalImageToTexture` (WebGPU) — both incur a copy from decoded RGBA to GPU |
 | End-game | H.264 / VP9 / AV1 streaming codec | WebCodecs `VideoDecoder` → `VideoFrame` | `GPUDevice.importExternalTexture()` — **zero-copy YUV sampled directly in the fragment shader**              |
 
 The end-game's load-bearing capability is `importExternalTexture` reading the GPU-decoded video frame's YUV planes directly, eliminating the JPEG-decode + RGBA-upload round-trip. For a 60fps slab at higher resolutions, this is the difference between a frame-upload stall and free.
@@ -445,7 +447,7 @@ Three caveats survive the research:
 Triggers — independent from the renderer migration:
 
 1. **Measured throughput or thermal ceiling** — desktop telemetry shows frame-upload jank correlating with page complexity or screencast resolution; **on mobile (iOS / iPadOS sustained sessions on battery), the symptom flips to warm chassis + faster battery drain before frame jank appears** because iOS will throttle CPU frequency to hold FPS, hiding the throughput signal while the thermal/power cost stays real. Same root cause (JPEG decode + RGBA upload as the hot path), different observability surface. Hardware-decoded H.264/VP9 through `importExternalTexture` routes through Apple's dedicated media engine — materially cheaper per frame than the JPEG path on battery-budgeted runtime.
-2. **Higher fidelity required** — operator-grade browsing where 60% JPEG is no longer acceptable (multi-stream surfaces, peer_viewport screencasts, demo-quality recording).
+2. **Higher fidelity required** — operator-grade browsing where the JPEG tier is no longer acceptable (multi-stream surfaces, peer_viewport screencasts, demo-quality recording).
 3. **Multi-stream futures** — when several screencasts compose on one slab (federated peer_viewport overlays, comparison views), per-stream decode CPU at JPEG rates blows past the budget.
 
 The renderer migration and the capture-pipeline migration **must not be conflated**. The renderer migration is a small swap at the `RenderAdapter` seam. The pipeline migration is a substantial rewrite spanning `services/browser-sandbox` (encoder), the wire format (`ScreencastFrame` discriminated union — JPEG-base64 OR codec stream), and the client decode + texture path. Each has its own trigger; each ships independently.

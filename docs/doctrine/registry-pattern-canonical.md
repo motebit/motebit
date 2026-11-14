@@ -2,7 +2,9 @@
 
 > **Layer:** law (every registered registry exports its type guard) — enforced by `check-closed-registry-canonical`
 
-A motebit-shaped invariant. Five instances at land; the sixth (`EventType`, 2026-05-14), seventh (`SettlementMode`, 2026-05-15), eighth (`MerkleTreeVersion`, 2026-05-30), ninth (`AgentRevocationReason`, 2026-06-04), and tenth (`MemorySource`, 2026-06-10 — provenance vocabulary for memory formation, `docs/doctrine/memory-provenance.md`), and eleventh (`EvalKind` — the eval-attestation kind, `docs/doctrine/evals-as-attestations.md`) shipped as template growth on the same rails, with `REGISTERED_REGISTRIES` growing 5 → 11 in successive arcs — each addition mechanical, not new design.
+**Status:** [doctrine-status.md § registry-pattern-canonical](../ops/doctrine-status.md#registry-pattern-canonicalmd)
+
+A motebit-shaped invariant. It was codified from five instances; every registry registered since is template growth on the same rails — each addition mechanical, not new design.
 
 ## The structure motebit has been building
 
@@ -77,7 +79,7 @@ The pattern is for **interop law**, not for every closed type union. The test:
 - **Wire-format presence.** The values appear in JSON, signed artifacts, audit logs, or cross-device sync. Internal-only switch discriminators don't need the canonical-coverage gate.
 - **A real drift incident or anticipated drift.** The pattern is documented response to past pain (`check-audience-canonical` exists because `aud: "task:sumbit"` typos cost real debugging time). Anticipatory registration is acceptable when the criteria above are met, but every entry should be defensible against "why is this canonical-grade?"
 
-The five at land all pass every criterion. Six more have since landed as template growth on the rails this doctrine codified: **`EventType`** sixth (2026-05-14), **`SettlementMode`** seventh (2026-05-15), then **`MerkleTreeVersion`** eighth, **`AgentRevocationReason`** ninth, **`MemorySource`** tenth and **`EvalKind`** eleventh. `REGISTERED_REGISTRIES` holds eleven entries today. Remaining future candidate: `Jurisdiction` (closed three-value union, regulatory-distinct).
+The five at land all pass every criterion, and every later registration must too. `REGISTERED_REGISTRIES` is the inventory. Future candidate: `Jurisdiction` (closed three-value union, regulatory-distinct).
 
 Future non-candidates: `DropPayloadKind` (already covered by `check-drop-handlers`, different shape), `ControlState` / `EmbodimentMode` (covered by `check-slab-chrome-coverage`, matrix not single-axis), the `dispute.ts` unions (single-file dispatch).
 

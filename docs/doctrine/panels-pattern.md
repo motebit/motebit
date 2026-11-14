@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § panels-pattern](../ops/doctrine-status.md#panels-patternmd)
+
 When a UI panel ships on more than one surface, where does its state live? Four answers, chosen per panel, documented here so the next extraction stays consistent.
 
 ## The four shapes
@@ -15,13 +17,13 @@ Pattern: `createXController(adapter)` returns a state subscription + action meth
 - State mutations are optimistic where safe (pin flip, delete), authoritative otherwise (refresh after add).
 - Drift gate `check-panel-controllers` matches the family's file-name pattern against relay-endpoint or runtime-API signatures; any match without `@motebit/panels` import fails CI.
 
-Families shipped: **Sovereign**, **Agents**, **Memory**, **Activity**, **Retention**, **Self-test** (plus **Goals** and **Skills** — see the table below). `check-panel-controllers` registers seven families: these six and Goals.
+Example: **Sovereign** — the canonical three-surface family. Each family in this shape registers with `check-panel-controllers`.
 
 ### 2. Two-surface controller — same shape, scope-compressed
 
 Same pattern, but one of the three surfaces is a genuinely different feature (not a render-divergent copy) and stays outside the controller.
 
-No family currently fits this shape. **Goals** was the shipped example until 2026-04-22: desktop + mobile shared the daemon-backed CRUD model (`GoalsController`) and web ran parallel `ScheduledAgent` (recurring simple) + `WebGoal` (one-shot plan) types. The unification pass added `createGoalsRunner` — the daemon-role sibling of `GoalsController` for surfaces that ARE the daemon (web) — folding web's two types onto the shared `ScheduledGoal` shape. The "two surfaces + different feature" framing was retrospectively a diagnosis of drift rather than a legitimate shape.
+**Goals** was this shape's example until 2026-04-22: desktop + mobile shared the daemon-backed CRUD model (`GoalsController`) and web ran parallel `ScheduledAgent` (recurring simple) + `WebGoal` (one-shot plan) types. The unification pass added `createGoalsRunner` — the daemon-role sibling of `GoalsController` for surfaces that ARE the daemon (web) — folding web's two types onto the shared `ScheduledGoal` shape. The "two surfaces + different feature" framing was retrospectively a diagnosis of drift rather than a legitimate shape.
 
 Rule: before accepting this shape for a new family, verify the "different feature" claim by asking whether the surface is answering a different _user question_. If it's answering the same question through a different mechanism (daemon vs. browser tab), unify instead — the mechanism divergence is surface-level, not domain-level.
 
@@ -29,7 +31,7 @@ Rule: before accepting this shape for a new family, verify the "different featur
 
 When the shared logic is a drawing or compute primitive that doesn't own state, it belongs alongside its domain.
 
-Family shipped: **Voice waveform** — `renderVoiceWaveform` + `analyzeWaveformFrame` + `EmaTuning` live in `@motebit/voice`, adjacent to the STT/TTS providers. Desktop and web each own their own state machine; they call the renderer per frame.
+Example: **Voice waveform** — `renderVoiceWaveform` + `analyzeWaveformFrame` + `EmaTuning` live in `@motebit/voice`, adjacent to the STT/TTS providers. Desktop and web each own their own state machine; they call the renderer per frame.
 
 Rule: state + actions → `@motebit/panels`. Pure compute + rendering + I/O adapters → the domain package.
 
@@ -40,20 +42,6 @@ When the shape is "forms plus platform-specific I/O," a controller adds a layer 
 Family evaluated: **Settings**. Desktop 2089 + web 1242 + mobile 441 (modal) + ~1750 (tabs) = forms bound to Tauri keyring / localStorage / expo-secure-store. ~40 % shared config math (already in `@motebit/sdk`), ~60 % platform-specific rendering + I/O.
 
 Rule: when the LOC is dominated by form fields and platform I/O, extract the types + derivations into `@motebit/sdk` and leave the surfaces alone.
-
-## What's shipped
-
-| Family         | Surfaces                                   | Home              | Gate                                       |
-| -------------- | ------------------------------------------ | ----------------- | ------------------------------------------ |
-| Sovereign      | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
-| Agents         | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
-| Memory         | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
-| Goals          | desktop, mobile, web (controller + runner) | `@motebit/panels` | `check-panel-controllers`                  |
-| Activity       | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
-| Retention      | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
-| Self-test      | desktop, web, mobile                       | `@motebit/panels` | `check-panel-controllers`                  |
-| Skills         | desktop, web, mobile                       | `@motebit/panels` | — (no `check-panel-controllers` entry)     |
-| Voice waveform | desktop, web                               | `@motebit/voice`  | — (rendering primitive, not a state drift) |
 
 ## Evaluated but not extracted
 
@@ -71,11 +59,11 @@ Revisit trigger: a third chat surface wanting streaming + approval orchestration
 
 Known drifts (close whether or not a controller ships):
 
-1. ~~Web's `streamingTTS` is a module-scope singleton; two concurrent chats would share state.~~ **Accepted 2026-04-24.** Web is strictly single-chat-per-tab by design — the runtime has no code path that mounts two simultaneous chat surfaces in one window. The singleton is architecturally equivalent to a surface-owned instance given that constraint. Revisit when web introduces multi-chat (split panes, floating secondary chat, etc.); the desktop pattern (callback-owned lifecycle) is the reference.
-2. ~~Web strips `<thinking>` / `<memory>` / `<state>` tags and `[EXTERNAL_DATA]` / `[MEMORY_DATA]` markers; desktop doesn't.~~ **Closed 2026-04-24.** Canonical `stripInternalTags` primitive added to `@motebit/ai-core`; `stripPartialActionTag` now composes it (so desktop picks up the thinking/external-data stripping via its existing call site) and web imports it directly. Both surfaces route every tag-stripping pass through the same regex set. Adding a new internal tag is one edit in `packages/ai-core/src/core.ts`.
-3. Memory footer — confidence scores and Recalled-vs-Formed distinction (`apps/desktop/src/ui/chat.ts:545–642`) — is desktop-only. Web has no equivalent. **Still open** — scope question, not a mechanical fix (is the memory footer a desktop-specific affordance because the desktop surface has more vertical space, or is it a web feature gap?). Revisit when product weighs in.
-4. Approval nesting: desktop's callback-driven `consumeApproval` chain allows recursive `approval_request` (line 428); web's Promise-based `showApprovalCard` flattens to sequence. Different UX for multi-step delegation with nested approvals. **Still open** — semantic-design question, not a mechanical fix (nested approvals vs sequential approvals is a product decision about how the creature asks permission for compound actions).
-5. ~~`showToolStatus(name, context?)` — web preserves context; desktop ignores it.~~ **Closed 2026-04-24.** Desktop's `showToolStatus` signature widened to `(name, context?)` with `formatToolLabel` helper mirroring web. `completeToolStatus` rewritten to preserve the context label (was `${name} done` — recomposed from `name` alone, dropping context; now rewrites only the trailing `...` on the live element text, matching web's pattern). The four `tool_status` chunk handlers in `apps/desktop/src/ui/chat.ts` now thread `chunk.context` through.
+1. Web's `streamingTTS` is a module-scope singleton; two concurrent chats would share state. **Accepted 2026-04-24.** Web is strictly single-chat-per-tab by design — the runtime has no code path that mounts two simultaneous chat surfaces in one window. The singleton is architecturally equivalent to a surface-owned instance given that constraint. Revisit when web introduces multi-chat (split panes, floating secondary chat, etc.); the desktop pattern (callback-owned lifecycle) is the reference.
+2. Internal-tag stripping has one home: the canonical `stripInternalTags` primitive in `@motebit/ai-core`, which `stripPartialActionTag` composes; both surfaces route every tag-stripping pass through the same regex set. Adding a new internal tag is one edit in `packages/ai-core/src/core.ts`.
+3. Memory footer — confidence scores and Recalled-vs-Formed distinction (`apps/desktop/src/ui/chat.ts`) — a scope question, not a mechanical fix (is the memory footer a desktop-specific affordance because the desktop surface has more vertical space, or is it a web feature gap?). Revisit when product weighs in.
+4. Approval nesting: desktop's callback-driven `consumeApproval` chain allows recursive `approval_request`; web's Promise-based `showApprovalCard` flattens to sequence. Different UX for multi-step delegation with nested approvals — a semantic-design question, not a mechanical fix (nested approvals vs sequential approvals is a product decision about how the creature asks permission for compound actions).
+5. `showToolStatus(name, context?)` preserves the tool-status context label on both surfaces (`formatToolLabel`); `completeToolStatus` rewrites only the trailing `...`, never recomposes the label from `name` alone.
 
 ### Settings
 
@@ -85,19 +73,9 @@ Canonical types already live in `@motebit/sdk` (`GovernanceConfig`, `AppearanceC
 
 Known drifts (each is a policy / audit question, not a mechanical cleanup):
 
-1. ~~**`APPROVAL_PRESET_CONFIGS` diverges silently across surfaces.**~~ **Closed 2026-04-24** (commit `bb35843c`). Web and mobile now import from `@motebit/sdk`; mobile's divergent values (`balanced` denyAbove: 4 → 3, `autonomous` requireApprovalAbove: 2 → 3) are gone. Direction chosen: align to SDK — canonical values win when surfaces diverge, even when a surface was stricter. Recurrence prevented by drift-defense #40 (`check-preset-imports`): any `apps/*` redeclaration of an SDK-canonical identifier fails CI.
+1. **`APPROVAL_PRESET_CONFIGS` has one home, `@motebit/sdk`.** Canonical values win when surfaces diverge, even when a surface was stricter. Drift-defense #40 (`check-preset-imports`) fails CI on any `apps/*` redeclaration of an SDK-canonical identifier.
 
-2. Desktop hardcodes `maxMemoriesPerTurn: 5` (`apps/desktop/src/ui/settings.ts:1734`) instead of reading `DEFAULT_GOVERNANCE_CONFIG.maxMemoriesPerTurn`. The field is not user-editable on desktop.
-
-3. Mobile's `GovernanceTab.tsx` has no UI for `maxMemoriesPerTurn`; the field is stored in `MobileSettings` but users can't edit it.
-
-4. Model-list seeding needs cross-surface audit: desktop reads from `ANTHROPIC_MODELS` / `OPENAI_MODELS` / `GOOGLE_MODELS` in `@motebit/sdk`, mobile relies on parent-supplied defaults, and web's prior local constant was struck during the BYOK overhaul (model picker flows through the vendor catalog now). Whether different users see different model pickers for the same provider is an open audit on the post-overhaul state.
-
-5. Voice key persistence on desktop needs audit. Web uses `getTTSKey('elevenlabs')` through a shared helper. Desktop's settings.ts grep shows no matching read path for `elevenlabs_api_key` — the key may only be persisted if the TTS provider reads the keyring itself, which would mean Settings shows a stale "connected" indicator when the key changes.
-
-6. `deriveInteriorColor` is copied to mobile (`apps/mobile/src/components/settings/settings-shared.tsx`) instead of imported from the desktop `color-picker.ts`. The math matches today; drift-prone.
-
-Recommended next pass: walk drifts 1–6 with policy-level decisions for 1 and the user's preference on 2+5. None of them are drift gate candidates — they're one-time audits.
+The remaining Settings drifts are one-time audits, not drift-gate candidates; their state is in the status ledger.
 
 ## Three invariant questions the next extraction should pre-answer
 

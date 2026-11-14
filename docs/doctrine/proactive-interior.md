@@ -2,6 +2,8 @@
 
 > **Layer:** law (tending may call only memory tools) — enforced by `packages/runtime/src/__tests__/proactive-wire.test.ts`
 
+**Status:** [doctrine-status.md § proactive-interior](../ops/doctrine-status.md#proactive-interiormd)
+
 A motebit's interior is active. The body is passive. Idle is not absence — idle is the time the motebit uses to consolidate what it knows. This doctrine names what proactive means, what's allowed, and what protects the user from runaway action.
 
 ## Three pillars
@@ -31,7 +33,7 @@ The motebit's only proactive maintenance loop. Lives in [`packages/runtime/src/c
 
 Each phase has an independent budget (default 15s). When the budget fires, the phase yields partial work and the cycle moves to the next phase. Phase errors are caught and recorded in `CycleResult.phasesErrored`; subsequent phases run.
 
-The cycle emits one `ConsolidationCycleRun` event with the full result payload. It does not surface to the user via toast, chat bubble, or notification — calm software. Discovery happens through the memory panel's consolidation log (follow-up surface work).
+The cycle emits one `ConsolidationCycleRun` event with the full result payload. It does not surface to the user via toast, chat bubble, or notification — calm software. Discovery happens through the memory panel's consolidation log.
 
 ### 3. Proactive capability scope — fail-closed by default
 
@@ -94,17 +96,11 @@ A motebit running with the proactive interior enabled:
 
 ## What's deferred
 
-Spatial UI follow-on. Desktop + web + mobile parity shipped (single-source `resolveProactiveAnchor`); spatial waits until the spatial surface itself has settings + memory-panel analogues to host the toggle and the consolidation log.
+Spatial UI follow-on: spatial waits until the spatial surface itself has settings + memory-panel analogues to host the toggle and the consolidation log. The flat surfaces share one primitive, `resolveProactiveAnchor`, so a new surface adopts the shared behavior rather than wiring its own tick.
 
-## What was deferred and is now done
+## Curiosity belongs to gather
 
-Web + mobile parity for the proactive-interior surface (settings toggle + creature presence modulation + memory-panel consolidation log) shipped 2026-04-20 — desktop's UI dogfooded and the cross-surface one-pass followed cleanly. The single-source `resolveProactiveAnchor` primitive lifted the per-surface tick wiring into one shared call, so the three flat surfaces now share both behavior and chrome.
-
-The `runHousekeeping` unification landed 2026-04-28. The deferred-design question — does curiosity belong in the cycle's `gather` phase or stay a separate signal the gradient manager subscribes to? — was settled by the data: `housekeeping()` had been called only at runtime shutdown since the 2026-04-20 unification, firing at a soon-to-be-disposed gradient manager. Curiosity-target computation was effectively dead in production for eight days, and the gradient was being kept fresh only by interactive-turn paths (cold-start, every-fifth-turn reflection) — never during long idle windows.
-
-Resolution: curiosity is a `gather`-class operation and now lives in the cycle's `gather` phase. `findCuriosityTargets` runs over the same live-node set the rest of `gather` already loaded; the result is pushed via the cycle's `setCuriosityTargets` dep callback into `gradientManager.setCuriosityTargets`. The cycle gained a parallel `computeAndStoreGradient` dep callback so the post-prune gradient recompute runs once per cycle, restoring the periodic-during-idle gradient updates the shutdown-only housekeeping path never delivered.
-
-Net: `packages/runtime/src/housekeeping.ts` deleted. `MotebitRuntime.housekeeping()` deleted. The shutdown call in `stop()` deleted. The `episodicConsolidation` config option (zero callers, zero effect — never propagated into the cycle) deleted. Surfaces (`apps/{cli,web,mobile,spatial}`) migrated their periodic-tick callers from `runtime.housekeeping()` to `runtime.consolidationCycle()`. The cycle is now the only proactive maintenance loop, in code as well as in doctrine.
+Curiosity-target computation is a `gather`-class operation and lives in the cycle's `gather` phase: `findCuriosityTargets` runs over the same live-node set the rest of `gather` already loaded, and the result is pushed via the cycle's `setCuriosityTargets` dep callback into `gradientManager.setCuriosityTargets`. The cycle's `computeAndStoreGradient` dep callback runs the post-prune gradient recompute once per cycle, so the gradient stays fresh during long idle windows, not only on interactive-turn paths. A maintenance path that runs only at shutdown fires at a soon-to-be-disposed gradient manager and is dead in production — the reason the old `housekeeping()` path was removed rather than kept beside the cycle. The cycle is the only proactive maintenance loop, in code as well as in doctrine.
 
 ## How to apply
 

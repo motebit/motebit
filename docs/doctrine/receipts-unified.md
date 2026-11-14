@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § receipts-unified](../ops/doctrine-status.md#receipts-unifiedmd)
+
 Motebit's signed-receipt surface is three types in three packages, unified by one cryptographic shape and one verification path. The positioning sentence's "receipts" claim points at this family, not at any single type. This memo names the family so future contributors find the unification by reading, not by reconstruction.
 
 ## The three types
@@ -16,7 +18,7 @@ Three distinct types with three distinct attestation roles. They are NOT redunda
 
 - **`ExecutionReceipt`** — "what did this agent accomplish, end-to-end, on this goal?" Agent-signed; the whole-task proof.
 - **`ToolInvocationReceipt`** — "what did this agent do in this single tool call?" Agent-signed; per-step granularity for auditors who need to trace not just outcomes but each act.
-- **`ContentArtifactManifest`** — until 2026-05-14, exclusively "the relay assembled this bundle of agent-signed artifacts at time T" (the 12 state-export endpoints — relay-signed wrappers for bundle assembly). The goal-results Phase 3 arc landed the first non-relay consumer: `goal-result` artifacts produced per-fire by a goal cadence, signed by the **agent's** motebit identity (not the relay). The closed `ContentArtifactType` registry is the unification surface; the _producer-identity_ dimension is orthogonal — the registry's stated semantic is "content-artifact category for C2PA-shape provenance," not "relay state-export bundle." See [`goal-results.md`](goal-results.md) §"Phase 3" for the producer + verification path.
+- **`ContentArtifactManifest`** — "this producer assembled or produced this standalone content at time T." Two producers: the relay, for the state-export endpoints (relay-signed wrappers for bundle assembly of agent-signed artifacts), and the agent, for `goal-result` artifacts produced per-fire by a goal cadence and signed by the **agent's** motebit identity (not the relay). The closed `ContentArtifactType` registry is the unification surface; the _producer-identity_ dimension is orthogonal — the registry's stated semantic is "content-artifact category for C2PA-shape provenance," not "relay state-export bundle." See [`goal-results.md`](goal-results.md) §"Phase 3" for the producer + verification path.
 
 ## What unifies them
 

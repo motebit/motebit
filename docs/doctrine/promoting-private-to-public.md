@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § promoting-private-to-public](../ops/doctrine-status.md#promoting-private-to-publicmd)
+
 Motebit ships 13 packages to npm and keeps 62 workspace-internal at `0.0.0-private`. The boundary is settled by [`docs/doctrine/protocol-model.md`](protocol-model.md) and the sentinel commit `fa5fdfeb` (2026-04-24). This file documents the _process_ — what to do when a real third-party trigger arrives and a private package needs to become public.
 
 ## The trigger condition
@@ -65,7 +67,7 @@ If wraps in `<ReferenceExample>` referenced this package, unwrap them now. Repla
 
 ### 7. Reconcile the `ignore`-era changeset pile-up, then land a `major` changeset
 
-**First, clear the accumulated changesets.** While a package sits in `.changeset/config.json`'s `ignore` list, `changeset version` never consumes the changesets that bump it — they accumulate indefinitely (the day this was written, ignored libs carried up to ~9 lingering changesets each; apps far more). The moment you remove the package from `ignore`, the **next** `changeset version` consumes **all** of them at once: a first published changelog polluted with stale entries describing private-era churn, and a bump level derived from changes made before anyone could install it. So before promoting:
+**First, clear the accumulated changesets.** While a package sits in `.changeset/config.json`'s `ignore` list, `changeset version` never consumes the changesets that bump it — they accumulate indefinitely. The moment you remove the package from `ignore`, the **next** `changeset version` consumes **all** of them at once: a first published changelog polluted with stale entries describing private-era churn, and a bump level derived from changes made before anyone could install it. So before promoting:
 
 ```bash
 # Find every pending changeset that bumps the package being promoted.
@@ -85,7 +87,7 @@ Pick `major` for the new package. The body MUST include a `## Migration` section
 **The first publish is by hand; every later one comes from the release pipeline.** `release.yml` publishes only through npm trusted publishing, and npm attaches a trusted publisher only to a name it has already seen. So the pipeline refuses a train that contains a never-published name, before it builds anything (`security-publish.ts first-publish`). Before the Version Packages PR that carries this `major` merges, the founder:
 
 1. Publishes the version on `main` (`0.0.0`, per step 1) from a clean checkout: build the package, then `pnpm publish --access public --no-git-checks` in its directory. Use pnpm, not npm: only pnpm rewrites `workspace:` dependencies. This one version carries no provenance.
-2. Adds the package's trusted publisher on npmjs.com: `motebit/motebit`, `release.yml`, environment `npm-publish`, with direct publish allowed (as for every other public package). npm marks it pending until a publish uses it, and shows a deadline for that publish (two days, the day this was written), so step 3 must finish before then.
+2. Adds the package's trusted publisher on npmjs.com: `motebit/motebit`, `release.yml`, environment `npm-publish`, with direct publish allowed (as for every other public package). npm marks it pending until a publish uses it, and shows a deadline for that publish, so step 3 must finish before then.
 3. Merges the Version Packages PR and approves the `npm-publish` environment. The pipeline publishes `1.0.0` with provenance, and GitHub Releases auto-generates human-readable release notes per [`apps/docs/content/docs/changelog.mdx`](../../apps/docs/content/docs/changelog.mdx).
 
 The commands and the checks the founder makes on npmjs.com are in [`docs/ops/RUNBOOK.md`](../ops/RUNBOOK.md) § Publish authority.
@@ -102,7 +104,7 @@ The cost of these promises is real. That is why the trigger condition is "a real
 
 ## Reverse direction: making a public package private
 
-This is doctrinally possible (a `major` changeset can deprecate the package and remove it), but the friction is high enough that motebit has never done it. The published packages have committed downstream consumers; pulling one back creates an upgrade obligation for everyone who imported it. If the situation arises, the path is:
+This is doctrinally possible (a `major` changeset can deprecate the package and remove it), but the friction is high enough that it is a last resort. The published packages have committed downstream consumers; pulling one back creates an upgrade obligation for everyone who imported it. If the situation arises, the path is:
 
 1. Annotate every public symbol with `@deprecated` + the four-field contract.
 2. Land a `major` changeset naming the deprecation, with a `## Migration` section pointing consumers to the replacement.

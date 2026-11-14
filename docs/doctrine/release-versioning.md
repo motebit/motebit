@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § release-versioning](../ops/doctrine-status.md#release-versioningmd)
+
 Versions are promises. A package number is a claim — to its consumers and to its own future maintainers — about what changed between this release and the last. Lockstep grouping breaks that promise by minting versions for packages that did not change. From 1.0 onward motebit publishes packages independently.
 
 ## The rule
@@ -52,7 +54,7 @@ Two GitHub workflows, single-responsibility each:
 - **`release.yml`** — fires on every push to `main`. When changesets are pending, it opens or updates the `Version Packages` PR (branch `changeset-release/main`). When that PR is merged, it publishes to npm. This is the standard `changesets/action` pattern.
 - **`release-train.yml`** — fires on `cron: "0 23 * * 2"`. Its only job is to merge the open `Version Packages` PR. The merge produces a push to `main`, which fires `release.yml`, which publishes.
 
-The publish trigger is therefore the cron, not the merge button. Maintainers do not click Merge on the `Version Packages` PR during normal operation — it accumulates changesets across the week and ships in one Tuesday train.
+By design the publish trigger is the cron, not the merge button: in normal operation maintainers do not click Merge on the `Version Packages` PR — it accumulates changesets across the week and ships in one Tuesday train. Whether the train is enabled is state, kept in the status ledger.
 
 ### What happens when the cron fires into nothing
 

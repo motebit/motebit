@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § runtime-invariants-over-prompt-rules](../ops/doctrine-status.md#runtime-invariants-over-prompt-rulesmd)
+
 When a problem can be solved either by adding a prompt clause that teaches the AI to behave a certain way OR by adding a runtime contract that makes the failure mode structurally impossible, **prefer the runtime contract**. The prompt teaches what's true about the world; the runtime enforces what must hold.
 
 This doctrine is named because of a recurring drift pattern: a witnessed bug produces a prompt clause that tells the AI "don't do X" or "always do Y." Each clause is justifiable individually. Stack 50 of them and the prompt becomes a configuration file disguised as a teaching — the AI is a rule-follower rather than an emergent agent, and the §4 thesis from [`THE_EMERGENT_INTERIOR.md`](../../THE_EMERGENT_INTERIOR.md) (architecture-shapes-emergence, do not pressure the system prompt) starts contaminating.
@@ -95,7 +97,7 @@ The B-grade items are not bugs; they're teaching that doesn't have an obvious ru
 
 ## Enforcement
 
-`scripts/check-prompt-density.ts` (drift-defense #81, added 2026-05-12) is the CI forcing function for this doctrine. It counts rule-shaped clauses in `packages/ai-core/src/prompt.ts` — `- ` bullets plus `<digit>. ` numbered RULES lines — against a measured `BASELINE` (current value lives in the script; the local minimum after the 2026-05-12 prompt-prune pass started at 62 and has bumped to 64 across the day's typed-truth-triple landings, each bump documented in the script's bump log with grade + reason). Growth fails the gate with the five-question audit reproduced in the failure message; pruning lowers the floor silently.
+`scripts/check-prompt-density.ts` (drift-defense #81) is the CI forcing function for this doctrine. It counts rule-shaped clauses in `packages/ai-core/src/prompt.ts` — `- ` bullets plus `<digit>. ` numbered RULES lines — against a measured `BASELINE` (the value lives in the script, and each bump is documented in the script's bump log with grade + reason). Growth fails the gate with the five-question audit reproduced in the failure message; pruning lowers the floor silently.
 
 Smoke-alarm shape, not a per-clause registry. Bumping `BASELINE` IS the doctrine moment — the commit that bumps it names the new clause's grade (A or B per the table above) in the message. The gate cannot mechanize the grading; it forces the moment to ask. False negatives on inline non-bullet rules ("Never narrate physical actions" inside a paragraph) are accepted as the cost of low-maintenance defense — the most common drift pattern is adding new bullets, and that's what the gate catches.
 
