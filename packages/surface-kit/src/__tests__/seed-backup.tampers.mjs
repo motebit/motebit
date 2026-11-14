@@ -19,7 +19,8 @@ const cliPkg = join(repo, "apps", "cli");
 const cliSeed = join(cliPkg, "src", "subcommands", "seed.ts");
 /** Round 3's fix: a zero-succession file counts only when signed no later than the acknowledgment. */
 const DATE_CHECK = "    if (bound.createdAtMs != null && bound.createdAtMs <= ackAt) return true;";
-const NO_DATE_CHECK = "    return true;";
+// A revert the package build accepts (an unconditional return leaves unreachable code, which tsc -b rejects).
+const NO_DATE_CHECK = "    if (bound != null) return true;";
 
 await runTampers(
   [
