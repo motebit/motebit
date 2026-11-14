@@ -66,7 +66,7 @@ mechanism is identical and load-bearing:
 
 - The accrual basis is **minted only inside the accrual source** — `@motebit/memory-graph`'s
   `recallRelevantCore` emits the `recalled_memory` basis as part of the retrieval it actually
-  performed; the trust-graph edge lookup emits `trust_edge`; the model's text output carries
+  performed; the trust-graph edge lookup will emit `trust_edge` once its decision exists; the model's text output carries
   **no** leverage marker, exactly as the `<memory>` tag carries no `source=`. A gate scans
   `ai-core` for any model-authored leverage marker — a model that could author "I remembered"
   could fabricate a relationship that was never used.

@@ -299,7 +299,7 @@ scene droplets — §4 sigil → spatial droplet); on flat the act is the slab d
 arc, not a head-turn toward a record. What stays open is only the per-surface render
 (panel vs spatial Presentation), not the choreography.
 
-**The hire, end to end.** The Agents panel's **Discover**
+**The hire, end to end.** On web, the Agents panel's **Discover**
 card renders each _priced_ capability as a hire launch affordance; tapping it closes
 the panel and emerges the **hire-compose register** on the slab (`hire-chip.ts`,
 sibling of `pr-url-chip.ts`) pinned to `{worker, capability, price}`. The chat input
