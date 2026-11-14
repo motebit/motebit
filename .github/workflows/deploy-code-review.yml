@@ -52,15 +52,16 @@ jobs:
     # Promotion: a required reviewer approves this job (Settings → Environments).
     environment: production
     # One promotion of this service at a time; a running deploy is never
-    # cancelled. GitHub keeps ONE pending run per group (a newer one replaces
-    # an older one). For SAFETY that changes nothing: the head-of-main re-check
-    # means no stale sha deploys either way. It can cost LIVENESS (a pending
-    # run evicted, e.g. by a partial re-run of an older cancelled run), which
-    # the SUPERSEDED / STRANDED outcomes make visible. No `queue:` key: it is
-    # unverified (a key GitHub rejects stops the whole file loading) and a
-    # pending founder decision.
+    # cancelled. `queue: max` is a LIVENESS control, not a safety control: it
+    # keeps a newer pending promotion from being evicted (e.g. by a partial
+    # re-run of an older run). Safety comes from the head-of-main re-check.
+    # actionlint <= 1.7.12 falsely flags the key (rhysd/actionlint#657);
+    # GitHub supports it (changelog 2026-05-07). If GitHub ever rejected it,
+    # this workflow would fail to load and nothing would deploy (fail-closed,
+    # visible on the first run).
     concurrency:
       group: production-deploy-code-review
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: read

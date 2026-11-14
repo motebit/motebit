@@ -146,15 +146,17 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   entry(
-    "the unverified `queue:` key comes back on a deploy job",
+    // Locks the documented LIVENESS choice (a newer pending promotion is not
+    // evicted); it does not prove a security property — safety is the re-check.
+    "the queue: max liveness control is dropped from a deploy job",
     WF(
       "summarize",
-      "promotions serialize per service, never cancelled, no queue key; no workflow-level group",
+      "promotions serialize per service, queued (liveness), never cancelled; no workflow-level group",
     ),
     edit(
       ".github/workflows/deploy-summarize.yml",
-      "      group: production-deploy-summarize\n",
       "      group: production-deploy-summarize\n      queue: max\n",
+      "      group: production-deploy-summarize\n",
     ),
   ),
 ];
