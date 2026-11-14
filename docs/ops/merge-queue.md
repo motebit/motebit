@@ -12,7 +12,23 @@ it lands, and lands it only if every required check passes on that commit.
   `gh-readonly-queue/main/pr-<N>-<sha>`, fires the `merge_group` event, and
   merges when the required checks pass on it. A failing group is removed from
   the queue; the PR stays open — fix and re-queue.
-- Pushing to a PR that is in the queue removes it from the queue.
+- **A push does not reliably dequeue.** GitHub normally drops a PR from the
+  queue when its head moves, but a merge group already built from the old head
+  can still land. #1275 merged its earlier head minutes after a corrected
+  commit was pushed (2026-11-14). To change a queued PR:
+  1. Dequeue it explicitly: **Remove from queue** in the UI, or GitHub's
+     `dequeuePullRequest` mutation —
+     `gh api graphql -f query='mutation{dequeuePullRequest(input:{id:"<PR node id>"}){clientMutationId}}'`
+     (the node id is `gh pr view <N> --json id --jq .id`).
+  2. Confirm it left the queue: `mergeQueueEntry` is `null` in
+     `gh api graphql -f query='{repository(owner:"motebit",name:"motebit"){pullRequest(number:<N>){mergeQueueEntry{state}}}}'`.
+  3. Push the fix, let checks re-run, and get approval on the new head.
+  4. Re-queue.
+- **After every merge, check what landed, not what the PR says.** Compare the
+  merge commit's files with the head that was approved (`headRefOid` at
+  approval), never with the PR's description or its current head:
+  `git diff --quiet <merge-commit> <approved-head> -- <changed files>`.
+  A PR's description can be edited after merge, so it is not evidence.
 - `gh pr merge <N> --admin` **bypasses the queue** (and the checks). It is
   emergency-only: a production-down fix that cannot wait one CI cycle. It
   re-opens exactly the hole the queue closes, so say why in the PR.
