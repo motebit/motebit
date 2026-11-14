@@ -35,7 +35,7 @@ const UNBOUND_BRANCH =
   '    return { status: "not_backed_up", reason: "unconfirmed" };\n  }\n  const current';
 /** The bare-timestamp reader the defect had. */
 const BARE_TIMESTAMP_READER =
-  '  if (config.cli_encrypted_key == null) return "no_identity";\n  return typeof config.seed_backed_up_at === "number" ? "backed_up" : "not_backed_up";';
+  '  if (config.cli_encrypted_key == null) return { status: "no_identity" };\n  if (typeof config.seed_backed_up_at === "number") return { status: "backed_up" } as never;';
 
 await runTampers(
   [
@@ -67,14 +67,14 @@ await runTampers(
       ],
     },
     {
-      name: "cli: seedBackupStatus back to the bare timestamp (the defect)",
+      name: "cli: seedBackupPostureOf back to the bare timestamp (the defect)",
       pkg: "motebit",
       test: cliTest,
       red: `${CLI_ROTATE} rotate ⇒ not backed up; the old acknowledgment and the retired key are both still there`,
       edits: [
         {
           file: cliSeed,
-          from: "  return seedBackupPostureOf(config).status;",
+          from: '  if (config.cli_encrypted_key == null) return { status: "no_identity" };',
           to: BARE_TIMESTAMP_READER,
         },
       ],
@@ -87,7 +87,7 @@ await runTampers(
       edits: [
         {
           file: cliSeed,
-          from: "  return seedBackupPostureOf(config).status;",
+          from: '  if (config.cli_encrypted_key == null) return { status: "no_identity" };',
           to: BARE_TIMESTAMP_READER,
         },
       ],
@@ -96,7 +96,7 @@ await runTampers(
       name: "cli: the reader drops the acknowledgment's key (a bound backup stops counting)",
       pkg: "motebit",
       test: cliTest,
-      red: "seedBackupPostureOf / seedBackupStatus — the CLI reader a bound acknowledgment for the current key reads backed up",
+      red: "seedBackupPostureOf — the CLI reader a bound acknowledgment for the current key reads backed up",
       edits: [
         {
           file: cliSeed,

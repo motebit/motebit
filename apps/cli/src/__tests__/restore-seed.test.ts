@@ -11,7 +11,10 @@ import {
   classifyWriteAhead,
   holdsIdentityKey,
 } from "../subcommands/restore.js";
-import { seedBackupStatus } from "../subcommands/seed.js";
+import { seedBackupPostureOf } from "../subcommands/seed.js";
+
+const seedBackupStatus = (c: Parameters<typeof seedBackupPostureOf>[0]) =>
+  seedBackupPostureOf(c).status;
 import { deriveSovereignMotebitId } from "@motebit/crypto";
 
 const PUB = "8b13f81eb531972b57b3068074631d8a23eba3ccb99db596c40c7050e30365a4";

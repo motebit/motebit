@@ -21,7 +21,7 @@
  *   to "passphrase on this machine", so it is never a default.
  * - Enrollment does NOT replace the recovery seed: keychain + disk die
  *   with the machine. The seed nudge is structurally independent
- *   (`seedBackupStatus` never reads enrollment state) and must stay so.
+ *   (`seedBackupPostureOf` never reads enrollment state) and must stay so.
  *
  * The passphrase passes to `security` as an argv element — briefly
  * visible in the process table to the SAME user (and root). That is the

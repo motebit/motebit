@@ -78,13 +78,6 @@ export function seedBackupPostureOf(
   });
 }
 
-/** The posture's status alone: `no_identity` / `backed_up` / `not_backed_up`. */
-export function seedBackupStatus(
-  config: SeedBackupConfig,
-): "no_identity" | "backed_up" | "not_backed_up" {
-  return seedBackupPostureOf(config).status;
-}
-
 /**
  * Record that the owner wrote the seed down — for the identity and key
  * captured WHEN THE SEED WAS SHOWN, never "whatever is current now". The

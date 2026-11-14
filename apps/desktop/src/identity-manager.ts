@@ -156,6 +156,10 @@ export class IdentityManager {
         if (holdsCliKey(current) && current.motebit_id !== state.motebit_id) {
           throw new Error(cliIdentityRefusal(current, await retiredKeyrings(invoke)));
         }
+        // No seed-backup set-aside is needed here: a motebit_id change is
+        // refused above whenever a CLI key is present, and the CLI reads the
+        // seed-backup posture only when one is. `applyIdentitySwitch` is the
+        // path that moves an acknowledgment aside (`seedBackupSwitchPatch`).
         await updateConfig(invoke, { ...state });
       },
     };

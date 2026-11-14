@@ -1,7 +1,7 @@
 // A committed key rotation invalidates the previous seed backup, on the CLI:
 // the REAL `performRotation` against the REAL config writer
 // (`saveFullConfig` under a temp MOTEBIT_CONFIG_DIR), then the REAL posture
-// reader every CLI surface uses (`seedBackupStatus` — the startup nudge,
+// reader every CLI surface uses (`seedBackupPostureOf` — the startup nudge,
 // `motebit doctor`, `motebit seed`, `motebit keychain`). The acknowledgment
 // names the key it covers (`seed_backed_up_key`); a committed rotation moves
 // `device_public_key`, so it reads "not backed up" on every commit path —
@@ -110,11 +110,11 @@ function deps(over: Partial<import("../rotation.js").RotationDeps> = {}) {
   };
 }
 
-const status = () => seed.seedBackupStatus(cfg.loadFullConfig());
+const status = () => seed.seedBackupPostureOf(cfg.loadFullConfig()).status;
 const keptConfigs = () =>
   fs.readdirSync(tmpDir).filter((f) => f.startsWith(`config.json${cfg.CONFIG_BACKUP_INFIX}`));
 
-describe("seedBackupPostureOf / seedBackupStatus — the CLI reader", () => {
+describe("seedBackupPostureOf — the CLI reader", () => {
   it("a bound acknowledgment for the current key reads backed up", async () => {
     await identityWithBackup();
     expect(status()).toBe("backed_up");

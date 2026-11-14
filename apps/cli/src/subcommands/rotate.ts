@@ -191,7 +191,7 @@ export async function handleRotate(config: CliConfig): Promise<void> {
       console.log(`  rotations    ${outcome.rotations}`);
       if (config.reason) console.log(`  reason       ${config.reason}`);
       // The seed IS the key: said once here, on every path that ends
-      // `rotated` (resumes included). `seedBackupStatus` already reads "not
+      // `rotated` (resumes included). `seedBackupPostureOf` already reads "not
       // backed up" — the acknowledgment names the retired key.
       console.log();
       for (const line of ROTATION_SEED_NOTICE_LINES) console.log(`  ${line}`);

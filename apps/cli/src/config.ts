@@ -126,7 +126,7 @@ export interface FullConfig {
   /**
    * The public key (hex) of the seed `seed_backed_up_at` acknowledges. A
    * seed IS one key, and a rotation mints a new one, so the acknowledgment
-   * covers this key only: `seedBackupStatus` reads "not backed up" whenever
+   * covers this key only: `seedBackupPostureOf` reads "not backed up" whenever
    * it differs from `device_public_key` (a committed rotation since). Never
    * cleared by a rotation: it stays as the record of which retired key the
    * old paper seed recovers. Absent on acknowledgments recorded before it
