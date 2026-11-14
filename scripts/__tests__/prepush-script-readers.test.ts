@@ -31,7 +31,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HELPER = "scripts/lib/prepush-script-readers.ts";
 
 describe("prepush-script-readers — the real repo", () => {
-  it("scripts/lib/tamper-runner.ts is read by exactly its five reader packages", () => {
+  it("scripts/lib/tamper-runner.ts is read by exactly its six reader packages", () => {
     expect(scriptReaders(ROOT, ["scripts/lib/tamper-runner.ts"])).toEqual({
       all: false,
       dirs: [
@@ -39,6 +39,7 @@ describe("prepush-script-readers — the real repo", () => {
         "packages/planner",
         "packages/runtime",
         "packages/verify",
+        "packages/wallet-solana",
         "services/relay",
       ],
     });

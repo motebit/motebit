@@ -42,3 +42,27 @@ export class InvalidSolanaAddressError extends Error {
     this.address = address;
   }
 }
+
+/**
+ * Thrown by a transfer (`send`, `sendBatch`, `buildP2pPayment`) when the
+ * wallet holds less SOL than the gas floor — BEFORE anything is signed or
+ * broadcast. The automatic USDC → SOL top-up is disabled (Jupiter swaps are
+ * refused until intent-bound transaction validation exists), so the remedy
+ * is to fund the wallet with SOL directly.
+ */
+export class InsufficientSolForGasError extends Error {
+  readonly code = "insufficient_sol_for_gas" as const;
+  /** SOL held, in lamports. */
+  readonly availableLamports: bigint;
+  /** The gas floor, in lamports. */
+  readonly requiredLamports: bigint;
+
+  constructor(availableLamports: bigint, requiredLamports: bigint) {
+    super(
+      `Insufficient SOL for network fees: have ${availableLamports.toString()} lamports, need at least ${requiredLamports.toString()} lamports. Fund this wallet's address with SOL directly; automatic USDC-to-SOL top-up is disabled.`,
+    );
+    this.name = "InsufficientSolForGasError";
+    this.availableLamports = availableLamports;
+    this.requiredLamports = requiredLamports;
+  }
+}

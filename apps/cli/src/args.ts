@@ -538,7 +538,7 @@ Commands:
   wallet                    Show your sovereign Solana wallet (address, USDC balance)
     --solana-rpc-url <url>    Solana RPC endpoint (default: mainnet-beta public RPC)
     --address-only            Skip the balance query (address-only)
-  wallet swap <sol>         Convert SOL → USDC working capital (Jupiter; gas floor enforced)
+  wallet swap <sol>         Disabled: swaps are refused until intent-bound validation exists
   verify-release            Verify this binary's bytes against the operator's signed witness
   doctor                    Check system readiness (Node, SQLite, config)
   seed [reveal]             Recovery-seed backup status; reveal prints it once

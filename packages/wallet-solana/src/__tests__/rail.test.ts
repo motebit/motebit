@@ -18,6 +18,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const { swapUsdcToSolMock } = vi.hoisted(() => ({ swapUsdcToSolMock: vi.fn() }));
 vi.mock("../jupiter.js", () => ({
   swapUsdcToSol: swapUsdcToSolMock,
+  // The rail refuses through the choke point before reading the keypair; a
+  // no-op here lets the mocked-swap branches run.
+  refuseJupiterSwap: () => undefined,
   // rail.ts statically imports the gas-floor constant from the same
   // module (single-source since the swapSolToUsdc mirror landed) — the
   // mock must carry it or every rail test fails at import time.
@@ -29,6 +32,7 @@ import {
   type SolanaRpcAdapter,
   type SendUsdcArgs,
   InsufficientUsdcBalanceError,
+  InsufficientSolForGasError,
   InvalidSolanaAddressError,
   Web3JsRpcAdapter,
   createSolanaWalletRail,
@@ -193,12 +197,12 @@ describe("SolanaWalletRail.sendBatch", () => {
 
 // ── getSolBalance + ensureGas ────────────────────────────────────────────
 //
-// `ensureGas` is the auto-gas guard. It returns true when SOL is above
-// the floor, returns false when auto-gas is disabled (or impossible
-// because the adapter isn't a Web3JsRpcAdapter), attempts a Jupiter
-// swap when both autoGas and a Web3JsRpcAdapter are present, and
-// returns false on swap failure (caller can still attempt the txn —
-// it'll fail with insufficient gas, but that's the honest state).
+// `ensureGas` is the gas-floor check. It returns true when SOL is at or
+// above the floor and false below it. The legacy `autoGas: true` path
+// still reaches the Jupiter swap, which now refuses
+// (jupiter.test.ts / gas-containment.test.ts prove that against the REAL
+// module); here the module is mocked so the rail's own branches are
+// exercised in isolation.
 
 describe("SolanaWalletRail.getSolBalance", () => {
   it("delegates to adapter.getSolBalance and returns lamports", async () => {
@@ -237,7 +241,7 @@ describe("SolanaWalletRail.ensureGas", () => {
     expect(swapUsdcToSolMock).not.toHaveBeenCalled();
   });
 
-  it("auto-swaps USDC → SOL via Jupiter and returns true on swap success", async () => {
+  it("legacy autoGas: true — reports true only if the (mocked) swap resolved; the real swap refuses", async () => {
     const adapter = new Web3JsRpcAdapter({
       rpcUrl: "https://api.devnet.solana.com",
       identitySeed: new Uint8Array(32).fill(3),
@@ -250,7 +254,7 @@ describe("SolanaWalletRail.ensureGas", () => {
     expect(swapUsdcToSolMock).toHaveBeenCalledOnce();
   });
 
-  it("returns false when the Jupiter swap throws (caller can still proceed)", async () => {
+  it("returns false when the Jupiter swap throws", async () => {
     const adapter = new Web3JsRpcAdapter({
       rpcUrl: "https://api.devnet.solana.com",
       identitySeed: new Uint8Array(32).fill(4),
@@ -264,8 +268,8 @@ describe("SolanaWalletRail.ensureGas", () => {
   });
 });
 
-describe("SolanaWalletRail send + sendBatch with autoGas", () => {
-  it("calls ensureGas before sending when autoGas is enabled", async () => {
+describe("SolanaWalletRail send + sendBatch gas check", () => {
+  it("checks the gas floor before sending", async () => {
     const getSolBalance = vi.fn().mockResolvedValue(10_000_000n); // above floor
     const sendUsdc = vi.fn().mockResolvedValue({
       signature: "sig",
@@ -278,7 +282,7 @@ describe("SolanaWalletRail send + sendBatch with autoGas", () => {
     expect(sendUsdc).toHaveBeenCalledOnce();
   });
 
-  it("does NOT call getSolBalance when autoGas is disabled", async () => {
+  it("with autoGas off, still checks the floor and refuses below it before signing", async () => {
     const getSolBalance = vi.fn().mockResolvedValue(0n);
     const sendUsdc = vi.fn().mockResolvedValue({
       signature: "sig",
@@ -286,12 +290,12 @@ describe("SolanaWalletRail send + sendBatch with autoGas", () => {
       confirmed: true,
     });
     const rail = new SolanaWalletRail(makeAdapter({ getSolBalance, sendUsdc }), { autoGas: false });
-    await rail.send("Dest", 100n);
-    expect(getSolBalance).not.toHaveBeenCalled();
-    expect(sendUsdc).toHaveBeenCalledOnce();
+    await expect(rail.send("Dest", 100n)).rejects.toBeInstanceOf(InsufficientSolForGasError);
+    expect(getSolBalance).toHaveBeenCalledOnce();
+    expect(sendUsdc).not.toHaveBeenCalled();
   });
 
-  it("calls ensureGas before sendBatch when autoGas is enabled", async () => {
+  it("checks the gas floor before sendBatch", async () => {
     const getSolBalance = vi.fn().mockResolvedValue(10_000_000n);
     const sendUsdcBatch = vi.fn().mockResolvedValue([]);
     const rail = new SolanaWalletRail(makeAdapter({ getSolBalance, sendUsdcBatch }), {
@@ -306,7 +310,7 @@ describe("SolanaWalletRail send + sendBatch with autoGas", () => {
 // ── createSolanaWalletRail factory ───────────────────────────────────────
 
 describe("createSolanaWalletRail", () => {
-  it("constructs a rail backed by Web3JsRpcAdapter, autoGas on by default", () => {
+  it("constructs a rail backed by Web3JsRpcAdapter, autoGas off by default", () => {
     const rail = createSolanaWalletRail({
       rpcUrl: "https://api.devnet.solana.com",
       identitySeed: new Uint8Array(32).fill(5),
@@ -316,6 +320,7 @@ describe("createSolanaWalletRail", () => {
     expect(rail.asset).toBe("USDC");
     // Address derives from the seed via Web3JsRpcAdapter — non-empty base58.
     expect(rail.address).toMatch(/^[1-9A-HJ-NP-Za-km-z]+$/);
+    expect((rail as unknown as { autoGas: boolean }).autoGas).toBe(false);
   });
 
   it("disables autoGas when disableAutoGas: true", async () => {
@@ -401,27 +406,28 @@ describe("SolanaWalletRail.buildP2pPayment", () => {
     expect(proof.network).toBe("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1");
   });
 
-  it("runs the gas check before broadcasting when autoGas is enabled", async () => {
+  it("refuses before broadcasting when SOL is below the gas floor", async () => {
     const sendUsdcBatch = vi.fn().mockResolvedValue([
       { ok: true, signature: "s", slot: 1, reason: null },
       { ok: true, signature: "s", slot: 1, reason: null },
     ]);
-    // Low SOL → ensureGas runs; with a non-web3 mock adapter it returns false
-    // without throwing, and the broadcast still proceeds (honest degradation).
+    // Low SOL → no top-up exists, so the payment fails closed, unsigned.
     const getSolBalance = vi.fn().mockResolvedValue(0n);
     const rail = new SolanaWalletRail(makeAdapter({ sendUsdcBatch, getSolBalance }), {
       autoGas: true,
     });
 
-    await rail.buildP2pPayment({
-      workerAddress: "W11111111111111111111111111111111111111111",
-      amountMicro: 1,
-      treasuryAddress: "T11111111111111111111111111111111111111111",
-      feeAmountMicro: 1,
-    });
+    await expect(
+      rail.buildP2pPayment({
+        workerAddress: "W11111111111111111111111111111111111111111",
+        amountMicro: 1,
+        treasuryAddress: "T11111111111111111111111111111111111111111",
+        feeAmountMicro: 1,
+      }),
+    ).rejects.toBeInstanceOf(InsufficientSolForGasError);
 
     expect(getSolBalance).toHaveBeenCalled();
-    expect(sendUsdcBatch).toHaveBeenCalledTimes(1);
+    expect(sendUsdcBatch).not.toHaveBeenCalled();
   });
 });
 

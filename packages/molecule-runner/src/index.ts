@@ -1394,7 +1394,10 @@ export async function runMolecule(
   // meaningful for a P2P-enabled service that RECEIVES funds). Initial sweep on
   // boot + a periodic timer; the timer is unref'd (never keeps the process
   // alive) and cleared on shutdown. The service pays its own SOL gas
-  // (wallet-solana CLAUDE.md rule 4) — fund it with a little SOL or sweeps fail.
+  // (wallet-solana CLAUDE.md rule 4) and nothing tops it up: hold at least
+  // 0.005 SOL (GAS_FLOOR_LAMPORTS; 0.01 recommended) at the service's address.
+  // Below the floor every sweep and paid sub-delegation is refused before
+  // signing (InsufficientSolForGasError).
   const sweepAddress = process.env.MOTEBIT_SWEEP_ADDRESS?.trim();
   const sweepRpcUrl = process.env.MOTEBIT_SOLANA_RPC_URL?.trim();
   if (

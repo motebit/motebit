@@ -13,7 +13,9 @@
  * eligibility verdict, the exact $ legs, your USDC balance) and STOPS before the
  * irreversible broadcast. Only `DRY_RUN=0` moves funds. Use a worker with the
  * smallest positive unit_cost and fund the delegator with exactly one task's
- * worth (+ a little SOL for gas) so worst-case exposure is a single task.
+ * worth (+ at least 0.005 SOL for gas, 0.01 recommended: below the wallet's
+ * gas floor the payment is refused before signing, and nothing tops SOL up)
+ * so worst-case exposure is a single task.
  *
  * This is the "smallest-amount test on staging" the prod-delegation playbook
  * names. Run it green on staging, then the prod run is the identical invocation
@@ -25,7 +27,7 @@
  *                         delegator, OR the relay master token
  *   DELEGATOR_MOTEBIT_ID  the delegator's motebit id (the task's submitted_by)
  *   DELEGATOR_SEED_HEX    32-byte hex seed for the delegator's Solana wallet
- *                         (funded with USDC + a little SOL on the staging chain)
+ *                         (funded with USDC + >= 0.005 SOL on the staging chain)
  *   SOLANA_RPC_URL        the chain RPC the staging relay's verifier uses
  *   CAPABILITY            capability to delegate, e.g. web_search
  * Optional:

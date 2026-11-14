@@ -38,10 +38,11 @@ relay,p2p`, Solana settlement address published. The quote the meter will see:
    derives from. Watch for the `Pinned relay key …` line.
 4. **Fund the sovereign wallet.** `motebit wallet` prints the identity-derived
    Solana address, balance, and its own funding posture. Send **≥ $1 USDC on
-   the SOLANA network + ~0.005 SOL** (tx fees) — or send SOL from anywhere
-   and normalize it yourself: `motebit wallet swap 0.02` converts SOL → USDC
-   working capital (gas floor enforced). $1 covers ~19 tasks at the worker's
-   price.
+   the SOLANA network + ≥ 0.01 SOL** (tx fees). A transfer is refused before
+   signing while the wallet holds under 0.005 SOL; there is no automatic gas
+   top-up and `motebit wallet swap` is disabled until intent-bound transaction
+   validation exists, so fund both assets directly. $1 covers ~19 tasks at the
+   worker's price.
 5. **Mint the delegation grant** (the ceremony's successor to grant
    `019f3415…`, whose `pay_invoice` scope deliberately does not cover
    delegation — scope is a signed ceiling, so a new authority is a new grant):

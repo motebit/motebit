@@ -2999,6 +2999,17 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-third-party-tx-signing",
+    proves:
+      "flags the Jupiter shape — a Solana transaction deserialized from bytes a third party built, then signed with the identity keypair (packages/wallet-solana/src/jupiter.ts before 2026-11-14). Probe appends to the wallet's sweep module a function that does `VersionedTransaction.deserialize(bytes)` then `tx.sign([keypair])`; the gate's taint scan must name it. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(
+        "packages/wallet-solana/src/sweep.ts",
+        (src) =>
+          `${src}\nexport function __probeSignForeignTx(bytes: Uint8Array, keypair: never): void {\n  const tx = VersionedTransaction.deserialize(bytes);\n  tx.sign([keypair]);\n}\n`,
+      ),
+  },
+  {
     script: "check-goal-artifact-signing",
     proves:
       "flags a per-surface goal-runner that has stopped calling `runtime.signGoalArtifact` — the silent regression that would let goal-fire artifacts persist without a signed `ContentArtifactManifest` envelope. The drift class: a refactor that renames or removes the signing call on one surface (`apps/web/src/goal-scheduler.ts`, `apps/desktop/src/goal-scheduler.ts`, or `apps/mobile/src/goal-scheduler.ts`) passes typecheck because `signGoalArtifact` is optional from the runtime's perspective; the gate is the only catch. Probe rewrites `signGoalArtifact(` to `signGoalArtifactDisabled(` on the web surface; the gate's identifier scan must surface the missing-call violation.",

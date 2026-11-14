@@ -17,7 +17,7 @@
  * address, no second key, no binding ceremony.
  */
 
-import { createSolanaWalletRail } from "@motebit/wallet-solana";
+import { createSolanaWalletRail, refuseJupiterSwap } from "@motebit/wallet-solana";
 import { fromMicro } from "@motebit/sdk";
 import { secureErase } from "@motebit/encryption";
 import { loadFullConfig } from "../config.js";
@@ -42,8 +42,8 @@ export const DEFAULT_SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com";
 export const WALLET_GUIDANCE_LINES: readonly string[] = [
   `  This address IS your Ed25519 identity public key, base58-encoded.`,
   `  Fund with USDC on the SOLANA network (not Base/Ethereum — same asset,`,
-  `  different chains). SOL received here is gas, auto-managed; convert extra`,
-  `  SOL to working capital with \`motebit wallet swap <sol-amount>\`.`,
+  `  different chains). SOL here pays network fees: keep at least 0.005 SOL,`,
+  `  funded directly. Gas is not topped up automatically and swaps are off.`,
   `  Sovereign — no relay, no custody.`,
 ];
 
@@ -113,77 +113,30 @@ export async function handleWallet(options: WalletOptions = {}): Promise<void> {
 }
 
 /**
- * `motebit wallet swap <sol-amount>` — owner-invoked SOL → USDC
- * normalization (wallet homeostasis, funding side). A deterministic
- * affordance: the owner's passphrase IS the authorization; the Jupiter
- * adapter's gas floor refuses fail-closed to metabolize the last fuel.
- * Born 2026-07-05: the founder funded the first live motebit with SOL
- * from an exchange, and the wallet had no way to normalize it.
+ * `motebit wallet swap <sol-amount>` — DISABLED. The SOL → USDC swap signed
+ * a transaction built by Jupiter's HTTP API with the identity key, without
+ * inspecting it; swaps are refused until an intent-bound transaction
+ * validator exists. The command stays so a user who types it gets the
+ * honest refusal and the next step, through the same choke point the
+ * wallet itself uses (`refuseJupiterSwap` in @motebit/wallet-solana), and
+ * before any passphrase prompt — nothing is unlocked for a refused action.
  */
-export async function handleWalletSwap(
-  amountArg: string | undefined,
-  options: WalletOptions = {},
+export function handleWalletSwap(
+  _amountArg: string | undefined,
+  _options: WalletOptions = {},
 ): Promise<void> {
-  if (amountArg == null || amountArg.trim() === "") {
-    console.error("Usage: motebit wallet swap <sol-amount>   e.g. motebit wallet swap 0.01");
-    process.exit(1);
-  }
-  // Decimal SOL → lamports without float drift: split on the point.
-  const m = amountArg.trim().match(/^(\d+)(?:\.(\d{1,9}))?$/);
-  if (m == null) {
-    console.error(`Invalid SOL amount "${amountArg}" — up to 9 decimal places.`);
-    process.exit(1);
-  }
-  const lamports = BigInt(m[1]!) * 1_000_000_000n + BigInt((m[2] ?? "").padEnd(9, "0"));
-  if (lamports <= 0n) {
-    console.error("Amount must be positive.");
-    process.exit(1);
-  }
-
-  const config = loadFullConfig();
-  if (!config.motebit_id) {
-    console.error(NO_IDENTITY_MESSAGE);
-    process.exit(1);
-  }
-
-  let privateKey: Uint8Array;
-  try {
-    const loaded = await loadActiveSigningKey(config, {
-      promptLabel: "Passphrase (to sign swap): ",
-    });
-    privateKey = loaded.privateKey;
-  } catch (err) {
-    if (err instanceof IdentityKeyError) {
-      console.error(`Swap unavailable: ${sanitizeRelayText(err.message)}`);
-      console.error(`  → ${err.remedy}`);
-    } else {
-      console.error(
-        `Swap unavailable: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
-      );
+  return Promise.resolve().then(() => {
+    try {
+      refuseJupiterSwap("swapSolToUsdc");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`Swap unavailable: ${sanitizeRelayText(msg)}`);
+      console.error(`  → ${WALLET_SWAP_REMEDY}`);
+      process.exit(1);
     }
-    process.exit(1);
-  }
-
-  const rpcUrl = options.rpcUrl ?? DEFAULT_SOLANA_RPC_URL;
-  let rail;
-  try {
-    rail = createSolanaWalletRail({ rpcUrl, identitySeed: privateKey });
-  } finally {
-    secureErase(privateKey);
-  }
-
-  console.log(`Swapping ${amountArg} SOL → USDC via Jupiter (1% slippage bound)…`);
-  try {
-    const result = await rail.swapSolToUsdc(lamports);
-    console.log(
-      `  swapped   ${amountArg} SOL → ${fromMicro(Number(result.outputAmount)).toFixed(2)} USDC`,
-    );
-    console.log(`  tx        https://explorer.solana.com/tx/${result.signature}`);
-    console.log();
-    console.log(`Run \`motebit wallet\` to see the updated balance.`);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Swap refused or failed: ${sanitizeRelayText(msg)}`);
-    process.exit(1);
-  }
+  });
 }
+
+/** The next step a user who wanted a swap takes instead. */
+export const WALLET_SWAP_REMEDY =
+  "Fund USDC on the SOLANA network directly, and keep at least 0.005 SOL for network fees (send SOL to the address `motebit wallet` prints).";

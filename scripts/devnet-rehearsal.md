@@ -10,7 +10,9 @@ The trick that removes all faucet friction for the _token_: we mint our own
 6-decimal SPL "USDC" and point both the relay verifier and the harness at it via
 `SOLANA_USDC_MINT`. The verifier only walks transfers of the configured mint —
 it never checks the mint is canonical USDC. The one thing we still need from the
-network is a little **SOL** for gas + ATA rent.
+network is **SOL** for gas + ATA rent: at least 0.005 SOL (the wallet's gas
+floor; 0.01 recommended). Below the floor the wallet refuses transfers before
+signing, and there is no automatic top-up.
 
 > **VALIDATED 2026-06-03** against a local `solana-test-validator`: the full loop
 > ran green end to end — delegator −$0.052632, worker +$0.050000, treasury
@@ -114,7 +116,8 @@ broadcast the real (devnet) atomic multi-output tx. Watch the relay log for
 Identical to step 3 with `SOLANA_USDC_MINT` = mainnet USDC
 (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`), a mainnet `SOLANA_RPC_URL`, the
 production relay (`https://relay.motebit.com`) + a P2P-enabled prod worker, and a
-delegator wallet holding real USDC + a little SOL. No code differs — only the
+delegator wallet holding real USDC + at least 0.005 SOL (0.01 recommended;
+below it the payment is refused before signing). No code differs — only the
 chain.
 
 ## Teardown
