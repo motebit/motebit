@@ -94,42 +94,65 @@ controls. Nothing in the relay checks the old treasury before a replacement,
 so this section is the check. Do every step, in order, while the **old** key
 is still loaded.
 
-1. **Freeze.** `POST /api/v1/admin/freeze` (§ "Emergency Freeze" in
-   `docs/ops/RUNBOOK.md`). Confirm with `GET /api/v1/admin/freeze-status`.
-   No new withdrawal or payout may start from here on.
-2. **Drain the payout queue.** `GET /api/v1/admin/withdrawals/pending` and
-   `GET /api/v1/admin/withdrawals/pre-claim` must both be empty. A queued or
-   processing Path-0 payout is a durable-nonce transaction signed by the old
-   key; the new key cannot kill it. Never mark one failed by hand while its
-   signed transaction could still land — that can pay twice. Reconcile each
-   one (`POST /api/v1/admin/withdrawals/:id/reconcile`) until it is finalized
-   or provably dead.
-3. **Record the old treasury.** Note the old treasury address, its SOL and
+**What the freeze does here.** `POST /api/v1/admin/freeze` installs guards on
+the money tables (`services/relay/src/freeze.ts`), including the guarded
+`pending → processing` payout claim and the payout attempts. While frozen, **no
+payout is claimed, signed or broadcast** — the payout queue is left as it was
+and resumes after unfreeze. So a frozen relay cannot drain its queue: drain
+first, then freeze, then prove it is empty. There is no intake-only pause
+(stop new withdrawal requests, keep paying old ones); that is a named gap
+below.
+
+1. **Drain while unfrozen.** Pick a quiet window. Poll
+   `GET /api/v1/admin/withdrawals/pending` and
+   `GET /api/v1/admin/withdrawals/pre-claim` until both are empty and nothing
+   is `processing`. A queued or processing Path-0 payout is a durable-nonce
+   transaction signed by the old key; the new key cannot kill it. Never mark
+   one failed by hand while its signed transaction could still land — that can
+   pay twice. Reconcile each stuck one
+   (`POST /api/v1/admin/withdrawals/:id/reconcile`) until it is finalized or
+   provably dead.
+2. **Freeze.** `POST /api/v1/admin/freeze` (§ "Emergency Freeze" in
+   `docs/ops/RUNBOOK.md`); confirm with `GET /api/v1/admin/freeze-status`.
+   From here no new payout can be claimed, so the queue can no longer change.
+3. **Blocking condition — prove the queue is empty under freeze.** Re-check
+   `withdrawals/pending` and `withdrawals/pre-claim`: both empty, nothing
+   `processing`, and every reconciled payout finalized or provably dead. **If
+   anything remains, key replacement is BLOCKED:** unfreeze, return to step 1,
+   and repeat. Do not proceed with any outstanding claim.
+4. **Record the old treasury.** Note the old treasury address, its SOL and
    USDC balances, and `GET /api/v1/admin/treasury-reconciliation`. Every fee
    leg already paid to this address is real money the operator owns.
-4. **Sweep the treasury** to the operator's hardware-wallet receive address
-   (treasury-custody phase 1), using the old key. Leave enough SOL for step 5.
-5. **Withdraw the durable-nonce account.** Its address is
+5. **Sweep the treasury** to the operator's hardware-wallet receive address
+   (treasury-custody phase 1), signing with the old key. This is an operator
+   transfer outside the frozen relay tables. Leave enough SOL for step 6.
+6. **Withdraw the durable-nonce account.** Its address is
    `PublicKey.createWithSeed(<old treasury>, "motebit-payout-nonce-v1",
-SystemProgram)` (`NONCE_ACCOUNT_SEED`, `packages/wallet-solana/src/web3js-adapter.ts`),
-   and its authority is the old key. Withdraw its lamports to the old
-   treasury, then sweep again. After the replacement the lane re-derives
-   under the new key; an un-withdrawn old account is orphaned rent and an
-   authority the new key cannot use.
-6. **Only now replace the key** (§ 3, `--force-replace`), re-publish the
-   transparency declaration, and unfreeze.
-7. **Afterwards:** fee legs paid to the old treasury before the replacement
-   may be marked `failed (fee_leg)` by the P2P verifier, which holds the
-   treasury address it read at startup. Restart the relay so it reads the new
-   address, and treat any such failure dated before the replacement as an
-   operator-side artifact, not the payer's fault.
+SystemProgram)` (`NONCE_ACCOUNT_SEED`,
+   `packages/wallet-solana/src/web3js-adapter.ts`), and its authority is the
+   old key. Withdraw its lamports to the old treasury, then sweep again. An
+   un-withdrawn old account is orphaned rent and an authority the new key
+   cannot use.
+7. **Replace the key while still frozen** (§ 3, `--force-replace`).
+8. **Restart and verify BEFORE unfreezing.** Restart the relay so every
+   component reads the new key — the P2P verifier holds the treasury address
+   it read at startup (`services/relay/src/index.ts`). Then confirm: the
+   startup log's treasury address is the one the new key derives; the
+   transparency declaration at `/.well-known/motebit-transparency.json` is
+   re-published and signed by the new key; `GET /api/v1/admin/freeze-status`
+   still reads frozen. Any mismatch: stay frozen and fix it.
+9. **Unfreeze.** Fee legs paid to the old treasury before the replacement may
+   be marked `failed (fee_leg)`; treat any such failure dated before the
+   replacement as an operator-side artifact, not the payer's fault.
 
-**Not built (named gap):** there is no relay-key succession tool that does
-steps 2–5 automatically, and no relay-side succession record for the relay's
-own key. Until one exists, this checklist is the only safeguard. If the old
-key is lost (volume loss with no backup), steps 2–5 are impossible: funds at
-the old treasury and its nonce account are unrecoverable, which is why § 1
-(back up now, then quarterly) comes first.
+**Not built (named gaps):** no intake-only withdrawal pause, so step 1 depends
+on a quiet window and step 3 may loop; no relay-key succession tool that does
+steps 1–6 automatically; no relay-side succession record for the relay's own
+key. Until those exist, this checklist is the only safeguard, and a
+destructive relay-key replacement MUST NOT be attempted without it. If the
+old key is lost (volume loss with no backup), steps 1 and 4–6 are impossible:
+funds at the old treasury and its nonce account are unrecoverable, which is
+why § 1 (back up now, then quarterly) comes first.
 
 ## Failure modes
 
