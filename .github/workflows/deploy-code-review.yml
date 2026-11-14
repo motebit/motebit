@@ -14,9 +14,10 @@ on:
       - "package.json"
   workflow_dispatch:
 
-concurrency:
-  group: deploy-code-review-${{ github.ref }}
-  cancel-in-progress: false
+# No workflow-level concurrency: every push gets its own gate (they wait
+# independently), and promotions serialize on the deploy job's
+# `production-deploy-code-review` group below, which queues instead of cancelling
+# (an approved deploy is never cancelled by a newer push).
 
 # Least privilege: the repo's default GITHUB_TOKEN is write, so every
 # workflow states its own. This one only checks out the repo; the deploy
@@ -25,14 +26,70 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  # The pre-approval gate (docs/ops/RUNBOOK.md §3 "Molecule production
+  # deploys"): CI success on this exact sha, the sha still main's head, and
+  # NO staging check — see the exception below.
+  # workflow_dispatch runs through it too; there is no bypass.
+  gate:
+    uses: ./.github/workflows/molecule-prod-gate.yml
+    permissions:
+      contents: read
+      actions: read # the CI and staging runs on this sha
+    with:
+      service: code-review
+      # EXPLICIT EXCEPTION — the only caller with staging_leg: false.
+      # code-review has no staging app in deploy-archetype-staging.yml, so
+      # only CI on the exact sha + the production approval gate it. Founder
+      # decision pending: add a code-review staging leg (recommended; needs a
+      # new Fly app) or accept CI + approval only. The gate prints this loudly.
+      staging_leg: false
 
+  deploy:
+    needs: gate
+    # Superseded or failed gate: no deploy, and no approval is requested.
+    if: needs.gate.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    # Promotion: a required reviewer approves this job (Settings → Environments).
+    environment: production
+    # One promotion of this service at a time, queued in order, never
+    # cancelled. An older queued commit then fails the post-approval
+    # head-of-main re-check and does not deploy — the intended safe outcome.
+    concurrency:
+      group: production-deploy-code-review
+      queue: max
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read # the post-approval re-check reads the CI and staging runs
+    timeout-minutes: 30
     steps:
+      # The EXACT sha the gate checked and the reviewer approved — never a branch.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      # Approval is granted before a job's steps run, so the world may have
+      # moved while it waited. Re-run every check on the pinned sha, without
+      # waiting: superseded → no deploy (not red); anything else not green →
+      # fail. Every step below runs only when this says deploy.
+      - name: Re-check the gate after approval
+        id: recheck
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_MODE: recheck
+          GATE_SHA: ${{ needs.gate.outputs.sha }}
+          GATE_REPO: ${{ github.repository }}
+          GATE_SERVICE: code-review
+          GATE_STAGING_LEG: "false"
+        run: node scripts/molecule-prod-gate.ts
 
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
+        if: steps.recheck.outputs.deploy == 'true'
 
       # The service self-bootstraps its identity from the persistent /data
       # volume on first boot — no out-of-band ceremony. Required one-time
@@ -44,6 +101,7 @@ jobs:
       # (No GITHUB_TOKEN — the service fetches public PR patches through
       # the read-url atom; private repos are unsupported by design.)
       - name: Deploy to Fly.io
+        if: steps.recheck.outputs.deploy == 'true'
         # A HANG must fail, not vanish: a job killed by the ceiling
         # reports as `cancelled`, which no `if: failure()` alert
         # matches. See deploy-sync.yml for the incident that showed it.

@@ -137,6 +137,57 @@ fly ssh sftp get /data/motebit-backup-YYYYMMDD.db -a motebit-sync
 
 ## 3. Service Deployment
 
+### Molecule production deploys (gated)
+
+The seven molecule prod workflows (`deploy-web-search`, `deploy-read-url`, `deploy-summarize`, `deploy-research`, `deploy-auditor`, `deploy-clerk`, `deploy-code-review`) fire on push to main and on `workflow_dispatch`. Neither trigger deploys directly. Each workflow has two jobs:
+
+1. **`gate`** calls `.github/workflows/molecule-prod-gate.yml`, which runs `scripts/molecule-prod-gate.ts` in `wait` mode on the pushed sha (`github.sha`). It checks three things:
+   - **CI.** The `CI` (ci.yml) run on main for that exact sha must conclude `success`. The gate waits up to 45 min. A failure, cancellation, timeout or missing run means FAIL.
+   - **Head of main.** The sha must still be the head of main. If it is not, the outcome is **SUPERSEDED**: nothing deploys, the job stays green, and the job summary says so. The newer commit runs its own gated deploy. A FAILED gate means something different: the commit is main's head and its evidence is missing or not green, so it needs a repair.
+   - **Staging** (every service except code-review). The `deploy-archetype-staging.yml` run on main for that sha must conclude `success`. If no run exists (the staging path filter skipped the sha, for example), the gate **FAILS** and prints a repair instruction. Staging is never silently skipped. A non-green staging run on a sha that main has since left counts as superseded.
+2. **`deploy`** runs only when the gate says `deploy == 'true'`. It sits behind the `production` environment, which is the promotion approval. It checks out the **pinned** gated sha (`needs.gate.outputs.sha`, never a branch). Its first real step re-runs the same script in `recheck` mode. GitHub grants the approval before the job's steps run, so the world may have moved while the approval waited. The re-check does not wait: the sha must still be main's head, with CI (and staging, where it applies) still green. Otherwise nothing deploys. Every later step, including `flyctl deploy`, runs only when the re-check says deploy.
+
+The re-check narrows the race. The pinned sha plus serialization is what makes the deployed revision exactly the approved one. Each deploy job is in the concurrency group `production-deploy-<service>` with `queue: max` and `cancel-in-progress: false`, so promotions of one service run in order, one at a time, and an approved deploy is never cancelled. An older commit still in the queue then fails the head-of-main re-check and does not deploy. That is the intended safe outcome. (actionlint 1.7.12 does not know the `queue` key yet. GitHub added it on 2026-05-07.)
+
+**Manual dispatch** goes through exactly the same jobs: the pre-approval gate, the `production` approval and the post-approval re-check. If all pass, it deploys the dispatched sha. If any fails, it does not. A dispatch from a ref other than main's head is superseded by definition.
+
+**code-review exception.** `deploy-code-review.yml` is the only caller with `staging_leg: false`, because code-review has no staging app. Only CI on the exact sha plus the approval gate it, and the gate prints a loud notice on every run. The recommended founder decision is to add a code-review staging leg, which needs a new Fly app and a slate entry.
+
+**Promote (approve).** When a gate passes, the run waits on "Review deployments". In Actions, open the run, choose **Review deployments**, tick `production` and approve. `gh` has no approve command. The REST call is `POST /repos/{owner}/{repo}/actions/runs/{run_id}/pending_deployments`, with `environment_ids` and `state: approved`. Rejecting, or simply not approving, deploys nothing.
+
+**Self-review.** While the founder both dispatches or merges and is the sole required reviewer, the environment's **Prevent self-review** setting must stay **OFF**. If it is on, he cannot approve his own deploys. A second authorized reviewer, with self-review prevented, gives stronger separation of duties. That is the founder's decision.
+
+**Re-run staging for a sha** (the gate printed "No deploy-archetype-staging.yml run exists"):
+
+```bash
+# only while <sha> is still the head of main (dispatch takes a ref, not a sha)
+gh workflow run deploy-archetype-staging.yml --ref main
+# or, if a staging run for the sha exists but failed:
+gh run rerun <staging-run-id> --failed
+# when staging is green, re-run the failed gate:
+gh run rerun <deploy-run-id> --failed
+```
+
+**Scope, stated plainly.** This gates the GitHub Actions path ONLY. Anyone with Fly credentials can still deploy any app directly, whether with a local `flyctl` login or with the `FLY_API_TOKEN` repository secret (which any workflow in this repo can read). The commands in the subsections below are exactly such direct deploys. GitHub environments do not protect that path. Narrowing it, for example with per-app deploy tokens held only by the `production` environment, is a separate operational decision.
+
+**Coverage inventory: every production deploy path**
+
+| Path                                                                                  | What it deploys                                                                    | Protected?                                                                                                                                                   |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `deploy-{web-search,read-url,summarize,research,auditor,clerk}.yml` (push + dispatch) | the molecule's prod Fly app (`motebit-<service>`)                                  | **Gated:** CI + head of main + staging, then `production` approval, then post-approval re-check, pinned sha, serialized                                      |
+| `deploy-code-review.yml` (push + dispatch)                                            | `motebit-code-review`                                                              | **Gated, no staging leg:** CI + head of main, `production` approval, re-check, pinned sha, serialized                                                        |
+| `deploy-sync.yml` (push)                                                              | the relay, `motebit-sync`                                                          | Own gate: waits for CI success on the sha, then waits for the staging relay deploy to conclude (ordering, not a promotion gate). **No environment approval** |
+| `deploy-sync.yml` (`workflow_dispatch`)                                               | `motebit-sync`                                                                     | **Ungated.** Both gate steps are `if: github.event_name == 'push'`, so a dispatch deploys at once                                                            |
+| `deploy-web.yml` (push + dispatch)                                                    | apps/web to Vercel production (`vercel --prod`)                                    | **Ungated**                                                                                                                                                  |
+| `deploy-proxy.yml` (push + dispatch)                                                  | services/proxy to Vercel production (`vercel --prod`)                              | **Ungated**                                                                                                                                                  |
+| `deploy-embed.yml` (push + dispatch)                                                  | `motebit-embed` on Fly                                                             | **Ungated**                                                                                                                                                  |
+| `deploy-browser-sandbox.yml` (push + dispatch)                                        | `motebit-browser-sandbox` on Fly                                                   | **Ungated**                                                                                                                                                  |
+| `publish-images.yml` (push to main, `relay-v*` tags, dispatch)                        | the `ghcr.io/motebit/relay` image (signed, with provenance) that self-hosters pull | **Ungated** (publishes an artifact; runs no service)                                                                                                         |
+| staging (`deploy-sync-staging.yml`, `deploy-archetype-staging.yml`)                   | the `-stg` apps                                                                    | Not production. Relay staging waits for CI on push; the archetype slate is deliberately ungated                                                              |
+| direct `flyctl deploy` (local credentials, or anything holding `FLY_API_TOKEN`)       | any Fly app                                                                        | **NOT protected** by GitHub environments                                                                                                                     |
+
+(npm publishing, `release.yml`, is behind its own `npm-publish` environment and is out of scope here.)
+
 ### receipt.computer (`apps/verify/`)
 
 receipt.computer is the public verifier, so what it serves must be the exact build that was reviewed. The Vercel project `receipt-computer` is **deliberately not connected to Git**. A Git connection rebuilds from source on Vercel's side and would make every push to `main` a production deploy, using the project's Vite preset at the repo root.
