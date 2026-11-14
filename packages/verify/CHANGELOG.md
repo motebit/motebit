@@ -1,5 +1,20 @@
 # @motebit/verify
 
+## 1.10.1
+
+### Patch Changes
+
+- 3e9a6f3: `motebit-verify repo-change` (CI-on-PR mode) now judges a bundle the pull request modifies, as spec/repo-change-v1.md §9 requires ("every axis is still computed when a shape check fails"). A pull request that adds no bundle but modifies exactly one regular file under `.motebit/bundles/` still fails its shape checks exactly as before, and the file at the head is now judged on every axis: a second bundle under a grant whose first bundle already landed reads `authority: insufficient` with `authority.repo_change.grant_spent`, and `spent` is true, where before it read `authority: unknown` and `spent: false`. A deleted bundle still leaves no bundle to judge, and so do an executable bundle, two modified bundles, and a modify beside an added file. No valid pull request verifies differently.
+- Updated dependencies [e9fa97a]
+  - @motebit/protocol@3.21.0
+  - @motebit/crypto@4.2.0
+  - @motebit/crypto-android-keystore@1.1.41
+  - @motebit/crypto-appattest@1.0.43
+  - @motebit/crypto-tpm@1.1.42
+  - @motebit/crypto-webauthn@1.0.43
+  - @motebit/state-export-client@0.7.3
+  - @motebit/verifier@1.15.1
+
 ## 1.10.0
 
 ### Minor Changes

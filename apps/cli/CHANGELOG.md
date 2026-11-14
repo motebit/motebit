@@ -1,5 +1,51 @@
 # motebit CLI Changelog
 
+## 2.3.1
+
+### Patch Changes
+
+- d307eb6: `motebit run` and `motebit serve` now meter standing-grant spending against the persistent spend store. Both daemons accept a grant this identity signed, but neither passed a `grantSpendStore`, so the runtime fell back to the in-memory store and a grant's window and lifetime ceilings reset on every daemon restart. Both now build their runtime config through `daemonRuntimeConfig`, which requires the store and is given the daemon's own database store (the same one the REPL uses). A restart no longer resets a grant's ceilings or forgets a spent token. `check-money-authority` gains assertion 7. For each `new` or `super` call whose target resolves by type to `MotebitRuntime`, it follows the config through object literals, the CLI config builders, spreads of literals, conditionals and casts. A config that sets `identityPublicKeyHex` must pass a `grantSpendStore` on every branch, and a config part it cannot follow fails the gate. It does not see every way a runtime can be constructed, and it does not check that a passed store is durable.
+- ccccb27: `@hono/node-server` ≥1.19.19 (GHSA-jpvv-r467-5p4w, fixed in 1.19.18): a backslash in the request path was parsed as a path separator, so a reverse proxy that allows or denies by path prefix could be bypassed. The upper-bounded override floor rises with it. GHSA-rmxm-3fg6-px4f (`serveStatic` decodes the path twice) is fixed only in 2.x and is not reachable: nothing in the repository uses `serveStatic`; recorded in `docs/security/dependency-triage.md`.
+- d45d46c: `motebit wallet swap` is disabled. The swap signed a transaction built by Jupiter's HTTP API with your identity key without inspecting it, so a compromised or intercepted API response could have moved funds or changed account authority. The command now refuses with "swaps are disabled until intent-bound transaction validation exists" and tells you what to do instead (fund USDC on the Solana network directly and keep at least 0.005 SOL for network fees). It refuses before asking for your passphrase and makes no network call.
+
+  The wallet no longer tops up SOL automatically by swapping USDC. A payment or transfer from a wallet holding less than 0.005 SOL is refused before anything is signed, with a message telling you to fund SOL directly. Payments from a wallet with enough SOL work exactly as before. The `motebit wallet` guidance and the grant preflight remedy no longer mention swaps or automatic gas.
+
+  The wallet-side change is in `jupiter-swaps-refused-ignored.md`.
+
+- f01e1f6: `motebit repo-task run` takes `--author "Name <email>"`, the git author and committer of both commits. The default is unchanged. A repository whose required checks read the commit identity (a CLA check links the email to an account) can now take a governed change: with the default, unlinked identity, such a check cannot pass. Who acted is still the signed bundle's to say, never the git author's. A value git would not record verbatim (a malformed one, one Node could not decode as UTF-8, one over 256 bytes in its name or email, or one beginning or ending with a character git strips) is refused before the first model call.
+- 483f746: `motebit repo-task run` adds a publish condition to its "To publish" output: the pull request's title and body must not contain the word "committer". GitHub's merge queue re-wraps the squash commit's message and, when it signs the commit, inserts a copy of its signature block after every line that begins with that word. The landed commit then fails its own signature, so the change can never verify offline. The `repo-task run` module also exports its `--author` parser, its rule that the output directory must not be inside the repository, and its default commit identity. The negative acceptance fixture (`scripts/governed-change-fixture.ts`, a repository script that is never published) uses these exports instead of copying the rules.
+- a9717ce: A committed key rotation now invalidates the previous seed backup. A recovery seed is one key, and `motebit rotate` mints a new random key. The backup acknowledgment (`seed_backed_up_at`) was a bare timestamp, so after a rotation `motebit seed` still said "recorded" and the startup nudge stayed silent, while the paper seed recovered only the retired key.
+
+  - **Binding.** The acknowledgment is now bound to the key and identity it covers (`seed_backed_up_key`, `seed_backed_up_motebit_id`). These are local config only, never wire.
+    - `motebit seed reveal` binds the key the revealed seed derives and the identity it was shown for.
+    - `motebit restore` binds the key the entered seed derives.
+  - **Reading it.** The CLI reader (`seedBackupPostureOf`) reads "not backed up" whenever the bound key is not `device_public_key`. Every commit path invalidates it, including an interrupted commit finished later; an abandoned or refused rotation leaves it alone.
+  - **Nothing is deleted.** The old acknowledgment stays as the record of the retired key, and `motebit seed` says the recorded seed is for a retired key and should be kept.
+  - **One notice.** `motebit rotate` says once that the seed changed.
+  - **Legacy acknowledgments now require one re-confirmation.** An acknowledgment recorded before this release (a timestamp with no key) is never honoured: `motebit seed`, `motebit doctor`, `motebit keychain` and the startup line ask the owner to re-confirm the recovery seed once with `motebit seed reveal`. Nothing on disk can prove which key such an acknowledgment covered.
+
+  The binding rule lives in `@motebit/surface-kit` (sibling: `rotation-invalidates-seed-backup-ignored.md`).
+
+- a9717ce: A seed-backup acknowledgment is never carried onto a new identity, and the backup status never reports an old seed as covering a different key or identity.
+
+  - **Carried acknowledgments.** Some writes replace the identity in `~/.motebit/config.json`:
+    - a `motebit` first-launch mint;
+    - `motebit restore` of another identity;
+    - `create-motebit`'s "Overwrite?" path;
+    - the desktop's identity switch.
+
+    These writes move the replaced identity's acknowledgment aside into `seed_backup_prior: [{ at, key, motebit_id }]`. It is kept, never deleted, and never treated as current. A restore that records a fresh acknowledgment keeps the fresh one current and keeps the replaced one aside. A stale snapshot saved after the identity changed takes the disk's acknowledgment along with the disk's identity.
+
+  - **Legacy acknowledgments now require one re-confirmation.** An acknowledgment with no bound key is never honoured, whatever the identity file or the clock says. The owner is asked once to re-confirm the recovery seed (`motebit seed reveal`).
+  - **The identity is bound too.** A new acknowledgment also records `seed_backed_up_motebit_id`.
+    - For another identity it reads "not backed up for this identity", never "retired".
+    - "Retired key" is said only for a known earlier key of the same identity.
+  - **Reveal race.** `motebit seed reveal` re-reads the config before recording. If the identity or key changed while the seed was on screen, nothing is recorded, and it says so.
+  - **Keychain wording.** `motebit keychain enroll` uses the same wording as the other readers.
+
+  Sibling: `seed-backup-not-carried-ignored.md`.
+  - @motebit/state-export-client@0.7.3
+
 ## 2.3.0
 
 ### Minor Changes
