@@ -243,7 +243,7 @@ export function getBestLiveBond(
  * value, not only bond-admitted tickets, so it never UNDER-counts exposure.
  *
  * KNOWN BOUND (named, tested, deferred-with-trigger — docs/doctrine/commitment-bond.md
- * § Status "Known bound"): exposure is recognized only once a ticket's settlement
+ * § Bounds and deferrals "Known bound"): exposure is recognized only once a ticket's settlement
  * row exists. Two CONCURRENT submissions evaluated before either's row is recorded
  * therefore both see the same (lower) exposure and can both pass — a small
  * over-admission window the coefficient `k` absorbs but does not close. This is
