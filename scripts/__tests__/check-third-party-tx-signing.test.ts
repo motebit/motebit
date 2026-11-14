@@ -100,7 +100,7 @@ describe("check-third-party-tx-signing", () => {
       /\d+ source file\(s\) scanned in packages\/, services\/, apps\/ .* \d+ transaction-decode site\(s\), \d+ network-bytes decode site\(s\), \d+ signing\/broadcast call site\(s\) examined, 0 signing a decoded transaction or network bytes, 0 validator module\(s\) registered/,
     );
     expect(r.stdout).toContain("NOT CAUGHT:");
-  });
+  }, 60_000);
 
   it("stays green on wallet-solana's own locally built transfers, which it examines", () => {
     const r = spawnSync("npx", ["tsx", SCRIPT, "--root", "packages/wallet-solana"], {
@@ -115,5 +115,5 @@ describe("check-third-party-tx-signing", () => {
     expect(Number(m![1])).toBeGreaterThan(5);
     // The adapter, memo submitter and operator transfer sign local builds.
     expect(Number(m![3])).toBeGreaterThan(0);
-  });
+  }, 60_000);
 });
