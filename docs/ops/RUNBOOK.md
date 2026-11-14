@@ -162,6 +162,24 @@ The re-check narrows the race. The pinned sha plus serialization is what makes t
 
 For code-review, which has no staging leg, step 2 alone. Relevance-aware freshness, which would detect and promote automatically, is a separate follow-up PR, not part of this one.
 
+**Evidence the gate accepts.**
+
+- CI counts only from a `push` run on main for the exact sha.
+- Staging counts from a `push` or a `workflow_dispatch` run on main. The repairs above dispatch staging.
+- A run from any other event (pull_request, schedule, merge_group) is ignored.
+
+**Trigger paths.** Every staging-leg deploy workflow triggers only on push paths that `deploy-archetype-staging.yml` also triggers on (the service's own directory, `packages/**`, `pnpm-lock.yaml`, `package.json`). Otherwise a push would start the deploy but not staging, and the gate would fail "missing". For that reason `deploy-clerk.yml` and `deploy-auditor.yml` no longer list their own file. An edit to a deploy workflow alone therefore starts no deploy; dispatch it if it should run. A test enforces this subset rule.
+
+**API budget and runner cost.** Every Actions workflow in the repo, including deploy-sync's relay CI gate, shares the GITHUB_TOKEN limit of about 1,000 REST requests per hour per repo. The gate therefore polls every 2 minutes with one call per poll.
+
+- **Per gate job:**
+  - about 14 calls for a typical 20-minute CI;
+  - 29 for a 35-minute CI followed by a 15-minute staging run (a test enforces at most 30);
+  - 36 when every wait runs to its deadline. The worst case is bounded at 37 calls and 66 minutes, inside the 70-minute job timeout.
+  - The post-approval re-check makes at most 4 calls.
+- **Per `packages/**` push, worst case:** 7 gates × 36 = 252, plus 7 re-checks × 4 = 28, about **280 calls**. Typical is about 7 × 14 = 98, plus the re-checks of approved promotions.
+- **Runner occupancy is a known cost.** Each push holds seven runners waiting on CI. The follow-up candidate is a single gate triggered by `workflow_run` (on CI completion) that fans out to the seven deploys. It is not built here.
+
 **Manual dispatch** goes through exactly the same jobs: the pre-approval gate, the `production` approval and the post-approval re-check. If all pass, it deploys the dispatched sha. If any fails, it does not. A dispatch on main gates main's head: the gate's sha is `github.sha`, which for a dispatch is the head of the dispatched ref when it was dispatched (`GATE_SHA` in `molecule-prod-gate.yml`), and the head-of-main check requires it still to be main's. A dispatch from any other ref does not deploy.
 
 **code-review exception.** `deploy-code-review.yml` is the only caller with `staging_leg: false`, because code-review has no staging app. Only CI on the exact sha plus the approval gate it, and the gate prints a loud notice on every run. The recommended founder decision is to add a code-review staging leg, which needs a new Fly app and a slate entry.

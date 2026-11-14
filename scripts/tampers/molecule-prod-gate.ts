@@ -38,6 +38,8 @@ const entry = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry =
   edits,
 });
 
+const RECHECK_TITLE =
+  "the post-approval re-check runs before any Fly step, on the pinned sha, and every later step depends on it";
 const STRANDED = "decision: superseded only when a newer deploy run exists, else STRANDED";
 const CANCELLED = "decision: CI cancelled because main moved is supersession, not a CI failure";
 
@@ -158,6 +160,70 @@ const TAMPERS: TamperEntry[] = [
       "      group: production-deploy-summarize\n      queue: max\n",
       "      group: production-deploy-summarize\n",
     ),
+  ),
+  entry(
+    "the Fly deploy step runs under always() || the re-check verdict",
+    WF("read-url", RECHECK_TITLE),
+    edit(
+      ".github/workflows/deploy-read-url.yml",
+      "      - name: Deploy to Fly.io\n        if: steps.recheck.outputs.deploy == 'true'\n",
+      "      - name: Deploy to Fly.io\n        if: always() || steps.recheck.outputs.deploy == 'true'\n",
+    ),
+  ),
+  entry(
+    "the re-check reads an in-progress staging run as a success",
+    `${RECHECK} staging still in progress or queued at deploy time: refused, not deploy`,
+    edit(
+      SCRIPT,
+      '          : run.status === "completed"\n            ? { kind: "completed", run }',
+      '          : (true as boolean)\n            ? { kind: "completed", run: { ...run, status: "completed", conclusion: "success" } }',
+    ),
+  ),
+  entry(
+    "the re-check reads another repository's runs",
+    WF("summarize", RECHECK_TITLE),
+    edit(
+      ".github/workflows/deploy-summarize.yml",
+      "          GATE_REPO: ${{ github.repository }}\n",
+      "          GATE_REPO: someone/fork\n",
+    ),
+  ),
+  entry(
+    "the pre-approval gate reads another repository's runs",
+    "the reusable gate workflow runs the script in wait mode on github.sha with least privilege",
+    edit(
+      ".github/workflows/molecule-prod-gate.yml",
+      "          GATE_REPO: ${{ github.repository }}\n",
+      "          GATE_REPO: someone/fork\n",
+    ),
+  ),
+  entry(
+    "a staging-leg deploy workflow re-adds its own file to its push paths (staging never runs for it)",
+    "the seven molecule prod workflows route every deploy through the gate every staging-leg deploy workflow triggers only on paths the staging slate also triggers on",
+    edit(
+      ".github/workflows/deploy-clerk.yml",
+      '      - "services/clerk/**"\n',
+      '      - "services/clerk/**"\n      - ".github/workflows/deploy-clerk.yml"\n',
+    ),
+  ),
+  entry(
+    "the poll interval goes back to 15 s (seven gates exhaust the repo's API budget)",
+    "API budget: the gate's GitHub REST calls per job a 35-minute CI then a 15-minute staging, at the default cadence: deploy within 30 calls",
+    edit(SCRIPT, "  pollMs: 120_000,", "  pollMs: 15_000,"),
+  ),
+  entry(
+    "a CI run from workflow_dispatch (or any event) counts as CI evidence",
+    "CLI: what the workflow sees the gh adapter counts CI only from push, staging from push or workflow_dispatch",
+    edit(
+      SCRIPT,
+      'const events = workflow === CI_WORKFLOW ? ["push"] : ["push", "workflow_dispatch"];',
+      'const events = workflow === CI_WORKFLOW ? ["push", "workflow_dispatch"] : ["push", "workflow_dispatch"];',
+    ),
+  ),
+  entry(
+    "the event filter is dropped (pull_request or schedule runs count)",
+    "CLI: what the workflow sees the gh adapter counts CI only from push, staging from push or workflow_dispatch",
+    edit(SCRIPT, "events.includes(r.event)", "(true as boolean)"),
   ),
 ];
 

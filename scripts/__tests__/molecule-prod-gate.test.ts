@@ -383,6 +383,16 @@ describe("decision: the post-approval re-check (recheck mode) never waits", () =
     expect(f.calls.ci).toBe(1);
   });
 
+  it("staging still in progress or queued at deploy time: refused, not deploy", async () => {
+    for (const status of ["in_progress", "queued"]) {
+      const f = fake([OK], [run(status), OK]);
+      const d = await gate(f, "recheck");
+      expect(d.outcome, status).toBe("fail");
+      expect(d.deploy, status).toBe(false);
+      expect(f.calls.staging, status).toBe(1);
+    }
+  });
+
   it("staging gone missing: no deploy, no grace wait", async () => {
     const f = fake([OK], [null, OK]);
     const d = await gate(f, "recheck");
@@ -393,6 +403,69 @@ describe("decision: the post-approval re-check (recheck mode) never waits", () =
   it("an API error during the re-check: fail closed", async () => {
     expect((await gate(fake([new Error("x")], [OK]), "recheck")).outcome).toBe("fail");
     expect((await gate(fake([OK], [new Error("x")]), "recheck")).outcome).toBe("fail");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// API budget
+
+describe("API budget: the gate's GitHub REST calls per job", () => {
+  /** A repo whose CI concludes at `ciAt` and whose staging concludes `stagingAfter` later. */
+  function budget(ciAt: number, stagingAfter: number) {
+    let t = 0;
+    let calls = 0;
+    const gh = (args: string[]): string => {
+      calls++;
+      const path = args.find((a) => a.startsWith("repos/")) ?? "";
+      if (path.endsWith("/git/ref/heads/main")) return `${SHA}\n`;
+      const ci = path.includes(`/workflows/${CI_WORKFLOW}/`);
+      const done = ci ? t >= ciAt : t >= ciAt + stagingAfter;
+      return JSON.stringify({
+        workflow_runs: [
+          {
+            id: 1,
+            head_sha: SHA,
+            event: "push",
+            status: done ? "completed" : "in_progress",
+            conclusion: done ? "success" : null,
+          },
+        ],
+      });
+    };
+    const deps: GateDeps = {
+      ...ghDeps("o/r", gh),
+      sleep: async (ms) => {
+        t += ms;
+      },
+      now: () => t,
+    };
+    return { deps, calls: () => calls };
+  }
+
+  it("a 35-minute CI then a 15-minute staging, at the default cadence: deploy within 30 calls", async () => {
+    const b = budget(35 * MIN, 15 * MIN);
+    const d = await decideGate(b.deps, {
+      sha: SHA,
+      service: "clerk",
+      runId: RUN_ID,
+      stagingLeg: true,
+      mode: "wait",
+    });
+    expect(d.outcome).toBe("deploy");
+    expect(b.calls()).toBeLessThanOrEqual(30);
+  });
+
+  it("the post-approval re-check is a handful of calls", async () => {
+    const b = budget(0, 0);
+    const d = await decideGate(b.deps, {
+      sha: SHA,
+      service: "clerk",
+      runId: RUN_ID,
+      stagingLeg: true,
+      mode: "recheck",
+    });
+    expect(d.outcome).toBe("deploy");
+    expect(b.calls()).toBeLessThanOrEqual(4);
   });
 });
 
@@ -520,6 +593,7 @@ describe("CLI: what the workflow sees", () => {
           {
             id: 1,
             head_sha: SHA,
+            event: "push",
             status: "completed",
             conclusion: "failure",
             created_at: "2026-11-14T10:00:00Z",
@@ -527,6 +601,7 @@ describe("CLI: what the workflow sees", () => {
           {
             id: 3,
             head_sha: NEWER,
+            event: "push",
             status: "completed",
             conclusion: "success",
             created_at: "2026-11-14T12:00:00Z",
@@ -534,6 +609,7 @@ describe("CLI: what the workflow sees", () => {
           {
             id: 2,
             head_sha: SHA,
+            event: "push",
             status: "completed",
             conclusion: "success",
             created_at: "2026-11-14T11:00:00Z",
@@ -551,6 +627,23 @@ describe("CLI: what the workflow sees", () => {
       ]),
     );
     expect(await deps.mainHead()).toBe(SHA);
+  });
+
+  it("the gh adapter counts CI only from push, staging from push or workflow_dispatch", async () => {
+    const runs = (event: string) =>
+      JSON.stringify({
+        workflow_runs: [
+          { id: 7, head_sha: SHA, event, status: "completed", conclusion: "success" },
+        ],
+      });
+    const at = (event: string) => ghDeps("o/r", () => runs(event));
+    expect((await at("push").latestRun(CI_WORKFLOW, SHA))?.id).toBe(7);
+    for (const e of ["workflow_dispatch", "pull_request", "schedule", "merge_group"])
+      expect(await at(e).latestRun(CI_WORKFLOW, SHA), e).toBeNull();
+    expect((await at("push").latestRun(STAGING_WORKFLOW, SHA))?.id).toBe(7);
+    expect((await at("workflow_dispatch").latestRun(STAGING_WORKFLOW, SHA))?.id).toBe(7);
+    for (const e of ["pull_request", "schedule"])
+      expect(await at(e).latestRun(STAGING_WORKFLOW, SHA), e).toBeNull();
   });
 
   it("the gh adapter returns null when no run exists for the sha", async () => {
@@ -688,12 +781,22 @@ describe("the seven molecule prod workflows route every deploy through the gate"
         expect(r?.env).toMatchObject({
           GATE_MODE: "recheck",
           GATE_SHA: "${{ needs.gate.outputs.sha }}",
+          GATE_REPO: "${{ github.repository }}",
           GATE_SERVICE: svc,
           GATE_STAGING_LEG: stagingLeg ? "true" : "false",
         });
         const after = steps.slice(i + 1);
         expect(after.length).toBeGreaterThan(0);
-        for (const s of after) expect(s.if ?? "", s.name ?? s.uses).toContain(RECHECK_IF);
+        for (const s of after) {
+          const cond = s.if ?? "";
+          const label = s.name ?? s.uses ?? "?";
+          // Exactly the re-check verdict, or that verdict AND-ed with more — never
+          // OR-ed with it, never under a status function that overrides it.
+          expect(cond === RECHECK_IF || cond.startsWith(`${RECHECK_IF} && `), label).toBe(true);
+          expect(cond, label).not.toMatch(/always\(\)|failure\(\)|cancelled\(\)|\|\|/);
+        }
+        // The re-check step itself carries no status-function override either.
+        expect(r?.if ?? "", "recheck").not.toMatch(/always\(\)|failure\(\)|cancelled\(\)|\|\|/);
         const deployIdx = steps.findIndex((s) => (s.run ?? "").includes("flyctl deploy"));
         expect(deployIdx).toBeGreaterThan(i);
         expect(steps[deployIdx]?.run).toContain(`--config services/${svc}/fly.toml`);
@@ -706,6 +809,24 @@ describe("the seven molecule prod workflows route every deploy through the gate"
       (s) => wf(`deploy-${s}.yml`).jobs.gate?.with?.staging_leg !== true,
     );
     expect(without).toEqual(["code-review"]);
+  });
+
+  it("every staging-leg deploy workflow triggers only on paths the staging slate also triggers on", () => {
+    // Otherwise a push matching the deploy's filter but not staging's gates with
+    // no staging run for its sha and FAILS "missing" (a self-path did exactly that).
+    const pushPaths = (file: string): string[] => {
+      const on = wf(file).on as { push?: { paths?: string[] } };
+      return on.push?.paths ?? [];
+    };
+    const staging = new Set(pushPaths("deploy-archetype-staging.yml"));
+    expect(staging.size).toBeGreaterThan(0);
+    for (const [svc, leg] of Object.entries(MOLECULES)) {
+      if (!leg) continue;
+      const paths = pushPaths(`deploy-${svc}.yml`);
+      expect(paths.length, svc).toBeGreaterThan(0);
+      for (const p of paths) expect(staging.has(p), `deploy-${svc}.yml: ${p}`).toBe(true);
+    }
+    expect(staging.has("pnpm-lock.yaml") && staging.has("package.json")).toBe(true);
   });
 
   it("every service with a staging leg is in the staging slate matrix", () => {
@@ -743,6 +864,7 @@ describe("the reusable gate workflow", () => {
     expect(step?.env).toMatchObject({
       GATE_MODE: "wait",
       GATE_SHA: "${{ github.sha }}",
+      GATE_REPO: "${{ github.repository }}",
       GATE_SERVICE: "${{ inputs.service }}",
       GATE_STAGING_LEG: "${{ inputs.staging_leg }}",
     });

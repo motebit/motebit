@@ -131,7 +131,14 @@ export const DEFAULTS = {
   stagingTimeoutMs: 15 * 60_000,
   stagingGraceMs: 2 * 60_000,
   newerRunGraceMs: 2 * 60_000,
-  pollMs: 15_000,
+  // API budget: GITHUB_TOKEN gets ~1,000 REST requests/hour per repo, shared
+  // with every other workflow (deploy-sync's relay CI gate among them), and
+  // each push runs seven of these gates. One call per poll, every 2 minutes.
+  // Bound per gate job (every wait to its deadline): CI 24 + head 1 +
+  // staging 9 + head 1 + newer-run 2 = 37 calls (36 simulated); time
+  // 45 + 2 + 15 + 2 + 2 = 66 min of the reusable workflow's 70-min job
+  // timeout. A 35-min CI then a 15-min staging: 29 calls (tested <= 30).
+  pollMs: 120_000,
 };
 
 export function stagingRepair(sha: string): string {
@@ -540,9 +547,16 @@ export function ghDeps(repo: string, gh: GhExec): GateDeps {
         "-f",
         "per_page=30",
       ]);
-      const body = JSON.parse(out) as { workflow_runs?: (RunInfo & { head_sha?: string })[] };
+      const body = JSON.parse(out) as {
+        workflow_runs?: (RunInfo & { head_sha?: string; event?: string })[];
+      };
       // The API already filters by head_sha; re-filter so a run for another sha can never count.
-      const runs = (body.workflow_runs ?? []).filter((r) => r.head_sha === sha);
+      // CI counts only from a push to main; staging also from workflow_dispatch (the
+      // stranded and missing-staging repairs dispatch it). Never pull_request, schedule, ….
+      const events = workflow === CI_WORKFLOW ? ["push"] : ["push", "workflow_dispatch"];
+      const runs = (body.workflow_runs ?? []).filter(
+        (r) => r.head_sha === sha && typeof r.event === "string" && events.includes(r.event),
+      );
       if (runs.length === 0) return null;
       // Newest first: a re-dispatched staging run supersedes an older failed one.
       runs.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "") || b.id - a.id);
