@@ -105,6 +105,18 @@ const TAMPERS: TamperEntry[] = [
       "      staging_leg: false\n",
     ),
   ),
+  entry(
+    "the unverified `queue:` key comes back on a deploy job",
+    WF(
+      "summarize",
+      "promotions serialize per service, never cancelled, no queue key; no workflow-level group",
+    ),
+    edit(
+      ".github/workflows/deploy-summarize.yml",
+      "      group: production-deploy-summarize\n",
+      "      group: production-deploy-summarize\n      queue: max\n",
+    ),
+  ),
 ];
 
 void runTampers(TAMPERS, { root: ROOT });

@@ -474,12 +474,13 @@ describe("the seven molecule prod workflows route every deploy through the gate"
         expect(Object.keys(w.jobs).sort()).toEqual(["deploy", "gate"]);
       });
 
-      it("promotions serialize per service, queued, never cancelled; no workflow-level group", () => {
-        expect(w.jobs.deploy?.concurrency).toEqual({
+      it("promotions serialize per service, never cancelled, no queue key; no workflow-level group", () => {
+        const c = w.jobs.deploy?.concurrency;
+        expect(c).toEqual({
           group: `production-deploy-${svc}`,
-          queue: "max",
           "cancel-in-progress": false,
         });
+        expect(c).not.toHaveProperty("queue");
         expect(w.concurrency).toBeUndefined();
       });
 

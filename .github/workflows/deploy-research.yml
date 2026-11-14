@@ -16,8 +16,8 @@ on:
 
 # No workflow-level concurrency: every push gets its own gate (they wait
 # independently), and promotions serialize on the deploy job's
-# `production-deploy-research` group below, which queues instead of cancelling
-# (an approved deploy is never cancelled by a newer push).
+# `production-deploy-research` group below (a running deploy is never
+# cancelled by a newer push).
 
 # Least privilege: the repo's default GITHUB_TOKEN is write, so every
 # workflow states its own. This one only checks out the repo; the deploy
@@ -46,12 +46,13 @@ jobs:
     runs-on: ubuntu-latest
     # Promotion: a required reviewer approves this job (Settings → Environments).
     environment: production
-    # One promotion of this service at a time, queued in order, never
-    # cancelled. An older queued commit then fails the post-approval
-    # head-of-main re-check and does not deploy — the intended safe outcome.
+    # One promotion of this service at a time; a running deploy is never
+    # cancelled. GitHub keeps ONE pending run per group (a newer one replaces
+    # an older one) — no loss: the older sha is superseded and would fail the
+    # head-of-main re-check anyway. No `queue:` key: it adds nothing here and
+    # is unverified (a key GitHub rejects stops the whole file loading).
     concurrency:
       group: production-deploy-research
-      queue: max
       cancel-in-progress: false
     permissions:
       contents: read
