@@ -23,6 +23,7 @@
  * Local configuration only. Never wire.
  */
 import { deriveSovereignMotebitId } from "@motebit/encryption";
+import { boundIdentityFile } from "./machine-roster-identity-file.js";
 
 /** What a surface has recorded about a seed backup. */
 export interface SeedBackupAcknowledgment {
@@ -39,51 +40,80 @@ export type SeedBackupPosture =
   /** The acknowledgment covers the identity's current key. */
   | { status: "backed_up"; at: number }
   /** Never acknowledged. */
-  | { status: "not_backed_up"; stale: false }
+  | { status: "not_backed_up"; reason: "never" }
   /**
-   * Acknowledged, but for a key that is not the current one (a rotation
-   * since), or a legacy unbound acknowledgment that cannot be shown to
-   * cover the current key. The recorded seed recovers only a retired key.
+   * Acknowledged for a KNOWN key that is not the current one (a rotation
+   * since): the recorded seed recovers only that retired key. The only
+   * variant a surface may describe as "a retired key".
    */
-  | { status: "not_backed_up"; stale: true; coveredPublicKeyHex: string | null };
+  | { status: "not_backed_up"; reason: "retired_key"; coveredPublicKeyHex: string }
+  /**
+   * Acknowledged, but which key it covers is unknown (a legacy, unbound
+   * acknowledgment no evidence ties to the current key). Nothing says the
+   * key is retired: the honest ask is to re-confirm the seed.
+   */
+  | { status: "not_backed_up"; reason: "unconfirmed" };
 
 /**
  * The posture of a seed backup for the identity's CURRENT key.
  *
  * A legacy acknowledgment (no key recorded) is honoured only when the
- * current key is provably the identity's genesis key: the motebit_id is
- * the sovereign commitment to it (`deriveSovereignMotebitId`). A sovereign
- * identity's current key stops being its genesis key at its first
- * rotation, forever, so an already-rotated owner who upgrades reads "not
- * backed up". A legacy (random) motebit_id cannot prove that either way,
- * so its unbound acknowledgment is not honoured: one re-confirmation, never
- * a false "backed up".
+ * current key is provably the identity's genesis key — the only key it
+ * ever had, so the only one the acknowledgment can have covered. Either:
+ *
+ *   - the motebit_id is the sovereign commitment to it
+ *     (`deriveSovereignMotebitId`); or
+ *   - an identity file this surface holds is BOUND to it
+ *     (`boundIdentityFile`: signature and chain verify, it names this
+ *     motebit_id, its current key is the current key) and records ZERO
+ *     successions — which works for a legacy (random) motebit_id too.
+ *
+ * Any rotation ends both proofs, so an already-rotated owner who upgrades
+ * reads "not backed up". Without either proof the coverage is unknown:
+ * `unconfirmed`, never `retired_key`.
  */
 export async function seedBackupPosture(input: {
   ack: SeedBackupAcknowledgment;
   currentPublicKeyHex: string | null | undefined;
   motebitId: string | null | undefined;
+  /** Identity file contents (motebit.md) this surface can read. Untrusted: each is verified here. */
+  identityFiles?: readonly (string | null | undefined)[];
 }): Promise<SeedBackupPosture> {
   const { ack, currentPublicKeyHex, motebitId } = input;
-  if (typeof ack.at !== "number") return { status: "not_backed_up", stale: false };
+  if (typeof ack.at !== "number") return { status: "not_backed_up", reason: "never" };
   const current = (currentPublicKeyHex ?? "").toLowerCase();
   if (typeof ack.publicKeyHex === "string" && ack.publicKeyHex !== "") {
     const covered = ack.publicKeyHex.toLowerCase();
-    return current !== "" && covered === current
+    if (current === "") return { status: "not_backed_up", reason: "unconfirmed" };
+    return covered === current
       ? { status: "backed_up", at: ack.at }
-      : { status: "not_backed_up", stale: true, coveredPublicKeyHex: covered };
+      : { status: "not_backed_up", reason: "retired_key", coveredPublicKeyHex: covered };
   }
   // Legacy, unbound.
   if (current !== "" && motebitId != null && motebitId !== "") {
-    let genesis = false;
-    try {
-      genesis = (await deriveSovereignMotebitId(current)) === motebitId.toLowerCase();
-    } catch {
-      genesis = false; // malformed key: fail closed
+    if (await isGenesisKey(current, motebitId, input.identityFiles ?? [])) {
+      return { status: "backed_up", at: ack.at };
     }
-    if (genesis) return { status: "backed_up", at: ack.at };
   }
-  return { status: "not_backed_up", stale: true, coveredPublicKeyHex: null };
+  return { status: "not_backed_up", reason: "unconfirmed" };
+}
+
+/** Is `current` provably the identity's genesis key? Never throws; false on any doubt. */
+async function isGenesisKey(
+  current: string,
+  motebitId: string,
+  identityFiles: readonly (string | null | undefined)[],
+): Promise<boolean> {
+  try {
+    if ((await deriveSovereignMotebitId(current)) === motebitId.toLowerCase()) return true;
+  } catch {
+    // malformed key: not proven
+  }
+  for (const content of identityFiles) {
+    const bound = await boundIdentityFile(motebitId, content ?? null, current);
+    if (bound != null && bound.records.length === 0) return true;
+  }
+  return false;
 }
 
 /**

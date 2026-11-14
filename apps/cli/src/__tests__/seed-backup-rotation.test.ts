@@ -129,7 +129,7 @@ describe("seedBackupPostureOf / seedBackupStatus — the CLI reader", () => {
     expect(await status()).toBe("not_backed_up");
     expect(await seed.seedBackupPostureOf(cfg.loadFullConfig())).toMatchObject({
       status: "not_backed_up",
-      stale: true,
+      reason: "retired_key",
       coveredPublicKeyHex: hex(other),
     });
   });
@@ -241,6 +241,134 @@ describe("motebit rotate — a committed rotation invalidates the previous seed 
     cfg.saveFullConfig(c);
     expect(await status()).toBe("backed_up");
     expect((await rotation.performRotation(deps())).kind).toBe("rotated");
+    expect(await status()).toBe("not_backed_up");
+  });
+});
+
+/** A legacy (random, UUIDv7) motebit_id: never the sovereign commitment to any key. */
+const LEGACY_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+
+/** A never-rotated LEGACY identity with an acknowledgment from before the binding (unbound). */
+async function legacyIdentity(opts: { withFile: boolean }) {
+  const a = await generateKeypair();
+  if (opts.withFile) {
+    fs.writeFileSync(
+      identityPath(),
+      await generate(
+        { motebitId: LEGACY_ID, ownerId: "owner", publicKeyHex: hex(a) },
+        a.privateKey,
+      ),
+    );
+  }
+  fs.writeFileSync(
+    cfg.CONFIG_PATH,
+    JSON.stringify({
+      motebit_id: LEGACY_ID,
+      device_id: "legacy-laptop",
+      device_public_key: hex(a),
+      cli_encrypted_key: (await identity.encryptPrivateKey(bytesToHex(a.privateKey), PASS))!,
+      seed_backed_up_at: 1_000,
+    }),
+    { mode: 0o600 },
+  );
+  return { a };
+}
+
+describe("a legacy (unbound) acknowledgment is never a false alarm with false text", () => {
+  it("never-rotated legacy id with a zero-succession motebit.md reads backed up", async () => {
+    await legacyIdentity({ withFile: true });
+    expect(await status()).toBe("backed_up");
+  });
+
+  it("legacy id with unknown coverage reads 're-confirm', and nothing says 'retired'", async () => {
+    await legacyIdentity({ withFile: false });
+    const posture = await seed.seedBackupPostureOf(cfg.loadFullConfig());
+    expect(posture).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
+    const words = seed.seedBackupWording(posture);
+    for (const line of [words.nudge, words.doctor, words.detail]) {
+      expect(line).toContain("re-confirm your recovery seed");
+      expect(line).not.toMatch(/retired/i);
+    }
+  });
+
+  it("a bound acknowledgment for another key still says 'retired key'", async () => {
+    await identityWithBackup();
+    const other = await generateKeypair();
+    const c = cfg.loadFullConfig();
+    c.seed_backed_up_key = hex(other);
+    fs.writeFileSync(cfg.CONFIG_PATH, JSON.stringify(c));
+    const words = seed.seedBackupWording(await seed.seedBackupPostureOf(cfg.loadFullConfig()));
+    expect(words.detail).toContain("retired key");
+    expect(words.doctor).toContain("retired key");
+  });
+});
+
+describe("an acknowledgment is never carried onto a new identity", () => {
+  /** An identity-replacing write: loads the config, writes a new binding over it, carries every other field. */
+  async function replaceIdentity(extra: (c: import("../config.js").FullConfig) => void = () => {}) {
+    const b = await generateKeypair();
+    const newMid = await deriveSovereignMotebitId(hex(b));
+    const c = cfg.loadFullConfig();
+    c.motebit_id = newMid;
+    c.device_id = `${newMid}-laptop`;
+    c.device_public_key = hex(b);
+    c.cli_encrypted_key = (await identity.encryptPrivateKey(bytesToHex(b.privateKey), PASS))!;
+    extra(c);
+    cfg.saveFullConfig(c, { identityChange: "preserve-replaced" });
+    return { b };
+  }
+
+  it("a new identity written over an old acknowledgment reads not backed up; the old one is kept aside", async () => {
+    const { mid, a } = await identityWithBackup();
+    await replaceIdentity();
+    const after = cfg.loadFullConfig();
+    expect(after.seed_backed_up_at).toBeUndefined();
+    expect(after.seed_backed_up_key).toBeUndefined();
+    expect(after.seed_backup_prior).toEqual([{ at: 1_000, key: hex(a), motebit_id: mid }]);
+    expect(await status()).toBe("not_backed_up");
+  });
+
+  it("an unbound (legacy) acknowledgment is set aside the same way — never honoured by the new genesis key", async () => {
+    const { mid } = await identityWithBackup({ bound: false });
+    await replaceIdentity();
+    expect(cfg.loadFullConfig().seed_backup_prior).toEqual([
+      { at: 1_000, key: null, motebit_id: mid },
+    ]);
+    expect(await status()).toBe("not_backed_up");
+  });
+
+  it("a restore that records a fresh acknowledgment keeps it current, and keeps the replaced one aside", async () => {
+    const { mid, a } = await identityWithBackup();
+    let newKey = "";
+    await replaceIdentity((c) => {
+      newKey = c.device_public_key!;
+      c.seed_backed_up_at = 5_000;
+      c.seed_backed_up_key = newKey;
+    });
+    const after = cfg.loadFullConfig();
+    expect(after.seed_backed_up_key).toBe(newKey);
+    expect(after.seed_backup_prior).toEqual([{ at: 1_000, key: hex(a), motebit_id: mid }]);
+    expect(await status()).toBe("backed_up");
+  });
+
+  it("a rotation (same identity) moves nothing aside: the acknowledgment stays, bound to the retired key", async () => {
+    const { a } = await identityWithBackup();
+    expect((await rotation.performRotation(deps())).kind).toBe("rotated");
+    const after = cfg.loadFullConfig();
+    expect(after.seed_backed_up_key).toBe(hex(a));
+    expect(after.seed_backup_prior).toBeUndefined();
+  });
+
+  it("a stale snapshot saved after the identity was replaced never carries the old acknowledgment back", async () => {
+    await identityWithBackup();
+    const stale = cfg.loadFullConfig(); // still holds the old acknowledgment
+    await replaceIdentity();
+    stale.default_model = "some-model";
+    cfg.saveFullConfig(stale);
+    const after = cfg.loadFullConfig();
+    expect(after.default_model).toBe("some-model");
+    expect(after.seed_backed_up_at).toBeUndefined();
+    expect(after.seed_backup_prior).toHaveLength(1);
     expect(await status()).toBe("not_backed_up");
   });
 });

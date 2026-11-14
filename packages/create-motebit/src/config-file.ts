@@ -98,6 +98,56 @@ export function identityFingerprint(config: object): string {
   );
 }
 
+/** The fields that record a seed backup — scoped to the identity they were made for (same list as the CLI's `config.ts`). */
+const SEED_BACKUP_FIELDS = [
+  "seed_backed_up_at",
+  "seed_backed_up_key",
+  "seed_backup_prior",
+] as const;
+
+interface SeedBackupPrior {
+  at: number;
+  key: string | null;
+  motebit_id: string | null;
+}
+
+/**
+ * Twin of the CLI's `setAsideReplacedSeedBackup` (`apps/cli/src/config.ts`):
+ * a write that replaces the identity (`motebit_id` changes — this
+ * scaffolder's "Overwrite?" path) never carries the replaced identity's
+ * seed-backup acknowledgment as current. It is moved ASIDE into
+ * `seed_backup_prior` (kept, never deleted); one the write overwrote is kept
+ * aside too. A seed shown for one identity is never the backup of the next.
+ */
+export function setAsideReplacedSeedBackup(
+  onDisk: Record<string, unknown>,
+  write: Record<string, unknown>,
+): void {
+  const at = onDisk["seed_backed_up_at"];
+  if (typeof at !== "number") return;
+  const key =
+    typeof onDisk["seed_backed_up_key"] === "string" ? onDisk["seed_backed_up_key"] : null;
+  const carried =
+    write["seed_backed_up_at"] === at && (write["seed_backed_up_key"] ?? null) === key;
+  const identityReplaced = (write["motebit_id"] ?? null) !== (onDisk["motebit_id"] ?? null);
+  if (!identityReplaced && carried) return;
+  const motebitId = typeof onDisk["motebit_id"] === "string" ? onDisk["motebit_id"] : null;
+  const priorOf = (c: Record<string, unknown>): SeedBackupPrior[] =>
+    Array.isArray(c["seed_backup_prior"]) ? (c["seed_backup_prior"] as SeedBackupPrior[]) : [];
+  const prior = [...priorOf(onDisk), ...priorOf(write)];
+  const kept: SeedBackupPrior[] = [];
+  for (const p of [...prior, { at, key, motebit_id: motebitId }]) {
+    if (!kept.some((k) => k.at === p.at && k.key === p.key && k.motebit_id === p.motebit_id)) {
+      kept.push(p);
+    }
+  }
+  write["seed_backup_prior"] = kept;
+  if (identityReplaced && carried) {
+    delete write["seed_backed_up_at"];
+    delete write["seed_backed_up_key"];
+  }
+}
+
 function losesIdentityMaterial(from: object, to: object): boolean {
   const f = from as Record<string, unknown>;
   const t = to as Record<string, unknown>;
@@ -203,8 +253,9 @@ export function writeConfigFile(
     if (onDisk != null && identityFingerprint(onDisk) !== identityFingerprint(write)) {
       const untouched = baseline !== undefined && identityFingerprint(write) === baseline;
       if (opts.identityChange === undefined && untouched) {
+        // The disk identity wins, and with it the disk seed-backup acknowledgment.
         const d = onDisk as Record<string, unknown>;
-        for (const f of IDENTITY_FIELDS) {
+        for (const f of [...IDENTITY_FIELDS, ...SEED_BACKUP_FIELDS]) {
           if (d[f] === undefined) delete write[f];
           else write[f] = d[f];
         }
@@ -216,6 +267,7 @@ export function writeConfigFile(
         if (mode === "preserve-replaced" && losesIdentityMaterial(onDisk, write)) {
           preservedAs = preserveAside(path, CONFIG_BACKUP_INFIX);
         }
+        setAsideReplacedSeedBackup(onDisk as Record<string, unknown>, write);
       }
     }
     writeFileAtomic(path, JSON.stringify(write, null, 2) + "\n", 0o600);

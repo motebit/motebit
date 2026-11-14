@@ -15,12 +15,15 @@ import {
   signKeySuccession,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
+import { generate, rotate as rotateIdentityFile } from "@motebit/identity-file";
 
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "../key-rotation.js";
 import { seedBackupPosture, type SeedBackupAcknowledgment } from "../seed-backup.js";
 
 const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
 const MID = "mid-seed";
+/** A legacy (random, UUIDv7) motebit_id: never the sovereign commitment to any key. */
+const LEGACY_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
 interface Relay {
   held_public_key: string | null;
@@ -103,9 +106,9 @@ const postureOf = (ack: SeedBackupAcknowledgment, current: string, motebitId = M
 const ackFor = (kp: KeyPair): SeedBackupAcknowledgment => ({ at: 1_000, publicKeyHex: hex(kp) });
 
 describe("seedBackupPosture — the acknowledgment covers the key it names", () => {
-  it("never acknowledged ⇒ not backed up (not stale)", async () => {
+  it("never acknowledged ⇒ not backed up (reason: never)", async () => {
     const a = await generateKeypair();
-    expect(await postureOf({}, hex(a))).toEqual({ status: "not_backed_up", stale: false });
+    expect(await postureOf({}, hex(a))).toEqual({ status: "not_backed_up", reason: "never" });
   });
 
   it("acknowledged for the current key ⇒ backed up", async () => {
@@ -118,7 +121,7 @@ describe("seedBackupPosture — the acknowledgment covers the key it names", () 
     const b = await generateKeypair();
     expect(await postureOf(ackFor(a), hex(b))).toEqual({
       status: "not_backed_up",
-      stale: true,
+      reason: "retired_key",
       coveredPublicKeyHex: hex(a),
     });
   });
@@ -146,16 +149,86 @@ describe("seedBackupPosture — the acknowledgment covers the key it names", () 
       expect((await performKeyRotation(ports)).kind).toBe("rotated");
       expect(await postureOf({ at: 5 }, s.pub, sovereign)).toEqual({
         status: "not_backed_up",
-        stale: true,
-        coveredPublicKeyHex: null,
+        reason: "unconfirmed",
       });
     });
 
-    it("NOT honoured for a legacy (random) motebit_id — it cannot prove which key it covers", async () => {
+    it("legacy (random) id, no identity file ⇒ unconfirmed (re-confirm), never retired_key", async () => {
       const a = await generateKeypair();
+      expect(await postureOf({ at: 5 }, hex(a), LEGACY_ID)).toEqual({
+        status: "not_backed_up",
+        reason: "unconfirmed",
+      });
+    });
+
+    it("legacy (random) id, never rotated: a bound identity file with ZERO successions ⇒ backed up", async () => {
+      const a = await generateKeypair();
+      const file = await generate(
+        { motebitId: LEGACY_ID, ownerId: "owner", publicKeyHex: hex(a) },
+        a.privateKey,
+      );
       expect(
-        (await postureOf({ at: 5 }, hex(a), "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b")).status,
-      ).toBe("not_backed_up");
+        await seedBackupPosture({
+          ack: { at: 5 },
+          currentPublicKeyHex: hex(a),
+          motebitId: LEGACY_ID,
+          identityFiles: [null, file],
+        }),
+      ).toEqual({ status: "backed_up", at: 5 });
+    });
+
+    it("legacy id, rotated: the bound file records a succession ⇒ unconfirmed", async () => {
+      const a = await generateKeypair();
+      const b = await generateKeypair();
+      const genesis = await generate(
+        { motebitId: LEGACY_ID, ownerId: "owner", publicKeyHex: hex(a) },
+        a.privateKey,
+      );
+      const rotated = await rotateIdentityFile({
+        existingContent: genesis,
+        newPublicKey: b.publicKey,
+        newPrivateKey: b.privateKey,
+        successionRecord: await signKeySuccession(
+          a.privateKey,
+          b.privateKey,
+          b.publicKey,
+          a.publicKey,
+        ),
+      });
+      // The stale genesis copy names a, not the current key b: not bound.
+      expect(
+        await seedBackupPosture({
+          ack: { at: 5 },
+          currentPublicKeyHex: hex(b),
+          motebitId: LEGACY_ID,
+          identityFiles: [rotated, genesis],
+        }),
+      ).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
+    });
+
+    it("a zero-succession file that does not verify, or names another identity, proves nothing", async () => {
+      const a = await generateKeypair();
+      const file = await generate(
+        { motebitId: LEGACY_ID, ownerId: "owner", publicKeyHex: hex(a) },
+        a.privateKey,
+      );
+      const tampered = file.replace("owner", "0wner");
+      const other = await generate(
+        {
+          motebitId: "0190a1b2-c3d4-7e5f-8a9b-ffffffffffff",
+          ownerId: "owner",
+          publicKeyHex: hex(a),
+        },
+        a.privateKey,
+      );
+      expect(
+        await seedBackupPosture({
+          ack: { at: 5 },
+          currentPublicKeyHex: hex(a),
+          motebitId: LEGACY_ID,
+          identityFiles: [tampered, other],
+        }),
+      ).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
     });
   });
 });
@@ -170,7 +243,7 @@ describe("a committed rotation invalidates the previous seed backup", () => {
     expect(o.kind).toBe("rotated");
     expect(await postureOf(ack, s.pub)).toEqual({
       status: "not_backed_up",
-      stale: true,
+      reason: "retired_key",
       coveredPublicKeyHex: hex(a),
     });
     expect(ack).toEqual({ at: 1_000, publicKeyHex: hex(a) });
