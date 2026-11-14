@@ -84,6 +84,53 @@ a corrupt or wrong-passphrase artifact can never reach the database.
   backup's identity, pass `--force-replace`. After a forced replace you
   MUST re-publish the transparency declaration for the restored key.
 
+## 4. Before any destructive key replacement
+
+A `--force-replace` import, or a relay that mints a fresh identity after its
+database is lost, changes the **treasury** as well as the trust root: the
+treasury wallet derives from the relay identity key (wallet-solana rule 2).
+Relay acceptance of the new key says nothing about what the old key still
+controls. Nothing in the relay checks the old treasury before a replacement,
+so this section is the check. Do every step, in order, while the **old** key
+is still loaded.
+
+1. **Freeze.** `POST /api/v1/admin/freeze` (§ "Emergency Freeze" in
+   `docs/ops/RUNBOOK.md`). Confirm with `GET /api/v1/admin/freeze-status`.
+   No new withdrawal or payout may start from here on.
+2. **Drain the payout queue.** `GET /api/v1/admin/withdrawals/pending` and
+   `GET /api/v1/admin/withdrawals/pre-claim` must both be empty. A queued or
+   processing Path-0 payout is a durable-nonce transaction signed by the old
+   key; the new key cannot kill it. Never mark one failed by hand while its
+   signed transaction could still land — that can pay twice. Reconcile each
+   one (`POST /api/v1/admin/withdrawals/:id/reconcile`) until it is finalized
+   or provably dead.
+3. **Record the old treasury.** Note the old treasury address, its SOL and
+   USDC balances, and `GET /api/v1/admin/treasury-reconciliation`. Every fee
+   leg already paid to this address is real money the operator owns.
+4. **Sweep the treasury** to the operator's hardware-wallet receive address
+   (treasury-custody phase 1), using the old key. Leave enough SOL for step 5.
+5. **Withdraw the durable-nonce account.** Its address is
+   `PublicKey.createWithSeed(<old treasury>, "motebit-payout-nonce-v1",
+SystemProgram)` (`NONCE_ACCOUNT_SEED`, `packages/wallet-solana/src/web3js-adapter.ts`),
+   and its authority is the old key. Withdraw its lamports to the old
+   treasury, then sweep again. After the replacement the lane re-derives
+   under the new key; an un-withdrawn old account is orphaned rent and an
+   authority the new key cannot use.
+6. **Only now replace the key** (§ 3, `--force-replace`), re-publish the
+   transparency declaration, and unfreeze.
+7. **Afterwards:** fee legs paid to the old treasury before the replacement
+   may be marked `failed (fee_leg)` by the P2P verifier, which holds the
+   treasury address it read at startup. Restart the relay so it reads the new
+   address, and treat any such failure dated before the replacement as an
+   operator-side artifact, not the payer's fault.
+
+**Not built (named gap):** there is no relay-key succession tool that does
+steps 2–5 automatically, and no relay-side succession record for the relay's
+own key. Until one exists, this checklist is the only safeguard. If the old
+key is lost (volume loss with no backup), steps 2–5 are impossible: funds at
+the old treasury and its nonce account are unrecoverable, which is why § 1
+(back up now, then quarterly) comes first.
+
 ## Failure modes
 
 | Symptom                                               | Cause / action                                                                            |
