@@ -13,7 +13,7 @@ import { openMotebitDatabase } from "@motebit/persistence";
 import { createRuntimeCoverage, describeGap } from "../runtime-coverage.js";
 import { CONFIG_DIR, listConfigBackups, listKeptKeyFiles, loadFullConfig } from "../config.js";
 import { mkdirOwnerOnly } from "../durable-file.js";
-import { seedBackupStatus } from "./seed.js";
+import { seedBackupPostureOf, seedBackupWording } from "./seed.js";
 import { getDbPath } from "../runtime-factory.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 import { normalizeRelayUrl } from "../sync-opt-in.js";
@@ -206,7 +206,8 @@ export async function handleDoctor(): Promise<void> {
   // can provide, by design, so the self-recovery door must be lit BEFORE
   // loss. Self-reported ack (paper is unverifiable); see seed.ts.
   {
-    const posture = seedBackupStatus(fullCfg);
+    const full = seedBackupPostureOf(fullCfg);
+    const posture = full.status;
     if (posture !== "no_identity") {
       checks.push({
         name: "Seed backup",
@@ -214,7 +215,7 @@ export async function handleDoctor(): Promise<void> {
         // with its remedy, because the loss it forestalls is irreversible.
         ok: true,
         ...(posture === "not_backed_up" ? { warn: true } : {}),
-        detail: posture === "backed_up" ? "recovery seed recorded" : "not recorded",
+        detail: seedBackupWording(full).doctor,
         ...(posture === "not_backed_up"
           ? { remedy: "motebit seed reveal — show it once, write it on paper" }
           : {}),

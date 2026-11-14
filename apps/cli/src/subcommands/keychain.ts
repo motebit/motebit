@@ -28,7 +28,7 @@ import {
   writeKeychainPassphrase,
   deleteKeychainPassphrase,
 } from "../keychain.js";
-import { seedBackupStatus } from "./seed.js";
+import { seedBackupPostureOf, seedBackupWording } from "./seed.js";
 import { bold, dim, success, warn } from "../colors.js";
 
 export async function handleKeychain(config: CliConfig): Promise<void> {
@@ -64,10 +64,9 @@ export async function handleKeychain(config: CliConfig): Promise<void> {
     console.log(dim("  this is convenience, not biometrics: any process running as your user"));
     console.log(dim("  can read it. Undo anytime: motebit keychain remove"));
     console.log(dim("  `motebit seed reveal` still always asks for the passphrase."));
-    if (seedBackupStatus(full) === "not_backed_up") {
-      console.log(
-        `\n  ${warn("Your recovery seed is still not backed up.")} The keychain dies with`,
-      );
+    const seedPosture = seedBackupPostureOf(full);
+    if (seedPosture.status === "not_backed_up") {
+      console.log(`\n  ${warn(seedBackupWording(seedPosture).keychain)} The keychain dies with`);
       console.log(
         `  this machine — the seed is the recovery that survives it: ${bold("motebit seed reveal")}`,
       );

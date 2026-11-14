@@ -12,6 +12,11 @@ import type {
 import type { connectMcpServers } from "@motebit/mcp-client";
 import { type UnifiedProviderConfig, type GovernanceConfig } from "@motebit/sdk";
 import {
+  SEED_BACKUP_FIELDS,
+  setAsideReplacedSeedBackup as kitSetAsideReplacedSeedBackup,
+  type SeedBackupPrior,
+} from "@motebit/surface-kit";
+import {
   isTrulyAbsent,
   mkdirOwnerOnly,
   narrowOnLoad,
@@ -118,6 +123,32 @@ export interface FullConfig {
    * (#428). Also set by `motebit restore` (holding the seed IS the backup).
    */
   seed_backed_up_at?: number;
+  /**
+   * The public key (hex) of the seed `seed_backed_up_at` acknowledges. A
+   * seed IS one key, and a rotation mints a new one, so the acknowledgment
+   * covers this key only: `seedBackupPostureOf` reads "not backed up" whenever
+   * it differs from `device_public_key` (a committed rotation since). Never
+   * cleared by a rotation: it stays as the record of which retired key the
+   * old paper seed recovers. Absent on acknowledgments recorded before it
+   * existed (see `seedBackupPosture` in `@motebit/surface-kit`). Local only.
+   */
+  seed_backed_up_key?: string;
+  /**
+   * The motebit_id `seed_backed_up_at` acknowledges the seed for. A seed
+   * shown for one identity never reads as the backup of another
+   * (`other_identity`). Absent on acknowledgments written before it existed:
+   * the key comparison alone decides. Local only.
+   */
+  seed_backed_up_motebit_id?: string;
+  /**
+   * Acknowledgments of identities this config no longer holds, kept (never
+   * deleted, never current): `saveFullConfig` moves the current
+   * acknowledgment here whenever a write replaces the identity
+   * (`motebit_id` changes — a new mint, a restore of another identity, a
+   * create-motebit replace), so a seed shown for one identity is never
+   * carried as the backup of the next. See `setAsideReplacedSeedBackup`.
+   */
+  seed_backup_prior?: SeedBackupPrior[];
   /**
    * Capability-tiered tool admission override (#501). Default (absent):
    * a minimal-tier model (e.g. a 3B local model) is never OFFERED
@@ -286,6 +317,19 @@ const IDENTITY_FIELDS = [
 ] as const;
 
 /**
+ * The seed-backup set-aside rule for identity-replacing writes — one
+ * implementation in `@motebit/surface-kit` (`setAsideReplacedSeedBackup`),
+ * shared with the desktop's identity switch; create-motebit keeps a twin.
+ */
+export type { SeedBackupPrior };
+export function setAsideReplacedSeedBackup(onDisk: FullConfig, write: FullConfig): void {
+  kitSetAsideReplacedSeedBackup(
+    onDisk as unknown as Record<string, unknown>,
+    write as unknown as Record<string, unknown>,
+  );
+}
+
+/**
  * The identity fields as this process last READ them from disk, carried on
  * the config object itself (an enumerable symbol: object spread copies it,
  * `JSON.stringify` never writes it). It is the compare half of
@@ -448,10 +492,12 @@ export function saveFullConfig(
       const untouched = baseline !== undefined && identityFingerprint(write) === baseline;
       if (opts.identityChange === undefined && untouched) {
         // The caller never touched the identity; the disk moved under it.
-        // The disk's identity wins.
+        // The disk's identity wins — and with it the disk's seed-backup
+        // acknowledgment, which belongs to that identity: a stale snapshot
+        // never carries the previous identity's acknowledgment back.
         const w = write as Record<string, unknown>;
         const d = onDisk as Record<string, unknown>;
-        for (const f of IDENTITY_FIELDS) {
+        for (const f of [...IDENTITY_FIELDS, ...SEED_BACKUP_FIELDS]) {
           if (d[f] === undefined) delete w[f];
           else w[f] = d[f];
         }
@@ -465,6 +511,7 @@ export function saveFullConfig(
         if (mode === "preserve-replaced" && losesIdentityMaterial(onDisk, write)) {
           preservedAs = preserveAside(CONFIG_PATH, CONFIG_BACKUP_INFIX);
         }
+        setAsideReplacedSeedBackup(onDisk, write);
       }
     }
     writeFileAtomic(CONFIG_PATH, JSON.stringify(write, null, 2), 0o600);

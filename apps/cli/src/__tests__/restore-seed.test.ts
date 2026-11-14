@@ -11,7 +11,10 @@ import {
   classifyWriteAhead,
   holdsIdentityKey,
 } from "../subcommands/restore.js";
-import { seedBackupStatus } from "../subcommands/seed.js";
+import { seedBackupPostureOf } from "../subcommands/seed.js";
+
+const seedBackupStatus = (c: Parameters<typeof seedBackupPostureOf>[0]) =>
+  seedBackupPostureOf(c).status;
 import { deriveSovereignMotebitId } from "@motebit/crypto";
 
 const PUB = "8b13f81eb531972b57b3068074631d8a23eba3ccb99db596c40c7050e30365a4";
@@ -96,18 +99,34 @@ describe("isSovereignId", () => {
 });
 
 describe("seedBackupStatus", () => {
-  it("no encrypted key → no_identity (nothing to back up)", () => {
+  it("no encrypted key → no_identity (nothing to back up)", async () => {
     expect(seedBackupStatus({})).toBe("no_identity");
   });
 
-  it("key present, no ack → not_backed_up (the nudge fires)", () => {
+  it("key present, no ack → not_backed_up (the nudge fires)", async () => {
     expect(seedBackupStatus({ cli_encrypted_key: { ciphertext: "x" } })).toBe("not_backed_up");
   });
 
-  it("ack recorded → backed_up (the nudge is gone forever)", () => {
+  it("ack recorded for the current key → backed_up (the nudge is gone until a rotation)", async () => {
     expect(
-      seedBackupStatus({ cli_encrypted_key: { ciphertext: "x" }, seed_backed_up_at: 123 }),
+      seedBackupStatus({
+        cli_encrypted_key: { ciphertext: "x" },
+        device_public_key: PUB,
+        seed_backed_up_at: 123,
+        seed_backed_up_key: PUB,
+      }),
     ).toBe("backed_up");
+  });
+
+  it("ack recorded for another key (a rotation since) → not_backed_up", async () => {
+    expect(
+      seedBackupStatus({
+        cli_encrypted_key: { ciphertext: "x" },
+        device_public_key: PUB,
+        seed_backed_up_at: 123,
+        seed_backed_up_key: OTHER_PUB,
+      }),
+    ).toBe("not_backed_up");
   });
 });
 

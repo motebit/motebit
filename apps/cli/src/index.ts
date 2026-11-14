@@ -123,7 +123,8 @@ import {
   handleMachines,
   handleSeed,
   handleKeychain,
-  seedBackupStatus,
+  seedBackupPostureOf,
+  seedBackupWording,
   handleFederationStatus,
   handleFederationPeers,
   handleFederationPeer,
@@ -985,8 +986,9 @@ async function main(): Promise<void> {
   // line, not a nag — but an unbacked-up sovereign key is a catastrophic
   // loss waiting on a forgotten passphrase or a dead disk, and no operator
   // can help afterwards (#428; the 2026-07-28 founder near-miss).
-  if (seedBackupStatus(loadFullConfig()) === "not_backed_up") {
-    console.log(dim("  recovery seed not backed up — `motebit seed reveal` (once, on paper)"));
+  const seedPosture = seedBackupPostureOf(loadFullConfig());
+  if (seedPosture.status === "not_backed_up") {
+    console.log(dim(`  ${seedBackupWording(seedPosture).nudge}`));
     console.log();
   }
 
