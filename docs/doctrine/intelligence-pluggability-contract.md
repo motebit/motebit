@@ -55,7 +55,7 @@ systemPromptBudget + toolSchemaBudget + renderedStateBudget + userMessageReserve
 
 This is a **new gate**, distinct from the auto-router's deny channel ([`auto-routing-as-protocol-primitive.md`](auto-routing-as-protocol-primitive.md)). Auto-routing deny answers "I cannot pick among catalog entries." Admission answers "the picked or configured model cannot carry the assembled prompt." A single-model backend such as WebLLM receives auto-router deny (empty catalog → deny), and the consumer **falls through to the configured model** anyway — that fall-through is the bug surface admission closes.
 
-The deny is honest, not silent. The chrome surfaces "this model's context window is too small for the full motebit runtime — choose a larger model or switch to Motebit Cloud" via the existing `routingNarration` slot.
+The deny must be honest, not silent: the chrome is to surface "this model's context window is too small for the full motebit runtime — choose a larger model or switch to Motebit Cloud" via the existing `routingNarration` slot. Commitment 1 is a requirement: no surface measures the assembled prompt today, and the typed error above does not exist yet ([doctrine-status.md](../ops/doctrine-status.md#intelligence-pluggability-contractmd)).
 
 ### 2. Model-aware prompt assembly
 
@@ -63,7 +63,7 @@ System prompt assembly takes the provider's capability profile as input:
 
 - Doctrine teaching blocks (PERCEPTION_DOCTRINE et al.) can compress under a declared `promptVerbosity` budget without dropping wire-field semantics.
 - Tool schemas can prune to the consumer's active tier set when total budget pressure demands it.
-- `trimConversation` in `packages/ai-core/src/context-window.ts` reserves the system-prompt + tool budget instead of treating them as free.
+- `trimConversation` in `packages/ai-core/src/context-window.ts` is to reserve the system-prompt + tool budget instead of treating them as free (today it reserves only `reserveForResponse`).
 
 The shape of "compression" is not arbitrary truncation — it is removing rule-shaped conformance clauses (per `runtime-invariants-over-prompt-rules.md`) while preserving the typed-truth wire-field teachings that the runtime cannot enforce. This is the same five-question audit, parameterized by model.
 
