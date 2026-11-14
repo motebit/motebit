@@ -49,9 +49,12 @@ jobs:
     environment: production
     # One promotion of this service at a time; a running deploy is never
     # cancelled. GitHub keeps ONE pending run per group (a newer one replaces
-    # an older one) — no loss: the older sha is superseded and would fail the
-    # head-of-main re-check anyway. No `queue:` key: it adds nothing here and
-    # is unverified (a key GitHub rejects stops the whole file loading).
+    # an older one). For SAFETY that changes nothing: the head-of-main re-check
+    # means no stale sha deploys either way. It can cost LIVENESS (a pending
+    # run evicted, e.g. by a partial re-run of an older cancelled run), which
+    # the SUPERSEDED / STRANDED outcomes make visible. No `queue:` key: it is
+    # unverified (a key GitHub rejects stops the whole file loading) and a
+    # pending founder decision.
     concurrency:
       group: production-deploy-auditor
       cancel-in-progress: false

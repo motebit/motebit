@@ -38,7 +38,47 @@ const entry = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry =
   edits,
 });
 
+const STRANDED = "decision: superseded only when a newer deploy run exists, else STRANDED";
+const CANCELLED = "decision: CI cancelled because main moved is supersession, not a CI failure";
+
 const TAMPERS: TamperEntry[] = [
+  entry(
+    "superseded no longer asks whether a newer deploy run exists (a stranded fix reads green)",
+    `${STRANDED} no newer run within the grace (main moved via out-of-path commits): STRANDED, red, with the dispatch repair`,
+    edit(SCRIPT, "      if (newer !== null) {", "      if ((true as boolean) || newer !== null) {"),
+  ),
+  entry(
+    "a newer-run lookup error reads as superseded (green)",
+    `${STRANDED} the newer-run lookup errors: fail (red), never green`,
+    edit(
+      SCRIPT,
+      '        return finish(\n          "fail",\n          `${why} Could not check for a newer',
+      '        return finish(\n          "superseded",\n          `${why} Could not check for a newer',
+    ),
+  ),
+  entry(
+    "the stranded repair drops the staging dispatch for a staging-leg service",
+    `${STRANDED} no newer run within the grace (main moved via out-of-path commits): STRANDED, red, with the dispatch repair`,
+    edit(
+      SCRIPT,
+      "strandedRepair(sha, opts.service, opts.stagingLeg)",
+      "strandedRepair(sha, opts.service, false)",
+    ),
+  ),
+  entry(
+    "a CI cancelled by supersession is reported as a CI failure again",
+    `${CANCELLED} CI cancelled on a sha main has left, newer run exists: superseded (green)`,
+    off('    if (ci.run.conclusion === "cancelled") {'),
+  ),
+  entry(
+    "any non-success CI on a superseded sha is treated as supersession",
+    `${HEAD} CI red on a superseded sha still reports the CI failure`,
+    edit(
+      SCRIPT,
+      '    if (ci.run.conclusion === "cancelled") {',
+      '    if ((true as boolean) || ci.run.conclusion === "cancelled") {',
+    ),
+  ),
   entry(
     "the CI-success check is removed (a red CI deploys)",
     `${CI} CI failure: no deploy`,

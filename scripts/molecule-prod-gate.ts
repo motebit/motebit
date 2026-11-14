@@ -20,9 +20,19 @@
  *   (a) the newest `CI` (ci.yml) run on main for that EXACT sha concluded
  *       `success`. Still running → wait (wait mode) / no deploy (recheck).
  *       Any other conclusion, a timeout, or no run at all → FAIL.
- *   (b) the sha is still the head of main. Otherwise → SUPERSEDED: nothing is
- *       deployed, the job is not red, and the summary says so. A newer commit
- *       runs its own deploy. Not a failure, and never reported as deployed.
+ *   (b) the sha is still the head of main. Otherwise nothing is deployed,
+ *       and the outcome depends on whether anything will gate the new head:
+ *       a NEWER run of this same deploy-<service>.yml exists on main →
+ *       SUPERSEDED (green, explained); none appears within a bounded grace
+ *       (main moved via commits outside the workflow's paths) → STRANDED
+ *       (red, with the dispatch command that promotes the head); the lookup
+ *       fails → FAIL. A CANCELLED CI on a sha main has left (ci.yml cancels
+ *       per ref) takes this same path; any other non-success CI stays FAIL.
+ *       The deploy predicate never changes: head of main is required.
+ *
+ *   A workflow_dispatch on main gates main's head: the reusable workflow
+ *   passes GATE_SHA = github.sha, which for a dispatch is the head of the
+ *   dispatched ref at dispatch time, and (b) requires it to still be main's.
  *   (c) when the service has a staging leg, the newest
  *       `deploy-archetype-staging.yml` run on main for that sha concluded
  *       `success`. NO run for the sha (the staging path filter skipped it) →
@@ -62,6 +72,13 @@ export interface GateDeps {
   latestRun(workflow: string, sha: string): Promise<RunInfo | null>;
   /** The sha main points at now. Throws on an API error. */
   mainHead(): Promise<string>;
+  /**
+   * The newest run of the deploy workflow `workflow` on main (event push or
+   * workflow_dispatch) for a commit OTHER than `sha`, created after the run
+   * `runId` (run ids only grow), or null when there is none. Throws on an
+   * API error.
+   */
+  newerRun(workflow: string, sha: string, runId: number): Promise<RunInfo | null>;
   sleep(ms: number): Promise<void>;
   now(): number;
 }
@@ -79,10 +96,18 @@ export interface GateOptions {
   stagingTimeoutMs?: number;
   /** How long a missing staging run may take to appear before it counts as missing (wait mode). */
   stagingGraceMs?: number;
+  /**
+   * The id of the run doing the gating (GITHUB_RUN_ID; in a reusable workflow
+   * it is the caller's run). Used only on the superseded path, to find a newer
+   * run of the same deploy workflow.
+   */
+  runId: number;
+  /** How long a newer deploy run may take to appear before the outcome is STRANDED. */
+  newerRunGraceMs?: number;
   pollMs?: number;
 }
 
-export type GateOutcome = "deploy" | "superseded" | "fail";
+export type GateOutcome = "deploy" | "superseded" | "stranded" | "fail";
 
 export interface CheckRow {
   check: string;
@@ -105,6 +130,7 @@ export const DEFAULTS = {
   ciTimeoutMs: 45 * 60_000, // CI can take 35+ min on shared runners (#978)
   stagingTimeoutMs: 15 * 60_000,
   stagingGraceMs: 2 * 60_000,
+  newerRunGraceMs: 2 * 60_000,
   pollMs: 15_000,
 };
 
@@ -116,11 +142,32 @@ export function stagingRepair(sha: string): string {
   );
 }
 
+/** The deploy workflow a molecule service ships from (locked by the workflow tests). */
+export function deployWorkflow(service: string): string {
+  return `deploy-${service}.yml`;
+}
+
 const SUPERSEDED_NOTE =
-  "SUPERSEDED — nothing was deployed, and this is not a failure: the commit is no longer the head of main " +
-  "(or was dispatched from a ref that is not main's head). The newer commit on main runs its own gated deploy; " +
-  "production keeps its current release until then. A FAILED gate, by contrast, means this commit is the head " +
-  "of main and its evidence (CI or staging) is missing or not green — that needs a repair.";
+  "SUPERSEDED — nothing was deployed, and this is not a failure: the commit is no longer the head of main, " +
+  "and a NEWER run of this same deploy workflow exists on main (linked in the checks above). That run gates its " +
+  "own commit; production keeps its current release until a gated deploy lands. A STRANDED or FAILED gate, by " +
+  "contrast, is red and needs a repair.";
+
+/**
+ * The repair for STRANDED. The head that stranded the sha is outside this
+ * workflow's paths, so for a staging-leg service the staging slate never ran
+ * on it either: staging must be dispatched (and go green) for the current head
+ * BEFORE the deploy dispatch, or the new run fails its own staging check.
+ */
+export function strandedRepair(sha: string, service: string, stagingLeg: boolean): string {
+  const deploy = `\`gh workflow run ${deployWorkflow(service)} --ref main\``;
+  return (
+    `main moved past ${sha} via commits outside this workflow's paths; prod for ${service} is not on ${sha}. ` +
+    (stagingLeg
+      ? `To promote the current head: first re-run staging for it — \`gh workflow run ${STAGING_WORKFLOW} --ref main\` — and wait until that run is green for the current head; then run ${deploy}.`
+      : `Run ${deploy} to promote the current head (no staging leg for this service).`)
+  );
+}
 
 const NO_STAGING_NOTICE =
   "NO STAGING LEG: this service is deployed with GATE_STAGING_LEG=false — only CI on the exact sha plus the " +
@@ -205,6 +252,8 @@ export async function decideGate(
   const finish = (outcome: GateOutcome, reason: string, extra: string[] = []): GateDecision => {
     if (outcome === "fail")
       annotations.push(`::error title=Production deploy refused (${opts.service})::${reason}`);
+    if (outcome === "stranded")
+      annotations.push(`::error title=Production deploy stranded (${opts.service})::${reason}`);
     if (outcome === "superseded")
       annotations.push(`::notice title=Not deployed: superseded (${opts.service})::${reason}`);
     for (const e of extra) annotations.push(e);
@@ -215,7 +264,9 @@ export async function decideGate(
           : "PASS — deploying this exact sha"
         : outcome === "superseded"
           ? "SUPERSEDED — not deployed (not a failure)"
-          : "FAIL — not deployed";
+          : outcome === "stranded"
+            ? "STRANDED — not deployed, and no newer run will deploy (repair needed)"
+            : "FAIL — not deployed";
     const lines = [
       `### Molecule production gate (${mode === "wait" ? "before approval" : "re-check after approval"}) — ${opts.service}`,
       "",
@@ -245,6 +296,45 @@ export async function decideGate(
       annotations,
       summary: lines.join("\n"),
     };
+  };
+
+  /**
+   * The sha is not main's head. That is SUPERSEDED (green) only when a newer
+   * run of this deploy workflow exists to gate the new head; a commit outside
+   * the workflow's paths moves main without starting one, and then nothing
+   * would ever promote it: STRANDED (red, with the repair). A lookup error is
+   * never green. The safety predicate is unchanged: nothing here deploys.
+   */
+  const superseded = async (why: string): Promise<GateDecision> => {
+    const workflow = deployWorkflow(opts.service);
+    const graceMs = opts.newerRunGraceMs ?? DEFAULTS.newerRunGraceMs;
+    const start = deps.now();
+    for (;;) {
+      let newer: RunInfo | null;
+      try {
+        newer = await deps.newerRun(workflow, sha, opts.runId);
+      } catch (err) {
+        checks.push({
+          check: `newer ${workflow} run on main`,
+          result: `lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        return finish(
+          "fail",
+          `${why} Could not check for a newer ${workflow} run on main; refusing to call this superseded (fail-closed).`,
+        );
+      }
+      if (newer !== null) {
+        checks.push({ check: `newer ${workflow} run on main`, result: `yes: ${describe(newer)}` });
+        return finish("superseded", why);
+      }
+      if (deps.now() - start >= graceMs) break;
+      await deps.sleep(pollMs);
+    }
+    checks.push({
+      check: `newer ${workflow} run on main`,
+      result: "NONE — no run will gate the new head",
+    });
+    return finish("stranded", `${why} ${strandedRepair(sha, opts.service, opts.stagingLeg)}`);
   };
 
   if (!/^[0-9a-f]{40}$/.test(sha)) {
@@ -291,6 +381,18 @@ export async function decideGate(
   }
   if (ci.run.conclusion !== "success") {
     checks.push({ check: "CI (ci.yml) success on this sha", result: describe(ci.run) });
+    // ci.yml cancels an in-progress run when a newer commit lands on its ref:
+    // a CANCELLED CI on a sha main has left is supersession, not a CI failure.
+    // Any other conclusion stays red, superseded or not.
+    if (ci.run.conclusion === "cancelled") {
+      const h = await headIs(deps, sha);
+      if (h.ok && h.head !== sha) {
+        checks.push({ check: "sha is the head of main", result: `no — main is at ${h.head}` });
+        return superseded(
+          `CI on ${short(sha)} was cancelled because main moved on (now ${short(h.head)}).`,
+        );
+      }
+    }
     return finish(
       "fail",
       `CI concluded '${ci.run.conclusion ?? "none"}' on ${short(sha)}; refusing to deploy.`,
@@ -306,10 +408,7 @@ export async function decideGate(
   }
   if (head1.head !== sha) {
     checks.push({ check: "sha is the head of main", result: `no — main is at ${head1.head}` });
-    return finish(
-      "superseded",
-      `${short(sha)} is not the head of main (main is at ${short(head1.head)}).`,
-    );
+    return superseded(`${short(sha)} is not the head of main (main is at ${short(head1.head)}).`);
   }
   checks.push({ check: "sha is the head of main", result: "yes" });
 
@@ -368,8 +467,7 @@ export async function decideGate(
           check: "sha is the head of main (after staging)",
           result: `no — main is at ${head2.head}`,
         });
-        return finish(
-          "superseded",
+        return superseded(
           `${short(sha)} was superseded on main (now ${short(head2.head)}) while staging was ${st.kind === "absent" ? "missing" : "not green"}.`,
         );
       }
@@ -408,10 +506,7 @@ export async function decideGate(
         check: "sha is the head of main (final)",
         result: `no — main is at ${head3.head}`,
       });
-      return finish(
-        "superseded",
-        `${short(sha)} was superseded on main (now ${short(head3.head)}).`,
-      );
+      return superseded(`${short(sha)} was superseded on main (now ${short(head3.head)}).`);
     }
     checks.push({ check: "sha is the head of main (final)", result: "yes" });
   }
@@ -453,6 +548,30 @@ export function ghDeps(repo: string, gh: GhExec): GateDeps {
       runs.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "") || b.id - a.id);
       return runs[0] ?? null;
     },
+    async newerRun(workflow, sha, runId) {
+      const out = gh([
+        "api",
+        "-X",
+        "GET",
+        `repos/${repo}/actions/workflows/${workflow}/runs`,
+        "-f",
+        "branch=main",
+        "-f",
+        "per_page=30",
+      ]);
+      const body = JSON.parse(out) as {
+        workflow_runs?: (RunInfo & { head_sha?: string; event?: string })[];
+      };
+      const newer = (body.workflow_runs ?? []).filter(
+        (r) =>
+          (r.event === "push" || r.event === "workflow_dispatch") &&
+          typeof r.head_sha === "string" &&
+          r.head_sha !== sha &&
+          r.id > runId,
+      );
+      newer.sort((a, b) => b.id - a.id);
+      return newer[0] ?? null;
+    },
     async mainHead() {
       const out = gh(["api", `repos/${repo}/git/ref/heads/main`, "--jq", ".object.sha"]).trim();
       if (!/^[0-9a-f]{40}$/.test(out))
@@ -476,7 +595,8 @@ export interface CliIo {
 /**
  * Run the gate as the workflow does. Writes `deploy`, `outcome` and `sha` to
  * $GITHUB_OUTPUT. Exit 0 for deploy and superseded (with deploy=false), 1 for
- * fail and for a misconfigured invocation.
+ * fail, stranded and a misconfigured invocation. GITHUB_RUN_ID is the run's
+ * own id (set by Actions in every step; in a reusable workflow, the caller's).
  */
 export async function runCli(io: CliIo): Promise<{ code: number; decision: GateDecision | null }> {
   const log = io.log ?? ((l: string) => console.log(l));
@@ -506,6 +626,9 @@ export async function runCli(io: CliIo): Promise<{ code: number; decision: GateD
     problems.push(`GATE_REPO must be owner/name (got ${JSON.stringify(repo)})`);
   if (!/^[a-z0-9-]+$/.test(service))
     problems.push(`GATE_SERVICE must be a service name (got ${JSON.stringify(service)})`);
+  const runId = env.GITHUB_RUN_ID ?? "";
+  if (!/^[1-9]\d*$/.test(runId))
+    problems.push(`GITHUB_RUN_ID must be the run's numeric id (got ${JSON.stringify(runId)})`);
   if (problems.length > 0) {
     for (const p of problems) log(`::error title=Molecule production gate misconfigured::${p}`);
     writeOutput("deploy=false\noutcome=fail\n");
@@ -518,7 +641,7 @@ export async function runCli(io: CliIo): Promise<{ code: number; decision: GateD
   const deps = io.deps ?? ghDeps(repo, gh);
   const decision = await decideGate(
     deps,
-    { sha, service, stagingLeg: leg === "true", mode: mode as GateMode },
+    { sha, service, stagingLeg: leg === "true", mode: mode as GateMode, runId: Number(runId) },
     log,
   );
   for (const a of decision.annotations) log(a);
@@ -526,7 +649,7 @@ export async function runCli(io: CliIo): Promise<{ code: number; decision: GateD
     `deploy=${decision.deploy ? "true" : "false"}\noutcome=${decision.outcome}\nsha=${sha}\n`,
   );
   writeSummary(decision.summary);
-  return { code: decision.outcome === "fail" ? 1 : 0, decision };
+  return { code: decision.outcome === "fail" || decision.outcome === "stranded" ? 1 : 0, decision };
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {

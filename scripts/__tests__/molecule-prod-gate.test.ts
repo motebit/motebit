@@ -35,6 +35,9 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SHA = "a".repeat(40);
 const NEWER = "b".repeat(40);
 const MIN = 60_000;
+const RUN_ID = 5000;
+/** A run of the same deploy workflow, for the newer head, created after RUN_ID. */
+const NEWER_RUN: RunInfo = { id: 5001, status: "queued", conclusion: null };
 
 type Answer = RunInfo | null | Error;
 /** A run answer per poll; the last one repeats. */
@@ -47,16 +50,31 @@ const OK = run("completed", "success");
 
 interface Fake {
   deps: GateDeps;
-  calls: { ci: number; staging: number; head: number };
+  calls: { ci: number; staging: number; head: number; newer: number };
+  newerArgs: [string, string, number][];
 }
 
-function fake(ci: Script, staging: Script, head: (string | Error)[] = [SHA]): Fake {
+/** `newer`: answers for "is there a newer run of this deploy workflow" (default: yes). */
+function fake(
+  ci: Script,
+  staging: Script,
+  head: (string | Error)[] = [SHA],
+  newer: Script = [NEWER_RUN],
+): Fake {
   let t = 0;
-  const calls = { ci: 0, staging: 0, head: 0 };
+  const calls = { ci: 0, staging: 0, head: 0, newer: 0 };
+  const newerArgs: [string, string, number][] = [];
   const pick = <T>(xs: T[], i: number): T => xs[Math.min(i, xs.length - 1)] as T;
   return {
     calls,
+    newerArgs,
     deps: {
+      async newerRun(workflow, sha, runId) {
+        newerArgs.push([workflow, sha, runId]);
+        const a = pick(newer, calls.newer++);
+        if (a instanceof Error) throw a;
+        return a;
+      },
       async latestRun(workflow) {
         const a = workflow === CI_WORKFLOW ? pick(ci, calls.ci++) : pick(staging, calls.staging++);
         if (workflow !== CI_WORKFLOW && workflow !== STAGING_WORKFLOW)
@@ -78,7 +96,14 @@ function fake(ci: Script, staging: Script, head: (string | Error)[] = [SHA]): Fa
 }
 
 function gate(f: Fake, mode: GateMode = "wait", stagingLeg = true, sha = SHA) {
-  return decideGate(f.deps, { sha, service: "clerk", stagingLeg, mode, pollMs: 15_000 });
+  return decideGate(f.deps, {
+    sha,
+    service: "clerk",
+    runId: RUN_ID,
+    stagingLeg,
+    mode,
+    pollMs: 15_000,
+  });
 }
 
 describe("decision: (a) CI on the exact sha", () => {
@@ -113,6 +138,7 @@ describe("decision: (a) CI on the exact sha", () => {
     const d = await decideGate(f.deps, {
       sha: SHA,
       service: "clerk",
+      runId: RUN_ID,
       stagingLeg: true,
       mode: "wait",
       pollMs: MIN,
@@ -128,6 +154,7 @@ describe("decision: (a) CI on the exact sha", () => {
     const d = await decideGate(fake([null], [OK]).deps, {
       sha: SHA,
       service: "clerk",
+      runId: RUN_ID,
       stagingLeg: true,
       mode: "wait",
       ciTimeoutMs: 2 * MIN,
@@ -156,7 +183,7 @@ describe("decision: (b) the sha must still be the head of main", () => {
     expect(d.outcome).toBe("superseded");
     expect(d.deploy).toBe(false);
     expect(d.summary).toContain("SUPERSEDED — nothing was deployed, and this is not a failure");
-    expect(d.summary).toContain("A FAILED gate, by contrast");
+    expect(d.summary).toContain("A STRANDED or FAILED gate, by");
     expect(f.calls.staging).toBe(0);
   });
 
@@ -179,6 +206,100 @@ describe("decision: (b) the sha must still be the head of main", () => {
 
   it("CI red on a superseded sha still reports the CI failure", async () => {
     const d = await gate(fake([run("completed", "failure")], [OK], [NEWER]));
+    expect(d.outcome).toBe("fail");
+  });
+});
+
+describe("decision: superseded only when a newer deploy run exists, else STRANDED", () => {
+  it("a newer run of this deploy workflow exists: superseded (green), and it asked the right question", async () => {
+    const f = fake([OK], [OK], [NEWER], [NEWER_RUN]);
+    const d = await gate(f);
+    expect(d.outcome).toBe("superseded");
+    expect(f.newerArgs[0]).toEqual(["deploy-clerk.yml", SHA, RUN_ID]);
+    expect(d.checks.some((c) => c.result.startsWith("yes:"))).toBe(true);
+  });
+
+  it("no newer run within the grace (main moved via out-of-path commits): STRANDED, red, with the dispatch repair", async () => {
+    const f = fake([OK], [OK], [NEWER], [null]);
+    const d = await gate(f);
+    expect(d.outcome).toBe("stranded");
+    expect(d.deploy).toBe(false);
+    expect(d.reason).toContain(`main moved past ${SHA} via commits outside this workflow's paths`);
+    expect(d.reason).toContain(`prod for clerk is not on ${SHA}`);
+    expect(d.reason).toContain("gh workflow run deploy-clerk.yml --ref main");
+    // clerk has a staging leg: the staging dispatch comes FIRST (the stranding head never ran staging).
+    const st = d.reason.indexOf(`gh workflow run ${STAGING_WORKFLOW} --ref main`);
+    expect(st).toBeGreaterThan(-1);
+    expect(st).toBeLessThan(d.reason.indexOf("gh workflow run deploy-clerk.yml --ref main"));
+    expect(d.reason).toContain("wait until that run is green for the current head");
+    expect(d.annotations.join("\n")).toContain("::error title=Production deploy stranded (clerk)");
+    expect(d.summary).toContain("STRANDED — not deployed, and no newer run will deploy");
+    // The bounded retry that absorbs run-creation lag: 2 min at 15 s.
+    expect(f.calls.newer).toBe(9);
+  });
+
+  it("stranded code-review (no staging leg): the repair is the deploy dispatch alone, no staging dispatch", async () => {
+    const f = fake([OK], [null], [NEWER], [null]);
+    const d = await decideGate(f.deps, {
+      sha: SHA,
+      service: "code-review",
+      runId: RUN_ID,
+      stagingLeg: false,
+      mode: "wait",
+    });
+    expect(d.outcome).toBe("stranded");
+    expect(d.reason).toContain("gh workflow run deploy-code-review.yml --ref main");
+    expect(d.reason).not.toContain(STAGING_WORKFLOW);
+    expect(f.newerArgs[0]?.[0]).toBe("deploy-code-review.yml");
+  });
+
+  it("a newer run that appears within the grace counts: superseded", async () => {
+    const d = await gate(fake([OK], [OK], [NEWER], [null, null, NEWER_RUN]));
+    expect(d.outcome).toBe("superseded");
+  });
+
+  it("the newer-run lookup errors: fail (red), never green", async () => {
+    const d = await gate(fake([OK], [OK], [NEWER], [new Error("502")]));
+    expect(d.outcome).toBe("fail");
+    expect(d.deploy).toBe(false);
+  });
+
+  it("staging superseded with no newer run: stranded, not superseded", async () => {
+    const d = await gate(fake([OK], [run("completed", "cancelled")], [SHA, NEWER], [null]));
+    expect(d.outcome).toBe("stranded");
+  });
+
+  it("superseded at the final head check with no newer run: stranded", async () => {
+    const d = await gate(fake([OK], [OK], [SHA, NEWER], [null]));
+    expect(d.outcome).toBe("stranded");
+  });
+
+  it("approval granted after main moved via an out-of-path commit: recheck says stranded, no deploy", async () => {
+    const d = await gate(fake([OK], [OK], [NEWER], [null]), "recheck");
+    expect(d.outcome).toBe("stranded");
+    expect(d.deploy).toBe(false);
+  });
+});
+
+describe("decision: CI cancelled because main moved is supersession, not a CI failure", () => {
+  it("CI cancelled on a sha main has left, newer run exists: superseded (green)", async () => {
+    const d = await gate(fake([run("completed", "cancelled")], [OK], [NEWER]));
+    expect(d.outcome).toBe("superseded");
+    expect(d.reason).toContain("was cancelled because main moved on");
+  });
+
+  it("CI cancelled on a sha main has left, no newer run: stranded", async () => {
+    const d = await gate(fake([run("completed", "cancelled")], [OK], [NEWER], [null]));
+    expect(d.outcome).toBe("stranded");
+  });
+
+  it("CI cancelled and the head cannot be read: fail", async () => {
+    const d = await gate(fake([run("completed", "cancelled")], [OK], [new Error("x")]));
+    expect(d.outcome).toBe("fail");
+  });
+
+  it("CI timed_out on a superseded sha stays a CI failure", async () => {
+    const d = await gate(fake([run("completed", "timed_out")], [OK], [NEWER]));
     expect(d.outcome).toBe("fail");
   });
 });
@@ -217,6 +338,7 @@ describe("decision: (c) staging on the exact sha", () => {
     const d = await decideGate(fake([OK], [run("in_progress")]).deps, {
       sha: SHA,
       service: "clerk",
+      runId: RUN_ID,
       stagingLeg: true,
       mode: "wait",
       stagingTimeoutMs: 5 * MIN,
@@ -284,6 +406,7 @@ function env(over: Record<string, string | undefined> = {}) {
     GATE_REPO: "motebit/motebit",
     GATE_SERVICE: "clerk",
     GATE_STAGING_LEG: "true",
+    GITHUB_RUN_ID: String(RUN_ID),
     ...over,
   };
 }
@@ -328,6 +451,59 @@ describe("CLI: what the workflow sees", () => {
       expect(r.code, String(v)).toBe(1);
       expect(r.out).toBe("deploy=false\noutcome=fail\n");
     }
+  });
+
+  it("stranded: exit 1 (red), deploy=false, outcome=stranded", async () => {
+    const r = await cli(env(), fake([OK], [OK], [NEWER], [null]));
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("deploy=false\noutcome=stranded\n");
+  });
+
+  it("GITHUB_RUN_ID must be the numeric run id", async () => {
+    for (const v of [undefined, "", "abc", "0"]) {
+      const r = await cli(env({ GITHUB_RUN_ID: v }), fake([OK], [OK]));
+      expect(r.code, String(v)).toBe(1);
+    }
+  });
+
+  it("the gh adapter's newer-run lookup: same workflow on main, push or dispatch, another sha, a later run id", async () => {
+    const seen: string[][] = [];
+    const deps = ghDeps("o/r", (args) => {
+      seen.push(args);
+      return JSON.stringify({
+        workflow_runs: [
+          { id: 4000, head_sha: NEWER, event: "push", status: "completed", conclusion: "success" },
+          {
+            id: 5002,
+            head_sha: SHA,
+            event: "workflow_dispatch",
+            status: "queued",
+            conclusion: null,
+          },
+          { id: 5003, head_sha: NEWER, event: "schedule", status: "queued", conclusion: null },
+          { id: 5004, head_sha: NEWER, event: "push", status: "queued", conclusion: null },
+          {
+            id: 5005,
+            head_sha: NEWER,
+            event: "workflow_dispatch",
+            status: "queued",
+            conclusion: null,
+          },
+        ],
+      });
+    });
+    expect((await deps.newerRun("deploy-clerk.yml", SHA, RUN_ID))?.id).toBe(5005);
+    expect(seen[0]).toEqual(
+      expect.arrayContaining(["repos/o/r/actions/workflows/deploy-clerk.yml/runs", "branch=main"]),
+    );
+    const none = ghDeps("o/r", () =>
+      JSON.stringify({
+        workflow_runs: [
+          { id: 4000, head_sha: NEWER, event: "push", status: "completed", conclusion: "success" },
+        ],
+      }),
+    );
+    expect(await none.newerRun("deploy-clerk.yml", SHA, RUN_ID)).toBeNull();
   });
 
   it("GATE_MODE must be wait or recheck", async () => {
