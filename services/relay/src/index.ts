@@ -2362,6 +2362,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app,
     db: moteDb.db,
     recordAuthEvent: authEvents.record,
+    relayIdentity,
   });
 
   // --- Federation background loops ---

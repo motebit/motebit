@@ -297,7 +297,10 @@ describe("#855 carve-outs against the relay's registered routes", () => {
       p.startsWith("/api/v1/allocations/") ||
       p.startsWith("/api/v1/disputes/") ||
       p.startsWith("/api/v1/skills/") ||
-      p === "/api/v1/delegations/revocations";
+      p === "/api/v1/delegations/revocations" ||
+      // standing-delegation@1.3 §5.2: the signed set attestation, public for
+      // the reason the cache read is (a new route, deliberately carved).
+      p === "/api/v1/delegations/revocations/head";
     const lost = handlers
       .filter((h) => mainExempt(concrete(h.path)))
       .filter((h) => !isMasterTokenCarveOut(h.method, concrete(h.path)))

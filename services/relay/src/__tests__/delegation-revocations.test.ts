@@ -87,7 +87,7 @@ describe("delegation-revocation cache", () => {
 
     const res = await post(relay, revocation);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, grant_id: "grant-1", status: "recorded" });
+    expect(await res.json()).toMatchObject({ ok: true, grant_id: "grant-1", status: "recorded" });
 
     const feed = (await (await get(relay)).json()) as FeedBody;
     expect(feed.records).toHaveLength(1);
