@@ -31,13 +31,14 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HELPER = "scripts/lib/prepush-script-readers.ts";
 
 describe("prepush-script-readers — the real repo", () => {
-  it("scripts/lib/tamper-runner.ts is read by exactly its six reader packages", () => {
+  it("scripts/lib/tamper-runner.ts is read by exactly its seven reader packages", () => {
     expect(scriptReaders(ROOT, ["scripts/lib/tamper-runner.ts"])).toEqual({
       all: false,
       dirs: [
         "packages/mcp-server",
         "packages/planner",
         "packages/runtime",
+        "packages/surface-kit",
         "packages/verify",
         "packages/wallet-solana",
         "services/relay",
