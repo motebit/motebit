@@ -340,6 +340,22 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Standard:** novel.
 - **Forbidden synonyms:** archive, package, manifest (reserved suffix), proof.
 
+### 6.13 DelegationRevocationHead
+
+- **Definition:** a relay-signed snapshot of every `DelegationRevocation` the relay holds for one delegator up to `seq_high_water`, answering a consumer-chosen `challenge`, with `records_digest` = SHA-256 of the canonical-JSON entries. The only source of "no revocation as of `as_of`"; it never confers authority. Guarantees integrity, freshness, no rollback and relay accountability; NOT completeness against omission, NOT non-equivocation. Subject = signer (the relay records its own holdings). Companion type: `DelegationRevocationHeadEntry`. **Naming deviation:** the type carries no suffix from the signed-artifact table in `docs/doctrine/naming-by-layer.md` (the money-authority contract named it); a rename, if wanted, is cheapest before any consumer ships.
+- **Layer:** protocol (`DelegationRevocationHead`, `DelegationRevocationHeadEntry`, `DELEGATION_REVOCATION_HEAD_SPEC_ID`), crypto (`signRevocationHead`, `verifyRevocationHead`, `computeRevocationRecordsDigest`, `detectRevocationEquivocation`).
+- **Wire:** `spec/schemas/delegation-revocation-head-v1.json`; `spec: "motebit/delegation-revocation-head@1.0"`. See [`standing-delegation-v1.md`](standing-delegation-v1.md) §5.2, §8.1.
+- **Standard:** novel; a signed tree-less snapshot, not an RFC 6962 signed tree head.
+- **Forbidden synonyms:** revocation list, CRL, deny-list, feed (the unsigned §5.1 read is the feed), proof of non-revocation.
+
+### 6.14 DelegationRevocationInclusionReceipt
+
+- **Definition:** the relay's signed statement that it recorded one `DelegationRevocation` (named by `grant_id`, `delegator_id` and `revocation_signature`) at receipt sequence `seq`. With a later head from the same relay key that covers `seq` but lacks the record, it proves the relay contradicted itself; it is never evidence that any other party accepted the revocation. Subject = signer (the relay records its own act of inclusion), so it is in the receipt family.
+- **Layer:** protocol (`DelegationRevocationInclusionReceipt`, `DELEGATION_REVOCATION_INCLUSION_RECEIPT_SPEC_ID`), crypto (`signRevocationInclusionReceipt`, `verifyRevocationInclusionReceipt`, `detectRevocationOmission`).
+- **Wire:** `spec/schemas/delegation-revocation-receipt-v1.json`; `spec: "motebit/delegation-revocation-inclusion-receipt@1.0"`. See [`standing-delegation-v1.md`](standing-delegation-v1.md) §5.3, §8.1.
+- **Standard:** novel; not a Merkle inclusion proof.
+- **Forbidden synonyms:** ack, acceptance proof, inclusion proof, witness.
+
 ## 7. Settlement
 
 ### 7.1 SettlementMode

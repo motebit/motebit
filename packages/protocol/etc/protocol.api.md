@@ -1365,6 +1365,12 @@ export interface DelegateSignature {
 }
 
 // @public
+export const DELEGATION_REVOCATION_HEAD_SPEC_ID: "motebit/delegation-revocation-head@1.0";
+
+// @public
+export const DELEGATION_REVOCATION_INCLUSION_RECEIPT_SPEC_ID: "motebit/delegation-revocation-inclusion-receipt@1.0";
+
+// @public
 export interface DelegationReceiptLike {
     // (undocumented)
     delegation_receipts?: DelegationReceiptLike[];
@@ -1399,6 +1405,43 @@ export interface DelegationRevocation {
     // (undocumented)
     revoked_at: number;
     signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
+export interface DelegationRevocationHead {
+    as_of: number;
+    challenge: string;
+    count: number;
+    delegator_id: string;
+    entries: DelegationRevocationHeadEntry[];
+    records_digest: string;
+    relay_id: string;
+    relay_public_key: string;
+    seq_high_water: number;
+    signature: string;
+    spec: "motebit/delegation-revocation-head@1.0";
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
+export interface DelegationRevocationHeadEntry {
+    received_at: number;
+    record: DelegationRevocation;
+    seq: number;
+}
+
+// @public
+export interface DelegationRevocationInclusionReceipt {
+    delegator_id: string;
+    grant_id: string;
+    received_at: number;
+    relay_id: string;
+    relay_public_key: string;
+    revocation_signature: string;
+    seq: number;
+    signature: string;
+    spec: "motebit/delegation-revocation-inclusion-receipt@1.0";
     suite: "motebit-jcs-ed25519-b64-v1";
 }
 
