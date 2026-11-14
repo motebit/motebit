@@ -70,7 +70,7 @@ Each axis carries a code-anchored constant, a decay form (exponential / cliff / 
 
 **Default constant.** `τ_A_capacity = 10,000` entries (not a time, a count).
 
-**Doctrinal binding.** Audit persistence is **capacity-bound** today — the in-memory `AuditLogger` (PolicyGate's actual sink) holds the last N entries regardless of age. This is the most aggressive dissolution axis: a busy motebit can churn through 10,000 entries in days. The hash-chained `AuditChainStore` primitive (see `audit_chain_signing_endgame` project memory) would replace capacity-FIFO with durable hash-chained persistence + Merkle anchoring; that's the endgame this axis points at.
+**Doctrinal binding.** Audit persistence is **capacity-bound only where no storage-backed sink is supplied.** The 10,000-entry FIFO is the `InMemoryAuditSink` that `AuditLogger` falls back to when a `PolicyGate` is built without a sink (tests, a surface that passes none); there it holds the last N entries regardless of age, the most aggressive dissolution axis — a busy motebit can churn through 10,000 entries in days. The runtime hands `PolicyGate` the surface's storage-backed `adapters.storage.toolAuditSink` (SQLite on the CLI, Tauri on desktop, Expo on mobile, IndexedDB in the browser), which is not FIFO-capped, and wraps it in a hash-chained `ChainedAuditSink` when the surface also supplies an `auditChainStore` (today the CLI) — `packages/runtime/src/motebit-runtime.ts`, the "Policy & memory governance" block. Extending the chain to every surface is the remaining direction on this axis.
 
 ## The three dissolution shapes
 
@@ -80,7 +80,7 @@ The five axes resolve into three structural forms — and these align exactly wi
 | --------------- | ------------------------------ | ------------------------------------------------ |
 | **Exponential** | memory, trust                  | `mutable_pruning` (continuous)                   |
 | **Cliff**       | credentials, retention ceiling | `consolidation_flush` (whole-record at boundary) |
-| **Capacity**    | audit (today)                  | `append_only_horizon` (whole-prefix truncation)  |
+| **Capacity**    | audit (in-memory fallback)     | `append_only_horizon` (whole-prefix truncation)  |
 
 This is not coincidence. Persistence and retention are the same physics observed from different sides — the medium dissolves what the policy doesn't actively retain. The two doctrines are co-derived from §V.5 + §V.4 (cohesive permeability).
 

@@ -22,7 +22,7 @@ The same architectural argument applies to evals. Collapsing them into the recei
 
 ## The deferral
 
-A signed `EvalAttestation` type in `@motebit/protocol` is a real future primitive. Today it has zero consumers, zero wire-format presence, and no recorded drift between independent implementations. Per the registry-promotion criteria in [`registry-pattern-canonical.md`](registry-pattern-canonical.md), this is the same deferral shape as `SettlementAsset` sub-phase B per [`off-ramp-as-user-action.md`](off-ramp-as-user-action.md) — single literal, no cross-implementation drift surface to defend against yet. We name the doctrine first; the code follows when a real consumer arrives. This is the doctrine-first / code-second pattern per [`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md).
+A signed `EvalAttestation` type in `@motebit/protocol` was a real future primitive. When this section was written it had zero consumers, zero wire-format presence, and no recorded drift between independent implementations (since 2026-07-08 the Auditor is consumer #1 — see "Promotion" below). Per the registry-promotion criteria in [`registry-pattern-canonical.md`](registry-pattern-canonical.md), this was the same deferral shape as `SettlementAsset` sub-phase B per [`off-ramp-as-user-action.md`](off-ramp-as-user-action.md) — single literal, no cross-implementation drift surface to defend against yet. We name the doctrine first; the code follows when a real consumer arrives. This is the doctrine-first / code-second pattern per [`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md).
 
 ### Named trigger for promotion
 
@@ -47,7 +47,7 @@ The primitive ships as this memo promised: the EvalAttestation wire type in `@mo
 
 The behavioral coverage gap that motivated this discussion gets closed through testing discipline, not protocol commitment:
 
-- **Property-based tests** on high-consequence surfaces. `@motebit/virtual-accounts` conservation invariants landed (commit `08aea3db`). Hardware-attestation chain mutations and skill-manifest fuzz are the next two surfaces in the same pattern.
+- **Property-based tests** on high-consequence surfaces. `@motebit/virtual-accounts` conservation invariants landed (commit `08aea3db`). Hardware-attestation chain mutations and skill-manifest fuzz followed in the same pattern: `properties.test.ts` in each of `crypto-appattest`, `crypto-android-keystore`, `crypto-tpm` and `crypto-webauthn`, and `packages/skills/src/__tests__/parse-properties.test.ts`.
 - **Cross-model behavioral equivalence** as an in-package test suite in `@motebit/runtime` (commit `57091d2f`). Backstops [`intelligence-pluggability-contract.md`](intelligence-pluggability-contract.md) behaviorally where `check-prompt-budget` and `check-prompt-density` already cover the structural half.
 - **Real-fixture capture** for at least one hardware-attestation platform. Android Keystore is the cheapest path; iOS App Attest fixtures are structurally harder, TPM EK certs are structurally unpublishable per the existing audit memos.
 

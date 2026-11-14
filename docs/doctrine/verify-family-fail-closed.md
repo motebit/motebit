@@ -1,4 +1,4 @@
-# Verify-family fail-closed: deferred with named triggers
+# Verify-family fail-closed: trigger fired, additive half shipped, breaking major pending
 
 > **Layer:** narrative
 

@@ -40,8 +40,8 @@ Three coordinated commitments:
 
 **`ProviderCapability` axes** (lifted from `services/proxy/src/validation.ts`'s `MODEL_CONFIG`; the 11 production models with `{host, lab, jurisdiction, input/outputCostPerMillion}`):
 
-- `InferenceHost`: `"anthropic" | "openai" | "google" | "groq"` — closed registry, lifted to `@motebit/protocol`.
-- `ModelLab`: `"anthropic" | "openai" | "google" | "meta"` — closed registry, lifted to `@motebit/protocol`.
+- `InferenceHost`: `"anthropic" | "openai" | "google" | "groq" | "local-server"` — closed registry, defined in `@motebit/protocol` (`packages/protocol/src/routing.ts`; `validation.ts` re-exports it).
+- `ModelLab`: `"anthropic" | "openai" | "google" | "meta" | "mistral" | "microsoft" | "alibaba"` — closed registry, defined in `@motebit/protocol` (`packages/protocol/src/routing.ts`; `validation.ts` re-exports it).
 - `Jurisdiction`: `"US" | "CN" | "EU"` — predicate, not role; lifted to `@motebit/protocol`.
 
 **`RoutingConstraint` (consumer-neutral)**: `jurisdiction?`, `maxInputCostPerMillion?`, `maxOutputCostPerMillion?`, `requiresToolUse?`, `sensitivityCeiling?`. No motebit-cloud-specific fields.
