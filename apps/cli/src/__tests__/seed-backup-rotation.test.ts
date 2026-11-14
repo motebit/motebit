@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { generate } from "@motebit/identity-file";
 import {
   bytesToHex,
+  hexToBytes,
   deriveSovereignMotebitId,
   generateKeypair,
   signKeySuccession,
@@ -247,6 +248,8 @@ describe("motebit rotate — a committed rotation invalidates the previous seed 
 
 /** A legacy (random, UUIDv7) motebit_id: never the sovereign commitment to any key. */
 const LEGACY_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+/** When the legacy acknowledgment was recorded. */
+const LEGACY_ACK_AT = Date.parse("2026-06-01T00:00:00.000Z");
 
 /** A never-rotated LEGACY identity with an acknowledgment from before the binding (unbound). */
 async function legacyIdentity(opts: { withFile: boolean }) {
@@ -255,7 +258,13 @@ async function legacyIdentity(opts: { withFile: boolean }) {
     fs.writeFileSync(
       identityPath(),
       await generate(
-        { motebitId: LEGACY_ID, ownerId: "owner", publicKeyHex: hex(a) },
+        {
+          motebitId: LEGACY_ID,
+          ownerId: "owner",
+          publicKeyHex: hex(a),
+          // Signed before the acknowledgment below: the identity's own file.
+          createdAt: new Date(LEGACY_ACK_AT - 86_400_000).toISOString(),
+        },
         a.privateKey,
       ),
     );
@@ -267,7 +276,7 @@ async function legacyIdentity(opts: { withFile: boolean }) {
       device_id: "legacy-laptop",
       device_public_key: hex(a),
       cli_encrypted_key: (await identity.encryptPrivateKey(bytesToHex(a.privateKey), PASS))!,
-      seed_backed_up_at: 1_000,
+      seed_backed_up_at: LEGACY_ACK_AT,
     }),
     { mode: 0o600 },
   );
@@ -280,13 +289,51 @@ describe("a legacy (unbound) acknowledgment is never a false alarm with false te
     expect(await status()).toBe("backed_up");
   });
 
+  it("a zero-succession motebit.md signed after the acknowledgment (a regenerate) reads re-confirm", async () => {
+    const { a } = await legacyIdentity({ withFile: false });
+    fs.writeFileSync(
+      identityPath(),
+      await generate(
+        {
+          motebitId: LEGACY_ID,
+          ownerId: LEGACY_ID,
+          publicKeyHex: hex(a),
+          createdAt: new Date(LEGACY_ACK_AT + 1).toISOString(),
+        },
+        a.privateKey,
+      ),
+    );
+    expect(await seed.seedBackupPostureOf(cfg.loadFullConfig())).toEqual({
+      status: "not_backed_up",
+      reason: "unconfirmed",
+    });
+  });
+
+  it("rotate, regenerate motebit.md for the new key, read: not backed up", async () => {
+    await legacyIdentity({ withFile: true });
+    expect(await status()).toBe("backed_up");
+    const o = await rotation.performRotation(deps());
+    if (o.kind !== "rotated") throw new Error("expected rotated");
+    // create-motebit's regenerate path: a FRESH file for the current key,
+    // no succession, dated now (generate's default).
+    const priv = await identity.decryptPrivateKey(cfg.loadFullConfig().cli_encrypted_key!, PASS);
+    fs.writeFileSync(
+      identityPath(),
+      await generate(
+        { motebitId: LEGACY_ID, ownerId: LEGACY_ID, publicKeyHex: o.newPublicKeyHex },
+        hexToBytes(priv),
+      ),
+    );
+    expect(await status()).toBe("not_backed_up");
+  });
+
   it("legacy id with unknown coverage reads 're-confirm', and nothing says 'retired'", async () => {
     await legacyIdentity({ withFile: false });
     const posture = await seed.seedBackupPostureOf(cfg.loadFullConfig());
     expect(posture).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
     const words = seed.seedBackupWording(posture);
-    for (const line of [words.nudge, words.doctor, words.detail]) {
-      expect(line).toContain("re-confirm your recovery seed");
+    for (const line of [words.nudge, words.doctor, words.detail, words.keychain]) {
+      expect(line.toLowerCase()).toContain("re-confirm your recovery seed");
       expect(line).not.toMatch(/retired/i);
     }
   });
@@ -300,6 +347,7 @@ describe("a legacy (unbound) acknowledgment is never a false alarm with false te
     const words = seed.seedBackupWording(await seed.seedBackupPostureOf(cfg.loadFullConfig()));
     expect(words.detail).toContain("retired key");
     expect(words.doctor).toContain("retired key");
+    expect(words.keychain).toContain("not backed up for the current key");
   });
 });
 

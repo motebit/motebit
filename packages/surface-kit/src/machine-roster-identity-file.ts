@@ -37,6 +37,20 @@ export interface BoundIdentityFile {
   records: KeySuccessionRecord[];
   /** The guardian the file names, when it is a well-formed (lowercase hex) key; else null. */
   guardian: string | null;
+  /**
+   * The file's `created_at` as epoch ms — a frontmatter field, so covered by
+   * the signature (spec/identity-v1.md §4.1, §4.4) — or null when absent or
+   * unparsable. Signer-asserted: it says when the holder of THIS key signed
+   * the file, never more.
+   */
+  createdAtMs: number | null;
+}
+
+/** A signed ISO 8601 `created_at` as epoch ms; null when absent or unparsable. */
+function parseCreatedAt(value: unknown): number | null {
+  if (typeof value !== "string" || value === "") return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
 }
 
 /**
@@ -62,6 +76,7 @@ export async function boundIdentityFile(
       publicKeyHex: held,
       records: [...(v.identity.succession ?? [])],
       guardian: typeof g === "string" && HEX_32.test(g) ? g : null,
+      createdAtMs: parseCreatedAt(v.identity.created_at),
     };
   } catch {
     return null;

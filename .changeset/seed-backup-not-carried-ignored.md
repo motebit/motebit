@@ -2,7 +2,7 @@
 "@motebit/surface-kit": patch
 ---
 
-`seedBackupPosture` gains an `identityFiles` input. A legacy (unbound) acknowledgment counts when one of those files is bound to the current key (checked with `boundIdentityFile`: the signature and succession chain verify, the file names this `motebit_id`, and its current key is the current key) and records zero successions. Until now only a v8 sovereign id could prove that.
+`seedBackupPosture` gains an `identityFiles` input. A legacy (unbound) acknowledgment counts when one of those files is bound to the current key (checked with `boundIdentityFile`: the signature and succession chain verify, the file names this `motebit_id`, and its current key is the current key) records zero successions, and was signed no later than the acknowledgment (its signed `created_at` ≤ the acknowledgment time; a file regenerated afterwards proves nothing). Until now only a v8 sovereign id could prove that. `BoundIdentityFile` gains `createdAtMs`.
 
 The not-backed-up posture now carries a `reason`:
 

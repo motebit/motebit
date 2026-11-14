@@ -17,6 +17,9 @@ const kitSrc = join(kitPkg, "src", "seed-backup.ts");
 const repo = join(kitPkg, "..", "..");
 const cliPkg = join(repo, "apps", "cli");
 const cliSeed = join(cliPkg, "src", "subcommands", "seed.ts");
+/** Round 3's fix: a zero-succession file counts only when signed no later than the acknowledgment. */
+const DATE_CHECK = "    if (bound.createdAtMs != null && bound.createdAtMs <= ackAt) return true;";
+const NO_DATE_CHECK = "    return true;";
 
 await runTampers(
   [
@@ -142,12 +145,12 @@ await runTampers(
       name: "kit: a zero-succession bound identity file no longer proves the genesis key",
       pkg: "@motebit/surface-kit",
       test: relative(kitPkg, join(here, "seed-backup.test.ts")),
-      red: "seedBackupPosture — the acknowledgment covers the key it names legacy acknowledgment (no key recorded) legacy (random) id, never rotated: a bound identity file with ZERO successions ⇒ backed up",
+      red: "seedBackupPosture — the acknowledgment covers the key it names legacy acknowledgment (no key recorded) legacy (random) id, never rotated: a bound zero-succession file signed BEFORE the acknowledgment ⇒ backed up",
       edits: [
         {
           file: kitSrc,
-          from: "    if (bound != null && bound.records.length === 0) return true;\n",
-          to: "    if (bound != null && bound.records.length < 0) return true;\n",
+          from: "    if (bound == null || bound.records.length !== 0) continue;",
+          to: "    if (bound == null || bound.records.length >= 0) continue;",
         },
       ],
     },
@@ -160,8 +163,8 @@ await runTampers(
       edits: [
         {
           file: kitSrc,
-          from: "    if (bound != null && bound.records.length === 0) return true;\n",
-          to: "    if (bound != null && bound.records.length < 0) return true;\n",
+          from: "    if (bound == null || bound.records.length !== 0) continue;",
+          to: "    if (bound == null || bound.records.length >= 0) continue;",
         },
       ],
     },
@@ -240,6 +243,63 @@ await runTampers(
           file: join(repo, "packages", "create-motebit", "src", "config-file.ts"),
           from: "        setAsideReplacedSeedBackup(onDisk as Record<string, unknown>, write);\n",
           to: "",
+        },
+      ],
+    },
+    // ── Round 3: a file regenerated after the acknowledgment proves nothing ──
+    {
+      name: "kit: the signed-date check is dropped (a regenerated file proves genesis again)",
+      pkg: "@motebit/surface-kit",
+      test: relative(kitPkg, join(here, "seed-backup.test.ts")),
+      red: "seedBackupPosture — the acknowledgment covers the key it names legacy acknowledgment (no key recorded) a zero-succession file signed AFTER the acknowledgment (a regenerate) proves nothing ⇒ unconfirmed",
+      edits: [{ file: kitSrc, from: DATE_CHECK, to: NO_DATE_CHECK }],
+    },
+    {
+      name: "kit: rotate + regenerate reads backed up without the signed-date check",
+      pkg: "@motebit/surface-kit",
+      test: relative(kitPkg, join(here, "seed-backup.test.ts")),
+      red: "seedBackupPosture — the acknowledgment covers the key it names legacy acknowledgment (no key recorded) rotate, regenerate a fresh zero-succession file for the new key, read ⇒ not backed up",
+      edits: [{ file: kitSrc, from: DATE_CHECK, to: NO_DATE_CHECK }],
+    },
+    {
+      name: "cli: rotate + regenerate motebit.md reads backed up without the signed-date check",
+      pkg: "motebit",
+      test: relative(cliPkg, join(cliPkg, "src", "__tests__", "seed-backup-rotation.test.ts")),
+      red: "a legacy (unbound) acknowledgment is never a false alarm with false text rotate, regenerate motebit.md for the new key, read: not backed up",
+      rebuild: ["@motebit/surface-kit"],
+      edits: [{ file: kitSrc, from: DATE_CHECK, to: NO_DATE_CHECK }],
+    },
+    {
+      name: "cli: a motebit.md signed after the acknowledgment reads backed up without the signed-date check",
+      pkg: "motebit",
+      test: relative(cliPkg, join(cliPkg, "src", "__tests__", "seed-backup-rotation.test.ts")),
+      red: "a legacy (unbound) acknowledgment is never a false alarm with false text a zero-succession motebit.md signed after the acknowledgment (a regenerate) reads re-confirm",
+      rebuild: ["@motebit/surface-kit"],
+      edits: [{ file: kitSrc, from: DATE_CHECK, to: NO_DATE_CHECK }],
+    },
+    {
+      name: "kit: the date comparison never passes (a file older than the acknowledgment stops counting)",
+      pkg: "@motebit/surface-kit",
+      test: relative(kitPkg, join(here, "seed-backup.test.ts")),
+      red: "seedBackupPosture — the acknowledgment covers the key it names legacy acknowledgment (no key recorded) legacy (random) id, never rotated: a bound zero-succession file signed BEFORE the acknowledgment ⇒ backed up",
+      edits: [
+        {
+          file: kitSrc,
+          from: DATE_CHECK,
+          to: "    if (bound.createdAtMs != null && bound.createdAtMs < 0) return true;",
+        },
+      ],
+    },
+    {
+      name: "cli: motebit keychain keeps the old 'still not backed up' text for unknown coverage",
+      pkg: "motebit",
+      test: relative(cliPkg, join(cliPkg, "src", "__tests__", "seed-backup-rotation.test.ts")),
+      red: "a legacy (unbound) acknowledgment is never a false alarm with false text legacy id with unknown coverage reads 're-confirm', and nothing says 'retired'",
+      edits: [
+        {
+          file: cliSeed,
+          from: '      keychain: "Please re-confirm your recovery seed.",',
+          to: '      keychain: "Your recovery seed is still not backed up.",',
         },
       ],
     },

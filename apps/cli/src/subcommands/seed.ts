@@ -130,12 +130,15 @@ export function seedBackupWording(posture: { status: string; reason?: string }):
   doctor: string;
   /** `motebit seed`'s explanation (empty when nothing more to say). */
   detail: string;
+  /** `motebit keychain enroll`'s headline. */
+  keychain: string;
 } {
   if (posture.status === "not_backed_up" && posture.reason === "retired_key") {
     return {
       nudge:
         "recovery seed not backed up for the current key — `motebit seed reveal` (once, on paper)",
       doctor: "recorded for a retired key; not recorded for the current one",
+      keychain: "Your recovery seed is not backed up for the current key.",
       detail:
         "  The seed you recorded is for a retired key. Keep it — it still recovers that key\n" +
         "  and anything left at its address — and record the current one.",
@@ -145,6 +148,7 @@ export function seedBackupWording(posture: { status: string; reason?: string }):
     return {
       nudge: "please re-confirm your recovery seed — `motebit seed reveal` (once, on paper)",
       doctor: "please re-confirm your recovery seed",
+      keychain: "Please re-confirm your recovery seed.",
       detail:
         "  Please re-confirm your recovery seed: this machine cannot tell which key the\n" +
         "  backup you recorded earlier covers.",
@@ -153,6 +157,7 @@ export function seedBackupWording(posture: { status: string; reason?: string }):
   return {
     nudge: "recovery seed not backed up — `motebit seed reveal` (once, on paper)",
     doctor: posture.status === "backed_up" ? "recovery seed recorded" : "not recorded",
+    keychain: "Your recovery seed is still not backed up.",
     detail: "",
   };
 }

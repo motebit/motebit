@@ -65,12 +65,21 @@ export type SeedBackupPosture =
  *     (`deriveSovereignMotebitId`); or
  *   - an identity file this surface holds is BOUND to it
  *     (`boundIdentityFile`: signature and chain verify, it names this
- *     motebit_id, its current key is the current key) and records ZERO
- *     successions — which works for a legacy (random) motebit_id too.
+ *     motebit_id, its current key is the current key), records ZERO
+ *     successions, AND was signed no later than the acknowledgment (its
+ *     signed `created_at` ≤ `ack.at`). The last condition is load-bearing:
+ *     a zero-succession file can be REGENERATED for the current key after
+ *     a rotation (create-motebit's regenerate path signs a fresh one, dated
+ *     now), and a file signed after the acknowledgment proves nothing about
+ *     what that acknowledgment covered. One signed before it does: keys
+ *     only move forward, so the key it names was already current at signing
+ *     and is still current now — it was the key the owner was shown.
+ *     Works for a legacy (random) motebit_id too.
  *
  * Any rotation ends both proofs, so an already-rotated owner who upgrades
  * reads "not backed up". Without either proof the coverage is unknown:
- * `unconfirmed`, never `retired_key`.
+ * `unconfirmed`, never `retired_key`. A false alarm costs one prompt; a
+ * false "backed up" can cost funds — so every doubt reads `unconfirmed`.
  */
 export async function seedBackupPosture(input: {
   ack: SeedBackupAcknowledgment;
@@ -91,17 +100,21 @@ export async function seedBackupPosture(input: {
   }
   // Legacy, unbound.
   if (current !== "" && motebitId != null && motebitId !== "") {
-    if (await isGenesisKey(current, motebitId, input.identityFiles ?? [])) {
+    if (await isGenesisKey(current, motebitId, ack.at, input.identityFiles ?? [])) {
       return { status: "backed_up", at: ack.at };
     }
   }
   return { status: "not_backed_up", reason: "unconfirmed" };
 }
 
-/** Is `current` provably the identity's genesis key? Never throws; false on any doubt. */
+/**
+ * Is `current` provably the key the acknowledgment (made at `ackAt`)
+ * covered? Never throws; false on any doubt.
+ */
 async function isGenesisKey(
   current: string,
   motebitId: string,
+  ackAt: number,
   identityFiles: readonly (string | null | undefined)[],
 ): Promise<boolean> {
   try {
@@ -111,7 +124,9 @@ async function isGenesisKey(
   }
   for (const content of identityFiles) {
     const bound = await boundIdentityFile(motebitId, content ?? null, current);
-    if (bound != null && bound.records.length === 0) return true;
+    if (bound == null || bound.records.length !== 0) continue;
+    // Signed after the acknowledgment (or undated): proves nothing about it.
+    if (bound.createdAtMs != null && bound.createdAtMs <= ackAt) return true;
   }
   return false;
 }
