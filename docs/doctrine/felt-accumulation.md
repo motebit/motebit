@@ -161,7 +161,7 @@ growing interior by betraying the substrate that makes the feeling earned.
 **Producers, per kind.** `consolidated_fact` is produced when the leveraged memory's
 `MemorySource` is `consolidation_derived` ("I pieced this together" vs "you told me"), else
 `recalled_memory`. `standing_delegation`'s real seam is the `verifiedGrant` auto-execution in
-`policy-gate`; it is minted in the accrual source, NOT in `ai-core`
+`policy-gate`; it is not yet produced, and when built it is minted in the accrual source, NOT in `ai-core`
 (`check-accrual-basis-canonical` forbids a kind literal there), with single-basis arbitration
 for a turn that both recalls and auto-runs. `trust_edge` and `prior_approval_pattern` are
 **deferred-until-seam**: a kind is produced only once its real decision exists — producing it
