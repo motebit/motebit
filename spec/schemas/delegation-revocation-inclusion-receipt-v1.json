@@ -1,9 +1,9 @@
 {
   "$comment": "SPDX-License-Identifier: Apache-2.0",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/delegation-revocation-receipt-v1.json",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/delegation-revocation-inclusion-receipt-v1.json",
   "title": "DelegationRevocationInclusionReceipt (v1)",
-  "description": "The relay's signed statement that it recorded one DelegationRevocation at `seq` (standing-delegation@1.3). With a later head from the same relay key covering `seq` but lacking the record, proves relay self-contradiction (omission) — never independent acceptance (same signer). Canonicalization: JCS (RFC 8785). Signature: Ed25519 over canonicalJson(body minus signature), base64url. See spec/standing-delegation-v1.md §5.3.",
+  "description": "The relay's signed statement that it recorded one DelegationRevocation at `seq` (standing-delegation@1.3). With a later set attestation from the same relay key covering `seq` but lacking the record, proves relay self-contradiction (omission) — never independent acceptance (same signer). Canonicalization: JCS (RFC 8785). Signature: Ed25519 over canonicalJson(body minus signature), base64url. See spec/standing-delegation-v1.md §5.3.",
   "type": "object",
   "properties": {
     "spec": {
@@ -11,7 +11,7 @@
       "const": "motebit/delegation-revocation-inclusion-receipt@1.0",
       "description": "Artifact discriminator (domain separation from every other relay-signed artifact)."
     },
-    "relay_id": {
+    "relay_motebit_id": {
       "type": "string",
       "minLength": 1,
       "description": "The relay's motebit identity."
@@ -26,7 +26,7 @@
       "minLength": 1,
       "description": "The recorded revocation's `grant_id`."
     },
-    "delegator_id": {
+    "delegator_motebit_id": {
       "type": "string",
       "minLength": 1,
       "description": "The recorded revocation's `delegator_id`."
@@ -40,7 +40,7 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 9007199254740991,
-      "description": "The receipt sequence number the relay assigned to the record. A later head from the same relay key with `seq_high_water >= seq` MUST carry the record at this seq; one that does not proves the relay contradicted itself."
+      "description": "The receipt sequence number the relay assigned to the record. A later set attestation from the same relay key with `seq_high_water >= seq` MUST carry the record at this seq; one that does not proves the relay contradicted itself."
     },
     "received_at": {
       "type": "integer",
@@ -61,10 +61,10 @@
   },
   "required": [
     "spec",
-    "relay_id",
+    "relay_motebit_id",
     "relay_public_key",
     "grant_id",
-    "delegator_id",
+    "delegator_motebit_id",
     "revocation_signature",
     "seq",
     "received_at",

@@ -192,76 +192,77 @@ The `DelegationRevocation` type in `@motebit/protocol` is the binding machine-re
 The relay-cache routes below are the binding cross-implementation contract for revocation propagation. The artifact is the security boundary on both: submission verifies the revocation's signature under a key the relay holds for its `delegator_id` (that IS the auth — anyone MAY propagate a revocation the delegator signed), and the cache read is public (a consumer building its `isRevoked` seam holds no relay token).
 
 - `POST /api/v1/delegations/revocations` — submit a signed `DelegationRevocation` (the §5.1 artifact verbatim). Recorded only after `verifyDelegationRevocation` passes AND `delegator_public_key` is a key the relay holds for `delegator_id` (its current identity key, registry key, or a device key; a key rotated away from no longer qualifies); idempotent on the signature. An invalid signature is rejected fail-closed (422); a valid signature under a key the named delegator does not hold — a stranger's own keypair, a rotated-out key, or a delegator the relay does not know — is refused (403). The embedded key proves only that someone signed; it never alone makes the signer the delegator. The artifact's own key is canonical (§5.1 — a non-canonical spelling fails `verifyDelegationRevocation` and is rejected); the comparison against the keys the relay HOLDS is case-insensitive, because a relay's legacy key rows may store another spelling of the same key. Known residual in the reference relay: its registration routes accept a key without proof of possession, so before a sovereign identity registers, another party can register that id under its own key and sign revocations in its name until the owner arrives; proof of possession at registration closes it.
-- `GET /api/v1/delegations/revocations` — read the cache incrementally via the optional `since=<ms>` query parameter. `since` filters on the relay's receipt clock (`received_at`, returned as `next_since`), never the signer-asserted `revoked_at`, so a backdated revocation cannot hide from a poller. Records are served verbatim; the response is a cache projection (§6 D2), not a relay assertion. **This unsigned feed is propagation-only: it MUST NOT be used as money evidence.** It can show that a revocation exists (each record is delegator-signed), but it cannot show that one does not: any server answering the relay's URL can serve an empty list. A consumer deciding whether a grant may move money MUST obtain a verified `DelegationRevocationHead` (§5.2).
+- `GET /api/v1/delegations/revocations` — read the cache incrementally via the optional `since=<ms>` query parameter. `since` filters on the relay's receipt clock (`received_at`, returned as `next_since`), never the signer-asserted `revoked_at`, so a backdated revocation cannot hide from a poller. Records are served verbatim; the response is a cache projection (§6 D2), not a relay assertion. **This unsigned feed is propagation-only: it MUST NOT be used as money evidence.** It can show that a revocation exists (each record is delegator-signed), but it cannot show that one does not: any server answering the relay's URL can serve an empty list. A consumer deciding whether a grant may move money MUST obtain a verified `DelegationRevocationSetAttestation` (§5.2).
 
-### 5.2 — DelegationRevocationHead
+### 5.2 — DelegationRevocationSetAttestation
 
-`standing-delegation@1.3` adds signed revocation evidence. A consumer can learn that a revocation EXISTS from any copy of it, because each `DelegationRevocation` is delegator-signed. Nothing in @1.0–@1.2 lets it learn that one does NOT exist. The head closes that gap: it is the relay's signed snapshot of every revocation it holds for one delegator, answering a challenge the consumer chose. It is the only source of "no revocation for this delegator as of `as_of`."
+`standing-delegation@1.3` adds signed revocation evidence. A consumer can learn that a revocation EXISTS from any copy of it, because each `DelegationRevocation` is delegator-signed. Nothing in @1.0–@1.2 lets it learn that one does NOT exist. The set attestation closes that gap: it is the relay's signed statement of every revocation it holds for one delegator, answering a challenge the consumer chose. The relay signs a statement about another party's revocation set (signer ≠ subject), so it is an attestation. It is the only source of "no revocation for this delegator as of `as_of`."
 
-**The head never confers authority.** It is an AND-condition on top of a verified grant (§3.1). A consumer that has the head refuses a grant when the union of its local revocations and the head's entries revokes it (the §5.1 binding check). A consumer that has no acceptable head refuses autonomous money outright.
+**The set attestation never confers authority.** It is an AND-condition on top of a verified grant (§3.1). A consumer that has one refuses a grant when the union of its local revocations and the attested entries revokes it (the §5.1 binding check). A consumer that has no acceptable set attestation refuses autonomous money outright.
 
 #### Wire format (foundation law)
 
 ```
-DelegationRevocationHead {
-  spec:             "motebit/delegation-revocation-head@1.0"  // artifact discriminator (domain separation)
-  relay_id:         string   // the relay's MotebitId
-  relay_public_key: string   // Ed25519, hex (64 lowercase). Compared to the key the consumer PINS; the embedded key alone proves nothing.
-  delegator_id:     string   // the delegator this head covers
-  challenge:        string   // consumer-chosen, echoed verbatim (1–256 chars)
-  as_of:            number   // Unix ms at which the relay assembled the head
-  seq_high_water:   number   // the relay's highest assigned receipt seq at as_of (non-negative integer)
-  count:            number   // MUST equal entries.length
-  entries:          Array<{ seq: number, received_at: number, record: DelegationRevocation }>
-                             // every revocation held for delegator_id with seq <= seq_high_water, strictly ascending by seq;
-                             // seq: positive integer; received_at: relay receipt clock (Unix ms); record: the §5.1 artifact verbatim
-  records_digest:   string   // hex(SHA-256(canonicalJson(entries))), 64 lowercase
-  suite:            "motebit-jcs-ed25519-b64-v1"
-  signature:        string   // base64url Ed25519 over canonicalJson(all fields except signature), by relay_public_key
+DelegationRevocationSetAttestation {
+  spec:                 "motebit/delegation-revocation-set-attestation@1.0"  // artifact discriminator (domain separation)
+  relay_motebit_id:     string   // the relay's MotebitId
+  relay_public_key:     string   // Ed25519, hex (64 lowercase). Compared to the key the consumer PINS; the embedded key alone proves nothing.
+  delegator_motebit_id: string   // the delegator whose revocation set this attests
+  challenge:            string   // consumer-chosen, echoed verbatim (1–256 chars)
+  as_of:                number   // Unix ms at which the relay assembled the attestation
+  seq_high_water:       number   // the relay's highest assigned receipt seq at as_of (non-negative integer)
+  count:                number   // MUST equal entries.length
+  entries:              Array<{ seq: number, received_at: number, record: DelegationRevocation }>
+                                 // every revocation held for delegator_motebit_id with seq <= seq_high_water, strictly ascending by seq;
+                                 // seq: positive integer; received_at: relay receipt clock (Unix ms);
+                                 // record: the §5.1 artifact verbatim (it keeps its own frozen delegator_id field)
+  records_digest:       string   // hex(SHA-256(canonicalJson(entries))), 64 lowercase
+  suite:                "motebit-jcs-ed25519-b64-v1"
+  signature:            string   // base64url Ed25519 over canonicalJson(all fields except signature), by relay_public_key
 }
 ```
 
-`seq` is the relay's receipt sequence: one counter for the whole relay, assigned when a revocation is first recorded and never reused or reassigned. `seq_high_water` is therefore relay-wide, and a head with no entries still says something: "nothing for this delegator up to seq N." `records_digest` covers only `entries`, never `challenge` or `as_of`, so two heads at the same `seq_high_water` are comparable by digest alone. A relay MUST NOT drop an entry from a head once it has receipted it (revocation is terminal, §6 D3).
+`seq` is the relay's receipt sequence: one counter for the whole relay, assigned when a revocation is first recorded and never reused or reassigned. `seq_high_water` is therefore relay-wide, and a set attestation with no entries still says something: "nothing for this delegator up to seq N." `records_digest` covers only `entries`, never `challenge` or `as_of`, so two set attestations at the same `seq_high_water` are comparable by digest alone. A relay MUST NOT drop an entry from a set attestation once it has receipted it (revocation is terminal, §6 D3).
 
-The `DelegationRevocationHead` type in `@motebit/protocol` is the binding machine-readable form; `DelegationRevocationHeadSchema` in `@motebit/wire-schemas` derives `spec/schemas/delegation-revocation-head-v1.json`.
+The `DelegationRevocationSetAttestation` type in `@motebit/protocol` is the binding machine-readable form; `DelegationRevocationSetAttestationSchema` in `@motebit/wire-schemas` derives `spec/schemas/delegation-revocation-set-attestation-v1.json`.
 
 #### Verification (foundation law)
 
-A consumer MUST refuse a head unless ALL hold, checked in this order (`@motebit/crypto` `verifyRevocationHead`, which returns a structured refusal, never a bare boolean):
+A consumer MUST refuse a set attestation unless ALL hold, checked in this order (`@motebit/crypto` `verifyRevocationSetAttestation`, which returns a structured refusal, never a bare boolean):
 
-1. **Schema.** The head is well formed; `suite` and `spec` are the pinned literals.
+1. **Schema.** The attestation is well formed; `suite` and `spec` are the pinned literals.
 2. **Pinned key.** `relay_public_key` equals the key the consumer pins for this relay (resolved through its own pin store, including key succession).
-3. **Signature.** The signature verifies over `canonicalJson(head minus signature)` under that key.
-4. **Challenge and delegator.** `challenge` equals the challenge the consumer sent. `delegator_id` equals the delegator it asked about, and so does every entry's `record.delegator_id`.
+3. **Signature.** The signature verifies over `canonicalJson(attestation minus signature)` under that key.
+4. **Challenge and delegator.** `challenge` equals the challenge the consumer sent. `delegator_motebit_id` equals the delegator it asked about, and every entry's `record.delegator_id` equals `delegator_motebit_id`.
 5. **Order.** Entries are strictly ascending by `seq`, and every `seq <= seq_high_water`.
 6. **Count.** `count == entries.length`.
 7. **Digest.** `records_digest == hex(SHA-256(canonicalJson(entries)))` (`computeRevocationRecordsDigest`).
 8. **Freshness.** `now − as_of <= window + skew` and `as_of − now <= skew`. RECOMMENDED: window 60 s, skew 60 s.
 9. **No rollback.** `seq_high_water` is at least the highest `seq_high_water` the consumer has already accepted from this relay key.
 
-A failure at steps 1–7 is `revocation_evidence_invalid`; at step 8, `revocation_evidence_stale`; at step 9, `revocation_evidence_rollback`. A consumer that cannot obtain a head (unreachable relay, timeout, 404, 5xx, malformed body) has `revocation_evidence_unavailable`. All four refuse autonomous money.
+A failure at steps 1–7 is `revocation_evidence_invalid`; at step 8, `revocation_evidence_stale`; at step 9, `revocation_evidence_rollback`. A consumer that cannot obtain a set attestation (unreachable relay, timeout, 404, 5xx, malformed body) has `revocation_evidence_unavailable`. All four refuse autonomous money.
 
 The verifier does not check each entry's delegator signature: an entry revokes a grant only through the §5.1 binding check (`findGrantRevocation`), which does.
 
-**Equivocation.** Two heads signed by the same relay key, for the same delegator, at the same `seq_high_water`, with different `records_digest`, prove that the relay equivocated (`detectRevocationEquivocation`). Detecting it requires two consumers to compare heads; nothing in this spec makes them do so.
+**Equivocation proof.** Two set attestations signed by the same relay key, for the same delegator, at the same `seq_high_water`, with different `records_digest`, prove that the relay equivocated (`verifyRevocationEquivocationProof`, whose `valid` means the proof holds). Detecting it requires two consumers to compare attestations; nothing in this spec makes them do so.
 
-#### Head route
+#### Set attestation route
 
-`GET /api/v1/delegations/revocations/head?delegator_id=<id>&challenge=<challenge>` returns a `DelegationRevocationHead`. It is public for the same reason the §5.1 read is. This route is normative for @1.3. It moves into the §5.1 `Routes (foundation law)` block when the reference relay serves it, because `check-spec-routes` fails on a declared route that no implementation serves.
+`GET /api/v1/delegations/revocations/head?delegator_motebit_id=<id>&challenge=<challenge>` is the route that serves the `DelegationRevocationSetAttestation` (the path keeps its earlier name). It is public for the same reason the §5.1 read is. This route is normative for @1.3. It moves into the §5.1 `Routes (foundation law)` block when the reference relay serves it, because `check-spec-routes` fails on a declared route that no implementation serves.
 
 ### 5.3 — DelegationRevocationInclusionReceipt
 
-A head alone cannot catch a relay that silently drops a revocation: the head would simply not list it. The inclusion receipt gives the submitter something to hold the relay to. It is the relay's signed statement that it recorded one revocation at one `seq`.
+A set attestation alone cannot catch a relay that silently drops a revocation: the attestation would simply not list it. The inclusion receipt gives the submitter something to hold the relay to. It is the relay's signed record of its own act of recording one revocation at one `seq` (signer = subject), so it is a receipt.
 
 #### Wire format (foundation law)
 
 ```
 DelegationRevocationInclusionReceipt {
   spec:                 "motebit/delegation-revocation-inclusion-receipt@1.0"  // artifact discriminator
-  relay_id:             string   // the relay's MotebitId
+  relay_motebit_id:     string   // the relay's MotebitId
   relay_public_key:     string   // Ed25519, hex (64 lowercase). Compared to the pinned key.
   grant_id:             string   // the recorded revocation's grant_id
-  delegator_id:         string   // the recorded revocation's delegator_id
+  delegator_motebit_id: string   // the recorded revocation's delegator_id
   revocation_signature: string   // the recorded revocation's signature, verbatim (the record's identity)
   seq:                  number   // the receipt seq the relay assigned (positive integer)
   received_at:          number   // relay receipt clock, Unix ms
@@ -270,17 +271,17 @@ DelegationRevocationInclusionReceipt {
 }
 ```
 
-The `DelegationRevocationInclusionReceipt` type in `@motebit/protocol` is the binding machine-readable form; `DelegationRevocationInclusionReceiptSchema` in `@motebit/wire-schemas` derives `spec/schemas/delegation-revocation-receipt-v1.json`.
+The `DelegationRevocationInclusionReceipt` type in `@motebit/protocol` is the binding machine-readable form; `DelegationRevocationInclusionReceiptSchema` in `@motebit/wire-schemas` derives `spec/schemas/delegation-revocation-inclusion-receipt-v1.json`.
 
 #### Foundation Law
 
 - A @1.3 relay MUST return the receipt in the `POST /api/v1/delegations/revocations` response body as `inclusion_receipt`, for a new record and for an already-recorded one alike (with the original `seq`; the route is idempotent on the signature).
-- A submitter MUST treat a revocation as propagated only when it holds a receipt that verifies (`verifyRevocationInclusionReceipt`): suite, spec, pinned key, signature, and `grant_id` / `delegator_id` / `revocation_signature` equal to the revocation it sent. Without one, it keeps the revocation queued and tells its owner plainly that the revocation is NOT propagated.
-- **Omission proof.** A verified receipt R and a verified head H, signed by the same relay key for the same delegator, with `H.seq_high_water >= R.seq`, where H does not carry the record at `R.seq` (matching `revocation_signature` and `grant_id`), prove that the relay contradicted itself (`detectRevocationOmission`). A consumer holding such a pair MUST refuse the head (`revocation_omission_detected`).
+- A submitter MUST treat a revocation as propagated only when it holds a receipt that verifies (`verifyRevocationInclusionReceipt`): suite, spec, pinned key, signature, and `grant_id` / `delegator_motebit_id` / `revocation_signature` equal to the revocation's `grant_id` / `delegator_id` / `signature`. Without one, it keeps the revocation queued and tells its owner plainly that the revocation is NOT propagated.
+- **Omission proof.** A verified receipt R and a verified set attestation A, signed by the same relay key for the same delegator, with `A.seq_high_water >= R.seq`, where A does not carry the record at `R.seq` (matching `revocation_signature` and `grant_id`), prove that the relay contradicted itself (`verifyRevocationOmissionProof`, whose `valid` means the proof holds). A consumer holding such a pair MUST refuse the attestation (`revocation_omission_detected`).
 
 #### Conformance
 
-[`spec/conformance/delegation-revocation-head/`](conformance/delegation-revocation-head/README.md) holds fixed-key, byte-stable vectors for §5.2–§5.3: every head refusal, the receipt checks, and the omission and equivocation checks. A second implementation runs its own law over each case and must produce the identical result. Regenerate with `npx tsx scripts/gen-delegation-revocation-head-corpus.ts`.
+[`spec/conformance/delegation-revocation-set-attestation/`](conformance/delegation-revocation-set-attestation/README.md) holds fixed-key, byte-stable vectors for §5.2–§5.3: every set-attestation refusal, the receipt checks, and both proof verifiers. A second implementation runs its own law over each case and must produce the identical result. Regenerate with `npx tsx scripts/gen-delegation-revocation-set-attestation-corpus.ts`.
 
 ## 6. Conventions
 
@@ -301,17 +302,17 @@ The `DelegationRevocationInclusionReceipt` type in `@motebit/protocol` is the bi
 
 ### 8.1 Revocation evidence (@1.3)
 
-**What a verified head guarantees.** Integrity (the pinned relay signed exactly these bytes). Freshness and no replay (`as_of` within the window, the consumer's own challenge echoed). No rollback against heads the consumer already accepted. Accountability: the relay has signed "these are all the revocations I hold for this delegator up to `seq_high_water`," so a relay that later shows a contradicting artifact has signed its own contradiction.
+**What a verified set attestation guarantees.** Integrity (the pinned relay signed exactly these bytes). Freshness and no replay (`as_of` within the window, the consumer's own challenge echoed). No rollback against attestations the consumer already accepted. Accountability: the relay has signed "these are all the revocations I hold for this delegator up to `seq_high_water`," so a relay that later shows a contradicting artifact has signed its own contradiction.
 
 **What it does not guarantee.**
 
-- **Completeness against omission.** A relay that never receipted a revocation can leave it out of every head, and no consumer can tell. The inclusion receipt (§5.3) narrows this to revocations whose submitter holds no verified receipt. That gap remains: a revocation submitted without a verified receipt can be omitted undetectably.
-- **Non-equivocation.** A relay can sign different heads for different consumers. `records_digest` makes two heads at the same `seq_high_water` comparable, so equivocation is provable when two heads meet. Nothing forces them to meet.
+- **Completeness against omission.** A relay that never receipted a revocation can leave it out of every set attestation, and no consumer can tell. The inclusion receipt (§5.3) narrows this to revocations whose submitter holds no verified receipt. That gap remains: a revocation submitted without a verified receipt can be omitted undetectably.
+- **Non-equivocation.** A relay can sign different set attestations for different consumers. `records_digest` makes two attestations at the same `seq_high_water` comparable, so equivocation is provable when two attestations meet. Nothing forces them to meet.
 
-**A receipt plus a later head proves self-contradiction, not independent acceptance.** The same key signs both. The pair shows that the relay said two incompatible things. It does not show that any third party saw, accepted or relayed the revocation.
+**A receipt plus a later set attestation proves self-contradiction, not independent acceptance.** The same key signs both. The pair shows that the relay said two incompatible things. It does not show that any third party saw, accepted or relayed the revocation.
 
 **Witnesses are not built.** No witness cosigning, gossip or transparency log backs these artifacts. A relay that controls everything a consumer sees can omit or equivocate within the limits above. Closing that needs independent observers, which this version does not define.
 
-**The revocation-to-broadcast race.** A revocation that reaches the relay after a consumer accepted a head, but before the consumer's irreversible payment broadcast, does not stop that payment: it still pays once. The exposure is bounded by the freshness window plus skew plus the broadcast latency, and by the grant's signed spend ceiling (§3.3). It is not zero.
+**The revocation-to-broadcast race.** A revocation that reaches the relay after a consumer accepted a set attestation, but before the consumer's irreversible payment broadcast, does not stop that payment: it still pays once. The exposure is bounded by the freshness window plus skew plus the broadcast latency, and by the grant's signed spend ceiling (§3.3). It is not zero.
 
-**Freshness MUST be re-checked at the irreversible payment boundary.** A head accepted at turn start can age past the window before the payment is broadcast. A consumer MUST re-check the accepted head's freshness immediately before every irreversible money action, not only at turn start, and refuse (`revocation_evidence_stale`) once it has aged out.
+**Freshness MUST be re-checked at the irreversible payment boundary.** A set attestation accepted at turn start can age past the window before the payment is broadcast. A consumer MUST re-check the accepted attestation's freshness immediately before every irreversible money action, not only at turn start, and refuse (`revocation_evidence_stale`) once it has aged out.

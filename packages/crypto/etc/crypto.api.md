@@ -17,9 +17,9 @@ import type { CostAttestationV1 } from '@motebit/protocol';
 import type { CostAttestationVerdict } from '@motebit/protocol';
 import type { CredentialBundle } from '@motebit/protocol';
 import type { DelegationRevocation } from '@motebit/protocol';
-import type { DelegationRevocationHead } from '@motebit/protocol';
-import type { DelegationRevocationHeadEntry } from '@motebit/protocol';
 import type { DelegationRevocationInclusionReceipt } from '@motebit/protocol';
+import type { DelegationRevocationSetAttestation } from '@motebit/protocol';
+import type { DelegationRevocationSetAttestationEntry } from '@motebit/protocol';
 import type { DelegationToken } from '@motebit/protocol';
 import type { DeletionCertificate } from '@motebit/protocol';
 import type { DepartureAttestation } from '@motebit/protocol';
@@ -262,7 +262,7 @@ export function computeFederationSettlementLeaf(settlement: Record<string, unkno
 export const COMPUTER_SESSION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public
-export function computeRevocationRecordsDigest(entries: readonly DelegationRevocationHeadEntry[]): Promise<string>;
+export function computeRevocationRecordsDigest(entries: readonly DelegationRevocationSetAttestationEntry[]): Promise<string>;
 
 // @public
 export function computeSyncEventDigest(entry: unknown): Promise<string>;
@@ -410,13 +410,13 @@ export function decodeSkillSignaturePublicKey(sig: SkillSignature): Uint8Array;
 export const DEFAULT_SIGNED_TOKEN_TTL_MS: number;
 
 // @public
-export const DELEGATION_REVOCATION_HEAD_SPEC_MIRROR: "motebit/delegation-revocation-head@1.0";
-
-// @public
-export const DELEGATION_REVOCATION_HEAD_SUITE: "motebit-jcs-ed25519-b64-v1";
+export const DELEGATION_REVOCATION_EVIDENCE_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 // @public (undocumented)
 export const DELEGATION_REVOCATION_INCLUSION_RECEIPT_SPEC_MIRROR: "motebit/delegation-revocation-inclusion-receipt@1.0";
+
+// @public
+export const DELEGATION_REVOCATION_SET_ATTESTATION_SPEC_MIRROR: "motebit/delegation-revocation-set-attestation@1.0";
 
 // @public
 export const DELEGATION_TOKEN_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -457,12 +457,6 @@ export interface DeletionCertificateVerifyResult {
 
 // @public
 export function deriveSovereignMotebitId(genesisPublicKeyHex: string): Promise<string>;
-
-// @public
-export function detectRevocationEquivocation(headA: DelegationRevocationHead, headB: DelegationRevocationHead): Promise<boolean>;
-
-// @public
-export function detectRevocationOmission(receipt: DelegationRevocationInclusionReceipt, head: DelegationRevocationHead): Promise<boolean>;
 
 // @public
 export const DEVICE_REGISTRATION_MAX_AGE_MS: number;
@@ -1295,10 +1289,10 @@ export interface ReceiptVerifyResult extends BaseResult {
 }
 
 // @public
-export const REFERENCE_REVOCATION_HEAD_CLOCK_SKEW_MS = 60000;
+export const REFERENCE_REVOCATION_SET_ATTESTATION_CLOCK_SKEW_MS = 60000;
 
 // @public
-export const REFERENCE_REVOCATION_HEAD_MAX_AGE_MS = 60000;
+export const REFERENCE_REVOCATION_SET_ATTESTATION_MAX_AGE_MS = 60000;
 
 // @public
 export type RelayFeeRateVerification = {
@@ -1378,16 +1372,22 @@ export interface RevocationAnchorVerifyResult {
     valid: boolean;
 }
 
+// @public
+export type RevocationEquivocationProofFailureReason = "unsupported_spec" | "malformed_artifact" | "relay_key_mismatch" | "delegator_mismatch" | "seq_high_water_differs" | "same_records_digest" | "signature_invalid";
+
 export { RevocationFreshness }
 
 // @public
-export type RevocationHeadFailureReason = "missing_expectation" | "malformed_head" | "unsupported_suite" | "unsupported_spec" | "malformed_public_key" | "public_key_mismatch" | "malformed_signature" | "signature_invalid" | "challenge_mismatch" | "delegator_mismatch" | "entries_out_of_order" | "entry_seq_exceeds_high_water" | "count_mismatch" | "records_digest_mismatch" | "stale" | "future_as_of" | "rollback";
-
-// @public
-export type RevocationHeadRefusal = "revocation_evidence_invalid" | "revocation_evidence_stale" | "revocation_evidence_rollback";
-
-// @public
 export type RevocationInclusionReceiptFailureReason = "missing_expectation" | "malformed_receipt" | "unsupported_suite" | "unsupported_spec" | "malformed_public_key" | "public_key_mismatch" | "malformed_signature" | "signature_invalid" | "revocation_mismatch";
+
+// @public
+export type RevocationOmissionProofFailureReason = "unsupported_spec" | "malformed_artifact" | "relay_key_mismatch" | "delegator_mismatch" | "seq_not_covered" | "signature_invalid" | "record_carried";
+
+// @public
+export type RevocationSetAttestationFailureReason = "missing_expectation" | "malformed_attestation" | "unsupported_suite" | "unsupported_spec" | "malformed_public_key" | "public_key_mismatch" | "malformed_signature" | "signature_invalid" | "challenge_mismatch" | "delegator_mismatch" | "entries_out_of_order" | "entry_seq_exceeds_high_water" | "count_mismatch" | "records_digest_mismatch" | "stale" | "future_as_of" | "rollback";
+
+// @public
+export type RevocationSetAttestationRefusal = "revocation_evidence_invalid" | "revocation_evidence_stale" | "revocation_evidence_rollback";
 
 export { RevocationStatus }
 
@@ -1862,16 +1862,16 @@ export function signRequestEnvelope(payload: unknown, fields: {
 }, identityPrivateKey: Uint8Array): Promise<SignedRequestEnvelope>;
 
 // @public
-export function signRevocationHead(body: Omit<DelegationRevocationHead, "signature" | "suite" | "spec" | "count" | "records_digest">, relayPrivateKey: Uint8Array): Promise<DelegationRevocationHead>;
-
-// @public
 export function signRevocationInclusionReceipt(body: {
-    relay_id: string;
+    relay_motebit_id: string;
     relay_public_key: string;
     revocation: DelegationRevocation;
     seq: number;
     received_at: number;
 }, relayPrivateKey: Uint8Array): Promise<DelegationRevocationInclusionReceipt>;
+
+// @public
+export function signRevocationSetAttestation(body: Omit<DelegationRevocationSetAttestation, "signature" | "suite" | "spec" | "count" | "records_digest">, relayPrivateKey: Uint8Array): Promise<DelegationRevocationSetAttestation>;
 
 // @public
 export function signRoutingTranscript(body: Omit<RoutingDecisionTranscript, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<RoutingDecisionTranscript>;
@@ -2435,26 +2435,14 @@ export function verifyRevocationAnchor(proof: RevocationAnchorProof, revocationP
 }) => Promise<boolean>): Promise<RevocationAnchorVerifyResult>;
 
 // @public
-export function verifyRevocationHead(head: DelegationRevocationHead, expected: VerifyRevocationHeadExpectations): Promise<VerifyRevocationHeadResult>;
+export function verifyRevocationEquivocationProof(a: DelegationRevocationSetAttestation, b: DelegationRevocationSetAttestation): Promise<VerifyRevocationEquivocationProofResult>;
 
 // @public
-export interface VerifyRevocationHeadExpectations {
-    readonly challenge: string;
-    readonly clockSkewMs?: number;
-    readonly delegatorId: string;
-    readonly lastSeenSeq: number;
-    readonly maxAgeMs?: number;
-    readonly now: number;
-    readonly pinnedRelayPublicKey: string;
-}
-
-// @public
-export type VerifyRevocationHeadResult = {
+export type VerifyRevocationEquivocationProofResult = {
     readonly valid: true;
 } | {
     readonly valid: false;
-    readonly refusal: RevocationHeadRefusal;
-    readonly reason: RevocationHeadFailureReason;
+    readonly reason: RevocationEquivocationProofFailureReason;
 };
 
 // @public
@@ -2472,6 +2460,40 @@ export type VerifyRevocationInclusionReceiptResult = {
 } | {
     readonly valid: false;
     readonly reason: RevocationInclusionReceiptFailureReason;
+};
+
+// @public
+export function verifyRevocationOmissionProof(receipt: DelegationRevocationInclusionReceipt, attestation: DelegationRevocationSetAttestation): Promise<VerifyRevocationOmissionProofResult>;
+
+// @public
+export type VerifyRevocationOmissionProofResult = {
+    readonly valid: true;
+} | {
+    readonly valid: false;
+    readonly reason: RevocationOmissionProofFailureReason;
+};
+
+// @public
+export function verifyRevocationSetAttestation(attestation: DelegationRevocationSetAttestation, expected: VerifyRevocationSetAttestationExpectations): Promise<VerifyRevocationSetAttestationResult>;
+
+// @public
+export interface VerifyRevocationSetAttestationExpectations {
+    readonly challenge: string;
+    readonly clockSkewMs?: number;
+    readonly delegatorMotebitId: string;
+    readonly lastSeenSeq: number;
+    readonly maxAgeMs?: number;
+    readonly now: number;
+    readonly pinnedRelayPublicKey: string;
+}
+
+// @public
+export type VerifyRevocationSetAttestationResult = {
+    readonly valid: true;
+} | {
+    readonly valid: false;
+    readonly refusal: RevocationSetAttestationRefusal;
+    readonly reason: RevocationSetAttestationFailureReason;
 };
 
 // @public

@@ -7,7 +7,7 @@
 import { describe, it, expect } from "vitest";
 import {
   StandingDelegationSchema,
-  DelegationRevocationHeadSchema,
+  DelegationRevocationSetAttestationSchema,
   DelegationRevocationInclusionReceiptSchema,
 } from "../standing-delegation.js";
 
@@ -91,12 +91,12 @@ function revocation(): Record<string, unknown> {
   };
 }
 
-function baseHead(): Record<string, unknown> {
+function baseAttestation(): Record<string, unknown> {
   return {
-    spec: "motebit/delegation-revocation-head@1.0",
-    relay_id: "relay-1",
+    spec: "motebit/delegation-revocation-set-attestation@1.0",
+    relay_motebit_id: "relay-1",
     relay_public_key: "d".repeat(64),
-    delegator_id: "did:motebit:alice",
+    delegator_motebit_id: "did:motebit:alice",
     challenge: "nonce-1",
     as_of: 1_700_000_100_000,
     seq_high_water: 9,
@@ -104,17 +104,17 @@ function baseHead(): Record<string, unknown> {
     entries: [{ seq: 4, received_at: 1_700_000_000_500, record: revocation() }],
     records_digest: "e".repeat(64),
     suite: "motebit-jcs-ed25519-b64-v1",
-    signature: "head-sig",
+    signature: "attestation-sig",
   };
 }
 
 function baseReceipt(): Record<string, unknown> {
   return {
     spec: "motebit/delegation-revocation-inclusion-receipt@1.0",
-    relay_id: "relay-1",
+    relay_motebit_id: "relay-1",
     relay_public_key: "d".repeat(64),
     grant_id: "grant-1",
-    delegator_id: "did:motebit:alice",
+    delegator_motebit_id: "did:motebit:alice",
     revocation_signature: "rev-sig",
     seq: 4,
     received_at: 1_700_000_000_500,
@@ -123,22 +123,26 @@ function baseReceipt(): Record<string, unknown> {
   };
 }
 
-describe("DelegationRevocationHeadSchema (@1.3)", () => {
-  it("parses a well-formed head and preserves its entries", () => {
-    const parsed = DelegationRevocationHeadSchema.parse(baseHead());
+describe("DelegationRevocationSetAttestationSchema (@1.3)", () => {
+  it("parses a well-formed attestation and preserves its entries", () => {
+    const parsed = DelegationRevocationSetAttestationSchema.parse(baseAttestation());
     expect(parsed.entries[0]!.record.grant_id).toBe("grant-1");
   });
 
-  it("parses an empty head (absence evidence)", () => {
+  it("parses an empty attestation (absence evidence)", () => {
     expect(() =>
-      DelegationRevocationHeadSchema.parse({ ...baseHead(), entries: [], count: 0 }),
+      DelegationRevocationSetAttestationSchema.parse({
+        ...baseAttestation(),
+        entries: [],
+        count: 0,
+      }),
     ).not.toThrow();
   });
 
   it("rejects another spec discriminator (domain separation)", () => {
     expect(() =>
-      DelegationRevocationHeadSchema.parse({
-        ...baseHead(),
+      DelegationRevocationSetAttestationSchema.parse({
+        ...baseAttestation(),
         spec: "motebit/delegation-revocation-inclusion-receipt@1.0",
       }),
     ).toThrow();
@@ -146,38 +150,51 @@ describe("DelegationRevocationHeadSchema (@1.3)", () => {
 
   it("rejects a non-canonical relay key", () => {
     expect(() =>
-      DelegationRevocationHeadSchema.parse({ ...baseHead(), relay_public_key: "D".repeat(64) }),
+      DelegationRevocationSetAttestationSchema.parse({
+        ...baseAttestation(),
+        relay_public_key: "D".repeat(64),
+      }),
     ).toThrow();
   });
 
   it("rejects a non-integer, zero or negative entry seq", () => {
     for (const seq of [0, 1.5, -1]) {
-      const h = baseHead();
+      const h = baseAttestation();
       h.entries = [{ seq, received_at: 1, record: revocation() }];
-      expect(() => DelegationRevocationHeadSchema.parse(h)).toThrow();
+      expect(() => DelegationRevocationSetAttestationSchema.parse(h)).toThrow();
     }
   });
 
   it("rejects a non-hex records_digest", () => {
     expect(() =>
-      DelegationRevocationHeadSchema.parse({ ...baseHead(), records_digest: "zz" }),
+      DelegationRevocationSetAttestationSchema.parse({
+        ...baseAttestation(),
+        records_digest: "zz",
+      }),
     ).toThrow();
   });
 
-  it("rejects an unknown key on the head, an entry, or a record (strict)", () => {
-    expect(() => DelegationRevocationHeadSchema.parse({ ...baseHead(), surprise: 1 })).toThrow();
-    const e = baseHead();
+  it("rejects an unknown key on the attestation, an entry, or a record (strict)", () => {
+    expect(() =>
+      DelegationRevocationSetAttestationSchema.parse({ ...baseAttestation(), surprise: 1 }),
+    ).toThrow();
+    const e = baseAttestation();
     e.entries = [{ seq: 4, received_at: 1, record: revocation(), extra: true }];
-    expect(() => DelegationRevocationHeadSchema.parse(e)).toThrow();
-    const r = baseHead();
+    expect(() => DelegationRevocationSetAttestationSchema.parse(e)).toThrow();
+    const r = baseAttestation();
     r.entries = [{ seq: 4, received_at: 1, record: { ...revocation(), extra: true } }];
-    expect(() => DelegationRevocationHeadSchema.parse(r)).toThrow();
+    expect(() => DelegationRevocationSetAttestationSchema.parse(r)).toThrow();
   });
 
   it("rejects an empty or oversized challenge", () => {
-    expect(() => DelegationRevocationHeadSchema.parse({ ...baseHead(), challenge: "" })).toThrow();
     expect(() =>
-      DelegationRevocationHeadSchema.parse({ ...baseHead(), challenge: "x".repeat(257) }),
+      DelegationRevocationSetAttestationSchema.parse({ ...baseAttestation(), challenge: "" }),
+    ).toThrow();
+    expect(() =>
+      DelegationRevocationSetAttestationSchema.parse({
+        ...baseAttestation(),
+        challenge: "x".repeat(257),
+      }),
     ).toThrow();
   });
 });
@@ -187,11 +204,11 @@ describe("DelegationRevocationInclusionReceiptSchema (@1.3)", () => {
     expect(DelegationRevocationInclusionReceiptSchema.parse(baseReceipt()).seq).toBe(4);
   });
 
-  it("rejects the head's spec discriminator (domain separation)", () => {
+  it("rejects the attestation's spec discriminator (domain separation)", () => {
     expect(() =>
       DelegationRevocationInclusionReceiptSchema.parse({
         ...baseReceipt(),
-        spec: "motebit/delegation-revocation-head@1.0",
+        spec: "motebit/delegation-revocation-set-attestation@1.0",
       }),
     ).toThrow();
   });

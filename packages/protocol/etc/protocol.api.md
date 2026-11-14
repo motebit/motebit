@@ -1365,10 +1365,10 @@ export interface DelegateSignature {
 }
 
 // @public
-export const DELEGATION_REVOCATION_HEAD_SPEC_ID: "motebit/delegation-revocation-head@1.0";
+export const DELEGATION_REVOCATION_INCLUSION_RECEIPT_SPEC_ID: "motebit/delegation-revocation-inclusion-receipt@1.0";
 
 // @public
-export const DELEGATION_REVOCATION_INCLUSION_RECEIPT_SPEC_ID: "motebit/delegation-revocation-inclusion-receipt@1.0";
+export const DELEGATION_REVOCATION_SET_ATTESTATION_SPEC_ID: "motebit/delegation-revocation-set-attestation@1.0";
 
 // @public
 export interface DelegationReceiptLike {
@@ -1409,40 +1409,40 @@ export interface DelegationRevocation {
 }
 
 // @public
-export interface DelegationRevocationHead {
-    as_of: number;
-    challenge: string;
-    count: number;
-    delegator_id: string;
-    entries: DelegationRevocationHeadEntry[];
-    records_digest: string;
-    relay_id: string;
-    relay_public_key: string;
-    seq_high_water: number;
-    signature: string;
-    spec: "motebit/delegation-revocation-head@1.0";
-    suite: "motebit-jcs-ed25519-b64-v1";
-}
-
-// @public
-export interface DelegationRevocationHeadEntry {
-    received_at: number;
-    record: DelegationRevocation;
-    seq: number;
-}
-
-// @public
 export interface DelegationRevocationInclusionReceipt {
-    delegator_id: string;
+    delegator_motebit_id: string;
     grant_id: string;
     received_at: number;
-    relay_id: string;
+    relay_motebit_id: string;
     relay_public_key: string;
     revocation_signature: string;
     seq: number;
     signature: string;
     spec: "motebit/delegation-revocation-inclusion-receipt@1.0";
     suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
+export interface DelegationRevocationSetAttestation {
+    as_of: number;
+    challenge: string;
+    count: number;
+    delegator_motebit_id: string;
+    entries: DelegationRevocationSetAttestationEntry[];
+    records_digest: string;
+    relay_motebit_id: string;
+    relay_public_key: string;
+    seq_high_water: number;
+    signature: string;
+    spec: "motebit/delegation-revocation-set-attestation@1.0";
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
+export interface DelegationRevocationSetAttestationEntry {
+    received_at: number;
+    record: DelegationRevocation;
+    seq: number;
 }
 
 // @public

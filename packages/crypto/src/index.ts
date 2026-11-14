@@ -3431,28 +3431,32 @@ export type {
   SyncDigestHash,
 } from "./sync-hold-receipt.js";
 export {
-  signRevocationHead,
-  verifyRevocationHead,
+  signRevocationSetAttestation,
+  verifyRevocationSetAttestation,
   signRevocationInclusionReceipt,
   verifyRevocationInclusionReceipt,
   computeRevocationRecordsDigest,
-  detectRevocationOmission,
-  detectRevocationEquivocation,
-  DELEGATION_REVOCATION_HEAD_SUITE,
-  DELEGATION_REVOCATION_HEAD_SPEC_MIRROR,
+  verifyRevocationOmissionProof,
+  verifyRevocationEquivocationProof,
+  DELEGATION_REVOCATION_EVIDENCE_SUITE,
+  DELEGATION_REVOCATION_SET_ATTESTATION_SPEC_MIRROR,
   DELEGATION_REVOCATION_INCLUSION_RECEIPT_SPEC_MIRROR,
-  REFERENCE_REVOCATION_HEAD_MAX_AGE_MS,
-  REFERENCE_REVOCATION_HEAD_CLOCK_SKEW_MS,
-} from "./delegation-revocation-head.js";
+  REFERENCE_REVOCATION_SET_ATTESTATION_MAX_AGE_MS,
+  REFERENCE_REVOCATION_SET_ATTESTATION_CLOCK_SKEW_MS,
+} from "./delegation-revocation-set-attestation.js";
 export type {
-  RevocationHeadRefusal,
-  RevocationHeadFailureReason,
-  VerifyRevocationHeadResult,
-  VerifyRevocationHeadExpectations,
+  RevocationSetAttestationRefusal,
+  RevocationSetAttestationFailureReason,
+  VerifyRevocationSetAttestationResult,
+  VerifyRevocationSetAttestationExpectations,
+  RevocationOmissionProofFailureReason,
+  VerifyRevocationOmissionProofResult,
+  RevocationEquivocationProofFailureReason,
+  VerifyRevocationEquivocationProofResult,
   RevocationInclusionReceiptFailureReason,
   VerifyRevocationInclusionReceiptResult,
   VerifyRevocationInclusionReceiptExpectations,
-} from "./delegation-revocation-head.js";
+} from "./delegation-revocation-set-attestation.js";
 export {
   computeCredentialLeaf,
   verifyCredentialAnchor,

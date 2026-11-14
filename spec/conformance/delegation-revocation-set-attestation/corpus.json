@@ -1,17 +1,17 @@
 {
-  "schema": "motebit.delegation-revocation-head-corpus.v1",
+  "schema": "motebit.delegation-revocation-set-attestation-corpus.v1",
   "spec": "standing-delegation@1.3 §5.2–§5.3",
   "cases": [
     {
-      "name": "head-clean",
-      "check": "head",
-      "description": "A head the pinned relay signed.",
+      "name": "attestation-clean",
+      "check": "attestation",
+      "description": "An attestation the pinned relay signed.",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -44,12 +44,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -59,15 +59,15 @@
       }
     },
     {
-      "name": "head-empty",
-      "check": "head",
+      "name": "attestation-empty",
+      "check": "attestation",
       "description": "No revocations for the delegator: positive absence evidence.",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 0,
@@ -75,12 +75,12 @@
           "entries": [],
           "records_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "1lVV0pSD7v2j2nIQZA9sSPV1QLHWpmtWk-6mb_cICus5fL5w_jg4bZEK_Pj0FUqnvkBEQPmroVPhvbbTinDFAQ"
+          "signature": "iX4ndELx1hEDGlCR4AuYIEtT833z9q7Z8pUE0IC34gmnm_tWJdc1sGDYEQU_EJlmgX7O3MPUZdDf-DDbDq3AAw"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -90,15 +90,15 @@
       }
     },
     {
-      "name": "head-wrong-key",
-      "check": "head",
+      "name": "attestation-wrong-key",
+      "check": "attestation",
       "description": "Signed by a relay key other than the pinned one.",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "fa01347a991e04ae0f1a6d81db29a5ea4eeb5965f577ac9efb44e7b1f2fbb028",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -131,12 +131,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "U_TAxNfJO74D8XcyPeP69hTv-_gw5kV-H2q6m4UDnaQ9vMnrQ5KxV-5C_mJF3sYw3o_rsqzpdE8RpIuEjB7EAg"
+          "signature": "lny_CsM3aSwlGJZhMWsdkcxIIcInwDrD5VoYdzlvHas7CeQxUXLQebPyVQu2mxWfCC1u266zOlFf6pxFipN9AQ"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -148,15 +148,15 @@
       }
     },
     {
-      "name": "head-bad-signature",
-      "check": "head",
+      "name": "attestation-bad-signature",
+      "check": "attestation",
       "description": "as_of changed after signing.",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1799999999999,
           "seq_high_water": 10,
@@ -189,12 +189,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -206,15 +206,15 @@
       }
     },
     {
-      "name": "head-malformed-signature",
-      "check": "head",
+      "name": "attestation-malformed-signature",
+      "check": "attestation",
       "description": "Signature is not 64 base64url bytes.",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -252,7 +252,7 @@
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -264,15 +264,15 @@
       }
     },
     {
-      "name": "head-challenge-mismatch",
-      "check": "head",
+      "name": "attestation-challenge-mismatch",
+      "check": "attestation",
       "description": "Answers another consumer's challenge.",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "someone-elses-challenge",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -305,12 +305,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "ERcUox4t1bD3wtFM902Ihh8ezf0tzoXutwW0Dy0M63sMwUcHf3U6mga-RPDIKK3EUhw2MEZmeKSRxHaM_lNdAA"
+          "signature": "q3e26wtxNFnNWMjKYpXH4pI4hLGyBkbUBi8mzc7x76CVWw-E132QMK-9tCxLVmyvdhdqdfg4gKLZLIFH-sFdCQ"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -322,15 +322,15 @@
       }
     },
     {
-      "name": "head-delegator-mismatch",
-      "check": "head",
+      "name": "attestation-delegator-mismatch",
+      "check": "attestation",
       "description": "Covers another delegator.",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d2",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d2",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -338,12 +338,12 @@
           "entries": [],
           "records_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "PfEBHEd-9G7c41zfL3fKBnjgRo_yoZmdyWlGXxD6PVTn1tG6VTdtKpf3tOHDcCVJFdwG80-iXuXG1l54aIUfCA"
+          "signature": "L9Y0CF9C-HHbt8eKcfTxfn3B1QUpb7Cbn_-FN-oPWyAVQAgSk3Ucdya6NzkGgYt2y_GcrFMOEGnAqnphxhSUBA"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -355,15 +355,15 @@
       }
     },
     {
-      "name": "head-foreign-entry",
-      "check": "head",
+      "name": "attestation-foreign-entry",
+      "check": "attestation",
       "description": "Carries an entry for another delegator (forged).",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -408,12 +408,12 @@
           ],
           "records_digest": "4512b5109d0afa2a97786b453280ab29b3e304c9b098eba4da592b78efef8ffb",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "fyNCLZX1kj6yWd1pam6za8c8h0vD0opNOwy9jMOn4vUe1bogEjTY_CzCjujKkHsZfb4TUOsdFzUcQOnVDF81Aw"
+          "signature": "l2dnq_k9s9M68XIFkuOk2pBk-k7XIX6UZF8HVq87C7U1br6wDcQhuMtQuS8ipzSJ2o4N1L5ibr1Kd41N-DfEAQ"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -425,15 +425,15 @@
       }
     },
     {
-      "name": "head-out-of-order",
-      "check": "head",
+      "name": "attestation-out-of-order",
+      "check": "attestation",
       "description": "Entries not strictly ascending by seq (forged).",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -466,12 +466,12 @@
           ],
           "records_digest": "0aa13d934d31b9256bb0267cc193255eea7947e34af133e2e1b537cf75aa3ce4",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "qr8m_MwtaQ9ZjpmShpZ6Osk6DkhweexkcdDAXAbaJ4PWKO5njemVDhJnnoAqPQYVTpDEjdu9r3ttyabGtHe7CA"
+          "signature": "wNWINmFv7QgrVkCWvjv_DvHhAmdrhTXzuvo0cXN_vqSE7txT0cRL2v4-IHO_SLvilOPukHbpsnPYaMmAPa72BQ"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -483,15 +483,15 @@
       }
     },
     {
-      "name": "head-seq-above-high-water",
-      "check": "head",
+      "name": "attestation-seq-above-high-water",
+      "check": "attestation",
       "description": "An entry seq exceeds seq_high_water (forged).",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 5,
@@ -524,12 +524,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "LEr3aT9mh-naYALIoZqv-NwXh1-5t6oyjBc2c8sJESAuTFvOTFq21oaPCLzMdkKLEHJQ-XI_DCF3ut2w3hbEBQ"
+          "signature": "c5i0gTEYwVjPMyK9-KYQkXdHho-W-xm2YUCh2AO99bfo4WD3Lu7m3pxmJlbD_fnpbqEnDb4sGd8ho9O3_vV9DA"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -541,15 +541,15 @@
       }
     },
     {
-      "name": "head-count-mismatch",
-      "check": "head",
+      "name": "attestation-count-mismatch",
+      "check": "attestation",
       "description": "count disagrees with entries (forged).",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -582,12 +582,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "jWDne8F3d05PvN7MO_iuLYyIUkQ2fRBF2AEvmChMbzJId9sW24U-CMKk_MHZN2alGI281AIDjubyomXaQzcfCA"
+          "signature": "p5vQZArYkMYZWiB3Uo2yoU-EfBOd55-xGC7UW4Ls1oUE1r35LJzzxjTadjenwE0swABZ5smYtquNKjD4VjZzBA"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -599,15 +599,15 @@
       }
     },
     {
-      "name": "head-digest-mismatch",
-      "check": "head",
+      "name": "attestation-digest-mismatch",
+      "check": "attestation",
       "description": "records_digest disagrees with entries (forged).",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -640,12 +640,12 @@
           ],
           "records_digest": "0000000000000000000000000000000000000000000000000000000000000000",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "Qh-y-mc8g0AaUY-SbckvgRE2nKhRqceikMpOYd1IbAMet11Vh-8GQv5t2IdkLlSGdmqhsm7mwnQUbih39YJ2Cw"
+          "signature": "sFkOeNk41DmlsQzoaOwyZzcxlb_ZPX6jNhiIkQrll_xDLMaeHrS8Vgumv2-H_rGsxL5q86l8oRBRnRnJp7rnBQ"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -657,15 +657,15 @@
       }
     },
     {
-      "name": "head-stale",
-      "check": "head",
+      "name": "attestation-stale",
+      "check": "attestation",
       "description": "as_of older than window (60 s) plus skew (60 s).",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1799999879999,
           "seq_high_water": 10,
@@ -698,12 +698,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "QdXtjfIhI9LC5N9YV7CtDVzaZkTUEQz77pIYElkVBuHeuwRzo9J00mFGciSB3udfVdNEkJ-U6_Lhbd8cYamSCg"
+          "signature": "9DnFTN6U0tCX3RGoIbko5OuG3WmKYjmrnmDjc7xM9cAI8iQALJX5HvLlE4Se_UaP2f51z4RjK8zFIKBs7ofOCA"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -715,15 +715,15 @@
       }
     },
     {
-      "name": "head-stale-boundary",
-      "check": "head",
+      "name": "attestation-stale-boundary",
+      "check": "attestation",
       "description": "as_of exactly window plus skew old: accepted.",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1799999880000,
           "seq_high_water": 10,
@@ -756,12 +756,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "8sS8DPuDtNgHTBavMH_2m_LK8Pq7Oww5Q4INrh62ekjltoIyUoI0DvZ_lHPxYJMRwthuyMNLwsZ8g0Yp7DlBAw"
+          "signature": "bsmPZE4P6JDQFQJl_AFipzdO-Nuj3LssYy8O4Uh0OPLJ926Wh-oRsbsAL3Pq_Algnkxpq32_iAC-Gh6nsUvHBA"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -771,15 +771,15 @@
       }
     },
     {
-      "name": "head-future",
-      "check": "head",
+      "name": "attestation-future",
+      "check": "attestation",
       "description": "as_of more than skew (60 s) in the future.",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000060001,
           "seq_high_water": 10,
@@ -812,12 +812,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "KnHu4FFPDvWdMGLEOPodXw3Kr48N1WywjKKQ8zeHToV-g8lTbgOkvdtg-xf7mzhEl6SaDNl9oaErcOwk8yddCA"
+          "signature": "-aiBwKHst_V0eKckBZQUXvn70JCJIHY4YoY8eBxwxNCHvGzDUGrQRb-HpaGv2LbpR46hB7zQLScyJPnHcaAbBQ"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -829,15 +829,15 @@
       }
     },
     {
-      "name": "head-rollback",
-      "check": "head",
+      "name": "attestation-rollback",
+      "check": "attestation",
       "description": "seq_high_water below one already accepted from this relay key.",
       "input": {
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -870,12 +870,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 11
         }
@@ -887,15 +887,15 @@
       }
     },
     {
-      "name": "head-unsupported-spec",
-      "check": "head",
-      "description": "A receipt's spec discriminator on a head body.",
+      "name": "attestation-unsupported-spec",
+      "check": "attestation",
+      "description": "A receipt's spec discriminator on an attestation body.",
       "input": {
-        "head": {
+        "attestation": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -928,12 +928,12 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "challenge": "conformance-challenge-0001",
-          "delegatorId": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegatorMotebitId": "019a0000-0000-7000-8000-00000000d0d1",
           "now": 1800000000000,
           "lastSeenSeq": 0
         }
@@ -951,15 +951,15 @@
       "input": {
         "receipt": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "grant_id": "019a0000-0000-7000-8000-0000000000c1",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "revocation_signature": "qixQMsBW3oPtcEhSFI6AqgCkSWM3tZMg9xUaBjFSnDCYvrtzRXBoFD_VokqgFH1-YmZ-idkNzoXZu8VwxGo4Dw",
           "seq": 3,
           "received_at": 1799999999000,
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "ZEuCTnrfxyR5kP4RMx5p7SJ_rdtoFdaX4HjDgxeLkWyMZ9hoaT3I31xQwZknd0-4oTb5NTXbR5eiF_P4ebRpAg"
+          "signature": "TBJ47hGWT3lE5qBOHIJnoPtrTEN4Q_dU89DGoDD0PyDs3m61CBkbYSARLTd2nlajPRIW0lvBT8rAXBs2XcyKDg"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
@@ -984,15 +984,15 @@
       "input": {
         "receipt": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "fa01347a991e04ae0f1a6d81db29a5ea4eeb5965f577ac9efb44e7b1f2fbb028",
           "grant_id": "019a0000-0000-7000-8000-0000000000c1",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "revocation_signature": "qixQMsBW3oPtcEhSFI6AqgCkSWM3tZMg9xUaBjFSnDCYvrtzRXBoFD_VokqgFH1-YmZ-idkNzoXZu8VwxGo4Dw",
           "seq": 3,
           "received_at": 1799999999000,
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "6Ce2dV4406kFwwAsVNmvf-g5kOcoy6zIXRQRc8_8KXzBEtiCSGCgdkLZpukTnIY9Nv65KvSKQMMiqXQeOEhhCw"
+          "signature": "VLdsJrJKwsd0YPVR17drrQWzVG0HbNHesQV7VGWhHLC0U-rThNtIk1gHLjvyIOpsHDe2A8y2lC_3py8ARuQvAQ"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
@@ -1018,15 +1018,15 @@
       "input": {
         "receipt": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "grant_id": "019a0000-0000-7000-8000-0000000000c1",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "revocation_signature": "qixQMsBW3oPtcEhSFI6AqgCkSWM3tZMg9xUaBjFSnDCYvrtzRXBoFD_VokqgFH1-YmZ-idkNzoXZu8VwxGo4Dw",
           "seq": 4,
           "received_at": 1799999999000,
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "ZEuCTnrfxyR5kP4RMx5p7SJ_rdtoFdaX4HjDgxeLkWyMZ9hoaT3I31xQwZknd0-4oTb5NTXbR5eiF_P4ebRpAg"
+          "signature": "TBJ47hGWT3lE5qBOHIJnoPtrTEN4Q_dU89DGoDD0PyDs3m61CBkbYSARLTd2nlajPRIW0lvBT8rAXBs2XcyKDg"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
@@ -1052,15 +1052,15 @@
       "input": {
         "receipt": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "grant_id": "019a0000-0000-7000-8000-0000000000c1",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "revocation_signature": "qixQMsBW3oPtcEhSFI6AqgCkSWM3tZMg9xUaBjFSnDCYvrtzRXBoFD_VokqgFH1-YmZ-idkNzoXZu8VwxGo4Dw",
           "seq": 3,
           "received_at": 1799999999000,
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "ZEuCTnrfxyR5kP4RMx5p7SJ_rdtoFdaX4HjDgxeLkWyMZ9hoaT3I31xQwZknd0-4oTb5NTXbR5eiF_P4ebRpAg"
+          "signature": "TBJ47hGWT3lE5qBOHIJnoPtrTEN4Q_dU89DGoDD0PyDs3m61CBkbYSARLTd2nlajPRIW0lvBT8rAXBs2XcyKDg"
         },
         "expectations": {
           "pinnedRelayPublicKey": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
@@ -1082,25 +1082,25 @@
     {
       "name": "omission-detected",
       "check": "omission",
-      "description": "Receipt at seq 9; a later head at high-water 10 lacks the record.",
+      "description": "Receipt at seq 9; a later attestation at high-water 10 lacks the record.",
       "input": {
         "receipt": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "grant_id": "019a0000-0000-7000-8000-0000000000c3",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "revocation_signature": "pMQ2SFKoF1adFwr48BsW7PrGlwDZyBSYgCQMDAWT4bkWw8pYRMuq07TbRFsSidWhjASlq4-NiiUO7eMV1WBBDg",
           "seq": 9,
           "received_at": 1799999999000,
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "-dfhMZ3PKkoBZD98N9My-UUg9AdhZ-18FhdRu5mJ8oTmegsMTcAYsbP8y9vYqM39N0x6kB_BM1yNsoAx1KqPCw"
+          "signature": "Fn6bhm3NY8AvbjaBv6JQ3-cOrAH8N33V9wH5coGn6NVMoaDYHkRDfytYv1iWsbNxvGAu5yfmp_f5g-bdlGrfCg"
         },
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1133,33 +1133,35 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         }
       },
-      "expected": true
+      "expected": {
+        "valid": true
+      }
     },
     {
       "name": "omission-wrong-seq",
       "check": "omission",
-      "description": "Head carries the record, but at a seq other than receipted.",
+      "description": "The attestation carries the record, but at a seq other than receipted.",
       "input": {
         "receipt": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "grant_id": "019a0000-0000-7000-8000-0000000000c2",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "revocation_signature": "r_BiMKrEIdW7zNwhNPlGhQ8SRO-zH3gEo76AuZGNpQRGuOC220a8EkGlc9B6Nyg2m6DLQ9d4sTqnAOM3xnnXDw",
           "seq": 8,
           "received_at": 1799999999000,
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "1_SITtejcq_1C5P_cwCSRWD5sj8hLsIi_92UN4M7pfDd9vqR8oyc32ztzY4wjm3zTPrHM8abbm5j8kZSoqyqAw"
+          "signature": "1V20wz2gQTOKV4-3VgiqLA3-kOjmvasNnXHCbrW24Q2sLvGSg7cyG4CIj5Z1Nhqr5OUuFxz3fbamzRxKSnAIAQ"
         },
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1192,33 +1194,35 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         }
       },
-      "expected": true
+      "expected": {
+        "valid": true
+      }
     },
     {
       "name": "omission-carried",
       "check": "omission",
-      "description": "Head carries the receipted record.",
+      "description": "The attestation carries the receipted record.",
       "input": {
         "receipt": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "grant_id": "019a0000-0000-7000-8000-0000000000c2",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "revocation_signature": "r_BiMKrEIdW7zNwhNPlGhQ8SRO-zH3gEo76AuZGNpQRGuOC220a8EkGlc9B6Nyg2m6DLQ9d4sTqnAOM3xnnXDw",
           "seq": 7,
           "received_at": 1799999999000,
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "4UgSdJ5bkRSU3xPubppEm7hKHMwmnwRrAsfv6gq0V1syWHKvdG4npLozI4QMSzTXTu_J4f0jTnTiRtynwBASCQ"
+          "signature": "TJa-Ntxu41JMN7EP62MaHd_Zx5qAwIbto1u2mLKkToi1jCSzL320piNkC6IYRxugl-uT0cr7UmYrxAz0ECbpCw"
         },
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1251,33 +1255,36 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         }
       },
-      "expected": false
+      "expected": {
+        "valid": false,
+        "reason": "record_carried"
+      }
     },
     {
       "name": "omission-not-covered",
       "check": "omission",
-      "description": "Head high-water below the receipted seq.",
+      "description": "Attestation high-water below the receipted seq.",
       "input": {
         "receipt": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "grant_id": "019a0000-0000-7000-8000-0000000000c3",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "revocation_signature": "pMQ2SFKoF1adFwr48BsW7PrGlwDZyBSYgCQMDAWT4bkWw8pYRMuq07TbRFsSidWhjASlq4-NiiUO7eMV1WBBDg",
           "seq": 11,
           "received_at": 1799999999000,
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "FVRycjToksAAQ3WFKlTsQqfuq8GBeTYlkgHfBwnLrrfVf4wqIhq_bEv-q4VL92apEuzhPRMbLnANflaxeBXmBg"
+          "signature": "hbt4QeY5vDhYIhY2ewtq2aNTEqGapubP7K8E2-LvbcscHPV2V5w7guNGa_5-SBLYTbcMdoEy0mncH8lLNq0qCA"
         },
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1310,33 +1317,36 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         }
       },
-      "expected": false
+      "expected": {
+        "valid": false,
+        "reason": "seq_not_covered"
+      }
     },
     {
       "name": "omission-other-relay",
       "check": "omission",
-      "description": "Receipt and head signed by different relay keys.",
+      "description": "Receipt and attestation signed by different relay keys.",
       "input": {
         "receipt": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "fa01347a991e04ae0f1a6d81db29a5ea4eeb5965f577ac9efb44e7b1f2fbb028",
           "grant_id": "019a0000-0000-7000-8000-0000000000c3",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "revocation_signature": "pMQ2SFKoF1adFwr48BsW7PrGlwDZyBSYgCQMDAWT4bkWw8pYRMuq07TbRFsSidWhjASlq4-NiiUO7eMV1WBBDg",
           "seq": 9,
           "received_at": 1799999999000,
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "2EE0252rihllkzV8c8vs68VPo86m6HdKoPRxZ7J2SvyzFcL05pPnLXczSdsSmPNeOJDxHJkQVGXimCzzSOSyCw"
+          "signature": "E4Gk0qXi51OvrodN6pdAkPqFwWRvYGFmrwjGXwDrbepsw2iIXpSNteKoJ20MIetGvt8m0fReI6TBW7Jn4Z94Bg"
         },
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1369,10 +1379,13 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         }
       },
-      "expected": false
+      "expected": {
+        "valid": false,
+        "reason": "relay_key_mismatch"
+      }
     },
     {
       "name": "omission-forged-receipt",
@@ -1381,21 +1394,21 @@
       "input": {
         "receipt": {
           "spec": "motebit/delegation-revocation-inclusion-receipt@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
           "grant_id": "019a0000-0000-7000-8000-0000000000c3",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "revocation_signature": "pMQ2SFKoF1adFwr48BsW7PrGlwDZyBSYgCQMDAWT4bkWw8pYRMuq07TbRFsSidWhjASlq4-NiiUO7eMV1WBBDg",
           "seq": 9,
           "received_at": 1,
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "-dfhMZ3PKkoBZD98N9My-UUg9AdhZ-18FhdRu5mJ8oTmegsMTcAYsbP8y9vYqM39N0x6kB_BM1yNsoAx1KqPCw"
+          "signature": "Fn6bhm3NY8AvbjaBv6JQ3-cOrAH8N33V9wH5coGn6NVMoaDYHkRDfytYv1iWsbNxvGAu5yfmp_f5g-bdlGrfCg"
         },
-        "head": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestation": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1428,21 +1441,24 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         }
       },
-      "expected": false
+      "expected": {
+        "valid": false,
+        "reason": "signature_invalid"
+      }
     },
     {
       "name": "equivocation-detected",
       "check": "equivocation",
       "description": "Same key, delegator and high-water; different records_digest.",
       "input": {
-        "headA": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestationA": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1475,13 +1491,13 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         },
-        "headB": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestationB": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "other-consumer",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1502,21 +1518,23 @@
           ],
           "records_digest": "0dd11a8b4ae17d386cc806b19d7a00025f93a8c69cd11100bebd9d251ffaa94c",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "q0NUgh7f9iubKyxEqUdi4sR5DN76GgVZngPLubJal0hV7BpeVAraqWCOZa0oBLQOpaoUYxGgoW4YShNoTJnyAg"
+          "signature": "QxZaOjzm2ZcBP-VOwBdWXbZ2ALAnhG7-audETe70E3ahdMT4XZt20nB4TFV2fIjnsn_EFxTDR_6GDRKKWUneBw"
         }
       },
-      "expected": true
+      "expected": {
+        "valid": true
+      }
     },
     {
       "name": "equivocation-same-entries",
       "check": "equivocation",
       "description": "Same entries under different challenge and as_of: same digest.",
       "input": {
-        "headA": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestationA": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1549,13 +1567,13 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         },
-        "headB": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestationB": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "other-consumer",
           "as_of": 1800000000005,
           "seq_high_water": 10,
@@ -1588,21 +1606,24 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "n0lnBC3_6tU_x7UFR39onRqj0segTxbjXoNJpKJJI_MttS1khkf8o05GoeXCmG5d8jjeEt-NyZSHKI_lmxzvBg"
+          "signature": "6EMH7xuRTzCxK4j4BPwzx33H4fLwqP_jhYSLpxy4krpxrH_C8oMBU2e1oLrZxI0ggZwTSRNtPD9njfK5ZdXdBg"
         }
       },
-      "expected": false
+      "expected": {
+        "valid": false,
+        "reason": "same_records_digest"
+      }
     },
     {
       "name": "equivocation-different-high-water",
       "check": "equivocation",
       "description": "Different seq_high_water.",
       "input": {
-        "headA": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestationA": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1635,13 +1656,13 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         },
-        "headB": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestationB": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 4,
@@ -1662,21 +1683,24 @@
           ],
           "records_digest": "0dd11a8b4ae17d386cc806b19d7a00025f93a8c69cd11100bebd9d251ffaa94c",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "wVU3tndZY75v1gXu7yxETdST9mXzaS9IzHxQPaHipYPhF_ZBFLMRYVKrbYq34RAb7Gw_gYCG3Ujbe-ENgbU-AQ"
+          "signature": "NP-bggyNqnscbxPufud-YgCTxcvDRNfOZehR2hX8zYKv-s06B2W0K9zrzpSHLOewsw_dezdiv0XXZuyCLCYoDg"
         }
       },
-      "expected": false
+      "expected": {
+        "valid": false,
+        "reason": "seq_high_water_differs"
+      }
     },
     {
       "name": "equivocation-forged",
       "check": "equivocation",
-      "description": "One head's signature does not verify.",
+      "description": "One attestation's signature does not verify.",
       "input": {
-        "headA": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestationA": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1800000000000,
           "seq_high_water": 10,
@@ -1709,13 +1733,13 @@
           ],
           "records_digest": "26289121fb1c9b6ea8bcd6624b58f3bea365bface826d337502ce9df069b4f49",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "7ee2vYTWK2WSk3qPHrDUNIjpxcE_1LubdSzvcpAEkkqAMbkTkhfv83jh7BKUneMEJxY84zseR6flPti6jbeHBg"
+          "signature": "EQr8JCpggQ7R35eeOSH_R1gmedCP-ShjG2UEMUGbcSXbAZdcAaYovQ7LIPWctNA3p8LSGkOG_7DfvKUYOV_1Dw"
         },
-        "headB": {
-          "spec": "motebit/delegation-revocation-head@1.0",
-          "relay_id": "019a0000-0000-7000-8000-00000000a0a1",
+        "attestationB": {
+          "spec": "motebit/delegation-revocation-set-attestation@1.0",
+          "relay_motebit_id": "019a0000-0000-7000-8000-00000000a0a1",
           "relay_public_key": "93db9f2ee0f7e39e942fb59441190bf20b9c43cfcc8a051a152499cf392b7a37",
-          "delegator_id": "019a0000-0000-7000-8000-00000000d0d1",
+          "delegator_motebit_id": "019a0000-0000-7000-8000-00000000d0d1",
           "challenge": "conformance-challenge-0001",
           "as_of": 1,
           "seq_high_water": 10,
@@ -1736,10 +1760,13 @@
           ],
           "records_digest": "0dd11a8b4ae17d386cc806b19d7a00025f93a8c69cd11100bebd9d251ffaa94c",
           "suite": "motebit-jcs-ed25519-b64-v1",
-          "signature": "MebZMQs1AcN3n6NleMa878yYTSD_ZAM_uDID9ZLuZmp_cCjefC8JhvUW4PZyaqkOHuRzV7YWgeJpwGMFhv9dCw"
+          "signature": "4WB3u9r1c5tWTlltvjccqT0aQYslhEi8RvBPrey1LkCMibyZtxi8JXCo7GchKh32eeoOM1MF2QIKKWtIBi4ZDQ"
         }
       },
-      "expected": false
+      "expected": {
+        "valid": false,
+        "reason": "signature_invalid"
+      }
     }
   ]
 }

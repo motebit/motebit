@@ -137,10 +137,14 @@ export const REGISTRY: Record<string, Classification> = {
   // The caller pins the relay key and its nonce via the verifier's options.
   SyncHoldReceipt: { kind: "verifier", verifier: "verifySyncHoldReceipt" },
   // Signed revocation evidence (standing-delegation@1.3 §5.2–§5.3): the
-  // relay's signed head and per-revocation inclusion receipt (subject =
-  // signer, receipt-family). The caller pins the relay key, challenge,
-  // delegator, clock and last-seen seq via the verifier's expectations.
-  DelegationRevocationHead: { kind: "verifier", verifier: "verifyRevocationHead" },
+  // relay's set attestation over a delegator's revocation set (signer ≠
+  // subject) and its per-revocation inclusion receipt (signer = subject).
+  // The caller pins the relay key, challenge, delegator, clock and last-seen
+  // seq via the verifier's expectations.
+  DelegationRevocationSetAttestation: {
+    kind: "verifier",
+    verifier: "verifyRevocationSetAttestation",
+  },
   DelegationRevocationInclusionReceipt: {
     kind: "verifier",
     verifier: "verifyRevocationInclusionReceipt",

@@ -4,18 +4,18 @@
  * (spec/standing-delegation-v1.md §5.2–§5.3, standing-delegation@1.3).
  * Deterministic fixed test keys (Ed25519 is deterministic, so the corpus is
  * byte-stable). Clean artifacts are minted by the real producers
- * (`signRevocationHead`, `signRevocationInclusionReceipt`); heads that break a
+ * (`signRevocationSetAttestation`, `signRevocationInclusionReceipt`); attestations that break a
  * producer rule are forged by signing the raw body through suite dispatch.
  * Every expectation is asserted against the producer's own verifier BEFORE
  * the corpus is written.
  *
  * Four case families:
- *   - head        → expected verdict of `verifyRevocationHead`
+ *   - attestation → expected verdict of `verifyRevocationSetAttestation`
  *   - receipt     → expected verdict of `verifyRevocationInclusionReceipt`
- *   - omission    → expected boolean of `detectRevocationOmission`
- *   - equivocation→ expected boolean of `detectRevocationEquivocation`
+ *   - omission    → expected boolean of `verifyRevocationOmissionProof`
+ *   - equivocation→ expected boolean of `verifyRevocationEquivocationProof`
  *
- * Regenerate: npx tsx scripts/gen-delegation-revocation-head-corpus.ts
+ * Regenerate: npx tsx scripts/gen-delegation-revocation-set-attestation-corpus.ts
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -28,25 +28,25 @@ import {
   canonicalJsonForSigning,
   toBase64Url,
   signDelegationRevocation,
-  signRevocationHead,
-  verifyRevocationHead,
+  signRevocationSetAttestation,
+  verifyRevocationSetAttestation,
   computeRevocationRecordsDigest,
   signRevocationInclusionReceipt,
   verifyRevocationInclusionReceipt,
-  detectRevocationOmission,
-  detectRevocationEquivocation,
-  type VerifyRevocationHeadExpectations,
+  verifyRevocationOmissionProof,
+  verifyRevocationEquivocationProof,
+  type VerifyRevocationSetAttestationExpectations,
 } from "../packages/crypto/src/index.js";
 import { getPublicKeyBySuite, signBySuite } from "../packages/crypto/src/suite-dispatch.js";
 import type {
   DelegationRevocation,
-  DelegationRevocationHead,
-  DelegationRevocationHeadEntry,
+  DelegationRevocationSetAttestation,
+  DelegationRevocationSetAttestationEntry,
   DelegationRevocationInclusionReceipt,
 } from "../packages/protocol/src/index.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT_DIR = join(ROOT, "spec/conformance/delegation-revocation-head");
+const OUT_DIR = join(ROOT, "spec/conformance/delegation-revocation-set-attestation");
 const OUT = join(OUT_DIR, "corpus.json");
 
 const SUITE = "motebit-jcs-ed25519-b64-v1" as const;
@@ -64,7 +64,7 @@ const OTHER_DELEGATOR_ID = "019a0000-0000-7000-8000-00000000d0d2";
 
 interface Case {
   name: string;
-  check: "head" | "receipt" | "omission" | "equivocation";
+  check: "attestation" | "receipt" | "omission" | "equivocation";
   description: string;
   input: Record<string, unknown>;
   expected: unknown;
@@ -109,20 +109,20 @@ async function main(): Promise<void> {
     },
     OTHER_DELEGATOR_PRIV,
   );
-  const entries: DelegationRevocationHeadEntry[] = [
+  const entries: DelegationRevocationSetAttestationEntry[] = [
     { seq: 3, received_at: NOW - 4_900, record: revA },
     { seq: 7, received_at: NOW - 3_900, record: revB },
   ];
 
-  const head = async (
-    over: Partial<Parameters<typeof signRevocationHead>[0]> = {},
+  const attest = async (
+    over: Partial<Parameters<typeof signRevocationSetAttestation>[0]> = {},
     priv = RELAY_PRIV,
-  ): Promise<DelegationRevocationHead> =>
-    signRevocationHead(
+  ): Promise<DelegationRevocationSetAttestation> =>
+    signRevocationSetAttestation(
       {
-        relay_id: RELAY_ID,
+        relay_motebit_id: RELAY_ID,
         relay_public_key: await pub(priv),
-        delegator_id: DELEGATOR_ID,
+        delegator_motebit_id: DELEGATOR_ID,
         challenge: CHALLENGE,
         as_of: NOW,
         seq_high_water: 10,
@@ -131,21 +131,21 @@ async function main(): Promise<void> {
       },
       priv,
     );
-  const forgedHead = async (
+  const forgedAttestation = async (
     mutate: (b: Record<string, unknown>) => void,
-  ): Promise<DelegationRevocationHead> => {
-    const { signature: _s, ...body } = await head();
+  ): Promise<DelegationRevocationSetAttestation> => {
+    const { signature: _s, ...body } = await attest();
     const b = body as Record<string, unknown>;
     const originalDigest = body.records_digest;
     mutate(b);
-    // Each forged head breaks exactly one rule: re-commit the digest to the
+    // Each forged attestation breaks exactly one rule: re-commit the digest to the
     // mutated entries unless the mutation is the digest itself.
     if (b.records_digest === originalDigest) {
       b.records_digest = await computeRevocationRecordsDigest(
-        b.entries as DelegationRevocationHeadEntry[],
+        b.entries as DelegationRevocationSetAttestationEntry[],
       );
     }
-    return forge<DelegationRevocationHead>(b);
+    return forge<DelegationRevocationSetAttestation>(b);
   };
   const receipt = async (
     r: DelegationRevocation,
@@ -154,7 +154,7 @@ async function main(): Promise<void> {
   ): Promise<DelegationRevocationInclusionReceipt> =>
     signRevocationInclusionReceipt(
       {
-        relay_id: RELAY_ID,
+        relay_motebit_id: RELAY_ID,
         relay_public_key: await pub(priv),
         revocation: r,
         seq,
@@ -163,10 +163,10 @@ async function main(): Promise<void> {
       priv,
     );
 
-  const exp: VerifyRevocationHeadExpectations = {
+  const exp: VerifyRevocationSetAttestationExpectations = {
     pinnedRelayPublicKey: relayPub,
     challenge: CHALLENGE,
-    delegatorId: DELEGATOR_ID,
+    delegatorMotebitId: DELEGATOR_ID,
     now: NOW,
     lastSeenSeq: 0,
   };
@@ -177,123 +177,131 @@ async function main(): Promise<void> {
   });
 
   const cases: Case[] = [];
-  const headCase = (
+  const attestationCase = (
     name: string,
     description: string,
-    h: DelegationRevocationHead,
+    h: DelegationRevocationSetAttestation,
     expected: unknown,
-    expectations: VerifyRevocationHeadExpectations = exp,
+    expectations: VerifyRevocationSetAttestationExpectations = exp,
   ): void => {
-    cases.push({ name, check: "head", description, input: { head: h, expectations }, expected });
+    cases.push({
+      name,
+      check: "attestation",
+      description,
+      input: { attestation: h, expectations },
+      expected,
+    });
   };
 
-  headCase("head-clean", "A head the pinned relay signed.", await head(), { valid: true });
-  headCase(
-    "head-empty",
+  attestationCase("attestation-clean", "An attestation the pinned relay signed.", await attest(), {
+    valid: true,
+  });
+  attestationCase(
+    "attestation-empty",
     "No revocations for the delegator: positive absence evidence.",
-    await head({ entries: [], seq_high_water: 0 }),
+    await attest({ entries: [], seq_high_water: 0 }),
     { valid: true },
   );
-  headCase(
-    "head-wrong-key",
+  attestationCase(
+    "attestation-wrong-key",
     "Signed by a relay key other than the pinned one.",
-    await head({}, OTHER_RELAY_PRIV),
+    await attest({}, OTHER_RELAY_PRIV),
     invalid("public_key_mismatch"),
   );
-  headCase(
-    "head-bad-signature",
+  attestationCase(
+    "attestation-bad-signature",
     "as_of changed after signing.",
-    { ...(await head()), as_of: NOW - 1 },
+    { ...(await attest()), as_of: NOW - 1 },
     invalid("signature_invalid"),
   );
-  headCase(
-    "head-malformed-signature",
+  attestationCase(
+    "attestation-malformed-signature",
     "Signature is not 64 base64url bytes.",
-    { ...(await head()), signature: "AAAA" },
+    { ...(await attest()), signature: "AAAA" },
     invalid("malformed_signature"),
   );
-  headCase(
-    "head-challenge-mismatch",
+  attestationCase(
+    "attestation-challenge-mismatch",
     "Answers another consumer's challenge.",
-    await head({ challenge: "someone-elses-challenge" }),
+    await attest({ challenge: "someone-elses-challenge" }),
     invalid("challenge_mismatch"),
   );
-  headCase(
-    "head-delegator-mismatch",
+  attestationCase(
+    "attestation-delegator-mismatch",
     "Covers another delegator.",
-    await head({ delegator_id: OTHER_DELEGATOR_ID, entries: [] }),
+    await attest({ delegator_motebit_id: OTHER_DELEGATOR_ID, entries: [] }),
     invalid("delegator_mismatch"),
   );
-  headCase(
-    "head-foreign-entry",
+  attestationCase(
+    "attestation-foreign-entry",
     "Carries an entry for another delegator (forged).",
-    await forgedHead((b) => {
+    await forgedAttestation((b) => {
       b.entries = [...entries, { seq: 9, received_at: NOW - 2_000, record: revForeign }];
       b.count = 3;
     }),
     invalid("delegator_mismatch"),
   );
-  headCase(
-    "head-out-of-order",
+  attestationCase(
+    "attestation-out-of-order",
     "Entries not strictly ascending by seq (forged).",
-    await forgedHead((b) => {
+    await forgedAttestation((b) => {
       b.entries = [entries[1], entries[0]];
     }),
     invalid("entries_out_of_order"),
   );
-  headCase(
-    "head-seq-above-high-water",
+  attestationCase(
+    "attestation-seq-above-high-water",
     "An entry seq exceeds seq_high_water (forged).",
-    await forgedHead((b) => {
+    await forgedAttestation((b) => {
       b.seq_high_water = 5;
     }),
     invalid("entry_seq_exceeds_high_water"),
   );
-  headCase(
-    "head-count-mismatch",
+  attestationCase(
+    "attestation-count-mismatch",
     "count disagrees with entries (forged).",
-    await forgedHead((b) => {
+    await forgedAttestation((b) => {
       b.count = 1;
     }),
     invalid("count_mismatch"),
   );
-  headCase(
-    "head-digest-mismatch",
+  attestationCase(
+    "attestation-digest-mismatch",
     "records_digest disagrees with entries (forged).",
-    await forgedHead((b) => {
+    await forgedAttestation((b) => {
       b.records_digest = "0".repeat(64);
     }),
     invalid("records_digest_mismatch"),
   );
-  headCase(
-    "head-stale",
+  attestationCase(
+    "attestation-stale",
     "as_of older than window (60 s) plus skew (60 s).",
-    await head({ as_of: NOW - 120_001 }),
+    await attest({ as_of: NOW - 120_001 }),
     { valid: false, refusal: "revocation_evidence_stale", reason: "stale" },
   );
-  headCase(
-    "head-stale-boundary",
+  attestationCase(
+    "attestation-stale-boundary",
     "as_of exactly window plus skew old: accepted.",
-    await head({ as_of: NOW - 120_000 }),
+    await attest({ as_of: NOW - 120_000 }),
     { valid: true },
   );
-  headCase(
-    "head-future",
+  attestationCase(
+    "attestation-future",
     "as_of more than skew (60 s) in the future.",
-    await head({ as_of: NOW + 60_001 }),
+    await attest({ as_of: NOW + 60_001 }),
     { valid: false, refusal: "revocation_evidence_stale", reason: "future_as_of" },
   );
-  headCase(
-    "head-rollback",
+  attestationCase(
+    "attestation-rollback",
     "seq_high_water below one already accepted from this relay key.",
-    await head(),
+    await attest(),
     { valid: false, refusal: "revocation_evidence_rollback", reason: "rollback" },
     { ...exp, lastSeenSeq: 11 },
   );
-  headCase(
-    "head-unsupported-spec",
-    "A receipt's spec discriminator on a head body.",
-    { ...(await head()), spec: "motebit/delegation-revocation-inclusion-receipt@1.0" as never },
+  attestationCase(
+    "attestation-unsupported-spec",
+    "A receipt's spec discriminator on an attestation body.",
+    { ...(await attest()), spec: "motebit/delegation-revocation-inclusion-receipt@1.0" as never },
     invalid("unsupported_spec"),
   );
 
@@ -350,105 +358,111 @@ async function main(): Promise<void> {
     name: string,
     description: string,
     r: DelegationRevocationInclusionReceipt,
-    h: DelegationRevocationHead,
-    expected: boolean,
+    h: DelegationRevocationSetAttestation,
+    expected: unknown,
   ): void => {
-    cases.push({ name, check: "omission", description, input: { receipt: r, head: h }, expected });
+    cases.push({
+      name,
+      check: "omission",
+      description,
+      input: { receipt: r, attestation: h },
+      expected,
+    });
   };
   omission(
     "omission-detected",
-    "Receipt at seq 9; a later head at high-water 10 lacks the record.",
+    "Receipt at seq 9; a later attestation at high-water 10 lacks the record.",
     await receipt(revC, 9),
-    await head(),
-    true,
+    await attest(),
+    { valid: true },
   );
   omission(
     "omission-wrong-seq",
-    "Head carries the record, but at a seq other than receipted.",
+    "The attestation carries the record, but at a seq other than receipted.",
     await receipt(revB, 8),
-    await head(),
-    true,
+    await attest(),
+    { valid: true },
   );
   omission(
     "omission-carried",
-    "Head carries the receipted record.",
+    "The attestation carries the receipted record.",
     await receipt(revB, 7),
-    await head(),
-    false,
+    await attest(),
+    { valid: false, reason: "record_carried" },
   );
   omission(
     "omission-not-covered",
-    "Head high-water below the receipted seq.",
+    "Attestation high-water below the receipted seq.",
     await receipt(revC, 11),
-    await head(),
-    false,
+    await attest(),
+    { valid: false, reason: "seq_not_covered" },
   );
   omission(
     "omission-other-relay",
-    "Receipt and head signed by different relay keys.",
+    "Receipt and attestation signed by different relay keys.",
     await receipt(revC, 9, OTHER_RELAY_PRIV),
-    await head(),
-    false,
+    await attest(),
+    { valid: false, reason: "relay_key_mismatch" },
   );
   omission(
     "omission-forged-receipt",
     "Receipt signature does not verify.",
     { ...(await receipt(revC, 9)), received_at: 1 },
-    await head(),
-    false,
+    await attest(),
+    { valid: false, reason: "signature_invalid" },
   );
 
   const equivocation = (
     name: string,
     description: string,
-    a: DelegationRevocationHead,
-    b: DelegationRevocationHead,
-    expected: boolean,
+    a: DelegationRevocationSetAttestation,
+    b: DelegationRevocationSetAttestation,
+    expected: unknown,
   ): void => {
     cases.push({
       name,
       check: "equivocation",
       description,
-      input: { headA: a, headB: b },
+      input: { attestationA: a, attestationB: b },
       expected,
     });
   };
   equivocation(
     "equivocation-detected",
     "Same key, delegator and high-water; different records_digest.",
-    await head(),
-    await head({ entries: [entries[0]!], challenge: "other-consumer" }),
-    true,
+    await attest(),
+    await attest({ entries: [entries[0]!], challenge: "other-consumer" }),
+    { valid: true },
   );
   equivocation(
     "equivocation-same-entries",
     "Same entries under different challenge and as_of: same digest.",
-    await head(),
-    await head({ challenge: "other-consumer", as_of: NOW + 5 }),
-    false,
+    await attest(),
+    await attest({ challenge: "other-consumer", as_of: NOW + 5 }),
+    { valid: false, reason: "same_records_digest" },
   );
   equivocation(
     "equivocation-different-high-water",
     "Different seq_high_water.",
-    await head(),
-    await head({ entries: [entries[0]!], seq_high_water: 4 }),
-    false,
+    await attest(),
+    await attest({ entries: [entries[0]!], seq_high_water: 4 }),
+    { valid: false, reason: "seq_high_water_differs" },
   );
   equivocation(
     "equivocation-forged",
-    "One head's signature does not verify.",
-    await head(),
-    { ...(await head({ entries: [entries[0]!] })), as_of: 1 },
-    false,
+    "One attestation's signature does not verify.",
+    await attest(),
+    { ...(await attest({ entries: [entries[0]!] })), as_of: 1 },
+    { valid: false, reason: "signature_invalid" },
   );
 
   // Assert every expectation against the producer's own law before writing.
   for (const c of cases) {
     let got: unknown;
-    if (c.check === "head") {
-      got = await verifyRevocationHead(
-        c.input.head as DelegationRevocationHead,
-        c.input.expectations as VerifyRevocationHeadExpectations,
+    if (c.check === "attestation") {
+      got = await verifyRevocationSetAttestation(
+        c.input.attestation as DelegationRevocationSetAttestation,
+        c.input.expectations as VerifyRevocationSetAttestationExpectations,
       );
     } else if (c.check === "receipt") {
       got = await verifyRevocationInclusionReceipt(
@@ -456,14 +470,14 @@ async function main(): Promise<void> {
         c.input.expectations as { pinnedRelayPublicKey: string; revocation: DelegationRevocation },
       );
     } else if (c.check === "omission") {
-      got = await detectRevocationOmission(
+      got = await verifyRevocationOmissionProof(
         c.input.receipt as DelegationRevocationInclusionReceipt,
-        c.input.head as DelegationRevocationHead,
+        c.input.attestation as DelegationRevocationSetAttestation,
       );
     } else {
-      got = await detectRevocationEquivocation(
-        c.input.headA as DelegationRevocationHead,
-        c.input.headB as DelegationRevocationHead,
+      got = await verifyRevocationEquivocationProof(
+        c.input.attestationA as DelegationRevocationSetAttestation,
+        c.input.attestationB as DelegationRevocationSetAttestation,
       );
     }
     if (!isDeepStrictEqual(got, c.expected)) {
@@ -475,7 +489,7 @@ async function main(): Promise<void> {
 
   mkdirSync(OUT_DIR, { recursive: true });
   const corpus = {
-    schema: "motebit.delegation-revocation-head-corpus.v1",
+    schema: "motebit.delegation-revocation-set-attestation-corpus.v1",
     spec: "standing-delegation@1.3 §5.2–§5.3",
     cases,
   };

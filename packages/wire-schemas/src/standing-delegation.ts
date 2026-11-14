@@ -30,7 +30,7 @@ import { z } from "zod";
 import type {
   StandingDelegation,
   DelegationRevocation,
-  DelegationRevocationHead,
+  DelegationRevocationSetAttestation,
   DelegationRevocationInclusionReceipt,
   SubjectBindingV1,
   SpendCeilingV1,
@@ -48,10 +48,10 @@ export const SUBJECT_BINDING_SCHEMA_ID =
   "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/subject-binding-v1.json";
 export const SPEND_CEILING_SCHEMA_ID =
   "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/spend-ceiling-v1.json";
-export const DELEGATION_REVOCATION_HEAD_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/delegation-revocation-head-v1.json";
+export const DELEGATION_REVOCATION_SET_ATTESTATION_SCHEMA_ID =
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/delegation-revocation-set-attestation-v1.json";
 export const DELEGATION_REVOCATION_INCLUSION_RECEIPT_SCHEMA_ID =
-  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/delegation-revocation-receipt-v1.json";
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/delegation-revocation-inclusion-receipt-v1.json";
 
 const HEX_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/;
 const HEX_SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -339,7 +339,7 @@ const RELAY_PUBLIC_KEY = z
 const SAFE_SEQ = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 const SAFE_NON_NEGATIVE = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 
-const DelegationRevocationHeadEntrySchema = z
+const DelegationRevocationSetAttestationEntrySchema = z
   .object({
     seq: SAFE_SEQ.describe(
       "The relay's receipt sequence number for this record (positive integer). Entries are strictly ascending by `seq`.",
@@ -353,45 +353,45 @@ const DelegationRevocationHeadEntrySchema = z
   })
   .strict();
 
-export const DelegationRevocationHeadSchema = z
+export const DelegationRevocationSetAttestationSchema = z
   .object({
     spec: z
-      .literal("motebit/delegation-revocation-head@1.0")
+      .literal("motebit/delegation-revocation-set-attestation@1.0")
       .describe(
         "Artifact discriminator (domain separation from every other relay-signed artifact).",
       ),
-    relay_id: z.string().min(1).describe("The relay's motebit identity."),
+    relay_motebit_id: z.string().min(1).describe("The relay's motebit identity."),
     relay_public_key: RELAY_PUBLIC_KEY,
-    delegator_id: z
+    delegator_motebit_id: z
       .string()
       .min(1)
       .describe(
-        "The delegator whose revocations this head covers. Every entry's `record.delegator_id` MUST equal it.",
+        "The delegator whose revocation set this attests. Every entry's `record.delegator_id` MUST equal it.",
       ),
     challenge: z
       .string()
       .min(1)
       .max(256)
       .describe(
-        "The consumer-chosen challenge, echoed verbatim. A head without the consumer's challenge answers no request of theirs.",
+        "The consumer-chosen challenge, echoed verbatim. An attestation without the consumer's challenge answers no request of theirs.",
       ),
     as_of: SAFE_NON_NEGATIVE.describe(
-      "Unix ms at which the relay assembled the head. Consumers MUST refuse a head older than their freshness window plus clock skew, or newer than clock skew.",
+      "Unix ms at which the relay assembled the attestation. Consumers MUST refuse an attestation older than their freshness window plus clock skew, or newer than clock skew.",
     ),
     seq_high_water: SAFE_NON_NEGATIVE.describe(
-      "The relay's highest assigned receipt sequence number at `as_of`. Every entry's `seq` MUST be ≤ it. Consumers MUST refuse a head below one they already accepted from the same relay key (rollback).",
+      "The relay's highest assigned receipt sequence number at `as_of`. Every entry's `seq` MUST be ≤ it. Consumers MUST refuse an attestation below one they already accepted from the same relay key (rollback).",
     ),
     count: SAFE_NON_NEGATIVE.describe("Number of entries. MUST equal `entries.length`."),
     entries: z
-      .array(DelegationRevocationHeadEntrySchema)
+      .array(DelegationRevocationSetAttestationEntrySchema)
       .describe(
-        "Every revocation the relay holds for `delegator_id` with `seq <= seq_high_water`, strictly ascending by `seq`.",
+        "Every revocation the relay holds for `delegator_motebit_id` with `seq <= seq_high_water`, strictly ascending by `seq`.",
       ),
     records_digest: z
       .string()
       .regex(HEX_SHA256_PATTERN)
       .describe(
-        "hex(SHA-256(canonicalJson(entries))), 64 lowercase. Excludes `challenge` and `as_of`, so two heads at the same `seq_high_water` are comparable by digest (equivocation evidence).",
+        "hex(SHA-256(canonicalJson(entries))), 64 lowercase. Excludes `challenge` and `as_of`, so two attestations at the same `seq_high_water` are comparable by digest (equivocation evidence).",
       ),
     suite: RELAY_SUITE,
     signature: RELAY_SIGNATURE,
@@ -405,10 +405,10 @@ export const DelegationRevocationInclusionReceiptSchema = z
       .describe(
         "Artifact discriminator (domain separation from every other relay-signed artifact).",
       ),
-    relay_id: z.string().min(1).describe("The relay's motebit identity."),
+    relay_motebit_id: z.string().min(1).describe("The relay's motebit identity."),
     relay_public_key: RELAY_PUBLIC_KEY,
     grant_id: z.string().min(1).describe("The recorded revocation's `grant_id`."),
-    delegator_id: z.string().min(1).describe("The recorded revocation's `delegator_id`."),
+    delegator_motebit_id: z.string().min(1).describe("The recorded revocation's `delegator_id`."),
     revocation_signature: z
       .string()
       .min(1)
@@ -416,7 +416,7 @@ export const DelegationRevocationInclusionReceiptSchema = z
         "The recorded DelegationRevocation's `signature`, verbatim — the record's identity (the relay is idempotent on it).",
       ),
     seq: SAFE_SEQ.describe(
-      "The receipt sequence number the relay assigned to the record. A later head from the same relay key with `seq_high_water >= seq` MUST carry the record at this seq; one that does not proves the relay contradicted itself.",
+      "The receipt sequence number the relay assigned to the record. A later set attestation from the same relay key with `seq_high_water >= seq` MUST carry the record at this seq; one that does not proves the relay contradicted itself.",
     ),
     received_at: SAFE_NON_NEGATIVE.describe("Unix ms, the relay's receipt clock."),
     suite: RELAY_SUITE,
@@ -432,15 +432,21 @@ type InferredStanding = z.infer<typeof StandingDelegationSchema>;
 type InferredRevocation = z.infer<typeof DelegationRevocationSchema>;
 type InferredSubjectBinding = z.infer<typeof SubjectBindingV1Schema>;
 type InferredSpendCeiling = z.infer<typeof SpendCeilingV1Schema>;
-type InferredRevocationHead = z.infer<typeof DelegationRevocationHeadSchema>;
+type InferredRevocationSetAttestation = z.infer<typeof DelegationRevocationSetAttestationSchema>;
 type InferredInclusionReceipt = z.infer<typeof DelegationRevocationInclusionReceiptSchema>;
 
-type _RevocationHeadForward = ParityForward<DelegationRevocationHead, InferredRevocationHead>;
-type _RevocationHeadReverse = ParityReverse<DelegationRevocationHead, InferredRevocationHead>;
+type _RevocationSetAttestationForward = ParityForward<
+  DelegationRevocationSetAttestation,
+  InferredRevocationSetAttestation
+>;
+type _RevocationSetAttestationReverse = ParityReverse<
+  DelegationRevocationSetAttestation,
+  InferredRevocationSetAttestation
+>;
 
-export const _DELEGATION_REVOCATION_HEAD_TYPE_PARITY: {
-  forward: _RevocationHeadForward;
-  reverse: _RevocationHeadReverse;
+export const _DELEGATION_REVOCATION_SET_ATTESTATION_TYPE_PARITY: {
+  forward: _RevocationSetAttestationForward;
+  reverse: _RevocationSetAttestationReverse;
 } = {
   forward: true,
   reverse: true,
@@ -564,13 +570,13 @@ export function buildDelegationRevocationJsonSchema(): Record<string, unknown> {
   });
 }
 
-export function buildDelegationRevocationHeadJsonSchema(): Record<string, unknown> {
-  const raw = toDraft7(DelegationRevocationHeadSchema);
+export function buildDelegationRevocationSetAttestationJsonSchema(): Record<string, unknown> {
+  const raw = toDraft7(DelegationRevocationSetAttestationSchema);
   return assembleJsonSchemaFor(raw, {
-    $id: DELEGATION_REVOCATION_HEAD_SCHEMA_ID,
-    title: "DelegationRevocationHead (v1)",
+    $id: DELEGATION_REVOCATION_SET_ATTESTATION_SCHEMA_ID,
+    title: "DelegationRevocationSetAttestation (v1)",
     description:
-      "The relay's signed snapshot of every DelegationRevocation it holds for one delegator up to `seq_high_water`, answering one consumer challenge (standing-delegation@1.3). The only source of 'absent as of `as_of`'; never confers authority. Guarantees integrity, freshness and relay accountability — NOT completeness against omission, NOT non-equivocation. Canonicalization: JCS (RFC 8785). Signature: Ed25519 over canonicalJson(body minus signature), base64url. See spec/standing-delegation-v1.md §5.2.",
+      "The relay's signed attestation of every DelegationRevocation it holds for one delegator (signer = relay ≠ subject = the delegator's revocation set) up to `seq_high_water`, answering one consumer challenge (standing-delegation@1.3). The only source of 'absent as of `as_of`'; never confers authority. Guarantees integrity, freshness and relay accountability — NOT completeness against omission, NOT non-equivocation. Canonicalization: JCS (RFC 8785). Signature: Ed25519 over canonicalJson(body minus signature), base64url. See spec/standing-delegation-v1.md §5.2.",
   });
 }
 
@@ -580,6 +586,6 @@ export function buildDelegationRevocationInclusionReceiptJsonSchema(): Record<st
     $id: DELEGATION_REVOCATION_INCLUSION_RECEIPT_SCHEMA_ID,
     title: "DelegationRevocationInclusionReceipt (v1)",
     description:
-      "The relay's signed statement that it recorded one DelegationRevocation at `seq` (standing-delegation@1.3). With a later head from the same relay key covering `seq` but lacking the record, proves relay self-contradiction (omission) — never independent acceptance (same signer). Canonicalization: JCS (RFC 8785). Signature: Ed25519 over canonicalJson(body minus signature), base64url. See spec/standing-delegation-v1.md §5.3.",
+      "The relay's signed statement that it recorded one DelegationRevocation at `seq` (standing-delegation@1.3). With a later set attestation from the same relay key covering `seq` but lacking the record, proves relay self-contradiction (omission) — never independent acceptance (same signer). Canonicalization: JCS (RFC 8785). Signature: Ed25519 over canonicalJson(body minus signature), base64url. See spec/standing-delegation-v1.md §5.3.",
   });
 }

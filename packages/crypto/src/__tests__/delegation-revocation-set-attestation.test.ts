@@ -1,31 +1,31 @@
 /**
  * Signed revocation evidence (spec/standing-delegation-v1.md §5.2–§5.3):
- * `verifyRevocationHead`, `verifyRevocationInclusionReceipt`,
- * `detectRevocationOmission`, `detectRevocationEquivocation`.
+ * `verifyRevocationSetAttestation`, `verifyRevocationInclusionReceipt`,
+ * `verifyRevocationOmissionProof`, `verifyRevocationEquivocationProof`.
  *
- * Every refusal code has a test. Heads that violate the producer rules
+ * Every refusal code has a test. Attestations that violate the producer rules
  * (out-of-order, count, digest, foreign delegator) are FORGED here by signing
- * a raw body through suite dispatch — `signRevocationHead` itself refuses to
+ * a raw body through suite dispatch — `signRevocationSetAttestation` itself refuses to
  * emit them — so each verifier check is exercised on an otherwise validly
- * signed head. Tamper file: scripts/tampers/revocation-head-evidence.ts.
+ * signed attestation. Tamper file: scripts/tampers/revocation-evidence.ts.
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import type {
   DelegationRevocation,
-  DelegationRevocationHead,
-  DelegationRevocationHeadEntry,
+  DelegationRevocationSetAttestation,
+  DelegationRevocationSetAttestationEntry,
   DelegationRevocationInclusionReceipt,
 } from "@motebit/protocol";
 import {
-  signRevocationHead,
-  verifyRevocationHead,
+  signRevocationSetAttestation,
+  verifyRevocationSetAttestation,
   signRevocationInclusionReceipt,
   verifyRevocationInclusionReceipt,
   computeRevocationRecordsDigest,
-  detectRevocationOmission,
-  detectRevocationEquivocation,
-  type VerifyRevocationHeadExpectations,
-} from "../delegation-revocation-head.js";
+  verifyRevocationOmissionProof,
+  verifyRevocationEquivocationProof,
+  type VerifyRevocationSetAttestationExpectations,
+} from "../delegation-revocation-set-attestation.js";
 import { signDelegationRevocation } from "../artifacts.js";
 import { bytesToHex, canonicalJsonForSigning, toBase64Url } from "../signing.js";
 import { getPublicKeyBySuite, signBySuite } from "../suite-dispatch.js";
@@ -50,7 +50,7 @@ let otherDelegatorPub: string;
 let revA: DelegationRevocation;
 let revB: DelegationRevocation;
 let revForeign: DelegationRevocation;
-let entries: DelegationRevocationHeadEntry[];
+let entries: DelegationRevocationSetAttestationEntry[];
 
 async function pub(priv: Uint8Array): Promise<string> {
   return bytesToHex(await getPublicKeyBySuite(priv, SUITE));
@@ -66,15 +66,15 @@ async function forge<T extends { signature?: unknown }>(
   return { ...body, signature: toBase64Url(sig) } as T;
 }
 
-async function head(
-  overrides: Partial<Parameters<typeof signRevocationHead>[0]> = {},
+async function attest(
+  overrides: Partial<Parameters<typeof signRevocationSetAttestation>[0]> = {},
   priv: Uint8Array = RELAY_PRIV,
-): Promise<DelegationRevocationHead> {
-  return signRevocationHead(
+): Promise<DelegationRevocationSetAttestation> {
+  return signRevocationSetAttestation(
     {
-      relay_id: RELAY_ID,
+      relay_motebit_id: RELAY_ID,
       relay_public_key: priv === RELAY_PRIV ? relayPub : await pub(priv),
-      delegator_id: DELEGATOR_ID,
+      delegator_motebit_id: DELEGATOR_ID,
       challenge: CHALLENGE,
       as_of: NOW,
       seq_high_water: 10,
@@ -86,30 +86,30 @@ async function head(
 }
 
 /**
- * A validly signed head body with `mutate` applied BEFORE signing. The
+ * A validly signed attestation body with `mutate` applied BEFORE signing. The
  * records digest is recomputed over the mutated entries (unless the mutation
- * set it, or `keepDigest`), so each forged head breaks exactly one rule.
+ * set it, or `keepDigest`), so each forged attestation breaks exactly one rule.
  */
-async function forgedHead(
-  mutate: (b: Omit<DelegationRevocationHead, "signature">) => void,
+async function forgedAttestation(
+  mutate: (b: Omit<DelegationRevocationSetAttestation, "signature">) => void,
   keepDigest = false,
-): Promise<DelegationRevocationHead> {
-  const { signature: _s, ...body } = await head();
+): Promise<DelegationRevocationSetAttestation> {
+  const { signature: _s, ...body } = await attest();
   const original = body.records_digest;
   mutate(body);
   if (!keepDigest && body.records_digest === original) {
     body.records_digest = await computeRevocationRecordsDigest(body.entries);
   }
-  return forge<DelegationRevocationHead>(body);
+  return forge<DelegationRevocationSetAttestation>(body);
 }
 
 function expectations(
-  over: Partial<VerifyRevocationHeadExpectations> = {},
-): VerifyRevocationHeadExpectations {
+  over: Partial<VerifyRevocationSetAttestationExpectations> = {},
+): VerifyRevocationSetAttestationExpectations {
   return {
     pinnedRelayPublicKey: relayPub,
     challenge: CHALLENGE,
-    delegatorId: DELEGATOR_ID,
+    delegatorMotebitId: DELEGATOR_ID,
     now: NOW,
     lastSeenSeq: 0,
     ...over,
@@ -154,90 +154,90 @@ beforeAll(async () => {
   ];
 });
 
-describe("verifyRevocationHead", () => {
-  it("accepts a head the pinned relay signed (happy path round-trip)", async () => {
-    const h = await head();
+describe("verifyRevocationSetAttestation", () => {
+  it("accepts an attestation the pinned relay signed (happy path round-trip)", async () => {
+    const h = await attest();
     expect(h.count).toBe(2);
     expect(h.records_digest).toBe(await computeRevocationRecordsDigest(entries));
-    expect(await verifyRevocationHead(h, expectations())).toEqual({ valid: true });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({ valid: true });
   });
 
-  it("accepts an empty head (positive absence evidence)", async () => {
-    const h = await head({ entries: [], seq_high_water: 0 });
+  it("accepts an empty attestation (positive absence evidence)", async () => {
+    const h = await attest({ entries: [], seq_high_water: 0 });
     expect(h.count).toBe(0);
-    expect(await verifyRevocationHead(h, expectations())).toEqual({ valid: true });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({ valid: true });
   });
 
-  it("refuses a head signed by a key other than the pinned one (wrong key)", async () => {
-    const h = await head({}, OTHER_RELAY_PRIV);
+  it("refuses an attestation signed by a key other than the pinned one (wrong key)", async () => {
+    const h = await attest({}, OTHER_RELAY_PRIV);
     expect(h.relay_public_key).toBe(otherRelayPub);
-    expect(await verifyRevocationHead(h, expectations())).toEqual({
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_invalid",
       reason: "public_key_mismatch",
     });
   });
 
-  it("refuses a head whose signature does not verify (bad signature)", async () => {
-    const h = { ...(await head()), as_of: NOW - 1 };
-    expect(await verifyRevocationHead(h, expectations())).toEqual({
+  it("refuses an attestation whose signature does not verify (bad signature)", async () => {
+    const h = { ...(await attest()), as_of: NOW - 1 };
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_invalid",
       reason: "signature_invalid",
     });
   });
 
-  it("refuses a head carrying the pinned key but signed by another key", async () => {
-    const { signature: _s, ...body } = await head();
-    const h = await forge<DelegationRevocationHead>(body, OTHER_RELAY_PRIV);
-    expect((await verifyRevocationHead(h, expectations())).valid).toBe(false);
-    expect(await verifyRevocationHead(h, expectations())).toMatchObject({
+  it("refuses an attestation carrying the pinned key but signed by another key", async () => {
+    const { signature: _s, ...body } = await attest();
+    const h = await forge<DelegationRevocationSetAttestation>(body, OTHER_RELAY_PRIV);
+    expect((await verifyRevocationSetAttestation(h, expectations())).valid).toBe(false);
+    expect(await verifyRevocationSetAttestation(h, expectations())).toMatchObject({
       reason: "signature_invalid",
     });
   });
 
   it("refuses a malformed signature", async () => {
-    const h = { ...(await head()), signature: "AAAA" };
-    expect(await verifyRevocationHead(h, expectations())).toMatchObject({
+    const h = { ...(await attest()), signature: "AAAA" };
+    expect(await verifyRevocationSetAttestation(h, expectations())).toMatchObject({
       refusal: "revocation_evidence_invalid",
       reason: "malformed_signature",
     });
   });
 
-  it("refuses a head answering another challenge (challenge mismatch)", async () => {
-    const h = await head({ challenge: "someone-elses-challenge" });
-    expect(await verifyRevocationHead(h, expectations())).toEqual({
+  it("refuses an attestation answering another challenge (challenge mismatch)", async () => {
+    const h = await attest({ challenge: "someone-elses-challenge" });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_invalid",
       reason: "challenge_mismatch",
     });
   });
 
-  it("refuses a head for another delegator (delegator mismatch)", async () => {
-    const h = await head({ delegator_id: OTHER_DELEGATOR_ID, entries: [] });
-    expect(await verifyRevocationHead(h, expectations())).toEqual({
+  it("refuses an attestation for another delegator (delegator mismatch)", async () => {
+    const h = await attest({ delegator_motebit_id: OTHER_DELEGATOR_ID, entries: [] });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_invalid",
       reason: "delegator_mismatch",
     });
   });
 
-  it("refuses a head carrying an entry for another delegator", async () => {
-    const h = await forgedHead((b) => {
+  it("refuses an attestation carrying an entry for another delegator", async () => {
+    const h = await forgedAttestation((b) => {
       b.entries = [...entries, { seq: 9, received_at: NOW - 2_000, record: revForeign }];
       b.count = 3;
     });
-    expect(await verifyRevocationHead(h, expectations())).toMatchObject({
+    expect(await verifyRevocationSetAttestation(h, expectations())).toMatchObject({
       refusal: "revocation_evidence_invalid",
       reason: "delegator_mismatch",
     });
   });
 
   it("refuses out-of-order entries", async () => {
-    const h = await forgedHead((b) => {
+    const h = await forgedAttestation((b) => {
       b.entries = [entries[1]!, entries[0]!];
     });
-    expect(await verifyRevocationHead(h, expectations())).toEqual({
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_invalid",
       reason: "entries_out_of_order",
@@ -245,19 +245,19 @@ describe("verifyRevocationHead", () => {
   });
 
   it("refuses duplicate seqs (not strictly ascending)", async () => {
-    const h = await forgedHead((b) => {
+    const h = await forgedAttestation((b) => {
       b.entries = [entries[0]!, { ...entries[1]!, seq: 3 }];
     });
-    expect(await verifyRevocationHead(h, expectations())).toMatchObject({
+    expect(await verifyRevocationSetAttestation(h, expectations())).toMatchObject({
       reason: "entries_out_of_order",
     });
   });
 
   it("refuses an entry seq above seq_high_water", async () => {
-    const h = await forgedHead((b) => {
+    const h = await forgedAttestation((b) => {
       b.seq_high_water = 5;
     });
-    expect(await verifyRevocationHead(h, expectations())).toEqual({
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_invalid",
       reason: "entry_seq_exceeds_high_water",
@@ -265,10 +265,10 @@ describe("verifyRevocationHead", () => {
   });
 
   it("refuses a count that disagrees with the entries", async () => {
-    const h = await forgedHead((b) => {
+    const h = await forgedAttestation((b) => {
       b.count = 1;
     });
-    expect(await verifyRevocationHead(h, expectations())).toEqual({
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_invalid",
       reason: "count_mismatch",
@@ -276,10 +276,10 @@ describe("verifyRevocationHead", () => {
   });
 
   it("refuses a records_digest that disagrees with the entries", async () => {
-    const h = await forgedHead((b) => {
+    const h = await forgedAttestation((b) => {
       b.records_digest = "0".repeat(64);
     });
-    expect(await verifyRevocationHead(h, expectations())).toEqual({
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_invalid",
       reason: "records_digest_mismatch",
@@ -287,53 +287,56 @@ describe("verifyRevocationHead", () => {
   });
 
   it("refuses an entry dropped under the original digest and count", async () => {
-    const h = await forgedHead((b) => {
+    const h = await forgedAttestation((b) => {
       b.entries = [entries[0]!];
       b.count = 1;
     }, true);
-    expect(await verifyRevocationHead(h, expectations())).toMatchObject({
+    expect(await verifyRevocationSetAttestation(h, expectations())).toMatchObject({
       reason: "records_digest_mismatch",
     });
   });
 
-  it("refuses a stale head (older than window plus skew)", async () => {
-    const h = await head({ as_of: NOW - 120_001 });
-    expect(await verifyRevocationHead(h, expectations())).toEqual({
+  it("refuses a stale attestation (older than window plus skew)", async () => {
+    const h = await attest({ as_of: NOW - 120_001 });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_stale",
       reason: "stale",
     });
   });
 
-  it("accepts a head exactly at window plus skew", async () => {
-    const h = await head({ as_of: NOW - 120_000 });
-    expect(await verifyRevocationHead(h, expectations())).toEqual({ valid: true });
+  it("accepts an attestation exactly at window plus skew", async () => {
+    const h = await attest({ as_of: NOW - 120_000 });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({ valid: true });
   });
 
   it("honours a tighter freshness window override", async () => {
-    const h = await head({ as_of: NOW - 30_000 });
+    const h = await attest({ as_of: NOW - 30_000 });
     expect(
-      await verifyRevocationHead(h, expectations({ maxAgeMs: 10_000, clockSkewMs: 10_000 })),
+      await verifyRevocationSetAttestation(
+        h,
+        expectations({ maxAgeMs: 10_000, clockSkewMs: 10_000 }),
+      ),
     ).toMatchObject({ refusal: "revocation_evidence_stale", reason: "stale" });
   });
 
-  it("refuses a head dated in the future beyond skew", async () => {
-    const h = await head({ as_of: NOW + 60_001 });
-    expect(await verifyRevocationHead(h, expectations())).toEqual({
+  it("refuses an attestation dated in the future beyond skew", async () => {
+    const h = await attest({ as_of: NOW + 60_001 });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_stale",
       reason: "future_as_of",
     });
   });
 
-  it("accepts a head dated in the future within skew", async () => {
-    const h = await head({ as_of: NOW + 60_000 });
-    expect(await verifyRevocationHead(h, expectations())).toEqual({ valid: true });
+  it("accepts an attestation dated in the future within skew", async () => {
+    const h = await attest({ as_of: NOW + 60_000 });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({ valid: true });
   });
 
   it("refuses a rollback below the last accepted seq_high_water", async () => {
-    const h = await head();
-    expect(await verifyRevocationHead(h, expectations({ lastSeenSeq: 11 }))).toEqual({
+    const h = await attest();
+    expect(await verifyRevocationSetAttestation(h, expectations({ lastSeenSeq: 11 }))).toEqual({
       valid: false,
       refusal: "revocation_evidence_rollback",
       reason: "rollback",
@@ -341,66 +344,72 @@ describe("verifyRevocationHead", () => {
   });
 
   it("accepts seq_high_water equal to the last accepted one", async () => {
-    const h = await head();
-    expect(await verifyRevocationHead(h, expectations({ lastSeenSeq: 10 }))).toEqual({
+    const h = await attest();
+    expect(await verifyRevocationSetAttestation(h, expectations({ lastSeenSeq: 10 }))).toEqual({
       valid: true,
     });
   });
 
   it("refuses when any required expectation is missing", async () => {
-    const h = await head();
+    const h = await attest();
     for (const key of [
       "pinnedRelayPublicKey",
       "challenge",
-      "delegatorId",
+      "delegatorMotebitId",
       "now",
       "lastSeenSeq",
     ] as const) {
       const exp = { ...expectations() } as Record<string, unknown>;
       delete exp[key];
       expect(
-        await verifyRevocationHead(h, exp as unknown as VerifyRevocationHeadExpectations),
+        await verifyRevocationSetAttestation(
+          h,
+          exp as unknown as VerifyRevocationSetAttestationExpectations,
+        ),
       ).toMatchObject({ refusal: "revocation_evidence_invalid", reason: "missing_expectation" });
     }
   });
 
   it("refuses an unknown suite or spec", async () => {
-    const h = await head();
+    const h = await attest();
     expect(
-      await verifyRevocationHead(
+      await verifyRevocationSetAttestation(
         { ...h, suite: "motebit-jcs-ed25519-hex-v1" as never },
         expectations(),
       ),
     ).toMatchObject({ reason: "unsupported_suite" });
     expect(
-      await verifyRevocationHead({ ...h, spec: "motebit/other@1.0" as never }, expectations()),
+      await verifyRevocationSetAttestation(
+        { ...h, spec: "motebit/other@1.0" as never },
+        expectations(),
+      ),
     ).toMatchObject({ reason: "unsupported_spec" });
   });
 
-  it("refuses a malformed head shape", async () => {
-    const h = await head();
+  it("refuses a malformed attestation shape", async () => {
+    const h = await attest();
     expect(
-      await verifyRevocationHead({ ...h, entries: "nope" as never }, expectations()),
-    ).toMatchObject({ reason: "malformed_head" });
+      await verifyRevocationSetAttestation({ ...h, entries: "nope" as never }, expectations()),
+    ).toMatchObject({ reason: "malformed_attestation" });
     expect(
-      await verifyRevocationHead({ ...h, relay_public_key: "ABC" }, expectations()),
+      await verifyRevocationSetAttestation({ ...h, relay_public_key: "ABC" }, expectations()),
     ).toMatchObject({ reason: "malformed_public_key" });
   });
 
   it("checks the signature before the challenge (verification order)", async () => {
-    const h = { ...(await head()), challenge: "tampered" };
-    expect(await verifyRevocationHead(h, expectations())).toMatchObject({
+    const h = { ...(await attest()), challenge: "tampered" };
+    expect(await verifyRevocationSetAttestation(h, expectations())).toMatchObject({
       reason: "signature_invalid",
     });
   });
 });
 
-describe("signRevocationHead (producer refusals)", () => {
+describe("signRevocationSetAttestation (producer refusals)", () => {
   it("refuses out-of-order entries, a seq above high-water, and a foreign delegator", async () => {
-    await expect(head({ entries: [entries[1]!, entries[0]!] })).rejects.toThrow(/ascending/);
-    await expect(head({ seq_high_water: 5 })).rejects.toThrow(/ascending/);
+    await expect(attest({ entries: [entries[1]!, entries[0]!] })).rejects.toThrow(/ascending/);
+    await expect(attest({ seq_high_water: 5 })).rejects.toThrow(/ascending/);
     await expect(
-      head({ entries: [{ seq: 1, received_at: NOW, record: revForeign }] }),
+      attest({ entries: [{ seq: 1, received_at: NOW, record: revForeign }] }),
     ).rejects.toThrow(/delegator/);
   });
 });
@@ -412,7 +421,7 @@ describe("verifyRevocationInclusionReceipt", () => {
   ): Promise<DelegationRevocationInclusionReceipt> {
     return signRevocationInclusionReceipt(
       {
-        relay_id: RELAY_ID,
+        relay_motebit_id: RELAY_ID,
         relay_public_key: priv === RELAY_PRIV ? relayPub : await pub(priv),
         revocation: revA,
         seq: 3,
@@ -483,8 +492,8 @@ describe("verifyRevocationInclusionReceipt", () => {
     ).toEqual({ valid: false, reason: "revocation_mismatch" });
   });
 
-  it("refuses a head presented as a receipt (spec domain separation)", async () => {
-    const h = await head();
+  it("refuses an attestation presented as a receipt (spec domain separation)", async () => {
+    const h = await attest();
     expect(
       await verifyRevocationInclusionReceipt(h as unknown as DelegationRevocationInclusionReceipt, {
         pinnedRelayPublicKey: relayPub,
@@ -504,11 +513,11 @@ describe("verifyRevocationInclusionReceipt", () => {
   });
 });
 
-describe("detectRevocationOmission", () => {
+describe("verifyRevocationOmissionProof", () => {
   async function receiptFor(rev: DelegationRevocation, seq: number, priv = RELAY_PRIV) {
     return signRevocationInclusionReceipt(
       {
-        relay_id: RELAY_ID,
+        relay_motebit_id: RELAY_ID,
         relay_public_key: await pub(priv),
         revocation: rev,
         seq,
@@ -518,7 +527,7 @@ describe("detectRevocationOmission", () => {
     );
   }
 
-  it("is true when a later head covers the receipted seq but lacks the record", async () => {
+  it("holds when a later attestation covers the receipted seq but lacks the record", async () => {
     const revC = await signDelegationRevocation(
       {
         grant_id: "019a0000-0000-7000-8000-0000000000g4",
@@ -529,77 +538,119 @@ describe("detectRevocationOmission", () => {
       DELEGATOR_PRIV,
     );
     const r = await receiptFor(revC, 9);
-    const h = await head({ seq_high_water: 10 });
-    expect(await detectRevocationOmission(r, h)).toBe(true);
+    const a = await attest({ seq_high_water: 10 });
+    expect(await verifyRevocationOmissionProof(r, a)).toEqual({ valid: true });
   });
 
-  it("is true when the head carries the record at a different seq than receipted", async () => {
+  it("holds when the attestation carries the record at a different seq than receipted", async () => {
     const r = await receiptFor(revB, 8);
-    expect(await detectRevocationOmission(r, await head())).toBe(true);
+    expect(await verifyRevocationOmissionProof(r, await attest())).toEqual({ valid: true });
   });
 
-  it("is false when the head carries the receipted record", async () => {
+  it("does not hold when the attestation carries the receipted record", async () => {
     const r = await receiptFor(revB, 7);
-    expect(await detectRevocationOmission(r, await head())).toBe(false);
+    expect(await verifyRevocationOmissionProof(r, await attest())).toEqual({
+      valid: false,
+      reason: "record_carried",
+    });
   });
 
-  it("is false when the head's high-water does not cover the receipted seq", async () => {
+  it("does not hold when the attestation's high-water does not cover the receipted seq", async () => {
     const r = await receiptFor(revB, 11);
-    expect(await detectRevocationOmission(r, await head())).toBe(false);
+    expect(await verifyRevocationOmissionProof(r, await attest())).toEqual({
+      valid: false,
+      reason: "seq_not_covered",
+    });
   });
 
-  it("is false across different relay keys", async () => {
+  it("does not hold across different relay keys", async () => {
     const r = await receiptFor(revB, 9, OTHER_RELAY_PRIV);
-    expect(await detectRevocationOmission(r, await head())).toBe(false);
+    expect(await verifyRevocationOmissionProof(r, await attest())).toEqual({
+      valid: false,
+      reason: "relay_key_mismatch",
+    });
   });
 
-  it("is false across different delegators", async () => {
+  it("does not hold across different delegators", async () => {
     const r = await receiptFor(revForeign, 9);
-    expect(await detectRevocationOmission(r, await head())).toBe(false);
+    expect(await verifyRevocationOmissionProof(r, await attest())).toEqual({
+      valid: false,
+      reason: "delegator_mismatch",
+    });
   });
 
-  it("is false when the receipt signature is forged", async () => {
+  it("does not hold when the receipt signature is forged", async () => {
     const r = { ...(await receiptFor(revB, 9)), received_at: 1 };
-    expect(await detectRevocationOmission(r, await head())).toBe(false);
+    expect(await verifyRevocationOmissionProof(r, await attest())).toEqual({
+      valid: false,
+      reason: "signature_invalid",
+    });
   });
 
-  it("is false when the head signature is forged", async () => {
+  it("does not hold when the attestation signature is forged", async () => {
     const r = await receiptFor(revB, 9);
-    const h = { ...(await head()), as_of: 1 };
-    expect(await detectRevocationOmission(r, h)).toBe(false);
+    const a = { ...(await attest()), as_of: 1 };
+    expect(await verifyRevocationOmissionProof(r, a)).toEqual({
+      valid: false,
+      reason: "signature_invalid",
+    });
   });
 });
 
-describe("detectRevocationEquivocation", () => {
-  it("is true for two heads at the same seq_high_water with different digests", async () => {
-    const a = await head();
-    const b = await head({ entries: [entries[0]!], challenge: "other" });
-    expect(await detectRevocationEquivocation(a, b)).toBe(true);
+describe("verifyRevocationEquivocationProof", () => {
+  it("holds for two attestations at the same seq_high_water with different digests", async () => {
+    const a = await attest();
+    const b = await attest({ entries: [entries[0]!], challenge: "other" });
+    expect(await verifyRevocationEquivocationProof(a, b)).toEqual({ valid: true });
   });
 
-  it("is false for two heads over the same entries (challenge and as_of differ)", async () => {
-    const a = await head();
-    const b = await head({ challenge: "other", as_of: NOW + 5 });
+  it("does not hold for two attestations over the same entries (challenge and as_of differ)", async () => {
+    const a = await attest();
+    const b = await attest({ challenge: "other", as_of: NOW + 5 });
     expect(a.records_digest).toBe(b.records_digest);
-    expect(await detectRevocationEquivocation(a, b)).toBe(false);
+    expect(await verifyRevocationEquivocationProof(a, b)).toEqual({
+      valid: false,
+      reason: "same_records_digest",
+    });
   });
 
-  it("is false at different seq_high_water", async () => {
-    const a = await head();
-    const b = await head({ entries: [entries[0]!], seq_high_water: 4 });
-    expect(await detectRevocationEquivocation(a, b)).toBe(false);
+  it("does not hold at different seq_high_water", async () => {
+    const a = await attest();
+    const b = await attest({ entries: [entries[0]!], seq_high_water: 4 });
+    expect(await verifyRevocationEquivocationProof(a, b)).toEqual({
+      valid: false,
+      reason: "seq_high_water_differs",
+    });
   });
 
-  it("is false across different relay keys", async () => {
-    const a = await head();
-    const b = await head({ entries: [entries[0]!] }, OTHER_RELAY_PRIV);
-    expect(await detectRevocationEquivocation(a, b)).toBe(false);
+  it("does not hold across different relay keys", async () => {
+    const a = await attest();
+    const b = await attest({ entries: [entries[0]!] }, OTHER_RELAY_PRIV);
+    expect(await verifyRevocationEquivocationProof(a, b)).toEqual({
+      valid: false,
+      reason: "relay_key_mismatch",
+    });
   });
 
-  it("is false when either head's signature is forged", async () => {
-    const a = await head();
-    const b = { ...(await head({ entries: [entries[0]!] })), as_of: 1 };
-    expect(await detectRevocationEquivocation(a, b)).toBe(false);
-    expect(await detectRevocationEquivocation(b, a)).toBe(false);
+  it("does not hold across different delegators", async () => {
+    const a = await attest();
+    const b = await attest({ delegator_motebit_id: OTHER_DELEGATOR_ID, entries: [] });
+    expect(await verifyRevocationEquivocationProof(a, b)).toEqual({
+      valid: false,
+      reason: "delegator_mismatch",
+    });
+  });
+
+  it("does not hold when either attestation's signature is forged", async () => {
+    const a = await attest();
+    const b = { ...(await attest({ entries: [entries[0]!] })), as_of: 1 };
+    expect(await verifyRevocationEquivocationProof(a, b)).toEqual({
+      valid: false,
+      reason: "signature_invalid",
+    });
+    expect(await verifyRevocationEquivocationProof(b, a)).toEqual({
+      valid: false,
+      reason: "signature_invalid",
+    });
   });
 });

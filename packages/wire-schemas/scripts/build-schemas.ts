@@ -28,7 +28,7 @@ import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
 import {
   buildStandingDelegationJsonSchema,
   buildDelegationRevocationJsonSchema,
-  buildDelegationRevocationHeadJsonSchema,
+  buildDelegationRevocationSetAttestationJsonSchema,
   buildDelegationRevocationInclusionReceiptJsonSchema,
   buildSubjectBindingV1JsonSchema,
   buildSpendCeilingV1JsonSchema,
@@ -175,11 +175,11 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "standing-delegation-v1.json", build: buildStandingDelegationJsonSchema },
   { filename: "delegation-revocation-v1.json", build: buildDelegationRevocationJsonSchema },
   {
-    filename: "delegation-revocation-head-v1.json",
-    build: buildDelegationRevocationHeadJsonSchema,
+    filename: "delegation-revocation-set-attestation-v1.json",
+    build: buildDelegationRevocationSetAttestationJsonSchema,
   },
   {
-    filename: "delegation-revocation-receipt-v1.json",
+    filename: "delegation-revocation-inclusion-receipt-v1.json",
     build: buildDelegationRevocationInclusionReceiptJsonSchema,
   },
   { filename: "subject-binding-v1.json", build: buildSubjectBindingV1JsonSchema },
