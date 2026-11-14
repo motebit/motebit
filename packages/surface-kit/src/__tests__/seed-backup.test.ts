@@ -19,7 +19,12 @@ import type { KeyPair } from "@motebit/encryption";
 import { generate, rotate as rotateIdentityFile } from "@motebit/identity-file";
 
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "../key-rotation.js";
-import { seedBackupPosture, type SeedBackupAcknowledgment } from "../seed-backup.js";
+import {
+  ACK_FUTURE_SKEW_MS,
+  seedBackupPosture,
+  type SeedBackupAcknowledgment,
+} from "../seed-backup.js";
+import { parseCreatedAt } from "../machine-roster-identity-file.js";
 
 const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
 const MID = "mid-seed";
@@ -142,6 +147,101 @@ describe("seedBackupPosture — the acknowledgment covers the key it names", () 
         status: "backed_up",
         at: 5,
       });
+    });
+
+    it("main-shaped carry: X's unbound acknowledgment, Y's v8 id, Y's motebit.md signed after it ⇒ unconfirmed", async () => {
+      // Main's create-motebit replace kept X's seed_backed_up_at and minted
+      // Y (v8 id from Y's key), writing Y's motebit.md at mint time.
+      const y = await generateKeypair();
+      const yId = await deriveSovereignMotebitId(hex(y));
+      const yFile = await generate(
+        {
+          motebitId: yId,
+          ownerId: yId,
+          publicKeyHex: hex(y),
+          createdAt: new Date(ACK_AT + 60_000).toISOString(),
+        },
+        y.privateKey,
+      );
+      expect(
+        await seedBackupPosture({
+          ack: { at: ACK_AT },
+          currentPublicKeyHex: hex(y),
+          motebitId: yId,
+          identityFiles: [yFile],
+        }),
+      ).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
+    });
+
+    it("a never-rotated v8 identity whose motebit.md was signed before the acknowledgment ⇒ backed up", async () => {
+      const a = await generateKeypair();
+      const id = await deriveSovereignMotebitId(hex(a));
+      const file = await generate(
+        {
+          motebitId: id,
+          ownerId: id,
+          publicKeyHex: hex(a),
+          createdAt: new Date(ACK_AT - 60_000).toISOString(),
+        },
+        a.privateKey,
+      );
+      expect(
+        await seedBackupPosture({
+          ack: { at: ACK_AT },
+          currentPublicKeyHex: hex(a),
+          motebitId: id,
+          identityFiles: [file],
+        }),
+      ).toEqual({ status: "backed_up", at: ACK_AT });
+    });
+
+    it.each([
+      ["date-only", "2026-01-01"],
+      ["zoneless", "2026-01-01T00:00:00"],
+    ])("a %s created_at proves nothing ⇒ unconfirmed", async (_label, createdAt) => {
+      expect(parseCreatedAt(createdAt)).toBeNull();
+      const a = await generateKeypair();
+      const file = await generate(
+        { motebitId: LEGACY_ID, ownerId: "owner", publicKeyHex: hex(a), createdAt },
+        a.privateKey,
+      );
+      expect(
+        await seedBackupPosture({
+          ack: { at: ACK_AT },
+          currentPublicKeyHex: hex(a),
+          motebitId: LEGACY_ID,
+          identityFiles: [file],
+        }),
+      ).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
+    });
+
+    it("parseCreatedAt accepts only a full zoned timestamp", () => {
+      expect(parseCreatedAt("2026-01-01T00:00:00Z")).toBe(Date.parse("2026-01-01T00:00:00Z"));
+      expect(parseCreatedAt("2026-01-01T00:00:00.123+02:00")).toBe(
+        Date.parse("2026-01-01T00:00:00.123+02:00"),
+      );
+      expect(parseCreatedAt("2026-01-01T00:00Z")).toBeNull();
+      expect(parseCreatedAt("2026-13-45T99:99:99Z")).toBeNull();
+      expect(parseCreatedAt(1_700_000_000_000)).toBeNull();
+    });
+
+    it("an acknowledgment dated more than the skew in the future is unproven ⇒ unconfirmed", async () => {
+      const a = await generateKeypair();
+      const sovereign = await deriveSovereignMotebitId(hex(a));
+      const now = ACK_AT;
+      const read = (at: number) =>
+        seedBackupPosture({
+          ack: { at },
+          currentPublicKeyHex: hex(a),
+          motebitId: sovereign,
+          now: () => now,
+        });
+      expect(await read(now + ACK_FUTURE_SKEW_MS + 1)).toEqual({
+        status: "not_backed_up",
+        reason: "unconfirmed",
+      });
+      // Within the skew, the v8 rule still holds.
+      expect((await read(now + ACK_FUTURE_SKEW_MS)).status).toBe("backed_up");
     });
 
     it("NOT honoured once a sovereign identity has rotated (the already-rotated upgrader)", async () => {

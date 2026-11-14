@@ -46,9 +46,17 @@ export interface BoundIdentityFile {
   createdAtMs: number | null;
 }
 
-/** A signed ISO 8601 `created_at` as epoch ms; null when absent or unparsable. */
-function parseCreatedAt(value: unknown): number | null {
-  if (typeof value !== "string" || value === "") return null;
+/**
+ * A FULL ISO 8601 timestamp: date, time to the second (optional fraction),
+ * and an explicit zone (`Z` or `±hh:mm`). A date-only or zoneless value is
+ * ambiguous (`Date.parse` reads one as UTC, the other as local time), so it
+ * proves nothing.
+ */
+const FULL_ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
+
+/** A signed `created_at` as epoch ms; null when absent, not a full zoned timestamp, or invalid. */
+export function parseCreatedAt(value: unknown): number | null {
+  if (typeof value !== "string" || !FULL_ISO_8601.test(value)) return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
 }

@@ -23,7 +23,7 @@
  * Local configuration only. Never wire.
  */
 import { deriveSovereignMotebitId } from "@motebit/encryption";
-import { boundIdentityFile } from "./machine-roster-identity-file.js";
+import { boundIdentityFile, type BoundIdentityFile } from "./machine-roster-identity-file.js";
 
 /** What a surface has recorded about a seed backup. */
 export interface SeedBackupAcknowledgment {
@@ -62,7 +62,9 @@ export type SeedBackupPosture =
  * ever had, so the only one the acknowledgment can have covered. Either:
  *
  *   - the motebit_id is the sovereign commitment to it
- *     (`deriveSovereignMotebitId`); or
+ *     (`deriveSovereignMotebitId`) — unless every identity file bound to it
+ *     was signed after the acknowledgment (see `legacyAckCoversCurrentKey`:
+ *     the date evidence binds this rule too); or
  *   - an identity file this surface holds is BOUND to it
  *     (`boundIdentityFile`: signature and chain verify, it names this
  *     motebit_id, its current key is the current key), records ZERO
@@ -87,6 +89,8 @@ export async function seedBackupPosture(input: {
   motebitId: string | null | undefined;
   /** Identity file contents (motebit.md) this surface can read. Untrusted: each is verified here. */
   identityFiles?: readonly (string | null | undefined)[];
+  /** Clock for the future-acknowledgment check; defaults to `Date.now`. */
+  now?: () => number;
 }): Promise<SeedBackupPosture> {
   const { ack, currentPublicKeyHex, motebitId } = input;
   if (typeof ack.at !== "number") return { status: "not_backed_up", reason: "never" };
@@ -99,36 +103,73 @@ export async function seedBackupPosture(input: {
       : { status: "not_backed_up", reason: "retired_key", coveredPublicKeyHex: covered };
   }
   // Legacy, unbound.
+  const now = (input.now ?? Date.now)();
+  // An acknowledgment dated in the future cannot be ordered against any
+  // file: the date rules are unproven, so nothing is honoured.
+  if (ack.at > now + ACK_FUTURE_SKEW_MS) return { status: "not_backed_up", reason: "unconfirmed" };
   if (current !== "" && motebitId != null && motebitId !== "") {
-    if (await isGenesisKey(current, motebitId, ack.at, input.identityFiles ?? [])) {
+    if (await legacyAckCoversCurrentKey(current, motebitId, ack.at, input.identityFiles ?? [])) {
       return { status: "backed_up", at: ack.at };
     }
   }
   return { status: "not_backed_up", reason: "unconfirmed" };
 }
 
+/** How far in the future an acknowledgment may be dated (clock skew) before it is unproven. */
+export const ACK_FUTURE_SKEW_MS = 5 * 60_000;
+
 /**
- * Is `current` provably the key the acknowledgment (made at `ackAt`)
- * covered? Never throws; false on any doubt.
+ * Does a legacy acknowledgment made at `ackAt` provably cover `current`?
+ * Never throws; false on any doubt.
+ *
+ * The date evidence comes first and binds BOTH rules: when this surface
+ * holds any identity file bound to the current key, at least one of them
+ * must have been signed at or before the acknowledgment. If every one was
+ * signed after it (or carries no usable date), the current key's own record
+ * starts after the acknowledgment, so nothing says the acknowledgment was
+ * for it — even a sovereign (v8) id derived from it. That is the state
+ * main's create-motebit replace left on disk: an old identity's unbound
+ * acknowledgment, a new identity minted with a v8 id, and the new
+ * identity's motebit.md written at mint time, after the acknowledgment.
+ * With no bound file at all, the v8 rule stands alone.
+ *
+ * KNOWN DEPENDENCY (spec/identity-v1.md §3.1 defines `created_at` as the
+ * identity's creation time; this proof reads it as the time the file was
+ * SIGNED). Every writer in this repo stamps `created_at` at write time —
+ * `@motebit/identity-file` `generate` (the CLI's export, the desktop, web
+ * and mobile surfaces) and create-motebit's `generateIdentity` /
+ * `regenerateIdentityFile` — and
+ * `src/__tests__/seed-backup-writers.test.ts` goes red if one stops. A
+ * writer that PRESERVED a genesis `created_at` on a fresh file (for a later
+ * key, or with the succession chain dropped) would make this proof unsound:
+ * it could date a file "before" an acknowledgment that never covered its
+ * key.
  */
-async function isGenesisKey(
+async function legacyAckCoversCurrentKey(
   current: string,
   motebitId: string,
   ackAt: number,
   identityFiles: readonly (string | null | undefined)[],
 ): Promise<boolean> {
-  try {
-    if ((await deriveSovereignMotebitId(current)) === motebitId.toLowerCase()) return true;
-  } catch {
-    // malformed key: not proven
-  }
+  const bound: BoundIdentityFile[] = [];
   for (const content of identityFiles) {
-    const bound = await boundIdentityFile(motebitId, content ?? null, current);
-    if (bound == null || bound.records.length !== 0) continue;
-    // Signed after the acknowledgment (or undated): proves nothing about it.
-    if (bound.createdAtMs != null && bound.createdAtMs <= ackAt) return true;
+    const b = await boundIdentityFile(motebitId, content ?? null, current);
+    if (b != null) bound.push(b);
   }
-  return false;
+  const signedByAck = (b: BoundIdentityFile): boolean =>
+    b.createdAtMs != null && b.createdAtMs <= ackAt;
+  // Files for this key exist, and every one was signed after the
+  // acknowledgment: it cannot have been for this key.
+  if (bound.length > 0 && !bound.some(signedByAck)) return false;
+  let sovereign = false;
+  try {
+    sovereign = (await deriveSovereignMotebitId(current)) === motebitId.toLowerCase();
+  } catch {
+    sovereign = false; // malformed key: not proven
+  }
+  if (sovereign) return true;
+  // A zero-succession file signed no later than the acknowledgment.
+  return bound.some((b) => b.records.length === 0 && signedByAck(b));
 }
 
 /**

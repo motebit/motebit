@@ -72,7 +72,16 @@ async function identityWithBackup(opts: { bound?: boolean } = {}) {
   const mid = await deriveSovereignMotebitId(hex(a));
   fs.writeFileSync(
     identityPath(),
-    await generate({ motebitId: mid, ownerId: "owner", publicKeyHex: hex(a) }, a.privateKey),
+    await generate(
+      // Signed before the acknowledgment below (at 1_000 ms): the identity's own file.
+      {
+        motebitId: mid,
+        ownerId: "owner",
+        publicKeyHex: hex(a),
+        createdAt: "1970-01-01T00:00:00.000Z",
+      },
+      a.privateKey,
+    ),
   );
   const config: Record<string, unknown> = {
     motebit_id: mid,
@@ -287,6 +296,41 @@ describe("a legacy (unbound) acknowledgment is never a false alarm with false te
   it("never-rotated legacy id with a zero-succession motebit.md reads backed up", async () => {
     await legacyIdentity({ withFile: true });
     expect(await status()).toBe("backed_up");
+  });
+
+  it("main-shaped carry: X's unbound acknowledgment, Y's v8 id and Y's motebit.md signed after it ⇒ re-confirm", async () => {
+    // What main's create-motebit replace left on disk: X's seed_backed_up_at
+    // carried, Y minted with a v8 id from Y's key, Y's ~/.motebit/motebit.md
+    // written at mint time — after X's acknowledgment.
+    const y = await generateKeypair();
+    const yId = await deriveSovereignMotebitId(hex(y));
+    fs.writeFileSync(
+      identityPath(),
+      await generate(
+        {
+          motebitId: yId,
+          ownerId: yId,
+          publicKeyHex: hex(y),
+          createdAt: new Date(LEGACY_ACK_AT + 60_000).toISOString(),
+        },
+        y.privateKey,
+      ),
+    );
+    fs.writeFileSync(
+      cfg.CONFIG_PATH,
+      JSON.stringify({
+        motebit_id: yId,
+        device_id: `${yId}-laptop`,
+        device_public_key: hex(y),
+        cli_encrypted_key: (await identity.encryptPrivateKey(bytesToHex(y.privateKey), PASS))!,
+        seed_backed_up_at: LEGACY_ACK_AT,
+      }),
+      { mode: 0o600 },
+    );
+    expect(await seed.seedBackupPostureOf(cfg.loadFullConfig())).toEqual({
+      status: "not_backed_up",
+      reason: "unconfirmed",
+    });
   });
 
   it("a zero-succession motebit.md signed after the acknowledgment (a regenerate) reads re-confirm", async () => {

@@ -17,6 +17,11 @@ const kitSrc = join(kitPkg, "src", "seed-backup.ts");
 const repo = join(kitPkg, "..", "..");
 const cliPkg = join(repo, "apps", "cli");
 const cliSeed = join(cliPkg, "src", "subcommands", "seed.ts");
+const kitIdentityFile = join(kitPkg, "src", "machine-roster-identity-file.ts");
+/** Round 4's fixes. */
+const V8_DATE_VETO = "  if (bound.length > 0 && !bound.some(signedByAck)) return false;\n";
+const STRICT_DATE = '  if (typeof value !== "string" || !FULL_ISO_8601.test(value)) return null;';
+const LOOSE_DATE = '  if (typeof value !== "string" || FULL_ISO_8601.source === "") return null;';
 /** Round 3's fix: a zero-succession file counts only when signed no later than the acknowledgment. */
 const DATE_CHECK = "    if (bound.createdAtMs != null && bound.createdAtMs <= ackAt) return true;";
 // A revert the package build accepts: no unreachable code, and ackAt still read (tsc -b sets noUnusedParameters).
@@ -301,6 +306,89 @@ await runTampers(
           file: cliSeed,
           from: '      keychain: "Please re-confirm your recovery seed.",',
           to: '      keychain: "Your recovery seed is still not backed up.",',
+        },
+      ],
+    },
+    // ── Round 4: date evidence binds the v8 rule; strict dates; future acks; writer pins ──
+    {
+      name: "kit: the v8 rule ignores date evidence (main-shaped carry reads backed up)",
+      pkg: "@motebit/surface-kit",
+      test: relative(kitPkg, join(here, "seed-backup.test.ts")),
+      red: "seedBackupPosture — the acknowledgment covers the key it names legacy acknowledgment (no key recorded) main-shaped carry: X's unbound acknowledgment, Y's v8 id, Y's motebit.md signed after it ⇒ unconfirmed",
+      edits: [{ file: kitSrc, from: V8_DATE_VETO, to: "" }],
+    },
+    {
+      name: "cli: the v8 rule ignores date evidence (main-shaped carry reads backed up)",
+      pkg: "motebit",
+      test: relative(cliPkg, join(cliPkg, "src", "__tests__", "seed-backup-rotation.test.ts")),
+      red: "a legacy (unbound) acknowledgment is never a false alarm with false text main-shaped carry: X's unbound acknowledgment, Y's v8 id and Y's motebit.md signed after it ⇒ re-confirm",
+      rebuild: ["@motebit/surface-kit"],
+      edits: [{ file: kitSrc, from: V8_DATE_VETO, to: "" }],
+    },
+    {
+      name: "kit: a date-only created_at is accepted as proof",
+      pkg: "@motebit/surface-kit",
+      test: relative(kitPkg, join(here, "seed-backup.test.ts")),
+      red: "seedBackupPosture — the acknowledgment covers the key it names legacy acknowledgment (no key recorded) a date-only created_at proves nothing ⇒ unconfirmed",
+      edits: [{ file: kitIdentityFile, from: STRICT_DATE, to: LOOSE_DATE }],
+    },
+    {
+      name: "kit: a zoneless created_at is accepted as proof",
+      pkg: "@motebit/surface-kit",
+      test: relative(kitPkg, join(here, "seed-backup.test.ts")),
+      red: "seedBackupPosture — the acknowledgment covers the key it names legacy acknowledgment (no key recorded) a zoneless created_at proves nothing ⇒ unconfirmed",
+      edits: [{ file: kitIdentityFile, from: STRICT_DATE, to: LOOSE_DATE }],
+    },
+    {
+      name: "kit: a future-dated acknowledgment is honoured",
+      pkg: "@motebit/surface-kit",
+      test: relative(kitPkg, join(here, "seed-backup.test.ts")),
+      red: "seedBackupPosture — the acknowledgment covers the key it names legacy acknowledgment (no key recorded) an acknowledgment dated more than the skew in the future is unproven ⇒ unconfirmed",
+      edits: [
+        {
+          file: kitSrc,
+          from: "  if (ack.at > now + ACK_FUTURE_SKEW_MS) return",
+          to: "  if (ack.at > now + ACK_FUTURE_SKEW_MS && now < 0) return",
+        },
+      ],
+    },
+    {
+      name: "writers: create-motebit regenerate preserves a genesis created_at",
+      pkg: "create-motebit",
+      test: "src/__tests__/created-at-write-time.test.ts",
+      red: "create-motebit writers stamp created_at at write time generateIdentity and regenerateIdentityFile both date the file now, with a zone",
+      edits: [
+        {
+          file: join(repo, "packages", "create-motebit", "src", "generate.ts"),
+          from: "    motebit_id: opts.motebitId,\n    created_at: new Date().toISOString(),",
+          to: '    motebit_id: opts.motebitId,\n    created_at: "2020-01-01T00:00:00.000Z",',
+        },
+      ],
+    },
+    {
+      name: "writers: identity-file generate stops defaulting created_at to now",
+      pkg: "@motebit/surface-kit",
+      test: relative(kitPkg, join(here, "seed-backup-writers.test.ts")),
+      red: "identity-file generate stamps created_at at write time no createdAt given ⇒ created_at is the signing time, as a full zoned timestamp",
+      rebuild: ["@motebit/identity-file"],
+      edits: [
+        {
+          file: join(repo, "packages", "identity-file", "src", "index.ts"),
+          from: "    created_at: opts.createdAt ?? new Date().toISOString(),",
+          to: '    created_at: opts.createdAt ?? "2020-01-01T00:00:00.000Z",',
+        },
+      ],
+    },
+    {
+      name: "writers: the CLI export starts preserving a created_at",
+      pkg: "@motebit/surface-kit",
+      test: relative(kitPkg, join(here, "seed-backup-writers.test.ts")),
+      red: "no production writer preserves a genesis created_at no call of identity-file generate passes createdAt",
+      edits: [
+        {
+          file: join(cliPkg, "src", "subcommands", "export.ts"),
+          from: "      motebitId,\n      ownerId: motebitId,\n      publicKeyHex,\n      devices,\n",
+          to: '      motebitId,\n      ownerId: motebitId,\n      publicKeyHex,\n      devices,\n      createdAt: "2020-01-01T00:00:00.000Z",\n',
         },
       ],
     },
