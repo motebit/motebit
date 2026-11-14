@@ -2815,4 +2815,23 @@ export const relayMigrations: Migration[] = [
       add("settlement_replay_failures", "INTEGER NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: 61,
+    name: "delegation_revocations_by_delegator",
+    up: (db) => {
+      // The signed set attestation (standing-delegation §5.2,
+      // `GET /api/v1/delegations/revocations/head`) reads every revocation for
+      // ONE delegator in seq order on a public route; without this index each
+      // request scans the whole table. Index only: no row changes.
+      const has = db
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'relay_delegation_revocations'",
+        )
+        .get();
+      if (has === undefined) return;
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_delegation_revocations_delegator_seq ON relay_delegation_revocations(delegator_id, id)",
+      );
+    },
+  },
 ];

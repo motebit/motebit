@@ -570,6 +570,8 @@ export const MASTER_TOKEN_CARVE_OUTS: ReadonlyArray<MasterTokenCarveOut> = [
   // delegator-signed revocation on submit, public read of the cache ---
   { method: "POST", path: "/api/v1/delegations/revocations", auth: SIGNATURE_IS_AUTH },
   { method: "GET", path: "/api/v1/delegations/revocations", auth: PUBLIC_ARTIFACT },
+  // The signed set attestation (§5.2): public for the reason the cache read is.
+  { method: "GET", path: "/api/v1/delegations/revocations/head", auth: PUBLIC_ARTIFACT },
 ];
 
 /**
@@ -727,6 +729,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   // ingestion, the bond class); the cache read shares the same path, so the
   // stricter write tier covers both methods.
   app.use("/api/v1/delegations/revocations", rl(writeLimiter));
+  // The signed set attestation (§5.2): read tier. A consumer fetches a fresh
+  // one (fresh challenge) before each autonomous money turn and re-checks at
+  // the payment boundary; each request is one indexed read and one Ed25519
+  // signature, the cost class of the other public read-tier artifact routes.
+  app.use("/api/v1/delegations/revocations/head", rl(readLimiter));
 
   // Read endpoints: discover, credentials, capabilities, listings (60 req/min)
   app.use("/api/v1/agents/discover", rl(readLimiter));
