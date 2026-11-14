@@ -406,6 +406,7 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   // rotation reads "not backed up" (seed.ts `seedBackupPostureOf`).
   next.seed_backed_up_at = Date.now();
   next.seed_backed_up_key = publicKeyHex;
+  if (next.motebit_id !== undefined) next.seed_backed_up_motebit_id = next.motebit_id;
   // 2. The config. `saveFullConfig` keeps whatever it replaces: a damaged
   //    file byte for byte, and — this being a declared identity change — any
   //    key or signed identity file the new config does not carry, on EVERY

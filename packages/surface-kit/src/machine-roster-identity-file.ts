@@ -37,28 +37,6 @@ export interface BoundIdentityFile {
   records: KeySuccessionRecord[];
   /** The guardian the file names, when it is a well-formed (lowercase hex) key; else null. */
   guardian: string | null;
-  /**
-   * The file's `created_at` as epoch ms — a frontmatter field, so covered by
-   * the signature (spec/identity-v1.md §4.1, §4.4) — or null when absent or
-   * unparsable. Signer-asserted: it says when the holder of THIS key signed
-   * the file, never more.
-   */
-  createdAtMs: number | null;
-}
-
-/**
- * A FULL ISO 8601 timestamp: date, time to the second (optional fraction),
- * and an explicit zone (`Z` or `±hh:mm`). A date-only or zoneless value is
- * ambiguous (`Date.parse` reads one as UTC, the other as local time), so it
- * proves nothing.
- */
-const FULL_ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
-
-/** A signed `created_at` as epoch ms; null when absent, not a full zoned timestamp, or invalid. */
-export function parseCreatedAt(value: unknown): number | null {
-  if (typeof value !== "string" || !FULL_ISO_8601.test(value)) return null;
-  const ms = Date.parse(value);
-  return Number.isFinite(ms) ? ms : null;
 }
 
 /**
@@ -84,7 +62,6 @@ export async function boundIdentityFile(
       publicKeyHex: held,
       records: [...(v.identity.succession ?? [])],
       guardian: typeof g === "string" && HEX_32.test(g) ? g : null,
-      createdAtMs: parseCreatedAt(v.identity.created_at),
     };
   } catch {
     return null;

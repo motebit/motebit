@@ -97,18 +97,16 @@ describe("isSovereignId", () => {
 
 describe("seedBackupStatus", () => {
   it("no encrypted key → no_identity (nothing to back up)", async () => {
-    expect(await seedBackupStatus({})).toBe("no_identity");
+    expect(seedBackupStatus({})).toBe("no_identity");
   });
 
   it("key present, no ack → not_backed_up (the nudge fires)", async () => {
-    expect(await seedBackupStatus({ cli_encrypted_key: { ciphertext: "x" } })).toBe(
-      "not_backed_up",
-    );
+    expect(seedBackupStatus({ cli_encrypted_key: { ciphertext: "x" } })).toBe("not_backed_up");
   });
 
   it("ack recorded for the current key → backed_up (the nudge is gone until a rotation)", async () => {
     expect(
-      await seedBackupStatus({
+      seedBackupStatus({
         cli_encrypted_key: { ciphertext: "x" },
         device_public_key: PUB,
         seed_backed_up_at: 123,
@@ -119,7 +117,7 @@ describe("seedBackupStatus", () => {
 
   it("ack recorded for another key (a rotation since) → not_backed_up", async () => {
     expect(
-      await seedBackupStatus({
+      seedBackupStatus({
         cli_encrypted_key: { ciphertext: "x" },
         device_public_key: PUB,
         seed_backed_up_at: 123,

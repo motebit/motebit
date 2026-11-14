@@ -102,6 +102,7 @@ export function identityFingerprint(config: object): string {
 const SEED_BACKUP_FIELDS = [
   "seed_backed_up_at",
   "seed_backed_up_key",
+  "seed_backed_up_motebit_id",
   "seed_backup_prior",
 ] as const;
 
@@ -112,10 +113,11 @@ interface SeedBackupPrior {
 }
 
 /**
- * Twin of the CLI's `setAsideReplacedSeedBackup` (`apps/cli/src/config.ts`):
- * a write that replaces the identity (`motebit_id` changes — this
- * scaffolder's "Overwrite?" path) never carries the replaced identity's
- * seed-backup acknowledgment as current. It is moved ASIDE into
+ * Twin of `setAsideReplacedSeedBackup` in `@motebit/surface-kit`
+ * (`seed-backup.ts`; the CLI and the desktop use that one — this package is
+ * standalone): a write that replaces the identity (`motebit_id` changes —
+ * this scaffolder's "Overwrite?" path) never carries the replaced
+ * identity's seed-backup acknowledgment as current. It is moved ASIDE into
  * `seed_backup_prior` (kept, never deleted); one the write overwrote is kept
  * aside too. A seed shown for one identity is never the backup of the next.
  */
@@ -125,18 +127,20 @@ export function setAsideReplacedSeedBackup(
 ): void {
   const at = onDisk["seed_backed_up_at"];
   if (typeof at !== "number") return;
-  const key =
-    typeof onDisk["seed_backed_up_key"] === "string" ? onDisk["seed_backed_up_key"] : null;
+  const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+  const key = str(onDisk["seed_backed_up_key"]);
+  const ackId = str(onDisk["seed_backed_up_motebit_id"]);
   const carried =
-    write["seed_backed_up_at"] === at && (write["seed_backed_up_key"] ?? null) === key;
+    write["seed_backed_up_at"] === at &&
+    str(write["seed_backed_up_key"]) === key &&
+    str(write["seed_backed_up_motebit_id"]) === ackId;
   const identityReplaced = (write["motebit_id"] ?? null) !== (onDisk["motebit_id"] ?? null);
   if (!identityReplaced && carried) return;
-  const motebitId = typeof onDisk["motebit_id"] === "string" ? onDisk["motebit_id"] : null;
   const priorOf = (c: Record<string, unknown>): SeedBackupPrior[] =>
     Array.isArray(c["seed_backup_prior"]) ? (c["seed_backup_prior"] as SeedBackupPrior[]) : [];
-  const prior = [...priorOf(onDisk), ...priorOf(write)];
   const kept: SeedBackupPrior[] = [];
-  for (const p of [...prior, { at, key, motebit_id: motebitId }]) {
+  const entry: SeedBackupPrior = { at, key, motebit_id: ackId ?? str(onDisk["motebit_id"]) };
+  for (const p of [...priorOf(onDisk), ...priorOf(write), entry]) {
     if (!kept.some((k) => k.at === p.at && k.key === p.key && k.motebit_id === p.motebit_id)) {
       kept.push(p);
     }
@@ -145,6 +149,7 @@ export function setAsideReplacedSeedBackup(
   if (identityReplaced && carried) {
     delete write["seed_backed_up_at"];
     delete write["seed_backed_up_key"];
+    delete write["seed_backed_up_motebit_id"];
   }
 }
 

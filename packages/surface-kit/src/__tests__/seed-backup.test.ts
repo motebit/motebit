@@ -11,27 +11,18 @@ import { describe, it, expect } from "vitest";
 import {
   generateKeypair,
   bytesToHex,
-  hexToBytes,
   deriveSovereignMotebitId,
   signKeySuccession,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
-import { generate, rotate as rotateIdentityFile } from "@motebit/identity-file";
 
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "../key-rotation.js";
-import {
-  ACK_FUTURE_SKEW_MS,
-  seedBackupPosture,
-  type SeedBackupAcknowledgment,
-} from "../seed-backup.js";
-import { parseCreatedAt } from "../machine-roster-identity-file.js";
+import { seedBackupPosture, type SeedBackupAcknowledgment } from "../seed-backup.js";
 
 const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
 const MID = "mid-seed";
 /** A legacy (random, UUIDv7) motebit_id: never the sovereign commitment to any key. */
 const LEGACY_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
-/** When a legacy acknowledgment was recorded (fixed, so file dates can sit either side of it). */
-const ACK_AT = Date.parse("2026-06-01T00:00:00.000Z");
 
 interface Relay {
   held_public_key: string | null;
@@ -116,18 +107,18 @@ const ackFor = (kp: KeyPair): SeedBackupAcknowledgment => ({ at: 1_000, publicKe
 describe("seedBackupPosture — the acknowledgment covers the key it names", () => {
   it("never acknowledged ⇒ not backed up (reason: never)", async () => {
     const a = await generateKeypair();
-    expect(await postureOf({}, hex(a))).toEqual({ status: "not_backed_up", reason: "never" });
+    expect(postureOf({}, hex(a))).toEqual({ status: "not_backed_up", reason: "never" });
   });
 
   it("acknowledged for the current key ⇒ backed up", async () => {
     const a = await generateKeypair();
-    expect(await postureOf(ackFor(a), hex(a))).toEqual({ status: "backed_up", at: 1_000 });
+    expect(postureOf(ackFor(a), hex(a))).toEqual({ status: "backed_up", at: 1_000 });
   });
 
   it("an old backup presented as current (key mismatch) ⇒ not backed up, naming the covered key", async () => {
     const a = await generateKeypair();
     const b = await generateKeypair();
-    expect(await postureOf(ackFor(a), hex(b))).toEqual({
+    expect(postureOf(ackFor(a), hex(b))).toEqual({
       status: "not_backed_up",
       reason: "retired_key",
       coveredPublicKeyHex: hex(a),
@@ -136,251 +127,76 @@ describe("seedBackupPosture — the acknowledgment covers the key it names", () 
 
   it("no current key ⇒ never backed up", async () => {
     const a = await generateKeypair();
-    expect((await postureOf(ackFor(a), "")).status).toBe("not_backed_up");
+    expect(postureOf(ackFor(a), "").status).toBe("not_backed_up");
   });
 
-  describe("legacy acknowledgment (no key recorded)", () => {
-    it("honoured while the current key is the sovereign genesis key (never rotated)", async () => {
+  describe("an unbound (legacy) acknowledgment is never honoured — one re-confirmation, by design", () => {
+    it("even for a never-rotated sovereign (v8) identity ⇒ unconfirmed", async () => {
       const a = await generateKeypair();
       const sovereign = await deriveSovereignMotebitId(hex(a));
-      expect(await postureOf({ at: 5 }, hex(a), sovereign)).toEqual({
-        status: "backed_up",
-        at: 5,
+      expect(postureOf({ at: 5 }, hex(a), sovereign)).toEqual({
+        status: "not_backed_up",
+        reason: "unconfirmed",
       });
     });
 
-    it("main-shaped carry: X's unbound acknowledgment, Y's v8 id, Y's motebit.md signed after it ⇒ unconfirmed", async () => {
-      // Main's create-motebit replace kept X's seed_backed_up_at and minted
-      // Y (v8 id from Y's key), writing Y's motebit.md at mint time.
+    it("main-shaped carry (X's unbound acknowledgment, Y's v8 id) ⇒ unconfirmed, whatever the clock says", async () => {
       const y = await generateKeypair();
       const yId = await deriveSovereignMotebitId(hex(y));
-      const yFile = await generate(
-        {
-          motebitId: yId,
-          ownerId: yId,
-          publicKeyHex: hex(y),
-          createdAt: new Date(ACK_AT + 60_000).toISOString(),
-        },
-        y.privateKey,
-      );
-      expect(
-        await seedBackupPosture({
-          ack: { at: ACK_AT },
-          currentPublicKeyHex: hex(y),
-          motebitId: yId,
-          identityFiles: [yFile],
-        }),
-      ).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
-    });
-
-    it("a never-rotated v8 identity whose motebit.md was signed before the acknowledgment ⇒ backed up", async () => {
-      const a = await generateKeypair();
-      const id = await deriveSovereignMotebitId(hex(a));
-      const file = await generate(
-        {
-          motebitId: id,
-          ownerId: id,
-          publicKeyHex: hex(a),
-          createdAt: new Date(ACK_AT - 60_000).toISOString(),
-        },
-        a.privateKey,
-      );
-      expect(
-        await seedBackupPosture({
-          ack: { at: ACK_AT },
-          currentPublicKeyHex: hex(a),
-          motebitId: id,
-          identityFiles: [file],
-        }),
-      ).toEqual({ status: "backed_up", at: ACK_AT });
-    });
-
-    it.each([
-      ["date-only", "2026-01-01"],
-      ["zoneless", "2026-01-01T00:00:00"],
-    ])("a %s created_at proves nothing ⇒ unconfirmed", async (_label, createdAt) => {
-      expect(parseCreatedAt(createdAt)).toBeNull();
-      const a = await generateKeypair();
-      const file = await generate(
-        { motebitId: LEGACY_ID, ownerId: "owner", publicKeyHex: hex(a), createdAt },
-        a.privateKey,
-      );
-      expect(
-        await seedBackupPosture({
-          ack: { at: ACK_AT },
-          currentPublicKeyHex: hex(a),
-          motebitId: LEGACY_ID,
-          identityFiles: [file],
-        }),
-      ).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
-    });
-
-    it("parseCreatedAt accepts only a full zoned timestamp", () => {
-      expect(parseCreatedAt("2026-01-01T00:00:00Z")).toBe(Date.parse("2026-01-01T00:00:00Z"));
-      expect(parseCreatedAt("2026-01-01T00:00:00.123+02:00")).toBe(
-        Date.parse("2026-01-01T00:00:00.123+02:00"),
-      );
-      expect(parseCreatedAt("2026-01-01T00:00Z")).toBeNull();
-      expect(parseCreatedAt("2026-13-45T99:99:99Z")).toBeNull();
-      expect(parseCreatedAt(1_700_000_000_000)).toBeNull();
-    });
-
-    it("an acknowledgment dated more than the skew in the future is unproven ⇒ unconfirmed", async () => {
-      const a = await generateKeypair();
-      const sovereign = await deriveSovereignMotebitId(hex(a));
-      const now = ACK_AT;
-      const read = (at: number) =>
-        seedBackupPosture({
-          ack: { at },
-          currentPublicKeyHex: hex(a),
-          motebitId: sovereign,
-          now: () => now,
+      for (const at of [0, Date.now() - 86_400_000, Date.now() + 86_400_000]) {
+        expect(postureOf({ at }, hex(y), yId)).toEqual({
+          status: "not_backed_up",
+          reason: "unconfirmed",
         });
-      expect(await read(now + ACK_FUTURE_SKEW_MS + 1)).toEqual({
-        status: "not_backed_up",
-        reason: "unconfirmed",
-      });
-      // Within the skew, the v8 rule still holds.
-      expect((await read(now + ACK_FUTURE_SKEW_MS)).status).toBe("backed_up");
+      }
     });
 
-    it("NOT honoured once a sovereign identity has rotated (the already-rotated upgrader)", async () => {
+    it("a legacy (random) id ⇒ unconfirmed, never retired_key", async () => {
       const a = await generateKeypair();
-      const sovereign = await deriveSovereignMotebitId(hex(a));
-      const { s, ports } = device(a, null);
-      ports.motebitId = sovereign;
-      expect((await performKeyRotation(ports)).kind).toBe("rotated");
-      expect(await postureOf({ at: 5 }, s.pub, sovereign)).toEqual({
+      expect(postureOf({ at: 5 }, hex(a), LEGACY_ID)).toEqual({
         status: "not_backed_up",
         reason: "unconfirmed",
       });
     });
+  });
 
-    it("legacy (random) id, no identity file ⇒ unconfirmed (re-confirm), never retired_key", async () => {
+  describe("the acknowledgment also names its identity", () => {
+    it("same identity, same key ⇒ backed up", async () => {
       const a = await generateKeypair();
-      expect(await postureOf({ at: 5 }, hex(a), LEGACY_ID)).toEqual({
-        status: "not_backed_up",
-        reason: "unconfirmed",
+      expect(postureOf({ ...ackFor(a), motebitId: MID }, hex(a))).toEqual({
+        status: "backed_up",
+        at: 1_000,
       });
     });
 
-    it("legacy (random) id, never rotated: a bound zero-succession file signed BEFORE the acknowledgment ⇒ backed up", async () => {
-      const a = await generateKeypair();
-      const file = await generate(
-        {
-          motebitId: LEGACY_ID,
-          ownerId: "owner",
-          publicKeyHex: hex(a),
-          createdAt: new Date(ACK_AT - 86_400_000).toISOString(),
-        },
-        a.privateKey,
-      );
-      expect(
-        await seedBackupPosture({
-          ack: { at: ACK_AT },
-          currentPublicKeyHex: hex(a),
-          motebitId: LEGACY_ID,
-          identityFiles: [null, file],
-        }),
-      ).toEqual({ status: "backed_up", at: ACK_AT });
-    });
-
-    it("a zero-succession file signed AFTER the acknowledgment (a regenerate) proves nothing ⇒ unconfirmed", async () => {
-      const a = await generateKeypair();
-      const regenerated = await generate(
-        {
-          motebitId: LEGACY_ID,
-          ownerId: "owner",
-          publicKeyHex: hex(a),
-          createdAt: new Date(ACK_AT + 1).toISOString(),
-        },
-        a.privateKey,
-      );
-      expect(
-        await seedBackupPosture({
-          ack: { at: ACK_AT },
-          currentPublicKeyHex: hex(a),
-          motebitId: LEGACY_ID,
-          identityFiles: [regenerated],
-        }),
-      ).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
-    });
-
-    it("rotate, regenerate a fresh zero-succession file for the new key, read ⇒ not backed up", async () => {
-      const a = await generateKeypair();
-      // The owner acknowledged a's seed (legacy, unbound), then rotated.
-      const ack = { at: Date.now() - 1_000 };
-      const { s, ports } = device(a, null);
-      ports.motebitId = LEGACY_ID;
-      expect((await performKeyRotation(ports)).kind).toBe("rotated");
-      // create-motebit's regenerate path: a fresh file for the CURRENT key,
-      // no succession, dated now.
-      const regenerated = await generate(
-        { motebitId: LEGACY_ID, ownerId: LEGACY_ID, publicKeyHex: s.pub },
-        hexToBytes(s.priv),
-      );
-      expect(
-        await seedBackupPosture({
-          ack,
-          currentPublicKeyHex: s.pub,
-          motebitId: LEGACY_ID,
-          identityFiles: [regenerated],
-        }),
-      ).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
-    });
-
-    it("legacy id, rotated: the bound file records a succession ⇒ unconfirmed", async () => {
+    it("same identity, another key ⇒ retired_key", async () => {
       const a = await generateKeypair();
       const b = await generateKeypair();
-      const genesis = await generate(
-        { motebitId: LEGACY_ID, ownerId: "owner", publicKeyHex: hex(a) },
-        a.privateKey,
-      );
-      const rotated = await rotateIdentityFile({
-        existingContent: genesis,
-        newPublicKey: b.publicKey,
-        newPrivateKey: b.privateKey,
-        successionRecord: await signKeySuccession(
-          a.privateKey,
-          b.privateKey,
-          b.publicKey,
-          a.publicKey,
-        ),
+      expect(postureOf({ ...ackFor(a), motebitId: MID }, hex(b))).toEqual({
+        status: "not_backed_up",
+        reason: "retired_key",
+        coveredPublicKeyHex: hex(a),
       });
-      // The stale genesis copy names a, not the current key b: not bound.
-      expect(
-        await seedBackupPosture({
-          ack: { at: 5 },
-          currentPublicKeyHex: hex(b),
-          motebitId: LEGACY_ID,
-          identityFiles: [rotated, genesis],
-        }),
-      ).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
     });
 
-    it("a zero-succession file that does not verify, or names another identity, proves nothing", async () => {
+    it("another identity ⇒ other_identity, never retired_key — even with the same key", async () => {
       const a = await generateKeypair();
-      const file = await generate(
-        { motebitId: LEGACY_ID, ownerId: "owner", publicKeyHex: hex(a) },
-        a.privateKey,
-      );
-      const tampered = file.replace("owner", "0wner");
-      const other = await generate(
-        {
-          motebitId: "0190a1b2-c3d4-7e5f-8a9b-ffffffffffff",
-          ownerId: "owner",
-          publicKeyHex: hex(a),
-        },
-        a.privateKey,
-      );
-      expect(
-        await seedBackupPosture({
-          ack: { at: 5 },
-          currentPublicKeyHex: hex(a),
-          motebitId: LEGACY_ID,
-          identityFiles: [tampered, other],
-        }),
-      ).toEqual({ status: "not_backed_up", reason: "unconfirmed" });
+      expect(postureOf({ ...ackFor(a), motebitId: "someone-else" }, hex(a))).toEqual({
+        status: "not_backed_up",
+        reason: "other_identity",
+      });
+      const b = await generateKeypair();
+      expect(postureOf({ ...ackFor(a), motebitId: "someone-else" }, hex(b))).toEqual({
+        status: "not_backed_up",
+        reason: "other_identity",
+      });
+    });
+
+    it("a bound acknowledgment without the id field (written before it existed) ⇒ the key decides, as before", async () => {
+      const a = await generateKeypair();
+      const b = await generateKeypair();
+      expect(postureOf(ackFor(a), hex(a), "any-id").status).toBe("backed_up");
+      expect(postureOf(ackFor(a), hex(b), "any-id")).toMatchObject({ reason: "retired_key" });
     });
   });
 });
@@ -390,10 +206,10 @@ describe("a committed rotation invalidates the previous seed backup", () => {
     const a = await generateKeypair();
     const ack = ackFor(a);
     const { s, ports } = device(a, null);
-    expect((await postureOf(ack, s.pub)).status).toBe("backed_up");
+    expect(postureOf(ack, s.pub).status).toBe("backed_up");
     const o = await performKeyRotation(ports);
     expect(o.kind).toBe("rotated");
-    expect(await postureOf(ack, s.pub)).toEqual({
+    expect(postureOf(ack, s.pub)).toEqual({
       status: "not_backed_up",
       reason: "retired_key",
       coveredPublicKeyHex: hex(a),
@@ -405,7 +221,7 @@ describe("a committed rotation invalidates the previous seed backup", () => {
     const a = await generateKeypair();
     const { s, ports } = device(a, { departable: true, held_public_key: hex(a), post: "ok" });
     expect((await performKeyRotation(ports)).kind).toBe("rotated");
-    expect((await postureOf(ackFor(a), s.pub)).status).toBe("not_backed_up");
+    expect(postureOf(ackFor(a), s.pub).status).toBe("not_backed_up");
   });
 
   it("refused rotation (old key stays) ⇒ unchanged; the write-ahead is kept aside", async () => {
@@ -413,7 +229,7 @@ describe("a committed rotation invalidates the previous seed backup", () => {
     const { s, ports } = device(a, { departable: true, held_public_key: hex(a), post: "refused" });
     const o = await performKeyRotation(ports);
     expect(o).toMatchObject({ kind: "stopped", state: "refused" });
-    expect(await postureOf(ackFor(a), s.pub)).toEqual({ status: "backed_up", at: 1_000 });
+    expect(postureOf(ackFor(a), s.pub)).toEqual({ status: "backed_up", at: 1_000 });
     expect(s.keptAside).toHaveLength(1);
   });
 
@@ -424,7 +240,7 @@ describe("a committed rotation invalidates the previous seed backup", () => {
     const o = await performKeyRotation(ports);
     expect(o).toMatchObject({ kind: "stopped", state: "funds-at-risk" });
     expect(s.commits).toBe(0);
-    expect((await postureOf(ackFor(a), s.pub)).status).toBe("backed_up");
+    expect(postureOf(ackFor(a), s.pub).status).toBe("backed_up");
   });
 
   it("interrupted (answer lost ⇒ held) then resumed to commit ⇒ unchanged while held, invalidated at the commit", async () => {
@@ -434,7 +250,7 @@ describe("a committed rotation invalidates the previous seed backup", () => {
     const held = await performKeyRotation(first.ports);
     expect(held.kind).toBe("held");
     expect(first.s.pub).toBe(hex(a));
-    expect((await postureOf(ack, first.s.pub)).status).toBe("backed_up");
+    expect(postureOf(ack, first.s.pub).status).toBe("backed_up");
 
     // Later run: the relay DID record it (S1 applied) — committed from the write-ahead.
     const w = first.s.held!;
@@ -445,7 +261,7 @@ describe("a committed rotation invalidates the previous seed backup", () => {
     );
     const o = await performKeyRotation(resume.ports);
     expect(o).toMatchObject({ kind: "rotated", relay: "already-held" });
-    expect((await postureOf(ack, resume.s.pub)).status).toBe("not_backed_up");
+    expect(postureOf(ack, resume.s.pub).status).toBe("not_backed_up");
   });
 
   it("commit interrupted between its writes, finished on the next run ⇒ invalidated; re-running never re-marks", async () => {
@@ -468,7 +284,7 @@ describe("a committed rotation invalidates the previous seed backup", () => {
       newPublicKeyHex: hex(b),
     });
     expect(s.pub).toBe(hex(b));
-    expect((await postureOf(ackFor(a), s.pub)).status).toBe("not_backed_up");
+    expect(postureOf(ackFor(a), s.pub).status).toBe("not_backed_up");
 
     // Idempotent commit: calling it again with the same arguments (the
     // contract's "finish an interrupted commit") cannot bring "backed up" back.
@@ -478,16 +294,16 @@ describe("a committed rotation invalidates the previous seed backup", () => {
       record,
       relay: "already-held",
     });
-    expect((await postureOf(ackFor(a), s.pub)).status).toBe("not_backed_up");
+    expect(postureOf(ackFor(a), s.pub).status).toBe("not_backed_up");
   });
 
   it("restore (seed ⇒ key, acknowledgment bound to it) then rotate ⇒ invalidated", async () => {
     const restored = await generateKeypair();
     const ack = ackFor(restored); // restore: holding the seed IS the backup, for this key
     const { s, ports } = device(restored, null);
-    expect((await postureOf(ack, s.pub)).status).toBe("backed_up");
+    expect(postureOf(ack, s.pub).status).toBe("backed_up");
     expect((await performKeyRotation(ports)).kind).toBe("rotated");
-    expect((await postureOf(ack, s.pub)).status).toBe("not_backed_up");
+    expect(postureOf(ack, s.pub).status).toBe("not_backed_up");
   });
 
   it("two rotations: a backup of the middle key is stale after the second", async () => {
@@ -495,8 +311,8 @@ describe("a committed rotation invalidates the previous seed backup", () => {
     const { s, ports } = device(a, null);
     await performKeyRotation(ports);
     const middle: SeedBackupAcknowledgment = { at: 2_000, publicKeyHex: s.pub };
-    expect((await postureOf(middle, s.pub)).status).toBe("backed_up");
+    expect(postureOf(middle, s.pub).status).toBe("backed_up");
     await performKeyRotation(ports);
-    expect((await postureOf(middle, s.pub)).status).toBe("not_backed_up");
+    expect(postureOf(middle, s.pub).status).toBe("not_backed_up");
   });
 });

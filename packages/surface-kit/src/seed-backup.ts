@@ -1,5 +1,5 @@
 /**
- * Seed-backup acknowledgment, bound to the key it covers.
+ * Seed-backup acknowledgment, bound to the key (and identity) it covers.
  *
  * A recovery seed IS one Ed25519 private key, and a key rotation mints a
  * new random key (`rotateIdentityKeys`). So an acknowledgment that the
@@ -9,21 +9,29 @@
  * surface kept saying "backed up" while the paper seed recovered only the
  * RETIRED key.
  *
- * The rule here is structural, not a clear-at-commit step: the posture is a
- * function of (the key the acknowledgment names, the identity's current
- * key). A committed rotation changes the current key, so every surface that
- * reads its posture through this function sees "not backed up" from the
- * moment the new key is committed — including a commit finished on a later
- * resume, and on any code path that never thought about backups. An
- * abandoned or refused rotation leaves the current key where it was, so the
- * posture is unchanged. Nothing is written, so nothing is destroyed: the
- * old acknowledgment stays as the record of which (now retired) key the old
- * paper seed recovers — still the only way to sweep the retired address.
+ * The rule is structural, not a clear-at-commit step: the posture is a
+ * function of (the key and identity the acknowledgment names, the
+ * identity's current key and id). A committed rotation changes the current
+ * key, so every surface that reads its posture through this function sees
+ * "not backed up" from the moment the new key is committed — including a
+ * commit finished on a later resume, and on any code path that never
+ * thought about backups. An abandoned or refused rotation leaves the
+ * current key where it was, so the posture is unchanged. Nothing is
+ * written, so nothing is destroyed: the old acknowledgment stays as the
+ * record of which (now retired) key the old paper seed recovers — still the
+ * only way to sweep the retired address.
+ *
+ * BOUND-ONLY, by design. An acknowledgment recorded before the binding
+ * existed (a timestamp with no key) is never honoured: it reads
+ * `unconfirmed` and asks for one re-confirmation. Nothing on disk can prove
+ * which key an unbound acknowledgment covered without trusting a wall clock
+ * — every proof attempted (a sovereign id, a zero-succession identity file,
+ * signed dates) was defeated by a reachable state, the last by a clock
+ * stepping backward. A false alarm costs one prompt; a false "backed up"
+ * can cost funds.
  *
  * Local configuration only. Never wire.
  */
-import { deriveSovereignMotebitId } from "@motebit/encryption";
-import { boundIdentityFile, type BoundIdentityFile } from "./machine-roster-identity-file.js";
 
 /** What a surface has recorded about a seed backup. */
 export interface SeedBackupAcknowledgment {
@@ -31,9 +39,16 @@ export interface SeedBackupAcknowledgment {
   at?: number;
   /**
    * The public key (hex) of the seed the owner confirmed. Absent on an
-   * acknowledgment recorded before the binding existed (legacy).
+   * acknowledgment recorded before the binding existed (legacy): never
+   * honoured.
    */
   publicKeyHex?: string;
+  /**
+   * The motebit_id the owner confirmed the seed for. Absent on a bound
+   * acknowledgment written before this field existed: the key comparison
+   * alone decides, as before.
+   */
+  motebitId?: string;
 }
 
 export type SeedBackupPosture =
@@ -42,134 +57,113 @@ export type SeedBackupPosture =
   /** Never acknowledged. */
   | { status: "not_backed_up"; reason: "never" }
   /**
-   * Acknowledged for a KNOWN key that is not the current one (a rotation
-   * since): the recorded seed recovers only that retired key. The only
-   * variant a surface may describe as "a retired key".
+   * Acknowledged for a KNOWN key of THIS identity that is not the current
+   * one (a rotation since): the recorded seed recovers only that retired
+   * key. The only variant a surface may describe as "a retired key".
    */
   | { status: "not_backed_up"; reason: "retired_key"; coveredPublicKeyHex: string }
   /**
+   * Acknowledged for ANOTHER identity (its motebit_id differs): not backed
+   * up for this one. Never described as "retired".
+   */
+  | { status: "not_backed_up"; reason: "other_identity" }
+  /**
    * Acknowledged, but which key it covers is unknown (a legacy, unbound
-   * acknowledgment no evidence ties to the current key). Nothing says the
-   * key is retired: the honest ask is to re-confirm the seed.
+   * acknowledgment, or no current key to compare). Nothing says the key is
+   * retired: the honest ask is to re-confirm the seed.
    */
   | { status: "not_backed_up"; reason: "unconfirmed" };
 
-/**
- * The posture of a seed backup for the identity's CURRENT key.
- *
- * A legacy acknowledgment (no key recorded) is honoured only when the
- * current key is provably the identity's genesis key — the only key it
- * ever had, so the only one the acknowledgment can have covered. Either:
- *
- *   - the motebit_id is the sovereign commitment to it
- *     (`deriveSovereignMotebitId`) — unless every identity file bound to it
- *     was signed after the acknowledgment (see `legacyAckCoversCurrentKey`:
- *     the date evidence binds this rule too); or
- *   - an identity file this surface holds is BOUND to it
- *     (`boundIdentityFile`: signature and chain verify, it names this
- *     motebit_id, its current key is the current key), records ZERO
- *     successions, AND was signed no later than the acknowledgment (its
- *     signed `created_at` ≤ `ack.at`). The last condition is load-bearing:
- *     a zero-succession file can be REGENERATED for the current key after
- *     a rotation (create-motebit's regenerate path signs a fresh one, dated
- *     now), and a file signed after the acknowledgment proves nothing about
- *     what that acknowledgment covered. One signed before it does: keys
- *     only move forward, so the key it names was already current at signing
- *     and is still current now — it was the key the owner was shown.
- *     Works for a legacy (random) motebit_id too.
- *
- * Any rotation ends both proofs, so an already-rotated owner who upgrades
- * reads "not backed up". Without either proof the coverage is unknown:
- * `unconfirmed`, never `retired_key`. A false alarm costs one prompt; a
- * false "backed up" can cost funds — so every doubt reads `unconfirmed`.
- */
-export async function seedBackupPosture(input: {
+/** The posture of a seed backup for the identity's CURRENT key and id. */
+export function seedBackupPosture(input: {
   ack: SeedBackupAcknowledgment;
   currentPublicKeyHex: string | null | undefined;
   motebitId: string | null | undefined;
-  /** Identity file contents (motebit.md) this surface can read. Untrusted: each is verified here. */
-  identityFiles?: readonly (string | null | undefined)[];
-  /** Clock for the future-acknowledgment check; defaults to `Date.now`. */
-  now?: () => number;
-}): Promise<SeedBackupPosture> {
-  const { ack, currentPublicKeyHex, motebitId } = input;
+}): SeedBackupPosture {
+  const { ack } = input;
   if (typeof ack.at !== "number") return { status: "not_backed_up", reason: "never" };
-  const current = (currentPublicKeyHex ?? "").toLowerCase();
-  if (typeof ack.publicKeyHex === "string" && ack.publicKeyHex !== "") {
-    const covered = ack.publicKeyHex.toLowerCase();
-    if (current === "") return { status: "not_backed_up", reason: "unconfirmed" };
-    return covered === current
-      ? { status: "backed_up", at: ack.at }
-      : { status: "not_backed_up", reason: "retired_key", coveredPublicKeyHex: covered };
+  // Unbound (legacy): never honoured — one re-confirmation, by design.
+  if (typeof ack.publicKeyHex !== "string" || ack.publicKeyHex === "") {
+    return { status: "not_backed_up", reason: "unconfirmed" };
   }
-  // Legacy, unbound.
-  const now = (input.now ?? Date.now)();
-  // An acknowledgment dated in the future cannot be ordered against any
-  // file: the date rules are unproven, so nothing is honoured.
-  if (ack.at > now + ACK_FUTURE_SKEW_MS) return { status: "not_backed_up", reason: "unconfirmed" };
-  if (current !== "" && motebitId != null && motebitId !== "") {
-    if (await legacyAckCoversCurrentKey(current, motebitId, ack.at, input.identityFiles ?? [])) {
-      return { status: "backed_up", at: ack.at };
+  const current = (input.currentPublicKeyHex ?? "").toLowerCase();
+  if (current === "") return { status: "not_backed_up", reason: "unconfirmed" };
+  if (typeof ack.motebitId === "string" && ack.motebitId !== "") {
+    const id = input.motebitId ?? "";
+    if (id === "") return { status: "not_backed_up", reason: "unconfirmed" };
+    if (id.toLowerCase() !== ack.motebitId.toLowerCase()) {
+      return { status: "not_backed_up", reason: "other_identity" };
     }
   }
-  return { status: "not_backed_up", reason: "unconfirmed" };
+  const covered = ack.publicKeyHex.toLowerCase();
+  return covered === current
+    ? { status: "backed_up", at: ack.at }
+    : { status: "not_backed_up", reason: "retired_key", coveredPublicKeyHex: covered };
 }
 
-/** How far in the future an acknowledgment may be dated (clock skew) before it is unproven. */
-export const ACK_FUTURE_SKEW_MS = 5 * 60_000;
+/** A seed-backup acknowledgment set aside when its identity was replaced. */
+export interface SeedBackupPrior {
+  at: number;
+  /** The key it was bound to; null for a legacy (unbound) acknowledgment. */
+  key: string | null;
+  motebit_id: string | null;
+}
+
+/** The config fields that record a seed backup — scoped to the identity they were made for. */
+export const SEED_BACKUP_FIELDS = [
+  "seed_backed_up_at",
+  "seed_backed_up_key",
+  "seed_backed_up_motebit_id",
+  "seed_backup_prior",
+] as const;
 
 /**
- * Does a legacy acknowledgment made at `ackAt` provably cover `current`?
- * Never throws; false on any doubt.
+ * An identity-REPLACING write (its `motebit_id` differs from the one on
+ * disk) never carries the replaced identity's seed-backup acknowledgment as
+ * current: the acknowledgment on disk is moved ASIDE into
+ * `seed_backup_prior` (kept — never deleted), and a carried copy is dropped
+ * from the current fields. An acknowledgment the write set anew (a restore,
+ * which holds the seed) stays current, and the one it overwrote is kept
+ * aside too, even for the same motebit_id. A rotation keeps its
+ * `motebit_id` and carries its acknowledgment: untouched, it stays bound to
+ * the retired key. Mutates `write`.
  *
- * The date evidence comes first and binds BOTH rules: when this surface
- * holds any identity file bound to the current key, at least one of them
- * must have been signed at or before the acknowledgment. If every one was
- * signed after it (or carries no usable date), the current key's own record
- * starts after the acknowledgment, so nothing says the acknowledgment was
- * for it — even a sovereign (v8) id derived from it. That is the state
- * main's create-motebit replace left on disk: an old identity's unbound
- * acknowledgment, a new identity minted with a v8 id, and the new
- * identity's motebit.md written at mint time, after the acknowledgment.
- * With no bound file at all, the v8 rule stands alone.
- *
- * KNOWN DEPENDENCY (spec/identity-v1.md §3.1 defines `created_at` as the
- * identity's creation time; this proof reads it as the time the file was
- * SIGNED). Every writer in this repo stamps `created_at` at write time —
- * `@motebit/identity-file` `generate` (the CLI's export, the desktop, web
- * and mobile surfaces) and create-motebit's `generateIdentity` /
- * `regenerateIdentityFile` — and
- * `src/__tests__/seed-backup-writers.test.ts` goes red if one stops. A
- * writer that PRESERVED a genesis `created_at` on a fresh file (for a later
- * key, or with the succession chain dropped) would make this proof unsound:
- * it could date a file "before" an acknowledgment that never covered its
- * key.
+ * The one implementation for every writer of the shared
+ * `~/.motebit/config.json` that can depend on this package (the CLI's
+ * `saveFullConfig`, the desktop's identity switch). create-motebit, which
+ * is standalone, keeps a twin in its `config-file.ts`.
  */
-async function legacyAckCoversCurrentKey(
-  current: string,
-  motebitId: string,
-  ackAt: number,
-  identityFiles: readonly (string | null | undefined)[],
-): Promise<boolean> {
-  const bound: BoundIdentityFile[] = [];
-  for (const content of identityFiles) {
-    const b = await boundIdentityFile(motebitId, content ?? null, current);
-    if (b != null) bound.push(b);
+export function setAsideReplacedSeedBackup(
+  onDisk: Record<string, unknown>,
+  write: Record<string, unknown>,
+): void {
+  const at = onDisk["seed_backed_up_at"];
+  if (typeof at !== "number") return;
+  const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+  const key = str(onDisk["seed_backed_up_key"]);
+  const ackId = str(onDisk["seed_backed_up_motebit_id"]);
+  const carried =
+    write["seed_backed_up_at"] === at &&
+    str(write["seed_backed_up_key"]) === key &&
+    str(write["seed_backed_up_motebit_id"]) === ackId;
+  const identityReplaced = (write["motebit_id"] ?? null) !== (onDisk["motebit_id"] ?? null);
+  // Same identity, acknowledgment carried (a rotation): nothing to move.
+  if (!identityReplaced && carried) return;
+  const priorOf = (c: Record<string, unknown>): SeedBackupPrior[] =>
+    Array.isArray(c["seed_backup_prior"]) ? (c["seed_backup_prior"] as SeedBackupPrior[]) : [];
+  const kept: SeedBackupPrior[] = [];
+  const entry: SeedBackupPrior = { at, key, motebit_id: ackId ?? str(onDisk["motebit_id"]) };
+  for (const p of [...priorOf(onDisk), ...priorOf(write), entry]) {
+    if (!kept.some((k) => k.at === p.at && k.key === p.key && k.motebit_id === p.motebit_id)) {
+      kept.push(p);
+    }
   }
-  const signedByAck = (b: BoundIdentityFile): boolean =>
-    b.createdAtMs != null && b.createdAtMs <= ackAt;
-  // Files for this key exist, and every one was signed after the
-  // acknowledgment: it cannot have been for this key.
-  if (bound.length > 0 && !bound.some(signedByAck)) return false;
-  let sovereign = false;
-  try {
-    sovereign = (await deriveSovereignMotebitId(current)) === motebitId.toLowerCase();
-  } catch {
-    sovereign = false; // malformed key: not proven
+  write["seed_backup_prior"] = kept;
+  if (identityReplaced && carried) {
+    delete write["seed_backed_up_at"];
+    delete write["seed_backed_up_key"];
+    delete write["seed_backed_up_motebit_id"];
   }
-  if (sovereign) return true;
-  // A zero-succession file signed no later than the acknowledgment.
-  return bound.some((b) => b.records.length === 0 && signedByAck(b));
 }
 
 /**

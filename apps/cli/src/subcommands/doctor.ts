@@ -206,7 +206,7 @@ export async function handleDoctor(): Promise<void> {
   // can provide, by design, so the self-recovery door must be lit BEFORE
   // loss. Self-reported ack (paper is unverifiable); see seed.ts.
   {
-    const full = await seedBackupPostureOf(fullCfg);
+    const full = seedBackupPostureOf(fullCfg);
     const posture = full.status;
     if (posture !== "no_identity") {
       checks.push({

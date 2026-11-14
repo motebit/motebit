@@ -68,7 +68,12 @@ import {
 } from "@motebit/encryption";
 import type { KeySuccessionRecord, KeyTransferPayload } from "@motebit/sdk";
 import type { WalletHoldingsReader } from "@motebit/encryption";
-import { identityFileRecords, persistVerifiedLineage } from "@motebit/surface-kit";
+import {
+  identityFileRecords,
+  persistVerifiedLineage,
+  setAsideReplacedSeedBackup,
+  SEED_BACKUP_FIELDS,
+} from "@motebit/surface-kit";
 import { APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
 import {
   generate as generateIdentityFile,
@@ -84,7 +89,7 @@ import {
 import { rotateDesktopKey } from "./key-rotation";
 import { rosterAfterRotationCommit } from "./machine-roster";
 import { loadReplica, saveReplica, tauriRosterIO } from "./machine-roster-store";
-import { updateConfig } from "./config-update";
+import { applyConfigPatch, updateConfig } from "./config-update";
 import type { BootstrapResult } from "./index.js";
 import { createTauriStorage } from "./index.js";
 
@@ -882,8 +887,39 @@ async function applyIdentitySwitch(invoke: InvokeFn, sw: IdentitySwitch): Promis
   };
   if (sw.device_public_key !== undefined) patch.device_public_key = sw.device_public_key;
   if (sw.identity_file !== undefined) patch._identity_file = sw.identity_file;
-  await updateConfig(invoke, patch);
+  // The shared config may hold a seed-backup acknowledgment the CLI recorded
+  // for the outgoing identity: never carried as the incoming identity's
+  // backup, never deleted — moved aside into `seed_backup_prior`. The read is
+  // the compare half: the acknowledgment fields must still be what was read.
+  const current = JSON.parse(await invoke<string>("read_config")) as Record<string, unknown>;
+  const seed = seedBackupSwitchPatch(current, patch);
+  await updateConfig(invoke, { ...patch, ...seed.patch }, seed.expect);
   await invoke<void>("keyring_set_aside", { key: SWITCH_KEY });
+}
+
+/**
+ * The seed-backup fields an identity switch writes alongside `patch`, and
+ * the compare-and-swap guard for them: `setAsideReplacedSeedBackup` (the
+ * one rule, `@motebit/surface-kit`) applied to the merged config, as a
+ * patch. Empty when there is nothing to move (no acknowledgment, or the
+ * same identity). Exported for tests.
+ */
+export function seedBackupSwitchPatch(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): { patch: Record<string, unknown>; expect?: Record<string, unknown> } {
+  const write = applyConfigPatch(current, patch);
+  setAsideReplacedSeedBackup(current, write);
+  const out: Record<string, unknown> = {};
+  const expect: Record<string, unknown> = {};
+  for (const f of SEED_BACKUP_FIELDS) {
+    const before = current[f];
+    const after = write[f];
+    if (JSON.stringify(before) === JSON.stringify(after)) continue;
+    out[f] = after === undefined ? null : after;
+    expect[f] = before === undefined ? null : before;
+  }
+  return Object.keys(out).length === 0 ? { patch: out } : { patch: out, expect };
 }
 
 /**

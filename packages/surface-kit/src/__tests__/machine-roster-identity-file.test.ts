@@ -85,8 +85,6 @@ describe("identityFileRecords / boundIdentityFile (#800)", () => {
       publicKeyHex: hex(b),
       records: recs,
       guardian: hex(g),
-      // The signed created_at, as epoch ms.
-      createdAtMs: expect.any(Number),
     });
     // The held key is compared as hex, whatever its case.
     expect(await identityFileRecords(MID, rotated, hex(b).toUpperCase())).toHaveLength(1);

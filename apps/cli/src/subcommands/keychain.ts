@@ -64,7 +64,7 @@ export async function handleKeychain(config: CliConfig): Promise<void> {
     console.log(dim("  this is convenience, not biometrics: any process running as your user"));
     console.log(dim("  can read it. Undo anytime: motebit keychain remove"));
     console.log(dim("  `motebit seed reveal` still always asks for the passphrase."));
-    const seedPosture = await seedBackupPostureOf(full);
+    const seedPosture = seedBackupPostureOf(full);
     if (seedPosture.status === "not_backed_up") {
       console.log(`\n  ${warn(seedBackupWording(seedPosture).keychain)} The keychain dies with`);
       console.log(

@@ -12,6 +12,11 @@ import type {
 import type { connectMcpServers } from "@motebit/mcp-client";
 import { type UnifiedProviderConfig, type GovernanceConfig } from "@motebit/sdk";
 import {
+  SEED_BACKUP_FIELDS,
+  setAsideReplacedSeedBackup as kitSetAsideReplacedSeedBackup,
+  type SeedBackupPrior,
+} from "@motebit/surface-kit";
+import {
   isTrulyAbsent,
   mkdirOwnerOnly,
   narrowOnLoad,
@@ -128,6 +133,13 @@ export interface FullConfig {
    * existed (see `seedBackupPosture` in `@motebit/surface-kit`). Local only.
    */
   seed_backed_up_key?: string;
+  /**
+   * The motebit_id `seed_backed_up_at` acknowledges the seed for. A seed
+   * shown for one identity never reads as the backup of another
+   * (`other_identity`). Absent on acknowledgments written before it existed:
+   * the key comparison alone decides. Local only.
+   */
+  seed_backed_up_motebit_id?: string;
   /**
    * Acknowledgments of identities this config no longer holds, kept (never
    * deleted, never current): `saveFullConfig` moves the current
@@ -304,58 +316,17 @@ const IDENTITY_FIELDS = [
   "_identity_file",
 ] as const;
 
-/** A seed-backup acknowledgment set aside when its identity was replaced. */
-export interface SeedBackupPrior {
-  at: number;
-  /** The key it was bound to; null for a legacy (unbound) acknowledgment. */
-  key: string | null;
-  motebit_id: string | null;
-}
-
-/** The fields that record a seed backup — scoped to the identity they were made for. */
-const SEED_BACKUP_FIELDS = [
-  "seed_backed_up_at",
-  "seed_backed_up_key",
-  "seed_backup_prior",
-] as const;
-
 /**
- * An identity-REPLACING write (its `motebit_id` differs from the one on
- * disk) never carries the replaced identity's seed-backup acknowledgment as
- * current: the acknowledgment on disk is moved ASIDE into
- * `seed_backup_prior` (kept — never deleted), and a carried copy is dropped
- * from the current fields. An acknowledgment the write set anew (a restore,
- * which holds the seed) stays current, and the one it overwrote is kept
- * aside too, even for the same motebit_id. A rotation keeps its `motebit_id`
- * and is untouched: its acknowledgment stays bound to the retired key.
- * Mutates `write`. The twin lives in create-motebit's `config-file.ts`.
+ * The seed-backup set-aside rule for identity-replacing writes — one
+ * implementation in `@motebit/surface-kit` (`setAsideReplacedSeedBackup`),
+ * shared with the desktop's identity switch; create-motebit keeps a twin.
  */
+export type { SeedBackupPrior };
 export function setAsideReplacedSeedBackup(onDisk: FullConfig, write: FullConfig): void {
-  const at = onDisk.seed_backed_up_at;
-  if (typeof at !== "number") return;
-  const key = typeof onDisk.seed_backed_up_key === "string" ? onDisk.seed_backed_up_key : null;
-  const carried = write.seed_backed_up_at === at && (write.seed_backed_up_key ?? null) === key;
-  const identityReplaced = (write.motebit_id ?? null) !== (onDisk.motebit_id ?? null);
-  // Same identity, acknowledgment carried (a rotation): nothing to move.
-  // Same identity, acknowledgment overwritten (a restore of another key):
-  // the old one is kept aside, never lost.
-  if (!identityReplaced && carried) return;
-  const motebitId = onDisk.motebit_id ?? null;
-  const prior = [
-    ...(Array.isArray(onDisk.seed_backup_prior) ? onDisk.seed_backup_prior : []),
-    ...(Array.isArray(write.seed_backup_prior) ? write.seed_backup_prior : []),
-  ];
-  const kept: SeedBackupPrior[] = [];
-  for (const p of [...prior, { at, key, motebit_id: motebitId }]) {
-    if (!kept.some((k) => k.at === p.at && k.key === p.key && k.motebit_id === p.motebit_id)) {
-      kept.push(p);
-    }
-  }
-  write.seed_backup_prior = kept;
-  if (identityReplaced && carried) {
-    delete write.seed_backed_up_at;
-    delete write.seed_backed_up_key;
-  }
+  kitSetAsideReplacedSeedBackup(
+    onDisk as unknown as Record<string, unknown>,
+    write as unknown as Record<string, unknown>,
+  );
 }
 
 /**

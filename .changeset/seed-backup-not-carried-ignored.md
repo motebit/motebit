@@ -1,15 +1,17 @@
 ---
 "@motebit/surface-kit": patch
+"@motebit/desktop": patch
 ---
 
-`seedBackupPosture` gains an `identityFiles` input. A legacy (unbound) acknowledgment counts when one of those files is bound to the current key (checked with `boundIdentityFile`: the signature and succession chain verify, the file names this `motebit_id`, and its current key is the current key) records zero successions, and was signed no later than the acknowledgment (its signed `created_at` ≤ the acknowledgment time; a file regenerated afterwards proves nothing). Until now only a v8 sovereign id could prove that. `BoundIdentityFile` gains `createdAtMs`.
+`seedBackupPosture` is bound-only. An acknowledgment with no recorded key is never honoured: legacy acknowledgments require one re-confirmation, because nothing on disk can prove which key they covered without trusting a wall clock. The acknowledgment may also name its `motebitId`.
 
-The not-backed-up posture now carries a `reason`:
+The not-backed-up posture carries a `reason`:
 
 - `never`: never acknowledged.
-- `retired_key`: the acknowledgment names a known key that differs from the current one. This is the only case a surface may describe as "retired".
-- `unconfirmed`: which key the acknowledgment covers is unknown, so the surface asks the owner to re-confirm.
+- `retired_key`: a known earlier key of the same identity. This is the only case a surface may describe as "retired".
+- `other_identity`: the acknowledgment was recorded for another identity.
+- `unconfirmed`: a legacy acknowledgment, or no current key, so the surface asks the owner to re-confirm.
 
-The date evidence binds the v8 rule too: when bound files exist and none was signed at or before the acknowledgment, the result is `unconfirmed`. `parseCreatedAt` accepts only a full zoned ISO 8601 timestamp. An acknowledgment dated beyond `ACK_FUTURE_SKEW_MS` (5 minutes) is unproven.
+`setAsideReplacedSeedBackup` and `SEED_BACKUP_FIELDS` are the one implementation of the "never carried onto a new identity" rule. The CLI's `saveFullConfig` and the desktop's identity switch (restore, key-transfer pairing) both use them, and create-motebit keeps a twin.
 
-The published consumer is `motebit` (sibling: `seed-backup-not-carried.md`).
+The published consumers are `motebit` and `create-motebit` (sibling: `seed-backup-not-carried.md`).

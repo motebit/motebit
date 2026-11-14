@@ -25,8 +25,6 @@
  * line) dismissible by the honest act it asks for, not to prove anything.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
 import * as readline from "node:readline";
 
 import { base58Encode } from "@motebit/sdk";
@@ -38,7 +36,7 @@ import {
 } from "@motebit/encryption";
 import { seedBackupPosture, type SeedBackupPosture } from "@motebit/surface-kit";
 import type { CliConfig } from "../args.js";
-import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
+import { loadFullConfig, saveFullConfig, type FullConfig } from "../config.js";
 import { decryptPrivateKey, promptPassphrase } from "../identity.js";
 import { bold, dim, success, warn } from "../colors.js";
 
@@ -47,74 +45,83 @@ export interface SeedBackupConfig {
   cli_encrypted_key?: unknown;
   seed_backed_up_at?: number;
   seed_backed_up_key?: string;
+  seed_backed_up_motebit_id?: string;
   device_public_key?: string;
   motebit_id?: string;
 }
 
 /**
- * The seed-backup posture of a config, for status/doctor/nudge. The
- * acknowledgment covers the key it names (`seed_backed_up_key`), never a
- * later one: a committed rotation moves `device_public_key`, so this reads
- * "not_backed_up" from that moment on, whichever path committed it (a
- * fresh rotation, a resume that finished an interrupted commit). See
- * `seedBackupPosture` (`@motebit/surface-kit`) for the legacy rule.
+ * The seed-backup posture of a config, for status/doctor/nudge/keychain.
+ * The acknowledgment covers the key and identity it names
+ * (`seed_backed_up_key`, `seed_backed_up_motebit_id`), never a later key: a
+ * committed rotation moves `device_public_key`, so this reads
+ * "not_backed_up" from that moment on, whichever path committed it. An
+ * unbound (legacy) acknowledgment is never honoured: one re-confirmation,
+ * by design (see `seedBackupPosture` in `@motebit/surface-kit`).
  */
-export async function seedBackupPostureOf(
+export function seedBackupPostureOf(
   config: SeedBackupConfig,
-  opts: { identityFiles?: readonly string[] } = {},
-): Promise<{ status: "no_identity" } | SeedBackupPosture> {
+): { status: "no_identity" } | SeedBackupPosture {
   if (config.cli_encrypted_key == null) return { status: "no_identity" };
-  // Only read when they could matter: a legacy (unbound) acknowledgment.
-  const needFiles =
-    typeof config.seed_backed_up_at === "number" &&
-    (config.seed_backed_up_key == null || config.seed_backed_up_key === "");
   return seedBackupPosture({
     ack: {
       ...(config.seed_backed_up_at !== undefined ? { at: config.seed_backed_up_at } : {}),
       ...(config.seed_backed_up_key !== undefined
         ? { publicKeyHex: config.seed_backed_up_key }
         : {}),
+      ...(config.seed_backed_up_motebit_id !== undefined
+        ? { motebitId: config.seed_backed_up_motebit_id }
+        : {}),
     },
     currentPublicKeyHex: config.device_public_key,
     motebitId: config.motebit_id,
-    identityFiles: needFiles ? (opts.identityFiles ?? cliIdentityFiles(config)) : [],
   });
 }
 
-/**
- * Every identity file (motebit.md) this machine holds for the CLI: the
- * config's embedded `_identity_file` (restore's), `~/.motebit/motebit.md`
- * (create-motebit's), `~/.motebit/identity.md`, and `motebit.md` in the
- * working directory and its parents (the search `motebit rotate` makes).
- * Untrusted contents — `seedBackupPosture` verifies each. Never throws.
- */
-export function cliIdentityFiles(config: object, cwd: string = process.cwd()): string[] {
-  const out: string[] = [];
-  const embedded = (config as Record<string, unknown>)["_identity_file"];
-  if (typeof embedded === "string" && embedded !== "") out.push(embedded);
-  const paths = [path.join(CONFIG_DIR, "motebit.md"), path.join(CONFIG_DIR, "identity.md")];
-  for (let dir = path.resolve(cwd); ;) {
-    paths.push(path.join(dir, "motebit.md"));
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  for (const p of new Set(paths)) {
-    try {
-      out.push(fs.readFileSync(p, "utf-8"));
-    } catch {
-      // not there
-    }
-  }
-  return out;
+/** The posture's status alone: `no_identity` / `backed_up` / `not_backed_up`. */
+export function seedBackupStatus(
+  config: SeedBackupConfig,
+): "no_identity" | "backed_up" | "not_backed_up" {
+  return seedBackupPostureOf(config).status;
 }
 
-/** The posture's status alone: `no_identity` / `backed_up` / `not_backed_up`. */
-export async function seedBackupStatus(
-  config: SeedBackupConfig,
-  opts: { identityFiles?: readonly string[] } = {},
-): Promise<"no_identity" | "backed_up" | "not_backed_up"> {
-  return (await seedBackupPostureOf(config, opts)).status;
+/**
+ * Record that the owner wrote the seed down — for the identity and key
+ * captured WHEN THE SEED WAS SHOWN, never "whatever is current now". The
+ * config is re-read first: if another process (a `motebit rotate`, a
+ * restore, create-motebit, the desktop) changed the identity or key while
+ * the seed was on screen, nothing is recorded — the seed shown may not be
+ * the current one.
+ */
+export async function recordSeedAcknowledgment(input: {
+  /** What the config said when the seed was revealed. */
+  shown: { motebitId: string | undefined; publicKeyHex: string | undefined };
+  seedHex: string;
+  load?: () => FullConfig;
+  save?: (config: FullConfig) => unknown;
+  now?: () => number;
+}): Promise<{ recorded: true } | { recorded: false; reason: string }> {
+  const load = input.load ?? loadFullConfig;
+  const save = input.save ?? saveFullConfig;
+  const next = load();
+  if (
+    next.motebit_id !== input.shown.motebitId ||
+    next.device_public_key !== input.shown.publicKeyHex
+  ) {
+    return {
+      recorded: false,
+      reason:
+        "the identity or key on this machine changed while the seed was on screen (another motebit process ran); nothing was recorded — run `motebit seed reveal` again",
+    };
+  }
+  next.seed_backed_up_at = (input.now ?? Date.now)();
+  // Bound to the key THIS seed derives and the identity it was shown for:
+  // a later rotation reads "retired key", another identity "not backed up
+  // for this identity" — without anyone clearing anything.
+  next.seed_backed_up_key = await seedPublicKeyHex(input.seedHex);
+  if (next.motebit_id !== undefined) next.seed_backed_up_motebit_id = next.motebit_id;
+  save(next);
+  return { recorded: true };
 }
 
 /**
@@ -144,14 +151,23 @@ export function seedBackupWording(posture: { status: string; reason?: string }):
         "  and anything left at its address — and record the current one.",
     };
   }
+  if (posture.status === "not_backed_up" && posture.reason === "other_identity") {
+    return {
+      nudge:
+        "recovery seed not backed up for this identity — `motebit seed reveal` (once, on paper)",
+      doctor: "not backed up for this identity",
+      keychain: "Your recovery seed is not backed up for this identity.",
+      detail: "  The backup recorded on this machine was for another identity.",
+    };
+  }
   if (posture.status === "not_backed_up" && posture.reason === "unconfirmed") {
     return {
       nudge: "please re-confirm your recovery seed — `motebit seed reveal` (once, on paper)",
       doctor: "please re-confirm your recovery seed",
       keychain: "Please re-confirm your recovery seed.",
       detail:
-        "  Please re-confirm your recovery seed: this machine cannot tell which key the\n" +
-        "  backup you recorded earlier covers.",
+        "  Please re-confirm your recovery seed: the backup recorded earlier does not say\n" +
+        "  which key it covers, so it is asked for once more.",
     };
   }
   return {
@@ -182,7 +198,7 @@ export async function handleSeed(config: CliConfig): Promise<void> {
   const sub = config.positionals[1];
   const full = loadFullConfig();
 
-  const posture = await seedBackupPostureOf(full);
+  const posture = seedBackupPostureOf(full);
   const status = posture.status;
   if (posture.status === "no_identity") {
     console.log("\n  No identity on this machine. Run `motebit init` or `motebit restore`.");
@@ -264,12 +280,16 @@ export async function handleSeed(config: CliConfig): Promise<void> {
     ),
   );
   if (ack.trim().toLowerCase() === "y") {
-    const next = loadFullConfig();
-    next.seed_backed_up_at = Date.now();
-    // Bound to the key THIS seed derives, never "whatever is current": a
-    // later rotation then reads "not backed up" without anyone clearing it.
-    next.seed_backed_up_key = await seedPublicKeyHex(seedHex!);
-    saveFullConfig(next);
+    // For the identity and key the seed was shown for (`full`, read before
+    // the reveal) — refused if either changed meanwhile.
+    const result = await recordSeedAcknowledgment({
+      shown: { motebitId: full.motebit_id, publicKeyHex: full.device_public_key },
+      seedHex: seedHex!,
+    });
+    if (!result.recorded) {
+      console.error(`\n  ${warn("Not recorded:")} ${result.reason}.`);
+      process.exit(1);
+    }
     console.log(`\n  ${success("Recorded.")} ${dim("The startup reminder is gone.")}`);
   } else {
     console.log(dim("\n  Not recorded — the reminder stays until you confirm a backup."));
