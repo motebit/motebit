@@ -36,6 +36,6 @@
     "@types/three": "^0.185.4",
     "esbuild": "^0.28.2",
     "typescript": "^5.6.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }
