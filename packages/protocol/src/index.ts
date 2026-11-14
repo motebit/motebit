@@ -4190,6 +4190,20 @@ export {
 export type { SyncHeldEvent, SyncHoldPage, SyncHoldReceipt } from "./sync-hold-receipt.js";
 export { SYNC_HOLD_RECEIPT_SPEC_ID } from "./sync-hold-receipt.js";
 
+// Signed revocation evidence for standing grants (standing-delegation@1.3,
+// spec/standing-delegation-v1.md §5.2–§5.3): the relay's signed set
+// attestation (the only source of "absent as of T") and its per-revocation
+// inclusion receipt.
+export type {
+  DelegationRevocationSetAttestationEntry,
+  DelegationRevocationSetAttestation,
+  DelegationRevocationInclusionReceipt,
+} from "./delegation-revocation-set-attestation.js";
+export {
+  DELEGATION_REVOCATION_SET_ATTESTATION_SPEC_ID,
+  DELEGATION_REVOCATION_INCLUSION_RECEIPT_SPEC_ID,
+} from "./delegation-revocation-set-attestation.js";
+
 // Merkle tree-hash version registry — the agility axis for leaf/node domain
 // separation (RFC 6962 §2.1). Separate from `SuiteId` (signature recipe): this
 // names the tree-hash recipe that builds the root the signature commits to. A

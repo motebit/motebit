@@ -136,6 +136,19 @@ export const REGISTRY: Record<string, Classification> = {
   // holds (subject = signer, receipt-family; spec/sync-hold-receipt-v1.md).
   // The caller pins the relay key and its nonce via the verifier's options.
   SyncHoldReceipt: { kind: "verifier", verifier: "verifySyncHoldReceipt" },
+  // Signed revocation evidence (standing-delegation@1.3 §5.2–§5.3): the
+  // relay's set attestation over a delegator's revocation set (signer ≠
+  // subject) and its per-revocation inclusion receipt (signer = subject).
+  // The caller pins the relay key, challenge, delegator, clock and last-seen
+  // seq via the verifier's expectations.
+  DelegationRevocationSetAttestation: {
+    kind: "verifier",
+    verifier: "verifyRevocationSetAttestation",
+  },
+  DelegationRevocationInclusionReceipt: {
+    kind: "verifier",
+    verifier: "verifyRevocationInclusionReceipt",
+  },
   DisputeAppeal: { kind: "verifier", verifier: "verifyDisputeAppeal" },
   DisputeEvidence: { kind: "verifier", verifier: "verifyDisputeEvidence" },
   DisputeRequest: { kind: "verifier", verifier: "verifyDisputeRequest" },

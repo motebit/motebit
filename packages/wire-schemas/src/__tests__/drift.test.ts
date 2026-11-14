@@ -162,10 +162,14 @@ import {
   DELEGATION_REVOCATION_SCHEMA_ID,
   SUBJECT_BINDING_SCHEMA_ID,
   SPEND_CEILING_SCHEMA_ID,
+  DELEGATION_REVOCATION_SET_ATTESTATION_SCHEMA_ID,
+  DELEGATION_REVOCATION_INCLUSION_RECEIPT_SCHEMA_ID,
   buildStandingDelegationJsonSchema,
   buildDelegationRevocationJsonSchema,
   buildSubjectBindingV1JsonSchema,
   buildSpendCeilingV1JsonSchema,
+  buildDelegationRevocationSetAttestationJsonSchema,
+  buildDelegationRevocationInclusionReceiptJsonSchema,
 } from "../standing-delegation.js";
 import {
   COST_ATTESTATION_SCHEMA_ID,
@@ -299,6 +303,18 @@ const CASES: SchemaCase[] = [
     filename: "delegation-revocation-v1.json",
     expectedId: DELEGATION_REVOCATION_SCHEMA_ID,
     build: buildDelegationRevocationJsonSchema,
+  },
+  {
+    name: "delegation-revocation-set-attestation-v1",
+    filename: "delegation-revocation-set-attestation-v1.json",
+    expectedId: DELEGATION_REVOCATION_SET_ATTESTATION_SCHEMA_ID,
+    build: buildDelegationRevocationSetAttestationJsonSchema,
+  },
+  {
+    name: "delegation-revocation-inclusion-receipt-v1",
+    filename: "delegation-revocation-inclusion-receipt-v1.json",
+    expectedId: DELEGATION_REVOCATION_INCLUSION_RECEIPT_SCHEMA_ID,
+    build: buildDelegationRevocationInclusionReceiptJsonSchema,
   },
   {
     name: "subject-binding-v1",

@@ -3431,6 +3431,35 @@ export type {
   SyncDigestHash,
 } from "./sync-hold-receipt.js";
 export {
+  signRevocationSetAttestation,
+  verifyRevocationSetAttestation,
+  signRevocationInclusionReceipt,
+  verifyRevocationInclusionReceipt,
+  computeRevocationRecordsDigest,
+  verifyRevocationOmissionProof,
+  verifyRevocationEquivocationProof,
+  DELEGATION_REVOCATION_EVIDENCE_SUITE,
+  DELEGATION_REVOCATION_SET_ATTESTATION_SPEC_MIRROR,
+  DELEGATION_REVOCATION_INCLUSION_RECEIPT_SPEC_MIRROR,
+  REFERENCE_REVOCATION_SET_ATTESTATION_MAX_AGE_MS,
+  REFERENCE_REVOCATION_SET_ATTESTATION_CLOCK_SKEW_MS,
+  REVOCATION_SET_ATTESTATION_CHALLENGE_MIN_LENGTH,
+  REVOCATION_SET_ATTESTATION_CHALLENGE_MAX_LENGTH,
+} from "./delegation-revocation-set-attestation.js";
+export type {
+  RevocationSetAttestationRefusal,
+  RevocationSetAttestationFailureReason,
+  VerifyRevocationSetAttestationResult,
+  VerifyRevocationSetAttestationExpectations,
+  RevocationOmissionProofFailureReason,
+  VerifyRevocationOmissionProofResult,
+  RevocationEquivocationProofFailureReason,
+  VerifyRevocationEquivocationProofResult,
+  RevocationInclusionReceiptFailureReason,
+  VerifyRevocationInclusionReceiptResult,
+  VerifyRevocationInclusionReceiptExpectations,
+} from "./delegation-revocation-set-attestation.js";
+export {
   computeCredentialLeaf,
   verifyCredentialAnchor,
   verifyRevocationAnchor,
