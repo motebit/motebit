@@ -2,6 +2,8 @@
 
 > **Layer:** law (a past-date unmet commitment fails) — enforced by `check-coverage-graduation`
 
+**Status:** [doctrine-status.md § coverage-graduation](../ops/doctrine-status.md#coverage-graduationmd)
+
 Two policies, one direction.
 
 **Floor (invariant).** Coverage thresholds never lower. Every `vitest.config.ts` declares its measured baseline; CI fails if a regression lands. Enforced by `turbo run test:coverage` (drift-defenses #5) and the `defineMotebitTest` factory in `vitest.shared.ts` (which makes thresholds a required argument). Anchored in the `feedback_coverage_thresholds` memory.
@@ -18,13 +20,13 @@ The packages on the **money path** or the **identity path** — anything where a
 - `@motebit/crypto` — every signature in the system routes here
 - `@motebit/core-identity` — identity bootstrap and persistence
 - `@motebit/virtual-accounts` — the per-motebit ledger
-- `@motebit/settlement-rails` — the three guest rails + registry
+- `@motebit/settlement-rails` — the guest rails + registry
 - `@motebit/evm-rpc` — JSON-RPC behind the deposit detector
 - `@motebit/deposit-detector` — what credits an account when value lands
 
 A package belongs in this scope when an untested path could move money, sign on behalf of an identity, or admit a signed artifact that should have been rejected.
 
-A package is **a graduation candidate** when any axis of its declared threshold is below 80. The manifest carries six entries, added by the money/identity coverage slate — `@motebit/core-identity` plus the five hardware/aggregator verifiers (`crypto-{appattest,android-keystore,tpm,webauthn}`, `verify`) — and as of 2026-10-31 all six have graduated (the last, `verify`, on 2026-10-31); each is retained as a closed `GRADUATED` record, and `check-gates-effective` proves the deadline gate with a synthetic injected entry, so a fully graduated manifest leaves the gate live. An earlier graduation, `@motebit/wallet-solana`, went 42/86/58/42 at the 2026-04-16 baseline → raised in three passes (memo-submitter → rail.ts → jupiter.ts) to 97/96/100/97 by 2026-04-20, then removed from the manifest ahead of the 2026-06-01 deadline per the "when all targets are met, remove the entry" rule. See `packages/wallet-solana/vitest.config.ts` for the per-pass narrative.
+A package is **a graduation candidate** when any axis of its declared threshold is below 80. `check-gates-effective` proves the deadline gate with a synthetic injected entry, so a fully graduated manifest leaves the gate live.
 
 ## Manifest
 
@@ -47,7 +49,7 @@ A package is **a graduation candidate** when any axis of its declared threshold 
 }
 ```
 
-When `packages` is `[]` the quiet state is an explicit statement that no money/identity package is below floor; today it carries the six slate entries above.
+When `packages` is `[]` the quiet state is an explicit statement that no money/identity package is below floor.
 
 Three states per entry:
 

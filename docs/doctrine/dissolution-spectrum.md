@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § dissolution-spectrum](../ops/doctrine-status.md#dissolution-spectrummd)
+
 [`LIQUESCENTIA.md`](../../LIQUESCENTIA.md) §V.5 names persistence: the medium permits a motebit to cohere "as long as its internal cohesion exceeds the medium's dissolution pressure." Until this doctrine, that pressure was metaphor — evocative, but unlike breathing rhythm (`~0.3 Hz` derived from `ω² = n(n-1)(n+2)σ/ρR³`, see [`liquescentia-as-substrate.md`](liquescentia-as-substrate.md) §V.2), it had no equation, no constant, no code-anchored derivation.
 
 This doctrine closes that asymmetry. Dissolution pressure is **multi-axis** — a spectrum of decay constants, one per persistence axis — and each axis has a real value in code today. The aggregate determines whether the motebit's interior cohesion exceeds the medium's claim on it.
@@ -70,7 +72,7 @@ Each axis carries a code-anchored constant, a decay form (exponential / cliff / 
 
 **Default constant.** `τ_A_capacity = 10,000` entries (not a time, a count).
 
-**Doctrinal binding.** Audit persistence is **capacity-bound only where no storage-backed sink is supplied.** The 10,000-entry FIFO is the `InMemoryAuditSink` that `AuditLogger` falls back to when a `PolicyGate` is built without a sink (tests, a surface that passes none); there it holds the last N entries regardless of age, the most aggressive dissolution axis — a busy motebit can churn through 10,000 entries in days. The runtime hands `PolicyGate` the surface's storage-backed `adapters.storage.toolAuditSink` (SQLite on the CLI, Tauri on desktop, Expo on mobile, IndexedDB in the browser), which is not FIFO-capped, and wraps it in a hash-chained `ChainedAuditSink` when the surface also supplies an `auditChainStore` (today the CLI) — `packages/runtime/src/motebit-runtime.ts`, the "Policy & memory governance" block. Extending the chain to every surface is the remaining direction on this axis.
+**Doctrinal binding.** Audit persistence is **capacity-bound only where no storage-backed sink is supplied.** The 10,000-entry FIFO is the `InMemoryAuditSink` that `AuditLogger` falls back to when a `PolicyGate` is built without a sink (tests, a surface that passes none); there it holds the last N entries regardless of age, the most aggressive dissolution axis — a busy motebit can churn through 10,000 entries in days. The runtime hands `PolicyGate` the surface's storage-backed `adapters.storage.toolAuditSink` (SQLite on the CLI, Tauri on desktop, Expo on mobile, IndexedDB in the browser), which is not FIFO-capped, and wraps it in a hash-chained `ChainedAuditSink` when the surface also supplies an `auditChainStore` — `packages/runtime/src/motebit-runtime.ts`, the "Policy & memory governance" block. The direction on this axis is the chain on every surface.
 
 ## The three dissolution shapes
 
@@ -93,7 +95,7 @@ It does now. Each axis names its constant, its form, its code home, its doctrina
 ## What remains as future direction
 
 - **Hardware attestation TTL** is currently platform-set (Apple App Attest, Google Play Integrity, Microsoft TPM, etc. each define their own). A motebit-side override (e.g., "we treat any attestation older than τ_HA as stale even if the platform still trusts it") would add a sixth axis. Defer until a real federation consumer needs the override.
-- **Audit signing endgame** — `AuditChainStore` exists as a hash-chained primitive; PolicyGate doesn't write to it (see project memory `audit_chain_signing_endgame`). When that wiring lands, audit dissolution moves from capacity-FIFO to anchor-pinned-merkle-chain — a fundamentally different shape.
+- **Audit signing endgame** — `AuditChainStore` is the hash-chained primitive (see project memory `audit_chain_signing_endgame`). When every surface writes PolicyGate's audit through it, audit dissolution moves from capacity-FIFO to anchor-pinned-merkle-chain — a fundamentally different shape.
 - **Kelvin-equation-derived τ_M.** Today `τ_M_recency = 24h` is a chosen value with empirical fit. A first-principles derivation (motebit's "dissolution rate scales with cohesion-vs-medium-pressure ratio, by direct analog to `ln(P/P₀) = 2γVm / (RTr)`") would land memory's half-life in the same physics chain breathing came from. Real new content; deferred until either a peer-reviewer of the article asks or a third-party motebit implementer needs to know what τ_M to target.
 
 ## Connections to existing doctrine

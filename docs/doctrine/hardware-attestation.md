@@ -2,7 +2,9 @@
 
 > **Layer:** law (attestation never gates) — enforced by `packages/market/src/__tests__/graph-routing.test.ts`
 
-A motebit's identity key is Ed25519, stored on desktop in an owner-only plaintext file (`~/.motebit/dev-keyring.json`; the OS keychain is a pending arc, [#764](https://github.com/motebit/motebit/issues/764)) and in the OS keychain (SecureStore) on mobile. That key is **software-custody**: the private bytes are readable by any process running as the user. A self-attesting system that stops there has a clear ceiling — a third party can verify the signature, but not that any piece of hardware has ever seen the key.
+**Status:** [doctrine-status.md § hardware-attestation](../ops/doctrine-status.md#hardware-attestationmd)
+
+A motebit's identity key is Ed25519, stored on desktop in an owner-only plaintext file (`~/.motebit/dev-keyring.json`) and in the OS keychain (SecureStore) on mobile. That key is **software-custody**: the private bytes are readable by any process running as the user. A self-attesting system that stops there has a clear ceiling — a third party can verify the signature, but not that any piece of hardware has ever seen the key.
 
 Hardware attestation closes that gap without moving the identity. A separate hardware-native keypair — Apple Secure Enclave issues ECDSA P-256, Windows TPM issues RSA/ECDSA, Android StrongBox issues EC, DeviceCheck issues platform-signed assertions (Google Play Integrity did too, until its verifier package was removed 2026-05-03 — see below) — signs a canonical claim that binds itself to the Ed25519 identity. The identity stays where it is. The hardware signature is **additive evidence** a verifier can rank against.
 
@@ -30,7 +32,7 @@ The attestor signs a JCS-canonicalized body:
 }
 ```
 
-The attestation receipt is `base64url(body) + "." + base64url(ecdsa_der_signature)`. The full `HardwareAttestationClaim` ({`platform`, `key_exported`, `attestation_receipt`}) lives on `credentialSubject.hardware_attestation` of a W3C VC — today embedded in the self-signed `AgentTrustCredential`; in future passes, on any `TrustCredential` a peer issues.
+The attestation receipt is `base64url(body) + "." + base64url(ecdsa_der_signature)`. The full `HardwareAttestationClaim` ({`platform`, `key_exported`, `attestation_receipt`}) lives on `credentialSubject.hardware_attestation` of a W3C VC — the self-signed `AgentTrustCredential`, or any `TrustCredential` a peer issues.
 
 ## Verification
 
@@ -61,11 +63,11 @@ The rank is algebra, not policy-by-switch. `packages/semiring/src/hardware-attes
 | `platform: "software"` (explicit no-hardware)                                                                | 0.1                                        |
 | Absent claim                                                                                                 | 0.0 (semiring zero, annihilates under `⊗`) |
 
-Hardware platform coverage today: Apple Secure Enclave (desktop macOS + iOS Secure Enclave receipt), Apple App Attest (iOS, Apple-CA-signed chain), Android Hardware-Backed Keystore Attestation (Android, Google-CA-signed chain via `crypto-android-keystore` — the canonical Android sovereign-verifiable primitive), TPM 2.0 (Windows / Linux, endorsement-key chain against pinned vendor roots — verification only: the desktop mint bridge `apps/desktop/src-tauri/src/tpm.rs` returns `not_supported` on every platform until `tss-esapi` is wired into the build, so no surface mints a TPM claim today), W3C WebAuthn (browsers, FIDO-vendor batch root). Scoring is identical across every adapter — all collapse to the same `1.0 / 0.5 / 0.1 / 0.0` scalar under the bottleneck semiring. The scalar answers "hardware-backed?" yes/no; the platform identifier answers "which hardware?" for audit, not for rank. (Google Play Integrity carries the same `1.0` score for backward compatibility with already-minted claims, but the verifier package was removed 2026-05-03 — see § "Three architectural categories" below for the structural-mismatch explanation.)
+Scoring is identical across every adapter — all collapse to the same `1.0 / 0.5 / 0.1 / 0.0` scalar under the bottleneck semiring. The scalar answers "hardware-backed?" yes/no; the platform identifier answers "which hardware?" for audit, not for rank. (Google Play Integrity carries the same `1.0` score for backward compatibility with already-minted claims, but the verifier package was removed 2026-05-03 — see § "Three architectural categories" below for the structural-mismatch explanation.)
 
 **Sub-tier granularity is a deliberate collapse, not an omission (decided 2026-07-29, #446).** Two leaves surface finer security facts than the scalar encodes: `crypto-android-keystore` reports `attestation_security_level` (StrongBox vs TEE) and `crypto-webauthn` reports `attestation_kind` (`full` vs `self`). The semiring does not read them, and this is now canon rather than drift: the uniform per-platform scalar keeps the algebra auditable and platform-neutral (a StrongBox-vs-TEE distinction has no analogue on Secure Enclave or TPM, so scoring it would make ranks incomparable across platforms), and the fields are verify-time outputs that do not exist on the wire — `HardwareAttestationClaim` carries neither. The leaves surface them in their results so a consumer that wants a within-platform read can take one without a protocol change. Promoting them to scoring dimensions is a **wire-format arc, not a scoring tweak** — claim/credential schema extension, mint-path changes on mobile and web, wire-schemas, verifier, then the semiring — and it is deferred with a trigger: the first real consumer that needs to _rank_ within a platform's security levels (an operator asking why two differently-secured Android devices score identically, or a routing policy that prices StrongBox above TEE). Until then, the honest READMEs say what ships: the fields are surfaced, informational today.
 
-Scalars not names: product-semiring composition with trust, cost, and latency stays pure arithmetic. `@motebit/market`'s `graph-routing.ts` lifts a market-local `productSemiring(TrustSemiring, HardwareAttestationSemiring)` over the routing graph — every edge carries a `(trust, hwScore)` tuple, `optimalPaths` bottlenecks HW scores across the whole path in one traversal, and the ranker folds the chain bottleneck into trust via `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)` at the scoring boundary. Single-hop candidates recover the prior scalar-at-terminal score; multi-hop chains through a `software` or absent intermediate now score at the weakest link. Swap the encoder for a different policy without touching the algebra.
+Scalars not names: product-semiring composition with trust, cost, and latency stays pure arithmetic. `@motebit/market`'s `graph-routing.ts` lifts a market-local `productSemiring(TrustSemiring, HardwareAttestationSemiring)` over the routing graph — every edge carries a `(trust, hwScore)` tuple, `optimalPaths` bottlenecks HW scores across the whole path in one traversal, and the ranker folds the chain bottleneck into trust via `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)` at the scoring boundary. Single-hop candidates recover the prior scalar-at-terminal score; multi-hop chains through a `software` or absent intermediate score at the weakest link. Swap the encoder for a different policy without touching the algebra.
 
 ## The metabolic split
 
@@ -130,44 +132,13 @@ Every future change to this vertical clears all three:
 
 - **Chain-of-trust verification for Secure Enclave.** The SE public key is the self-asserted root in v1. App Attest, Android Keystore, TPM, and WebAuthn adapters already verify the platform's own attestation chain (Apple App Attest root CA; Google Hardware Attestation roots — RSA + ECDSA P-384 — via `@motebit/crypto-android-keystore`'s `DEFAULT_ANDROID_KEYSTORE_TRUST_ANCHORS`; Infineon, Nuvoton, STMicro, Intel PTT TPM vendor roots via `@motebit/crypto-tpm`'s `DEFAULT_PINNED_TPM_ROOTS`; Apple, Yubico, Microsoft FIDO roots via `@motebit/crypto-webauthn`). The SE chain-of-trust landing is tracked alongside persistent-SE keys.
 
-- **Real TPM fixture coverage.** The TPM verifier currently has synthetic coverage only. Real EK-backed TPM captures are not lifted from third-party fixtures by default because EK certificates can identify individual chips. A real-device fixture should come from owned hardware or a vendor-approved public vector, with privacy reviewed before committing. The same shape worked for `@motebit/crypto-webauthn` because Yubico deliberately reuses one batch attestation root across millions of devices, so a captured ceremony rooted at it leaks no per-device identity; TPM EK chains are the architectural opposite.
+- **Real TPM fixture coverage.** Real EK-backed TPM captures are not lifted from third-party fixtures by default because EK certificates can identify individual chips. A real-device fixture should come from owned hardware or a vendor-approved public vector, with privacy reviewed before committing. The same shape worked for `@motebit/crypto-webauthn` because Yubico deliberately reuses one batch attestation root across millions of devices, so a captured ceremony rooted at it leaks no per-device identity; TPM EK chains are the architectural opposite.
 
-- **TPM `tss-esapi` linking in the Rust build graph.** `apps/desktop/src-tauri/src/tpm.rs` ships a `not_supported`-on-every-platform stub until an operator wires the `tss-esapi` crate plus `libtss2-*` system dependencies into the desktop build. The TS cascade treats the `not_supported` reason as expected and falls through to the software sentinel, so the ship is non-regressive.
+- **TPM `tss-esapi` linking in the Rust build graph.** Until an operator wires the `tss-esapi` crate plus `libtss2-*` system dependencies into the desktop build, `apps/desktop/src-tauri/src/tpm.rs` answers `not_supported` on every platform. The TS cascade treats the `not_supported` reason as expected and falls through to the software sentinel, so it is non-regressive.
 
 - **Revocation channel.** Claims expire with their parent credential's `validFrom` + expiry. No separate revocation path.
 
 - **Migrating Ed25519 identity → P-256.** Explicitly rejected. Hierarchical attestation preserves cryptosuite-agility; migration would force every federation peer to re-verify every historical receipt.
-
-## Where it shows up
-
-Live consumers today:
-
-- `packages/crypto/src/hardware-attestation.ts` — verifier, pure permissive-floor (Apache-2.0) algebra.
-- `packages/crypto/src/index.ts` — `verify()` dispatcher lifts `hardware_attestation` onto `CredentialVerifyResult`.
-- `packages/semiring/src/hardware-attestation.ts` — `HardwareAttestationSemiring` + `scoreAttestation`.
-- `packages/market/src/graph-routing.ts` — `HARDWARE_ATTESTATION_BOOST` applied to the trust edge during agent ranking.
-- `packages/market/src/scoring.ts` — `CandidateProfile.hardware_attestation?` field.
-- `packages/encryption/src/hardware-attestation-credential.ts` — canonical VC composer; CLI + desktop + mobile + web all delegate.
-- `packages/crypto-appattest/` — Apple App Attest chain verifier (pinned Apple root).
-- `packages/crypto-android-keystore/` — Android Hardware-Backed Keystore Attestation verifier (pinned Google attestation roots — RSA + ECDSA P-384). The canonical sovereign-verifiable Android primitive.
-- `packages/crypto-play-integrity/` — REMOVED 2026-05-03. Was a Google Play Integrity JWT verifier (pinned Google JWKS, ES256 / RS256 dispatch). Structurally miscategorized as a sovereign-verifiable leaf — Google publishes no global JWKS; replaced by `crypto-android-keystore`. Final published artifact is `@motebit/crypto-play-integrity@1.1.3` on npm with a registry-level deprecation; the source tree is gone.
-- `packages/crypto-tpm/src/verify.ts` — TPM 2.0 quote verifier; pinned vendor roots (Infineon, Nuvoton, STMicro, Intel PTT).
-- `packages/crypto-tpm/src/tpm-parse.ts` — minimal `TPMS_ATTEST` marshaling; hand-rolled over dep explosion.
-- `packages/crypto-webauthn/src/verify.ts` — browser-platform-authenticator packed-attestation verifier; pinned FIDO roots (Apple, Yubico, Microsoft) + self-attestation path.
-- `apps/mobile/modules/expo-app-attest/` — iOS native App Attest bridge.
-- `apps/mobile/modules/expo-android-keystore/` — Android native Hardware-Backed Keystore Attestation bridge.
-- `apps/mobile/src/mint-hardware-credential.ts` — mobile surface; per-OS cascade (App Attest → SE on iOS; Android Keystore on Android; software sentinel everywhere).
-- `apps/web/src/mint-hardware-credential.ts` — Web surface; cascades WebAuthn → software via `navigator.credentials.create`.
-- `apps/desktop/src-tauri/src/secure_enclave.rs` — Rust SE bridge (macOS-gated).
-- `apps/desktop/src-tauri/src/tpm.rs` — Rust TPM bridge (Windows / Linux; `not_supported` pending `tss-esapi` link).
-- `apps/desktop/src/secure-enclave-bridge.ts` — typed TS wrapper with `SecureEnclaveError` taxonomy.
-- `apps/desktop/src/secure-enclave-attest.ts` — high-level `mintAttestationClaim` with software fallback.
-- `apps/desktop/src/tpm-bridge.ts` — typed TS wrapper with `TpmError` taxonomy mirroring SE shape.
-- `apps/desktop/src/tpm-attest.ts` — high-level `mintTpmAttestationClaim`; returns `null` to defer to the cascade.
-- `apps/desktop/src/mint-hardware-credential.ts` — `mintHardwareCredential` — desktop surface; cascade SE → TPM → software.
-- `apps/cli/src/subcommands/attest.ts` — `motebit attest` — software-claim surface.
-- `apps/cli/src/subcommands/doctor.ts` — `detectSecureEnclaveAvailability()` diagnostic.
-- `packages/verifier/src/lib.ts` — `formatHuman` surfaces `hardware: <platform> ✓/✗`.
 
 ## Cross-references
 

@@ -2,10 +2,11 @@
 
 > **Layer:** law (a basis is minted only above the consequential bar) — enforced by `packages/memory-graph/src/__tests__/accrual.test.ts`
 
+**Status:** [doctrine-status.md § felt-accumulation](../ops/doctrine-status.md#felt-accumulationmd)
+
 [`felt-interior.md`](felt-interior.md) gave the owner two registers of the accruing
 interior: it **changed** (the consolidation act, the `tending` cue) and it **holds**
-(the resting `Felt*` records — memory, trust, consolidation), both now shipped across
-surfaces. But the thing thesis #2 actually promises — _the agent gets more capable the
+(the resting `Felt*` records — memory, trust, consolidation). But the thing thesis #2 actually promises — _the agent gets more capable the
 longer it runs_ — is felt in neither. A glance at a memory record tells the owner the
 interior is **large**; it never lets them feel it **work**. The missing register is the
 interior **drawn upon**: the moment accrued state changes an outcome — a question not
@@ -155,27 +156,18 @@ growing interior by betraying the substrate that makes the feeling earned.
   content. **Bound:** summary-not-secret, owner-only, the leveraged source's sensitivity
   ceiling.
 
-## Status
+## Producers and deferrals
 
-**Shipped.** Doctrine (Inc 0, this file); Ring-1 `AccrualBasis` / `AccrualKind` in
-`@motebit/protocol` (Inc 1); production in the `memory-graph` accrual source
-(`recalledMemoryBasis`), threaded produced-not-authored onto the turn result (Inc 2);
-per-surface render on all four surfaces — a calm in-flow attribution on web / desktop /
-mobile, the generalized `CredentialSatelliteRenderer`-shape orbit drawing on the memory haze
-on spatial (Inc 3); `check-accrual-basis-canonical` locking produced-not-authored + the
-no-aggregate refusal (Inc 5).
-
-**Producers, per kind.** `recalled_memory` and `consolidated_fact` are produced — the latter
-when the leveraged memory's `MemorySource` is `consolidation_derived` ("I pieced this
-together" vs "you told me"). `standing_delegation` has a real seam (the `verifiedGrant`
-auto-execution in `policy-gate`) and is the next increment — minted in the accrual source,
-NOT in `ai-core` (the Inc-5 gate forbids a kind literal there), with single-basis arbitration
+**Producers, per kind.** `consolidated_fact` is produced when the leveraged memory's
+`MemorySource` is `consolidation_derived` ("I pieced this together" vs "you told me"), else
+`recalled_memory`. `standing_delegation`'s real seam is the `verifiedGrant` auto-execution in
+`policy-gate`; it is minted in the accrual source, NOT in `ai-core`
+(`check-accrual-basis-canonical` forbids a kind literal there), with single-basis arbitration
 for a turn that both recalls and auto-runs. `trust_edge` and `prior_approval_pattern` are
-**deferred-until-seam**: their decisions do not exist today — trust is display-only plus an
-inbound approval-band nudge (no outbound trust-gated skip), and every approval is asked fresh
-(no pattern memory). Producing them now would FABRICATE a leverage moment — the exact
-produced-not-authored violation the arc exists to prevent. They land when the real decision
-ships (an outbound trust-gated skip-verification; approval-pattern matching), not before.
+**deferred-until-seam**: a kind is produced only once its real decision exists — producing it
+before would FABRICATE a leverage moment, the exact produced-not-authored violation the arc
+exists to prevent. They land when the real decision ships (an outbound trust-gated
+skip-verification; approval-pattern matching), not before.
 
 **The deepening needs no separate increment.** "Deepening" is felt-interior's own move (§6):
 a quality of the standing graph rendered as _present shape, never a delta, streak, or growth

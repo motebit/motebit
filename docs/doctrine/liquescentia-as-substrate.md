@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § liquescentia-as-substrate](../ops/doctrine-status.md#liquescentia-as-substratemd)
+
 [`LIQUESCENTIA.md`](../../LIQUESCENTIA.md) derives the medium's five properties from droplet physics. This doctrine maps each property to its canonical code home and names the AR-glasses endgame.
 
 Liquescentia is the shared physics every motebit-rendering surface obeys. Web, desktop, mobile, spatial, and future glasses all render Liquescentia conditions — spatial is the surface where the medium is most visible, but the physics inherits everywhere.
@@ -58,9 +60,9 @@ On VR and web/desktop, Liquescentia is fully synthetic (`ENV_LIGHT` renders the 
 
 The architecture names this endgame in `packages/render-engine/src/adapter.ts`'s `WebXRThreeJSAdapter` header comment: _"the real world IS Liquescentia. The camera feed provides the chromatic spectrum the liquescent body refracts."_
 
-**Current state:** the adapter uses `ENV_LIGHT` unconditionally as both today's behavior and the eventual fallback. Promotion to real-world spectrum (via `XRSession.requestLightProbe()` / `WebXRManager.getEstimatedLight()`) is endgame work blocked on a real-device test surface (Vision Pro AR mode / Quest passthrough rig). The code's comment names the gap; this doctrine pins what closing it requires.
+**The fallback and the promotion.** `ENV_LIGHT` is the adapter's fallback. Promotion to real-world spectrum (via `XRSession.requestLightProbe()` / `WebXRManager.getEstimatedLight()`) is endgame work that waits on a real-device test surface (Vision Pro AR mode / Quest passthrough rig). The code's comment names the gap; this doctrine pins what closing it requires.
 
-**Renderer promotion — WebGL → WebGPU.** The renderer itself promotes from Three.js `WebGLRenderer` to `WebGPURenderer` (in the `three/webgpu` namespace). Apple shipped WebGPU in Safari 26 (June 2025) on visionOS / iOS 26 / iPadOS 26 / macOS Tahoe; combined with Chrome (since 2023), Edge, and Firefox (2025), WebGPU's by-default availability is now ~70% globally — production-ready for the slab's hero surfaces.
+**Renderer promotion — WebGL → WebGPU.** The renderer itself promotes from Three.js `WebGLRenderer` to `WebGPURenderer` (in the `three/webgpu` namespace), once WebGPU's by-default browser availability makes it production-ready for the slab's hero surfaces.
 
 The migration is **lower-risk than the conservative framing implies**. Three.js's `WebGPURenderer` ships with TSL (Three Shader Language), which transpiles to WGSL or GLSL depending on the runtime backend. Same scene graph, same materials, same physics — the slab's contract (Ring 1) is identical across both renderers; only the renderer instance swaps at the `RenderAdapter` seam. The "parallel-implementation tax" that would justify deferring doesn't exist if motebit stays on Three.js (which it should — re-platforming off Three.js is not in scope here).
 
@@ -70,7 +72,7 @@ Three triggers can fire the migration, ordered by leverage:
 2. **A render artifact demands compute shaders.** Real fluid sim for the pinch animation, particle systems for memory surfacing, advanced post-processing — WebGL has no compute path.
 3. **Voluntary endgame.** Once the slab's visual character is stable and the consumer-side product surface is shipping, a pre-emptive renderer migration is defensible on its own merits: cleaner API, future-aligned, no parallel maintenance. No technical waiting required.
 
-Cross-browser fallback handled by Three.js auto-detection (`createRenderer({ forceWebGL: false })`). The ~15% long tail (older Firefox, some Android, Intel macOS) continues on WebGL automatically. **The capture pipeline migration (JPEG → WebCodecs `VideoDecoder` + `importExternalTexture`) is separate end-game work that lives at the screencast layer**, not the renderer layer — see [`motebit-computer.md`](motebit-computer.md) §"Compositing — content vs chrome split" for that pin. Renderer and capture migrate independently on their own triggers.
+Cross-browser fallback handled by Three.js auto-detection (`createRenderer({ forceWebGL: false })`). The long tail (older Firefox, some Android, Intel macOS) continues on WebGL automatically. **The capture pipeline migration (JPEG → WebCodecs `VideoDecoder` + `importExternalTexture`) is separate end-game work that lives at the screencast layer**, not the renderer layer — see [`motebit-computer.md`](motebit-computer.md) §"Compositing — content vs chrome split" for that pin. Renderer and capture migrate independently on their own triggers.
 
 ## Operational consequences
 

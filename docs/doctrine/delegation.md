@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § delegation](../ops/doctrine-status.md#delegationmd)
+
 Delegation is the architectural primitive that turns motebit's other five primitives into a system rather than a catalog.
 
 ## The spine: delegation is the connector, not the sixth sibling
@@ -74,11 +76,9 @@ Delegation composes with the other five primitives via specific structural bindi
 
 The five bindings compose into one structural claim: **motebit's protocol layer IS the delegation layer.** Identity, trust, receipts, settlement, policy are the static surfaces; delegation is the dynamic relationship that runs through all five. This is why the doctrine memo for delegation deserves its place alongside the others — not because the positioning sentence has six concepts, but because delegation is the architectural relationship the other five primitives instantiate.
 
-## Spec status
+## Spec relationship
 
-The wire spec [`spec/delegation-v1.md`](../../spec/delegation-v1.md) is currently **Draft** status. This doctrine memo governs the six invariants above (cryptographic + semantic) regardless of evolutions in the wire format. The spec details how the invariants are expressed on the wire; if a future spec revision changes a field name or normalization rule, the doctrine's invariants still hold and the spec is updated to match. Same deferral pattern as [`receipts-unified.md`](receipts-unified.md) — doctrine names the family; spec details the implementation.
-
-When the spec graduates from Draft to Stable, this section reduces to a one-line "Stable per `delegation-v1.md`."
+The wire spec is [`spec/delegation-v1.md`](../../spec/delegation-v1.md). This doctrine memo governs the six invariants above (cryptographic + semantic) regardless of evolutions in the wire format. The spec details how the invariants are expressed on the wire; if a future spec revision changes a field name or normalization rule, the doctrine's invariants still hold and the spec is updated to match. Same deferral pattern as [`receipts-unified.md`](receipts-unified.md) — doctrine names the family; spec details the implementation.
 
 ## Why "delegation" is the right tagline word
 
@@ -90,7 +90,7 @@ Three candidates were considered for the positioning sentence's third concept (a
 
 The corrected tagline candidate: _"Motebit lets AI agents act with identity, trust, **delegation**, receipts, and settlement. Open protocol. Managed cloud. Relay economy."_
 
-The doctrine memo for "delegation" exists (this one), the spec for delegation exists (`delegation-v1.md`), the code surface for delegation exists (`packages/runtime/src/relay-delegation.ts`, `packages/runtime/src/interactive-delegation.ts`, `packages/runtime/src/agent-task-handler.ts`, `delegate_to_agent` tool, A2A federation delegation per [`services/relay/CLAUDE.md`](../../services/relay/CLAUDE.md) §7-9). When the tagline swaps "permissions" → "delegation," the word points at a doctrinal artifact that grounds it. Until the swap lands, this doctrine memo is the surface readers find when grepping for what "delegation" means in motebit's architecture.
+The doctrine memo for "delegation" exists (this one), the spec for delegation exists (`delegation-v1.md`), the code surface for delegation exists (`packages/runtime/src/relay-delegation.ts`, `packages/runtime/src/interactive-delegation.ts`, `packages/runtime/src/agent-task-handler.ts`, `delegate_to_agent` tool, A2A federation delegation per [`services/relay/CLAUDE.md`](../../services/relay/CLAUDE.md) §7-9). When the tagline says "delegation," the word points at a doctrinal artifact that grounds it; this doctrine memo is the surface readers find when grepping for what "delegation" means in motebit's architecture.
 
 A future cross-reference paragraph in the policy package's per-directory `CLAUDE.md` (when one ships) — _"policy covers what consumer-facing material calls 'delegation' (same concept, different audience precision; policy is the constraint layer of the delegation relationship)"_ — is the discoverability bridge written last, depending on this doctrine memo plus the tagline swap to be in place.
 
@@ -102,5 +102,5 @@ A future cross-reference paragraph in the policy package's per-directory `CLAUDE
 - [`agility-as-role.md`](agility-as-role.md) — cryptosuite agility means delegation signatures evolve via registry append (PQ migration is a registry add, not a wire-format break for delegations).
 - [`self-attesting-system.md`](self-attesting-system.md) — every claim is user-verifiable; delegation receipts are the verifier-facing artifacts that make every action on a user's behalf cryptographically auditable.
 - [`docs/doctrine/audits/2026-05-13-positioning-architecture-audit.md`](audits/2026-05-13-positioning-architecture-audit.md) — the audit that surfaced this doctrine's need (asymmetry 1: permissions/policy vs delegation). This memo closes that asymmetry.
-- [`spec/delegation-v1.md`](../../spec/delegation-v1.md) — Draft wire spec; foundation laws in §3.3, §4.2, §6.4 instantiate the semantic invariants above.
+- [`spec/delegation-v1.md`](../../spec/delegation-v1.md) — the wire spec; foundation laws in §3.3, §4.2, §6.4 instantiate the semantic invariants above.
 - [`services/relay/CLAUDE.md`](../../services/relay/CLAUDE.md) — rules 6 (relay is convenience-layer-not-trust-root) and 11 (receipts append-only byte-identical) apply directly to delegation receipts.

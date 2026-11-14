@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § clearing-house-not-thin-waist](../ops/doctrine-status.md#clearing-house-not-thin-waistmd)
+
 **The protocol is the thin waist motebit gives away to earn the routing. The business is the clearing house the routing accrues back to. They are different layers, and conflating them is the founding strategic error this memo exists to forbid.**
 
 This is the resolution of a recurring founder-surface question: _"is motebit the TCP/IP, the Linux, or the Kubernetes of the agentic economy?"_ The honest answer is that those three are not three flavors of one compliment — they are three mutually incompatible theories of **where value pools**, and reaching for all three at once hides the one trap that can kill the company. This memo names the trap and pins the correct category so the answer stops drifting back into "thin waist" marketing language.
@@ -54,7 +56,7 @@ Born 2026-08-01, when the founder asked whether the Researcher's $0.25 was too e
 
 Predatory dumping — a better-funded operator pricing below cost to own a capability — is therefore _permitted_, and the defense is the Docker-trap escape, not a rule: they can buy hires, but every subsidized hire routed through the relay pays the fee and accrues to the history they cannot fork. Predatory pricing funds the moat it is trying to breach.
 
-**Enforcement is deferred-with-trigger, consistent with this memo's style.** The floor law became mechanically checkable the day the hire-path meter shipped (logged `cost_estimate_usd` vs the listing's unit cost); the obvious gate is an operator-observability alarm — rolling logged cost exceeding the listed price goes red, sibling of treasury-reconciliation's recorded-vs-onchain honesty check. **Trigger to crystallize:** the first deliberate reprice from metered data (the act that makes the floor a maintained number rather than a one-time measurement), or a second first-party priced capability. **The second condition has fired** (as of 2026-11-13 several first-party services list a non-zero price in `services/<name>/src/pricing.ts` — research $0.25 and code-review $0.20 among them), and the gate is **not built**: no check compares logged cost to the listed price. Until it is, the discipline is the reprice procedure itself: no price changes without meter data, and every price change sweeps the client-side price tables that render receipts.
+**Enforcement is deferred-with-trigger, consistent with this memo's style.** The floor law became mechanically checkable the day the hire-path meter shipped (logged `cost_estimate_usd` vs the listing's unit cost); the obvious gate is an operator-observability alarm — rolling logged cost exceeding the listed price goes red, sibling of treasury-reconciliation's recorded-vs-onchain honesty check. **Trigger to crystallize:** the first deliberate reprice from metered data (the act that makes the floor a maintained number rather than a one-time measurement), or a second first-party priced capability. Until the gate is built, the discipline is the reprice procedure itself: no price changes without meter data, and every price change sweeps the client-side price tables that render receipts.
 
 ## The language guard (where the trap re-enters)
 

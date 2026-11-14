@@ -2,6 +2,8 @@
 
 > **Layer:** law (the bonded address is key-derived; an under-funded bond reads underbacked) — enforced by `packages/crypto/src/__tests__/bond.test.ts`, `services/relay/src/__tests__/commitment-bond.test.ts`
 
+**Status:** [doctrine-status.md § commitment-bond](../ops/doctrine-status.md#commitment-bondmd)
+
 The relay's revenue rests on a coordination moat — trusted, dispute-grade history — but its
 recourse today is dispute-resolution-only with no capital behind it: `executeFundAction`
 (`services/relay/src/disputes.ts`) **no-ops on a P2P / zero-locked dispute**, exactly where money
@@ -15,7 +17,7 @@ lowers risk; your reputation is your asset).
 
 That recourse only **bites with volume + real disputes**, so the arc stages. **Phase 1 (this doctrine)
 ships the volume _enabler_ only: the commitment bond as an anti-sybil signal.** The recourse half is a
-deliberate, triggered follow-on (§ Status), not a gap.
+deliberate, triggered follow-on (§ Bounds and deferrals), not a gap.
 
 ## What it is — and is NOT
 
@@ -101,26 +103,23 @@ against drain-and-default, exit-scam, or a closed high-value pair going dark; no
 _concurrent_ cross-ticket exposure — the live-read recognizes a ticket's exposure only once its
 settlement row exists, so concurrent submissions before that can momentarily over-admit against one bond
 (fund-loss-free in phase 1 — no recourse means no loss; closed by the deferred reservation ledger, see
-§ Status "Known bound"). We ship phase 1 knowing it filters sybils and signals seriousness — nothing
+§ Bounds and deferrals "Known bound"). We ship phase 1 knowing it filters sybils and signals seriousness — nothing
 more, and surfaces must say so.
 
-## Status
+## Bounds and deferrals
 
-**Phase 1 (this arc, eligibility-unlock):** Inc 0 doctrine (this file); Inc 1 the `BondCommitment` wire
-type (`@motebit/protocol`) + `sign/verifyBondCommitment` (`@motebit/crypto`, the identity-address binding
-enforced) + `check-bond-address-binding`; Inc 2 the `getUsdcBalanceOf` arbitrary-address read
-(`@motebit/wallet-solana`) + the supervised `startBondVerifierLoop` (relay) + the as-of/staleness
-bound; Inc 3 the additive bonded branch in `evaluateSettlementEligibility` (tiered-with-sovereign) +
-accept-time re-verification + the cross-ticket exposure defense + `check-bond-surface-honesty`; Inc 4 the
-bond-ingestion surface (POST/GET `/api/v1/agents/:id/bond`, artifact-verified, no new audience) + the
-decision-time re-verification adapter wired into the live submission gate.
+**Phase 1 is eligibility-unlock only:** the `BondCommitment` wire type with the identity-address binding
+enforced (`check-bond-address-binding`), relay verification by RPC read with an as-of/staleness bound, the
+additive bonded branch in `evaluateSettlementEligibility` (tiered-with-sovereign) with accept-time
+re-verification and the cross-ticket exposure defense, surface honesty (`check-bond-surface-honesty`), and
+an artifact-verified bond-ingestion surface that needs no new audience.
 
 **The cross-ticket reuse defense is a conservative LIVE READ, not a stored reservation ledger.** The
 predicate (`backing − k·in_flight ≥ k·ticket`) is computed by summing the worker's PENDING p2p
 settlements (`workerInFlightP2pCostMicro`) — strictly conservative (over-counts, never under, because it
 counts ALL of the worker's in-flight p2p value, not only bond-admitted tickets), self-releasing through
 the existing settlement state machine, zero new money-path write-surface. The identity-address binding
-(§Inc 1) handles cross-IDENTITY reuse; this handles cross-TICKET reuse within one identity.
+(§ "The identity-address binding") handles cross-IDENTITY reuse; this handles cross-TICKET reuse within one identity.
 
 **Known bound (named — the one axis a reservation ledger would strengthen):** exposure is recognized only
 once a ticket's settlement row exists, so two _concurrent_ submissions evaluated before either's row is

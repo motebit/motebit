@@ -2,11 +2,13 @@
 
 > **Layer:** law (canonical poses stay inside the orbit envelope and the backdrop dome; surfaces consume the canonical camera) — enforced by `packages/render-engine/src/__tests__/camera-envelope.test.ts`, `check-creature-canon`
 
+**Status:** [doctrine-status.md § creature-canon](../ops/doctrine-status.md#creature-canonmd)
+
 **The creature is the show. Every frame is a product shot.**
 
 The motebit body is the first claim a stranger evaluates — before any receipt, any proof, any doctrine. It is registered trade dress ([`TRADEMARK.md`](../../TRADEMARK.md), "Trade Dress — The Liquescent Droplet Creature"). Render fidelity is therefore a trust surface: a seam in the sky or a dead eye at an oblique angle quietly argues against "this thing can hold your money." This memo fixes the canon — what is frozen, what is choreographed, what is toleranced, and how the rendered body proves itself.
 
-The discipline is the icon discipline: **material honesty** (the body derives from droplet physics — done, see [`DROPLET.md`](../../DROPLET.md) §II–§VI), **choreographed states** (every state the body can be in is named and rehearsed), **a spec with tolerances** (constants are pinned _and_ operating envelopes are closed), and **rehearsed proof** (the full state × angle tour renders deterministically, and every frame is shippable).
+The discipline is the icon discipline: **material honesty** (the body derives from droplet physics — see [`DROPLET.md`](../../DROPLET.md) §II–§VI), **choreographed states** (every state the body can be in is named and rehearsed), **a spec with tolerances** (constants are pinned _and_ operating envelopes are closed), and **rehearsed proof** (the full state × angle tour renders deterministically, and every frame is shippable).
 
 ## Where the numbers live
 
@@ -66,8 +68,6 @@ The body is ~94% transmissive: **it is made of its environment.** A dark environ
 - Acceptance is proof, not preference: the dark preset's golden frames must show the face, the material character, and the breathing legibly.
 - If no dark preset passes, surfaces pin the light environment. A live creature in a slightly-wrong-temperature world beats a dead creature in a matching one.
 
-**Status (2026-07-07): passed.** `ENV_DARK` was redesigned in place as the designed night (moon key panel, moonlit horizon band, cool fill) and its golden frames (`front-resting-dark`, `front-thinking-dark`) show the face, catch-lights, material character, and interior glow legibly. The web surface's environment now follows the UI theme; mobile already switched via settings. The original near-black `ENV_DARK` was the proof of the criterion — the body read dead in it, exactly as the material predicts.
-
 ## The Motebit Smirk
 
 At in-between angles the smile's meniscus curvature interacts with the body's refraction to produce an expression that is not visible straight-on and is not coded anywhere — it is what the geometry and the material do together. The mouth itself is a symmetric meniscus arc (DROPLET §IV Law 4, "the meniscus of mood"); the smirk's asymmetry exists only in projection, at oblique view. This is the face's emergent eigenmode, the same shape as the breathing mode (DROPLET §VI): the physics produces the behavior without being instructed. Preserve-listed: do not flatten it, do not make it visible from every angle, do not replace it with a coded expression.
@@ -98,4 +98,4 @@ Together: the doctrine cannot silently rot ("citation-protection") and the pixel
 
 ## Drift defense
 
-Two-layer, per the proof contract: the golden-frame harness (test-enforced defense — runs in the CI e2e job, too heavy for the check suite) and the static canon gate (hard CI, in the check suite). Both land with the harness increment of the 2026-07 creature-endgame arc; until the gate line exists in the drift-defenses inventory, this memo is the citation-protection.
+Two-layer, per the proof contract: the golden-frame harness (test-enforced defense — runs in the CI e2e job, too heavy for the check suite) and the static canon gate `check-creature-canon` (hard CI, in the check suite).
