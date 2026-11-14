@@ -57,7 +57,9 @@ const DELEGATOR_PRIV = new Uint8Array(32).fill(0x83);
 const OTHER_DELEGATOR_PRIV = new Uint8Array(32).fill(0x84);
 
 const NOW = 1_800_000_000_000;
-const CHALLENGE = "conformance-challenge-0001";
+// 32 bytes as hex — the spec's recommended challenge shape (fixed for byte-stability).
+const CHALLENGE = "c0ffee00000000000000000000000000000000000000000000000000000000c1";
+const OTHER_CHALLENGE = "c0ffee00000000000000000000000000000000000000000000000000000000c2";
 const RELAY_ID = "019a0000-0000-7000-8000-00000000a0a1";
 const DELEGATOR_ID = "019a0000-0000-7000-8000-00000000d0d1";
 const OTHER_DELEGATOR_ID = "019a0000-0000-7000-8000-00000000d0d2";
@@ -223,7 +225,7 @@ async function main(): Promise<void> {
   attestationCase(
     "attestation-challenge-mismatch",
     "Answers another consumer's challenge.",
-    await attest({ challenge: "someone-elses-challenge" }),
+    await attest({ challenge: OTHER_CHALLENGE }),
     invalid("challenge_mismatch"),
   );
   attestationCase(
@@ -304,6 +306,29 @@ async function main(): Promise<void> {
     { ...(await attest()), spec: "motebit/delegation-revocation-inclusion-receipt@1.0" as never },
     invalid("unsupported_spec"),
   );
+  attestationCase(
+    "attestation-weak-challenge",
+    "The consumer's own challenge is shorter than 32 characters (under 128 bits).",
+    await attest(),
+    invalid("weak_challenge"),
+    { ...exp, challenge: "nonce-1" },
+  );
+  attestationCase(
+    "attestation-unknown-field",
+    "An unknown top-level field (the wire schema is strict), validly signed.",
+    await forgedAttestation((b) => {
+      b.surprise = 1;
+    }),
+    invalid("malformed_attestation"),
+  );
+  attestationCase(
+    "attestation-entry-unknown-field",
+    "An entry with an unknown field, validly signed (forged).",
+    await forgedAttestation((b) => {
+      b.entries = [{ ...entries[0], extra: true }, entries[1]];
+    }),
+    invalid("malformed_attestation"),
+  );
 
   const receiptCase = (
     name: string,
@@ -352,6 +377,13 @@ async function main(): Promise<void> {
     await receipt(revA, 3),
     revB,
     { valid: false, reason: "revocation_mismatch" },
+  );
+  receiptCase(
+    "receipt-unsupported-suite",
+    "A suite other than the pinned one.",
+    { ...(await receipt(revA, 3)), suite: "motebit-jcs-ed25519-hex-v1" as never },
+    revA,
+    { valid: false, reason: "unsupported_suite" },
   );
 
   const omission = (
@@ -431,14 +463,14 @@ async function main(): Promise<void> {
     "equivocation-detected",
     "Same key, delegator and high-water; different records_digest.",
     await attest(),
-    await attest({ entries: [entries[0]!], challenge: "other-consumer" }),
+    await attest({ entries: [entries[0]!], challenge: OTHER_CHALLENGE }),
     { valid: true },
   );
   equivocation(
     "equivocation-same-entries",
     "Same entries under different challenge and as_of: same digest.",
     await attest(),
-    await attest({ challenge: "other-consumer", as_of: NOW + 5 }),
+    await attest({ challenge: OTHER_CHALLENGE, as_of: NOW + 5 }),
     { valid: false, reason: "same_records_digest" },
   );
   equivocation(

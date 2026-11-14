@@ -63,8 +63,67 @@ export const REFERENCE_REVOCATION_SET_ATTESTATION_MAX_AGE_MS = 60_000;
 /** Reference clock-skew tolerance for a set attestation's `as_of` (spec §5.2 RECOMMENDED ±60 s). */
 export const REFERENCE_REVOCATION_SET_ATTESTATION_CLOCK_SKEW_MS = 60_000;
 
+/**
+ * Challenge length bounds (spec §5.2). A consumer MUST send a fresh,
+ * unpredictable challenge of at least 128 bits of entropy per request (e.g. 32
+ * random bytes as 64 hex characters); 32 characters is the floor at which a
+ * hex challenge can carry 128 bits. 256 is the wire schema's maximum.
+ */
+export const REVOCATION_SET_ATTESTATION_CHALLENGE_MIN_LENGTH = 32;
+export const REVOCATION_SET_ATTESTATION_CHALLENGE_MAX_LENGTH = 256;
+
 const HEX64 = /^[0-9a-f]{64}$/;
 const UTF8 = new TextEncoder();
+
+/** The exact top-level keys of each artifact and of a set-attestation entry (the wire schemas are strict). */
+const SET_ATTESTATION_KEYS: ReadonlySet<string> = new Set([
+  "spec",
+  "relay_motebit_id",
+  "relay_public_key",
+  "delegator_motebit_id",
+  "challenge",
+  "as_of",
+  "seq_high_water",
+  "count",
+  "entries",
+  "records_digest",
+  "suite",
+  "signature",
+]);
+const ENTRY_KEYS: ReadonlySet<string> = new Set(["seq", "received_at", "record"]);
+const REVOCATION_KEYS: ReadonlySet<string> = new Set([
+  "grant_id",
+  "delegator_id",
+  "delegator_public_key",
+  "revoked_at",
+  "suite",
+  "signature",
+]);
+const INCLUSION_RECEIPT_KEYS: ReadonlySet<string> = new Set([
+  "spec",
+  "relay_motebit_id",
+  "relay_public_key",
+  "grant_id",
+  "delegator_motebit_id",
+  "revocation_signature",
+  "seq",
+  "received_at",
+  "suite",
+  "signature",
+]);
+
+/** True when every own key of `o` is in `allowed` (unknown fields are refused, as the wire schemas do). */
+function hasOnlyKeys(o: unknown, allowed: ReadonlySet<string>): boolean {
+  return typeof o === "object" && o !== null && Object.keys(o).every((k) => allowed.has(k));
+}
+
+function isChallenge(v: unknown): v is string {
+  return (
+    typeof v === "string" &&
+    v.length >= REVOCATION_SET_ATTESTATION_CHALLENGE_MIN_LENGTH &&
+    v.length <= REVOCATION_SET_ATTESTATION_CHALLENGE_MAX_LENGTH
+  );
+}
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
@@ -155,6 +214,7 @@ export type RevocationSetAttestationRefusal =
 /** Fine-grained reason for a set-attestation refusal, in verification order. */
 export type RevocationSetAttestationFailureReason =
   | "missing_expectation"
+  | "weak_challenge"
   | "malformed_attestation"
   | "unsupported_suite"
   | "unsupported_spec"
@@ -185,13 +245,27 @@ export type VerifyRevocationSetAttestationResult =
 export interface VerifyRevocationSetAttestationExpectations {
   /** The relay key the caller pins (hex). Resolved by the caller's pin store (succession-aware); mismatch fails. */
   readonly pinnedRelayPublicKey: string;
-  /** The challenge the caller sent. The attestation must echo it exactly. */
+  /**
+   * The challenge the caller sent. The attestation must echo it exactly. MUST
+   * be fresh and unpredictable per request, with at least 128 bits of entropy
+   * (e.g. 32 random bytes as hex); a challenge outside
+   * [{@link REVOCATION_SET_ATTESTATION_CHALLENGE_MIN_LENGTH},
+   * {@link REVOCATION_SET_ATTESTATION_CHALLENGE_MAX_LENGTH}] characters is
+   * refused as `weak_challenge`. Replay protection holds only under that MUST:
+   * a reused challenge lets any attestation answering it replay for the whole
+   * freshness window.
+   */
   readonly challenge: string;
   /** The delegator the caller asked about. */
   readonly delegatorMotebitId: string;
   /** The caller's clock, Unix ms. */
   readonly now: number;
-  /** The highest `seq_high_water` the caller has previously accepted from this relay key (0 when none). */
+  /**
+   * The highest `seq_high_water` the caller has previously accepted from this
+   * RELAY IDENTITY (`relay_motebit_id`), 0 when none. Track it per relay
+   * identity, never per relay key: `seq` is relay-wide, and a relay key
+   * succession must not reset the rollback floor.
+   */
   readonly lastSeenSeq: number;
   /** Freshness window override (ms). Default {@link REFERENCE_REVOCATION_SET_ATTESTATION_MAX_AGE_MS}. */
   readonly maxAgeMs?: number;
@@ -219,9 +293,14 @@ function isRevocationShape(r: unknown): r is DelegationRevocation {
 }
 
 function isEntryShape(e: unknown): e is DelegationRevocationSetAttestationEntry {
-  if (typeof e !== "object" || e === null) return false;
+  if (!hasOnlyKeys(e, ENTRY_KEYS)) return false;
   const o = e as Record<string, unknown>;
-  return isPositiveSeq(o.seq) && isNonNegativeInt(o.received_at) && isRevocationShape(o.record);
+  return (
+    isPositiveSeq(o.seq) &&
+    isNonNegativeInt(o.received_at) &&
+    isRevocationShape(o.record) &&
+    hasOnlyKeys(o.record, REVOCATION_KEYS)
+  );
 }
 
 async function verifyRelaySignature(artifact: {
@@ -278,6 +357,7 @@ export async function verifyRevocationSetAttestation(
   ) {
     return invalid("missing_expectation");
   }
+  if (!isChallenge(exp.challenge)) return invalid("weak_challenge");
   const now = exp.now as number;
   const maxAgeMs = exp.maxAgeMs ?? REFERENCE_REVOCATION_SET_ATTESTATION_MAX_AGE_MS;
   const skewMs = exp.clockSkewMs ?? REFERENCE_REVOCATION_SET_ATTESTATION_CLOCK_SKEW_MS;
@@ -290,9 +370,10 @@ export async function verifyRevocationSetAttestation(
     return invalid("unsupported_spec");
   }
   if (
+    !hasOnlyKeys(a, SET_ATTESTATION_KEYS) ||
     !isNonEmptyString(a.relay_motebit_id) ||
     !isNonEmptyString(a.delegator_motebit_id) ||
-    !isNonEmptyString(a.challenge) ||
+    !isChallenge(a.challenge) ||
     !isNonNegativeInt(a.as_of) ||
     !isNonNegativeInt(a.seq_high_water) ||
     !isNonNegativeInt(a.count) ||
@@ -348,7 +429,7 @@ export async function verifyRevocationSetAttestation(
     return { valid: false, refusal: "revocation_evidence_stale", reason: "future_as_of" };
   }
 
-  // 9. Rollback: never accept an attestation below one already accepted from this key.
+  // 9. Rollback: never accept an attestation below one already accepted from this relay identity.
   if (a.seq_high_water < exp.lastSeenSeq) {
     return { valid: false, refusal: "revocation_evidence_rollback", reason: "rollback" };
   }
@@ -450,6 +531,7 @@ export async function verifyRevocationInclusionReceipt(
     return { valid: false, reason: "unsupported_spec" };
   }
   if (
+    !hasOnlyKeys(receipt, INCLUSION_RECEIPT_KEYS) ||
     !isNonEmptyString(receipt.relay_motebit_id) ||
     !isNonEmptyString(receipt.grant_id) ||
     !isNonEmptyString(receipt.delegator_motebit_id) ||
@@ -518,7 +600,9 @@ export type VerifyRevocationOmissionProofResult =
  * never yields a proof.
  *
  * `valid: false` does NOT mean "no omission": a relay that never issued a
- * receipt can omit a record undetectably (spec §8.1).
+ * receipt can omit a record undetectably (spec §8.1). Only a party holding
+ * BOTH artifacts can run this check — in practice the device that submitted
+ * the revocation; receipts are not propagated to the identity's other devices.
  */
 export async function verifyRevocationOmissionProof(
   receipt: DelegationRevocationInclusionReceipt,
@@ -584,6 +668,9 @@ export type VerifyRevocationEquivocationProofResult =
  * `seq_high_water` with different `records_digest`s. Both signatures are
  * verified; a forged attestation never yields a proof. Attestations are
  * comparable by digest because the digest excludes `challenge` and `as_of`.
+ * Sound only against a relay that assigns `seq` and commits the record
+ * atomically (spec §5.2 relay atomicity); otherwise two honest attestations
+ * at one `seq_high_water` could differ.
  */
 export async function verifyRevocationEquivocationProof(
   a: DelegationRevocationSetAttestation,

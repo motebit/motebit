@@ -69,11 +69,11 @@ export interface DelegationRevocationSetAttestation {
   relay_public_key: string;
   /** The delegator whose revocation set this attests. Every entry's `record.delegator_id` equals it. */
   delegator_motebit_id: string;
-  /** The consumer-chosen challenge, echoed. An attestation without the consumer's challenge answers no request of theirs (replay defence). */
+  /** The consumer-chosen challenge, echoed (32–256 chars). The consumer MUST make it fresh and unpredictable per request, ≥ 128 bits of entropy; replay protection holds only then. */
   challenge: string;
   /** Unix ms at which the relay assembled the attestation. Consumers enforce a freshness window. */
   as_of: number;
-  /** The relay's highest assigned receipt sequence number at `as_of` (non-negative integer). Every entry's `seq` is ≤ it. */
+  /** The relay's highest receipt sequence number of a COMMITTED, visible record at `as_of` (non-negative integer; the relay assigns and commits atomically). Every entry's `seq` is ≤ it. Consumers track the rollback floor per `relay_motebit_id`, never per key. */
   seq_high_water: number;
   /** Number of entries. MUST equal `entries.length`. */
   count: number;

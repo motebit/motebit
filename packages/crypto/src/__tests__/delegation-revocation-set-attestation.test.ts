@@ -38,7 +38,9 @@ const DELEGATOR_PRIV = new Uint8Array(32).fill(0x73);
 const OTHER_DELEGATOR_PRIV = new Uint8Array(32).fill(0x74);
 
 const NOW = 1_800_000_000_000;
-const CHALLENGE = "c2f1e0d9-challenge-0001";
+// 32 random bytes as hex — the spec's recommended challenge shape.
+const CHALLENGE = "c2f1e0d9a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0";
+const OTHER_CHALLENGE = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0";
 const DELEGATOR_ID = "019a0000-0000-7000-8000-00000000d001";
 const OTHER_DELEGATOR_ID = "019a0000-0000-7000-8000-00000000d002";
 const RELAY_ID = "019a0000-0000-7000-8000-00000000a001";
@@ -205,7 +207,7 @@ describe("verifyRevocationSetAttestation", () => {
   });
 
   it("refuses an attestation answering another challenge (challenge mismatch)", async () => {
-    const h = await attest({ challenge: "someone-elses-challenge" });
+    const h = await attest({ challenge: OTHER_CHALLENGE });
     expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
       valid: false,
       refusal: "revocation_evidence_invalid",
@@ -386,6 +388,102 @@ describe("verifyRevocationSetAttestation", () => {
     ).toMatchObject({ reason: "unsupported_spec" });
   });
 
+  it("refuses an unknown top-level field (strict, as the wire schema)", async () => {
+    const { signature: _s, ...body } = await attest();
+    const h = await forge<DelegationRevocationSetAttestation>({
+      ...body,
+      surprise: 1,
+    } as unknown as Omit<DelegationRevocationSetAttestation, "signature">);
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
+      valid: false,
+      refusal: "revocation_evidence_invalid",
+      reason: "malformed_attestation",
+    });
+  });
+
+  it("refuses an entry carrying an unknown field", async () => {
+    const h = await forgedAttestation((b) => {
+      b.entries = [
+        { ...entries[0]!, extra: true } as DelegationRevocationSetAttestationEntry,
+        entries[1]!,
+      ];
+    });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
+      valid: false,
+      refusal: "revocation_evidence_invalid",
+      reason: "malformed_attestation",
+    });
+  });
+
+  it("refuses an entry whose record carries an unknown field", async () => {
+    const h = await forgedAttestation((b) => {
+      b.entries = [
+        { ...entries[0]!, record: { ...revA, extra: true } as DelegationRevocation },
+        entries[1]!,
+      ];
+    });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toMatchObject({
+      reason: "malformed_attestation",
+    });
+  });
+
+  it("refuses an entry missing its record (entry shape)", async () => {
+    const h = await forgedAttestation((b) => {
+      b.entries = [{ seq: 3, received_at: NOW - 4_900 } as DelegationRevocationSetAttestationEntry];
+      b.count = 1;
+    });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
+      valid: false,
+      refusal: "revocation_evidence_invalid",
+      reason: "malformed_attestation",
+    });
+  });
+
+  it("refuses an attestation whose challenge is shorter than 32 characters", async () => {
+    const short = "a".repeat(31);
+    const h = await forgedAttestation((b) => {
+      b.challenge = short;
+    });
+    expect(
+      await verifyRevocationSetAttestation(h, expectations({ challenge: short })),
+    ).toMatchObject({ reason: "weak_challenge" });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toMatchObject({
+      reason: "malformed_attestation",
+    });
+  });
+
+  it("refuses an attestation whose challenge exceeds 256 characters", async () => {
+    const long = "a".repeat(257);
+    const h = await forgedAttestation((b) => {
+      b.challenge = long;
+    });
+    expect(await verifyRevocationSetAttestation(h, expectations())).toEqual({
+      valid: false,
+      refusal: "revocation_evidence_invalid",
+      reason: "malformed_attestation",
+    });
+  });
+
+  it("refuses a caller challenge with too little entropy (weak challenge)", async () => {
+    const h = await attest();
+    expect(await verifyRevocationSetAttestation(h, expectations({ challenge: "nonce-1" }))).toEqual(
+      {
+        valid: false,
+        refusal: "revocation_evidence_invalid",
+        reason: "weak_challenge",
+      },
+    );
+  });
+
+  it("accepts challenges at both length bounds", async () => {
+    for (const c of ["b".repeat(32), "c".repeat(256)]) {
+      const h = await attest({ challenge: c });
+      expect(await verifyRevocationSetAttestation(h, expectations({ challenge: c }))).toEqual({
+        valid: true,
+      });
+    }
+  });
+
   it("refuses a malformed attestation shape", async () => {
     const h = await attest();
     expect(
@@ -397,7 +495,7 @@ describe("verifyRevocationSetAttestation", () => {
   });
 
   it("checks the signature before the challenge (verification order)", async () => {
-    const h = { ...(await attest()), challenge: "tampered" };
+    const h = { ...(await attest()), challenge: OTHER_CHALLENGE };
     expect(await verifyRevocationSetAttestation(h, expectations())).toMatchObject({
       reason: "signature_invalid",
     });
@@ -490,6 +588,26 @@ describe("verifyRevocationInclusionReceipt", () => {
         revocation: sameGrant,
       }),
     ).toEqual({ valid: false, reason: "revocation_mismatch" });
+  });
+
+  it("refuses a receipt with an unknown suite", async () => {
+    const r = { ...(await receipt()), suite: "motebit-jcs-ed25519-hex-v1" as never };
+    expect(
+      await verifyRevocationInclusionReceipt(r, {
+        pinnedRelayPublicKey: relayPub,
+        revocation: revA,
+      }),
+    ).toEqual({ valid: false, reason: "unsupported_suite" });
+  });
+
+  it("refuses a receipt with an unknown field (strict)", async () => {
+    const r = { ...(await receipt()), surprise: 1 } as DelegationRevocationInclusionReceipt;
+    expect(
+      await verifyRevocationInclusionReceipt(r, {
+        pinnedRelayPublicKey: relayPub,
+        revocation: revA,
+      }),
+    ).toEqual({ valid: false, reason: "malformed_receipt" });
   });
 
   it("refuses an attestation presented as a receipt (spec domain separation)", async () => {
@@ -600,13 +718,13 @@ describe("verifyRevocationOmissionProof", () => {
 describe("verifyRevocationEquivocationProof", () => {
   it("holds for two attestations at the same seq_high_water with different digests", async () => {
     const a = await attest();
-    const b = await attest({ entries: [entries[0]!], challenge: "other" });
+    const b = await attest({ entries: [entries[0]!], challenge: OTHER_CHALLENGE });
     expect(await verifyRevocationEquivocationProof(a, b)).toEqual({ valid: true });
   });
 
   it("does not hold for two attestations over the same entries (challenge and as_of differ)", async () => {
     const a = await attest();
-    const b = await attest({ challenge: "other", as_of: NOW + 5 });
+    const b = await attest({ challenge: OTHER_CHALLENGE, as_of: NOW + 5 });
     expect(a.records_digest).toBe(b.records_digest);
     expect(await verifyRevocationEquivocationProof(a, b)).toEqual({
       valid: false,

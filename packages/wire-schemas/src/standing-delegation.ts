@@ -370,16 +370,16 @@ export const DelegationRevocationSetAttestationSchema = z
       ),
     challenge: z
       .string()
-      .min(1)
+      .min(32)
       .max(256)
       .describe(
-        "The consumer-chosen challenge, echoed verbatim. An attestation without the consumer's challenge answers no request of theirs.",
+        "The consumer-chosen challenge, echoed verbatim. 32–256 characters: the consumer MUST generate it fresh and unpredictable per request with at least 128 bits of entropy (e.g. 32 random bytes as hex). An attestation without the consumer's challenge answers no request of theirs.",
       ),
     as_of: SAFE_NON_NEGATIVE.describe(
       "Unix ms at which the relay assembled the attestation. Consumers MUST refuse an attestation older than their freshness window plus clock skew, or newer than clock skew.",
     ),
     seq_high_water: SAFE_NON_NEGATIVE.describe(
-      "The relay's highest assigned receipt sequence number at `as_of`. Every entry's `seq` MUST be ≤ it. Consumers MUST refuse an attestation below one they already accepted from the same relay key (rollback).",
+      "The relay's highest assigned receipt sequence number at `as_of`. Every entry's `seq` MUST be ≤ it. The highest seq of a committed, visible record (relay atomicity). Consumers MUST refuse an attestation below one they already accepted from the same relay identity (`relay_motebit_id`, never per key: a key succession does not reset it).",
     ),
     count: SAFE_NON_NEGATIVE.describe("Number of entries. MUST equal `entries.length`."),
     entries: z

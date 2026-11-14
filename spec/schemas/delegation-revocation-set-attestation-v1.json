@@ -28,9 +28,9 @@
     },
     "challenge": {
       "type": "string",
-      "minLength": 1,
+      "minLength": 32,
       "maxLength": 256,
-      "description": "The consumer-chosen challenge, echoed verbatim. An attestation without the consumer's challenge answers no request of theirs."
+      "description": "The consumer-chosen challenge, echoed verbatim. 32–256 characters: the consumer MUST generate it fresh and unpredictable per request with at least 128 bits of entropy (e.g. 32 random bytes as hex). An attestation without the consumer's challenge answers no request of theirs."
     },
     "as_of": {
       "type": "integer",
@@ -42,7 +42,7 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
-      "description": "The relay's highest assigned receipt sequence number at `as_of`. Every entry's `seq` MUST be ≤ it. Consumers MUST refuse an attestation below one they already accepted from the same relay key (rollback)."
+      "description": "The relay's highest assigned receipt sequence number at `as_of`. Every entry's `seq` MUST be ≤ it. The highest seq of a committed, visible record (relay atomicity). Consumers MUST refuse an attestation below one they already accepted from the same relay identity (`relay_motebit_id`, never per key: a key succession does not reset it)."
     },
     "count": {
       "type": "integer",

@@ -39,6 +39,30 @@ const TAMPERS: TamperEntry[] = [
     `${ATT} refuses when any required expectation is missing`,
   ),
   entry(
+    "attestation: caller challenge entropy floor removed",
+    `  if (!isChallenge(exp.challenge)) return invalid("weak_challenge");\n`,
+    "",
+    `${ATT} refuses a caller challenge with too little entropy (weak challenge)`,
+  ),
+  entry(
+    "attestation: unknown top-level fields accepted",
+    "    !hasOnlyKeys(a, SET_ATTESTATION_KEYS) ||\n",
+    "",
+    `${ATT} refuses an unknown top-level field (strict, as the wire schema)`,
+  ),
+  entry(
+    "attestation: entry-shape check removed",
+    "    !a.entries.every(isEntryShape) ||\n",
+    "",
+    `${ATT} refuses an entry carrying an unknown field`,
+  ),
+  entry(
+    "attestation: challenge length bound removed from the schema step",
+    "    !isChallenge(a.challenge) ||\n",
+    "    !isNonEmptyString(a.challenge) ||\n",
+    `${ATT} refuses an attestation whose challenge exceeds 256 characters`,
+  ),
+  entry(
     "attestation: suite check removed",
     `if (a.suite !== DELEGATION_REVOCATION_EVIDENCE_SUITE) return invalid("unsupported_suite");`,
     `if ${NEVER} return invalid("unsupported_suite");`,
@@ -157,9 +181,21 @@ const TAMPERS: TamperEntry[] = [
 
   // ── verifyRevocationInclusionReceipt ──
   entry(
+    "receipt: suite check removed",
+    "if (receipt.suite !== DELEGATION_REVOCATION_EVIDENCE_SUITE) {",
+    `if ${NEVER} {`,
+    `${RECEIPT} refuses a receipt with an unknown suite`,
+  ),
+  entry(
+    "receipt: unknown fields accepted",
+    "    !hasOnlyKeys(receipt, INCLUSION_RECEIPT_KEYS) ||\n",
+    "",
+    `${RECEIPT} refuses a receipt with an unknown field (strict)`,
+  ),
+  entry(
     "receipt: spec check removed",
-    'if (receipt.spec !== DELEGATION_REVOCATION_INCLUSION_RECEIPT_SPEC_MIRROR) {\n    return { valid: false, reason: "unsupported_spec" };\n  }\n  if (\n    !isNonEmptyString(receipt.relay_motebit_id)',
-    `if ${NEVER} {\n    return { valid: false, reason: "unsupported_spec" };\n  }\n  if (\n    !isNonEmptyString(receipt.relay_motebit_id)`,
+    'if (receipt.spec !== DELEGATION_REVOCATION_INCLUSION_RECEIPT_SPEC_MIRROR) {\n    return { valid: false, reason: "unsupported_spec" };\n  }\n  if (\n    !hasOnlyKeys(receipt, INCLUSION_RECEIPT_KEYS)',
+    `if ${NEVER} {\n    return { valid: false, reason: "unsupported_spec" };\n  }\n  if (\n    !hasOnlyKeys(receipt, INCLUSION_RECEIPT_KEYS)`,
     `${RECEIPT} refuses an attestation presented as a receipt (spec domain separation)`,
   ),
   entry(

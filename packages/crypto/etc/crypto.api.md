@@ -1346,6 +1346,12 @@ export interface RetentionManifestVerifyResult {
     readonly valid: boolean;
 }
 
+// @public (undocumented)
+export const REVOCATION_SET_ATTESTATION_CHALLENGE_MAX_LENGTH = 256;
+
+// @public
+export const REVOCATION_SET_ATTESTATION_CHALLENGE_MIN_LENGTH = 32;
+
 // @public
 export interface RevocationAnchorProof {
     anchor: {
@@ -1384,7 +1390,7 @@ export type RevocationInclusionReceiptFailureReason = "missing_expectation" | "m
 export type RevocationOmissionProofFailureReason = "unsupported_spec" | "malformed_artifact" | "relay_key_mismatch" | "delegator_mismatch" | "seq_not_covered" | "signature_invalid" | "record_carried";
 
 // @public
-export type RevocationSetAttestationFailureReason = "missing_expectation" | "malformed_attestation" | "unsupported_suite" | "unsupported_spec" | "malformed_public_key" | "public_key_mismatch" | "malformed_signature" | "signature_invalid" | "challenge_mismatch" | "delegator_mismatch" | "entries_out_of_order" | "entry_seq_exceeds_high_water" | "count_mismatch" | "records_digest_mismatch" | "stale" | "future_as_of" | "rollback";
+export type RevocationSetAttestationFailureReason = "missing_expectation" | "weak_challenge" | "malformed_attestation" | "unsupported_suite" | "unsupported_spec" | "malformed_public_key" | "public_key_mismatch" | "malformed_signature" | "signature_invalid" | "challenge_mismatch" | "delegator_mismatch" | "entries_out_of_order" | "entry_seq_exceeds_high_water" | "count_mismatch" | "records_digest_mismatch" | "stale" | "future_as_of" | "rollback";
 
 // @public
 export type RevocationSetAttestationRefusal = "revocation_evidence_invalid" | "revocation_evidence_stale" | "revocation_evidence_rollback";

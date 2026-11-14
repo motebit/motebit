@@ -97,7 +97,7 @@ function baseAttestation(): Record<string, unknown> {
     relay_motebit_id: "relay-1",
     relay_public_key: "d".repeat(64),
     delegator_motebit_id: "did:motebit:alice",
-    challenge: "nonce-1",
+    challenge: "d".repeat(64),
     as_of: 1_700_000_100_000,
     seq_high_water: 9,
     count: 1,
@@ -186,9 +186,15 @@ describe("DelegationRevocationSetAttestationSchema (@1.3)", () => {
     expect(() => DelegationRevocationSetAttestationSchema.parse(r)).toThrow();
   });
 
-  it("rejects an empty or oversized challenge", () => {
+  it("rejects a challenge shorter than 32 or longer than 256 characters", () => {
     expect(() =>
       DelegationRevocationSetAttestationSchema.parse({ ...baseAttestation(), challenge: "" }),
+    ).toThrow();
+    expect(() =>
+      DelegationRevocationSetAttestationSchema.parse({
+        ...baseAttestation(),
+        challenge: "x".repeat(31),
+      }),
     ).toThrow();
     expect(() =>
       DelegationRevocationSetAttestationSchema.parse({
