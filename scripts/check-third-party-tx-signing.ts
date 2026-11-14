@@ -1,7 +1,16 @@
 #!/usr/bin/env tsx
 /**
- * check-third-party-tx-signing — nothing signs a Solana transaction built by
- * someone else, until an intent-bound validator exists to check it.
+ * check-third-party-tx-signing — no code signs, or hands to a signer, a Solana
+ * transaction or message DECODED from external bytes, nor signs or broadcasts
+ * raw bytes decoded from a network value, outside a registered intent-bound
+ * validator module (there are none).
+ *
+ * What it does NOT enforce (see BLIND_SPOTS, printed on every pass): a
+ * transaction built locally from third-party-supplied instructions or
+ * accounts (Jupiter `/swap-instructions` JSON → `new TransactionInstruction`
+ * → `new Transaction().add(ix).sign`) looks exactly like a local build to
+ * this gate and passes. "Locally built ⇒ out of scope" is a carve-out of the
+ * gate's reach, not a proof that the bytes are the owner's intent.
  *
  * Born 2026-11-14: `packages/wallet-solana/src/jupiter.ts` fetched a
  * serialized swap transaction from Jupiter's HTTP API, deserialized it,
@@ -41,13 +50,24 @@
  *      `for…of` and callbacks handed to a method of a tainted receiver
  *      (`decoded.forEach(tx => …)`) propagate taint.
  *   4. SINKS: a call of a signer — `sign`, `partialSign`, `signTransaction`,
- *      `signAllTransactions`, `signAndSendTransaction`, `addSignature`,
- *      `sendTransaction` (web3.js signs inside it), `sendAndConfirmTransaction`,
- *      nacl `sign.detached`, `ed25519Sign`, `signBySuite`, `signBytes`,
- *      `signMessage`, the kit signers, any import alias of one — or of any
- *      function (found across the scan, by name) whose parameter reaches a
- *      signer. A sink whose receiver or any argument is tainted is a
- *      VIOLATION unless it sits in a registered validator module.
+ *      `signAllTransactions`, `signAndSendTransaction(s)`,
+ *      `modifyAndSignTransactions`, `addSignature`, `sendTransaction` (web3.js
+ *      signs inside it), `sendAndConfirmTransaction`, nacl `sign.detached`,
+ *      sodium `crypto_sign(_detached)`, `ed25519Sign`, `signBySuite`,
+ *      `signBytes`, `signMessage`, the kit signers, any alias of one (import,
+ *      `const s = signTransaction`, destructuring, `require`) — or of any
+ *      function (found across the scan, by name, destructured parameters and
+ *      anonymous default exports included) whose parameter reaches a
+ *      transaction signer. A sink whose receiver or any argument is tainted is
+ *      a VIOLATION unless it sits in a registered validator module.
+ *   5. RAW FOREIGN BYTES: a network value (`fetch`, `.json()`, …) decoded to
+ *      bytes (`Buffer.from(v, "base64")`, `base64.decode(v)`, …, or a binary
+ *      `.arrayBuffer()` body) reaching a raw byte signer, a transaction signer
+ *      or `sendRawTransaction`, inside one function, is a VIOLATION too.
+ *
+ * Aliases: `const X = VersionedTransaction`, `const T = web3.Transaction`,
+ * `const T = require("@solana/web3.js").Transaction` and destructured
+ * re-bindings resolve to the decode class.
  *
  * Over-approximation is deliberate (it fails closed): name-based linking can
  * flag a call that never reaches a signer; such a flag is resolved by
@@ -129,6 +149,8 @@ const TX_ARG_SIGNERS = new Set([
   "signTransactionMessageWithSigners",
   "partiallySignTransactionMessageWithSigners",
   "signAndSendTransactionMessageWithSigners",
+  "modifyAndSignTransactions",
+  "signAndSendTransactions",
   "sendTransaction",
   "sendAndConfirmTransaction",
 ]);
@@ -145,9 +167,50 @@ const BYTE_SIGNERS = new Set([
   "signBytes",
   "signMessage",
   "signAsync",
+  "signSync",
+  "signDetached",
+  "crypto_sign",
+  "crypto_sign_detached",
 ]);
 const SIGNERS = new Set([...TX_METHOD_SIGNERS, ...TX_ARG_SIGNERS, ...BYTE_SIGNERS]);
+
+/**
+ * RAW FOREIGN BYTES. A network value is one carried by `fetch(…)` or a
+ * response/request body read (`.json()`, `.arrayBuffer()`, `.blob()`,
+ * `.formData()`). Raw foreign bytes are a network value decoded to bytes —
+ * `Buffer.from(v, "base64" | "base64url" | "hex")`, `base64.decode(v)` /
+ * `bs58.decode(v)` (any receiver naming base64/base58/bs58/b64), the
+ * `fromBase64` / `base64ToBytes` / `decodeBase64` / `base64Decode` / `atob`
+ * family — or a binary body (`.arrayBuffer()`). Such bytes may not reach a
+ * raw byte signer, a transaction signer, or a raw broadcast.
+ */
+const NET_CALLS = new Set(["fetch", "json", "arrayBuffer", "blob", "formData"]);
+const RAW_DECODE_FUNCTIONS = new Set([
+  "fromBase64",
+  "base64ToBytes",
+  "decodeBase64",
+  "base64Decode",
+  "b64decode",
+  "atob",
+]);
+const RAW_DECODE_RECEIVER = /base64|base58|bs58|b64/i;
+const RAW_BROADCASTS = new Set(["sendRawTransaction", "sendEncodedTransaction"]);
+/** Default export: the name a default-exported anonymous function and a default import share. */
+const DEFAULT_EXPORT = "default";
 const NOT_A_SIGNER_RECEIVER = new Set(["Math"]);
+
+/**
+ * What this gate cannot see — printed on every pass, mirrored in the
+ * check.ts description and drift-defenses row #179. A green run is a claim
+ * only about the shapes above, never about these.
+ */
+const BLIND_SPOTS =
+  "NOT CAUGHT: (1) a transaction built locally from third-party-supplied instructions or accounts — e.g. Jupiter /swap-instructions JSON → new TransactionInstruction(...) → new Transaction().add(ix).sign(kp) — is indistinguishable from a local build here and passes; any such design needs its own review; " +
+  "(2) a signer reached through a computed member (obj[name]()), a re-bound method (tx.sign.bind(tx)) or a callee that is not a plain or dotted name; " +
+  "(3) taint carried by mutation (map.set, arr.push, obj.field = …), class fields, generators/iterators other than for…of, Promise chains (.then callbacks on an untainted receiver), or across process/IPC/worker boundaries; " +
+  "(4) a decoded transaction's bytes, or network bytes, reaching a raw byte signer or broadcast through another function (raw-byte sinks are intra-function), and name collisions in the name-based cross-function linking; " +
+  "(5) network values from sources other than fetch()/.json()/.arrayBuffer()/.blob()/.formData() (WebSocket messages, IPC, files, env), and byte decoders outside the listed base64/base58/hex set; " +
+  "(6) decoders outside the listed web3.js/kit set, eval/new Function, .js/.mjs sources and apps/*/src-tauri.";
 
 type FnNode = ts.FunctionLikeDeclaration;
 type Scope = ts.SourceFile | FnNode;
@@ -156,7 +219,8 @@ interface FnInfo {
   name: string;
   node: FnNode;
   file: string;
-  params: string[];
+  /** Every name each parameter binds (a destructured parameter binds several). */
+  params: string[][];
 }
 
 interface Parsed {
@@ -176,6 +240,8 @@ interface Violation {
   line: number;
   fn: string;
   sink: string;
+  /** `decoded`: a decoded transaction/message; `raw`: raw bytes decoded from a network value. */
+  kind: "decoded" | "raw";
 }
 
 function walk(dir: string, out: string[], skipTests: boolean): void {
@@ -212,7 +278,16 @@ function fnName(node: ts.Node): string {
     node.name !== undefined
   )
     return node.name.getText();
+  // `export default function (…) {}` / `export default (…) => …`: the name a
+  // default import resolves to.
+  if (
+    ts.isFunctionDeclaration(node) &&
+    node.name === undefined &&
+    (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Default) !== 0
+  )
+    return DEFAULT_EXPORT;
   const parent = node.parent;
+  if (parent && ts.isExportAssignment(parent) && !parent.isExportEquals) return DEFAULT_EXPORT;
   if (parent && ts.isVariableDeclaration(parent)) return parent.name.getText();
   if (parent && ts.isPropertyAssignment(parent)) return parent.name.getText();
   if (parent && ts.isPropertyDeclaration(parent)) return parent.name.getText();
@@ -261,16 +336,66 @@ function parse(abs: string, rel: string): Parsed {
   const classAliases = new Map<string, string>();
   const fnAliases = new Map<string, string>();
   for (const [c] of DECODE_METHODS) classAliases.set(c, c);
+  /** Record `local` as an alias of `target` when `target` names something tracked. */
+  const alias = (local: string, target: string): boolean => {
+    const cls = classAliases.get(target) ?? (DECODE_METHODS.has(target) ? target : undefined);
+    if (cls !== undefined && classAliases.get(local) !== cls) {
+      classAliases.set(local, cls);
+      return true;
+    }
+    const fn =
+      fnAliases.get(target) ??
+      (DECODE_FUNCTIONS.has(target) || SIGNERS.has(target) || target === DEFAULT_EXPORT
+        ? target
+        : undefined);
+    if (fn !== undefined && fnAliases.get(local) !== fn) {
+      fnAliases.set(local, fn);
+      return true;
+    }
+    return false;
+  };
   for (const stmt of sf.statements) {
     if (!ts.isImportDeclaration(stmt)) continue;
-    const named = stmt.importClause?.namedBindings;
+    const clause = stmt.importClause;
+    // A default import calls whatever the module default-exports.
+    if (clause?.name) fnAliases.set(clause.name.text, DEFAULT_EXPORT);
+    const named = clause?.namedBindings;
     if (!named || !ts.isNamedImports(named)) continue;
-    for (const el of named.elements) {
-      const imported = (el.propertyName ?? el.name).text;
-      if (DECODE_METHODS.has(imported)) classAliases.set(el.name.text, imported);
-      if (DECODE_FUNCTIONS.has(imported) || SIGNERS.has(imported))
-        fnAliases.set(el.name.text, imported);
-    }
+    for (const el of named.elements) alias(el.name.text, (el.propertyName ?? el.name).text);
+  }
+  // `const X = VersionedTransaction`, `const T = web3.Transaction`,
+  // `const T = require("@solana/web3.js").Transaction`, `const s = signTransaction`,
+  // `const { VersionedTransaction: VT } = web3 | require(…)` — to a fixpoint
+  // (aliases of aliases).
+  const unwrap = (e: ts.Expression): ts.Expression => {
+    let x = e;
+    while (
+      ts.isParenthesizedExpression(x) ||
+      ts.isAsExpression(x) ||
+      ts.isNonNullExpression(x) ||
+      ts.isSatisfiesExpression(x) ||
+      ts.isTypeAssertionExpression(x)
+    )
+      x = x.expression;
+    return x;
+  };
+  for (let changed = true; changed;) {
+    changed = false;
+    const visitAliases = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && n.initializer) {
+        if (ts.isIdentifier(n.name)) {
+          const last = lastIdentifier(unwrap(n.initializer));
+          if (last !== null) changed = alias(n.name.text, last) || changed;
+        } else if (ts.isObjectBindingPattern(n.name))
+          for (const el of n.name.elements) {
+            const from = el.propertyName ?? el.name;
+            if (ts.isIdentifier(from) && ts.isIdentifier(el.name))
+              changed = alias(el.name.text, from.text) || changed;
+          }
+      }
+      ts.forEachChild(n, visitAliases);
+    };
+    visitAliases(sf);
   }
   const declared = new Map<Scope, Set<string>>();
   const declare = (scope: Scope, names: string[]): void => {
@@ -279,16 +404,6 @@ function parse(abs: string, rel: string): Parsed {
     declared.set(scope, set);
   };
   const visit = (n: ts.Node): void => {
-    // `const { VersionedTransaction: VT } = web3` re-binds a decode class.
-    if (ts.isVariableDeclaration(n) && ts.isObjectBindingPattern(n.name))
-      for (const el of n.name.elements) {
-        const from = el.propertyName ?? el.name;
-        if (ts.isIdentifier(from) && ts.isIdentifier(el.name)) {
-          if (DECODE_METHODS.has(from.text)) classAliases.set(el.name.text, from.text);
-          if (DECODE_FUNCTIONS.has(from.text) || SIGNERS.has(from.text))
-            fnAliases.set(el.name.text, from.text);
-        }
-      }
     if (ts.isVariableDeclaration(n)) declare(scopeOf(n), bindingNames(n.name));
     else if (ts.isParameter(n)) {
       const fn = n.parent;
@@ -320,10 +435,29 @@ function isDecodeCall(call: ts.CallExpression, p: Parsed): boolean {
 class FileTaint {
   readonly tainted = new Map<Scope, Set<string>>();
 
+  /**
+   * `seed` says which calls produce a tainted value. Without one, the seed is
+   * a decode site or a call of a function known to return a decoded value.
+   */
+  readonly seed: (call: ts.CallExpression) => boolean;
+
   constructor(
     readonly p: Parsed,
     readonly taintReturning: ReadonlySet<string>,
-  ) {}
+    seed?: (call: ts.CallExpression) => boolean,
+  ) {
+    this.seed =
+      seed ??
+      ((call) => {
+        if (isDecodeCall(call, p)) return true;
+        const raw = calleeName(call.expression);
+        const resolved = callName(call, p);
+        return (
+          (raw !== null && taintReturning.has(raw)) ||
+          (resolved !== null && taintReturning.has(resolved))
+        );
+      });
+  }
 
   private resolve(id: ts.Identifier): Scope | null {
     let scope: Scope | null = scopeOf(id);
@@ -356,16 +490,9 @@ class FileTaint {
     let hit = false;
     const visit = (n: ts.Node): void => {
       if (hit) return;
-      if (ts.isCallExpression(n)) {
-        if (isDecodeCall(n, this.p)) {
-          hit = true;
-          return;
-        }
-        const name = calleeName(n.expression);
-        if (name !== null && this.taintReturning.has(name)) {
-          hit = true;
-          return;
-        }
+      if (ts.isCallExpression(n) && this.seed(n)) {
+        hit = true;
+        return;
       }
       if (ts.isIdentifier(n)) {
         const parent = n.parent;
@@ -462,6 +589,40 @@ function taintedSink(
   return null;
 }
 
+/** Does this call turn a network value into raw bytes (or read a binary body)? */
+function isRawSeed(call: ts.CallExpression, p: Parsed, net: FileTaint): boolean {
+  const name = callName(call, p);
+  if (name === null) return false;
+  if (name === "arrayBuffer") return true;
+  const arg0 = call.arguments[0];
+  if (arg0 === undefined || !net.isTainted(arg0)) return false;
+  const recv = receiverOf(call.expression);
+  if (name === "from" && recv !== null && lastIdentifier(recv) === "Buffer") {
+    const enc = call.arguments[1];
+    return (
+      enc !== undefined &&
+      ts.isStringLiteralLike(enc) &&
+      ["base64", "base64url", "hex"].includes(enc.text)
+    );
+  }
+  if (name === "decode" && recv !== null && RAW_DECODE_RECEIVER.test(recv.getText())) return true;
+  return RAW_DECODE_FUNCTIONS.has(name);
+}
+
+/** Raw foreign bytes reaching a signer or a raw broadcast: the sink's name, else null. */
+function rawSink(call: ts.CallExpression, p: Parsed, raw: FileTaint): string | null {
+  const name = callName(call, p);
+  if (name === null) return null;
+  if (!(BYTE_SIGNERS.has(name) || TX_ARG_SIGNERS.has(name) || RAW_BROADCASTS.has(name)))
+    return null;
+  return call.arguments.some((a) => raw.isTainted(a)) ? name : null;
+}
+
+const RAW_FILE_TEXT = /\b(?:fetch|json|arrayBuffer|blob|formData)\b/;
+const RAW_SINK_TEXT = new RegExp(
+  `\\b(?:${[...BYTE_SIGNERS, ...TX_ARG_SIGNERS, ...RAW_BROADCASTS].join("|")})\\b`,
+);
+
 function functionsOf(p: Parsed): FnInfo[] {
   const out: FnInfo[] = [];
   const visit = (n: ts.Node): void => {
@@ -472,9 +633,7 @@ function functionsOf(p: Parsed): FnInfo[] {
           name,
           node: n,
           file: p.rel,
-          params: n.parameters.map((prm) =>
-            ts.isIdentifier(prm.name) ? prm.name.text : "<pattern>",
-          ),
+          params: n.parameters.map((prm) => bindingNames(prm.name)),
         });
     }
     ts.forEachChild(n, visit);
@@ -510,10 +669,11 @@ function paramsReachingSink(
   signingParams: ReadonlyMap<string, ReadonlySet<number>>,
 ): Set<number> {
   const out = new Set<number>();
-  fn.params.forEach((param, i) => {
-    if (param === "<pattern>") return;
+  fn.params.forEach((names, i) => {
+    if (names.length === 0) return;
     const t = new FileTaint(p, taintReturning);
-    t.add(fn.node, [param]);
+    // A destructured parameter taints every name it binds.
+    t.add(fn.node, names);
     t.propagate(fn.node);
     let hit = false;
     const visit = (n: ts.Node): void => {
@@ -530,6 +690,8 @@ function paramsReachingSink(
 export interface ScanResult {
   files: number;
   decodeSites: number;
+  /** Network values decoded to raw bytes (or binary bodies read). */
+  rawSites: number;
   signingSites: number;
   violations: Violation[];
   validatorExempt: number;
@@ -587,6 +749,7 @@ export function scan(files: string[], root: string): ScanResult {
   const result: ScanResult = {
     files: parsed.length,
     decodeSites: 0,
+    rawSites: 0,
     signingSites: 0,
     violations: [],
     validatorExempt: 0,
@@ -595,13 +758,31 @@ export function scan(files: string[], root: string): ScanResult {
     const t = new FileTaint(p, taintReturning);
     const seeded = canSeed(p);
     if (seeded) t.propagate(p.sf);
+    // Raw foreign bytes: network values, then the bytes decoded from them.
+    const rawSeeded = RAW_FILE_TEXT.test(p.sf.text) && RAW_SINK_TEXT.test(p.sf.text);
+    let raw: FileTaint | null = null;
+    if (rawSeeded) {
+      const net = new FileTaint(p, taintReturning, (c) =>
+        NET_CALLS.has(calleeName(c.expression) ?? ""),
+      );
+      net.propagate(p.sf);
+      raw = new FileTaint(p, taintReturning, (c) => isRawSeed(c, p, net));
+      raw.propagate(p.sf);
+    }
     const visit = (n: ts.Node): void => {
       if (ts.isCallExpression(n)) {
         if (isDecodeCall(n, p)) result.decodeSites += 1;
         const name = callName(n, p);
-        if (name !== null && (SIGNERS.has(name) || signingParams.has(name)))
+        if (raw !== null && raw.seed(n)) result.rawSites += 1;
+        if (
+          name !== null &&
+          (SIGNERS.has(name) || signingParams.has(name) || RAW_BROADCASTS.has(name))
+        )
           result.signingSites += 1;
-        const sink = seeded ? taintedSink(n, p, t, signingParams, true) : null;
+        const decodedSink = seeded ? taintedSink(n, p, t, signingParams, true) : null;
+        const rawSinkName = decodedSink === null && raw !== null ? rawSink(n, p, raw) : null;
+        const sink = decodedSink ?? rawSinkName;
+        const kind: Violation["kind"] = decodedSink !== null ? "decoded" : "raw";
         if (sink !== null) {
           if (validatorFiles.has(p.rel)) result.validatorExempt += 1;
           else {
@@ -614,6 +795,7 @@ export function scan(files: string[], root: string): ScanResult {
               line: p.sf.getLineAndCharacterOfPosition(n.getStart()).line + 1,
               fn: ts.isSourceFile(scope) ? "<module>" : fnName(scope),
               sink,
+              kind,
             });
           }
         }
@@ -650,25 +832,26 @@ function main(): void {
   );
   const r = scan(files, REPO_ROOT);
   const sites = [
-    ...r.violations.map(
-      (v) =>
-        `${v.file}:${v.line} — ${v.fn}() passes a transaction decoded from external bytes to ${v.sink}()`,
+    ...r.violations.map((v) =>
+      v.kind === "decoded"
+        ? `${v.file}:${v.line} — ${v.fn}() passes a transaction decoded from external bytes to ${v.sink}()`
+        : `${v.file}:${v.line} — ${v.fn}() passes raw bytes decoded from a network value to ${v.sink}()`,
     ),
     ...stale,
   ];
   if (sites.length > 0) {
     failWithRepair({
-      invariant: `${r.violations.length} site(s) sign a Solana transaction built by a third party, outside a registered intent-bound validator (VALIDATOR_MODULES is empty: nothing may)`,
+      invariant: `${r.violations.length} site(s) sign (or hand to a signer or a raw broadcast) a transaction decoded from external bytes or raw bytes decoded from a network value, outside a registered intent-bound validator (VALIDATOR_MODULES is empty: nothing may)`,
       canonical:
         "scripts/check-third-party-tx-signing.ts (VALIDATOR_MODULES) — the containment precedent is packages/wallet-solana/src/jupiter.ts (refuseJupiterSwap)",
-      fix: "do not sign bytes someone else built. Build the transaction locally from the authorized intent (new Transaction().add(...) or new VersionedTransaction(new TransactionMessage({...}).compileToV0Message())), or refuse the action as jupiter.ts does. Add a module to VALIDATOR_MODULES only with a reviewed intent-bound validation design (programs, accounts, amounts and authorities checked against what the owner authorized) — never to silence this finding. Remove stale entries.",
+      fix: "do not sign or broadcast bytes someone else built. Build the transaction locally from the authorized intent (new Transaction().add(...) or new VersionedTransaction(new TransactionMessage({...}).compileToV0Message())), or refuse the action as jupiter.ts does. Add a module to VALIDATOR_MODULES only with a reviewed intent-bound validation design (programs, accounts, amounts and authorities checked against what the owner authorized) — never to silence this finding. Remove stale entries.",
       sites,
       doctrine:
         "docs/doctrine/settlement-authority-binding.md (authority is the owner's, never a third party's)",
     });
   }
   process.stdout.write(
-    `✓ check-third-party-tx-signing: ${r.files} source file(s) scanned in ${aperture} — ${r.decodeSites} transaction-decode site(s), ${r.signingSites} signing call site(s) examined, 0 signing a decoded transaction, ${VALIDATOR_MODULES.length} validator module(s) registered. Blind to: a signer reached through a computed member (obj[name]()) or a re-bound method (const s = tx.sign.bind(tx)), taint carried by mutation (map.set, arr.push, obj.field = …), through class fields or across process/IPC boundaries, a decoded transaction's bytes reaching a raw byte signer through another function, eval/new Function, .js/.mjs sources and apps/*/src-tauri, and decoders outside the listed web3.js/kit set.\n`,
+    `✓ check-third-party-tx-signing: ${r.files} source file(s) scanned in ${aperture} — ${r.decodeSites} transaction-decode site(s), ${r.rawSites} network-bytes decode site(s), ${r.signingSites} signing/broadcast call site(s) examined, 0 signing a decoded transaction or network bytes, ${VALIDATOR_MODULES.length} validator module(s) registered. ${BLIND_SPOTS}\n`,
   );
 }
 

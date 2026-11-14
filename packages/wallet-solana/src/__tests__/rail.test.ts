@@ -18,6 +18,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const { swapUsdcToSolMock } = vi.hoisted(() => ({ swapUsdcToSolMock: vi.fn() }));
 vi.mock("../jupiter.js", () => ({
   swapUsdcToSol: swapUsdcToSolMock,
+  // The rail refuses through the choke point before reading the keypair; a
+  // no-op here lets the mocked-swap branches run.
+  refuseJupiterSwap: () => undefined,
   // rail.ts statically imports the gas-floor constant from the same
   // module (single-source since the swapSolToUsdc mirror landed) — the
   // mock must carry it or every rail test fails at import time.

@@ -9,9 +9,10 @@
  * molecule runner) wraps it in a lifecycle loop — keeping timers/scheduling out
  * of this Layer-1 primitive so it stays pure + adapter-testable.
  *
- * The wallet pays its own SOL gas (wallet-solana CLAUDE.md rule 4) — fund the
- * service with a little SOL or sweeps fail with insufficient gas. This primitive
- * does not subsidize gas.
+ * The wallet pays its own SOL gas (wallet-solana CLAUDE.md rule 4) and nothing
+ * tops it up: hold at least 0.005 SOL (`GAS_FLOOR_LAMPORTS`; 0.01 recommended).
+ * Below the floor the rail refuses the sweep's transfer before signing
+ * (`InsufficientSolForGasError`). This primitive does not subsidize gas.
  */
 
 /**

@@ -198,8 +198,10 @@ export class SolanaWalletRail implements SovereignWalletRail {
     if (!this.autoGas || !this.web3Adapter) return { ok: false, balance };
 
     try {
-      const { swapUsdcToSol } = await import("./jupiter.js");
-      await swapUsdcToSol(
+      const jupiter = await import("./jupiter.js");
+      // Refuse BEFORE the keypair is read: the choke point throws today.
+      jupiter.refuseJupiterSwap("swapUsdcToSol");
+      await jupiter.swapUsdcToSol(
         GAS_SWAP_USDC_MICRO,
         this.web3Adapter.getKeypair(),
         this.web3Adapter.getConnection(),
@@ -236,8 +238,10 @@ export class SolanaWalletRail implements SovereignWalletRail {
         "swap unavailable: this rail was constructed without a web3 adapter (createSolanaWalletRail provides one).",
       );
     }
-    const { swapSolToUsdc } = await import("./jupiter.js");
-    return swapSolToUsdc(
+    const jupiter = await import("./jupiter.js");
+    // Refuse BEFORE the keypair is read: the choke point throws today.
+    jupiter.refuseJupiterSwap("swapSolToUsdc");
+    return jupiter.swapSolToUsdc(
       solLamports,
       this.web3Adapter.getKeypair(),
       this.web3Adapter.getConnection(),

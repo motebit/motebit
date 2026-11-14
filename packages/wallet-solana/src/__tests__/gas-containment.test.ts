@@ -25,6 +25,7 @@ import {
   Web3JsRpcAdapter,
   createSolanaWalletRail,
   InsufficientSolForGasError,
+  JupiterSwapDisabledError,
   GAS_FLOOR_LAMPORTS,
   type SolanaRpcAdapter,
   type SendUsdcArgs,
@@ -110,6 +111,32 @@ describe("ensureGas below the floor never reaches a Jupiter signature", () => {
     expectNothingSigned(doors);
     expect(sendRaw).toHaveBeenCalledTimes(0);
     expect(sendTx).toHaveBeenCalledTimes(0);
+  });
+
+  it("legacy autoGas: true — the refusal precedes any keypair read", async () => {
+    const doors = spyDoors();
+    const { adapter } = web3Adapter(0n);
+    const keypairReads = vi.spyOn(adapter, "getKeypair");
+    const rail = new SolanaWalletRail(adapter, { autoGas: true });
+    expect(await rail.ensureGas()).toBe(false);
+    expect(keypairReads).toHaveBeenCalledTimes(0);
+    expectNothingSigned(doors);
+  });
+
+  it("rail.swapSolToUsdc refuses before any keypair read; no fetch, no signature", async () => {
+    const doors = spyDoors();
+    const { adapter, sendRaw } = web3Adapter(10_000_000_000n);
+    const keypairReads = vi.spyOn(adapter, "getKeypair");
+    const rail = new SolanaWalletRail(adapter);
+    const err = await rail.swapSolToUsdc(1_000_000n).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(JupiterSwapDisabledError);
+    expect((err as JupiterSwapDisabledError).code).toBe("jupiter_swap_disabled");
+    expect(keypairReads).toHaveBeenCalledTimes(0);
+    expect(sendRaw).toHaveBeenCalledTimes(0);
+    expectNothingSigned(doors);
   });
 
   it("factory rail — ensureGas returns false; no fetch, no signature, no broadcast", async () => {

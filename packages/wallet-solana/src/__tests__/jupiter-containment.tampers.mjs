@@ -124,7 +124,7 @@ const TAMPERS = [
     edits: [
       {
         file: GATE,
-        from: "        if (isDecodeCall(n, this.p)) {\n          hit = true;\n          return;\n        }\n",
+        from: "        if (isDecodeCall(call, p)) return true;\n",
         to: "",
       },
     ],
@@ -138,6 +138,44 @@ const TAMPERS = [
         file: GATE,
         from: "  if (TX_METHOD_SIGNERS.has(name) && recv !== null && t.isTainted(recv)) return name;\n",
         to: "",
+      },
+    ],
+  },
+  {
+    name: "rail: legacy ensureGas reads the keypair before the refusal",
+    pkg: WALLET,
+    test: "src/__tests__/gas-containment.test.ts",
+    red: "ensureGas below the floor never reaches a Jupiter signature legacy autoGas: true — the refusal precedes any keypair read",
+    edits: [{ file: RAIL, from: '      jupiter.refuseJupiterSwap("swapUsdcToSol");\n', to: "" }],
+  },
+  {
+    name: "rail: swapSolToUsdc reads the keypair before the refusal",
+    pkg: WALLET,
+    test: "src/__tests__/gas-containment.test.ts",
+    red: "ensureGas below the floor never reaches a Jupiter signature rail.swapSolToUsdc refuses before any keypair read; no fetch, no signature",
+    edits: [{ file: RAIL, from: '    jupiter.refuseJupiterSwap("swapSolToUsdc");\n', to: "" }],
+  },
+  {
+    name: "gate widening deleted: raw network bytes no longer reach a sink",
+    test: GATE_TEST,
+    red: GATE_RED,
+    edits: [
+      {
+        file: GATE,
+        from: "  return call.arguments.some((a) => raw.isTainted(a)) ? name : null;",
+        to: '  return raw.p === p && name === "" ? name : null;',
+      },
+    ],
+  },
+  {
+    name: "gate widening deleted: destructured parameters seed nothing",
+    test: GATE_TEST,
+    red: GATE_RED,
+    edits: [
+      {
+        file: GATE,
+        from: "          params: n.parameters.map((prm) => bindingNames(prm.name)),",
+        to: "          params: n.parameters.map((prm) => (ts.isIdentifier(prm.name) ? [prm.name.text] : [])),",
       },
     ],
   },
