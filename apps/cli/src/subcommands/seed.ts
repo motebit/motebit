@@ -28,27 +28,81 @@
 import * as readline from "node:readline";
 
 import { base58Encode } from "@motebit/sdk";
-import { hexToBytes, deriveSovereignMotebitId } from "@motebit/encryption";
+import {
+  bytesToHex,
+  getPublicKeyBySuite,
+  hexToBytes,
+  deriveSovereignMotebitId,
+} from "@motebit/encryption";
+import { seedBackupPosture, type SeedBackupPosture } from "@motebit/surface-kit";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
 import { decryptPrivateKey, promptPassphrase } from "../identity.js";
 import { bold, dim, success, warn } from "../colors.js";
 
-/** Pure: the seed-backup posture of a config, for status/doctor/nudge. */
-export function seedBackupStatus(config: {
+/** The config fields the seed-backup posture reads. */
+export interface SeedBackupConfig {
   cli_encrypted_key?: unknown;
   seed_backed_up_at?: number;
-}): "no_identity" | "backed_up" | "not_backed_up" {
-  if (config.cli_encrypted_key == null) return "no_identity";
-  return typeof config.seed_backed_up_at === "number" ? "backed_up" : "not_backed_up";
+  seed_backed_up_key?: string;
+  device_public_key?: string;
+  motebit_id?: string;
 }
+
+/**
+ * The seed-backup posture of a config, for status/doctor/nudge. The
+ * acknowledgment covers the key it names (`seed_backed_up_key`), never a
+ * later one: a committed rotation moves `device_public_key`, so this reads
+ * "not_backed_up" from that moment on, whichever path committed it (a
+ * fresh rotation, a resume that finished an interrupted commit). See
+ * `seedBackupPosture` (`@motebit/surface-kit`) for the legacy rule.
+ */
+export async function seedBackupPostureOf(
+  config: SeedBackupConfig,
+): Promise<{ status: "no_identity" } | SeedBackupPosture> {
+  if (config.cli_encrypted_key == null) return { status: "no_identity" };
+  return seedBackupPosture({
+    ack: {
+      ...(config.seed_backed_up_at !== undefined ? { at: config.seed_backed_up_at } : {}),
+      ...(config.seed_backed_up_key !== undefined
+        ? { publicKeyHex: config.seed_backed_up_key }
+        : {}),
+    },
+    currentPublicKeyHex: config.device_public_key,
+    motebitId: config.motebit_id,
+  });
+}
+
+/** The posture's status alone: `no_identity` / `backed_up` / `not_backed_up`. */
+export async function seedBackupStatus(
+  config: SeedBackupConfig,
+): Promise<"no_identity" | "backed_up" | "not_backed_up"> {
+  return (await seedBackupPostureOf(config)).status;
+}
+
+/** The public key (hex) a recovery seed derives — what an acknowledgment of it covers. */
+export async function seedPublicKeyHex(seedHex: string): Promise<string> {
+  return bytesToHex(await getPublicKeyBySuite(hexToBytes(seedHex), "motebit-jcs-ed25519-hex-v1"));
+}
+
+/**
+ * What `motebit rotate` says, once, after a committed rotation: the seed IS
+ * the key, so it changed. The startup line and `motebit doctor` keep the
+ * reminder until the new seed is recorded.
+ */
+export const ROTATION_SEED_NOTICE_LINES = [
+  "Recovery seed: changed with the key. The seed you recorded before recovers only the",
+  "  retired key — keep it (it still reaches anything left at that address), and record",
+  "  the new one: motebit seed reveal",
+] as const;
 
 export async function handleSeed(config: CliConfig): Promise<void> {
   const sub = config.positionals[1];
   const full = loadFullConfig();
 
-  const status = seedBackupStatus(full);
-  if (status === "no_identity") {
+  const posture = await seedBackupPostureOf(full);
+  const status = posture.status;
+  if (posture.status === "no_identity") {
     console.log("\n  No identity on this machine. Run `motebit init` or `motebit restore`.");
     process.exit(1);
   }
@@ -63,11 +117,24 @@ export async function handleSeed(config: CliConfig): Promise<void> {
     console.log(`\n  Identity     ${full.motebit_id ?? "?"}`);
     console.log(
       `  Seed backup  ${
-        status === "backed_up"
-          ? success(`recorded ${new Date(full.seed_backed_up_at!).toISOString().slice(0, 10)}`)
+        posture.status === "backed_up"
+          ? success(`recorded ${new Date(posture.at).toISOString().slice(0, 10)}`)
           : warn("NOT recorded")
       }`,
     );
+    if (posture.status === "not_backed_up" && posture.stale) {
+      // A committed rotation since: the recorded seed recovers only a retired key.
+      const covered =
+        posture.coveredPublicKeyHex != null
+          ? ` (key ${posture.coveredPublicKeyHex.slice(0, 16)}…)`
+          : "";
+      console.log(
+        dim(
+          `  The seed you recorded${covered} is for a retired key. Keep it — it still\n` +
+            "  recovers that key and anything left at its address — and record the current one.",
+        ),
+      );
+    }
     console.log(
       dim(
         sovereign
@@ -128,6 +195,9 @@ export async function handleSeed(config: CliConfig): Promise<void> {
   if (ack.trim().toLowerCase() === "y") {
     const next = loadFullConfig();
     next.seed_backed_up_at = Date.now();
+    // Bound to the key THIS seed derives, never "whatever is current": a
+    // later rotation then reads "not backed up" without anyone clearing it.
+    next.seed_backed_up_key = await seedPublicKeyHex(seedHex!);
     saveFullConfig(next);
     console.log(`\n  ${success("Recorded.")} ${dim("The startup reminder is gone.")}`);
   } else {

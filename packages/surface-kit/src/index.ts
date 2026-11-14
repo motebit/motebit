@@ -33,6 +33,11 @@ export type {
   KeyRotationPorts,
 } from "./key-rotation.js";
 
+// Seed-backup acknowledgment bound to the key it covers: a committed
+// rotation reads "not backed up" on every surface that asks through it.
+export { seedBackupPosture, ROTATION_SEED_BACKUP_NOTICE } from "./seed-backup.js";
+export type { SeedBackupAcknowledgment, SeedBackupPosture } from "./seed-backup.js";
+
 // Machine roster, part C (docs/proposals/machine-roster-clients-v1.md C2–C6):
 // the controller every key-holding surface runs, its replica, and the view.
 export {

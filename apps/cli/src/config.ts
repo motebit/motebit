@@ -119,6 +119,16 @@ export interface FullConfig {
    */
   seed_backed_up_at?: number;
   /**
+   * The public key (hex) of the seed `seed_backed_up_at` acknowledges. A
+   * seed IS one key, and a rotation mints a new one, so the acknowledgment
+   * covers this key only: `seedBackupStatus` reads "not backed up" whenever
+   * it differs from `device_public_key` (a committed rotation since). Never
+   * cleared by a rotation: it stays as the record of which retired key the
+   * old paper seed recovers. Absent on acknowledgments recorded before it
+   * existed (see `seedBackupPosture` in `@motebit/surface-kit`). Local only.
+   */
+  seed_backed_up_key?: string;
+  /**
    * Capability-tiered tool admission override (#501). Default (absent):
    * a minimal-tier model (e.g. a 3B local model) is never OFFERED
    * money-moving tools — the runtime omits them from the model-visible

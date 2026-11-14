@@ -17,14 +17,14 @@ import {
 } from "../storage";
 import { checkWebGPU, WebLLMProvider, DEFAULT_OLLAMA_URL } from "../providers";
 import { detectLocalInference, probeLocalModels, DEFAULT_LOCAL_ENDPOINTS } from "../bootstrap";
-import { setTTSVoice } from "./chat";
+import { addMessage, setTTSVoice } from "./chat";
 import { rebuildTTSProvider } from "../main";
 import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
 import { mountMachines } from "./machines-section";
 import { DEFAULT_GOOGLE_MODEL, DEFAULT_PROXY_MODEL, isLocalServerUrl } from "@motebit/sdk";
-import { rotationFundsStop } from "@motebit/surface-kit";
+import { ROTATION_SEED_BACKUP_NOTICE, rotationFundsStop } from "@motebit/surface-kit";
 import { renderCloudModelPicker, selectStoredCloudModel, selectStoredModel } from "./cloud-model";
 import { renderAnthropicPicker } from "./anthropic-picker";
 
@@ -625,8 +625,12 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     if (!confirmed) return;
     const rotate = (acknowledgeFundsAtRisk: boolean): Promise<void> =>
       ctx.app.rotateKey("manual rotation", { acknowledgeFundsAtRisk }).then(() => {
+        // The seed IS the key, so it changed: said once, as the one
+        // actionable system message (it replaces the success toast — the
+        // new key is visible in the identity fields). First, so a refresh
+        // below that throws cannot swallow it.
+        addMessage("system", ROTATION_SEED_BACKUP_NOTICE);
         populateIdentityFields();
-        ctx.showToast("Key rotated successfully");
       });
     const failed = (err: unknown): void => {
       const msg = err instanceof Error ? err.message : String(err);

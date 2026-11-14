@@ -30,6 +30,7 @@ import { performRotation, RotationUnlockError, type RotationNote } from "../rota
 import { getRelayUrl } from "./_helpers.js";
 import { listStoredGrants, previousKeyGrantNotice } from "./grant.js";
 import { DEFAULT_SOLANA_RPC_URL } from "./wallet.js";
+import { ROTATION_SEED_NOTICE_LINES } from "./seed.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 
 /**
@@ -189,6 +190,11 @@ export async function handleRotate(config: CliConfig): Promise<void> {
       console.log(`  public_key   ${outcome.newPublicKeyHex.slice(0, 16)}...`);
       console.log(`  rotations    ${outcome.rotations}`);
       if (config.reason) console.log(`  reason       ${config.reason}`);
+      // The seed IS the key: said once here, on every path that ends
+      // `rotated` (resumes included). `seedBackupStatus` already reads "not
+      // backed up" — the acknowledgment names the retired key.
+      console.log();
+      for (const line of ROTATION_SEED_NOTICE_LINES) console.log(`  ${line}`);
       // The machine roster's rotation hook (machine-roster-clients R21,
       // option (a), second half): AFTER the local commit — here, on every
       // path that ends `rotated`, the resume paths included — under the NEW

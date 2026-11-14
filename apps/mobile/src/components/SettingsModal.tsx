@@ -59,7 +59,7 @@ import {
   useSettingsStyles,
   type Tab,
 } from "./settings";
-import { rotationFundsStop } from "@motebit/surface-kit";
+import { ROTATION_SEED_BACKUP_NOTICE, rotationFundsStop } from "@motebit/surface-kit";
 
 // Re-export deriveInteriorColor so App.tsx keeps working — the live
 // preview path imports it from this file and we don't want to touch
@@ -482,7 +482,8 @@ export function SettingsModal({
                             });
                             Alert.alert(
                               "Key Rotated",
-                              `New public key: ${result.newPublicKey.slice(0, 16)}...`,
+                              // The seed IS the key, so it changed: said once, here.
+                              `New public key: ${result.newPublicKey.slice(0, 16)}...\n\n${ROTATION_SEED_BACKUP_NOTICE}`,
                             );
                           };
                           try {

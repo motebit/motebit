@@ -1,4 +1,4 @@
-import { rotationFundsStop } from "@motebit/surface-kit";
+import { ROTATION_SEED_BACKUP_NOTICE, rotationFundsStop } from "@motebit/surface-kit";
 import type { DesktopAIConfig } from "../index";
 import { getMcpServersConfig } from "./mcp-connections";
 import type { DesktopContext } from "../types";
@@ -1009,6 +1009,11 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       // Show result briefly, then close and update identity display
       rotateKeyResult.style.display = "block";
       rotateKeyResult.textContent = `${result.oldKeyFingerprint}\u2026 \u2192 ${result.newKeyFingerprint}\u2026\nRotation #${result.rotationCount}`;
+
+      // The seed IS the key, so it changed: said once, as a system message
+      // (it outlives the dialog, which closes on its own). Before the
+      // refreshes below, so one that throws cannot swallow it.
+      addMessage("system", ROTATION_SEED_BACKUP_NOTICE);
 
       // Update identity display with new key
       populateIdentityTab();

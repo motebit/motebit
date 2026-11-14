@@ -401,8 +401,11 @@ export async function handleRestore(config: CliConfig): Promise<void> {
       (next as Record<string, unknown>)["_identity_file"] = originalContent;
     }
   }
-  // They demonstrably HOLD the seed — that is what "backed up" means.
+  // They demonstrably HOLD the seed — that is what "backed up" means — for
+  // the key it derives (`publicKeyHex`), and only that key: a later
+  // rotation reads "not backed up" (seed.ts `seedBackupPostureOf`).
   next.seed_backed_up_at = Date.now();
+  next.seed_backed_up_key = publicKeyHex;
   // 2. The config. `saveFullConfig` keeps whatever it replaces: a damaged
   //    file byte for byte, and — this being a declared identity change — any
   //    key or signed identity file the new config does not carry, on EVERY
