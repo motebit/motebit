@@ -538,7 +538,7 @@ what keeps the cost from eating the property it paid for.
 params (`deriveAgentSigil`, `oklchToRgb`, `shortFingerprint`) and the
 human-comparable `wordFingerprint` (BIP-39, SHA-256-verified — adopted, not
 minted) in `@motebit/sdk`; the sigil rendered on agent rows on web
-(`apps/web/src/ui/gated-panels.ts` via `identity-sigil-svg.ts`), desktop
+(`apps/web/src/ui/gated-panels.ts` via `apps/web/src/identity-sigil-svg.ts`), desktop
 (`apps/desktop/src/ui/agent-sigil.ts`) and mobile
 (`apps/mobile/src/components/agent-sigil.tsx`); and the first-person **petname
 data field** (`AgentTrustRecord.petname`, local-only — never on the wire — with
