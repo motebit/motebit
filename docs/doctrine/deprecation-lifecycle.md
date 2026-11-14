@@ -2,6 +2,8 @@
 
 > **Layer:** law (published deprecations carry a replacement and a reason) — enforced by `check-deprecation-discipline`
 
+**Status:** [doctrine-status.md § deprecation-lifecycle](../ops/doctrine-status.md#deprecation-lifecyclemd)
+
 Removal has a doctrine — `migration-cleanup.md` gives the state-holder analysis for stripping dead compat. Addition needs a matching doctrine. Post-GA, every breaking change either ships as a coordinated major or as a disciplined deprecation; there is no third option.
 
 ## The three signals
@@ -22,7 +24,7 @@ The shape depends on whether the package publishes to npm. Two cases, two contra
 
 ### Published packages (the four-field contract)
 
-Every `@deprecated` annotation in a package that publishes to npm — `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`, `@motebit/wire-schemas`, `@motebit/verify`, the `crypto-*` leaf verifiers, `motebit`, `create-motebit` — MUST carry four fields. The contract is for consumers across a versioning boundary; missing fields break the boundary.
+Every `@deprecated` annotation in a package that publishes to npm (any package whose version is not the `0.0.0-private` sentinel) MUST carry four fields. The contract is for consumers across a versioning boundary; missing fields break the boundary.
 
 ```ts
 /**
@@ -82,7 +84,7 @@ In a workspace where every caller is in the same git tree, `@deprecated` is stru
 
 2. **Active workspace consumer — migrate, then delete.** Symbol is called from elsewhere in the workspace. Migrate the callers in the same commit and delete. The annotation is a half-finished migration; finish it.
 
-3. **Deferred-design legacy — annotation stays, with the unblock criterion in `Reason:`.** Symbol is load-bearing because the replacement doesn't yet cover every behavior the symbol provides, AND the missing behavior is a separate architectural decision (not just labor). The `Reason:` block must name the design gap explicitly — not "tracked as the next minor," but the actual unanswered question. Example: `MotebitRuntime.housekeeping()` and `runHousekeeping()` carry the deprecation while the curiosity-target unification design (does curiosity belong in the cycle's gather phase or stay a separate signal the gradient manager subscribes to?) is settled. The symbol retires when the decision lands.
+3. **Deferred-design legacy — annotation stays, with the unblock criterion in `Reason:`.** Symbol is load-bearing because the replacement doesn't yet cover every behavior the symbol provides, AND the missing behavior is a separate architectural decision (not just labor). The `Reason:` block must name the design gap explicitly — not "tracked as the next minor," but the actual unanswered question. Example: `MotebitRuntime.housekeeping()` and `runHousekeeping()` carried the deprecation while the curiosity-target unification design (does curiosity belong in the cycle's gather phase or stay a separate signal the gradient manager subscribes to?) was open, and retired when the decision landed.
 
 Cases 1 and 2 should not sit annotated indefinitely. A private-package `@deprecated` that has been in the tree more than ~30 days without progress is almost certainly a category error — either the migration is real (do it) or the symbol is supported (drop the tag, document as alternative API shape if dual-surface). Only case 3 has a legitimate long-tail; it survives by naming the unblock criterion concretely.
 
@@ -165,26 +167,13 @@ Practical implication: deprecating BSL code with a `removed in` that falls _afte
 | Breaking silently at a minor                         | Violates semver. Breaks consumers who trusted `^1.0.0`.                       | Either bump major, or deprecate then remove across a window.                                                                      |
 | Deprecating _and_ removing in the same release       | No window for consumers to migrate. Equivalent to breaking without warning.   | Minimum one major cycle for stable APIs; alpha can collapse to same release.                                                      |
 
-## How to apply at motebit (as of 2026-04-23)
-
-The ~15 existing `@deprecated` markers across the codebase land in the grandfathered category — they were added before this doctrine existed. Classification pass in a follow-up commit:
-
-- **`LegacyVerifyResult` + `verifyIdentityFile`** (`@motebit/crypto`) — classified active-API here, annotated `@deprecated since 1.0.0, removed in 3.0.0`, and **removed in the 3.0.0 crypto major** (2026-06-06), where a pre-removal holder check found them zero-holder. Replacement: `verify()` + `VerifyResult`.
-- **`detectLocalInference` / `AnthropicProvider` legacy names** (`@motebit/ai-core`) — BSL runtime-internal, can collapse to the next minor.
-- **Market scoring legacy functions** (`@motebit/market`) — BSL internal, same.
-- **`@motebit/mcp-client` credential-source backwards-compat** — BSL internal. Named sunset at next minor.
-- **Services/api anchoring EVM fields, federation rate-limiter alias** — BSL runtime. Named sunset.
-- **`apps/cli/src/args.ts` deprecated flag alias** — belongs to `motebit` fixed-group package. Named sunset at 2.0.0.
-
-Each marker gets rewritten to the four-field contract in a dedicated pass. No behavior change in the classification commit — only annotation fidelity.
-
 ## Drift defense
 
 Two complementary gates, scoped to the two cases above. Both share the same comment-block parser (walks backward to the block opener and forward to the closer, since motebit's convention places `Reason:` lines AFTER the annotation), then split on the containing package's `package.json` version.
 
 ### `check-deprecation-discipline` — invariant #39 (published packages)
 
-Landed 2026-04-24. Scans every `.ts` / `.tsx` under `packages/**`, `apps/**`, `services/**` whose containing package has a non-`0.0.0-private` version. Validates five rules:
+Scans every `.ts` / `.tsx` under `packages/**`, `apps/**`, `services/**` whose containing package has a non-`0.0.0-private` version. Validates five rules:
 
 - `since <X.Y.Z>` present on the annotation line
 - `removed in <X.Y.Z>` present on the annotation line
@@ -200,7 +189,7 @@ Landed 2026-04-28 after a bird's-eye audit caught 9 markers across 4 private pac
 
 The cleanup stripped the residue (kept the replacement pointer + `Reason:` block, dropped the semver fields). The gate codifies the new shape: scans every `.ts` / `.tsx` under `packages/**`, `apps/**`, `services/**` whose containing package has `version === "0.0.0-private"`, and fails if any `@deprecated` annotation carries `since X.Y.Z` or `removed in X.Y.Z`. Replacement pointer + `Reason:` are still required — workspace callers still need them; only the consumer-facing semver promise is theater.
 
-Together with `check-changeset-discipline` (enforces `## Migration` sections on `major` bumps) and `check-api-surface` (enforces that public-API changes ship a pending changeset), the deprecation pipeline is now mechanically complete on both halves of the public/private split: shape gate (this pair) → major changeset with migration guide → removal PR that updates api-extractor baselines.
+Together with `check-changeset-discipline` (enforces `## Migration` sections on `major` bumps) and `check-api-surface` (enforces that public-API changes ship a pending changeset), the deprecation pipeline is mechanically complete on both halves of the public/private split: shape gate (this pair) → major changeset with migration guide → removal PR that updates api-extractor baselines.
 
 ## Cross-references
 

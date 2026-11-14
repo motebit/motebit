@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § agents-as-first-person-trust-graph](../ops/doctrine-status.md#agents-as-first-person-trust-graphmd)
+
 The Agents panel is where the whole thesis becomes visible or hides itself. It is
 the one surface that renders, in a single glance, who an agent is, what it offers,
 and whether it can be trusted — and it is the surface most likely to drift into a
@@ -189,7 +191,7 @@ Two rules make this safe rather than decorative:
   `motebit_id → { palette, geometry seed, symmetry, density, … }` — Ring 1, identical
   everywhere, zero-dep, testable. The _render_ is per-surface (Ring 3): an SVG
   string on web + desktop (DOM) and on mobile (react-native-svg `SvgXml` paints the
-  same string — shipped 2026-06-04, locked byte-identical across all three by
+  same string, locked byte-identical across all three by
   `check-sigil-renderer-parity`), compact glyph on CLI, and — the payoff — a **3D
   droplet presence in spatial from the same seed** (see
   [`spatial-as-endgame.md`](spatial-as-endgame.md)). Emitting pixels from a shared
@@ -297,7 +299,7 @@ scene droplets — §4 sigil → spatial droplet); on flat the act is the slab d
 arc, not a head-turn toward a record. What stays open is only the per-surface render
 (panel vs spatial Presentation), not the choreography.
 
-**Shipped (2026-06-05): the web hire, end to end.** The Agents panel's **Discover**
+**The hire, end to end.** On web, the Agents panel's **Discover**
 card renders each _priced_ capability as a hire launch affordance; tapping it closes
 the panel and emerges the **hire-compose register** on the slab (`hire-chip.ts`,
 sibling of `pr-url-chip.ts`) pinned to `{worker, capability, price}`. The chat input
@@ -308,11 +310,10 @@ the runtime fails closed if that exact worker can't be paid P2P — it never sub
 a capability-routed worker (the pin's money-safety invariant, locked in
 `relay-delegation.ts` `selectAndRunDelegation` + tested both in-branch and at the
 no-rail boundary). The panel stays pure browse — the launch affordance _initiates_ the
-handoff; the slab composes + performs. Cold-start consent is the existing Settings →
+handoff; the slab composes + performs. Cold-start consent is the Settings →
 Governance "Pay new agents directly" opt-in (a Discover agent is by definition a
 no-history pair); without it the hire fails closed with actionable copy pointing at the
-toggle. Held still: re-hiring a **Known** peer (Known cards carry no pricing row yet),
-the desktop/mobile hire affordances, and the spatial Presentation render.
+toggle.
 
 ## 6. Money history derives from receipts, never trust-record drift
 
@@ -322,7 +323,7 @@ settlement tree** (the source of truth; see [`receipts-unified.md`](receipts-uni
 Never denormalize a money field onto the trust record — that is the kind of drift
 that lies later.
 
-**Shipped (2026-06-04): the materialized projection, signed and verified.** The
+**The materialized projection, signed and verified.** The
 panel renders, under each Known peer's mark, the caller's first-person economic
 history with that peer — net earned/paid + a settlement count, honest-empty when
 there's none. The data is a **projection over the relay's signed settlement
@@ -350,10 +351,9 @@ ledger** (`relay_settlements`), keyed `[motebit_id, remote_motebit_id]`:
   `AgentRecord`. The "permitted middle path" from the Gotchas below: a cache
   rebuilt _from_ the ledger, clearly derived, never a source of truth.
 
-Locked by the existing state-export triad — `check-state-export-signed` (#86,
+Locked by the state-export triad — `check-state-export-signed` (#86,
 the route must sign), `check-artifact-type-canonical` (#85, the type is
-canonical) — and the round-trip test in `state-export-manifest.test.ts`. The
-money line is wired on web + desktop; mobile is the contained follow-on.
+canonical) — and the round-trip test in `state-export-manifest.test.ts`.
 
 ## 7. ERC-8004 / ANS validate the category, not the architecture
 
@@ -534,22 +534,13 @@ what keeps the cost from eating the property it paid for.
   forced-and-reversible, hold the unforced-or-irreversible. Architecture is more
   comfortable than distribution; this section exists partly to name that.
 
-**State (as of this writing).** Shipped under the gate above: the Ring-1 sigil
-params (`deriveAgentSigil`, `oklchToRgb`, `shortFingerprint`) and the
-human-comparable `wordFingerprint` (BIP-39, SHA-256-verified — adopted, not
-minted) in `@motebit/sdk`; the sigil rendered on agent rows on web
-(`apps/web/src/ui/gated-panels.ts` via `apps/web/src/identity-sigil-svg.ts`), desktop
-(`apps/desktop/src/ui/agent-sigil.ts`) and mobile
-(`apps/mobile/src/components/agent-sigil.tsx`); and the first-person **petname
-data field** (`AgentTrustRecord.petname`, local-only — never on the wire — with
-`runtime.setAgentPetname`), shown on the row and edited inline on Known rows on
-web and desktop (`gated-panels.ts`, `apps/desktop/src/ui/agents.ts`). Held —
-unforced or surface-committing: the spatial renderer, the desktop/mobile/spatial
-**hire** affordances (the **web** hire shipped 2026-06-05 — §5), the mobile
-petname editor, and petname **auto-suggestion** (the §3
-pincer — gate any auto-suggest behind earned trust, never adopt the self-asserted
-name at discovery). These ship when a concrete consumer pulls (the live demo, or
-a builder), not before.
+**Hold rule.** The pieces that are unforced or surface-committing — the spatial
+renderer, per-surface **hire** affordances, per-surface petname editors, and
+petname **auto-suggestion** (the §3 pincer — gate any auto-suggest behind earned
+trust, never adopt the self-asserted name at discovery) — ship when a concrete
+consumer pulls (the live demo, or a builder), not before. The petname is a
+first-person data field (`AgentTrustRecord.petname`), local-only — never on the
+wire.
 
 ---
 

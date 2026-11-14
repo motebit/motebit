@@ -469,7 +469,7 @@ describe("evaluateSettlementEligibility — additive bonded branch", () => {
     // reservation ledger, which lands WITH the recourse half). This test PINS the
     // bound — it is expected to FLIP to "the second rejects" the day that ledger
     // ships, which is the intended tripwire. See bond-store.workerInFlightP2pCostMicro
-    // and docs/doctrine/commitment-bond.md § Status "Known bound".
+    // and docs/doctrine/commitment-bond.md § Bounds and deferrals "Known bound".
     await freshBackedBond(10_000_000, 10_000_000); // $10 bond backs exactly one $1 ticket at k=10
     const a = await evaluateSettlementEligibility(relay.moteDb.db, "del-b", "bond-worker", false, {
       unitCostMicro: 1_000_000n,

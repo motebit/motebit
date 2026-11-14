@@ -2,15 +2,17 @@
 
 > **Layer:** law (the motebit register renders task narration) — enforced by `apps/web/src/__tests__/slab-chrome.test.ts`
 
-The slab's chrome is **`render(controlState × embodimentMode)`**, not a fixed layout that lives around the screencast. Every cell of the matrix has its own register; the chrome's job is to render whichever cell the slab is currently in. The cobrowser-shaped chrome that ships today — URL bar primary, nav buttons, screencast as a page the user might drive — is the `user × virtual_browser` register universalized as if it were the only register. That's the polarity error this doctrine corrects.
+**Status:** [doctrine-status.md § chrome-as-state-render](../ops/doctrine-status.md#chrome-as-state-rendermd)
+
+The slab's chrome is **`render(controlState × embodimentMode)`**, not a fixed layout that lives around the screencast. Every cell of the matrix has its own register; the chrome's job is to render whichever cell the slab is currently in. The cobrowser-shaped chrome — URL bar primary, nav buttons, screencast as a page the user might drive — is the `user × virtual_browser` register universalized as if it were the only register. That's the polarity error this doctrine corrects.
 
 The slab is "the body's first-person perceptual field made visible" ([`motebit-computer.md`](motebit-computer.md)). When the chrome treats it as a cobrowser, that doctrine is contradicted at the chrome level. The pivot inverts the default register: motebit-driving with task-step narration becomes the baseline; cobrowse becomes a mode the user explicitly enters.
 
 This is not a UI redesign. It's a category shift in what the chrome IS. The cobrowser register doesn't go away — it becomes one cell of a matrix instead of the entire surface.
 
-## The polarity error today
+## The polarity error (pre-PR-1)
 
-`apps/web/src/web-app.ts` renders chrome around the URL bar. `_homeOverlayActive` is focus-derived off the URL bar. The control band re-renders to "reflect the new URL." `ControlState` lives in `packages/protocol/src/co-browse.ts:66-74` with the four-kind union — but the chrome doesn't render against it. Same chrome for every state. That's the cobrowse-default-as-only-register shape.
+`apps/web/src/web-app.ts` rendered chrome around the URL bar. `_homeOverlayActive` was focus-derived off the URL bar. The control band re-rendered to "reflect the new URL." `ControlState` lives in `packages/protocol/src/co-browse.ts:66-74` with the four-kind union — but the chrome didn't render against it. Same chrome for every state. That's the cobrowse-default-as-only-register shape.
 
 The pivot starts when the chrome's render signature becomes `f(controlState × embodimentMode)` and each cell has its own register, not when the URL bar moves.
 
@@ -81,7 +83,7 @@ Display: event-driven, not constantly-displayed. When motebit is actively doing 
 
 **`user` register — cobrowse mode entered.**
 
-The cobrowser-shaped chrome as an _entered mode_ — realized 2026-07-09: the rest cell (no committed URL) renders one ingress line + watermark, and the editable URL bar / nav buttons / "motebit waiting" chip rotate in only once a URL commits. Click/scroll route to the page, motebit's role becomes assistant-on-standby; the waiting chip is both the presence indicator and the hand-back affordance.
+The cobrowser-shaped chrome as an _entered mode_: the rest cell (no committed URL) renders one ingress line + watermark, and the editable URL bar / nav buttons / "motebit waiting" chip rotate in only once a URL commits. Click/scroll route to the page, motebit's role becomes assistant-on-standby; the waiting chip is both the presence indicator and the hand-back affordance.
 
 **`handoff_pending` register — control transition requested.**
 
@@ -151,34 +153,34 @@ PR 2 polishes the affordance: explicit "take the wheel" button, gesture-based ha
 - Animation rhythms for state transitions. (Existing 0.3 Hz breathing applies; specifics emerge.)
 - Visual polish on the `take-the-wheel` affordance (button, gesture, cue choreography).
 
-## PR 2 scope (mobile, shipped 2026-05-13)
+## PR 2 scope (mobile)
 
-PR 2 ships the **second surface dispatcher against the same matrix**, lifting the doctrine from one-instance-deep (web alone could be a special case) to a generalizable pattern.
+PR 2 is the **second surface dispatcher against the same matrix**, lifting the doctrine from one-instance-deep (web alone could be a special case) to a generalizable pattern.
 
 **Shape:**
 
 - Pure dispatcher in `apps/mobile/src/slab-chrome.ts` exports `dispatchSlabChrome(state, embodimentMode, opts) → SlabChromeCell | null`. The cell description is surface-agnostic — a discriminated union over the four `controlState` registers — and the React Native component (`apps/mobile/src/components/SlabChrome.tsx`) maps each variant to a subtree.
 - Splitting pure description from surface render makes the doctrine's "each register is an information shape, not a UI component" line legible in code: the dispatcher's return type IS the information shape, and the render is downstream. A future spatial renderer would consume the same `SlabChromeCell` shape without rewriting the dispatcher.
-- `task_step_narration` chunk handling lands in `apps/mobile/src/use-chat-stream.ts` (alongside web's `apps/web/src/ui/chat.ts`): set on chunk arrival, cleared in a `try/finally` so a stale narration never outlives the turn (every-termination-path discipline per [`feedback_streaming_state_cleanup_every_path`]).
-- `/wheel` and `/back` slash commands ship in `apps/mobile/src/slash-commands.ts` as the surface-deterministic affordance counterparts; the URL-chip and "motebit waiting" chip in the dispatcher's rendered cells dispatch the same slash commands.
+- `task_step_narration` chunk handling lives in `apps/mobile/src/use-chat-stream.ts` (alongside web's `apps/web/src/ui/chat.ts`): set on chunk arrival, cleared in a `try/finally` so a stale narration never outlives the turn (every-termination-path discipline per [`feedback_streaming_state_cleanup_every_path`]).
+- `/wheel` and `/back` slash commands live in `apps/mobile/src/slash-commands.ts` as the surface-deterministic affordance counterparts; the URL-chip and "motebit waiting" chip in the dispatcher's rendered cells dispatch the same slash commands.
 
 **Structural lock:** `check-slab-chrome-coverage` (drift-defense #94) asserts each surface in the `SLAB_SURFACES` registry handles every `ControlState` and references every deferred embodiment in its dispatcher source. Adding a new surface (desktop, spatial) extends the registry and the gate forces matrix completeness in the new dispatcher.
 
-**Mobile-as-renderer:** mobile has no live cobrowse session yet (cloud-browser dispatcher remains web-only at the consumer layer), so the `user × virtual_browser` / `handoff_pending × virtual_browser` / `paused × virtual_browser` cells are present in the dispatcher but inert at runtime today. The wire is set; the moment a mobile cloud-browser surface lands, the chrome's cells route through the existing `CoBrowseControlMachine` capability without further dispatcher work.
+**Mobile-as-renderer:** the `user × virtual_browser` / `handoff_pending × virtual_browser` / `paused × virtual_browser` cells are present in mobile's dispatcher whether or not mobile has a live cobrowse session. The wire is set; the moment a mobile cloud-browser surface lands, the chrome's cells route through the existing `CoBrowseControlMachine` capability without further dispatcher work.
 
-## PR 3 scope (spatial, shipped 2026-05-13)
+## PR 3 scope (spatial)
 
-PR 3 ships the **third surface dispatcher**, lifting the matrix from two-instance-deep to three-instance-deep and closing the spatial-as-endgame validation: the registers translate to a chromeless surface (voice + ambient + gaze) without semantic loss.
+PR 3 is the **third surface dispatcher**, lifting the matrix from two-instance-deep to three-instance-deep for the spatial-as-endgame validation: the registers translate to a chromeless surface (voice + ambient + gaze) without semantic loss.
 
 **Shape:**
 
-- Pure dispatcher in `apps/spatial/src/slab-chrome.ts` exports `dispatchSlabChrome(state, embodimentMode, opts) → SlabChromeCell | null` — same signature, same cell-shape variants as mobile's. The dispatcher's body is 12 lines of switch-case over `ControlState`; per `feedback_endgame_not_mvp` × "rule of three," two duplicated dispatchers don't yet justify lifting to `@motebit/render-engine`. When a fourth slab surface arrives (desktop chrome, perhaps), promote `SlabChromeCell` + `dispatchSlabChrome` + `formatUrlHostForChip` to the shared package; drift-defense #94's `SLAB_SURFACES` registry is the discipline trigger.
+- Pure dispatcher in `apps/spatial/src/slab-chrome.ts` exports `dispatchSlabChrome(state, embodimentMode, opts) → SlabChromeCell | null` — same signature, same cell-shape variants as mobile's. The dispatcher's body is a short switch-case over `ControlState`; per `feedback_endgame_not_mvp` × "rule of three," two duplicated dispatchers don't yet justify lifting to `@motebit/render-engine`. When a fourth slab surface arrives (desktop chrome, perhaps), promote `SlabChromeCell` + `dispatchSlabChrome` + `formatUrlHostForChip` to the shared package; drift-defense #94's `SLAB_SURFACES` registry is the discipline trigger.
 - Spatial render adapter `renderCellToActivity(cell) → string | null` lives in the same file. The HUD's active-task field is spatial's chrome render (per `apps/spatial/CLAUDE.md` Rule 1: HUD is the non-negotiable safety floor — connection state, balance, active task); the cell maps directly into it. Voice cues + creature-gaze updates compose on top of the same cell when their adapters arrive (out of scope for PR 3 — the activity label is the minimum semantic render that demonstrates the doctrine).
 - `task_step_narration` chunk handling in `spatial-app.ts` routes through the slab-chrome dispatcher (not `deriveStreamActivity`'s default arm), so the matrix-as-primitive path is the canonical seam. The two paths converge on the same string when narration alone fires; the slab-chrome path composes URL + narration (`"Reading the page · apple.com"`) and stands ready for the user / handoff / paused cells.
 
-**Structural lock:** `check-slab-chrome-coverage` (drift-defense #94) now asserts 3 surfaces × 4 control states + 5 deferred embodiments — matrix fully covered across web, mobile, and spatial.
+**Structural lock:** `check-slab-chrome-coverage` (drift-defense #94) asserts every registered surface × 4 control states + every deferred embodiment — the matrix fully covered on each slab surface.
 
-**Spatial-as-endgame validation closed:** the doctrine's claim "registers as information shapes survive the chromeless surface" is now testable end-to-end. The `SlabChromeCell` discriminated union flows from the dispatcher into surface-specific renders without any web-chrome assumptions leaking through. A future AR-glasses production renderer reads the same cell shape and composes voice + gaze + ambient indicators without re-deriving the matrix.
+**Spatial-as-endgame validation:** the doctrine's claim "registers as information shapes survive the chromeless surface" is testable end-to-end. The `SlabChromeCell` discriminated union flows from the dispatcher into surface-specific renders without any web-chrome assumptions leaking through. A future AR-glasses production renderer reads the same cell shape and composes voice + gaze + ambient indicators without re-deriving the matrix.
 
 ## Spatial-as-endgame validation
 

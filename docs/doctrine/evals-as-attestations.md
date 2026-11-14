@@ -4,7 +4,7 @@
 
 Signed evaluation artifacts are an attestation, not a receipt. This memo names the category split so future contributors don't re-litigate whether an `EvalReceipt` should join the [three-type receipt family](receipts-unified.md), and records the trigger for promoting the deferred protocol primitive when a real consumer arrives.
 
-> **Status (2026-07-08): promotion trigger fired — the primitive ships.** See [§Promotion](#promotion-2026-07-08) below. The deferral sections are kept as the historical record of the discipline that sequenced it.
+**Status:** [doctrine-status.md § evals-as-attestations](../ops/doctrine-status.md#evals-as-attestationsmd)
 
 ## The category split
 
@@ -39,25 +39,25 @@ Until one of those triggers fires, evals stay internal to CI as test-suite artif
 
 **Trigger #1 fired.** The archetype arc ([`agent-archetypes.md`](agent-archetypes.md)) ships the Auditor — a first-party marketplace service whose deliverable is a signed measurement of _another_ motebit (identity binding, succession, revocation, receipt spot-checks, bond integrity, solvency), transported over the relay's standard task path. That is verbatim the trigger-1 sentence: a second motebit emitting a signed eval against another motebit, with a transport needing the wire shape to be canonical. Trigger #2 fires with it — the Auditor is fee-bearing.
 
-The primitive ships as this memo promised: the EvalAttestation wire type in `@motebit/protocol` with a closed `EvalKind` registry (`ALL_EVAL_KINDS`, single member `verification_audit`; unknown kinds fail closed at wire intake) under the eight-artifact treatment ([`registry-pattern-canonical.md`](registry-pattern-canonical.md)), signing/verification laws in `@motebit/crypto` (subject ≠ signer carried structurally; the verify law establishes "this issuer said this about this subject" and deliberately never the truth of the measurement), a zod wire schema with a committed JSON Schema, and re-exports through `@motebit/verifier` so external consumers never reach past the aggregator. Each measurement embeds the per-axis verification verdict whole — no top-level pass/fail boolean, the same no-silent-true discipline as the verdict vocabulary itself.
+The primitive is what this memo promised: the EvalAttestation wire type in `@motebit/protocol` with a closed `EvalKind` registry (`ALL_EVAL_KINDS`; unknown kinds fail closed at wire intake) under the eight-artifact treatment ([`registry-pattern-canonical.md`](registry-pattern-canonical.md)), signing/verification laws in `@motebit/crypto` (subject ≠ signer carried structurally; the verify law establishes "this issuer said this about this subject" and deliberately never the truth of the measurement), a zod wire schema with a committed JSON Schema, and re-exports through `@motebit/verifier` so external consumers never reach past the aggregator. Each measurement embeds the per-axis verification verdict whole — no top-level pass/fail boolean, the same no-silent-true discipline as the verdict vocabulary itself.
 
-**What was NOT built:** the `@motebit/evals` runner sketched in "What ships now" below. The Auditor is consumer #1 of the wire shape; composing the in-repo test suites into signed-eval producers remains future work with its own consumer test. Promotion of the envelope is not a mandate to build issuers.
+**Promotion of the envelope is not a mandate to build issuers.** The `@motebit/evals` runner sketched in "What ships now" below — composing the in-repo test suites into signed-eval producers — waits for its own consumer test.
 
 ## What ships now
 
 The behavioral coverage gap that motivated this discussion gets closed through testing discipline, not protocol commitment:
 
-- **Property-based tests** on high-consequence surfaces. `@motebit/virtual-accounts` conservation invariants landed (commit `08aea3db`). Hardware-attestation chain mutations and skill-manifest fuzz followed in the same pattern: `properties.test.ts` in each of `crypto-appattest`, `crypto-android-keystore`, `crypto-tpm` and `crypto-webauthn`, and `packages/skills/src/__tests__/parse-properties.test.ts`.
-- **Cross-model behavioral equivalence** as an in-package test suite in `@motebit/runtime` (commit `57091d2f`). Backstops [`intelligence-pluggability-contract.md`](intelligence-pluggability-contract.md) behaviorally where `check-prompt-budget` and `check-prompt-density` already cover the structural half.
+- **Property-based tests** on high-consequence surfaces — conservation invariants, hardware-attestation chain mutations, skill-manifest fuzz.
+- **Cross-model behavioral equivalence** as an in-package test suite in `@motebit/runtime`. Backstops [`intelligence-pluggability-contract.md`](intelligence-pluggability-contract.md) behaviorally where `check-prompt-budget` and `check-prompt-density` already cover the structural half.
 - **Real-fixture capture** for at least one hardware-attestation platform. Android Keystore is the cheapest path; iOS App Attest fixtures are structurally harder, TPM EK certs are structurally unpublishable per the existing audit memos.
 
-These ship as tests under existing package surfaces, not as a new package or protocol type. When the promotion trigger fires, the existing test infrastructure composes into the `@motebit/evals` runner that produces signed `EvalAttestation`s — at which point the test suites already in place become the first consumers of the new primitive. The deferral does not strand the work; it sequences it.
+These ship as tests under existing package surfaces, not as a new package or protocol type. The existing test infrastructure is what composes into a `@motebit/evals` runner that produces signed `EvalAttestation`s, at which point the test suites already in place become producers of the primitive. The deferral does not strand the work; it sequences it.
 
 ## Cross-cuts
 
 - [`receipts-unified.md`](receipts-unified.md) — the contrast family. Receipts are first-person provenance; this memo establishes evals as third-party measurement.
 - [`hardware-attestation.md`](hardware-attestation.md) — the structural precedent. Hardware attestation lives outside receipts for the same subject ≠ signer reason; the `HardwareAttestationSemiring` is the additive-scoring shape evals will inherit.
-- [`registry-pattern-canonical.md`](registry-pattern-canonical.md) — the eight-artifact promotion pattern that `EvalAttestation` will follow when the trigger fires.
+- [`registry-pattern-canonical.md`](registry-pattern-canonical.md) — the eight-artifact promotion pattern that `EvalAttestation` follows.
 - [`off-ramp-as-user-action.md`](off-ramp-as-user-action.md) — the sub-phase B deferral precedent (single literal, no cross-implementation drift yet, defer until consumer arrives).
 - [`intelligence-pluggability-contract.md`](intelligence-pluggability-contract.md) — the doctrine whose behavioral half is backed by the cross-model equivalence test in `@motebit/runtime`.
 - [`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md) — the doctrine-first / code-second pattern this deferral follows.

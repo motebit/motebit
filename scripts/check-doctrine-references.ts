@@ -183,9 +183,9 @@ const IDENTIFIER_ALLOWLIST: Record<string, string> = {
   startBondVerifierLoop:
     "anticipated future symbol — `commitment-bond.md` names the relay-side supervised RPC poller (mirror of the shipped `startP2pVerifierLoop`); lands in `services/relay/src/bond-verifier.ts` at Inc 2.",
   BondCall:
-    "anticipated future type (deferred-with-trigger) — `commitment-bond.md` § Status names the recourse-half wire type, deliberately NOT defined in phase 1; lands when real settlement volume + disputes arrive (same name-ahead-of-landing pattern as `VerificationVerdict`).",
+    "anticipated future type (deferred-with-trigger) — `commitment-bond.md` § Bounds and deferrals names the recourse-half wire type, deliberately NOT defined in phase 1; lands when real settlement volume + disputes arrive (same name-ahead-of-landing pattern as `VerificationVerdict`).",
   BondDefault:
-    "anticipated future type (deferred-with-trigger) — `commitment-bond.md` § Status names the recourse-half public append-only feed artifact (sibling of `AgentRevocationFeed`), deliberately NOT defined in phase 1; lands with the recourse half.",
+    "anticipated future type (deferred-with-trigger) — `commitment-bond.md` § Bounds and deferrals names the recourse-half public append-only feed artifact (sibling of `AgentRevocationFeed`), deliberately NOT defined in phase 1; lands with the recourse half.",
 
   // ----- Real symbols living in a corpus-excluded file -----
   REPAIR_CONTRACT_ALLOWLIST:

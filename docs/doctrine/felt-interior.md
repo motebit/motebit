@@ -2,6 +2,8 @@
 
 > **Layer:** law (verified only when coverage holds) — enforced by `packages/panels/src/__tests__/felt-consolidation.test.ts`
 
+**Status:** [doctrine-status.md § felt-interior](../ops/doctrine-status.md#felt-interiormd)
+
 A motebit is a droplet of intelligence under surface tension: identity is the
 boundary, intelligence fills the interior, governance maintains the surface.
 "Maximum interiority, minimum display" follows directly — to everyone outside the
@@ -45,10 +47,10 @@ The existing legibility bound in
 (§ Gotchas, "legibility is back-loaded") conflates two different properties under
 one word. Separating them is the whole move:
 
-| Legibility                       | Audience            | Availability                            | Status                                       |
+| Legibility                       | Audience            | Availability                            | Posture                                      |
 | -------------------------------- | ------------------- | --------------------------------------- | -------------------------------------------- |
 | **Stranger-legibility of trust** | a new visitor       | back-loaded (Known empty at onboarding) | genuinely a distribution gap; stays deferred |
-| **Owner-legibility of accrual**  | the sovereign owner | day one, and grows                      | a front-door property — under-rendered today |
+| **Owner-legibility of accrual**  | the sovereign owner | day one, and grows                      | a front-door property                        |
 
 Refusing the global reputation score is correct and is the moat: it is what makes
 trust illegible _to a stranger_ at first contact, and that back-loading is a real,
@@ -71,7 +73,7 @@ reconciliation, with the consolidation cycle as the worked example:
 - **The moment of accrual is an act.** While the motebit consolidates it is in
   `tending`, and the body shows a subtle cue (slower breath, dimmer eye) via
   `renderFrame` — ephemeral, presented, then reabsorbed to rest. This is the
-  act-side felt signal, and it is already shipped (see
+  act-side felt signal (see
   [`proactive-interior.md`](proactive-interior.md)). It stays calm: never a louder
   pulse, never an alarm.
 - **The accumulation itself is a record.** What was consolidated, the trust earned,
@@ -293,7 +295,7 @@ calm or the sovereignty it depends on.
   act and must obey `records-vs-acts.md`; if it cannot be found it has failed this
   doctrine.
 - **Legibility ratio.** This file is one-third of the commitment; the code and the
-  drift gate are the other two. The desktop _and_ web slices shipped — a real durable
+  drift gate are the other two. The slice is a real durable
   mutation in `packages/runtime/src/consolidation-cycle.ts` → its signed
   `ConsolidationReceipt` → a signed `ConsolidationMutationManifest` committing the
   exact mutations ([`spec/consolidation-mutation-manifest-v1.md`](../../spec/consolidation-mutation-manifest-v1.md))
@@ -322,10 +324,8 @@ calm or the sovereignty it depends on.
   reaches a render — is locked by the test suites in `@motebit/panels`,
   `@motebit/runtime`, and `@motebit/crypto`. Verification is current-key, fail-closed
   (a rotated/historical key reads receipt-only, never falsely verified);
-  succession-chain verification is a deferred enhancement for both surfaces. Mobile
-  has since shipped it too (`apps/mobile/src/components/MemoryPanel.tsx` calls
-  `resolveFeltConsolidation`); what remains is the one-pass to spatial
-  ([`panels-pattern.md`](panels-pattern.md)).
+  succession-chain verification is a deferred enhancement. The one-pass reaches every
+  flat surface, then spatial ([`panels-pattern.md`](panels-pattern.md)).
 
 ## Related
 

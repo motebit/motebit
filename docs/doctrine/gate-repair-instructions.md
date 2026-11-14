@@ -2,6 +2,8 @@
 
 > **Layer:** law (the repair contract rejects bare output) — enforced by `scripts/__tests__/gate-report.test.ts`
 
+**Status:** [doctrine-status.md § gate-repair-instructions](../ops/doctrine-status.md#gate-repair-instructionsmd)
+
 A drift gate that fails must tell the reader **how to fix it**, not just **that** something broke. The agentic-era invariant: an agent (or human) who hits a red gate should be able to close the loop from the failure text alone — without opening the gate's source to reverse-engineer what it wanted.
 
 This is the difference between a gate that prints `3 violation(s) found` (the reader becomes the parser) and one that names the canonical source of truth and the exact edit. The first is a tripwire; the second is self-serviceable.
@@ -51,7 +53,7 @@ Same partial-gate honesty applies, and for the same reason. Disclosure proves a 
 
 Two deliberate non-mandates:
 
-- **It is not enforced.** `scripts/measure-gate-aperture.ts` reports it. Measured 2026-09-02: **107 of 137** passing gates already state their aperture (78%). Of the 30 that don't, some genuinely shouldn't — a gate validating a single manifest has no meaningful count, and a number there would be noise. Mandating across all of them would manufacture false precision in exactly the places it adds none. The named cluster worth fixing is the seven `check-*-primitives` gates, which report their allowlist size but never how much source they scanned.
+- **It is not enforced.** `scripts/measure-gate-aperture.ts` reports it. Some gates genuinely shouldn't state an aperture — a gate validating a single manifest has no meaningful count, and a number there would be noise. Mandating across all of them would manufacture false precision in exactly the places it adds none.
 - **Prefer widening to disclosing.** Disclosure is the floor, not the goal. `check-affordance-routing`'s real fix was not printing a number — it was replacing a hardcoded subdirectory list with a walk of all of `src/`, so the aperture _cannot_ narrow as the repo grows. A list of directories is a moving target; a rule that derives the set is not.
 
 **The checklist question**, to be asked when adding or reviewing any gate: _what fraction of the candidate set does this actually see, and would I notice if that fraction shrank?_

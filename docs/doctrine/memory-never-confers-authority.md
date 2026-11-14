@@ -2,7 +2,7 @@
 
 > **Layer:** law (grantless R4 needs approval; the grant's signature is verified; a grant binds its presenter) — enforced by `packages/policy/src/__tests__/grant-authorizes-r4.test.ts`, `packages/runtime/src/__tests__/grant-verifier.test.ts`, `packages/runtime/src/__tests__/grant-presenter-binding.test.ts`
 
-**Status:** shipped (invariant + producer seam, 2026-06-10). Grants are now stored and presented: the grant store is `~/.motebit/grants/` (`motebit grant`, `apps/cli/src/subcommands/grant.ts`); `motebit --grant`, `motebit serve --direct --grant` and the molecule-runner self-grant present grants to the runtime; the CLI callers read revocations from the relay's `/api/v1/delegations/revocations` cache; the molecule-runner self-grant presents none.
+**Status:** [doctrine-status.md § memory-never-confers-authority](../ops/doctrine-status.md#memory-never-confers-authoritymd)
 **Code:** `packages/policy/src/policy-gate.ts` (step 8b), `packages/runtime/src/grant-verifier.ts` (`verifyGrantForTurn`), `packages/runtime/src/interactive-delegation.ts` (explicit `riskHint`).
 **Gate:** `check-money-authority`.
 **Siblings:** [`memory-provenance.md`](memory-provenance.md), [`delegation.md`](delegation.md), [`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md), [`surface-determinism.md`](surface-determinism.md).

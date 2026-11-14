@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § intelligence-pluggability-contract](../ops/doctrine-status.md#intelligence-pluggability-contractmd)
+
 > **Intelligence is pluggable only when motebit's runtime invariants remain constant while prompt, tools, and context budgets adapt to the selected model. The runtime does not become smaller for smaller models. The prompt does.**
 
 This is the connective doctrine between [`protocol-primacy.md`](protocol-primacy.md) (the WHAT: identity / governance / trust / receipts are protocol-level across all tiers) and [`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md) (the discipline: runtime enforces, prompt teaches). Without this clause both doctrines hold individually and still admit the failure mode named below.
@@ -51,11 +53,9 @@ systemPromptBudget + toolSchemaBudget + renderedStateBudget + userMessageReserve
   → ContextWindowTooSmallError (typed-failure, calm-software surface)
 ```
 
-This is a **new gate**, distinct from the auto-router's deny channel ([`auto-routing-as-protocol-primitive.md`](auto-routing-as-protocol-primitive.md)). Auto-routing deny answers "I cannot pick among catalog entries." Admission answers "the picked or configured model cannot carry the assembled prompt." Today's WebLLM path receives auto-router deny (single-model backend → empty catalog → deny), and the consumer **falls through to the configured model** anyway — that fall-through is the bug surface; admission closes it.
+This is a **new gate**, distinct from the auto-router's deny channel ([`auto-routing-as-protocol-primitive.md`](auto-routing-as-protocol-primitive.md)). Auto-routing deny answers "I cannot pick among catalog entries." Admission answers "the picked or configured model cannot carry the assembled prompt." A single-model backend such as WebLLM receives auto-router deny (empty catalog → deny), and the consumer **falls through to the configured model** anyway — that fall-through is the bug surface admission closes.
 
-The deny is honest, not silent. The chrome surfaces "this model's context window is too small for the full motebit runtime — choose a larger model or switch to Motebit Cloud" via the existing `routingNarration` slot.
-
-**Status: not built.** The ContextWindowTooSmallError named above does not exist in the code, and no surface measures the assembled prompt before invoking a provider. What exists is the field the gate would read — `ProviderCapability.contextWindowTokens` (`packages/protocol/src/routing.ts`), optional, and set by no producer today — and the mitigation for the witnessed failure: the web WebLLM engine is initialized with a 16,384-token window (`WEBLLM_CONTEXT_WINDOW_TOKENS`, `apps/web/src/providers.ts`). An over-long prompt still reaches the provider and fails with the provider's own error.
+The deny must be honest, not silent: the chrome is to surface "this model's context window is too small for the full motebit runtime — choose a larger model or switch to Motebit Cloud" via the existing `routingNarration` slot. Commitment 1 is a requirement: no surface measures the assembled prompt today, and the typed error above does not exist yet ([doctrine-status.md](../ops/doctrine-status.md#intelligence-pluggability-contractmd)).
 
 ### 2. Model-aware prompt assembly
 
@@ -63,15 +63,13 @@ System prompt assembly takes the provider's capability profile as input:
 
 - Doctrine teaching blocks (PERCEPTION_DOCTRINE et al.) can compress under a declared `promptVerbosity` budget without dropping wire-field semantics.
 - Tool schemas can prune to the consumer's active tier set when total budget pressure demands it.
-- `trimConversation` in `packages/ai-core/src/context-window.ts` reserves the system-prompt + tool budget instead of treating them as free.
-
-**Status: partly built.** Two pieces adapt to the model today. `buildSystemPrompt` takes an optional `model` and, below the frontier tier (`modelCapabilityTier`), adds the `TIER_ADAPTED_VOICE` block (`packages/ai-core/src/prompt.ts`). The conversation-history budget is chosen per model by `historyTokenBudget` (`packages/sdk/src/models.ts`): 64,000 tokens for large-window vendors, 8,000 otherwise. What is not built: the system prompt and the tool schemas are not budgeted against the model's window. `trimConversation` reserves only `reserveForResponse`, so the prompt and schemas are still treated as free, and doctrine blocks and tool schemas do not compress. The only control on the prompt's size is the static `SYSTEM_PROMPT_BUDGET_BYTES` ceiling in `packages/ai-core/src/prompt.ts`, enforced by `check-prompt-budget` (#103).
+- `trimConversation` in `packages/ai-core/src/context-window.ts` is to reserve the system-prompt + tool budget instead of treating them as free (today it reserves only `reserveForResponse`).
 
 The shape of "compression" is not arbitrary truncation — it is removing rule-shaped conformance clauses (per `runtime-invariants-over-prompt-rules.md`) while preserving the typed-truth wire-field teachings that the runtime cannot enforce. This is the same five-question audit, parameterized by model.
 
 ### 3. Move invariants out of the prompt (the standing fix)
 
-The current `PERCEPTION_DOCTRINE` block is ~2,750 tokens. It is a `runtime-invariants-over-prompt-rules.md` violation independent of model size — Sonnet absorbs it invisibly; Llama-3.2-3B exposes it. The small-model failure is the **forcing function** that makes a long-standing prompt-density slip legible.
+The size of the `PERCEPTION_DOCTRINE` block is a `runtime-invariants-over-prompt-rules.md` violation independent of model size — Sonnet absorbs it invisibly; Llama-3.2-3B exposes it. The small-model failure is the **forcing function** that makes a long-standing prompt-density slip legible.
 
 This commitment is **not deferred** as "future deep work" — it is the standing direction every prompt-clause audit moves toward. Each new typed-truth wire field + dispatch enforcement subtracts prose from the prompt. The eventual end state is a prompt that fits a 4k-window model with the full runtime intact, because the runtime carries what the prompt previously enumerated.
 
@@ -83,7 +81,7 @@ This doctrine does not replace; it composes.
 - **[`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md)** says the runtime should enforce; the prompt should teach. This doctrine adds: the prompt's _teaching density_ is an adaptive surface, not a constant. The runtime is constant; the teaching scales to what the model needs taught.
 - **[`auto-routing-as-protocol-primitive.md`](auto-routing-as-protocol-primitive.md)** defines the dispatcher's deny channel for "no catalog entry satisfies constraints." This doctrine adds the **admission** deny for "the chosen model cannot carry the assembled prompt." Two deny semantics; one calm-software surface (the chrome's `routingNarration` slot).
 - **Capability rings** in [`CLAUDE.md`](../../CLAUDE.md): "Ring 1 is about capability, not form — a surface may express the same capability through a different medium-native form." This doctrine extends: the same runtime expresses its invariants through a _differently-budgeted_ prompt without becoming a different runtime.
-- **[`agility-as-role.md`](agility-as-role.md)**: model selection is agility-as-role's foundation-model instance (one of seven: cryptosuite, license-floor, settlement-rail, foundation-model, inference-host, model-lab, TaskShape; `Jurisdiction` is an admission predicate, not an instance). The intelligence is the parameter; the runtime is the role.
+- **[`agility-as-role.md`](agility-as-role.md)**: model selection is agility-as-role's foundation-model instance (`Jurisdiction` is an admission predicate, not an instance). The intelligence is the parameter; the runtime is the role.
 
 ## Drift defense
 
@@ -112,11 +110,11 @@ Pre-doctrine (witnessed 2026-05-17):
 4. `buildSystemPrompt` assembles ~6.5k tokens of static prefix + ~2k tokens of tools + ~1k tokens of packed context.
 5. WebLLM rejects at 8,484 tokens vs 4,096 window. User sees a developer-shaped error message.
 
-Today (only step 1 is shipped):
+With the WebLLM window raised:
 
-1. Same selection. The WebLLM engine is initialized with `context_window_size: 16384` (model supports up to 128K; WebLLM's default was the cap, not the model's). The prompt now fits, so the turn proceeds. Same invariants as Sonnet — identity, policy, receipts, sensitivity, tool dispatch are byte-identical.
+1. Same selection. The WebLLM engine is initialized with `context_window_size: 16384` (model supports up to 128K; WebLLM's default was the cap, not the model's). The prompt fits, so the turn proceeds. Same invariants as Sonnet — identity, policy, receipts, sensitivity, tool dispatch are byte-identical.
 
-Target, once commitment 1 is built (steps 2–4 are not built):
+With admission (commitment 1):
 
 2. `ProviderCapability.contextWindowTokens: 16384` declared on the capability profile.
 3. WebApp performs admission: assembled prompt + reserve ≤ 16384 → admitted.
@@ -126,14 +124,14 @@ Target, once commitment 1 is built (steps 2–4 are not built):
 
 - **The minimum context-window floor.** Today's floor is a function of `prompt.ts` size + tool count + state pack. As `PERCEPTION_DOCTRINE` shrinks (commitment 3), the floor drops. Naming a fixed number here would ossify a soft-decay target.
 - **Per-model prompt variants.** Compression is not "different prompts per model." It is **one prompt assembly function** parameterized by model capability. Variants would re-introduce the lite-motebit trap.
-- **Routing-policy for admission failure.** Whether the consumer should fall back to a different provider when admission fails (e.g., automatically swap to Cloud) is a consumer-side policy decision, not a doctrine-level law. The doctrine requires the typed failure to exist (it is not built yet; see commitment 1's status); what to do with it belongs to the consumer.
+- **Routing-policy for admission failure.** Whether the consumer should fall back to a different provider when admission fails (e.g., automatically swap to Cloud) is a consumer-side policy decision, not a doctrine-level law. The doctrine requires the typed failure to exist; what to do with it belongs to the consumer.
 
 ## Cross-cuts
 
 - [`protocol-primacy.md`](protocol-primacy.md) — the constitutional invariant. This doctrine is the structural floor under its on-device claim.
 - [`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md) — the discipline. This doctrine parameterizes the discipline by model.
 - [`auto-routing-as-protocol-primitive.md`](auto-routing-as-protocol-primitive.md) — the deny channel. Admission is a sibling deny semantic.
-- [`agility-as-role.md`](agility-as-role.md) — model selection as the 8th role-instance.
+- [`agility-as-role.md`](agility-as-role.md) — model selection as a role-instance.
 - [`hardware-attestation.md`](hardware-attestation.md) — same shape at the identity layer (hardware capability is additive; software identity is the floor).
 - _feedback_sovereignty_orthogonal_ — tier and provider mode are orthogonal. This doctrine extends: tier and **model size** are orthogonal too.
 - _feedback_intelligence_commodity_ — don't sell intelligence as the product. The runtime is the product; intelligence is the parameter.

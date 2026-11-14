@@ -2,6 +2,8 @@
 
 > **Layer:** narrative
 
+**Status:** [doctrine-status.md § identity-universal-boundary](../ops/doctrine-status.md#identity-universal-boundarymd)
+
 The sovereign Ed25519 identity is the same primitive at every boundary the agent
 touches. It is not a relay credential, a payment key, and a web signature that
 happen to share a curve — it is **one identity, presented at many membranes.**
@@ -28,14 +30,16 @@ web-request key). Each new boundary is an **adapter, not a new primitive** — a
 fresh agility axis over the existing identity (see
 [`agility-as-role.md`](agility-as-role.md)), never a fork of the self.
 
-| Boundary            | State                    | Mechanism                                       |
-| ------------------- | ------------------------ | ----------------------------------------------- |
-| agent ↔ relay       | shipped                  | signed device/auth tokens, audience-bound       |
-| agent ↔ agent       | shipped (onchain-proven) | P2P settlement, signed delegation receipts      |
-| agent ↔ user        | shipped                  | governed delegation, pairing, cold-start ack    |
-| agent ↔ wallet/rail | shipped                  | sovereign Solana + guest rails                  |
-| agent ↔ website     | **deferred**             | Web Bot Auth (RFC 9421 HTTP Message Signatures) |
-| agent ↔ enterprise  | **deferred**             | IAM bridges / VC presentation                   |
+| Boundary            | Mechanism                                       |
+| ------------------- | ----------------------------------------------- |
+| agent ↔ relay       | signed device/auth tokens, audience-bound       |
+| agent ↔ agent       | P2P settlement, signed delegation receipts      |
+| agent ↔ user        | governed delegation, pairing, cold-start ack    |
+| agent ↔ wallet/rail | sovereign Solana + guest rails                  |
+| agent ↔ website     | Web Bot Auth (RFC 9421 HTTP Message Signatures) |
+| agent ↔ enterprise  | IAM bridges / VC presentation                   |
+
+The agent ↔ website and agent ↔ enterprise adapters are **deferred-with-trigger** (§ "Web Bot Auth" below for the trigger shape).
 
 ## The thin-waist position — and the honest qualifier
 
@@ -98,7 +102,7 @@ pays off if the sovereign path is also the most capable path.
 
 Adapters consume the identity; they never replace it.
 
-## Web Bot Auth — deferred standards adapter (not a pivot, not shipped)
+## Web Bot Auth — deferred standards adapter (not a pivot)
 
 The agent↔website boundary: an automated client publishes an Ed25519 public key at
 a `/.well-known/` directory and signs each outbound request per **RFC 9421** (HTTP
@@ -106,13 +110,6 @@ Message Signatures) so origin servers can verify _who_ is calling. Motebit alrea
 does Ed25519 + `/.well-known/motebit.json` + receipt/payment signing — the adapter
 is a second well-known directory and RFC 9421 signing over the **existing**
 sovereign key, no new primitive.
-
-> Snapshot, 2026-06 (sources below — these will age; the _mechanism_ above is the
-> durable part, not the calendar): an IETF working group is standardizing this
-> (`draft-meunier-web-bot-auth-architecture`), authored out of Cloudflare +
-> Google, with Amazon/Akamai/OpenAI participating and OpenAI already signing
-> Operator requests; a BCP was targeted ~Aug 2026. Treat participants/dates as a
-> dated snapshot, not doctrine.
 
 One useful way to read the emerging landscape (our interpretation, not an
 established standard) is by _trust anchor_: card-network tokens (Mastercard Agent
