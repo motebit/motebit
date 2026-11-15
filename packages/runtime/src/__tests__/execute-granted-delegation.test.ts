@@ -1500,3 +1500,80 @@ describe("executeGrantedDelegation — per-call ceiling maxTotalMicro, enforced 
     expect(result).toEqual({ ok: false, code: "budget_exceeded" });
   });
 });
+
+describe("executeGrantedDelegation — a rail that refuses every spend (rail_spend_refused)", () => {
+  let relayCalls = 0;
+  beforeEach(() => {
+    relayCalls = 0;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      relayCalls++;
+      if (isRelayMetadataUrl(url)) return relayMetadataResponse();
+      return relayFetch()(url);
+    }) as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /** A wallet whose rail reports `spendRefused` (structurally, as SolanaWalletRail does). */
+  function refusingWallet(spendRefused: unknown) {
+    const { wallet, buildP2pPayment } = mockWallet(async () => {
+      throw new Error("the rail must not be reached");
+    });
+    (wallet as unknown as { spendRefused: unknown }).spendRefused = spendRefused;
+    return { wallet, buildP2pPayment };
+  }
+
+  it("the live branch returns rail_spend_refused before discovery, the meter and the rail", async () => {
+    const grant = await makeGrant(CLERK, CLERK);
+    const token = await mintTick(grant, CLERK);
+    const { wallet, buildP2pPayment } = refusingWallet(true);
+    const runtime = clerkRuntime(wallet);
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+    });
+
+    expect(result).toEqual({ ok: false, code: "rail_spend_refused" });
+    expect(relayCalls).toBe(0); // before discovery: the relay was never asked
+    expect(buildP2pPayment).toHaveBeenCalledTimes(0);
+    expect(runtime.outstandingPaidResults()).toEqual([]);
+    expect(runtime.getRecentRoutingTranscripts()).toHaveLength(0);
+  });
+
+  it("the dry run is untouched by a refusing rail: it still quotes and never broadcasts", async () => {
+    const grant = await makeGrant(CLERK, CLERK);
+    const token = await mintTick(grant, CLERK);
+    const { wallet, buildP2pPayment } = refusingWallet(true);
+    const runtime = clerkRuntime(wallet);
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(buildP2pPayment).toHaveBeenCalledTimes(0);
+  });
+
+  it("only a literal `spendRefused: true` refuses here: any other value reaches the rail", async () => {
+    const grant = await makeGrant(CLERK, CLERK);
+    const token = await mintTick(grant, CLERK);
+    const { wallet, buildP2pPayment } = refusingWallet("yes");
+    const runtime = clerkRuntime(wallet);
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+  });
+});

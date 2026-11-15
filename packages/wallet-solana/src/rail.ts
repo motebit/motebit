@@ -33,6 +33,8 @@ import {
   InsufficientSolForGasError,
   InsufficientUsdcBalanceError,
   InvalidSolanaAddressError,
+  RailSpendRefusedError,
+  isSpendRefused,
 } from "./constants.js";
 
 export type SendResult = SendUsdcResult;
@@ -117,6 +119,14 @@ export interface SolanaWalletRailConfig {
   identitySeed: Uint8Array;
   /** USDC SPL mint (base58). Defaults to mainnet USDC. */
   usdcMint?: string;
+  /**
+   * The mints this wallet may sign a transfer for. Absent ⇒ unrestricted
+   * (every existing caller). Present ⇒ `send`, `sendBatch` and
+   * `buildP2pPayment` throw `RailSpendRefusedError` before the gas check
+   * unless the adapter's PARSED mint is listed; the adapter repeats the
+   * check. Fixed at construction — there is no setter.
+   */
+  spendableMints?: readonly string[];
   /** RPC commitment level. Defaults to "confirmed". */
   commitment?: "processed" | "confirmed" | "finalized";
   /**
@@ -154,12 +164,20 @@ export class SolanaWalletRail implements SovereignWalletRail {
    */
   readonly confirmP2pPayment?: (query: ConfirmP2pPaymentQuery) => Promise<P2pPaymentConfirmation>;
 
+  /**
+   * The mints this wallet may sign a transfer for; `undefined` ⇒ unrestricted.
+   * A frozen copy taken at construction.
+   */
+  readonly spendableMints: readonly string[] | undefined;
+
   constructor(
     private readonly adapter: SolanaRpcAdapter,
-    opts?: { autoGas?: boolean; now?: () => number },
+    opts?: { autoGas?: boolean; now?: () => number; spendableMints?: readonly string[] },
   ) {
     this.autoGas = opts?.autoGas ?? false;
     this.now = opts?.now ?? Date.now;
+    this.spendableMints =
+      opts?.spendableMints !== undefined ? Object.freeze([...opts.spendableMints]) : undefined;
     this.web3Adapter = adapter instanceof Web3JsRpcAdapter ? adapter : null;
     if (adapter.honorsBroadcastHooks === true) {
       this.confirmP2pPayment = (query) => this.confirmOwnP2pPayment(query);
@@ -169,6 +187,33 @@ export class SolanaWalletRail implements SovereignWalletRail {
   /** The wallet's own base58 address. Equivalent to the motebit identity public key. */
   get address(): string {
     return this.adapter.ownAddress;
+  }
+
+  /** The adapter's PARSED mint (base58); `undefined` when the adapter reports none. */
+  get usdcMint(): string | undefined {
+    return this.adapter.usdcMint;
+  }
+
+  /**
+   * Read-only: would `send` / `sendBatch` / `buildP2pPayment` refuse right
+   * now? True when this wallet has a `spendableMints` allowlist and the
+   * adapter's parsed mint is not on it — or the adapter reports no mint.
+   * Always false without an allowlist. A caller reads it to refuse early
+   * (before a meter commits spend); the transfers refuse regardless.
+   */
+  get spendRefused(): boolean {
+    return isSpendRefused(this.spendableMints, this.adapter.usdcMint);
+  }
+
+  /**
+   * Refuse, before the gas check and before the adapter is called, a transfer
+   * in a mint this wallet may not sign for.
+   */
+  private requireSpendable(): void {
+    const allowed = this.spendableMints;
+    if (allowed !== undefined && this.spendRefused) {
+      throw new RailSpendRefusedError(this.adapter.usdcMint ?? null, allowed);
+    }
   }
 
   /** USDC balance in micro-units (6 decimals, same as motebit money). */
@@ -257,6 +302,7 @@ export class SolanaWalletRail implements SovereignWalletRail {
    * confirms it.
    */
   async send(toAddress: string, microAmount: bigint): Promise<SendResult> {
+    this.requireSpendable();
     await this.requireGas();
     return this.adapter.sendUsdc({ toAddress, microAmount });
   }
@@ -274,6 +320,7 @@ export class SolanaWalletRail implements SovereignWalletRail {
   async sendBatch(
     items: ReadonlyArray<{ toAddress: string; microAmount: bigint }>,
   ): Promise<SendUsdcBatchItemResult[]> {
+    this.requireSpendable();
     await this.requireGas();
     return this.adapter.sendUsdcBatch(items);
   }
@@ -298,6 +345,7 @@ export class SolanaWalletRail implements SovereignWalletRail {
     request: SovereignP2pPaymentRequest,
     hooks?: BroadcastHooks,
   ): Promise<P2pPaymentProof> {
+    this.requireSpendable();
     await this.requireGas();
     return buildP2pPaymentProof(this.adapter, proofArgs(request), hooks);
   }
@@ -326,7 +374,8 @@ export class SolanaWalletRail implements SovereignWalletRail {
     if (
       query.error instanceof InsufficientUsdcBalanceError ||
       query.error instanceof InsufficientSolForGasError ||
-      query.error instanceof InvalidSolanaAddressError
+      query.error instanceof InvalidSolanaAddressError ||
+      query.error instanceof RailSpendRefusedError
     ) {
       return { status: "absent" };
     }
@@ -479,8 +528,11 @@ export function createSolanaWalletRail(config: SolanaWalletRailConfig): SolanaWa
     identitySeed: config.identitySeed,
     usdcMint: config.usdcMint,
     commitment: config.commitment,
+    // The allowlist binds both layers: the rail refuses first, the adapter
+    // refuses again if anything reaches it another way.
+    spendableMints: config.spendableMints,
   });
   // Automatic gas is OFF, whatever `disableAutoGas` says: the top-up signed
   // a Jupiter-built transaction unvalidated (see `./jupiter.ts`).
-  return new SolanaWalletRail(adapter, { autoGas: false });
+  return new SolanaWalletRail(adapter, { autoGas: false, spendableMints: config.spendableMints });
 }

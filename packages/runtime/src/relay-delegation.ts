@@ -167,6 +167,16 @@ export type DelegationErrorCode =
    */
   | "money_meter_denied"
   /**
+   * Pre-flight, BEFORE signing. The sovereign rail may not sign a transfer
+   * for its mint: it was constructed with a `spendableMints` allowlist and
+   * its parsed mint is not on it (or its adapter reports no mint). Nothing
+   * was signed, nothing was sent, nothing was written to the paid-intent
+   * ledger and the grant's spend meter was not charged. Not a retryable
+   * condition and not a reason to use another lane: the rail refuses every
+   * spend until its construction changes.
+   */
+  | "rail_spend_refused"
+  /**
    * Pre-flight, BEFORE broadcast. The session's paid-intent ledger holds a
    * SETTLED-but-unretrieved payment that this new delegation would duplicate
    * (same worker + capability, or too many outstanding payments session-wide).
@@ -1507,6 +1517,22 @@ export function p2pPaymentConfirmerOf(rail: unknown): ConfirmP2pPayment | undefi
   return typeof fn === "function" ? (fn as ConfirmP2pPayment).bind(rail) : undefined;
 }
 
+/**
+ * Does the rail report that it refuses every spend? Structurally
+ * `SolanaWalletRail.spendRefused`, read the way {@link p2pPaymentConfirmerOf}
+ * reads the confirmer, so this rail-agnostic module never imports a wallet
+ * package and the protocol's `SovereignWalletRail` type is unchanged. Only a
+ * literal `true` counts; a rail without the property is not refused here.
+ * Never the only guard: a refusing rail also throws from its transfers.
+ */
+export function railSpendRefusedOf(rail: unknown): boolean {
+  if (rail == null || typeof rail !== "object") return false;
+  return (rail as { spendRefused?: unknown }).spendRefused === true;
+}
+
+/** `Error.name` of the rail's typed spend refusal (thrown only before signing). */
+export const RAIL_SPEND_REFUSED_ERROR_NAME = "RailSpendRefusedError";
+
 /** Default wait for a pending transaction: past the ~150s Solana landing window. */
 const DEFAULT_PAYMENT_CONFIRM_MAX_WAIT_MS = 180_000;
 /** Upper bound on status reads for one transaction while it is pending. */
@@ -2453,6 +2479,13 @@ export async function resolveAndSubmitP2pDelegation(
           ...(denial != null ? { denial } : {}),
         },
       };
+    }
+    // The rail (or the metered wrapper reading the rail) refused the spend
+    // for its mint. Thrown only before the gas check and before anything is
+    // signed, so nothing was sent: no ledger entry, never `payment_status_unknown`
+    // (which an adapter without broadcast hooks would otherwise produce).
+    if (err instanceof Error && err.name === RAIL_SPEND_REFUSED_ERROR_NAME) {
+      return fail("rail_spend_refused", err.message);
     }
     // wallet-solana surfaces a funds shortfall as InsufficientUsdcBalanceError,
     // thrown only before any transaction is signed (adapter.ts contract).

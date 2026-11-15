@@ -336,6 +336,15 @@ export interface SolanaRpcAdapter {
   /** The wallet's own base58 address (derived from the keypair seed). */
   readonly ownAddress: string;
 
+  /**
+   * The SPL mint (base58) this adapter's transfers are built for, as PARSED
+   * by the adapter — never an echo of a raw config string. Read-only.
+   * `SolanaWalletRail` compares it against its `spendableMints` allowlist;
+   * a rail with an allowlist over an adapter that reports no mint refuses
+   * every spend (`RailSpendRefusedError`).
+   */
+  readonly usdcMint?: string;
+
   /** USDC balance in micro-units. Returns 0 if no token account exists yet. */
   getUsdcBalance(): Promise<bigint>;
 

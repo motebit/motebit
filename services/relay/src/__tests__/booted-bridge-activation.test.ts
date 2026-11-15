@@ -64,13 +64,14 @@ import {
 } from "@motebit/crypto";
 import { createInMemoryStorage } from "@motebit/runtime";
 import { InMemoryToolRegistry } from "@motebit/tools";
-import { SolanaWalletRail, type SolanaRpcAdapter } from "@motebit/wallet-solana";
+import { SolanaWalletRail, USDC_MINT_DEVNET, type SolanaRpcAdapter } from "@motebit/wallet-solana";
 import type { BootstrapAndEmitIdentityResult } from "@motebit/mcp-server";
 import { RiskLevel } from "@motebit/sdk";
 import {
   defaultCreateMoneyRuntime,
   selfIssueGrant,
   mintTick,
+  MOLECULE_SPENDABLE_MINTS,
   type MoleculeConfig,
 } from "@motebit/molecule-runner";
 import {
@@ -209,6 +210,9 @@ function fakeRail(): { rail: SolanaWalletRail; sent: () => number } {
   const sig = fakeSolanaTxHash();
   const adapter = {
     ownAddress: "FaKeSo1anaAddr1111111111111111111111111111",
+    // This suite expects LIVE sends: the fake reports the devnet mint, the
+    // only one a molecule's rail may sign for (MOLECULE_SPENDABLE_MINTS).
+    usdcMint: USDC_MINT_DEVNET,
     getUsdcBalance: async () => 100_000_000n,
     getSolBalance: async () => 10_000_000n,
     sendUsdc: async () => ({ ok: true, signature: sig, slot: 1, confirmed: true }),
@@ -219,7 +223,12 @@ function fakeRail(): { rail: SolanaWalletRail; sent: () => number } {
     getTransaction: async () => ({ status: "not_found" }),
     isReachable: async () => true,
   } as unknown as SolanaRpcAdapter;
-  return { rail: new SolanaWalletRail(adapter), sent: () => calls };
+  return {
+    // The runner refuses to build a money runtime over a rail that does not
+    // carry exactly its allowlist.
+    rail: new SolanaWalletRail(adapter, { spendableMints: MOLECULE_SPENDABLE_MINTS }),
+    sent: () => calls,
+  };
 }
 
 /** A ≥170-char result so the completion clears the quality gate (else the task

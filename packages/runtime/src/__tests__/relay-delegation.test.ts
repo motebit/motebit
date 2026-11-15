@@ -753,6 +753,60 @@ describe("resolveAndSubmitP2pDelegation", () => {
     if (!result.ok) expect(result.error.code).toBe("insufficient_balance");
   });
 
+  it("a rail spend refusal is rail_spend_refused with NO confirmer: nothing recorded, never payment_status_unknown", async () => {
+    // Over a wallet with no confirmer every unclassified throw becomes
+    // `payment_status_unknown` and writes an unconfirmed ledger row. The
+    // refusal is thrown before signing, so it must be classified first.
+    const buildP2pPayment = vi.fn(async () => {
+      throw Object.assign(new Error("mint not spendable"), { name: "RailSpendRefusedError" });
+    });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+      }),
+    );
+    const ledger = new PaidIntentLedger();
+    const result = await resolveAndSubmitP2pDelegation(
+      resolveParams({ buildP2pPayment, paidIntentLedger: ledger }),
+    );
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("rail_spend_refused");
+      expect(result.error.unconfirmedPayment).toBeUndefined();
+      expect(result.error.settledPayment).toBeUndefined();
+    }
+    expect(ledger.outstanding()).toEqual([]);
+  });
+
+  it("a rail spend refusal is rail_spend_refused WITH a confirmer too (not payment_broadcast_failed)", async () => {
+    const buildP2pPayment = vi.fn(async () => {
+      throw Object.assign(new Error("mint not spendable"), { name: "RailSpendRefusedError" });
+    });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+      }),
+    );
+    const confirmP2pPayment = vi.fn(async () => ({ status: "absent" as const }));
+    const ledger = new PaidIntentLedger();
+    const result = await resolveAndSubmitP2pDelegation(
+      resolveParams({ buildP2pPayment, confirmP2pPayment, paidIntentLedger: ledger }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("rail_spend_refused");
+    expect(confirmP2pPayment).toHaveBeenCalledTimes(0);
+    expect(ledger.outstanding()).toEqual([]);
+  });
+
   it("a builder throw with no confirmer is payment_status_unknown — never read as 'nothing moved' (#885)", async () => {
     const buildP2pPayment = vi.fn(async () => {
       throw new Error("rpc down");
