@@ -55,7 +55,7 @@ import { LIVENESS_SESSION_GAP_MS } from "./runtime-coverage.js";
 import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { createDirectTaskHandler } from "./direct-task-handler.js";
-import { createGrantPresenter } from "./subcommands/grant.js";
+import { createGrantPresenter, daemonGrantRelayUrls } from "./subcommands/grant.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
 import { cliRuntimeConfig, daemonRelay } from "./sync-configured.js";
@@ -1440,7 +1440,21 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // delegate (the task submitter is a foreign principal); without it an
   // R4_MONEY tool is refused on this path (no human to approve).
   const serveGrant =
-    config.direct && config.grant != null ? await createGrantPresenter(config.grant) : null;
+    config.direct && config.grant != null
+      ? await createGrantPresenter(config.grant, {
+          // Asked each task: the relay named for this identity and the one
+          // it pushes to (stdio serve pushes to none, yet a revocation signed
+          // on another machine lives on the named one), plus the named relay
+          // re-resolved as `motebit grant revoke` resolves it.
+          relayUrls: () => daemonGrantRelayUrls(relay, config),
+          // Once per outage: the relay could not confirm revocation status,
+          // so the grant is withheld and R4 tasks are refused.
+          onRevocationUnconfirmed: (reason) =>
+            log(
+              `Standing grant not presented: its revocation status could not be confirmed with the relay (${sanitizeRelayText(reason)}) — money tasks are refused until it can be`,
+            ),
+        })
+      : null;
   if (servePrivateKey) {
     {
       const privateKey = servePrivateKey;
