@@ -3,10 +3,20 @@
 # Daily scheduled run exercises staging END TO END with a PAID devnet P2P
 # delegation per molecule — free delegation to a priced agent is structurally
 # impossible (Arc 3.5), and that's correct: the probe pays like any stranger,
-# no allowlist. Promotion staging → prod is gated on
-# scripts/check-promotion-ready.ts reading THIS workflow's scheduled-run
-# history (5 consecutive greens), then a human dispatches the promote job
-# (protected by the production environment's required reviewers).
+# no allowlist.
+#
+# This workflow does not promote anything. Promotion READINESS is
+# scripts/check-promotion-ready.ts: an operator pre-flight run by hand (not
+# a CI gate; no workflow calls it) that reads THIS workflow's scheduled-run
+# history and reports ready when the last 5 SCHEDULED runs all succeeded
+# (manual dispatches do not count). What it gates is the one-time creation
+# of a molecule's prod app, which a human does with
+# `RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts`; until then
+# deploy-<service>.yml skips ("Check prod app exists"). Neither that script
+# nor the deploy workflows read this history themselves. Once the app
+# exists, each prod deploy goes through deploy-<service>.yml: CI + head of
+# main + staging gate, then the `production` reviewer (docs/ops/RUNBOOK.md,
+# "Molecule production deploys").
 #
 # Secrets (staging environment):
 #   PROBE_DELEGATOR_SEED_HEX  the probe's ONE secret — devnet-funded only. It is

@@ -262,10 +262,10 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # run (and by any PR touching scripts/), not by an unrelated local push.
   _scripts_changed=$(changed_files scripts/ coverage-graduation.json examples/interop/ .github/workflows/)
   if [ -n "$_scripts_changed" ]; then
-    run_phase "gate self-tests (scripts/ changed)" pnpm test:gates
-    run_phase "gate-effectiveness (scripts/ changed)" pnpm check-gates-effective
+    run_phase "gate self-tests (gate inputs changed)" pnpm test:gates
+    run_phase "gate-effectiveness (gate inputs changed)" pnpm check-gates-effective
   else
-    skip_phase "gate self-tests + gate-effectiveness" "no scripts/ changes; CI runs them"
+    skip_phase "gate self-tests + gate-effectiveness" "no gate-input changes; CI runs them"
   fi
 
   # `--concurrency` caps turbo's parallel task count. Each test task spawns its

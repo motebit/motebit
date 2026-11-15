@@ -460,7 +460,12 @@ jobs:
             # examples/interop/ is a gate input too: the APS vector and the pins
             # in INTEROP.md are read by scripts/__tests__/interop-aps-vector.test.ts.
             # .github/workflows/ is a gate input too: the workflow pin tests in
-            # scripts/__tests__ parse these files.
+            # scripts/__tests__ parse these files, and check-prepush-subset
+            # pins ci.yml itself. ONE filter on purpose, so a workflow-only
+            # change (a dependabot github-actions bump included) triggers the
+            # full proof on pull_request and merge_group: gate-self-tests,
+            # the gate-effectiveness shards AND activation-effectiveness. The
+            # cost is accepted.
             if echo "$changed" | grep -qE '^scripts/|^coverage-graduation\.json$|^examples/interop/|^\.github/workflows/'; then
               scripts=true
             fi
@@ -477,9 +482,11 @@ jobs:
 
   gate-effectiveness-shard:
     # Probe every drift-defense gate with a known-violating fixture to prove
-    # each one actually fires. Scoped to scripts/* changes + pushes to main
-    # so the expense (every gate runs under a perturbation) isn't paid on
-    # unrelated PRs — but any change to a gate or the gate list triggers it.
+    # each one actually fires. Scoped to gate-input changes (the `changes`
+    # job's `scripts` output: scripts/, coverage-graduation.json,
+    # examples/interop/, .github/workflows/) + pushes to main, so the expense
+    # (every gate runs under a perturbation) isn't paid on unrelated PRs —
+    # but any change to a gate, the gate list or a gate input triggers it.
     # Trigger uses the `changes` job's real diff detection, not a text match
     # on PR metadata (#115).
     #
@@ -667,8 +674,10 @@ jobs:
     # (docs/doctrine/composition-preserves-enforcement.md). This is the durable,
     # continuous form of the manual severing runs the ladder PRs recorded once.
     # Heavier than gate-effectiveness (a dist rebuild per probe), so it's its
-    # own job scoped to relay + gate-script changes (and every push to main) —
-    # a relay refactor is exactly what can make a suite go vacuous.
+    # own job scoped to relay changes + gate-input changes (the `changes`
+    # job's `scripts` output, which includes .github/workflows/) and every
+    # push to main — a relay refactor is exactly what can make a suite go
+    # vacuous.
     needs: changes
     if: |
       github.event_name == 'push' ||

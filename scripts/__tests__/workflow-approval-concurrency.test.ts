@@ -21,12 +21,22 @@
  *            held by a production job in one workflow and a non-production
  *            job in another.
  *
- * Limits, stated: groups are compared as written (expressions are not
+ * How a job is modelled: each job carries two facts, `production` (it, or
+ * work it runs, waits on the production reviewer) and `unattended` (it, or
+ * work it runs, does not). An ordinary job has exactly one. A caller of a
+ * local reusable workflow (`./.github/workflows/x.yml`) is one job that
+ * carries the UNION of its callee's jobs, recursively through nested local
+ * callees: a callee with both a production job and an unattended job makes
+ * its caller BOTH. So a workflow-level group over such a caller, or a
+ * job-level group on it, is a breach on its own — the group spans the
+ * callee's approval wait and the callee's unattended work (the 2026-11-14
+ * shape, through a callee).
+ *
+ * Limits, stated: group names are compared lowercased (GitHub treats them
+ * case-insensitively) and otherwise as written (expressions are not
  * evaluated; (c) skips any group containing `${{`). "Behind production" is
  * read from the `environment:` key, compared case-insensitively (GitHub
- * environment names are). A caller of a local reusable workflow
- * (`./.github/workflows/x.yml`) counts as one job, behind production when
- * any job of the callee is. What cannot be decided offline FAILS CLOSED: an
+ * environment names are). What cannot be decided offline FAILS CLOSED: an
  * environment name built from an expression, and a reusable workflow in
  * another repository (`org/repo/.github/workflows/x.yml@ref`), whose jobs
  * this test cannot read. Other environments (npm-publish, staging) are
@@ -49,27 +59,31 @@ const APPROVAL_ENV = "production";
 type Yaml = Record<string, unknown>;
 interface Job {
   id: string;
-  /** The job-level group as written, or null. */
+  /** The job-level group, lowercased, or null. */
   group: string | null;
+  /** It, or (for a caller) some job of its callee, is behind `environment: production`. */
   production: boolean;
+  /** It, or (for a caller) some job of its callee, is not. */
+  unattended: boolean;
 }
 interface Workflow {
   file: string;
-  /** The workflow-level group as written, or null. */
+  /** The workflow-level group, lowercased, or null. */
   group: string | null;
   jobs: Job[];
 }
 
+/** The group name, lowercased: GitHub treats concurrency group names case-insensitively. */
 function groupOf(node: unknown, where: string): string | null {
   if (node === undefined || node === null) return null;
-  if (typeof node === "string") return node;
+  if (typeof node === "string") return node.toLowerCase();
   const g = (node as Yaml).group;
   if (typeof g !== "string") {
     throw new Error(
       `${where}: concurrency without a string group (${JSON.stringify(g)}). Write \`group:\` as a string.`,
     );
   }
-  return g;
+  return g.toLowerCase();
 }
 
 /** The environment name, lowercased (GitHub compares them case-insensitively), or null. */
@@ -96,10 +110,11 @@ function load(sources: Record<string, string>): Workflow[] {
   const docs = new Map<string, Yaml>();
   for (const [file, text] of Object.entries(sources)) docs.set(file, parse(text) as Yaml);
   const jobsOf = (doc: Yaml) => Object.entries((doc.jobs ?? {}) as Record<string, Yaml>);
-  const production = (job: Yaml, where: string, seen: string[]): boolean => {
-    if (envName(job.environment, where) === APPROVAL_ENV) return true;
+  type Kind = { production: boolean; unattended: boolean };
+  const kind = (job: Yaml, where: string, seen: string[]): Kind => {
+    const own = envName(job.environment, where) === APPROVAL_ENV;
     const uses = typeof job.uses === "string" ? job.uses : "";
-    if (uses === "") return false;
+    if (uses === "") return { production: own, unattended: !own };
     const m = /^\.\/\.github\/workflows\/([^@]+)$/.exec(uses);
     if (!m) {
       throw new Error(
@@ -113,8 +128,12 @@ function load(sources: Record<string, string>): Workflow[] {
     if (!doc) {
       throw new Error(`${where}: reusable workflow ${callee} not found under .github/workflows`);
     }
-    if (seen.includes(callee)) return false;
-    return jobsOf(doc).some(([id, j]) => production(j, `${callee}#${id}`, [...seen, callee]));
+    // A caller carries the union of its callee's jobs (recursively). A cycle
+    // contributes nothing new: the jobs on it are already being counted.
+    if (seen.includes(callee)) return { production: own, unattended: false };
+    const inner = jobsOf(doc).map(([id, j]) => kind(j, `${callee}#${id}`, [...seen, callee]));
+    const production = own || inner.some((k) => k.production);
+    return { production, unattended: !own && (inner.some((k) => k.unattended) || !production) };
   };
   return [...docs.entries()].map(([file, doc]) => ({
     file,
@@ -122,7 +141,7 @@ function load(sources: Record<string, string>): Workflow[] {
     jobs: jobsOf(doc).map(([id, job]) => ({
       id,
       group: groupOf(job.concurrency, `${file}#${id}`),
-      production: production(job, `${file}#${id}`, [file]),
+      ...kind(job, `${file}#${id}`, [file]),
     })),
   }));
 }
@@ -134,12 +153,13 @@ function violations(workflows: Workflow[]): string[] {
   const hold = (group: string, job: Job, file: string) => {
     if (group.includes("${{")) return;
     const h = holders.get(group) ?? { production: [], unattended: [] };
-    (job.production ? h.production : h.unattended).push(`${file}#${job.id}`);
+    if (job.production) h.production.push(`${file}#${job.id}`);
+    if (job.unattended) h.unattended.push(`${file}#${job.id}`);
     holders.set(group, h);
   };
   for (const wf of workflows) {
     const prod = wf.jobs.filter((j) => j.production);
-    const rest = wf.jobs.filter((j) => !j.production);
+    const rest = wf.jobs.filter((j) => j.unattended);
     if (wf.group !== null && prod.length > 0 && rest.length > 0) {
       out.push(
         `${wf.file}: workflow-level concurrency group "${wf.group}" is held by ` +
@@ -148,8 +168,15 @@ function violations(workflows: Workflow[]): string[] {
       );
     }
     for (const a of prod) {
+      if (a.group !== null && a.unattended) {
+        out.push(
+          `${wf.file}: job ${a.id} calls a reusable workflow that has both a job behind environment: ` +
+            `${APPROVAL_ENV} and one that is not, and holds the job-level group "${a.group}" over all of ` +
+            `it. Drop the group from the caller and give the callee's jobs their own.`,
+        );
+      }
       for (const b of rest) {
-        if (a.group !== null && a.group === b.group) {
+        if (a !== b && a.group !== null && a.group === b.group) {
           out.push(
             `${wf.file}: jobs ${a.id} (behind environment: ${APPROVAL_ENV}) and ${b.id} share the ` +
               `job-level group "${a.group}". Give ${a.id} a group of its own.`,
@@ -276,6 +303,51 @@ describe("class rule: a job behind environment: production shares no concurrency
     expect(v[0]).toMatch(/held by call .* blocking other\./);
     const plain = `on: workflow_call\njobs:\n  j:\n    runs-on: x\n`;
     expect(violations(load({ "callee.yml": plain, "w.yml": caller }))).toEqual([]);
+  });
+
+  it("a caller carries the UNION of its callee's jobs: a mixed callee under a workflow-level group", () => {
+    const mixed = `on: workflow_call\njobs:\n  probe:\n    runs-on: x\n  deploy:\n    runs-on: x\n    environment: production\n`;
+    const caller = wf(`concurrency: g\njobs:\n  call:\n    uses: ./.github/workflows/callee.yml\n`);
+    const v = violations(load({ "callee.yml": mixed, "w.yml": caller }));
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatch(
+      /^w\.yml: workflow-level concurrency group "g" is held by call .* blocking call\./,
+    );
+    // Nested: the mixed callee is reached through a second local callee.
+    const middle = `on: workflow_call\njobs:\n  inner:\n    uses: ./.github/workflows/callee.yml\n`;
+    const outer = wf(`concurrency: g\njobs:\n  call:\n    uses: ./.github/workflows/middle.yml\n`);
+    const nested = violations(load({ "callee.yml": mixed, "middle.yml": middle, "w.yml": outer }));
+    expect(nested).toHaveLength(1);
+    expect(nested[0]).toMatch(/^w\.yml: workflow-level concurrency group "g"/);
+    // No group on the caller workflow: nothing spans the two.
+    const bare = wf(`jobs:\n  call:\n    uses: ./.github/workflows/callee.yml\n`);
+    expect(violations(load({ "callee.yml": mixed, "w.yml": bare }))).toEqual([]);
+  });
+
+  it("a caller carries the UNION of its callee's jobs: a mixed callee under the caller's job-level group", () => {
+    const mixed = `on: workflow_call\njobs:\n  probe:\n    runs-on: x\n  deploy:\n    runs-on: x\n    environment: production\n`;
+    const caller = wf(
+      `jobs:\n  call:\n    uses: ./.github/workflows/callee.yml\n    concurrency:\n      group: g\n`,
+    );
+    const v = violations(load({ "callee.yml": mixed, "w.yml": caller }));
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatch(
+      /^w\.yml: job call calls a reusable workflow that has both .* job-level group "g"/,
+    );
+    // A callee that is production-only, or unattended-only, may be grouped by its caller.
+    const prodOnly = `on: workflow_call\njobs:\n  deploy:\n    runs-on: x\n    environment: production\n`;
+    const plain = `on: workflow_call\njobs:\n  probe:\n    runs-on: x\n`;
+    expect(violations(load({ "callee.yml": prodOnly, "w.yml": caller }))).toEqual([]);
+    expect(violations(load({ "callee.yml": plain, "w.yml": caller }))).toEqual([]);
+  });
+
+  it("group names are compared case-insensitively: (b) in one workflow, (c) across workflows", () => {
+    expect(violations(load({ "w.yml": wf(JOBS(GROUP("g"), GROUP("G"))) }))).toHaveLength(1);
+    const a = wf(`jobs:\n  prod:\n    runs-on: x\n    environment: production\n${GROUP("Deploy")}`);
+    const b = wf(`concurrency:\n  group: deploy\njobs:\n  nightly:\n    runs-on: x\n`);
+    const v = violations(load({ "a.yml": a, "b.yml": b }));
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatch(/^group "deploy" is held by a\.yml#prod .* and by b\.yml#nightly/);
   });
 
   it("the environment name is compared case-insensitively, in both forms", () => {

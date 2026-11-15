@@ -81,6 +81,34 @@ const TAMPERS: TamperEntry[] = [
     { file: TEST, from: "  return n.toLowerCase();\n", to: "  return n;\n" },
   ),
   entry(
+    "group names are compared case-sensitively (g and G read as different groups)",
+    `${CLASS} group names are compared case-insensitively: (b) in one workflow, (c) across workflows`,
+    {
+      file: TEST,
+      from: '  if (typeof node === "string") return node.toLowerCase();\n',
+      to: '  if (typeof node === "string") return node;\n',
+    },
+    { file: TEST, from: "  return g.toLowerCase();\n", to: "  return g;\n" },
+  ),
+  entry(
+    "a caller hides its callee's unattended jobs (workflow-level group over a mixed callee)",
+    `${CLASS} a caller carries the UNION of its callee's jobs: a mixed callee under a workflow-level group`,
+    {
+      file: TEST,
+      from: "unattended: !own && (inner.some((k) => k.unattended) || !production)",
+      to: "unattended: !production",
+    },
+  ),
+  entry(
+    "a caller hides its callee's unattended jobs (job-level group on the caller of a mixed callee)",
+    `${CLASS} a caller carries the UNION of its callee's jobs: a mixed callee under the caller's job-level group`,
+    {
+      file: TEST,
+      from: "unattended: !own && (inner.some((k) => k.unattended) || !production)",
+      to: "unattended: !production",
+    },
+  ),
+  entry(
     "an environment built from an expression reads as not-production instead of failing closed",
     `${CLASS} fails closed, naming the file and job, on an environment built from an expression`,
     {
@@ -95,7 +123,7 @@ const TAMPERS: TamperEntry[] = [
     {
       file: TEST,
       from: "    if (!m) {\n      throw",
-      to: "    if (!m) return false;\n    if (!m) {\n      throw",
+      to: "    if (!m) return { production: own, unattended: !own };\n    if (!m) {\n      throw",
     },
   ),
   entry(
