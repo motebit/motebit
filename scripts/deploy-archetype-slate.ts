@@ -14,10 +14,27 @@
  *   DRY RUN:   npx tsx scripts/deploy-archetype-slate.ts
  *   STAGING:   RUN=1 npx tsx scripts/deploy-archetype-slate.ts
  *   PROD:      RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts
- *              (run scripts/check-promotion-ready.ts FIRST, by hand: 5
- *               consecutive green scheduled conformance runs. This script
- *               does not check it, and no CI gate or GitHub environment
- *               reviewer applies to a local flyctl deploy.)
+ *
+ * PROMOTION READINESS (docs/doctrine/agent-archetypes.md §4). A real prod run
+ * (RUN=1 and TARGET=prod) reads the conformance workflow's scheduled-run
+ * history (scripts/check-promotion-ready.ts, `readPromotionReadiness`: the
+ * last 5 scheduled runs of archetype-conformance.yml all concluded success)
+ * BEFORE its first flyctl call, and REFUSES (exit 1, nothing deployed, no
+ * secret staged) unless ready. Unreadable history (gh missing,
+ * unauthenticated, erroring) refuses. A prod dry run reports the readiness
+ * and refuses nothing. Staging never reads it.
+ *
+ *   OVERRIDE:  PROMOTION_READINESS_OVERRIDE_REASON="<why>" RUN=1 TARGET=prod …
+ *              The only bypass. The value must be a non-empty reason (empty
+ *              or whitespace does not override); the run prints the reason
+ *              and the readiness result it overrode, then proceeds. Nothing
+ *              records it beyond this run's output.
+ *
+ * What this does NOT cover: this is still a local flyctl deploy, so no CI
+ * gate and no GitHub environment reviewer applies to it; a direct
+ * `flyctl deploy` consults nothing; and once a prod app exists, its
+ * deploy-<service>.yml workflow deploys it on CI + staging + head of main +
+ * a reviewer WITHOUT consulting conformance history.
  *
  * Required env (real run):
  *   MOTEBIT_API_TOKEN        the operator's token — used by THIS script's discover call only;
@@ -37,6 +54,16 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import {
+  PROMOTION_REQUIRED_GREEN_RUNS,
+  describePromotionReadiness,
+  readPromotionReadiness,
+  type ListRuns,
+} from "./check-promotion-ready.ts";
+import { cleanEnv } from "./lib/differential-tree.ts";
 
 interface SlateService {
   name: string;
@@ -52,6 +79,9 @@ interface SlateService {
 type Target = "staging" | "prod";
 
 interface SecretContext {
+  target: Target;
+  /** The deploy environment secrets are passed through from. */
+  env: Record<string, string | undefined>;
   relayUrl: string;
   /** The OPERATOR's token — used only for the operator's own discover call below; never placed in a worker secret map. */
   apiToken: string;
@@ -62,12 +92,30 @@ interface SecretContext {
   appHost: (app: string) => string;
 }
 
-const TARGET: Target = process.env["TARGET"] === "prod" ? "prod" : "staging";
-const RUN = process.env["RUN"] === "1";
-const RELAY_URL =
-  process.env["RELAY_URL"] ??
-  (TARGET === "prod" ? "https://relay.motebit.com" : "https://motebit-sync-stg.fly.dev");
 const REGION = "sjc";
+
+/**
+ * The one bypass of the promotion-readiness refusal: a non-empty human
+ * reason. Empty or whitespace does not override.
+ */
+export const PROMOTION_READINESS_OVERRIDE_ENV = "PROMOTION_READINESS_OVERRIDE_REASON";
+
+/**
+ * Everything the ceremony does to the world, as parameters, so a test can
+ * drive `runSlate` with a recording runner and no real gh, flyctl or network.
+ */
+export interface SlateEffects {
+  env: Record<string, string | undefined>;
+  /** Runs a command and returns its stdout; throws on a non-zero exit. */
+  exec: (cmd: string, args: string[], opts?: { quiet?: boolean }) => string;
+  fetch: (url: string, init?: { headers?: Record<string, string> }) => Promise<Response>;
+  sleep: (ms: number) => Promise<void>;
+  log: (line: string) => void;
+  error: (line: string) => void;
+  table: (rows: unknown[]) => void;
+  /** Lists scheduled conformance runs for the readiness check (default: `gh run list`). */
+  listRuns?: ListRuns;
+}
 
 // The slate — parsed by check-archetype-slate; order is the deploy order
 // (atoms first — molecules exit(1) without atom hostnames).
@@ -96,7 +144,7 @@ export const SLATE: SlateService[] = [
       // the hop P2P; the settlement address is derived from this atom's own
       // identity key (molecule-runner). relay,p2p keeps relay-mode available.
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
-      BRAVE_API_KEY: process.env["BRAVE_API_KEY"] ?? "",
+      BRAVE_API_KEY: ctx.env["BRAVE_API_KEY"] ?? "",
     }),
   },
   {
@@ -146,7 +194,7 @@ export const SLATE: SlateService[] = [
       MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,
       MOTEBIT_UNIT_COST: "0",
       WEB_SEARCH_URL: ctx.appHost(
-        TARGET === "prod" ? "motebit-web-search" : "motebit-web-search-stg",
+        ctx.target === "prod" ? "motebit-web-search" : "motebit-web-search-stg",
       ),
     }),
   },
@@ -167,9 +215,9 @@ export const SLATE: SlateService[] = [
       MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,
       MOTEBIT_UNIT_COST: "0.25",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
-      ANTHROPIC_API_KEY: process.env["ANTHROPIC_API_KEY"] ?? "",
-      MOTEBIT_WEB_SEARCH_URL: `${ctx.appHost(TARGET === "prod" ? "motebit-web-search" : "motebit-web-search-stg")}/mcp`,
-      MOTEBIT_READ_URL_URL: `${ctx.appHost(TARGET === "prod" ? "motebit-read-url" : "motebit-read-url-stg")}/mcp`,
+      ANTHROPIC_API_KEY: ctx.env["ANTHROPIC_API_KEY"] ?? "",
+      MOTEBIT_WEB_SEARCH_URL: `${ctx.appHost(ctx.target === "prod" ? "motebit-web-search" : "motebit-web-search-stg")}/mcp`,
+      MOTEBIT_READ_URL_URL: `${ctx.appHost(ctx.target === "prod" ? "motebit-read-url" : "motebit-read-url-stg")}/mcp`,
       ...(ctx.atomIds.has("web_search")
         ? { MOTEBIT_WEB_SEARCH_TARGET_ID: ctx.atomIds.get("web_search")! }
         : {}),
@@ -219,74 +267,38 @@ export const SLATE: SlateService[] = [
       // live ceiling untouched). Flipping to live money is a deliberate,
       // ratified operator step — set DRY_RUN=0 out of band, never here.
       DRY_RUN: "1",
-      MOTEBIT_CLERK_CEILING_MICRO: process.env["MOTEBIT_CLERK_CEILING_MICRO"] ?? "1000000",
+      MOTEBIT_CLERK_CEILING_MICRO: ctx.env["MOTEBIT_CLERK_CEILING_MICRO"] ?? "1000000",
       // The sovereign rail (own funds) + the PINNED relay treasury root —
       // passed through from the deploy environment (never hardcoded).
-      MOTEBIT_SOLANA_RPC_URL: process.env["MOTEBIT_SOLANA_RPC_URL"] ?? "",
-      MOTEBIT_RELAY_PUBLIC_KEY: process.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? "",
+      MOTEBIT_SOLANA_RPC_URL: ctx.env["MOTEBIT_SOLANA_RPC_URL"] ?? "",
+      MOTEBIT_RELAY_PUBLIC_KEY: ctx.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? "",
     }),
   },
 ];
 
-function sh(cmd: string, args: string[]): string {
-  if (!RUN) {
-    console.log(`  [dry-run] ${cmd} ${args.join(" ")}`);
-    return "";
-  }
-  return execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
-}
-
-function flyAppExists(app: string): boolean {
-  if (!RUN) return false;
-  try {
-    execFileSync("flyctl", ["status", "-a", app], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+interface DiscoveredAgent {
+  motebit_id: string;
+  endpoint_url: string;
+  display_name?: string | null;
+  description?: string | null;
+  pricing?: unknown;
 }
 
 async function discoverByCapability(
+  effects: SlateEffects,
   relayUrl: string,
   apiToken: string,
-): Promise<
-  Map<
-    string,
-    {
-      motebit_id: string;
-      endpoint_url: string;
-      display_name?: string | null;
-      description?: string | null;
-      pricing?: unknown;
-    }
-  >
-> {
-  const byCapability = new Map<
-    string,
-    {
-      motebit_id: string;
-      endpoint_url: string;
-      display_name?: string | null;
-      description?: string | null;
-      pricing?: unknown;
-    }
-  >();
-  const res = await fetch(`${relayUrl}/api/v1/agents/discover`, {
+): Promise<Map<string, DiscoveredAgent>> {
+  const byCapability = new Map<string, DiscoveredAgent>();
+  const res = await effects.fetch(`${relayUrl}/api/v1/agents/discover`, {
     headers: { Authorization: `Bearer ${apiToken}` },
   });
   if (!res.ok) {
-    console.error(`  discover returned ${res.status} — capture skipped`);
+    effects.error(`  discover returned ${res.status} — capture skipped`);
     return byCapability;
   }
   const data = (await res.json()) as {
-    agents?: Array<{
-      motebit_id: string;
-      endpoint_url: string;
-      capabilities: string[];
-      display_name?: string | null;
-      description?: string | null;
-      pricing?: unknown;
-    }>;
+    agents?: Array<DiscoveredAgent & { capabilities: string[] }>;
   };
   for (const agent of data.agents ?? []) {
     for (const cap of agent.capabilities) {
@@ -301,8 +313,8 @@ async function discoverByCapability(
 }
 
 /** The relay's Ed25519 public key from its well-known descriptor — pinned into every worker. */
-async function fetchRelayPublicKey(relayUrl: string): Promise<string> {
-  const res = await fetch(`${relayUrl}/.well-known/motebit.json`);
+async function fetchRelayPublicKey(effects: SlateEffects, relayUrl: string): Promise<string> {
+  const res = await effects.fetch(`${relayUrl}/.well-known/motebit.json`);
   if (!res.ok) throw new Error(`well-known fetch failed: ${res.status}`);
   const body = (await res.json()) as { public_key?: string };
   if (!body.public_key || !/^[0-9a-f]{64}$/.test(body.public_key)) {
@@ -311,24 +323,127 @@ async function fetchRelayPublicKey(relayUrl: string): Promise<string> {
   return body.public_key;
 }
 
-async function main(): Promise<void> {
-  const apiToken = process.env["MOTEBIT_API_TOKEN"] ?? "";
-  console.log(
-    `deploy-archetype-slate — target=${TARGET} relay=${RELAY_URL} ${RUN ? "LIVE" : "DRY RUN (set RUN=1 to execute)"}`,
-  );
-  if (RUN && apiToken === "") {
-    console.error("MOTEBIT_API_TOKEN is required for a live run (relay registration).");
-    process.exit(1);
-  }
-  if (RUN && process.env["ANTHROPIC_API_KEY"] == null) {
-    console.error("ANTHROPIC_API_KEY is required for a live run (research inference).");
-    process.exit(1);
+const RECHECK = "npx tsx scripts/check-promotion-ready.ts";
+
+/**
+ * The promotion-readiness gate (docs/doctrine/agent-archetypes.md §4), at the
+ * one place the slate's promotion happens. Returns the exit code to refuse
+ * with, or null to go on.
+ *
+ *   staging            → no readiness read at all
+ *   prod, dry run      → reads and reports; refuses nothing
+ *   prod, real run     → refuses unless ready, or unless the override env
+ *                        carries a non-empty reason (printed with the result
+ *                        it overrode)
+ */
+function gatePromotion(target: Target, run: boolean, effects: SlateEffects): number | null {
+  if (target !== "prod") return null;
+
+  const readiness = readPromotionReadiness({
+    required: PROMOTION_REQUIRED_GREEN_RUNS,
+    listRuns: effects.listRuns,
+  });
+  const lines = describePromotionReadiness(readiness);
+  const overrideReason = (effects.env[PROMOTION_READINESS_OVERRIDE_ENV] ?? "").trim();
+  const overridden = overrideReason !== "";
+
+  if (readiness.ready) {
+    effects.log("promotion readiness:");
+    for (const line of lines) effects.log(`  ${line}`);
+    if (overridden) {
+      effects.log(
+        `  ${PROMOTION_READINESS_OVERRIDE_ENV} is set (${overrideReason}) but overrides nothing: readiness is green.`,
+      );
+    }
+    return null;
   }
 
-  const relayPublicKey = await fetchRelayPublicKey(RELAY_URL);
-  console.log(`relay public key (task-admission pin for every worker): ${relayPublicKey}`);
+  if (!run) {
+    effects.log("promotion readiness (dry run: reported, nothing refused):");
+    for (const line of lines) effects.log(`  ${line}`);
+    effects.log(
+      overridden
+        ? `  A real prod run would PROCEED on ${PROMOTION_READINESS_OVERRIDE_ENV} (${overrideReason}), overriding the result above.`
+        : `  A real prod run (RUN=1 TARGET=prod) would REFUSE here, before any flyctl call. Re-check with: ${RECHECK}`,
+    );
+    return null;
+  }
+
+  if (overridden) {
+    effects.error("!!! PROMOTION READINESS OVERRIDDEN !!!");
+    effects.error(`!!! reason (${PROMOTION_READINESS_OVERRIDE_ENV}): ${overrideReason}`);
+    effects.error("!!! the readiness result this run overrides:");
+    for (const line of lines) effects.error(`!!!   ${line}`);
+    effects.error("!!! proceeding with the prod deploy.");
+    return null;
+  }
+
+  effects.error("REFUSED: the archetype slate is not ready for production. Nothing was deployed.");
+  for (const line of lines) effects.error(`  ${line}`);
+  effects.error(
+    `Fix: promotion needs the last ${PROMOTION_REQUIRED_GREEN_RUNS} SCHEDULED runs of archetype-conformance.yml all green (docs/doctrine/agent-archetypes.md §4). ` +
+      (readiness.reason === "gh-unreadable"
+        ? "Install and authenticate gh (`gh auth status`) so the history can be read"
+        : readiness.reason === "thin-history"
+          ? "Wait for the daily schedule to put enough runs on record (manual dispatches do not count)"
+          : "Fix what the runs listed above caught, then wait for the daily schedule to turn the window green (manual dispatches do not count)") +
+      `, re-check with: ${RECHECK}, then re-run this command. ` +
+      `Emergency only: ${PROMOTION_READINESS_OVERRIDE_ENV}="<why>" proceeds and prints the reason with the result it overrode; an empty value does not.`,
+  );
+  return 1;
+}
+
+/** The ceremony. Returns the process exit code. */
+export async function runSlate(effects: SlateEffects): Promise<number> {
+  const { env } = effects;
+  const target: Target = env["TARGET"] === "prod" ? "prod" : "staging";
+  const run = env["RUN"] === "1";
+  const relayUrl =
+    env["RELAY_URL"] ??
+    (target === "prod" ? "https://relay.motebit.com" : "https://motebit-sync-stg.fly.dev");
+
+  const sh = (cmd: string, args: string[]): string => {
+    if (!run) {
+      effects.log(`  [dry-run] ${cmd} ${args.join(" ")}`);
+      return "";
+    }
+    return effects.exec(cmd, args);
+  };
+  const flyAppExists = (app: string): boolean => {
+    if (!run) return false;
+    try {
+      effects.exec("flyctl", ["status", "-a", app], { quiet: true });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const apiToken = env["MOTEBIT_API_TOKEN"] ?? "";
+  effects.log(
+    `deploy-archetype-slate — target=${target} relay=${relayUrl} ${run ? "LIVE" : "DRY RUN (set RUN=1 to execute)"}`,
+  );
+
+  // Before anything else touches the world: no flyctl call, no secret staged
+  // and no relay read happens on a prod run the readiness gate refuses.
+  const refusal = gatePromotion(target, run, effects);
+  if (refusal !== null) return refusal;
+
+  if (run && apiToken === "") {
+    effects.error("MOTEBIT_API_TOKEN is required for a live run (relay registration).");
+    return 1;
+  }
+  if (run && env["ANTHROPIC_API_KEY"] == null) {
+    effects.error("ANTHROPIC_API_KEY is required for a live run (research inference).");
+    return 1;
+  }
+
+  const relayPublicKey = await fetchRelayPublicKey(effects, relayUrl);
+  effects.log(`relay public key (task-admission pin for every worker): ${relayPublicKey}`);
   const ctx: SecretContext = {
-    relayUrl: RELAY_URL,
+    target,
+    env,
+    relayUrl,
     apiToken,
     relayPublicKey,
     atomIds: new Map(),
@@ -337,10 +452,10 @@ async function main(): Promise<void> {
 
   const phases: Array<"atom" | "molecule"> = ["atom", "molecule"];
   for (const phase of phases) {
-    console.log(`\n=== ${phase}s ===`);
+    effects.log(`\n=== ${phase}s ===`);
     for (const svc of SLATE.filter((s) => s.kind === phase)) {
-      const app = svc.app(TARGET);
-      console.log(`\n▸ ${svc.name} → ${app}`);
+      const app = svc.app(target);
+      effects.log(`\n▸ ${svc.name} → ${app}`);
 
       if (!flyAppExists(app)) {
         sh("flyctl", ["apps", "create", app, "--org", "personal"]);
@@ -357,7 +472,7 @@ async function main(): Promise<void> {
           "--yes",
         ]);
       } else {
-        console.log("  app exists — skipping create");
+        effects.log("  app exists — skipping create");
       }
 
       const secrets = svc.secrets(ctx);
@@ -371,30 +486,30 @@ async function main(): Promise<void> {
       const publicUrl = ctx.appHost(app);
       sh("flyctl", ["secrets", "set", "--stage", "-a", app, `MOTEBIT_PUBLIC_URL=${publicUrl}`]);
 
-      sh("flyctl", ["deploy", "--config", svc.config(TARGET), "-a", app, "--remote-only"]);
+      sh("flyctl", ["deploy", "--config", svc.config(target), "-a", app, "--remote-only"]);
     }
 
-    if (phase === "atom" && RUN) {
+    if (phase === "atom" && run) {
       // Give registrations a moment, then capture atom ids for molecule wiring.
-      console.log("\ncapturing atom motebit_ids from the relay…");
-      await new Promise((r) => setTimeout(r, 15_000));
-      const found = await discoverByCapability(RELAY_URL, apiToken);
+      effects.log("\ncapturing atom motebit_ids from the relay…");
+      await effects.sleep(15_000);
+      const found = await discoverByCapability(effects, relayUrl, apiToken);
       for (const cap of ["web_search", "read_url", "summarize_search"]) {
         const agent = found.get(cap);
         if (agent) {
           ctx.atomIds.set(cap, agent.motebit_id);
-          console.log(`  ${cap} → ${agent.motebit_id}`);
+          effects.log(`  ${cap} → ${agent.motebit_id}`);
         } else {
-          console.log(`  ${cap} → NOT FOUND (molecule target secret skipped)`);
+          effects.log(`  ${cap} → NOT FOUND (molecule target secret skipped)`);
         }
       }
     }
   }
 
   // === Final verification table ===
-  if (RUN) {
-    console.log("\n=== slate verification (relay discover) ===");
-    const found = await discoverByCapability(RELAY_URL, apiToken);
+  if (run) {
+    effects.log("\n=== slate verification (relay discover) ===");
+    const found = await discoverByCapability(effects, relayUrl, apiToken);
     const rows = SLATE.map((svc) => {
       const agent = found.get(svc.capability);
       return {
@@ -406,21 +521,57 @@ async function main(): Promise<void> {
         pricing: agent?.pricing != null ? "listed" : "—",
       };
     });
-    console.table(rows);
+    effects.table(rows);
     const missing = rows.filter((r) => r.discovered === "NO");
     if (missing.length > 0) {
-      console.error(`\n${missing.length} slate service(s) not discoverable — inspect fly logs.`);
-      process.exit(1);
+      effects.error(`\n${missing.length} slate service(s) not discoverable — inspect fly logs.`);
+      return 1;
     }
-    console.log("\nSlate live. Next: scripts/archetype-conformance.ts exercises it end-to-end.");
+    effects.log("\nSlate live. Next: scripts/archetype-conformance.ts exercises it end-to-end.");
   } else {
-    console.log(
+    effects.log(
       "\nDry run complete. Set RUN=1 (and MOTEBIT_API_TOKEN, ANTHROPIC_API_KEY) to execute.",
     );
   }
+  return 0;
 }
 
-main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+/** The real effects: this process's env, `execFileSync`, global fetch, the console. */
+export function realEffects(): SlateEffects {
+  return {
+    env: process.env,
+    exec: (cmd, args, opts) =>
+      execFileSync(cmd, args, {
+        encoding: "utf8",
+        // A generic command runner: no child inherits a hook's GIT_* variables.
+        env: cleanEnv(),
+        stdio: opts?.quiet === true ? "ignore" : ["ignore", "pipe", "inherit"],
+      }) ?? "",
+    fetch: (url, init) => fetch(url, init),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    log: (line) => console.log(line),
+    error: (line) => console.error(line),
+    table: (rows) => console.table(rows),
+  };
+}
+
+/** True when this file is the program being run, not a module a test imported. */
+function isMain(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
+  runSlate(realEffects()).then(
+    (code) => process.exit(code),
+    (err: unknown) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    },
+  );
+}

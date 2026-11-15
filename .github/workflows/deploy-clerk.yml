@@ -104,8 +104,12 @@ jobs:
       # hard-zero. Flipping to live money (DRY_RUN=0) is a deliberate operator
       # step, never in this workflow.
       # The prod app deliberately does not exist until the archetype slate
-      # promotes (5 consecutive green scheduled conformance runs —
-      # scripts/check-promotion-ready.ts). Skipping cleanly keeps this
+      # promotes: the slate's prod command (`RUN=1 TARGET=prod
+      # scripts/deploy-archetype-slate.ts`, a local flyctl run) creates it,
+      # and refuses without 5 consecutive green scheduled conformance runs
+      # (scripts/check-promotion-ready.ts). Once the app exists, THIS workflow
+      # deploys it on CI + staging + head of main + the reviewer, and does
+      # not consult conformance history. Skipping cleanly keeps this
       # workflow green-but-honest pre-promotion instead of failing red on
       # every main push that touches packages/** (red-noise trains people
       # to ignore red).
@@ -117,7 +121,7 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::motebit-clerk not provisioned yet — promotion is conformance-gated (check-promotion-ready). Skipping deploy."
+            echo "::notice::motebit-clerk not provisioned yet — the slate's prod command (scripts/deploy-archetype-slate.ts) creates it and refuses without conformance readiness (check-promotion-ready). Skipping deploy."
           fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
