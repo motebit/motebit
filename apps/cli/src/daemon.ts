@@ -1442,11 +1442,16 @@ export async function handleServe(config: CliConfig): Promise<void> {
   const serveGrant =
     config.direct && config.grant != null
       ? await createGrantPresenter(config.grant, {
-          // Once per daemon run: the relay could not confirm revocation
-          // status, so the grant is withheld and R4 tasks are refused.
-          onRevocationUnconfirmed: () =>
+          // The relay NAMED for this identity (`relay.intentUrl`), not
+          // `relay.syncUrl`: stdio serve pushes to no relay (syncUrl is
+          // undefined there), yet a revocation signed on another machine
+          // lives on the named one. The presenter asks no other.
+          relayUrl: relay.intentUrl,
+          // Once per outage: the relay could not confirm revocation status,
+          // so the grant is withheld and R4 tasks are refused.
+          onRevocationUnconfirmed: (reason) =>
             log(
-              "Standing grant not presented: its revocation status could not be confirmed with the relay — money tasks are refused until it can be",
+              `Standing grant not presented: its revocation status could not be confirmed with the relay (${sanitizeRelayText(reason)}) — money tasks are refused until it can be`,
             ),
         })
       : null;

@@ -497,7 +497,7 @@ async function main(): Promise<void> {
     } else if (grantCmd === "show") {
       await handleGrantShow(config.positionals[2]);
     } else if (grantCmd === "revoke") {
-      await handleGrantRevoke(config.positionals[2]);
+      await handleGrantRevoke(config.positionals[2], config);
     } else {
       console.error("Usage: motebit grant [create|list|show|revoke]");
       process.exit(1);
@@ -1051,12 +1051,14 @@ async function main(): Promise<void> {
   const grantPresenter =
     config.grant != null
       ? await createGrantPresenter(config.grant, {
-          // Once per session, on the first turn the relay could not confirm
+          // The relay this session talks to — the presenter asks no other.
+          relayUrl: syncUrl,
+          // Once per outage, on the first turn the relay could not confirm
           // revocation status: the grant is withheld, R4 asks for approval.
-          onRevocationUnconfirmed: () =>
+          onRevocationUnconfirmed: (reason) =>
             console.log(
               dim(
-                "  [standing grant not presented: its revocation status could not be confirmed with the relay — money actions will ask for approval]",
+                `  [standing grant not presented: its revocation status could not be confirmed with the relay (${sanitizeRelayText(reason)}) — money actions will ask for approval]`,
               ),
             ),
         })

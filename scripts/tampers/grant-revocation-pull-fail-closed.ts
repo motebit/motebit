@@ -12,7 +12,11 @@
  *   - the presenter's "withhold on a failed pull" branch removed;
  *   - the non-2xx check dropped (an error status with a feed-shaped body);
  *   - a 200 body that is not the feed read as an empty feed;
- *   - the once-per-session latch removed (not a safety property: calm).
+ *   - the once-per-outage latch removed, or never re-armed (not a safety
+ *     property: calm);
+ *   - the pull resolving a relay of its own (config/env) instead of the one
+ *     its caller passed, and each call site dropping or swapping that URL;
+ *   - the pull following redirects.
  *
  *   npx tsx scripts/tampers/grant-revocation-pull-fail-closed.ts
  *   (plain `node` cannot resolve the runner's `.js` import specifier)
@@ -28,6 +32,7 @@ const PKG = "motebit";
 const TEST = "src/__tests__/grant-presenter-pull-fail-closed.test.ts";
 
 const PRESENTER = "revocation pull: a failed pull presents no grant";
+const SESSION = "revocation pull: the relay is the session's, never the presenter's own";
 const CHAT =
   "revocation pull: the runtime path (owner chat turn) failed pull: the R4 call does not auto-execute — it pauses for approval, zero payments built";
 const DIRECT =
@@ -92,7 +97,63 @@ const TAMPERS: TamperEntry[] = [
     "the once-per-session notice latch is removed",
     "        notified = true;\n",
     "",
-    "revocation pull: the notice fires once per session several failed-pull turns call onRevocationUnconfirmed exactly once",
+    "revocation pull: the notice fires once per outage consecutive failed-pull turns call onRevocationUnconfirmed exactly once, with the reason",
+  ),
+  entry(
+    "the notice latch is never re-armed after a successful pull (once per process)",
+    '    if (pull.status === "ok") notified = false;\n',
+    "",
+    "revocation pull: the notice fires once per outage failure, success, failure: each outage is announced once",
+  ),
+  entry(
+    "the pull resolves its own relay from config/env again (the passed URL is dropped)",
+    "  const relayUrl = normalizeRelayUrl(options.relayUrl);\n",
+    '  const relayUrl = normalizeRelayUrl(\n    loadFullConfig().sync_url ?? process.env["MOTEBIT_SYNC_URL"],\n  );\n',
+    `${SESSION} --sync-url only (no env, no config) + a failed pull: withheld`,
+  ),
+  entry(
+    "the pull falls back to the environment when the caller named no relay",
+    "  const relayUrl = normalizeRelayUrl(options.relayUrl);\n",
+    '  const relayUrl = normalizeRelayUrl(options.relayUrl ?? process.env["MOTEBIT_SYNC_URL"]);\n',
+    `${PRESENTER} no relay configured: the grant is presented from local state, and nothing is fetched`,
+  ),
+  {
+    name: "the REPL stops passing the session's relay to the presenter",
+    edits: [
+      {
+        file: "apps/cli/src/index.ts",
+        from: "          relayUrl: syncUrl,\n",
+        to: "",
+      },
+    ],
+    pkg: PKG,
+    test: TEST,
+    red: `${SESSION} the call sites pass the session's relay: REPL \`syncUrl\`, daemon \`relay.intentUrl\``,
+  },
+  {
+    name: "the daemon passes the push relay (undefined on stdio) instead of the named one",
+    edits: [
+      {
+        file: "apps/cli/src/daemon.ts",
+        from: "          relayUrl: relay.intentUrl,\n",
+        to: "          relayUrl: relay.syncUrl,\n",
+      },
+    ],
+    pkg: PKG,
+    test: TEST,
+    red: `${SESSION} the call sites pass the session's relay: REPL \`syncUrl\`, daemon \`relay.intentUrl\``,
+  },
+  entry(
+    "the pull follows redirects again",
+    '      redirect: "error",\n',
+    "",
+    `${PRESENTER} a redirected answer: no grant is presented`,
+  ),
+  entry(
+    "the withhold branch is removed (a local revocation + a failed pull)",
+    WITHHOLD,
+    "",
+    `${PRESENTER} a local revocation + a failed pull: no authority`,
   ),
 ];
 

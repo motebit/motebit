@@ -49,6 +49,7 @@ import { mkdirOwnerOnly } from "../durable-file.js";
 import { getDbPath } from "../runtime-factory.js";
 import { loadActiveSigningKey } from "../identity.js";
 import type { CliConfig } from "../args.js";
+import { namedRelayUrl, normalizeRelayUrl } from "../sync-opt-in.js";
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -141,8 +142,14 @@ export function selectDueTick(stored: StoredGrant, now: number): DelegationToken
  * elsewhere, and the payment is broadcast before the relay's own fence sees
  * the task. So a failed pull presents NO grant for that turn: the turn runs
  * grantless and R4 falls back to the owner's approval (or, on a path with no
- * one to approve, is refused). With no relay configured there is nothing to
- * ask, and the local set stands.
+ * one to approve, is refused). With no relay named there is nothing to ask,
+ * and the local set stands.
+ *
+ * WHICH relay is the caller's answer, never this module's: the presenter
+ * pulls from `GrantPresenterOptions.relayUrl`, the relay the session itself
+ * resolved (flag > env > config), and reads no config or environment of its
+ * own. A second resolution here could disagree with the session's and ask a
+ * different relay, or none.
  *
  * What this does not do: the feed is unsigned, so a relay that omits a record
  * (or a wrong relay URL) still answers "ok". That needs the signed
@@ -176,11 +183,20 @@ export interface GrantPresenter {
 
 export interface GrantPresenterOptions {
   /**
-   * Called ONCE per presenter (per session), on the first presentation
-   * withheld because the relay could not confirm revocation status. The
-   * caller renders its own one-line notice; later withheld turns are silent.
+   * The relay THIS SESSION uses, already resolved by the caller (the REPL's
+   * and the daemon's own flag > env > config answer). Absent, empty or
+   * whitespace: no relay, nothing is pulled. The presenter consults no other
+   * source.
    */
-  onRevocationUnconfirmed?: () => void;
+  relayUrl?: string | undefined;
+  /**
+   * Called once per OUTAGE: on the first presentation withheld because the
+   * relay could not confirm revocation status, with the pull's failure reason
+   * (`HTTP 429`, a timeout, …). Later consecutive withheld turns are silent; a
+   * successful pull re-arms it, so the next outage is announced again. The
+   * caller renders its own one-line notice.
+   */
+  onRevocationUnconfirmed?: (reason: string) => void;
   /** The fetch the revocation pull uses (tests inject one; default: global). */
   fetch?: typeof fetch;
   /** Upper bound on one pull (default 3 s). */
@@ -196,7 +212,7 @@ const RELAY_REVOCATION_PULL_TIMEOUT_MS = 3_000;
  * failed pull as an empty set without saying so.
  */
 export type RelayRevocationPull =
-  /** No relay configured: there is no feed to ask. */
+  /** The caller named no relay: there is no feed to ask. */
   | { status: "no_relay" }
   /** The relay answered 2xx with a well-shaped feed (possibly empty). */
   | { status: "ok"; records: DelegationRevocation[] }
@@ -207,17 +223,18 @@ const isRecordObject = (v: unknown): boolean =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
 export async function pullRelayRevocations(
-  options: Pick<GrantPresenterOptions, "fetch" | "pullTimeoutMs"> = {},
+  options: Pick<GrantPresenterOptions, "relayUrl" | "fetch" | "pullTimeoutMs"> = {},
 ): Promise<RelayRevocationPull> {
-  const relayUrl = (loadFullConfig().sync_url ?? process.env["MOTEBIT_SYNC_URL"] ?? "").replace(
-    /\/$/,
-    "",
-  );
-  if (relayUrl === "") return { status: "no_relay" };
+  // The caller's relay, normalised as the session normalises it. No fallback
+  // to config or environment: the caller's answer is the only one.
+  const relayUrl = normalizeRelayUrl(options.relayUrl);
+  if (relayUrl == null) return { status: "no_relay" };
   const fetchImpl = options.fetch ?? fetch;
   try {
     const res = await fetchImpl(`${relayUrl}/api/v1/delegations/revocations`, {
       signal: AbortSignal.timeout(options.pullTimeoutMs ?? RELAY_REVOCATION_PULL_TIMEOUT_MS),
+      // A redirected answer is not this relay's answer: a failed pull.
+      redirect: "error",
     });
     if (!res.ok) return { status: "failed", reason: `HTTP ${res.status}` };
     const body: unknown = await res.json();
@@ -253,10 +270,12 @@ export function createGrantPresenter(
     if (pull.status === "failed") {
       if (!notified) {
         notified = true;
-        options.onRevocationUnconfirmed?.();
+        options.onRevocationUnconfirmed?.(pull.reason);
       }
       return { status: "withheld", reason: "revocation_unconfirmed" };
     }
+    // The relay answered: the outage (if any) is over, the next one is new.
+    if (pull.status === "ok") notified = false;
     const revocations: DelegationRevocation[] = [
       ...(stored.revocation != null ? [stored.revocation] : []),
       ...(pull.status === "ok" ? pull.records : []),
@@ -608,7 +627,10 @@ export async function handleGrantShow(grantId: string | undefined): Promise<void
 
 // === motebit grant revoke ============================================
 
-export async function handleGrantRevoke(grantId: string | undefined): Promise<void> {
+export async function handleGrantRevoke(
+  grantId: string | undefined,
+  config: { syncUrl?: string | undefined } = {},
+): Promise<void> {
   if (grantId == null || grantId === "") {
     console.error("Usage: motebit grant revoke <grant_id>");
     process.exit(1);
@@ -657,11 +679,10 @@ export async function handleGrantRevoke(grantId: string | undefined): Promise<vo
   // cache is what lets the coordinator refuse at acceptance/settlement).
   // Offline is not failure: the local store already bites, and anyone
   // may re-propagate the signed artifact later.
-  const relayUrl = (fullConfig.sync_url ?? process.env["MOTEBIT_SYNC_URL"] ?? "").replace(
-    /\/$/,
-    "",
-  );
-  if (relayUrl === "") {
+  // The relay the operator named for this process, resolved as every other
+  // command resolves it: `--sync-url` > MOTEBIT_SYNC_URL > config `sync_url`.
+  const relayUrl = namedRelayUrl(config, fullConfig);
+  if (relayUrl == null) {
     console.log("No relay configured — propagate later by re-running revoke with sync_url set.");
     return;
   }
