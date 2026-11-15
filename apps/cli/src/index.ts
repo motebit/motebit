@@ -156,6 +156,7 @@ import {
 } from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { resolveRelayUrl } from "./subcommands/_helpers.js";
+import { replGrantRelayUrls, type SessionRelay } from "./subcommands/grant.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
 import { VoiceController } from "./voice.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
@@ -925,6 +926,9 @@ async function main(): Promise<void> {
   // Relay wiring — only when a relay is named. Relay sync is opt-in
   // (`sync-opt-in.ts`): with none, the REPL makes no relay call at all.
   const syncUrl = resolveRelayUrl(config, reloadedConfig);
+  // The relay this session talks to NOW: `/connect` replaces `url`, and the
+  // `--grant` presenter reads it at each turn.
+  const sessionRelay: SessionRelay = { url: syncUrl };
   const replPush: CliEventPush | undefined = await startReplRelay({
     runtime,
     config,
@@ -1051,8 +1055,9 @@ async function main(): Promise<void> {
   const grantPresenter =
     config.grant != null
       ? await createGrantPresenter(config.grant, {
-          // The relay this session talks to — the presenter asks no other.
-          relayUrl: syncUrl,
+          // Asked each turn: the relay this session talks to now (after any
+          // `/connect`) plus the named relay, re-resolved.
+          relayUrls: () => replGrantRelayUrls(sessionRelay, config),
           // Once per outage, on the first turn the relay could not confirm
           // revocation status: the grant is withheld, R4 asks for approval.
           onRevocationUnconfirmed: (reason) =>
@@ -1158,6 +1163,7 @@ async function main(): Promise<void> {
         privateKeyBytes,
         deviceId,
         voice: voiceController,
+        sessionRelay,
       });
       console.log();
       prompt();

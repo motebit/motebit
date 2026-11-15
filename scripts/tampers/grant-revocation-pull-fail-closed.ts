@@ -14,11 +14,15 @@
  *   - a 200 body that is not the feed read as an empty feed;
  *   - the once-per-outage latch removed, or never re-armed (not a safety
  *     property: calm);
- *   - the pull resolving a relay of its own (config/env) instead of the one
- *     its caller passed, and each call site dropping or swapping that URL;
- *   - the pull following redirects.
+ *   - the pull following redirects, or accepting a redirected answer;
+ *   - the relay set captured once at startup instead of asked each turn;
+ *   - `/connect` no longer moving the session relay;
+ *   - "any failed pull withholds" weakened to "all must fail";
+ *   - the named-relay floor dropped from the REPL's or the daemon's set;
+ *   - the presenter falling back to the environment by itself;
+ *   - the raw error text restored in the failure reason.
  *
- *   npx tsx scripts/tampers/grant-revocation-pull-fail-closed.ts
+ *   node_modules/.bin/tsx scripts/tampers/grant-revocation-pull-fail-closed.ts
  *   (plain `node` cannot resolve the runner's `.js` import specifier)
  */
 import path from "node:path";
@@ -28,25 +32,31 @@ import { runTampers, type TamperEntry } from "../lib/tamper-runner.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SRC = "apps/cli/src/subcommands/grant.ts";
+const SLASH = "apps/cli/src/slash-commands.ts";
 const PKG = "motebit";
 const TEST = "src/__tests__/grant-presenter-pull-fail-closed.test.ts";
 
 const PRESENTER = "revocation pull: a failed pull presents no grant";
-const SESSION = "revocation pull: the relay is the session's, never the presenter's own";
+const UNION = "revocation pull: every known relay is asked, any failure withholds";
+const CONNECT = "revocation pull: /connect moves the relay the grant is checked against";
+const DAEMON = "revocation pull: serve --direct --grant asks the relay `grant revoke` posts to";
+const REASON = "revocation pull: the reason never carries a URL or an error's own text";
+const NOTICE = "revocation pull: the notice fires once per outage";
 const CHAT =
   "revocation pull: the runtime path (owner chat turn) failed pull: the R4 call does not auto-execute — it pauses for approval, zero payments built";
 const DIRECT =
   "revocation pull: serve --direct --grant inherits it failed pull: the R4 task is refused and the tool never runs";
 
-function entry(name: string, from: string, to: string, red: string): TamperEntry {
-  return { name, edits: [{ file: SRC, from, to }], pkg: PKG, test: TEST, red };
+function entry(name: string, from: string, to: string, red: string, file = SRC): TamperEntry {
+  return { name, edits: [{ file, from, to }], pkg: PKG, test: TEST, red };
 }
 
-const THROWN_FAILED =
-  '    return { status: "failed", reason: err instanceof Error ? err.message : String(err) };\n';
+const THROWN_FAILED = "    return failed(thrownPullKind(err));\n";
 const THROWN_EMPTY = '    return { status: "ok", records: [] };\n';
-
+const NON_2XX = "    if (!res.ok) return failed(`HTTP ${res.status}`);\n";
 const WITHHOLD = '      return { status: "withheld", reason: "revocation_unconfirmed" };\n';
+const ASK_NOW = "      relayUrls = options.relayUrls?.() ?? [];\n";
+const ANY_FAILS = "  if (failures.length > 0) return";
 
 const TAMPERS: TamperEntry[] = [
   entry(
@@ -76,73 +86,41 @@ const TAMPERS: TamperEntry[] = [
   entry("the withhold branch is removed (owner chat turn, real runtime)", WITHHOLD, "", CHAT),
   entry("the withhold branch is removed (serve --direct --grant task)", WITHHOLD, "", DIRECT),
   entry(
+    "the withhold branch is removed (a local revocation + a failed pull)",
+    WITHHOLD,
+    "",
+    `${PRESENTER} a local revocation + a failed pull: no authority`,
+  ),
+  entry(
     "the non-2xx check is dropped (HTTP 429 with a feed-shaped body)",
-    '    if (!res.ok) return { status: "failed", reason: `HTTP ${res.status}` };\n',
+    NON_2XX,
     "",
     `${PRESENTER} HTTP 429 with a feed-shaped body: no grant is presented`,
   ),
   entry(
     "the non-2xx check is dropped (owner chat turn, real runtime)",
-    '    if (!res.ok) return { status: "failed", reason: `HTTP ${res.status}` };\n',
+    NON_2XX,
     '    if (!res.ok) return { status: "ok", records: [] };\n',
     CHAT,
   ),
   entry(
     "a 200 body that is not the feed is read as an empty feed",
-    '      return { status: "failed", reason: "response is not a revocation feed" };\n',
+    '      return failed("not a revocation feed");\n',
     '      return { status: "ok", records: [] };\n',
     `${PRESENTER} a 200 body with no records array: no grant is presented`,
   ),
   entry(
-    "the once-per-session notice latch is removed",
+    "the once-per-outage notice latch is removed",
     "        notified = true;\n",
     "",
-    "revocation pull: the notice fires once per outage consecutive failed-pull turns call onRevocationUnconfirmed exactly once, with the reason",
+    `${NOTICE} consecutive failed-pull turns call onRevocationUnconfirmed exactly once, with the reason`,
   ),
   entry(
     "the notice latch is never re-armed after a successful pull (once per process)",
     '    if (pull.status === "ok") notified = false;\n',
     "",
-    "revocation pull: the notice fires once per outage failure, success, failure: each outage is announced once",
+    `${NOTICE} failure, success, failure: each outage is announced once`,
   ),
-  entry(
-    "the pull resolves its own relay from config/env again (the passed URL is dropped)",
-    "  const relayUrl = normalizeRelayUrl(options.relayUrl);\n",
-    '  const relayUrl = normalizeRelayUrl(\n    loadFullConfig().sync_url ?? process.env["MOTEBIT_SYNC_URL"],\n  );\n',
-    `${SESSION} --sync-url only (no env, no config) + a failed pull: withheld`,
-  ),
-  entry(
-    "the pull falls back to the environment when the caller named no relay",
-    "  const relayUrl = normalizeRelayUrl(options.relayUrl);\n",
-    '  const relayUrl = normalizeRelayUrl(options.relayUrl ?? process.env["MOTEBIT_SYNC_URL"]);\n',
-    `${PRESENTER} no relay configured: the grant is presented from local state, and nothing is fetched`,
-  ),
-  {
-    name: "the REPL stops passing the session's relay to the presenter",
-    edits: [
-      {
-        file: "apps/cli/src/index.ts",
-        from: "          relayUrl: syncUrl,\n",
-        to: "",
-      },
-    ],
-    pkg: PKG,
-    test: TEST,
-    red: `${SESSION} the call sites pass the session's relay: REPL \`syncUrl\`, daemon \`relay.intentUrl\``,
-  },
-  {
-    name: "the daemon passes the push relay (undefined on stdio) instead of the named one",
-    edits: [
-      {
-        file: "apps/cli/src/daemon.ts",
-        from: "          relayUrl: relay.intentUrl,\n",
-        to: "          relayUrl: relay.syncUrl,\n",
-      },
-    ],
-    pkg: PKG,
-    test: TEST,
-    red: `${SESSION} the call sites pass the session's relay: REPL \`syncUrl\`, daemon \`relay.intentUrl\``,
-  },
   entry(
     "the pull follows redirects again",
     '      redirect: "error",\n',
@@ -150,10 +128,88 @@ const TAMPERS: TamperEntry[] = [
     `${PRESENTER} a redirected answer: no grant is presented`,
   ),
   entry(
-    "the withhold branch is removed (a local revocation + a failed pull)",
-    WITHHOLD,
+    "a redirected answer is accepted",
+    '    if (res.redirected) return failed("redirected");\n',
     "",
-    `${PRESENTER} a local revocation + a failed pull: no authority`,
+    `${UNION} an answer that was redirected (a fetch that followed one anyway) is a failed pull`,
+  ),
+  // ── which relays are asked ──
+  {
+    name: "the relay set is captured once at startup (/connect is not seen)",
+    edits: [
+      {
+        file: SRC,
+        from: "  let notified = false;\n",
+        to: "  let notified = false;\n  const startupRelayUrls = options.relayUrls?.() ?? [];\n",
+      },
+      { file: SRC, from: ASK_NOW, to: "      relayUrls = startupRelayUrls;\n" },
+    ],
+    pkg: PKG,
+    test: TEST,
+    red: `${CONNECT} no relay at start, /connect B, B answers 500: the next presentation is withheld`,
+  },
+  {
+    name: "the relay set is captured once at startup (a later change is not seen)",
+    edits: [
+      {
+        file: SRC,
+        from: "  let notified = false;\n",
+        to: "  let notified = false;\n  const startupRelayUrls = options.relayUrls?.() ?? [];\n",
+      },
+      { file: SRC, from: ASK_NOW, to: "      relayUrls = startupRelayUrls;\n" },
+    ],
+    pkg: PKG,
+    test: TEST,
+    red: `${UNION} the set is asked again at EACH presentation, never captured`,
+  },
+  entry(
+    "/connect no longer updates the session relay",
+    "      if (repl.sessionRelay != null) repl.sessionRelay.url = connectUrl;\n",
+    "",
+    `${CONNECT} --sync-url A at start, /connect B: both A and B are asked`,
+    SLASH,
+  ),
+  entry(
+    "any failed pull withholds -> all must fail (two relays, one fails)",
+    ANY_FAILS,
+    "  if (failures.length === pulls.length) return",
+    `${UNION} two relays, one fails: withheld, and the notice names the failing host only`,
+  ),
+  entry(
+    "any failed pull withholds -> all must fail (/connect: A ok + B 500)",
+    ANY_FAILS,
+    "  if (failures.length === pulls.length) return",
+    `${CONNECT} --sync-url A at start, /connect B, A ok + B 500: withheld`,
+  ),
+  entry(
+    "the named-relay floor is dropped from the REPL's set",
+    "  return [session.url, namedRelayUrl(config, loadFullConfig())];\n",
+    "  return [session.url];\n",
+    `${CONNECT} a relay saved to config by another process mid-session is asked on the next turn`,
+  ),
+  entry(
+    "the named-relay floor is dropped from the daemon's set",
+    "  return [relay.intentUrl, relay.syncUrl, namedRelayUrl(config, loadFullConfig())];\n",
+    "  return [relay.intentUrl, relay.syncUrl];\n",
+    `${DAEMON} MOTEBIT_SYNC_URL="" + config sync_url: the daemon names no relay, the config relay is still asked, a failed pull withholds`,
+  ),
+  entry(
+    "the presenter falls back to the environment when its caller gave no set",
+    ASK_NOW,
+    '      relayUrls = options.relayUrls?.() ?? [process.env["MOTEBIT_SYNC_URL"]];\n',
+    `${UNION} no relayUrls given + a relay named only in the environment: nothing is fetched`,
+  ),
+  entry(
+    "merged records are dropped (only the first relay's records are kept)",
+    '  return { status: "ok", records: pulls.flatMap((p) => (p.status === "ok" ? p.records : [])) };\n',
+    '  return { status: "ok", records: pulls[0]?.status === "ok" ? pulls[0].records : [] };\n',
+    `${UNION} two relays, both ok: the records are merged (a revocation on either one refuses)`,
+  ),
+  entry(
+    "the raw error text is restored in the failure reason",
+    THROWN_FAILED,
+    "    return failed(err instanceof Error ? err.message : String(err));\n",
+    `${REASON} a thrown error quoting the credentialed URL: host only, a fixed word`,
   ),
 ];
 

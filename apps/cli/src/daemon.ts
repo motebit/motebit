@@ -55,7 +55,7 @@ import { LIVENESS_SESSION_GAP_MS } from "./runtime-coverage.js";
 import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { createDirectTaskHandler } from "./direct-task-handler.js";
-import { createGrantPresenter } from "./subcommands/grant.js";
+import { createGrantPresenter, daemonGrantRelayUrls } from "./subcommands/grant.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
 import { cliRuntimeConfig, daemonRelay } from "./sync-configured.js";
@@ -1442,11 +1442,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
   const serveGrant =
     config.direct && config.grant != null
       ? await createGrantPresenter(config.grant, {
-          // The relay NAMED for this identity (`relay.intentUrl`), not
-          // `relay.syncUrl`: stdio serve pushes to no relay (syncUrl is
-          // undefined there), yet a revocation signed on another machine
-          // lives on the named one. The presenter asks no other.
-          relayUrl: relay.intentUrl,
+          // Asked each task: the relay named for this identity and the one
+          // it pushes to (stdio serve pushes to none, yet a revocation signed
+          // on another machine lives on the named one), plus the named relay
+          // re-resolved as `motebit grant revoke` resolves it.
+          relayUrls: () => daemonGrantRelayUrls(relay, config),
           // Once per outage: the relay could not confirm revocation status,
           // so the grant is withheld and R4 tasks are refused.
           onRevocationUnconfirmed: (reason) =>

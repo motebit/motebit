@@ -12,11 +12,10 @@
  *
  * Every pull here goes to an injected fetch; nothing touches the network.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import {
   generateKeypair,
   bytesToHex,
@@ -152,7 +151,7 @@ async function presentAndVerify(
   fetchImpl: FakeFetch,
 ): Promise<{ presented: boolean; verified: boolean }> {
   const presenter = await grantMod.createGrantPresenter(grantId, {
-    relayUrl: sessionRelay,
+    relayUrls: () => [sessionRelay],
     fetch: fetchImpl,
     pullTimeoutMs: 30,
   });
@@ -189,7 +188,7 @@ describe("revocation pull: a failed pull presents no grant", () => {
       const { grantId } = await storeGrant();
       const fetchImpl = make();
       const presenter = await grantMod.createGrantPresenter(grantId, {
-        relayUrl: sessionRelay,
+        relayUrls: () => [sessionRelay],
         fetch: fetchImpl,
         pullTimeoutMs: 30,
       });
@@ -272,7 +271,7 @@ describe("revocation pull: a failed pull presents no grant", () => {
       verified: false,
     });
     const presenter = await grantMod.createGrantPresenter(grantId, {
-      relayUrl: RELAY,
+      relayUrls: () => [RELAY],
       fetch: json(500, {}),
     });
     expect((await presenter!.presentForTurn()).status).toBe("withheld");
@@ -292,7 +291,7 @@ describe("revocation pull: the notice fires once per outage", () => {
     const { grantId } = await storeGrant();
     const notice = vi.fn();
     const presenter = await grantMod.createGrantPresenter(grantId, {
-      relayUrl: RELAY,
+      relayUrls: () => [RELAY],
       fetch: json(429, {}),
       onRevocationUnconfirmed: notice,
     });
@@ -300,7 +299,7 @@ describe("revocation pull: the notice fires once per outage", () => {
       expect(await presenter!.delegationForTurn()).toBeNull();
     }
     expect(notice).toHaveBeenCalledTimes(1);
-    expect(notice).toHaveBeenCalledWith("HTTP 429");
+    expect(notice).toHaveBeenCalledWith("HTTP 429 (relay.invalid)");
   });
 
   it("failure, success, failure: each outage is announced once", async () => {
@@ -308,7 +307,7 @@ describe("revocation pull: the notice fires once per outage", () => {
     const notice = vi.fn();
     let status = 200;
     const presenter = await grantMod.createGrantPresenter(grantId, {
-      relayUrl: RELAY,
+      relayUrls: () => [RELAY],
       fetch: fakeFetch(() =>
         Promise.resolve(new Response(JSON.stringify({ records: [] }), { status })),
       ),
@@ -320,7 +319,7 @@ describe("revocation pull: the notice fires once per outage", () => {
     expect(await presenter!.delegationForTurn()).toBeNull();
     expect(await presenter!.delegationForTurn()).toBeNull();
     expect(notice).toHaveBeenCalledTimes(1);
-    expect(notice).toHaveBeenLastCalledWith("HTTP 502");
+    expect(notice).toHaveBeenLastCalledWith("HTTP 502 (relay.invalid)");
     // The relay answers again: the grant is presented again, the outage over.
     status = 200;
     expect(await presenter!.delegationForTurn()).not.toBeNull();
@@ -330,7 +329,7 @@ describe("revocation pull: the notice fires once per outage", () => {
     expect(await presenter!.delegationForTurn()).toBeNull();
     expect(await presenter!.delegationForTurn()).toBeNull();
     expect(notice).toHaveBeenCalledTimes(2);
-    expect(notice).toHaveBeenLastCalledWith("HTTP 503");
+    expect(notice).toHaveBeenLastCalledWith("HTTP 503 (relay.invalid)");
   });
 });
 
@@ -354,7 +353,7 @@ describe("revocation pull: the relay is the session's, never the presenter's own
       );
       const { grantId } = await storeGrant();
       const presenter = await grantMod.createGrantPresenter(grantId, {
-        relayUrl: resolved,
+        relayUrls: () => [resolved],
         fetch: fetchImpl,
       });
       return { status: (await presenter!.presentForTurn()).status, resolved };
@@ -394,29 +393,415 @@ describe("revocation pull: the relay is the session's, never the presenter's own
       status: "no_relay",
     });
   });
+});
 
-  it("the call sites pass the session's relay: REPL `syncUrl`, daemon `relay.intentUrl`", () => {
-    const src = (file: string): string =>
-      readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", file), "utf8");
-    const call = (text: string): string => {
-      const at = text.indexOf("await createGrantPresenter(config.grant, {");
-      expect(at).toBeGreaterThan(-1);
-      return text.slice(at, at + 600);
-    };
-    const repl = src("index.ts");
-    expect(call(repl)).toMatch(/\brelayUrl: syncUrl,/);
-    // …and `syncUrl` is the session's own resolution, declared before the call.
-    const declared = repl.indexOf("const syncUrl = resolveRelayUrl(config, reloadedConfig);");
-    expect(declared).toBeGreaterThan(-1);
-    expect(declared).toBeLessThan(repl.indexOf("await createGrantPresenter(config.grant, {"));
-    expect(call(src("daemon.ts"))).toMatch(/\brelayUrl: relay\.intentUrl,/);
-    // The presenter module reads no relay source of its own in the pull.
-    const grant = src("subcommands/grant.ts");
-    const pull = grant.slice(
-      grant.indexOf("export async function pullRelayRevocations"),
-      grant.indexOf("export function createGrantPresenter"),
+// THE RULE: each turn, pull from EVERY relay this identity is known to use, and
+// withhold if ANY pull fails.
+describe("revocation pull: every known relay is asked, any failure withholds", () => {
+  const A = "https://a.invalid";
+  const B = "https://b.invalid";
+  const feed = (url: string): string => `${url}/api/v1/delegations/revocations`;
+  /** A fetch answering per relay origin. */
+  const byRelay = (answers: Record<string, () => Response>): FakeFetch => {
+    const impl = fakeFetch(() => Promise.reject(new TypeError("unrouted")));
+    const routed = ((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      impl.calls.push(url);
+      const answer = answers[new URL(url).origin];
+      return answer != null
+        ? Promise.resolve(answer())
+        : Promise.reject(new TypeError("fetch failed"));
+    }) as FakeFetch;
+    routed.calls = impl.calls;
+    return routed;
+  };
+  const ok =
+    (records: unknown[] = []) =>
+    (): Response =>
+      new Response(JSON.stringify({ records }), { status: 200 });
+  const status = (code: number) => (): Response => new Response("{}", { status: code });
+
+  it("two relays, one fails: withheld, and the notice names the failing host only", async () => {
+    const { grantId } = await storeGrant();
+    const notice = vi.fn();
+    const fetchImpl = byRelay({ [A]: ok(), [B]: status(500) });
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => [A, B],
+      fetch: fetchImpl,
+      onRevocationUnconfirmed: notice,
+    });
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect([...fetchImpl.calls].sort()).toEqual([feed(A), feed(B)]);
+    expect(notice).toHaveBeenCalledTimes(1);
+    expect(notice).toHaveBeenCalledWith("HTTP 500 (b.invalid)");
+  });
+
+  it("two relays, both ok: the records are merged (a revocation on either one refuses)", async () => {
+    const { grantId, revocation } = await storeGrant();
+    for (const holder of [A, B]) {
+      const other = holder === A ? B : A;
+      const presenter = await grantMod.createGrantPresenter(grantId, {
+        relayUrls: () => [A, B],
+        fetch: byRelay({ [holder]: ok([revocation]), [other]: ok() }),
+      });
+      const turn = await presenter!.delegationForTurn();
+      expect(turn).not.toBeNull();
+      expect(turn!.delegation.revocations).toEqual([revocation]);
+      expect(
+        await verifyGrantForTurn(
+          turn!.delegation.token,
+          turn!.delegation.grant,
+          turn!.delegation.revocations,
+          self(),
+        ),
+      ).toBeNull();
+    }
+  });
+
+  it("duplicates (after normalisation) are asked once", async () => {
+    const { grantId } = await storeGrant();
+    const fetchImpl = byRelay({ [A]: ok() });
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => [A, `${A}/`, ` ${A}// `, undefined, "  "],
+      fetch: fetchImpl,
+    });
+    expect((await presenter!.presentForTurn()).status).toBe("presented");
+    expect(fetchImpl.calls).toEqual([feed(A)]);
+  });
+
+  it("an empty set is no relay: presented from local state, zero fetches", async () => {
+    const { grantId } = await storeGrant();
+    const fetchImpl = networkError();
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => [undefined, "", "   "],
+      fetch: fetchImpl,
+    });
+    expect((await presenter!.presentForTurn()).status).toBe("presented");
+    expect(fetchImpl.calls).toHaveLength(0);
+    expect(await grantMod.pullRevocationsFromRelays([], { fetch: fetchImpl })).toEqual({
+      status: "no_relay",
+    });
+  });
+
+  it("no relayUrls given + a relay named only in the environment: nothing is fetched", async () => {
+    // MOTEBIT_SYNC_URL names ENV_RELAY here; the presenter has no source of its own.
+    const { grantId } = await storeGrant();
+    const fetchImpl = networkError();
+    const presenter = await grantMod.createGrantPresenter(grantId, { fetch: fetchImpl });
+    expect((await presenter!.presentForTurn()).status).toBe("presented");
+    expect(fetchImpl.calls).toHaveLength(0);
+  });
+
+  it("an answer that was redirected (a fetch that followed one anyway) is a failed pull", async () => {
+    const { grantId } = await storeGrant();
+    const notice = vi.fn();
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => [A],
+      fetch: fakeFetch(() => {
+        const res = new Response(JSON.stringify({ records: [] }), { status: 200 });
+        Object.defineProperty(res, "redirected", { value: true });
+        return Promise.resolve(res);
+      }),
+      onRevocationUnconfirmed: notice,
+    });
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect(notice).toHaveBeenCalledWith("redirected (a.invalid)");
+  });
+
+  it("the set is asked again at EACH presentation, never captured", async () => {
+    const { grantId } = await storeGrant();
+    const current: { url: string | undefined } = { url: undefined };
+    const fetchImpl = byRelay({ [A]: status(500) });
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => [current.url],
+      fetch: fetchImpl,
+    });
+    expect((await presenter!.presentForTurn()).status).toBe("presented");
+    current.url = A;
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+  });
+
+  it("a relay set that cannot be read withholds", async () => {
+    const { grantId } = await storeGrant();
+    const notice = vi.fn();
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => {
+        throw new Error("config damaged at /secret/path");
+      },
+      onRevocationUnconfirmed: notice,
+    });
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect(notice).toHaveBeenCalledWith("relay configuration unreadable");
+  });
+});
+
+describe("revocation pull: the reason never carries a URL or an error's own text", () => {
+  const SECRET = "s3cr3t-token";
+  const WITH_USERINFO = `https://user:${SECRET}@relay.invalid/base?key=${SECRET}`;
+
+  async function reasonFor(relayUrl: string, fetchImpl: FakeFetch): Promise<string> {
+    const { grantId } = await storeGrant();
+    const notice = vi.fn<(reason: string) => void>();
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => [relayUrl],
+      fetch: fetchImpl,
+      pullTimeoutMs: 30,
+      onRevocationUnconfirmed: notice,
+    });
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect(notice).toHaveBeenCalledTimes(1);
+    return notice.mock.calls[0]![0];
+  }
+
+  it("a thrown error quoting the credentialed URL: host only, a fixed word", async () => {
+    const reason = await reasonFor(
+      WITH_USERINFO,
+      fakeFetch(() =>
+        Promise.reject(
+          new TypeError(`Request cannot be constructed from ${WITH_USERINFO} (credentials)`),
+        ),
+      ),
     );
-    expect(pull).not.toMatch(/loadFullConfig|process\.env/);
+    expect(reason).toBe("network error (relay.invalid)");
+    expect(reason).not.toContain(SECRET);
+    expect(reason).not.toContain("user");
+  });
+
+  it("an HTTP error from a credentialed URL: status and host only", async () => {
+    const reason = await reasonFor(WITH_USERINFO, json(503, {}));
+    expect(reason).toBe("HTTP 503 (relay.invalid)");
+    expect(reason).not.toContain(SECRET);
+  });
+
+  it("each failure kind maps to its fixed reason", async () => {
+    expect(await reasonFor(RELAY, hangs())).toBe("timeout (relay.invalid)");
+    expect(await reasonFor(RELAY, networkError())).toBe("network error (relay.invalid)");
+    expect(
+      await reasonFor(
+        RELAY,
+        fakeFetch(() =>
+          // What Node's fetch throws for `redirect: "error"`.
+          Promise.reject(
+            new TypeError("fetch failed", { cause: new Error("unexpected redirect") }),
+          ),
+        ),
+      ),
+    ).toBe("redirected (relay.invalid)");
+    expect(await reasonFor(RELAY, text(200, "<html>"))).toBe(
+      "not a revocation feed (relay.invalid)",
+    );
+    expect(await reasonFor(RELAY, json(200, { ok: true }))).toBe(
+      "not a revocation feed (relay.invalid)",
+    );
+    expect(await reasonFor(`not a url ${SECRET}`, networkError())).toBe("invalid relay URL");
+    expect(await reasonFor(`ftp://${SECRET}@relay.invalid`, networkError())).toBe(
+      "invalid relay URL",
+    );
+  });
+});
+
+// The REPL: the real `/connect` handler updates the session relay the presenter
+// reads each turn. Wired as apps/cli/src/index.ts wires it: one `SessionRelay`
+// holder shared by the slash-command context and `replGrantRelayUrls`.
+describe("revocation pull: /connect moves the relay the grant is checked against", () => {
+  const A = "https://a.invalid";
+  const B = "https://b.invalid";
+  const feed = (url: string): string => `${url}/api/v1/delegations/revocations`;
+  let feedAnswer: Record<string, () => Response>;
+  let feedCalls: string[];
+
+  beforeEach(() => {
+    feedAnswer = {};
+    feedCalls = [];
+    rmSync(join(dir, "config.json"), { force: true });
+    vi.stubEnv("MOTEBIT_SYNC_URL", "");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    // One fetch for everything the session does: /connect's bootstrap and
+    // discovery are answered; the feed answers per relay; the rest is refused.
+    vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/api/v1/agents/bootstrap")) {
+        return Promise.resolve(new Response(JSON.stringify({ registered: true }), { status: 200 }));
+      }
+      if (url.endsWith("/api/v1/agents/discover")) {
+        return Promise.resolve(new Response(JSON.stringify({ agents: [] }), { status: 200 }));
+      }
+      if (url.endsWith("/api/v1/delegations/revocations")) {
+        feedCalls.push(url);
+        const answer = feedAnswer[new URL(url).origin];
+        if (answer != null) return Promise.resolve(answer());
+      }
+      return Promise.reject(new TypeError(`network denied: ${url}`));
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.stubEnv("MOTEBIT_SYNC_URL", ENV_RELAY);
+    rmSync(join(dir, "config.json"), { force: true });
+  });
+
+  /** A REPL session with `--grant`, started with `flag` as `--sync-url` (or none). */
+  async function session(flag: string | undefined): Promise<{
+    present: () => Promise<string>;
+    verified: () => Promise<boolean>;
+    connect: (url: string) => Promise<void>;
+    enabled: ReturnType<typeof vi.fn>;
+    revocation: DelegationRevocation;
+  }> {
+    const { handleSlashCommand } = await import("../slash-commands.js");
+    const { namedRelayUrl } = await import("../sync-opt-in.js");
+    const { loadFullConfig } = await import("../config.js");
+    const { parseCliArgs } = await import("../args.js");
+    const config = parseCliArgs(flag != null ? ["--sync-url", flag] : []);
+    const { grantId, revocation } = await storeGrant();
+    // index.ts: `const syncUrl = resolveRelayUrl(config, reloadedConfig)`.
+    const sessionRelay = { url: namedRelayUrl(config, loadFullConfig()) };
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => grantMod.replGrantRelayUrls(sessionRelay, config),
+    });
+    const enabled = vi.fn();
+    const runtime = { enableInteractiveDelegation: enabled, registerServiceListing: vi.fn() };
+    return {
+      present: async () => (await presenter!.presentForTurn()).status,
+      verified: async () => {
+        const turn = await presenter!.delegationForTurn();
+        if (turn == null) return false;
+        const { token, grant, revocations } = turn.delegation;
+        return (await verifyGrantForTurn(token, grant, revocations, self())) != null;
+      },
+      connect: (url) =>
+        handleSlashCommand(
+          "connect",
+          url,
+          runtime as never,
+          config,
+          { ...loadFullConfig(), device_public_key: pub },
+          {
+            moteDb: {} as never,
+            motebitId: ID,
+            mcpAdapters: [],
+            privateKeyBytes: owner.privateKey,
+            deviceId: "dev-f1",
+            sessionRelay,
+          },
+        ),
+      enabled,
+      revocation,
+    };
+  }
+  const ok =
+    (records: unknown[] = []) =>
+    (): Response =>
+      new Response(JSON.stringify({ records }), { status: 200 });
+  const http500 = (): Response => new Response("{}", { status: 500 });
+
+  it("no relay at start, /connect B, B answers 500: the next presentation is withheld", async () => {
+    const s = await session(undefined);
+    expect(await s.present()).toBe("presented");
+    expect(feedCalls).toHaveLength(0);
+    feedAnswer = { [B]: http500 };
+    await s.connect(B);
+    expect(s.enabled).toHaveBeenCalledWith(expect.objectContaining({ syncUrl: B }));
+    expect(await s.present()).toBe("withheld");
+    expect(feedCalls).toEqual([feed(B)]);
+  });
+
+  it("no relay at start, /connect B, B holds the grant's revocation: the verifier refuses", async () => {
+    const s = await session(undefined);
+    expect(await s.verified()).toBe(true);
+    feedAnswer = { [B]: ok([s.revocation]) };
+    await s.connect(B);
+    expect(await s.present()).toBe("presented");
+    expect(await s.verified()).toBe(false);
+  });
+
+  it("--sync-url A at start, /connect B: both A and B are asked", async () => {
+    const s = await session(A);
+    feedAnswer = { [A]: ok(), [B]: ok() };
+    await s.connect(B);
+    feedCalls = [];
+    expect(await s.present()).toBe("presented");
+    expect([...feedCalls].sort()).toEqual([feed(A), feed(B)]);
+  });
+
+  it("--sync-url A at start, /connect B, A ok + B 500: withheld", async () => {
+    const s = await session(A);
+    feedAnswer = { [A]: ok(), [B]: http500 };
+    expect(await s.present()).toBe("presented");
+    await s.connect(B);
+    expect(await s.present()).toBe("withheld");
+  });
+
+  it("a relay saved to config by another process mid-session is asked on the next turn", async () => {
+    const { loadFullConfig, saveFullConfig } = await import("../config.js");
+    const s = await session(undefined);
+    expect(await s.present()).toBe("presented");
+    saveFullConfig({ ...loadFullConfig(), sync_url: B });
+    feedAnswer = { [B]: http500 };
+    expect(await s.present()).toBe("withheld");
+    expect(feedCalls).toEqual([feed(B)]);
+  });
+});
+
+// The daemon: `daemonGrantRelayUrls` over the REAL `daemonRelay`, which is what
+// apps/cli/src/daemon.ts passes as the presenter's `relayUrls`.
+describe("revocation pull: serve --direct --grant asks the relay `grant revoke` posts to", () => {
+  const C = "https://config-relay.invalid";
+  afterEach(() => {
+    vi.stubEnv("MOTEBIT_SYNC_URL", ENV_RELAY);
+    rmSync(join(dir, "config.json"), { force: true });
+  });
+
+  async function daemonSession(
+    env: string,
+    transport: "stdio" | "http",
+    fetchImpl: FakeFetch,
+  ): Promise<{ status: string; relay: { syncUrl?: string; intentUrl?: string } }> {
+    const { daemonRelay } = await import("../sync-configured.js");
+    const { loadFullConfig, saveFullConfig } = await import("../config.js");
+    const { parseCliArgs } = await import("../args.js");
+    saveFullConfig({ ...loadFullConfig(), sync_url: C });
+    vi.stubEnv("MOTEBIT_SYNC_URL", env);
+    const config = parseCliArgs([]);
+    const relay = daemonRelay(config, loadFullConfig(), transport);
+    const { grantId } = await storeGrant();
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => grantMod.daemonGrantRelayUrls(relay, config),
+      fetch: fetchImpl,
+    });
+    return { status: (await presenter!.presentForTurn()).status, relay };
+  }
+
+  it('MOTEBIT_SYNC_URL="" + config sync_url: the daemon names no relay, the config relay is still asked, a failed pull withholds', async () => {
+    const fetchImpl = json(500, {});
+    const out = await daemonSession("", "http", fetchImpl);
+    // The pre-existing disagreement this floor covers: the daemon's own
+    // resolution yields none, while `grant revoke` posts to the config relay.
+    expect(out.relay).toEqual({ syncUrl: undefined, intentUrl: undefined });
+    expect(out.status).toBe("withheld");
+    expect(fetchImpl.calls).toEqual([`${C}/api/v1/delegations/revocations`]);
+  });
+
+  it("stdio serve (pushes to no relay): the named relay is asked once", async () => {
+    vi.stubEnv("MOTEBIT_SYNC_URL", "");
+    const fetchImpl = json(200, { records: [] });
+    const { daemonRelay } = await import("../sync-configured.js");
+    const { loadFullConfig, saveFullConfig } = await import("../config.js");
+    const { parseCliArgs } = await import("../args.js");
+    saveFullConfig({ ...loadFullConfig(), sync_url: C });
+    delete process.env["MOTEBIT_SYNC_URL"];
+    const config = parseCliArgs([]);
+    const relay = daemonRelay(config, loadFullConfig(), "stdio");
+    expect(relay.syncUrl).toBeUndefined();
+    expect(relay.intentUrl).toBe(C);
+    const { grantId } = await storeGrant();
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => grantMod.daemonGrantRelayUrls(relay, config),
+      fetch: fetchImpl,
+    });
+    expect((await presenter!.presentForTurn()).status).toBe("presented");
+    expect(fetchImpl.calls).toEqual([`${C}/api/v1/delegations/revocations`]);
   });
 });
 
@@ -488,7 +873,7 @@ async function ownerTurn(fetchImpl: FakeFetch): Promise<{
     return { ok: true, data: "moved" };
   });
   const presenter = await grantMod.createGrantPresenter(grantId, {
-    relayUrl: RELAY,
+    relayUrls: () => [RELAY],
     fetch: fetchImpl,
   });
   const presentation = await presenter!.presentForTurn();
@@ -548,7 +933,7 @@ async function directTask(fetchImpl: FakeFetch): Promise<{
   );
   const notice = vi.fn();
   const serveGrant = await grantMod.createGrantPresenter(grantId, {
-    relayUrl: sessionRelay,
+    relayUrls: () => [sessionRelay],
     fetch: fetchImpl,
     onRevocationUnconfirmed: notice,
   });

@@ -76,6 +76,12 @@ export interface ReplContext {
   deviceId?: string;
   /** Voice controller — optional, off by default. `/voice on` opts in. */
   voice?: VoiceController;
+  /**
+   * The relay this REPL session talks to NOW. `/connect` replaces it, so a
+   * `--grant` presenter (which reads it each turn) asks the relay the
+   * delegation tool was just pointed at, not the one named at startup.
+   */
+  sessionRelay?: { url: string | undefined };
 }
 
 export function isSlashCommand(input: string): boolean {
@@ -974,6 +980,9 @@ export async function handleSlashCommand(
         },
         routingStrategy: config.routingStrategy,
       });
+      // The session's relay is now this one: a standing grant's revocation
+      // status is checked against it from the next turn on.
+      if (repl.sessionRelay != null) repl.sessionRelay.url = connectUrl;
       console.log(success("  Interactive delegation enabled."));
 
       // 3. Discover agents

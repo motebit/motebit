@@ -145,11 +145,19 @@ export function selectDueTick(stored: StoredGrant, now: number): DelegationToken
  * one to approve, is refused). With no relay named there is nothing to ask,
  * and the local set stands.
  *
- * WHICH relay is the caller's answer, never this module's: the presenter
- * pulls from `GrantPresenterOptions.relayUrl`, the relay the session itself
- * resolved (flag > env > config), and reads no config or environment of its
- * own. A second resolution here could disagree with the session's and ask a
- * different relay, or none.
+ * THE RULE: each turn, the presenter pulls from EVERY relay this identity is
+ * known to use, and withholds if ANY of those pulls fails. The set is
+ * recomputed at each presentation through `GrantPresenterOptions.relayUrls`,
+ * a function, so a relay captured once at startup is unrepresentable. The
+ * caller composes it (`replGrantRelayUrls`, `daemonGrantRelayUrls`):
+ *   (a) the relay(s) the session talks to NOW (the REPL's mutable session
+ *       relay, which `/connect` updates; the daemon's intent and push relay);
+ *   (b) the NAMED relay re-resolved per turn (`namedRelayUrl`: flag > env >
+ *       config file), so a relay saved to config mid-session, or one the
+ *       daemon's own sync resolution skips, is still asked.
+ * Records from every pull are merged. An empty set means no relay is known
+ * anywhere. The presenter reads no config or environment except through that
+ * function.
  *
  * What this does not do: the feed is unsigned, so a relay that omits a record
  * (or a wrong relay URL) still answers "ok". That needs the signed
@@ -183,24 +191,55 @@ export interface GrantPresenter {
 
 export interface GrantPresenterOptions {
   /**
-   * The relay THIS SESSION uses, already resolved by the caller (the REPL's
-   * and the daemon's own flag > env > config answer). Absent, empty or
-   * whitespace: no relay, nothing is pulled. The presenter consults no other
-   * source.
+   * Every relay this identity is known to use, asked at EACH presentation
+   * (never captured): see `replGrantRelayUrls` / `daemonGrantRelayUrls`.
+   * Entries are normalised and de-duplicated; absent or all-empty means no
+   * relay, and nothing is pulled.
    */
-  relayUrl?: string | undefined;
+  relayUrls?: () => readonly (string | undefined)[];
   /**
-   * Called once per OUTAGE: on the first presentation withheld because the
-   * relay could not confirm revocation status, with the pull's failure reason
-   * (`HTTP 429`, a timeout, …). Later consecutive withheld turns are silent; a
-   * successful pull re-arms it, so the next outage is announced again. The
-   * caller renders its own one-line notice.
+   * Called once per OUTAGE: on the first presentation withheld because a
+   * relay could not confirm revocation status, with a short fixed reason
+   * naming the failing relay's host (`HTTP 429 (relay.example)`,
+   * `timeout (…)`). Never a raw URL or a raw error message. Later consecutive
+   * withheld turns are silent; a turn where every pull succeeds re-arms it.
+   * The caller renders its own one-line notice.
    */
   onRevocationUnconfirmed?: (reason: string) => void;
   /** The fetch the revocation pull uses (tests inject one; default: global). */
   fetch?: typeof fetch;
   /** Upper bound on one pull (default 3 s). */
   pullTimeoutMs?: number;
+}
+
+/** The REPL's CURRENT relay: set at startup, replaced by `/connect`. */
+export interface SessionRelay {
+  url: string | undefined;
+}
+
+/**
+ * The relays a REPL session's grant is checked against, this turn: (a) the
+ * relay the session talks to now, (b) the named relay, re-resolved.
+ */
+export function replGrantRelayUrls(
+  session: SessionRelay,
+  config: { syncUrl?: string | undefined },
+): (string | undefined)[] {
+  return [session.url, namedRelayUrl(config, loadFullConfig())];
+}
+
+/**
+ * The relays a daemon's grant is checked against, this task: (a) the relay
+ * named for its identity and the one it pushes to, (b) the named relay,
+ * re-resolved with `namedRelayUrl`. (b) matters because `daemonRelayUrl` does
+ * not normalise: with `MOTEBIT_SYNC_URL=""` and a config `sync_url` it yields
+ * none, while `motebit grant revoke` posts to the config relay.
+ */
+export function daemonGrantRelayUrls(
+  relay: { syncUrl: string | undefined; intentUrl: string | undefined },
+  config: { syncUrl?: string | undefined },
+): (string | undefined)[] {
+  return [relay.intentUrl, relay.syncUrl, namedRelayUrl(config, loadFullConfig())];
 }
 
 /** Upper bound on the per-presentation relay revocation pull. */
@@ -216,19 +255,68 @@ export type RelayRevocationPull =
   | { status: "no_relay" }
   /** The relay answered 2xx with a well-shaped feed (possibly empty). */
   | { status: "ok"; records: DelegationRevocation[] }
-  /** Timeout, network error, non-2xx, or a body that is not the feed's shape. */
+  /**
+   * Timeout, network error, redirect, non-2xx, or a body that is not the
+   * feed's shape. `reason` is a fixed short phrase plus the relay's host.
+   */
   | { status: "failed"; reason: string };
 
 const isRecordObject = (v: unknown): boolean =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
+/** Normalised (as the session normalises), de-duplicated, order kept. */
+export function normalizeRelayUrls(urls: readonly (string | undefined)[]): string[] {
+  const out: string[] = [];
+  for (const url of urls) {
+    const normalized = normalizeRelayUrl(url);
+    if (normalized != null && !out.includes(normalized)) out.push(normalized);
+  }
+  return out;
+}
+
+/** The relay's host (no userinfo, path or query), or null when it has none. */
+function relayHost(relayUrl: string): string | null {
+  try {
+    const url = new URL(relayUrl);
+    return (url.protocol === "https:" || url.protocol === "http:") && url.host !== ""
+      ? url.host
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+const errorField = (err: unknown, field: "name" | "message" | "cause"): unknown =>
+  typeof err === "object" && err !== null ? (err as Record<string, unknown>)[field] : undefined;
+
+/**
+ * A thrown pull as one of a fixed set of words. The error's own text is never
+ * returned: it can carry the request URL, and a URL can carry credentials.
+ */
+function thrownPullKind(err: unknown): string {
+  const name = errorField(err, "name");
+  if (name === "TimeoutError" || name === "AbortError") return "timeout";
+  if (name === "SyntaxError") return "not a revocation feed";
+  const texts = [errorField(err, "message"), errorField(errorField(err, "cause"), "message")];
+  return texts.some((t) => typeof t === "string" && /redirect/i.test(t))
+    ? "redirected"
+    : "network error";
+}
+
 export async function pullRelayRevocations(
-  options: Pick<GrantPresenterOptions, "relayUrl" | "fetch" | "pullTimeoutMs"> = {},
+  options: { relayUrl?: string | undefined } & Pick<
+    GrantPresenterOptions,
+    "fetch" | "pullTimeoutMs"
+  > = {},
 ): Promise<RelayRevocationPull> {
-  // The caller's relay, normalised as the session normalises it. No fallback
-  // to config or environment: the caller's answer is the only one.
   const relayUrl = normalizeRelayUrl(options.relayUrl);
   if (relayUrl == null) return { status: "no_relay" };
+  const host = relayHost(relayUrl);
+  if (host == null) return { status: "failed", reason: "invalid relay URL" };
+  const failed = (kind: string): RelayRevocationPull => ({
+    status: "failed",
+    reason: `${kind} (${host})`,
+  });
   const fetchImpl = options.fetch ?? fetch;
   try {
     const res = await fetchImpl(`${relayUrl}/api/v1/delegations/revocations`, {
@@ -236,11 +324,12 @@ export async function pullRelayRevocations(
       // A redirected answer is not this relay's answer: a failed pull.
       redirect: "error",
     });
-    if (!res.ok) return { status: "failed", reason: `HTTP ${res.status}` };
+    if (res.redirected) return failed("redirected");
+    if (!res.ok) return failed(`HTTP ${res.status}`);
     const body: unknown = await res.json();
     const records = isRecordObject(body) ? (body as { records?: unknown }).records : undefined;
     if (!Array.isArray(records) || !records.every(isRecordObject)) {
-      return { status: "failed", reason: "response is not a revocation feed" };
+      return failed("not a revocation feed");
     }
     // The whole cache — findGrantRevocation inside the runtime's verifier
     // does the authoritative grant_id + delegator-key binding check, so
@@ -248,8 +337,27 @@ export async function pullRelayRevocations(
     return { status: "ok", records: records as DelegationRevocation[] };
   } catch (err: unknown) {
     // Timeout, offline, or an unparseable body: revocation status is unknown.
-    return { status: "failed", reason: err instanceof Error ? err.message : String(err) };
+    return failed(thrownPullKind(err));
   }
+}
+
+/**
+ * Pull every relay in the set. ANY failed pull fails the whole: one relay
+ * that cannot be read may be the one holding the revocation. All succeeded:
+ * the records are merged. An empty set is `no_relay`.
+ */
+export async function pullRevocationsFromRelays(
+  relayUrls: readonly (string | undefined)[],
+  options: Pick<GrantPresenterOptions, "fetch" | "pullTimeoutMs"> = {},
+): Promise<RelayRevocationPull> {
+  const urls = normalizeRelayUrls(relayUrls);
+  if (urls.length === 0) return { status: "no_relay" };
+  const pulls = await Promise.all(
+    urls.map((relayUrl) => pullRelayRevocations({ ...options, relayUrl })),
+  );
+  const failures = pulls.flatMap((p) => (p.status === "failed" ? [p.reason] : []));
+  if (failures.length > 0) return { status: "failed", reason: failures.join("; ") };
+  return { status: "ok", records: pulls.flatMap((p) => (p.status === "ok" ? p.records : [])) };
 }
 
 export function createGrantPresenter(
@@ -261,12 +369,22 @@ export function createGrantPresenter(
     return Promise.resolve(null);
   }
   let notified = false;
+  /** This turn's relay set, asked of the caller now; unreadable is a failure. */
+  const pullForTurn = async (): Promise<RelayRevocationPull> => {
+    let relayUrls: readonly (string | undefined)[];
+    try {
+      relayUrls = options.relayUrls?.() ?? [];
+    } catch {
+      return { status: "failed", reason: "relay configuration unreadable" };
+    }
+    return pullRevocationsFromRelays(relayUrls, options);
+  };
   const presentForTurn = async (): Promise<GrantPresentation> => {
     const stored = loadStoredGrant(grantId);
     if (stored == null || stored.grant.grant_id !== grantId) return { status: "not_due" };
     const tick = selectDueTick(stored, Date.now());
     if (tick == null) return { status: "not_due" };
-    const pull = await pullRelayRevocations(options);
+    const pull = await pullForTurn();
     if (pull.status === "failed") {
       if (!notified) {
         notified = true;
@@ -274,7 +392,7 @@ export function createGrantPresenter(
       }
       return { status: "withheld", reason: "revocation_unconfirmed" };
     }
-    // The relay answered: the outage (if any) is over, the next one is new.
+    // Every relay answered: the outage (if any) is over, the next one is new.
     if (pull.status === "ok") notified = false;
     const revocations: DelegationRevocation[] = [
       ...(stored.revocation != null ? [stored.revocation] : []),
