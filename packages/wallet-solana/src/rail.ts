@@ -34,6 +34,7 @@ import {
   InsufficientUsdcBalanceError,
   InvalidSolanaAddressError,
   RailSpendRefusedError,
+  isRailSpendRefusal,
   isSpendRefused,
 } from "./constants.js";
 
@@ -375,7 +376,9 @@ export class SolanaWalletRail implements SovereignWalletRail {
       query.error instanceof InsufficientUsdcBalanceError ||
       query.error instanceof InsufficientSolForGasError ||
       query.error instanceof InvalidSolanaAddressError ||
-      query.error instanceof RailSpendRefusedError
+      // By class OR by name + code: a refusal thrown by another loaded copy
+      // of this module is not `instanceof` this one.
+      isRailSpendRefusal(query.error)
     ) {
       return { status: "absent" };
     }

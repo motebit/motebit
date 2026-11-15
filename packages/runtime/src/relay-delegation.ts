@@ -2484,7 +2484,11 @@ export async function resolveAndSubmitP2pDelegation(
     // for its mint. Thrown only before the gas check and before anything is
     // signed, so nothing was sent: no ledger entry, never `payment_status_unknown`
     // (which an adapter without broadcast hooks would otherwise produce).
-    if (err instanceof Error && err.name === RAIL_SPEND_REFUSED_ERROR_NAME) {
+    // Pre-sign BY CONSTRUCTION, not by the name alone: the class holds only
+    // while no transaction was reported signed. If a later change ever throws
+    // this name after a broadcast hook fired, it falls to the paths below
+    // (confirm the recorded transaction, or `payment_status_unknown`).
+    if (signed.length === 0 && err instanceof Error && err.name === RAIL_SPEND_REFUSED_ERROR_NAME) {
       return fail("rail_spend_refused", err.message);
     }
     // wallet-solana surfaces a funds shortfall as InsufficientUsdcBalanceError,

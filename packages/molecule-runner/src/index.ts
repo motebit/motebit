@@ -393,6 +393,11 @@ export interface MoleculeRunnerAdapters {
    * the metered delegation path enabled. Tests inject a stub exposing
    * `executeGrantedDelegation` + `init`/`stop` to exercise the spend seam
    * without a wallet or relay.
+   *
+   * TEST SEAM ONLY. The runtime this returns is opaque: the runner cannot
+   * see, and does not check, the wallet rail inside it, so the spendable-mint
+   * allowlist is NOT enforced on it. `check-molecule-spend-containment`
+   * fails any molecule service that names this adapter.
    */
   createMoneyRuntime?: (
     identity: BootstrapAndEmitIdentityResult,
@@ -681,10 +686,18 @@ export function makeAuthTokenMinter(
  * The mints a first-party molecule's wallet rails may sign a transfer for:
  * devnet USDC only. ONE constant, passed to every rail this runner builds
  * (the money-execution rail and the earnings-sweep rail) and required, at
- * boot, of every rail it is handed. Not an environment variable and not a
- * per-service option: no env or secret configuration of a `runMolecule`
- * process can make it sign a mainnet-USDC transfer. Changing what a molecule
- * may spend is a reviewed change to this line (`check-molecule-spend-containment`).
+ * boot, of every rail the runner can SEE: a `walletOverride` handed to
+ * `defaultCreateMoneyRuntime` and the wallet a `createSweepWallet` adapter
+ * returns. Not an environment variable and not a per-service option: no env
+ * or secret configuration of a `runMolecule` process can make it sign a
+ * mainnet-USDC transfer. Changing what a molecule may spend is a reviewed
+ * change to this line (`check-molecule-spend-containment`).
+ *
+ * Not covered: a runtime returned by an injected
+ * `MoleculeRunnerAdapters.createMoneyRuntime` is opaque — the runner cannot
+ * inspect the rail inside it, so nothing here checks it. That adapter is a
+ * test seam; `check-molecule-spend-containment` fails any molecule service
+ * that names it.
  */
 export const MOLECULE_SPENDABLE_MINTS: readonly string[] = Object.freeze([USDC_MINT_DEVNET]);
 
@@ -705,9 +718,12 @@ function railSpendFacts(rail: unknown): {
 /**
  * Refuse to proceed unless `rail` carries EXACTLY {@link MOLECULE_SPENDABLE_MINTS}
  * as its spendable-mint allowlist — same length, same entries, same order.
- * Applied to every rail the runner builds or receives (the `walletOverride`
- * and `createSweepWallet` test overrides included), so a rail with no
- * allowlist, a wider one, or a different one never reaches a running molecule.
+ * Applied to every rail the runner builds, to a `walletOverride` handed to
+ * `defaultCreateMoneyRuntime`, and to the wallet a `createSweepWallet`
+ * adapter returns — so none of those reaches a running molecule with no
+ * allowlist, a wider one, or a different one. NOT applied to a runtime an
+ * injected `createMoneyRuntime` adapter returns: that runtime is opaque to
+ * the runner (a test seam the static gate keeps out of services).
  */
 export function assertMoleculeRailContained(rail: unknown, label: string): void {
   const { spendableMints } = railSpendFacts(rail);

@@ -17,6 +17,14 @@
  *     pre-sign classification in `resolveAndSubmitP2pDelegation`;
  *   - the runner: the boot check on the money-execution rail and on the sweep
  *     rail, the exactness of that check, and the factory passing the constant;
+ *   - classification by construction: the pre-sign class requiring that
+ *     nothing was signed, and `confirmSend` matching the refusal by name and
+ *     code together (not by class alone, not by name alone);
+ *   - the PRODUCTION branch of `runMolecule` (runner-built rail and runtime):
+ *     the early return, the loop-path reader, the pre-sign class and the
+ *     rail's own check, each against a production-branch test;
+ *   - the static gate's own rules: unconditional boot checks, no second
+ *     binding of the constant's name, overrides spelled as strings;
  *   - Research: the tool-result wording that stops a retry.
  *
  * Entries whose test lives in another package than the edit rebuild the edited
@@ -54,6 +62,40 @@ const ADAPTER_DESC = "spendable-mint allowlist: the web3 adapter repeats the ref
 const MAINNET_HOOKS = "a molecule over a MAINNET-mint rail moves nothing (hooks honoured)";
 const MAINNET_NO_HOOKS = "a molecule over a MAINNET-mint rail moves nothing (hooks absent)";
 const BOOT_DESC = "the runner refuses to start with a rail lacking the exact allowlist";
+const PRODUCTION =
+  "the runner's own rails (no override): env and config cannot widen them production branch —";
+const GATE = "scripts/check-molecule-spend-containment.ts";
+const GATE_TEST = "scripts/__tests__/check-molecule-spend-containment.test.ts";
+const GATE_DESC = "check-molecule-spend-containment fails on:";
+const DELEGATION_TEST = "src/__tests__/relay-delegation.test.ts";
+
+/** The refusal's structural match (name + code), in wallet-solana. */
+const STRUCTURAL_MATCH =
+  '  return e.name === "RailSpendRefusedError" && e.code === "rail_spend_refused";';
+
+/** The wrapper's rail reader at the loop-path call site (enableInteractiveDelegation). */
+const LOOP_READER: TamperEntry["edits"] = [
+  {
+    file: MOTEBIT_RUNTIME,
+    from:
+      "          () => railSpendRefusedOf(this._solanaWallet),\n" +
+      "        )\n" +
+      "      : undefined;",
+    to: "        )\n      : undefined;",
+  },
+];
+
+/** The rail's own check at `send`, removed. */
+const RAIL_SEND: TamperEntry["edits"] = [
+  {
+    file: RAIL,
+    from:
+      "    this.requireSpendable();\n" +
+      "    await this.requireGas();\n" +
+      "    return this.adapter.sendUsdc({ toAddress, microAmount });",
+    to: "    await this.requireGas();\n    return this.adapter.sendUsdc({ toAddress, microAmount });",
+  },
+];
 
 /** The allowlist constant, widened to include mainnet USDC. */
 const WIDEN: TamperEntry["edits"] = [
@@ -79,7 +121,7 @@ const PRE_SIGN_CLASS: TamperEntry["edits"] = [
   {
     file: RELAY_DELEGATION,
     from:
-      "    if (err instanceof Error && err.name === RAIL_SPEND_REFUSED_ERROR_NAME) {\n" +
+      "    if (signed.length === 0 && err instanceof Error && err.name === RAIL_SPEND_REFUSED_ERROR_NAME) {\n" +
       '      return fail("rail_spend_refused", err.message);\n' +
       "    }\n",
     to: "",
@@ -210,7 +252,9 @@ const TAMPERS: TamperEntry[] = [
         file: RAIL,
         from:
           "      query.error instanceof InvalidSolanaAddressError ||\n" +
-          "      query.error instanceof RailSpendRefusedError\n",
+          "      // By class OR by name + code: a refusal thrown by another loaded copy\n" +
+          "      // of this module is not `instanceof` this one.\n" +
+          "      isRailSpendRefusal(query.error)\n",
         to: "      query.error instanceof InvalidSolanaAddressError\n",
       },
     ],
@@ -329,16 +373,7 @@ const TAMPERS: TamperEntry[] = [
   },
   {
     name: "wrapper's rail reader dropped at the loop-path call site (enableInteractiveDelegation)",
-    edits: [
-      {
-        file: MOTEBIT_RUNTIME,
-        from:
-          "          () => railSpendRefusedOf(this._solanaWallet),\n" +
-          "        )\n" +
-          "      : undefined;",
-        to: "        )\n      : undefined;",
-      },
-    ],
+    edits: LOOP_READER,
     pkg: RUNNER,
     test: RUNNER_TEST,
     rebuild: [RUNTIME],
@@ -439,6 +474,127 @@ const TAMPERS: TamperEntry[] = [
     pkg: RUNNER,
     test: RUNNER_TEST,
     red: "the runner's own rails (no override): env and config cannot widen them createMoleculeWalletRail always carries exactly the constant, whatever mint it is given",
+  },
+
+  // ── Classification by construction ───────────────────────────────────────
+  {
+    name: "pre-sign class no longer requires that nothing was signed",
+    edits: [
+      {
+        file: RELAY_DELEGATION,
+        from: "    if (signed.length === 0 && err instanceof Error && err.name === RAIL_SPEND_REFUSED_ERROR_NAME) {",
+        to: "    if (err instanceof Error && err.name === RAIL_SPEND_REFUSED_ERROR_NAME) {",
+      },
+    ],
+    pkg: RUNTIME,
+    test: DELEGATION_TEST,
+    red: "resolveAndSubmitP2pDelegation the refusal's NAME thrown AFTER a transaction was reported signed is not pre-sign: payment_status_unknown, recorded",
+    only: true,
+  },
+  {
+    name: "confirmSend matches the refusal by class only (a second module copy reads as pending)",
+    edits: [{ file: WALLET_CONSTANTS, from: STRUCTURAL_MATCH, to: "  return e === undefined;" }],
+    pkg: WALLET,
+    test: WALLET_TEST,
+    red: `${RAIL_DESC} confirmSend reads a refusal from ANOTHER copy of the module (name + code, not instanceof) as absent`,
+  },
+  {
+    name: "confirmSend's structural match loosened to the name alone",
+    edits: [
+      {
+        file: WALLET_CONSTANTS,
+        from: STRUCTURAL_MATCH,
+        to: '  return e.name === "RailSpendRefusedError";',
+      },
+    ],
+    pkg: WALLET,
+    test: WALLET_TEST,
+    red: `${RAIL_DESC} confirmSend does NOT read a name alone or a code alone as a refusal: it looks the transfer up`,
+  },
+
+  // ── The PRODUCTION branch (runner-built rail and runtime) ────────────────
+  {
+    name: "production branch: runtime early return removed",
+    edits: EARLY_RETURN,
+    pkg: RUNNER,
+    test: RUNNER_TEST,
+    rebuild: [RUNTIME],
+    red: `${PRODUCTION} executeGrantedDelegation: rail_spend_refused before discovery`,
+  },
+  {
+    name: "production branch: wrapper's rail reader dropped at the loop-path call site",
+    edits: LOOP_READER,
+    pkg: RUNNER,
+    test: RUNNER_TEST,
+    rebuild: [RUNTIME],
+    red: `${PRODUCTION} delegate_to_agent through executeToolGated: refused before the meter is charged`,
+  },
+  {
+    name: "production branch: pre-sign classification removed",
+    edits: PRE_SIGN_CLASS,
+    pkg: RUNNER,
+    test: RUNNER_TEST,
+    rebuild: [RUNTIME],
+    red: `${PRODUCTION} invokeCapability: rail_spend_refused, nothing recorded as unconfirmed`,
+  },
+  {
+    name: "production branch: the rail's check removed at send (the adapter is reached)",
+    edits: RAIL_SEND,
+    pkg: RUNNER,
+    test: RUNNER_TEST,
+    rebuild: [WALLET],
+    red: `${PRODUCTION} runtime sendUsdc: throws rail_spend_refused`,
+  },
+
+  // ── The static gate's own rules ──────────────────────────────────────────
+  {
+    name: "gate: a boot check that is not in a block still counts (if-guarded check passes)",
+    edits: [
+      {
+        file: GATE,
+        from: "  if (!ts.isBlock(block)) return false;",
+        to: "  if (!ts.isBlock(block)) return true;",
+      },
+    ],
+    test: GATE_TEST,
+    red: `${GATE_DESC} the money-execution boot check made env-conditional (if)`,
+  },
+  {
+    name: "gate: a boot check need not directly follow the statement that obtains the rail",
+    edits: [
+      {
+        file: GATE,
+        from: "  return previous !== undefined && buildsRail(previous);",
+        to: "  return previous !== undefined;",
+      },
+    ],
+    test: GATE_TEST,
+    red: `${GATE_DESC} an early exit placed between obtaining the rail and checking it`,
+  },
+  {
+    name: "gate: a second binding of the constant's name is no longer flagged",
+    edits: [
+      { file: GATE, from: "        if (shadow)", to: "        if (shadow && p === undefined)" },
+    ],
+    test: GATE_TEST,
+    red: `${GATE_DESC} a function parameter shadowing the constant builds a rail with another list`,
+  },
+  {
+    name: "gate: a rail override spelled as a string is no longer flagged",
+    edits: [
+      {
+        file: GATE,
+        from:
+          "            (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) &&\n" +
+          "            SERVICE_FORBIDDEN_NAMES.has(n.text)",
+        to:
+          "            (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) &&\n" +
+          "            SERVICE_FORBIDDEN_NAMES.has(n.text) &&\n" +
+          "            ts.isIdentifier(n)",
+      },
+    ],
+    test: GATE_TEST,
+    red: `${GATE_DESC} a molecule service spells the override as a COMPUTED string key`,
   },
 
   // ── Research ─────────────────────────────────────────────────────────────

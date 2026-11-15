@@ -2,11 +2,10 @@
  * Spend containment for first-party molecules — no configuration of a
  * `runMolecule` process yields a signed mainnet-USDC transfer.
  *
- * Every wallet rail a molecule holds carries `MOLECULE_SPENDABLE_MINTS`
- * (devnet USDC only). This file drives every entry that can reach a rail,
- * through the REAL composition root (`runMolecule` → `defaultCreateMoneyRuntime`
- * → `MotebitRuntime`), over a real SQLite database, with a fake RPC adapter
- * that counts every send and reports the MAINNET mint:
+ * Every wallet rail the runner builds, and every rail handed to
+ * `defaultCreateMoneyRuntime` or returned by `createSweepWallet`, carries
+ * `MOLECULE_SPENDABLE_MINTS` (devnet USDC only). The entries that can reach a
+ * rail are:
  *
  *   - the spend handle, live and dry-run
  *   - `executeGrantedDelegation`
@@ -15,16 +14,39 @@
  *   - runtime `sendUsdc`
  *   - the earnings sweep
  *
- * in both broadcast-hook shapes (`honorsBroadcastHooks` true and absent), and
- * asserts: zero adapter sends, zero signatures reported, the grant-spend store
- * and the paid-intent ledger unchanged, and the surfaced code
- * `rail_spend_refused`. Controls: the devnet mint reaches the adapter; an
- * adapter that reports no mint is refused; the runner refuses to start with a
- * rail that lacks the exact allowlist.
+ * `runMolecule` has two branches for a money molecule, and this file says
+ * which one each case runs on:
  *
- * The production runner does not hand the SQLite paid-intent store to the
- * runtime (its ledger is in-process); the harness wires it so "the ledger is
- * unchanged" is asserted on the durable table as well as on the runtime.
+ *   A. PRODUCTION branch (no `createMoneyRuntime` adapter — what a deployed
+ *      molecule runs). The runner builds the rail itself, over the real
+ *      `Web3JsRpcAdapter` on the mainnet default mint, and builds the runtime
+ *      itself. Describe "the runner's own rails (no override)": the spend
+ *      handle (live and dry run), `executeGrantedDelegation`,
+ *      `delegate_to_agent`, `invokeCapability`, runtime `sendUsdc`, the
+ *      default sweep rail, and the boot log. Asserted: zero calls of the
+ *      adapter's three send functions and its balance reads (class spies),
+ *      the SQLite grant-spend store unchanged, the runtime's paid-intent
+ *      ledger empty, code `rail_spend_refused`. One hook shape only (the real
+ *      adapter honours broadcast hooks). The runner-built runtime is captured
+ *      by a spy on `MotebitRuntime.prototype.init`, not by a runner seam.
+ *   B. TEST-ADAPTER branch (`adapters.createMoneyRuntime`, which calls the
+ *      real `defaultCreateMoneyRuntime` with a `walletOverride`). The rail is
+ *      a real `SolanaWalletRail` over a counting FAKE adapter reporting the
+ *      mainnet mint, in both broadcast-hook shapes (`honorsBroadcastHooks`
+ *      true and absent). Describes "a molecule over a MAINNET-mint rail moves
+ *      nothing (…)", "controls" and the boot-refusal cases. Here the harness
+ *      also wires the SQLite paid-intent store (the production runner does
+ *      not: its ledger is in-process), so "the ledger is unchanged" is
+ *      asserted on the durable table too.
+ *
+ * Controls (branch B): the devnet mint reaches the adapter; an adapter that
+ * reports no mint is refused; the runner refuses to start with a rail that
+ * lacks the exact allowlist.
+ *
+ * Not checkable by the runner: a runtime returned by an injected
+ * `createMoneyRuntime` is opaque — the runner cannot see its rail. That
+ * adapter is a test seam; `check-molecule-spend-containment` forbids a
+ * service from naming it.
  *
  * Tamper: scripts/tampers/molecule-spend-containment.ts
  */
@@ -36,8 +58,10 @@ import { generateKeypair, bytesToHex } from "@motebit/crypto";
 import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { InMemoryToolRegistry } from "@motebit/tools";
+import { MotebitRuntime } from "@motebit/runtime";
 import {
   SolanaWalletRail,
+  Web3JsRpcAdapter,
   sweepWalletRail,
   USDC_MINT_DEVNET,
   USDC_MINT_MAINNET,
@@ -317,6 +341,16 @@ async function boot(opts: {
       runtime = built as unknown as MoneyRuntime;
       return built;
     };
+  } else {
+    // PRODUCTION BRANCH: no money-runtime adapter, so the runner builds the
+    // rail and the runtime itself, exactly as a deployed molecule does. The
+    // runtime it builds is captured where the runner calls `init()` on it —
+    // a spy on the class, not a seam in the runner.
+    const realInit = MotebitRuntime.prototype.init;
+    vi.spyOn(MotebitRuntime.prototype, "init").mockImplementation(function (this: MotebitRuntime) {
+      runtime = this as unknown as MoneyRuntime;
+      return realInit.call(this);
+    });
   }
 
   await runMolecule(
@@ -359,6 +393,54 @@ async function bootWithFakeRail(mint: string | undefined, hooks: HookShape) {
 }
 
 const EMPTY_DURABLE_STATE = JSON.stringify({ grant_spend_state: [], paid_intent_ledger: [] });
+
+/**
+ * Count every door of the REAL web3 adapter the runner built: the three send
+ * functions and the two reads a transfer makes first. Spies on the class the
+ * runner's own `createSolanaWalletRail` instantiates (they call through; the
+ * assertion is that none was ever called).
+ */
+function spyRunnerBuiltAdapter() {
+  const doors = {
+    sendUsdc: vi.spyOn(Web3JsRpcAdapter.prototype, "sendUsdc"),
+    sendUsdcBatch: vi.spyOn(Web3JsRpcAdapter.prototype, "sendUsdcBatch"),
+    sendUsdcDurable: vi.spyOn(Web3JsRpcAdapter.prototype, "sendUsdcDurable"),
+    getSolBalance: vi.spyOn(Web3JsRpcAdapter.prototype, "getSolBalance"),
+    getUsdcBalance: vi.spyOn(Web3JsRpcAdapter.prototype, "getUsdcBalance"),
+  };
+  return {
+    doors,
+    expectUntouched: (): void => {
+      for (const [name, spy] of Object.entries(doors))
+        expect(spy, `Web3JsRpcAdapter.${name}`).toHaveBeenCalledTimes(0);
+    },
+  };
+}
+
+/** Boot the production branch (runner-built rail, mainnet default mint) with the adapter spied. */
+async function bootProduction() {
+  const adapter = spyRunnerBuiltAdapter();
+  const h = await boot({});
+  if (h.runtime == null) throw new Error("the runner-built runtime was not captured");
+  // The rail really is the runner's: built by its factory over the real adapter.
+  expect(
+    h.log.some(
+      (l) =>
+        l.startsWith("Spend containment (money-execution rail)") &&
+        l.includes(`mint=${USDC_MINT_MAINNET}`),
+    ),
+  ).toBe(true);
+  const expectNothingMoved = (): void => {
+    adapter.expectUntouched();
+    // The grant-spend store here IS the SQLite one the runner passes. The
+    // production runner hands the runtime no SQLite paid-intent store, so the
+    // ledger is asserted on the runtime; the table stays empty by construction.
+    expect(h.durableState()).toBe(EMPTY_DURABLE_STATE);
+    expect(h.runtime.outstandingPaidResults()).toEqual([]);
+    expect(h.relay.calls().some((u) => u.startsWith(SOLANA_RPC))).toBe(false);
+  };
+  return { ...h, expectNothingMoved };
+}
 
 /** Nothing was sent, nothing was signed, nothing was written. */
 function expectNothingMoved(h: Awaited<ReturnType<typeof bootWithFakeRail>>): void {
@@ -541,6 +623,78 @@ describe("the runner's own rails (no override): env and config cannot widen them
     expect(result).toEqual({ ok: false, code: "rail_spend_refused" });
     expect(h.relay.calls()).toEqual([]); // no relay call, no RPC call
     expect(h.durableState()).toBe(EMPTY_DURABLE_STATE);
+  });
+
+  // Every entry below runs on the PRODUCTION branch of `runMolecule`: no
+  // `createMoneyRuntime` adapter, the runner's own rail over the real web3
+  // adapter (mainnet default mint), the runner's own runtime.
+  it("production branch — executeGrantedDelegation: rail_spend_refused before discovery", async () => {
+    const h = await bootProduction();
+    const grant = await selfIssueGrant(h.identity, h.config.moneyExecution!);
+    const token = await mintTick(grant, h.identity);
+    const result = await h.runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "granted",
+      delegation: { token, grant },
+    });
+    expect(result).toEqual({ ok: false, code: "rail_spend_refused" });
+    expect(h.relay.calls()).toEqual([]);
+    h.expectNothingMoved();
+  });
+
+  it("production branch — delegate_to_agent through executeToolGated: refused before the meter is charged", async () => {
+    const h = await bootProduction();
+    const grant = await selfIssueGrant(h.identity, h.config.moneyExecution!);
+    const token = await mintTick(grant, h.identity);
+    const result = await h.runtime.executeToolGated(
+      "delegate_to_agent",
+      { prompt: "tool", required_capabilities: ["research"] },
+      { caller: { principal: "owner" }, delegation: { token, grant } },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("rail_spend_refused");
+    // The relay quoted the hire, so the payment builder was reached.
+    expect(h.relay.calls().some((u) => u.includes("/api/v1/agents/discover"))).toBe(true);
+    h.expectNothingMoved();
+  });
+
+  it("production branch — invokeCapability: rail_spend_refused, nothing recorded as unconfirmed", async () => {
+    const h = await bootProduction();
+    h.runtime.enableInvokeCapability({
+      syncUrl: RELAY_URL,
+      authToken: async () => "test-token",
+      relayPublicKey: SIGNING_PINNED_HEX,
+      acknowledgeNoHistoryRisk: true,
+    });
+    const chunks: Array<{ type: string; code?: string }> = [];
+    for await (const chunk of h.runtime.invokeCapability("research", "tap")) chunks.push(chunk);
+    const errors = chunks.filter((c) => c.type === "invoke_error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.code).toBe("rail_spend_refused");
+    expect(h.relay.calls().some((u) => u.includes("/api/v1/agents/discover"))).toBe(true);
+    h.expectNothingMoved();
+  });
+
+  it("production branch — runtime sendUsdc: throws rail_spend_refused", async () => {
+    const h = await bootProduction();
+    await expect(h.runtime.sendUsdc(WORKER_ADDRESS, 1_000n)).rejects.toMatchObject({
+      name: "RailSpendRefusedError",
+      code: "rail_spend_refused",
+    });
+    h.expectNothingMoved();
+  });
+
+  it("production branch — spend handle, live and dry run: refused live, quoted dry, nothing moved", async () => {
+    const h = await bootProduction();
+    expect(await h.spend.spend({ capability: "research", prompt: "live" })).toEqual({
+      ok: false,
+      code: "rail_spend_refused",
+    });
+    expect(h.relay.calls()).toEqual([]);
+    expect(
+      await h.spend.spend({ capability: "research", prompt: "quote", dryRun: true }),
+    ).toMatchObject({ ok: true, dryRun: true });
+    h.expectNothingMoved();
   });
 
   it("default money rail on the devnet mint: logged as allowed, with the PARSED mint", async () => {

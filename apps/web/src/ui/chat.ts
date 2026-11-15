@@ -680,6 +680,12 @@ function failureCopy(code: string, retryAfterSeconds?: number): string {
       // wallet. Without one the runtime fails closed rather than substituting a
       // relay-routed worker (surface-determinism).
       return "Hiring a specific agent settles peer-to-peer — fund a sovereign wallet in the Sovereign panel to pay directly.";
+    case "rail_spend_refused":
+      // The wallet rail was built with a spendable-mint allowlist that does
+      // not include its token, so it refused before signing. No surface
+      // passes an allowlist today (first-party molecules do); the line exists
+      // so the code never reaches the raw-code fallback. Not retryable.
+      return "This wallet isn't permitted to pay in its token, so the payment was refused — no funds moved.";
     case "worker_not_payable":
       return "That agent isn't set up to be paid right now (no price or settlement address).";
     case "relay_fee_rate_unverified":

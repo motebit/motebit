@@ -191,6 +191,36 @@ describe("spendable-mint allowlist: the rail refuses before the gas check", () =
     expect(verdict).toEqual({ status: "absent" });
     expect(calls.findOutgoingTransfer).toBe(0);
   });
+
+  it("confirmSend reads a refusal from ANOTHER copy of the module (name + code, not instanceof) as absent", async () => {
+    const { adapter, calls } = countingAdapter(USDC_MINT_MAINNET);
+    const rail = new SolanaWalletRail(adapter, { spendableMints: DEVNET_ONLY });
+    // What a second loaded copy of this package would throw: same name and
+    // code, a different class object.
+    const foreign = Object.assign(new Error("Spend refused before signing"), {
+      name: "RailSpendRefusedError",
+      code: "rail_spend_refused",
+    });
+    expect(foreign).not.toBeInstanceOf(RailSpendRefusedError);
+    const query = { toAddress: TO, microAmount: 1_000n, sentAtMs: 1_000, failedAtMs: 1_001 };
+    expect(await rail.confirmSend({ ...query, error: foreign })).toEqual({ status: "absent" });
+    expect(calls.findOutgoingTransfer).toBe(0);
+  });
+
+  it("confirmSend does NOT read a name alone or a code alone as a refusal: it looks the transfer up", async () => {
+    const { adapter, calls } = countingAdapter(USDC_MINT_MAINNET);
+    const rail = new SolanaWalletRail(adapter, { spendableMints: DEVNET_ONLY, now: () => 1_002 });
+    const query = { toAddress: TO, microAmount: 1_000n, sentAtMs: 1_000, failedAtMs: 1_001 };
+    const nameOnly = Object.assign(new Error("x"), { name: "RailSpendRefusedError" });
+    const codeOnly = Object.assign(new Error("x"), { code: "rail_spend_refused" });
+    expect((await rail.confirmSend({ ...query, error: nameOnly })).status).toBe("pending");
+    expect((await rail.confirmSend({ ...query, error: codeOnly })).status).toBe("pending");
+    expect((await rail.confirmSend({ ...query, error: "rail_spend_refused" })).status).toBe(
+      "pending",
+    );
+    expect((await rail.confirmSend({ ...query, error: null })).status).toBe("pending");
+    expect(calls.findOutgoingTransfer).toBe(4);
+  });
 });
 
 describe("spendable-mint allowlist: the web3 adapter repeats the refusal", () => {

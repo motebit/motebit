@@ -807,6 +807,46 @@ describe("resolveAndSubmitP2pDelegation", () => {
     expect(ledger.outstanding()).toEqual([]);
   });
 
+  it("the refusal's NAME thrown AFTER a transaction was reported signed is not pre-sign: payment_status_unknown, recorded", async () => {
+    // Pre-sign by construction: the class holds only while nothing was
+    // signed. A (hypothetical, future) rail that reports a signature and THEN
+    // throws this name may have moved money.
+    const buildP2pPayment = vi.fn(
+      async (
+        _req: SovereignP2pPaymentRequest,
+        hooks?: {
+          beforeBroadcast?: (tx: {
+            signature: string;
+            lastValidBlockHeight: number;
+          }) => void | Promise<void>;
+        },
+      ): Promise<P2pPaymentProof> => {
+        await hooks?.beforeBroadcast?.({ signature: "SigAfterSigning", lastValidBlockHeight: 1 });
+        throw Object.assign(new Error("thrown after signing"), { name: "RailSpendRefusedError" });
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+      }),
+    );
+    const ledger = new PaidIntentLedger();
+    const result = await resolveAndSubmitP2pDelegation(
+      resolveParams({ buildP2pPayment, paidIntentLedger: ledger }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("payment_status_unknown");
+      expect(result.error.unconfirmedPayment).toBeDefined();
+    }
+    // The signed transaction stays on record: a re-hire is refused.
+    expect(ledger.outstanding()).toHaveLength(1);
+  });
+
   it("a builder throw with no confirmer is payment_status_unknown — never read as 'nothing moved' (#885)", async () => {
     const buildP2pPayment = vi.fn(async () => {
       throw new Error("rpc down");

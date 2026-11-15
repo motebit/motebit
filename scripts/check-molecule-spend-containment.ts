@@ -25,7 +25,10 @@
  *      `MOLECULE_SPENDABLE_MINTS` exactly once, as
  *      `Object.freeze([USDC_MINT_DEVNET])` — one element, that identifier,
  *      imported from `@motebit/wallet-solana`, nothing spread in — and no
- *      runner source assigns to it or declares another binding of that name.
+ *      runner source assigns to it or declares ANY other binding of that name
+ *      (a parameter, a destructured name, a function, a class, an import, a
+ *      catch variable): a shadow would let a rail be built with another list
+ *      under the same spelling.
  *   3. THE CONSTRUCTIONS. Every `createSolanaWalletRail(` call in the
  *      runner's source passes an object literal whose `spendableMints` is the
  *      identifier `MOLECULE_SPENDABLE_MINTS`, with no spread after it; there
@@ -34,12 +37,22 @@
  *   4. BOTH RAILS. `defaultCreateMoneyRuntime` (the money-execution rail) and
  *      `runMolecule` (the earnings-sweep rail) each obtain their own rail
  *      from `createMoleculeWalletRail(` and each call
- *      `assertMoleculeRailContained(`; `createMoleculeWalletRail` calls it too.
+ *      `assertMoleculeRailContained(`; `createMoleculeWalletRail` calls it
+ *      too. Only an UNCONDITIONAL check counts: a bare call statement that is
+ *      the very next statement, in the same block, after the statement that
+ *      obtains the rail from a factory, and is not inside a `try` block. A
+ *      check behind an `if`, a ternary, `&&`/`||`/`??`, or in a `try` whose
+ *      `catch` could swallow it, is not counted.
  *   5. NO SIDE DOOR. No non-test source of a molecule service (a
  *      `services/<svc>` whose source imports `@motebit/molecule-runner`)
- *      names a rail constructor, an RPC adapter, the runner's rail overrides
- *      (`createMoneyRuntime`, `createSweepWallet`), or imports
- *      `@motebit/wallet-solana` / `@solana/web3.js`.
+ *      names a rail constructor, an RPC adapter or the runner's rail overrides
+ *      (`createMoneyRuntime`, `createSweepWallet`) — as an identifier OR as a
+ *      string / template literal equal to the name (a quoted property key, a
+ *      computed key `["createSweepWallet"]`, an element access) — or imports
+ *      `@motebit/wallet-solana` / `@solana/web3.js`. The runner's
+ *      `createMoneyRuntime` adapter returns an opaque runtime the runner
+ *      cannot inspect, so it is a test seam only; this rule is what keeps it
+ *      out of services.
  *
  * `--root <dir>` runs the same checks against another tree laid out like the
  * repo (the self-test plants broken shapes there).
@@ -97,7 +110,9 @@ const SOURCE_EXT = /\.(?:ts|tsx|mts|cts)$/;
  * about the shapes above only.
  */
 const BLIND_SPOTS =
-  "NOT CAUGHT: (1) a rail or signer reached through an alias, a re-export, a computed member or a dynamic import; " +
+  "NOT CAUGHT: (1) a rail or signer reached through an alias or a re-export under another name, a forbidden name assembled at run time (string concatenation, a template with substitutions, a value read from data) or a dynamic import; " +
+  "(1b) a boot check that is unconditional in shape but skipped by control flow the gate does not follow (a `return` or `throw` inside the rail-building statement, a function that never reaches the block), and a check whose own body is weakened (tests and tampers cover that); " +
+  "(1c) the runner's `createMoneyRuntime` test adapter returns an opaque runtime whose rail the runner cannot check — the gate only forbids services from naming it; " +
   "(2) a transfer signed without a wallet rail at all (raw web3.js in a package a service imports, a keypair handed to other code); " +
   "(3) the allowlist's ENFORCEMENT (the rail and adapter refusals, the runtime's early return) — those are proven by tests and scripts/tampers/molecule-spend-containment.ts, not here; " +
   "(4) runtime mutation or replacement of the frozen constant through a cast; " +
@@ -152,7 +167,50 @@ function callName(call: ts.CallExpression | ts.NewExpression): string | null {
   return null;
 }
 
+/** Does `node`'s subtree (not crossing into nested functions) call a rail factory? */
+function buildsRail(node: ts.Node): boolean {
+  let hit = false;
+  const visit = (n: ts.Node): void => {
+    if (hit) return;
+    if (n !== node && ts.isFunctionLike(n)) return;
+    if (ts.isCallExpression(n)) {
+      const name = callName(n);
+      if (name === RUNNER_FACTORY || name === RAIL_FACTORY) hit = true;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return hit;
+}
+
+/**
+ * Is this `assertMoleculeRailContained(` call UNCONDITIONAL for the rail it
+ * checks? It must be a bare call statement (`assert…(rail, label);`), the
+ * very next statement — in the same block — after the statement that obtains
+ * the rail from a factory, with no enclosing `try` block inside the function
+ * (a `catch` could swallow the refusal). Anything else — behind an `if`, in a
+ * ternary or a `&&`/`||`/`??`, awaited, returned, or separated from the
+ * rail-building statement — is not counted.
+ */
+function isUnconditionalCheck(call: ts.CallExpression, fnBody: ts.Node): boolean {
+  const stmt = call.parent;
+  if (!ts.isExpressionStatement(stmt) || stmt.expression !== call) return false;
+  const block = stmt.parent;
+  if (!ts.isBlock(block)) return false;
+  for (let a: ts.Node = block; a !== fnBody; a = a.parent) {
+    const parent = a.parent;
+    if (parent === undefined) return false;
+    if (ts.isTryStatement(parent) && parent.tryBlock === a) return false;
+    if (ts.isFunctionLike(parent)) return false;
+  }
+  const i = block.statements.indexOf(stmt);
+  const previous = i > 0 ? block.statements[i - 1] : undefined;
+  return previous !== undefined && buildsRail(previous);
+}
+
 export interface ScanResult {
+  /** `assertMoleculeRailContained(` calls that are not unconditional (not counted). */
+  conditionalChecks: number;
   files: number;
   runnerFiles: number;
   serviceFiles: number;
@@ -166,6 +224,7 @@ export function scan(root: string): ScanResult {
   const violations: string[] = [];
   const rel = (abs: string): string => relative(root, abs);
   const result: ScanResult = {
+    conditionalChecks: 0,
     files: 0,
     runnerFiles: 0,
     serviceFiles: 0,
@@ -262,6 +321,29 @@ export function scan(root: string): ScanResult {
             );
         }
       }
+      // Any OTHER binding of the constant's name (a shadow).
+      if (ts.isIdentifier(n) && n.text === CONSTANT) {
+        const p = n.parent;
+        const shadow =
+          (ts.isParameter(p) && p.name === n) ||
+          (ts.isBindingElement(p) && p.name === n) ||
+          ((ts.isFunctionDeclaration(p) ||
+            ts.isFunctionExpression(p) ||
+            ts.isClassDeclaration(p) ||
+            ts.isClassExpression(p) ||
+            ts.isEnumDeclaration(p) ||
+            ts.isModuleDeclaration(p) ||
+            ts.isImportClause(p) ||
+            ts.isNamespaceImport(p) ||
+            ts.isImportEqualsDeclaration(p)) &&
+            p.name === n) ||
+          (ts.isImportSpecifier(p) && p.name === n) ||
+          (ts.isVariableDeclaration(p) && p.name === n && ts.isCatchClause(p.parent));
+        if (shadow)
+          violations.push(
+            `${file}:${lineOf(sf, n)} — ${CONSTANT} is bound a second time (${ts.SyntaxKind[p.kind]}): a shadow of the constant lets a rail be built with a different list under the same name`,
+          );
+      }
       if (
         ts.isBinaryExpression(n) &&
         n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
@@ -321,7 +403,10 @@ export function scan(root: string): ScanResult {
         if (!ts.isCallExpression(n)) return;
         const name = callName(n);
         if (name === RUNNER_FACTORY) factory += 1;
-        if (name === BOOT_CHECK) check += 1;
+        if (name === BOOT_CHECK) {
+          if (isUnconditionalCheck(n, stmt.body!)) check += 1;
+          else result.conditionalChecks += 1;
+        }
       });
       result.bootChecks += check;
       if (RAIL_HOLDERS.includes(fn)) holderRails.set(fn, { factory, check });
@@ -337,7 +422,9 @@ export function scan(root: string): ScanResult {
       `${RUNNER_DIR} — no ${RAIL_FACTORY}( call found (the runner's rail construction moved out of the scan)`,
     );
   if (factoryChecks < 1)
-    violations.push(`${RUNNER_INDEX} — ${RUNNER_FACTORY} does not call ${BOOT_CHECK}(`);
+    violations.push(
+      `${RUNNER_INDEX} — ${RUNNER_FACTORY} has no UNCONDITIONAL ${BOOT_CHECK}( call (a bare call statement directly after the statement that builds the rail, outside any try block)`,
+    );
   for (const fn of RAIL_HOLDERS) {
     const seen = holderRails.get(fn);
     if (seen === undefined) {
@@ -351,7 +438,7 @@ export function scan(root: string): ScanResult {
       );
     if (seen.check < 1)
       violations.push(
-        `${RUNNER_INDEX} — ${fn} does not call ${BOOT_CHECK}( on the rail it holds (an override would start unchecked)`,
+        `${RUNNER_INDEX} — ${fn} has no UNCONDITIONAL ${BOOT_CHECK}( call on the rail it holds (it must be a bare call statement directly after the statement that obtains the rail, outside any try block — a check behind an if, a ternary, a logical operator or a swallowing catch can be skipped, and an override would then start unchecked)`,
       );
   }
 
@@ -401,6 +488,16 @@ export function scan(root: string): ScanResult {
             violations.push(
               `${file}:${lineOf(sf, n)} — a molecule service names \`${n.text}\` (rail construction and the runner's rail overrides are not available to a service)`,
             );
+          // The same name as TEXT: a quoted property key, a computed key
+          // (`["createSweepWallet"]`), an element access (`adapters["…"]`) —
+          // any string or substitution-free template equal to a forbidden name.
+          if (
+            (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) &&
+            SERVICE_FORBIDDEN_NAMES.has(n.text)
+          )
+            violations.push(
+              `${file}:${lineOf(sf, n)} — a molecule service spells \`${n.text}\` as a string (a quoted or computed property key or an element access reaches the same rail override as the identifier)`,
+            );
         });
       }
     }
@@ -424,7 +521,7 @@ function main(): void {
     });
   }
   process.stdout.write(
-    `✓ check-molecule-spend-containment: ${r.files} source file(s) scanned (1 mint-constants file, ${r.runnerFiles} runner file(s) in ${RUNNER_DIR}/, ${r.serviceFiles} file(s) across ${r.moleculeServices.length} molecule service(s): ${r.moleculeServices.join(", ") || "none"}; tests and build output excluded) — ${CONSTANT} is exactly [${DEVNET_NAME}] = ${PINNED_DEVNET_USDC_MINT}, ${r.railConstructions} ${RAIL_FACTORY}( call(s) all carry it, ${r.bootChecks} ${BOOT_CHECK}( call(s), 0 rail constructions in molecule services. ${BLIND_SPOTS}\n`,
+    `✓ check-molecule-spend-containment: ${r.files} source file(s) scanned (1 mint-constants file, ${r.runnerFiles} runner file(s) in ${RUNNER_DIR}/, ${r.serviceFiles} file(s) across ${r.moleculeServices.length} molecule service(s): ${r.moleculeServices.join(", ") || "none"}; tests and build output excluded) — ${CONSTANT} is exactly [${DEVNET_NAME}] = ${PINNED_DEVNET_USDC_MINT}, ${r.railConstructions} ${RAIL_FACTORY}( call(s) all carry it, ${r.bootChecks} unconditional ${BOOT_CHECK}( call(s) (${r.conditionalChecks} conditional, not counted), 0 rail constructions or rail-override names (identifier or string) in molecule services. ${BLIND_SPOTS}\n`,
   );
 }
 

@@ -193,7 +193,99 @@ describe("check-molecule-spend-containment", () => {
           to: "",
         },
       ],
-      names: /defaultCreateMoneyRuntime does not call assertMoleculeRailContained\(/,
+      names: /defaultCreateMoneyRuntime has no UNCONDITIONAL assertMoleculeRailContained\(/,
+    },
+    // ── A check that exists but can be skipped is not a check. ──────────────
+    {
+      name: "the money-execution boot check made env-conditional (if)",
+      edits: [
+        {
+          file: RUNNER,
+          from: '  assertMoleculeRailContained(wallet, "money-execution");\n',
+          to: '  if (process.env.X !== "1") assertMoleculeRailContained(wallet, "money-execution");\n',
+        },
+      ],
+      names: /defaultCreateMoneyRuntime has no UNCONDITIONAL assertMoleculeRailContained\(/,
+    },
+    {
+      name: "the earnings-sweep boot check behind a logical operator",
+      edits: [
+        {
+          file: RUNNER,
+          from: '    assertMoleculeRailContained(wallet, "earnings-sweep");\n',
+          to: '    void (process.env.X !== "1" && assertMoleculeRailContained(wallet, "earnings-sweep"));\n',
+        },
+      ],
+      names: /runMolecule has no UNCONDITIONAL assertMoleculeRailContained\(/,
+    },
+    {
+      name: "the factory's boot check inside a ternary",
+      edits: [
+        {
+          file: RUNNER,
+          from: '  assertMoleculeRailContained(rail, "constructed");\n  return rail;',
+          to: '  void (args.usdcMint ? assertMoleculeRailContained(rail, "constructed") : undefined);\n  return rail;',
+        },
+      ],
+      names: /createMoleculeWalletRail has no UNCONDITIONAL assertMoleculeRailContained\(/,
+    },
+    {
+      name: "the money-execution boot check in a try whose catch swallows it",
+      edits: [
+        {
+          file: RUNNER,
+          from: '  assertMoleculeRailContained(wallet, "money-execution");\n',
+          to: '  try {\n    assertMoleculeRailContained(wallet, "money-execution");\n  } catch {\n    // swallowed\n  }\n',
+        },
+      ],
+      names: /defaultCreateMoneyRuntime has no UNCONDITIONAL assertMoleculeRailContained\(/,
+    },
+    {
+      name: "an early exit placed between obtaining the rail and checking it",
+      edits: [
+        {
+          file: RUNNER,
+          from: '  assertMoleculeRailContained(wallet, "money-execution");\n',
+          to: '  if (process.env.X === "1") return undefined as never;\n  assertMoleculeRailContained(wallet, "money-execution");\n',
+        },
+      ],
+      names: /defaultCreateMoneyRuntime has no UNCONDITIONAL assertMoleculeRailContained\(/,
+    },
+    // ── A second binding of the constant's name. ────────────────────────────
+    {
+      name: "a function parameter shadowing the constant builds a rail with another list",
+      edits: [
+        {
+          file: RUNNER,
+          from: '  assertMoleculeRailContained(rail, "constructed");\n  return rail;\n}\n',
+          to:
+            '  assertMoleculeRailContained(rail, "constructed");\n  return rail;\n}\n\n' +
+            "export function widen(MOLECULE_SPENDABLE_MINTS: readonly string[]): SolanaWalletRail {\n" +
+            "  return createSolanaWalletRail({\n" +
+            '    rpcUrl: "x",\n' +
+            "    identitySeed: new Uint8Array(32),\n" +
+            "    spendableMints: MOLECULE_SPENDABLE_MINTS,\n" +
+            "  });\n" +
+            "}\n",
+        },
+      ],
+      names: /MOLECULE_SPENDABLE_MINTS is bound a second time \(Parameter\)/,
+    },
+    {
+      name: "a destructured local shadowing the constant",
+      edits: [
+        {
+          file: RUNNER,
+          from: '  assertMoleculeRailContained(rail, "constructed");\n  return rail;\n}\n',
+          to:
+            '  assertMoleculeRailContained(rail, "constructed");\n  return rail;\n}\n\n' +
+            "export function widen2(env: { mints: readonly string[] }): readonly string[] {\n" +
+            "  const { mints: MOLECULE_SPENDABLE_MINTS } = env;\n" +
+            "  return MOLECULE_SPENDABLE_MINTS;\n" +
+            "}\n",
+        },
+      ],
+      names: /MOLECULE_SPENDABLE_MINTS is bound a second time \(BindingElement\)/,
     },
     {
       name: "the earnings-sweep boot check removed",
@@ -204,7 +296,7 @@ describe("check-molecule-spend-containment", () => {
           to: "",
         },
       ],
-      names: /runMolecule does not call assertMoleculeRailContained\(/,
+      names: /runMolecule has no UNCONDITIONAL assertMoleculeRailContained\(/,
     },
     {
       name: "the runner constructs a rail directly",
@@ -251,15 +343,79 @@ describe("check-molecule-spend-containment", () => {
       ],
       names: /a molecule service names `createMoneyRuntime`/,
     },
+    // ── The same override spelled as text, not as an identifier. ────────────
+    {
+      name: "a molecule service spells the override as a QUOTED property key",
+      edits: [
+        {
+          file: SERVICE,
+          from: SERVICE_IMPORT,
+          to: `export const sideDoor = { "createMoneyRuntime": () => null };\n${SERVICE_IMPORT}`,
+        },
+      ],
+      names: /a molecule service spells `createMoneyRuntime` as a string/,
+    },
+    {
+      name: "a molecule service spells the override as a COMPUTED string key",
+      edits: [
+        {
+          file: SERVICE,
+          from: SERVICE_IMPORT,
+          to: `export const sideDoor = { ["createSweepWallet"]: () => null };\n${SERVICE_IMPORT}`,
+        },
+      ],
+      names: /a molecule service spells `createSweepWallet` as a string/,
+    },
+    {
+      name: "a molecule service spells the override as a computed TEMPLATE key",
+      edits: [
+        {
+          file: SERVICE,
+          from: SERVICE_IMPORT,
+          to: `export const sideDoor = { [\`createSweepWallet\`]: () => null };\n${SERVICE_IMPORT}`,
+        },
+      ],
+      names: /a molecule service spells `createSweepWallet` as a string/,
+    },
+    {
+      name: "a molecule service reaches the override by ELEMENT ACCESS",
+      edits: [
+        {
+          file: SERVICE,
+          from: SERVICE_IMPORT,
+          to: `export const sideDoor: Record<string, unknown> = {};\nsideDoor["createMoneyRuntime"] = () => null;\n${SERVICE_IMPORT}`,
+        },
+      ],
+      names: /a molecule service spells `createMoneyRuntime` as a string/,
+    },
   ];
 
-  it.each(PLANTED)("fails on: $name", ({ edits, names }) => {
-    const r = run(plantedTree(edits));
-    expect(r.status, r.stdout + r.stderr).toBe(1);
-    expect(r.stderr).toMatch(names);
-    // A failing gate teaches the repair: canonical source + directive.
-    expect(hasRepairInstruction(r.stderr)).toEqual({ ok: true });
-    expect(r.stderr).toContain("packages/molecule-runner/src/index.ts");
-    expect(r.stderr).toContain("reviewed change");
+  it("documents what it still cannot see: a name assembled at run time passes, and the pass line says so", () => {
+    const r = run(
+      plantedTree([
+        {
+          file: SERVICE,
+          from: SERVICE_IMPORT,
+          to: `export const sideDoor = { ["create" + "SweepWallet"]: () => null };\n${SERVICE_IMPORT}`,
+        },
+      ]),
+    );
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain("a forbidden name assembled at run time");
+    expect(r.stdout).toContain("opaque runtime whose rail the runner cannot check");
   });
+
+  // A plain loop (not it.each): each case's full name is then exact text a
+  // tamper entry can name.
+  for (const { name, edits, names } of PLANTED) {
+    it(`fails on: ${name}`, () => {
+      const r = run(plantedTree(edits));
+      expect(r.status, r.stdout + r.stderr).toBe(1);
+      expect(r.stderr).toMatch(names);
+      // A failing gate teaches the repair: canonical source + directive.
+      expect(hasRepairInstruction(r.stderr)).toEqual({ ok: true });
+      expect(r.stderr).toContain("packages/molecule-runner/src/index.ts");
+      expect(r.stderr).toContain("reviewed change");
+    });
+  }
 });
