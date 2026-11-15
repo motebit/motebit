@@ -692,6 +692,17 @@ const SCENARIOS: Record<string, (hook: string) => Scenario> = {
       detail: show(r),
     };
   },
+  /** .github/workflows/ is a gate input (the workflow pin tests parse it) — same trigger as CI. */
+  ".github/workflows/ triggers the gate self-tests": (hook) => {
+    const r = runHook(repoWith({ ".github/workflows/some.yml": "on: push\n" }, { hook }));
+    return {
+      ok:
+        r.status === 0 &&
+        r.calls.includes("test:gates") &&
+        r.calls.includes("check-gates-effective"),
+      detail: show(r),
+    };
+  },
   /** examples/interop/ is a gate input (the APS vector + pins) — same trigger as CI. */
   "examples/interop/ triggers the gate self-tests": (hook) => {
     const r = runHook(repoWith({ "examples/interop/aps/INTEROP.md": "x\n" }, { hook }));
@@ -835,15 +846,21 @@ const HOOK_MUTANTS: { name: string; from: string | RegExp; to: string; killedBy:
   },
   {
     name: "coverage-graduation.json dropped from the gate-input trigger",
-    from: "changed_files scripts/ coverage-graduation.json examples/interop/",
-    to: "changed_files scripts/ examples/interop/",
+    from: "changed_files scripts/ coverage-graduation.json examples/interop/ .github/workflows/",
+    to: "changed_files scripts/ examples/interop/ .github/workflows/",
     killedBy: "coverage-graduation.json triggers the gate self-tests",
   },
   {
     name: "examples/interop/ dropped from the gate-input trigger",
-    from: "changed_files scripts/ coverage-graduation.json examples/interop/",
-    to: "changed_files scripts/ coverage-graduation.json",
+    from: "changed_files scripts/ coverage-graduation.json examples/interop/ .github/workflows/",
+    to: "changed_files scripts/ coverage-graduation.json .github/workflows/",
     killedBy: "examples/interop/ triggers the gate self-tests",
+  },
+  {
+    name: ".github/workflows/ dropped from the gate-input trigger",
+    from: "changed_files scripts/ coverage-graduation.json examples/interop/ .github/workflows/",
+    to: "changed_files scripts/ coverage-graduation.json examples/interop/",
+    killedBy: ".github/workflows/ triggers the gate self-tests",
   },
   {
     name: "core.quotePath=false dropped (C1)",
