@@ -3010,6 +3010,18 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-molecule-spend-containment",
+    proves:
+      "flags the allowlist a first-party molecule's rails sign for being widened to include mainnet USDC — the one-line edit that would let a deployed Clerk or Research sign a mainnet transfer under configuration alone. Probe rewrites the runner's `MOLECULE_SPENDABLE_MINTS = Object.freeze([USDC_MINT_DEVNET])` to also list the mainnet mint; the gate's AST check of the constant's initializer must name it. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile("packages/molecule-runner/src/index.ts", (src) =>
+        src.replace(
+          "Object.freeze([USDC_MINT_DEVNET])",
+          'Object.freeze([USDC_MINT_DEVNET, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"])',
+        ),
+      ),
+  },
+  {
     script: "check-goal-artifact-signing",
     proves:
       "flags a per-surface goal-runner that has stopped calling `runtime.signGoalArtifact` — the silent regression that would let goal-fire artifacts persist without a signed `ContentArtifactManifest` envelope. The drift class: a refactor that renames or removes the signing call on one surface (`apps/web/src/goal-scheduler.ts`, `apps/desktop/src/goal-scheduler.ts`, or `apps/mobile/src/goal-scheduler.ts`) passes typecheck because `signGoalArtifact` is optional from the runtime's perspective; the gate is the only catch. Probe rewrites `signGoalArtifact(` to `signGoalArtifactDisabled(` on the web surface; the gate's identifier scan must surface the missing-call violation.",

@@ -6,7 +6,12 @@
  */
 import { describe, it, expect } from "vitest";
 import { InMemoryGrantSpendStore } from "@motebit/policy";
-import { createMoneyMeter, wrapP2pPaymentWithMeter } from "../money-meter.js";
+import {
+  createMoneyMeter,
+  wrapP2pPaymentWithMeter,
+  RailSpendRefusedError,
+} from "../money-meter.js";
+import { railSpendRefusedOf } from "../relay-delegation.js";
 
 const M = 1_000_000;
 const GRANT = {
@@ -177,5 +182,100 @@ describe("wrapP2pPaymentWithMeter — the rail-seam enforcement", () => {
     const { wrapped, calls } = harness(bare);
     await expect(wrapped(REQUEST as never)).rejects.toMatchObject({ denial: "ceiling_absent" });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("wrapP2pPaymentWithMeter — a rail that refuses every spend is refused BEFORE the meter", () => {
+  const REQUEST = {
+    workerAddress: "worker-addr",
+    amountMicro: 2 * M,
+    treasuryAddress: "treasury-addr",
+    feeAmountMicro: 100_000,
+  };
+
+  function harness(isRailSpendRefused?: () => boolean) {
+    const store = new InMemoryGrantSpendStore();
+    const built: unknown[] = [];
+    let metered = 0;
+    const inner = createMoneyMeter(store, { now: () => 1_000_000_000 });
+    const wrapped = wrapP2pPaymentWithMeter(
+      (async (req: unknown) => {
+        built.push(req);
+        return {} as never;
+      }) as never,
+      () => GRANT as never,
+      (grant, tool, args) => {
+        metered++;
+        return inner(grant, tool, args);
+      },
+      isRailSpendRefused,
+    );
+    return { wrapped, store, built, metered: () => metered };
+  }
+
+  it("a refusing rail throws RailSpendRefusedError: the meter is never called and nothing is charged", async () => {
+    const { wrapped, store, built, metered } = harness(() => true);
+    await expect(wrapped(REQUEST as never)).rejects.toMatchObject({
+      name: "RailSpendRefusedError",
+      code: "rail_spend_refused",
+      reason: "rail_spend_refused",
+    });
+    await expect(wrapped(REQUEST as never)).rejects.toBeInstanceOf(RailSpendRefusedError);
+    expect(metered()).toBe(0);
+    expect(store.peek("grant-1")).toBeUndefined();
+    expect(built).toHaveLength(0);
+  });
+
+  it("a refusing rail is refused with NO active grant too (the unmetered human-approved path)", async () => {
+    const built: unknown[] = [];
+    const wrapped = wrapP2pPaymentWithMeter(
+      (async (req: unknown) => {
+        built.push(req);
+        return {} as never;
+      }) as never,
+      () => null,
+      createMoneyMeter(new InMemoryGrantSpendStore()),
+      () => true,
+    );
+    await expect(wrapped(REQUEST as never)).rejects.toBeInstanceOf(RailSpendRefusedError);
+    expect(built).toHaveLength(0);
+  });
+
+  it("a rail that does not refuse is metered and built exactly as before", async () => {
+    const { wrapped, store, built, metered } = harness(() => false);
+    await wrapped(REQUEST as never);
+    expect(metered()).toBe(1);
+    expect(store.peek("grant-1")!.lifetime_spent_micro).toBe(2 * M + 100_000);
+    expect(built).toHaveLength(1);
+  });
+
+  it("the refusal is re-read on every call (a rail that starts refusing is refused next time)", async () => {
+    let refused = false;
+    const { wrapped, built, metered } = harness(() => refused);
+    await wrapped(REQUEST as never);
+    refused = true;
+    await expect(wrapped(REQUEST as never)).rejects.toBeInstanceOf(RailSpendRefusedError);
+    expect(metered()).toBe(1);
+    expect(built).toHaveLength(1);
+  });
+});
+
+describe("railSpendRefusedOf — structural read of the rail's refusal", () => {
+  it("is true only for an object whose spendRefused is literally true", () => {
+    expect(railSpendRefusedOf({ spendRefused: true })).toBe(true);
+    expect(railSpendRefusedOf({ spendRefused: false })).toBe(false);
+    expect(railSpendRefusedOf({ spendRefused: "true" })).toBe(false);
+    expect(railSpendRefusedOf({})).toBe(false);
+    expect(railSpendRefusedOf(null)).toBe(false);
+    expect(railSpendRefusedOf(undefined)).toBe(false);
+    expect(railSpendRefusedOf("rail")).toBe(false);
+    // A getter (how SolanaWalletRail exposes it) is read like a field.
+    expect(
+      railSpendRefusedOf({
+        get spendRefused() {
+          return true;
+        },
+      }),
+    ).toBe(true);
   });
 });

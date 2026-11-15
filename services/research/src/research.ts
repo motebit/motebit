@@ -982,6 +982,20 @@ export async function research(question: string, config: ResearchConfig): Promis
             content: `${tu.name} was not performed: its price exceeds what remains of this report's paid-call budget. Do not call ${tu.name} again — write the report from what you already gathered.`,
           };
         }
+        if (!paid.ok && paid.code === "rail_spend_refused") {
+          // The wallet rail may not sign for its mint: refused before the
+          // meter and before signing, on every call until the rail's
+          // construction changes. The priced work is not done for free (no
+          // direct-MCP fallback) and asking again cannot succeed.
+          console.log(
+            `[research] sub-hop: RAIL REFUSED pre-sign cap=${capabilityHint} code=rail_spend_refused — no payment, no free fallback`,
+          );
+          return {
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: `${tu.name} was not performed: this agent's wallet is not permitted to pay for it (rail_spend_refused), and no payment was made. Do not call ${tu.name} again — write the report from what you already gathered (free tools such as motebit_recall_self remain available).`,
+          };
+        }
         if (paid.ok) {
           if (paid.receipt == null) {
             console.log(`[research] sub-hop: paid ok but NO receipt cap=${capabilityHint}`);

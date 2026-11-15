@@ -66,3 +66,58 @@ export class InsufficientSolForGasError extends Error {
     this.requiredLamports = requiredLamports;
   }
 }
+
+/**
+ * Thrown by a transfer (`send`, `sendBatch`, `buildP2pPayment`, and the
+ * adapter's `sendUsdc` / `sendUsdcBatch` / `sendUsdcDurable`) when the wallet
+ * was constructed with a `spendableMints` allowlist and the mint it would
+ * sign for is not on it — BEFORE the gas check, before any RPC read, and
+ * before anything is signed or broadcast. Also thrown when the allowlist is
+ * present and the adapter reports no mint (fail closed).
+ *
+ * The mint is part of what gets signed (a transfer names token accounts
+ * derived from it), so the refusal needs no network read and does not depend
+ * on which cluster the RPC serves.
+ */
+export class RailSpendRefusedError extends Error {
+  readonly code = "rail_spend_refused" as const;
+  /** The mint the wallet would have signed for; `null` when the adapter reports none. */
+  readonly mint: string | null;
+  /** The mints this wallet may sign for. */
+  readonly spendableMints: readonly string[];
+
+  constructor(mint: string | null, spendableMints: readonly string[]) {
+    super(
+      `Spend refused before signing: this wallet may sign transfers only for mint(s) [${spendableMints.join(", ")}], and its mint is ${mint ?? "not reported by the adapter"}. Nothing was signed or sent.`,
+    );
+    this.name = "RailSpendRefusedError";
+    this.mint = mint;
+    this.spendableMints = spendableMints;
+  }
+}
+
+/**
+ * Is `err` a rail spend refusal — a `RailSpendRefusedError` of THIS module,
+ * or an error carrying both its `name` and its `code` (the same class loaded
+ * from a duplicate copy of the package, where `instanceof` is false)? Both
+ * fields are required: a name alone, or a code alone, is not a match.
+ */
+export function isRailSpendRefusal(err: unknown): boolean {
+  if (err instanceof RailSpendRefusedError) return true;
+  if (err === null || typeof err !== "object") return false;
+  const e = err as { name?: unknown; code?: unknown };
+  return e.name === "RailSpendRefusedError" && e.code === "rail_spend_refused";
+}
+
+/**
+ * Is a transfer in `mint` refused under `spendableMints`? No allowlist ⇒ never
+ * refused (unrestricted). With an allowlist, refused unless `mint` is reported
+ * and listed — an adapter that reports no mint is refused.
+ */
+export function isSpendRefused(
+  spendableMints: readonly string[] | undefined,
+  mint: string | undefined,
+): boolean {
+  if (spendableMints === undefined) return false;
+  return mint === undefined || !spendableMints.includes(mint);
+}

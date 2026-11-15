@@ -882,6 +882,35 @@ describe("paid-spend budget — ledger and seam failures degrade conservatively"
     expect(result.paid_spend_micro).toBe(0);
   });
 
+  it("rail_spend_refused: the model is told not to call the tool again; nothing is charged and no free lane runs", async () => {
+    modelWantsSearches(1);
+    const live: number[] = [];
+    const seam: PaidSubDelegate = async (p) => {
+      if (p.dryRun === true)
+        return { ok: true, settlement: { mode: "p2p", paidMicro: 10_000, feeMicro: 527 } };
+      live.push(1);
+      return { ok: false, code: "rail_spend_refused" }; // refused pre-sign: nothing moved
+    };
+    const result = await research(
+      "question",
+      config({ paidSubDelegate: seam, paidSpendBudgetMicro: DEFAULT_BUDGET }),
+    );
+    expect(live).toHaveLength(1);
+    const first = toolResults()[0]!;
+    expect(first.content).toBe(
+      "motebit_web_search was not performed: this agent's wallet is not permitted to pay for it (rail_spend_refused), and no payment was made. Do not call motebit_web_search again — write the report from what you already gathered (free tools such as motebit_recall_self remain available).",
+    );
+    // Guidance, not a failure the model would retry.
+    expect(first.is_error).toBeUndefined();
+    expect(logs.some((l) => l.includes("RAIL REFUSED pre-sign"))).toBe(true);
+    // Priced work is never done for free: neither free lane was taken.
+    expect(logs.some((l) => l.includes("fallback DIRECT"))).toBe(false);
+    expect(logs.some((l) => l.includes("DIRECT (no paid seam)"))).toBe(false);
+    // The hold was released at zero.
+    expect(result.paid_spend_micro).toBe(0);
+    expect(result.report).toBe(REPORT);
+  });
+
   it("unbudgeted: a live seam that throws charges nothing it cannot attribute and propagates", async () => {
     modelWantsSearches(1);
     const seam: PaidSubDelegate = async () => {
