@@ -1,0 +1,79 @@
+name: Molecule production gate
+
+# The pre-approval half of the molecule production gate
+# (scripts/molecule-prod-gate.ts; docs/ops/RUNBOOK.md §3 "Molecule production
+# deploys"). Each of the seven molecule prod workflows calls this as its first
+# job; its deploy job `needs:` it, runs only when `deploy == 'true'`, sits
+# behind the `production` environment (approval), checks out the PINNED sha
+# this job gated, and re-runs the same script in `recheck` mode as its first
+# step, because the world can move while an approval waits.
+#
+# For the exact sha: CI (ci.yml) concluded success; the sha is still the head
+# of main (else SUPERSEDED: no deploy, not red); and, when `staging_leg` is
+# true, deploy-archetype-staging.yml concluded success on that sha — a MISSING
+# staging run fails with a repair instruction, never a silent skip.
+#
+# Every caller goes through this, including `workflow_dispatch`: a manual run
+# meets the same checks and the same approval. It gates the GitHub Actions path
+# only; direct `flyctl deploy` with Fly credentials is not covered.
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: "The molecule service (services/<service>) being deployed to production."
+        required: true
+        type: string
+      staging_leg:
+        description: "Whether the service has a staging leg in deploy-archetype-staging.yml. false is the named code-review exception only."
+        required: true
+        type: boolean
+    outputs:
+      deploy:
+        description: "'true' only when every check passed."
+        value: ${{ jobs.gate.outputs.deploy }}
+      outcome:
+        description: "deploy | superseded | fail"
+        value: ${{ jobs.gate.outputs.outcome }}
+      sha:
+        description: "The exact sha that was gated; the deploy job checks out and re-checks this sha."
+        value: ${{ jobs.gate.outputs.sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    # 45 min for CI + 15 for staging + the missing-run grace + slack.
+    timeout-minutes: 70
+    permissions:
+      contents: read
+      actions: read # the CI and staging runs on this sha
+    outputs:
+      deploy: ${{ steps.gate.outputs.deploy }}
+      outcome: ${{ steps.gate.outputs.outcome }}
+      sha: ${{ steps.gate.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/molecule-prod-gate.ts
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Gate on CI, head of main and staging
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_MODE: wait
+          GATE_SHA: ${{ github.sha }}
+          GATE_REPO: ${{ github.repository }}
+          GATE_SERVICE: ${{ inputs.service }}
+          GATE_STAGING_LEG: ${{ inputs.staging_leg }}
+        run: node scripts/molecule-prod-gate.ts

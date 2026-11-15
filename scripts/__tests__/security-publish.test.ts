@@ -213,10 +213,27 @@ function shellLines(run: string): string[] {
     .filter((l) => !/^\s*#/.test(l));
 }
 /** Every way this job could publish. A job's own permissions, else the workflow's. */
-function canPublish(job: Job, doc: Workflow): string[] {
+function canPublish(
+  job: Job,
+  doc: Workflow,
+  all: { file: string; doc: Workflow }[] = workflows,
+  depth = 0,
+): string[] {
   const why: string[] = [];
   if (grantsIdToken(job.permissions ?? doc.permissions)) why.push("id-token: write");
-  if (job.uses) why.push(`calls reusable workflow ${job.uses}`);
+  if (job.uses) {
+    // A LOCAL callee (./.github/workflows/x.yml) is judged by what its own jobs
+    // can do, outside npm-publish; a remote callee, one not found, or one
+    // nested too deep cannot be read here and is refused outright.
+    const m = /^\.\/\.github\/workflows\/([\w.-]+\.ya?ml)$/.exec(job.uses);
+    const callee = m && depth < 4 ? all.find((w) => w.file === m[1])?.doc : undefined;
+    if (callee === undefined) why.push(`calls reusable workflow ${job.uses}`);
+    else
+      for (const [name, cj] of Object.entries(callee.jobs ?? {}))
+        if (envName(cj) !== "npm-publish")
+          for (const w of canPublish(cj, callee, all, depth + 1))
+            why.push(`via ${job.uses} (${name}): ${w}`);
+  }
   for (const step of job.steps ?? []) {
     if (shellLines(step.run ?? "").some((l) => PUBLISH_COMMAND.test(l) || SCRIPT_PUBLISH.test(l)))
       why.push(`publishes in "${step.name}"`);
@@ -291,6 +308,28 @@ describe("publish authority across every workflow", () => {
         .filter((j) => j.why.length > 0),
     );
     expect(unapproved).toEqual([]);
+  });
+
+  it("a local reusable-workflow call is judged by its callee's jobs; anything unreadable is refused", () => {
+    const all: { file: string; doc: Workflow }[] = [
+      {
+        file: "pub.yml",
+        doc: { jobs: { pub: { steps: [{ name: "go", run: "npm publish x.tgz" }] } } },
+      },
+      { file: "quiet.yml", doc: { jobs: { q: { steps: [{ name: "q", run: "echo hi" }] } } } },
+    ];
+    const caller: Workflow = { permissions: { contents: "read" } };
+    const call = (uses: string) => canPublish({ uses }, caller, all);
+    expect(call("./.github/workflows/pub.yml")).toEqual([
+      'via ./.github/workflows/pub.yml (pub): publishes in "go"',
+    ]);
+    expect(call("./.github/workflows/quiet.yml")).toEqual([]);
+    expect(call("./.github/workflows/missing.yml")).toEqual([
+      "calls reusable workflow ./.github/workflows/missing.yml",
+    ]);
+    expect(call("other/repo/.github/workflows/quiet.yml@v1")).toEqual([
+      "calls reusable workflow other/repo/.github/workflows/quiet.yml@v1",
+    ]);
   });
 
   it("the id-token exemption is a job that publishes nothing to npm", () => {
