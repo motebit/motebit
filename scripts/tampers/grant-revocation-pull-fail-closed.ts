@@ -14,7 +14,8 @@
  *   - a 200 body that is not the feed read as an empty feed;
  *   - the once-per-session latch removed (not a safety property: calm).
  *
- *   node scripts/tampers/grant-revocation-pull-fail-closed.ts
+ *   npx tsx scripts/tampers/grant-revocation-pull-fail-closed.ts
+ *   (plain `node` cannot resolve the runner's `.js` import specifier)
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
