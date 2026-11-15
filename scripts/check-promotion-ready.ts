@@ -13,8 +13,13 @@
  * workflow, 90-day retention horizon, a rename) reads NOT READY — never
  * "probably fine".
  *
- * NOT a CI gate — an operator pre-flight for the human-dispatched promote
- * step. Requires `gh` authenticated.
+ * NOT a CI gate — an operator pre-flight, run by hand, before a human runs
+ * the slate's prod command (`RUN=1 TARGET=prod npx tsx
+ * scripts/deploy-archetype-slate.ts`). Nothing calls this script: neither
+ * that command nor any workflow checks readiness for you. That command
+ * deploys by local flyctl, so no CI gate and no GitHub environment reviewer
+ * applies to it (docs/ops/RUNBOOK.md, "Molecule production deploys": the
+ * gate covers the GitHub Actions path only). Requires `gh` authenticated.
  *
  *   npx tsx scripts/check-promotion-ready.ts        # N=5
  *   REQUIRED=3 npx tsx scripts/check-promotion-ready.ts
@@ -84,7 +89,7 @@ function main(): void {
     `✓ check-promotion-ready: last ${runs.length} scheduled conformance runs all green (${runs[runs.length - 1]!.createdAt} → ${runs[0]!.createdAt}).`,
   );
   console.log(
-    "READY — promote with: RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts (production environment reviewers apply).",
+    "READY — the slate's prod command is: RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts. It deploys by local flyctl: no CI gate and no GitHub environment reviewer applies to it, and it does not re-check this readiness.",
   );
 }
 

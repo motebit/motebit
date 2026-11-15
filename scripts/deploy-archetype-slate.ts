@@ -14,8 +14,10 @@
  *   DRY RUN:   npx tsx scripts/deploy-archetype-slate.ts
  *   STAGING:   RUN=1 npx tsx scripts/deploy-archetype-slate.ts
  *   PROD:      RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts
- *              (prod promotion is gated on check-promotion-ready — 5
- *               consecutive green scheduled conformance runs)
+ *              (run scripts/check-promotion-ready.ts FIRST, by hand: 5
+ *               consecutive green scheduled conformance runs. This script
+ *               does not check it, and no CI gate or GitHub environment
+ *               reviewer applies to a local flyctl deploy.)
  *
  * Required env (real run):
  *   MOTEBIT_API_TOKEN        the operator's token — used by THIS script's discover call only;
