@@ -28,7 +28,11 @@
  *      runner source assigns to it or declares ANY other binding of that name
  *      (a parameter, a destructured name, a function, a class, an import, a
  *      catch variable): a shadow would let a rail be built with another list
- *      under the same spelling.
+ *      under the same spelling. The same holds for the two functions the
+ *      containment rests on: `assertMoleculeRailContained` and
+ *      `createMoleculeWalletRail` are each exactly ONE top-level function
+ *      declaration in the runner's index, and no parameter, destructured
+ *      name, variable, import or nested function rebinds either name.
  *   3. THE CONSTRUCTIONS. Every `createSolanaWalletRail(` call in the
  *      runner's source passes an object literal whose `spendableMints` is the
  *      identifier `MOLECULE_SPENDABLE_MINTS`, with no spread after it; there
@@ -38,11 +42,25 @@
  *      `runMolecule` (the earnings-sweep rail) each obtain their own rail
  *      from `createMoleculeWalletRail(` and each call
  *      `assertMoleculeRailContained(`; `createMoleculeWalletRail` calls it
- *      too. Only an UNCONDITIONAL check counts: a bare call statement that is
- *      the very next statement, in the same block, after the statement that
- *      obtains the rail from a factory, and is not inside a `try` block. A
- *      check behind an `if`, a ternary, `&&`/`||`/`??`, or in a `try` whose
- *      `catch` could swallow it, is not counted.
+ *      too. A check counts only when it is bound to THE RAIL, not to a
+ *      position: a bare call statement `assertMoleculeRailContained(X, …)`
+ *      whose first argument is the identifier `X` that the immediately
+ *      preceding statement — in the same block — declares as
+ *      `const X = createSolanaWalletRail({…})` (the factory) or
+ *      `const X = <override> ?? createMoleculeWalletRail({…})` (the two
+ *      holders), and that is not inside a `try` block. Every declaration in
+ *      the runner whose initializer obtains a rail any other way than a
+ *      direct `createMoleculeWalletRail(…)` call (which checks itself) must be
+ *      followed by such a check on its own name, and the override it reads
+ *      (`walletOverride`, `createSweepWallet`) may be mentioned nowhere else
+ *      in that function — so a check on a fresh rail cannot stand in for the
+ *      rail that is held. What is NOT counted: a check that is the single
+ *      statement of an `if`, inside a ternary or a `&&`/`||`/`??`, awaited,
+ *      returned, in a `try`, on another expression, or separated from the
+ *      declaration. What IS counted whatever guards it: a check in a BLOCK
+ *      that also contains the declaration — the sweep check legitimately sits
+ *      inside the `if` block that runs only when a sweep is configured. The
+ *      gate does not follow that guard, or any other control flow.
  *   5. NO SIDE DOOR. No non-test source of a molecule service (a
  *      `services/<svc>` whose source imports `@motebit/molecule-runner`)
  *      names a rail constructor, an RPC adapter or the runner's rail overrides
@@ -78,6 +96,8 @@ const MAINNET_NAME = "USDC_MINT_MAINNET";
 const RAIL_FACTORY = "createSolanaWalletRail";
 const RUNNER_FACTORY = "createMoleculeWalletRail";
 const BOOT_CHECK = "assertMoleculeRailContained";
+/** The two functions the containment rests on: never rebound, declared once. */
+const GUARDED_FUNCTIONS: readonly string[] = [BOOT_CHECK, RUNNER_FACTORY];
 /** Functions that must each obtain their own rail from the runner's factory and check it. */
 const RAIL_HOLDERS = ["defaultCreateMoneyRuntime", "runMolecule"];
 /**
@@ -111,7 +131,8 @@ const SOURCE_EXT = /\.(?:ts|tsx|mts|cts)$/;
  */
 const BLIND_SPOTS =
   "NOT CAUGHT: (1) a rail or signer reached through an alias or a re-export under another name, a forbidden name assembled at run time (string concatenation, a template with substitutions, a value read from data) or a dynamic import; " +
-  "(1b) a boot check that is unconditional in shape but skipped by control flow the gate does not follow (a `return` or `throw` inside the rail-building statement, a function that never reaches the block), and a check whose own body is weakened (tests and tampers cover that); " +
+  "(1b) control flow the gate does not follow: a counted boot check sits in the same block as the declaration of the rail it checks, and whatever guards that BLOCK is not examined (the sweep check is inside an `if` block by design), nor is a `return` or `throw` inside the rail-building statement, nor whether the function reaches the block at all; " +
+  "(1b') data flow beyond the checked name: the gate proves the check names the variable the preceding statement declares and that the override it reads is mentioned nowhere else in the function, not that the rail later handed to the runtime or the sweep IS that variable (a different rail obtained from another module, a property, or a nested function is not seen), and not what the check's own body does (tests and tampers cover that); " +
   "(1c) the runner's `createMoneyRuntime` test adapter returns an opaque runtime whose rail the runner cannot check — the gate only forbids services from naming it; " +
   "(2) a transfer signed without a wallet rail at all (raw web3.js in a package a service imports, a keypair handed to other code); " +
   "(3) the allowlist's ENFORCEMENT (the rail and adapter refusals, the runtime's early return) — those are proven by tests and scripts/tampers/molecule-spend-containment.ts, not here; " +
@@ -183,33 +204,103 @@ function buildsRail(node: ts.Node): boolean {
   return hit;
 }
 
+/** Strip parentheses, `as`, `satisfies` and `!` around an expression. */
+function unwrap(e: ts.Expression): ts.Expression {
+  let x = e;
+  while (
+    ts.isParenthesizedExpression(x) ||
+    ts.isAsExpression(x) ||
+    ts.isNonNullExpression(x) ||
+    ts.isSatisfiesExpression(x)
+  )
+    x = x.expression;
+  return x;
+}
+
+/** Is `e` a DIRECT call of the plain identifier `name` (`name(…)`, nothing around it)? */
+function isDirectCallOf(e: ts.Expression, name: string): boolean {
+  const x = unwrap(e);
+  return ts.isCallExpression(x) && ts.isIdentifier(x.expression) && x.expression.text === name;
+}
+
 /**
- * Is this `assertMoleculeRailContained(` call UNCONDITIONAL for the rail it
- * checks? It must be a bare call statement (`assert…(rail, label);`), the
- * very next statement — in the same block — after the statement that obtains
- * the rail from a factory, with no enclosing `try` block inside the function
- * (a `catch` could swallow the refusal). Anything else — behind an `if`, in a
- * ternary or a `&&`/`||`/`??`, awaited, returned, or separated from the
- * rail-building statement — is not counted.
+ * The shapes in which the runner obtains a rail it must then check — exactly
+ * the ones the runner uses, nothing looser:
+ *
+ *   - `createSolanaWalletRail({…})` — the runner's factory building the rail;
+ *   - `<override> ?? createMoleculeWalletRail({…})` — a holder taking a test
+ *     override or building its own. `<override>` is an identifier
+ *     (`walletOverride`) or a call on a property (`adapters.createSweepWallet?.(…)`);
+ *     `overrideName` is the name that override is read by.
+ *
+ * Returns null for anything else (including a direct
+ * `createMoleculeWalletRail(…)`, which needs no further check: it checks itself).
  */
-function isUnconditionalCheck(call: ts.CallExpression, fnBody: ts.Node): boolean {
+function checkedRailShape(init: ts.Expression): { overrideName: string | null } | null {
+  const x = unwrap(init);
+  if (isDirectCallOf(x, RAIL_FACTORY)) return { overrideName: null };
+  if (
+    ts.isBinaryExpression(x) &&
+    x.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken &&
+    isDirectCallOf(x.right, RUNNER_FACTORY)
+  ) {
+    const left = unwrap(x.left);
+    if (ts.isIdentifier(left)) return { overrideName: left.text };
+    if (ts.isCallExpression(left) && ts.isPropertyAccessExpression(left.expression))
+      return { overrideName: left.expression.name.text };
+  }
+  return null;
+}
+
+/** `const X = <init>;` with exactly one declaration and an identifier name, else null. */
+function singleConstDeclaration(
+  stmt: ts.Statement | undefined,
+): { name: string; init: ts.Expression; decl: ts.VariableDeclaration } | null {
+  if (stmt === undefined || !ts.isVariableStatement(stmt)) return null;
+  if ((stmt.declarationList.flags & ts.NodeFlags.Const) === 0) return null;
+  if (stmt.declarationList.declarations.length !== 1) return null;
+  const decl = stmt.declarationList.declarations[0]!;
+  if (!ts.isIdentifier(decl.name) || decl.initializer === undefined) return null;
+  return { name: decl.name.text, init: decl.initializer, decl };
+}
+
+/**
+ * Is this `assertMoleculeRailContained(` call a counted check — bound to the
+ * RAIL the preceding statement declares, not merely placed after it?
+ *
+ * It must be a bare call statement whose FIRST ARGUMENT is the identifier
+ * that the immediately preceding statement, in the same block, declares with
+ * `const`, and that declaration's initializer must be one of the two shapes
+ * of {@link checkedRailShape}. No enclosing `try` block inside the function
+ * (a `catch` could swallow the refusal). Returns the declaration it checks.
+ *
+ * Not counted: the single statement of an `if`, a ternary or `&&`/`||`/`??`
+ * operand, awaited, returned, a check on any other expression (a fresh rail
+ * built in the argument, another variable), or one separated from the
+ * declaration. Counted whatever guards it: a check in a BLOCK that also holds
+ * the declaration — the guard of that block is not followed.
+ */
+function countedCheck(call: ts.CallExpression, fnBody: ts.Node): ts.VariableDeclaration | null {
   const stmt = call.parent;
-  if (!ts.isExpressionStatement(stmt) || stmt.expression !== call) return false;
+  if (!ts.isExpressionStatement(stmt) || stmt.expression !== call) return null;
   const block = stmt.parent;
-  if (!ts.isBlock(block)) return false;
+  if (!ts.isBlock(block)) return null;
   for (let a: ts.Node = block; a !== fnBody; a = a.parent) {
     const parent = a.parent;
-    if (parent === undefined) return false;
-    if (ts.isTryStatement(parent) && parent.tryBlock === a) return false;
-    if (ts.isFunctionLike(parent)) return false;
+    if (parent === undefined) return null;
+    if (ts.isTryStatement(parent) && parent.tryBlock === a) return null;
+    if (ts.isFunctionLike(parent)) return null;
   }
   const i = block.statements.indexOf(stmt);
-  const previous = i > 0 ? block.statements[i - 1] : undefined;
-  return previous !== undefined && buildsRail(previous);
+  const declared = singleConstDeclaration(i > 0 ? block.statements[i - 1] : undefined);
+  if (declared === null || checkedRailShape(declared.init) === null) return null;
+  const arg = call.arguments[0];
+  if (arg === undefined || !ts.isIdentifier(arg) || arg.text !== declared.name) return null;
+  return declared.decl;
 }
 
 export interface ScanResult {
-  /** `assertMoleculeRailContained(` calls that are not unconditional (not counted). */
+  /** `assertMoleculeRailContained(` calls that are not bound to a declared rail (not counted). */
   conditionalChecks: number;
   files: number;
   runnerFiles: number;
@@ -262,6 +353,7 @@ export function scan(root: string): ScanResult {
     violations.push(`${RUNNER_INDEX} — file not found (the runner's composition root moved)`);
 
   let constantDeclarations = 0;
+  const guardedDeclarations = new Map<string, number>();
   const holderRails = new Map<string, { factory: number; check: number }>();
   let factoryChecks = 0;
   for (const abs of runnerFiles) {
@@ -321,6 +413,40 @@ export function scan(root: string): ScanResult {
             );
         }
       }
+      // The two functions the containment rests on: one top-level function
+      // declaration each, in the runner's index, and no other binding.
+      if (ts.isIdentifier(n) && GUARDED_FUNCTIONS.includes(n.text)) {
+        const p = n.parent;
+        const topLevelFn =
+          ts.isFunctionDeclaration(p) && p.name === n && p.parent === sf && isIndex;
+        const binds =
+          (ts.isParameter(p) && p.name === n) ||
+          (ts.isBindingElement(p) && p.name === n) ||
+          (ts.isVariableDeclaration(p) && p.name === n) ||
+          ((ts.isFunctionDeclaration(p) ||
+            ts.isFunctionExpression(p) ||
+            ts.isClassDeclaration(p) ||
+            ts.isClassExpression(p) ||
+            ts.isEnumDeclaration(p) ||
+            ts.isModuleDeclaration(p) ||
+            ts.isImportClause(p) ||
+            ts.isNamespaceImport(p) ||
+            ts.isImportEqualsDeclaration(p)) &&
+            p.name === n) ||
+          (ts.isImportSpecifier(p) && p.name === n);
+        if (topLevelFn) guardedDeclarations.set(n.text, (guardedDeclarations.get(n.text) ?? 0) + 1);
+        else if (binds)
+          violations.push(
+            `${file}:${lineOf(sf, n)} — ${n.text} is rebound (${ts.SyntaxKind[p.kind]}): only the one top-level function declaration in ${RUNNER_INDEX} may carry this name — a parameter, variable, import or nested function of the same name replaces the real ${n.text === BOOT_CHECK ? "boot check" : "rail factory"} at its call sites`,
+          );
+      }
+      if (
+        ts.isBinaryExpression(n) &&
+        n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        n.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+        GUARDED_FUNCTIONS.some((g) => n.left.getText() === g)
+      )
+        violations.push(`${file}:${lineOf(sf, n)} — assignment to ${n.left.getText()}`);
       // Any OTHER binding of the constant's name (a shadow).
       if (ts.isIdentifier(n) && n.text === CONSTANT) {
         const p = n.parent;
@@ -399,13 +525,47 @@ export function scan(root: string): ScanResult {
       const fn = stmt.name.text;
       let factory = 0;
       let check = 0;
+      const checked = new Set<ts.VariableDeclaration>();
       each(stmt.body, (n) => {
         if (!ts.isCallExpression(n)) return;
         const name = callName(n);
         if (name === RUNNER_FACTORY) factory += 1;
         if (name === BOOT_CHECK) {
-          if (isUnconditionalCheck(n, stmt.body!)) check += 1;
-          else result.conditionalChecks += 1;
+          const decl = countedCheck(n, stmt.body!);
+          if (decl !== null) {
+            check += 1;
+            checked.add(decl);
+          } else result.conditionalChecks += 1;
+        }
+      });
+      // Every declaration that obtains a rail (other than a direct call of the
+      // runner's factory, which checks itself) is checked BY NAME, and the
+      // override it reads is mentioned nowhere else in the function.
+      each(stmt.body, (n) => {
+        if (!ts.isVariableDeclaration(n) || n.initializer === undefined) return;
+        if (!buildsRail(n.initializer)) return;
+        if (isDirectCallOf(n.initializer, RUNNER_FACTORY)) return;
+        const where = `${file}:${lineOf(sf, n)}`;
+        const shape = checkedRailShape(n.initializer);
+        if (shape === null) {
+          violations.push(
+            `${where} — ${fn} obtains a rail in a shape the gate does not accept: \`${n.getText().slice(0, 100)}\` (accepted: \`const x = ${RAIL_FACTORY}({…})\` in the factory, \`const x = <override> ?? ${RUNNER_FACTORY}({…})\` in a holder, or a direct \`${RUNNER_FACTORY}({…})\`)`,
+          );
+          return;
+        }
+        if (!checked.has(n))
+          violations.push(
+            `${where} — ${fn} declares the rail \`${n.name.getText()}\` and does not check IT: the next statement must be \`${BOOT_CHECK}(${n.name.getText()}, …);\` (a check on a fresh rail, on another expression or on another variable leaves this one — and any override in it — unchecked)`,
+          );
+        if (shape.overrideName !== null) {
+          let mentions = 0;
+          each(stmt.body!, (m) => {
+            if (ts.isIdentifier(m) && m.text === shape.overrideName) mentions += 1;
+          });
+          if (mentions !== 1)
+            violations.push(
+              `${where} — ${fn} mentions the rail override \`${shape.overrideName}\` ${mentions} time(s); it may appear only in the checked declaration of \`${n.name.getText()}\` (used anywhere else, the override would reach the runtime unchecked)`,
+            );
         }
       });
       result.bootChecks += check;
@@ -417,13 +577,20 @@ export function scan(root: string): ScanResult {
     violations.push(
       `${RUNNER_DIR} — ${CONSTANT} is declared ${constantDeclarations} time(s), expected exactly 1`,
     );
+  for (const g of GUARDED_FUNCTIONS) {
+    const count = guardedDeclarations.get(g) ?? 0;
+    if (count !== 1)
+      violations.push(
+        `${RUNNER_INDEX} — ${g} has ${count} top-level function declaration(s), expected exactly 1`,
+      );
+  }
   if (result.railConstructions < 1)
     violations.push(
       `${RUNNER_DIR} — no ${RAIL_FACTORY}( call found (the runner's rail construction moved out of the scan)`,
     );
   if (factoryChecks < 1)
     violations.push(
-      `${RUNNER_INDEX} — ${RUNNER_FACTORY} has no UNCONDITIONAL ${BOOT_CHECK}( call (a bare call statement directly after the statement that builds the rail, outside any try block)`,
+      `${RUNNER_INDEX} — ${RUNNER_FACTORY} has no UNCONDITIONAL ${BOOT_CHECK}( call on the rail it builds (a bare \`${BOOT_CHECK}(x, …);\` statement directly after \`const x = ${RAIL_FACTORY}({…})\`, naming that x, outside any try block)`,
     );
   for (const fn of RAIL_HOLDERS) {
     const seen = holderRails.get(fn);
@@ -438,7 +605,7 @@ export function scan(root: string): ScanResult {
       );
     if (seen.check < 1)
       violations.push(
-        `${RUNNER_INDEX} — ${fn} has no UNCONDITIONAL ${BOOT_CHECK}( call on the rail it holds (it must be a bare call statement directly after the statement that obtains the rail, outside any try block — a check behind an if, a ternary, a logical operator or a swallowing catch can be skipped, and an override would then start unchecked)`,
+        `${RUNNER_INDEX} — ${fn} has no UNCONDITIONAL ${BOOT_CHECK}( call on the rail it holds (it must be a bare \`${BOOT_CHECK}(x, …);\` statement directly after \`const x = <override> ?? ${RUNNER_FACTORY}({…})\`, naming that x, outside any try block — a check that is the single statement of an if, inside a ternary or a logical operator, in a swallowing try, or on a different rail does not count, and an override would then start unchecked)`,
       );
   }
 
@@ -521,7 +688,7 @@ function main(): void {
     });
   }
   process.stdout.write(
-    `✓ check-molecule-spend-containment: ${r.files} source file(s) scanned (1 mint-constants file, ${r.runnerFiles} runner file(s) in ${RUNNER_DIR}/, ${r.serviceFiles} file(s) across ${r.moleculeServices.length} molecule service(s): ${r.moleculeServices.join(", ") || "none"}; tests and build output excluded) — ${CONSTANT} is exactly [${DEVNET_NAME}] = ${PINNED_DEVNET_USDC_MINT}, ${r.railConstructions} ${RAIL_FACTORY}( call(s) all carry it, ${r.bootChecks} unconditional ${BOOT_CHECK}( call(s) (${r.conditionalChecks} conditional, not counted), 0 rail constructions or rail-override names (identifier or string) in molecule services. ${BLIND_SPOTS}\n`,
+    `✓ check-molecule-spend-containment: ${r.files} source file(s) scanned (1 mint-constants file, ${r.runnerFiles} runner file(s) in ${RUNNER_DIR}/, ${r.serviceFiles} file(s) across ${r.moleculeServices.length} molecule service(s): ${r.moleculeServices.join(", ") || "none"}; tests and build output excluded) — ${CONSTANT} is exactly [${DEVNET_NAME}] = ${PINNED_DEVNET_USDC_MINT}, ${r.railConstructions} ${RAIL_FACTORY}( call(s) all carry it, ${r.bootChecks} ${BOOT_CHECK}( call(s) bound to the rail the preceding statement declares (${r.conditionalChecks} other call(s), not counted), ${GUARDED_FUNCTIONS.join(" and ")} each declared once and never rebound, 0 rail constructions or rail-override names (identifier or string) in molecule services. ${BLIND_SPOTS}\n`,
   );
 }
 

@@ -23,8 +23,12 @@
  *   - the PRODUCTION branch of `runMolecule` (runner-built rail and runtime):
  *     the early return, the loop-path reader, the pre-sign class and the
  *     rail's own check, each against a production-branch test;
- *   - the static gate's own rules: unconditional boot checks, no second
- *     binding of the constant's name, overrides spelled as strings;
+ *   - the static gate's own rules: a boot check bound to the rail the
+ *     preceding statement declares (not an if-guarded one, not one separated
+ *     from it, not one on a different rail), every declared rail checked by
+ *     name, the override mentioned only there, no second binding of the
+ *     constant, the boot check or the rail factory, overrides spelled as
+ *     strings;
  *   - Research: the tool-result wording that stops a retry.
  *
  * Entries whose test lives in another package than the edit rebuild the edited
@@ -68,6 +72,13 @@ const GATE = "scripts/check-molecule-spend-containment.ts";
 const GATE_TEST = "scripts/__tests__/check-molecule-spend-containment.test.ts";
 const GATE_DESC = "check-molecule-spend-containment fails on:";
 const DELEGATION_TEST = "src/__tests__/relay-delegation.test.ts";
+
+/** The gate's requirement that the check's argument IS the declared rail. */
+const CHECK_ARGUMENT = {
+  file: GATE,
+  from: "  if (arg === undefined || !ts.isIdentifier(arg) || arg.text !== declared.name) return null;",
+  to: "  if (arg === undefined) return null;",
+};
 
 /** The refusal's structural match (name + code), in wallet-solana. */
 const STRUCTURAL_MATCH =
@@ -552,8 +563,12 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: GATE,
-        from: "  if (!ts.isBlock(block)) return false;",
-        to: "  if (!ts.isBlock(block)) return true;",
+        from:
+          "  const stmt = call.parent;\n" +
+          "  if (!ts.isExpressionStatement(stmt) || stmt.expression !== call) return null;",
+        to:
+          "  const stmt = ts.isIfStatement(call.parent.parent) ? call.parent.parent : call.parent;\n" +
+          "  if (!ts.isExpressionStatement(stmt) && !ts.isIfStatement(stmt)) return null;",
       },
     ],
     test: GATE_TEST,
@@ -564,12 +579,66 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: GATE,
-        from: "  return previous !== undefined && buildsRail(previous);",
-        to: "  return previous !== undefined;",
+        from: "singleConstDeclaration(i > 0 ? block.statements[i - 1] : undefined)",
+        to: "singleConstDeclaration(i > 1 ? block.statements[i - 2] : undefined)",
       },
     ],
     test: GATE_TEST,
     red: `${GATE_DESC} an early exit placed between obtaining the rail and checking it`,
+  },
+  {
+    name: "gate: accepts a check on a DIFFERENT rail than the one declared (money-execution)",
+    edits: [CHECK_ARGUMENT],
+    test: GATE_TEST,
+    red: `${GATE_DESC} the check is called on a rail built in its own argument (money-execution)`,
+  },
+  {
+    name: "gate: accepts a check on a DIFFERENT rail than the one declared (earnings-sweep)",
+    edits: [CHECK_ARGUMENT],
+    test: GATE_TEST,
+    red: `${GATE_DESC} the check is called on a rail built in its own argument (earnings-sweep)`,
+  },
+  {
+    name: "gate: a declared rail that is never checked by name is no longer flagged",
+    edits: [
+      {
+        file: GATE,
+        from: "        if (!checked.has(n))",
+        to: '        if (!checked.has(n) && file === "")',
+      },
+    ],
+    test: GATE_TEST,
+    red: `${GATE_DESC} a fresh rail is built and checked while the held wallet goes unchecked`,
+  },
+  {
+    name: "gate: the rail override may be mentioned outside the checked declaration",
+    edits: [
+      { file: GATE, from: "          if (mentions !== 1)", to: "          if (mentions < 1)" },
+    ],
+    test: GATE_TEST,
+    red: `${GATE_DESC} the checked wallet is bypassed: the override is handed to the runtime directly`,
+  },
+  {
+    name: "gate: accepts a SHADOWED check function (a parameter named like the boot check)",
+    edits: [
+      { file: GATE, from: "        else if (binds)", to: '        else if (binds && file === "")' },
+    ],
+    test: GATE_TEST,
+    red: `${GATE_DESC} a parameter named assertMoleculeRailContained replaces the boot check`,
+  },
+  {
+    name: "gate: accepts a shadowed rail factory (a local variable named like the factory)",
+    edits: [
+      { file: GATE, from: "        else if (binds)", to: '        else if (binds && file === "")' },
+    ],
+    test: GATE_TEST,
+    red: `${GATE_DESC} a local variable named createMoleculeWalletRail replaces the rail factory`,
+  },
+  {
+    name: "gate: the boot check may be declared more than once",
+    edits: [{ file: GATE, from: "    if (count !== 1)", to: "    if (count < 1)" }],
+    test: GATE_TEST,
+    red: `${GATE_DESC} a second top-level declaration of the boot check (an overload signature)`,
   },
   {
     name: "gate: a second binding of the constant's name is no longer flagged",

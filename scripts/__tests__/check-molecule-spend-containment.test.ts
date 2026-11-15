@@ -13,7 +13,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasApertureDisclosure, hasRepairInstruction } from "../lib/gate-report.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -25,6 +25,12 @@ const SERVICE = "services/clerk/src/index.ts";
 const SERVICE_IMPORT =
   'import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";';
 const MAINNET = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+// Every case spawns the gate (`npx tsx`), about a second each when idle and several
+// when the machine is loaded (the tamper runner runs many copies at once).
+// `pnpm test:gates` passes --testTimeout=30000; a direct `vitest run <file>` does
+// not, so the file sets its own budget instead of inheriting the 5 s default.
+vi.setConfig({ testTimeout: 60_000 });
 
 const temps: string[] = [];
 afterEach(() => {
@@ -388,7 +394,125 @@ describe("check-molecule-spend-containment", () => {
       ],
       names: /a molecule service spells `createMoneyRuntime` as a string/,
     },
+
+    // ── The check must name THE RAIL the preceding statement declares. ──────
+    {
+      name: "a fresh rail is built and checked while the held wallet goes unchecked",
+      edits: [
+        {
+          file: RUNNER,
+          from: '  assertMoleculeRailContained(wallet, "money-execution");\n',
+          to:
+            "  const fresh = createMoleculeWalletRail({ rpcUrl: money.solanaRpcUrl, identitySeed: identity.privateKey });\n" +
+            '  assertMoleculeRailContained(fresh, "money-execution");\n',
+        },
+      ],
+      names: /defaultCreateMoneyRuntime declares the rail `wallet` and does not check IT/,
+    },
+    {
+      name: "the check is called on a rail built in its own argument (money-execution)",
+      edits: [
+        {
+          file: RUNNER,
+          from: '  assertMoleculeRailContained(wallet, "money-execution");\n',
+          to: '  assertMoleculeRailContained(createMoleculeWalletRail({ rpcUrl: money.solanaRpcUrl, identitySeed: identity.privateKey }), "money-execution");\n',
+        },
+      ],
+      names: /defaultCreateMoneyRuntime declares the rail `wallet` and does not check IT/,
+    },
+    {
+      name: "the check is called on a rail built in its own argument (earnings-sweep)",
+      edits: [
+        {
+          file: RUNNER,
+          from: '    assertMoleculeRailContained(wallet, "earnings-sweep");\n',
+          to: '    assertMoleculeRailContained(createMoleculeWalletRail({ rpcUrl: sweepRpcUrl, identitySeed: identity.privateKey }), "earnings-sweep");\n',
+        },
+      ],
+      names: /runMolecule declares the rail `wallet` and does not check IT/,
+    },
+    {
+      name: "the checked wallet is bypassed: the override is handed to the runtime directly",
+      edits: [
+        {
+          file: RUNNER,
+          from: "      solanaWallet: wallet,\n",
+          to: "      solanaWallet: walletOverride ?? wallet,\n",
+        },
+      ],
+      names: /defaultCreateMoneyRuntime mentions the rail override `walletOverride` 2 time\(s\)/,
+    },
+    {
+      name: "the rail is obtained in a shape the gate does not accept (|| instead of ??)",
+      edits: [
+        {
+          file: RUNNER,
+          from: "    walletOverride ??\n    createMoleculeWalletRail({",
+          to: "    walletOverride ||\n    createMoleculeWalletRail({",
+        },
+      ],
+      names: /defaultCreateMoneyRuntime obtains a rail in a shape the gate does not accept/,
+    },
+    // ── The check and the factory may not be rebound. ───────────────────────
+    {
+      name: "a parameter named assertMoleculeRailContained replaces the boot check",
+      edits: [
+        {
+          file: RUNNER,
+          from: "  walletOverride?: SolanaWalletRail,\n): RunnerRuntime {",
+          to:
+            "  walletOverride?: SolanaWalletRail,\n" +
+            "  assertMoleculeRailContained: (rail: unknown, label: string) => void = () => {},\n" +
+            "): RunnerRuntime {",
+        },
+      ],
+      names: /assertMoleculeRailContained is rebound \(Parameter\)/,
+    },
+    {
+      name: "a local variable named createMoleculeWalletRail replaces the rail factory",
+      edits: [
+        {
+          file: RUNNER,
+          from: "  const log = adapters.log ?? defaultLog;\n",
+          to:
+            "  const log = adapters.log ?? defaultLog;\n" +
+            "  const createMoleculeWalletRail = (a: {\n" +
+            "    rpcUrl: string;\n" +
+            "    identitySeed: Uint8Array;\n" +
+            "    usdcMint?: string;\n" +
+            "  }): SolanaWalletRail => createSolanaWalletRail({ ...a, spendableMints: MOLECULE_SPENDABLE_MINTS });\n",
+        },
+      ],
+      names: /createMoleculeWalletRail is rebound \(VariableDeclaration\)/,
+    },
+    {
+      name: "a second top-level declaration of the boot check (an overload signature)",
+      edits: [
+        {
+          file: RUNNER,
+          from: "export function assertMoleculeRailContained(rail: unknown, label: string): void {",
+          to:
+            "export function assertMoleculeRailContained(rail: unknown, label: string): void;\n" +
+            "export function assertMoleculeRailContained(rail: unknown, label: string): void {",
+        },
+      ],
+      names:
+        /assertMoleculeRailContained has 2 top-level function declaration\(s\), expected exactly 1/,
+    },
   ];
+
+  it("counts a check in a guarded BLOCK and says the guard is not followed", () => {
+    // The legitimate sweep check sits inside the `if` block that runs only
+    // when a sweep is configured. A block holding both the declaration and
+    // its check is counted whatever guards the block; the pass line owns that.
+    const r = run();
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain(
+      "3 assertMoleculeRailContained( call(s) bound to the rail the preceding statement declares",
+    );
+    expect(r.stdout).toContain("whatever guards that BLOCK is not examined");
+    expect(r.stdout).toContain("each declared once and never rebound");
+  });
 
   it("documents what it still cannot see: a name assembled at run time passes, and the pass line says so", () => {
     const r = run(
