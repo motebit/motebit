@@ -32,12 +32,13 @@ on:
         options: [staging, prod-presence-only]
         default: staging
 
-# Concurrency is PER JOB, never workflow-level. `prod-presence` sits behind
-# the `production` environment, whose required reviewer can leave it waiting
-# for hours; a group it shared with the scheduled staging probe would keep
-# that probe pending with no jobs (observed 2026-11-14/15: ~13 h), and
+# No workflow-level concurrency. `prod-presence` sits behind the `production`
+# environment, whose required reviewer can leave it waiting for hours; a
+# group it shared with the scheduled staging probe would keep that probe
+# pending with no jobs (observed 2026-11-14/15: ~13 h), and
 # scripts/check-promotion-ready.ts needs the last five SCHEDULED runs green.
-# A job waiting on a human must never hold a group unattended work needs.
+# A job waiting on a human must never hold a group unattended work needs:
+# only the staging job has a group, and `prod-presence` has none.
 # Pinned by scripts/__tests__/workflow-approval-concurrency.test.ts.
 
 # Least privilege: the repo's default GITHUB_TOKEN is write, so every
@@ -52,8 +53,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging
-    # Staging probes run one at a time (one delegator wallet), queued, never
-    # cancelled. Shared with no approval-gated job.
+    # Staging probes run one at a time (one delegator wallet). A RUNNING probe
+    # is never cancelled. At most ONE run waits: a newer waiting run replaces
+    # an older waiting one (GitHub's default; the per-job split did not change
+    # it), so a waiting scheduled run can still be displaced by a later
+    # staging dispatch. `queue: max` would keep every waiting run; it is a
+    # follow-up once the molecule prod deploys prove GitHub accepts the key
+    # (docs/ops/RUNBOOK.md, "Molecule production deploys") — a rejected key
+    # would stop this workflow loading and the nightly probe with it.
+    # Shared with no approval-gated job.
     concurrency:
       group: archetype-conformance-staging
       cancel-in-progress: false
@@ -92,11 +100,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
-    # Its own group: it may wait on the production reviewer without holding
-    # anything the scheduled staging probe needs.
-    concurrency:
-      group: archetype-conformance-prod-presence
-      cancel-in-progress: false
+    # NO concurrency group, on purpose: a read-only presence probe that shares
+    # no state. With no group it can wait on the production reviewer without
+    # holding, or queueing behind, anything.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4

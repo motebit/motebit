@@ -3,8 +3,8 @@
  * (scripts/__tests__/workflow-approval-concurrency.test.ts).
  *
  * Each entry puts back one way a job waiting on the `production` reviewer
- * could hold a concurrency group the scheduled staging probe needs, and names
- * the test that must go red.
+ * could hold a concurrency group the scheduled staging probe needs (or drops
+ * the staging job's own serialization), and names the test that must go red.
  *
  *   node scripts/tampers/workflow-approval-concurrency.ts
  */
@@ -35,11 +35,18 @@ const WORKFLOW_GROUP = edit(
   "\npermissions:\n  contents: read\n\njobs:\n",
   "\nconcurrency:\n  group: archetype-conformance\n  cancel-in-progress: false\n\npermissions:\n  contents: read\n\njobs:\n",
 );
+/** Where a job-level group on prod-presence would go. */
+const PROD_ENV = "    timeout-minutes: 10\n    environment: production\n";
+const prodGroup = (group: string): TamperEdit =>
+  edit(
+    PROD_ENV,
+    `${PROD_ENV}    concurrency:\n      group: ${group}\n      cancel-in-progress: false\n`,
+  );
 /** The prod-presence job takes the staging job's group. */
-const SHARED_GROUP = edit(
-  "      group: archetype-conformance-prod-presence\n",
-  "      group: archetype-conformance-staging\n",
-);
+const SHARED_GROUP = prodGroup("archetype-conformance-staging");
+
+const NO_PROD_GROUP = `${PIN} no job behind environment: production declares a concurrency group`;
+const ALL_WORKFLOWS = `${CLASS} no workflow under .github/workflows breaks the rule`;
 
 const TAMPERS: TamperEntry[] = [
   entry(
@@ -49,22 +56,51 @@ const TAMPERS: TamperEntry[] = [
   ),
   entry(
     "the workflow-level group is restored (class rule over every workflow)",
-    `${CLASS} no workflow under .github/workflows breaks the rule`,
+    ALL_WORKFLOWS,
     WORKFLOW_GROUP,
   ),
+  entry("prod-presence gains the staging group (pin)", NO_PROD_GROUP, SHARED_GROUP),
   entry(
-    "prod-presence shares the staging job's group (pin)",
+    "prod-presence gains the staging group (pin: staging group shared with no production job)",
     `${PIN} the scheduled staging job's group is shared with no job behind environment: production`,
     SHARED_GROUP,
   ),
   entry(
-    "prod-presence shares the staging job's group (class rule over every workflow)",
-    `${CLASS} no workflow under .github/workflows breaks the rule`,
+    "prod-presence gains the staging group (class rule over every workflow)",
+    ALL_WORKFLOWS,
     SHARED_GROUP,
   ),
   entry(
-    "the staging job loses its own group",
-    `${PIN} every job has its own group, and no two jobs share one`,
+    "prod-presence gains any group, even its own",
+    NO_PROD_GROUP,
+    prodGroup("archetype-conformance-prod-presence"),
+  ),
+  entry(
+    "the environment name is compared case-sensitively (Production hides a gated job)",
+    `${CLASS} the environment name is compared case-insensitively, in both forms`,
+    { file: TEST, from: "  return n.toLowerCase();\n", to: "  return n;\n" },
+  ),
+  entry(
+    "an environment built from an expression reads as not-production instead of failing closed",
+    `${CLASS} fails closed, naming the file and job, on an environment built from an expression`,
+    {
+      file: TEST,
+      from: '  if (n.includes("${{")) {\n    throw',
+      to: '  if ((false as boolean) && n.includes("${{")) {\n    throw',
+    },
+  ),
+  entry(
+    "a reusable workflow in another repository reads as not-production instead of failing closed",
+    `${CLASS} fails closed on a reusable workflow it cannot read (another repository, or a missing file)`,
+    {
+      file: TEST,
+      from: "    if (!m) {\n      throw",
+      to: "    if (!m) return false;\n    if (!m) {\n      throw",
+    },
+  ),
+  entry(
+    "the staging job loses its group",
+    `${PIN} the scheduled staging job has the staging group and is not behind production`,
     edit(
       "    concurrency:\n      group: archetype-conformance-staging\n      cancel-in-progress: false\n",
       "",
@@ -72,7 +108,7 @@ const TAMPERS: TamperEntry[] = [
   ),
   entry(
     "a queued staging probe cancels the running one",
-    `${PIN} neither job cancels a running probe`,
+    `${PIN} a running staging probe is never cancelled`,
     edit(
       "      group: archetype-conformance-staging\n      cancel-in-progress: false\n",
       "      group: archetype-conformance-staging\n      cancel-in-progress: true\n",

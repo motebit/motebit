@@ -10,8 +10,8 @@
  * green, so a blocked or replaced scheduled run breaks promotion readiness.
  *
  * Two halves, both over the REAL .github/workflows/*.yml:
- *   1. the pin for archetype-conformance.yml (per-job groups, staging
- *      shared with no production job);
+ *   1. the pin for archetype-conformance.yml (no workflow-level group; only
+ *      the staging job has a group; the job behind production has none);
  *   2. the class rule for every workflow:
  *        (a) no workflow-level concurrency group when the workflow has both
  *            a job behind `environment: production` and one that is not;
@@ -23,10 +23,17 @@
  *
  * Limits, stated: groups are compared as written (expressions are not
  * evaluated; (c) skips any group containing `${{`). "Behind production" is
- * read from the `environment:` key; a caller of a local reusable workflow
- * counts as one job, behind production when any job of the callee is. Other
- * environments (npm-publish, staging) are outside the rule: whether they
- * require a reviewer is a GitHub setting this repo cannot read.
+ * read from the `environment:` key, compared case-insensitively (GitHub
+ * environment names are). A caller of a local reusable workflow
+ * (`./.github/workflows/x.yml`) counts as one job, behind production when
+ * any job of the callee is. What cannot be decided offline FAILS CLOSED: an
+ * environment name built from an expression, and a reusable workflow in
+ * another repository (`org/repo/.github/workflows/x.yml@ref`), whose jobs
+ * this test cannot read. Other environments (npm-publish, staging) are
+ * outside the rule: whether they require a reviewer is a GitHub setting this
+ * repo cannot read. The rule does not cover the pending-run replacement
+ * GitHub applies inside one group (a newer waiting run replaces an older
+ * waiting one unless `queue: max` is set).
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -53,19 +60,35 @@ interface Workflow {
   jobs: Job[];
 }
 
-function groupOf(node: unknown): string | null {
+function groupOf(node: unknown, where: string): string | null {
   if (node === undefined || node === null) return null;
   if (typeof node === "string") return node;
   const g = (node as Yaml).group;
-  if (typeof g !== "string") throw new Error(`concurrency without a string group: ${String(g)}`);
+  if (typeof g !== "string") {
+    throw new Error(
+      `${where}: concurrency without a string group (${JSON.stringify(g)}). Write \`group:\` as a string.`,
+    );
+  }
   return g;
 }
 
-function envName(node: unknown): string | null {
+/** The environment name, lowercased (GitHub compares them case-insensitively), or null. */
+function envName(node: unknown, where: string): string | null {
   if (node === undefined || node === null) return null;
-  if (typeof node === "string") return node;
-  const n = (node as Yaml).name;
-  return typeof n === "string" ? n : null;
+  const n = typeof node === "string" ? node : (node as Yaml).name;
+  if (typeof n !== "string") {
+    throw new Error(
+      `${where}: environment without a string name (${JSON.stringify(n)}). Name the environment literally.`,
+    );
+  }
+  if (n.includes("${{")) {
+    throw new Error(
+      `${where}: environment "${n}" is an expression, so whether the job waits on the ` +
+        `${APPROVAL_ENV} reviewer cannot be decided offline. Name the environment literally ` +
+        `(one job per environment), or teach scripts/__tests__/workflow-approval-concurrency.test.ts the expression.`,
+    );
+  }
+  return n.toLowerCase();
 }
 
 /** Parse workflow sources ({ file: yaml text }) into the shape the rule reads. */
@@ -73,25 +96,33 @@ function load(sources: Record<string, string>): Workflow[] {
   const docs = new Map<string, Yaml>();
   for (const [file, text] of Object.entries(sources)) docs.set(file, parse(text) as Yaml);
   const jobsOf = (doc: Yaml) => Object.entries((doc.jobs ?? {}) as Record<string, Yaml>);
-  const direct = (job: Yaml) => envName(job.environment) === APPROVAL_ENV;
-  const production = (job: Yaml, seen: string[]): boolean => {
-    if (direct(job)) return true;
+  const production = (job: Yaml, where: string, seen: string[]): boolean => {
+    if (envName(job.environment, where) === APPROVAL_ENV) return true;
     const uses = typeof job.uses === "string" ? job.uses : "";
+    if (uses === "") return false;
     const m = /^\.\/\.github\/workflows\/([^@]+)$/.exec(uses);
-    if (!m) return false;
+    if (!m) {
+      throw new Error(
+        `${where}: \`uses: ${uses}\` calls a reusable workflow this test cannot read offline, so ` +
+          `whether the job waits on the ${APPROVAL_ENV} reviewer is unknown. Call a workflow in this ` +
+          `repo (./.github/workflows/<file>), or teach scripts/__tests__/workflow-approval-concurrency.test.ts about it.`,
+      );
+    }
     const callee = m[1] as string;
     const doc = docs.get(callee);
-    if (!doc) throw new Error(`reusable workflow ${callee} not found`);
+    if (!doc) {
+      throw new Error(`${where}: reusable workflow ${callee} not found under .github/workflows`);
+    }
     if (seen.includes(callee)) return false;
-    return jobsOf(doc).some(([, j]) => production(j, [...seen, callee]));
+    return jobsOf(doc).some(([id, j]) => production(j, `${callee}#${id}`, [...seen, callee]));
   };
   return [...docs.entries()].map(([file, doc]) => ({
     file,
-    group: groupOf(doc.concurrency),
+    group: groupOf(doc.concurrency, file),
     jobs: jobsOf(doc).map(([id, job]) => ({
       id,
-      group: groupOf(job.concurrency),
-      production: production(job, [file]),
+      group: groupOf(job.concurrency, `${file}#${id}`),
+      production: production(job, `${file}#${id}`, [file]),
     })),
   }));
 }
@@ -159,13 +190,16 @@ describe("archetype-conformance.yml: approval never blocks the scheduled staging
     expect(wf.group).toBeNull();
   });
 
-  it("every job has its own group, and no two jobs share one", () => {
+  it("the scheduled staging job has the staging group and is not behind production", () => {
     expect(wf.jobs.map((j) => j.id).sort()).toEqual(["conformance", "prod-presence"]);
-    const groups = wf.jobs.map((j) => j.group);
-    expect(groups.every((g) => typeof g === "string" && g.length > 0)).toBe(true);
-    expect(new Set(groups).size).toBe(wf.jobs.length);
+    expect(job("conformance").production).toBe(false);
     expect(job("conformance").group).toBe("archetype-conformance-staging");
-    expect(job("prod-presence").group).toBe("archetype-conformance-prod-presence");
+  });
+
+  it("no job behind environment: production declares a concurrency group", () => {
+    const prod = wf.jobs.filter((j) => j.production);
+    expect(prod.map((j) => j.id)).toEqual(["prod-presence"]);
+    expect(prod.map((j) => j.group)).toEqual([null]);
   });
 
   it("the scheduled staging job's group is shared with no job behind environment: production", () => {
@@ -180,13 +214,14 @@ describe("archetype-conformance.yml: approval never blocks the scheduled staging
     expect(sharers).toEqual([]);
   });
 
-  it("neither job cancels a running probe", () => {
+  it("a running staging probe is never cancelled", () => {
     const doc = parse(readFileSync(join(WF_DIR, wf.file), "utf8")) as {
-      jobs: Record<string, { concurrency: Yaml }>;
+      jobs: Record<string, { concurrency?: Yaml }>;
     };
-    for (const id of ["conformance", "prod-presence"]) {
-      expect(doc.jobs[id]?.concurrency["cancel-in-progress"]).toBe(false);
-    }
+    expect(doc.jobs.conformance?.concurrency).toEqual({
+      group: "archetype-conformance-staging",
+      "cancel-in-progress": false,
+    });
   });
 });
 
@@ -233,20 +268,53 @@ describe("class rule: a job behind environment: production shares no concurrency
 
   it("a caller of a reusable workflow is a job, behind production when the callee is", () => {
     const callee = `on: workflow_call\njobs:\n  deploy:\n    runs-on: x\n    environment: production\n`;
-    const caller = (uses: string) =>
-      wf(
-        `concurrency: g\njobs:\n  call:\n    uses: ${uses}\n  other:\n    runs-on: x\n` +
-          `  third:\n    uses: org/repo/.github/workflows/x.yml@v1\n`,
-      );
-    const v = violations(
-      load({ "callee.yml": callee, "w.yml": caller("./.github/workflows/callee.yml") }),
+    const caller = wf(
+      `concurrency: g\njobs:\n  call:\n    uses: ./.github/workflows/callee.yml\n  other:\n    runs-on: x\n`,
     );
+    const v = violations(load({ "callee.yml": callee, "w.yml": caller }));
     expect(v).toHaveLength(1);
-    expect(v[0]).toMatch(/held by call .* blocking other, third/);
+    expect(v[0]).toMatch(/held by call .* blocking other\./);
     const plain = `on: workflow_call\njobs:\n  j:\n    runs-on: x\n`;
-    expect(
-      violations(load({ "callee.yml": plain, "w.yml": caller("./.github/workflows/callee.yml") })),
-    ).toEqual([]);
+    expect(violations(load({ "callee.yml": plain, "w.yml": caller }))).toEqual([]);
+  });
+
+  it("the environment name is compared case-insensitively, in both forms", () => {
+    for (const env of ["environment: Production", "environment:\n      name: PRODUCTION"]) {
+      const body = `concurrency: g\njobs:\n  a:\n    runs-on: x\n  prod:\n    runs-on: x\n    ${env}\n`;
+      expect(violations(load({ "w.yml": wf(body) }))).toHaveLength(1);
+    }
+  });
+
+  it("fails closed, naming the file and job, on an environment built from an expression", () => {
+    const expr = "${{ inputs.target }}";
+    for (const env of [`environment: ${expr}`, `environment:\n      name: ${expr}\n      url: u`]) {
+      const body = `jobs:\n  deploy:\n    runs-on: x\n    ${env}\n`;
+      expect(() => load({ "w.yml": wf(body) })).toThrow(
+        /^w\.yml#deploy: environment "\$\{\{ inputs\.target \}\}" is an expression.*Name the environment literally/,
+      );
+    }
+    const callee = `on: workflow_call\njobs:\n  inner:\n    runs-on: x\n    environment: ${expr}\n`;
+    const caller = wf(`jobs:\n  call:\n    uses: ./.github/workflows/callee.yml\n`);
+    expect(() => load({ "w.yml": caller, "callee.yml": callee })).toThrow(/^callee\.yml#inner: /);
+  });
+
+  it("fails closed on a reusable workflow it cannot read (another repository, or a missing file)", () => {
+    const call = (uses: string) => wf(`jobs:\n  call:\n    uses: ${uses}\n`);
+    expect(() => load({ "w.yml": call("org/repo/.github/workflows/x.yml@v1") })).toThrow(
+      /^w\.yml#call: `uses: org\/repo\/\.github\/workflows\/x\.yml@v1` calls a reusable workflow this test cannot read offline/,
+    );
+    expect(() => load({ "w.yml": call("./.github/workflows/gone.yml") })).toThrow(
+      /^w\.yml#call: reusable workflow gone\.yml not found/,
+    );
+  });
+
+  it("names the file in a concurrency block without a string group", () => {
+    const top = wf(`concurrency:\n  cancel-in-progress: true\njobs:\n  a:\n    runs-on: x\n`);
+    expect(() => load({ "w.yml": top })).toThrow(/^w\.yml: concurrency without a string group/);
+    const inJob = wf(`jobs:\n  a:\n    runs-on: x\n    concurrency:\n      group: 7\n`);
+    expect(() => load({ "w.yml": inJob })).toThrow(
+      /^w\.yml#a: concurrency without a string group \(7\)/,
+    );
   });
 
   it("(c) refuses a literal group held by a production job and an unattended job in another workflow", () => {
