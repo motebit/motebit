@@ -50,19 +50,43 @@ import {
 
 const ROOT = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", ".."));
 
-/** A scheduled run, `daysAgo` days before 2026-11-15. */
-function run(daysAgo: number, conclusion: string | null, event = "schedule"): ConformanceRun {
-  const day = String(15 - daysAgo).padStart(2, "0");
+/** The injected clock: a few hours after the newest fixture run. */
+const NOW = new Date("2026-11-15T20:00:00Z");
+const HOUR = 3_600_000;
+
+/**
+ * A scheduled run on main, first attempt, created at 14:17 UTC `daysAgo` days
+ * before `base` (default: the fixed 2026-11-15).
+ */
+function run(
+  daysAgo: number,
+  conclusion: string | null,
+  over: Partial<ConformanceRun> = {},
+  base = new Date("2026-11-15T14:17:00Z"),
+): ConformanceRun {
   return {
+    attempt: 1,
     conclusion,
-    createdAt: `2026-11-${day}T14:17:00Z`,
-    event,
+    createdAt: new Date(base.getTime() - daysAgo * 24 * HOUR).toISOString().replace(".000Z", "Z"),
+    event: "schedule",
+    headBranch: "main",
+    status: conclusion === null ? "in_progress" : "completed",
     url: `https://github.example/runs/${1000 - daysAgo}`,
+    ...over,
   };
 }
 /** Newest first, as `gh run list` answers. */
 const history = (...conclusions: Array<string | null>): ConformanceRun[] =>
   conclusions.map((c, i) => run(i, c));
+/** The same, dated against the REAL clock (newest: one hour ago), for the program tests. */
+const liveHistory = (...conclusions: Array<string | null>): ConformanceRun[] => {
+  const base = new Date(Math.floor((Date.now() - HOUR) / 1000) * 1000);
+  return conclusions.map((c, i) => run(i, c, {}, base));
+};
+
+/** `readPromotionReadiness` on the injected clock. */
+const read = (opts: Parameters<typeof readPromotionReadiness>[0]) =>
+  readPromotionReadiness({ now: () => NOW, ...opts });
 
 const FIVE_GREEN = history("success", "success", "success", "success", "success");
 const ONE_RED = history("success", "success", "failure", "success", "success");
@@ -82,7 +106,7 @@ describe("readPromotionReadiness", () => {
   it("the required count is five", () => {
     expect(PROMOTION_REQUIRED_GREEN_RUNS).toBe(5);
     const asked: number[] = [];
-    readPromotionReadiness({
+    read({
       listRuns: (limit) => {
         asked.push(limit);
         return FIVE_GREEN;
@@ -92,12 +116,12 @@ describe("readPromotionReadiness", () => {
   });
 
   it("five green scheduled runs: ready, with the run window", () => {
-    const result = readPromotionReadiness({ listRuns: lister(FIVE_GREEN) });
+    const result = read({ listRuns: lister(FIVE_GREEN) });
     expect(result).toEqual({ ready: true, required: 5, runs: FIVE_GREEN });
   });
 
   it("gh unreadable (the lister throws): not ready, gh-unreadable", () => {
-    const result = readPromotionReadiness({
+    const result = read({
       listRuns: () => {
         throw GH_DOWN;
       },
@@ -117,7 +141,7 @@ describe("readPromotionReadiness", () => {
       "[]",
       [{ conclusion: "success" }],
     ]) {
-      const result = readPromotionReadiness({ listRuns: lister(answer) });
+      const result = read({ listRuns: lister(answer) });
       expect(result.ready).toBe(false);
       expect(result.ready === false && result.reason).toBe("gh-unreadable");
     }
@@ -126,7 +150,7 @@ describe("readPromotionReadiness", () => {
   it("a required count that is not a positive integer: not ready, the lister never asked", () => {
     for (const required of [0, -1, 2.5, Number.NaN]) {
       let asked = 0;
-      const result = readPromotionReadiness({
+      const result = read({
         required,
         listRuns: () => {
           asked += 1;
@@ -139,9 +163,9 @@ describe("readPromotionReadiness", () => {
   });
 
   it("thin history: not ready, thin-history", () => {
-    const result = readPromotionReadiness({ listRuns: lister(THIN) });
+    const result = read({ listRuns: lister(THIN) });
     expect(result).toEqual({ ready: false, reason: "thin-history", required: 5, runs: THIN });
-    expect(readPromotionReadiness({ listRuns: lister([]) })).toMatchObject({
+    expect(read({ listRuns: lister([]) })).toMatchObject({
       ready: false,
       reason: "thin-history",
     });
@@ -150,7 +174,7 @@ describe("readPromotionReadiness", () => {
   it("a failed, cancelled or pending run in the window: not ready, not-all-green, naming the runs", () => {
     for (const conclusion of ["failure", "cancelled", "timed_out", "skipped", null]) {
       const rows = history("success", conclusion, "success", "success", "success");
-      const result = readPromotionReadiness({ listRuns: lister(rows) });
+      const result = read({ listRuns: lister(rows) });
       expect(result).toEqual({
         ready: false,
         reason: "not-all-green",
@@ -162,19 +186,122 @@ describe("readPromotionReadiness", () => {
   });
 
   it("only scheduled runs count: a manual dispatch in the answer is thin history, never a green", () => {
-    const dispatch = run(0, "success", "workflow_dispatch");
-    const four = history("success", "success", "success", "success");
-    const result = readPromotionReadiness({ listRuns: () => [dispatch, ...four] });
+    const dispatch = run(0, "success", { event: "workflow_dispatch" });
+    const four = [1, 2, 3, 4].map((daysAgo) => run(daysAgo, "success"));
+    const result = read({ listRuns: () => [dispatch, ...four] });
     expect(result).toMatchObject({ ready: false, reason: "thin-history", runs: four });
   });
 
   it("only the newest `required` runs count: an older red beyond the window does not block", () => {
     const rows = history("success", "success", "success", "success", "success", "failure");
-    expect(readPromotionReadiness({ listRuns: () => rows })).toEqual({
+    expect(read({ listRuns: () => rows })).toEqual({
       ready: true,
       required: 5,
       runs: rows.slice(0, 5),
     });
+  });
+
+  it("a re-run attempt is not an unattended green: not ready, rerun-attempt, naming the run", () => {
+    // A scheduled run that failed and that someone re-ran to success.
+    const rows = history("success", "success", "success", "success", "success");
+    rows[1] = run(1, "success", { attempt: 2 });
+    expect(read({ listRuns: lister(rows) })).toEqual({
+      ready: false,
+      reason: "rerun-attempt",
+      required: 5,
+      runs: rows,
+      failing: [rows[1]],
+    });
+  });
+
+  it("a run on another branch does not count: not ready, wrong-branch", () => {
+    const rows = history("success", "success", "success", "success", "success");
+    rows[4] = run(4, "success", { headBranch: "release/probe" });
+    expect(read({ listRuns: lister(rows) })).toEqual({
+      ready: false,
+      reason: "wrong-branch",
+      required: 5,
+      runs: rows,
+      failing: [rows[4]],
+    });
+  });
+
+  it("a run that says success but is not completed does not count: not-all-green", () => {
+    const rows = history("success", "success", "success", "success", "success");
+    rows[0] = run(0, "success", { status: "in_progress" });
+    expect(read({ listRuns: lister(rows) })).toMatchObject({
+      ready: false,
+      reason: "not-all-green",
+      failing: [rows[0]],
+    });
+  });
+
+  it("a stale newest run: five old greens do not stand in for a stopped schedule (48 hours)", () => {
+    const newest = Date.parse(FIVE_GREEN[0]!.createdAt);
+    const at = (hours: number) => () => new Date(newest + hours * HOUR);
+    // Exactly 48 hours old still counts; past it does not.
+    expect(readPromotionReadiness({ listRuns: lister(FIVE_GREEN), now: at(48) }).ready).toBe(true);
+    const stale = readPromotionReadiness({ listRuns: lister(FIVE_GREEN), now: at(48.5) });
+    expect(stale).toMatchObject({ ready: false, reason: "stale-history", runs: FIVE_GREEN });
+    expect(stale.ready === false && stale.reason === "stale-history" && stale.newestAgeHours).toBe(
+      48.5,
+    );
+    expect(
+      readPromotionReadiness({ listRuns: lister(FIVE_GREEN), now: at(24 * 30) }),
+    ).toMatchObject({ ready: false, reason: "stale-history" });
+  });
+
+  it("the answer's order is not trusted: an oldest-first answer with a newer red row is not ready", () => {
+    // Six rows, oldest first; the red one is the NEWEST. Taking "the first
+    // five" as given would count five greens.
+    const newestFirst = history("failure", "success", "success", "success", "success", "success");
+    const oldestFirst = [...newestFirst].reverse();
+    expect(read({ listRuns: () => oldestFirst })).toEqual({
+      ready: false,
+      reason: "not-all-green",
+      required: 5,
+      runs: newestFirst.slice(0, 5),
+      failing: [newestFirst[0]],
+    });
+    // And a shuffled all-green answer is ready, with the window newest first.
+    const shuffled = [
+      FIVE_GREEN[3]!,
+      FIVE_GREEN[0]!,
+      FIVE_GREEN[4]!,
+      FIVE_GREEN[2]!,
+      FIVE_GREEN[1]!,
+    ];
+    expect(read({ listRuns: () => shuffled })).toEqual({
+      ready: true,
+      required: 5,
+      runs: FIVE_GREEN,
+    });
+  });
+
+  it("extra rows change nothing: more than `required`, other events, in any order", () => {
+    const older = [run(5, "failure"), run(6, "cancelled"), run(7, "success", { attempt: 3 })];
+    const dispatches = [
+      run(0, "failure", { event: "workflow_dispatch", createdAt: "2026-11-15T16:00:00Z" }),
+      run(1, "failure", { event: "push" }),
+    ];
+    expect(read({ listRuns: () => [...older, ...dispatches, ...FIVE_GREEN] })).toEqual({
+      ready: true,
+      required: 5,
+      runs: FIVE_GREEN,
+    });
+  });
+
+  it("a run without the new fields, or with a date that does not parse, is an unreadable answer", () => {
+    const { attempt: _a, ...noAttempt } = FIVE_GREEN[0]!;
+    const { headBranch: _b, ...noBranch } = FIVE_GREEN[0]!;
+    const { status: _s, ...noStatus } = FIVE_GREEN[0]!;
+    const badDate = { ...FIVE_GREEN[0]!, createdAt: "yesterday" };
+    for (const bad of [noAttempt, noBranch, noStatus, badDate]) {
+      expect(read({ listRuns: () => [bad, ...FIVE_GREEN.slice(1)] })).toMatchObject({
+        ready: false,
+        reason: "gh-unreadable",
+      });
+    }
   });
 });
 
@@ -193,6 +320,7 @@ function cli(env: Record<string, string | undefined>, rows: ConformanceRun[] | E
       if (rows instanceof Error) throw rows;
       return rows.slice(0, limit);
     },
+    now: () => NOW,
     log: (l) => out.push(l),
     error: (l) => err.push(l),
   });
@@ -224,8 +352,44 @@ describe("check-promotion-ready CLI", () => {
         "check-promotion-ready: 1/5 of the last scheduled runs did not succeed:",
         `  ${ONE_RED[2]!.createdAt}  failure  ${ONE_RED[2]!.url}`,
         "NOT READY.",
+        "Fix: Fix what the runs listed above caught, then wait for the daily schedule to turn the window green (manual dispatches do not count).",
       ].join("\n"),
     );
+  });
+
+  it("a re-run, another branch, a stale window: exit 1, each named with its repair", () => {
+    const rerun = history("success", "success", "success", "success", "success");
+    rerun[2] = run(2, "success", { attempt: 2 });
+    const a = cli({}, rerun);
+    expect(a.code).toBe(1);
+    expect(a.err).toBe(
+      [
+        "check-promotion-ready: 1/5 of the last scheduled runs are re-runs, not the scheduled attempt:",
+        `  ${rerun[2]!.createdAt}  attempt 2  ${rerun[2]!.url}`,
+        "NOT READY — a re-run someone started is not an unattended green.",
+        "Fix: Wait for the daily schedule to replace the re-run runs with first attempts (do not `gh run rerun` a scheduled run: the re-run never counts).",
+      ].join("\n"),
+    );
+
+    const branch = history("success", "success", "success", "success", "success");
+    branch[0] = run(0, "success", { headBranch: "probe" });
+    const b = cli({}, branch);
+    expect(b.code).toBe(1);
+    expect(b.err).toContain("1/5 of the last scheduled runs did not run on main:");
+    expect(b.err).toContain(`  ${branch[0]!.createdAt}  probe  ${branch[0]!.url}`);
+    expect(b.err).toContain("NOT READY — only scheduled runs on main count.");
+
+    // The newest fixture run is 2026-11-15T14:17Z; NOW is 20:00Z the same day.
+    const old = [3, 4, 5, 6, 7].map((daysAgo) => run(daysAgo, "success"));
+    const c = cli({}, old);
+    expect(c.code).toBe(1);
+    expect(c.err).toContain(
+      "check-promotion-ready: the newest scheduled run (2026-11-12T14:17:00Z) is 77 hours old; the limit is 48.",
+    );
+    expect(c.err).toContain(
+      "NOT READY — old greens do not stand in for a schedule that has stopped.",
+    );
+    expect(c.err).toContain("gh workflow enable");
   });
 
   it("a pending run reads `pending`: exit 1", () => {
@@ -241,6 +405,7 @@ describe("check-promotion-ready CLI", () => {
       [
         "check-promotion-ready: only 3/5 scheduled run(s) on record.",
         "NOT READY — thin history reads not-ready by design (new workflow / retention horizon / rename).",
+        "Fix: Wait for the daily schedule to put enough runs on record (manual dispatches do not count).",
       ].join("\n"),
     );
   });
@@ -252,6 +417,7 @@ describe("check-promotion-ready CLI", () => {
       [
         `check-promotion-ready: could not read ${CONFORMANCE_WORKFLOW} run history via gh (spawnSync gh ENOENT).`,
         "NOT READY — unknown history is not green history.",
+        "Fix: Install and authenticate gh (`gh auth status`) so the history can be read.",
       ].join("\n"),
     );
   });
@@ -304,6 +470,7 @@ function slate(env: Record<string, string | undefined>, rows: ConformanceRun[] |
     log: (l) => out.push(l),
     error: (l) => err.push(l),
     table: () => undefined,
+    now: () => NOW,
     listRuns: (limit) => {
       events.push(`readiness ${limit}`);
       if (rows instanceof Error) throw rows;
@@ -437,7 +604,7 @@ describe("deploy-archetype-slate: the promotion-readiness gate", () => {
     expect(red.readiness).toEqual(["readiness 5"]);
     expect(red.out).toContain("promotion readiness (dry run: reported, nothing refused):");
     expect(red.out).toContain("1/5 of the last scheduled runs did not succeed:");
-    expect(red.out).toContain("A real prod run (RUN=1 TARGET=prod) would REFUSE here");
+    expect(red.out).toContain("A real run (RUN=1) would REFUSE here");
     expect(red.out).toContain("[dry-run] flyctl deploy --config services/auditor/fly.toml");
 
     const down = await slate({ TARGET: "prod" }, GH_DOWN);
@@ -471,6 +638,165 @@ describe("deploy-archetype-slate: the promotion-readiness gate", () => {
     expect(r.readiness).toEqual([]);
     expect(r.flyctl).toEqual([]);
   });
+
+  it("prod real run, a re-run attempt or a stale window: refuses, naming the repair", async () => {
+    const rerun = history("success", "success", "success", "success", "success");
+    rerun[0] = run(0, "success", { attempt: 2 });
+    const a = await slate(PROD, rerun);
+    expectRefused(a);
+    expect(a.err).toContain(`${rerun[0]!.createdAt}  attempt 2  ${rerun[0]!.url}`);
+    expect(a.err).toContain("the re-run never counts");
+
+    const b = await slate(
+      PROD,
+      [3, 4, 5, 6, 7].map((daysAgo) => run(daysAgo, "success")),
+    );
+    expectRefused(b);
+    expect(b.err).toContain("is 77 hours old; the limit is 48.");
+    expect(b.err).toContain("gh workflow enable");
+  });
+
+  it("a flag-like or too-short override is not a reason: refuses, and says why", async () => {
+    for (const value of [
+      "1",
+      "true",
+      "TRUE",
+      "yes",
+      "y",
+      "ok",
+      "Override",
+      " override ",
+      "because",
+      "hotfix!!!",
+    ]) {
+      const r = await slate({ ...PROD, [PROMOTION_READINESS_OVERRIDE_ENV]: value }, ONE_RED);
+      expectRefused(r);
+      expect(r.err).toContain(
+        'PROMOTION_READINESS_OVERRIDE_REASON is set but is not a reason, so it overrides nothing: it needs at least 10 characters saying why, and "1" / "true" / "yes" / "y" / "ok" / "override" are not reasons.',
+      );
+      expect(r.err).not.toContain("OVERRIDDEN");
+    }
+    // Ten characters is a reason.
+    const ok = await slate({ ...PROD, [PROMOTION_READINESS_OVERRIDE_ENV]: "key repin." }, ONE_RED);
+    expect(ok.code).toBe(0);
+    expect(ok.err).toContain("reason (PROMOTION_READINESS_OVERRIDE_REASON): key repin.");
+  });
+
+  it("TARGET must be unset, staging or prod exactly: anything else refuses before anything runs", async () => {
+    for (const target of ["PROD", "Prod", "prod ", " prod", "production", "prd", "", "stg"]) {
+      for (const base of [LIVE, {}]) {
+        const r = await slate({ ...base, TARGET: target }, FIVE_GREEN);
+        expect(r.code).toBe(1);
+        expect(r.events).toEqual([]);
+        expect(r.out).toBe("");
+        expect(r.err).toContain(`REFUSED: TARGET=${JSON.stringify(target)} is not a target.`);
+        expect(r.err).toContain("TARGET=prod for production");
+      }
+    }
+    // The explicit staging spelling is staging.
+    const stg = await slate({ ...LIVE, TARGET: "staging" }, GH_DOWN);
+    expect(stg.code).toBe(0);
+    expect(stg.readiness).toEqual([]);
+    expect(
+      stg.flyctl.filter((e) => e.startsWith("flyctl deploy ")).every((e) => e.includes("-stg ")),
+    ).toBe(true);
+  });
+
+  it("staging apps joined to the PRODUCTION relay are gated as a promotion", async () => {
+    for (const relay of [
+      "https://relay.motebit.com",
+      "https://relay.motebit.com/",
+      "https://RELAY.motebit.com",
+      "https://relay.motebit.com.:443/",
+      "https://motebit-sync.fly.dev",
+    ]) {
+      // Not ready: refused, nothing touched, for unset and explicit staging alike.
+      for (const target of [{}, { TARGET: "staging" }]) {
+        const refused = await slate({ ...LIVE, ...target, RELAY_URL: relay }, ONE_RED);
+        expectRefused(refused);
+        expect(refused.out).toContain("is the PRODUCTION relay");
+      }
+      expectRefused(await slate({ ...LIVE, RELAY_URL: relay }, GH_DOWN));
+      // Ready: proceeds, with the readiness read first, deploying the -stg apps.
+      const ok = await slate({ ...LIVE, RELAY_URL: relay }, FIVE_GREEN);
+      expect(ok.code).toBe(0);
+      expect(ok.events[0]).toBe("readiness 5");
+      expect(ok.flyctl.some((e) => e.includes("-a motebit-auditor-stg "))).toBe(true);
+      // A dry run reports and refuses nothing.
+      const dry = await slate({ RELAY_URL: relay }, ONE_RED);
+      expect(dry.code).toBe(0);
+      expect(dry.readiness).toEqual(["readiness 5"]);
+      expect(dry.flyctl).toEqual([]);
+    }
+    // Any other relay on a staging run: no readiness read.
+    const other = await slate({ ...LIVE, RELAY_URL: "https://relay.example.test" }, GH_DOWN);
+    expect(other.code).toBe(0);
+    expect(other.readiness).toEqual([]);
+  });
+
+  it("a RELAY_URL that is not a URL refuses before anything runs", async () => {
+    const r = await slate({ ...LIVE, RELAY_URL: "relay.motebit.com" }, FIVE_GREEN);
+    expect(r.code).toBe(1);
+    expect(r.events).toEqual([]);
+    expect(r.err).toContain('REFUSED: RELAY_URL="relay.motebit.com" is not a URL.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// the clerk's relay key: one secret, the operator's pin or the fetched key
+// ---------------------------------------------------------------------------
+
+describe("deploy-archetype-slate: the clerk's staged secrets", () => {
+  /** The KEY=value pairs of the clerk's first `flyctl secrets set`. */
+  async function clerkSecrets(env: Record<string, string | undefined>): Promise<string[]> {
+    const r = await slate({ ...LIVE, ...env }, FIVE_GREEN);
+    expect(r.code).toBe(0);
+    const staged = r.flyctl.filter((e) =>
+      e.startsWith("flyctl secrets set --stage -a motebit-clerk-stg MOTEBIT_SYNC_URL="),
+    );
+    expect(staged).toHaveLength(1);
+    return staged[0]!.split(" ").slice(6);
+  }
+  const OPERATOR_PIN = "cd".repeat(32);
+
+  it("operator env unset: the clerk is staged the relay key fetched from the well-known descriptor", async () => {
+    const pairs = await clerkSecrets({});
+    expect(pairs.filter((p) => p.startsWith("MOTEBIT_RELAY_PUBLIC_KEY="))).toEqual([
+      `MOTEBIT_RELAY_PUBLIC_KEY=${RELAY_KEY}`,
+    ]);
+  });
+
+  it("operator env set: the clerk is staged the operator's pin; empty counts as unset", async () => {
+    const pinned = await clerkSecrets({ MOTEBIT_RELAY_PUBLIC_KEY: OPERATOR_PIN });
+    expect(pinned.filter((p) => p.startsWith("MOTEBIT_RELAY_PUBLIC_KEY="))).toEqual([
+      `MOTEBIT_RELAY_PUBLIC_KEY=${OPERATOR_PIN}`,
+    ]);
+    const empty = await clerkSecrets({ MOTEBIT_RELAY_PUBLIC_KEY: "" });
+    expect(empty.filter((p) => p.startsWith("MOTEBIT_RELAY_PUBLIC_KEY="))).toEqual([
+      `MOTEBIT_RELAY_PUBLIC_KEY=${RELAY_KEY}`,
+    ]);
+  });
+
+  it("the operator's pin reaches the clerk only: every other worker gets the fetched key", async () => {
+    const r = await slate({ ...LIVE, MOTEBIT_RELAY_PUBLIC_KEY: OPERATOR_PIN }, FIVE_GREEN);
+    const withKey = r.flyctl.filter((e) => e.includes(" MOTEBIT_RELAY_PUBLIC_KEY="));
+    expect(withKey).toHaveLength(SLATE.length);
+    for (const e of withKey) {
+      const expected = e.includes("-a motebit-clerk-stg ") ? OPERATOR_PIN : RELAY_KEY;
+      expect(e).toContain(` MOTEBIT_RELAY_PUBLIC_KEY=${expected}`);
+    }
+  });
+
+  it("the Solana RPC URL is passed through when set and not staged when unset", async () => {
+    expect((await clerkSecrets({})).filter((p) => p.startsWith("MOTEBIT_SOLANA_RPC_URL="))).toEqual(
+      [],
+    );
+    expect(
+      (await clerkSecrets({ MOTEBIT_SOLANA_RPC_URL: "https://rpc.example.test" })).filter((p) =>
+        p.startsWith("MOTEBIT_SOLANA_RPC_URL="),
+      ),
+    ).toEqual(["MOTEBIT_SOLANA_RPC_URL=https://rpc.example.test"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -498,7 +824,11 @@ describe("the scripts as programs (fake gh, fake flyctl)", () => {
       script("gh", `echo "$@" >> "${dir}/gh.calls"\necho "gh: not logged in" >&2\nexit 4`);
     } else if (ghAnswer !== "absent") {
       writeFileSync(join(dir, "gh.json"), JSON.stringify(ghAnswer));
-      script("gh", `echo "$@" >> "${dir}/gh.calls"\ncat "${dir}/gh.json"`);
+      // Records its argv and every GIT_* variable it was started with.
+      script(
+        "gh",
+        `echo "$@" >> "${dir}/gh.calls"\nenv | grep '^GIT_' >> "${dir}/gh-git-env.calls"\ncat "${dir}/gh.json"`,
+      );
     }
     script("flyctl", `echo "$@" >> "${dir}/flyctl.calls"`);
     const calls = (name: string): string[] =>
@@ -524,23 +854,35 @@ describe("the scripts as programs (fake gh, fake flyctl)", () => {
   }
 
   const GH_ARGV =
-    "run list --workflow archetype-conformance.yml --event schedule --limit 5 --json conclusion,createdAt,event,url";
+    "run list --repo motebit/motebit --workflow archetype-conformance.yml --event schedule --limit 5 --json attempt,conclusion,createdAt,event,headBranch,status,url";
   const PROD_LIVE = { ...LIVE, TARGET: "prod" };
+  // The programs read the real clock, so their histories are dated against it.
+  const LIVE_GREEN = liveHistory("success", "success", "success", "success", "success");
+  const LIVE_RED = liveHistory("success", "success", "failure", "success", "success");
+  const LIVE_THIN = liveHistory("success", "success", "success");
 
   it("check-promotion-ready: asks gh for the last 5 SCHEDULED conformance runs; exit 0 ready, 1 not ready / thin / unreadable", () => {
-    const green = sandbox(FIVE_GREEN);
+    const green = sandbox(LIVE_GREEN);
     const ready = green.runScript("check-promotion-ready.ts", {});
     expect(ready.code).toBe(0);
     expect(ready.out).toContain("READY — the slate's prod command is");
     expect(green.calls("gh")).toEqual([GH_ARGV]);
 
-    const red = sandbox(ONE_RED).runScript("check-promotion-ready.ts", {});
+    const red = sandbox(LIVE_RED).runScript("check-promotion-ready.ts", {});
     expect(red.code).toBe(1);
     expect(red.err).toContain("1/5 of the last scheduled runs did not succeed:");
 
-    const thin = sandbox(THIN).runScript("check-promotion-ready.ts", {});
+    const thin = sandbox(LIVE_THIN).runScript("check-promotion-ready.ts", {});
     expect(thin.code).toBe(1);
     expect(thin.err).toContain("only 3/5 scheduled run(s) on record.");
+
+    // Five greens dated 2020, against the real clock: stale.
+    const stale = sandbox(
+      FIVE_GREEN.map((r) => ({ ...r, createdAt: r.createdAt.replace("2026", "2020") })),
+    );
+    const old = stale.runScript("check-promotion-ready.ts", {});
+    expect(old.code).toBe(1);
+    expect(old.err).toContain("hours old; the limit is 48.");
 
     for (const broken of ["absent", "fails"] as const) {
       const r = sandbox(broken).runScript("check-promotion-ready.ts", {});
@@ -549,13 +891,78 @@ describe("the scripts as programs (fake gh, fake flyctl)", () => {
     }
   });
 
+  it("the gh read names the repository and inherits no GIT_* variable, whatever the environment says", () => {
+    const box = sandbox(LIVE_GREEN);
+    const r = box.runScript("check-promotion-ready.ts", {
+      GH_REPO: "someone/fork",
+      GIT_DIR: "/nonexistent/.git",
+      GIT_WORK_TREE: "/nonexistent",
+    });
+    expect(r.code).toBe(0);
+    expect(box.calls("gh")).toEqual([GH_ARGV]);
+    expect(box.calls("gh")[0]).toContain("--repo motebit/motebit ");
+    expect(box.calls("gh-git-env")).toEqual([""]);
+  });
+
   it("the slate's prod command, a red run on record: exit 1, flyctl never run", () => {
-    const box = sandbox(ONE_RED);
+    const box = sandbox(LIVE_RED);
     const r = box.runScript("deploy-archetype-slate.ts", PROD_LIVE);
     expect(r.code).toBe(1);
     expect(r.err).toContain("REFUSED: the archetype slate is not ready for production.");
-    expect(r.err).toContain(ONE_RED[2]!.url);
+    expect(r.err).toContain(LIVE_RED[2]!.url);
     expect(box.calls("gh")).toEqual([GH_ARGV]);
+    expect(box.calls("flyctl")).toEqual([]);
+  });
+
+  it("check-promotion-ready run WITHOUT the .ts extension still checks: exit 1 on a red history, 0 on green", () => {
+    const red = sandbox(LIVE_RED);
+    const r = red.runScript("check-promotion-ready", {});
+    expect(r.err).toContain("1/5 of the last scheduled runs did not succeed:");
+    expect(r.code).toBe(1);
+    expect(red.calls("gh")).toEqual([GH_ARGV]);
+
+    const green = sandbox(LIVE_GREEN);
+    const ok = green.runScript("check-promotion-ready", {});
+    expect(ok.out).toContain("READY — the slate's prod command is");
+    expect(ok.code).toBe(0);
+  });
+
+  it("the slate's prod command run WITHOUT the .ts extension still gates: exit 1, flyctl never run", () => {
+    const box = sandbox(LIVE_RED);
+    const r = box.runScript("deploy-archetype-slate", PROD_LIVE);
+    expect(r.err).toContain("REFUSED: the archetype slate is not ready for production.");
+    expect(r.code).toBe(1);
+    expect(box.calls("gh")).toEqual([GH_ARGV]);
+    expect(box.calls("flyctl")).toEqual([]);
+  });
+
+  it("an entry that cannot be resolved is never read as 'imported': both scripts exit non-zero and say why", () => {
+    for (const file of ["check-promotion-ready.ts", "deploy-archetype-slate.ts"]) {
+      const box = sandbox(LIVE_GREEN);
+      const r = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "-e",
+          `process.argv[1] = "/nonexistent/entry"; await import(${JSON.stringify(join(ROOT, "scripts", file))}); console.log("did nothing");`,
+        ],
+        { cwd: ROOT, encoding: "utf8", timeout: 60_000, env: { PATH: `${box.dir}:/bin:/usr/bin` } },
+      );
+      expect(r.stdout).not.toContain("did nothing");
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain("cannot tell whether this script is being run or imported");
+      expect(box.calls("flyctl")).toEqual([]);
+    }
+  });
+
+  it("the slate's prod command refuses a mistyped TARGET as a program: exit 1, nothing run", () => {
+    const box = sandbox(LIVE_GREEN);
+    const r = box.runScript("deploy-archetype-slate.ts", { ...LIVE, TARGET: "PROD" });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('REFUSED: TARGET="PROD" is not a target.');
+    expect(box.calls("gh")).toEqual([]);
     expect(box.calls("flyctl")).toEqual([]);
   });
 

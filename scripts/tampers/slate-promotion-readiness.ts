@@ -1,15 +1,23 @@
 /**
  * Tamper checks for the archetype slate's promotion-readiness gate:
- * scripts/check-promotion-ready.ts (the decision) and
- * scripts/deploy-archetype-slate.ts (the refusal, on a real prod run, before
- * the first flyctl call).
+ * scripts/check-promotion-ready.ts (the decision, the gh read, the
+ * program-entry test) and scripts/deploy-archetype-slate.ts (the refusal on a
+ * real production promotion, before the first flyctl call).
  *
- * Each entry removes one rule — the readiness read, the refusal, its place
- * before the first flyctl call, fail-closed on unreadable gh, the non-empty
- * override reason, the printed reason and overridden result, the fixed
- * window of five, the scheduled-only history, the staging and dry-run
- * carve-outs — and names the test in
- * scripts/__tests__/slate-promotion-readiness.test.ts that must go red.
+ * Each entry removes one rule and names the test in
+ * scripts/__tests__/slate-promotion-readiness.test.ts that must go red:
+ *   - the gate: the readiness read, the refusal, its place before the first
+ *     flyctl call, fail-closed on unreadable gh, the fixed window of five,
+ *     the staging and dry-run carve-outs;
+ *   - the override: a real reason (length, trimming), printed with the
+ *     result it overrode;
+ *   - the decision: thin history, not-green, completed, first attempt, main,
+ *     freshness, the window's own ordering, scheduled-only;
+ *   - the gh read: `--event schedule`, `--repo`, the scrubbed environment;
+ *   - the program entry: an extensionless or unresolvable entry is never a
+ *     silent no-op;
+ *   - the target: an exact TARGET, and the production relay as a promotion;
+ *   - the clerk's relay key: one secret, the operator's pin or the fetched key.
  *
  *   node scripts/tampers/slate-promotion-readiness.ts
  */
@@ -26,6 +34,7 @@ const TEST = "scripts/__tests__/slate-promotion-readiness.test.ts";
 
 const DECISION = (t: string) => `readPromotionReadiness ${t}`;
 const GATE = (t: string) => `deploy-archetype-slate: the promotion-readiness gate ${t}`;
+const CLERK = (t: string) => `deploy-archetype-slate: the clerk's staged secrets ${t}`;
 const PROGRAM = (t: string) => `the scripts as programs (fake gh, fake flyctl) ${t}`;
 
 const REFUSES_RED = GATE(
@@ -41,6 +50,34 @@ const FIVE = GATE(
   "prod real run reads exactly five runs: one fresh green above a red one refuses, whatever REQUIRED says",
 );
 const EMPTY_OVERRIDE = GATE("override empty or whitespace: refuses");
+const FLAG_OVERRIDE = GATE(
+  "a flag-like or too-short override is not a reason: refuses, and says why",
+);
+const TARGET_EXACT = GATE(
+  "TARGET must be unset, staging or prod exactly: anything else refuses before anything runs",
+);
+const PROD_RELAY = GATE("staging apps joined to the PRODUCTION relay are gated as a promotion");
+const STALE = DECISION(
+  "a stale newest run: five old greens do not stand in for a stopped schedule (48 hours)",
+);
+const GH_READ = PROGRAM(
+  "the gh read names the repository and inherits no GIT_* variable, whatever the environment says",
+);
+const NO_EXT_CHECK = PROGRAM(
+  "check-promotion-ready run WITHOUT the .ts extension still checks: exit 1 on a red history, 0 on green",
+);
+const NO_EXT_SLATE = PROGRAM(
+  "the slate's prod command run WITHOUT the .ts extension still gates: exit 1, flyctl never run",
+);
+const UNRESOLVED = PROGRAM(
+  "an entry that cannot be resolved is never read as 'imported': both scripts exit non-zero and say why",
+);
+const CLERK_FETCHED = CLERK(
+  "operator env unset: the clerk is staged the relay key fetched from the well-known descriptor",
+);
+const CLERK_PIN = CLERK(
+  "operator env set: the clerk is staged the operator's pin; empty counts as unset",
+);
 
 const edit = (file: string, from: string, to: string): TamperEdit => ({ file, from, to });
 const entry = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry => ({
@@ -51,17 +88,27 @@ const entry = (name: string, red: string, ...edits: TamperEdit[]): TamperEntry =
 });
 
 const GATE_CALL =
-  "  const refusal = gatePromotion(target, run, effects);\n  if (refusal !== null) return refusal;\n";
+  "  const refusal = gatePromotion(promotion, run, effects);\n  if (refusal !== null) return refusal;\n";
 const DEPLOY_CALL =
   '      sh("flyctl", ["deploy", "--config", svc.config(target), "-a", app, "--remote-only"]);\n';
+const ENTRY_CANDIDATES = "  for (const candidate of [entry, `${entry}.ts`]) {";
+const ENTRY_THROW = "  throw new Error(\n    `${fileURLToPath(moduleUrl)}: cannot tell whether";
+/** The original regression: no `.ts` candidate, and an unresolved entry reads as "imported". */
+const SILENT_FALSE: TamperEdit[] = [
+  edit(READY, ENTRY_CANDIDATES, "  for (const candidate of [entry]) {"),
+  edit(READY, ENTRY_THROW, `  if (true as boolean) return false;\n${ENTRY_THROW}`),
+];
+const CLERK_KEY =
+  '      MOTEBIT_RELAY_PUBLIC_KEY: setOr(ctx.env["MOTEBIT_RELAY_PUBLIC_KEY"], ctx.relayPublicKey),';
 
 const TAMPERS: TamperEntry[] = [
+  // --- the gate ---------------------------------------------------------
   entry(
     "the slate never reads readiness (the call is removed)",
     REFUSES_RED,
     edit(
       SLATE,
-      "  const refusal = gatePromotion(target, run, effects);\n",
+      "  const refusal = gatePromotion(promotion, run, effects);\n",
       "  const refusal = null as number | null;\n",
     ),
   ),
@@ -81,7 +128,7 @@ const TAMPERS: TamperEntry[] = [
     edit(
       SLATE,
       DEPLOY_CALL,
-      `${DEPLOY_CALL}      const refusal = gatePromotion(target, run, effects);\n      if (refusal !== null) return refusal;\n`,
+      `${DEPLOY_CALL}      const refusal = gatePromotion(promotion, run, effects);\n      if (refusal !== null) return refusal;\n`,
     ),
   ),
   entry(
@@ -98,41 +145,9 @@ const TAMPERS: TamperEntry[] = [
     REFUSES_GH,
     edit(
       SLATE,
-      '  if (overridden) {\n    effects.error("!!! PROMOTION READINESS OVERRIDDEN !!!");',
-      '  if (overridden || (readiness.reason as string) === "gh-unreadable") {\n    effects.error("!!! PROMOTION READINESS OVERRIDDEN !!!");',
+      '  if (overrideReason !== null) {\n    effects.error("!!! PROMOTION READINESS OVERRIDDEN !!!");',
+      '  if (overrideReason !== null || (readiness.reason as string) === "gh-unreadable") {\n    effects.error("!!! PROMOTION READINESS OVERRIDDEN !!!");',
     ),
-  ),
-  entry(
-    "an empty override is accepted (set is enough, no reason needed)",
-    EMPTY_OVERRIDE,
-    edit(
-      SLATE,
-      '  const overridden = overrideReason !== "";',
-      "  const overridden = effects.env[PROMOTION_READINESS_OVERRIDE_ENV] !== undefined;",
-    ),
-  ),
-  entry(
-    "a whitespace override is accepted (the reason is not trimmed)",
-    EMPTY_OVERRIDE,
-    edit(
-      SLATE,
-      '  const overrideReason = (effects.env[PROMOTION_READINESS_OVERRIDE_ENV] ?? "").trim();',
-      '  const overrideReason = effects.env[PROMOTION_READINESS_OVERRIDE_ENV] ?? "";',
-    ),
-  ),
-  entry(
-    "the override is silent about its reason",
-    GATE("override with a reason: proceeds, printing the reason"),
-    edit(
-      SLATE,
-      "    effects.error(`!!! reason (${PROMOTION_READINESS_OVERRIDE_ENV}): ${overrideReason}`);\n",
-      "",
-    ),
-  ),
-  entry(
-    "the override does not print the readiness result it overrode",
-    GATE("override with a reason: prints the readiness result it overrode"),
-    edit(SLATE, "    for (const line of lines) effects.error(`!!!   ${line}`);\n", ""),
   ),
   entry(
     "the required window is lowered from five to one",
@@ -153,6 +168,65 @@ const TAMPERS: TamperEntry[] = [
     ),
   ),
   entry(
+    "a run that is not a promotion reads readiness too (the carve-out is gone)",
+    GATE("staging real run: no readiness read, and it deploys the -stg apps"),
+    edit(
+      SLATE,
+      "  if (!promotion) return null;",
+      "  if ((false as boolean) && !promotion) return null;",
+    ),
+  ),
+  entry(
+    "a prod dry run refuses instead of reporting",
+    GATE("prod dry run: reports readiness, refuses nothing, runs no flyctl"),
+    edit(
+      SLATE,
+      '  if (!run) {\n    effects.log("promotion readiness (dry run',
+      '  if ((false as boolean) && !run) {\n    effects.log("promotion readiness (dry run',
+    ),
+  ),
+
+  // --- the override -----------------------------------------------------
+  entry(
+    "an empty override is accepted (no length rule at all)",
+    EMPTY_OVERRIDE,
+    edit(
+      SLATE,
+      "  if (reason.length < OVERRIDE_REASON_MIN_LENGTH) return null;",
+      "  if ((false as boolean) && reason.length < OVERRIDE_REASON_MIN_LENGTH) return null;",
+    ),
+  ),
+  entry(
+    "a too-short override is accepted (any non-empty value is a reason)",
+    FLAG_OVERRIDE,
+    edit(
+      SLATE,
+      "  if (reason.length < OVERRIDE_REASON_MIN_LENGTH) return null;",
+      "  if (reason.length < 1) return null;",
+    ),
+  ),
+  entry(
+    "the override value is not trimmed (padding counts toward the length)",
+    FLAG_OVERRIDE,
+    edit(SLATE, '  const reason = (raw ?? "").trim();', '  const reason = raw ?? "";'),
+  ),
+  entry(
+    "the override is silent about its reason",
+    GATE("override with a reason: proceeds, printing the reason"),
+    edit(
+      SLATE,
+      "    effects.error(`!!! reason (${PROMOTION_READINESS_OVERRIDE_ENV}): ${overrideReason}`);\n",
+      "",
+    ),
+  ),
+  entry(
+    "the override does not print the readiness result it overrode",
+    GATE("override with a reason: prints the readiness result it overrode"),
+    edit(SLATE, "    for (const line of lines) effects.error(`!!!   ${line}`);\n", ""),
+  ),
+
+  // --- the decision -----------------------------------------------------
+  entry(
     "the decision: thin history reads as ready",
     DECISION("thin history: not ready, thin-history"),
     edit(
@@ -168,21 +242,73 @@ const TAMPERS: TamperEntry[] = [
     ),
     edit(
       READY,
-      '  const failing = runs.filter((r) => r.conclusion !== "success");',
-      '  const failing = runs.filter((r) => r.conclusion === "failure");',
+      '  const notGreen = runs.filter((r) => r.status !== "completed" || r.conclusion !== "success");',
+      '  const notGreen = runs.filter((r) => r.conclusion === "failure");',
     ),
+  ),
+  entry(
+    "the decision: a run that has not completed counts when it says success",
+    DECISION("a run that says success but is not completed does not count: not-all-green"),
+    edit(
+      READY,
+      '  const notGreen = runs.filter((r) => r.status !== "completed" || r.conclusion !== "success");',
+      '  const notGreen = runs.filter((r) => r.conclusion !== "success");',
+    ),
+  ),
+  entry(
+    "the decision: a re-run attempt counts as an unattended green",
+    DECISION(
+      "a re-run attempt is not an unattended green: not ready, rerun-attempt, naming the run",
+    ),
+    edit(
+      READY,
+      "  const reruns = runs.filter((r) => r.attempt !== 1);",
+      "  const reruns = runs.filter((r) => r.attempt < 1);",
+    ),
+  ),
+  entry(
+    "the decision: a run on another branch counts",
+    DECISION("a run on another branch does not count: not ready, wrong-branch"),
+    edit(
+      READY,
+      "  const offBranch = runs.filter((r) => r.headBranch !== CONFORMANCE_BRANCH);",
+      '  const offBranch = runs.filter((r) => r.headBranch === "");',
+    ),
+  ),
+  entry(
+    "the decision: no freshness check (old greens stand forever)",
+    STALE,
+    edit(
+      READY,
+      "  if (newestAgeHours > PROMOTION_MAX_NEWEST_RUN_AGE_HOURS) {",
+      "  if ((false as boolean) && newestAgeHours > PROMOTION_MAX_NEWEST_RUN_AGE_HOURS) {",
+    ),
+  ),
+  entry(
+    "the decision: the freshness limit is raised from 48 hours to 480",
+    STALE,
+    edit(
+      READY,
+      "export const PROMOTION_MAX_NEWEST_RUN_AGE_HOURS = 48;",
+      "export const PROMOTION_MAX_NEWEST_RUN_AGE_HOURS = 480;",
+    ),
+  ),
+  entry(
+    "the decision: the answer's order is trusted (no sort by date)",
+    DECISION(
+      "the answer's order is not trusted: an oldest-first answer with a newer red row is not ready",
+    ),
+    edit(READY, "    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))\n", ""),
   ),
   entry(
     "the decision: manual dispatches count toward the window",
     DECISION(
       "only scheduled runs count: a manual dispatch in the answer is thin history, never a green",
     ),
-    edit(
-      READY,
-      '  const runs = listed.filter((r) => r.event === "schedule").slice(0, required);',
-      "  const runs = listed.slice(0, required);",
-    ),
+    edit(READY, '    .filter((r) => r.event === "schedule")\n', ""),
   ),
+
+  // --- the gh read ------------------------------------------------------
   entry(
     "the gh adapter no longer asks for scheduled runs only",
     PROGRAM(
@@ -191,21 +317,93 @@ const TAMPERS: TamperEntry[] = [
     edit(READY, '      "--event",\n      "schedule",\n', ""),
   ),
   entry(
-    "staging reads readiness too (the carve-out is gone)",
-    GATE("staging real run: no readiness read, and it deploys the -stg apps"),
+    "the gh read no longer names the repository (--repo dropped)",
+    GH_READ,
+    edit(READY, '      "--repo",\n      CONFORMANCE_REPO,\n', ""),
+  ),
+  entry(
+    "the gh read inherits the caller's GIT_* variables (no scrubbed env)",
+    GH_READ,
+    edit(READY, '    { encoding: "utf8", env: cleanEnv() },', '    { encoding: "utf8" },'),
+  ),
+
+  // --- the program entry --------------------------------------------------
+  entry(
+    "the silent false is back: check-promotion-ready without .ts does nothing and exits 0",
+    NO_EXT_CHECK,
+    ...SILENT_FALSE,
+  ),
+  entry(
+    "the silent false is back: the slate command without .ts does nothing and exits 0",
+    NO_EXT_SLATE,
+    ...SILENT_FALSE,
+  ),
+  entry(
+    "an entry that cannot be resolved reads as 'imported' (silent, exit 0)",
+    UNRESOLVED,
+    edit(READY, ENTRY_THROW, `  if (true as boolean) return false;\n${ENTRY_THROW}`),
+  ),
+
+  // --- the target ---------------------------------------------------------
+  entry(
+    "a mistyped TARGET falls through to staging again",
+    TARGET_EXACT,
     edit(
       SLATE,
-      '  if (target !== "prod") return null;',
-      '  if ((false as boolean) && target !== "prod") return null;',
+      '  if (rawTarget !== undefined && rawTarget !== "staging" && rawTarget !== "prod") {',
+      '  if ((false as boolean) && rawTarget !== undefined && rawTarget !== "staging" && rawTarget !== "prod") {',
     ),
   ),
   entry(
-    "a prod dry run refuses instead of reporting",
-    GATE("prod dry run: reports readiness, refuses nothing, runs no flyctl"),
+    "staging apps on the production relay are not a promotion",
+    PROD_RELAY,
     edit(
       SLATE,
-      '  if (!run) {\n    effects.log("promotion readiness (dry run',
-      '  if ((false as boolean) && !run) {\n    effects.log("promotion readiness (dry run',
+      '  const promotion = target === "prod" || prodRelay;',
+      '  const promotion = target === "prod";',
+    ),
+  ),
+  entry(
+    "the production relay's Fly host is not recognised",
+    PROD_RELAY,
+    edit(
+      SLATE,
+      'const PROD_RELAY_HOSTS: readonly string[] = ["relay.motebit.com", "motebit-sync.fly.dev"];',
+      'const PROD_RELAY_HOSTS: readonly string[] = ["relay.motebit.com"];',
+    ),
+  ),
+  entry(
+    "a trailing-dot spelling of the production relay slips past",
+    PROD_RELAY,
+    edit(
+      SLATE,
+      '    return new URL(relayUrl).hostname.toLowerCase().replace(/\\.$/, "");',
+      "    return new URL(relayUrl).hostname.toLowerCase();",
+    ),
+  ),
+
+  // --- the clerk's relay key ---------------------------------------------
+  entry(
+    "the clerk's relay key is the env pass-through again (the fetched key is never staged)",
+    CLERK_FETCHED,
+    edit(
+      SLATE,
+      CLERK_KEY,
+      '      MOTEBIT_RELAY_PUBLIC_KEY: ctx.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? "",',
+    ),
+  ),
+  entry(
+    "the operator's pin is ignored for the clerk",
+    CLERK_PIN,
+    edit(SLATE, CLERK_KEY, "      MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,"),
+  ),
+  entry(
+    "an empty operator pin counts as set (the clerk gets no key)",
+    CLERK_PIN,
+    edit(
+      SLATE,
+      '  return value !== undefined && value !== "" ? value : fallback;',
+      "  return value !== undefined ? value : fallback;",
     ),
   ),
 ];

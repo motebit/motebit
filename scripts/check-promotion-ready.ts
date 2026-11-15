@@ -4,16 +4,24 @@
  *
  * The promotion state IS the conformance workflow's own scheduled-run
  * history (docs/doctrine/agent-archetypes.md §4: accept-on-proof): ready
- * when the last N (default 5) SCHEDULED runs of archetype-conformance.yml
- * all concluded success. Manual dispatches don't count — the discipline is
- * that the slate passes unattended, on the daily cadence, not when someone
- * is watching.
+ * when the newest N (default 5) SCHEDULED runs of archetype-conformance.yml
+ * in motebit/motebit all concluded success, each one unattended:
+ *   - a manual dispatch does not count (only `schedule` runs are read);
+ *   - a re-run does not count (`attempt` must be 1: a human `gh run rerun`
+ *     of a failed scheduled run is not an unattended green);
+ *   - the run must be on `main`, completed, conclusion `success`;
+ *   - the newest run must be at most 48 hours old (a disabled schedule must
+ *     not leave old greens standing).
+ * The discipline is that the slate passes unattended, on the daily cadence,
+ * not when someone is watching.
  *
  * Fail-closed on thin history: fewer than N scheduled runs on record (new
  * workflow, 90-day retention horizon, a rename) reads NOT READY — never
  * "probably fine". Fail-closed on unreadable history: `gh` missing,
  * unauthenticated, erroring or answering with something that is not a run
- * list reads NOT READY.
+ * list reads NOT READY. The read names the repository (`--repo
+ * motebit/motebit`), so a fork remote, `gh repo set-default` or GH_REPO
+ * cannot point it at another repository's history.
  *
  * Two callers:
  *   1. this CLI, an operator pre-flight run by hand (N from REQUIRED);
@@ -22,7 +30,7 @@
  *      `readPromotionReadiness` with N fixed at
  *      PROMOTION_REQUIRED_GREEN_RUNS before its first flyctl call and
  *      refuses unless ready (or PROMOTION_READINESS_OVERRIDE_REASON carries
- *      a non-empty reason, printed with what it overrode).
+ *      a real reason, printed with what it overrode).
  *
  * What that does NOT cover — NOT a CI gate:
  *   - the slate's prod command is still a local flyctl deploy: no CI gate
@@ -33,7 +41,7 @@
  *     (deploy-<service>.yml) are gated on CI + staging + head of main + a
  *     reviewer and do NOT consult this conformance history;
  *   - a direct `flyctl deploy` consults nothing.
- * Requires `gh` authenticated.
+ * Requires `gh` authenticated. Run through tsx:
  *
  *   npx tsx scripts/check-promotion-ready.ts        # N=5
  *   REQUIRED=3 npx tsx scripts/check-promotion-ready.ts
@@ -43,8 +51,16 @@ import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { cleanEnv } from "./lib/differential-tree.ts";
+
 /** The workflow whose scheduled-run history is the promotion state. */
 export const CONFORMANCE_WORKFLOW = "archetype-conformance.yml";
+
+/** The repository whose history is read, whatever the checkout's remotes or gh defaults say. */
+export const CONFORMANCE_REPO = "motebit/motebit";
+
+/** The branch a counted run must have run on. */
+export const CONFORMANCE_BRANCH = "main";
 
 /**
  * Consecutive green scheduled runs promotion needs. The slate's prod command
@@ -52,16 +68,22 @@ export const CONFORMANCE_WORKFLOW = "archetype-conformance.yml";
  */
 export const PROMOTION_REQUIRED_GREEN_RUNS = 5;
 
+/** The newest counted run may be at most this old: the schedule is daily. */
+export const PROMOTION_MAX_NEWEST_RUN_AGE_HOURS = 48;
+
 export interface ConformanceRun {
+  attempt: number;
   conclusion: string | null;
   createdAt: string;
   event: string;
+  headBranch: string;
+  status: string;
   url: string;
 }
 
 /**
- * Lists the newest `limit` SCHEDULED runs of the conformance workflow, newest
- * first. Throws when the history cannot be read.
+ * Lists up to `limit` SCHEDULED runs of the conformance workflow. Throws when
+ * the history cannot be read. The order of the answer is not trusted.
  */
 export type ListRuns = (limit: number) => unknown;
 
@@ -71,11 +93,20 @@ export type PromotionReadiness =
   | { ready: false; reason: "thin-history"; required: number; runs: ConformanceRun[] }
   | {
       ready: false;
-      reason: "not-all-green";
+      reason: "not-all-green" | "rerun-attempt" | "wrong-branch";
       required: number;
       runs: ConformanceRun[];
       failing: ConformanceRun[];
+    }
+  | {
+      ready: false;
+      reason: "stale-history";
+      required: number;
+      runs: ConformanceRun[];
+      newestAgeHours: number;
     };
+
+export type NotReadyReason = Exclude<PromotionReadiness, { ready: true }>["reason"];
 
 /** The default `listRuns`: `gh run list` for the conformance workflow's scheduled runs. */
 export function listScheduledRunsViaGh(limit: number): unknown {
@@ -84,6 +115,8 @@ export function listScheduledRunsViaGh(limit: number): unknown {
     [
       "run",
       "list",
+      "--repo",
+      CONFORMANCE_REPO,
       "--workflow",
       CONFORMANCE_WORKFLOW,
       "--event",
@@ -91,9 +124,9 @@ export function listScheduledRunsViaGh(limit: number): unknown {
       "--limit",
       String(limit),
       "--json",
-      "conclusion,createdAt,event,url",
+      "attempt,conclusion,createdAt,event,headBranch,status,url",
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: cleanEnv() },
   );
   return JSON.parse(raw) as unknown;
 }
@@ -102,26 +135,34 @@ function isRun(row: unknown): row is ConformanceRun {
   if (typeof row !== "object" || row === null) return false;
   const r = row as Record<string, unknown>;
   return (
+    typeof r["attempt"] === "number" &&
     (r["conclusion"] === null || typeof r["conclusion"] === "string") &&
     typeof r["createdAt"] === "string" &&
+    !Number.isNaN(Date.parse(r["createdAt"])) &&
     typeof r["event"] === "string" &&
+    typeof r["headBranch"] === "string" &&
+    typeof r["status"] === "string" &&
     typeof r["url"] === "string"
   );
 }
 
 /**
- * The readiness decision. Pure given `listRuns`: ready only when the newest
- * `required` scheduled runs exist and every one concluded `success`.
+ * The readiness decision. Pure given `listRuns` and `now`: ready only when
+ * the newest `required` scheduled runs exist, every one is a first attempt
+ * on main that completed with `success`, and the newest is fresh.
  * Everything else — unreadable history, a malformed answer, a `required`
  * that is not a positive integer, thin history, a run that failed or has not
- * concluded — is not ready, with the reason.
+ * concluded, a re-run, another branch, a stale window — is not ready, with
+ * the reason.
  */
 export function readPromotionReadiness(opts: {
   required?: number;
   listRuns?: ListRuns;
+  now?: () => Date;
 }): PromotionReadiness {
   const required = opts.required ?? PROMOTION_REQUIRED_GREEN_RUNS;
   const listRuns = opts.listRuns ?? listScheduledRunsViaGh;
+  const now = opts.now ?? (() => new Date());
   const unreadable = (detail: string): PromotionReadiness => ({
     ready: false,
     reason: "gh-unreadable",
@@ -140,15 +181,36 @@ export function readPromotionReadiness(opts: {
     return unreadable(err instanceof Error ? err.message : String(err));
   }
   if (!Array.isArray(listed) || !listed.every(isRun)) {
-    return unreadable("the answer is not a list of runs (conclusion, createdAt, event, url)");
+    return unreadable(
+      "the answer is not a list of runs (attempt, conclusion, createdAt, event, headBranch, status, url)",
+    );
   }
-  // Only scheduled runs count, and only the newest `required` of them: a
-  // lister that answers with more, or with other events, changes nothing.
-  const runs = listed.filter((r) => r.event === "schedule").slice(0, required);
+  // Only scheduled runs count, and only the newest `required` of them BY
+  // THEIR OWN DATES: the answer's order is not trusted, and a lister that
+  // answers with more rows, or with other events, changes nothing.
+  const runs = listed
+    .filter((r) => r.event === "schedule")
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+    .slice(0, required);
 
   if (runs.length < required) return { ready: false, reason: "thin-history", required, runs };
-  const failing = runs.filter((r) => r.conclusion !== "success");
-  if (failing.length > 0) return { ready: false, reason: "not-all-green", required, runs, failing };
+
+  const notGreen = runs.filter((r) => r.status !== "completed" || r.conclusion !== "success");
+  if (notGreen.length > 0) {
+    return { ready: false, reason: "not-all-green", required, runs, failing: notGreen };
+  }
+  const reruns = runs.filter((r) => r.attempt !== 1);
+  if (reruns.length > 0) {
+    return { ready: false, reason: "rerun-attempt", required, runs, failing: reruns };
+  }
+  const offBranch = runs.filter((r) => r.headBranch !== CONFORMANCE_BRANCH);
+  if (offBranch.length > 0) {
+    return { ready: false, reason: "wrong-branch", required, runs, failing: offBranch };
+  }
+  const newestAgeHours = (now().getTime() - Date.parse(runs[0]!.createdAt)) / 3_600_000;
+  if (newestAgeHours > PROMOTION_MAX_NEWEST_RUN_AGE_HOURS) {
+    return { ready: false, reason: "stale-history", required, runs, newestAgeHours };
+  }
   return { ready: true, required, runs };
 }
 
@@ -177,12 +239,48 @@ export function describePromotionReadiness(result: PromotionReadiness): string[]
         ...result.failing.map((r) => `  ${r.createdAt}  ${r.conclusion ?? "pending"}  ${r.url}`),
         "NOT READY.",
       ];
+    case "rerun-attempt":
+      return [
+        `check-promotion-ready: ${result.failing.length}/${result.runs.length} of the last scheduled runs are re-runs, not the scheduled attempt:`,
+        ...result.failing.map((r) => `  ${r.createdAt}  attempt ${r.attempt}  ${r.url}`),
+        "NOT READY — a re-run someone started is not an unattended green.",
+      ];
+    case "wrong-branch":
+      return [
+        `check-promotion-ready: ${result.failing.length}/${result.runs.length} of the last scheduled runs did not run on ${CONFORMANCE_BRANCH}:`,
+        ...result.failing.map((r) => `  ${r.createdAt}  ${r.headBranch}  ${r.url}`),
+        `NOT READY — only scheduled runs on ${CONFORMANCE_BRANCH} count.`,
+      ];
+    case "stale-history":
+      return [
+        `check-promotion-ready: the newest scheduled run (${result.runs[0]!.createdAt}) is ${Math.floor(result.newestAgeHours)} hours old; the limit is ${PROMOTION_MAX_NEWEST_RUN_AGE_HOURS}.`,
+        "NOT READY — old greens do not stand in for a schedule that has stopped.",
+      ];
+  }
+}
+
+/** What to do about a not-ready result: one clause, no trailing period. */
+export function promotionRepair(reason: NotReadyReason): string {
+  switch (reason) {
+    case "gh-unreadable":
+      return "Install and authenticate gh (`gh auth status`) so the history can be read";
+    case "thin-history":
+      return "Wait for the daily schedule to put enough runs on record (manual dispatches do not count)";
+    case "not-all-green":
+      return "Fix what the runs listed above caught, then wait for the daily schedule to turn the window green (manual dispatches do not count)";
+    case "rerun-attempt":
+      return "Wait for the daily schedule to replace the re-run runs with first attempts (do not `gh run rerun` a scheduled run: the re-run never counts)";
+    case "wrong-branch":
+      return `Wait for the daily schedule to put enough ${CONFORMANCE_BRANCH} runs on record`;
+    case "stale-history":
+      return `Find why the schedule stopped (\`gh workflow view ${CONFORMANCE_WORKFLOW} --repo ${CONFORMANCE_REPO}\`; a disabled workflow is re-enabled with \`gh workflow enable\`), then wait for the daily schedule to produce a fresh window`;
   }
 }
 
 export interface CheckPromotionReadyIo {
   env: Record<string, string | undefined>;
   listRuns?: ListRuns;
+  now?: () => Date;
   log?: (line: string) => void;
   error?: (line: string) => void;
 }
@@ -192,9 +290,10 @@ export function runCheckPromotionReady(io: CheckPromotionReadyIo): number {
   const log = io.log ?? ((line: string) => console.log(line));
   const error = io.error ?? ((line: string) => console.error(line));
   const required = Number(io.env["REQUIRED"] ?? String(PROMOTION_REQUIRED_GREEN_RUNS));
-  const result = readPromotionReadiness({ required, listRuns: io.listRuns });
+  const result = readPromotionReadiness({ required, listRuns: io.listRuns, now: io.now });
   if (!result.ready) {
     for (const line of describePromotionReadiness(result)) error(line);
+    error(`Fix: ${promotionRepair(result.reason)}.`);
     return 1;
   }
   for (const line of describePromotionReadiness(result)) log(line);
@@ -204,17 +303,36 @@ export function runCheckPromotionReady(io: CheckPromotionReadyIo): number {
   return 0;
 }
 
-/** True when this file is the program being run, not a module the slate script or a test imported. */
-function isMain(): boolean {
+/**
+ * Is the module at `moduleUrl` the program being run (true), or a module
+ * something else imported (false)?
+ *
+ * `process.argv[1]` is resolved the way tsx resolves an entry: as given, then
+ * with `.ts` (`tsx scripts/check-promotion-ready`, no extension, is a real
+ * invocation). When it cannot be resolved at all, the answer is unknown, and
+ * unknown is never "imported": a readiness check that exits 0 without
+ * checking is fail-open for any `check && deploy` chain. It throws, so the
+ * process exits non-zero and says why.
+ */
+export function isProgramEntry(moduleUrl: string): boolean {
   const entry = process.argv[1];
+  // No entry at all: `node -e`, a REPL. The module was imported.
   if (entry === undefined) return false;
-  try {
-    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
+  const self = realpathSync(fileURLToPath(moduleUrl));
+  for (const candidate of [entry, `${entry}.ts`]) {
+    let resolved: string;
+    try {
+      resolved = realpathSync(candidate);
+    } catch {
+      continue;
+    }
+    return resolved === self;
   }
+  throw new Error(
+    `${fileURLToPath(moduleUrl)}: cannot tell whether this script is being run or imported (the entry "${entry}" does not resolve to a file). Refusing to do nothing and exit 0. Run it by its path, e.g. npx tsx scripts/check-promotion-ready.ts`,
+  );
 }
 
-if (isMain()) {
+if (isProgramEntry(import.meta.url)) {
   process.exit(runCheckPromotionReady({ env: process.env }));
 }

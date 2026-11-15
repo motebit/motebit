@@ -15,20 +15,31 @@
  *   STAGING:   RUN=1 npx tsx scripts/deploy-archetype-slate.ts
  *   PROD:      RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts
  *
- * PROMOTION READINESS (docs/doctrine/agent-archetypes.md §4). A real prod run
- * (RUN=1 and TARGET=prod) reads the conformance workflow's scheduled-run
+ * TARGET is unset, `staging` or `prod`, exactly. Anything else (`PROD`,
+ * `prod ` with a space, an empty value) is refused before anything runs: it
+ * used to deploy STAGING silently.
+ *
+ * PROMOTION READINESS (docs/doctrine/agent-archetypes.md §4). A real
+ * production promotion reads the conformance workflow's scheduled-run
  * history (scripts/check-promotion-ready.ts, `readPromotionReadiness`: the
- * last 5 scheduled runs of archetype-conformance.yml all concluded success)
- * BEFORE its first flyctl call, and REFUSES (exit 1, nothing deployed, no
- * secret staged) unless ready. Unreadable history (gh missing,
- * unauthenticated, erroring) refuses. A prod dry run reports the readiness
- * and refuses nothing. Staging never reads it.
+ * newest 5 scheduled runs of archetype-conformance.yml in motebit/motebit,
+ * each a first attempt on main that concluded success, the newest at most 48
+ * hours old) BEFORE its first flyctl call, and REFUSES (exit 1, nothing
+ * deployed, no secret staged) unless ready. Unreadable history (gh missing,
+ * unauthenticated, erroring) refuses. A run is a production promotion when
+ * TARGET=prod, OR when the relay it resolves to is the production relay
+ * (relay.motebit.com / motebit-sync.fly.dev) even though the apps are the
+ * `-stg` ones: joining staging apps to the production relay is gated the
+ * same way. A dry run of either reports the readiness and refuses nothing.
+ * A staging run against any other relay never reads it.
  *
  *   OVERRIDE:  PROMOTION_READINESS_OVERRIDE_REASON="<why>" RUN=1 TARGET=prod …
- *              The only bypass. The value must be a non-empty reason (empty
- *              or whitespace does not override); the run prints the reason
- *              and the readiness result it overrode, then proceeds. Nothing
- *              records it beyond this run's output.
+ *              The only bypass. The value must be a reason someone wrote: at
+ *              least 10 characters after trimming, and not `1`, `true`,
+ *              `yes`, `y`, `ok` or `override`. Anything less does not
+ *              override. The run prints the reason and the readiness result
+ *              it overrode, then proceeds. Nothing records it beyond this
+ *              run's output.
  *
  * What this does NOT cover: this is still a local flyctl deploy, so no CI
  * gate and no GitHub environment reviewer applies to it; a direct
@@ -40,8 +51,19 @@
  *   MOTEBIT_API_TOKEN        the operator's token — used by THIS script's discover call only;
  *                            never handed to a worker (workers self-authenticate)
  *   ANTHROPIC_API_KEY        research only (operator-funded inference)
+ *   MOTEBIT_SOLANA_RPC_URL   clerk only: the sovereign rail. The clerk exits at boot without
+ *                            MOTEBIT_SOLANA_RPC_URL, MOTEBIT_RELAY_PUBLIC_KEY and
+ *                            MOTEBIT_SYNC_URL (services/clerk/src/index.ts). This script
+ *                            stages the last two itself; it passes this one through and
+ *                            does NOT check that it is set.
  * Optional:
  *   RELAY_URL                override the target relay base URL
+ *   MOTEBIT_RELAY_PUBLIC_KEY clerk only: the operator's own pin of the relay key. When set
+ *                            (non-empty) it is what the clerk gets; otherwise the clerk
+ *                            gets the key fetched from the relay's well-known descriptor,
+ *                            like every other worker.
+ *   MOTEBIT_CLERK_CEILING_MICRO  clerk only (default 1000000)
+ *   BRAVE_API_KEY            web-search only
  *
  * Economics posture (agent-archetypes.md §5): the multi-hop settlement arc
  * landed (Inc 1/2), so atoms are now PRICED cost-indexed (web-search $0.003,
@@ -54,12 +76,13 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import {
+  PROMOTION_MAX_NEWEST_RUN_AGE_HOURS,
   PROMOTION_REQUIRED_GREEN_RUNS,
   describePromotionReadiness,
+  isProgramEntry,
+  promotionRepair,
   readPromotionReadiness,
   type ListRuns,
 } from "./check-promotion-ready.ts";
@@ -94,11 +117,50 @@ interface SecretContext {
 
 const REGION = "sjc";
 
+/** `value` when it is set and non-empty, else `fallback`. */
+function setOr(value: string | undefined, fallback: string): string {
+  return value !== undefined && value !== "" ? value : fallback;
+}
+
+const STAGING_RELAY_URL = "https://motebit-sync-stg.fly.dev";
+const PROD_RELAY_URL = "https://relay.motebit.com";
 /**
- * The one bypass of the promotion-readiness refusal: a non-empty human
- * reason. Empty or whitespace does not override.
+ * Hosts that ARE the production relay: its public name and its Fly app
+ * (docs/ops/RUNBOOK.md). A run that resolves to one of them is a production
+ * promotion whatever TARGET says.
+ */
+const PROD_RELAY_HOSTS: readonly string[] = ["relay.motebit.com", "motebit-sync.fly.dev"];
+
+/** The host a relay URL names, lower-cased with no trailing dot; null when it is not a URL. */
+function relayHost(relayUrl: string): string | null {
+  try {
+    return new URL(relayUrl).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The one bypass of the promotion-readiness refusal: a reason someone wrote.
+ * See `overrideReasonOf` for what counts.
  */
 export const PROMOTION_READINESS_OVERRIDE_ENV = "PROMOTION_READINESS_OVERRIDE_REASON";
+
+/** A reason shorter than this (trimmed) is not a reason. */
+const OVERRIDE_REASON_MIN_LENGTH = 10;
+/**
+ * Flag-shaped values, named so the refusal can say them. Every one is also
+ * shorter than the minimum length, which is the rule that rejects them.
+ */
+const OVERRIDE_NOT_A_REASON: readonly string[] = ["1", "true", "yes", "y", "ok", "override"];
+
+/** The override reason when the value is one, else null (no override). */
+function overrideReasonOf(raw: string | undefined): string | null {
+  const reason = (raw ?? "").trim();
+  if (reason.length < OVERRIDE_REASON_MIN_LENGTH) return null;
+  if (OVERRIDE_NOT_A_REASON.includes(reason.toLowerCase())) return null;
+  return reason;
+}
 
 /**
  * Everything the ceremony does to the world, as parameters, so a test can
@@ -115,6 +177,8 @@ export interface SlateEffects {
   table: (rows: unknown[]) => void;
   /** Lists scheduled conformance runs for the readiness check (default: `gh run list`). */
   listRuns?: ListRuns;
+  /** The clock the readiness check measures the newest run's age against (default: the real one). */
+  now?: () => Date;
 }
 
 // The slate — parsed by check-archetype-slate; order is the deploy order
@@ -260,7 +324,14 @@ export const SLATE: SlateService[] = [
       // tasks by verifying the relay-signed dispatch token against this pin.
       // Until 2026-09-15 this map handed the OPERATOR's master token to every
       // worker twice — as MOTEBIT_API_TOKEN and again as MOTEBIT_AUTH_TOKEN.
-      MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,
+      //
+      // ONE key, and it doubles as the clerk's pinned P2P treasury root: the
+      // operator's own pin from the deploy environment when set (non-empty),
+      // else the key fetched from the relay's well-known descriptor. Until
+      // this was collapsed the map set the key twice and the env pass-through
+      // (defaulting to "") won, so the fetched key was NEVER staged for the
+      // clerk and, without the operator variable, a fresh clerk exited at boot.
+      MOTEBIT_RELAY_PUBLIC_KEY: setOr(ctx.env["MOTEBIT_RELAY_PUBLIC_KEY"], ctx.relayPublicKey),
       MOTEBIT_UNIT_COST: "0.01",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
       // DRY-RUN-FIRST: the whole metered spine runs at hard-zero (no broadcast,
@@ -268,10 +339,9 @@ export const SLATE: SlateService[] = [
       // ratified operator step — set DRY_RUN=0 out of band, never here.
       DRY_RUN: "1",
       MOTEBIT_CLERK_CEILING_MICRO: ctx.env["MOTEBIT_CLERK_CEILING_MICRO"] ?? "1000000",
-      // The sovereign rail (own funds) + the PINNED relay treasury root —
-      // passed through from the deploy environment (never hardcoded).
+      // The sovereign rail (own funds) — passed through from the deploy
+      // environment (never hardcoded). Not set ⇒ not staged.
       MOTEBIT_SOLANA_RPC_URL: ctx.env["MOTEBIT_SOLANA_RPC_URL"] ?? "",
-      MOTEBIT_RELAY_PUBLIC_KEY: ctx.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? "",
     }),
   },
 ];
@@ -330,27 +400,34 @@ const RECHECK = "npx tsx scripts/check-promotion-ready.ts";
  * one place the slate's promotion happens. Returns the exit code to refuse
  * with, or null to go on.
  *
- *   staging            → no readiness read at all
- *   prod, dry run      → reads and reports; refuses nothing
- *   prod, real run     → refuses unless ready, or unless the override env
- *                        carries a non-empty reason (printed with the result
- *                        it overrode)
+ *   not a promotion    → no readiness read at all
+ *   promotion, dry run → reads and reports; refuses nothing
+ *   promotion, real    → refuses unless ready, or unless the override env
+ *                        carries a real reason (printed with the result it
+ *                        overrode)
+ *
+ * `promotion` is: TARGET=prod, or a relay that is the production relay.
  */
-function gatePromotion(target: Target, run: boolean, effects: SlateEffects): number | null {
-  if (target !== "prod") return null;
+function gatePromotion(promotion: boolean, run: boolean, effects: SlateEffects): number | null {
+  if (!promotion) return null;
 
   const readiness = readPromotionReadiness({
     required: PROMOTION_REQUIRED_GREEN_RUNS,
     listRuns: effects.listRuns,
+    now: effects.now,
   });
   const lines = describePromotionReadiness(readiness);
-  const overrideReason = (effects.env[PROMOTION_READINESS_OVERRIDE_ENV] ?? "").trim();
-  const overridden = overrideReason !== "";
+  const overrideRaw = effects.env[PROMOTION_READINESS_OVERRIDE_ENV];
+  const overrideReason = overrideReasonOf(overrideRaw);
+  const notAReason =
+    overrideRaw !== undefined && overrideReason === null
+      ? `${PROMOTION_READINESS_OVERRIDE_ENV} is set but is not a reason, so it overrides nothing: it needs at least ${OVERRIDE_REASON_MIN_LENGTH} characters saying why, and ${OVERRIDE_NOT_A_REASON.map((v) => `"${v}"`).join(" / ")} are not reasons.`
+      : null;
 
   if (readiness.ready) {
     effects.log("promotion readiness:");
     for (const line of lines) effects.log(`  ${line}`);
-    if (overridden) {
+    if (overrideReason !== null) {
       effects.log(
         `  ${PROMOTION_READINESS_OVERRIDE_ENV} is set (${overrideReason}) but overrides nothing: readiness is green.`,
       );
@@ -361,15 +438,16 @@ function gatePromotion(target: Target, run: boolean, effects: SlateEffects): num
   if (!run) {
     effects.log("promotion readiness (dry run: reported, nothing refused):");
     for (const line of lines) effects.log(`  ${line}`);
+    if (notAReason !== null) effects.log(`  ${notAReason}`);
     effects.log(
-      overridden
-        ? `  A real prod run would PROCEED on ${PROMOTION_READINESS_OVERRIDE_ENV} (${overrideReason}), overriding the result above.`
-        : `  A real prod run (RUN=1 TARGET=prod) would REFUSE here, before any flyctl call. Re-check with: ${RECHECK}`,
+      overrideReason !== null
+        ? `  A real run would PROCEED on ${PROMOTION_READINESS_OVERRIDE_ENV} (${overrideReason}), overriding the result above.`
+        : `  A real run (RUN=1) would REFUSE here, before any flyctl call. Re-check with: ${RECHECK}`,
     );
     return null;
   }
 
-  if (overridden) {
+  if (overrideReason !== null) {
     effects.error("!!! PROMOTION READINESS OVERRIDDEN !!!");
     effects.error(`!!! reason (${PROMOTION_READINESS_OVERRIDE_ENV}): ${overrideReason}`);
     effects.error("!!! the readiness result this run overrides:");
@@ -380,15 +458,11 @@ function gatePromotion(target: Target, run: boolean, effects: SlateEffects): num
 
   effects.error("REFUSED: the archetype slate is not ready for production. Nothing was deployed.");
   for (const line of lines) effects.error(`  ${line}`);
+  if (notAReason !== null) effects.error(`  ${notAReason}`);
   effects.error(
-    `Fix: promotion needs the last ${PROMOTION_REQUIRED_GREEN_RUNS} SCHEDULED runs of archetype-conformance.yml all green (docs/doctrine/agent-archetypes.md §4). ` +
-      (readiness.reason === "gh-unreadable"
-        ? "Install and authenticate gh (`gh auth status`) so the history can be read"
-        : readiness.reason === "thin-history"
-          ? "Wait for the daily schedule to put enough runs on record (manual dispatches do not count)"
-          : "Fix what the runs listed above caught, then wait for the daily schedule to turn the window green (manual dispatches do not count)") +
-      `, re-check with: ${RECHECK}, then re-run this command. ` +
-      `Emergency only: ${PROMOTION_READINESS_OVERRIDE_ENV}="<why>" proceeds and prints the reason with the result it overrode; an empty value does not.`,
+    `Fix: promotion needs the newest ${PROMOTION_REQUIRED_GREEN_RUNS} SCHEDULED runs of archetype-conformance.yml all green, each a first attempt on main, the newest at most ${PROMOTION_MAX_NEWEST_RUN_AGE_HOURS} hours old (docs/doctrine/agent-archetypes.md §4). ` +
+      `${promotionRepair(readiness.reason)}, re-check with: ${RECHECK}, then re-run this command. ` +
+      `Emergency only: ${PROMOTION_READINESS_OVERRIDE_ENV}="<why, at least ${OVERRIDE_REASON_MIN_LENGTH} characters>" proceeds and prints the reason with the result it overrode; an empty or flag-like value (${OVERRIDE_NOT_A_REASON.join(", ")}) does not.`,
   );
   return 1;
 }
@@ -396,11 +470,28 @@ function gatePromotion(target: Target, run: boolean, effects: SlateEffects): num
 /** The ceremony. Returns the process exit code. */
 export async function runSlate(effects: SlateEffects): Promise<number> {
   const { env } = effects;
-  const target: Target = env["TARGET"] === "prod" ? "prod" : "staging";
+  // TARGET is exact. `PROD`, `prod ` or an empty value used to fall through
+  // to staging without a word.
+  const rawTarget = env["TARGET"];
+  if (rawTarget !== undefined && rawTarget !== "staging" && rawTarget !== "prod") {
+    effects.error(
+      `REFUSED: TARGET=${JSON.stringify(rawTarget)} is not a target. Nothing was deployed. Fix: leave TARGET unset or set TARGET=staging for the -stg apps, or TARGET=prod for production (exact, lower case, no spaces).`,
+    );
+    return 1;
+  }
+  const target: Target = rawTarget === "prod" ? "prod" : "staging";
   const run = env["RUN"] === "1";
-  const relayUrl =
-    env["RELAY_URL"] ??
-    (target === "prod" ? "https://relay.motebit.com" : "https://motebit-sync-stg.fly.dev");
+  const relayUrl = env["RELAY_URL"] ?? (target === "prod" ? PROD_RELAY_URL : STAGING_RELAY_URL);
+  const host = relayHost(relayUrl);
+  if (host === null) {
+    effects.error(
+      `REFUSED: RELAY_URL=${JSON.stringify(relayUrl)} is not a URL. Nothing was deployed. Fix: unset RELAY_URL for the target's own relay, or set it to an absolute https URL.`,
+    );
+    return 1;
+  }
+  // Staging apps joined to the production relay are a production promotion.
+  const prodRelay = PROD_RELAY_HOSTS.includes(host);
+  const promotion = target === "prod" || prodRelay;
 
   const sh = (cmd: string, args: string[]): string => {
     if (!run) {
@@ -426,7 +517,12 @@ export async function runSlate(effects: SlateEffects): Promise<number> {
 
   // Before anything else touches the world: no flyctl call, no secret staged
   // and no relay read happens on a prod run the readiness gate refuses.
-  const refusal = gatePromotion(target, run, effects);
+  if (target !== "prod" && prodRelay) {
+    effects.log(
+      `relay ${relayUrl} is the PRODUCTION relay: joining the ${target} apps to it is gated as a production promotion.`,
+    );
+  }
+  const refusal = gatePromotion(promotion, run, effects);
   if (refusal !== null) return refusal;
 
   if (run && apiToken === "") {
@@ -555,18 +651,7 @@ export function realEffects(): SlateEffects {
   };
 }
 
-/** True when this file is the program being run, not a module a test imported. */
-function isMain(): boolean {
-  const entry = process.argv[1];
-  if (entry === undefined) return false;
-  try {
-    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-}
-
-if (isMain()) {
+if (isProgramEntry(import.meta.url)) {
   runSlate(realEffects()).then(
     (code) => process.exit(code),
     (err: unknown) => {
