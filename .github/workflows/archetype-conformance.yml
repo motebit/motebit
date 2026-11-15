@@ -32,9 +32,13 @@ on:
         options: [staging, prod-presence-only]
         default: staging
 
-concurrency:
-  group: archetype-conformance
-  cancel-in-progress: false
+# Concurrency is PER JOB, never workflow-level. `prod-presence` sits behind
+# the `production` environment, whose required reviewer can leave it waiting
+# for hours; a group it shared with the scheduled staging probe would keep
+# that probe pending with no jobs (observed 2026-11-14/15: ~13 h), and
+# scripts/check-promotion-ready.ts needs the last five SCHEDULED runs green.
+# A job waiting on a human must never hold a group unattended work needs.
+# Pinned by scripts/__tests__/workflow-approval-concurrency.test.ts.
 
 # Least privilege: the repo's default GITHUB_TOKEN is write, so every
 # workflow states its own. Read-only by default; the one write is granted on
@@ -48,6 +52,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging
+    # Staging probes run one at a time (one delegator wallet), queued, never
+    # cancelled. Shared with no approval-gated job.
+    concurrency:
+      group: archetype-conformance-staging
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write # the failure alert below comments on / opens a pinned issue
@@ -83,6 +92,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
+    # Its own group: it may wait on the production reviewer without holding
+    # anything the scheduled staging probe needs.
+    concurrency:
+      group: archetype-conformance-prod-presence
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
