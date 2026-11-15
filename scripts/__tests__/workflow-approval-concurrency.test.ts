@@ -348,6 +348,12 @@ describe("class rule: a job behind environment: production shares no concurrency
     const v = violations(load({ "a.yml": a, "b.yml": b }));
     expect(v).toHaveLength(1);
     expect(v[0]).toMatch(/^group "deploy" is held by a\.yml#prod .* and by b\.yml#nightly/);
+    // The shorthand form (`concurrency: <string>`) is lowercased too.
+    const SHORT = (g: string) => `    concurrency: ${g}\n`;
+    expect(violations(load({ "w.yml": wf(JOBS(SHORT("g"), SHORT("G"))) }))).toHaveLength(1);
+    const c = wf(`jobs:\n  prod:\n    runs-on: x\n    environment: production\n${SHORT("Deploy")}`);
+    const d = wf(`concurrency: deploy\njobs:\n  nightly:\n    runs-on: x\n`);
+    expect(violations(load({ "c.yml": c, "d.yml": d }))).toHaveLength(1);
   });
 
   it("the environment name is compared case-insensitively, in both forms", () => {

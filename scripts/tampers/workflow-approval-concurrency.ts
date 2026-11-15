@@ -81,13 +81,17 @@ const TAMPERS: TamperEntry[] = [
     { file: TEST, from: "  return n.toLowerCase();\n", to: "  return n;\n" },
   ),
   entry(
-    "group names are compared case-sensitively (g and G read as different groups)",
+    "shorthand group names are compared case-sensitively (concurrency: g vs G)",
     `${CLASS} group names are compared case-insensitively: (b) in one workflow, (c) across workflows`,
     {
       file: TEST,
       from: '  if (typeof node === "string") return node.toLowerCase();\n',
       to: '  if (typeof node === "string") return node;\n',
     },
+  ),
+  entry(
+    "object-form group names are compared case-sensitively (group: g vs G)",
+    `${CLASS} group names are compared case-insensitively: (b) in one workflow, (c) across workflows`,
     { file: TEST, from: "  return g.toLowerCase();\n", to: "  return g;\n" },
   ),
   entry(

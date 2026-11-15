@@ -9,14 +9,16 @@
 # scripts/check-promotion-ready.ts: an operator pre-flight run by hand (not
 # a CI gate; no workflow calls it) that reads THIS workflow's scheduled-run
 # history and reports ready when the last 5 SCHEDULED runs all succeeded
-# (manual dispatches do not count). What it gates is the one-time creation
-# of a molecule's prod app, which a human does with
-# `RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts`; until then
-# deploy-<service>.yml skips ("Check prod app exists"). Neither that script
-# nor the deploy workflows read this history themselves. Once the app
-# exists, each prod deploy goes through deploy-<service>.yml: CI + head of
-# main + staging gate, then the `production` reviewer (docs/ops/RUNBOOK.md,
-# "Molecule production deploys").
+# (manual dispatches do not count). What it informs is a human running
+# `RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts`, which
+# creates the slate's prod apps and performs the first prod deploy of the
+# whole slate by local flyctl: no CI gate and no reviewer apply to that
+# command. Until an app exists, deploy-auditor.yml and deploy-clerk.yml skip
+# at "Check prod app exists"; the other deploy workflows have no such step.
+# Neither that script nor the deploy workflows read this history themselves.
+# Each WORKFLOW-driven prod deploy goes through deploy-<service>.yml: CI +
+# head of main + staging gate, then the `production` reviewer
+# (docs/ops/RUNBOOK.md, "Molecule production deploys").
 #
 # Secrets (staging environment):
 #   PROBE_DELEGATOR_SEED_HEX  the probe's ONE secret — devnet-funded only. It is
