@@ -303,6 +303,75 @@ describe("readPromotionReadiness", () => {
       });
     }
   });
+
+  it("the window must be consecutive: no two counted runs more than 48 hours apart", () => {
+    const t0 = Date.parse("2026-11-15T14:17:00Z");
+    const at = (hoursAgo: number, n: number) =>
+      run(0, "success", {
+        createdAt: new Date(t0 - hoursAgo * HOUR).toISOString().replace(".000Z", "Z"),
+        url: `https://github.example/runs/gap-${n}`,
+      });
+    // Gaps of exactly 48 hours count (GitHub's cron runs late, never to the minute).
+    const boundary = [at(0, 0), at(48, 1), at(96, 2), at(144, 3), at(192, 4)];
+    expect(read({ listRuns: () => boundary })).toEqual({
+      ready: true,
+      required: 5,
+      runs: boundary,
+    });
+
+    // A 49 hour gap in the middle: daily, daily, then a hole.
+    const hole = [at(0, 0), at(24, 1), at(48, 2), at(97, 3), at(121, 4)];
+    expect(read({ listRuns: () => hole })).toEqual({
+      ready: false,
+      reason: "gap-in-history",
+      required: 5,
+      runs: hole,
+      gap: { newer: hole[2], older: hole[3], hours: 49 },
+    });
+
+    // One green from today and four from August: the newest is fresh, the window is not.
+    const august = [
+      at(0, 0),
+      run(0, "success", {
+        createdAt: "2026-08-14T14:17:00Z",
+        url: "https://github.example/runs/a1",
+      }),
+      run(0, "success", {
+        createdAt: "2026-08-13T14:17:00Z",
+        url: "https://github.example/runs/a2",
+      }),
+      run(0, "success", {
+        createdAt: "2026-08-12T14:17:00Z",
+        url: "https://github.example/runs/a3",
+      }),
+      run(0, "success", {
+        createdAt: "2026-08-11T14:17:00Z",
+        url: "https://github.example/runs/a4",
+      }),
+    ];
+    const result = read({ listRuns: () => august });
+    expect(result).toMatchObject({
+      ready: false,
+      reason: "gap-in-history",
+      gap: { newer: august[0], older: august[1] },
+    });
+  });
+
+  it("a run listed twice counts once: five copies of one green run are thin history", () => {
+    const one = FIVE_GREEN[0]!;
+    expect(read({ listRuns: () => [one, one, one, one, one] })).toEqual({
+      ready: false,
+      reason: "thin-history",
+      required: 5,
+      runs: [one],
+    });
+    // Duplicates beside a full window change nothing.
+    expect(read({ listRuns: () => [...FIVE_GREEN, ...FIVE_GREEN] })).toEqual({
+      ready: true,
+      required: 5,
+      runs: FIVE_GREEN,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -392,10 +461,57 @@ describe("check-promotion-ready CLI", () => {
     expect(c.err).toContain("gh workflow enable");
   });
 
-  it("a pending run reads `pending`: exit 1", () => {
-    const r = cli({}, history(null, "success", "success", "success", "success"));
+  it("a run still in progress reads `in progress`, with the re-check repair: exit 1", () => {
+    // gh reports a running run's conclusion as "" (older answers: null).
+    for (const conclusion of ["", null]) {
+      const rows = history("success", "success", "success", "success", "success");
+      rows[0] = run(0, conclusion, { status: "in_progress" });
+      const r = cli({}, rows);
+      expect(r.code).toBe(1);
+      expect(r.err).toBe(
+        [
+          "check-promotion-ready: 1/5 of the last scheduled runs did not succeed:",
+          `  ${rows[0]!.createdAt}  in progress  ${rows[0]!.url}`,
+          "NOT READY.",
+          "Fix: A scheduled run is still in progress: re-check when it finishes.",
+        ].join("\n"),
+      );
+    }
+    // A run in progress beside a real failure keeps the failure's repair.
+    const mixed = history("success", "failure", "success", "success", "success");
+    mixed[0] = run(0, "", { status: "queued" });
+    const m = cli({}, mixed);
+    expect(m.code).toBe(1);
+    expect(m.err).toContain("  in progress  ");
+    expect(m.err).toContain("  failure  ");
+    expect(m.err).toContain("Fix: Fix what the runs listed above caught");
+  });
+
+  it("a gap in the window: exit 1, named with its repair", () => {
+    const rows = history("success", "success", "success", "success", "success");
+    rows[4] = run(9, "success");
+    const r = cli({}, rows);
     expect(r.code).toBe(1);
-    expect(r.err).toContain("  pending  ");
+    expect(r.err).toBe(
+      [
+        "check-promotion-ready: 144 hours passed between two consecutive counted runs (2026-11-06T14:17:00Z → 2026-11-12T14:17:00Z); the limit is 48.",
+        "NOT READY — the window must be consecutive daily runs; greens from before a gap do not count toward it.",
+        "Fix: Wait for the daily schedule to produce 5 consecutive runs with no more than 48 hours between any two (if the schedule was disabled, the window restarts from when it resumed).",
+      ].join("\n"),
+    );
+  });
+
+  it("an older gh that does not know a field: exit 1, and the repair is to upgrade gh", () => {
+    const r = cli(
+      {},
+      new Error(
+        'Command failed: gh run list --json attempt\nUnknown JSON field: "attempt"\nAvailable fields:\n  conclusion\n',
+      ),
+    );
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("NOT READY — unknown history is not green history.");
+    expect(r.err).toContain("Fix: Upgrade gh (`gh --version`): this check needs the `attempt`");
+    expect(r.err).not.toContain("gh auth status");
   });
 
   it("thin history: exit 1", () => {
@@ -499,7 +615,9 @@ function expectRefused(r: Awaited<ReturnType<typeof slate>>): void {
 }
 
 describe("deploy-archetype-slate: the promotion-readiness gate", () => {
-  const PROD = { ...LIVE, TARGET: "prod" };
+  // A promotion needs the operator's pin of the relay key (the clerk's tests
+  // below); here it is set and matches, so these tests are about readiness.
+  const PROD = { ...LIVE, TARGET: "prod", MOTEBIT_RELAY_PUBLIC_KEY: RELAY_KEY };
 
   it("prod real run, ready: proceeds, and the first flyctl call comes after the readiness read", async () => {
     const r = await slate(PROD, FIVE_GREEN);
@@ -718,7 +836,10 @@ describe("deploy-archetype-slate: the promotion-readiness gate", () => {
       }
       expectRefused(await slate({ ...LIVE, RELAY_URL: relay }, GH_DOWN));
       // Ready: proceeds, with the readiness read first, deploying the -stg apps.
-      const ok = await slate({ ...LIVE, RELAY_URL: relay }, FIVE_GREEN);
+      const ok = await slate(
+        { ...LIVE, RELAY_URL: relay, MOTEBIT_RELAY_PUBLIC_KEY: RELAY_KEY },
+        FIVE_GREEN,
+      );
       expect(ok.code).toBe(0);
       expect(ok.events[0]).toBe("readiness 5");
       expect(ok.flyctl.some((e) => e.includes("-a motebit-auditor-stg "))).toBe(true);
@@ -734,11 +855,31 @@ describe("deploy-archetype-slate: the promotion-readiness gate", () => {
     expect(other.readiness).toEqual([]);
   });
 
-  it("a RELAY_URL that is not a URL refuses before anything runs", async () => {
-    const r = await slate({ ...LIVE, RELAY_URL: "relay.motebit.com" }, FIVE_GREEN);
-    expect(r.code).toBe(1);
-    expect(r.events).toEqual([]);
-    expect(r.err).toContain('REFUSED: RELAY_URL="relay.motebit.com" is not a URL.');
+  it("a RELAY_URL that is not an http(s) URL refuses before anything runs", async () => {
+    // `relay.motebit.com:443` PARSES as a URL (scheme `relay.motebit.com:`,
+    // empty host): without the scheme check it is neither refused nor gated.
+    for (const relay of [
+      "relay.motebit.com",
+      "relay.motebit.com:443",
+      "motebit-sync.fly.dev:443/",
+      "ftp://relay.motebit.com",
+      "file:///relay.motebit.com",
+      "https://",
+      "",
+    ]) {
+      for (const base of [LIVE, { ...LIVE, TARGET: "prod" }, {}]) {
+        const r = await slate({ ...base, RELAY_URL: relay }, FIVE_GREEN);
+        expect(r.code).toBe(1);
+        expect(r.events).toEqual([]);
+        expect(r.err).toContain(
+          `REFUSED: RELAY_URL=${JSON.stringify(relay)} is not an http(s) URL.`,
+        );
+      }
+    }
+    // http is a URL (a local relay in a test rig); it is simply not the production relay.
+    const local = await slate({ ...LIVE, RELAY_URL: "http://127.0.0.1:1" }, GH_DOWN);
+    expect(local.code).toBe(0);
+    expect(local.readiness).toEqual([]);
   });
 });
 
@@ -787,6 +928,173 @@ describe("deploy-archetype-slate: the clerk's staged secrets", () => {
     }
   });
 
+  const PROD = { ...LIVE, TARGET: "prod" };
+  const clerkKeyOf = (r: Awaited<ReturnType<typeof slate>>, app: string): string[] =>
+    r.flyctl
+      .filter((e) => e.startsWith(`flyctl secrets set --stage -a ${app} MOTEBIT_SYNC_URL=`))
+      .flatMap((e) => e.split(" ").filter((p) => p.startsWith("MOTEBIT_RELAY_PUBLIC_KEY=")));
+  /** Refused after the relay key was fetched: nothing but reads touched the world. */
+  function expectPinRefused(r: Awaited<ReturnType<typeof slate>>, promotion: boolean): void {
+    expect(r.code).toBe(1);
+    expect(r.flyctl).toEqual([]);
+    expect(r.events.filter((e) => !e.startsWith("readiness "))).toHaveLength(1);
+    expect(r.events.at(-1)).toMatch(/^fetch .*\/\.well-known\/motebit\.json$/);
+    expect(r.readiness).toEqual(promotion ? ["readiness 5"] : []);
+    expect(r.err).toContain("Nothing was deployed.");
+  }
+
+  it("operator pin set and matching the relay: one value staged, said plainly, on prod and staging", async () => {
+    for (const [env, app] of [
+      [PROD, "motebit-clerk"],
+      [LIVE, "motebit-clerk-stg"],
+    ] as const) {
+      const r = await slate({ ...env, MOTEBIT_RELAY_PUBLIC_KEY: RELAY_KEY }, FIVE_GREEN);
+      expect(r.code).toBe(0);
+      expect(clerkKeyOf(r, app)).toEqual([`MOTEBIT_RELAY_PUBLIC_KEY=${RELAY_KEY}`]);
+      expect(r.out).toContain(
+        "clerk's relay key: the operator's MOTEBIT_RELAY_PUBLIC_KEY, which matches the fetched key above.",
+      );
+      expect(r.err).toBe("");
+    }
+  });
+
+  it("operator pin unset on a PROMOTION: refused, zero flyctl calls; the fetched key is not a pin", async () => {
+    // Unset, empty and whitespace-only alike; prod target, and staging apps on the prod relay.
+    for (const value of [undefined, "", " ", " \n\t"]) {
+      for (const env of [PROD, { ...LIVE, RELAY_URL: "https://relay.motebit.com" }]) {
+        const r = await slate({ ...env, MOTEBIT_RELAY_PUBLIC_KEY: value }, FIVE_GREEN);
+        expectPinRefused(r, true);
+        expect(r.err).toContain(
+          "REFUSED: a production promotion needs the clerk's relay key pinned by the operator, and MOTEBIT_RELAY_PUBLIC_KEY is not set.",
+        );
+        expect(r.err).toContain(
+          "serves (abababab…abababab, shown only for comparison) is trust on first use, not a pin.",
+        );
+        expect(r.err).toContain("obtained out of band");
+        // The full fetched key is not handed back, in the refusal or the log, as something to paste.
+        expect(r.err).not.toContain(RELAY_KEY);
+        expect(r.out).not.toContain(RELAY_KEY);
+        expect(r.out).toContain("abababab…abababab (first and last 8 characters only");
+      }
+    }
+    // The readiness override does not stand in for the pin.
+    const overridden = await slate(
+      { ...PROD, [PROMOTION_READINESS_OVERRIDE_ENV]: "relay key rotation in progress" },
+      ONE_RED,
+    );
+    expectPinRefused(overridden, true);
+  });
+
+  it("operator pin unset on a prod DRY run: reports what a real run would refuse, refuses nothing", async () => {
+    const dry = await slate({ TARGET: "prod" }, FIVE_GREEN);
+    expect(dry.code).toBe(0);
+    expect(dry.flyctl).toEqual([]);
+    expect(dry.err).toContain(
+      "!!! WARNING: a production promotion needs the clerk's relay key pinned by the operator, and MOTEBIT_RELAY_PUBLIC_KEY is not set.",
+    );
+    expect(dry.err).toContain("A real run (RUN=1) would REFUSE here, before any flyctl call.");
+    expect(dry.err).not.toContain("REFUSED:");
+  });
+
+  it("operator pin unset on a staging run: the fetched key is staged, and the log calls it what it is", async () => {
+    const r = await slate(LIVE, FIVE_GREEN);
+    expect(r.code).toBe(0);
+    expect(clerkKeyOf(r, "motebit-clerk-stg")).toEqual([`MOTEBIT_RELAY_PUBLIC_KEY=${RELAY_KEY}`]);
+    expect(r.out).toContain(
+      "clerk's relay key: the key above, fetched from the relay (trust on first use), not an operator pin (MOTEBIT_RELAY_PUBLIC_KEY is not set).",
+    );
+    expect(r.out).toContain("trust on first use: it is served by the relay it pins");
+    expect(r.err).toBe("");
+  });
+
+  it("operator pin MISMATCH on a promotion: refused, zero flyctl calls, both keys named", async () => {
+    // A stale staging key left exported in the shell, on a prod run.
+    for (const env of [PROD, { ...LIVE, RELAY_URL: "https://relay.motebit.com" }]) {
+      const r = await slate({ ...env, MOTEBIT_RELAY_PUBLIC_KEY: OPERATOR_PIN }, FIVE_GREEN);
+      expectPinRefused(r, true);
+      expect(r.err).toContain(
+        "REFUSED: the operator's pin MOTEBIT_RELAY_PUBLIC_KEY (cdcdcdcd…cdcdcdcd) and the key the relay",
+      );
+      expect(r.err).toContain("serves (abababab…abababab) disagree.");
+      expect(r.err).toContain("Do not deploy until one is corrected.");
+    }
+    // The readiness override does not carry a mismatched pin through.
+    const overridden = await slate(
+      {
+        ...PROD,
+        MOTEBIT_RELAY_PUBLIC_KEY: OPERATOR_PIN,
+        [PROMOTION_READINESS_OVERRIDE_ENV]: "relay key rotation in progress",
+      },
+      ONE_RED,
+    );
+    expectPinRefused(overridden, true);
+    // A prod DRY run reports what a real run would do, and refuses nothing.
+    const dry = await slate({ TARGET: "prod", MOTEBIT_RELAY_PUBLIC_KEY: OPERATOR_PIN }, FIVE_GREEN);
+    expect(dry.code).toBe(0);
+    expect(dry.flyctl).toEqual([]);
+    expect(dry.err).toContain("disagree. A real run (RUN=1) would REFUSE here");
+  });
+
+  it("operator pin MISMATCH on a staging run: warned loudly, proceeds with the operator's value", async () => {
+    const r = await slate({ ...LIVE, MOTEBIT_RELAY_PUBLIC_KEY: OPERATOR_PIN }, FIVE_GREEN);
+    expect(r.code).toBe(0);
+    expect(clerkKeyOf(r, "motebit-clerk-stg")).toEqual([
+      `MOTEBIT_RELAY_PUBLIC_KEY=${OPERATOR_PIN}`,
+    ]);
+    expect(r.err).toContain(
+      "!!! WARNING: the operator's pin MOTEBIT_RELAY_PUBLIC_KEY (cdcdcdcd…cdcdcdcd) and the key the relay",
+    );
+    expect(r.err).toContain("PROCEEDS and stages the clerk the OPERATOR's pin");
+    expect(r.err).not.toContain("REFUSED");
+  });
+
+  it("operator pin that is not 64 hex characters: refused on staging and prod alike, value not echoed", async () => {
+    for (const bad of [
+      "not-a-key",
+      "ab".repeat(31),
+      "ab".repeat(33),
+      `${"ab".repeat(31)}zz`,
+      "0x" + "ab".repeat(32),
+    ]) {
+      for (const [env, promotion] of [
+        [LIVE, false],
+        [PROD, true],
+      ] as const) {
+        const r = await slate({ ...env, MOTEBIT_RELAY_PUBLIC_KEY: bad }, FIVE_GREEN);
+        expectPinRefused(r, promotion);
+        expect(r.err).toContain(
+          `REFUSED: MOTEBIT_RELAY_PUBLIC_KEY is set but is not a relay public key (64 hex characters; got ${bad.length} characters).`,
+        );
+        expect(r.err).not.toContain(bad);
+      }
+    }
+  });
+
+  it("operator pin of whitespace only behaves as unset: the fetched key is staged, nothing warned", async () => {
+    // On a staging run. (On a promotion, unset refuses: the test above.)
+    for (const blank of [" ", "\t", " \n "]) {
+      const r = await slate({ ...LIVE, MOTEBIT_RELAY_PUBLIC_KEY: blank }, FIVE_GREEN);
+      expect(r.code).toBe(0);
+      expect(clerkKeyOf(r, "motebit-clerk-stg")).toEqual([`MOTEBIT_RELAY_PUBLIC_KEY=${RELAY_KEY}`]);
+      expect(r.out).toContain("not an operator pin (MOTEBIT_RELAY_PUBLIC_KEY is not set)");
+      expect(r.err).toBe("");
+    }
+  });
+
+  it("operator pin in upper case or padded: normalised, matches, staged lower-case", async () => {
+    for (const spelled of [
+      RELAY_KEY.toUpperCase(),
+      ` ${RELAY_KEY}\n`,
+      `  ${RELAY_KEY.toUpperCase()} `,
+    ]) {
+      const r = await slate({ ...PROD, MOTEBIT_RELAY_PUBLIC_KEY: spelled }, FIVE_GREEN);
+      expect(r.code).toBe(0);
+      expect(clerkKeyOf(r, "motebit-clerk")).toEqual([`MOTEBIT_RELAY_PUBLIC_KEY=${RELAY_KEY}`]);
+      expect(r.out).toContain("which matches the fetched key above");
+      expect(r.err).toBe("");
+    }
+  });
+
   it("the Solana RPC URL is passed through when set and not staged when unset", async () => {
     expect((await clerkSecrets({})).filter((p) => p.startsWith("MOTEBIT_SOLANA_RPC_URL="))).toEqual(
       [],
@@ -813,7 +1121,7 @@ describe("the scripts as programs (fake gh, fake flyctl)", () => {
    * A PATH directory holding only a fake `gh` (records its argv, prints
    * `ghAnswer`, or is absent) and a fake `flyctl` (records its argv).
    */
-  function sandbox(ghAnswer: ConformanceRun[] | "absent" | "fails") {
+  function sandbox(ghAnswer: ConformanceRun[] | "absent" | "fails" | "old") {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "slate-readiness-")));
     dirs.push(dir);
     const script = (name: string, body: string) => {
@@ -822,6 +1130,12 @@ describe("the scripts as programs (fake gh, fake flyctl)", () => {
     };
     if (ghAnswer === "fails") {
       script("gh", `echo "$@" >> "${dir}/gh.calls"\necho "gh: not logged in" >&2\nexit 4`);
+    } else if (ghAnswer === "old") {
+      // A gh from before `attempt` was a `run list --json` field.
+      script(
+        "gh",
+        `echo "$@" >> "${dir}/gh.calls"\necho 'Unknown JSON field: "attempt"' >&2\necho 'Available fields:' >&2\necho '  conclusion' >&2\nexit 1`,
+      );
     } else if (ghAnswer !== "absent") {
       writeFileSync(join(dir, "gh.json"), JSON.stringify(ghAnswer));
       // Records its argv and every GIT_* variable it was started with.
@@ -925,6 +1239,34 @@ describe("the scripts as programs (fake gh, fake flyctl)", () => {
     const ok = green.runScript("check-promotion-ready", {});
     expect(ok.out).toContain("READY — the slate's prod command is");
     expect(ok.code).toBe(0);
+  });
+
+  it("both scripts run by a .js name (tsx maps it to the .ts file) still run: exit 1 on a red history", () => {
+    const check = sandbox(LIVE_RED);
+    const c = check.runScript("check-promotion-ready.js", {});
+    expect(c.err).toContain("1/5 of the last scheduled runs did not succeed:");
+    expect(c.code).toBe(1);
+
+    const box = sandbox(LIVE_RED);
+    const s = box.runScript("deploy-archetype-slate.js", PROD_LIVE);
+    expect(s.err).toContain("REFUSED: the archetype slate is not ready for production.");
+    expect(s.code).toBe(1);
+    expect(box.calls("flyctl")).toEqual([]);
+  });
+
+  it("an older gh that rejects the `attempt` field: not ready, and both scripts say to upgrade gh", () => {
+    const check = sandbox("old").runScript("check-promotion-ready.ts", {});
+    expect(check.code).toBe(1);
+    expect(check.err).toContain('Unknown JSON field: "attempt"');
+    expect(check.err).toContain("Fix: Upgrade gh (`gh --version`)");
+    expect(check.err).not.toContain("gh auth status");
+
+    const box = sandbox("old");
+    const s = box.runScript("deploy-archetype-slate.ts", PROD_LIVE);
+    expect(s.code).toBe(1);
+    expect(s.err).toContain("REFUSED: the archetype slate is not ready for production.");
+    expect(s.err).toContain("Upgrade gh (`gh --version`)");
+    expect(box.calls("flyctl")).toEqual([]);
   });
 
   it("the slate's prod command run WITHOUT the .ts extension still gates: exit 1, flyctl never run", () => {

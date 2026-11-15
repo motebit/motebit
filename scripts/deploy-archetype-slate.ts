@@ -24,7 +24,8 @@
  * history (scripts/check-promotion-ready.ts, `readPromotionReadiness`: the
  * newest 5 scheduled runs of archetype-conformance.yml in motebit/motebit,
  * each a first attempt on main that concluded success, the newest at most 48
- * hours old) BEFORE its first flyctl call, and REFUSES (exit 1, nothing
+ * hours old, no two consecutive ones more than 48 hours apart) BEFORE its
+ * first flyctl call, and REFUSES (exit 1, nothing
  * deployed, no secret staged) unless ready. Unreadable history (gh missing,
  * unauthenticated, erroring) refuses. A run is a production promotion when
  * TARGET=prod, OR when the relay it resolves to is the production relay
@@ -39,7 +40,9 @@
  *              `yes`, `y`, `ok` or `override`. Anything less does not
  *              override. The run prints the reason and the readiness result
  *              it overrode, then proceeds. Nothing records it beyond this
- *              run's output.
+ *              run's output: the reason makes a bypass visible, not
+ *              impossible. It overrides readiness only, never the clerk's
+ *              relay-key rules below.
  *
  * What this does NOT cover: this is still a local flyctl deploy, so no CI
  * gate and no GitHub environment reviewer applies to it; a direct
@@ -58,10 +61,24 @@
  *                            does NOT check that it is set.
  * Optional:
  *   RELAY_URL                override the target relay base URL
- *   MOTEBIT_RELAY_PUBLIC_KEY clerk only: the operator's own pin of the relay key. When set
- *                            (non-empty) it is what the clerk gets; otherwise the clerk
- *                            gets the key fetched from the relay's well-known descriptor,
- *                            like every other worker.
+ *   MOTEBIT_RELAY_PUBLIC_KEY clerk only: the operator's pin of the relay key, the clerk's
+ *                            payment trust root. The operator's key is the pin; the key
+ *                            this script fetches from the relay's well-known descriptor is
+ *                            a convenience and a cross-check, because it is served by the
+ *                            very relay it would pin (trust on first use).
+ *                            REQUIRED on a production promotion (TARGET=prod or the
+ *                            production relay): unset, empty or whitespace REFUSES before
+ *                            any flyctl call. Get the key out of band.
+ *                            On a staging run it is optional: unset, the clerk gets the
+ *                            fetched key, and the log says it is not an operator pin.
+ *                            When set it must be 64 hex characters (compared lower-cased),
+ *                            or the run is refused on every target. It is then compared
+ *                            with the fetched key: a MISMATCH refuses a production
+ *                            promotion; on a staging run it prints a warning and the
+ *                            clerk gets the operator's value.
+ *                            The OTHER five workers always get the fetched key as their
+ *                            task-admission key. That is trust on first use for them, and
+ *                            an open question this script does not settle.
  *   MOTEBIT_CLERK_CEILING_MICRO  clerk only (default 1000000)
  *   BRAVE_API_KEY            web-search only
  *
@@ -79,6 +96,7 @@ import { execFileSync } from "node:child_process";
 
 import {
   PROMOTION_MAX_NEWEST_RUN_AGE_HOURS,
+  PROMOTION_MAX_RUN_GAP_HOURS,
   PROMOTION_REQUIRED_GREEN_RUNS,
   describePromotionReadiness,
   isProgramEntry,
@@ -110,6 +128,13 @@ interface SecretContext {
   apiToken: string;
   /** The target relay's Ed25519 public key (hex) from its well-known descriptor — the worker's task-admission pin. */
   relayPublicKey: string;
+  /**
+   * The relay key the CLERK is staged (its pinned P2P treasury root): the
+   * operator's validated MOTEBIT_RELAY_PUBLIC_KEY when set, else the fetched
+   * key. Resolved once in `runSlate`, which refuses a malformed pin and a
+   * pin that disagrees with the relay on a promotion.
+   */
+  clerkRelayPublicKey: string;
   /** capability → motebit_id captured from the relay after atom deploys. */
   atomIds: Map<string, string>;
   appHost: (app: string) => string;
@@ -117,10 +142,11 @@ interface SecretContext {
 
 const REGION = "sjc";
 
-/** `value` when it is set and non-empty, else `fallback`. */
-function setOr(value: string | undefined, fallback: string): string {
-  return value !== undefined && value !== "" ? value : fallback;
-}
+/** An Ed25519 public key as the relay serves it: 64 lower-case hex characters. */
+const RELAY_KEY_FORMAT = /^[0-9a-f]{64}$/;
+
+/** A key's first and last 8 hex characters, for a message that compares two. */
+const keyEnds = (key: string): string => `${key.slice(0, 8)}…${key.slice(-8)}`;
 
 const STAGING_RELAY_URL = "https://motebit-sync-stg.fly.dev";
 const PROD_RELAY_URL = "https://relay.motebit.com";
@@ -131,13 +157,21 @@ const PROD_RELAY_URL = "https://relay.motebit.com";
  */
 const PROD_RELAY_HOSTS: readonly string[] = ["relay.motebit.com", "motebit-sync.fly.dev"];
 
-/** The host a relay URL names, lower-cased with no trailing dot; null when it is not a URL. */
+/**
+ * The host an http(s) relay URL names, lower-cased with no trailing dot; null
+ * when it is not one. `relay.motebit.com:443` parses as a URL whose SCHEME is
+ * `relay.motebit.com:` and whose host is empty, so the scheme is checked.
+ */
 function relayHost(relayUrl: string): string | null {
+  let url: URL;
   try {
-    return new URL(relayUrl).hostname.toLowerCase().replace(/\.$/, "");
+    url = new URL(relayUrl);
   } catch {
     return null;
   }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  // An http(s) URL always has a host (`new URL("https://")` throws).
+  return url.hostname.toLowerCase().replace(/\.$/, "");
 }
 
 /**
@@ -326,12 +360,13 @@ export const SLATE: SlateService[] = [
       // worker twice — as MOTEBIT_API_TOKEN and again as MOTEBIT_AUTH_TOKEN.
       //
       // ONE key, and it doubles as the clerk's pinned P2P treasury root: the
-      // operator's own pin from the deploy environment when set (non-empty),
-      // else the key fetched from the relay's well-known descriptor. Until
-      // this was collapsed the map set the key twice and the env pass-through
+      // operator's own pin from the deploy environment when set, validated
+      // and compared with the relay's served key in `runSlate`, else the key
+      // fetched from the relay's well-known descriptor. Until this was
+      // collapsed the map set the key twice and the env pass-through
       // (defaulting to "") won, so the fetched key was NEVER staged for the
       // clerk and, without the operator variable, a fresh clerk exited at boot.
-      MOTEBIT_RELAY_PUBLIC_KEY: setOr(ctx.env["MOTEBIT_RELAY_PUBLIC_KEY"], ctx.relayPublicKey),
+      MOTEBIT_RELAY_PUBLIC_KEY: ctx.clerkRelayPublicKey,
       MOTEBIT_UNIT_COST: "0.01",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
       // DRY-RUN-FIRST: the whole metered spine runs at hard-zero (no broadcast,
@@ -460,8 +495,8 @@ function gatePromotion(promotion: boolean, run: boolean, effects: SlateEffects):
   for (const line of lines) effects.error(`  ${line}`);
   if (notAReason !== null) effects.error(`  ${notAReason}`);
   effects.error(
-    `Fix: promotion needs the newest ${PROMOTION_REQUIRED_GREEN_RUNS} SCHEDULED runs of archetype-conformance.yml all green, each a first attempt on main, the newest at most ${PROMOTION_MAX_NEWEST_RUN_AGE_HOURS} hours old (docs/doctrine/agent-archetypes.md §4). ` +
-      `${promotionRepair(readiness.reason)}, re-check with: ${RECHECK}, then re-run this command. ` +
+    `Fix: promotion needs the newest ${PROMOTION_REQUIRED_GREEN_RUNS} SCHEDULED runs of archetype-conformance.yml all green, each a first attempt on main, the newest at most ${PROMOTION_MAX_NEWEST_RUN_AGE_HOURS} hours old and no two more than ${PROMOTION_MAX_RUN_GAP_HOURS} hours apart (docs/doctrine/agent-archetypes.md §4). ` +
+      `${promotionRepair(readiness)}, re-check with: ${RECHECK}, then re-run this command. ` +
       `Emergency only: ${PROMOTION_READINESS_OVERRIDE_ENV}="<why, at least ${OVERRIDE_REASON_MIN_LENGTH} characters>" proceeds and prints the reason with the result it overrode; an empty or flag-like value (${OVERRIDE_NOT_A_REASON.join(", ")}) does not.`,
   );
   return 1;
@@ -485,7 +520,7 @@ export async function runSlate(effects: SlateEffects): Promise<number> {
   const host = relayHost(relayUrl);
   if (host === null) {
     effects.error(
-      `REFUSED: RELAY_URL=${JSON.stringify(relayUrl)} is not a URL. Nothing was deployed. Fix: unset RELAY_URL for the target's own relay, or set it to an absolute https URL.`,
+      `REFUSED: RELAY_URL=${JSON.stringify(relayUrl)} is not an http(s) URL. Nothing was deployed. Fix: unset RELAY_URL for the target's own relay, or set it to an absolute URL that starts with https:// (a bare host or host:port is not one).`,
     );
     return 1;
   }
@@ -535,13 +570,73 @@ export async function runSlate(effects: SlateEffects): Promise<number> {
   }
 
   const relayPublicKey = await fetchRelayPublicKey(effects, relayUrl);
-  effects.log(`relay public key (task-admission pin for every worker): ${relayPublicKey}`);
+  // On a promotion the fetched key is a cross-check for the operator's pin,
+  // so only its ends are shown: this line is not where the pin comes from.
+  effects.log(
+    `relay public key, fetched from the relay's well-known descriptor (trust on first use: it is served by the relay it pins; staged as the task-admission key for every worker; the clerk's key is named on the next line): ${promotion ? `${keyEnds(relayPublicKey)} (first and last 8 characters only on a promotion: a cross-check, not a value to copy)` : relayPublicKey}`,
+  );
+
+  // The clerk's key is its payment trust root. The OPERATOR's key is the pin;
+  // the fetched key is a convenience and a cross-check, because it comes from
+  // the very relay it would pin. So a promotion needs the operator's key, and
+  // only a staging run may fall back to the fetched one. Whitespace-only is
+  // unset, and the value is compared lower-cased. Nothing has been deployed
+  // or staged yet.
+  const operatorPin = (env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? "").trim().toLowerCase();
+  const pinRequired = promotion;
+  let clerkRelayPublicKey = relayPublicKey;
+  if (operatorPin === "") {
+    if (pinRequired) {
+      const missing = `a production promotion needs the clerk's relay key pinned by the operator, and MOTEBIT_RELAY_PUBLIC_KEY is not set. The key the relay ${relayUrl} serves (${keyEnds(relayPublicKey)}, shown only for comparison) is trust on first use, not a pin`;
+      if (run) {
+        effects.error(
+          `REFUSED: ${missing}. Nothing was deployed. Fix: export MOTEBIT_RELAY_PUBLIC_KEY=<the production relay's 64-hex public key, obtained out of band, not from this run's output>, then re-run this command.`,
+        );
+        return 1;
+      }
+      effects.error(
+        `!!! WARNING: ${missing}. A real run (RUN=1) would REFUSE here, before any flyctl call.`,
+      );
+    } else {
+      effects.log(
+        "clerk's relay key: the key above, fetched from the relay (trust on first use), not an operator pin (MOTEBIT_RELAY_PUBLIC_KEY is not set).",
+      );
+    }
+  } else {
+    if (!RELAY_KEY_FORMAT.test(operatorPin)) {
+      // The value is not echoed: a variable holding the wrong thing may hold a secret.
+      effects.error(
+        `REFUSED: MOTEBIT_RELAY_PUBLIC_KEY is set but is not a relay public key (64 hex characters; got ${operatorPin.length} characters). Nothing was deployed. Fix: unset it to stage the clerk the key the relay serves (${keyEnds(relayPublicKey)}), or set it to that relay's 64-hex Ed25519 public key.`,
+      );
+      return 1;
+    }
+    if (operatorPin === relayPublicKey) {
+      effects.log(
+        "clerk's relay key: the operator's MOTEBIT_RELAY_PUBLIC_KEY, which matches the fetched key above.",
+      );
+    } else {
+      const disagree = `the operator's pin MOTEBIT_RELAY_PUBLIC_KEY (${keyEnds(operatorPin)}) and the key the relay ${relayUrl} serves (${keyEnds(relayPublicKey)}) disagree`;
+      if (promotion && run) {
+        effects.error(
+          `REFUSED: ${disagree}. Nothing was deployed. The clerk would pin its payments to a key this relay does not hold. Do not deploy until one is corrected. Fix: if the pin is stale (a staging key left in the shell), unset MOTEBIT_RELAY_PUBLIC_KEY or set it to the production relay's key; if the relay is serving the wrong key, stop and find out why.`,
+        );
+        return 1;
+      }
+      const consequence = promotion
+        ? "A real run (RUN=1) would REFUSE here, before any flyctl call."
+        : "This is not a production promotion, so the run PROCEEDS and stages the clerk the OPERATOR's pin; every other worker gets the fetched key.";
+      effects.error(`!!! WARNING: ${disagree}. ${consequence}`);
+    }
+    clerkRelayPublicKey = operatorPin;
+  }
+
   const ctx: SecretContext = {
     target,
     env,
     relayUrl,
     apiToken,
     relayPublicKey,
+    clerkRelayPublicKey,
     atomIds: new Map(),
     appHost: (app) => `https://${app}.fly.dev`,
   };

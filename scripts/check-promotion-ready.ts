@@ -10,8 +10,12 @@
  *   - a re-run does not count (`attempt` must be 1: a human `gh run rerun`
  *     of a failed scheduled run is not an unattended green);
  *   - the run must be on `main`, completed, conclusion `success`;
- *   - the newest run must be at most 48 hours old (a disabled schedule must
- *     not leave old greens standing).
+ *   - the newest run must be at most 48 hours old, and no two consecutive
+ *     counted runs may be more than 48 hours apart (a disabled schedule must
+ *     not leave old greens standing: one green from today does not adopt
+ *     four from August; 48 hours tolerates GitHub's cron delay on a daily
+ *     schedule);
+ *   - a run listed twice (same url) counts once.
  * The discipline is that the slate passes unattended, on the daily cadence,
  * not when someone is watching.
  *
@@ -71,6 +75,9 @@ export const PROMOTION_REQUIRED_GREEN_RUNS = 5;
 /** The newest counted run may be at most this old: the schedule is daily. */
 export const PROMOTION_MAX_NEWEST_RUN_AGE_HOURS = 48;
 
+/** Two consecutive counted runs may be at most this far apart: the window is consecutive days. */
+export const PROMOTION_MAX_RUN_GAP_HOURS = 48;
+
 export interface ConformanceRun {
   attempt: number;
   conclusion: string | null;
@@ -104,7 +111,17 @@ export type PromotionReadiness =
       required: number;
       runs: ConformanceRun[];
       newestAgeHours: number;
+    }
+  | {
+      ready: false;
+      reason: "gap-in-history";
+      required: number;
+      runs: ConformanceRun[];
+      /** The newest pair of consecutive counted runs that are too far apart. */
+      gap: { newer: ConformanceRun; older: ConformanceRun; hours: number };
     };
+
+export type NotReady = Exclude<PromotionReadiness, { ready: true }>;
 
 export type NotReadyReason = Exclude<PromotionReadiness, { ready: true }>["reason"];
 
@@ -185,12 +202,19 @@ export function readPromotionReadiness(opts: {
       "the answer is not a list of runs (attempt, conclusion, createdAt, event, headBranch, status, url)",
     );
   }
-  // Only scheduled runs count, and only the newest `required` of them BY
-  // THEIR OWN DATES: the answer's order is not trusted, and a lister that
-  // answers with more rows, or with other events, changes nothing.
+  // Only scheduled runs count, each once, and only the newest `required` of
+  // them BY THEIR OWN DATES: the answer's order is not trusted, and a lister
+  // that answers with more rows, repeated rows, or other events, changes
+  // nothing.
+  const seen = new Set<string>();
   const runs = listed
     .filter((r) => r.event === "schedule")
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+    .filter((r) => {
+      if (seen.has(r.url)) return false;
+      seen.add(r.url);
+      return true;
+    })
     .slice(0, required);
 
   if (runs.length < required) return { ready: false, reason: "thin-history", required, runs };
@@ -210,6 +234,22 @@ export function readPromotionReadiness(opts: {
   const newestAgeHours = (now().getTime() - Date.parse(runs[0]!.createdAt)) / 3_600_000;
   if (newestAgeHours > PROMOTION_MAX_NEWEST_RUN_AGE_HOURS) {
     return { ready: false, reason: "stale-history", required, runs, newestAgeHours };
+  }
+  // The window itself must be consecutive: a fresh newest run does not adopt
+  // old greens from before the schedule stopped.
+  for (let i = 0; i + 1 < runs.length; i++) {
+    const newer = runs[i]!;
+    const older = runs[i + 1]!;
+    const hours = (Date.parse(newer.createdAt) - Date.parse(older.createdAt)) / 3_600_000;
+    if (hours > PROMOTION_MAX_RUN_GAP_HOURS) {
+      return {
+        ready: false,
+        reason: "gap-in-history",
+        required,
+        runs,
+        gap: { newer, older, hours },
+      };
+    }
   }
   return { ready: true, required, runs };
 }
@@ -236,7 +276,7 @@ export function describePromotionReadiness(result: PromotionReadiness): string[]
     case "not-all-green":
       return [
         `check-promotion-ready: ${result.failing.length}/${result.runs.length} of the last scheduled runs did not succeed:`,
-        ...result.failing.map((r) => `  ${r.createdAt}  ${r.conclusion ?? "pending"}  ${r.url}`),
+        ...result.failing.map((r) => `  ${r.createdAt}  ${shownConclusion(r)}  ${r.url}`),
         "NOT READY.",
       ];
     case "rerun-attempt":
@@ -256,18 +296,43 @@ export function describePromotionReadiness(result: PromotionReadiness): string[]
         `check-promotion-ready: the newest scheduled run (${result.runs[0]!.createdAt}) is ${Math.floor(result.newestAgeHours)} hours old; the limit is ${PROMOTION_MAX_NEWEST_RUN_AGE_HOURS}.`,
         "NOT READY — old greens do not stand in for a schedule that has stopped.",
       ];
+    case "gap-in-history":
+      return [
+        `check-promotion-ready: ${Math.floor(result.gap.hours)} hours passed between two consecutive counted runs (${result.gap.older.createdAt} → ${result.gap.newer.createdAt}); the limit is ${PROMOTION_MAX_RUN_GAP_HOURS}.`,
+        "NOT READY — the window must be consecutive daily runs; greens from before a gap do not count toward it.",
+      ];
   }
 }
 
+/** A run that has not completed; gh reports its conclusion as "" (or null). */
+function inProgress(r: ConformanceRun): boolean {
+  return r.status !== "completed";
+}
+
+/** The conclusion column of a listed run, truthfully: a running run has none yet. */
+function shownConclusion(r: ConformanceRun): string {
+  if (inProgress(r)) return "in progress";
+  return r.conclusion === null || r.conclusion === "" ? "pending" : r.conclusion;
+}
+
 /** What to do about a not-ready result: one clause, no trailing period. */
-export function promotionRepair(reason: NotReadyReason): string {
-  switch (reason) {
+export function promotionRepair(result: NotReady): string {
+  switch (result.reason) {
     case "gh-unreadable":
+      // An older gh does not know a field this check asks for.
+      if (result.detail.includes("Unknown JSON field")) {
+        return "Upgrade gh (`gh --version`): this check needs the `attempt`, `headBranch` and `status` fields of `gh run list --json`";
+      }
       return "Install and authenticate gh (`gh auth status`) so the history can be read";
     case "thin-history":
       return "Wait for the daily schedule to put enough runs on record (manual dispatches do not count)";
     case "not-all-green":
+      if (result.failing.every(inProgress)) {
+        return "A scheduled run is still in progress: re-check when it finishes";
+      }
       return "Fix what the runs listed above caught, then wait for the daily schedule to turn the window green (manual dispatches do not count)";
+    case "gap-in-history":
+      return `Wait for the daily schedule to produce ${result.required} consecutive runs with no more than ${PROMOTION_MAX_RUN_GAP_HOURS} hours between any two (if the schedule was disabled, the window restarts from when it resumed)`;
     case "rerun-attempt":
       return "Wait for the daily schedule to replace the re-run runs with first attempts (do not `gh run rerun` a scheduled run: the re-run never counts)";
     case "wrong-branch":
@@ -293,7 +358,7 @@ export function runCheckPromotionReady(io: CheckPromotionReadyIo): number {
   const result = readPromotionReadiness({ required, listRuns: io.listRuns, now: io.now });
   if (!result.ready) {
     for (const line of describePromotionReadiness(result)) error(line);
-    error(`Fix: ${promotionRepair(result.reason)}.`);
+    error(`Fix: ${promotionRepair(result)}.`);
     return 1;
   }
   for (const line of describePromotionReadiness(result)) log(line);
@@ -309,7 +374,8 @@ export function runCheckPromotionReady(io: CheckPromotionReadyIo): number {
  *
  * `process.argv[1]` is resolved the way tsx resolves an entry: as given, then
  * with `.ts` (`tsx scripts/check-promotion-ready`, no extension, is a real
- * invocation). When it cannot be resolved at all, the answer is unknown, and
+ * invocation), then with a `.js` ending read as `.ts` (`tsx
+ * scripts/check-promotion-ready.js` runs the `.ts` file). When it cannot be resolved at all, the answer is unknown, and
  * unknown is never "imported": a readiness check that exits 0 without
  * checking is fail-open for any `check && deploy` chain. It throws, so the
  * process exits non-zero and says why.
@@ -319,7 +385,7 @@ export function isProgramEntry(moduleUrl: string): boolean {
   // No entry at all: `node -e`, a REPL. The module was imported.
   if (entry === undefined) return false;
   const self = realpathSync(fileURLToPath(moduleUrl));
-  for (const candidate of [entry, `${entry}.ts`]) {
+  for (const candidate of [entry, `${entry}.ts`, entry.replace(/\.js$/, ".ts")]) {
     let resolved: string;
     try {
       resolved = realpathSync(candidate);

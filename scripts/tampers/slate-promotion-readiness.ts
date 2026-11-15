@@ -91,15 +91,18 @@ const GATE_CALL =
   "  const refusal = gatePromotion(promotion, run, effects);\n  if (refusal !== null) return refusal;\n";
 const DEPLOY_CALL =
   '      sh("flyctl", ["deploy", "--config", svc.config(target), "-a", app, "--remote-only"]);\n';
-const ENTRY_CANDIDATES = "  for (const candidate of [entry, `${entry}.ts`]) {";
+const ENTRY_CANDIDATES =
+  '  for (const candidate of [entry, `${entry}.ts`, entry.replace(/\\.js$/, ".ts")]) {';
 const ENTRY_THROW = "  throw new Error(\n    `${fileURLToPath(moduleUrl)}: cannot tell whether";
 /** The original regression: no `.ts` candidate, and an unresolved entry reads as "imported". */
 const SILENT_FALSE: TamperEdit[] = [
   edit(READY, ENTRY_CANDIDATES, "  for (const candidate of [entry]) {"),
   edit(READY, ENTRY_THROW, `  if (true as boolean) return false;\n${ENTRY_THROW}`),
 ];
-const CLERK_KEY =
-  '      MOTEBIT_RELAY_PUBLIC_KEY: setOr(ctx.env["MOTEBIT_RELAY_PUBLIC_KEY"], ctx.relayPublicKey),';
+const CLERK_KEY = "      MOTEBIT_RELAY_PUBLIC_KEY: ctx.clerkRelayPublicKey,";
+const OPERATOR_PIN =
+  '  const operatorPin = (env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? "").trim().toLowerCase();';
+const CLI = (t: string) => `check-promotion-ready CLI ${t}`;
 
 const TAMPERS: TamperEntry[] = [
   // --- the gate ---------------------------------------------------------
@@ -377,8 +380,17 @@ const TAMPERS: TamperEntry[] = [
     PROD_RELAY,
     edit(
       SLATE,
-      '    return new URL(relayUrl).hostname.toLowerCase().replace(/\\.$/, "");',
-      "    return new URL(relayUrl).hostname.toLowerCase();",
+      '  return url.hostname.toLowerCase().replace(/\\.$/, "");',
+      "  return url.hostname.toLowerCase();",
+    ),
+  ),
+  entry(
+    "a RELAY_URL with another scheme (or host:port read as a scheme) is accepted",
+    GATE("a RELAY_URL that is not an http(s) URL refuses before anything runs"),
+    edit(
+      SLATE,
+      '  if (url.protocol !== "https:" && url.protocol !== "http:") return null;',
+      '  if ((false as boolean) && url.protocol !== "https:" && url.protocol !== "http:") return null;',
     ),
   ),
 
@@ -398,13 +410,123 @@ const TAMPERS: TamperEntry[] = [
     edit(SLATE, CLERK_KEY, "      MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,"),
   ),
   entry(
-    "an empty operator pin counts as set (the clerk gets no key)",
-    CLERK_PIN,
+    "a whitespace-only operator pin counts as set",
+    CLERK(
+      "operator pin of whitespace only behaves as unset: the fetched key is staged, nothing warned",
+    ),
     edit(
       SLATE,
-      '  return value !== undefined && value !== "" ? value : fallback;',
-      "  return value !== undefined ? value : fallback;",
+      OPERATOR_PIN,
+      '  const operatorPin = (env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? "").toLowerCase();',
     ),
+  ),
+  entry(
+    "the operator pin is not lower-cased before it is checked and compared",
+    CLERK("operator pin in upper case or padded: normalised, matches, staged lower-case"),
+    edit(
+      SLATE,
+      OPERATOR_PIN,
+      '  const operatorPin = (env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? "").trim();',
+    ),
+  ),
+  entry(
+    "the operator pin's format is not checked (anything is staged)",
+    CLERK(
+      "operator pin that is not 64 hex characters: refused on staging and prod alike, value not echoed",
+    ),
+    edit(
+      SLATE,
+      "    if (!RELAY_KEY_FORMAT.test(operatorPin)) {",
+      "    if ((false as boolean) && !RELAY_KEY_FORMAT.test(operatorPin)) {",
+    ),
+  ),
+  entry(
+    "a pin that disagrees with the relay no longer refuses a promotion",
+    CLERK("operator pin MISMATCH on a promotion: refused, zero flyctl calls, both keys named"),
+    edit(
+      SLATE,
+      "      if (promotion && run) {",
+      "      if ((false as boolean) && promotion && run) {",
+    ),
+  ),
+  entry(
+    "a pin that disagrees with the relay proceeds on staging without a warning",
+    CLERK(
+      "operator pin MISMATCH on a staging run: warned loudly, proceeds with the operator's value",
+    ),
+    edit(SLATE, "      effects.error(`!!! WARNING: ${disagree}. ${consequence}`);\n", ""),
+  ),
+  entry(
+    "a promotion without the operator's pin falls back to the fetched key again",
+    CLERK(
+      "operator pin unset on a PROMOTION: refused, zero flyctl calls; the fetched key is not a pin",
+    ),
+    edit(SLATE, "  const pinRequired = promotion;", "  const pinRequired = false as boolean;"),
+  ),
+  entry(
+    "a promotion prints the full fetched key (a value to copy, not a cross-check)",
+    CLERK(
+      "operator pin unset on a PROMOTION: refused, zero flyctl calls; the fetched key is not a pin",
+    ),
+    edit(
+      SLATE,
+      "${promotion ? `${keyEnds(relayPublicKey)} (first",
+      "${(false as boolean) ? `${keyEnds(relayPublicKey)} (first",
+    ),
+  ),
+
+  // --- round three: the window, the rows, the repairs, the .js entry -------
+  entry(
+    "the decision: no gap bound (one green today adopts four from August)",
+    DECISION("the window must be consecutive: no two counted runs more than 48 hours apart"),
+    edit(
+      READY,
+      "    if (hours > PROMOTION_MAX_RUN_GAP_HOURS) {",
+      "    if ((false as boolean) && hours > PROMOTION_MAX_RUN_GAP_HOURS) {",
+    ),
+  ),
+  entry(
+    "the decision: a run listed twice counts twice",
+    DECISION("a run listed twice counts once: five copies of one green run are thin history"),
+    edit(
+      READY,
+      "      if (seen.has(r.url)) return false;",
+      "      if ((false as boolean) && seen.has(r.url)) return false;",
+    ),
+  ),
+  entry(
+    "a run in progress gets the failure repair, not the re-check one",
+    CLI("a run still in progress reads `in progress`, with the re-check repair: exit 1"),
+    edit(
+      READY,
+      "      if (result.failing.every(inProgress)) {",
+      "      if ((false as boolean) && result.failing.every(inProgress)) {",
+    ),
+  ),
+  entry(
+    "a run in progress is printed with its empty conclusion",
+    CLI("a run still in progress reads `in progress`, with the re-check repair: exit 1"),
+    edit(
+      READY,
+      '  if (inProgress(r)) return "in progress";',
+      '  if ((false as boolean) && inProgress(r)) return "in progress";',
+    ),
+  ),
+  entry(
+    "an older gh's unknown-field error gets the install-and-authenticate repair",
+    CLI("an older gh that does not know a field: exit 1, and the repair is to upgrade gh"),
+    edit(
+      READY,
+      '      if (result.detail.includes("Unknown JSON field")) {',
+      '      if ((false as boolean) && result.detail.includes("Unknown JSON field")) {',
+    ),
+  ),
+  entry(
+    "a .js entry name is not resolved to the .ts file (unresolved: throws instead of running)",
+    PROGRAM(
+      "both scripts run by a .js name (tsx maps it to the .ts file) still run: exit 1 on a red history",
+    ),
+    edit(READY, ENTRY_CANDIDATES, "  for (const candidate of [entry, `${entry}.ts`]) {"),
   ),
 ];
 
