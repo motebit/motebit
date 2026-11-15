@@ -13,7 +13,10 @@
  *
  *   DRY RUN:   npx tsx scripts/deploy-archetype-slate.ts
  *   STAGING:   RUN=1 npx tsx scripts/deploy-archetype-slate.ts
- *   PROD:      RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts
+ *   PROD:      MOTEBIT_RELAY_PUBLIC_KEY=<production relay key> RUN=1 TARGET=prod \
+ *                npx tsx scripts/deploy-archetype-slate.ts
+ *              (the key is the operator's pin, obtained out of band; a
+ *               promotion without it is refused: see Required env)
  *
  * TARGET is unset, `staging` or `prod`, exactly. Anything else (`PROD`,
  * `prod ` with a space, an empty value) is refused before anything runs: it
@@ -24,8 +27,9 @@
  * history (scripts/check-promotion-ready.ts, `readPromotionReadiness`: the
  * newest 5 scheduled runs of archetype-conformance.yml in motebit/motebit,
  * each a first attempt on main that concluded success, the newest at most 48
- * hours old, no two consecutive ones more than 48 hours apart) BEFORE its
- * first flyctl call, and REFUSES (exit 1, nothing
+ * hours old, no two counted runs more than 48 hours apart (a schedule that
+ * stopped and restarted)) BEFORE its first flyctl call, and REFUSES (exit 1,
+ * nothing
  * deployed, no secret staged) unless ready. Unreadable history (gh missing,
  * unauthenticated, erroring) refuses. A run is a production promotion when
  * TARGET=prod, OR when the relay it resolves to is the production relay
@@ -34,7 +38,8 @@
  * same way. A dry run of either reports the readiness and refuses nothing.
  * A staging run against any other relay never reads it.
  *
- *   OVERRIDE:  PROMOTION_READINESS_OVERRIDE_REASON="<why>" RUN=1 TARGET=prod …
+ *   OVERRIDE:  PROMOTION_READINESS_OVERRIDE_REASON="<why>" \
+ *                MOTEBIT_RELAY_PUBLIC_KEY=<production relay key> RUN=1 TARGET=prod …
  *              The only bypass. The value must be a reason someone wrote: at
  *              least 10 characters after trimming, and not `1`, `true`,
  *              `yes`, `y`, `ok` or `override`. Anything less does not
@@ -417,13 +422,33 @@ async function discoverByCapability(
   return byCapability;
 }
 
-/** The relay's Ed25519 public key from its well-known descriptor — pinned into every worker. */
+/**
+ * The relay's Ed25519 public key from its well-known descriptor. Every
+ * failure names what could not be read and says nothing was deployed: this
+ * runs before the first flyctl call.
+ */
 async function fetchRelayPublicKey(effects: SlateEffects, relayUrl: string): Promise<string> {
-  const res = await effects.fetch(`${relayUrl}/.well-known/motebit.json`);
-  if (!res.ok) throw new Error(`well-known fetch failed: ${res.status}`);
-  const body = (await res.json()) as { public_key?: string };
-  if (!body.public_key || !/^[0-9a-f]{64}$/.test(body.public_key)) {
-    throw new Error("well-known descriptor carries no 64-hex public_key");
+  const what = `${new URL(relayUrl).host}/.well-known/motebit.json`;
+  const unread = (reason: string, cause?: unknown): Error =>
+    new Error(`could not read ${what} (${reason}); nothing was deployed`, { cause });
+  let res: Response;
+  try {
+    res = await effects.fetch(`${relayUrl}/.well-known/motebit.json`);
+  } catch (err) {
+    // undici's "fetch failed" carries the real reason (ECONNREFUSED, ENOTFOUND) on its cause.
+    const code = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+    const message = err instanceof Error ? err.message : String(err);
+    throw unread(typeof code === "string" ? `${message}: ${code}` : message, err);
+  }
+  if (!res.ok) throw unread(`HTTP ${res.status}`);
+  let body: { public_key?: string };
+  try {
+    body = (await res.json()) as { public_key?: string };
+  } catch (err) {
+    throw unread("the answer is not JSON", err);
+  }
+  if (!body.public_key || !RELAY_KEY_FORMAT.test(body.public_key)) {
+    throw unread("the descriptor carries no 64-hex public_key");
   }
   return body.public_key;
 }
@@ -487,7 +512,9 @@ function gatePromotion(promotion: boolean, run: boolean, effects: SlateEffects):
     effects.error(`!!! reason (${PROMOTION_READINESS_OVERRIDE_ENV}): ${overrideReason}`);
     effects.error("!!! the readiness result this run overrides:");
     for (const line of lines) effects.error(`!!!   ${line}`);
-    effects.error("!!! proceeding with the prod deploy.");
+    effects.error(
+      "!!! proceeding past the readiness check only: the override does not replace the operator's relay-key pin (MOTEBIT_RELAY_PUBLIC_KEY), which is checked next.",
+    );
     return null;
   }
 
@@ -497,7 +524,7 @@ function gatePromotion(promotion: boolean, run: boolean, effects: SlateEffects):
   effects.error(
     `Fix: promotion needs the newest ${PROMOTION_REQUIRED_GREEN_RUNS} SCHEDULED runs of archetype-conformance.yml all green, each a first attempt on main, the newest at most ${PROMOTION_MAX_NEWEST_RUN_AGE_HOURS} hours old and no two more than ${PROMOTION_MAX_RUN_GAP_HOURS} hours apart (docs/doctrine/agent-archetypes.md §4). ` +
       `${promotionRepair(readiness)}, re-check with: ${RECHECK}, then re-run this command. ` +
-      `Emergency only: ${PROMOTION_READINESS_OVERRIDE_ENV}="<why, at least ${OVERRIDE_REASON_MIN_LENGTH} characters>" proceeds and prints the reason with the result it overrode; an empty or flag-like value (${OVERRIDE_NOT_A_REASON.join(", ")}) does not.`,
+      `Emergency only: ${PROMOTION_READINESS_OVERRIDE_ENV}="<why, at least ${OVERRIDE_REASON_MIN_LENGTH} characters>" proceeds and prints the reason with the result it overrode; an empty or flag-like value (${OVERRIDE_NOT_A_REASON.join(", ")}) does not. The override does not replace the operator's relay-key pin: a promotion still needs MOTEBIT_RELAY_PUBLIC_KEY.`,
   );
   return 1;
 }
@@ -528,9 +555,18 @@ export async function runSlate(effects: SlateEffects): Promise<number> {
   const prodRelay = PROD_RELAY_HOSTS.includes(host);
   const promotion = target === "prod" || prodRelay;
 
+  const RELAY_KEY_ARG = "MOTEBIT_RELAY_PUBLIC_KEY=";
   const sh = (cmd: string, args: string[]): string => {
     if (!run) {
-      effects.log(`  [dry-run] ${cmd} ${args.join(" ")}`);
+      // On a promotion the relay key is not a value to copy from this output
+      // (the operator's pin comes from out of band), so a dry run shows only
+      // its ends. A staging dry run prints it as before.
+      const shown = args.map((arg) =>
+        promotion && arg.startsWith(RELAY_KEY_ARG)
+          ? `${RELAY_KEY_ARG}${keyEnds(arg.slice(RELAY_KEY_ARG.length))}`
+          : arg,
+      );
+      effects.log(`  [dry-run] ${cmd} ${shown.join(" ")}`);
       return "";
     }
     return effects.exec(cmd, args);
@@ -606,7 +642,11 @@ export async function runSlate(effects: SlateEffects): Promise<number> {
     if (!RELAY_KEY_FORMAT.test(operatorPin)) {
       // The value is not echoed: a variable holding the wrong thing may hold a secret.
       effects.error(
-        `REFUSED: MOTEBIT_RELAY_PUBLIC_KEY is set but is not a relay public key (64 hex characters; got ${operatorPin.length} characters). Nothing was deployed. Fix: unset it to stage the clerk the key the relay serves (${keyEnds(relayPublicKey)}), or set it to that relay's 64-hex Ed25519 public key.`,
+        `REFUSED: MOTEBIT_RELAY_PUBLIC_KEY is set but is not a relay public key (64 hex characters; got ${operatorPin.length} characters). Nothing was deployed. Fix: ${
+          promotion
+            ? "set MOTEBIT_RELAY_PUBLIC_KEY to the production relay's 64-hex key, obtained out of band."
+            : `unset it to stage the clerk the key the relay serves (${keyEnds(relayPublicKey)}), or set it to that relay's 64-hex Ed25519 public key.`
+        }`,
       );
       return 1;
     }
@@ -618,7 +658,7 @@ export async function runSlate(effects: SlateEffects): Promise<number> {
       const disagree = `the operator's pin MOTEBIT_RELAY_PUBLIC_KEY (${keyEnds(operatorPin)}) and the key the relay ${relayUrl} serves (${keyEnds(relayPublicKey)}) disagree`;
       if (promotion && run) {
         effects.error(
-          `REFUSED: ${disagree}. Nothing was deployed. The clerk would pin its payments to a key this relay does not hold. Do not deploy until one is corrected. Fix: if the pin is stale (a staging key left in the shell), unset MOTEBIT_RELAY_PUBLIC_KEY or set it to the production relay's key; if the relay is serving the wrong key, stop and find out why.`,
+          `REFUSED: ${disagree}. Nothing was deployed. The clerk would pin its payments to a key this relay does not hold. Do not deploy until one is corrected. Fix: if the pin is stale (a staging key left in the shell), set MOTEBIT_RELAY_PUBLIC_KEY to the production relay's 64-hex key, obtained out of band; if the relay is serving the wrong key, stop and find out why.`,
         );
         return 1;
       }
@@ -721,7 +761,7 @@ export async function runSlate(effects: SlateEffects): Promise<number> {
     effects.log("\nSlate live. Next: scripts/archetype-conformance.ts exercises it end-to-end.");
   } else {
     effects.log(
-      "\nDry run complete. Set RUN=1 (and MOTEBIT_API_TOKEN, ANTHROPIC_API_KEY) to execute.",
+      "\nDry run complete. Set RUN=1 (and MOTEBIT_API_TOKEN, ANTHROPIC_API_KEY; a production promotion also needs MOTEBIT_RELAY_PUBLIC_KEY, the production relay's key obtained out of band) to execute.",
     );
   }
   return 0;

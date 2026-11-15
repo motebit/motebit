@@ -281,8 +281,12 @@ describe("readPromotionReadiness", () => {
   it("extra rows change nothing: more than `required`, other events, in any order", () => {
     const older = [run(5, "failure"), run(6, "cancelled"), run(7, "success", { attempt: 3 })];
     const dispatches = [
-      run(0, "failure", { event: "workflow_dispatch", createdAt: "2026-11-15T16:00:00Z" }),
-      run(1, "failure", { event: "push" }),
+      run(0, "failure", {
+        event: "workflow_dispatch",
+        createdAt: "2026-11-15T16:00:00Z",
+        url: "https://github.example/runs/dispatch-1",
+      }),
+      run(1, "failure", { event: "push", url: "https://github.example/runs/push-1" }),
     ];
     expect(read({ listRuns: () => [...older, ...dispatches, ...FIVE_GREEN] })).toEqual({
       ready: true,
@@ -304,7 +308,7 @@ describe("readPromotionReadiness", () => {
     }
   });
 
-  it("the window must be consecutive: no two counted runs more than 48 hours apart", () => {
+  it("a schedule that stopped and restarted: no two counted runs more than 48 hours apart", () => {
     const t0 = Date.parse("2026-11-15T14:17:00Z");
     const at = (hoursAgo: number, n: number) =>
       run(0, "success", {
@@ -365,12 +369,46 @@ describe("readPromotionReadiness", () => {
       required: 5,
       runs: [one],
     });
-    // Duplicates beside a full window change nothing.
+    // Identical duplicates beside a full window change nothing.
     expect(read({ listRuns: () => [...FIVE_GREEN, ...FIVE_GREEN] })).toEqual({
       ready: true,
       required: 5,
       runs: FIVE_GREEN,
     });
+  });
+
+  it("one run listed twice with DIFFERENT contents cannot hide a red run: unreadable, in either order", () => {
+    // The same url once green and once red. First-copy-wins would count the green.
+    const green = FIVE_GREEN[2]!;
+    const red = { ...green, conclusion: "failure" };
+    const others = FIVE_GREEN.filter((r) => r !== green);
+    for (const rows of [
+      [...others, green, red],
+      [...others, red, green],
+      [red, ...FIVE_GREEN],
+      [...FIVE_GREEN, red],
+    ]) {
+      expect(read({ listRuns: () => rows })).toEqual({
+        ready: false,
+        reason: "gh-unreadable",
+        required: 5,
+        detail: `the run list names one run twice with different contents: ${green.url}`,
+      });
+    }
+    // Any differing field counts, not only the conclusion; and a conflicting
+    // copy that is not a scheduled row still makes the answer untrustworthy.
+    for (const other of [
+      { ...green, attempt: 2 },
+      { ...green, status: "in_progress" },
+      { ...green, headBranch: "probe" },
+      { ...green, createdAt: "2026-11-01T00:00:00Z" },
+      { ...green, event: "workflow_dispatch" },
+    ]) {
+      expect(read({ listRuns: () => [...FIVE_GREEN, other] })).toMatchObject({
+        ready: false,
+        reason: "gh-unreadable",
+      });
+    }
   });
 });
 
@@ -404,7 +442,11 @@ describe("check-promotion-ready CLI", () => {
     expect(r.out).toContain(
       "✓ check-promotion-ready: last 5 scheduled conformance runs all green (2026-11-11T14:17:00Z → 2026-11-15T14:17:00Z).",
     );
-    expect(r.out).toContain("READY — the slate's prod command is: RUN=1 TARGET=prod");
+    // The command is printed as it must be run: a promotion without the operator's key is refused.
+    expect(r.out).toContain(
+      "READY — the slate's prod command is: MOTEBIT_RELAY_PUBLIC_KEY=<production relay key> RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts.",
+    );
+    expect(r.out).toContain("obtained out of band (it refuses a promotion without it)");
     expect(r.out).toContain("re-checks this readiness itself");
     expect(r.out).toContain("refuses unless ready");
     expect(r.out).toContain("no CI gate and no GitHub environment reviewer applies to it");
@@ -453,7 +495,7 @@ describe("check-promotion-ready CLI", () => {
     const c = cli({}, old);
     expect(c.code).toBe(1);
     expect(c.err).toContain(
-      "check-promotion-ready: the newest scheduled run (2026-11-12T14:17:00Z) is 77 hours old; the limit is 48.",
+      "check-promotion-ready: the newest scheduled run (2026-11-12T14:17:00Z) is 77.8 hours old; the limit is 48.",
     );
     expect(c.err).toContain(
       "NOT READY — old greens do not stand in for a schedule that has stopped.",
@@ -494,11 +536,40 @@ describe("check-promotion-ready CLI", () => {
     expect(r.code).toBe(1);
     expect(r.err).toBe(
       [
-        "check-promotion-ready: 144 hours passed between two consecutive counted runs (2026-11-06T14:17:00Z → 2026-11-12T14:17:00Z); the limit is 48.",
-        "NOT READY — the window must be consecutive daily runs; greens from before a gap do not count toward it.",
-        "Fix: Wait for the daily schedule to produce 5 consecutive runs with no more than 48 hours between any two (if the schedule was disabled, the window restarts from when it resumed).",
+        "check-promotion-ready: two counted runs are 144 hours apart (2026-11-06T14:17:00Z → 2026-11-12T14:17:00Z); the limit is 48.",
+        "NOT READY — a schedule that stopped and restarted does not get its old greens counted.",
+        "Fix: Wait for the daily schedule to produce 5 runs with no two more than 48 hours apart (after a schedule stopped and restarted, the count starts again from the restart).",
       ].join("\n"),
     );
+  });
+
+  it("hours over a limit never print as the limit: 48.5 reads 48.5, 48.04 reads 48.1", () => {
+    const t0 = Date.parse("2026-11-15T14:17:00Z");
+    const at = (hoursAgo: number, n: number) =>
+      run(0, "success", {
+        createdAt: new Date(t0 - hoursAgo * HOUR).toISOString(),
+        url: `https://github.example/runs/h-${n}`,
+      });
+    // A 48.5 hour gap.
+    const gap = cli({}, [at(0, 0), at(24, 1), at(72.5, 2), at(96.5, 3), at(120.5, 4)]);
+    expect(gap.code).toBe(1);
+    expect(gap.err).toContain("two counted runs are 48.5 hours apart (");
+    expect(gap.err).not.toContain("are 48 hours apart");
+    // A 48.04 hour gap rounds UP to 48.1, never down to the limit.
+    const hair = cli({}, [at(0, 0), at(24, 1), at(72.04, 2), at(96.04, 3), at(120.04, 4)]);
+    expect(hair.code).toBe(1);
+    expect(hair.err).toContain("two counted runs are 48.1 hours apart (");
+    // A newest run 48.5 hours old.
+    const staleErr: string[] = [];
+    const stale = runCheckPromotionReady({
+      env: {},
+      listRuns: () => FIVE_GREEN,
+      now: () => new Date(t0 + 48.5 * HOUR),
+      log: () => undefined,
+      error: (l) => staleErr.push(l),
+    });
+    expect(stale).toBe(1);
+    expect(staleErr.join("\n")).toContain("is 48.5 hours old; the limit is 48.");
   });
 
   it("an older gh that does not know a field: exit 1, and the repair is to upgrade gh", () => {
@@ -552,7 +623,12 @@ describe("check-promotion-ready CLI", () => {
 const RELAY_KEY = "ab".repeat(32);
 const LIVE = { RUN: "1", MOTEBIT_API_TOKEN: "operator-token", ANTHROPIC_API_KEY: "inference-key" };
 
-function slate(env: Record<string, string | undefined>, rows: ConformanceRun[] | Error) {
+function slate(
+  env: Record<string, string | undefined>,
+  rows: ConformanceRun[] | Error,
+  /** What the relay's well-known descriptor read does instead of answering with RELAY_KEY. */
+  wellKnown?: () => Promise<Response>,
+) {
   /** Every effect on the world, in order: `readiness <limit>`, `flyctl …`, `fetch <url>`. */
   const events: string[] = [];
   const out: string[] = [];
@@ -570,7 +646,7 @@ function slate(env: Record<string, string | undefined>, rows: ConformanceRun[] |
     fetch: (url) => {
       events.push(`fetch ${url}`);
       if (url.endsWith("/.well-known/motebit.json")) {
-        return Promise.resolve(json({ public_key: RELAY_KEY }));
+        return wellKnown ? wellKnown() : Promise.resolve(json({ public_key: RELAY_KEY }));
       }
       return Promise.resolve(
         json({
@@ -612,6 +688,10 @@ function expectRefused(r: Awaited<ReturnType<typeof slate>>): void {
   expect(r.err).toContain("REFUSED: the archetype slate is not ready for production.");
   expect(r.err).toContain("re-check with: npx tsx scripts/check-promotion-ready.ts");
   expect(r.err).toContain("archetype-conformance.yml");
+  // The override hint does not promise more than the override does.
+  expect(r.err).toContain(
+    "The override does not replace the operator's relay-key pin: a promotion still needs MOTEBIT_RELAY_PUBLIC_KEY.",
+  );
 }
 
 describe("deploy-archetype-slate: the promotion-readiness gate", () => {
@@ -680,6 +760,9 @@ describe("deploy-archetype-slate: the promotion-readiness gate", () => {
     expect(r.events[0]).toBe("readiness 5");
     expect(r.flyctl.filter((e) => e.startsWith("flyctl deploy "))).toHaveLength(SLATE.length);
     expect(r.err).toContain("PROMOTION READINESS OVERRIDDEN");
+    expect(r.err).toContain(
+      "the override does not replace the operator's relay-key pin (MOTEBIT_RELAY_PUBLIC_KEY), which is checked next.",
+    );
     expect(r.err).toContain(`reason (PROMOTION_READINESS_OVERRIDE_REASON): ${reason}`);
     expect(r.err).not.toContain("REFUSED");
   });
@@ -770,7 +853,7 @@ describe("deploy-archetype-slate: the promotion-readiness gate", () => {
       [3, 4, 5, 6, 7].map((daysAgo) => run(daysAgo, "success")),
     );
     expectRefused(b);
-    expect(b.err).toContain("is 77 hours old; the limit is 48.");
+    expect(b.err).toContain("is 77.8 hours old; the limit is 48.");
     expect(b.err).toContain("gh workflow enable");
   });
 
@@ -1017,6 +1100,11 @@ describe("deploy-archetype-slate: the clerk's staged secrets", () => {
       );
       expect(r.err).toContain("serves (abababab…abababab) disagree.");
       expect(r.err).toContain("Do not deploy until one is corrected.");
+      // The repair never says to unset the variable: a promotion without it is refused too.
+      expect(r.err).toContain(
+        "set MOTEBIT_RELAY_PUBLIC_KEY to the production relay's 64-hex key, obtained out of band;",
+      );
+      expect(r.err).not.toMatch(/unset/i);
     }
     // The readiness override does not carry a mismatched pin through.
     const overridden = await slate(
@@ -1066,6 +1154,17 @@ describe("deploy-archetype-slate: the clerk's staged secrets", () => {
           `REFUSED: MOTEBIT_RELAY_PUBLIC_KEY is set but is not a relay public key (64 hex characters; got ${bad.length} characters).`,
         );
         expect(r.err).not.toContain(bad);
+        // The repair fits the run: a promotion is never told to unset the variable.
+        if (promotion) {
+          expect(r.err).toContain(
+            "Fix: set MOTEBIT_RELAY_PUBLIC_KEY to the production relay's 64-hex key, obtained out of band.",
+          );
+          expect(r.err).not.toMatch(/unset/i);
+        } else {
+          expect(r.err).toContain(
+            "Fix: unset it to stage the clerk the key the relay serves (abababab…abababab), or set it to that relay's 64-hex Ed25519 public key.",
+          );
+        }
       }
     }
   });
@@ -1093,6 +1192,74 @@ describe("deploy-archetype-slate: the clerk's staged secrets", () => {
       expect(r.out).toContain("which matches the fetched key above");
       expect(r.err).toBe("");
     }
+  });
+
+  it("a promotion DRY run shows only the ends of the relay key in its secrets lines; a staging dry run is unchanged", async () => {
+    const keyArgs = (r: Awaited<ReturnType<typeof slate>>): string[] =>
+      r.out
+        .split("\n")
+        .filter((l) => l.includes("[dry-run] flyctl secrets set"))
+        .flatMap((l) => l.split(" ").filter((p) => p.startsWith("MOTEBIT_RELAY_PUBLIC_KEY=")));
+
+    // Prod target and staging apps on the prod relay; pin unset, matching, and mismatched.
+    for (const base of [{ TARGET: "prod" }, { RELAY_URL: "https://relay.motebit.com" }]) {
+      for (const pin of [undefined, RELAY_KEY, OPERATOR_PIN]) {
+        const r = await slate({ ...base, MOTEBIT_RELAY_PUBLIC_KEY: pin }, FIVE_GREEN);
+        expect(r.code).toBe(0);
+        expect(r.flyctl).toEqual([]);
+        const clerk = pin === OPERATOR_PIN ? "cdcdcdcd…cdcdcdcd" : "abababab…abababab";
+        const args = keyArgs(r);
+        expect(args).toHaveLength(SLATE.length);
+        expect(args.filter((a) => a === "MOTEBIT_RELAY_PUBLIC_KEY=abababab…abababab")).toHaveLength(
+          pin === OPERATOR_PIN ? SLATE.length - 1 : SLATE.length,
+        );
+        expect(args).toContain(`MOTEBIT_RELAY_PUBLIC_KEY=${clerk}`);
+        // Neither full key appears anywhere in the output.
+        expect(r.out + r.err).not.toContain(RELAY_KEY);
+        expect(r.out + r.err).not.toContain(OPERATOR_PIN);
+      }
+    }
+
+    // A staging dry run prints the keys in full, as before.
+    const stg = await slate({ MOTEBIT_RELAY_PUBLIC_KEY: OPERATOR_PIN }, FIVE_GREEN);
+    expect(stg.code).toBe(0);
+    const stgArgs = keyArgs(stg);
+    expect(stgArgs.filter((a) => a === `MOTEBIT_RELAY_PUBLIC_KEY=${RELAY_KEY}`)).toHaveLength(
+      SLATE.length - 1,
+    );
+    expect(stgArgs).toContain(`MOTEBIT_RELAY_PUBLIC_KEY=${OPERATOR_PIN}`);
+  });
+
+  it("a relay whose well-known descriptor cannot be read: the error names what and says nothing was deployed", async () => {
+    const unreachable = () =>
+      Promise.reject(
+        new TypeError("fetch failed", {
+          cause: Object.assign(new Error("x"), { code: "ECONNREFUSED" }),
+        }),
+      );
+    await expect(slate(LIVE, FIVE_GREEN, unreachable)).rejects.toThrow(
+      "could not read motebit-sync-stg.fly.dev/.well-known/motebit.json (fetch failed: ECONNREFUSED); nothing was deployed",
+    );
+    await expect(
+      slate({ ...PROD, MOTEBIT_RELAY_PUBLIC_KEY: RELAY_KEY }, FIVE_GREEN, unreachable),
+    ).rejects.toThrow(
+      "could not read relay.motebit.com/.well-known/motebit.json (fetch failed: ECONNREFUSED); nothing was deployed",
+    );
+    // A bare failure with no cause, an HTTP error, a non-JSON answer, a descriptor with no key.
+    await expect(
+      slate(LIVE, FIVE_GREEN, () => Promise.reject(new Error("socket hang up"))),
+    ).rejects.toThrow("/.well-known/motebit.json (socket hang up); nothing was deployed");
+    await expect(
+      slate(LIVE, FIVE_GREEN, () => Promise.resolve(new Response("down", { status: 503 }))),
+    ).rejects.toThrow("/.well-known/motebit.json (HTTP 503); nothing was deployed");
+    await expect(
+      slate(LIVE, FIVE_GREEN, () => Promise.resolve(new Response("<html>", { status: 200 }))),
+    ).rejects.toThrow("/.well-known/motebit.json (the answer is not JSON); nothing was deployed");
+    await expect(
+      slate(LIVE, FIVE_GREEN, () =>
+        Promise.resolve(new Response(JSON.stringify({ public_key: "nope" }), { status: 200 })),
+      ),
+    ).rejects.toThrow("(the descriptor carries no 64-hex public_key); nothing was deployed");
   });
 
   it("the Solana RPC URL is passed through when set and not staged when unset", async () => {
@@ -1325,6 +1492,16 @@ describe("the scripts as programs (fake gh, fake flyctl)", () => {
     expect(exec("/bin/echo", ["status"], { quiet: true })).toBe("");
     // `flyctl status` on an app that does not exist: the ceremony reads the throw as "create it".
     expect(() => exec("/bin/sh", ["-c", "exit 1"], { quiet: true })).toThrow();
+  });
+
+  it("the slate command against a relay nothing listens on: exit 1, the error names the relay, flyctl never run", () => {
+    // A staging dry run; RELAY_URL is the sandbox's http://127.0.0.1:1.
+    const box = sandbox(LIVE_GREEN);
+    const r = box.runScript("deploy-archetype-slate.ts", {});
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("could not read 127.0.0.1:1/.well-known/motebit.json (fetch failed");
+    expect(r.err).toContain("); nothing was deployed");
+    expect(box.calls("flyctl")).toEqual([]);
   });
 
   it("importing either script runs nothing: no gh, no flyctl, no exit", () => {

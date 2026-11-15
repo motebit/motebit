@@ -10,12 +10,14 @@
  *   - a re-run does not count (`attempt` must be 1: a human `gh run rerun`
  *     of a failed scheduled run is not an unattended green);
  *   - the run must be on `main`, completed, conclusion `success`;
- *   - the newest run must be at most 48 hours old, and no two consecutive
- *     counted runs may be more than 48 hours apart (a disabled schedule must
- *     not leave old greens standing: one green from today does not adopt
- *     four from August; 48 hours tolerates GitHub's cron delay on a daily
- *     schedule);
- *   - a run listed twice (same url) counts once.
+ *   - the newest run must be at most 48 hours old, and no two counted runs
+ *     may be more than 48 hours apart (a schedule that stopped and restarted:
+ *     one green from today does not adopt four from August). The bound stops
+ *     a STOPPED schedule's old greens from being counted. It does not demand
+ *     one run per calendar day: a day GitHub skips or delays is not a red run;
+ *   - a run listed twice (same url, same contents) counts once; the same url
+ *     with DIFFERENT contents means the answer cannot be trusted, and reads
+ *     as unreadable history.
  * The discipline is that the slate passes unattended, on the daily cadence,
  * not when someone is watching.
  *
@@ -29,8 +31,9 @@
  *
  * Two callers:
  *   1. this CLI, an operator pre-flight run by hand (N from REQUIRED);
- *   2. the slate's prod command (`RUN=1 TARGET=prod npx tsx
- *      scripts/deploy-archetype-slate.ts`), which calls
+ *   2. the slate's prod command (`MOTEBIT_RELAY_PUBLIC_KEY=<production relay
+ *      key> RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts`),
+ *      which calls
  *      `readPromotionReadiness` with N fixed at
  *      PROMOTION_REQUIRED_GREEN_RUNS before its first flyctl call and
  *      refuses unless ready (or PROMOTION_READINESS_OVERRIDE_REASON carries
@@ -75,7 +78,11 @@ export const PROMOTION_REQUIRED_GREEN_RUNS = 5;
 /** The newest counted run may be at most this old: the schedule is daily. */
 export const PROMOTION_MAX_NEWEST_RUN_AGE_HOURS = 48;
 
-/** Two consecutive counted runs may be at most this far apart: the window is consecutive days. */
+/**
+ * No two counted runs may be further apart than this. It stops the old greens
+ * of a schedule that stopped and restarted from being counted; it does not
+ * demand one run per calendar day (a day GitHub skips is not a red run).
+ */
 export const PROMOTION_MAX_RUN_GAP_HOURS = 48;
 
 export interface ConformanceRun {
@@ -202,10 +209,29 @@ export function readPromotionReadiness(opts: {
       "the answer is not a list of runs (attempt, conclusion, createdAt, event, headBranch, status, url)",
     );
   }
-  // Only scheduled runs count, each once, and only the newest `required` of
-  // them BY THEIR OWN DATES: the answer's order is not trusted, and a lister
-  // that answers with more rows, repeated rows, or other events, changes
-  // nothing.
+  // gh lists one row per run. The same url twice with DIFFERENT contents (one
+  // copy green, one red) is an answer that cannot be trusted: collapsing it
+  // to whichever copy came first could hide a red run.
+  const byUrl = new Map<string, string>();
+  for (const r of listed) {
+    const contents = JSON.stringify([
+      r.attempt,
+      r.conclusion,
+      r.createdAt,
+      r.event,
+      r.headBranch,
+      r.status,
+    ]);
+    const first = byUrl.get(r.url);
+    if (first !== undefined && first !== contents) {
+      return unreadable(`the run list names one run twice with different contents: ${r.url}`);
+    }
+    byUrl.set(r.url, contents);
+  }
+  // Only scheduled runs count, each once (identical repeated rows collapse),
+  // and only the newest `required` of them BY THEIR OWN DATES: the answer's
+  // order is not trusted, and a lister that answers with more rows or with
+  // other events changes nothing.
   const seen = new Set<string>();
   const runs = listed
     .filter((r) => r.event === "schedule")
@@ -235,8 +261,8 @@ export function readPromotionReadiness(opts: {
   if (newestAgeHours > PROMOTION_MAX_NEWEST_RUN_AGE_HOURS) {
     return { ready: false, reason: "stale-history", required, runs, newestAgeHours };
   }
-  // The window itself must be consecutive: a fresh newest run does not adopt
-  // old greens from before the schedule stopped.
+  // A fresh newest run does not adopt old greens from before the schedule
+  // stopped: no two counted runs may be too far apart.
   for (let i = 0; i + 1 < runs.length; i++) {
     const newer = runs[i]!;
     const older = runs[i + 1]!;
@@ -293,15 +319,24 @@ export function describePromotionReadiness(result: PromotionReadiness): string[]
       ];
     case "stale-history":
       return [
-        `check-promotion-ready: the newest scheduled run (${result.runs[0]!.createdAt}) is ${Math.floor(result.newestAgeHours)} hours old; the limit is ${PROMOTION_MAX_NEWEST_RUN_AGE_HOURS}.`,
+        `check-promotion-ready: the newest scheduled run (${result.runs[0]!.createdAt}) is ${hoursShown(result.newestAgeHours)} hours old; the limit is ${PROMOTION_MAX_NEWEST_RUN_AGE_HOURS}.`,
         "NOT READY — old greens do not stand in for a schedule that has stopped.",
       ];
     case "gap-in-history":
       return [
-        `check-promotion-ready: ${Math.floor(result.gap.hours)} hours passed between two consecutive counted runs (${result.gap.older.createdAt} → ${result.gap.newer.createdAt}); the limit is ${PROMOTION_MAX_RUN_GAP_HOURS}.`,
-        "NOT READY — the window must be consecutive daily runs; greens from before a gap do not count toward it.",
+        `check-promotion-ready: two counted runs are ${hoursShown(result.gap.hours)} hours apart (${result.gap.older.createdAt} → ${result.gap.newer.createdAt}); the limit is ${PROMOTION_MAX_RUN_GAP_HOURS}.`,
+        "NOT READY — a schedule that stopped and restarted does not get its old greens counted.",
       ];
   }
+}
+
+/**
+ * Hours for a message that compares them with a limit: one decimal, rounded
+ * UP, so a value over the limit never prints as the limit (48.04 → 48.1).
+ */
+function hoursShown(hours: number): string {
+  const up = Math.ceil(hours * 10) / 10;
+  return Number.isInteger(up) ? String(up) : up.toFixed(1);
 }
 
 /** A run that has not completed; gh reports its conclusion as "" (or null). */
@@ -332,7 +367,7 @@ export function promotionRepair(result: NotReady): string {
       }
       return "Fix what the runs listed above caught, then wait for the daily schedule to turn the window green (manual dispatches do not count)";
     case "gap-in-history":
-      return `Wait for the daily schedule to produce ${result.required} consecutive runs with no more than ${PROMOTION_MAX_RUN_GAP_HOURS} hours between any two (if the schedule was disabled, the window restarts from when it resumed)`;
+      return `Wait for the daily schedule to produce ${result.required} runs with no two more than ${PROMOTION_MAX_RUN_GAP_HOURS} hours apart (after a schedule stopped and restarted, the count starts again from the restart)`;
     case "rerun-attempt":
       return "Wait for the daily schedule to replace the re-run runs with first attempts (do not `gh run rerun` a scheduled run: the re-run never counts)";
     case "wrong-branch":
@@ -363,7 +398,7 @@ export function runCheckPromotionReady(io: CheckPromotionReadyIo): number {
   }
   for (const line of describePromotionReadiness(result)) log(line);
   log(
-    `READY — the slate's prod command is: RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts. It re-checks this readiness itself (always the last ${PROMOTION_REQUIRED_GREEN_RUNS} scheduled runs, whatever REQUIRED says here) before its first flyctl call and refuses unless ready. It is still a local flyctl deploy: no CI gate and no GitHub environment reviewer applies to it.`,
+    `READY — the slate's prod command is: MOTEBIT_RELAY_PUBLIC_KEY=<production relay key> RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts. It needs the production relay's public key from you, obtained out of band (it refuses a promotion without it). It re-checks this readiness itself (always the last ${PROMOTION_REQUIRED_GREEN_RUNS} scheduled runs, whatever REQUIRED says here) before its first flyctl call and refuses unless ready. It is still a local flyctl deploy: no CI gate and no GitHub environment reviewer applies to it.`,
   );
   return 0;
 }

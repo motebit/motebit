@@ -478,7 +478,7 @@ const TAMPERS: TamperEntry[] = [
   // --- round three: the window, the rows, the repairs, the .js entry -------
   entry(
     "the decision: no gap bound (one green today adopts four from August)",
-    DECISION("the window must be consecutive: no two counted runs more than 48 hours apart"),
+    DECISION("a schedule that stopped and restarted: no two counted runs more than 48 hours apart"),
     edit(
       READY,
       "    if (hours > PROMOTION_MAX_RUN_GAP_HOURS) {",
@@ -527,6 +527,68 @@ const TAMPERS: TamperEntry[] = [
       "both scripts run by a .js name (tsx maps it to the .ts file) still run: exit 1 on a red history",
     ),
     edit(READY, ENTRY_CANDIDATES, "  for (const candidate of [entry, `${entry}.ts`]) {"),
+  ),
+
+  // --- round four ---------------------------------------------------------
+  entry(
+    "a run listed twice with different contents: the first copy wins again (a red copy is hidden)",
+    DECISION(
+      "one run listed twice with DIFFERENT contents cannot hide a red run: unreadable, in either order",
+    ),
+    edit(
+      READY,
+      "    if (first !== undefined && first !== contents) {",
+      "    if ((false as boolean) && first !== undefined && first !== contents) {",
+    ),
+  ),
+  entry(
+    "hours are floored again (a 48.5 hour gap prints as 48, the limit)",
+    CLI("hours over a limit never print as the limit: 48.5 reads 48.5, 48.04 reads 48.1"),
+    edit(READY, "  const up = Math.ceil(hours * 10) / 10;", "  const up = Math.floor(hours);"),
+  ),
+  entry(
+    "a promotion's malformed-pin refusal tells the operator to unset the variable",
+    CLERK(
+      "operator pin that is not 64 hex characters: refused on staging and prod alike, value not echoed",
+    ),
+    edit(
+      SLATE,
+      '          promotion\n            ? "set MOTEBIT_RELAY_PUBLIC_KEY to the production relay\'s 64-hex key, obtained out of band."',
+      '          (false as boolean)\n            ? "set MOTEBIT_RELAY_PUBLIC_KEY to the production relay\'s 64-hex key, obtained out of band."',
+    ),
+  ),
+  entry(
+    "a promotion dry run prints the relay key in full in its secrets lines",
+    CLERK(
+      "a promotion DRY run shows only the ends of the relay key in its secrets lines; a staging dry run is unchanged",
+    ),
+    edit(
+      SLATE,
+      "        promotion && arg.startsWith(RELAY_KEY_ARG)",
+      "        (false as boolean) && arg.startsWith(RELAY_KEY_ARG)",
+    ),
+  ),
+  entry(
+    "a staging dry run redacts the relay key too (the redaction is not promotion-only)",
+    CLERK(
+      "a promotion DRY run shows only the ends of the relay key in its secrets lines; a staging dry run is unchanged",
+    ),
+    edit(
+      SLATE,
+      "        promotion && arg.startsWith(RELAY_KEY_ARG)",
+      "        arg.startsWith(RELAY_KEY_ARG)",
+    ),
+  ),
+  entry(
+    "an unreachable relay is a bare `fetch failed` again",
+    CLERK(
+      "a relay whose well-known descriptor cannot be read: the error names what and says nothing was deployed",
+    ),
+    edit(
+      SLATE,
+      '    throw unread(typeof code === "string" ? `${message}: ${code}` : message, err);',
+      "    throw err;",
+    ),
   ),
 ];
 
