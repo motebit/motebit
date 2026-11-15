@@ -21,8 +21,9 @@
  * PROPAGATES it to the relay's delegation-revocation cache
  * (`POST /api/v1/delegations/revocations` — permissive by design; the
  * artifact is the auth, and revocations want to travel). Offline revoke
- * still bites locally: the chat presenter includes the stored revocation
- * in the held set, and `verifyGrantForTurn` refuses.
+ * still bites locally: with no relay configured the presenter includes the
+ * stored revocation in the held set and `verifyGrantForTurn` refuses; with a
+ * relay configured and unreachable it presents no grant at all.
  *
  * Honest framing (trust-layer discipline): the ceiling is what the
  * runtime's meter ENFORCES on the trusted-runtime path — never displayed
@@ -130,67 +131,144 @@ export function selectDueTick(stored: StoredGrant, now: number): DelegationToken
  *
  * Everything is read at EACH presentation, never cached from startup: the
  * stored grant and its locally stored revocation (so `motebit grant revoke`
- * from another shell bites on the running session's next call), plus a
- * best-effort pull of the relay's delegation-revocation cache (so a
- * revocation signed on ANOTHER device bites too). An offline pull is not an
- * error (the cache is a cache, §6 D2); it narrows freshness to the local set,
- * and the relay re-fences at acceptance regardless. A stored grant that has
- * disappeared presents nothing.
+ * from another shell bites on the running session's next call), plus a pull of
+ * the relay's delegation-revocation cache (so a revocation signed on ANOTHER
+ * device bites too). A stored grant that has disappeared presents nothing.
+ *
+ * The pull is fail-closed. With a relay configured, a pull that FAILED
+ * (timeout, network error, non-2xx, a body that is not the feed's shape) is
+ * not "nothing revoked": this machine may hold a copy of a grant revoked
+ * elsewhere, and the payment is broadcast before the relay's own fence sees
+ * the task. So a failed pull presents NO grant for that turn: the turn runs
+ * grantless and R4 falls back to the owner's approval (or, on a path with no
+ * one to approve, is refused). With no relay configured there is nothing to
+ * ask, and the local set stands.
+ *
+ * What this does not do: the feed is unsigned, so a relay that omits a record
+ * (or a wrong relay URL) still answers "ok". That needs the signed
+ * revocation-set attestation (spec/standing-delegation-v1.md §5.2).
  */
+export interface GrantDelegation {
+  token: DelegationToken;
+  grant: StandingDelegation;
+  revocations: readonly DelegationRevocation[];
+}
+
+/** What one presentation produced, and why when it produced no grant. */
+export type GrantPresentation =
+  | { status: "presented"; delegation: GrantDelegation }
+  /** The stored grant is gone, or no pre-minted tick is active now. */
+  | { status: "not_due" }
+  /** The relay could not confirm revocation status, so no grant is presented. */
+  | { status: "withheld"; reason: "revocation_unconfirmed" };
+
 export interface GrantPresenter {
   grantId: string;
-  /** Options fragment for this turn, or null when no tick is due / the grant is gone. */
-  delegationForTurn(): Promise<{
-    delegation: {
-      token: DelegationToken;
-      grant: StandingDelegation;
-      revocations: readonly DelegationRevocation[];
-    };
-  } | null>;
+  /** This turn's presentation, with the reason when no grant is presented. */
+  presentForTurn(): Promise<GrantPresentation>;
+  /**
+   * Options fragment for this turn, or null for a grantless turn (no tick due,
+   * the grant is gone, or revocation status unconfirmed). `presentForTurn`
+   * projected for a caller that does not need the reason.
+   */
+  delegationForTurn(): Promise<{ delegation: GrantDelegation } | null>;
+}
+
+export interface GrantPresenterOptions {
+  /**
+   * Called ONCE per presenter (per session), on the first presentation
+   * withheld because the relay could not confirm revocation status. The
+   * caller renders its own one-line notice; later withheld turns are silent.
+   */
+  onRevocationUnconfirmed?: () => void;
+  /** The fetch the revocation pull uses (tests inject one; default: global). */
+  fetch?: typeof fetch;
+  /** Upper bound on one pull (default 3 s). */
+  pullTimeoutMs?: number;
 }
 
 /** Upper bound on the per-presentation relay revocation pull. */
 const RELAY_REVOCATION_PULL_TIMEOUT_MS = 3_000;
 
-async function pullRelayRevocations(): Promise<DelegationRevocation[]> {
+/**
+ * One pull of the relay's revocation feed. FAILED and SUCCEEDED-AND-EMPTY are
+ * different answers, so they are different variants: a caller cannot read a
+ * failed pull as an empty set without saying so.
+ */
+export type RelayRevocationPull =
+  /** No relay configured: there is no feed to ask. */
+  | { status: "no_relay" }
+  /** The relay answered 2xx with a well-shaped feed (possibly empty). */
+  | { status: "ok"; records: DelegationRevocation[] }
+  /** Timeout, network error, non-2xx, or a body that is not the feed's shape. */
+  | { status: "failed"; reason: string };
+
+const isRecordObject = (v: unknown): boolean =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+export async function pullRelayRevocations(
+  options: Pick<GrantPresenterOptions, "fetch" | "pullTimeoutMs"> = {},
+): Promise<RelayRevocationPull> {
   const relayUrl = (loadFullConfig().sync_url ?? process.env["MOTEBIT_SYNC_URL"] ?? "").replace(
     /\/$/,
     "",
   );
-  if (relayUrl === "") return [];
+  if (relayUrl === "") return { status: "no_relay" };
+  const fetchImpl = options.fetch ?? fetch;
   try {
-    const res = await fetch(`${relayUrl}/api/v1/delegations/revocations`, {
-      signal: AbortSignal.timeout(RELAY_REVOCATION_PULL_TIMEOUT_MS),
+    const res = await fetchImpl(`${relayUrl}/api/v1/delegations/revocations`, {
+      signal: AbortSignal.timeout(options.pullTimeoutMs ?? RELAY_REVOCATION_PULL_TIMEOUT_MS),
     });
-    if (!res.ok) return [];
-    const body = (await res.json()) as { records?: DelegationRevocation[] };
+    if (!res.ok) return { status: "failed", reason: `HTTP ${res.status}` };
+    const body: unknown = await res.json();
+    const records = isRecordObject(body) ? (body as { records?: unknown }).records : undefined;
+    if (!Array.isArray(records) || !records.every(isRecordObject)) {
+      return { status: "failed", reason: "response is not a revocation feed" };
+    }
     // The whole cache — findGrantRevocation inside the runtime's verifier
     // does the authoritative grant_id + delegator-key binding check, so
     // over-inclusion is harmless and correct.
-    return body.records ?? [];
-  } catch {
-    // Offline — local set stands; the relay re-fences at acceptance.
-    return [];
+    return { status: "ok", records: records as DelegationRevocation[] };
+  } catch (err: unknown) {
+    // Timeout, offline, or an unparseable body: revocation status is unknown.
+    return { status: "failed", reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
-export function createGrantPresenter(grantId: string): Promise<GrantPresenter | null> {
+export function createGrantPresenter(
+  grantId: string,
+  options: GrantPresenterOptions = {},
+): Promise<GrantPresenter | null> {
   if (loadStoredGrant(grantId) == null) {
     console.error(`--grant: no stored grant ${grantId} under ${grantsDir()}`);
     return Promise.resolve(null);
   }
+  let notified = false;
+  const presentForTurn = async (): Promise<GrantPresentation> => {
+    const stored = loadStoredGrant(grantId);
+    if (stored == null || stored.grant.grant_id !== grantId) return { status: "not_due" };
+    const tick = selectDueTick(stored, Date.now());
+    if (tick == null) return { status: "not_due" };
+    const pull = await pullRelayRevocations(options);
+    if (pull.status === "failed") {
+      if (!notified) {
+        notified = true;
+        options.onRevocationUnconfirmed?.();
+      }
+      return { status: "withheld", reason: "revocation_unconfirmed" };
+    }
+    const revocations: DelegationRevocation[] = [
+      ...(stored.revocation != null ? [stored.revocation] : []),
+      ...(pull.status === "ok" ? pull.records : []),
+    ];
+    return { status: "presented", delegation: { token: tick, grant: stored.grant, revocations } };
+  };
   return Promise.resolve({
     grantId,
+    presentForTurn,
     async delegationForTurn() {
-      const stored = loadStoredGrant(grantId);
-      if (stored == null || stored.grant.grant_id !== grantId) return null;
-      const tick = selectDueTick(stored, Date.now());
-      if (tick == null) return null;
-      const revocations: DelegationRevocation[] = [
-        ...(stored.revocation != null ? [stored.revocation] : []),
-        ...(await pullRelayRevocations()),
-      ];
-      return { delegation: { token: tick, grant: stored.grant, revocations } };
+      const presentation = await presentForTurn();
+      return presentation.status === "presented" ? { delegation: presentation.delegation } : null;
     },
   });
 }

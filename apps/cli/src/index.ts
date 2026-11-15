@@ -1048,7 +1048,19 @@ async function main(): Promise<void> {
   // the stored grant + its revocations and presents the currently-due tick.
   // The runtime derives (or refuses) authority per turn — a null
   // presentation is an honestly grantless turn, never an error.
-  const grantPresenter = config.grant != null ? await createGrantPresenter(config.grant) : null;
+  const grantPresenter =
+    config.grant != null
+      ? await createGrantPresenter(config.grant, {
+          // Once per session, on the first turn the relay could not confirm
+          // revocation status: the grant is withheld, R4 asks for approval.
+          onRevocationUnconfirmed: () =>
+            console.log(
+              dim(
+                "  [standing grant not presented: its revocation status could not be confirmed with the relay — money actions will ask for approval]",
+              ),
+            ),
+        })
+      : null;
   if (grantPresenter != null) {
     console.log(
       dim(
@@ -1167,8 +1179,12 @@ async function main(): Promise<void> {
         }
       } else {
         writeOutput("\n" + promptColor("mote>") + " ");
-        const grantOptions = (await grantPresenter?.delegationForTurn()) ?? undefined;
-        if (grantPresenter != null && grantOptions == null) {
+        const presentation = await grantPresenter?.presentForTurn();
+        const grantOptions =
+          presentation?.status === "presented"
+            ? { delegation: presentation.delegation }
+            : undefined;
+        if (presentation?.status === "not_due") {
           console.log(dim("  [no grant tick due this turn — running grantless]"));
         }
         await consumeStream(

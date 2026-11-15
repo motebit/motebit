@@ -1440,7 +1440,16 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // delegate (the task submitter is a foreign principal); without it an
   // R4_MONEY tool is refused on this path (no human to approve).
   const serveGrant =
-    config.direct && config.grant != null ? await createGrantPresenter(config.grant) : null;
+    config.direct && config.grant != null
+      ? await createGrantPresenter(config.grant, {
+          // Once per daemon run: the relay could not confirm revocation
+          // status, so the grant is withheld and R4 tasks are refused.
+          onRevocationUnconfirmed: () =>
+            log(
+              "Standing grant not presented: its revocation status could not be confirmed with the relay — money tasks are refused until it can be",
+            ),
+        })
+      : null;
   if (servePrivateKey) {
     {
       const privateKey = servePrivateKey;
