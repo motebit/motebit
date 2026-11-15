@@ -399,7 +399,8 @@ describe("revocation pull: every source that names a relay is asked, not the win
     const config = parseCliArgs(sources.flag != null ? ["--sync-url", sources.flag] : []);
     let relayUrls: () => readonly (string | undefined)[];
     if (kind === "REPL") {
-      const sessionRelay = { url: namedRelayUrl(config, loadFullConfig()) };
+      const sessionRelay = new grantMod.SessionRelays();
+      sessionRelay.add(namedRelayUrl(config, loadFullConfig()));
       relayUrls = () => grantMod.replGrantRelayUrls(sessionRelay, config);
     } else {
       const relay = daemonRelay(
@@ -756,24 +757,34 @@ describe("revocation pull: the reason never carries a URL or an error's own text
   });
 });
 
-// The REPL: the real `/connect` handler updates the session relay the presenter
-// reads each turn. Wired as apps/cli/src/index.ts wires it: one `SessionRelay`
-// holder shared by the slash-command context and `replGrantRelayUrls`.
-describe("revocation pull: /connect moves the relay the grant is checked against", () => {
+// The REPL, over a REAL MotebitRuntime and the real `/connect` handler, wired as
+// apps/cli/src/index.ts + repl-relay.ts wire it: delegation enabled against the
+// startup relay, one `SessionRelays` shared by the slash-command context and
+// `replGrantRelayUrls`.
+//
+// THE PROPERTY: the relay `delegate_to_agent` would submit to is in the set
+// that was pulled, and a revocation held only on that relay refuses the grant.
+// `/connect B` does NOT re-point an already-enabled delegation tool (the
+// runtime keeps the first relay), so the session's relays accumulate.
+describe("revocation pull: the relay delegation submits to is always pulled (/connect adds, never replaces)", () => {
   const A = "https://a.invalid";
   const B = "https://b.invalid";
+  const C = "https://c.invalid";
   const feed = (url: string): string => `${url}/api/v1/delegations/revocations`;
   let feedAnswer: Record<string, () => Response>;
   let feedCalls: string[];
+  let taskCalls: string[];
 
   beforeEach(() => {
     feedAnswer = {};
     feedCalls = [];
+    taskCalls = [];
     rmSync(join(dir, "config.json"), { force: true });
     vi.stubEnv("MOTEBIT_SYNC_URL", "");
     vi.spyOn(console, "log").mockImplementation(() => {});
     // One fetch for everything the session does: /connect's bootstrap and
-    // discovery are answered; the feed answers per relay; the rest is refused.
+    // discovery are answered; the feed answers per relay (unlisted: an empty
+    // feed); a task submission is recorded and refused; the rest is refused.
     vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.endsWith("/api/v1/agents/bootstrap")) {
@@ -784,9 +795,10 @@ describe("revocation pull: /connect moves the relay the grant is checked against
       }
       if (url.endsWith("/api/v1/delegations/revocations")) {
         feedCalls.push(url);
-        const answer = feedAnswer[new URL(url).origin];
-        if (answer != null) return Promise.resolve(answer());
+        const answer = feedAnswer[new URL(url).origin] ?? ok();
+        return Promise.resolve(answer());
       }
+      if (url.endsWith("/task")) taskCalls.push(url);
       return Promise.reject(new TypeError(`network denied: ${url}`));
     });
   });
@@ -797,29 +809,51 @@ describe("revocation pull: /connect moves the relay the grant is checked against
     rmSync(join(dir, "config.json"), { force: true });
   });
 
-  /** A REPL session with `--grant`, started with `flag` as `--sync-url` (or none). */
-  async function session(flag: string | undefined): Promise<{
+  /** A REPL session with `--grant`, started under these relay sources. */
+  async function session(sources: { flag?: string; env?: string; cfg?: string } = {}): Promise<{
     present: () => Promise<string>;
+    /** The origins asked by one presentation. */
+    pulled: () => Promise<string[]>;
     verified: () => Promise<boolean>;
     connect: (url: string) => Promise<void>;
-    enabled: ReturnType<typeof vi.fn>;
+    /** The origin `delegate_to_agent` submits a task to, or null when not enabled. */
+    delegationOrigin: () => Promise<string | null>;
     revocation: DelegationRevocation;
   }> {
     const { handleSlashCommand } = await import("../slash-commands.js");
     const { namedRelayUrl } = await import("../sync-opt-in.js");
-    const { loadFullConfig } = await import("../config.js");
+    const { loadFullConfig, saveFullConfig } = await import("../config.js");
     const { parseCliArgs } = await import("../args.js");
-    const config = parseCliArgs(flag != null ? ["--sync-url", flag] : []);
+    if (sources.cfg != null) saveFullConfig({ ...loadFullConfig(), sync_url: sources.cfg });
+    vi.stubEnv("MOTEBIT_SYNC_URL", sources.env ?? "");
+    const config = parseCliArgs(sources.flag != null ? ["--sync-url", sources.flag] : []);
+    // The startup config object the REPL keeps and hands to every slash command.
+    const startupConfig = { ...loadFullConfig(), device_public_key: pub };
+    const runtime = new MotebitRuntime(
+      { motebitId: ID, tickRateHz: 0, signingKeys: owner, policy: POLICY },
+      { storage: createInMemoryStorage(), renderer: new NullRenderer() },
+    );
+    const authToken = (): Promise<string> => Promise.resolve("token");
+    // index.ts: `const syncUrl = resolveRelayUrl(config, reloadedConfig)`, then
+    // repl-relay.ts enables delegation against it when a relay is named.
+    const syncUrl = namedRelayUrl(config, loadFullConfig());
+    const sessionRelay = new grantMod.SessionRelays();
+    sessionRelay.add(syncUrl);
+    if (syncUrl != null) {
+      runtime.enableInteractiveDelegation({ syncUrl, authToken });
+      runtime.enableInvokeCapability({ syncUrl, authToken });
+    }
     const { grantId, revocation } = await storeGrant();
-    // index.ts: `const syncUrl = resolveRelayUrl(config, reloadedConfig)`.
-    const sessionRelay = { url: namedRelayUrl(config, loadFullConfig()) };
     const presenter = await grantMod.createGrantPresenter(grantId, {
       relayUrls: () => grantMod.replGrantRelayUrls(sessionRelay, config),
     });
-    const enabled = vi.fn();
-    const runtime = { enableInteractiveDelegation: enabled, registerServiceListing: vi.fn() };
     return {
       present: async () => (await presenter!.presentForTurn()).status,
+      pulled: async () => {
+        feedCalls = [];
+        await presenter!.presentForTurn();
+        return feedCalls.map((u) => new URL(u).origin).sort();
+      },
       verified: async () => {
         const turn = await presenter!.delegationForTurn();
         if (turn == null) return false;
@@ -827,22 +861,21 @@ describe("revocation pull: /connect moves the relay the grant is checked against
         return (await verifyGrantForTurn(token, grant, revocations, self())) != null;
       },
       connect: (url) =>
-        handleSlashCommand(
-          "connect",
-          url,
-          runtime as never,
-          config,
-          { ...loadFullConfig(), device_public_key: pub },
-          {
-            moteDb: {} as never,
-            motebitId: ID,
-            mcpAdapters: [],
-            privateKeyBytes: owner.privateKey,
-            deviceId: "dev-f1",
-            sessionRelay,
-          },
-        ),
-      enabled,
+        handleSlashCommand("connect", url, runtime, config, startupConfig, {
+          moteDb: {} as never,
+          motebitId: ID,
+          mcpAdapters: [],
+          privateKeyBytes: owner.privateKey,
+          deviceId: "dev-f1",
+          sessionRelay,
+        }),
+      delegationOrigin: async () => {
+        if (!runtime.getToolRegistry().has("delegate_to_agent")) return null;
+        taskCalls = [];
+        await runtime.getToolRegistry().execute("delegate_to_agent", { prompt: "do it" });
+        expect(taskCalls).toHaveLength(1);
+        return new URL(taskCalls[0]!).origin;
+      },
       revocation,
     };
   }
@@ -852,55 +885,116 @@ describe("revocation pull: /connect moves the relay the grant is checked against
       new Response(JSON.stringify({ records }), { status: 200 });
   const http500 = (): Response => new Response("{}", { status: 500 });
 
-  it("no relay at start, /connect B, B answers 500: the next presentation is withheld", async () => {
-    const s = await session(undefined);
-    expect(await s.present()).toBe("presented");
-    expect(feedCalls).toHaveLength(0);
-    feedAnswer = { [B]: http500 };
-    await s.connect(B);
-    expect(s.enabled).toHaveBeenCalledWith(expect.objectContaining({ syncUrl: B }));
-    expect(await s.present()).toBe("withheld");
-    expect(feedCalls).toEqual([feed(B)]);
-  });
-
-  it("no relay at start, /connect B, B holds the grant's revocation: the verifier refuses", async () => {
-    const s = await session(undefined);
+  /** The property, asserted: the delegation relay is pulled, and its revocation refuses. */
+  async function expectDelegationRelayGoverns(
+    s: Awaited<ReturnType<typeof session>>,
+    expectedOrigin: string,
+  ): Promise<void> {
+    const origin = await s.delegationOrigin();
+    expect(origin).toBe(expectedOrigin);
+    expect(await s.pulled()).toContain(origin);
+    feedAnswer = {};
     expect(await s.verified()).toBe(true);
-    feedAnswer = { [B]: ok([s.revocation]) };
-    await s.connect(B);
+    // The revocation exists ONLY on the relay delegation submits to.
+    feedAnswer = { [origin!]: ok([s.revocation]) };
     expect(await s.present()).toBe("presented");
     expect(await s.verified()).toBe(false);
+    // …and that relay failing withholds.
+    feedAnswer = { [origin!]: http500 };
+    expect(await s.present()).toBe("withheld");
+  }
+
+  it("(a) config=A at start, /connect B: delegation still submits to A, and A is still pulled", async () => {
+    const s = await session({ cfg: A });
+    await s.connect(B);
+    expect(await s.pulled()).toEqual([A, B]);
+    await expectDelegationRelayGoverns(s, A);
   });
 
-  it("--sync-url A at start, /connect B: both A and B are asked", async () => {
-    const s = await session(A);
-    feedAnswer = { [A]: ok(), [B]: ok() };
+  it("(b) no relay at start, /connect B, then /connect C: delegation submits to B, and B is still pulled", async () => {
+    const s = await session();
+    expect(await s.delegationOrigin()).toBeNull();
+    await s.connect(B);
+    await s.connect(C);
+    expect(await s.pulled()).toEqual([B, C]);
+    await expectDelegationRelayGoverns(s, B);
+  });
+
+  it("(c) flag=A, no /connect: delegation submits to A, and A is pulled", async () => {
+    const s = await session({ flag: A });
+    expect(await s.pulled()).toEqual([A]);
+    await expectDelegationRelayGoverns(s, A);
+  });
+
+  it("(c) env=A, no /connect: delegation submits to A, and A is pulled", async () => {
+    const s = await session({ env: A });
+    expect(await s.pulled()).toEqual([A]);
+    await expectDelegationRelayGoverns(s, A);
+  });
+
+  it("(c) flag=A, /connect B: delegation submits to A; both are pulled; B failing withholds", async () => {
+    const s = await session({ flag: A });
+    await s.connect(B);
+    expect(await s.pulled()).toEqual([A, B]);
+    feedAnswer = { [B]: http500 };
+    expect(await s.present()).toBe("withheld");
+    await expectDelegationRelayGoverns(s, A);
+  });
+
+  it("no relay at start, /connect B: delegation submits to B; B answering 500 withholds", async () => {
+    const s = await session();
+    expect(await s.present()).toBe("presented");
+    expect(feedCalls).toHaveLength(0);
+    await s.connect(B);
+    feedAnswer = { [B]: http500 };
+    feedCalls = [];
+    expect(await s.present()).toBe("withheld");
+    expect(feedCalls).toEqual([feed(B)]);
+    await expectDelegationRelayGoverns(s, B);
+  });
+
+  it("--sync-url A at start, /connect B, saved config then removed: B stays in the set (the session keeps it)", async () => {
+    const s = await session({ flag: A });
     await s.connect(B);
     // `/connect` also saved B to config. Remove it (as `motebit sync disable`
-    // from another shell would): the session is still connected to B, and it is
-    // the SESSION relay, not the config, that must keep B in the set.
+    // from another shell would): only the session's own record keeps B asked.
     rmSync(join(dir, "config.json"), { force: true });
-    feedCalls = [];
-    expect(await s.present()).toBe("presented");
-    expect([...feedCalls].sort()).toEqual([feed(A), feed(B)]);
+    expect(await s.pulled()).toEqual([A, B]);
   });
 
-  it("--sync-url A at start, /connect B, A ok + B 500: withheld", async () => {
-    const s = await session(A);
-    feedAnswer = { [A]: ok(), [B]: http500 };
-    expect(await s.present()).toBe("presented");
+  it("the relay the saved config names when /connect overwrites it stays in the set", async () => {
+    const { loadFullConfig, saveFullConfig } = await import("../config.js");
+    const s = await session();
+    // Another process saves C after this session started; the REPL's startup
+    // config object does not know it. `/connect B` is about to overwrite it.
+    saveFullConfig({ ...loadFullConfig(), sync_url: C });
+    expect(await s.pulled()).toEqual([C]);
     await s.connect(B);
-    expect(await s.present()).toBe("withheld");
+    expect(loadFullConfig().sync_url).toBe(B);
+    expect(await s.pulled()).toEqual([B, C]);
   });
 
   it("a relay saved to config by another process mid-session is asked on the next turn", async () => {
     const { loadFullConfig, saveFullConfig } = await import("../config.js");
-    const s = await session(undefined);
+    const s = await session();
     expect(await s.present()).toBe("presented");
     saveFullConfig({ ...loadFullConfig(), sync_url: B });
     feedAnswer = { [B]: http500 };
+    feedCalls = [];
     expect(await s.present()).toBe("withheld");
     expect(feedCalls).toEqual([feed(B)]);
+  });
+
+  it("SessionRelays only grows: add normalises and de-duplicates, and its view cannot edit it", () => {
+    const relays = new grantMod.SessionRelays();
+    relays.add(undefined);
+    relays.add("  ");
+    relays.add(`${A}/`);
+    relays.add(A);
+    relays.add(B);
+    expect(relays.urls).toEqual([A, B]);
+    (relays.urls as string[]).length = 0;
+    expect(relays.urls).toEqual([A, B]);
   });
 });
 
@@ -942,6 +1036,40 @@ describe("revocation pull: serve --direct --grant asks the relay `grant revoke` 
     expect(out.status).toBe("withheld");
     expect(fetchImpl.calls).toEqual([`${C}/api/v1/delegations/revocations`]);
   });
+
+  // Today `daemonRelay` derives intentUrl/syncUrl from the same flag/env/config
+  // the composer also reads, so they are redundant. They stay as a defence if
+  // that ever diverges; these cases isolate each term: a relay NO other source
+  // names must still be asked.
+  for (const [term, relay, flag] of [
+    [
+      "relay.intentUrl",
+      { intentUrl: "https://intent-only.invalid", syncUrl: undefined },
+      undefined,
+    ],
+    ["relay.syncUrl", { intentUrl: undefined, syncUrl: "https://push-only.invalid" }, undefined],
+    [
+      "config.syncUrl (the flag)",
+      { intentUrl: undefined, syncUrl: undefined },
+      "https://flag-only.invalid",
+    ],
+  ] as Array<
+    [string, { intentUrl: string | undefined; syncUrl: string | undefined }, string | undefined]
+  >) {
+    it(`a relay named only by ${term} is asked, and its failure withholds`, async () => {
+      vi.stubEnv("MOTEBIT_SYNC_URL", "");
+      rmSync(join(dir, "config.json"), { force: true });
+      const only = relay.intentUrl ?? relay.syncUrl ?? flag!;
+      const fetchImpl = relayRouter({ [only]: feedStatus(500) });
+      const { grantId } = await storeGrant();
+      const presenter = await grantMod.createGrantPresenter(grantId, {
+        relayUrls: () => grantMod.daemonGrantRelayUrls(relay, { syncUrl: flag }),
+        fetch: fetchImpl,
+      });
+      expect((await presenter!.presentForTurn()).status).toBe("withheld");
+      expect(fetchImpl.calls).toEqual([feedUrl(only)]);
+    });
+  }
 
   it("stdio serve (pushes to no relay): the named relay is asked once", async () => {
     vi.stubEnv("MOTEBIT_SYNC_URL", "");

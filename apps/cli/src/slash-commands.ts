@@ -41,7 +41,7 @@ import { McpServerAdapter, wireServerDeps } from "@motebit/mcp-server";
 import type { McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
 import { type CliConfig, COMMANDS, defaultModelForProvider } from "./args.js";
 import type { FullConfig } from "./config.js";
-import { CONFIG_DIR, saveFullConfig } from "./config.js";
+import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "./config.js";
 import { join } from "node:path";
 import { SkillRegistry, type SkillRecord } from "@motebit/skills";
 import { NodeFsSkillStorageAdapter } from "@motebit/skills/node-fs";
@@ -77,11 +77,21 @@ export interface ReplContext {
   /** Voice controller — optional, off by default. `/voice on` opts in. */
   voice?: VoiceController;
   /**
-   * The relay this REPL session talks to NOW. `/connect` replaces it, so a
-   * `--grant` presenter (which reads it each turn) asks the relay the
-   * delegation tool was just pointed at, not the one named at startup.
+   * Every relay this REPL session has used. `/connect` ADDS to it and nothing
+   * is ever removed: a `--grant` presenter (which reads it each turn) must
+   * keep asking the earlier relays, because an already-enabled delegation
+   * tool keeps submitting to the relay it was first enabled against.
    */
-  sessionRelay?: { url: string | undefined };
+  sessionRelay?: { add(url: string | undefined): void };
+}
+
+/** The relay config.json names on disk right now; none when unreadable. */
+function savedRelayUrl(): string | undefined {
+  try {
+    return loadFullConfig().sync_url;
+  } catch {
+    return undefined;
+  }
 }
 
 export function isSlashCommand(input: string): boolean {
@@ -980,9 +990,15 @@ export async function handleSlashCommand(
         },
         routingStrategy: config.routingStrategy,
       });
-      // The session's relay is now this one: a standing grant's revocation
-      // status is checked against it from the next turn on.
-      if (repl.sessionRelay != null) repl.sessionRelay.url = connectUrl;
+      // The session has now used this relay too: a standing grant's
+      // revocation status is checked against it from the next turn on. ADDED,
+      // never swapped in: when delegation was already enabled, the call above
+      // changed nothing and `delegate_to_agent` still submits to the earlier
+      // relay. The relay the saved config names right now is added as well —
+      // step 4 is about to overwrite it.
+      repl.sessionRelay?.add(fullConfig?.sync_url);
+      repl.sessionRelay?.add(savedRelayUrl());
+      repl.sessionRelay?.add(connectUrl);
       console.log(success("  Interactive delegation enabled."));
 
       // 3. Discover agents

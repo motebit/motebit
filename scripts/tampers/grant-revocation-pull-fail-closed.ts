@@ -16,7 +16,10 @@
  *     property: calm);
  *   - the pull following redirects, or accepting a redirected answer;
  *   - the relay set captured once at startup instead of asked each turn;
- *   - `/connect` no longer moving the session relay;
+ *   - `/connect` no longer adding its relay to the session, `SessionRelays`
+ *     replacing instead of accumulating, or the relay the saved config named
+ *     before `/connect` overwrote it being forgotten;
+ *   - each term of the daemon's set dropped, isolated;
  *   - "any failed pull withholds" weakened to "all must fail";
  *   - the REPL's or the daemon's relay set back to first-wins (`namedRelayUrl`:
  *     the winning source only), or the saved config dropped from it;
@@ -40,7 +43,8 @@ const TEST = "src/__tests__/grant-presenter-pull-fail-closed.test.ts";
 
 const PRESENTER = "revocation pull: a failed pull presents no grant";
 const UNION = "revocation pull: every known relay is asked, any failure withholds";
-const CONNECT = "revocation pull: /connect moves the relay the grant is checked against";
+const CONNECT =
+  "revocation pull: the relay delegation submits to is always pulled (/connect adds, never replaces)";
 const DAEMON = "revocation pull: serve --direct --grant asks the relay `grant revoke` posts to";
 const REASON = "revocation pull: the reason never carries a URL or an error's own text";
 const NOTICE = "revocation pull: the notice fires once per outage";
@@ -63,8 +67,14 @@ const WITHHOLD = '      return { status: "withheld", reason: "revocation_unconfi
 const ASK_NOW = "      relayUrls = options.relayUrls?.() ?? [];\n";
 const ANY_FAILS = "  if (failures.length > 0) {";
 const REPL_ALL =
-  '  return [session.url, config.syncUrl, process.env["MOTEBIT_SYNC_URL"], loadFullConfig().sync_url];\n';
-const REPL_WINNER = "  return [session.url, namedRelayUrl(config, loadFullConfig())];\n";
+  "  return [\n    ...session.urls,\n    config.syncUrl,\n" +
+  '    process.env["MOTEBIT_SYNC_URL"],\n    loadFullConfig().sync_url,\n  ];\n';
+const REPL_WINNER = "  return [...session.urls, namedRelayUrl(config, loadFullConfig())];\n";
+const DAEMON_NO_SAVED_CONFIG =
+  "  return [\n    relay.intentUrl,\n    relay.syncUrl,\n    config.syncUrl,\n" +
+  '    process.env["MOTEBIT_SYNC_URL"],\n  ];\n';
+const ACCUMULATE = "    this.#urls.push(normalized);\n";
+const REPLACE = "    this.#urls.splice(0, this.#urls.length, normalized);\n";
 const DAEMON_ALL =
   "  return [\n    relay.intentUrl,\n    relay.syncUrl,\n    config.syncUrl,\n" +
   '    process.env["MOTEBIT_SYNC_URL"],\n    loadFullConfig().sync_url,\n  ];\n';
@@ -159,7 +169,7 @@ const TAMPERS: TamperEntry[] = [
     ],
     pkg: PKG,
     test: TEST,
-    red: `${CONNECT} no relay at start, /connect B, B answers 500: the next presentation is withheld`,
+    red: `${CONNECT} no relay at start, /connect B: delegation submits to B; B answering 500 withholds`,
   },
   {
     name: "the relay set is captured once at startup (a later change is not seen)",
@@ -176,10 +186,10 @@ const TAMPERS: TamperEntry[] = [
     red: `${UNION} the set is asked again at EACH presentation, never captured`,
   },
   entry(
-    "/connect no longer updates the session relay",
-    "      if (repl.sessionRelay != null) repl.sessionRelay.url = connectUrl;\n",
+    "/connect no longer adds its relay to the session",
+    "      repl.sessionRelay?.add(connectUrl);\n",
     "",
-    `${CONNECT} --sync-url A at start, /connect B: both A and B are asked`,
+    `${CONNECT} --sync-url A at start, /connect B, saved config then removed: B stays in the set (the session keeps it)`,
     SLASH,
   ),
   entry(
@@ -192,7 +202,46 @@ const TAMPERS: TamperEntry[] = [
     "any failed pull withholds -> all must fail (/connect: A ok + B 500)",
     ANY_FAILS,
     "  if (failures.length === pulls.length) {",
-    `${CONNECT} --sync-url A at start, /connect B, A ok + B 500: withheld`,
+    `${CONNECT} (c) flag=A, /connect B: delegation submits to A; both are pulled; B failing withholds`,
+  ),
+  // ── the session's relays accumulate ──
+  entry(
+    "SessionRelays.add replaces instead of accumulating: (a) config=A, /connect B",
+    ACCUMULATE,
+    REPLACE,
+    `${CONNECT} (a) config=A at start, /connect B: delegation still submits to A, and A is still pulled`,
+  ),
+  entry(
+    "SessionRelays.add replaces instead of accumulating: (b) /connect B, /connect C",
+    ACCUMULATE,
+    REPLACE,
+    `${CONNECT} (b) no relay at start, /connect B, then /connect C: delegation submits to B, and B is still pulled`,
+  ),
+  entry(
+    "/connect no longer keeps the relay the saved config named before overwriting it",
+    "      repl.sessionRelay?.add(savedRelayUrl());\n",
+    "",
+    `${CONNECT} the relay the saved config names when /connect overwrites it stays in the set`,
+    SLASH,
+  ),
+  // ── the daemon set, each term isolated ──
+  entry(
+    "relay.intentUrl is dropped from the daemon's set",
+    "    relay.intentUrl,\n",
+    "",
+    `${DAEMON} a relay named only by relay.intentUrl is asked, and its failure withholds`,
+  ),
+  entry(
+    "relay.syncUrl is dropped from the daemon's set",
+    "    relay.syncUrl,\n",
+    "",
+    `${DAEMON} a relay named only by relay.syncUrl is asked, and its failure withholds`,
+  ),
+  entry(
+    "the flag (config.syncUrl) is dropped from the daemon's set",
+    "    relay.syncUrl,\n    config.syncUrl,\n",
+    "    relay.syncUrl,\n",
+    `${DAEMON} a relay named only by config.syncUrl (the flag) is asked, and its failure withholds`,
   ),
   // ── every source, not the winner ──
   entry(
@@ -245,8 +294,8 @@ const TAMPERS: TamperEntry[] = [
   ),
   entry(
     'the saved config is dropped from the daemon\'s set (MOTEBIT_SYNC_URL="" + config)',
-    "    loadFullConfig().sync_url,\n  ];\n",
-    "  ];\n",
+    DAEMON_ALL,
+    DAEMON_NO_SAVED_CONFIG,
     `${DAEMON} MOTEBIT_SYNC_URL="" + config sync_url: the daemon names no relay, the config relay is still asked, a failed pull withholds`,
   ),
   entry(

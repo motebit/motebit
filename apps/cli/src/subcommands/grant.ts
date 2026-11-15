@@ -153,9 +153,13 @@ export function selectDueTick(stored: StoredGrant, now: number): DelegationToken
  *
  * THE SET is every relay named by ANY source, all of them, not the winning
  * one: the `--sync-url` / `--sync` flag, the `MOTEBIT_SYNC_URL` environment
- * variable, the saved config's `sync_url` (re-read each turn), and the relay
- * the session is currently connected to (the REPL's session relay, which
- * `/connect` moves; the daemon's intent and push relay). The sources are not
+ * variable, the saved config's `sync_url` (re-read each turn), and every
+ * relay the session has used (the REPL's `SessionRelays`, to which startup and
+ * each `/connect` ADD and from which nothing is removed; the daemon's intent
+ * and push relay). `/connect` does not move the session: a delegation tool
+ * that is already enabled keeps submitting to the relay it was first enabled
+ * against (runtime behaviour, not changed here), so the earlier relay must
+ * stay in the set. The sources are not
  * ranked here, because a revocation may have been posted under any of them:
  * `motebit grant revoke` run without the flag posts to the config relay while
  * a session started with `--sync-url` talks to another. Records from every
@@ -220,23 +224,46 @@ export interface GrantPresenterOptions {
   pullTimeoutMs?: number;
 }
 
-/** The REPL's CURRENT relay: set at startup, replaced by `/connect`. */
-export interface SessionRelay {
-  url: string | undefined;
+/**
+ * Every relay a REPL session has used, for the life of the process. Relays
+ * are ADDED (the startup relay, each `/connect`, the relay the saved config
+ * named just before `/connect` overwrote it) and there is no way to remove or
+ * replace one: `/connect B` on a session whose delegation tool was enabled
+ * against A still submits paid delegations to A, so A must still be asked.
+ */
+export class SessionRelays {
+  readonly #urls: string[] = [];
+
+  /** Add a relay (normalised; an empty or already-known one is ignored). */
+  add(url: string | undefined): void {
+    const normalized = normalizeRelayUrl(url);
+    if (normalized == null || this.#urls.includes(normalized)) return;
+    this.#urls.push(normalized);
+  }
+
+  /** A copy: the set cannot be edited through it. */
+  get urls(): readonly string[] {
+    return [...this.#urls];
+  }
 }
 
 /**
- * The relays a REPL session's grant is checked against, this turn: the relay
- * the session is connected to now, and EVERY source that names one — the flag
+ * The relays a REPL session's grant is checked against, this turn: every
+ * relay the session has used, and EVERY source that names one — the flag
  * (`config.syncUrl`: `--sync-url`, or `--sync`), the environment, the saved
  * config. All of them, never the first that is set (`namedRelayUrl` picks a
  * winner; a revocation posted to a loser would be missed).
  */
 export function replGrantRelayUrls(
-  session: SessionRelay,
+  session: { readonly urls: readonly string[] },
   config: { syncUrl?: string | undefined },
 ): (string | undefined)[] {
-  return [session.url, config.syncUrl, process.env["MOTEBIT_SYNC_URL"], loadFullConfig().sync_url];
+  return [
+    ...session.urls,
+    config.syncUrl,
+    process.env["MOTEBIT_SYNC_URL"],
+    loadFullConfig().sync_url,
+  ];
 }
 
 /**
