@@ -573,9 +573,7 @@ const TAMPERS: TamperEntry[] = [
   },
   {
     name: "gate: a second binding of the constant's name is no longer flagged",
-    edits: [
-      { file: GATE, from: "        if (shadow)", to: "        if (shadow && p === undefined)" },
-    ],
+    edits: [{ file: GATE, from: "        if (shadow)", to: '        if (shadow && file === "")' }],
     test: GATE_TEST,
     red: `${GATE_DESC} a function parameter shadowing the constant builds a rail with another list`,
   },
@@ -590,7 +588,7 @@ const TAMPERS: TamperEntry[] = [
         to:
           "            (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) &&\n" +
           "            SERVICE_FORBIDDEN_NAMES.has(n.text) &&\n" +
-          "            ts.isIdentifier(n)",
+          '            file === ""',
       },
     ],
     test: GATE_TEST,
