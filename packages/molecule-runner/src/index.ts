@@ -38,6 +38,7 @@ import {
   createSolanaWalletRail,
   SolanaWalletRail,
   sweepWalletRail,
+  USDC_MINT_DEVNET,
   type SweepableWallet,
 } from "@motebit/wallet-solana";
 import type {
@@ -392,6 +393,11 @@ export interface MoleculeRunnerAdapters {
    * the metered delegation path enabled. Tests inject a stub exposing
    * `executeGrantedDelegation` + `init`/`stop` to exercise the spend seam
    * without a wallet or relay.
+   *
+   * TEST SEAM ONLY. The runtime this returns is opaque: the runner cannot
+   * see, and does not check, the wallet rail inside it, so the spendable-mint
+   * allowlist is NOT enforced on it. `check-molecule-spend-containment`
+   * fails any molecule service that names this adapter.
    */
   createMoneyRuntime?: (
     identity: BootstrapAndEmitIdentityResult,
@@ -424,8 +430,10 @@ export interface MoleculeRunnerAdapters {
   };
   /**
    * Override construction of the sovereign wallet used for sweeping earnings.
-   * Default: `createSolanaWalletRail({ rpcUrl, identitySeed })`. Tests inject a
-   * fake to exercise the sweep wiring without a network.
+   * Default: `createMoleculeWalletRail({ rpcUrl, identitySeed, usdcMint })`.
+   * Tests inject a fake to exercise the sweep wiring without a network. The
+   * override must carry `spendableMints` equal to `MOLECULE_SPENDABLE_MINTS`
+   * or the runner refuses to start.
    */
   createSweepWallet?: (rpcUrl: string, identitySeed: Uint8Array) => SweepableWallet;
   /** Override the log sink for the runner's own boot messages. Default: console.log. */
@@ -670,6 +678,102 @@ export function makeAuthTokenMinter(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Spend containment — which mints a molecule's rails may sign for
+// ---------------------------------------------------------------------------
+
+/**
+ * The mints a first-party molecule's wallet rails may sign a transfer for:
+ * devnet USDC only. ONE constant, passed to every rail this runner builds
+ * (the money-execution rail and the earnings-sweep rail) and required, at
+ * boot, of every rail the runner can SEE: a `walletOverride` handed to
+ * `defaultCreateMoneyRuntime` and the wallet a `createSweepWallet` adapter
+ * returns. Not an environment variable and not a per-service option: no env
+ * or secret configuration of a `runMolecule` process can make it sign a
+ * mainnet-USDC transfer. Changing what a molecule may spend is a reviewed
+ * change to this line (`check-molecule-spend-containment`).
+ *
+ * Not covered: a runtime returned by an injected
+ * `MoleculeRunnerAdapters.createMoneyRuntime` is opaque — the runner cannot
+ * inspect the rail inside it, so nothing here checks it. That adapter is a
+ * test seam; `check-molecule-spend-containment` fails any molecule service
+ * that names it.
+ */
+export const MOLECULE_SPENDABLE_MINTS: readonly string[] = Object.freeze([USDC_MINT_DEVNET]);
+
+/** A rail's allowlist and mint, read structurally (a sweep override is a bare `SweepableWallet`). */
+function railSpendFacts(rail: unknown): {
+  spendableMints: unknown;
+  usdcMint: unknown;
+  spendRefused: unknown;
+} {
+  const r = (rail ?? {}) as {
+    spendableMints?: unknown;
+    usdcMint?: unknown;
+    spendRefused?: unknown;
+  };
+  return { spendableMints: r.spendableMints, usdcMint: r.usdcMint, spendRefused: r.spendRefused };
+}
+
+/**
+ * Refuse to proceed unless `rail` carries EXACTLY {@link MOLECULE_SPENDABLE_MINTS}
+ * as its spendable-mint allowlist — same length, same entries, same order.
+ * Applied to every rail the runner builds, to a `walletOverride` handed to
+ * `defaultCreateMoneyRuntime`, and to the wallet a `createSweepWallet`
+ * adapter returns — so none of those reaches a running molecule with no
+ * allowlist, a wider one, or a different one. NOT applied to a runtime an
+ * injected `createMoneyRuntime` adapter returns: that runtime is opaque to
+ * the runner (a test seam the static gate keeps out of services).
+ */
+export function assertMoleculeRailContained(rail: unknown, label: string): void {
+  const { spendableMints } = railSpendFacts(rail);
+  const exact =
+    Array.isArray(spendableMints) &&
+    spendableMints.length === MOLECULE_SPENDABLE_MINTS.length &&
+    spendableMints.every((mint, i) => mint === MOLECULE_SPENDABLE_MINTS[i]);
+  if (!exact) {
+    throw new Error(
+      `refusing to start: the ${label} rail's spendable-mint allowlist is ` +
+        `${spendableMints === undefined ? "absent" : JSON.stringify(spendableMints)}, but every ` +
+        `wallet rail of a first-party molecule must carry exactly ` +
+        `${JSON.stringify(MOLECULE_SPENDABLE_MINTS)} (MOLECULE_SPENDABLE_MINTS in ` +
+        `@motebit/molecule-runner). Build the rail with createMoleculeWalletRail, or pass ` +
+        `spendableMints: MOLECULE_SPENDABLE_MINTS.`,
+    );
+  }
+}
+
+/**
+ * The ONE place this runner constructs a wallet rail: `createSolanaWalletRail`
+ * with {@link MOLECULE_SPENDABLE_MINTS}. Both the money-execution rail and
+ * the earnings-sweep rail come from here.
+ */
+export function createMoleculeWalletRail(args: {
+  rpcUrl: string;
+  identitySeed: Uint8Array;
+  /** Undefined ⇒ the rail's mainnet-USDC default (which the allowlist refuses). */
+  usdcMint?: string;
+}): SolanaWalletRail {
+  const rail = createSolanaWalletRail({
+    rpcUrl: args.rpcUrl,
+    identitySeed: args.identitySeed,
+    usdcMint: args.usdcMint,
+    spendableMints: MOLECULE_SPENDABLE_MINTS,
+  });
+  assertMoleculeRailContained(rail, "constructed");
+  return rail;
+}
+
+/** One boot-log line: the rail's posture and the mint its adapter PARSED. */
+export function describeRailSpendPosture(rail: unknown): string {
+  const { usdcMint, spendRefused } = railSpendFacts(rail);
+  const mint = typeof usdcMint === "string" ? usdcMint : "not reported";
+  return (
+    `${spendRefused === true ? "spend REFUSED (rail_spend_refused)" : "spend allowed"}; ` +
+    `mint=${mint}; allowlist=${JSON.stringify(MOLECULE_SPENDABLE_MINTS)}`
+  );
+}
+
 /**
  * Default money-runtime factory: a `MotebitRuntime` with the molecule's own
  * sovereign Solana rail, the persistent grant-spend store (so the lifetime
@@ -702,14 +806,18 @@ export function defaultCreateMoneyRuntime(
   if (money == null) throw new Error("defaultCreateMoneyRuntime called without moneyExecution");
   const wallet =
     walletOverride ??
-    createSolanaWalletRail({
+    createMoleculeWalletRail({
       rpcUrl: money.solanaRpcUrl,
       identitySeed: identity.privateKey,
       // Match the rail's mint to the network — else a devnet molecule reads the
       // (empty) mainnet-USDC ATA and every live hop fails `insufficient_balance`.
-      // Undefined passes through to the rail's mainnet-USDC default.
+      // Undefined passes through to the rail's mainnet-USDC default, which the
+      // spendable-mint allowlist refuses before signing.
       usdcMint: money.usdcMint,
     });
+  // Built here or handed in: the rail must carry exactly the runner's
+  // allowlist, or the molecule does not start.
+  assertMoleculeRailContained(wallet, "money-execution");
   const runtime = new MotebitRuntime(
     {
       motebitId: identity.motebitId,
@@ -1257,15 +1365,32 @@ export async function runMolecule(
     ...molecule.policyOverrides,
   };
   let runtime: RunnerRuntime;
-  if (config.moneyExecution) {
-    const makeMoney = adapters.createMoneyRuntime ?? defaultCreateMoneyRuntime;
-    runtime = makeMoney(
+  if (config.moneyExecution && adapters.createMoneyRuntime) {
+    runtime = adapters.createMoneyRuntime(
       identity,
       storage,
       molecule.toolRegistry,
       policyOverrides,
       config,
       db.grantSpendStore,
+    );
+  } else if (config.moneyExecution) {
+    // The money-execution rail is built here so its posture is on the boot
+    // log; `defaultCreateMoneyRuntime` re-checks its allowlist.
+    const moneyRail = createMoleculeWalletRail({
+      rpcUrl: config.moneyExecution.solanaRpcUrl,
+      identitySeed: identity.privateKey,
+      usdcMint: config.moneyExecution.usdcMint,
+    });
+    log(`Spend containment (money-execution rail): ${describeRailSpendPosture(moneyRail)}`);
+    runtime = defaultCreateMoneyRuntime(
+      identity,
+      storage,
+      molecule.toolRegistry,
+      policyOverrides,
+      config,
+      db.grantSpendStore,
+      moneyRail,
     );
   } else {
     const createRuntime = adapters.createRuntime ?? defaultCreateRuntime;
@@ -1418,11 +1543,24 @@ export async function runMolecule(
     const sweepUsdcMint = process.env.MOTEBIT_SOLANA_USDC_MINT?.trim() || undefined;
     const wallet =
       adapters.createSweepWallet?.(sweepRpcUrl, identity.privateKey) ??
-      createSolanaWalletRail({
+      createMoleculeWalletRail({
         rpcUrl: sweepRpcUrl,
         identitySeed: identity.privateKey,
         usdcMint: sweepUsdcMint,
       });
+    // The sweep is a signer too: built here or handed in, its rail carries
+    // exactly the runner's allowlist or the molecule does not start.
+    assertMoleculeRailContained(wallet, "earnings-sweep");
+    log(`Spend containment (earnings-sweep rail): ${describeRailSpendPosture(wallet)}`);
+    if (railSpendFacts(wallet).spendRefused === true) {
+      // The rail refuses every transfer for its mint, so no sweep can ever
+      // send: schedule nothing and read nothing. Earnings stay on the
+      // molecule's wallet (recoverable by the key holder).
+      log(
+        `Sweep NOT started → ${sweepAddress}: the sweep rail refuses to sign for its mint (rail_spend_refused)`,
+      );
+      return startServer(deps, serverCfg);
+    }
     const doSweep = async (): Promise<void> => {
       try {
         const r = await sweepWalletRail(wallet, sweepAddress, minMicro);

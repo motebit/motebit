@@ -39,11 +39,16 @@ import {
 } from "@motebit/crypto";
 import { createInMemoryStorage } from "@motebit/runtime";
 import { InMemoryToolRegistry } from "@motebit/tools";
-import { SolanaWalletRail } from "@motebit/wallet-solana";
+import { SolanaWalletRail, USDC_MINT_DEVNET } from "@motebit/wallet-solana";
 import type { SolanaRpcAdapter } from "@motebit/wallet-solana";
 import type { BootstrapAndEmitIdentityResult } from "@motebit/mcp-server";
 import type { MoleculeConfig } from "../index.js";
-import { defaultCreateMoneyRuntime, selfIssueGrant, mintTick } from "../index.js";
+import {
+  defaultCreateMoneyRuntime,
+  selfIssueGrant,
+  mintTick,
+  MOLECULE_SPENDABLE_MINTS,
+} from "../index.js";
 import { RiskLevel } from "@motebit/sdk";
 
 /** Structural view of the fields this test asserts (the full type lives in
@@ -86,6 +91,10 @@ function moneyConfig(): MoleculeConfig {
     syncUrl: RELAY_URL,
     moneyExecution: {
       solanaRpcUrl: SOLANA_RPC,
+      // Devnet mint: these tests expect LIVE spends to reach the rail, and a
+      // molecule's rail signs only for MOLECULE_SPENDABLE_MINTS (the mainnet
+      // default is refused before discovery — money-refused.test.ts).
+      usdcMint: USDC_MINT_DEVNET,
       relayPublicKeyHex: SIGNING_PINNED_HEX,
       spendCeiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: 1_000_000 },
     },
@@ -442,6 +451,7 @@ describe("defaultCreateMoneyRuntime — money-without-authority fails CLOSED at 
     let calls = 0;
     const adapter = {
       ownAddress: "FaKeSo1anaAddr1111111111111111111111111111",
+      usdcMint: USDC_MINT_DEVNET, // a live send is expected: the allowed mint
       getUsdcBalance: async () => 100_000_000n,
       getSolBalance: async () => 10_000_000n,
       sendUsdc: async () => ({ ok: true, signature: FAKE_SIG, slot: 1, confirmed: true }),
@@ -452,7 +462,10 @@ describe("defaultCreateMoneyRuntime — money-without-authority fails CLOSED at 
       getTransaction: async () => ({ status: "not_found" }),
       isReachable: async () => true,
     } as unknown as SolanaRpcAdapter;
-    return { rail: new SolanaWalletRail(adapter), sent: () => calls };
+    return {
+      rail: new SolanaWalletRail(adapter, { spendableMints: MOLECULE_SPENDABLE_MINTS }),
+      sent: () => calls,
+    };
   }
 
   function stubToPaymentLeg(): void {

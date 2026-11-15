@@ -86,6 +86,9 @@ export {
   InsufficientUsdcBalanceError,
   InsufficientSolForGasError,
   InvalidSolanaAddressError,
+  RailSpendRefusedError,
+  isRailSpendRefusal,
+  isSpendRefused,
 } from "./constants.js";
 
 export {

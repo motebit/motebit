@@ -280,6 +280,7 @@ import {
 } from "./sovereign-pay-forward-gate.js";
 import {
   p2pPaymentConfirmerOf,
+  railSpendRefusedOf,
   resolveAndSubmitP2pDelegation,
   resolveP2pPaymentRequest,
   retrieveDelegationResult,
@@ -6577,7 +6578,14 @@ export class MotebitRuntime {
     // pass unmetered — the human is that path's authorizer.
     const rawBuildP2pPayment = this._solanaWallet?.buildP2pPayment?.bind(this._solanaWallet);
     const buildP2pPayment = rawBuildP2pPayment
-      ? wrapP2pPaymentWithMeter(rawBuildP2pPayment, () => this._activeTurnGrant, this.moneyMeter)
+      ? wrapP2pPaymentWithMeter(
+          rawBuildP2pPayment,
+          () => this._activeTurnGrant,
+          this.moneyMeter,
+          // A rail that refuses every spend is refused BEFORE the meter
+          // commits anything against the grant's ceiling.
+          () => railSpendRefusedOf(this._solanaWallet),
+        )
       : undefined;
     // The same rail's read-only recovery lookup (#885): a builder that
     // throws is not proof nothing moved. Read-only, so it needs no meter.
@@ -7012,12 +7020,21 @@ export class MotebitRuntime {
       // 4b. LIVE: broadcast through the meter-wrapped builder (never the raw
       //     wallet method — that would bypass the ceiling and trip
       //     check-ceiling-from-grant), then submit through the shared spine.
+      //
+      //     A rail that refuses every spend for its mint ends the live branch
+      //     HERE — before discovery, before the meter (which commits spend to
+      //     the grant store and never refunds) and before the paid-intent
+      //     ledger. The dry run above is untouched: it never broadcasts.
+      if (railSpendRefusedOf(this._solanaWallet)) {
+        return { ok: false, code: "rail_spend_refused" };
+      }
       const rawBuild = this._solanaWallet?.buildP2pPayment?.bind(this._solanaWallet);
       if (rawBuild == null) return { ok: false, code: "no_sovereign_rail" };
       const buildP2pPayment = wrapP2pPaymentWithMeter(
         rawBuild,
         () => this._activeTurnGrant,
         this.moneyMeter,
+        () => railSpendRefusedOf(this._solanaWallet),
       );
       // #885: read-only "did it land anyway?" — needs no meter (never pays).
       const confirmP2pPayment = p2pPaymentConfirmerOf(this._solanaWallet);

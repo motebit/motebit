@@ -33,7 +33,7 @@ import {
   InvalidSpendCeilingError,
 } from "@motebit/policy";
 import type { TurnContext } from "@motebit/protocol";
-import type { BuildP2pPayment } from "./relay-delegation.js";
+import { RAIL_SPEND_REFUSED_ERROR_NAME, type BuildP2pPayment } from "./relay-delegation.js";
 
 export interface MeterVerdict {
   allowed: boolean;
@@ -123,6 +123,25 @@ export class MoneyMeterDeniedError extends Error {
 }
 
 /**
+ * Thrown by the metered payment builder when the rail reports that it
+ * refuses every spend — BEFORE the meter is consulted and before the rail is
+ * called. Same `name` and `code` as the rail's own typed refusal
+ * (`@motebit/wallet-solana`, which this package does not import), so the one
+ * pre-sign classification in `resolveAndSubmitP2pDelegation` covers both.
+ */
+export class RailSpendRefusedError extends Error {
+  readonly code = "rail_spend_refused";
+  readonly reason = "rail_spend_refused";
+  constructor() {
+    super(
+      "Payment refused before signing: the sovereign rail may not sign a transfer for its mint. " +
+        "Nothing was metered, signed or sent.",
+    );
+    this.name = RAIL_SPEND_REFUSED_ERROR_NAME;
+  }
+}
+
+/**
  * The RAIL-SEAM half of late-bound metering (`ToolDefinition.moneyBinding:
  * "late"`). A late-bound money tool's spend is unknown at args time — the
  * loop's AND-composition lets a grant-cleared call proceed on grant+meter
@@ -144,10 +163,19 @@ export function wrapP2pPaymentWithMeter(
   build: BuildP2pPayment,
   getActiveGrant: () => NonNullable<TurnContext["verifiedGrant"]> | null,
   meter: MoneyMeter,
+  /**
+   * Does the rail behind `build` refuse every spend right now
+   * (`railSpendRefusedOf`)? Checked BEFORE the meter: the meter commits the
+   * spend to the grant store and never refunds, so metering a payment the
+   * rail is certain to refuse would burn the grant's ceiling with no money
+   * moved. Absent ⇒ not checked here (the rail still throws).
+   */
+  isRailSpendRefused?: () => boolean,
 ): BuildP2pPayment {
   // `hooks` (#885) pass straight through: the caller records each signed
   // transaction before it is sent, metered or not.
   return async (request, hooks) => {
+    if (isRailSpendRefused?.() === true) throw new RailSpendRefusedError();
     const grant = getActiveGrant();
     if (grant == null) return build(request, hooks);
 

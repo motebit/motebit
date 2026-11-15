@@ -108,6 +108,8 @@ import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
   InvalidSolanaAddressError,
+  RailSpendRefusedError,
+  isSpendRefused,
 } from "./constants.js";
 
 /**
@@ -182,6 +184,13 @@ export interface Web3JsRpcAdapterConfig {
   rpcUrl: string;
   identitySeed: Uint8Array;
   usdcMint?: string;
+  /**
+   * The mints this adapter may sign a USDC transfer for. Absent ⇒
+   * unrestricted. Present ⇒ `sendUsdc` / `sendUsdcBatch` / `sendUsdcDurable`
+   * throw `RailSpendRefusedError` as their first statement unless the parsed
+   * mint is listed. Copied at construction; never changes afterwards.
+   */
+  spendableMints?: readonly string[];
   commitment?: Commitment;
   /**
    * How long `signSendConfirm` keeps asking the chain after a blockhash
@@ -234,6 +243,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   private readonly connection: Connection;
   private readonly keypair: Keypair;
   private readonly mint: PublicKey;
+  private readonly spendableMints: readonly string[] | undefined;
   private readonly commitment: Commitment;
   private readonly decisionCommitment: "confirmed" | "finalized";
   private readonly expiryPollMs: number;
@@ -283,6 +293,22 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     // public key derived from the same seed via @noble/ed25519.
     this.keypair = Keypair.fromSeed(config.identitySeed);
     this.mint = new PublicKey(config.usdcMint ?? USDC_MINT_MAINNET);
+    this.spendableMints =
+      config.spendableMints !== undefined ? Object.freeze([...config.spendableMints]) : undefined;
+  }
+
+  /** The PARSED mint (base58) every transfer is built for. */
+  get usdcMint(): string {
+    return this.mint.toBase58();
+  }
+
+  /** Refuse, before any read or signature, a transfer in a mint off the allowlist. */
+  private requireSpendableMint(): void {
+    const allowed = this.spendableMints;
+    const mint = this.mint.toBase58();
+    if (allowed !== undefined && isSpendRefused(allowed, mint)) {
+      throw new RailSpendRefusedError(mint, allowed);
+    }
   }
 
   get ownAddress(): string {
@@ -348,6 +374,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   }
 
   async sendUsdc(args: SendUsdcArgs, hooks?: BroadcastHooks): Promise<SendUsdcResult> {
+    this.requireSpendableMint();
     // 1. Validate recipient.
     let recipient: PublicKey;
     try {
@@ -520,6 +547,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     items: readonly SendUsdcArgs[],
     hooks?: BroadcastHooks,
   ): Promise<SendUsdcBatchItemResult[]> {
+    this.requireSpendableMint();
     if (items.length === 0) return [];
     if (items.length === 1) {
       const r = await this.sendUsdc(items[0]!, hooks);
@@ -1094,6 +1122,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     lane: DurableNonceLane,
     hooks?: DurableBroadcastHooks,
   ): Promise<DurableSendResult> {
+    this.requireSpendableMint();
     let recipient: PublicKey;
     try {
       recipient = new PublicKey(args.toAddress);

@@ -156,6 +156,7 @@ import {
 } from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { resolveRelayUrl } from "./subcommands/_helpers.js";
+import { replGrantRelayUrls, SessionRelays } from "./subcommands/grant.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
 import { VoiceController } from "./voice.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
@@ -497,7 +498,7 @@ async function main(): Promise<void> {
     } else if (grantCmd === "show") {
       await handleGrantShow(config.positionals[2]);
     } else if (grantCmd === "revoke") {
-      await handleGrantRevoke(config.positionals[2]);
+      await handleGrantRevoke(config.positionals[2], config);
     } else {
       console.error("Usage: motebit grant [create|list|show|revoke]");
       process.exit(1);
@@ -925,6 +926,11 @@ async function main(): Promise<void> {
   // Relay wiring — only when a relay is named. Relay sync is opt-in
   // (`sync-opt-in.ts`): with none, the REPL makes no relay call at all.
   const syncUrl = resolveRelayUrl(config, reloadedConfig);
+  // Every relay this session has used: the startup relay now, each
+  // `/connect` later. Added, never replaced; the `--grant` presenter reads
+  // the whole set at each turn.
+  const sessionRelay = new SessionRelays();
+  sessionRelay.add(syncUrl);
   const replPush: CliEventPush | undefined = await startReplRelay({
     runtime,
     config,
@@ -1048,7 +1054,22 @@ async function main(): Promise<void> {
   // the stored grant + its revocations and presents the currently-due tick.
   // The runtime derives (or refuses) authority per turn — a null
   // presentation is an honestly grantless turn, never an error.
-  const grantPresenter = config.grant != null ? await createGrantPresenter(config.grant) : null;
+  const grantPresenter =
+    config.grant != null
+      ? await createGrantPresenter(config.grant, {
+          // Asked each turn: every relay this session has used (startup and
+          // each `/connect`) plus every source that names one.
+          relayUrls: () => replGrantRelayUrls(sessionRelay, config),
+          // Once per outage, on the first turn the relay could not confirm
+          // revocation status: the grant is withheld, R4 asks for approval.
+          onRevocationUnconfirmed: (reason) =>
+            console.log(
+              dim(
+                `  [standing grant not presented: its revocation status could not be confirmed with the relay (${sanitizeRelayText(reason)}) — money actions will ask for approval]`,
+              ),
+            ),
+        })
+      : null;
   if (grantPresenter != null) {
     console.log(
       dim(
@@ -1144,6 +1165,7 @@ async function main(): Promise<void> {
         privateKeyBytes,
         deviceId,
         voice: voiceController,
+        sessionRelay,
       });
       console.log();
       prompt();
@@ -1167,8 +1189,12 @@ async function main(): Promise<void> {
         }
       } else {
         writeOutput("\n" + promptColor("mote>") + " ");
-        const grantOptions = (await grantPresenter?.delegationForTurn()) ?? undefined;
-        if (grantPresenter != null && grantOptions == null) {
+        const presentation = await grantPresenter?.presentForTurn();
+        const grantOptions =
+          presentation?.status === "presented"
+            ? { delegation: presentation.delegation }
+            : undefined;
+        if (presentation?.status === "not_due") {
           console.log(dim("  [no grant tick due this turn — running grantless]"));
         }
         await consumeStream(

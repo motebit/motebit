@@ -26,6 +26,7 @@ import {
   defaultCreateRuntime,
   defaultCreateMoneyRuntime,
   defaultLog,
+  MOLECULE_SPENDABLE_MINTS,
   memoryTaskSpend,
   memoryTaskSpendLedger,
   runMolecule,
@@ -522,7 +523,10 @@ describe("runMolecule", () => {
       // present-and-non-empty branch of the network-mint plumbing).
       process.env.MOTEBIT_SOLANA_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
       const send = vi.fn().mockResolvedValue({ signature: "sweep-sig" });
+      // A sweep override must carry exactly the runner's allowlist, or the
+      // runner refuses to start (money-refused.test.ts).
       const createSweepWallet = vi.fn(() => ({
+        spendableMints: MOLECULE_SPENDABLE_MINTS,
         isAvailable: vi.fn().mockResolvedValue(true),
         getBalance: vi.fn().mockResolvedValue(500_000n),
         send,
@@ -569,6 +573,7 @@ describe("runMolecule", () => {
       process.env.MOTEBIT_SWEEP_MIN_MICRO = "1";
       const send2 = vi.fn().mockRejectedValue(new Error("rpc down"));
       const failWallet = vi.fn(() => ({
+        spendableMints: MOLECULE_SPENDABLE_MINTS,
         isAvailable: vi.fn().mockResolvedValue(true),
         getBalance: vi.fn().mockResolvedValue(500_000n),
         send: send2,
