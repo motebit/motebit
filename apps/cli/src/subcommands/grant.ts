@@ -149,15 +149,22 @@ export function selectDueTick(stored: StoredGrant, now: number): DelegationToken
  * known to use, and withholds if ANY of those pulls fails. The set is
  * recomputed at each presentation through `GrantPresenterOptions.relayUrls`,
  * a function, so a relay captured once at startup is unrepresentable. The
- * caller composes it (`replGrantRelayUrls`, `daemonGrantRelayUrls`):
- *   (a) the relay(s) the session talks to NOW (the REPL's mutable session
- *       relay, which `/connect` updates; the daemon's intent and push relay);
- *   (b) the NAMED relay re-resolved per turn (`namedRelayUrl`: flag > env >
- *       config file), so a relay saved to config mid-session, or one the
- *       daemon's own sync resolution skips, is still asked.
- * Records from every pull are merged. An empty set means no relay is known
- * anywhere. The presenter reads no config or environment except through that
- * function.
+ * caller composes it (`replGrantRelayUrls`, `daemonGrantRelayUrls`).
+ *
+ * THE SET is every relay named by ANY source, all of them, not the winning
+ * one: the `--sync-url` / `--sync` flag, the `MOTEBIT_SYNC_URL` environment
+ * variable, the saved config's `sync_url` (re-read each turn), and the relay
+ * the session is currently connected to (the REPL's session relay, which
+ * `/connect` moves; the daemon's intent and push relay). The sources are not
+ * ranked here, because a revocation may have been posted under any of them:
+ * `motebit grant revoke` run without the flag posts to the config relay while
+ * a session started with `--sync-url` talks to another. Records from every
+ * pull are merged. An empty set means no relay is named anywhere. The
+ * presenter core reads no config or environment; only the two composers do.
+ *
+ * The cost, stated: a stale or unreachable relay left in the config or the
+ * environment under a flag override withholds the grant every turn until it
+ * is removed, and N relays cost N pulls per presented turn.
  *
  * What this does not do: the feed is unsigned, so a relay that omits a record
  * (or a wrong relay URL) still answers "ok". That needs the signed
@@ -202,8 +209,9 @@ export interface GrantPresenterOptions {
    * relay could not confirm revocation status, with a short fixed reason
    * naming the failing relay's host (`HTTP 429 (relay.example)`,
    * `timeout (…)`). Never a raw URL or a raw error message. Later consecutive
-   * withheld turns are silent; a turn where every pull succeeds re-arms it.
-   * The caller renders its own one-line notice.
+   * withheld turns with the SAME failing hosts are silent; it fires again
+   * when the set of failing hosts changes, and after a turn where every pull
+   * succeeded. The caller renders its own one-line notice.
    */
   onRevocationUnconfirmed?: (reason: string) => void;
   /** The fetch the revocation pull uses (tests inject one; default: global). */
@@ -218,28 +226,38 @@ export interface SessionRelay {
 }
 
 /**
- * The relays a REPL session's grant is checked against, this turn: (a) the
- * relay the session talks to now, (b) the named relay, re-resolved.
+ * The relays a REPL session's grant is checked against, this turn: the relay
+ * the session is connected to now, and EVERY source that names one — the flag
+ * (`config.syncUrl`: `--sync-url`, or `--sync`), the environment, the saved
+ * config. All of them, never the first that is set (`namedRelayUrl` picks a
+ * winner; a revocation posted to a loser would be missed).
  */
 export function replGrantRelayUrls(
   session: SessionRelay,
   config: { syncUrl?: string | undefined },
 ): (string | undefined)[] {
-  return [session.url, namedRelayUrl(config, loadFullConfig())];
+  return [session.url, config.syncUrl, process.env["MOTEBIT_SYNC_URL"], loadFullConfig().sync_url];
 }
 
 /**
- * The relays a daemon's grant is checked against, this task: (a) the relay
- * named for its identity and the one it pushes to, (b) the named relay,
- * re-resolved with `namedRelayUrl`. (b) matters because `daemonRelayUrl` does
- * not normalise: with `MOTEBIT_SYNC_URL=""` and a config `sync_url` it yields
- * none, while `motebit grant revoke` posts to the config relay.
+ * The relays a daemon's grant is checked against, this task: the relay named
+ * for its identity, the one it pushes to, and EVERY source that names one —
+ * the flag, the environment, the saved config. All of them, never a winner.
+ * (`daemonRelayUrl` also does not normalise: with `MOTEBIT_SYNC_URL=""` and a
+ * config `sync_url` it yields none, while `motebit grant revoke` posts to the
+ * config relay.)
  */
 export function daemonGrantRelayUrls(
   relay: { syncUrl: string | undefined; intentUrl: string | undefined },
   config: { syncUrl?: string | undefined },
 ): (string | undefined)[] {
-  return [relay.intentUrl, relay.syncUrl, namedRelayUrl(config, loadFullConfig())];
+  return [
+    relay.intentUrl,
+    relay.syncUrl,
+    config.syncUrl,
+    process.env["MOTEBIT_SYNC_URL"],
+    loadFullConfig().sync_url,
+  ];
 }
 
 /** Upper bound on the per-presentation relay revocation pull. */
@@ -257,9 +275,10 @@ export type RelayRevocationPull =
   | { status: "ok"; records: DelegationRevocation[] }
   /**
    * Timeout, network error, redirect, non-2xx, or a body that is not the
-   * feed's shape. `reason` is a fixed short phrase plus the relay's host.
+   * feed's shape. `reason` is a fixed short phrase plus the relay's host;
+   * `hosts` names each relay that failed (a fixed word when it has no host).
    */
-  | { status: "failed"; reason: string };
+  | { status: "failed"; reason: string; hosts: readonly string[] };
 
 const isRecordObject = (v: unknown): boolean =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -312,10 +331,13 @@ export async function pullRelayRevocations(
   const relayUrl = normalizeRelayUrl(options.relayUrl);
   if (relayUrl == null) return { status: "no_relay" };
   const host = relayHost(relayUrl);
-  if (host == null) return { status: "failed", reason: "invalid relay URL" };
+  if (host == null) {
+    return { status: "failed", reason: "invalid relay URL", hosts: ["(invalid relay URL)"] };
+  }
   const failed = (kind: string): RelayRevocationPull => ({
     status: "failed",
     reason: `${kind} (${host})`,
+    hosts: [host],
   });
   const fetchImpl = options.fetch ?? fetch;
   try {
@@ -355,8 +377,14 @@ export async function pullRevocationsFromRelays(
   const pulls = await Promise.all(
     urls.map((relayUrl) => pullRelayRevocations({ ...options, relayUrl })),
   );
-  const failures = pulls.flatMap((p) => (p.status === "failed" ? [p.reason] : []));
-  if (failures.length > 0) return { status: "failed", reason: failures.join("; ") };
+  const failures = pulls.flatMap((p) => (p.status === "failed" ? [p] : []));
+  if (failures.length > 0) {
+    return {
+      status: "failed",
+      reason: failures.map((f) => f.reason).join("; "),
+      hosts: failures.flatMap((f) => f.hosts),
+    };
+  }
   return { status: "ok", records: pulls.flatMap((p) => (p.status === "ok" ? p.records : [])) };
 }
 
@@ -368,14 +396,19 @@ export function createGrantPresenter(
     console.error(`--grant: no stored grant ${grantId} under ${grantsDir()}`);
     return Promise.resolve(null);
   }
-  let notified = false;
+  /** The failing hosts last announced; null while no outage stands announced. */
+  let announced: string | null = null;
   /** This turn's relay set, asked of the caller now; unreadable is a failure. */
   const pullForTurn = async (): Promise<RelayRevocationPull> => {
     let relayUrls: readonly (string | undefined)[];
     try {
       relayUrls = options.relayUrls?.() ?? [];
     } catch {
-      return { status: "failed", reason: "relay configuration unreadable" };
+      return {
+        status: "failed",
+        reason: "relay configuration unreadable",
+        hosts: ["(relay configuration)"],
+      };
     }
     return pullRevocationsFromRelays(relayUrls, options);
   };
@@ -386,14 +419,17 @@ export function createGrantPresenter(
     if (tick == null) return { status: "not_due" };
     const pull = await pullForTurn();
     if (pull.status === "failed") {
-      if (!notified) {
-        notified = true;
+      // Announce when the set of failing relays is new: the first failure of
+      // an outage, and again when a different relay is the one failing.
+      const failing = [...pull.hosts].sort().join(",");
+      if (failing !== announced) {
+        announced = failing;
         options.onRevocationUnconfirmed?.(pull.reason);
       }
       return { status: "withheld", reason: "revocation_unconfirmed" };
     }
     // Every relay answered: the outage (if any) is over, the next one is new.
-    if (pull.status === "ok") notified = false;
+    if (pull.status === "ok") announced = null;
     const revocations: DelegationRevocation[] = [
       ...(stored.revocation != null ? [stored.revocation] : []),
       ...(pull.status === "ok" ? pull.records : []),

@@ -18,7 +18,9 @@
  *   - the relay set captured once at startup instead of asked each turn;
  *   - `/connect` no longer moving the session relay;
  *   - "any failed pull withholds" weakened to "all must fail";
- *   - the named-relay floor dropped from the REPL's or the daemon's set;
+ *   - the REPL's or the daemon's relay set back to first-wins (`namedRelayUrl`:
+ *     the winning source only), or the saved config dropped from it;
+ *   - the notice latch ignoring WHICH relay is failing;
  *   - the presenter falling back to the environment by itself;
  *   - the raw error text restored in the failure reason.
  *
@@ -42,6 +44,9 @@ const CONNECT = "revocation pull: /connect moves the relay the grant is checked 
 const DAEMON = "revocation pull: serve --direct --grant asks the relay `grant revoke` posts to";
 const REASON = "revocation pull: the reason never carries a URL or an error's own text";
 const NOTICE = "revocation pull: the notice fires once per outage";
+const FOLLOWS = "revocation pull: the notice follows the failing relay";
+const SOURCES = "revocation pull: every source that names a relay is asked, not the winner";
+const BOTH = "both relays are asked, either failing withholds, either's revocation refuses";
 const CHAT =
   "revocation pull: the runtime path (owner chat turn) failed pull: the R4 call does not auto-execute — it pauses for approval, zero payments built";
 const DIRECT =
@@ -56,7 +61,15 @@ const THROWN_EMPTY = '    return { status: "ok", records: [] };\n';
 const NON_2XX = "    if (!res.ok) return failed(`HTTP ${res.status}`);\n";
 const WITHHOLD = '      return { status: "withheld", reason: "revocation_unconfirmed" };\n';
 const ASK_NOW = "      relayUrls = options.relayUrls?.() ?? [];\n";
-const ANY_FAILS = "  if (failures.length > 0) return";
+const ANY_FAILS = "  if (failures.length > 0) {";
+const REPL_ALL =
+  '  return [session.url, config.syncUrl, process.env["MOTEBIT_SYNC_URL"], loadFullConfig().sync_url];\n';
+const REPL_WINNER = "  return [session.url, namedRelayUrl(config, loadFullConfig())];\n";
+const DAEMON_ALL =
+  "  return [\n    relay.intentUrl,\n    relay.syncUrl,\n    config.syncUrl,\n" +
+  '    process.env["MOTEBIT_SYNC_URL"],\n    loadFullConfig().sync_url,\n  ];\n';
+const DAEMON_WINNER =
+  "  return [relay.intentUrl, relay.syncUrl, namedRelayUrl(config, loadFullConfig())];\n";
 
 const TAMPERS: TamperEntry[] = [
   entry(
@@ -111,13 +124,13 @@ const TAMPERS: TamperEntry[] = [
   ),
   entry(
     "the once-per-outage notice latch is removed",
-    "        notified = true;\n",
+    "        announced = failing;\n",
     "",
     `${NOTICE} consecutive failed-pull turns call onRevocationUnconfirmed exactly once, with the reason`,
   ),
   entry(
     "the notice latch is never re-armed after a successful pull (once per process)",
-    '    if (pull.status === "ok") notified = false;\n',
+    '    if (pull.status === "ok") announced = null;\n',
     "",
     `${NOTICE} failure, success, failure: each outage is announced once`,
   ),
@@ -139,8 +152,8 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SRC,
-        from: "  let notified = false;\n",
-        to: "  let notified = false;\n  const startupRelayUrls = options.relayUrls?.() ?? [];\n",
+        from: "  let announced: string | null = null;\n",
+        to: "  let announced: string | null = null;\n  const startupRelayUrls = options.relayUrls?.() ?? [];\n",
       },
       { file: SRC, from: ASK_NOW, to: "      relayUrls = startupRelayUrls;\n" },
     ],
@@ -153,8 +166,8 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SRC,
-        from: "  let notified = false;\n",
-        to: "  let notified = false;\n  const startupRelayUrls = options.relayUrls?.() ?? [];\n",
+        from: "  let announced: string | null = null;\n",
+        to: "  let announced: string | null = null;\n  const startupRelayUrls = options.relayUrls?.() ?? [];\n",
       },
       { file: SRC, from: ASK_NOW, to: "      relayUrls = startupRelayUrls;\n" },
     ],
@@ -172,26 +185,75 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "any failed pull withholds -> all must fail (two relays, one fails)",
     ANY_FAILS,
-    "  if (failures.length === pulls.length) return",
+    "  if (failures.length === pulls.length) {",
     `${UNION} two relays, one fails: withheld, and the notice names the failing host only`,
   ),
   entry(
     "any failed pull withholds -> all must fail (/connect: A ok + B 500)",
     ANY_FAILS,
-    "  if (failures.length === pulls.length) return",
+    "  if (failures.length === pulls.length) {",
     `${CONNECT} --sync-url A at start, /connect B, A ok + B 500: withheld`,
   ),
+  // ── every source, not the winner ──
   entry(
-    "the named-relay floor is dropped from the REPL's set",
-    "  return [session.url, namedRelayUrl(config, loadFullConfig())];\n",
-    "  return [session.url];\n",
-    `${CONNECT} a relay saved to config by another process mid-session is asked on the next turn`,
+    "REPL set back to first-wins (namedRelayUrl): flag=A + config=B",
+    REPL_ALL,
+    REPL_WINNER,
+    `${SOURCES} REPL: flag=A + config=B: ${BOTH}`,
   ),
   entry(
-    "the named-relay floor is dropped from the daemon's set",
-    "  return [relay.intentUrl, relay.syncUrl, namedRelayUrl(config, loadFullConfig())];\n",
-    "  return [relay.intentUrl, relay.syncUrl];\n",
+    "REPL set back to first-wins (namedRelayUrl): flag=A + env=B",
+    REPL_ALL,
+    REPL_WINNER,
+    `${SOURCES} REPL: flag=A + env=B: ${BOTH}`,
+  ),
+  entry(
+    "REPL set back to first-wins (namedRelayUrl): env=A + config=B",
+    REPL_ALL,
+    REPL_WINNER,
+    `${SOURCES} REPL: env=A + config=B: ${BOTH}`,
+  ),
+  entry(
+    "REPL set back to first-wins (namedRelayUrl): config B saved mid-session under flag A",
+    REPL_ALL,
+    REPL_WINNER,
+    `${SOURCES} REPL: started with flag=A, config B saved by another process mid-session: B is asked on the next turn`,
+  ),
+  entry(
+    "daemon set back to first-wins (namedRelayUrl): serve http, flag=A + config=B",
+    DAEMON_ALL,
+    DAEMON_WINNER,
+    `${SOURCES} serve (http): flag=A + config=B: ${BOTH}`,
+  ),
+  entry(
+    "daemon set back to first-wins (namedRelayUrl): serve http, flag=A + env=B",
+    DAEMON_ALL,
+    DAEMON_WINNER,
+    `${SOURCES} serve (http): flag=A + env=B: ${BOTH}`,
+  ),
+  entry(
+    "daemon set back to first-wins (namedRelayUrl): serve stdio, env=A + config=B",
+    DAEMON_ALL,
+    DAEMON_WINNER,
+    `${SOURCES} serve (stdio): env=A + config=B: ${BOTH}`,
+  ),
+  entry(
+    "daemon set back to first-wins (namedRelayUrl): serve stdio, config B saved mid-session under env A",
+    DAEMON_ALL,
+    DAEMON_WINNER,
+    `${SOURCES} serve (stdio): started with env=A, config B saved by another process mid-session: B is asked on the next turn`,
+  ),
+  entry(
+    'the saved config is dropped from the daemon\'s set (MOTEBIT_SYNC_URL="" + config)',
+    "    loadFullConfig().sync_url,\n  ];\n",
+    "  ];\n",
     `${DAEMON} MOTEBIT_SYNC_URL="" + config sync_url: the daemon names no relay, the config relay is still asked, a failed pull withholds`,
+  ),
+  entry(
+    "the notice latch ignores which relay is failing (announces once until all recover)",
+    "      if (failing !== announced) {\n",
+    "      if (announced === null) {\n",
+    `${FOLLOWS} A fails, then A recovers while B fails: announced again, naming B`,
   ),
   entry(
     "the presenter falls back to the environment when its caller gave no set",

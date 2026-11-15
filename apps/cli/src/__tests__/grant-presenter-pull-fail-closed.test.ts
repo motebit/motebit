@@ -333,65 +333,173 @@ describe("revocation pull: the notice fires once per outage", () => {
   });
 });
 
-// The presenter asks the relay its CALLER resolved (`namedRelayUrl`: flag > env
-// > config, each normalised — what the REPL and `grant revoke` use), never one
-// it resolves for itself.
-describe("revocation pull: the relay is the session's, never the presenter's own", () => {
-  /** Present once with the relay `namedRelayUrl` yields for these inputs. */
-  async function presentAs(
-    flag: string | undefined,
-    env: string,
-    configSyncUrl: string | undefined,
-    fetchImpl: FakeFetch,
-  ): Promise<{ status: string; resolved: string | undefined }> {
-    const { namedRelayUrl } = await import("../sync-opt-in.js");
-    vi.stubEnv("MOTEBIT_SYNC_URL", env);
-    try {
-      const resolved = namedRelayUrl(
-        { syncUrl: flag },
-        configSyncUrl === undefined ? {} : { sync_url: configSyncUrl },
-      );
-      const { grantId } = await storeGrant();
-      const presenter = await grantMod.createGrantPresenter(grantId, {
-        relayUrls: () => [resolved],
-        fetch: fetchImpl,
-      });
-      return { status: (await presenter!.presentForTurn()).status, resolved };
-    } finally {
-      vi.stubEnv("MOTEBIT_SYNC_URL", ENV_RELAY);
-    }
+/** A fetch answering per relay origin; an unlisted origin is unreachable. */
+function relayRouter(answers: Record<string, () => Response>): FakeFetch {
+  const calls: string[] = [];
+  const impl = ((input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    calls.push(url);
+    const answer = answers[new URL(url).origin];
+    return answer != null
+      ? Promise.resolve(answer())
+      : Promise.reject(new TypeError("fetch failed"));
+  }) as FakeFetch;
+  impl.calls = calls;
+  return impl;
+}
+const feedOk =
+  (records: unknown[] = []) =>
+  (): Response =>
+    new Response(JSON.stringify({ records }), { status: 200 });
+const feedStatus = (code: number) => (): Response => new Response("{}", { status: code });
+const feedUrl = (relay: string): string => `${relay}/api/v1/delegations/revocations`;
+
+// THE SET: every relay named by the flag, the environment, the saved config, and
+// the relay the session is connected to — all of them, not the winning one. A
+// revocation may sit on any: `motebit grant revoke` run without the flag posts
+// to the config relay while a `--sync-url` session talks to another.
+describe("revocation pull: every source that names a relay is asked, not the winner", () => {
+  const A = "https://a.invalid";
+  const B = "https://b.invalid";
+  type Sources = { flag?: string; env?: string; cfg?: string };
+  type Kind = "REPL" | "serve (http)" | "serve (stdio)";
+  const KINDS: Kind[] = ["REPL", "serve (http)", "serve (stdio)"];
+
+  afterEach(() => {
+    vi.stubEnv("MOTEBIT_SYNC_URL", ENV_RELAY);
+    rmSync(join(dir, "config.json"), { force: true });
+  });
+
+  async function saveConfigRelay(url: string | undefined): Promise<void> {
+    const { loadFullConfig, saveFullConfig } = await import("../config.js");
+    if (url === undefined) rmSync(join(dir, "config.json"), { force: true });
+    else saveFullConfig({ ...loadFullConfig(), sync_url: url });
   }
 
-  it("--sync-url only (no env, no config) + a failed pull: withheld", async () => {
-    const fetchImpl = json(500, {});
-    const out = await presentAs("https://flag-relay.invalid/", "", undefined, fetchImpl);
-    expect(out.status).toBe("withheld");
-    expect(fetchImpl.calls).toEqual(["https://flag-relay.invalid/api/v1/delegations/revocations"]);
-  });
+  /**
+   * A `--grant` session of `kind` started under `sources`, composing its relay
+   * set exactly as index.ts / daemon.ts do: the real `namedRelayUrl` /
+   * `daemonRelay` for the session's own relay, then the real composer.
+   */
+  async function start(
+    kind: Kind,
+    sources: Sources,
+    fetchImpl: FakeFetch,
+  ): Promise<{
+    status: () => Promise<string>;
+    verified: () => Promise<boolean>;
+    revocation: DelegationRevocation;
+  }> {
+    const { namedRelayUrl } = await import("../sync-opt-in.js");
+    const { daemonRelay } = await import("../sync-configured.js");
+    const { loadFullConfig } = await import("../config.js");
+    const { parseCliArgs } = await import("../args.js");
+    await saveConfigRelay(sources.cfg);
+    vi.stubEnv("MOTEBIT_SYNC_URL", sources.env ?? "");
+    const config = parseCliArgs(sources.flag != null ? ["--sync-url", sources.flag] : []);
+    let relayUrls: () => readonly (string | undefined)[];
+    if (kind === "REPL") {
+      const sessionRelay = { url: namedRelayUrl(config, loadFullConfig()) };
+      relayUrls = () => grantMod.replGrantRelayUrls(sessionRelay, config);
+    } else {
+      const relay = daemonRelay(
+        config,
+        loadFullConfig(),
+        kind === "serve (http)" ? "http" : "stdio",
+      );
+      relayUrls = () => grantMod.daemonGrantRelayUrls(relay, config);
+    }
+    const { grantId, revocation } = await storeGrant();
+    const presenter = await grantMod.createGrantPresenter(grantId, { relayUrls, fetch: fetchImpl });
+    return {
+      status: async () => (await presenter!.presentForTurn()).status,
+      verified: async () => {
+        const turn = await presenter!.delegationForTurn();
+        if (turn == null) return false;
+        const { token, grant, revocations } = turn.delegation;
+        return (await verifyGrantForTurn(token, grant, revocations, self())) != null;
+      },
+      revocation,
+    };
+  }
 
-  it('config sync_url "" + env set + a failed pull: withheld (the env relay is asked)', async () => {
-    const fetchImpl = networkError();
-    const out = await presentAs(undefined, "https://a.invalid", "", fetchImpl);
-    expect(out.status).toBe("withheld");
-    expect(fetchImpl.calls).toEqual(["https://a.invalid/api/v1/delegations/revocations"]);
-  });
+  const COMBOS: Array<[string, Sources]> = [
+    ["flag=A + config=B", { flag: A, cfg: B }],
+    ["flag=A + env=B", { flag: A, env: B }],
+    ["env=A + config=B", { env: A, cfg: B }],
+  ];
+  for (const kind of KINDS) {
+    for (const [name, sources] of COMBOS) {
+      it(`${kind}: ${name}: both relays are asked, either failing withholds, either's revocation refuses`, async () => {
+        // Both answer: presented, and BOTH were asked.
+        const both = relayRouter({ [A]: feedOk(), [B]: feedOk() });
+        const s = await start(kind, sources, both);
+        expect(await s.status()).toBe("presented");
+        expect([...both.calls].sort()).toEqual([feedUrl(A), feedUrl(B)]);
+        expect(await s.verified()).toBe(true);
+        // Either one failing withholds.
+        for (const down of [A, B]) {
+          const up = down === A ? B : A;
+          const t = await start(
+            kind,
+            sources,
+            relayRouter({ [up]: feedOk(), [down]: feedStatus(500) }),
+          );
+          expect(await t.status()).toBe("withheld");
+        }
+        // A revocation on either one refuses (posted to the "losing" relay too).
+        for (const holder of [A, B]) {
+          const other = holder === A ? B : A;
+          const router: Record<string, () => Response> = { [other]: feedOk() };
+          const t = await start(kind, sources, relayRouter(router));
+          router[holder] = feedOk([t.revocation]);
+          expect(await t.status()).toBe("presented");
+          expect(await t.verified()).toBe(false);
+        }
+      });
+    }
 
-  it("env = A, config = B: the pull goes to A, the relay the session uses", async () => {
-    const fetchImpl = json(200, { records: [] });
-    const out = await presentAs(undefined, "https://a.invalid", "https://b.invalid", fetchImpl);
-    expect(out.status).toBe("presented");
-    expect(fetchImpl.calls).toEqual(["https://a.invalid/api/v1/delegations/revocations"]);
-  });
+    for (const [name, sources] of [
+      ["flag=A", { flag: A }],
+      ["env=A", { env: A }],
+    ] as Array<[string, Sources]>) {
+      it(`${kind}: started with ${name}, config B saved by another process mid-session: B is asked on the next turn`, async () => {
+        const router = relayRouter({ [A]: feedOk(), [B]: feedStatus(500) });
+        const s = await start(kind, sources, router);
+        expect(await s.status()).toBe("presented");
+        expect(router.calls).toEqual([feedUrl(A)]);
+        await saveConfigRelay(B);
+        expect(await s.status()).toBe("withheld");
+        expect(router.calls).toContain(feedUrl(B));
+      });
+    }
 
-  it("a whitespace-only URL is no relay, as it is for the session: nothing is fetched", async () => {
-    const fetchImpl = networkError();
-    const out = await presentAs("   ", "  ", " ", fetchImpl);
-    expect(out.resolved).toBeUndefined();
-    expect(out.status).toBe("presented");
-    expect(fetchImpl.calls).toHaveLength(0);
-    expect(await grantMod.pullRelayRevocations({ relayUrl: "  \t ", fetch: fetchImpl })).toEqual({
-      status: "no_relay",
+    it(`${kind}: --sync-url only (no env, no config) + a failed pull: withheld`, async () => {
+      const router = relayRouter({ "https://flag-relay.invalid": feedStatus(500) });
+      const s = await start(kind, { flag: "https://flag-relay.invalid/" }, router);
+      expect(await s.status()).toBe("withheld");
+      expect(router.calls).toEqual([feedUrl("https://flag-relay.invalid")]);
     });
+
+    it(`${kind}: config sync_url "" + env set + a failed pull: withheld (the env relay is asked)`, async () => {
+      const router = relayRouter({});
+      const s = await start(kind, { env: A, cfg: "" }, router);
+      expect(await s.status()).toBe("withheld");
+      expect(router.calls).toEqual([feedUrl(A)]);
+    });
+
+    it(`${kind}: whitespace-only everywhere is no relay: presented, nothing is fetched`, async () => {
+      const router = relayRouter({});
+      const s = await start(kind, { flag: "   ", env: "  ", cfg: " " }, router);
+      expect(await s.status()).toBe("presented");
+      expect(router.calls).toHaveLength(0);
+    });
+  }
+
+  it("the single pull reads a whitespace-only URL as no relay", async () => {
+    expect(
+      await grantMod.pullRelayRevocations({ relayUrl: "  \t ", fetch: networkError() }),
+    ).toEqual({ status: "no_relay" });
   });
 });
 
@@ -532,6 +640,54 @@ describe("revocation pull: every known relay is asked, any failure withholds", (
     });
     expect((await presenter!.presentForTurn()).status).toBe("withheld");
     expect(notice).toHaveBeenCalledWith("relay configuration unreadable");
+  });
+});
+
+describe("revocation pull: the notice follows the failing relay", () => {
+  const A = "https://a.invalid";
+  const B = "https://b.invalid";
+
+  it("A fails, then A recovers while B fails: announced again, naming B", async () => {
+    const { grantId } = await storeGrant();
+    const notice = vi.fn();
+    const answers: Record<string, () => Response> = { [A]: feedStatus(503), [B]: feedOk() };
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => [A, B],
+      fetch: relayRouter(answers),
+      onRevocationUnconfirmed: notice,
+    });
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect(notice).toHaveBeenCalledTimes(1);
+    expect(notice).toHaveBeenLastCalledWith("HTTP 503 (a.invalid)");
+    // No fully successful turn in between: A recovers as B starts failing.
+    answers[A] = feedOk();
+    answers[B] = feedStatus(429);
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect(notice).toHaveBeenCalledTimes(2);
+    expect(notice).toHaveBeenLastCalledWith("HTTP 429 (b.invalid)");
+    // Both failing is a new set too; the same set again is silent.
+    answers[A] = feedStatus(500);
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect(notice).toHaveBeenCalledTimes(3);
+    expect(notice).toHaveBeenLastCalledWith("HTTP 500 (a.invalid); HTTP 429 (b.invalid)");
+  });
+
+  it("the same relay failing differently (500, then a timeout) is the same outage: silent", async () => {
+    const { grantId } = await storeGrant();
+    const notice = vi.fn();
+    const answers: Record<string, () => Response> = { [A]: feedStatus(500) };
+    const presenter = await grantMod.createGrantPresenter(grantId, {
+      relayUrls: () => [A],
+      fetch: relayRouter(answers),
+      onRevocationUnconfirmed: notice,
+    });
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    answers[A] = feedStatus(502);
+    expect((await presenter!.presentForTurn()).status).toBe("withheld");
+    expect(notice).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -720,6 +876,10 @@ describe("revocation pull: /connect moves the relay the grant is checked against
     const s = await session(A);
     feedAnswer = { [A]: ok(), [B]: ok() };
     await s.connect(B);
+    // `/connect` also saved B to config. Remove it (as `motebit sync disable`
+    // from another shell would): the session is still connected to B, and it is
+    // the SESSION relay, not the config, that must keep B in the set.
+    rmSync(join(dir, "config.json"), { force: true });
     feedCalls = [];
     expect(await s.present()).toBe("presented");
     expect([...feedCalls].sort()).toEqual([feed(A), feed(B)]);
