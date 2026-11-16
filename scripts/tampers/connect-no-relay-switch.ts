@@ -56,13 +56,17 @@ const ROW_3: TamperEdit[] = [
   {
     file: SLASH,
     from: "      if (bound !== null) {\n",
-    to: "      if (bound !== null && false) {\n",
+    to: "      if (bound !== null && (false as boolean)) {\n",
   },
 ];
 // Row 2 falls through to the full connect: its own branch is skipped, and the
 // row-3 refusal no longer catches the session's own relay.
 const ROW_2_FALLS_THROUGH: TamperEdit[] = [
-  { file: SLASH, from: "      if (sameRelay) {\n", to: "      if (sameRelay && false) {\n" },
+  {
+    file: SLASH,
+    from: "      if (sameRelay) {\n",
+    to: "      if (sameRelay && (false as boolean)) {\n",
+  },
   {
     file: SLASH,
     from: "      if (bound !== null) {\n",
@@ -74,7 +78,7 @@ const ROW_4: TamperEdit[] = [
   {
     file: SLASH,
     from: '      if (operatorToken !== undefined && operatorToken.value !== "") {\n',
-    to: '      if (operatorToken !== undefined && operatorToken.value !== "" && false) {\n',
+    to: '      if (operatorToken !== undefined && operatorToken.value !== "" && (false as boolean)) {\n',
   },
 ];
 // The bare enable calls occur twice in repl-relay.ts; the preceding line
