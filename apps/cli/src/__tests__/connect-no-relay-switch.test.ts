@@ -55,7 +55,7 @@ import { parseCliArgs } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
 import { startReplRelay } from "../repl-relay.js";
 import { createRuntime, InMemoryToolRegistry } from "../runtime-factory.js";
-import { handleSlashCommand } from "../slash-commands.js";
+import { handleSlashCommand, type ReplContext } from "../slash-commands.js";
 import { resolveRelayUrl } from "../subcommands/_helpers.js";
 import { SessionRelays } from "../subcommands/grant.js";
 
@@ -182,6 +182,8 @@ interface Session {
   /** The startup config object the REPL keeps and hands to every slash command. */
   startupConfig: ReturnType<typeof loadFullConfig>;
   sessionRelay: SessionRelays;
+  /** The REPL context every slash command gets; a test may close the key on it. */
+  repl: ReplContext;
   connect: (url: string) => Promise<void>;
   enableCalls: () => number;
   listingCalls: () => number;
@@ -242,19 +244,20 @@ async function startSession(
   // Counted from here on: what startup did is not what the command does.
   const enable = vi.spyOn(runtime, "enableInteractiveDelegation");
   const listing = vi.spyOn(runtime, "registerServiceListing");
+  const repl: ReplContext = {
+    moteDb,
+    motebitId: keys.motebitId,
+    mcpAdapters: [],
+    privateKeyBytes: keys.privateKey,
+    deviceId: keys.deviceId,
+    sessionRelay,
+  };
   return {
     runtime,
     startupConfig,
     sessionRelay,
-    connect: (url) =>
-      handleSlashCommand("connect", url, runtime, config, startupConfig, {
-        moteDb,
-        motebitId: keys.motebitId,
-        mcpAdapters: [],
-        privateKeyBytes: keys.privateKey,
-        deviceId: keys.deviceId,
-        sessionRelay,
-      }),
+    repl,
+    connect: (url) => handleSlashCommand("connect", url, runtime, config, startupConfig, repl),
     enableCalls: () => enable.mock.calls.length,
     listingCalls: () => listing.mock.calls.length,
   };
@@ -303,6 +306,12 @@ const R2 = (source: string, to: string): string[] => [
 const ALREADY = (on: string): string[] => [
   `This session is already on ${on}. Nothing was sent and nothing changed.`,
 ];
+const NO_KEYS = ["Error: no signing keys available — cannot authenticate with relay."];
+
+// URL suffixes carrying what `sanitizeRelayText` removes, and what is left:
+// a CSI escape sequence (it would recolour the terminal), a zero-width space.
+const UNPRINTABLE = ["/\x1b[31mred", "/re\u200bd"];
+const PRINTED_AS = "/red";
 
 /** Row 3, asserted: `/connect B` on a session bound to A sends nothing, changes nothing, prints R1. */
 async function expectRefusedSwitch(s: Session, a: FakeRelay, b: FakeRelay): Promise<void> {
@@ -358,6 +367,60 @@ describe("/connect in a session already on a relay: nothing sent, nothing change
     const s = await startSession({ flag: a.url, argv: ["--sync-token", OPERATOR_TOKEN] });
     await expectRefusedSwitch(s, a, b);
   });
+
+  it("bound to A with an operator token set and no open identity key, /connect B: the no-signing-keys error, not R1 or R2", async () => {
+    const [a, b] = [await relay(), await relay()];
+    const s = await startSession({ flag: a.url, argv: ["--sync-token", OPERATOR_TOKEN] });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url });
+    delete s.repl.privateKeyBytes;
+    const { printed, unchanged } = await runConnect(s, b.url, [a, b]);
+    expect(b.log).toEqual([]);
+    expect(unchanged).toBe(true);
+    expect(printed).toEqual(NO_KEYS);
+  });
+
+  it("bound to A, /connect with A's scheme in upper case: a different spelling is a different relay, refused with R1, nothing sent", async () => {
+    const a = await relay();
+    const s = await startSession({ flag: a.url });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url });
+    const spelled = a.url.replace(/^http:/, "HTTP:");
+    expect(spelled).not.toBe(a.url);
+    const { printed, unchanged } = await runConnect(s, spelled, [a]);
+    expect(unchanged).toBe(true);
+    expect(printed).toEqual(R1(a.url, spelled));
+  });
+
+  it("bound to A, /connect A/x: an extra path segment is a different relay, refused with R1, nothing sent", async () => {
+    const a = await relay();
+    const s = await startSession({ flag: a.url });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url });
+    const { printed, unchanged } = await runConnect(s, `${a.url}/x`, [a]);
+    expect(unchanged).toBe(true);
+    expect(printed).toEqual(R1(a.url, `${a.url}/x`));
+  });
+
+  it("the already-on line prints the session's relay without an escape sequence or a zero-width character", async () => {
+    for (const suffix of UNPRINTABLE) {
+      const a = await relay();
+      const s = await startSession({ flag: `${a.url}${suffix}` });
+      expect(s.runtime.getDelegationRelay()).toEqual({ url: `${a.url}${suffix}` });
+      const { printed, unchanged } = await runConnect(s, `${a.url}${suffix}`, [a]);
+      expect(unchanged).toBe(true);
+      expect(printed).toEqual(ALREADY(`${a.url}${PRINTED_AS}`));
+    }
+  });
+
+  it("R1 prints the session's relay and the named relay without an escape sequence or a zero-width character", async () => {
+    for (const suffix of UNPRINTABLE) {
+      const [a, b] = [await relay(), await relay()];
+      const s = await startSession({ flag: `${a.url}${suffix}` });
+      expect(s.runtime.getDelegationRelay()).toEqual({ url: `${a.url}${suffix}` });
+      const { printed, unchanged } = await runConnect(s, `${b.url}${suffix}`, [a, b]);
+      expect(b.log).toEqual([]);
+      expect(unchanged).toBe(true);
+      expect(printed).toEqual(R1(`${a.url}${PRINTED_AS}`, `${b.url}${PRINTED_AS}`));
+    }
+  });
 });
 
 describe("/connect never sends an operator token", () => {
@@ -392,6 +455,17 @@ describe("/connect never sends an operator token", () => {
     process.env["MOTEBIT_SYNC_TOKEN"] = OPERATOR_TOKEN;
     const s = await startSession();
     await expectRefusedForToken(s, x, "MOTEBIT_SYNC_TOKEN");
+  });
+
+  it("R2 prints the named relay without an escape sequence or a zero-width character", async () => {
+    for (const suffix of UNPRINTABLE) {
+      const x = await relay();
+      const s = await startSession({ argv: ["--sync-token", OPERATOR_TOKEN] });
+      const { printed, unchanged } = await runConnect(s, `${x.url}${suffix}`, [x]);
+      expect(x.log).toEqual([]);
+      expect(unchanged).toBe(true);
+      expect(printed).toEqual(R2("--sync-token", `${x.url}${PRINTED_AS}`));
+    }
   });
 
   /** Row 5 with a shadowed token: the connect runs, and no request carries the shadowed value. */

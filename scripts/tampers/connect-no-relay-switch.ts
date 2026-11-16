@@ -11,6 +11,9 @@
  *     binds), so the runtime reports no relay and `/connect B` runs;
  *   - `/connect <the session's own relay>` falling through to the full connect;
  *   - the operator-token refusal removed;
+ *   - the identity-key check moved below the relay and token checks;
+ *   - the relay comparison loosened (case-insensitive, or a prefix match);
+ *   - a relay URL printed without `sanitizeRelayText`;
  *   - each of the three token sources dropped from the shared helper;
  *   - the runtime's `getDelegationRelay()` always reporting null (the CLI
  *     tests load `@motebit/runtime` through its build output, so these entries
@@ -46,6 +49,13 @@ const TOKEN_FLAG = `${TOKEN} no relay, operator token from --sync-token: /connec
 const TOKEN_API = `${TOKEN} no relay, operator token from MOTEBIT_API_TOKEN: /connect X sends nothing and prints R2`;
 const TOKEN_SYNC = `${TOKEN} no relay, operator token from MOTEBIT_SYNC_TOKEN (MOTEBIT_API_TOKEN unset): /connect X sends nothing and prints R2`;
 const THEN_REFUSED = `${FIRST} /connect A succeeds on a 409 bootstrap with device-signed requests only; then /connect B is refused with R1`;
+
+const NO_KEY = `${BOUND} bound to A with an operator token set and no open identity key, /connect B: the no-signing-keys error, not R1 or R2`;
+const UPPER_SCHEME = `${BOUND} bound to A, /connect with A's scheme in upper case: a different spelling is a different relay, refused with R1, nothing sent`;
+const EXTRA_SEGMENT = `${BOUND} bound to A, /connect A/x: an extra path segment is a different relay, refused with R1, nothing sent`;
+const CLEAN_ALREADY = `${BOUND} the already-on line prints the session's relay without an escape sequence or a zero-width character`;
+const CLEAN_R1 = `${BOUND} R1 prints the session's relay and the named relay without an escape sequence or a zero-width character`;
+const CLEAN_R2 = `${TOKEN} R2 prints the named relay without an escape sequence or a zero-width character`;
 
 function entry(name: string, edits: TamperEdit[], red: string, rebuild?: string[]): TamperEntry {
   return { name, edits, pkg: PKG, test: TEST, red, ...(rebuild ? { rebuild } : {}) };
@@ -100,6 +110,69 @@ const GETTER_NULL: TamperEdit[] = [
     to: "    return coords === null ? null : null;\n",
   },
 ];
+// Row 1 (the key check) moved from before the relay and token checks to after
+// them. The same check occurs in another command; the comment that follows it
+// anchors the removal to `/connect`.
+const KEY_CHECK =
+  "      if (!repl?.privateKeyBytes || !repl?.deviceId) {\n" +
+  '        console.log("Error: no signing keys available — cannot authenticate with relay.");\n' +
+  "        break;\n" +
+  "      }\n";
+const AFTER_KEY_CHECK =
+  "\n      // The relay this session's runtime is bound to (startup wiring, or an\n";
+const CONNECTING = "\n      console.log(dim(`Connecting to ${connectUrl}...`));\n";
+const KEY_CHECK_LAST: TamperEdit[] = [
+  { file: SLASH, from: KEY_CHECK + AFTER_KEY_CHECK, to: AFTER_KEY_CHECK },
+  { file: SLASH, from: CONNECTING, to: "\n" + KEY_CHECK + CONNECTING },
+];
+const SAME_RELAY_LINE =
+  "      const sameRelay = bound !== null && normalizeRelayUrl(bound.url) === connectUrl;\n";
+const CASE_INSENSITIVE: TamperEdit[] = [
+  {
+    file: SLASH,
+    from: SAME_RELAY_LINE,
+    to:
+      "      const sameRelay =\n        bound !== null &&\n" +
+      "        normalizeRelayUrl(bound.url)?.toLowerCase() === connectUrl.toLowerCase();\n",
+  },
+];
+const PREFIX_MATCH: TamperEdit[] = [
+  {
+    file: SLASH,
+    from: SAME_RELAY_LINE,
+    to:
+      "      const sameRelay =\n        bound !== null &&\n" +
+      '        connectUrl.startsWith(normalizeRelayUrl(bound.url) ?? "\\0");\n',
+  },
+];
+const RAW_ALREADY: TamperEdit[] = [
+  {
+    file: SLASH,
+    from: "`This session is already on ${sanitizeRelayText(bound.url)}. Nothing",
+    to: "`This session is already on ${bound.url}. Nothing",
+  },
+];
+const RAW_R1_FROM: TamperEdit[] = [
+  {
+    file: SLASH,
+    from: "        const from = sanitizeRelayText(bound.url);\n",
+    to: "        const from = bound.url;\n",
+  },
+];
+const RAW_R1_TO: TamperEdit[] = [
+  {
+    file: SLASH,
+    from: "        const to = sanitizeRelayText(connectUrl);\n",
+    to: "        const to = connectUrl;\n",
+  },
+];
+const RAW_R2: TamperEdit[] = [
+  {
+    file: SLASH,
+    from: "nothing was sent to ${sanitizeRelayText(connectUrl)}.`",
+    to: "nothing was sent to ${connectUrl}.`",
+  },
+];
 const dropSource = (line: string): TamperEdit[] => [{ file: SLASH, from: line, to: "" }];
 
 const TAMPERS: TamperEntry[] = [
@@ -152,6 +225,15 @@ const TAMPERS: TamperEntry[] = [
     dropSource('    ["MOTEBIT_SYNC_TOKEN", process.env["MOTEBIT_SYNC_TOKEN"]],\n'),
     TOKEN_SYNC,
   ),
+  // ── the order of the checks, and what counts as the same relay ──
+  entry("the identity-key check runs after the relay and token checks", KEY_CHECK_LAST, NO_KEY),
+  entry("the relay comparison ignores case", CASE_INSENSITIVE, UPPER_SCHEME),
+  entry("the relay comparison is a prefix match", PREFIX_MATCH, EXTRA_SEGMENT),
+  // ── relay URLs are printed through sanitizeRelayText ──
+  entry("the already-on line prints the session's relay raw", RAW_ALREADY, CLEAN_ALREADY),
+  entry("R1 prints the session's relay raw", RAW_R1_FROM, CLEAN_R1),
+  entry("R1 prints the named relay raw", RAW_R1_TO, CLEAN_R1),
+  entry("R2 prints the named relay raw", RAW_R2, CLEAN_R2),
   // ── the runtime getter, through the build output the CLI loads ──
   entry(
     "getDelegationRelay always reports null (A from the saved config)",
