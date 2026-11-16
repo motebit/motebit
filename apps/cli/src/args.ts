@@ -464,7 +464,10 @@ export const COMMANDS: CommandEntry[] = [
   },
   { usage: "/conversation <id>", desc: "Load a past conversation" },
   { usage: "/model <name>", desc: "Switch AI model (persists across sessions)" },
-  { usage: "/connect <url>", desc: "Connect to a relay" },
+  {
+    usage: "/connect <url>",
+    desc: "Connect to a relay — only in a session started with no relay and no operator token",
+  },
   { usage: "/serve [port]", desc: "Start MCP server — accept delegations" },
   { usage: "/sync", desc: "Sync events and conversations" },
   { usage: "/tools", desc: "List registered tools" },

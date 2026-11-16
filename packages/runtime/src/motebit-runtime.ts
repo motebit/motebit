@@ -6632,6 +6632,24 @@ export class MotebitRuntime {
   }
 
   /**
+   * The relay of the runtime's task-query coordinates, or null. Read-only.
+   *
+   * Those coordinates are set, only while empty, by any
+   * `enableInteractiveDelegation` call and by the first-ever
+   * `enableInvokeCapability` call (a later one returns before reaching them),
+   * and are cleared by `disableInteractiveDelegation`. So after
+   * enable-invoke(A), disable, enable-invoke(B) this reports null.
+   *
+   * That is the whole contract. The runtime holds other relay bindings (the
+   * delegation tool's closure, the tap manager, the granted-spend
+   * coordinates) that can differ from this one; it does not report them.
+   */
+  getDelegationRelay(): { url: string } | null {
+    const coords = this._taskQueryCoords;
+    return coords === null ? null : { url: coords.syncUrl };
+  }
+
+  /**
    * Execute ONE tool directly — no AI loop — behind the SAME policy gate the
    * loop composes. The deterministic worker path (`motebit serve --direct`,
    * and the relay task dispatch that reaches it) used to call the registry

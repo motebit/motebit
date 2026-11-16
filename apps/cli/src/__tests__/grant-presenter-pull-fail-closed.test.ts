@@ -764,8 +764,10 @@ describe("revocation pull: the reason never carries a URL or an error's own text
 //
 // THE PROPERTY: the relay `delegate_to_agent` would submit to is in the set
 // that was pulled, and a revocation held only on that relay refuses the grant.
-// `/connect B` does NOT re-point an already-enabled delegation tool (the
-// runtime keeps the first relay), so the session's relays accumulate.
+// `/connect B` in a session already on a relay is refused: it sends nothing
+// and adds nothing, so the session's relay and the pulled set stay as they
+// were. A first `/connect` (a session on no relay) adds its relay, and the
+// relay the saved config named just before, to a set that only grows.
 describe("revocation pull: the relay delegation submits to is always pulled (/connect adds, never replaces)", () => {
   const A = "https://a.invalid";
   const B = "https://b.invalid";
@@ -774,8 +776,15 @@ describe("revocation pull: the relay delegation submits to is always pulled (/co
   let feedAnswer: Record<string, () => Response>;
   let feedCalls: string[];
   let taskCalls: string[];
+  // `/connect` refuses when an operator token is set, so neither variable may
+  // leak in from the machine running the suite. Deleted, not emptied: an
+  // empty string counts as defined and shadows the next source.
+  const TOKEN_VARS = ["MOTEBIT_API_TOKEN", "MOTEBIT_SYNC_TOKEN"] as const;
+  let tokenVarsBefore: Array<string | undefined>;
 
   beforeEach(() => {
+    tokenVarsBefore = TOKEN_VARS.map((k) => process.env[k]);
+    for (const k of TOKEN_VARS) delete process.env[k];
     feedAnswer = {};
     feedCalls = [];
     taskCalls = [];
@@ -807,6 +816,11 @@ describe("revocation pull: the relay delegation submits to is always pulled (/co
     vi.restoreAllMocks();
     vi.stubEnv("MOTEBIT_SYNC_URL", ENV_RELAY);
     rmSync(join(dir, "config.json"), { force: true });
+    TOKEN_VARS.forEach((k, i) => {
+      const before = tokenVarsBefore[i];
+      if (before === undefined) delete process.env[k];
+      else process.env[k] = before;
+    });
   });
 
   /** A REPL session with `--grant`, started under these relay sources. */
@@ -816,6 +830,8 @@ describe("revocation pull: the relay delegation submits to is always pulled (/co
     pulled: () => Promise<string[]>;
     verified: () => Promise<boolean>;
     connect: (url: string) => Promise<void>;
+    /** The session's own relay set (`SessionRelays`), as it stands. */
+    relays: () => readonly string[];
     /** The origin `delegate_to_agent` submits a task to, or null when not enabled. */
     delegationOrigin: () => Promise<string | null>;
     revocation: DelegationRevocation;
@@ -869,6 +885,7 @@ describe("revocation pull: the relay delegation submits to is always pulled (/co
           deviceId: "dev-f1",
           sessionRelay,
         }),
+      relays: () => sessionRelay.urls,
       delegationOrigin: async () => {
         if (!runtime.getToolRegistry().has("delegate_to_agent")) return null;
         taskCalls = [];
@@ -904,19 +921,26 @@ describe("revocation pull: the relay delegation submits to is always pulled (/co
     expect(await s.present()).toBe("withheld");
   }
 
-  it("(a) config=A at start, /connect B: delegation still submits to A, and A is still pulled", async () => {
+  it("(a) config=A at start, /connect B is refused: the set is unchanged, only A is pulled, delegation still submits to A", async () => {
+    const { loadFullConfig } = await import("../config.js");
     const s = await session({ cfg: A });
+    expect(s.relays()).toEqual([A]);
     await s.connect(B);
-    expect(await s.pulled()).toEqual([A, B]);
+    expect(s.relays()).toEqual([A]);
+    expect(loadFullConfig().sync_url).toBe(A);
+    expect(await s.pulled()).toEqual([A]);
     await expectDelegationRelayGoverns(s, A);
   });
 
-  it("(b) no relay at start, /connect B, then /connect C: delegation submits to B, and B is still pulled", async () => {
+  it("(b) no relay at start, /connect B, then /connect C is refused: the set is [B], only B is pulled, delegation submits to B", async () => {
+    const { loadFullConfig } = await import("../config.js");
     const s = await session();
     expect(await s.delegationOrigin()).toBeNull();
     await s.connect(B);
     await s.connect(C);
-    expect(await s.pulled()).toEqual([B, C]);
+    expect(s.relays()).toEqual([B]);
+    expect(loadFullConfig().sync_url).toBe(B);
+    expect(await s.pulled()).toEqual([B]);
     await expectDelegationRelayGoverns(s, B);
   });
 
@@ -932,13 +956,17 @@ describe("revocation pull: the relay delegation submits to is always pulled (/co
     await expectDelegationRelayGoverns(s, A);
   });
 
-  it("(c) flag=A, /connect B: delegation submits to A; both are pulled; B failing withholds", async () => {
-    const s = await session({ flag: A });
+  it("no relay at start, /connect B, another process then saves C: both are pulled; B failing withholds while C answers", async () => {
+    const { loadFullConfig, saveFullConfig } = await import("../config.js");
+    const s = await session();
     await s.connect(B);
-    expect(await s.pulled()).toEqual([A, B]);
+    // Another process saves C after the connect: C is asked through the saved
+    // config, B only because it entered the session through `/connect`.
+    saveFullConfig({ ...loadFullConfig(), sync_url: C });
+    expect(await s.pulled()).toEqual([B, C]);
     feedAnswer = { [B]: http500 };
     expect(await s.present()).toBe("withheld");
-    await expectDelegationRelayGoverns(s, A);
+    await expectDelegationRelayGoverns(s, B);
   });
 
   it("no relay at start, /connect B: delegation submits to B; B answering 500 withholds", async () => {
@@ -953,13 +981,13 @@ describe("revocation pull: the relay delegation submits to is always pulled (/co
     await expectDelegationRelayGoverns(s, B);
   });
 
-  it("--sync-url A at start, /connect B, saved config then removed: B stays in the set (the session keeps it)", async () => {
-    const s = await session({ flag: A });
+  it("no relay at start, /connect B, saved config then removed: B stays in the set (the session keeps it)", async () => {
+    const s = await session();
     await s.connect(B);
     // `/connect` also saved B to config. Remove it (as `motebit sync disable`
     // from another shell would): only the session's own record keeps B asked.
     rmSync(join(dir, "config.json"), { force: true });
-    expect(await s.pulled()).toEqual([A, B]);
+    expect(await s.pulled()).toEqual([B]);
   });
 
   it("the relay the saved config names when /connect overwrites it stays in the set", async () => {

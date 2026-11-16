@@ -189,7 +189,7 @@ const TAMPERS: TamperEntry[] = [
     "/connect no longer adds its relay to the session",
     "      repl.sessionRelay?.add(connectUrl);\n",
     "",
-    `${CONNECT} --sync-url A at start, /connect B, saved config then removed: B stays in the set (the session keeps it)`,
+    `${CONNECT} no relay at start, /connect B, saved config then removed: B stays in the set (the session keeps it)`,
     SLASH,
   ),
   entry(
@@ -199,23 +199,23 @@ const TAMPERS: TamperEntry[] = [
     `${UNION} two relays, one fails: withheld, and the notice names the failing host only`,
   ),
   entry(
-    "any failed pull withholds -> all must fail (/connect: A ok + B 500)",
+    "any failed pull withholds -> all must fail (/connect B, C saved after: C ok + B 500)",
     ANY_FAILS,
     "  if (failures.length === pulls.length) {",
-    `${CONNECT} (c) flag=A, /connect B: delegation submits to A; both are pulled; B failing withholds`,
+    `${CONNECT} no relay at start, /connect B, another process then saves C: both are pulled; B failing withholds while C answers`,
   ),
   // ── the session's relays accumulate ──
   entry(
-    "SessionRelays.add replaces instead of accumulating: (a) config=A, /connect B",
+    "SessionRelays.add replaces instead of accumulating: C saved by another process, then a first /connect B",
     ACCUMULATE,
     REPLACE,
-    `${CONNECT} (a) config=A at start, /connect B: delegation still submits to A, and A is still pulled`,
+    `${CONNECT} the relay the saved config names when /connect overwrites it stays in the set`,
   ),
   entry(
-    "SessionRelays.add replaces instead of accumulating: (b) /connect B, /connect C",
+    "SessionRelays.add replaces instead of accumulating: the SessionRelays unit test",
     ACCUMULATE,
     REPLACE,
-    `${CONNECT} (b) no relay at start, /connect B, then /connect C: delegation submits to B, and B is still pulled`,
+    `${CONNECT} SessionRelays only grows: add normalises and de-duplicates, and its view cannot edit it`,
   ),
   entry(
     "/connect no longer keeps the relay the saved config named before overwriting it",

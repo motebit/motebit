@@ -1,7 +1,7 @@
 // --- REPL slash command handler ---
 
 import { disconnectMcpServer } from "./mcp-config-wiring.js";
-import { namedRelayUrl, SYNC_OPT_IN_HINT } from "./sync-opt-in.js";
+import { namedRelayUrl, normalizeRelayUrl, SYNC_OPT_IN_HINT } from "./sync-opt-in.js";
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import {
@@ -77,10 +77,10 @@ export interface ReplContext {
   /** Voice controller — optional, off by default. `/voice on` opts in. */
   voice?: VoiceController;
   /**
-   * Every relay this REPL session has used. `/connect` ADDS to it and nothing
-   * is ever removed: a `--grant` presenter (which reads it each turn) must
-   * keep asking the earlier relays, because an already-enabled delegation
-   * tool keeps submitting to the relay it was first enabled against.
+   * Every relay this REPL session has used. A first `/connect` (one in a
+   * session whose runtime is on no relay yet) ADDS to it and nothing is ever
+   * removed: a `--grant` presenter reads it each turn. `/connect` in a
+   * session already on a relay is refused and adds nothing.
    */
   sessionRelay?: { add(url: string | undefined): void };
 }
@@ -213,14 +213,35 @@ function getRelaySyncUrl(config: CliConfig, fullConfig?: FullConfig): string | u
 /** What a relay slash command prints when relay sync is off. */
 const SYNC_OFF_LINE = `Relay sync is off — ${SYNC_OPT_IN_HINT} (or /connect <url>).`;
 
+/**
+ * The operator (master) token this process was given and the source that
+ * supplied it: the first DEFINED of `--sync-token`, `MOTEBIT_API_TOKEN`,
+ * `MOTEBIT_SYNC_TOKEN`. An empty string counts as defined and shadows the
+ * next source, so a caller must still check the value is non-empty. The one
+ * reader of those three sources here: `getRelayToken` (what is sent) and
+ * `/connect` (what refuses) both call it, so they cannot disagree.
+ */
+function operatorTokenSource(
+  config: Pick<CliConfig, "syncToken">,
+): { value: string; source: string } | undefined {
+  const sources: ReadonlyArray<readonly [source: string, value: string | undefined]> = [
+    ["--sync-token", config.syncToken],
+    ["MOTEBIT_API_TOKEN", process.env["MOTEBIT_API_TOKEN"]],
+    ["MOTEBIT_SYNC_TOKEN", process.env["MOTEBIT_SYNC_TOKEN"]],
+  ];
+  for (const [source, value] of sources) {
+    if (value != null) return { value, source };
+  }
+  return undefined;
+}
+
 /** Get an auth token for relay API calls — prefers master token, falls back to signed device token. */
 async function getRelayToken(
   config: CliConfig,
   repl?: ReplContext,
   aud = "admin:query",
 ): Promise<string | undefined> {
-  const master =
-    config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
+  const master = operatorTokenSource(config)?.value;
   if (master) return master;
   if (repl?.privateKeyBytes && repl?.deviceId) {
     return (
@@ -934,8 +955,11 @@ export async function handleSlashCommand(
     }
 
     case "connect": {
-      // /connect <url> — connect to a relay from inside the REPL
-      if (!args) {
+      // /connect <url> — name a relay from inside a REPL session that has none.
+      // It never changes the relay of a running session and never sends an
+      // operator token. Every check below runs before any request.
+      const connectUrl = normalizeRelayUrl(args); // trimmed, trailing slashes stripped
+      if (connectUrl === undefined) {
         console.log("Usage: /connect <relay-url>");
         console.log("  Example: /connect https://relay.motebit.com");
         break;
@@ -945,7 +969,39 @@ export async function handleSlashCommand(
         break;
       }
 
-      const connectUrl = args.trim().replace(/\/+$/, ""); // strip trailing slashes
+      // The relay this session's runtime is bound to (startup wiring, or an
+      // earlier /connect). A differently spelled URL counts as different.
+      const bound = runtime.getDelegationRelay();
+      const sameRelay = bound !== null && normalizeRelayUrl(bound.url) === connectUrl;
+      if (sameRelay) {
+        console.log(
+          `This session is already on ${sanitizeRelayText(bound.url)}. Nothing was sent and nothing changed.`,
+        );
+        break;
+      }
+      if (bound !== null) {
+        const from = sanitizeRelayText(bound.url);
+        const to = sanitizeRelayText(connectUrl);
+        console.log(
+          `This session is on ${from}. /connect cannot change relay while the session is running; nothing was sent to ${to}.`,
+        );
+        console.log(
+          "Another relay is not yet safe for paid delegation or with an operator token: this install's relay key pin and credentials are not kept per relay.",
+        );
+        console.log("A session keeps the relay it started with or first connected to.");
+        break;
+      }
+      const operatorToken = operatorTokenSource(config);
+      if (operatorToken !== undefined && operatorToken.value !== "") {
+        console.log(
+          `An operator token is set for this session (${operatorToken.source}). /connect does not send an operator token to a relay named inside a session; nothing was sent to ${sanitizeRelayText(connectUrl)}.`,
+        );
+        console.log(
+          "/connect is available in a session started with no relay and no operator token.",
+        );
+        break;
+      }
+
       console.log(dim(`Connecting to ${connectUrl}...`));
 
       // 1. Register device with relay (bootstrap)
@@ -990,12 +1046,11 @@ export async function handleSlashCommand(
         },
         routingStrategy: config.routingStrategy,
       });
-      // The session has now used this relay too: a standing grant's
-      // revocation status is checked against it from the next turn on. ADDED,
-      // never swapped in: when delegation was already enabled, the call above
-      // changed nothing and `delegate_to_agent` still submits to the earlier
-      // relay. The relay the saved config names right now is added as well —
-      // step 4 is about to overwrite it.
+      // The session is now on this relay: a standing grant's revocation
+      // status is checked against it from the next turn on. Added to the
+      // session's set, which only grows. The relay the saved config names
+      // right now (another process may have saved one since startup) is added
+      // as well — step 4 is about to overwrite it.
       repl.sessionRelay?.add(fullConfig?.sync_url);
       repl.sessionRelay?.add(savedRelayUrl());
       repl.sessionRelay?.add(connectUrl);

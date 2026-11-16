@@ -926,9 +926,10 @@ async function main(): Promise<void> {
   // Relay wiring — only when a relay is named. Relay sync is opt-in
   // (`sync-opt-in.ts`): with none, the REPL makes no relay call at all.
   const syncUrl = resolveRelayUrl(config, reloadedConfig);
-  // Every relay this session has used: the startup relay now, each
-  // `/connect` later. Added, never replaced; the `--grant` presenter reads
-  // the whole set at each turn.
+  // Every relay this session has used: the startup relay now, or the one a
+  // first `/connect` names later (`/connect` is refused once the session is
+  // on a relay). Added, never replaced; the `--grant` presenter reads the
+  // whole set at each turn.
   const sessionRelay = new SessionRelays();
   sessionRelay.add(syncUrl);
   const replPush: CliEventPush | undefined = await startReplRelay({
@@ -1057,8 +1058,8 @@ async function main(): Promise<void> {
   const grantPresenter =
     config.grant != null
       ? await createGrantPresenter(config.grant, {
-          // Asked each turn: every relay this session has used (startup and
-          // each `/connect`) plus every source that names one.
+          // Asked each turn: every relay this session has used (startup, or
+          // a first `/connect`) plus every source that names one.
           relayUrls: () => replGrantRelayUrls(sessionRelay, config),
           // Once per outage, on the first turn the relay could not confirm
           // revocation status: the grant is withheld, R4 asks for approval.
