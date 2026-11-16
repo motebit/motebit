@@ -1,9 +1,10 @@
 name: Deploy archetype slate (staging)
 
 # The staging slate is the conformance CANARY: `archetype-conformance.yml`
-# grades the `-stg` apps every day, and prod promotion is gated on five
-# consecutive greens (scripts/check-promotion-ready.ts). A probe is only
-# worth its verdict if the thing it grades tracks main.
+# grades the `-stg` apps every day, and the slate's prod command
+# (`RUN=1 TARGET=prod scripts/deploy-archetype-slate.ts`) refuses without
+# five consecutive scheduled greens (scripts/check-promotion-ready.ts). A
+# probe is only worth its verdict if the thing it grades tracks main.
 #
 # Until 2026-08-22 nothing deployed it. The six `deploy-<service>.yml`
 # workflows each deploy `fly.toml` (the PROD app) and nothing referenced

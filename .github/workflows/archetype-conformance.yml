@@ -5,17 +5,21 @@
 # impossible (Arc 3.5), and that's correct: the probe pays like any stranger,
 # no allowlist.
 #
-# This workflow does not promote anything. Promotion READINESS is
-# scripts/check-promotion-ready.ts: an operator pre-flight run by hand (not
-# a CI gate; no workflow calls it) that reads THIS workflow's scheduled-run
-# history and reports ready when the last 5 SCHEDULED runs all succeeded
-# (manual dispatches do not count). What it informs is a human running
-# `RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts`, which
-# creates the slate's prod apps and performs the first prod deploy of the
-# whole slate by local flyctl: no CI gate and no reviewer apply to that
-# command. Until an app exists, deploy-auditor.yml and deploy-clerk.yml skip
-# at "Check prod app exists"; the other deploy workflows have no such step.
-# Neither that script nor the deploy workflows read this history themselves.
+# This workflow does not promote anything. Promotion READINESS is decided by
+# scripts/check-promotion-ready.ts from THIS workflow's scheduled-run
+# history: the newest 5 SCHEDULED runs, each a first attempt on main that
+# completed green, the newest at most 48 hours old and no two more than 48
+# hours apart (manual dispatches and re-runs do not count). No workflow
+# calls that script. The slate's prod command
+# (`RUN=1 TARGET=prod npx tsx scripts/deploy-archetype-slate.ts`) does: it
+# refuses to promote unless the history is ready
+# (`PROMOTION_READINESS_OVERRIDE_REASON` with a written reason is the only
+# bypass, and it is printed) and unless the operator supplies the production
+# relay's key as `MOTEBIT_RELAY_PUBLIC_KEY`. That command creates the slate's
+# prod apps and performs the first prod deploy by local flyctl: no CI gate
+# and no `production` reviewer covers it. Until an app exists,
+# deploy-auditor.yml and deploy-clerk.yml skip at "Check prod app exists";
+# the other deploy workflows have no such step and do not read this history.
 # Each WORKFLOW-driven prod deploy goes through deploy-<service>.yml: CI +
 # head of main + staging gate, then the `production` reviewer
 # (docs/ops/RUNBOOK.md, "Molecule production deploys").

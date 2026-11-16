@@ -26,8 +26,10 @@
  *          issuer key matches the Auditor's registered key.
  *
  * Exit code 0 = all PASS (WARNs allowed); 1 = any FAIL. The scheduled
- * workflow (archetype-conformance.yml) feeds check-promotion-ready: 5
- * consecutive scheduled greens gate staging → prod promotion.
+ * workflow (archetype-conformance.yml) feeds check-promotion-ready: the
+ * slate's prod command (RUN=1 TARGET=prod scripts/deploy-archetype-slate.ts)
+ * refuses without 5 consecutive scheduled greens. Nothing else reads that
+ * history: a deploy-<service>.yml deploy of an existing prod app does not.
  *
  * Env:
  *   RELAY_URL              target relay (default staging)
