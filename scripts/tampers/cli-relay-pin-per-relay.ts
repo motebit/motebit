@@ -22,6 +22,9 @@
  *   - a throw from the declaration's verification let out of the full check,
  *     so `bindRelayPin` throws instead of returning `declaration_invalid`
  *     (`bindRelayPin`, `register`, lazy binding)
+ *   - each other guard that keeps a throw in: the metadata signature check
+ *     (runtime), the metadata step and its reason, the declaration read, the
+ *     legacy-key read, and `resolveRelayKey`'s own catch
  *   the readers
  *   - `resolveRelayKey` returns the legacy key (5, 7, and `delegate --sovereign`)
  *   - `index.ts` passes the legacy key (8)
@@ -100,6 +103,7 @@ const C12 = "test 12 — a damaged record is 'pins unknown', never empty";
 const DAMAGED_TAIL =
   ": no key, reason damaged, no request, the remedy, bytes unchanged; the pre-flight fails with it";
 
+const NO_THROW = "no step throws out, and each failure keeps its own reason";
 const UNVERIFIABLE =
   "a declaration the verifier throws on is the relay's fault, never a throw and never the record's";
 
@@ -262,6 +266,53 @@ const VERIFICATION_THROW_ESCAPES = edit(
   '    return { ok: false, reason: "declaration_invalid" }; // verification threw\n',
   '    throw new Error("declaration verification threw");\n',
 );
+// Each remaining guard that keeps a throw from leaving, one edit per guard.
+const METADATA_STEP_THROW_ESCAPES = edit(
+  PINS_SRC,
+  '    return { ok: false, reason: "metadata_unavailable" };\n',
+  '    throw new Error("metadata step threw");\n',
+);
+const METADATA_STEP_THROW_IS_UNREACHABLE = edit(
+  PINS_SRC,
+  '    return { ok: false, reason: "metadata_unavailable" };\n',
+  '    return { ok: false, reason: "unreachable" };\n',
+);
+const DECLARATION_READ_THROW_ESCAPES = edit(
+  PINS_SRC,
+  "    // something that is not a response): answered, but not a declaration.\n" +
+    '    return { ok: false, reason: "declaration_unavailable" };\n',
+  "    // something that is not a response): answered, but not a declaration.\n" +
+    '    throw new Error("declaration read threw");\n',
+);
+const LEGACY_READ_RETHROWS = edit(
+  PINS_SRC,
+  "    return undefined;\n",
+  '    throw new Error("legacy read threw");\n',
+);
+const RESOLVER_HAS_NO_CATCH = edit(
+  PINS_SRC,
+  "  const answer = decideRelayKey(relayUrl, deps).catch((err: unknown): RelayKeyResolution => ({\n" +
+    '    status: "no_key",\n' +
+    "    relayUrl,\n" +
+    '    reason: "unavailable",\n' +
+    "    file: relayPinsPath(),\n" +
+    "    cause: err instanceof Error ? err.message : String(err),\n" +
+    "  }));\n",
+  "  const answer = decideRelayKey(relayUrl, deps);\n",
+);
+const RUNTIME_SIGNATURE_THROW_ESCAPES = edit(
+  PIN_SRC,
+  "  let verified = false;\n" +
+    "  try {\n" +
+    "    verified = await verifyRelayMetadata(doc as unknown as RelayMetadata, hexToBytes(publicKey));\n" +
+    "  } catch {\n" +
+    "    verified = false;\n" +
+    "  }\n",
+  "  const verified = await verifyRelayMetadata(\n" +
+    "    doc as unknown as RelayMetadata,\n" +
+    "    hexToBytes(publicKey),\n" +
+    "  );\n",
+);
 const REGISTER_SECOND_FULL_CHECK = edit(
   REGISTER_SRC,
   "  const bound = await bindRelayPin(syncUrl, deps.relayKey);\n",
@@ -371,6 +422,56 @@ const TAMPERS: TamperEntry[] = [
     T_RUNTIME_PIN,
     `${R2} redirect_refused: a redirect is not followed, even to a document that would pass`,
     FOLLOW_METADATA_REDIRECT,
+  ),
+  entry(
+    "the guard around the metadata signature check is removed (a deep document throws out)",
+    RUNTIME,
+    T_RUNTIME_PIN,
+    `${R2} bad_signature, never a throw: metadata nested so deeply that canonicalising it overflows the stack`,
+    RUNTIME_SIGNATURE_THROW_ESCAPES,
+  ),
+  // ── no step throws out, each failure keeps its own reason (CLI) ──
+  entry(
+    "a throw from the metadata step escapes the full check",
+    CLI,
+    T_PINS,
+    `${NO_THROW} a transport that returns a non-response for the metadata: metadata_unavailable, not a throw`,
+    METADATA_STEP_THROW_ESCAPES,
+  ),
+  entry(
+    "a throw from the metadata step is reported as unreachable",
+    CLI,
+    T_PINS,
+    `${NO_THROW} a transport that returns a non-response for the metadata: metadata_unavailable, not a throw`,
+    METADATA_STEP_THROW_IS_UNREACHABLE,
+  ),
+  entry(
+    "a throw while reading the declaration's answer escapes the full check",
+    CLI,
+    T_PINS,
+    `${NO_THROW} a transport that returns a non-response for the declaration: declaration_unavailable, not a throw`,
+    DECLARATION_READ_THROW_ESCAPES,
+  ),
+  entry(
+    "the legacy-key read rethrows instead of 'no legacy key' (bindRelayPin)",
+    CLI,
+    T_PINS,
+    `${NO_THROW} an unreadable config.json during binding is 'no legacy key': legacy_mismatch, not a throw, no file written`,
+    LEGACY_READ_RETHROWS,
+  ),
+  entry(
+    "the legacy-key read rethrows instead of 'no legacy key' (resolveRelayKey)",
+    CLI,
+    T_PINS,
+    `${NO_THROW} an unreadable config.json at resolution is 'not pinned': the relay is not asked, and the record is not blamed`,
+    LEGACY_READ_RETHROWS,
+  ),
+  entry(
+    "resolveRelayKey's own catch is removed",
+    CLI,
+    T_PINS,
+    `${NO_THROW} resolveRelayKey never rejects: a throw that gets past every step's own guard is 'unavailable' with its cause`,
+    RESOLVER_HAS_NO_CATCH,
   ),
   // ── the full check (CLI) ──
   entry(

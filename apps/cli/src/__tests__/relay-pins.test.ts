@@ -302,6 +302,97 @@ describe("a declaration the verifier throws on is the relay's fault, never a thr
   });
 });
 
+describe("no step throws out, and each failure keeps its own reason", () => {
+  /** A transport that hands back something that is not a response for `path`, and is real otherwise. */
+  const nonResponseFor =
+    (path: string): typeof fetch =>
+    async (input, init) =>
+      typeof input === "string" && input.endsWith(path)
+        ? (undefined as unknown as Response)
+        : fetch(input, init);
+
+  it("a transport that returns a non-response for the metadata: metadata_unavailable, not a throw", async () => {
+    const relay = await startFakeRelay();
+    setLegacyKey(relay.identity.hex);
+    const deps = { ...FAST, fetchImpl: nonResponseFor(METADATA_PATH) };
+
+    await expect(fullRelayCheck(relay.base, deps)).resolves.toEqual({
+      ok: false,
+      reason: "metadata_unavailable",
+    });
+    await expect(bindRelayPin(relay.base, deps)).resolves.toEqual({
+      result: "no_key",
+      reason: "metadata_unavailable",
+    });
+    expect(relay.requests).toEqual([]);
+    expect(pinsBytes()).toBeNull();
+  });
+
+  it("a transport that returns a non-response for the declaration: declaration_unavailable, not a throw", async () => {
+    const relay = await startFakeRelay();
+    setLegacyKey(relay.identity.hex);
+    const deps = { ...FAST, fetchImpl: nonResponseFor(DECLARATION_PATH) };
+
+    await expect(fullRelayCheck(relay.base, deps)).resolves.toEqual({
+      ok: false,
+      reason: "declaration_unavailable",
+    });
+    await expect(bindRelayPin(relay.base, deps)).resolves.toEqual({
+      result: "no_key",
+      reason: "declaration_unavailable",
+    });
+    expect(pinsBytes()).toBeNull();
+  });
+
+  it("an unreadable config.json during binding is 'no legacy key': legacy_mismatch, not a throw, no file written", async () => {
+    const relay = await startFakeRelay();
+    fs.writeFileSync(CONFIG, "{ not json", { mode: 0o600 });
+
+    await expect(bindRelayPin(relay.base, FAST)).resolves.toEqual({ result: "legacy_mismatch" });
+    expect(pinsBytes()).toBeNull();
+    expect(fs.readFileSync(CONFIG, "utf-8")).toBe("{ not json");
+  });
+
+  it("an unreadable config.json at resolution is 'not pinned': the relay is not asked, and the record is not blamed", async () => {
+    const relay = await startFakeRelay();
+    fs.writeFileSync(CONFIG, "{ not json", { mode: 0o600 });
+
+    await expect(resolveRelayKey(relay.base, FAST)).resolves.toEqual({
+      status: "no_key",
+      relayUrl: relay.base,
+      reason: "not_pinned",
+    });
+    expect(relay.requests).toEqual([]);
+    expect(pinsBytes()).toBeNull();
+  });
+
+  it("resolveRelayKey never rejects: a throw that gets past every step's own guard is 'unavailable' with its cause", async () => {
+    const relay = await startFakeRelay();
+    setLegacyKey(relay.identity.hex);
+    // The one way left to make an inner step throw without changing the
+    // code: a deps object whose own property read throws.
+    const deps = {
+      lockTimeoutMs: 80,
+      get timeoutMs(): number {
+        throw new Error("deps exploded");
+      },
+    };
+
+    const res = await resolveRelayKey(relay.base, deps); // resolves; never rejects
+    expect(res).toEqual({
+      status: "no_key",
+      relayUrl: relay.base,
+      reason: "unavailable",
+      file: PINS,
+      cause: "deps exploded",
+    });
+    expect(relay.requests).toEqual([]);
+    expect(pinsBytes()).toBeNull();
+    // One answer per process still holds for it.
+    expect(await resolveRelayKey(relay.base, FAST)).toBe(res);
+  });
+});
+
 describe("test 3 — a server holding only copies of relay A's documents", () => {
   it("B, on A's host under another path, serves A's documents: endpoint_mismatch, no entry, the message names the URL A signed", async () => {
     // One host. A lives at /a and signs /a; B lives at /b and serves A's bytes.

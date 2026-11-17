@@ -33,7 +33,7 @@ pnpm run dev
 
 This starts the relay on `http://localhost:3000` with hot reload via `tsx watch`.
 
-The last two variables make the relay **sign its own URL** in its discovery metadata while keeping federation off. The `motebit` CLI uses a relay's key for paid peer-to-peer delegation (`motebit delegate --sovereign`, and paid delegation from the REPL) only when the relay signs the URL you name it by; without them the relay still registers agents, syncs and routes tasks, but the CLI records no key for it and paid peer-to-peer stays off. Name the relay by exactly the URL it signs: `http://localhost:3000` and `http://127.0.0.1:3000` are different relays to the CLI.
+The last two variables make the relay **sign its own URL** in its discovery metadata while keeping federation off. The `motebit` CLI uses a relay's key for paid peer-to-peer delegation (`motebit delegate --sovereign`, and paid delegation from the REPL) only when the relay signs the URL you name it by; without them the relay still registers agents, syncs and routes tasks, but the CLI records no per-relay entry for it (`motebit register` still writes the legacy `relay_public_key`, and warns), so it passes no key for that relay and paid peer-to-peer stays off. Name the relay by exactly the URL it signs: `http://localhost:3000` and `http://127.0.0.1:3000` are different relays to the CLI.
 
 ### What the environment variables do
 
