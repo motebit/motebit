@@ -37,10 +37,13 @@
  */
 
 import {
+  hexToBytes,
+  verifyRelayMetadata,
   verifySuccessionChain,
   KEY_SUCCESSION_SUITE,
   type KeySuccessionRecord,
 } from "@motebit/crypto";
+import type { RelayMetadata } from "@motebit/protocol";
 
 const PIN_KEY_PREFIX = "motebit:relay_pin:";
 
@@ -182,4 +185,167 @@ async function verifyRotation(args: {
     // pin is the relay equivocating to an unrelated lineage.
     chain.some((r) => r.old_public_key === args.pinnedKey)
   );
+}
+
+// === Per-relay key establishment (the URL a key signs) ======================
+//
+// `getOrPinRelayKey` above trusts whatever key a URL serves first. The two
+// functions below are stricter and store nothing: they answer "which key
+// PROVES it is the relay at this URL", by requiring the relay's signed
+// discovery metadata to name the URL it was asked at. A server holding only
+// copies of relay A's documents cannot pass for A under another URL, because
+// A's key signed A's URL.
+
+/**
+ * The comparable form of a relay URL, or null when the URL cannot carry a
+ * relay key. Two spellings share a pin key exactly when the URL parser
+ * unifies them (host case, default port, IDN, dot segments, trailing
+ * slashes); the path is kept, so two relays on one host stay distinct.
+ *
+ * Null (fail toward "no pin") for a backslash, `?`, `#`, `@`, whitespace or
+ * a control character anywhere in the raw input, for anything `new URL`
+ * rejects, and for a scheme other than `http:` / `https:`.
+ */
+export function relayPinKey(url: string): string | null {
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what is refused
+  if (/[\\?#@\s\u0000-\u001f\u007f]/.test(url)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  return parsed.href.replace(/\/+$/, "");
+}
+
+/** Why `verifyRelayMetadataForUrl` established no key. */
+export type RelayMetadataForUrlFailure =
+  | {
+      ok: false;
+      reason:
+        | "unpinnable_url"
+        | "unreachable"
+        | "redirect_refused"
+        | "metadata_unavailable"
+        | "malformed_key"
+        | "bad_signature"
+        | "endpoint_empty";
+    }
+  | {
+      ok: false;
+      reason: "endpoint_mismatch";
+      /** The pin key of the URL the relay DID sign, or null when it has none. */
+      signedPinKey: string | null;
+    };
+
+/** The outcome of `verifyRelayMetadataForUrl`. */
+export type RelayMetadataForUrlResult =
+  | {
+      ok: true;
+      /** The relay's Ed25519 public key: 64 hex characters, lowercase. */
+      publicKey: string;
+      relayId: string;
+    }
+  | RelayMetadataForUrlFailure;
+
+export interface VerifyRelayMetadataForUrlOptions {
+  /** Fetch implementation — defaults to `globalThis.fetch`. */
+  fetchImpl?: typeof fetch;
+  /** Request timeout in milliseconds. Default 5000. */
+  timeoutMs?: number;
+}
+
+/**
+ * Establish the key that signs the relay at `url`, from its signed discovery
+ * metadata (`<pin key>/.well-known/motebit.json`). Redirects are not followed
+ * (`redirect: "manual"`, so a redirect is distinguishable from no answer) and
+ * the request, body included, times out after five seconds unless `timeoutMs`
+ * says otherwise. Checks, in order:
+ *
+ *  1. `relayPinKey(url)` is null → `unpinnable_url`;
+ *  2. no answer (or a timeout) → `unreachable`; a redirect →
+ *     `redirect_refused`; non-2xx, not JSON, or missing fields →
+ *     `metadata_unavailable`;
+ *  3. `public_key` is not 64 hex characters → `malformed_key`; the document
+ *     does not verify under exactly that key → `bad_signature`;
+ *  4. the signed `endpoint_url` is empty → `endpoint_empty`; its pin key
+ *     differs from `url`'s → `endpoint_mismatch`.
+ *
+ * Stores nothing and never throws.
+ */
+export async function verifyRelayMetadataForUrl(
+  url: string,
+  options: VerifyRelayMetadataForUrlOptions = {},
+): Promise<RelayMetadataForUrlResult> {
+  const pinKey = relayPinKey(url);
+  if (pinKey == null) return { ok: false, reason: "unpinnable_url" };
+
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 5_000);
+  let doc: Record<string, unknown>;
+  try {
+    let resp: Response;
+    try {
+      resp = await fetchImpl(`${pinKey}/.well-known/motebit.json`, {
+        headers: { Accept: "application/json" },
+        redirect: "manual",
+        signal: controller.signal,
+      });
+    } catch {
+      return { ok: false, reason: "unreachable" };
+    }
+    // Node reports a manual redirect as the 3xx itself; a browser as an
+    // opaque redirect.
+    if (resp.type === "opaqueredirect" || (resp.status >= 300 && resp.status < 400)) {
+      return { ok: false, reason: "redirect_refused" };
+    }
+    if (!resp.ok) return { ok: false, reason: "metadata_unavailable" };
+    let body: unknown;
+    try {
+      body = await resp.json();
+    } catch {
+      // The timeout firing mid-body is no answer; anything else is not JSON.
+      return {
+        ok: false,
+        reason: controller.signal.aborted ? "unreachable" : "metadata_unavailable",
+      };
+    }
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return { ok: false, reason: "metadata_unavailable" };
+    }
+    doc = body as Record<string, unknown>;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (
+    typeof doc.public_key !== "string" ||
+    typeof doc.relay_id !== "string" ||
+    doc.relay_id === "" ||
+    typeof doc.signature !== "string" ||
+    typeof doc.suite !== "string"
+  ) {
+    return { ok: false, reason: "metadata_unavailable" };
+  }
+
+  if (!/^[0-9a-fA-F]{64}$/.test(doc.public_key)) return { ok: false, reason: "malformed_key" };
+  const publicKey = doc.public_key.toLowerCase();
+  let verified = false;
+  try {
+    verified = await verifyRelayMetadata(doc as unknown as RelayMetadata, hexToBytes(publicKey));
+  } catch {
+    verified = false;
+  }
+  if (!verified) return { ok: false, reason: "bad_signature" };
+
+  const signedEndpoint = doc.endpoint_url;
+  if (typeof signedEndpoint !== "string" || signedEndpoint === "") {
+    return { ok: false, reason: "endpoint_empty" };
+  }
+  const signedPinKey = relayPinKey(signedEndpoint);
+  if (signedPinKey !== pinKey) return { ok: false, reason: "endpoint_mismatch", signedPinKey };
+
+  return { ok: true, publicKey, relayId: doc.relay_id };
 }

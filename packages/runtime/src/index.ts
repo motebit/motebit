@@ -14,8 +14,14 @@ export {
   resolveAttachedAct,
 } from "./attached-surface.js";
 export type { AttachedReadKind, AttachedActKind } from "./attached-surface.js";
-export { getOrPinRelayKey } from "./relay-key-pin.js";
-export type { RelayKeyPinStorage, RelayKeyPinDeps } from "./relay-key-pin.js";
+export { getOrPinRelayKey, relayPinKey, verifyRelayMetadataForUrl } from "./relay-key-pin.js";
+export type {
+  RelayKeyPinStorage,
+  RelayKeyPinDeps,
+  RelayMetadataForUrlResult,
+  RelayMetadataForUrlFailure,
+  VerifyRelayMetadataForUrlOptions,
+} from "./relay-key-pin.js";
 export { performMigration } from "./migration-client.js";
 export type { MigrationClientDeps, MigrationResult, MigrationStep } from "./migration-client.js";
 export {
