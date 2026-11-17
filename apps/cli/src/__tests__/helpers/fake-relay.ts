@@ -70,6 +70,32 @@ export async function signDeclaration(
   };
 }
 
+/**
+ * The raw JSON body of a declaration whose `content` is arrays nested
+ * `depth` deep. It parses, and it has every field a declaration has, naming
+ * `relay`'s key and relay id — but canonicalising it overflows the stack, so
+ * the verifier THROWS on it instead of returning a verdict. It cannot be
+ * signed for the same reason; nothing gets as far as its signature.
+ */
+export function deeplyNestedDeclarationBody(relay: RelayIdentity, depth = 200_000): string {
+  const fields = JSON.stringify({
+    spec: "motebit-transparency/1.0",
+    declared_at: 1_790_000_000_000,
+    relay_id: "relay-under-test",
+    relay_public_key: relay.hex,
+    hash: "00".repeat(32),
+    suite: SUITE,
+    signature: "00".repeat(64),
+  });
+  return `${fields.slice(0, -1)},"content":${"[".repeat(depth)}${"]".repeat(depth)}}`;
+}
+
+/** Send a raw JSON body (one `JSON.stringify` could not produce). */
+export function sendRawJson(res: ServerResponse, body: string): void {
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(body);
+}
+
 type Route = (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
 
 export interface FakeRelay {

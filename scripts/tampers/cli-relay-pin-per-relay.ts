@@ -19,6 +19,9 @@
  *   - the declaration's key equality, and its `relay_id` equality, skipped (2)
  *   - redirects followed on the metadata fetch, and on the declaration fetch (2)
  *   - the declaration requested after a failed metadata step (2, 10a by count)
+ *   - a throw from the declaration's verification let out of the full check,
+ *     so `bindRelayPin` throws instead of returning `declaration_invalid`
+ *     (`bindRelayPin`, `register`, lazy binding)
  *   the readers
  *   - `resolveRelayKey` returns the legacy key (5, 7, and `delegate --sovereign`)
  *   - `index.ts` passes the legacy key (8)
@@ -96,6 +99,9 @@ const C6D =
 const C12 = "test 12 — a damaged record is 'pins unknown', never empty";
 const DAMAGED_TAIL =
   ": no key, reason damaged, no request, the remedy, bytes unchanged; the pre-flight fails with it";
+
+const UNVERIFIABLE =
+  "a declaration the verifier throws on is the relay's fault, never a throw and never the record's";
 
 const G10A = "test 10a — the existing step returns without comparing";
 
@@ -250,6 +256,11 @@ const STORE_THROWS = edit(
   PINS_SRC,
   '    return { result: "unavailable", cause: err instanceof Error ? err.message : String(err) };\n',
   "    throw err;\n",
+);
+const VERIFICATION_THROW_ESCAPES = edit(
+  PINS_SRC,
+  '    return { ok: false, reason: "declaration_invalid" }; // verification threw\n',
+  '    throw new Error("declaration verification threw");\n',
 );
 const REGISTER_SECOND_FULL_CHECK = edit(
   REGISTER_SRC,
@@ -587,6 +598,28 @@ const TAMPERS: TamperEntry[] = [
     T_PINS,
     `${C12} wrong shape (pins is not an object)${DAMAGED_TAIL}`,
     SHAPE_DAMAGE_AS_UPGRADE,
+  ),
+  // ── bindRelayPin never throws ──
+  entry(
+    "a throw from the declaration's verification escapes the full check (bindRelayPin)",
+    CLI,
+    T_PINS,
+    `${UNVERIFIABLE} bindRelayPin: no_key with declaration_invalid, it does not throw, no file written`,
+    VERIFICATION_THROW_ESCAPES,
+  ),
+  entry(
+    "a throw from the declaration's verification escapes the full check (register's exit code)",
+    CLI,
+    T_REGISTER,
+    "register against a relay whose declaration cannot be verified a declaration the verifier throws on: the same exit code and legacy-key behaviour as an invalid declaration, with the no_key warning",
+    VERIFICATION_THROW_ESCAPES,
+  ),
+  entry(
+    "a throw from the declaration's verification escapes the full check (lazy binding blames the record)",
+    CLI,
+    T_PINS,
+    `${UNVERIFIABLE} lazy binding: no key, with the declaration reason — not 'the record could not be read or written'`,
+    VERIFICATION_THROW_ESCAPES,
   ),
   // ── not changed ──
   entry(

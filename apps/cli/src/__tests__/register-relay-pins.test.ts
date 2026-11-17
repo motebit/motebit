@@ -39,7 +39,9 @@ import {
   DECLARATION_PATH,
   METADATA_PATH,
   closeFakeRelays,
+  deeplyNestedDeclarationBody,
   sendJson,
+  sendRawJson,
   signDeclaration,
   startFakeRelay,
   type FakeRelay,
@@ -304,6 +306,63 @@ describe("test 6c — register while another live process holds the record's loc
     expect(warnings[0]).toContain("locked by another motebit process");
     expect(warnings[0]).toContain(`motebit register --sync-url ${relay.base}\` again`);
     expect(errors).toEqual([]);
+  });
+});
+
+describe("register against a relay whose declaration cannot be verified", () => {
+  /** What one `register` run left behind. */
+  async function outcomeOf(relay: FakeRelay): Promise<{
+    exit: string;
+    legacyKey: string | undefined;
+    pins: string | null;
+    lastWarning: string;
+  }> {
+    warnings = [];
+    const exit = await register(relay).then(
+      () => "resolved (exit 0)",
+      (err: unknown) => String(err),
+    );
+    return {
+      exit,
+      legacyKey: loadFullConfig().relay_public_key,
+      pins: pinsBytes(),
+      lastWarning: warnings.at(-1) ?? "",
+    };
+  }
+
+  it("a declaration the verifier throws on: the same exit code and legacy-key behaviour as an invalid declaration, with the no_key warning", async () => {
+    // The reference: a declaration that fails verification with a verdict.
+    const invalid = await startFakeRelay();
+    invalid.route(DECLARATION_PATH, async (_req, res) => {
+      const declaration = await signDeclaration(invalid.identity);
+      sendJson(res, 200, { ...declaration, content: { posture: "edited after signing" } });
+    });
+    const reference = await outcomeOf(invalid);
+    expect(reference).toEqual({
+      exit: "resolved (exit 0)",
+      legacyKey: undefined,
+      pins: null,
+      lastWarning:
+        `Warning: no per-relay key was recorded for ${invalid.base}. ` +
+        "This relay's key was not established (declaration_invalid).",
+    });
+
+    // The case: a declaration nested so deeply that verifying it THROWS.
+    await freshInstall();
+    const deep = await startFakeRelay();
+    const body = deeplyNestedDeclarationBody(deep.identity);
+    deep.route(DECLARATION_PATH, (_req, res) => sendRawJson(res, body));
+    const outcome = await outcomeOf(deep);
+
+    expect(outcome).toEqual({
+      ...reference,
+      lastWarning: reference.lastWarning.replace(invalid.base, deep.base),
+    });
+    expect(errors).toEqual([]);
+    // The existing step absorbed the same throw, as it does on main.
+    expect(warnings[0]).toContain("could not fetch the relay transparency declaration");
+    expect(deep.count(METADATA_PATH)).toBe(1);
+    expect(deep.count(DECLARATION_PATH)).toBe(2);
   });
 });
 

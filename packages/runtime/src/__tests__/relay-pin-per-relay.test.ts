@@ -323,6 +323,27 @@ describe("verifyRelayMetadataForUrl (design test 2, the metadata reasons)", () =
     expect(await verifyRelayMetadataForUrl(base)).toEqual({ ok: false, reason: "bad_signature" });
   });
 
+  it("bad_signature, never a throw: metadata nested so deeply that canonicalising it overflows the stack", async () => {
+    const relay = await newRelay();
+    const depth = 200_000;
+    const { base } = await serve((_req, res, b) => {
+      const fields = JSON.stringify({
+        protocol_version: "1.0",
+        relay_id: "relay-under-test",
+        public_key: relay.hex,
+        endpoint_url: b,
+        suite: SUITE,
+        signature: "00".repeat(64),
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(`${fields.slice(0, -1)},"capabilities":${"[".repeat(depth)}${"]".repeat(depth)}}`);
+    });
+    await expect(verifyRelayMetadataForUrl(base)).resolves.toEqual({
+      ok: false,
+      reason: "bad_signature",
+    });
+  });
+
   it("endpoint_empty: the relay signs no URL", async () => {
     const relay = await newRelay();
     const { base } = await serveMetadata(() => signedMetadata(relay, ""));

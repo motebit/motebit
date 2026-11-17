@@ -219,7 +219,17 @@ export async function fullRelayCheck(
 ): Promise<RelayFullCheck> {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
   const timeoutMs = deps.timeoutMs ?? 5_000;
-  const metadata = await verifyRelayMetadataForUrl(url, { fetchImpl, timeoutMs });
+  // No step below may throw out of this function: `bindRelayPin` has exactly
+  // six results and never a throw. Each step turns its OWN failure into its
+  // own reason — a relay's fault is never reported as the record's.
+  let metadata: Awaited<ReturnType<typeof verifyRelayMetadataForUrl>>;
+  try {
+    metadata = await verifyRelayMetadataForUrl(url, { fetchImpl, timeoutMs });
+  } catch {
+    // It is written never to throw; a transport that hands back something
+    // that is not a response is the one way it could.
+    return { ok: false, reason: "metadata_unavailable" };
+  }
   if (!metadata.ok) {
     return metadata.reason === "endpoint_mismatch"
       ? { ok: false, reason: metadata.reason, signedPinKey: metadata.signedPinKey }
@@ -259,12 +269,24 @@ export async function fullRelayCheck(
       return { ok: false, reason: "declaration_unavailable" };
     }
     declaration = body as Parameters<typeof verifyTransparencyDeclaration>[0];
+  } catch {
+    // Reading the answer itself failed (a transport that handed back
+    // something that is not a response): answered, but not a declaration.
+    return { ok: false, reason: "declaration_unavailable" };
   } finally {
     clearTimeout(timer);
   }
 
-  // Its own verification, as `register` does it today.
-  const verdict = await verifyTransparencyDeclaration(declaration);
+  // Its own verification, as `register` does it today. The verifier
+  // canonicalises the document, and a document the relay nests deeply enough
+  // overflows the stack there: a declaration that cannot be verified is an
+  // invalid declaration, whatever the way it failed.
+  let verdict: Awaited<ReturnType<typeof verifyTransparencyDeclaration>>;
+  try {
+    verdict = await verifyTransparencyDeclaration(declaration);
+  } catch {
+    return { ok: false, reason: "declaration_invalid" }; // verification threw
+  }
   if (!verdict.ok) {
     return {
       ok: false,
@@ -274,6 +296,8 @@ export async function fullRelayCheck(
           : "declaration_invalid",
     };
   }
+  // A verified declaration's `relay_public_key` and `relay_id` are strings
+  // (the verifier's structural check), so neither comparison can throw.
   if (declaration.relay_public_key.toLowerCase() !== metadata.publicKey) {
     return { ok: false, reason: "declaration_key_mismatch" };
   }
@@ -316,6 +340,11 @@ export type BindRelayPinResult =
  * So an entry always records a key that both the relay proved for that URL
  * and this install already held. It does not look at existing entries
  * itself; only the store does.
+ *
+ * Exactly these six results, never a throw: the full check turns every
+ * failure of its own steps into a reason, the legacy read treats an
+ * unreadable `config.json` as "no legacy key", and the store returns
+ * `unavailable` instead of throwing.
  */
 export async function bindRelayPin(
   url: string,

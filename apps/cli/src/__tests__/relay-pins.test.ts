@@ -36,13 +36,16 @@ import {
   type RelayPinEntry,
 } from "../relay-pins.js";
 import type { StoredGrant } from "../subcommands/grant.js";
+import { verifyTransparencyDeclaration } from "@motebit/state-export-client";
 import {
   DECLARATION_PATH,
   METADATA_PATH,
   closeFakeRelays,
   deadUrl,
+  deeplyNestedDeclarationBody,
   newRelayIdentity,
   sendJson,
+  sendRawJson,
   signDeclaration,
   signMetadata,
   startFakeRelay,
@@ -239,6 +242,63 @@ describe("test 2 — the full check: the declaration reasons", () => {
     expect(await fullRelayCheck(relay.base, FAST)).toEqual({ ok: false, reason: "endpoint_empty" });
     expect(relay.count(METADATA_PATH)).toBe(1);
     expect(relay.count(DECLARATION_PATH)).toBe(0);
+  });
+});
+
+describe("a declaration the verifier throws on is the relay's fault, never a throw and never the record's", () => {
+  /** A relay whose metadata is valid and whose declaration overflows the verifier. */
+  async function relayWithUnverifiableDeclaration() {
+    const relay = await startFakeRelay();
+    const body = deeplyNestedDeclarationBody(relay.identity);
+    relay.route(DECLARATION_PATH, (_req, res) => sendRawJson(res, body));
+    return { relay, body };
+  }
+
+  it("the fixture: the declaration parses, and verifying it throws (it does not return a verdict)", async () => {
+    const { relay, body } = await relayWithUnverifiableDeclaration();
+    const parsed = JSON.parse(body) as Parameters<typeof verifyTransparencyDeclaration>[0];
+    expect(parsed.relay_public_key).toBe(relay.identity.hex);
+    await expect(verifyTransparencyDeclaration(parsed)).rejects.toThrow(RangeError);
+  });
+
+  it("bindRelayPin: no_key with declaration_invalid, it does not throw, no file written", async () => {
+    const { relay } = await relayWithUnverifiableDeclaration();
+    setLegacyKey(relay.identity.hex); // everything else would bind
+
+    await expect(bindRelayPin(relay.base, FAST)).resolves.toEqual({
+      result: "no_key",
+      reason: "declaration_invalid",
+    });
+    expect(relay.count(DECLARATION_PATH)).toBe(1);
+    expect(pinsBytes()).toBeNull();
+    expect(fs.existsSync(LOCK)).toBe(false);
+  });
+
+  it("the full check: declaration_invalid", async () => {
+    const { relay } = await relayWithUnverifiableDeclaration();
+    await expect(fullRelayCheck(relay.base, FAST)).resolves.toEqual({
+      ok: false,
+      reason: "declaration_invalid",
+    });
+  });
+
+  it("lazy binding: no key, with the declaration reason — not 'the record could not be read or written'", async () => {
+    const { relay } = await relayWithUnverifiableDeclaration();
+    setLegacyKey(relay.identity.hex);
+
+    const res = await resolveRelayKey(relay.base, FAST);
+    expect(res).toEqual({
+      status: "no_key",
+      relayUrl: relay.base,
+      reason: "no_key",
+      check: "declaration_invalid",
+    });
+    expect(pinsBytes()).toBeNull();
+    const line = relayKeyStartupLine(res, WHERE)!;
+    expect(line).toContain("This relay's key was not established (declaration_invalid).");
+    expect(line).not.toContain("could not be read or written");
+    expect(line).not.toContain("Maximum call stack");
+    expect(line).not.toContain(PINS);
   });
 });
 

@@ -2,11 +2,25 @@
 "motebit": major
 ---
 
-The CLI uses a relay key only for the relay URL that key signs. It used to hold one relay key (`relay_public_key`) for every relay, so a session on relay B could use relay A's key on the paid peer-to-peer path: the fee destination was derived from A's key, the client broadcast the payment, and B rejected the task. The owner had paid for nothing.
+The CLI uses a relay key only for the relay URL that key signs. It used to hold one relay key (`relay_public_key`) for every relay and pass it for whichever relay a session named.
+
+What was already refused: when the install held relay A's key and a second relay B served its own signed documents, a paid peer-to-peer delegation stopped before any payment (`relay_fee_rate_unverified`: the fee rate is read from metadata that must be signed by the key the client holds, and B's is signed by B's key). That is unchanged.
+
+What this release closes are the two cases in which the client, holding A's key and talking to another URL, did build and broadcast a payment:
+
+- the server at that URL served copies of A's signed documents. The metadata verified under A's key, the payment was built with the fee leg derived from A's key, and the relay then refused the task. The owner had paid for nothing;
+- the metadata request at that URL was redirected to a copy that verifies under A's key. The read followed the redirect, with the same result.
+
+Both are closed where the key is established, not at payment time: a key is recorded for a URL only when the relay's signed metadata names that URL, and that request does not follow redirects.
 
 The CLI now keeps one key per relay URL in `relay-pins.json` (in the config directory, mode 0600). REPL startup, `motebit delegate --sovereign` and the `--grant` pre-flight read only that record, decided once per process, and never fall back to `relay_public_key`. An entry is written only when the relay proves the key for the URL you name it by (its signed metadata names that URL, and its signed transparency declaration names the same key and relay id) and that key is the one this install already holds. `motebit register` writes the entry after everything it does today; an existing install gets its entry on the next start with no action, when its relay signs its URL. An entry is never replaced.
 
-`motebit register`'s own behaviour, the legacy `relay_public_key` field, its PIN MISMATCH rule, `motebit verify-release` and `create-motebit rotate` are unchanged. The implementation half in `@motebit/runtime` is in the sibling changeset `cli-relay-pin-per-relay-ignored.md`.
+`motebit register` keeps its order, its messages, the legacy `relay_public_key` field and its existing PIN MISMATCH rule, and gains two exits with code 1:
+
+- **a damaged `relay-pins.json`**: `register` exits 1 naming the file as its first act, before the passphrase prompt and before any request;
+- **a per-relay PIN MISMATCH**: after the bootstrap and the existing legacy pin step have run, when `relay-pins.json` already holds an entry for this relay under a different key than the one the relay just proved (and that proved key is the install's legacy key), `register` exits 1 naming the file and the entry to remove after out-of-band verification. The registration itself has already succeeded by then, and if the legacy key was unset the existing step has already written it.
+
+Every other outcome of the added step (no key established, the legacy key not matching, the record locked or unwritable) is a warning with the exit code `register` had before. `motebit verify-release` and `create-motebit rotate` are unchanged. The implementation half in `@motebit/runtime` is in the sibling changeset `cli-relay-pin-per-relay-ignored.md`.
 
 ## Migration
 
