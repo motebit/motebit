@@ -456,6 +456,7 @@
     "motebit.md",
     "pending-rotation.json",
     "relay",
+    "relay-pins.json",
     "relay/relay.db",
     "smoke-x402-buyer-eoa.txt",
     "smoke-x402-worker-eoa.txt",

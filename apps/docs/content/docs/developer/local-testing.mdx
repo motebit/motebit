@@ -26,10 +26,14 @@ The relay lives in `services/relay/`. Two environment variables are required: `X
 cd services/relay
 MOTEBIT_API_TOKEN=test-token \
 X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
+MOTEBIT_FEDERATION_ENDPOINT_URL=http://localhost:3000 \
+MOTEBIT_FEDERATION_ENABLED=false \
 pnpm run dev
 ```
 
 This starts the relay on `http://localhost:3000` with hot reload via `tsx watch`.
+
+The last two variables make the relay **sign its own URL** in its discovery metadata while keeping federation off. The `motebit` CLI uses a relay's key for paid peer-to-peer delegation (`motebit delegate --sovereign`, and paid delegation from the REPL) only when the relay signs the URL you name it by; without them the relay still registers agents, syncs and routes tasks, but the CLI records no key for it and paid peer-to-peer stays off. Name the relay by exactly the URL it signs: `http://localhost:3000` and `http://127.0.0.1:3000` are different relays to the CLI.
 
 ### What the environment variables do
 
@@ -52,12 +56,14 @@ The relay creates an in-memory SQLite database by default (no `MOTEBIT_DB_PATH`)
 
 ### Optional environment variables
 
-| Variable                          | Purpose                                          |
-| --------------------------------- | ------------------------------------------------ |
-| `MOTEBIT_DB_PATH`                 | SQLite file path for persistent storage          |
-| `MOTEBIT_RELAY_ISSUE_CREDENTIALS` | Set to `true` to enable relay-issued credentials |
-| `MOTEBIT_CORS_ORIGIN`             | CORS origin (default: `*`)                       |
-| `PORT`                            | Listen port (default: `3000`)                    |
+| Variable                          | Purpose                                                                                                                                         |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MOTEBIT_DB_PATH`                 | SQLite file path for persistent storage                                                                                                         |
+| `MOTEBIT_RELAY_ISSUE_CREDENTIALS` | Set to `true` to enable relay-issued credentials                                                                                                |
+| `MOTEBIT_CORS_ORIGIN`             | CORS origin (default: `*`)                                                                                                                      |
+| `PORT`                            | Listen port (default: `3000`)                                                                                                                   |
+| `MOTEBIT_FEDERATION_ENDPOINT_URL` | The URL this relay signs as its own. Needed for the CLI's paid peer-to-peer; also turns federation on unless `MOTEBIT_FEDERATION_ENABLED=false` |
+| `MOTEBIT_FEDERATION_ENABLED`      | `false` keeps federation off while the relay still signs its URL                                                                                |
 
 ## Registering a test agent
 
@@ -67,7 +73,7 @@ Agent registration is a two-step process: bootstrap the identity, then register 
 
 Bootstrap takes no bearer token; instead it proves possession of the key it introduces. The body is a device-registration request signed by that key (`signDeviceRegistration` from `@motebit/crypto`, the same construction as `POST /api/v1/devices/register-self` — see the [device self-registration spec](https://github.com/motebit/motebit/blob/main/spec/device-self-registration-v1.md)). A relay that enforces it (#875) refuses an unsigned body with `400 KEY_PROOF_REQUIRED`; an older relay ignores the signature fields, so the signed body works against both. The signature carries a timestamp and must reach the relay within 5 minutes of signing.
 
-With a CLI identity, `motebit register --sync-url http://localhost:3000` signs and sends it for you. To bootstrap a throwaway test agent by hand, sign it in a short script. Run it where `@motebit/crypto` resolves. The repository root does not depend on it, so use a scratch directory (`mkdir alice && cd alice && npm init -y && npm i @motebit/crypto tsx`) or a workspace package that depends on `@motebit/crypto`:
+With a CLI identity, `motebit register --sync-url http://localhost:3000` signs and sends it for you. It also records the relay's key for that URL when the relay signs it (see [Running a local relay](#running-a-local-relay)); when it does not, `register` still succeeds and prints how the relay's operator makes it sign one. To bootstrap a throwaway test agent by hand, sign it in a short script. Run it where `@motebit/crypto` resolves. The repository root does not depend on it, so use a scratch directory (`mkdir alice && cd alice && npm init -y && npm i @motebit/crypto tsx`) or a workspace package that depends on `@motebit/crypto`:
 
 ```ts
 // bootstrap-alice.mts — run with: npx tsx bootstrap-alice.mts

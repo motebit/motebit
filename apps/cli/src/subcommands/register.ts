@@ -18,8 +18,32 @@ import { requireMotebitId, NO_IDENTITY_MESSAGE } from "./_helpers.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 import { namedRelayUrl, SYNC_OFF_MESSAGE } from "../sync-opt-in.js";
 import { signedBootstrapBody } from "../relay-registration.js";
+import {
+  bindRelayPin,
+  readRelayPins,
+  relayCheckRemedy,
+  relayPinsDamagedRemedy,
+  relayPinsPath,
+  relayPinsUnavailableRemedy,
+  relayUrlSource,
+  type RelayKeyDeps,
+} from "../relay-pins.js";
 
-export async function handleRegister(config: CliConfig): Promise<void> {
+/** Injected seams for `handleRegister` (tests): how the per-relay entry is bound. */
+export interface RegisterDeps {
+  relayKey?: RelayKeyDeps;
+}
+
+export async function handleRegister(config: CliConfig, deps: RegisterDeps = {}): Promise<void> {
+  // A damaged per-relay record is "pins unknown": nothing may be written to
+  // it, so registration stops before the passphrase prompt and any request.
+  const pinsFile = relayPinsPath();
+  const pins = readRelayPins(pinsFile);
+  if (pins.status === "damaged") {
+    console.error(`Error: ${relayPinsDamagedRemedy({ file: pinsFile, ...pins })}`);
+    process.exit(1);
+  }
+
   const fullConfig = loadFullConfig();
   const syncUrl = namedRelayUrl(config, fullConfig);
   if (syncUrl == null) {
@@ -138,6 +162,47 @@ export async function handleRegister(config: CliConfig): Promise<void> {
 
   // Erase temporary private key bytes
   secureErase(privateKeyBytes);
+
+  // The per-relay entry, after everything above (which is unchanged): the
+  // key this relay proves for THIS URL is recorded only when it is the key
+  // this install holds as its legacy key. One call; the store alone decides
+  // whether an entry exists.
+  const bound = await bindRelayPin(syncUrl, deps.relayKey);
+  switch (bound.result) {
+    case "added":
+    case "already_present":
+      break;
+    case "no_key":
+      console.warn(
+        `Warning: no per-relay key was recorded for ${sanitizeRelayText(syncUrl)}. ` +
+          relayCheckRemedy(bound.reason, {
+            relayUrl: syncUrl,
+            where: relayUrlSource(config, fullConfig),
+            ...(bound.signedPinKey !== undefined ? { signedPinKey: bound.signedPinKey } : {}),
+          }),
+      );
+      break;
+    case "legacy_mismatch":
+      console.warn(
+        `Warning: This install's relay key does not match the key this relay proved, so nothing ` +
+          `was changed for this relay. Run \`motebit register --sync-url ${sanitizeRelayText(syncUrl)}\` again.`,
+      );
+      break;
+    case "unavailable":
+      console.warn(
+        `Warning: ${relayPinsUnavailableRemedy({ relayUrl: syncUrl, file: pinsFile, cause: bound.cause })}`,
+      );
+      break;
+    case "conflict":
+      console.error(
+        `PIN MISMATCH: a different key is already recorded for this relay in ${pinsFile} ` +
+          `(entry ${sanitizeRelayText(bound.pinKey)}), and it does not match the key the relay ` +
+          `just proved. A relay that changes identity must be re-pinned deliberately: verify ` +
+          `out-of-band, then remove that entry from ${pinsFile} and re-run register. ` +
+          `Refusing to overwrite.`,
+      );
+      process.exit(1);
+  }
 }
 
 /**

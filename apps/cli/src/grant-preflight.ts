@@ -23,8 +23,11 @@
  */
 
 import { APPROVAL_PRESET_CONFIGS } from "@motebit/sdk";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 import type { FullConfig } from "./config.js";
+import { relayKeyRemedy, type SessionRelayKey } from "./relay-pins.js";
 import { selectDueTick, type StoredGrant } from "./subcommands/grant.js";
+import { SYNC_OPT_IN_HINT } from "./sync-opt-in.js";
 
 export interface PreflightCheck {
   name: string;
@@ -47,6 +50,15 @@ export async function preflightGrant(deps: {
   fullConfig: FullConfig;
   /** Whether the sovereign rail was constructed this session (seed decrypted). */
   hasRail: boolean;
+  /**
+   * What THIS SESSION already decided about its relay's key
+   * (`resolveRelayKey`, once per process), or `no_relay` when relay sync is
+   * off. The pre-flight makes no request and reads no file for it: it reports
+   * the same answer the relay wiring got.
+   */
+  relayKey: SessionRelayKey;
+  /** Where the session's relay URL came from, for the remedy text. */
+  relaySource?: string;
   /** Live USDC balance in micro-units; undefined = RPC unavailable (soft-skip). */
   getBalanceMicro?: () => Promise<bigint>;
   /**
@@ -130,19 +142,30 @@ export async function preflightGrant(deps: {
       : { remedy: "the identity seed was not decrypted — relaunch and enter the passphrase" }),
   });
 
-  // 5. Relay pin — the P2P treasury derives FROM the pin.
-  const pinned = fullConfig.relay_public_key;
-  checks.push({
-    name: "relay-pin",
-    ok: pinned != null && pinned !== "",
-    detail:
-      pinned != null && pinned !== ""
-        ? `relay key pinned (${pinned.slice(0, 12)}…)`
-        : "relay operator key not pinned — P2P payment path unavailable",
-    ...(pinned != null && pinned !== ""
-      ? {}
-      : { remedy: "run `motebit register` online to pin the relay's verified key" }),
-  });
+  // 5. Relay pin — the P2P treasury derives FROM the key this session uses
+  //    for ITS relay. The session's one answer, never a second look.
+  const relayKey = deps.relayKey;
+  if (relayKey.status === "key") {
+    checks.push({
+      name: "relay-pin",
+      ok: true,
+      detail: `relay key pinned (${relayKey.key.slice(0, 12)}…)`,
+    });
+  } else if (relayKey.status === "no_relay") {
+    checks.push({
+      name: "relay-pin",
+      ok: false,
+      detail: "relay sync is off — there is no relay to pay through",
+      remedy: SYNC_OPT_IN_HINT,
+    });
+  } else {
+    checks.push({
+      name: "relay-pin",
+      ok: false,
+      detail: `no relay key for ${sanitizeRelayText(relayKey.relayUrl)} — P2P payment path unavailable`,
+      remedy: relayKeyRemedy(relayKey, deps.relaySource ?? "your relay setting"),
+    });
+  }
 
   // 6. Working capital — soft check; quotes vary, the meter decides.
   if (deps.getBalanceMicro != null) {

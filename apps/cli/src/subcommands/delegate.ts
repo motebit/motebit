@@ -33,6 +33,12 @@ import { getDbPath } from "../runtime-factory.js";
 import { cliRuntimeConfig } from "../sync-configured.js";
 import { openDelegateEventSync } from "../cli-event-push.js";
 import { electCoordinatorRole } from "../runtime-host.js";
+import {
+  relayKeyRemedy,
+  relayUrlSource,
+  resolveRelayKey,
+  type RelayKeyDeps,
+} from "../relay-pins.js";
 import { getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 
@@ -448,7 +454,12 @@ export function describeSovereignDelegationRefusal(error: {
   ];
 }
 
-export async function handleDelegate(config: CliConfig): Promise<void> {
+/** Injected seams for `handleDelegate` (tests): how the relay's key is resolved. */
+export interface DelegateDeps {
+  relayKey?: RelayKeyDeps;
+}
+
+export async function handleDelegate(config: CliConfig, deps: DelegateDeps = {}): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
 
   const prompt = config.positionals.slice(1).join(" ");
@@ -476,11 +487,15 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
   // account, and misdirected a funded sovereign user to `motebit fund`).
   if (config.sovereign) {
     const fullConfig = loadFullConfig();
-    if (fullConfig.relay_public_key == null || fullConfig.relay_public_key === "") {
+    // The key THIS relay proved, from the per-relay record — one answer per
+    // process (`relay-pins.ts`). A key recorded for another relay is never
+    // used here: the fee leg's treasury derives from it.
+    const relayKey = await resolveRelayKey(relayUrl, deps.relayKey);
+    if (relayKey.status !== "key") {
       console.error(
-        "Sovereign delegation requires a pinned relay key (the fee leg's treasury derives from it).",
+        `Sovereign delegation requires a pinned relay key for ${sanitizeRelayText(relayUrl)} (the fee leg's treasury derives from it).`,
       );
-      console.error("Run `motebit register` to pair with the relay first.");
+      console.error(relayKeyRemedy(relayKey, relayUrlSource(config, fullConfig)));
       process.exit(1);
     }
     const { loadActiveSigningKey } = await import("../identity.js");
@@ -530,7 +545,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       prompt,
       capability,
       ...(targetMotebitId != null ? { targetWorkerId: targetMotebitId } : {}),
-      relayPublicKeyHex: fullConfig.relay_public_key,
+      relayPublicKeyHex: relayKey.key,
       buildP2pPayment,
       // #885: a builder that throws is not proof nothing moved — the rail's
       // read-only lookup decides, and "unknown" never pays again.
