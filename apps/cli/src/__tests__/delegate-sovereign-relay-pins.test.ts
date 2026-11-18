@@ -237,12 +237,13 @@ describe("delegate --sovereign and the per-relay key", () => {
 
     const outcome = await delegateSovereign();
 
+    // First, the thing that matters: no payment was built.
+    expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(String(outcome)).toContain("exit 1");
     expect(errors).toEqual([
       `Sovereign delegation requires a pinned relay key for ${relay.base} (the fee leg's treasury derives from it).`,
       `No relay key is pinned. Run \`motebit register --sync-url ${relay.base}\`.`,
     ]);
-    expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(relay.requests).toEqual([]);
   });
 
@@ -252,12 +253,13 @@ describe("delegate --sovereign and the per-relay key", () => {
 
     const outcome = await delegateSovereign();
 
+    // First, the thing that matters: no payment was built with the other relay's key.
+    expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(String(outcome)).toContain("exit 1");
     expect(errors[0]).toContain(`requires a pinned relay key for ${relay.base}`);
     expect(errors[1]).toContain(
       "This install's relay key was pinned for another relay or this relay's key changed.",
     );
-    expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(fs.existsSync(PINS)).toBe(false);
   });
 
@@ -268,10 +270,10 @@ describe("delegate --sovereign and the per-relay key", () => {
 
     const outcome = await delegateSovereign();
 
+    expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(String(outcome)).toContain("exit 1");
     expect(errors[1]).toContain(`The relay key record \`${PINS}\` could not be read or written`);
     expect(errors[1]).toContain("locked by another motebit process");
-    expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(fs.existsSync(PINS)).toBe(false);
   });
 
@@ -285,11 +287,11 @@ describe("delegate --sovereign and the per-relay key", () => {
 
     const outcome = await delegateSovereign();
 
+    expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(String(outcome)).toContain("exit 1");
     expect(errors[1]).toContain(
       `A different key is already recorded for this relay in \`${PINS}\` (entry \`${relay.base}\`)`,
     );
-    expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(fs.readFileSync(PINS, "utf-8")).toBe(recorded);
   });
 
@@ -300,10 +302,10 @@ describe("delegate --sovereign and the per-relay key", () => {
 
     const outcome = await delegateSovereign();
 
+    expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(String(outcome)).toContain("exit 1");
     expect(errors[1]).toContain(PINS);
     expect(errors[1]).toContain("Move the file aside");
-    expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(relay.requests).toEqual([]);
     expect(fs.readFileSync(PINS, "utf-8")).toBe("{ not json");
   });

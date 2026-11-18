@@ -2,9 +2,13 @@
  * What a relay answers on `GET /api/v1/agents/:id/p2p-eligibility` — the
  * payment pre-flight a paid peer-to-peer delegation reads before it pays.
  *
- * The CURRENT relay service answers, for a worker with a priced listing and a
- * registered settlement address (`services/relay/src/agents.ts`, the
- * `p2p-eligibility` handler):
+ * The paying client is an IDENTIFIED caller: it sends its own signed
+ * `market:listing` token. For such a caller, a worker with a priced listing
+ * and a registered settlement address, and a session that acknowledged the
+ * no-history risk (`--pay-new-agents`), the CURRENT relay service answers
+ * (`services/relay/src/agents.ts`, the `p2p-eligibility` handler's
+ * caller-bound return; the reason is `evaluateSettlementEligibility`'s
+ * new-pair branch):
  *
  *   { allowed, reason, expected_amount_micro, expected_fee_micro, settlement_address }
  *
@@ -16,8 +20,11 @@
  * paths through the payment code, so a fake relay must say which one it is.
  *
  * There is no shared type or schema for this answer in `@motebit/protocol` or
- * `@motebit/wire-schemas`, so `p2p-eligibility-fixture-shape.test.ts` pins the
- * current shape here to the real handler's answer, in-process.
+ * `@motebit/wire-schemas`, so `p2p-eligibility-fixture-shape.test.ts` pins
+ * `currentEligibilityAnswer` to the real handler's answer to an identified
+ * caller, in-process, field for field. The older shape is pinned to nothing
+ * but "the current shape minus the two amounts": no relay that answers it is
+ * in this repository.
  */
 
 /** The fields of the current relay's answer for a priced, payable worker. */
@@ -29,6 +36,9 @@ export const CURRENT_ELIGIBILITY_KEYS = [
   "settlement_address",
 ] as const;
 
+/** `evaluateSettlementEligibility`'s reason for a new pair whose delegator acknowledged the risk. */
+export const NEW_PAIR_ACKNOWLEDGED_REASON = "New pair — delegator acknowledged no-history risk";
+
 export interface EligibilityFixtureArgs {
   settlementAddress: string;
   /** The worker leg: `toMicro(unit_cost)`. */
@@ -37,7 +47,7 @@ export interface EligibilityFixtureArgs {
   expectedFeeMicro: number;
 }
 
-/** The current relay's answer (amounts included). */
+/** The current relay's answer to the paying client (amounts included). */
 export function currentEligibilityAnswer(args: EligibilityFixtureArgs): {
   allowed: true;
   reason: string;
@@ -47,7 +57,7 @@ export function currentEligibilityAnswer(args: EligibilityFixtureArgs): {
 } {
   return {
     allowed: true,
-    reason: "caller not identified — advisory only",
+    reason: NEW_PAIR_ACKNOWLEDGED_REASON,
     expected_amount_micro: args.expectedAmountMicro,
     expected_fee_micro: args.expectedFeeMicro,
     settlement_address: args.settlementAddress,
@@ -64,7 +74,7 @@ export function olderRelayEligibilityAnswer(
 } {
   return {
     allowed: true,
-    reason: "caller not identified — advisory only",
+    reason: NEW_PAIR_ACKNOWLEDGED_REASON,
     settlement_address: args.settlementAddress,
   };
 }

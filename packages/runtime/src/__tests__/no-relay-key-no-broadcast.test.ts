@@ -41,6 +41,13 @@ const ME = "alice-nokey";
 const WORKER = "bob-worker";
 const WORKER_ADDR = "BobWorkerAddr1111111111111111111111111111111";
 const TASK = "task-nokey-1";
+/**
+ * The amounts the stub relay's pre-flight quotes. Deliberately NOT what the
+ * listing ($0.05 → 50000 / 2632) would price to, so a payment built from
+ * these can only have come from the pre-flight's amounts.
+ */
+const PREFLIGHT_AMOUNT_MICRO = 60_000;
+const PREFLIGHT_FEE_MICRO = 3_158;
 
 function provider(): StreamingProvider {
   const response: AIResponse = {
@@ -156,20 +163,25 @@ beforeEach(() => {
       });
     }
     if (path.endsWith("/p2p-eligibility")) {
-      // The CURRENT relay's answer for a priced worker
-      // (services/relay/src/agents.ts, the `p2p-eligibility` handler):
+      // Written to match what the CURRENT relay answers an identified caller
+      // (the paying client) for a priced worker — the caller-bound return of
+      // the `p2p-eligibility` handler in services/relay/src/agents.ts:
       // { allowed, reason, expected_amount_micro, expected_fee_micro,
       // settlement_address }. With the amounts the client pays without
-      // reading any signed relay document — so only the relay KEY decides
-      // whether, and to whose treasury, a payment is built. This package
-      // cannot depend on the relay; the CLI's
-      // `p2p-eligibility-fixture-shape.test.ts` pins this shape to the real
-      // handler. $0.05 → 50000 micro; fee computeP2pFeeMicro(50000, 0.05) = 2632.
+      // reading any signed relay document, so only the relay KEY decides
+      // whether, and to whose treasury, a payment is built.
+      //
+      // NOTHING pins this literal to the relay: this package cannot depend on
+      // the relay service. The CLI's `p2p-eligibility-fixture-shape.test.ts`
+      // pins the CLI's own fixture to the real handler; this stub is a
+      // hand-kept copy of the same shape. What IS pinned here: the control
+      // case below fails if this answer stops carrying usable amounts (it
+      // requires the amounts path — these exact amounts, no metadata read).
       return json(200, {
         allowed: true,
-        reason: "caller not identified — advisory only",
-        expected_amount_micro: 50_000,
-        expected_fee_micro: 2_632,
+        reason: "New pair — delegator acknowledged no-history risk",
+        expected_amount_micro: PREFLIGHT_AMOUNT_MICRO,
+        expected_fee_micro: PREFLIGHT_FEE_MICRO,
         settlement_address: WORKER_ADDR,
       });
     }
@@ -220,6 +232,18 @@ describe("no relay key: a priced cross-agent task signs and broadcasts nothing",
     expect(log.submits).toHaveLength(1);
     expect(log.submits[0]!["settlement_mode"]).toBe("p2p");
     expect(log.submits[0]!["payment_proof"]).toBeDefined();
+    // It took the AMOUNTS path, the one a current relay puts every paying
+    // client on: the payment carries exactly the pre-flight's amounts, and no
+    // signed relay metadata was read on the way to it. If the stub's amounts
+    // break, the client falls back to the older path (a metadata read) and
+    // this fails instead of passing by another route.
+    expect(log.submits[0]!["payment_proof"]).toMatchObject({
+      to_address: WORKER_ADDR,
+      amount_micro: PREFLIGHT_AMOUNT_MICRO,
+      fee_amount_micro: PREFLIGHT_FEE_MICRO,
+    });
+    expect(log.requests.filter((r) => r.includes("/.well-known/motebit.json"))).toEqual([]);
+    expect(log.requests.filter((r) => r.includes("/listing"))).toEqual([]);
   });
 
   it("delegate_to_agent (the AI-loop door): relay-mode, zero wallet calls, no P2P read, no payment proof", async () => {
