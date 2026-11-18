@@ -31,13 +31,19 @@ import * as path from "node:path";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/sdk";
 import type { CliConfig } from "../args.js";
 import { resetRelayKeyMemoryForTests, type RelayPinEntry } from "../relay-pins.js";
+import { hexToBytes } from "@motebit/crypto";
 import {
   DECLARATION_PATH,
+  METADATA_PATH,
   closeFakeRelays,
   sendJson,
   startFakeRelay,
   type FakeRelay,
 } from "./helpers/fake-relay.js";
+import {
+  currentEligibilityAnswer,
+  olderRelayEligibilityAnswer,
+} from "./helpers/p2p-eligibility-fixture.js";
 
 const ME = "019df0f4-084e-7910-90a8-3492ced8fb8f";
 const WORKER = "worker-researcher";
@@ -83,6 +89,13 @@ vi.mock("@motebit/wallet-solana", () => ({
   createSolanaWalletRail: () => ({ buildP2pPayment }),
 }));
 
+/** The treasury a relay key derives to (the real derivation; the rail itself is mocked). */
+async function treasuryOf(relayKeyHex: string): Promise<string> {
+  const { deriveSolanaAddress } =
+    await vi.importActual<typeof import("@motebit/wallet-solana")>("@motebit/wallet-solana");
+  return deriveSolanaAddress(hexToBytes(relayKeyHex));
+}
+
 const entryOf = (key: string): RelayPinEntry => ({
   public_key: key,
   relay_id: "relay-under-test",
@@ -95,12 +108,35 @@ function writePins(pins: Record<string, RelayPinEntry>): string {
   return bytes;
 }
 
-/** A fake relay offering a priced, P2P-payable worker. */
-async function payableRelay(): Promise<FakeRelay> {
+/** `toMicro(0.25)` and `computeP2pFeeMicro(250000, 0.05)`: what a relay quotes for the worker below. */
+const AMOUNT_MICRO = 250_000;
+const FEE_MICRO = 13_158;
+
+/**
+ * A fake relay offering a priced, P2P-payable worker.
+ *
+ * `current` (the default) answers the payment pre-flight the way the relay
+ * service does today — WITH the amounts to pay — so the client pays without
+ * reading any signed relay document. `older` answers without the amounts (a
+ * relay from before the pre-flight carried them): the client then reads the
+ * signed fee rate and the listing. `p2p-eligibility-fixture-shape.test.ts`
+ * pins the current shape to the real handler.
+ */
+async function payableRelay(preflight: "current" | "older" = "current"): Promise<FakeRelay> {
   const relay = await startFakeRelay();
   relay.route("/api/v1/agents/discover", (_req, res) => sendJson(res, 200, { agents: [worker()] }));
   relay.route(/\/p2p-eligibility/, (_req, res) =>
-    sendJson(res, 200, { allowed: true, settlement_address: WORKER_ADDR }),
+    sendJson(
+      res,
+      200,
+      preflight === "current"
+        ? currentEligibilityAnswer({
+            settlementAddress: WORKER_ADDR,
+            expectedAmountMicro: AMOUNT_MICRO,
+            expectedFeeMicro: FEE_MICRO,
+          })
+        : olderRelayEligibilityAnswer({ settlementAddress: WORKER_ADDR }),
+    ),
   );
   relay.route(`/api/v1/agents/${WORKER}/listing`, (_req, res) =>
     sendJson(res, 200, { pricing: [{ capability: "web_search", unit_cost: 0.25 }] }),
@@ -165,7 +201,35 @@ describe("delegate --sovereign and the per-relay key", () => {
     await delegateSovereign();
 
     expect(errors.join("\n")).not.toContain("requires a pinned relay key");
+    // Exactly one payment, to THIS relay's treasury, for the quoted amounts.
     expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+    expect(buildP2pPayment.mock.calls[0]![0]).toMatchObject({
+      workerAddress: WORKER_ADDR,
+      amountMicro: AMOUNT_MICRO,
+      feeAmountMicro: FEE_MICRO,
+      treasuryAddress: await treasuryOf(relay.identity.hex),
+    });
+    // The current pre-flight carries the amounts, so no signed relay document
+    // is read on the way to the payment: the key is the only thing that
+    // decides whose treasury is paid.
+    expect(relay.count(METADATA_PATH)).toBe(0);
+  });
+
+  it("control (older relay: the pre-flight carries no amounts): the payment is built from the signed fee rate and the listing", async () => {
+    const relay = await payableRelay("older");
+    writePins({ [relay.base]: entryOf(relay.identity.hex) });
+
+    await delegateSovereign();
+
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+    expect(buildP2pPayment.mock.calls[0]![0]).toMatchObject({
+      workerAddress: WORKER_ADDR,
+      amountMicro: AMOUNT_MICRO,
+      feeAmountMicro: FEE_MICRO,
+      treasuryAddress: await treasuryOf(relay.identity.hex),
+    });
+    // This path does read the relay's signed metadata (the fee rate).
+    expect(relay.count(METADATA_PATH)).toBeGreaterThanOrEqual(1);
   });
 
   it("test 13: no entry and no legacy key: exits 1 naming the relay and the remedy; nothing is broadcast, the relay is not asked", async () => {

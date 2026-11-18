@@ -156,7 +156,22 @@ beforeEach(() => {
       });
     }
     if (path.endsWith("/p2p-eligibility")) {
-      return json(200, { allowed: true, settlement_address: WORKER_ADDR });
+      // The CURRENT relay's answer for a priced worker
+      // (services/relay/src/agents.ts, the `p2p-eligibility` handler):
+      // { allowed, reason, expected_amount_micro, expected_fee_micro,
+      // settlement_address }. With the amounts the client pays without
+      // reading any signed relay document — so only the relay KEY decides
+      // whether, and to whose treasury, a payment is built. This package
+      // cannot depend on the relay; the CLI's
+      // `p2p-eligibility-fixture-shape.test.ts` pins this shape to the real
+      // handler. $0.05 → 50000 micro; fee computeP2pFeeMicro(50000, 0.05) = 2632.
+      return json(200, {
+        allowed: true,
+        reason: "caller not identified — advisory only",
+        expected_amount_micro: 50_000,
+        expected_fee_micro: 2_632,
+        settlement_address: WORKER_ADDR,
+      });
     }
     if (path.endsWith("/listing")) {
       return json(200, { pricing: [{ capability: "web_search", unit_cost: 0.05 }] });
