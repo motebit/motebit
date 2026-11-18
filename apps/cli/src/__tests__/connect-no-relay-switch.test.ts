@@ -521,6 +521,37 @@ describe("/connect in a session with no relay and no operator token", () => {
     expect(printed.join("\n")).not.toContain("undefined");
   });
 
+  /** Half an identity (the key or the device id missing): nothing sent, nothing changed, the error. */
+  async function expectRefusedForIdentity(s: Session, x: FakeRelay): Promise<void> {
+    expect(s.runtime.getDelegationRelay()).toBeNull();
+    const { printed, unchanged } = await runConnect(s, x.url, [x]);
+    expect(x.log).toEqual([]);
+    expect(fetched).toEqual([]);
+    expect(unchanged).toBe(true);
+    expect(s.runtime.getDelegationRelay()).toBeNull();
+    expect(s.sessionRelay.urls).toEqual([]);
+    expect(loadFullConfig().sync_url).toBeUndefined();
+    expect(s.startupConfig.sync_url).toBeUndefined();
+    expect(s.enableCalls()).toBe(0);
+    expect(printed).toEqual(NO_KEYS);
+  }
+
+  it("a signing key and no device id: /connect X sends nothing, changes nothing, and prints the no-signing-keys error", async () => {
+    const x = await relay();
+    const s = await startSession();
+    delete s.repl.deviceId;
+    expect(s.repl.privateKeyBytes).toBeInstanceOf(Uint8Array);
+    await expectRefusedForIdentity(s, x);
+  });
+
+  it("a device id and no signing key: /connect X sends nothing, changes nothing, and prints the no-signing-keys error", async () => {
+    const x = await relay();
+    const s = await startSession();
+    delete s.repl.privateKeyBytes;
+    expect(s.repl.deviceId).toBe(keys.deviceId);
+    await expectRefusedForIdentity(s, x);
+  });
+
   it("/connect A succeeds on a 409 bootstrap with device-signed requests only; then /connect B is refused with R1", async () => {
     const [a, b] = [await relay(), await relay()];
     a.bootstrapStatus = 409;

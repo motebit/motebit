@@ -12,6 +12,8 @@
  *   - `/connect <the session's own relay>` falling through to the full connect;
  *   - the operator-token refusal removed;
  *   - the identity-key check moved below the relay and token checks;
+ *   - either half of that check (the signing key, the device id) dropped by
+ *     itself, in a session on no relay;
  *   - the relay comparison loosened (case-insensitive, or a prefix match);
  *   - a relay URL printed without `sanitizeRelayText`;
  *   - each of the three token sources dropped from the shared helper;
@@ -51,6 +53,8 @@ const TOKEN_SYNC = `${TOKEN} no relay, operator token from MOTEBIT_SYNC_TOKEN (M
 const THEN_REFUSED = `${FIRST} /connect A succeeds on a 409 bootstrap with device-signed requests only; then /connect B is refused with R1`;
 
 const NO_KEY = `${BOUND} bound to A with an operator token set and no open identity key, /connect B: the no-signing-keys error, not R1 or R2`;
+const NO_DEVICE_ID = `${FIRST} a signing key and no device id: /connect X sends nothing, changes nothing, and prints the no-signing-keys error`;
+const NO_SIGNING_KEY = `${FIRST} a device id and no signing key: /connect X sends nothing, changes nothing, and prints the no-signing-keys error`;
 const UPPER_SCHEME = `${BOUND} bound to A, /connect with A's scheme in upper case: a different spelling is a different relay, refused with R1, nothing sent`;
 const EXTRA_SEGMENT = `${BOUND} bound to A, /connect A/x: an extra path segment is a different relay, refused with R1, nothing sent`;
 const CLEAN_ALREADY = `${BOUND} the already-on line prints the session's relay without an escape sequence or a zero-width character`;
@@ -124,6 +128,38 @@ const CONNECTING = "\n      console.log(dim(`Connecting to ${connectUrl}...`));\
 const KEY_CHECK_LAST: TamperEdit[] = [
   { file: SLASH, from: KEY_CHECK + AFTER_KEY_CHECK, to: AFTER_KEY_CHECK },
   { file: SLASH, from: CONNECTING, to: "\n" + KEY_CHECK + CONNECTING },
+];
+// Each half of the key check dropped by itself, in a session on no relay. The
+// dropped half becomes a type guard that always holds: a plain removal leaves
+// `repl.deviceId` / `repl.privateKeyBytes` possibly undefined further down and
+// does not type-check. The line occurs in another command too; the line after
+// it anchors the edit to `/connect`.
+const KEY_CHECK_HEAD = "      if (!repl?.privateKeyBytes || !repl?.deviceId) {\n";
+const KEY_CHECK_ERROR =
+  '        console.log("Error: no signing keys available — cannot authenticate with relay.");\n';
+const DEVICE_ID_HALF_DROPPED: TamperEdit[] = [
+  {
+    file: SLASH,
+    from: KEY_CHECK_HEAD + KEY_CHECK_ERROR,
+    to:
+      "      if (\n" +
+      "        !repl?.privateKeyBytes ||\n" +
+      "        !((d: string | undefined): d is string => true)(repl.deviceId)\n" +
+      "      ) {\n" +
+      KEY_CHECK_ERROR,
+  },
+];
+const KEY_HALF_DROPPED: TamperEdit[] = [
+  {
+    file: SLASH,
+    from: KEY_CHECK_HEAD + KEY_CHECK_ERROR,
+    to:
+      "      if (\n" +
+      "        !repl?.deviceId ||\n" +
+      "        !((k: Uint8Array | undefined): k is Uint8Array => true)(repl.privateKeyBytes)\n" +
+      "      ) {\n" +
+      KEY_CHECK_ERROR,
+  },
 ];
 const SAME_RELAY_LINE =
   "      const sameRelay = bound !== null && normalizeRelayUrl(bound.url) === connectUrl;\n";
@@ -227,6 +263,16 @@ const TAMPERS: TamperEntry[] = [
   ),
   // ── the order of the checks, and what counts as the same relay ──
   entry("the identity-key check runs after the relay and token checks", KEY_CHECK_LAST, NO_KEY),
+  entry(
+    "the device-id half of the key check is dropped (no relay, a key, no device id)",
+    DEVICE_ID_HALF_DROPPED,
+    NO_DEVICE_ID,
+  ),
+  entry(
+    "the signing-key half of the key check is dropped (no relay, a device id, no key)",
+    KEY_HALF_DROPPED,
+    NO_SIGNING_KEY,
+  ),
   entry("the relay comparison ignores case", CASE_INSENSITIVE, UPPER_SCHEME),
   entry("the relay comparison is a prefix match", PREFIX_MATCH, EXTRA_SEGMENT),
   // ── relay URLs are printed through sanitizeRelayText ──
