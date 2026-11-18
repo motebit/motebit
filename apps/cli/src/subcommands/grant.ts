@@ -155,11 +155,11 @@ export function selectDueTick(stored: StoredGrant, now: number): DelegationToken
  * one: the `--sync-url` / `--sync` flag, the `MOTEBIT_SYNC_URL` environment
  * variable, the saved config's `sync_url` (re-read each turn), and every
  * relay the session has used (the REPL's `SessionRelays`, to which startup and
- * each `/connect` ADD and from which nothing is removed; the daemon's intent
- * and push relay). `/connect` does not move the session: a delegation tool
- * that is already enabled keeps submitting to the relay it was first enabled
- * against (runtime behaviour, not changed here), so the earlier relay must
- * stay in the set. The sources are not
+ * a first `/connect` ADD and from which nothing is removed; the daemon's
+ * intent and push relay). `/connect` does not move the session: in a session
+ * already on a relay it is refused, sends nothing and adds nothing, so the
+ * relay the delegation tool submits to stays the one in the set. The sources
+ * are not
  * ranked here, because a revocation may have been posted under any of them:
  * `motebit grant revoke` run without the flag posts to the config relay while
  * a session started with `--sync-url` talks to another. Records from every
@@ -226,10 +226,11 @@ export interface GrantPresenterOptions {
 
 /**
  * Every relay a REPL session has used, for the life of the process. Relays
- * are ADDED (the startup relay, each `/connect`, the relay the saved config
- * named just before `/connect` overwrote it) and there is no way to remove or
- * replace one: `/connect B` on a session whose delegation tool was enabled
- * against A still submits paid delegations to A, so A must still be asked.
+ * are ADDED (the startup relay, a first `/connect` in a session on no relay,
+ * the relay the saved config named just before that `/connect` overwrote it)
+ * and there is no way to remove or replace one. `/connect B` on a session
+ * already on A is refused and adds nothing: the session stays on A, and A
+ * stays asked.
  */
 export class SessionRelays {
   readonly #urls: string[] = [];
