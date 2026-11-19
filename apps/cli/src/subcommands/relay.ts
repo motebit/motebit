@@ -76,9 +76,9 @@ import { RELAY_DIR, RELAY_DB_PATH } from "../config.js";
 import { mkdirOwnerOnly, narrowOnLoad } from "../durable-file.js";
 import { promptPassphrase } from "../identity.js";
 import {
-  RELAY_UP_TOKEN_FROM_ENV,
   relayTokenFileEmptyMessage,
-  relayUpOperatorHint,
+  relayUpAuthLineFromEnv,
+  relayUpAuthLineFromFile,
 } from "../relay-operator-token.js";
 import { bold, dim, cyan, success } from "../colors.js";
 
@@ -352,9 +352,7 @@ function printAuthLine(opts: RelayCliOptions): void {
       );
       return;
     case "env":
-      console.log(
-        `  ${dim("—")} auth     ${success("master token")} ${dim(RELAY_UP_TOKEN_FROM_ENV)}`,
-      );
+      console.log(relayUpAuthLineFromEnv());
       return;
     case "ephemeral":
       console.log(
@@ -362,9 +360,7 @@ function printAuthLine(opts: RelayCliOptions): void {
       );
       return;
     default:
-      console.log(
-        `  ${dim("—")} auth     ${success("master token")} ${dim(relayUpOperatorHint(relayApiTokenPath(opts.dbPath), opts.port))}`,
-      );
+      console.log(relayUpAuthLineFromFile(relayApiTokenPath(opts.dbPath), opts.port));
   }
 }
 

@@ -990,7 +990,7 @@ export async function handleSlashCommand(
       const operatorToken = operatorTokenIsSet(ALL_OPERATOR_TOKEN_SOURCES, config);
       if (operatorToken !== undefined) {
         console.log(
-          `An operator token is set for this session (${operatorToken.source}). /connect does not send an operator token to a relay named inside a session; nothing was sent to ${sanitizeRelayText(connectUrl)}.`,
+          `${operatorToken.sentence} /connect does not send an operator token to a relay named inside a session; nothing was sent to ${sanitizeRelayText(connectUrl)}.`,
         );
         console.log(
           "/connect is available in a session started with no relay and no operator token.",

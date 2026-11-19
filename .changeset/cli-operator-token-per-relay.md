@@ -24,6 +24,8 @@ Also in this release:
 - `motebit relay up` prints the bind command beside the export hint.
 - A relay that redirects: the token is not forwarded to another origin (the platform drops `Authorization` on a cross-origin redirect); a relay that redirects to another path on its own origin carries it there.
 
+Two sites have no behavioural test because nothing reaches them: `motebit run`'s plan-delegation token factory and `motebit serve --self-test`'s token fallback. Both go through the same module and are held by the `check-cli-operator-token-reader` gate alone.
+
 Not covered: the desktop app, which keeps one master-token slot and sends it to whatever relay is configured. The record ties a token to a URL you named; it does not prove the relay is honest or that the URL still reaches the same operator.
 
 ## Migration
@@ -58,6 +60,8 @@ What each group sees until it binds, and its remedy:
 **4. Relays that turn device auth off** (`MOTEBIT_ENABLE_DEVICE_AUTH=false`). There every device-token fallback is refused, so every command in groups 1 and 2 fails until the token is bound. Remedy: bind.
 
 **5. Daemons holding a token and no device key** — `motebit run` or `motebit serve` whose identity key did not open, or whose config has no `device_id`. Sync, the WebSocket and task receipts stop authenticating. Remedy: bind the token in the daemon's config directory. `motebit run` reads `--sync-token` then `MOTEBIT_SYNC_TOKEN`; `motebit serve` reads `--sync-token` then `MOTEBIT_API_TOKEN`; bind the value the daemon reads. A daemon resolves its token once, when it starts: restart it after binding. (A REPL's slash commands pick a new bind up at the next command; its background sync at the next start.)
+
+**5a. A daemon with a device key, on a relay with device auth off.** `motebit run` or `motebit serve` whose key opened used to send the operator token first for event sync and task receipts. With the token unbound it now signs as the device, which such a relay refuses, so sync and receipts stop authenticating there too. Remedy: bind the token in the daemon's config directory and restart it.
 
 **6. A REPL started with a token and no device key.** It gets no delegation wiring at all (it used to delegate with the operator token). Remedy: bind.
 

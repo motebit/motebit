@@ -10,7 +10,7 @@
  * Tamper: scripts/tampers/cli-operator-token-per-relay.ts
  */
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,6 +55,7 @@ function plantedTree(edits: Edit[]): string {
   for (const e of edits) {
     const abs = join(dir, e.file);
     if ("create" in e) {
+      mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, e.create);
       continue;
     }
@@ -303,6 +304,61 @@ describe("check-cli-operator-token-reader", () => {
         ]),
       );
       expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    });
+  });
+
+  describe("aperture — only __tests__/ directories and *.test.ts files are left out", () => {
+    const READ = "export const t = (): string | undefined => process.env.MOTEBIT_API_TOKEN;\n";
+    for (const [what, file] of [
+      ["a *.probe.ts file beside the code", `${SRC}/subcommands/discover.probe.ts`],
+      ["a *.spec.ts file beside the code", `${SRC}/subcommands/discover.spec.ts`],
+      ["a file under a dist/ directory", `${SRC}/dist/reader.ts`],
+      ["a file under a coverage/ directory", `${SRC}/coverage/reader.ts`],
+      ["a file under a __fixtures__/ directory", `${SRC}/__fixtures__/reader.ts`],
+      ["a file under a node_modules/ directory", `${SRC}/node_modules/reader.ts`],
+      ["a *.d.ts file", `${SRC}/reader.d.ts`],
+    ] as const) {
+      it(`${what} is scanned`, () => {
+        expectFails([{ file, create: READ }], `${file}:1`);
+      });
+    }
+
+    it("a *.test.ts file is not scanned", () => {
+      const r = run(plantedTree([{ file: `${SRC}/subcommands/discover.test.ts`, create: READ }]));
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    });
+
+    it("a file under a __tests__/ directory is not scanned", () => {
+      const r = run(plantedTree([{ file: `${SRC}/__tests__/reader.ts`, create: READ }]));
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    });
+  });
+
+  describe("the two sites no behaviour reaches are held here", () => {
+    it("run's plan-delegation token factory put back on its own read", () => {
+      expectFails(
+        [
+          {
+            file: `${SRC}/daemon.ts`,
+            from: '        if (!fullConfig.device_id) return operator?.token ?? "";\n',
+            to: '        if (!fullConfig.device_id)\n          return config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"] ?? "";\n',
+          },
+        ],
+        `${SRC}/daemon.ts:`,
+      );
+    });
+
+    it("serve --self-test's token fallback put back on its own read", () => {
+      expectFails(
+        [
+          {
+            file: `${SRC}/daemon.ts`,
+            from: '            return operator?.token ?? "";\n          };\n',
+            to: '            return config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? "";\n          };\n',
+          },
+        ],
+        `${SRC}/daemon.ts:`,
+      );
     });
   });
 

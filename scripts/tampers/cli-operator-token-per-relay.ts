@@ -31,10 +31,17 @@
  *     own test ("stays GREEN on the whole-environment pass-through…"), which
  *     plants the same text — and the subprocess row goes red, here.
  *
- * NOT in this catalog, because no test can catch it: `motebit run`'s
- * plan-delegation token factory (apps/cli/src/daemon.ts). Nothing in `motebit
- * run` calls it on either tree (see the note in
- * apps/cli/src/__tests__/operator-token.probe.ts); only the gate holds it.
+ * NOT in this catalog, because no behaviour reaches them on either tree and
+ * so no test can go red for them (see the note in
+ * apps/cli/src/__tests__/operator-token.probe.ts):
+ *   - `motebit run`'s plan-delegation token factory (apps/cli/src/daemon.ts):
+ *     nothing in `motebit run` drives the runtime's plan engine;
+ *   - `motebit serve --self-test`'s token fallback (same file): self-test runs
+ *     only after a registration that needs the key and device id the fallback
+ *     is for the absence of.
+ * Both are held by `check-cli-operator-token-reader` ALONE. Its own test
+ * plants a direct read at each ("the two sites no behaviour reaches are held
+ * here") and requires the gate to fail.
  *
  *   node_modules/.bin/tsx scripts/tampers/cli-operator-token-per-relay.ts
  *   (plain `node` cannot resolve the runner's `.js` import specifier)
@@ -201,6 +208,16 @@ const DAMAGE_SAID_EVERY_TIME = [
 // ── bind-token ──────────────────────────────────────────────────────────────
 
 const BIND_URL = "  const url = config.syncUrlFlag;\n";
+const BIND_EMPTY_URL_SAYS_SYNC = [
+  edit(BIND, '    if (url === "") {\n', '    if (url === "" && config.syncUrl == null) {\n'),
+];
+const SMOKE_NO_TOKEN_TEXT_CHANGED = [
+  edit(
+    MODULE,
+    '  if (operatorTokenIsSet(sources, config) !== undefined) {\n    return (\n      "Error: motebit smoke reconciliation',
+    '  if (true as boolean) {\n    return (\n      "Error: motebit smoke reconciliation',
+  ),
+];
 const BIND_READS_ENV_URL = [
   edit(BIND, BIND_URL, '  const url = config.syncUrlFlag ?? process.env["MOTEBIT_SYNC_URL"];\n'),
 ];
@@ -550,6 +567,18 @@ const TAMPERS: TamperEntry[] = [
     BIND_READS_ENV_URL,
   ),
   unit(
+    "an empty --sync-url gets the --sync refusal",
+    BIND_TEST,
+    `${REFUSALS} an empty --sync-url: its own refusal, not the --sync one`,
+    BIND_EMPTY_URL_SAYS_SYNC,
+  ),
+  unit(
+    "smoke prints the set-but-unbound text when no token is set at all",
+    UNIT,
+    "smokeTokenRequiredMessage (motebit smoke reconciliation) with NO token set: exactly main's text, with no bind instruction",
+    SMOKE_NO_TOKEN_TEXT_CHANGED,
+  ),
+  unit(
     "bind-token accepts --sync",
     BIND_TEST,
     `${REFUSALS} --sync instead of --sync-url`,
@@ -705,6 +734,12 @@ const TAMPERS: TamperEntry[] = [
     "motebit run's socket reads the token itself",
     DAEMONS,
     leak("daemon", "run WebSocket first frame (key, no device id)", "flag"),
+    RUN_SOCKET_OWN_READ,
+  ),
+  row(
+    "motebit run's socket reads the token itself (the key does not open)",
+    DAEMONS,
+    leak("daemon", "run WebSocket first frame (wrong passphrase)", "flag"),
     RUN_SOCKET_OWN_READ,
   ),
   row(

@@ -27,6 +27,27 @@ await vi.hoisted(async () => {
     delete process.env[k];
 });
 
-import { defineSiteRows } from "./operator-token.probe.js";
+import { describe, expect, it } from "vitest";
+import { defineSiteRows, selfTestRow } from "./operator-token.probe.js";
 
 defineSiteRows("daemon");
+
+/**
+ * `motebit serve --self-test` (design section 5, 4a). NOT a leak on main:
+ * self-test runs only after the daemon registered, which needs the key and
+ * the device id, and with both it signs as the device. These rows hold that
+ * it sends no operator token, bound or not; the differential records the same
+ * on main. The self-test's token FALLBACK is unreachable and is held by
+ * `check-cli-operator-token-reader` alone.
+ */
+describe.concurrent("serve --self-test sends no operator token (the same on main)", () => {
+  for (const binding of ["unbound", "bound"] as const) {
+    it(`an operator token set and ${binding}: the self-test submits as the device`, async () => {
+      const o = await selfTestRow(binding);
+      expect(o.requests, o.output).toBeGreaterThan(0);
+      expect(o.tokenAtOwn, o.output).toEqual([]);
+      expect(o.authKinds, o.output).toEqual(["device"]);
+      expect(o.output).toContain("[self-test] submitting task via relay (auth: device token)");
+    }, 180_000);
+  }
+});

@@ -642,6 +642,8 @@ export interface SiteSpec {
   fallback: "device" | "none" | "no-request";
   /** `false`: a config with a key and no `device_id`. */
   deviceId?: boolean;
+  /** `"wrong"`: the process is given a passphrase that does not open the key. */
+  passphrase?: "wrong";
   /** Subcommand argv (without the relay URL flag or the token flag). */
   argv?: (w: { other: string; out: string; id: string }) => string[];
   /** Daemon: which command, and what to wait for at the relay. */
@@ -711,6 +713,15 @@ async function driveTaskReceipt(w: World): Promise<void> {
  * run` send a token through that factory, on either tree, and this file does
  * not pretend one does. The site is still changed and still held by
  * `check-cli-operator-token-reader`.
+ *
+ * The same holds for `motebit serve --self-test`'s token FALLBACK (daemon.ts,
+ * the `mintToken` and `authToken` handed to the self-test): self-test runs
+ * only after the daemon registered, registration needs the key and the device
+ * id, and with both the self-test signs as the device. The fallback to the
+ * operator token is for their absence, which never reaches it. `selfTestRow`
+ * below shows what self-test does send (a device token, on both trees); the
+ * fallback itself is held by the gate alone, whose own test plants a direct
+ * read at both of these sites and requires the gate to fail.
  */
 const RUN = (w: { identity: string }): string[] => [
   "run",
@@ -804,6 +815,23 @@ export const SITES: readonly SiteSpec[] = [
     sources: RUN_SOURCES,
     fallback: "none",
     deviceId: false,
+    daemon: {
+      command: RUN,
+      drive: socketThenFrame,
+      channel: () => false,
+      firstFrame: true,
+    },
+  },
+  {
+    // The other fixture under which `run` can mint no token: the key does not
+    // open. (`serve` builds its socket only when the key opened, so it has no
+    // such row.)
+    id: "run WebSocket first frame (wrong passphrase)",
+    kind: "daemon",
+    routes: ALL_ROUTES,
+    sources: RUN_SOURCES,
+    fallback: "none",
+    passphrase: "wrong",
     daemon: {
       command: RUN,
       drive: socketThenFrame,
@@ -985,6 +1013,7 @@ export async function runRow(spec: SiteSpec, setup: RowSetup): Promise<Observati
       MOTEBIT_SYNC_URL: urlFor("env"),
       MOTEBIT_API_TOKEN: setup.tokens.api,
       MOTEBIT_SYNC_TOKEN: setup.tokens.sync,
+      ...(spec.passphrase === "wrong" ? { MOTEBIT_PASSPHRASE: "not-the-passphrase" } : {}),
     };
     identity.patchConfig({ sync_url: urlFor("saved") });
     const record: Record<string, string> = {};
@@ -1116,6 +1145,43 @@ export function sourceRow(spec: SiteSpec, source: Source): Promise<Observation> 
   });
 }
 
+const isSelfTestRequest = (r: RecordedRequest): boolean =>
+  /^\/agent\/[^/]+\/task(\/[^/]+)?$/.test(r.path.split("?")[0] ?? r.path);
+
+/** `motebit serve --self-test`: the requests the self-test itself makes (submit and poll). */
+const SELF_TEST: SiteSpec = {
+  id: "serve --self-test",
+  kind: "daemon",
+  routes: ["flag"],
+  sources: SERVE_SOURCES,
+  fallback: "device",
+  daemon: {
+    command: () => [...SERVE(), "--self-test"],
+    drive: async (w) => {
+      await w.own.waitForRequest(isSelfTestRequest, 60_000);
+      await sleep(1_000);
+    },
+    channel: isSelfTestRequest,
+  },
+};
+
+/**
+ * SELF-TEST: `motebit serve --self-test` with an operator token set — bound
+ * to its relay, or bound to nothing. It sends NO operator token either way,
+ * on the branch and on main alike (it signs as the device): this row is a
+ * characterization, not a leak that main has.
+ */
+export function selfTestRow(binding: "unbound" | "bound"): Promise<Observation> {
+  const token = binding === "bound" ? TOKEN_B : TOKEN_A;
+  return runRow(SELF_TEST, {
+    route: "flag",
+    lowerSources: "unset",
+    tokens: { api: token },
+    bind: binding === "bound" ? [{ relay: "own", token }] : [],
+    watch: token,
+  });
+}
+
 /** Run `tasks` with at most `limit` at once; results in order. */
 export async function pooled<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
   const results = new Array<T>(tasks.length);
@@ -1228,6 +1294,13 @@ if (probeOut !== undefined && probeOut !== "") {
               (await sourceRow(spec, source)).tokenAtOwn.length > 0 ? "sent" : "not sent";
           });
         }
+      }
+      for (const binding of ["unbound", "bound"] as const) {
+        tasks.push(async () => {
+          observations[`self-test | serve --self-test | token ${binding}`] = record(
+            await selfTestRow(binding),
+          );
+        });
       }
       await pooled(tasks, Math.max(2, Math.min(8, os.availableParallelism() - 2)));
     }, 3_600_000);

@@ -77,6 +77,30 @@ describe("handleSmokeReconciliation", () => {
     await expect(handleSmokeReconciliation(config)).rejects.toThrow("process.exit(1)");
     const errOutput = errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     expect(errOutput).toContain("requires a master token");
+    // Exactly the text origin/main (99e213719) prints with no token set.
+    expect(errOutput).toBe(
+      "Error: motebit smoke reconciliation requires a master token.\n" +
+        "  Set MOTEBIT_API_TOKEN (or MOTEBIT_SYNC_TOKEN, or pass --sync-token <token>)\n" +
+        "  with the relay's admin token. This subcommand probes the relay's\n" +
+        "  master-token-gated /api/v1/admin/treasury-reconciliation surface\n" +
+        "  and exits non-zero on failure (suitable for CI / cron).",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a token set but NOT bound to the relay: refuses, says so with the bind command, sends nothing", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const config = { ...baseConfig, syncToken: "a-token-bound-to-nothing" } as CliConfig;
+      await expect(handleSmokeReconciliation(config)).rejects.toThrow("process.exit(1)");
+      const errOutput = errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+      expect(errOutput).toContain("the one set is not bound to this relay");
+      expect(errOutput).toContain("motebit relay bind-token --sync-url https://relay.test");
+      expect(errOutput).not.toContain("a-token-bound-to-nothing");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 
   it("loop_disabled verdict — returns success when relay reports loop_enabled=false (testnet)", async () => {

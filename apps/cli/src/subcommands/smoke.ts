@@ -24,8 +24,8 @@ import type { CliConfig } from "../args.js";
 import {
   ALL_OPERATOR_TOKEN_SOURCES,
   bearerHeaders,
-  OPERATOR_TOKEN_REQUIRED_MESSAGE,
   operatorTokenFor,
+  smokeTokenRequiredMessage,
 } from "../relay-operator-token.js";
 import { fetchRelayJson, getRelayUrl } from "./_helpers.js";
 
@@ -59,7 +59,7 @@ export async function handleSmokeReconciliation(config: CliConfig): Promise<void
   // not an agent-side action.
   const operator = operatorTokenFor(relayUrl, ALL_OPERATOR_TOKEN_SOURCES, config);
   if (operator === undefined) {
-    console.error(OPERATOR_TOKEN_REQUIRED_MESSAGE);
+    console.error(smokeTokenRequiredMessage(relayUrl, ALL_OPERATOR_TOKEN_SOURCES, config));
     process.exit(1);
   }
 

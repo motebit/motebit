@@ -94,9 +94,17 @@ describe("motebit relay bind-token — refusals write nothing", () => {
     expect(err.join("\n")).toContain("does not accept --sync");
   });
 
-  it("an empty --sync-url", () => {
+  it("an empty --sync-url: its own refusal, not the --sync one", () => {
     expect(bind("--sync-url", "", "--sync-token", TOKEN)).toBe(1);
     expect(fs.existsSync(FILE)).toBe(false);
+    expect(err.join("\n")).toContain("was given an empty --sync-url");
+    expect(err.join("\n")).not.toContain("does not accept --sync");
+  });
+
+  it("an empty --sync-url together with --sync: still the empty-URL refusal", () => {
+    expect(bind("--sync-url", "", "--sync", "--sync-token", TOKEN)).toBe(1);
+    expect(fs.existsSync(FILE)).toBe(false);
+    expect(err.join("\n")).toContain("was given an empty --sync-url");
   });
 
   for (const [what, url] of [

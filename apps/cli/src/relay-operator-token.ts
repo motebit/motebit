@@ -29,6 +29,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { relayPinKey } from "@motebit/runtime";
 import { sanitizeRelayText } from "@motebit/sync-engine";
+import { dim, success } from "./colors.js";
 import { CONFIG_DIR } from "./config.js";
 import { isTrulyAbsent, mkdirOwnerOnly, withFileLock, writeFileAtomic } from "./durable-file.js";
 
@@ -242,17 +243,23 @@ function sayWithheld(relayUrl: string, pinKey: string | null, source: OperatorTo
 }
 
 /**
- * Whether an operator token is SET for this process (bound or not), and by
- * which source. `/connect` refuses on this: it never sends an operator token
- * to a relay named inside a session, whatever the record says.
+ * Whether an operator token is SET for this process (bound or not).
+ * `/connect` refuses on this: it never sends an operator token to a relay
+ * named inside a session, whatever the record says.
+ *
+ * The answer carries a whole sentence naming the source, not the source's
+ * name by itself: nothing this module returns or exports is a flag or
+ * variable name an importer could read the environment with.
  */
 export function operatorTokenIsSet(
   sources: OperatorTokenSources,
   config: OperatorTokenConfig,
-): { source: string } | undefined {
+): { sentence: string } | undefined {
   const found = firstDefined(sources, config);
   if (found === undefined || found.value === "") return undefined;
-  return { source: SOURCE_NAME[found.source] };
+  return {
+    sentence: `An operator token is set for this session (${SOURCE_NAME[found.source]}).`,
+  };
 }
 
 // ── Binding ─────────────────────────────────────────────────────────────────
@@ -264,8 +271,8 @@ export type BindResult =
       /** The record's key for the relay: the URL as normalized. */
       relay: string;
       file: string;
-      /** Where the token came from: the flag or the variable's name. */
-      source: string;
+      /** The whole line saying where the token came from and six characters of its hash. */
+      tokenLine: string;
       /** The first 6 characters of the token's SHA-256. */
       hashPrefix: string;
       /** True when an entry for this relay existed and was replaced. */
@@ -367,7 +374,7 @@ export function bindOperatorToken(relayUrl: string, config: OperatorTokenConfig)
           ok: true,
           relay: pinKey,
           file,
-          source: SOURCE_NAME[found.source],
+          tokenLine: `token   from ${SOURCE_NAME[found.source]} (sha256 ${hash.slice(0, 6)}…; the token is not stored)`,
           hashPrefix: hash.slice(0, 6),
           replaced: previous !== undefined,
           warnings,
@@ -383,17 +390,38 @@ export function bindOperatorToken(relayUrl: string, config: OperatorTokenConfig)
 // ── Sentences ───────────────────────────────────────────────────────────────
 //
 // Text that names the token flag or variables, for files that must not name
-// them themselves. Whole sentences, never a bare variable name: an importer
-// cannot build an environment read from one.
+// them themselves. Every one is a FUNCTION returning complete user-facing
+// lines: no exported constant holds a flag or variable name, alone or with a
+// prefix an importer could slice off to build an environment read.
 
-/** `motebit smoke reconciliation`: no operator token is bound to its relay (or none is set). */
-export const OPERATOR_TOKEN_REQUIRED_MESSAGE =
-  "Error: motebit smoke reconciliation requires a master token.\n" +
-  "  Set MOTEBIT_API_TOKEN (or MOTEBIT_SYNC_TOKEN, or pass --sync-token <token>)\n" +
-  "  with the relay's admin token, and bind it to the relay once:\n" +
-  "  `motebit relay bind-token --sync-url <url>`. This subcommand probes the relay's\n" +
-  "  master-token-gated /api/v1/admin/treasury-reconciliation surface\n" +
-  "  and exits non-zero on failure (suitable for CI / cron).";
+/**
+ * `motebit smoke reconciliation` refusing for want of an operator token.
+ * With NO token set this is the text the command has always printed. With a
+ * token set but not bound to `relayUrl` it says that instead, with the bind
+ * command.
+ */
+export function smokeTokenRequiredMessage(
+  relayUrl: string,
+  sources: OperatorTokenSources,
+  config: OperatorTokenConfig,
+): string {
+  if (operatorTokenIsSet(sources, config) !== undefined) {
+    return (
+      "Error: motebit smoke reconciliation requires a master token, and the one set is not bound to this relay.\n" +
+      `  Bind it once: \`motebit relay bind-token --sync-url ${sanitizeRelayText(relayUrl)}\`.\n` +
+      "  This subcommand probes the relay's\n" +
+      "  master-token-gated /api/v1/admin/treasury-reconciliation surface\n" +
+      "  and exits non-zero on failure (suitable for CI / cron)."
+    );
+  }
+  return (
+    "Error: motebit smoke reconciliation requires a master token.\n" +
+    "  Set MOTEBIT_API_TOKEN (or MOTEBIT_SYNC_TOKEN, or pass --sync-token <token>)\n" +
+    "  with the relay's admin token. This subcommand probes the relay's\n" +
+    "  master-token-gated /api/v1/admin/treasury-reconciliation surface\n" +
+    "  and exits non-zero on failure (suitable for CI / cron)."
+  );
+}
 
 /**
  * `motebit doctor`'s detail when the treasury probe was refused: no operator
@@ -417,18 +445,21 @@ export function relayTokenFileEmptyMessage(file: string): string {
   return `The relay's token file ${file} is empty. Delete it to generate a new token, or set MOTEBIT_API_TOKEN.`;
 }
 
-/** `motebit relay up`: where the master token came from, when the environment set it. */
-export const RELAY_UP_TOKEN_FROM_ENV = "from MOTEBIT_API_TOKEN";
+/** `motebit relay up`: the banner's auth line when the environment supplied the master token. */
+export function relayUpAuthLineFromEnv(): string {
+  return `  ${dim("—")} auth     ${success("master token")} ${dim("from MOTEBIT_API_TOKEN")}`;
+}
 
 /**
- * `motebit relay up`: how an operator uses the token kept in `tokenFile` with
- * this CLI, for a relay listening on `port`.
+ * `motebit relay up`: the banner's auth line when the token is kept in
+ * `tokenFile`, with how an operator uses it with this CLI for a relay
+ * listening on `port`.
  */
-export function relayUpOperatorHint(tokenFile: string, port: number): string {
+export function relayUpAuthLineFromFile(tokenFile: string, port: number): string {
   const url = `http://localhost:${String(port)}`;
-  return (
+  const hint =
     `in ${tokenFile} (for operator commands: export MOTEBIT_API_TOKEN=$(cat <that file>), ` +
     `then bind it once with \`motebit relay bind-token --sync-url ${url}\` — spell the URL as you will name ` +
-    "the relay later: `localhost` and `127.0.0.1` are different entries)"
-  );
+    "the relay later: `localhost` and `127.0.0.1` are different entries)";
+  return `  ${dim("—")} auth     ${success("master token")} ${dim(hint)}`;
 }

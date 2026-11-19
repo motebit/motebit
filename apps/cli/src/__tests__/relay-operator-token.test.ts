@@ -29,9 +29,14 @@ import {
   operatorTokenFor,
   operatorTokenIsSet,
   relayOperatorTokensPath,
+  relayTokenFileEmptyMessage,
+  relayUpAuthLineFromEnv,
+  relayUpAuthLineFromFile,
   resetOperatorTokenMemoryForTests,
+  smokeTokenRequiredMessage,
   treasuryProbeSkippedDetail,
 } from "../relay-operator-token.js";
+import * as operatorTokenModule from "../relay-operator-token.js";
 
 const FILE = path.join(CONFIG_DIR, "relay-operator-tokens.json");
 const A = "https://relay-a.test";
@@ -353,16 +358,16 @@ describe("operatorTokenFor", () => {
 describe("operatorTokenIsSet (what /connect refuses on)", () => {
   it("is set whether or not the token is bound, and names the source", () => {
     expect(operatorTokenIsSet(ALL_OPERATOR_TOKEN_SOURCES, flag(TOKEN))).toEqual({
-      source: "--sync-token",
+      sentence: "An operator token is set for this session (--sync-token).",
     });
     process.env["MOTEBIT_API_TOKEN"] = TOKEN;
     expect(operatorTokenIsSet(ALL_OPERATOR_TOKEN_SOURCES, flag(undefined))).toEqual({
-      source: "MOTEBIT_API_TOKEN",
+      sentence: "An operator token is set for this session (MOTEBIT_API_TOKEN).",
     });
     delete process.env["MOTEBIT_API_TOKEN"];
     process.env["MOTEBIT_SYNC_TOKEN"] = TOKEN;
     expect(operatorTokenIsSet(ALL_OPERATOR_TOKEN_SOURCES, flag(undefined))).toEqual({
-      source: "MOTEBIT_SYNC_TOKEN",
+      sentence: "An operator token is set for this session (MOTEBIT_SYNC_TOKEN).",
     });
     expect(stderr.join("")).toBe("");
   });
@@ -371,6 +376,103 @@ describe("operatorTokenIsSet (what /connect refuses on)", () => {
     expect(operatorTokenIsSet(ALL_OPERATOR_TOKEN_SOURCES, flag(undefined))).toBeUndefined();
     process.env["MOTEBIT_API_TOKEN"] = TOKEN;
     expect(operatorTokenIsSet(ALL_OPERATOR_TOKEN_SOURCES, flag(""))).toBeUndefined();
+  });
+});
+
+describe("nothing the module hands out is a flag or variable name", () => {
+  const NAMES = ["MOTEBIT_API_TOKEN", "MOTEBIT_SYNC_TOKEN", "--sync-token", "sync-token"];
+
+  /** True when slicing a prefix and/or suffix off `s` leaves exactly a source name. */
+  const yieldsANameBySlicing = (s: string): boolean =>
+    NAMES.some((n) => {
+      const i = s.indexOf(n);
+      if (i < 0) return false;
+      // A name is "sliceable" out of a short fragment: a name with only a
+      // few words around it, not a sentence the name merely appears in.
+      return s.length - n.length <= 24;
+    });
+
+  it("no export is a string, or holds a string, that names a source", () => {
+    const strings: Array<[string, string]> = [];
+    const collect = (where: string, v: unknown, depth = 0): void => {
+      if (typeof v === "string") strings.push([where, v]);
+      else if (Array.isArray(v))
+        v.forEach((x, i) => collect(`${where}[${String(i)}]`, x, depth + 1));
+      else if (typeof v === "object" && v !== null && depth < 4) {
+        for (const [k, x] of Object.entries(v)) collect(`${where}.${k}`, x, depth + 1);
+      }
+    };
+    for (const [name, value] of Object.entries(operatorTokenModule)) collect(name, value);
+    // Functions are not walked: what they RETURN is checked below.
+    for (const [where, s] of strings) {
+      for (const n of NAMES) expect(s, `export ${where}`).not.toContain(n);
+    }
+  });
+
+  it("every returned line that names a source is a whole user-facing line", () => {
+    process.env["MOTEBIT_API_TOKEN"] = TOKEN;
+    const returned: string[] = [
+      relayUpAuthLineFromEnv(),
+      relayUpAuthLineFromFile("/data/relay.db.api-token", 3000),
+      relayTokenFileEmptyMessage("/data/relay.db.api-token"),
+      smokeTokenRequiredMessage(B, ALL_OPERATOR_TOKEN_SOURCES, flag(undefined)),
+      smokeTokenRequiredMessage(B, ALL_OPERATOR_TOKEN_SOURCES, NO_FLAG_CONFIG),
+      treasuryProbeSkippedDetail(B, ["api", "sync"], NO_FLAG_CONFIG, undefined),
+      operatorTokenIsSet(ALL_OPERATOR_TOKEN_SOURCES, flag(undefined))!.sentence,
+    ];
+    const bind = bindOperatorToken(A, flag(undefined));
+    expect(bind.ok).toBe(true);
+    if (bind.ok) returned.push(bind.tokenLine, ...bind.warnings);
+    for (const s of returned) expect(yieldsANameBySlicing(s), s).toBe(false);
+  });
+
+  it("the old fragment would have failed that check", () => {
+    expect(yieldsANameBySlicing("from MOTEBIT_API_TOKEN")).toBe(true);
+    expect(yieldsANameBySlicing("MOTEBIT_SYNC_TOKEN")).toBe(true);
+  });
+
+  it("relay up: the auth line, whole, from the environment and from the token file", () => {
+    const fromEnv = relayUpAuthLineFromEnv();
+    expect(fromEnv).toContain("auth");
+    expect(fromEnv).toContain("master token");
+    expect(fromEnv).toContain("from MOTEBIT_API_TOKEN");
+    const fromFile = relayUpAuthLineFromFile("/data/relay.db.api-token", 3000);
+    expect(fromFile).toContain("auth");
+    expect(fromFile).toContain("master token");
+    expect(fromFile).toContain("in /data/relay.db.api-token");
+    expect(fromFile).toContain("motebit relay bind-token --sync-url http://localhost:3000");
+    expect(fromFile).toContain("`localhost` and `127.0.0.1` are different entries");
+  });
+});
+
+describe("smokeTokenRequiredMessage (motebit smoke reconciliation)", () => {
+  // The text `motebit smoke reconciliation` prints on origin/main (99e213719)
+  // when no operator token is set, byte for byte.
+  const MAIN_NO_TOKEN_TEXT =
+    "Error: motebit smoke reconciliation requires a master token.\n" +
+    "  Set MOTEBIT_API_TOKEN (or MOTEBIT_SYNC_TOKEN, or pass --sync-token <token>)\n" +
+    "  with the relay's admin token. This subcommand probes the relay's\n" +
+    "  master-token-gated /api/v1/admin/treasury-reconciliation surface\n" +
+    "  and exits non-zero on failure (suitable for CI / cron).";
+
+  it("with NO token set: exactly main's text, with no bind instruction", () => {
+    const text = smokeTokenRequiredMessage(B, ALL_OPERATOR_TOKEN_SOURCES, flag(undefined));
+    expect(text).toBe(MAIN_NO_TOKEN_TEXT);
+    expect(text).not.toContain("bind-token");
+  });
+
+  it("with an EMPTY token: the same text (an empty value is unset)", () => {
+    expect(smokeTokenRequiredMessage(B, ALL_OPERATOR_TOKEN_SOURCES, flag(""))).toBe(
+      MAIN_NO_TOKEN_TEXT,
+    );
+  });
+
+  it("with a token set but not bound: says so, with the bind command for this relay", () => {
+    const text = smokeTokenRequiredMessage(B, ALL_OPERATOR_TOKEN_SOURCES, flag(TOKEN));
+    expect(text).toContain("requires a master token");
+    expect(text).toContain("not bound to this relay");
+    expect(text).toContain(`motebit relay bind-token --sync-url ${B}`);
+    expect(text).not.toContain(TOKEN);
   });
 });
 

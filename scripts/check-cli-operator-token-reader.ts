@@ -15,7 +15,8 @@
  * (`motebit relay bind-token`). A new direct read anywhere else re-opens the
  * door without failing a single test of the sites that exist today.
  *
- * Rules, over every non-test source file under `apps/cli/src`:
+ * Rules, over every source file under `apps/cli/src` except `__tests__/`
+ * directories and `*.test.ts` files (nothing else is left out):
  *
  *   R1 Outside the two allowed files, no file mentions the token's sources —
  *      in code or in a string, never counting comments: the identifier
@@ -46,6 +47,14 @@
  * `scripts/tampers/cli-operator-token-per-relay.ts` keeps an entry that
  * records this gate staying green while they do.
  *
+ * Two sites are held by this gate ALONE, because no behaviour can reach them
+ * on either tree, so no test can go red for them: `motebit run`'s
+ * plan-delegation token factory (nothing in `motebit run` drives the
+ * runtime's plan engine) and `motebit serve --self-test`'s token fallback
+ * (self-test runs only after a registration that needs the key and device id
+ * the fallback is for the absence of). The gate's own test plants a direct
+ * read at each and requires this gate to fail.
+ *
  * `--root <dir>` runs the same checks against another tree laid out like the
  * repo (the self-test plants broken shapes there).
  */
@@ -74,8 +83,14 @@ const BIND = "bindOperatorToken";
 const SERVER_RESOLVER = "resolveRelayApiToken";
 const RELAY_PACKAGE = "@motebit/relay";
 
-const SKIP_DIRS = new Set(["node_modules", "dist", "__tests__", "__fixtures__", "coverage"]);
-const TEST_FILE = /\.(?:test|spec|probe)\.(?:ts|tsx|mts|cts)$/;
+/**
+ * The ONLY files left out: a `__tests__/` directory and a `*.test.ts` file.
+ * Nothing else is skipped — a `*.probe.ts` or `*.spec.ts` beside the code, or
+ * a `dist/`, `coverage/` or `__fixtures__/` directory under the scanned
+ * tree, is source like any other and is scanned.
+ */
+const SKIP_DIRS = new Set(["__tests__"]);
+const TEST_FILE = /\.test\.(?:ts|tsx|mts|cts)$/;
 const SOURCE_EXT = /\.(?:ts|tsx|mts|cts)$/;
 
 const BLIND_SPOTS =
@@ -235,7 +250,7 @@ function main(): void {
     });
   }
   process.stdout.write(
-    `✓ check-cli-operator-token-reader: ${r.files} source file(s) scanned under ${SCAN_DIR}/ (tests excluded); ` +
+    `✓ check-cli-operator-token-reader: ${r.files} source file(s) scanned under ${SCAN_DIR}/ (only __tests__/ directories and *.test.ts files excluded); ` +
       `${r.allowedReaders.length} allowed reader file(s) found (${r.allowedReaders.join(", ")}); ` +
       `${r.bindImporters.length} file(s) name ${BIND} besides the module (${r.bindImporters.join(", ")}); ` +
       `${SERVER_RESOLVER} and ${RELAY_PACKAGE} are named only in ${RELAY_SERVER}.\n  ${BLIND_SPOTS}\n`,

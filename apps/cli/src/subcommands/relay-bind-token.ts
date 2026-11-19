@@ -24,8 +24,13 @@ import { bindOperatorToken } from "../relay-operator-token.js";
 
 export function handleRelayBindToken(config: CliConfig): void {
   const url = config.syncUrlFlag;
-  if (url == null || url === "") {
-    if (config.syncUrl != null) {
+  if (url === undefined || url === "") {
+    if (url === "") {
+      // `--sync-url` was given, with nothing in it: not the `--sync` case.
+      console.error(
+        "Error: `motebit relay bind-token` was given an empty --sync-url. Pass the relay URL the token belongs to: --sync-url <url>.",
+      );
+    } else if (config.syncUrl != null) {
       console.error(
         "Error: `motebit relay bind-token` does not accept --sync: the command must show the relay URL the token is bound to. Pass --sync-url <url>.",
       );
@@ -53,9 +58,7 @@ export function handleRelayBindToken(config: CliConfig): void {
       ? `Replaced the operator token bound to ${relay}.`
       : `Bound the operator token to ${relay}.`,
   );
-  console.log(
-    `  token   from ${result.source} (sha256 ${result.hashPrefix}…; the token is not stored)`,
-  );
+  console.log(`  ${result.tokenLine}`);
   console.log(`  record  ${result.file}`);
   for (const warning of result.warnings) console.log(`  Warning: ${warning}`);
   console.log(
