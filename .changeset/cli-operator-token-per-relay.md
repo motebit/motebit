@@ -67,7 +67,7 @@ What each group sees until it binds, and its remedy:
 
 **7. A scaffolded agent or a second config directory.** The record lives in the config directory, so each one binds for itself: `MOTEBIT_CONFIG_DIR=<dir> motebit relay bind-token --sync-url <url>`.
 
-**8. A relay URL that cannot be bound.** A URL that is not `http` or `https`, does not parse, or contains `@`, `?`, `#`, a backslash, whitespace or a control character has no entry and never gets a token. There is no remedy other than naming the relay by a plain URL without those.
+**8. A relay URL that cannot be bound.** A URL that is not `http` or `https`, does not parse, or contains `@`, `?`, `#`, a backslash, whitespace or a control character has no entry and never gets a token. There is no remedy other than naming the relay by a plain URL without those. For such a URL the withheld line, `smoke reconciliation` and `doctor` say that it cannot have a token bound to it, and print no bind command.
 
 **9. A damaged `relay-operator-tokens.json`.** A file that does not parse, has another version or holds a non-string entry means no token is sent to any relay; every command says so once and continues. `bind-token` refuses to overwrite it. Remedy: move the file aside and bind again.
 

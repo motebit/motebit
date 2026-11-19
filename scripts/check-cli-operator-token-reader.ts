@@ -36,6 +36,10 @@
  *      `subcommands/relay.ts`.
  *   R4 `@motebit/relay` is imported only by `subcommands/relay.ts`, so no
  *      other CLI file can reach the relay's own token resolver.
+ *   R5 No scanned file names a path with a `__tests__` segment in a string
+ *      (an import, a re-export, a dynamic import, a `require`): `__tests__/`
+ *      is the one directory this gate does not read, so a production file
+ *      re-exporting from it would carry an unscanned reader into the build.
  *
  * What it cannot see: a file that passes the WHOLE `config` object or
  * `process.env` to a helper outside `apps/cli/src` that reads the token
@@ -89,7 +93,8 @@ const RELAY_PACKAGE = "@motebit/relay";
  * a `dist/`, `coverage/` or `__fixtures__/` directory under the scanned
  * tree, is source like any other and is scanned.
  */
-const SKIP_DIRS = new Set(["__tests__"]);
+const TESTS_DIR = "__tests__";
+const SKIP_DIRS = new Set([TESTS_DIR]);
 const TEST_FILE = /\.test\.(?:ts|tsx|mts|cts)$/;
 const SOURCE_EXT = /\.(?:ts|tsx|mts|cts)$/;
 
@@ -208,6 +213,16 @@ export function scan(root: string): ScanResult {
       ) {
         violations.push(
           `${file}:${line(n)} — names the module "${n.text}": only ${RELAY_SERVER} imports ${RELAY_PACKAGE} (it exports the relay's own token resolver)`,
+        );
+      }
+
+      // ── R5: nothing scanned reaches into the one unscanned directory ──
+      if (
+        (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) &&
+        n.text.split(/[\\/]/).includes(TESTS_DIR)
+      ) {
+        violations.push(
+          `${file}:${line(n)} — names "${n.text}", a path under ${TESTS_DIR}/: that directory is not scanned, so no file outside it may import or re-export from it`,
         );
       }
 

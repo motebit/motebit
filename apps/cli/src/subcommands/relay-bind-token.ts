@@ -24,7 +24,7 @@ import { bindOperatorToken } from "../relay-operator-token.js";
 
 export function handleRelayBindToken(config: CliConfig): void {
   const url = config.syncUrlFlag;
-  if (url === undefined || url === "") {
+  if (url == null || url === "") {
     if (url === "") {
       // `--sync-url` was given, with nothing in it: not the `--sync` case.
       console.error(

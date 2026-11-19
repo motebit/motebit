@@ -316,7 +316,8 @@ describe("check-cli-operator-token-reader", () => {
       ["a file under a coverage/ directory", `${SRC}/coverage/reader.ts`],
       ["a file under a __fixtures__/ directory", `${SRC}/__fixtures__/reader.ts`],
       ["a file under a node_modules/ directory", `${SRC}/node_modules/reader.ts`],
-      ["a *.d.ts file", `${SRC}/reader.d.ts`],
+      // A control, not a formerly-skipped shape: *.d.ts was scanned before too.
+      ["a *.d.ts file (a control: it was already scanned)", `${SRC}/reader.d.ts`],
     ] as const) {
       it(`${what} is scanned`, () => {
         expectFails([{ file, create: READ }], `${file}:1`);
@@ -330,6 +331,52 @@ describe("check-cli-operator-token-reader", () => {
 
     it("a file under a __tests__/ directory is not scanned", () => {
       const r = run(plantedTree([{ file: `${SRC}/__tests__/reader.ts`, create: READ }]));
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    });
+  });
+
+  describe("R5 — nothing scanned reaches into __tests__/", () => {
+    const READER = "export const t = (): string | undefined => process.env.MOTEBIT_API_TOKEN;\n";
+
+    it("a production re-export from __tests__/", () => {
+      expectFails(
+        [
+          { file: `${SRC}/__tests__/reader.ts`, create: READER },
+          { file: OTHER, append: 'export { t } from "../__tests__/reader.js";' },
+        ],
+        "a path under __tests__/",
+      );
+    });
+
+    it("a production import from __tests__/", () => {
+      expectFails(
+        [
+          { file: `${SRC}/__tests__/reader.ts`, create: READER },
+          {
+            file: OTHER,
+            append: 'import { t } from "../__tests__/reader.js";\nexport const leak = t;',
+          },
+        ],
+        "a path under __tests__/",
+      );
+    });
+
+    it("a dynamic import from a nested __tests__/", () => {
+      expectFails(
+        [
+          {
+            file: OTHER,
+            append: 'export const lazy = () => import("../repo-task/__tests__/x.js");',
+          },
+        ],
+        "a path under __tests__/",
+      );
+    });
+
+    it("a comment naming a test file does not fail", () => {
+      const r = run(
+        plantedTree([{ file: OTHER, append: "// see __tests__/discover.test.ts for the cases" }]),
+      );
       expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     });
   });

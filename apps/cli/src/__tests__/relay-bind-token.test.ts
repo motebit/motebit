@@ -101,6 +101,14 @@ describe("motebit relay bind-token — refusals write nothing", () => {
     expect(err.join("\n")).not.toContain("does not accept --sync");
   });
 
+  it("a null URL from a programmatic caller never reaches the binder", () => {
+    const config = { ...parseCliArgs(["relay", "bind-token", "--sync-token", TOKEN]) };
+    (config as { syncUrlFlag: unknown }).syncUrlFlag = null as never;
+    expect(() => handleRelayBindToken(config)).toThrow("process.exit(1)");
+    expect(fs.existsSync(FILE)).toBe(false);
+    expect(err.join("\n")).toContain("needs the relay URL on the command line");
+  });
+
   it("an empty --sync-url together with --sync: still the empty-URL refusal", () => {
     expect(bind("--sync-url", "", "--sync", "--sync-token", TOKEN)).toBe(1);
     expect(fs.existsSync(FILE)).toBe(false);

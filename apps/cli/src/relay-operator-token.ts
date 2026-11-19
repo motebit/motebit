@@ -227,6 +227,10 @@ export function operatorTokenFor(
   return undefined;
 }
 
+/** What makes a relay URL one a token can be bound to (`relayPinKey` accepts it). */
+const BINDABLE_URL_RULE =
+  "it must be an http(s) address without `?`, `#`, `@`, a backslash or spaces";
+
 function sayWithheld(relayUrl: string, pinKey: string | null, source: OperatorTokenSource): void {
   const memo = pinKey ?? relayUrl;
   if (withheldSaid.has(memo)) return;
@@ -235,7 +239,7 @@ function sayWithheld(relayUrl: string, pinKey: string | null, source: OperatorTo
   process.stderr.write(
     pinKey === null
       ? `Operator token (${SOURCE_NAME[source]}) was not sent to ${shown}: this relay URL cannot have a token bound to it ` +
-          `(it must be an http(s) address without \`?\`, \`#\`, \`@\`, a backslash or spaces). Name the relay by a plain address.\n`
+          `(${BINDABLE_URL_RULE}). Name the relay by a plain address.\n`
       : `Operator token (${SOURCE_NAME[source]}) was not sent to ${shown}: it is not bound to that relay. ` +
           `This command continues as if no operator token were set. ` +
           `If the token is this relay's, bind it once: \`motebit relay bind-token --sync-url ${shown}\`.\n`,
@@ -248,8 +252,10 @@ function sayWithheld(relayUrl: string, pinKey: string | null, source: OperatorTo
  * named inside a session, whatever the record says.
  *
  * The answer carries a whole sentence naming the source, not the source's
- * name by itself: nothing this module returns or exports is a flag or
- * variable name an importer could read the environment with.
+ * name by itself: no export or returned value of this module is a bare flag
+ * or variable name, or a short fragment around one. An importer that parses
+ * a name out of a sentence at run time is not prevented; that is blind spot
+ * (2) of `check-cli-operator-token-reader`.
  */
 export function operatorTokenIsSet(
   sources: OperatorTokenSources,
@@ -391,8 +397,10 @@ export function bindOperatorToken(relayUrl: string, config: OperatorTokenConfig)
 //
 // Text that names the token flag or variables, for files that must not name
 // them themselves. Every one is a FUNCTION returning complete user-facing
-// lines: no exported constant holds a flag or variable name, alone or with a
-// prefix an importer could slice off to build an environment read.
+// lines: no export is a bare flag or variable name, or a short fragment
+// around one. That is all that is enforced (by this module's tests). An
+// importer that parses a name out of a returned sentence at run time is the
+// gate's stated blind spot (2).
 
 /**
  * `motebit smoke reconciliation` refusing for want of an operator token.
@@ -406,12 +414,22 @@ export function smokeTokenRequiredMessage(
   config: OperatorTokenConfig,
 ): string {
   if (operatorTokenIsSet(sources, config) !== undefined) {
+    const probes =
+      "  This subcommand probes the relay's\n" +
+      "  master-token-gated /api/v1/admin/treasury-reconciliation surface\n" +
+      "  and exits non-zero on failure (suitable for CI / cron).";
+    // No bind command for a URL `bind-token` would refuse.
+    if (relayPinKey(relayUrl) === null) {
+      return (
+        "Error: motebit smoke reconciliation requires a master token, and the one set cannot be bound to this relay URL.\n" +
+        `  A token is bound to a relay by its URL, and ${BINDABLE_URL_RULE}. Name the relay by a plain address.\n` +
+        probes
+      );
+    }
     return (
       "Error: motebit smoke reconciliation requires a master token, and the one set is not bound to this relay.\n" +
       `  Bind it once: \`motebit relay bind-token --sync-url ${sanitizeRelayText(relayUrl)}\`.\n` +
-      "  This subcommand probes the relay's\n" +
-      "  master-token-gated /api/v1/admin/treasury-reconciliation surface\n" +
-      "  and exits non-zero on failure (suitable for CI / cron)."
+      probes
     );
   }
   return (
@@ -435,6 +453,10 @@ export function treasuryProbeSkippedDetail(
   bound: BoundOperatorToken | undefined,
 ): string {
   if (bound === undefined && operatorTokenIsSet(sources, config) !== undefined) {
+    // No bind command for a URL `bind-token` would refuse.
+    if (relayPinKey(relayUrl) === null) {
+      return `skipped — operator-only check (an operator token is set, but this relay URL cannot have a token bound to it: ${BINDABLE_URL_RULE})`;
+    }
     return `skipped — operator-only check (an operator token is set but not bound to this relay; run \`motebit relay bind-token --sync-url ${sanitizeRelayText(relayUrl)}\`)`;
   }
   return "skipped — operator-only check (set MOTEBIT_API_TOKEN to enable)";

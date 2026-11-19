@@ -214,8 +214,22 @@ const BIND_EMPTY_URL_SAYS_SYNC = [
 const SMOKE_NO_TOKEN_TEXT_CHANGED = [
   edit(
     MODULE,
-    '  if (operatorTokenIsSet(sources, config) !== undefined) {\n    return (\n      "Error: motebit smoke reconciliation',
-    '  if (true as boolean) {\n    return (\n      "Error: motebit smoke reconciliation',
+    "  if (operatorTokenIsSet(sources, config) !== undefined) {\n    const probes =\n",
+    "  if (true as boolean) {\n    const probes =\n",
+  ),
+];
+const SMOKE_BIND_COMMAND_FOR_UNBINDABLE_URL = [
+  edit(
+    MODULE,
+    '    if (relayPinKey(relayUrl) === null) {\n      return (\n        "Error: motebit smoke reconciliation',
+    '    if (false as boolean) {\n      return (\n        "Error: motebit smoke reconciliation',
+  ),
+];
+const DOCTOR_BIND_COMMAND_FOR_UNBINDABLE_URL = [
+  edit(
+    MODULE,
+    "    if (relayPinKey(relayUrl) === null) {\n      return `skipped",
+    "    if (false as boolean) {\n      return `skipped",
   ),
 ];
 const BIND_READS_ENV_URL = [
@@ -577,6 +591,18 @@ const TAMPERS: TamperEntry[] = [
     UNIT,
     "smokeTokenRequiredMessage (motebit smoke reconciliation) with NO token set: exactly main's text, with no bind instruction",
     SMOKE_NO_TOKEN_TEXT_CHANGED,
+  ),
+  unit(
+    "smoke prints a bind command for a URL bind-token refuses",
+    UNIT,
+    "smokeTokenRequiredMessage (motebit smoke reconciliation) with a token set and a URL that cannot be bound: says what a bindable URL is, and prints no bind command",
+    SMOKE_BIND_COMMAND_FOR_UNBINDABLE_URL,
+  ),
+  unit(
+    "doctor prints a bind command for a URL bind-token refuses",
+    UNIT,
+    "treasuryProbeSkippedDetail (motebit doctor) a URL that cannot be bound: says what a bindable URL is, and prints no bind command",
+    DOCTOR_BIND_COMMAND_FOR_UNBINDABLE_URL,
   ),
   unit(
     "bind-token accepts --sync",

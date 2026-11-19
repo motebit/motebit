@@ -347,6 +347,14 @@ describe("operatorTokenFor", () => {
       expect(text).not.toContain("\u001b");
     });
 
+    it("for a URL that cannot be bound: says what a bindable URL is, and prints no bind command", () => {
+      operatorTokenFor(`${B}?x=1`, ALL_OPERATOR_TOKEN_SOURCES, flag(TOKEN));
+      const text = stderr.join("");
+      expect(text).toContain("this relay URL cannot have a token bound to it");
+      expect(text).toContain("http(s) address without `?`, `#`, `@`, a backslash or spaces");
+      expect(text).not.toContain("bind-token");
+    });
+
     it("is not printed when the token is sent", () => {
       bound(A);
       operatorTokenFor(A, ALL_OPERATOR_TOKEN_SOURCES, flag(TOKEN));
@@ -418,11 +426,36 @@ describe("nothing the module hands out is a flag or variable name", () => {
       smokeTokenRequiredMessage(B, ALL_OPERATOR_TOKEN_SOURCES, flag(undefined)),
       smokeTokenRequiredMessage(B, ALL_OPERATOR_TOKEN_SOURCES, NO_FLAG_CONFIG),
       treasuryProbeSkippedDetail(B, ["api", "sync"], NO_FLAG_CONFIG, undefined),
-      operatorTokenIsSet(ALL_OPERATOR_TOKEN_SOURCES, flag(undefined))!.sentence,
+      smokeTokenRequiredMessage(`${B}?x=1`, ALL_OPERATOR_TOKEN_SOURCES, NO_FLAG_CONFIG),
+      treasuryProbeSkippedDetail(`${B}?x=1`, ["api", "sync"], NO_FLAG_CONFIG, undefined),
     ];
+    /** Every string anywhere in a returned value: whatever field it is in, now or later. */
+    const stringsOf = (v: unknown): string[] =>
+      typeof v === "string"
+        ? [v]
+        : Array.isArray(v)
+          ? v.flatMap(stringsOf)
+          : typeof v === "object" && v !== null
+            ? Object.values(v).flatMap(stringsOf)
+            : [];
+    const isSet = operatorTokenIsSet(ALL_OPERATOR_TOKEN_SOURCES, flag(undefined));
+    expect(isSet).toBeDefined();
+    returned.push(...stringsOf(isSet));
+    // A different token in the other variable and an earlier binding of the
+    // same token, so both warnings are present.
+    process.env["MOTEBIT_SYNC_TOKEN"] = "another-token";
+    expect(bindOperatorToken(B, flag(undefined)).ok).toBe(true);
     const bind = bindOperatorToken(A, flag(undefined));
     expect(bind.ok).toBe(true);
-    if (bind.ok) returned.push(bind.tokenLine, ...bind.warnings);
+    if (bind.ok) expect(bind.warnings).toHaveLength(2);
+    returned.push(...stringsOf(bind));
+    // And each refusal.
+    returned.push(...stringsOf(bindOperatorToken("ftp://x", flag(undefined))));
+    returned.push(...stringsOf(bindOperatorToken(A, flag(""))));
+    delete process.env["MOTEBIT_API_TOKEN"];
+    delete process.env["MOTEBIT_SYNC_TOKEN"];
+    returned.push(...stringsOf(bindOperatorToken(A, flag(undefined))));
+    expect(returned.length).toBeGreaterThan(14);
     for (const s of returned) expect(yieldsANameBySlicing(s), s).toBe(false);
   });
 
@@ -467,6 +500,16 @@ describe("smokeTokenRequiredMessage (motebit smoke reconciliation)", () => {
     );
   });
 
+  it("with a token set and a URL that cannot be bound: says what a bindable URL is, and prints no bind command", () => {
+    for (const url of [`${B}?x=1`, "https://user@relay-b.test", "ftp://relay-b.test"]) {
+      const text = smokeTokenRequiredMessage(url, ALL_OPERATOR_TOKEN_SOURCES, flag(TOKEN));
+      expect(text).toContain("cannot be bound to this relay URL");
+      expect(text).toContain("http(s) address without `?`, `#`, `@`, a backslash or spaces");
+      expect(text).not.toContain("bind-token");
+      expect(text).not.toContain(TOKEN);
+    }
+  });
+
   it("with a token set but not bound: says so, with the bind command for this relay", () => {
     const text = smokeTokenRequiredMessage(B, ALL_OPERATOR_TOKEN_SOURCES, flag(TOKEN));
     expect(text).toContain("requires a master token");
@@ -483,6 +526,19 @@ describe("treasuryProbeSkippedDetail (motebit doctor)", () => {
     expect(detail).toContain("set but not bound to this relay");
     expect(detail).toContain(`motebit relay bind-token --sync-url ${B}`);
     expect(detail).not.toContain(TOKEN);
+  });
+
+  it("a URL that cannot be bound: says what a bindable URL is, and prints no bind command", () => {
+    process.env["MOTEBIT_API_TOKEN"] = TOKEN;
+    const detail = treasuryProbeSkippedDetail(
+      `${B}#frag`,
+      ["api", "sync"],
+      NO_FLAG_CONFIG,
+      undefined,
+    );
+    expect(detail).toContain("this relay URL cannot have a token bound to it");
+    expect(detail).toContain("http(s) address without `?`, `#`, `@`, a backslash or spaces");
+    expect(detail).not.toContain("bind-token");
   });
 
   it("keeps the plain hint when no token is set, and when a bound token was refused", () => {
