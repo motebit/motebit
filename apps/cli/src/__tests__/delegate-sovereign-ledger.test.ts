@@ -22,6 +22,16 @@ const RELAY = "https://relay.test";
 
 const state = vi.hoisted(() => ({ dbPath: "" }));
 
+// The per-relay record `delegate --sovereign` takes its relay key from, in a
+// temporary config directory — never the developer's own.
+await vi.hoisted(async () => {
+  const { seedConfigDirWithPins } = await import("./helpers/seeded-config-dir.js");
+  seedConfigDirWithPins({
+    "https://relay.test":
+      "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c" /* SIGNING_PINNED_HEX */,
+  });
+});
+
 vi.mock("../config.js", async (orig) => ({
   ...(await orig<typeof import("../config.js")>()),
   loadFullConfig: () => ({

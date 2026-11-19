@@ -15,6 +15,10 @@ const { saveFullConfigMock, verifyMock } = vi.hoisted(() => ({
 vi.mock("../config.js", () => ({
   loadFullConfig: vi.fn(),
   saveFullConfig: saveFullConfigMock,
+  // `register.ts` imports the per-relay record (`relay-pins.ts`), which names
+  // its file under CONFIG_DIR. `pinRelayKey` — all this suite drives — never
+  // touches that file; the directory is one that does not exist.
+  CONFIG_DIR: "/nonexistent/motebit-register-pin-test",
 }));
 vi.mock("@motebit/state-export-client", () => ({
   verifyTransparencyDeclaration: verifyMock,

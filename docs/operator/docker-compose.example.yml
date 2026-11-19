@@ -33,6 +33,12 @@ services:
       # to start the stack while it is unset. Set it in a `.env` file beside
       # this one, e.g. `MOTEBIT_API_TOKEN=$(openssl rand -hex 32)`.
       MOTEBIT_API_TOKEN: ${MOTEBIT_API_TOKEN:?set MOTEBIT_API_TOKEN (openssl rand -hex 32)}
+      # The public URL agents reach this relay at. The relay signs it in its
+      # discovery metadata; the motebit CLI uses the relay's key for paid
+      # peer-to-peer delegation only for the URL the relay signs. Setting it
+      # also turns federation on — keep the second line to stay standalone.
+      # MOTEBIT_FEDERATION_ENDPOINT_URL: https://relay.example.com
+      # MOTEBIT_FEDERATION_ENABLED: "false"
       # Required for federation; see self-host.md § Federate with motebit.
       # OPERATOR_IDENTITY_PRIVATE_KEY: ${OPERATOR_IDENTITY_PRIVATE_KEY}
       # OPERATOR_IDENTITY_PUBLIC_KEY: ${OPERATOR_IDENTITY_PUBLIC_KEY}

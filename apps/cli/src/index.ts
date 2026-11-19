@@ -42,6 +42,12 @@ import {
 import { getDbPath, buildToolRegistry, createRuntime, syncFailureLine } from "./runtime-factory.js";
 import { bootstrapReplIdentity, type CliEventPush } from "./cli-event-push.js";
 import { startReplRelay } from "./repl-relay.js";
+import {
+  relayKeyStartupLine,
+  relayUrlSource,
+  resolveRelayKey,
+  type SessionRelayKey,
+} from "./relay-pins.js";
 import { connectConfigMcpServers, runtimeMcpServersForRepl } from "./mcp-config-wiring.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { consumeStream } from "./stream.js";
@@ -932,6 +938,18 @@ async function main(): Promise<void> {
   // whole set at each turn.
   const sessionRelay = new SessionRelays();
   sessionRelay.add(syncUrl);
+  // The relay key this session uses for THIS relay — decided once, here, from
+  // the per-relay record (`relay-pins.ts`), and handed to both the relay
+  // wiring and the grant pre-flight. No key ⇒ paid peer-to-peer is off and
+  // delegation runs relay-mode. With no relay named nothing is resolved (and
+  // no relay call is made).
+  const sessionRelayKey: SessionRelayKey =
+    syncUrl != null ? await resolveRelayKey(syncUrl) : { status: "no_relay" };
+  const relaySource = relayUrlSource(config, reloadedConfig);
+  if (sessionRelayKey.status !== "no_relay") {
+    const relayKeyLine = relayKeyStartupLine(sessionRelayKey, relaySource);
+    if (relayKeyLine != null) console.log(dim(`  [${relayKeyLine}]`));
+  }
   const replPush: CliEventPush | undefined = await startReplRelay({
     runtime,
     config,
@@ -941,7 +959,7 @@ async function main(): Promise<void> {
     privateKeyBytes,
     deviceId,
     devicePublicKey: reloadedConfig.device_public_key,
-    relayPublicKey: fullConfig.relay_public_key,
+    relayPublicKey: sessionRelayKey.status === "key" ? sessionRelayKey.key : undefined,
     log: (line) => console.log(line),
     warn: (line) => console.warn(line),
   });
@@ -1088,6 +1106,8 @@ async function main(): Promise<void> {
         now: Date.now(),
         fullConfig,
         hasRail: solanaWallet !== undefined,
+        relayKey: sessionRelayKey,
+        relaySource,
         ...(solanaWallet !== undefined ? { getBalanceMicro: () => solanaWallet.getBalance() } : {}),
         readGrantSpend: (gid) => moteDb.grantSpendStore.peek(gid),
       });

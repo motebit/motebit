@@ -7,13 +7,13 @@ One identity, several ways in. The current, shipped paths are the web app at [mo
 
 ## Where to start
 
-| Path | How | What you get |
-|------|-----|-------------|
-| **Web** | Open [motebit.com](https://motebit.com) | The creature and chat in your browser — no install. Your identity is created and kept in this browser |
-| **Full agent (CLI)** | `npm install -g motebit` then `motebit` | Interactive REPL with identity, memory, tools, operator mode, daemon, and MCP server |
-| **Identity only** | `npm create motebit` | Signed `motebit.md` identity file — create, verify, share |
-| **Service agent** | `npm create motebit my-agent -- --agent` | Runnable agent project with tools, identity, MCP server — `npm run dev` to join the network |
-| **Desktop (preview)** | Build from source | The Tauri app — see [Desktop (preview)](#desktop-preview) below |
+| Path                  | How                                      | What you get                                                                                          |
+| --------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **Web**               | Open [motebit.com](https://motebit.com)  | The creature and chat in your browser — no install. Your identity is created and kept in this browser |
+| **Full agent (CLI)**  | `npm install -g motebit` then `motebit`  | Interactive REPL with identity, memory, tools, operator mode, daemon, and MCP server                  |
+| **Identity only**     | `npm create motebit`                     | Signed `motebit.md` identity file — create, verify, share                                             |
+| **Service agent**     | `npm create motebit my-agent -- --agent` | Runnable agent project with tools, identity, MCP server — `npm run dev` to join the network           |
+| **Desktop (preview)** | Build from source                        | The Tauri app — see [Desktop (preview)](#desktop-preview) below                                       |
 
 The identity-only path is lightweight — no runtime, no database, just a cryptographically signed file. The service agent path scaffolds a complete project with `src/tools.ts`, identity, and an entrypoint that runs `motebit serve --direct` — a few commands from install to a registered service agent. The full agent gives you the complete operator console with streaming chat, MCP tool connections, goal scheduling, and everything described below.
 
@@ -81,9 +81,9 @@ Everything is local. Your memories, your identity, your conversation history —
 
 Your motebit doesn't care which LLM powers it. Open settings and pick a provider:
 
-| Provider | What you need |
-|----------|--------------|
-| **Ollama** | Install [Ollama](https://ollama.ai), pull a model (`ollama pull llama3.2`). Free, local, private. |
+| Provider      | What you need                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Ollama**    | Install [Ollama](https://ollama.ai), pull a model (`ollama pull llama3.2`). Free, local, private.            |
 | **Anthropic** | Enter your API key. Stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`, never in `config.json`. |
 
 The local-server option also detects LM Studio and llama.cpp servers; OpenAI, Google, and the motebit proxy are available as well.
@@ -199,6 +199,8 @@ docker run -p 3000:3000 \
   -e MOTEBIT_API_TOKEN=your-secret \
   -e MOTEBIT_DB_PATH=/data/relay.db \
   -e X402_PAY_TO_ADDRESS=0xYourWallet \
+  -e MOTEBIT_FEDERATION_ENDPOINT_URL=http://localhost:3000 \
+  -e MOTEBIT_FEDERATION_ENABLED=false \
   -v relay-data:/data \
   motebit-relay
 
@@ -207,6 +209,8 @@ cd services/relay
 MOTEBIT_API_TOKEN=your-secret \
 MOTEBIT_DB_PATH=./relay.db \
 X402_PAY_TO_ADDRESS=0xYourWallet \
+MOTEBIT_FEDERATION_ENDPOINT_URL=http://localhost:3000 \
+MOTEBIT_FEDERATION_ENABLED=false \
 pnpm run dev
 ```
 
@@ -215,6 +219,8 @@ Point your agents to it:
 ```bash
 motebit register --sync-url http://localhost:3000
 ```
+
+`MOTEBIT_FEDERATION_ENDPOINT_URL` is the URL the relay signs as its own; set it to the address your agents use (`MOTEBIT_FEDERATION_ENABLED=false` keeps federation off). The CLI uses a relay's key for paid peer-to-peer delegation only for the URL that relay signs, so a relay that signs no URL still registers and routes tasks but cannot be paid through with `motebit delegate --sovereign`. With `motebit relay up`, pass `--federation-url <url>`.
 
 The relay handles device auth, event sync, agent discovery, task routing, budget settlement, credential issuance, and federation.
 
@@ -260,12 +266,12 @@ None of this resets when you switch LLMs. Apart from the context a turn sends to
 
 Your motebit lives in these files:
 
-| File | What it holds | Where it lives |
-|------|--------------|----------------|
-| `~/.motebit/config.json` | Identity metadata, encrypted private key (CLI), device registration, MCP server config | Home directory |
-| `~/.motebit/dev-keyring.json` | Desktop only: private key, provider API keys, operator PIN hash (owner-only `0600`, not encrypted) | Home directory |
-| `~/.motebit/motebit.db` | Memories, events, audit log, conversations, goals, state snapshots | Home directory |
-| `motebit.md` | Signed identity file (public key, governance, privacy rules) | Your project directory |
+| File                          | What it holds                                                                                      | Where it lives         |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------- |
+| `~/.motebit/config.json`      | Identity metadata, encrypted private key (CLI), device registration, MCP server config             | Home directory         |
+| `~/.motebit/dev-keyring.json` | Desktop only: private key, provider API keys, operator PIN hash (owner-only `0600`, not encrypted) | Home directory         |
+| `~/.motebit/motebit.db`       | Memories, events, audit log, conversations, goals, state snapshots                                 | Home directory         |
+| `motebit.md`                  | Signed identity file (public key, governance, privacy rules)                                       | Your project directory |
 
 Back up `~/.motebit/` and you have everything (on the CLI you also need your passphrase to decrypt the key). The `motebit.md` file is portable — commit it to your repo, share it with services, use it on any machine.
 

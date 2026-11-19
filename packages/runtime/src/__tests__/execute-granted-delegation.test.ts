@@ -1174,6 +1174,61 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     expect(result).toEqual({ ok: false, code: "sync_not_enabled" });
   });
 
+  it("relay wired WITHOUT a relay key (wallet present, valid grant) ⇒ sync_not_enabled: nothing built, live or dry", async () => {
+    // The granted-spend door of "no relay key ⇒ no peer-to-peer": the session
+    // has a wallet, a verified in-scope grant and a relay that offers a
+    // priced P2P worker — everything but a key for that relay. The treasury
+    // derives from that key, so nothing may be quoted, signed or broadcast.
+    const operator = CLERK;
+    const clerk = CLERK;
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const { wallet, buildP2pPayment } = mockWallet(async (req) => ({
+      tx_hash: "tx-should-never-exist",
+      chain: "solana",
+      network: "solana:x",
+      to_address: req.workerAddress,
+      amount_micro: req.amountMicro,
+      fee_to_address: req.treasuryAddress,
+      fee_amount_micro: req.feeAmountMicro,
+    }));
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      requests.push(url);
+      if (isRelayMetadataUrl(url)) return relayMetadataResponse();
+      return relayFetch()(url);
+    }) as typeof fetch;
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "clerk-001",
+        tickRateHz: 0,
+        signingKeys: CLERK,
+        policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
+        solanaWallet: wallet,
+      },
+      createAdapters(),
+    );
+    // Wired to the relay — with NO relayPublicKey.
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+      acknowledgeNoHistoryRisk: true,
+    });
+
+    for (const dryRun of [false, true]) {
+      const result = await runtime.executeGrantedDelegation({
+        capability: "research",
+        prompt: "survey",
+        delegation: { token, grant },
+        dryRun,
+      });
+      expect(result).toEqual({ ok: false, code: "sync_not_enabled" });
+    }
+    expect(buildP2pPayment).not.toHaveBeenCalled();
+    expect(requests).toEqual([]);
+  });
+
   it("serializes: a second granted spend while one is in flight throws", async () => {
     const operator = CLERK;
     const clerk = CLERK;

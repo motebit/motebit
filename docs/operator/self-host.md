@@ -52,6 +52,8 @@ docker compose logs -f motebit-relay
 
 The relay listens on port 3000. Operator commands (admin dashboards, state exports, freeze) present that token as `Authorization: Bearer <token>`; `MOTEBIT_RELAY_INSECURE_NO_AUTH` is refused under `NODE_ENV=production`. `GET /health` returns `200 OK` once the database is up; `GET /.well-known/motebit-transparency.json` returns the operator's signed transparency declaration.
 
+**Make the relay sign its URL.** Set `MOTEBIT_FEDERATION_ENDPOINT_URL` to the public address agents reach this relay at (the compose file has the line, commented). The relay then names that URL in its signed discovery metadata (`/.well-known/motebit.json`). The `motebit` CLI uses a relay's key for paid peer-to-peer delegation only for the URL the relay signs: without it, agents can register, sync and delegate through the relay, but `motebit register` records no per-relay entry for it (it still writes the legacy `relay_public_key` in `config.json`, as before, and warns), so the CLI passes no key for this relay and `motebit delegate --sovereign` refuses. Setting it also turns federation on; add `MOTEBIT_FEDERATION_ENABLED=false` to keep the relay standalone. Agents must name the relay by exactly that URL.
+
 ## Federate with motebit
 
 A standalone relay is useful for testing. To act as a peer in the live motebit federation network, the relay needs:
