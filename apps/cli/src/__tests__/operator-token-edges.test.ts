@@ -13,7 +13,7 @@
  * Tamper: scripts/tampers/cli-operator-token-per-relay.ts
  */
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 await vi.hoisted(async () => {
   // CONFIG_DIR is read at module load: nothing here reads the developer's ~/.motebit.
@@ -28,6 +28,7 @@ await vi.hoisted(async () => {
 import {
   authKind,
   createEphemeralIdentity,
+  removeEphemeralIdentities,
   replLine,
   spawnCli,
   startFakeRelay,
@@ -40,6 +41,8 @@ import {
 } from "./operator-token.probe.js";
 
 vi.setConfig({ testTimeout: 180_000 });
+
+afterAll(() => removeEphemeralIdentities());
 
 const CONFIRM = "POST /api/v1/admin/federation/peer-confirm-signature";
 

@@ -373,6 +373,28 @@ interface IdentityMaterial {
 
 let material: Promise<IdentityMaterial> | undefined;
 
+const identityDirs: string[] = [];
+
+/**
+ * A fresh directory with a SHORT path. The runtime-host socket lives in the
+ * config directory (`<dir>/c/runtime.sock`), and a unix socket path is
+ * limited to about 104 bytes on macOS (108 on Linux): under a long `TMPDIR`
+ * (the tamper runner gives every run one, deep inside its slot) the daemons,
+ * the REPL and `delegate --plan` cannot bind it and refuse to start. So the
+ * system temp directory is used only while it is short; otherwise `/tmp`.
+ */
+function shortTempDir(): string {
+  const preferred = fs.realpathSync(os.tmpdir());
+  const dir = fs.mkdtempSync(path.join(preferred.length <= 60 ? preferred : "/tmp", "mb-ot-"));
+  identityDirs.push(dir);
+  return dir;
+}
+
+/** Remove every identity directory this file created (a test file's `afterAll`). */
+export function removeEphemeralIdentities(): void {
+  for (const dir of identityDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+}
+
 /** One key for the whole file: deriving the encryption key is the slow part. */
 function identityMaterial(): Promise<IdentityMaterial> {
   material ??= (async () => {
@@ -424,9 +446,7 @@ export async function createEphemeralIdentity(
   opts: { deviceId?: boolean } = {},
 ): Promise<EphemeralIdentity> {
   const m = await identityMaterial();
-  // Short paths: the runtime-host socket lives in the config directory and a
-  // unix socket path is limited to ~104 bytes on macOS.
-  const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "mb-ot-"));
+  const base = shortTempDir();
   const configDir = path.join(base, "c");
   const workDir = path.join(base, "w");
   fs.mkdirSync(configDir, { mode: 0o700 });

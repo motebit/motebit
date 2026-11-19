@@ -57,7 +57,7 @@ What each group sees until it binds, and its remedy:
 
 **4. Relays that turn device auth off** (`MOTEBIT_ENABLE_DEVICE_AUTH=false`). There every device-token fallback is refused, so every command in groups 1 and 2 fails until the token is bound. Remedy: bind.
 
-**5. Daemons holding a token and no device key** — `motebit run` or `motebit serve` whose identity key did not open, or whose config has no `device_id`. Sync, the WebSocket and task receipts stop authenticating. Remedy: bind the token in the daemon's config directory. `motebit run` reads `--sync-token` then `MOTEBIT_SYNC_TOKEN`; `motebit serve` reads `--sync-token` then `MOTEBIT_API_TOKEN`; bind the value the daemon reads.
+**5. Daemons holding a token and no device key** — `motebit run` or `motebit serve` whose identity key did not open, or whose config has no `device_id`. Sync, the WebSocket and task receipts stop authenticating. Remedy: bind the token in the daemon's config directory. `motebit run` reads `--sync-token` then `MOTEBIT_SYNC_TOKEN`; `motebit serve` reads `--sync-token` then `MOTEBIT_API_TOKEN`; bind the value the daemon reads. A daemon resolves its token once, when it starts: restart it after binding. (A REPL's slash commands pick a new bind up at the next command; its background sync at the next start.)
 
 **6. A REPL started with a token and no device key.** It gets no delegation wiring at all (it used to delegate with the operator token). Remedy: bind.
 
