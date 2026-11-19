@@ -30,7 +30,7 @@ export async function handleLedger(config: CliConfig): Promise<void> {
   }
 
   const url = `${syncUrl.replace(/\/$/, "")}/agent/${motebitId}/ledger/${goalId}`;
-  const headers = await getRelayAuthHeaders(config);
+  const headers = await getRelayAuthHeaders(config, syncUrl);
 
   let res: Response;
   try {

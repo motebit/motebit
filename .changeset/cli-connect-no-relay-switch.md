@@ -15,4 +15,4 @@ Now:
 
 Given up: `/connect` on the session's own relay no longer re-reads the agent list or re-sends the device registration, and no longer writes that relay to the saved config; there is no in-session way to save a different relay for the next launch; and a session with an operator token cannot use `/connect` at all.
 
-Not changed by this release: a relay named at launch is still paired with the one relay key pin this install keeps, and still receives an operator token set in the environment. Until the pin and the credentials are kept per relay, do not use `--grant` or an operator token with a relay other than the one this install registered with.
+Not changed by this change itself: which relay key and which operator token a relay named at launch is paired with. The same release changes both, in their own entries: the relay key is kept per relay URL (`cli-relay-pin-per-relay.md`), and an operator token is sent only to a relay it was bound to with `motebit relay bind-token` (`cli-operator-token-per-relay.md`), so a relay named at launch no longer receives an operator token just because one is set in the environment.

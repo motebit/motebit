@@ -11,7 +11,7 @@ import { fetchRelayJson, getRelayUrl, getRelayAuthHeaders } from "./_helpers.js"
 export async function handleDiscover(config: CliConfig): Promise<void> {
   const motebitId = config.positionals[1];
   const relayUrl = getRelayUrl(config);
-  const headers = await getRelayAuthHeaders(config);
+  const headers = await getRelayAuthHeaders(config, relayUrl);
 
   // No argument: show relay metadata
   if (!motebitId) {

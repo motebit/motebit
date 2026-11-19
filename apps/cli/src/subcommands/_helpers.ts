@@ -13,6 +13,11 @@ import type { TokenAudience } from "@motebit/sdk";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, type FullConfig } from "../config.js";
 import { loadActiveSigningKey } from "../identity.js";
+import {
+  ALL_OPERATOR_TOKEN_SOURCES,
+  bearerHeaders,
+  operatorTokenFor,
+} from "../relay-operator-token.js";
 import { namedRelayUrl, PUBLIC_RELAY_URL, SYNC_OFF_MESSAGE } from "../sync-opt-in.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 
@@ -106,15 +111,17 @@ export function resolveRelayUrl(config: CliConfig, fullConfig?: FullConfig): str
 }
 
 /**
- * Build auth headers for relay API calls. Tries in order:
- * 1. --sync-token / MOTEBIT_API_TOKEN / MOTEBIT_SYNC_TOKEN (master token)
+ * Build auth headers for a call to the relay at `relayUrl`. Tries in order:
+ * 1. The operator (master) token, only when it is bound to `relayUrl`
+ *    (`relay-operator-token.ts`: flag, then the two variables). A token that
+ *    is set but not bound to this relay is withheld, with one line on stderr.
  * 2. Signed device token (decrypts private key from config, prompts for passphrase)
  * 3. No auth (unauthenticated)
  *
- * Both `MOTEBIT_API_TOKEN` and `MOTEBIT_SYNC_TOKEN` are accepted because
- * the rest of the codebase uses both names interchangeably (see
- * `slash-commands.ts` for the original two-name fallback). `--sync-token`
- * is the documented command-line form.
+ * `relayUrl` is the relay the caller is about to request with these headers,
+ * and MUST be that one: the operator token is resolved for it. It sits before
+ * the options argument because `check-audience-route-parity` reads the
+ * audience from the last argument.
  *
  * On passphrase failure (step 2), a warning is logged and the request
  * continues unauthenticated rather than silently dropping the auth header
@@ -123,21 +130,27 @@ export function resolveRelayUrl(config: CliConfig, fullConfig?: FullConfig): str
  */
 export async function getRelayAuthHeaders(
   config: CliConfig,
+  relayUrl: string,
   opts?: { aud?: TokenAudience; json?: boolean },
 ): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
   if (opts?.json) headers["Content-Type"] = "application/json";
 
-  // 1. Master token — accept either env var name (they've been aliases
-  //    for the whole life of the CLI) plus the --sync-token flag.
-  const master =
-    config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
-  if (master) {
-    headers["Authorization"] = `Bearer ${master}`;
-    return headers;
-  }
+  // 1. The operator token, when it is this relay's.
+  const operator = operatorTokenFor(relayUrl, ALL_OPERATOR_TOKEN_SOURCES, config);
+  if (operator !== undefined) return { ...headers, ...bearerHeaders(operator) };
 
-  // 2. Signed device token from encrypted private key
+  return { ...headers, ...(await getDeviceAuthHeaders(opts?.aud)) };
+}
+
+/**
+ * The device-signed `Authorization` header alone (steps 2 and 3 above): what
+ * every relay call falls back to when no operator token is bound to its
+ * relay. Empty when there is no identity, or the key did not open.
+ */
+export async function getDeviceAuthHeaders(aud?: TokenAudience): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  // Signed device token from encrypted private key
   //
   // The passphrase decrypts the same `cli_encrypted_key` every other CLI
   // command unlocks (see apps/cli/src/index.ts, subcommands/rotate.ts,
@@ -160,7 +173,7 @@ export async function getRelayAuthHeaders(
           {
             mid: fullConfig.motebit_id,
             did: fullConfig.device_id,
-            aud: opts?.aud ?? "admin:query",
+            aud: aud ?? "admin:query",
           },
           privateKey,
         );

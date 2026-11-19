@@ -75,6 +75,11 @@ import type { CliConfig } from "../args.js";
 import { RELAY_DIR, RELAY_DB_PATH } from "../config.js";
 import { mkdirOwnerOnly, narrowOnLoad } from "../durable-file.js";
 import { promptPassphrase } from "../identity.js";
+import {
+  RELAY_UP_TOKEN_FROM_ENV,
+  relayTokenFileEmptyMessage,
+  relayUpOperatorHint,
+} from "../relay-operator-token.js";
 import { bold, dim, cyan, success } from "../colors.js";
 
 const DEFAULT_PORT = 3000;
@@ -253,9 +258,7 @@ function relayTokenFromFile(dbPath: string): {
   narrowOnLoad(file);
   const stored = fs.readFileSync(file, "utf-8").trim();
   if (stored === "") {
-    throw new Error(
-      `The relay's token file ${file} is empty. Delete it to generate a new token, or set MOTEBIT_API_TOKEN.`,
-    );
+    throw new Error(relayTokenFileEmptyMessage(file));
   }
   return { token: stored, source: "file" };
 }
@@ -350,7 +353,7 @@ function printAuthLine(opts: RelayCliOptions): void {
       return;
     case "env":
       console.log(
-        `  ${dim("—")} auth     ${success("master token")} ${dim("from MOTEBIT_API_TOKEN")}`,
+        `  ${dim("—")} auth     ${success("master token")} ${dim(RELAY_UP_TOKEN_FROM_ENV)}`,
       );
       return;
     case "ephemeral":
@@ -360,7 +363,7 @@ function printAuthLine(opts: RelayCliOptions): void {
       return;
     default:
       console.log(
-        `  ${dim("—")} auth     ${success("master token")} ${dim(`in ${relayApiTokenPath(opts.dbPath)} (export MOTEBIT_API_TOKEN=$(cat <that file>) for operator commands)`)}`,
+        `  ${dim("—")} auth     ${success("master token")} ${dim(relayUpOperatorHint(relayApiTokenPath(opts.dbPath), opts.port))}`,
       );
   }
 }

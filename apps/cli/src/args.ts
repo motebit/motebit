@@ -37,6 +37,12 @@ export interface CliConfig {
   dbPath: string | undefined;
   noStream: boolean;
   syncUrl: string | undefined;
+  /**
+   * The URL given by `--sync-url` itself, as typed. `--sync` (the public
+   * relay shorthand) sets `syncUrl` but never this: `motebit relay bind-token`
+   * binds only to a URL the command shows.
+   */
+  syncUrlFlag?: string | undefined;
   syncToken: string | undefined;
   operator: boolean;
   autoApprove: boolean;
@@ -328,6 +334,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     dbPath: values["db-path"],
     noStream: values["no-stream"],
     syncUrl: values["sync-url"] ?? (values.sync ? PUBLIC_RELAY_URL : undefined),
+    syncUrlFlag: values["sync-url"],
     syncToken: values["sync-token"],
     operator: values.operator,
     autoApprove: values["auto-approve"],
@@ -656,6 +663,12 @@ Commands:
   federation peer <url>       Peer with another relay (mutual handshake)
   federation peer-remove <url>  Un-peer this relay from a remote peer
   federation mesh <url1> <url2> ...  Pair-wise peer N relays (n choose 2 handshakes)
+  relay bind-token --sync-url <url> [--sync-token <token>]
+                              Record that your operator token belongs to this relay.
+                              An operator token (--sync-token / MOTEBIT_API_TOKEN /
+                              MOTEBIT_SYNC_TOKEN) is sent only to a relay it is bound to.
+                              Once per relay, per config directory and URL spelling;
+                              makes no network request.
   relay up                    Start a local sync relay (your own, on your machine)
     --port <n>                  HTTP port (default: 3000)
     --db-path <path>            SQLite path (default: ~/.motebit/relay/relay.db)
@@ -670,7 +683,8 @@ Commands:
                               (last cycle within 30 min), and reporting
                               consistent state. Exits non-zero on stale or
                               negative-drift verdicts. Master token required
-                              (--sync-token / MOTEBIT_API_TOKEN).
+                              (--sync-token / MOTEBIT_API_TOKEN), bound to the
+                              relay with \`motebit relay bind-token\`.
   smoke x402 [--mainnet]      Paid-flow end-to-end probe: bootstraps fresh
                               buyer + worker motebit identities + EVM EOAs,
                               posts a paid listing, drives a real x402
@@ -692,7 +706,9 @@ Options:
                           Relay sync is off unless a relay is named here, in the env,
                           or in config.json (\`motebit sync enable\`)
   --sync                  Opt in to relay sync with the public relay (${PUBLIC_RELAY_URL})
-  --sync-token <tok>      Auth token for sync server (or set MOTEBIT_SYNC_TOKEN)
+  --sync-token <tok>      Operator token for the relay (or set MOTEBIT_API_TOKEN /
+                          MOTEBIT_SYNC_TOKEN). Sent only to a relay it is bound to:
+                          \`motebit relay bind-token --sync-url <url>\`
   --once                  Create a one-shot goal (runs once then completes)
   --wall-clock <duration> Max wall-clock time per goal run (e.g. '30m', '1h'). Default: 10m
   --project <id>          Project ID for grouping related goals (shared context)
@@ -732,6 +748,19 @@ Slash commands (in REPL):`,
   }
   console.log("  quit, exit         Exit the REPL (/quit and /exit also work)");
 }
+
+/** `motebit smoke` usage. Here because this file owns the token flag. */
+export const SMOKE_USAGE =
+  "Usage: motebit smoke [reconciliation|x402] [--mainnet] [--sync-token <token>]";
+
+/** `motebit relay` usage. */
+export const RELAY_USAGE =
+  "Usage: motebit relay up [--port|--db-path|--pay-to-address|...]\n" +
+  "       motebit relay bind-token --sync-url <url> [--sync-token <token>]";
+
+/** `motebit relay bind-token` usage. */
+export const RELAY_BIND_TOKEN_USAGE =
+  "Usage: motebit relay bind-token --sync-url <url> [--sync-token <token>]";
 
 export function printVersion(): void {
   console.log(VERSION);

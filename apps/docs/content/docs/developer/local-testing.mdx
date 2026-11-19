@@ -265,6 +265,14 @@ ANTHROPIC_API_KEY=your-key \
 pnpm tsx src/index.ts
 ```
 
+`MOTEBIT_SYNC_TOKEN` (or `MOTEBIT_API_TOKEN`) is the relay's operator token. The CLI sends it only to a relay it is bound to, so bind it once per config directory, spelling the URL exactly as you name the relay:
+
+```bash
+MOTEBIT_SYNC_TOKEN=test-token pnpm tsx src/index.ts relay bind-token --sync-url http://localhost:3000
+```
+
+Without the bind the token is withheld (one line on stderr says so) and the REPL signs as its own device instead, which is all this walkthrough needs.
+
 This enters the interactive REPL. The CLI automatically:
 
 1. Bootstraps an Ed25519 identity

@@ -21,6 +21,12 @@
  */
 
 import type { CliConfig } from "../args.js";
+import {
+  ALL_OPERATOR_TOKEN_SOURCES,
+  bearerHeaders,
+  OPERATOR_TOKEN_REQUIRED_MESSAGE,
+  operatorTokenFor,
+} from "../relay-operator-token.js";
 import { fetchRelayJson, getRelayUrl } from "./_helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -45,26 +51,22 @@ export async function handleSmokeReconciliation(config: CliConfig): Promise<void
   const relayUrl = getRelayUrl(config);
 
   // The admin endpoint is gated by master token. The probe accepts the
-  // token from --sync-token / MOTEBIT_API_TOKEN / MOTEBIT_SYNC_TOKEN, in
-  // that order — same precedence chain as `getRelayAuthHeaders` in
-  // `_helpers.ts`. Signed device tokens (the "no master token" fallback
-  // there) deliberately don't apply: this is an operator-side probe
-  // against the operator's own relay, not an agent-side action.
-  const masterToken =
-    config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
-  if (masterToken == null || masterToken === "") {
-    console.error(
-      "Error: motebit smoke reconciliation requires a master token.\n" +
-        "  Set MOTEBIT_API_TOKEN (or MOTEBIT_SYNC_TOKEN, or pass --sync-token <token>)\n" +
-        "  with the relay's admin token. This subcommand probes the relay's\n" +
-        "  master-token-gated /api/v1/admin/treasury-reconciliation surface\n" +
-        "  and exits non-zero on failure (suitable for CI / cron).",
-    );
+  // operator token from the flag and both variables, in that order — the
+  // same precedence chain as `getRelayAuthHeaders` in `_helpers.ts` — and
+  // only when it is bound to this relay (`relay-operator-token.ts`). Signed
+  // device tokens (the "no master token" fallback there) deliberately don't
+  // apply: this is an operator-side probe against the operator's own relay,
+  // not an agent-side action.
+  const operator = operatorTokenFor(relayUrl, ALL_OPERATOR_TOKEN_SOURCES, config);
+  if (operator === undefined) {
+    console.error(OPERATOR_TOKEN_REQUIRED_MESSAGE);
     process.exit(1);
   }
 
-  const headers = { Authorization: `Bearer ${masterToken}` };
-  const result = await fetchRelayJson(`${relayUrl}/api/v1/admin/treasury-reconciliation`, headers);
+  const result = await fetchRelayJson(
+    `${operator.relayUrl}/api/v1/admin/treasury-reconciliation`,
+    bearerHeaders(operator),
+  );
   if (!result.ok) {
     console.error(`Error: relay probe failed: ${result.error}`);
     process.exit(1);

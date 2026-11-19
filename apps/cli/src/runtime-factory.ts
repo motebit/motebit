@@ -88,6 +88,7 @@ import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
 import { mkdirOwnerOnly } from "./durable-file.js";
 import { resolveRelayUrl } from "./subcommands/_helpers.js";
+import { ALL_OPERATOR_TOKEN_SOURCES, operatorTokenFor } from "./relay-operator-token.js";
 import { createRelayEventTransport } from "./relay-sync-socket.js";
 import { cliRuntimeConfig } from "./sync-configured.js";
 import { signedBootstrapBody } from "./relay-registration.js";
@@ -860,19 +861,18 @@ export async function createRuntime(
   // Wire sync — only when a relay is named. Relay sync is opt-in
   // (`sync-opt-in.ts`): with none, this process makes no relay call.
   if (syncUrl) {
-    // Accept both env var names — they have been aliases for the life of the
-    // CLI; see subcommands/_helpers.ts:getRelayAuthHeaders for the canonical
-    // fallback order. create-motebit's scaffold writes MOTEBIT_API_TOKEN, so
-    // reading only MOTEBIT_SYNC_TOKEN here would silently drop the token on
-    // `npm run dev` from a fresh scaffold.
-    const syncToken =
-      config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
+    // The operator token, from the flag and both variables (they have been
+    // aliases for the life of the CLI; create-motebit's scaffold writes the
+    // `api` one) — and only when it is bound to this relay
+    // (`relay-operator-token.ts`). It travels with the URL it is bound to.
+    const operator = operatorTokenFor(syncUrl, ALL_OPERATOR_TOKEN_SOURCES, config);
 
     // E2E with the sync key (#928); raw only when there is no key to encrypt with.
     const { remote: remoteStore } = createReplEventRemote({
-      syncUrl,
+      ...(operator !== undefined
+        ? { syncUrl: operator.relayUrl, operatorToken: operator.token }
+        : { syncUrl, operatorToken: undefined }),
       motebitId,
-      syncToken,
       encKey,
       ...(device ? { deviceId: device.deviceId, privateKey: device.privateKey } : {}),
     });
@@ -965,7 +965,8 @@ export interface ReplDeviceCredentials {
 export function createReplEventRemote(opts: {
   syncUrl: string;
   motebitId: string;
-  syncToken: string | undefined;
+  /** The operator token bound to `syncUrl`, when there is one. */
+  operatorToken: string | undefined;
   encKey: Uint8Array | undefined;
   /** No device id or key ⇒ only the configured token (if any) is presented. */
   deviceId?: string | undefined;
@@ -976,7 +977,9 @@ export function createReplEventRemote(opts: {
     motebitId: opts.motebitId,
     deviceId: opts.deviceId,
     privateKey: opts.privateKey ?? (() => undefined),
-    ...(opts.syncToken != null && opts.syncToken !== "" ? { configuredToken: opts.syncToken } : {}),
+    ...(opts.operatorToken != null && opts.operatorToken !== ""
+      ? { configuredToken: opts.operatorToken }
+      : {}),
     ...(opts.encKey ? { encKey: opts.encKey } : {}),
   });
   return { remote: t.remote, transport: t.http };

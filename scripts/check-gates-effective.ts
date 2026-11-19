@@ -3022,6 +3022,17 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-cli-operator-token-reader",
+    proves:
+      "flags a second reader of the relay operator token under apps/cli/src — the one-line edit that would let a CLI command send the token to whatever relay URL it resolved, with no test of the existing sites going red. Probe appends a direct read of the `api` variable to a subcommand file that never held one.",
+    perturb: () =>
+      mutateFile(
+        "apps/cli/src/subcommands/discover.ts",
+        (src) =>
+          `${src}\nexport const __probeOperatorToken = (): string | undefined =>\n  process.env["MOTEBIT_API_TOKEN"];\n`,
+      ),
+  },
+  {
     script: "check-goal-artifact-signing",
     proves:
       "flags a per-surface goal-runner that has stopped calling `runtime.signGoalArtifact` — the silent regression that would let goal-fire artifacts persist without a signed `ContentArtifactManifest` envelope. The drift class: a refactor that renames or removes the signing call on one surface (`apps/web/src/goal-scheduler.ts`, `apps/desktop/src/goal-scheduler.ts`, or `apps/mobile/src/goal-scheduler.ts`) passes typecheck because `signGoalArtifact` is optional from the runtime's perspective; the gate is the only catch. Probe rewrites `signGoalArtifact(` to `signGoalArtifactDisabled(` on the web surface; the gate's identifier scan must surface the missing-call violation.",

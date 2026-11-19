@@ -36,6 +36,6 @@ describe("taskResultBearer", () => {
   it("both daemon receipt posts (run and serve) go through it", () => {
     const src = readFileSync(join(import.meta.dirname, "..", "daemon.ts"), "utf8");
     expect(src.match(/await taskResultBearer\(\{/g)?.length).toBe(2);
-    expect(src.match(/masterToken: syncToken,/g)?.length).toBe(1);
+    expect(src.match(/masterToken: operator\?\.token,/g)?.length).toBe(2);
   });
 });

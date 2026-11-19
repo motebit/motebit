@@ -24,6 +24,19 @@
  *                 remedy names the shell command (`/delegate` parses no flags)
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
+
+await vi.hoisted(async () => {
+  // CONFIG_DIR is read at module load: the operator token record is read
+  // from this file's own directory, never from the developer's ~/.motebit.
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const p = await import("node:path");
+  process.env["MOTEBIT_CONFIG_DIR"] = fs.mkdtempSync(p.join(os.tmpdir(), "motebit-402-cfg-"));
+  for (const k of ["MOTEBIT_SYNC_URL", "MOTEBIT_API_TOKEN", "MOTEBIT_SYNC_TOKEN"])
+    delete process.env[k];
+});
+
+import { bindOperatorTokenForTest } from "./bind-operator-token-for-test.js";
 import { DeviceCapability, StepStatus } from "@motebit/sdk";
 import type { PlanStep, PlanId } from "@motebit/sdk";
 import {
@@ -363,6 +376,12 @@ async function replDelegateOutput(
     syncUrl: "http://relay.test",
     syncToken: "operator-token",
   } as unknown as CliConfig;
+  // The operator token is sent only to the relay it is bound to.
+  bindOperatorTokenForTest(
+    process.env["MOTEBIT_CONFIG_DIR"]!,
+    "http://relay.test",
+    "operator-token",
+  );
   await handleSlashCommand(
     "delegate",
     `${REPL_TARGET} ${REPL_PROMPT}`,

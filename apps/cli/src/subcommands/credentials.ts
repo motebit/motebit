@@ -24,9 +24,13 @@ export async function handleCredentials(config: CliConfig): Promise<void> {
   // least-privilege audience the relay enforces per route: the --presentation
   // branch below hits POST /presentation (credentials:present), otherwise the
   // GET /credentials read (credentials).
-  const headers = await getRelayAuthHeaders(config, {
-    aud: config.presentation ? "credentials:present" : "credentials",
-  });
+  // Resolved only when a relay is named: a local-only run reads no token,
+  // unlocks no key and makes no request.
+  const headers: Record<string, string> = syncUrl
+    ? await getRelayAuthHeaders(config, syncUrl, {
+        aud: config.presentation ? "credentials:present" : "credentials",
+      })
+    : {};
 
   // Read locally-persisted peer-issued credentials from SQLite
   type CredRow = {

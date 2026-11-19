@@ -47,7 +47,7 @@ motebit \
 | `--no-stream`             | Disable streaming (wait for full response)                                                                                          |
 | `--sync-url <url>`        | Opt in to relay sync with this relay (or set `MOTEBIT_SYNC_URL`)                                                                    |
 | `--sync`                  | Opt in to relay sync with the public relay (`https://relay.motebit.com`)                                                            |
-| `--sync-token <token>`    | Sync relay master token                                                                                                             |
+| `--sync-token <token>`    | Relay operator (master) token. Sent only to a relay it is bound to (`motebit relay bind-token`)                                     |
 | `--operator`              | Start with operator mode enabled                                                                                                    |
 | `--allowed-paths <paths>` | Comma-separated paths for file tools                                                                                                |
 | `--version`               | Print version                                                                                                                       |
@@ -112,7 +112,22 @@ The CLI uses the same identity system as the desktop app:
 1. First launch generates an Ed25519 keypair
 2. Private key is encrypted with PBKDF2 (AES-256-GCM) and stored in `~/.motebit/config.json`
 3. Identity and device are registered in the local SQLite database
-4. Optional: register with a sync relay using `--sync-url` (or `--sync`) and `--sync-token`
+4. Optional: register with a sync relay using `--sync-url` (or `--sync`)
+
+## Operator tokens are bound to a relay
+
+A relay's operator (master) token is that one relay's credential, and nothing in the token says which relay it is for. The CLI reads it from `--sync-token`, `MOTEBIT_API_TOKEN` or `MOTEBIT_SYNC_TOKEN`, and sends it to a relay only after you have recorded that the token belongs to that relay URL:
+
+```bash
+MOTEBIT_API_TOKEN=<that relay's token> motebit relay bind-token --sync-url https://relay.example.com
+```
+
+- The URL must be given with `--sync-url` in that command. `MOTEBIT_SYNC_URL`, the saved `sync_url` and `--sync` are refused: the pairing is stated in the command.
+- It makes no network request and does not check the token against the relay; your next operator command does.
+- It writes `~/.motebit/relay-operator-tokens.json` (mode 0600): one SHA-256 hash per relay URL, never the token. Running it again for the same relay replaces the entry (a rotated token).
+- Once per relay, per config directory (`MOTEBIT_CONFIG_DIR`) and per URL spelling: `http://localhost:3000` and `http://127.0.0.1:3000` are different entries, and a path is part of the URL.
+
+A token that is set but not bound to the relay a command is about to contact is **not sent**. The command prints one line on stderr naming the source, the relay and the bind command, and continues as it does with no operator token: most commands sign as this device instead (which unlocks your identity key, so a script may need `MOTEBIT_PASSPHRASE`); `motebit smoke reconciliation` refuses; admin routes answer 401 or 403. `motebit federation mesh` sends the configured token only to the URLs it is bound to; `MOTEBIT_MESH_TOKENS` (one token per URL, in order) and `MOTEBIT_PEER_API_TOKEN` are unchanged.
 
 ## Relay sync is opt-in
 

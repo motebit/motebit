@@ -2,6 +2,11 @@
 
 import { disconnectMcpServer } from "./mcp-config-wiring.js";
 import { namedRelayUrl, normalizeRelayUrl, SYNC_OPT_IN_HINT } from "./sync-opt-in.js";
+import {
+  ALL_OPERATOR_TOKEN_SOURCES,
+  operatorTokenFor,
+  operatorTokenIsSet,
+} from "./relay-operator-token.js";
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import {
@@ -214,35 +219,20 @@ function getRelaySyncUrl(config: CliConfig, fullConfig?: FullConfig): string | u
 const SYNC_OFF_LINE = `Relay sync is off — ${SYNC_OPT_IN_HINT} (or /connect <url>).`;
 
 /**
- * The operator (master) token this process was given and the source that
- * supplied it: the first DEFINED of `--sync-token`, `MOTEBIT_API_TOKEN`,
- * `MOTEBIT_SYNC_TOKEN`. An empty string counts as defined and shadows the
- * next source, so a caller must still check the value is non-empty. The one
- * reader of those three sources here: `getRelayToken` (what is sent) and
- * `/connect` (what refuses) both call it, so they cannot disagree.
+ * Get an auth token for a call to the relay at `relayUrl`: the operator
+ * (master) token when one is bound to that relay
+ * (`relay-operator-token.ts` — the one reader of the flag and the two
+ * variables; `/connect`'s refusal asks the same module), else a signed
+ * device token. `relayUrl` MUST be the relay the caller requests with it.
  */
-function operatorTokenSource(
-  config: Pick<CliConfig, "syncToken">,
-): { value: string; source: string } | undefined {
-  const sources: ReadonlyArray<readonly [source: string, value: string | undefined]> = [
-    ["--sync-token", config.syncToken],
-    ["MOTEBIT_API_TOKEN", process.env["MOTEBIT_API_TOKEN"]],
-    ["MOTEBIT_SYNC_TOKEN", process.env["MOTEBIT_SYNC_TOKEN"]],
-  ];
-  for (const [source, value] of sources) {
-    if (value != null) return { value, source };
-  }
-  return undefined;
-}
-
-/** Get an auth token for relay API calls — prefers master token, falls back to signed device token. */
 async function getRelayToken(
   config: CliConfig,
-  repl?: ReplContext,
+  repl: ReplContext | undefined,
+  relayUrl: string,
   aud = "admin:query",
 ): Promise<string | undefined> {
-  const master = operatorTokenSource(config)?.value;
-  if (master) return master;
+  const operator = operatorTokenFor(relayUrl, ALL_OPERATOR_TOKEN_SOURCES, config);
+  if (operator !== undefined) return operator.token;
   if (repl?.privateKeyBytes && repl?.deviceId) {
     return (
       await mintAudienceToken(
@@ -274,6 +264,7 @@ function makeRelayClient(config: CliConfig, syncUrl: string, repl?: ReplContext)
           (await getRelayToken(
             config,
             repl,
+            syncUrl,
             scope != null && isTokenAudience(scope) ? scope : undefined,
           )) ?? null,
       },
@@ -281,15 +272,19 @@ function makeRelayClient(config: CliConfig, syncUrl: string, repl?: ReplContext)
   });
 }
 
-/** Build relay request headers with auth. Optional content-type for POST/PUT. */
+/**
+ * Build request headers, with auth, for the relay at `relayUrl` (the relay
+ * the caller requests with them). Optional content-type for POST/PUT.
+ */
 async function makeRelayHeaders(
   config: CliConfig,
-  repl?: ReplContext,
+  repl: ReplContext | undefined,
+  relayUrl: string,
   opts?: { aud?: TokenAudience; json?: boolean },
 ): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
   if (opts?.json) headers["Content-Type"] = "application/json";
-  const token = await getRelayToken(config, repl, opts?.aud);
+  const token = await getRelayToken(config, repl, relayUrl, opts?.aud);
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return headers;
 }
@@ -345,7 +340,7 @@ async function lookupListing(
     const result = await relayFetch<{ agents?: DiscoveredListing[] }>(
       syncUrl,
       `/api/v1/agents/discover?motebit_id=${encodeURIComponent(motebitId)}`,
-      { headers: await makeRelayHeaders(config, repl) },
+      { headers: await makeRelayHeaders(config, repl, syncUrl) },
     );
     return result.ok ? result.data.agents?.find((a) => a.motebit_id === motebitId) : undefined;
   } catch {
@@ -409,7 +404,7 @@ async function buildRelayConfig(
 ): Promise<RelayConfig | undefined> {
   const relayUrl = getRelaySyncUrl(config, fullConfig);
   if (!relayUrl) return undefined;
-  const token = await getRelayToken(config, repl);
+  const token = await getRelayToken(config, repl, relayUrl);
   if (!token) return undefined;
   const motebitId = repl?.motebitId ?? "";
   if (!motebitId) return undefined;
@@ -418,7 +413,7 @@ async function buildRelayConfig(
     relayUrl,
     authToken: token,
     motebitId,
-    mintToken: async (audience) => (await getRelayToken(config, repl, audience)) ?? token,
+    mintToken: async (audience) => (await getRelayToken(config, repl, relayUrl, audience)) ?? token,
   };
 }
 
@@ -895,11 +890,11 @@ export async function handleSlashCommand(
               repl.moteDb.conversationStore,
             );
             const convSyncEngine = new ConversationSyncEngine(convStoreAdapter, repl.motebitId);
-            const syncToken = await getRelayToken(config, repl, "sync");
+            const relayCredential = await getRelayToken(config, repl, syncUrl, "sync");
             const httpConvAdapter = new HttpConversationSyncAdapter({
               baseUrl: syncUrl,
               motebitId: repl.motebitId,
-              authToken: syncToken,
+              authToken: relayCredential,
             });
             // Encrypt conversations — relay stores opaque ciphertext
             const encKey = repl.privateKeyBytes
@@ -929,7 +924,7 @@ export async function handleSlashCommand(
             const httpPlanAdapter = new HttpPlanSyncAdapter({
               baseUrl: syncUrl,
               motebitId: repl.motebitId,
-              authToken: syncToken,
+              authToken: relayCredential,
             });
             planSyncEngine.connectRemote(
               encKey
@@ -991,8 +986,9 @@ export async function handleSlashCommand(
         console.log("A session keeps the relay it started with or first connected to.");
         break;
       }
-      const operatorToken = operatorTokenSource(config);
-      if (operatorToken !== undefined && operatorToken.value !== "") {
+      // Refused on a token being SET, bound to a relay or not.
+      const operatorToken = operatorTokenIsSet(ALL_OPERATOR_TOKEN_SOURCES, config);
+      if (operatorToken !== undefined) {
         console.log(
           `An operator token is set for this session (${operatorToken.source}). /connect does not send an operator token to a relay named inside a session; nothing was sent to ${sanitizeRelayText(connectUrl)}.`,
         );
@@ -1058,7 +1054,7 @@ export async function handleSlashCommand(
 
       // 3. Discover agents
       try {
-        const headers = await makeRelayHeaders(config, repl);
+        const headers = await makeRelayHeaders(config, repl, connectUrl);
         const resp = await fetch(`${connectUrl}/api/v1/agents/discover`, { headers });
         if (resp.ok) {
           const data = (await resp.json()) as {
@@ -1166,7 +1162,7 @@ export async function handleSlashCommand(
         const syncUrl = getRelaySyncUrl(config, fullConfig);
         if (syncUrl && pubHex) {
           try {
-            const headers = await makeRelayHeaders(config, repl, { json: true });
+            const headers = await makeRelayHeaders(config, repl, syncUrl, { json: true });
             // Try to extract guardian key from identity file for org trust baseline
             let guardianPubKey: string | undefined;
             let guardianAttest: string | undefined;
@@ -1775,7 +1771,7 @@ export async function handleSlashCommand(
       try {
         const capParam = discoverArg || undefined;
         const queryStr = capParam ? `?capability=${encodeURIComponent(capParam)}` : "";
-        const headers = await makeRelayHeaders(config, repl);
+        const headers = await makeRelayHeaders(config, repl, syncUrl);
         const discoverResult = await relayFetch<{
           agents: Array<{
             motebit_id: string;
@@ -1964,7 +1960,7 @@ export async function handleSlashCommand(
       const UUID_LENGTH = 36;
       if (rawTargetId.length < UUID_LENGTH) {
         try {
-          const discoverHeaders = await makeRelayHeaders(config, repl);
+          const discoverHeaders = await makeRelayHeaders(config, repl, syncUrl);
           const discoverResult = await relayFetch<{ agents: DiscoveredListing[] }>(
             syncUrl,
             `/api/v1/agents/discover`,
@@ -2148,7 +2144,10 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposeHeaders = await makeRelayHeaders(config, repl, { aud: "proposal", json: true });
+      const proposeHeaders = await makeRelayHeaders(config, repl, proposeSyncUrl, {
+        aud: "proposal",
+        json: true,
+      });
 
       // Simple decomposition: distribute goal steps round-robin across participants.
       // Each participant gets a step: research, implementation, verification, etc.
@@ -2242,7 +2241,9 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposalsHeaders = await makeRelayHeaders(config, repl, { aud: "proposal" });
+      const proposalsHeaders = await makeRelayHeaders(config, repl, proposalsSyncUrl, {
+        aud: "proposal",
+      });
 
       try {
         const listResult = await relayFetch<{
@@ -2306,7 +2307,10 @@ export async function handleSlashCommand(
         break;
       }
 
-      const proposalHeaders = await makeRelayHeaders(config, repl, { aud: "proposal", json: true });
+      const proposalHeaders = await makeRelayHeaders(config, repl, proposalSyncUrl, {
+        aud: "proposal",
+        json: true,
+      });
 
       // First, fetch the proposal details
       type ProposalDetail = {
@@ -2527,7 +2531,7 @@ export async function handleSlashCommand(
         break;
       }
       try {
-        const ledgerToken = await getRelayToken(config, repl);
+        const ledgerToken = await getRelayToken(config, repl, ledgerSyncUrl);
         const ledgerRes = await fetch(
           `${ledgerSyncUrl.replace(/\/$/, "")}/agent/${repl.motebitId}/ledger/${goalId}`,
           ledgerToken ? { headers: { Authorization: `Bearer ${ledgerToken}` } } : {},
@@ -2640,7 +2644,9 @@ export async function handleSlashCommand(
       try {
         // The balance route verifies `account:balance`; the helper's
         // `admin:query` default was refused without a master token (#827).
-        const depHeaders = await makeRelayHeaders(config, repl, { aud: "account:balance" });
+        const depHeaders = await makeRelayHeaders(config, repl, depSyncUrl, {
+          aud: "account:balance",
+        });
         const depResult = await relayFetch<{
           transactions: Array<{
             type: string;
