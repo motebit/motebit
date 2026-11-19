@@ -314,16 +314,21 @@ describe("check-cli-operator-token-reader", () => {
     expect(`${r.stdout}${r.stderr}`).toContain("does not exist");
   });
 
-  it("stays GREEN on the whole-config pass-through it says it cannot see", () => {
-    // The stated blind spot, recorded: a sender that hands the whole config
-    // and environment to code outside apps/cli/src. The subprocess tests are
-    // what catch this shape.
+  it("stays GREEN on the whole-environment pass-through it says it cannot see", () => {
+    // The stated blind spot, recorded: a sender that hands the whole
+    // environment to code outside apps/cli/src and picks the token out by a
+    // name built at run time. This is the edit
+    // scripts/tampers/cli-operator-token-per-relay.ts makes to `motebit
+    // serve`; there the subprocess row goes red. Here the gate must PASS —
+    // if it ever fails on this, its header and this case are out of date.
     const r = run(
       plantedTree([
         {
-          file: OTHER,
-          append:
-            "export const passThrough = (config: object, helper: (c: object, e: object) => string) =>\n  helper(config, process.env);",
+          file: `${SRC}/daemon.ts`,
+          from: "    const operator = operatorTokenFor(syncUrl, SERVE_TOKEN_SOURCES, config);\n",
+          to:
+            '    const own = Object.fromEntries(Object.entries(process.env))[["MOTEBIT", "API", "TOKEN"].join("_")];\n' +
+            "    const operator = (own ? { relayUrl: syncUrl, token: own } : undefined) as ReturnType<typeof operatorTokenFor>;\n",
         },
       ]),
     );
