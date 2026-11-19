@@ -340,7 +340,7 @@ motebit federation peer https://other-relay.example.com
 motebit federation peers
 ```
 
-`federation peer`, `federation peers` and `federation mesh` act with your relay's operator token (`MOTEBIT_API_TOKEN`). The CLI sends that token only to a relay it is bound to, so record the pairing once, with the URL you name the relay by:
+`federation peer`, `federation peer-remove` and `federation mesh` act with your relay's operator token (`MOTEBIT_API_TOKEN`). The CLI sends that token only to a relay it is bound to, so record the pairing once, with the URL you name the relay by:
 
 ```bash
 MOTEBIT_API_TOKEN=<your relay's token> motebit relay bind-token --sync-url https://your-relay.example.com

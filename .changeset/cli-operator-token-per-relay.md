@@ -34,7 +34,7 @@ Everyone who uses a relay operator token with the CLI is affected. After upgradi
 
 ```bash
 export MOTEBIT_API_TOKEN=<relay token>
-motebit federation peers --sync-url https://relay.example.com    # sent the token
+motebit smoke reconciliation --sync-url https://relay.example.com    # sent the token
 ```
 
 **After:** bind once, then nothing else changes.
@@ -42,14 +42,14 @@ motebit federation peers --sync-url https://relay.example.com    # sent the toke
 ```bash
 export MOTEBIT_API_TOKEN=<relay token>
 motebit relay bind-token --sync-url https://relay.example.com    # once
-motebit federation peers --sync-url https://relay.example.com    # sends the token
+motebit smoke reconciliation --sync-url https://relay.example.com    # sends the token
 ```
 
 The bind is **per relay**, **per config directory** (an agent scaffolded with its own `MOTEBIT_CONFIG_DIR` has its own record) and **per URL spelling**: host case, a default port and trailing slashes are unified, but the path is kept, and `http://localhost:3000` and `http://127.0.0.1:3000` are different entries. Bind the spelling you use.
 
 What each group sees until it binds, and its remedy:
 
-**1. Admin commands that need the master token** — `motebit smoke reconciliation`, `motebit federation peers / peer / peer-remove / mesh`, the treasury probe in `motebit doctor`. `smoke reconciliation` refuses locally ("requires a master token"); the federation commands are refused by the relay (401 or 403, `operator-confirm` for `peer` and `mesh`); `doctor` reports the probe as skipped and says the token is set but not bound. Remedy: `motebit relay bind-token --sync-url <url>`. For `federation mesh` over several relays sharing one token, bind each URL, or pass `MOTEBIT_MESH_TOKENS` for that command.
+**1. Admin commands that need the master token** — `motebit smoke reconciliation`, `motebit federation peer / peer-remove / mesh`, the treasury probe in `motebit doctor`. (`motebit federation peers` reads a route the relay registers without a token check, so it should keep working; it no longer attaches the token to a relay it is not bound to.) `smoke reconciliation` refuses locally ("requires a master token"); the federation commands are refused by the relay (401 or 403, `operator-confirm` for `peer` and `mesh`); `doctor` reports the probe as skipped and says the token is set but not bound. Remedy: `motebit relay bind-token --sync-url <url>`. For `federation mesh` over several relays sharing one token, bind each URL, or pass `MOTEBIT_MESH_TOKENS` for that command.
 
 **2. Commands with a device-token path** — `balance`, `withdraw`, `fund`, `ledger`, `credentials`, `export`, `discover`, `delegate`, `migrate`, REPL sync and the slash commands. They run as this device's identity instead of as the operator. For your own identity the result is usually the same; a query about another identity is refused. Remedy: bind, if you meant to act as the operator.
 
