@@ -39,6 +39,24 @@
  *    as pairing or another client of the same identity would have left it).
  *  - The 30 s SyncEngine interval is faked (`setInterval` only); every other
  *    timer — socket backoff, push deadlines — is real.
+ *  - `@tauri-apps/api/core`'s `invoke` forwards to the stand-in, and
+ *    `window.__TAURI_INTERNALS__` is stubbed while `loadDesktopConfig` runs,
+ *    so the config the cell starts from is the one desktop LOADS, never a
+ *    hand-built one.
+ *  - `WebSocket` is the real global, subclassed to record every frame the
+ *    desktop sends and to deliver one task to the serving desktop (the
+ *    relay's `task_request` / `task_claimed` frames, injected; the claim
+ *    frame is answered locally). `runtime.handleAgentTask` yields a receipt
+ *    without running a model: the RESULT POST to the real relay is what is
+ *    under test.
+ *
+ * The token axis (operator token removed, design 2026-11-20): "token" means
+ * the key store's operator slot holds a hand-placed relay operator token
+ * (`operator-slot-guard.ts`); "no-token" means it is empty. In every cell no
+ * request header and no socket frame carries that token, the slot is never
+ * read, and every socket bearer is a `sync` token signed by THIS device's
+ * key, so when registration fails at startup (the `down→up` cells) sync
+ * starts with a minted device token, never a static one.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import Database from "better-sqlite3";
@@ -55,6 +73,23 @@ import { pushCompactionFloor } from "@motebit/sync-engine";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { EventType } from "@motebit/sdk";
 import type { MotebitId } from "@motebit/sdk";
+import { verifySignedToken } from "@motebit/encryption";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { carriesOperatorToken, guardOperatorSlot, OPERATOR_TOKEN } from "./operator-slot-guard";
+
+// `loadDesktopConfig` imports `invoke` from here; it forwards to the cell's
+// stand-in (set per cell).
+const tauriCore = vi.hoisted(() => ({
+  invoke: null as null | ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>),
+}));
+vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  invoke: (cmd: string, args?: Record<string, unknown>) => {
+    if (tauriCore.invoke == null) throw new Error("tauri stand-in not installed");
+    return tauriCore.invoke(cmd, args);
+  },
+}));
 
 // The runtime-host election binds ~/.motebit/runtime.sock through Tauri IPC.
 // Stubbed to "this process is the coordinator" — the outcome a desktop with
@@ -70,15 +105,21 @@ vi.mock("../runtime-host.js", () => ({
 import { DesktopApp, type InvokeFn } from "../index";
 import { applyConfigPatch } from "../config-update";
 import { startDesktopSync } from "../sync-startup";
+import { loadDesktopConfig } from "../ui/config";
 
-const MASTER = "zz962-master-token";
+// The relay's own operator (API) token IS the token in the slot: on a tree
+// that sent it, the relay would accept it.
+const MASTER = OPERATOR_TOKEN;
 const APPENDED = 1005; // runtime.compact() acts only at >= 1000 events (the default threshold)
 
 // ---------------------------------------------------------------------------
 // Tauri invoke stand-in: real SQLite with main.rs's schema
 // ---------------------------------------------------------------------------
 
-const MAIN_RS = new URL("../../src-tauri/src/main.rs", import.meta.url);
+// Paths from the package directory, not `new URL(…, import.meta.url)`:
+// under a jsdom environment that is not a file URL.
+const PKG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const MAIN_RS = join(PKG_DIR, "src-tauri", "src", "main.rs");
 function rustSchema(): string {
   const src = readFileSync(MAIN_RS, "utf8");
   const start = src.indexOf('const SCHEMA: &str = r#"');
@@ -106,7 +147,9 @@ interface TauriStandIn {
 // tables), and `TauriEventStore.append` writes `events.device_id`, a column
 // only persistence's schema has — main.rs's alone cannot hold an event.
 // Built here in that order: persistence first, then main.rs's SCHEMA.
-const PERSISTENCE = new URL("../../../../packages/persistence/dist/index.js", import.meta.url);
+const PERSISTENCE = new URL(
+  `file://${join(PKG_DIR, "..", "..", "packages", "persistence", "dist", "index.js")}`,
+);
 async function sharedMotebitDb(file: string): Promise<Database.Database> {
   const { createMotebitDatabase } = (await import(/* @vite-ignore */ PERSISTENCE.href)) as {
     createMotebitDatabase: (p: string) => { close(): void };
@@ -117,7 +160,7 @@ async function sharedMotebitDb(file: string): Promise<Database.Database> {
   return db;
 }
 
-async function makeTauri(file: string): Promise<TauriStandIn> {
+async function makeTauri(file: string, slotHoldsToken: boolean): Promise<TauriStandIn> {
   const db = await sharedMotebitDb(file);
   const keyring = new Map<string, string>();
   const state: TauriStandIn = {
@@ -164,7 +207,11 @@ async function makeTauri(file: string): Promise<TauriStandIn> {
         throw new Error(`tauri stand-in: no command ${cmd}`);
     }
   };
-  state.invoke = invoke as unknown as InvokeFn;
+  // "token": the operator slot holds a hand-placed token, and any read of it
+  // fails the cell (operator-slot-guard.ts).
+  state.invoke = (slotHoldsToken
+    ? guardOperatorSlot().wrap(invoke)
+    : invoke) as unknown as InvokeFn;
   return state;
 }
 
@@ -287,11 +334,57 @@ interface CellResult {
   surfaced: string[];
 }
 
+/** Every bearer the desktop put on the wire: HTTP Authorization and socket frames. */
+interface WireAuth {
+  headers: Array<{ route: string; auth: string }>;
+  frames: string[];
+}
+
+type RecordedSocket = WebSocket & { inject(m: unknown): void };
+
+function authorizationOf(input: string | URL | Request, init?: RequestInit): string {
+  const fromInit = init?.headers != null ? new Headers(init.headers).get("authorization") : null;
+  if (fromInit != null) return fromInit;
+  if (input instanceof Request) return input.headers.get("authorization") ?? "";
+  return "";
+}
+
+const INJECTED_TASK = "zz962-served-task";
+
+/**
+ * The real WebSocket, recording every frame the desktop sends. The relay's
+ * task frames for one injected task are delivered through `inject`; the
+ * desktop's claim for it is answered here (the relay never saw that task).
+ */
+function recordingWebSocket(frames: string[], sockets: RecordedSocket[]): typeof WebSocket {
+  const Real = globalThis.WebSocket;
+  return class RecordingWebSocket extends Real {
+    constructor(url: string | URL, protocols?: string | string[]) {
+      super(url, protocols);
+      sockets.push(this as unknown as RecordedSocket);
+    }
+    override send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+      const text = typeof data === "string" ? data : String(data);
+      frames.push(text);
+      if (text.includes('"type":"task_claim"') && text.includes(INJECTED_TASK)) {
+        this.inject({ type: "task_claimed", task_id: INJECTED_TASK });
+        return;
+      }
+      super.send(data);
+    }
+    inject(msg: unknown): void {
+      const handler = this.onmessage as ((ev: MessageEvent) => void) | null;
+      handler?.call(this, new MessageEvent("message", { data: JSON.stringify(msg) }));
+    }
+  };
+}
+
 /**
  * main.ts `trySyncRegistration`: `startDesktopSync`, the sequence it runs
- * after `initAI` at startup (main.ts ~680) for every Tauri desktop with a
- * relay URL; the token is `config.syncMasterToken ?? ""`. The action message
- * main.ts shows on a failure is recorded as surfaced.
+ * after `initAI` at startup (main.ts `onAIReady`) for every Tauri desktop
+ * with a relay URL, with the arguments main.ts passes from the LOADED
+ * config. The action message main.ts shows on a failure is recorded as
+ * surfaced.
  */
 async function desktopStartupSync(
   app: DesktopApp,
@@ -324,7 +417,7 @@ async function runDesktopCell(
     clear: () => ls.clear(),
   });
 
-  const tauri = await makeTauri(join(host.dir, "motebit.db"));
+  const tauri = await makeTauri(join(host.dir, "motebit.db"), withToken);
   const invoke = tauri.invoke;
   const app = new DesktopApp();
   cleanups.push(() => {
@@ -353,18 +446,29 @@ async function runDesktopCell(
   }
   if (reach === "down→up") await host.stop();
 
-  // 3. initAI — the Tauri runtime, relay configured.
+  // 3. initAI — the Tauri runtime, relay configured, from the config desktop
+  // LOADS (main.ts `bootstrap` → `loadDesktopConfig`).
   await tauri.invoke("update_config", {
     patch: JSON.stringify({ sync_url: host.url }),
   });
-  const masterToken = withToken ? MASTER : "";
-  const ok = await app.initAI({
-    provider: "local-server",
-    isTauri: true,
-    invoke,
-    syncUrl: host.url,
-    ...(withToken ? { syncMasterToken: MASTER } : {}),
-  } as Parameters<DesktopApp["initAI"]>[0]);
+  tauriCore.invoke = tauri.invoke as unknown as typeof tauriCore.invoke;
+  const w = globalThis as unknown as { window?: unknown };
+  const hadWindow = "window" in w;
+  const priorWindow = w.window;
+  w.window = { __TAURI_INTERNALS__: {} };
+  let config: Awaited<ReturnType<typeof loadDesktopConfig>>;
+  try {
+    config = await loadDesktopConfig();
+  } finally {
+    if (hadWindow) w.window = priorWindow;
+    else delete w.window;
+  }
+  expect(config.isTauri).toBe(true);
+  expect(config.syncUrl).toBe(host.url);
+  // Soft: on a tree that loads the token the cell runs on, so what it SENDS
+  // is seen too.
+  expect.soft(JSON.stringify(config), "the loaded config").not.toContain(OPERATOR_TOKEN);
+  const ok = await app.initAI(config);
   expect(ok).toBe(true);
   const runtime = app.getRuntime()!;
   expect(await runtime.isSyncConfigured()).toBe(true);
@@ -378,12 +482,31 @@ async function runDesktopCell(
     statuses.push(e.status);
     if (e.status === "error" && e.error) surfaced.push(`status:error ${e.error}`);
   });
-  // Pass-through recorder: what the startup sequence's HTTP calls got back.
+  // Pass-through recorder: what the startup sequence's HTTP calls got back,
+  // and every bearer the desktop sent.
   const wire: string[] = [];
+  const auth: WireAuth = { headers: [], frames: [] };
+  const sockets: RecordedSocket[] = [];
+  vi.stubGlobal("WebSocket", recordingWebSocket(auth.frames, sockets));
   const realFetch = globalThis.fetch;
   vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(url).pathname;
+    auth.headers.push({
+      route: `${init?.method ?? (input instanceof Request ? input.method : "GET")} ${path}`,
+      auth: authorizationOf(input, init),
+    });
+    // Stand-in, named: desktop registers to serve with the placeholder
+    // `endpoint_url: wss://<motebit_id>`, which the relay's outbound-URL rule
+    // refuses (`scheme_not_allowed`) for every desktop, with or without a
+    // token — a separate defect. Only that one body field is rewritten, to a
+    // loopback http URL the relay accepts and never calls, so serving starts
+    // and the bearers of the registration and the result POST can be seen.
+    if (path === "/api/v1/agents/register" && typeof init?.body === "string") {
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      body.endpoint_url = "http://127.0.0.1:9/zz962-desktop-serves-over-its-socket";
+      init = { ...init, body: JSON.stringify(body) };
+    }
     try {
       const res = await realFetch(input, init);
       if (!path.startsWith("/sync/")) wire.push(`${init?.method ?? "GET"} ${path} → ${res.status}`);
@@ -393,7 +516,13 @@ async function runDesktopCell(
       throw err;
     }
   });
-  await desktopStartupSync(app, invoke, host.url, masterToken, surfaced);
+  await desktopStartupSync(
+    app,
+    config.invoke!,
+    config.syncUrl!,
+    config.syncMasterToken ?? "",
+    surfaced,
+  );
 
   if (reach === "refusing") {
     // The operator revokes this identity: every signed token refused from here.
@@ -447,7 +576,10 @@ async function runDesktopCell(
       )
       .toBe(true);
   }
-  if (reach === "refusing") return { appended, surfaced };
+  if (reach === "refusing") {
+    await expectDeviceBearersOnly(app, invoke, auth);
+    return { appended, surfaced };
+  }
 
   if (reach === "down→up") await host.start();
 
@@ -491,7 +623,79 @@ async function runDesktopCell(
       )
       .toBe(true);
   }
+
+  // 8. Serving: registration, then one task delivered and its result posted.
+  await serveOneTask(app, motebitId, sockets, auth);
+
+  await expectDeviceBearersOnly(app, invoke, auth);
   return { appended, surfaced };
+}
+
+/**
+ * Start serving and deliver one task: the registration and the result POST
+ * go to the real relay with whatever bearer the desktop chose.
+ */
+async function serveOneTask(
+  app: DesktopApp,
+  motebitId: string,
+  sockets: RecordedSocket[],
+  auth: WireAuth,
+): Promise<void> {
+  const served = await app.startServing();
+  expect(served, `serving: ${JSON.stringify(served)}`).toEqual({ ok: true });
+  const runtime = app.getRuntime()!;
+  (runtime as unknown as { handleAgentTask: unknown }).handleAgentTask =
+    async function* (): AsyncGenerator<{ type: string; receipt: unknown }> {
+      yield { type: "task_result", receipt: { task_id: INJECTED_TASK, status: "completed" } };
+    };
+  const open = [...sockets].reverse().find((s) => s.readyState === WebSocket.OPEN);
+  expect(open, "an open sync socket to deliver the task on").toBeDefined();
+  open!.inject({
+    type: "task_request",
+    task: { task_id: INJECTED_TASK, motebit_id: motebitId, prompt: "zz962", status: "pending" },
+  });
+  const resultRoute = `POST /agent/${motebitId}/task/${INJECTED_TASK}/result`;
+  const posted = await until(
+    () => auth.headers.some((h) => h.route === resultRoute),
+    10_000,
+    false,
+  );
+  expect(
+    posted,
+    `the task result was posted (routes: ${auth.headers.map((h) => h.route).join(", ")})`,
+  ).toBe(true);
+}
+
+/**
+ * No bearer the desktop sent carries the operator token, and every socket
+ * bearer is a `sync` token signed by THIS device's key: minted, never a
+ * static token (test 2: also when registration failed at startup).
+ */
+async function expectDeviceBearersOnly(
+  app: DesktopApp,
+  invoke: InvokeFn,
+  auth: WireAuth,
+): Promise<void> {
+  const leaked = [
+    ...auth.headers.filter((h) => carriesOperatorToken(h.auth)).map((h) => h.route),
+    ...auth.frames
+      .filter((f) => carriesOperatorToken(f))
+      .map((f) => `socket frame ${f.slice(0, 40)}`),
+  ];
+  expect(leaked, "requests or socket frames carrying the operator token").toEqual([]);
+  const kp = await app.getDeviceKeypair(invoke);
+  const socketBearers = auth.frames
+    .map((f) => JSON.parse(f) as { type?: string; token?: string })
+    .filter((f) => f.type === "auth")
+    .map((f) => f.token ?? "");
+  expect(socketBearers.length, "the socket authenticated at least once").toBeGreaterThan(0);
+  for (const token of socketBearers) {
+    const payload = await verifySignedToken(token, hexToBytes(kp!.publicKey));
+    expect(payload, `socket bearer is not a device token: ${token.slice(0, 24)}…`).toMatchObject({
+      mid: app.motebitId,
+      aud: "sync",
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
