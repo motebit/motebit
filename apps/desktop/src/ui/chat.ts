@@ -941,9 +941,10 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       case "sync": {
         const config = ctx.getConfig();
         if (config?.syncUrl != null && config.syncUrl !== "" && config.invoke != null) {
-          // Encrypted: the app derives the sync key from the device keypair (#928).
+          // Encrypted: the app derives the sync key from the device keypair
+          // (#928), and mints the device `sync` token it authenticates with.
           void ctx.app
-            .syncConversations(config.invoke, config.syncUrl, config.syncMasterToken)
+            .syncConversations(config.invoke, config.syncUrl)
             .then((result) => {
               const total =
                 result.conversations_pushed +

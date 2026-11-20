@@ -108,10 +108,10 @@ export class SyncController {
   private _servingSyncUrl: string | null = null;
   private _servingAuthToken: string | null = null;
   /**
-   * Mints the bearer for a serving-side relay call, for the audience that
-   * call's route verifies: an operator's master token when one was supplied,
-   * else a device token for exactly that audience. The cached socket token
-   * (`sync`) was reused for the result post (`task:result`) and registration
+   * Mints the bearer for a serving-side relay call: a device token for
+   * exactly the audience that call's route verifies. Desktop holds no relay
+   * operator token (removed 2026-11-20). The cached socket token (`sync`)
+   * was reused for the result post (`task:result`) and registration
    * (`admin:query`), and both were refused (#827).
    */
   private _servingToken: ((audience: TokenAudience) => Promise<string>) | null = null;
@@ -166,13 +166,12 @@ export class SyncController {
    * text, titles and plans on the wire in plaintext. No keypair ⇒ refused:
    * there is no unencrypted conversation or plan sync on desktop.
    *
-   * @param authToken a configured master token; absent ⇒ a device `sync`
-   *   token is minted for this call.
+   * The bearer is a device `sync` token minted for this call; no caller
+   * hands one in, so no static token can ride this door.
    */
   async syncConversations(
     invoke: InvokeFn,
     syncUrl: string,
-    authToken?: string,
   ): Promise<{
     conversations_pushed: number;
     conversations_pulled: number;
@@ -203,10 +202,7 @@ export class SyncController {
     } finally {
       secureErase(privKeyBytes);
     }
-    const token =
-      authToken != null && authToken !== ""
-        ? authToken
-        : await this.deps.createSyncToken(keypair.privateKey);
+    const token = await this.deps.createSyncToken(keypair.privateKey);
     return this.syncConversationsE2E(syncUrl, token, encKey);
   }
 
@@ -293,21 +289,14 @@ export class SyncController {
    * Call after pairing completes or at app startup when syncUrl is configured.
    */
   /**
-   * @param authToken the socket bearer — normally the device `sync` token
-   *   `registerWithRelay` returned, else the operator master token.
-   * @param masterToken the operator's master token, ONLY when one is
-   *   configured. The serving calls (registration, task results) send it when
-   *   present; otherwise they mint the audience their route verifies. They
-   *   used to treat `authToken` as the master token, so a normal desktop sent
+   * @param authToken the socket bearer: the device `sync` token
+   *   `registerWithRelay` returned; absent ⇒ one is minted here. The serving
+   *   calls (registration, task results) never reuse it: they mint the
+   *   audience their route verifies. They used to reuse it, so a desktop sent
    *   its `sync` token to `/agents/register` (admin:query) and the result
    *   route (task:result) and both were refused (#827).
    */
-  async startSync(
-    invoke: InvokeFn,
-    syncUrl: string,
-    authToken?: string,
-    masterToken?: string,
-  ): Promise<void> {
+  async startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
     const runtime = this.deps.getRuntime();
     if (!runtime) return;
     const motebitId = this.deps.getMotebitId();
@@ -481,9 +470,7 @@ export class SyncController {
     this._servingPrivateKey = servingPrivKey;
     this._servingSyncUrl = syncUrl;
     this._servingAuthToken = token;
-    const master = masterToken != null && masterToken !== "" ? masterToken : null;
-    this._servingToken = async (audience) =>
-      master ?? this.deps.createSyncToken(privKeyHex, audience);
+    this._servingToken = async (audience) => this.deps.createSyncToken(privKeyHex, audience);
 
     // Wire task handler — accept delegations from the network.
     // The liquescent droplet becomes a body that works, not just a face that talks.

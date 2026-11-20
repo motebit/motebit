@@ -48,9 +48,12 @@ export const INWORLD_API_KEY_SLOT = "inworld_api_key";
 export const DEEPGRAM_API_KEY_SLOT = "deepgram_api_key";
 
 // === Sync ===
-
-/** Master sync token for the configured relay. */
-export const SYNC_MASTER_TOKEN_SLOT = "sync_master_token";
+//
+// No slot. Desktop authenticates to the relay as this device, with tokens
+// minted from `device_private_key`. The relay operator token's old slot
+// (`sync_master_token`) is not read and has no constant here; a value placed
+// in it by hand stays in the key store, unread. Operator work is the CLI's
+// (`motebit relay bind-token`). Gate: scripts/check-desktop-no-operator-token.ts.
 
 // === Legacy ===
 

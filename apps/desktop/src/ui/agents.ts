@@ -152,7 +152,7 @@ function createDesktopAgentsAdapter(ctx: DesktopContext): AgentsFetchAdapter {
     setPetname: (remoteMotebitId, petname) => ctx.app.setAgentPetname(remoteMotebitId, petname),
     // Money side of the trust graph (doctrine §6): the caller's own per-peer
     // economic history, verified against the relay's pinned key. Desktop auths
-    // with the static master token (panels CLAUDE.md rule 3); null on
+    // with a device token minted per request (panels CLAUDE.md rule 3); null on
     // no-relay / verification failure (fail-closed — mark + trust still render).
     listSettlementSummary: async (): Promise<AgentEconomicSummary | null> => {
       const config = ctx.getConfig();

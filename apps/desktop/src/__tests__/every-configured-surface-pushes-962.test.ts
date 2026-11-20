@@ -364,7 +364,7 @@ function recordingWebSocket(frames: string[], sockets: RecordedSocket[]): typeof
       sockets.push(this as unknown as RecordedSocket);
     }
     override send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
-      const text = typeof data === "string" ? data : String(data);
+      const text = typeof data === "string" ? data : "(binary frame)";
       frames.push(text);
       if (text.includes('"type":"task_claim"') && text.includes(INJECTED_TASK)) {
         this.inject({ type: "task_claimed", task_id: INJECTED_TASK });
@@ -390,10 +390,9 @@ async function desktopStartupSync(
   app: DesktopApp,
   invoke: InvokeFn,
   syncUrl: string,
-  masterToken: string,
   surfaced: string[],
 ): Promise<void> {
-  await startDesktopSync(app, invoke, syncUrl, masterToken, (message) => {
+  await startDesktopSync(app, invoke, syncUrl, (message) => {
     surfaced.push(message);
   });
 }
@@ -516,13 +515,7 @@ async function runDesktopCell(
       throw err;
     }
   });
-  await desktopStartupSync(
-    app,
-    config.invoke!,
-    config.syncUrl!,
-    config.syncMasterToken ?? "",
-    surfaced,
-  );
+  await desktopStartupSync(app, config.invoke!, config.syncUrl!, surfaced);
 
   if (reach === "refusing") {
     // The operator revokes this identity: every signed token refused from here.

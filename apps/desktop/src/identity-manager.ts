@@ -283,14 +283,8 @@ export class IdentityManager {
    * `/device/register` then answered 404 (400 without a master token), and a
    * token came back anyway — the socket was refused forever, nothing was
    * ever pushed, and the relay-floored compaction held the log growing.
-   *
-   * @param _masterToken kept for callers; registration no longer uses it.
    */
-  async registerWithRelay(
-    invoke: InvokeFn,
-    syncUrl: string,
-    _masterToken: string,
-  ): Promise<string | null> {
+  async registerWithRelay(invoke: InvokeFn, syncUrl: string): Promise<string | null> {
     const keypair = await this.getDeviceKeypair(invoke);
     if (!keypair) return null;
 

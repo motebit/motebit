@@ -1,0 +1,5 @@
+---
+"@motebit/desktop": minor
+---
+
+Desktop no longer reads or sends a relay operator (master) token. It used to read one from the key-store slot `sync_master_token` and send it to whatever relay URL was current, including a URL just typed into Connect or written into the shared `config.json` by the CLI. Every desktop relay request now authenticates as the device, with a token minted from the device key, or carries no Authorization. A token placed in the slot by hand is left in the key store, unread. Operator commands are the CLI's (`motebit relay bind-token`). If you hand-placed that token: device-token routes keep working; operator-only routes reached from desktop (the goals state export on a relay with an API token) are refused; on a relay with device auth off (`MOTEBIT_ENABLE_DEVICE_AUTH=false`) sync, task results and agent registration from desktop stop working; and with no AI provider started, the early registration attempt no longer runs. Held by `check-desktop-no-operator-token`.

@@ -354,9 +354,8 @@ async function tryInitAI(config: DesktopAIConfig): Promise<boolean> {
 async function trySyncRegistration(
   invoke: import("./tauri-storage.js").InvokeFn,
   syncUrl: string,
-  masterToken: string,
 ): Promise<void> {
-  await startDesktopSync(app, invoke, syncUrl, masterToken, (message, retry) => {
+  await startDesktopSync(app, invoke, syncUrl, (message, retry) => {
     addActionMessage(message, [
       { label: "Retry", primary: true, onClick: retry },
       {
@@ -667,7 +666,7 @@ function onAIReady(config: DesktopAIConfig): void {
 
   // Start full sync (event-level background polling + conversation sync)
   if (config.syncUrl != null && config.syncUrl !== "" && config.isTauri && config.invoke != null) {
-    void trySyncRegistration(config.invoke, config.syncUrl, config.syncMasterToken ?? "");
+    void trySyncRegistration(config.invoke, config.syncUrl);
   }
 }
 
@@ -717,15 +716,8 @@ async function bootstrap(): Promise<void> {
     // Bootstrap identity silently — creature is already breathing
     await tryBootstrapIdentity(invoke);
 
-    // Auto-register with sync relay if configured
-    if (
-      config.syncUrl != null &&
-      config.syncUrl !== "" &&
-      config.syncMasterToken != null &&
-      config.syncMasterToken !== ""
-    ) {
-      void trySyncRegistration(invoke, config.syncUrl, config.syncMasterToken);
-    }
+    // Sync starts in `onAIReady` for every configured relay, authenticated
+    // as this device (desktop holds no relay operator token).
 
     // Hydrate the color picker from the canonical `config.appearance`
     // populated by `loadDesktopConfig`. The loader handles legacy migration
@@ -1102,12 +1094,8 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
           invoke: invokeFn,
           syncUrl: url,
         });
-        await ctx.app.startSync(
-          invokeFn,
-          url,
-          prev?.syncMasterToken,
-          prev?.syncMasterToken || undefined,
-        );
+        // Authenticated as this device: startSync mints the device tokens.
+        await ctx.app.startSync(invokeFn, url);
         statusText.textContent = "";
         statusText.classList.remove("error");
       } catch (err: unknown) {
@@ -1128,9 +1116,9 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
   });
 
   // Disconnect button — stop the sync loop, clear `sync_url` from the
-  // config so the next launch doesn't auto-reconnect. The master token in
-  // the keyring is preserved; reconnecting to the same relay later will
-  // re-use it without a fresh pairing.
+  // config so the next launch doesn't auto-reconnect. Desktop keeps no relay
+  // credential: reconnecting authenticates as this device again, with tokens
+  // minted from the device key.
   disconnectBtn.addEventListener("click", () => {
     disconnectBtn.disabled = true;
     void (async (): Promise<void> => {

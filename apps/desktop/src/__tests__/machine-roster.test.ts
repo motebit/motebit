@@ -55,11 +55,13 @@ import {
 import { rotateDesktopKey } from "../key-rotation";
 import { IdentityManager } from "../identity-manager";
 import { machinesModel } from "../machines-render-model";
+import { OPERATOR_SLOT, OPERATOR_TOKEN } from "./operator-slot-guard";
 
 const MID = "0190f1a2-0000-7000-8000-00000000abcd"; // legacy
 const OTHER_MID = "0190f1a2-0000-7000-8000-00000000ef01";
 const NOW = 1_800_000_000_000;
-const MASTER = "MASTER-TOKEN-never-on-the-roster-routes";
+/** The relay operator token, hand-placed in its old slot (operator-slot-guard.ts). */
+const MASTER = OPERATOR_TOKEN;
 const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 const digestOf = async (s: string) => bytesToHex(await sha256(new TextEncoder().encode(s)));
@@ -203,7 +205,7 @@ function fakeInvoke(
   key: KeyPair | null,
   config: Record<string, unknown> = {},
 ): InvokeFn & { calls: Array<{ cmd: string; args?: Record<string, unknown> }> } {
-  const keyring = new Map<string, string>([["sync_master_token", MASTER]]);
+  const keyring = new Map<string, string>([[OPERATOR_SLOT, MASTER]]);
   if (key) keyring.set("device_private_key", bytesToHex(key.privateKey));
   const cfg: Record<string, unknown> = { sync_url: "https://relay.test/", ...config };
   const io = disk.io();
@@ -468,7 +470,7 @@ describe("desktop ports", () => {
     }
     // The master token's slot is never even read.
     expect(
-      d.invoke.calls.some((c) => c.cmd === "keyring_get" && c.args?.key === "sync_master_token"),
+      d.invoke.calls.some((c) => c.cmd === "keyring_get" && c.args?.key === OPERATOR_SLOT),
     ).toBe(false);
   });
 
