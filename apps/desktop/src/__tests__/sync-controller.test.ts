@@ -599,7 +599,13 @@ describe("SyncController serving bearer (#827)", () => {
     expect(calls.every((c) => c.auth !== "Bearer device-sync-token")).toBe(true);
   });
 
-  it("with a token in the operator slot, neither sends it: both still mint", async () => {
+  // A guard against a FUTURE read of the slot inside the controller, not a
+  // conversion of main's "with a configured master token, both send it": it
+  // is green on main by construction (main's controller never read the slot;
+  // the token came in as a parameter, which no longer exists). The test that
+  // goes red when a serving-site send is restored is the relay A → B test
+  // below ("start on relay A, stopSync, start on relay B…").
+  it("guard: the controller never reads the operator slot; register and result still mint", async () => {
     const guard = guardOperatorSlot();
     const calls = await serveOneTask(guard.wrap(async () => null));
     expect(calls.find((c) => c.url.endsWith("/api/v1/agents/register"))?.auth).toBe(

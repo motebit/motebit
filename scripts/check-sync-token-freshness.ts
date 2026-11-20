@@ -18,8 +18,9 @@
  * the conversation poll 403'd on `/sync/:id/conversations`. A textbook
  * sibling-boundary miss: the staleness fix landed on two of four sync adapters.
  *
- * This is WEB-ONLY by construction. Every surface mints device tokens per
- * request (panels rule 3), but this gate's rule (no static `authToken` on the
+ * This is WEB-ONLY by construction. Desktop, web and mobile mint device
+ * tokens per request (panels rule 3); the CLI sends a static operator token
+ * only to a relay it is bound to (`motebit relay bind-token`). This gate's rule (no static `authToken` on the
  * adapter) is narrower than that invariant, and widened, it would
  * false-positive: desktop's `syncConversationsE2E` builds one-shot
  * conversation and plan adapters with a static token minted for that one
