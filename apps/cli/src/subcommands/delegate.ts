@@ -28,6 +28,7 @@ import {
   admittedAs,
 } from "@motebit/planner";
 import type { CliConfig } from "../args.js";
+import { ALL_OPERATOR_TOKEN_SOURCES, operatorTokenFor } from "../relay-operator-token.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
 import { cliRuntimeConfig } from "../sync-configured.js";
@@ -77,7 +78,10 @@ async function handleDelegatePlan(
   const hostServer = await electCoordinatorRole(loadFullConfig(), motebitId, runtimeRef);
 
   // Build auth headers for relay calls
-  const authHeaders = await getRelayAuthHeaders(config, { aud: "task:submit", json: true });
+  const authHeaders = await getRelayAuthHeaders(config, relayUrl, {
+    aud: "task:submit",
+    json: true,
+  });
 
   // Initialize runtime with AI provider for plan decomposition
   const { createProvider, buildToolRegistry, buildStorageAdapters, deriveGovernanceForRuntime } =
@@ -166,13 +170,15 @@ async function handleDelegatePlan(
       pushKey = undefined;
     }
   }
-  const masterToken =
-    config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
+  // The operator token, only when it is bound to this relay; it travels
+  // with the URL it is bound to.
+  const operator = operatorTokenFor(relayUrl, ALL_OPERATOR_TOKEN_SOURCES, config);
   const eventSync = await openDelegateEventSync(runtime, {
-    syncUrl: relayUrl,
+    ...(operator !== undefined
+      ? { syncUrl: operator.relayUrl, configuredToken: operator.token }
+      : { syncUrl: relayUrl }),
     log: (line) => console.log(line),
     privateKey: () => pushKey,
-    ...(masterToken ? { configuredToken: masterToken } : {}),
     ...(pushKey && syncCfg.device_id && syncCfg.device_public_key
       ? {
           device: {
@@ -188,7 +194,7 @@ async function handleDelegatePlan(
   // Enable credential publishing to relay (sovereign trust → network trust bridge).
   // The relay is used for discovery; credentials published here feed the routing graph.
   const authTokenFactory = async (aud: TokenAudience = "task:submit"): Promise<string> => {
-    const h = await getRelayAuthHeaders(config, { aud, json: true });
+    const h = await getRelayAuthHeaders(config, relayUrl, { aud, json: true });
     return (h["Authorization"] ?? "").replace("Bearer ", "");
   };
   runtime.enableInteractiveDelegation({
@@ -204,7 +210,10 @@ async function handleDelegatePlan(
   if (config.sovereign) {
     const sovereignAdapter = runtime.createSovereignDelegationAdapter(relayUrl, {
       authToken: async (aud?: TokenAudience) => {
-        const h = await getRelayAuthHeaders(config, { aud: aud ?? "market:query", json: true });
+        const h = await getRelayAuthHeaders(config, relayUrl, {
+          aud: aud ?? "market:query",
+          json: true,
+        });
         return (h["Authorization"] ?? "").replace("Bearer ", "");
       },
       routingStrategy: config.routingStrategy,
@@ -227,7 +236,7 @@ async function handleDelegatePlan(
       submitHeaders: authHeaders,
       // The poll route verifies `task:query`; the submission's
       // `task:submit` headers were refused without a master token (#827).
-      queryHeaders: () => getRelayAuthHeaders(config, { aud: "task:query" }),
+      queryHeaders: () => getRelayAuthHeaders(config, relayUrl, { aud: "task:query" }),
       routingStrategy: config.routingStrategy,
       onRetry: (step, next, total) => {
         console.log(`  ↻ Retrying step "${step.description}" (attempt ${next}/${total})`);
@@ -475,7 +484,10 @@ export async function handleDelegate(config: CliConfig, deps: DelegateDeps = {})
   }
 
   const relayUrl = getRelayUrl(config);
-  const headers = await getRelayAuthHeaders(config, { aud: "task:submit", json: true });
+  const headers = await getRelayAuthHeaders(config, relayUrl, {
+    aud: "task:submit",
+    json: true,
+  });
 
   const capability = config.capability ?? "web_search";
   let targetMotebitId = config.target;
@@ -531,7 +543,10 @@ export async function handleDelegate(config: CliConfig, deps: DelegateDeps = {})
     const ledgerDb = await openMotebitDatabase(getDbPath(config.dbPath));
     const paidIntentLedger = new PaidIntentLedger(ledgerDb.paidIntentStore, motebitId);
     const mintToken = async (aud?: TokenAudience): Promise<string> => {
-      const h = await getRelayAuthHeaders(config, { aud: aud ?? "task:submit", json: true });
+      const h = await getRelayAuthHeaders(config, relayUrl, {
+        aud: aud ?? "task:submit",
+        json: true,
+      });
       return (h["Authorization"] ?? "").replace("Bearer ", "");
     };
 
@@ -636,7 +651,9 @@ export async function handleDelegate(config: CliConfig, deps: DelegateDeps = {})
       const maxBudget = config.budget ? parseFloat(config.budget) : 10;
       // Candidate discovery verifies `market:query` (#827: the `task:submit`
       // headers were refused without a master token).
-      const discoverHeaders = await getRelayAuthHeaders(config, { aud: "market:query" });
+      const discoverHeaders = await getRelayAuthHeaders(config, relayUrl, {
+        aud: "market:query",
+      });
       const discoverRes = await fetch(
         `${relayUrl}/api/v1/market/candidates?capability=${encodeURIComponent(capability)}&max_budget=${maxBudget}&limit=5`,
         { headers: discoverHeaders },
@@ -724,7 +741,7 @@ export async function handleDelegate(config: CliConfig, deps: DelegateDeps = {})
     try {
       // `task:query`, minted per poll (#827: the `task:submit` headers were
       // refused on every poll without a master token).
-      const pollHeaders = await getRelayAuthHeaders(config, { aud: "task:query" });
+      const pollHeaders = await getRelayAuthHeaders(config, relayUrl, { aud: "task:query" });
       const pollRes = await fetch(`${relayUrl}/agent/${targetMotebitId}/task/${taskId}`, {
         headers: pollHeaders,
       });

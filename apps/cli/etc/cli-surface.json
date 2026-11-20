@@ -45,6 +45,7 @@
     "ps": [],
     "register": [],
     "relay": [
+      "bind-token",
       "up"
     ],
     "repo-task": [],
@@ -456,6 +457,7 @@
     "motebit.md",
     "pending-rotation.json",
     "relay",
+    "relay-operator-tokens.json",
     "relay-pins.json",
     "relay/relay.db",
     "smoke-x402-buyer-eoa.txt",

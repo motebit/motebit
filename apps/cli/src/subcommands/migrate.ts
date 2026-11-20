@@ -72,7 +72,7 @@ export async function handleMigrate(config: CliConfig): Promise<void> {
   const fullConfig = loadFullConfig();
   const motebitId = requireMotebitId(fullConfig);
   const sourceRelayUrl = getRelayUrl(config);
-  const sourceHeaders = await getRelayAuthHeaders(config, { json: true });
+  const sourceHeaders = await getRelayAuthHeaders(config, sourceRelayUrl, { json: true });
 
   console.log(`\nMigrating ${motebitId}`);
   console.log(`  From: ${sourceRelayUrl}`);
@@ -218,7 +218,9 @@ export async function handleMigrate(config: CliConfig): Promise<void> {
   // The balance route verifies `account:balance`, not the `admin:query` the
   // migration steps use — reusing `sourceHeaders` was refused without a master
   // token (#827).
-  const balanceHeaders = await getRelayAuthHeaders(config, { aud: "account:balance" });
+  const balanceHeaders = await getRelayAuthHeaders(config, sourceRelayUrl, {
+    aud: "account:balance",
+  });
   const balanceRes = await fetch(`${sourceRelayUrl}/api/v1/agents/${motebitId}/balance`, {
     headers: balanceHeaders,
   });
@@ -287,7 +289,7 @@ export async function handleMigrate(config: CliConfig): Promise<void> {
 async function handleMigrateCancel(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
   const relayUrl = getRelayUrl(config);
-  const headers = await getRelayAuthHeaders(config, { json: true });
+  const headers = await getRelayAuthHeaders(config, relayUrl, { json: true });
 
   const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/migrate/cancel`, {
     method: "POST",
@@ -306,7 +308,7 @@ async function handleMigrateCancel(config: CliConfig): Promise<void> {
 async function handleMigrateStatus(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
   const relayUrl = getRelayUrl(config);
-  const headers = await getRelayAuthHeaders(config);
+  const headers = await getRelayAuthHeaders(config, relayUrl);
 
   // Check for active migration token by trying to get attestation
   const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/migration/attestation`, {

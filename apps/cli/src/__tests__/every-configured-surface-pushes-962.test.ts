@@ -80,6 +80,7 @@ import {
 } from "../runtime-factory.js";
 import type { MotebitDatabase } from "../runtime-factory.js";
 import { parseCliArgs } from "../args.js";
+import { bindOperatorTokenForTest } from "./bind-operator-token-for-test.js";
 import { cliRuntimeConfig, daemonRelay } from "../sync-configured.js";
 import { createDaemonRelaySync } from "../daemon-relay-sync.js";
 import { registerWithRelay, signedBootstrapBody } from "../relay-registration.js";
@@ -459,6 +460,16 @@ async function newCell(token: string | undefined): Promise<{
   cleanups.push(() => port.close());
   const kp = await generateKeypair();
   const mid = await deriveSovereignMotebitId(hex(kp));
+  // An operator token is sent only to the relay it is bound to: bind the
+  // cell's token to the cell's relay, so the cell still exercises the
+  // configured-token path (and the wrong-token cell is still refused).
+  if (token !== undefined) {
+    bindOperatorTokenForTest(
+      process.env["MOTEBIT_CONFIG_DIR"]!,
+      `http://127.0.0.1:${port.port}`,
+      token,
+    );
+  }
   return {
     ctx: {
       base: `http://127.0.0.1:${port.port}`,

@@ -25,7 +25,7 @@ export async function handleBalance(config: CliConfig): Promise<void> {
   // See `services/relay/src/middleware.ts:631` — `account:balance`.
   // Default `admin:query` is rejected by the agents-virtual-account
   // routes; each money-path subcommand pins its own aud.
-  const headers = await getRelayAuthHeaders(config, { aud: "account:balance" });
+  const headers = await getRelayAuthHeaders(config, relayUrl, { aud: "account:balance" });
 
   const result = await fetchRelayJson(`${relayUrl}/api/v1/agents/${motebitId}/balance`, headers);
   if (!result.ok) {
@@ -77,7 +77,10 @@ export async function handleWithdraw(config: CliConfig): Promise<void> {
 
   const relayUrl = getRelayUrl(config);
   // `account:withdraw` matches `services/relay/src/middleware.ts:635`.
-  const headers = await getRelayAuthHeaders(config, { aud: "account:withdraw", json: true });
+  const headers = await getRelayAuthHeaders(config, relayUrl, {
+    aud: "account:withdraw",
+    json: true,
+  });
 
   const body: Record<string, unknown> = { amount };
   if (config.destination) body["destination"] = config.destination;
@@ -129,11 +132,13 @@ export async function handleFund(config: CliConfig): Promise<void> {
   //   POST /checkout → account:checkout
   //   GET  /balance  → account:balance
   // A single signed token can only carry one aud, so we mint two.
-  const checkoutHeaders = await getRelayAuthHeaders(config, {
+  const checkoutHeaders = await getRelayAuthHeaders(config, relayUrl, {
     aud: "account:checkout",
     json: true,
   });
-  const balanceHeaders = await getRelayAuthHeaders(config, { aud: "account:balance" });
+  const balanceHeaders = await getRelayAuthHeaders(config, relayUrl, {
+    aud: "account:balance",
+  });
 
   // Create Stripe Checkout session
   let checkoutUrl: string;

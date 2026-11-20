@@ -63,6 +63,7 @@ import { createDaemonRelaySync } from "./daemon-relay-sync.js";
 import { startRunEventSync, startServeEventSync, type CliEventPush } from "./cli-event-push.js";
 import { enrollOnAnnounce } from "./machine-roster.js";
 import { taskResultBearer } from "./task-result-bearer.js";
+import { operatorTokenFor, type OperatorTokenSources } from "./relay-operator-token.js";
 import {
   electAttachOrCoordinate,
   electCoordinatorRole,
@@ -100,6 +101,14 @@ export function daemonRuntimeConfig(
  * replayed envelope has to be caught.
  */
 const commandReplayGuard = new CommandReplayGuard();
+
+/**
+ * The operator-token sources each daemon has always honoured, kept exactly:
+ * `motebit run` reads the flag then the `sync` variable, `motebit serve` the
+ * flag then the `api` variable. Neither starts reading the other's.
+ */
+const RUN_TOKEN_SOURCES: OperatorTokenSources = ["flag", "sync"];
+const SERVE_TOKEN_SOURCES: OperatorTokenSources = ["flag", "api"];
 
 /**
  * Point the guard at this machine's shared store once the database is
@@ -427,13 +436,17 @@ export async function handleRun(config: CliConfig): Promise<void> {
   }
 
   // Wire agent task handler via WebSocket (if sync URL configured — `syncUrl` above)
-  const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
   let wsAdapter: WebSocketEventStoreAdapter | null = null;
   let daemonRegistration: RelayRegistrationHandle | undefined;
   let runEventPush: CliEventPush | undefined;
   let privKeyBytes: Uint8Array | undefined;
 
   if (syncUrl != null && syncUrl !== "") {
+    // The operator token, only when it is bound to THIS relay
+    // (`relay-operator-token.ts`); every use below sends it to
+    // `operator.relayUrl`. Unbound or unset: each use behaves as with none.
+    const operator = operatorTokenFor(syncUrl, RUN_TOKEN_SOURCES, config);
+
     // Derive private key for signing execution receipts
     const deviceId = fullConfig.device_id ?? "unknown";
 
@@ -464,11 +477,12 @@ export async function handleRun(config: CliConfig): Promise<void> {
     // and plans through bare HTTP adapters while holding the key. One
     // function, shared with `serve` and under test (daemon-relay-sync.ts).
     const relaySync = await createDaemonRelaySync({
-      syncUrl,
+      ...(operator !== undefined
+        ? { syncUrl: operator.relayUrl, configuredToken: operator.token }
+        : { syncUrl }),
       motebitId,
       deviceId: fullConfig.device_id ?? undefined,
       privateKey: () => privKeyBytes,
-      ...(syncToken != null ? { configuredToken: syncToken } : {}),
     });
     const eventTransport = relaySync.transport;
     if (!relaySync.e2e) {
@@ -495,7 +509,9 @@ export async function handleRun(config: CliConfig): Promise<void> {
     ];
 
     wsAdapter = createRelaySyncSocket({
-      syncUrl,
+      ...(operator !== undefined
+        ? { syncUrl: operator.relayUrl, fallbackToken: operator.token }
+        : { syncUrl }),
       motebitId,
       // Declared, not invented. The relay groups peers by machine to
       // decide whether two unattended runtimes share a database; without
@@ -506,7 +522,6 @@ export async function handleRun(config: CliConfig): Promise<void> {
       // reference, so a reconnect after it falls back instead of minting
       // from zeroed bytes (the source also refuses an all-zero key).
       privateKey: () => privKeyBytes,
-      ...(syncToken != null ? { fallbackToken: syncToken } : {}),
       onMintError: (err: unknown) => {
         console.warn(
           `Warning: could not mint a relay sync token (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}) — connecting with the configured token instead`,
@@ -665,10 +680,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
               if (receipt) {
                 // POST receipt to relay: a configured master token first,
                 // else a minted `task:result` (#827; taskResultBearer).
-                const resultUrl = `${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`;
+                const resultUrl = `${operator?.relayUrl ?? syncUrl}/agent/${motebitId}/task/${task.task_id}/result`;
                 const deviceId = fullConfig.device_id;
                 const resultToken = await taskResultBearer({
-                  masterToken: syncToken,
+                  masterToken: operator?.token,
                   mintTaskResult:
                     deviceId != null
                       ? async () =>
@@ -716,7 +731,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
     if (privKeyBytes) {
       const privateKeyForDelegation = privKeyBytes;
       const tokenFactory = async (audience = "task:submit"): Promise<string> => {
-        if (!fullConfig.device_id) return syncToken ?? "";
+        if (!fullConfig.device_id) return operator?.token ?? "";
         try {
           return (
             await mintAudienceToken(
@@ -725,12 +740,12 @@ export async function handleRun(config: CliConfig): Promise<void> {
             )
           ).token;
         } catch {
-          return syncToken ?? "";
+          return operator?.token ?? "";
         }
       };
 
       const delegationAdapter = new RelayDelegationAdapter({
-        syncUrl,
+        syncUrl: operator?.relayUrl ?? syncUrl,
         motebitId,
         authToken: tokenFactory,
         sendRaw: (data: string) => wsAdapter!.sendRaw(data),
@@ -1540,18 +1555,22 @@ export async function handleServe(config: CliConfig): Promise<void> {
   let serveEventPush: CliEventPush | undefined;
   if (transport === "http" && syncUrl) {
     // Wire WebSocket for task dispatch (same adapter as daemon mode)
-    const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+    // The operator token, only when it is bound to THIS relay
+    // (`relay-operator-token.ts`); every use below sends it to
+    // `operator.relayUrl`. Unbound or unset: each use behaves as with none.
+    const operator = operatorTokenFor(syncUrl, SERVE_TOKEN_SOURCES, config);
 
     // The relay event transport (#927, #928): credentials per request, E2E
     // with the key this process already holds — the socket's catch-up below,
     // and `serve`'s own events, which it connected nowhere and never pushed
     // (#962; `startServeEventSync` is the wiring under test).
     const serveRelaySync = await createDaemonRelaySync({
-      syncUrl,
+      ...(operator !== undefined
+        ? { syncUrl: operator.relayUrl, configuredToken: operator.token }
+        : { syncUrl }),
       motebitId,
       deviceId: fullConfigForServe.device_id ?? undefined,
       privateKey: () => servePrivateKey,
-      ...(masterToken != null ? { configuredToken: masterToken } : {}),
     });
     serveEventPush = startServeEventSync(runtime, serveRelaySync, {
       syncUrl,
@@ -1575,12 +1594,13 @@ export async function handleServe(config: CliConfig): Promise<void> {
       const serveEventTransport = serveRelaySync.transport;
 
       serveWsAdapter = createRelaySyncSocket({
-        syncUrl,
+        ...(operator !== undefined
+          ? { syncUrl: operator.relayUrl, fallbackToken: operator.token }
+          : { syncUrl }),
         motebitId,
         // Read at each mint; shutdown zero-fills the key and drops this
         // reference, as `motebit run` does.
         privateKey: () => servePrivateKey,
-        ...(masterToken != null ? { fallbackToken: masterToken } : {}),
         onMintError: (err: unknown) => {
           log(
             `Warning: could not mint a relay sync token (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}) — connecting with the master token instead`,
@@ -1695,7 +1715,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
               const serveKey = servePrivateKey;
               const serveDeviceId = fullConfigForServe.device_id;
               const resultToken = await taskResultBearer({
-                masterToken,
+                masterToken: operator?.token,
                 mintTaskResult:
                   serveKey != null && serveDeviceId != null
                     ? async () =>
@@ -1708,7 +1728,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
                     : null,
               });
               if (resultToken) resultHeaders["Authorization"] = `Bearer ${resultToken}`;
-              await fetch(`${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`, {
+              const resultUrl = `${operator?.relayUrl ?? syncUrl}/agent/${motebitId}/task/${task.task_id}/result`;
+              await fetch(resultUrl, {
                 method: "POST",
                 headers: resultHeaders,
                 body: JSON.stringify(receipt),
@@ -1800,7 +1821,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
                 )
               ).token;
             }
-            return masterToken ?? "";
+            return operator?.token ?? "";
           };
 
           const authMethod =
@@ -1809,7 +1830,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
           try {
             const result = await cmdSelfTest(runtimeRef.current, {
-              relay: { relayUrl: syncUrl, authToken: masterToken ?? "", motebitId },
+              relay: {
+                relayUrl: operator?.relayUrl ?? syncUrl,
+                authToken: operator?.token ?? "",
+                motebitId,
+              },
               mintToken,
               // This runs inside the `regResp.ok` serve block: the daemon has
               // registered as a worker, so it WILL execute the self-delegated

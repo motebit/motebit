@@ -13,6 +13,8 @@ import {
   printHelp,
   printVersion,
   printBanner,
+  RELAY_USAGE,
+  SMOKE_USAGE,
   trimHistory,
   isExitInput,
 } from "./args.js";
@@ -123,6 +125,7 @@ import {
   handleUp,
   handleCredentials,
   handleRegister,
+  handleRelayBindToken,
   handleRelayUp,
   handleRestore,
   handleRotate,
@@ -392,8 +395,10 @@ async function main(): Promise<void> {
     const relayCmd = config.positionals[1];
     if (relayCmd === "up") {
       await handleRelayUp(config);
+    } else if (relayCmd === "bind-token") {
+      handleRelayBindToken(config);
     } else {
-      console.error("Usage: motebit relay up [--port|--db-path|--pay-to-address|...]");
+      console.error(RELAY_USAGE);
       process.exit(1);
     }
     return;
@@ -406,9 +411,7 @@ async function main(): Promise<void> {
     } else if (smokeCmd === "x402") {
       await handleSmokeX402(config);
     } else {
-      console.error(
-        "Usage: motebit smoke [reconciliation|x402] [--mainnet] [--sync-token <token>]",
-      );
+      console.error(SMOKE_USAGE);
       process.exit(1);
     }
     return;

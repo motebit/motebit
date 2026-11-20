@@ -204,17 +204,22 @@ export async function handleExport(config: CliConfig): Promise<void> {
   // Credentials are owner-private per route: GET /credentials needs the
   // `credentials` audience, POST /presentation the `credentials:present`
   // audience. Mint both (per-call signed tokens are cheap).
-  const credHeaders = await getRelayAuthHeaders(config, { aud: "credentials" });
-  const vpHeaders = await getRelayAuthHeaders(config, { aud: "credentials:present" });
-  // The balance summary below verifies `account:balance`.
-  const balanceHeaders = await getRelayAuthHeaders(config, { aud: "account:balance" });
   const baseUrl = syncUrl ? syncUrl.replace(/\/$/, "") : null;
 
   if (!baseUrl) {
+    // No relay: no auth is resolved at all (no token read, no request).
     skipped.push("credentials (no relay URL)");
     skipped.push("presentation (no relay URL)");
     skipped.push("budget (no relay URL)");
   } else {
+    const credHeaders = await getRelayAuthHeaders(config, baseUrl, { aud: "credentials" });
+    const vpHeaders = await getRelayAuthHeaders(config, baseUrl, {
+      aud: "credentials:present",
+    });
+    // The balance summary below verifies `account:balance`.
+    const balanceHeaders = await getRelayAuthHeaders(config, baseUrl, {
+      aud: "account:balance",
+    });
     // 3. Credentials
     const credResult = await fetchRelayJson(
       `${baseUrl}/api/v1/agents/${motebitId}/credentials`,

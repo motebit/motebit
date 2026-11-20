@@ -10,9 +10,19 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { CliConfig } from "../args.js";
+import { bindOperatorTokenForTest } from "./bind-operator-token-for-test.js";
+
+const { TEST_CONFIG_DIR } = await vi.hoisted(async () => {
+  // A config directory of this file's own: the operator token record is read
+  // from it, never from the developer's ~/.motebit or a shared /tmp path.
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const p = await import("node:path");
+  return { TEST_CONFIG_DIR: fs.mkdtempSync(p.join(os.tmpdir(), "motebit-smoke-cfg-")) };
+});
 
 vi.mock("../config.js", () => ({
-  CONFIG_DIR: "/tmp/motebit-test",
+  CONFIG_DIR: TEST_CONFIG_DIR,
   loadFullConfig: vi.fn().mockReturnValue({
     motebit_id: "test-mote",
     device_id: "test-device",
@@ -51,6 +61,8 @@ describe("handleSmokeReconciliation", () => {
     vi.stubGlobal("fetch", fetchMock);
     delete process.env["MOTEBIT_API_TOKEN"];
     delete process.env["MOTEBIT_SYNC_TOKEN"];
+    // The probe sends the operator token only to the relay it is bound to.
+    bindOperatorTokenForTest(TEST_CONFIG_DIR, "https://relay.test", "test-master-token");
   });
 
   afterEach(() => {
@@ -65,6 +77,30 @@ describe("handleSmokeReconciliation", () => {
     await expect(handleSmokeReconciliation(config)).rejects.toThrow("process.exit(1)");
     const errOutput = errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     expect(errOutput).toContain("requires a master token");
+    // Exactly the text origin/main (99e213719) prints with no token set.
+    expect(errOutput).toBe(
+      "Error: motebit smoke reconciliation requires a master token.\n" +
+        "  Set MOTEBIT_API_TOKEN (or MOTEBIT_SYNC_TOKEN, or pass --sync-token <token>)\n" +
+        "  with the relay's admin token. This subcommand probes the relay's\n" +
+        "  master-token-gated /api/v1/admin/treasury-reconciliation surface\n" +
+        "  and exits non-zero on failure (suitable for CI / cron).",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a token set but NOT bound to the relay: refuses, says so with the bind command, sends nothing", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const config = { ...baseConfig, syncToken: "a-token-bound-to-nothing" } as CliConfig;
+      await expect(handleSmokeReconciliation(config)).rejects.toThrow("process.exit(1)");
+      const errOutput = errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+      expect(errOutput).toContain("the one set is not bound to this relay");
+      expect(errOutput).toContain("motebit relay bind-token --sync-url https://relay.test");
+      expect(errOutput).not.toContain("a-token-bound-to-nothing");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 
   it("loop_disabled verdict — returns success when relay reports loop_enabled=false (testnet)", async () => {
@@ -256,6 +292,7 @@ describe("handleSmokeReconciliation", () => {
         }),
     });
     const config = { ...baseConfig, syncToken: undefined } as CliConfig;
+    bindOperatorTokenForTest(TEST_CONFIG_DIR, "https://relay.test", "env-master-token");
     await handleSmokeReconciliation(config);
     expect(fetchMock).toHaveBeenCalledOnce();
     const headersArg = fetchMock.mock.calls[0]?.[1] as RequestInit;

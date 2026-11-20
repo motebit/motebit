@@ -11,7 +11,17 @@
 
 import { verifyFederationMessage } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
-import { fetchRelayJson, getRelayAuthHeaders, getRelayUrl } from "./_helpers.js";
+import {
+  ALL_OPERATOR_TOKEN_SOURCES,
+  bearerHeaders,
+  operatorTokenFor,
+} from "../relay-operator-token.js";
+import {
+  fetchRelayJson,
+  getDeviceAuthHeaders,
+  getRelayAuthHeaders,
+  getRelayUrl,
+} from "./_helpers.js";
 
 export async function handleFederationStatus(config: CliConfig): Promise<void> {
   const relayUrl = getRelayUrl(config);
@@ -35,7 +45,7 @@ export async function handleFederationStatus(config: CliConfig): Promise<void> {
 
 export async function handleFederationPeers(config: CliConfig): Promise<void> {
   const relayUrl = getRelayUrl(config);
-  const headers = await getRelayAuthHeaders(config);
+  const headers = await getRelayAuthHeaders(config, relayUrl);
   const result = await fetchRelayJson(`${relayUrl}/federation/v1/peers`, headers);
   if (!result.ok) {
     console.error(`Failed to list peers: ${result.error}`);
@@ -307,7 +317,7 @@ export async function handleFederationPeer(config: CliConfig): Promise<void> {
 
   // Our confirm is minted on our operator's authority (relay-federation@1.5
   // §3.1); the peer's needs the peer operator's token, when we hold it.
-  const ownHeaders = await getRelayAuthHeaders(config);
+  const ownHeaders = await getRelayAuthHeaders(config, relayUrl);
   const peerHeaders = bearer(process.env["MOTEBIT_PEER_API_TOKEN"]);
 
   console.log(`Peering ${relayUrl} ↔ ${peerEndpoint}\n`);
@@ -360,7 +370,7 @@ export async function handleFederationPeerRemove(config: CliConfig): Promise<voi
 
   console.log(`Un-peering ${relayUrl} from ${peerEndpoint}\n`);
 
-  const headers = await getRelayAuthHeaders(config);
+  const headers = await getRelayAuthHeaders(config, relayUrl);
   const sigRes = await fetchRelayJson(
     `${relayUrl}/api/v1/admin/federation/peer-removal-signature?endpoint_url=${encodeURIComponent(peerEndpoint)}`,
     headers,
@@ -393,7 +403,8 @@ export async function handleFederationPeerRemove(config: CliConfig): Promise<voi
  * n=4) to any N≥2. Each pair uses the same propose → operator-minted
  * confirm → `/peer/confirm` flow as `handleFederationPeer`, so every relay's
  * master token is needed: `MOTEBIT_MESH_TOKENS` (comma-separated, one per
- * URL, in order), else the configured relay token for all. Per-pair failure
+ * URL, in order), else the configured relay token for each URL it is bound
+ * to (`motebit relay bind-token`) and the device token for the rest. Per-pair failure
  * isolation: a single failed handshake is reported in the summary, not
  * a fatal abort — operators bringing up federation meshes need to see
  * the full pair-grid status, not stop at the first transient hiccup.
@@ -433,9 +444,29 @@ export async function handleFederationMesh(config: CliConfig): Promise<void> {
     );
     process.exit(1);
   }
-  const fallback = await getRelayAuthHeaders(config);
-  const headersFor = (url: string): Record<string, string> =>
-    bearer(meshTokens[urls.indexOf(url)]) ?? fallback;
+  // Without a positional token, a URL gets the configured operator token
+  // only when that token is bound to THAT URL; every other URL gets the
+  // device token. The device token is minted once, and only when some URL
+  // needs it, so an all-bound mesh never prompts for the passphrase.
+  let deviceFallback: Record<string, string> | undefined;
+  const meshHeaders = new Map<string, Record<string, string>>();
+  for (const [i, url] of urls.entries()) {
+    const positional = bearer(meshTokens[i]);
+    if (positional !== undefined) {
+      if (!meshHeaders.has(url)) meshHeaders.set(url, positional);
+      continue;
+    }
+    const operator = operatorTokenFor(url, ALL_OPERATOR_TOKEN_SOURCES, config);
+    if (operator !== undefined) {
+      if (!meshHeaders.has(operator.relayUrl)) {
+        meshHeaders.set(operator.relayUrl, bearerHeaders(operator));
+      }
+      continue;
+    }
+    deviceFallback ??= await getDeviceAuthHeaders();
+    if (!meshHeaders.has(url)) meshHeaders.set(url, deviceFallback);
+  }
+  const headersFor = (url: string): Record<string, string> => meshHeaders.get(url) ?? {};
 
   const results: Array<{ pair: string; ok: boolean; step?: string; error?: string }> = [];
   for (const [a, b] of pairs) {

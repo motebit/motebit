@@ -17,6 +17,16 @@ import { seedBackupPostureOf, seedBackupWording } from "./seed.js";
 import { getDbPath } from "../runtime-factory.js";
 import { sanitizeRelayText } from "@motebit/sync-engine";
 import { normalizeRelayUrl } from "../sync-opt-in.js";
+import {
+  bearerHeaders,
+  NO_FLAG_CONFIG,
+  operatorTokenFor,
+  treasuryProbeSkippedDetail,
+  type OperatorTokenSources,
+} from "../relay-operator-token.js";
+
+/** This command parses no flags: the two variables, `api` first. */
+const DOCTOR_TOKEN_SOURCES: OperatorTokenSources = ["api", "sync"];
 
 interface DoctorCheck {
   name: string;
@@ -396,24 +406,29 @@ export async function handleDoctor(): Promise<void> {
     // Sibling-but-distinct primitive vs the deposit-detector — canonical
     // doctrine in `packages/treasury-reconciliation/CLAUDE.md` Rule 1.
     if (relayReachable) {
-      const masterToken = process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
-      const reqHeaders: Record<string, string> = {};
-      if (masterToken != null && masterToken !== "") {
-        reqHeaders["Authorization"] = `Bearer ${masterToken}`;
-      }
+      // The operator token, from the two variables (this command parses no
+      // flags), only when it is bound to this relay; else an unauthenticated
+      // probe, exactly as with none set.
+      const probeUrl = syncUrl.replace(/\/+$/, "");
+      const operator = operatorTokenFor(probeUrl, DOCTOR_TOKEN_SOURCES, NO_FLAG_CONFIG);
       try {
         const ac = new AbortController();
         const t = probeTimeout(ac.signal, 5000);
         const res = await fetch(
-          `${syncUrl.replace(/\/+$/, "")}/api/v1/admin/treasury-reconciliation`,
-          { signal: ac.signal, headers: reqHeaders },
+          `${operator?.relayUrl ?? probeUrl}/api/v1/admin/treasury-reconciliation`,
+          { signal: ac.signal, headers: operator !== undefined ? bearerHeaders(operator) : {} },
         );
         clearTimeout(t);
         if (res.status === 401) {
           checks.push({
             name: "Treasury reconciliation",
             ok: true,
-            detail: "skipped — operator-only check (set MOTEBIT_API_TOKEN to enable)",
+            detail: treasuryProbeSkippedDetail(
+              probeUrl,
+              DOCTOR_TOKEN_SOURCES,
+              NO_FLAG_CONFIG,
+              operator,
+            ),
           });
         } else if (res.status === 404) {
           checks.push({

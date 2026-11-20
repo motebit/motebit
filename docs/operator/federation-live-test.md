@@ -132,7 +132,20 @@ The staging federation is a K4 mesh of four `motebit-sync-stg{,-b,-c,-d}` apps, 
 | C       | `https://motebit-sync-stg-c.fly.dev` | `services/relay/fly.staging-c.toml` | §6.2 mesh complement                 |
 | D       | `https://motebit-sync-stg-d.fly.dev` | `services/relay/fly.staging-d.toml` | §6.2 mesh complement                 |
 
-To re-establish the mesh from scratch (e.g., after destroying + recreating any apps):
+To re-establish the mesh from scratch (e.g., after destroying + recreating any apps). Each relay's confirm is minted with that relay's operator token, and the CLI sends an operator token only to a relay it is bound to (`motebit relay bind-token`, since the `motebit` major that keeps the token per relay). The four staging relays share one token, so either bind it to all four URLs once on this machine:
+
+```bash
+export MOTEBIT_API_TOKEN="$TOKEN"
+for url in \
+  https://motebit-sync-stg.fly.dev \
+  https://motebit-sync-stg-b.fly.dev \
+  https://motebit-sync-stg-c.fly.dev \
+  https://motebit-sync-stg-d.fly.dev; do
+  motebit relay bind-token --sync-url "$url"
+done
+```
+
+or name the tokens positionally for this one command, which needs no bind: `MOTEBIT_MESH_TOKENS="$TOKEN,$TOKEN,$TOKEN,$TOKEN"`. A URL with neither is sent the device token, and its relay refuses the confirm (`operator-confirm` in the pair summary). The bind prints that the same token is already bound to another relay; here that is expected.
 
 ```bash
 motebit federation mesh \

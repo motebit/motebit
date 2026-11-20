@@ -171,7 +171,7 @@ describe("#962 C1 — the default REPL's push is accepted by a relay with device
     const { remote } = createReplEventRemote({
       syncUrl: BASE,
       motebitId: mid,
-      syncToken: undefined,
+      operatorToken: undefined,
       encKey: await deriveSyncEncryptionKey(kp.privateKey),
       deviceId,
       privateKey: () => kp.privateKey,
@@ -203,7 +203,7 @@ describe("#962 C1 — the default REPL's push is accepted by a relay with device
     const { remote } = createReplEventRemote({
       syncUrl: BASE,
       motebitId: mid,
-      syncToken: undefined,
+      operatorToken: undefined,
       encKey: await deriveSyncEncryptionKey(kp.privateKey),
       deviceId,
       privateKey: () => kp.privateKey,
@@ -241,7 +241,7 @@ describe("#962 C1 — the default REPL's push is accepted by a relay with device
     const { remote } = createReplEventRemote({
       syncUrl: BASE,
       motebitId: mid,
-      syncToken: undefined,
+      operatorToken: undefined,
       encKey: undefined,
       deviceId,
       privateKey: () => kp.privateKey,

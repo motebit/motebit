@@ -13,10 +13,19 @@ import type { MotebitRuntime } from "@motebit/runtime";
 import type { CliConfig } from "./args.js";
 import { replStartupSync, type CliEventPush } from "./cli-event-push.js";
 import { dim, success } from "./colors.js";
+import {
+  bearerHeaders,
+  operatorTokenFor,
+  type OperatorTokenConfig,
+  type OperatorTokenSources,
+} from "./relay-operator-token.js";
+
+/** The sources this wiring has always honoured: the flag, then `api`. Never `sync`. */
+const REPL_RELAY_TOKEN_SOURCES: OperatorTokenSources = ["flag", "api"];
 
 export interface ReplRelayOptions {
   runtime: MotebitRuntime;
-  config: Pick<CliConfig, "syncToken" | "routingStrategy" | "payNewAgents">;
+  config: OperatorTokenConfig & Pick<CliConfig, "routingStrategy" | "payNewAgents">;
   /** The relay the operator named, or undefined: relay sync is off. */
   syncUrl: string | undefined;
   motebitId: string;
@@ -60,12 +69,12 @@ export async function startReplRelay(opts: ReplRelayOptions): Promise<CliEventPu
   });
 
   // Enable delegation with audience-scoped device tokens (submit vs query).
-  // Falls back to raw API token only when device keys are unavailable.
+  // Falls back to the operator token — only one bound to this relay — when
+  // device keys are unavailable.
   // `enableInvokeCapability` is wired to the same relay coordinates so
   // the deterministic `/invoke <cap> <prompt>` path shares transport with
   // the AI-loop delegation path (surface-determinism doctrine).
   const shared = {
-    syncUrl,
     ...(config.routingStrategy !== undefined ? { routingStrategy: config.routingStrategy } : {}),
     // Cold-start opt-in (`--pay-new-agents`) — admit paid P2P delegation
     // to a no-history worker (else relay-mode). Shared by both the chat
@@ -83,13 +92,17 @@ export async function startReplRelay(opts: ReplRelayOptions): Promise<CliEventPu
     const authToken = async (audience = "task:submit"): Promise<string> => {
       return (await mintAudienceToken({ mid: motebitId, did, aud: audience }, pk)).token;
     };
-    const delegationCfg = { ...shared, authToken };
+    const delegationCfg = { ...shared, syncUrl, authToken };
     runtime.enableInteractiveDelegation(delegationCfg);
     runtime.enableInvokeCapability(delegationCfg);
   } else {
-    const apiToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-    if (apiToken) {
-      const delegationCfg = { ...shared, authToken: () => Promise.resolve(apiToken) };
+    const operator = operatorTokenFor(syncUrl, REPL_RELAY_TOKEN_SOURCES, config);
+    if (operator !== undefined) {
+      const delegationCfg = {
+        ...shared,
+        syncUrl: operator.relayUrl,
+        authToken: () => Promise.resolve(operator.token),
+      };
       runtime.enableInteractiveDelegation(delegationCfg);
       runtime.enableInvokeCapability(delegationCfg);
     }
@@ -97,10 +110,11 @@ export async function startReplRelay(opts: ReplRelayOptions): Promise<CliEventPu
 
   // Discover remote agents and populate service listings for interactive delegation
   try {
-    const token = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-    const headers: Record<string, string> = {};
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-    const resp = await (opts.fetchImpl ?? fetch)(`${syncUrl}/api/v1/agents/discover`, { headers });
+    const operator = operatorTokenFor(syncUrl, REPL_RELAY_TOKEN_SOURCES, config);
+    const resp = await (opts.fetchImpl ?? fetch)(
+      `${operator?.relayUrl ?? syncUrl}/api/v1/agents/discover`,
+      { headers: operator !== undefined ? bearerHeaders(operator) : {} },
+    );
     if (resp.ok) {
       const data = (await resp.json()) as {
         agents: Array<{

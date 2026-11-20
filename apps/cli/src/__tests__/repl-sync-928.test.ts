@@ -6,6 +6,19 @@
  * conversation, message or plan content.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+await vi.hoisted(async () => {
+  // CONFIG_DIR is read at module load: the operator token record is read
+  // from this file's own directory, never from the developer's ~/.motebit.
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const p = await import("node:path");
+  process.env["MOTEBIT_CONFIG_DIR"] = fs.mkdtempSync(p.join(os.tmpdir(), "motebit-928r-cfg-"));
+  for (const k of ["MOTEBIT_SYNC_URL", "MOTEBIT_API_TOKEN", "MOTEBIT_SYNC_TOKEN"])
+    delete process.env[k];
+});
+
+import { bindOperatorTokenForTest } from "./bind-operator-token-for-test.js";
 import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import { generateKeypair } from "@motebit/encryption";
 import { PlanStatus, StepStatus } from "@motebit/sdk";
@@ -103,6 +116,12 @@ describe("REPL /sync (#928 round 2)", () => {
       syncUrl: "https://relay.zz928r.test",
       syncToken: "operator-token",
     } as unknown as CliConfig;
+    // Sent only to the relay it is bound to.
+    bindOperatorTokenForTest(
+      process.env["MOTEBIT_CONFIG_DIR"]!,
+      "https://relay.zz928r.test",
+      "operator-token",
+    );
 
     await handleSlashCommand("sync", "", runtime, config, undefined, repl);
 
@@ -136,7 +155,7 @@ describe("REPL event remote (createReplEventRemote, what createRuntime connects)
     const { remote, transport } = createReplEventRemote({
       syncUrl: "https://relay.zz928r.test",
       motebitId: MID,
-      syncToken: "operator-token",
+      operatorToken: "operator-token",
       encKey: new Uint8Array(32).fill(3),
     });
     await expect(transport.append(plain)).rejects.toBeInstanceOf(PlaintextPushRefusedError);
@@ -149,7 +168,7 @@ describe("REPL event remote (createReplEventRemote, what createRuntime connects)
     const { remote, transport } = createReplEventRemote({
       syncUrl: "https://relay.zz928r.test",
       motebitId: MID,
-      syncToken: "operator-token",
+      operatorToken: "operator-token",
       encKey: undefined,
     });
     expect(remote).toBe(transport);

@@ -1,8 +1,10 @@
 /**
  * Tamper checks for "`/connect` does not change relay in a running session and
  * never sends an operator token" (apps/cli/src/slash-commands.ts: the
- * `connect` case and `operatorTokenSource`). Each entry re-opens one door and
- * must turn its test red:
+ * `connect` case; the token sources are read by the one reader,
+ * apps/cli/src/relay-operator-token.ts, which `/connect` asks through
+ * `operatorTokenIsSet`). Each entry re-opens one door and must turn its test
+ * red:
  *
  *   - the refusal for a session already on ANOTHER relay removed (the command
  *     runs the full connect again: registers with B, saves B);
@@ -33,6 +35,7 @@ import { runTampers, type TamperEdit, type TamperEntry } from "../lib/tamper-run
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SLASH = "apps/cli/src/slash-commands.ts";
+const TOKEN_READER = "apps/cli/src/relay-operator-token.ts";
 const REPL_RELAY = "apps/cli/src/repl-relay.ts";
 const RUNTIME = "packages/runtime/src/motebit-runtime.ts";
 const PKG = "motebit";
@@ -91,8 +94,8 @@ const ROW_2_FALLS_THROUGH: TamperEdit[] = [
 const ROW_4: TamperEdit[] = [
   {
     file: SLASH,
-    from: '      if (operatorToken !== undefined && operatorToken.value !== "") {\n',
-    to: '      if (operatorToken !== undefined && operatorToken.value !== "" && (false as boolean)) {\n',
+    from: "      if (operatorToken !== undefined) {\n",
+    to: "      if (operatorToken !== undefined && (false as boolean)) {\n",
   },
 ];
 // The bare enable calls occur twice in repl-relay.ts; the preceding line
@@ -101,10 +104,10 @@ const STARTUP_BINDS_NOTHING: TamperEdit[] = [
   {
     file: REPL_RELAY,
     from:
-      "    const delegationCfg = { ...shared, authToken };\n" +
+      "    const delegationCfg = { ...shared, syncUrl, authToken };\n" +
       "    runtime.enableInteractiveDelegation(delegationCfg);\n" +
       "    runtime.enableInvokeCapability(delegationCfg);\n",
-    to: "    const delegationCfg = { ...shared, authToken };\n",
+    to: "    const delegationCfg = { ...shared, syncUrl, authToken };\n",
   },
 ];
 const GETTER_NULL: TamperEdit[] = [
@@ -209,7 +212,11 @@ const RAW_R2: TamperEdit[] = [
     to: "nothing was sent to ${connectUrl}.`",
   },
 ];
-const dropSource = (line: string): TamperEdit[] => [{ file: SLASH, from: line, to: "" }];
+// The source is still dropped from the one helper that reads all three; that
+// helper now lives in the token reader, where a source is one `return`.
+const dropSource = (line: string): TamperEdit[] => [
+  { file: TOKEN_READER, from: line, to: "      return undefined;\n" },
+];
 
 const TAMPERS: TamperEntry[] = [
   // ── row 3: the refusal for another relay ──
@@ -248,17 +255,17 @@ const TAMPERS: TamperEntry[] = [
   entry("the operator-token refusal is removed", ROW_4, TOKEN_FLAG),
   entry(
     "--sync-token is dropped from the token-source helper",
-    dropSource('    ["--sync-token", config.syncToken],\n'),
+    dropSource("      return config.syncToken;\n"),
     TOKEN_FLAG,
   ),
   entry(
     "MOTEBIT_API_TOKEN is dropped from the token-source helper",
-    dropSource('    ["MOTEBIT_API_TOKEN", process.env["MOTEBIT_API_TOKEN"]],\n'),
+    dropSource('      return process.env["MOTEBIT_API_TOKEN"];\n'),
     TOKEN_API,
   ),
   entry(
     "MOTEBIT_SYNC_TOKEN is dropped from the token-source helper",
-    dropSource('    ["MOTEBIT_SYNC_TOKEN", process.env["MOTEBIT_SYNC_TOKEN"]],\n'),
+    dropSource('      return process.env["MOTEBIT_SYNC_TOKEN"];\n'),
     TOKEN_SYNC,
   ),
   // ── the order of the checks, and what counts as the same relay ──

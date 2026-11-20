@@ -64,6 +64,7 @@ export { handleRepoTaskDelegate, handleRepoTaskRevoke, handleRepoTaskRun } from 
 export { handleRestore } from "./restore.js";
 export { handleSeed, seedBackupPostureOf, seedBackupWording } from "./seed.js";
 export { handleKeychain } from "./keychain.js";
+export { handleRelayBindToken } from "./relay-bind-token.js";
 export { handleRelayUp } from "./relay.js";
 export { handleMachines } from "./machines.js";
 export { handleRotate } from "./rotate.js";

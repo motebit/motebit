@@ -239,6 +239,14 @@ motebit federation peer https://other-relay.example.com
 motebit federation peers
 ```
 
+`federation peer`, `federation peer-remove` and `federation mesh` act with your relay's operator token (`MOTEBIT_API_TOKEN`). The CLI sends that token only to a relay it is bound to, so record the pairing once, with the URL you name the relay by:
+
+```bash
+MOTEBIT_API_TOKEN=<your relay's token> motebit relay bind-token --sync-url https://your-relay.example.com
+```
+
+The other relay never receives your token. Its operator runs the other half, or you set `MOTEBIT_PEER_API_TOKEN` to its token for that one command.
+
 After peering, agents on either relay can discover and delegate to agents on the other. Tasks route via the semiring trust graph. Each relay may extract a configurable fee on settlement. Inter-relay settlements are batched into signed Merkle roots, which are anchored on-chain (Solana memo) when the operator configures a Solana RPC.
 
 Peering establishes mutual trust via signed relay identities. If the handshake fails, no routing or discovery occurs — peering is bilateral and fail-closed.
