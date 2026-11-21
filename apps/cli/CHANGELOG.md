@@ -1,5 +1,208 @@
 # motebit CLI Changelog
 
+## 3.0.0
+
+### Major Changes
+
+- 00778d1: The CLI sends a relay's operator (master) token only to the relay URL you bound it to. It used to send it to whatever relay URL a command resolved.
+
+  An operator token is one relay's master credential: the relay compares it as an opaque string, and nothing in it says which relay it is for. The CLI read it from `--sync-token`, `MOTEBIT_API_TOKEN` or `MOTEBIT_SYNC_TOKEN` and paired it with the relay URL of the invocation, which arrives by a separate route (`--sync-url`, `MOTEBIT_SYNC_URL`, the saved `sync_url`). With relay A's token exported and the URL naming relay B — a different flag, a changed variable, a `motebit sync enable <url>` — B received A's master token, and B's operator, or anyone who can read B's request logs, could then act as A's operator.
+
+  Now a token is sent to a relay only when you have recorded that it belongs to that relay:
+
+  ```bash
+  MOTEBIT_API_TOKEN=<that relay's token> motebit relay bind-token --sync-url <url>
+  ```
+
+  `motebit relay bind-token` writes `relay-operator-tokens.json` in the config directory (mode 0600): one SHA-256 hash per relay URL, never the token. The URL must be given with `--sync-url` in that command; `MOTEBIT_SYNC_URL`, the saved `sync_url` and `--sync` are refused, because the pairing has to be stated in the command. The token comes from `--sync-token`, then `MOTEBIT_API_TOKEN`, then `MOTEBIT_SYNC_TOKEN`; the command prints which one it used and six characters of the hash. It replaces an existing entry for that relay (a rotated token) and says so, says when the same token is already bound to another relay, and says when the two variables are both set and differ. It makes no network request and does not check the token against the relay.
+
+  Every site that sent the token now asks one module (`apps/cli/src/relay-operator-token.ts`) for the token of the relay it is about to contact: the subcommands (`delegate`, `balance`, `withdraw`, `fund`, `discover`, `credentials`, `ledger`, `export`, `migrate`, `federation peers / peer / peer-remove / mesh`, `smoke reconciliation`, `doctor`), the REPL (startup sync and discovery, and the slash commands), and the daemons (`motebit run`, `motebit serve`: event sync, the WebSocket, the task-receipt POST). A token that is set but not bound to that relay is not sent: the command prints one line on stderr naming the source, the relay and the bind command (never the token), and behaves exactly as it does with no operator token set. Each site still reads the same sources, in the same order, as before; none reads a variable it ignored before.
+
+  Also in this release:
+
+  - `motebit federation mesh <url1> … <urlN>` sends the configured token only to the URLs it is bound to; the others get the device token. `MOTEBIT_MESH_TOKENS` (one token per URL, in order) and `MOTEBIT_PEER_API_TOKEN` are unchanged: each is already a pairing typed in the command.
+  - `motebit credentials` and `motebit export` with no relay URL no longer resolve any credential (for `credentials`, no passphrase prompt on a local-only run).
+  - `/connect` still refuses whenever an operator token is set, bound or not.
+  - `motebit relay up` prints the bind command beside the export hint.
+  - A relay that redirects: the token is not forwarded to another origin (the platform drops `Authorization` on a cross-origin redirect); a relay that redirects to another path on its own origin carries it there.
+
+  Two sites have no behavioural test because nothing reaches them: `motebit run`'s plan-delegation token factory and `motebit serve --self-test`'s token fallback. Both go through the same module and are held by the `check-cli-operator-token-reader` gate alone.
+
+  Not covered: the desktop app, which keeps one master-token slot and sends it to whatever relay is configured. The record ties a token to a URL you named; it does not prove the relay is honest or that the URL still reaches the same operator.
+
+  ## Migration
+
+  Everyone who uses a relay operator token with the CLI is affected. After upgrading, the first command prints the withheld line and behaves as if no operator token were set, until the token is bound.
+
+  **Before:**
+
+  ```bash
+  export MOTEBIT_API_TOKEN=<relay token>
+  motebit smoke reconciliation --sync-url https://relay.example.com    # sent the token
+  ```
+
+  **After:** bind once, then nothing else changes.
+
+  ```bash
+  export MOTEBIT_API_TOKEN=<relay token>
+  motebit relay bind-token --sync-url https://relay.example.com    # once
+  motebit smoke reconciliation --sync-url https://relay.example.com    # sends the token
+  ```
+
+  The bind is **per relay**, **per config directory** (an agent scaffolded with its own `MOTEBIT_CONFIG_DIR` has its own record) and **per URL spelling**: host case, a default port and trailing slashes are unified, but the path is kept, and `http://localhost:3000` and `http://127.0.0.1:3000` are different entries. Bind the spelling you use.
+
+  What each group sees until it binds, and its remedy:
+
+  **1. Admin commands that need the master token** — `motebit smoke reconciliation`, `motebit federation peer / peer-remove / mesh`, the treasury probe in `motebit doctor`. (`motebit federation peers` reads a route the relay registers without a token check, so it should keep working; it no longer attaches the token to a relay it is not bound to.) `smoke reconciliation` refuses locally ("requires a master token"); the federation commands are refused by the relay (401 or 403, `operator-confirm` for `peer` and `mesh`); `doctor` reports the probe as skipped and says the token is set but not bound. Remedy: `motebit relay bind-token --sync-url <url>`. For `federation mesh` over several relays sharing one token, bind each URL, or pass `MOTEBIT_MESH_TOKENS` for that command.
+
+  **2. Commands with a device-token path** — `balance`, `withdraw`, `fund`, `ledger`, `credentials`, `export`, `discover`, `delegate`, `migrate`, REPL sync and the slash commands. They run as this device's identity instead of as the operator. For your own identity the result is usually the same; a query about another identity is refused. Remedy: bind, if you meant to act as the operator.
+
+  **3. A passphrase prompt in scripts.** Every subcommand that falls back to the device token unlocks the identity key, which prompts for the passphrase. A scripted operator command that never prompted will now wait on a prompt, or read stdin. The withheld line is printed before the prompt. Remedy: bind the token (no fallback, no prompt), or set `MOTEBIT_PASSPHRASE`.
+
+  **4. Relays that turn device auth off** (`MOTEBIT_ENABLE_DEVICE_AUTH=false`). There every device-token fallback is refused, so every command in groups 1 and 2 fails until the token is bound. Remedy: bind.
+
+  **5. Daemons holding a token and no device key** — `motebit run` or `motebit serve` whose identity key did not open, or whose config has no `device_id`. Sync, the WebSocket and task receipts stop authenticating. Remedy: bind the token in the daemon's config directory. `motebit run` reads `--sync-token` then `MOTEBIT_SYNC_TOKEN`; `motebit serve` reads `--sync-token` then `MOTEBIT_API_TOKEN`; bind the value the daemon reads. A daemon resolves its token once, when it starts: restart it after binding. (A REPL's slash commands pick a new bind up at the next command; its background sync at the next start.)
+
+  **5a. A daemon with a device key, on a relay with device auth off.** `motebit run` or `motebit serve` whose key opened used to send the operator token first for event sync and task receipts. With the token unbound it now signs as the device, which such a relay refuses, so sync and receipts stop authenticating there too. Remedy: bind the token in the daemon's config directory and restart it.
+
+  **6. A REPL started with a token and no device key.** It gets no delegation wiring at all (it used to delegate with the operator token). Remedy: bind.
+
+  **7. A scaffolded agent or a second config directory.** The record lives in the config directory, so each one binds for itself: `MOTEBIT_CONFIG_DIR=<dir> motebit relay bind-token --sync-url <url>`.
+
+  **8. A relay URL that cannot be bound.** A URL that is not `http` or `https`, does not parse, or contains `@`, `?`, `#`, a backslash, whitespace or a control character has no entry and never gets a token. There is no remedy other than naming the relay by a plain URL without those. For such a URL the withheld line, `smoke reconciliation` and `doctor` say that it cannot have a token bound to it, and print no bind command.
+
+  **9. A damaged `relay-operator-tokens.json`.** A file that does not parse, has another version or holds a non-string entry means no token is sent to any relay; every command says so once and continues. `bind-token` refuses to overwrite it. Remedy: move the file aside and bind again.
+
+  **Why:** a credential must be sent only to the party it was issued for, and an operator token cannot say who that is. The pairing therefore has to be recorded by the owner, once, in a command that shows both halves. The lighter rule — honour a token whenever `--sync-token` and `--sync-url` are flags of the same command — was not taken: two ways to pair doubles what has to be reviewed, and one command per relay is a small cost for a relay operator.
+
+- 99e2137: The CLI uses a relay key only for the relay URL that key signs. It used to hold one relay key (`relay_public_key`) for every relay and pass it for whichever relay a session named.
+
+  With relay A's key held and a session on a second relay B, a paid peer-to-peer delegation (`motebit delegate --sovereign`, or paid delegation from the REPL) was a wrong payment in the ordinary case. A current relay answers the payment pre-flight (`p2p-eligibility`) with the amounts to pay, and with those amounts the client builds the payment without reading any signed relay document: it broadcast one payment whose fee leg went to the treasury derived from A's key, and B then refused the task. The owner had paid a worker, and A's fee, for nothing. That happened whether B served its own signed documents or none at all, and also when B served copies of A's documents or redirected the metadata read to a copy that verifies under A's key.
+
+  The client stopped before paying only when both of these held: the pre-flight answer carried no amounts (an older relay), and the relay's metadata did not verify under the key the client held, because the relay served its own signed documents or none. With no amounts the client reads the fee rate from the relay's signed metadata, which must verify under the held key, and it refused (`relay_fee_rate_unverified`). With no amounts and metadata that did verify under A's key — B serving copies of A's documents, or redirecting the metadata read to such a copy — it built the same wrong payment.
+
+  After this release none of these builds a payment, because the key is not passed at all: a key is recorded for a URL only when the relay's signed metadata names that URL (read without following redirects), its signed transparency declaration names the same key and relay id, and that key is the one this install already holds.
+
+  The CLI now keeps one key per relay URL in `relay-pins.json` (in the config directory, mode 0600). REPL startup, `motebit delegate --sovereign` and the `--grant` pre-flight read only that record, decided once per process, and never fall back to `relay_public_key`. An entry is written only when the relay proves the key for the URL you name it by (its signed metadata names that URL, and its signed transparency declaration names the same key and relay id) and that key is the one this install already holds. `motebit register` writes the entry after everything it does today; an existing install gets its entry on the next start with no action, when its relay signs its URL. An entry is never replaced.
+
+  `motebit register` keeps its order, its messages, the legacy `relay_public_key` field and its existing PIN MISMATCH rule, and gains two exits with code 1:
+
+  - **a damaged `relay-pins.json`**: `register` exits 1 naming the file as its first act, before the passphrase prompt and before any request;
+  - **a per-relay PIN MISMATCH**: after the bootstrap and the existing legacy pin step have run, when `relay-pins.json` already holds an entry for this relay under a different key than the one the relay just proved (and that proved key is the install's legacy key), `register` exits 1 naming the file and the entry to remove after out-of-band verification. The registration itself has already succeeded by then, and if the legacy key was unset the existing step has already written it.
+
+  Every other outcome of the added step (no key established, the legacy key not matching, the record locked or unwritable) is a warning with the exit code `register` had before. `motebit verify-release` and `create-motebit rotate` are unchanged. The implementation half in `@motebit/runtime` is in the sibling changeset `cli-relay-pin-per-relay-ignored.md`.
+
+  ## Migration
+
+  Four groups stop getting a relay key until the remedy is applied. Without a key, paid peer-to-peer is off: REPL delegation runs relay-mode, `motebit delegate --sovereign` exits 1 naming the remedy, and the `--grant` pre-flight reports the relay pin as a blocker. Nothing is paid.
+
+  **1. A relay that signs no URL** — a `motebit relay up` started without `--federation-url`, a `pnpm run dev` relay, or a self-hosted relay without the endpoint variable.
+
+  **Before:**
+
+  ```bash
+  motebit relay up
+  motebit register --sync-url http://localhost:3000   # pinned; --sovereign worked
+  ```
+
+  **After:** start the relay so that it signs its URL, then register against exactly that URL.
+
+  ```bash
+  motebit relay up --federation-url http://localhost:3000
+  # or, for the relay service:
+  MOTEBIT_FEDERATION_ENDPOINT_URL=http://localhost:3000 MOTEBIT_FEDERATION_ENABLED=false pnpm run dev
+
+  motebit register --sync-url http://localhost:3000
+  ```
+
+  `--federation-url` turns federation on for that relay; `MOTEBIT_FEDERATION_ENABLED=false` keeps it off for the relay service.
+
+  **2. An install whose saved relay URL is an alias** of the URL its relay signs (for example an old default hostname). The message names the URL the relay signs.
+
+  **After:**
+
+  ```bash
+  motebit register --sync-url <the URL the relay signs>
+  # and change the flag, MOTEBIT_SYNC_URL or the saved sync_url to that URL
+  ```
+
+  **3. A second relay.** `motebit register` against a relay whose key differs from `relay_public_key` still exits 1 with PIN MISMATCH, as before. What changes: a session that names that second relay anyway now gets no key instead of the first relay's key. That is the fix. The remedy is the one PIN MISMATCH already gives: verify the relay's key out of band, remove `relay_public_key` from `config.json`, and run `motebit register --sync-url <relay>`. One install still holds a legacy key for one relay at a time.
+
+  **4. A first start that cannot reach the relay**, reaches it more slowly than five seconds, or names it by a URL that redirects — and a relay URL written with a backslash, a tab or newline, `?`, `#` or `@`. The entry is attempted once per process, so that session runs without a key; the next start tries again. Until an install has its entry, a start can wait up to about ten seconds on the two requests, and five more on the record's lock.
+
+  **After:** for a relay that was unreachable, the entry is attempted again on the next start and by `motebit register --sync-url <relay>`. For a relay that answers more slowly than five seconds there is no remedy on the client in this release: the next start and `register` both retry, each with the same five-second limit on each request, and there is no longer-timeout path. Name a redirecting relay by the address it redirects to; name the relay by a plain `http(s)` address. A relay whose real path contains `@` has no remedy in this release.
+
+  If `relay-pins.json` is damaged, no key is used and `motebit register` exits 1 before prompting. When the file was written by a newer version, upgrade the CLI. Otherwise move the file aside, and keep it (do not delete it) so its entries can be inspected. Moving it aside does not restore the record. An entry is re-established one relay at a time, and only when both of these hold at that moment: the relay still passes the full check (its signed metadata names the URL you name it by, and its signed transparency declaration names the same key and relay id), and the key it proves is the one this install holds as its legacy `relay_public_key`. For the relay whose key is the legacy key, that happens on the next start that names it (the REPL, or `motebit delegate --sovereign`) or on `motebit register --sync-url <that relay>`. Entries the file held for any other relay are lost: one comes back, by the same two routes (a later start naming that relay, or `register` against it), only once the install's legacy key is that relay's key and the relay still passes the full check.
+
+  **Why:** the fee leg of a paid peer-to-peer delegation is an irreversible onchain payment to a treasury derived from the relay's key. A key recorded without the relay it belongs to cannot be used safely on any other relay, and "one key for all relays" made the wrong payment the default whenever a session named a different relay. Binding each key to the URL the relay itself signs is the smallest rule that makes the wrong payment unrepresentable; the cost is that a relay must sign its URL before the CLI will pay through it.
+
+### Patch Changes
+
+- da9d87b: In the `motebit` chat REPL, `/connect <url>` no longer half-switches relays, and it never sends an operator token.
+
+  Before, in a session already using relay A, `/connect B` registered this device with B, printed "Interactive delegation enabled" and "Connected to B" while the delegation tool kept submitting to A, sent B the operator token when one was set, and overwrote the saved relay with B, so later relay commands and the next launch could use B with A's pinned key.
+
+  Now:
+
+  - In a session that is already on a relay, `/connect` sends nothing to any relay and changes nothing (no registration, no saved config, no in-memory relay). Naming another relay prints why it was refused; naming the session's own relay prints that the session is already on it.
+  - `/connect` never sends an operator token. In a session on no relay, when one is set by `--sync-token`, `MOTEBIT_API_TOKEN` or `MOTEBIT_SYNC_TOKEN`, it refuses before any request and names that source. In a session already on a relay the refusal above comes first and names no source. `/connect` is available in a session started with no relay and no operator token, where it works as before and authenticates with device-signed tokens only.
+  - `/connect /` (a URL that is empty once trimmed) prints the usage line.
+  - As before, a session that lacks a signing key or a device id is refused before any request; both halves of that check are now under test.
+
+  Given up: `/connect` on the session's own relay no longer re-reads the agent list or re-sends the device registration, and no longer writes that relay to the saved config; there is no in-session way to save a different relay for the next launch; and a session with an operator token cannot use `/connect` at all.
+
+  Not changed by this change itself: which relay key and which operator token a relay named at launch is paired with. The same release changes both, in their own entries: the relay key is kept per relay URL (`cli-relay-pin-per-relay.md`), and an operator token is sent only to a relay it was bound to with `motebit relay bind-token` (`cli-operator-token-per-relay.md`), so a relay named at launch no longer receives an operator token just because one is set in the environment.
+
+- ef107a7: `motebit --grant <id>` and `motebit serve --direct --grant <id>` no longer present a standing grant on a turn where a relay's revocation feed could not be read. A timeout, a network error, a redirect, a non-2xx answer or a body that is not the feed used to count as "nothing revoked", so a grant revoked on another machine still verified whenever the relay was unreachable. Now a failed pull presents no grant for that turn: in chat, money actions ask for approval; on a direct task they are refused. Each outage is announced once, in one line that names the failure and the relay's host (for example `HTTP 429 (relay.example)`), never a URL or an error's own text; it is announced again when a different relay starts failing, and after the relays have answered again.
+
+  Each turn the pull goes to every relay named by any source: the `--sync-url` / `--sync` flag, the `MOTEBIT_SYNC_URL` environment variable, the saved config's `sync_url` (re-read each turn), and every relay the session has used. All of them, not the winning one: a revocation posted to the config relay is seen by a session started with `--sync-url` for another relay. In chat, a session started with no relay and no operator token can name one with `/connect <url>`, which adds it to the session; in a session already on a relay `/connect` is refused, sends nothing and adds nothing. Every relay the session has used stays in the pulled set for the life of the process. If any pull fails, the grant is withheld; the records are merged. With no relay named anywhere, or when every pull succeeds, nothing changes.
+
+  Changed: `motebit grant revoke` now propagates to the relay named by `--sync-url` > `MOTEBIT_SYNC_URL` > config `sync_url`. Before, it posted to the config `sync_url`, else the environment, and ignored the flag. A CLI on another machine that has not been upgraded still pulls only its own config or environment relay, so revoke against the relay that machine uses.
+
+  The cost: a stale or unreachable relay left in the config or the environment under a flag override now withholds the grant every turn until it is removed; a relay the session connected to earlier keeps being asked until the process restarts; N relays mean N pulls per turn, each against that relay's 30 requests per minute per-address limit; and an `http://` relay URL that redirects to `https://` withholds until the URL is corrected. Not covered: a relay that omits a revocation, or a wrong relay URL (the feed is unsigned).
+
+- d307eb6: `motebit run` and `motebit serve` now meter standing-grant spending against the persistent spend store. Both daemons accept a grant this identity signed, but neither passed a `grantSpendStore`, so the runtime fell back to the in-memory store and a grant's window and lifetime ceilings reset on every daemon restart. Both now build their runtime config through `daemonRuntimeConfig`, which requires the store and is given the daemon's own database store (the same one the REPL uses). A restart no longer resets a grant's ceilings or forgets a spent token. `check-money-authority` gains assertion 7. For each `new` or `super` call whose target resolves by type to `MotebitRuntime`, it follows the config through object literals, the CLI config builders, spreads of literals, conditionals and casts. A config that sets `identityPublicKeyHex` must pass a `grantSpendStore` on every branch, and a config part it cannot follow fails the gate. It does not see every way a runtime can be constructed, and it does not check that a passed store is durable.
+- ccccb27: `@hono/node-server` ≥1.19.19 (GHSA-jpvv-r467-5p4w, fixed in 1.19.18): a backslash in the request path was parsed as a path separator, so a reverse proxy that allows or denies by path prefix could be bypassed. The upper-bounded override floor rises with it. GHSA-rmxm-3fg6-px4f (`serveStatic` decodes the path twice) is fixed only in 2.x and is not reachable: nothing in the repository uses `serveStatic`; recorded in `docs/security/dependency-triage.md`.
+- d45d46c: `motebit wallet swap` is disabled. The swap signed a transaction built by Jupiter's HTTP API with your identity key without inspecting it, so a compromised or intercepted API response could have moved funds or changed account authority. The command now refuses with "swaps are disabled until intent-bound transaction validation exists" and tells you what to do instead (fund USDC on the Solana network directly and keep at least 0.005 SOL for network fees). It refuses before asking for your passphrase and makes no network call.
+
+  The wallet no longer tops up SOL automatically by swapping USDC. A payment or transfer from a wallet holding less than 0.005 SOL is refused before anything is signed, with a message telling you to fund SOL directly. Payments from a wallet with enough SOL work exactly as before. The `motebit wallet` guidance and the grant preflight remedy no longer mention swaps or automatic gas.
+
+  The wallet-side change is in `jupiter-swaps-refused-ignored.md`.
+
+- f01e1f6: `motebit repo-task run` takes `--author "Name <email>"`, the git author and committer of both commits. The default is unchanged. A repository whose required checks read the commit identity (a CLA check links the email to an account) can now take a governed change: with the default, unlinked identity, such a check cannot pass. Who acted is still the signed bundle's to say, never the git author's. A value git would not record verbatim (a malformed one, one Node could not decode as UTF-8, one over 256 bytes in its name or email, or one beginning or ending with a character git strips) is refused before the first model call.
+- 483f746: `motebit repo-task run` adds a publish condition to its "To publish" output: the pull request's title and body must not contain the word "committer". GitHub's merge queue re-wraps the squash commit's message and, when it signs the commit, inserts a copy of its signature block after every line that begins with that word. The landed commit then fails its own signature, so the change can never verify offline. The `repo-task run` module also exports its `--author` parser, its rule that the output directory must not be inside the repository, and its default commit identity. The negative acceptance fixture (`scripts/governed-change-fixture.ts`, a repository script that is never published) uses these exports instead of copying the rules.
+- a9717ce: A committed key rotation now invalidates the previous seed backup. A recovery seed is one key, and `motebit rotate` mints a new random key. The backup acknowledgment (`seed_backed_up_at`) was a bare timestamp, so after a rotation `motebit seed` still said "recorded" and the startup nudge stayed silent, while the paper seed recovered only the retired key.
+
+  - **Binding.** The acknowledgment is now bound to the key and identity it covers (`seed_backed_up_key`, `seed_backed_up_motebit_id`). These are local config only, never wire.
+    - `motebit seed reveal` binds the key the revealed seed derives and the identity it was shown for.
+    - `motebit restore` binds the key the entered seed derives.
+  - **Reading it.** The CLI reader (`seedBackupPostureOf`) reads "not backed up" whenever the bound key is not `device_public_key`. Every commit path invalidates it, including an interrupted commit finished later; an abandoned or refused rotation leaves it alone.
+  - **Nothing is deleted.** The old acknowledgment stays as the record of the retired key, and `motebit seed` says the recorded seed is for a retired key and should be kept.
+  - **One notice.** `motebit rotate` says once that the seed changed.
+  - **Legacy acknowledgments now require one re-confirmation.** An acknowledgment recorded before this release (a timestamp with no key) is never honoured: `motebit seed`, `motebit doctor`, `motebit keychain` and the startup line ask the owner to re-confirm the recovery seed once with `motebit seed reveal`. Nothing on disk can prove which key such an acknowledgment covered.
+
+  The binding rule lives in `@motebit/surface-kit` (sibling: `rotation-invalidates-seed-backup-ignored.md`).
+
+- a9717ce: A seed-backup acknowledgment is never carried onto a new identity, and the backup status never reports an old seed as covering a different key or identity.
+
+  - **Carried acknowledgments.** Some writes replace the identity in `~/.motebit/config.json`:
+    - a `motebit` first-launch mint;
+    - `motebit restore` of another identity;
+    - `create-motebit`'s "Overwrite?" path;
+    - the desktop's identity switch.
+
+    These writes move the replaced identity's acknowledgment aside into `seed_backup_prior: [{ at, key, motebit_id }]`. It is kept, never deleted, and never treated as current. A restore that records a fresh acknowledgment keeps the fresh one current and keeps the replaced one aside. A stale snapshot saved after the identity changed takes the disk's acknowledgment along with the disk's identity.
+
+  - **Legacy acknowledgments now require one re-confirmation.** An acknowledgment with no bound key is never honoured, whatever the identity file or the clock says. The owner is asked once to re-confirm the recovery seed (`motebit seed reveal`).
+  - **The identity is bound too.** A new acknowledgment also records `seed_backed_up_motebit_id`.
+    - For another identity it reads "not backed up for this identity", never "retired".
+    - "Retired key" is said only for a known earlier key of the same identity.
+  - **Reveal race.** `motebit seed reveal` re-reads the config before recording. If the identity or key changed while the seed was on screen, nothing is recorded, and it says so.
+  - **Keychain wording.** `motebit keychain enroll` uses the same wording as the other readers.
+
+  Sibling: `seed-backup-not-carried-ignored.md`.
+  - @motebit/state-export-client@0.7.3
+
 ## 2.3.0
 
 ### Minor Changes
