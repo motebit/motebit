@@ -8,13 +8,8 @@ import type { InvokeFn } from "./tauri-storage.js";
 
 /** The part of `DesktopApp` the startup sequence drives. */
 export interface DesktopSyncApp {
-  registerWithRelay(invoke: InvokeFn, syncUrl: string, masterToken: string): Promise<string | null>;
-  startSync(
-    invoke: InvokeFn,
-    syncUrl: string,
-    authToken?: string,
-    masterToken?: string,
-  ): Promise<void>;
+  registerWithRelay(invoke: InvokeFn, syncUrl: string): Promise<string | null>;
+  startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void>;
   /** Run `stop` when sync stops; returns an unsubscribe. */
   onSyncStop(stop: () => void): () => void;
 }
@@ -40,33 +35,32 @@ export async function startDesktopSync(
   app: DesktopSyncApp,
   invoke: InvokeFn,
   syncUrl: string,
-  masterToken: string,
   onFailure: (message: string, retry: () => void) => void,
 ): Promise<void> {
   let token: string | null = null;
   let failure: string | null = null;
   try {
-    token = await app.registerWithRelay(invoke, syncUrl, masterToken);
+    token = await app.registerWithRelay(invoke, syncUrl);
   } catch (err: unknown) {
     failure = err instanceof Error ? err.message : String(err);
   }
 
   // Start background sync. Safe to call before AI init — startSync no-ops
   // when runtime is absent. `token` is the device `sync` token registration
-  // returned; the master token is passed separately and only when
-  // configured, so serving calls never mistake the sync token for it (#827).
+  // returned; when registration failed there is none, and startSync mints
+  // a device `sync` token itself. Desktop holds no static relay token.
   try {
-    await app.startSync(invoke, syncUrl, token ?? masterToken, masterToken || undefined);
+    await app.startSync(invoke, syncUrl, token ?? undefined);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     onFailure(`Sync relay connection failed: ${msg}`, () => {
-      void startDesktopSync(app, invoke, syncUrl, masterToken, onFailure);
+      void startDesktopSync(app, invoke, syncUrl, onFailure);
     });
     return;
   }
 
   if (failure === null) return;
-  const retry = keepRegistering(app, invoke, syncUrl, masterToken);
+  const retry = keepRegistering(app, invoke, syncUrl);
   onFailure(`Sync relay connection failed: ${failure}`, retry);
 }
 
@@ -74,12 +68,7 @@ export async function startDesktopSync(
  * Re-register until the relay accepts, on backoff, until sync stops.
  * Returns "register now" (the Retry action).
  */
-function keepRegistering(
-  app: DesktopSyncApp,
-  invoke: InvokeFn,
-  syncUrl: string,
-  masterToken: string,
-): () => void {
+function keepRegistering(app: DesktopSyncApp, invoke: InvokeFn, syncUrl: string): () => void {
   let delay = REGISTRATION_RETRY_BASE_MS;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let done = false;
@@ -99,7 +88,7 @@ function keepRegistering(
     inFlight = true;
     clear();
     try {
-      await app.registerWithRelay(invoke, syncUrl, masterToken);
+      await app.registerWithRelay(invoke, syncUrl);
       done = true;
       unsubscribe();
     } catch {

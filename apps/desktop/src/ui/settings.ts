@@ -1882,7 +1882,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       ? parseInt(settingsMaxTokens.value, 10) || undefined
       : undefined;
     // Spread the previous config so fields that aren't explicitly edited
-    // (syncUrl, syncMasterToken, personalityConfig, governance, …)
+    // (syncUrl, personalityConfig, governance, …)
     // survive the save. The old code only carried over `apiKey` and
     // `invoke`, silently dropping everything else.
     const localServerEndpointValue = settingsOnDeviceEndpoint.value.trim();

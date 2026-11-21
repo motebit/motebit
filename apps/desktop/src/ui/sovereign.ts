@@ -73,9 +73,10 @@ function truncate(text: string | null | undefined, max: number): string {
 
 // === Adapter ===
 
-// Desktop's sync auth is a static master token held in config. The controller
-// asks for a fetch strategy; this closure wires Tauri config + Bearer header
-// through the shared @motebit/panels state layer.
+// Desktop authenticates to the relay as this device: a token minted per
+// request for the route's audience (relay-bearer.ts). The controller asks for
+// a fetch strategy; this closure wires Tauri config + Bearer header through
+// the shared @motebit/panels state layer.
 // Trust-anchor bootstrap (TOFU, one fetch per session). Pins the relay's
 // signing key so every verified state-export checks against the same key (a
 // swap → producer_key_mismatch). Mirrors apps/web + apps/inspector. A failed
@@ -114,8 +115,8 @@ function createDesktopAdapter(ctx: DesktopContext): SovereignFetchAdapter {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
     };
-    // Master token when configured, else a device token for the audience
-    // this route verifies (the protocol's route table) — see relay-bearer.ts.
+    // A device token for the audience this route verifies (the protocol's
+    // route table) — see relay-bearer.ts.
     const bearer = await relayBearer(ctx, relayRouteAudience(init?.method ?? "GET", path));
     if (bearer) headers["Authorization"] = `Bearer ${bearer}`;
     return new Request(`${syncUrl}${path}`, {
@@ -138,9 +139,13 @@ function createDesktopAdapter(ctx: DesktopContext): SovereignFetchAdapter {
       return fetch(req);
     },
     // Verified fetch for relay state-export endpoints (the controller routes
-    // /api/v1/goals through this). Same syncMasterToken auth as `fetch`, then
-    // verifies X-Motebit-Content-Manifest against the body + pinned anchor so
-    // the relay cannot equivocate about the user's own ledger undetected.
+    // /api/v1/goals through this). Sent with no Authorization: the relay's
+    // goals route takes no device token (`relayRouteAudience` has none for
+    // it; on a relay with an API token it is operator-only, and desktop holds
+    // no operator token), so on such a relay it is refused and the ledger
+    // shows local goals, unverified. Verifies X-Motebit-Content-Manifest
+    // against the body + pinned anchor so the relay cannot equivocate about
+    // the user's own ledger undetected.
     // Doctrine: docs/doctrine/self-attesting-system.md.
     async verifiedFetch(path: string, init?: SovereignFetchInit): Promise<VerifiedFetchResult> {
       const config = ctx.getConfig();
@@ -150,7 +155,6 @@ function createDesktopAdapter(ctx: DesktopContext): SovereignFetchAdapter {
         "Content-Type": "application/json",
         ...(init?.headers ?? {}),
       };
-      if (config.syncMasterToken) headers["Authorization"] = `Bearer ${config.syncMasterToken}`;
       const anchor = await bootstrapAnchor(syncUrl);
       const res = await verifiedStateExportFetch<unknown>(`${syncUrl}${path}`, {
         ...(anchor !== undefined && { anchor }),

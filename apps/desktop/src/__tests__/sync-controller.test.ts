@@ -24,6 +24,8 @@ const mockCtrl = vi.hoisted(() => ({
     json: () => Promise<Record<string, unknown>>;
   },
   selfTestResult: { summary: "ok", data: { status: "passed" as const } },
+  /** Every conversation/plan HTTP adapter's config, in construction order. */
+  httpSyncAdapterOpts: [] as Array<{ baseUrl?: string; authToken?: string }>,
 }));
 
 vi.mock("@motebit/sync-engine", () => {
@@ -61,7 +63,9 @@ vi.mock("@motebit/sync-engine", () => {
     }
   }
   class HttpConversationSyncAdapter {
-    constructor(public opts: unknown) {}
+    constructor(public opts: { baseUrl?: string; authToken?: string }) {
+      mockCtrl.httpSyncAdapterOpts.push(opts);
+    }
   }
   class EncryptedConversationSyncAdapter {
     constructor(public opts: unknown) {}
@@ -70,7 +74,9 @@ vi.mock("@motebit/sync-engine", () => {
     constructor(public opts: unknown) {}
   }
   class HttpPlanSyncAdapter {
-    constructor(public opts: unknown) {}
+    constructor(public opts: { baseUrl?: string; authToken?: string }) {
+      mockCtrl.httpSyncAdapterOpts.push(opts);
+    }
   }
   class ConversationSyncEngine {
     constructor(
@@ -147,8 +153,21 @@ vi.mock("../tauri-sync-adapters.js", () => ({
   },
 }));
 
+// `loadDesktopConfig` imports `invoke` from here; tests set what it forwards to.
+const tauriCore = vi.hoisted(() => ({
+  invoke: null as null | ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>),
+}));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (cmd: string, args?: Record<string, unknown>) => {
+    if (tauriCore.invoke == null) throw new Error("tauri stand-in not installed");
+    return tauriCore.invoke(cmd, args);
+  },
+}));
+
 import { SyncController } from "../sync-controller";
 import type { SyncControllerDeps } from "../sync-controller";
+import { loadDesktopConfig } from "../ui/config";
+import { carriesOperatorToken, guardOperatorSlot } from "./operator-slot-guard";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -209,6 +228,7 @@ function makeDeps(overrides: Partial<SyncControllerDeps> = {}): SyncControllerDe
 
 beforeEach(() => {
   mockCtrl.wsInstances.length = 0;
+  mockCtrl.httpSyncAdapterOpts.length = 0;
   mockCtrl.fetchResponse = {
     ok: true,
     text: async () => "ok",
@@ -273,7 +293,7 @@ describe("SyncController.syncConversations", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       makeDeps({ getConversationStore: () => makeStore() as any }),
     );
-    const result = await ctrl.syncConversations(vi.fn() as any, "https://r", "token");
+    const result = await ctrl.syncConversations(vi.fn() as any, "https://r");
     expect(result.conversations_pushed).toBe(1);
     expect(result.messages_pulled).toBe(4);
   });
@@ -291,7 +311,7 @@ describe("SyncController.syncConversations", () => {
         getPlanStore: () => planStore as any,
       }),
     );
-    await ctrl.syncConversations(vi.fn() as any, "https://r", "token");
+    await ctrl.syncConversations(vi.fn() as any, "https://r");
   });
 
   it("emits syncing status during sync", async () => {
@@ -301,7 +321,7 @@ describe("SyncController.syncConversations", () => {
     );
     const statuses: string[] = [];
     ctrl.onSyncStatus((e) => statuses.push(e.status));
-    await ctrl.syncConversations(vi.fn() as any, "https://r", "token");
+    await ctrl.syncConversations(vi.fn() as any, "https://r");
     expect(statuses).toContain("syncing");
     expect(statuses).toContain("connected");
   });
@@ -499,11 +519,14 @@ describe("SyncController.stopSync", () => {
 
 // ---------------------------------------------------------------------------
 // Serving bearer (#827): registration and task results mint the audience
-// their route verifies; the master token is used only when configured.
+// their route verifies. Desktop holds no relay operator token.
 // ---------------------------------------------------------------------------
 
 describe("SyncController serving bearer (#827)", () => {
-  async function serveOneTask(masterToken?: string): Promise<Array<{ url: string; auth: string }>> {
+  async function serveOneTask(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    invoke: any = vi.fn(),
+  ): Promise<Array<{ url: string; auth: string }>> {
     const calls: Array<{ url: string; auth: string }> = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -519,9 +542,8 @@ describe("SyncController serving bearer (#827)", () => {
       }),
     );
     // Exactly what main.ts does: the socket bearer is the device `sync` token
-    // registerWithRelay returned; the master token rides separately.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await ctrl.startSync(vi.fn() as any, "https://relay.test", "device-sync-token", masterToken);
+    // registerWithRelay returned.
+    await ctrl.startSync(invoke, "https://relay.test", "device-sync-token");
     expect((await ctrl.startServing("pk")).ok).toBe(true);
     const ws = mockCtrl.wsInstances[mockCtrl.wsInstances.length - 1]!;
     for (const h of ws.customHandlers) {
@@ -566,7 +588,7 @@ describe("SyncController serving bearer (#827)", () => {
     ctrl.stopSync();
   });
 
-  it("with no master token, register mints admin:query and the result mints task:result", async () => {
+  it("register mints admin:query and the result mints task:result", async () => {
     const calls = await serveOneTask();
     expect(calls.find((c) => c.url.endsWith("/api/v1/agents/register"))?.auth).toBe(
       "Bearer minted:admin:query",
@@ -577,11 +599,169 @@ describe("SyncController serving bearer (#827)", () => {
     expect(calls.every((c) => c.auth !== "Bearer device-sync-token")).toBe(true);
   });
 
-  it("with a configured master token, both send it", async () => {
-    const calls = await serveOneTask("MASTER");
+  // A guard against a FUTURE read of the slot inside the controller, not a
+  // conversion of main's "with a configured master token, both send it": it
+  // is green on main by construction (main's controller never read the slot;
+  // the token came in as a parameter, which no longer exists). The test that
+  // goes red when a serving-site send is restored is the relay A → B test
+  // below ("start on relay A, stopSync, start on relay B…").
+  it("guard: the controller never reads the operator slot; register and result still mint", async () => {
+    const guard = guardOperatorSlot();
+    const calls = await serveOneTask(guard.wrap(async () => null));
     expect(calls.find((c) => c.url.endsWith("/api/v1/agents/register"))?.auth).toBe(
-      "Bearer MASTER",
+      "Bearer minted:admin:query",
     );
-    expect(calls.find((c) => c.url.endsWith("/task/t-1/result"))?.auth).toBe("Bearer MASTER");
+    expect(calls.find((c) => c.url.endsWith("/task/t-1/result"))?.auth).toBe(
+      "Bearer minted:task:result",
+    );
+    expect(calls.filter((c) => carriesOperatorToken(c.auth))).toEqual([]);
+    guard.expectUnread();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The relay operator token is removed (design 2026-11-20, tests 3 and 3b).
+// The key store's operator slot holds a hand-placed token in every test
+// (operator-slot-guard.ts): it is never read and never reaches any relay.
+// ---------------------------------------------------------------------------
+
+describe("SyncController — the operator token is never sent (design 2026-11-20)", () => {
+  /** `loadDesktopConfig` over the guarded key store, `sync_url` = `syncUrl`. */
+  async function loadConfig(
+    invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>,
+    syncUrl: string,
+  ) {
+    tauriCore.invoke = async (cmd, args) =>
+      cmd === "read_config" ? JSON.stringify({ sync_url: syncUrl }) : invoke(cmd, args);
+    const w = globalThis as unknown as { window?: unknown };
+    w.window = { __TAURI_INTERNALS__: {} };
+    try {
+      return await loadDesktopConfig();
+    } finally {
+      delete w.window;
+    }
+  }
+
+  /** Serve one task on the newest socket; resolves with the result POST's bearer. */
+  async function serveTask(
+    ctrl: SyncController,
+    calls: Array<{ url: string; auth: string }>,
+    taskId: string,
+  ): Promise<void> {
+    expect((await ctrl.startServing("pk")).ok).toBe(true);
+    const ws = mockCtrl.wsInstances[mockCtrl.wsInstances.length - 1]!;
+    for (const h of ws.customHandlers) h({ type: "task_request", task: { task_id: taskId } });
+    for (const h of ws.customHandlers) h({ type: "task_claimed", task_id: taskId });
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.url.endsWith(`/task/${taskId}/result`))).toBe(true);
+    });
+  }
+
+  it("start on relay A, stopSync, start on relay B: B receives no operator token", async () => {
+    const guard = guardOperatorSlot();
+    const invoke = guard.wrap(async () => null);
+    const calls: Array<{ url: string; auth: string }> = [];
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const h = (init?.headers ?? {}) as Record<string, string>;
+      calls.push({ url, auth: h["Authorization"] ?? "" });
+      return mockCtrl.fetchResponse;
+    }) as never;
+    const runtime = makeRuntime();
+    const ctrl = new SyncController(
+      makeDeps({
+        getRuntime: () => runtime,
+        createSyncToken: async (_pk: string, aud?: string) => `minted:${aud ?? "sync"}`,
+      }),
+    );
+
+    // Relay A, with the arguments main.ts's Connect handler passes (the URL
+    // alone; on main it also passed the loaded config's token twice).
+    const configA = await loadConfig(invoke, "https://relay-a.invalid");
+    await ctrl.startSync(configA.invoke as never, "https://relay-a.invalid");
+    await serveTask(ctrl, calls, "t-a");
+    // Serving outlives a stop (3.2a); toggled off here so B's registration
+    // is exercised too.
+    ctrl.stopServing();
+    ctrl.stopSync();
+
+    // Relay B: a URL typed into Connect.
+    const configB = await loadConfig(invoke, "https://relay-b.invalid");
+    await ctrl.startSync(configB.invoke as never, "https://relay-b.invalid");
+    await serveTask(ctrl, calls, "t-b");
+    ctrl.stopServing();
+    ctrl.stopSync();
+
+    const toB = calls.filter((c) => c.url.startsWith("https://relay-b.invalid"));
+    expect(toB.map((c) => c.url.replace("https://relay-b.invalid", ""))).toEqual(
+      expect.arrayContaining(["/api/v1/agents/register", "/agent/motebit-1/task/t-b/result"]),
+    );
+    expect(toB.filter((c) => carriesOperatorToken(c.auth))).toEqual([]);
+    expect(calls.filter((c) => carriesOperatorToken(c.auth))).toEqual([]);
+    const sockets = mockCtrl.wsInstances as unknown as Array<{
+      opts: { url: string; authToken?: string };
+    }>;
+    expect(sockets.some((s) => s.opts.url.startsWith("wss://relay-b.invalid"))).toBe(true);
+    expect(sockets.filter((s) => carriesOperatorToken(s.opts.authToken))).toEqual([]);
+    expect(toB.find((c) => c.url.endsWith("/task/t-b/result"))?.auth).toBe(
+      "Bearer minted:task:result",
+    );
+    guard.expectUnread();
+  });
+
+  it("/sync's door (syncConversations) mints its own sync token and never reads the slot", async () => {
+    const guard = guardOperatorSlot();
+    const planStore = { listActivePlans: vi.fn(() => []), getStepsForPlan: vi.fn(() => []) };
+    const ctrl = new SyncController(
+      makeDeps({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        getConversationStore: () => makeStore() as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        getPlanStore: () => planStore as any,
+        createSyncToken: async (_pk: string, aud?: string) => `minted:${aud ?? "sync"}`,
+      }),
+    );
+    await ctrl.syncConversations(guard.wrap(async () => null) as never, "https://relay.invalid");
+    const opts = mockCtrl.httpSyncAdapterOpts;
+    expect(opts.length).toBe(2); // conversations + plans
+    expect(opts.map((o) => o.authToken)).toEqual(["minted:sync", "minted:sync"]);
+    guard.expectUnread();
+  });
+
+  it("a stop while a granted task is in flight: its result still carries a minted task:result token (3b)", async () => {
+    const calls: Array<{ url: string; auth: string }> = [];
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const h = (init?.headers ?? {}) as Record<string, string>;
+      calls.push({ url, auth: h["Authorization"] ?? "" });
+      return mockCtrl.fetchResponse;
+    }) as never;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const runtime = makeRuntime({
+      handleAgentTask: vi.fn(async function* () {
+        await held;
+        yield { type: "task_result", receipt: { signed: true } };
+      }),
+    });
+    const ctrl = new SyncController(
+      makeDeps({
+        getRuntime: () => runtime,
+        createSyncToken: async (_pk: string, aud?: string) => `minted:${aud ?? "sync"}`,
+      }),
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ctrl.startSync(vi.fn() as any, "https://relay.invalid", "device-sync-token");
+    expect((await ctrl.startServing("pk")).ok).toBe(true);
+    const ws = mockCtrl.wsInstances[mockCtrl.wsInstances.length - 1]!;
+    for (const h of ws.customHandlers) h({ type: "task_request", task: { task_id: "t-3b" } });
+    for (const h of ws.customHandlers) h({ type: "task_claimed", task_id: "t-3b" });
+    await vi.waitFor(() => expect(runtime.handleAgentTask).toHaveBeenCalled());
+    ctrl.stopSync();
+    release();
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.url.endsWith("/task/t-3b/result"))).toBe(true);
+    });
+    expect(calls.find((c) => c.url.endsWith("/task/t-3b/result"))?.auth).toBe(
+      "Bearer minted:task:result",
+    );
   });
 });

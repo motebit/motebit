@@ -6509,7 +6509,6 @@ Secrets are stored in the platform key store, never in the config file (desktop:
 |---|---|
 | `device_private_key` | Ed25519 device private key (the CLI keeps it PBKDF2-encrypted in `config.json` instead) |
 | `<vendor>_api_key` | Per-vendor LLM keys: `anthropic_api_key`, `openai_api_key`, `google_api_key`, `deepseek_api_key`, `groq_api_key`; voice keys `elevenlabs_api_key`, `inworld_api_key`, `deepgram_api_key` |
-| `sync_master_token` | Sync relay authentication token |
 | `operator_pin_hash` | Operator PIN as a salted PBKDF2-SHA256 digest (100 000 iterations, `salt:derived`) |
 | `api_key` | Legacy single-vendor slot — read for migration only, never written |
 
@@ -7566,7 +7565,7 @@ In `~/.motebit/config.json`:
 }
 ```
 
-The sync master token is stored in the device key store — the owner-only `~/.motebit/dev-keyring.json` on desktop — not in the config file.
+Desktop authenticates to the relay as the device: every request carries a short-lived token signed by the device key, which lives in the device key store (the owner-only `~/.motebit/dev-keyring.json` on desktop), never in the config file. Desktop holds no relay operator token; operator commands are the CLI's (`motebit relay bind-token`).
 
 In the CLI, use `/sync` to trigger a manual sync cycle and see the current status.
 

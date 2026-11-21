@@ -437,7 +437,7 @@ describe("IdentityManager.registerWithRelay", () => {
     mgr.motebitId = "m";
     const invoke = makeInvoke({});
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = await mgr.registerWithRelay(invoke as any, "https://relay", "master");
+    const token = await mgr.registerWithRelay(invoke as any, "https://relay");
     expect(token).toBeNull();
     globalThis.fetch = origFetch;
   });
@@ -453,7 +453,7 @@ describe("IdentityManager.registerWithRelay", () => {
       __keyring_device_private_key: "b".repeat(64),
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = await mgr.registerWithRelay(invoke as any, "https://r", "tok");
+    const token = await mgr.registerWithRelay(invoke as any, "https://r");
     expect(token).toBe("signed-token");
     expect(mockCtrl.registerCalls).toHaveLength(1);
     expect(mockCtrl.registerCalls[0]).toMatchObject({
@@ -483,7 +483,7 @@ describe("IdentityManager.registerWithRelay", () => {
     });
     await expect(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mgr.registerWithRelay(invoke as any, "https://r", "tok"),
+      mgr.registerWithRelay(invoke as any, "https://r"),
     ).rejects.toThrow(/key_conflict/);
     mockCtrl.registerResult = { ok: true, created: true, registered_at: 1 };
     globalThis.fetch = origFetch;

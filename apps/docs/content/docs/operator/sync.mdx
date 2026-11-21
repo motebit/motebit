@@ -36,7 +36,7 @@ In `~/.motebit/config.json`:
 }
 ```
 
-The sync master token is stored in the device key store — the owner-only `~/.motebit/dev-keyring.json` on desktop — not in the config file.
+Desktop authenticates to the relay as the device: every request carries a short-lived token signed by the device key, which lives in the device key store (the owner-only `~/.motebit/dev-keyring.json` on desktop), never in the config file. Desktop holds no relay operator token; operator commands are the CLI's (`motebit relay bind-token`).
 
 In the CLI, use `/sync` to trigger a manual sync cycle and see the current status.
 

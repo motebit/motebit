@@ -3033,6 +3033,17 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-desktop-no-operator-token",
+    proves:
+      "flags a desktop source that names the relay operator token again — the one-line edit that would put a static relay master credential back into a desktop request sent to whatever relay URL is current, including through main.ts, which no test can import. Probe appends a read of the `sync_master_token` key-store slot to the desktop config loader.",
+    perturb: () =>
+      mutateFile(
+        "apps/desktop/src/ui/config.ts",
+        (src) =>
+          `${src}\nexport const __probeOperatorSlot = (invoke: (c: string, a: object) => Promise<unknown>) =>\n  invoke("keyring_get", { key: "sync_master_token" });\n`,
+      ),
+  },
+  {
     script: "check-goal-artifact-signing",
     proves:
       "flags a per-surface goal-runner that has stopped calling `runtime.signGoalArtifact` — the silent regression that would let goal-fire artifacts persist without a signed `ContentArtifactManifest` envelope. The drift class: a refactor that renames or removes the signing call on one surface (`apps/web/src/goal-scheduler.ts`, `apps/desktop/src/goal-scheduler.ts`, or `apps/mobile/src/goal-scheduler.ts`) passes typecheck because `signGoalArtifact` is optional from the runtime's perspective; the gate is the only catch. Probe rewrites `signGoalArtifact(` to `signGoalArtifactDisabled(` on the web surface; the gate's identifier scan must surface the missing-call violation.",

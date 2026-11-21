@@ -170,8 +170,8 @@ export interface VerifiedFetchResult {
 export interface SovereignFetchAdapter {
   readonly syncUrl: string | null;
   readonly motebitId: string | null;
-  // Surface-supplied auth'd fetch. Desktop injects `syncMasterToken`, web
-  // mints a signed sync token per call, mobile currently passes none.
+  // Surface-supplied auth'd fetch. Desktop, web and mobile each mint a
+  // device token per call for the route's audience.
   fetch(path: string, init?: SovereignFetchInit): Promise<Response>;
   /**
    * Optional verified fetch for relay state-export endpoints (the families

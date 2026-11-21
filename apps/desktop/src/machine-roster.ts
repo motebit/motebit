@@ -16,8 +16,8 @@
  * Ports:
  *   - `signer()` — `device_private_key` from the desktop's OWN key store
  *     (`~/.motebit/dev-keyring.json`, via `keyring_get`). The roster routes'
- *     bearer is a `device:auth` token minted over the SAME bytes — never the
- *     operator master token the Sovereign adapter holds (the routes 403 it).
+ *     bearer is a `device:auth` token minted over the SAME bytes. Desktop
+ *     holds no relay operator token (removed 2026-11-20; the routes 403 it).
  *   - `localSuccession()` — the succession records of the config's
  *     `_identity_file`, only when it verifies, names THIS motebit AND its
  *     current key is the key this desktop holds. A file proves possession,

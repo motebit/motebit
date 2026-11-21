@@ -18,11 +18,15 @@
  * the conversation poll 403'd on `/sync/:id/conversations`. A textbook
  * sibling-boundary miss: the staleness fix landed on two of four sync adapters.
  *
- * This is WEB-ONLY by construction. Desktop/CLI authenticate with a static
- * `syncMasterToken` (panels rule 3) that is long-lived by design; mobile uses
- * none. So the rotating-token-must-stay-fresh invariant binds the web surface
- * alone — scanning other surfaces would false-positive on their legitimate
- * static-token strategy.
+ * This is WEB-ONLY by construction. Desktop, web and mobile mint device
+ * tokens per request (panels rule 3); the CLI sends a static operator token
+ * only to a relay it is bound to (`motebit relay bind-token`). This gate's rule (no static `authToken` on the
+ * adapter) is narrower than that invariant, and widened, it would
+ * false-positive: desktop's `syncConversationsE2E` builds one-shot
+ * conversation and plan adapters with a static token minted for that one
+ * sync (`apps/desktop/src/sync-controller.ts`), which is legitimate because
+ * the adapter does not outlive the call. Desktop's long-lived catch-up
+ * adapter already takes a `credentialSource` (#927).
  *
  * Invariant: in `apps/web/src/**`, every construction of a long-lived HTTP sync
  * adapter (`HttpEventStoreAdapter`, `HttpPlanSyncAdapter`,
@@ -41,8 +45,8 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
-// Web only — the rotating-token surface. Other surfaces use a static master
-// token by design (panels rule 3) and are out of scope by construction.
+// Web only. Desktop's one-shot per-call adapters take a static, freshly
+// minted token legitimately (see the header), so they are out of scope.
 const SCAN_ROOT = resolve(ROOT, "apps/web/src");
 
 // The long-lived, relay-polling HTTP sync adapters. Each holds its config for

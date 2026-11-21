@@ -7,7 +7,7 @@ import {
   type GovernanceConfig,
   type AppearanceConfig,
 } from "@motebit/sdk";
-import { byokKeyringKey, LEGACY_API_KEY_SLOT, SYNC_MASTER_TOKEN_SLOT } from "./keyring-keys";
+import { byokKeyringKey, LEGACY_API_KEY_SLOT } from "./keyring-keys";
 
 /**
  * Read a canonical `AppearanceConfig` from the Tauri JSON blob.
@@ -153,19 +153,11 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       (parsed.ollama_endpoint as string | undefined) ??
       undefined;
 
-    // Sync relay config (optional)
+    // Sync relay config (optional). Only the URL: desktop authenticates to
+    // the relay as this device and reads no relay operator token. A token
+    // hand-placed in the key store's old operator slot is left there,
+    // unread (design 2026-11-20, decision D1).
     const syncUrl = (parsed.sync_url as string | undefined) ?? undefined;
-    let syncMasterToken: string | undefined;
-    if (syncUrl != null && syncUrl !== "") {
-      try {
-        const keyringVal = await invoke<string | null>("keyring_get", {
-          key: SYNC_MASTER_TOKEN_SLOT,
-        });
-        syncMasterToken = keyringVal ?? undefined;
-      } catch {
-        // Keyring unavailable
-      }
-    }
 
     const governance = parseGovernanceFromConfig(parsed);
     const appearance = parseAppearanceFromConfig(parsed);
@@ -178,7 +170,6 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       isTauri: true,
       invoke: invoke,
       syncUrl,
-      syncMasterToken,
       governance,
       appearance,
     };

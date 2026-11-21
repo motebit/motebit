@@ -201,7 +201,6 @@ export interface DesktopAIConfig {
   maxTokens?: number;
   invoke?: InvokeFn;
   syncUrl?: string;
-  syncMasterToken?: string;
   /**
    * Canonical governance config. Single source of truth for approval preset,
    * memory persistence threshold, secret rejection, and per-turn budget caps.
@@ -655,12 +654,8 @@ export class DesktopApp {
     return kp?.privateKey ?? null;
   }
 
-  registerWithRelay(
-    invoke: InvokeFn,
-    syncUrl: string,
-    masterToken: string,
-  ): Promise<string | null> {
-    return this.identity.registerWithRelay(invoke, syncUrl, masterToken);
+  registerWithRelay(invoke: InvokeFn, syncUrl: string): Promise<string | null> {
+    return this.identity.registerWithRelay(invoke, syncUrl);
   }
 
   createSyncToken(privateKeyHex: string, aud: string = "sync"): Promise<string> {
@@ -2420,27 +2415,26 @@ export class DesktopApp {
   syncConversations(
     invoke: InvokeFn,
     syncUrl: string,
-    authToken?: string,
   ): Promise<{
     conversations_pushed: number;
     conversations_pulled: number;
     messages_pushed: number;
     messages_pulled: number;
   }> {
-    return this.sync.syncConversations(invoke, syncUrl, authToken);
+    return this.sync.syncConversations(invoke, syncUrl);
   }
 
-  /** Start full sync: event-level WS + one-shot conversation sync. */
-  async startSync(
-    invoke: InvokeFn,
-    syncUrl: string,
-    authToken?: string,
-    masterToken?: string,
-  ): Promise<void> {
+  /**
+   * Start full sync: event-level WS + one-shot conversation sync.
+   * `authToken` is the device `sync` token `registerWithRelay` returned, if
+   * any; absent ⇒ minted. Every relay call desktop makes authenticates as
+   * the device.
+   */
+  async startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
     // #962: from here on a relay may hold this store's pushes — compaction
     // waits on its acknowledgment, whether or not the config named it.
     if (syncUrl !== "") this._syncStartedUrl = syncUrl;
-    await this.sync.startSync(invoke, syncUrl, authToken, masterToken);
+    await this.sync.startSync(invoke, syncUrl, authToken);
     // S4 — the roster is read (and presented, when due) whenever this
     // desktop connects. Under its own device:auth token, never `authToken`.
     if (this.sync.syncStatus.status === "connected") {

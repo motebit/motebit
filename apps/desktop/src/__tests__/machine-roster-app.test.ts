@@ -185,10 +185,13 @@ describe("DesktopApp.machineRoster", () => {
     const sync = internals(app).sync;
     vi.spyOn(sync, "startSync").mockResolvedValue(undefined);
     const status = vi.spyOn(sync, "syncStatus", "get").mockReturnValue({ status: "error" });
-    await app.startSync(invoke, "https://relay.test", "MASTER");
+    // No token argument: desktop authenticates as the device (the operator
+    // token is removed; startSync takes only the device `sync` token, if any).
+    await app.startSync(invoke, "https://relay.test");
     expect(refresh).not.toHaveBeenCalled();
     status.mockReturnValue({ status: "connected" });
-    await app.startSync(invoke, "https://relay.test", "MASTER");
+    await app.startSync(invoke, "https://relay.test");
+    expect(sync.startSync).toHaveBeenLastCalledWith(invoke, "https://relay.test", undefined);
     expect(refresh).toHaveBeenCalledTimes(1);
     app.stop();
   });
