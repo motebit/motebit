@@ -132,8 +132,8 @@ function makeRuntime() {
     getToolRegistry: vi.fn(() => ({ list: () => [] })),
     getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
     setDelegationAdapter: vi.fn(),
-    enableInteractiveDelegation: vi.fn(),
-    disableInteractiveDelegation: vi.fn(),
+    bindRelay: vi.fn(),
+    unbindRelay: vi.fn(),
     recoverDelegatedSteps: async function* () {
       /* empty */
     },
@@ -204,7 +204,7 @@ describe("Relay OFF drops every live relay handle", () => {
     const runtime = makeRuntime();
     const ctrl = new MobileSyncController(makeDeps(runtime));
     await connectAndRunFirstCycle(ctrl);
-    expect(runtime.enableInteractiveDelegation).toHaveBeenCalled();
+    expect(runtime.bindRelay).toHaveBeenCalled();
     // While ON, discovery reaches the relay.
     await ctrl.discoverAgents();
     expect(fetchSpy.mock.calls.some(([u]) => String(u).includes("/agents/discover"))).toBe(true);
@@ -226,7 +226,7 @@ describe("Relay OFF drops every live relay handle", () => {
 
     // delegate_to_agent / discover_agents / retrieve_task_result are gone
     // (pinned at the runtime by disable-interactive-delegation.test.ts).
-    expect(runtime.disableInteractiveDelegation).toHaveBeenCalled();
+    expect(runtime.unbindRelay).toHaveBeenCalled();
     expect(runtime.setDelegationAdapter).toHaveBeenLastCalledWith(undefined);
   });
 });
@@ -242,7 +242,7 @@ describe("Relay OFF disposes the session first, then unregisters the push token"
           url,
           ref.ctrl?.syncStatus,
           vi.mocked(deps.stopPushLifecycle).mock.calls.length > 0,
-          runtime.disableInteractiveDelegation.mock.calls.length > 0,
+          runtime.unbindRelay.mock.calls.length > 0,
           (await ref.ctrl?.getSyncUrl()) ?? null,
         );
       }),
@@ -397,7 +397,7 @@ async function expectNothingLiveAfterOff(
   await vi.advanceTimersByTimeAsync(120_000);
   expect(ctrl.isSyncConnected).toBe(false);
   expect(ctrl.syncStatus).toBe("offline");
-  expect(runtime.enableInteractiveDelegation).not.toHaveBeenCalled();
+  expect(runtime.bindRelay).not.toHaveBeenCalled();
   expect(await ctrl.discoverAgents()).toEqual([]);
   expect(fetchSpy).not.toHaveBeenCalled();
   expect(vi.getTimerCount()).toBe(0);
@@ -442,9 +442,9 @@ describe("Relay OFF while relay work is in flight: stale continuations cannot ac
     await vi.advanceTimersByTimeAsync(3_100); // first cycle, now blocked on the pin
     expect(getOrPinRelayKey).toHaveBeenCalled();
     await ctrl.disconnectSync();
-    expect(runtime.disableInteractiveDelegation).toHaveBeenCalled();
+    expect(runtime.unbindRelay).toHaveBeenCalled();
     fetchSpy.mockClear();
-    runtime.enableInteractiveDelegation.mockClear();
+    runtime.bindRelay.mockClear();
 
     pin.resolve("relay-key-hex");
     await expectNothingLiveAfterOff(ctrl, runtime);

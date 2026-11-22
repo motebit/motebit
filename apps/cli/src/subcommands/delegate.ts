@@ -197,13 +197,15 @@ async function handleDelegatePlan(
     const h = await getRelayAuthHeaders(config, relayUrl, { aud, json: true });
     return (h["Authorization"] ?? "").replace("Bearer ", "");
   };
-  runtime.enableInteractiveDelegation({
+  runtime.bindRelay({
     syncUrl: relayUrl,
     authToken: authTokenFactory,
     // Cold-start opt-in (`--pay-new-agents`) — lets a paid delegation to a
     // no-history worker settle P2P instead of degrading to relay-mode. Process-
     // lifetime config, so a plain boolean (no live getter needed on the CLI).
     ...(config.payNewAgents ? { acknowledgeNoHistoryRisk: true } : {}),
+    tools: true,
+    invokeCapability: false,
   });
 
   // Sovereign delegation: pay agents directly via Solana wallet (pattern 9.1)

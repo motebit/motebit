@@ -126,6 +126,14 @@ interface RelayAttempt {
   serving: boolean;
   servingUrl: string | null;
   servingAuthToken: string | null;
+  /**
+   * The runtime's delegation relay is bound ONCE per attempt — by the first
+   * sync cycle whose relay-key fetch returns. A later cycle of the same
+   * attempt never rebinds: a pin that resolves differently mid-attempt
+   * (first fetch failed, a rotation, a mismatch) cannot change the binding
+   * generation and deny a pending approval. The next attempt picks it up.
+   */
+  delegationBound: boolean;
 }
 
 export class MobileSyncController {
@@ -183,6 +191,7 @@ export class MobileSyncController {
       serving: false,
       servingUrl: null,
       servingAuthToken: null,
+      delegationBound: false,
     };
     session.own(() => {
       attempt.taskClaims.dispose();
@@ -218,7 +227,7 @@ export class MobileSyncController {
 
   private dropDelegation(): void {
     const runtime = this.deps.getRuntime();
-    runtime?.disableInteractiveDelegation();
+    runtime?.unbindRelay();
     runtime?.setDelegationAdapter(undefined);
   }
 
@@ -860,20 +869,28 @@ export class MobileSyncController {
             fetchImpl: session.fetch,
           }),
         );
-        runtime.enableInteractiveDelegation({
-          syncUrl,
-          // Honor the audience the runtime asks for — `task:submit` to
-          // submit, `task:query` to poll, `market:listing` for the P2P
-          // pre-flight. A closure that ignored it sent `task:submit` to all
-          // three, and the poll and pre-flight were refused (#827).
-          authToken: (audience?: TokenAudience) => attempt.mint(audience ?? "task:submit"),
-          ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
-          // Forward the cold-start opt-in as a LIVE getter (reads the in-memory
-          // mirror of MobileSettings.coldStartOptIn) so the Governance toggle
-          // governs chat-driven (delegate_to_agent) P2P delegation, not just a
-          // re-enable — parity with the web fix (d6cab601).
-          acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
-        });
+        // Bind the runtime's ONE delegation relay, once per attempt (see
+        // `RelayAttempt.delegationBound`). `session.run` above already
+        // refuses to continue a disposed attempt, so a stale bind cannot land.
+        if (!attempt.delegationBound) {
+          attempt.delegationBound = true;
+          runtime.bindRelay({
+            syncUrl,
+            // Honor the audience the runtime asks for — `task:submit` to
+            // submit, `task:query` to poll, `market:listing` for the P2P
+            // pre-flight. A closure that ignored it sent `task:submit` to all
+            // three, and the poll and pre-flight were refused (#827).
+            authToken: (audience?: TokenAudience) => attempt.mint(audience ?? "task:submit"),
+            ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+            // Forward the cold-start opt-in as a LIVE getter (reads the in-memory
+            // mirror of MobileSettings.coldStartOptIn) so the Governance toggle
+            // governs chat-driven (delegate_to_agent) P2P delegation — parity
+            // with the web fix (d6cab601).
+            acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
+            tools: true,
+            invokeCapability: false,
+          });
+        }
 
         // Store serving state
         attempt.servingUrl = syncUrl;

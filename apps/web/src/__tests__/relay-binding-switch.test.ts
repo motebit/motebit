@@ -117,6 +117,11 @@ let holdKeyFor: Set<"A" | "B">;
 
 beforeEach(() => {
   localStorage.clear();
+  // The once-per-device onboarding self-test submits its own probe task to
+  // the relay it starts on (it carries its own relay config, not the
+  // runtime's delegation binding — outside part 4a). Marked done, so every
+  // task request these tests see is a delegation call.
+  localStorage.setItem("motebit:self-test-done", "true");
   requests = [];
   keyHolds = new Map();
   holdKeyFor = new Set();

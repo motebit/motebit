@@ -693,24 +693,14 @@ export class SpatialApp {
     this.runtime.setLocalCapabilities([DeviceCapability.HttpMcp]);
 
     // Hardware-attestation peer flow — production wiring. The fetcher
-    // reads the sync URL lazily from localStorage (same accessor the
-    // ProxySessionAdapter uses), so reconfiguring the relay takes
-    // effect on the next delegation without runtime reconstruction.
+    // holds no relay: the runtime names one per fetch (the relay of the
+    // delegation call that produced the receipt, else the bound relay) and
+    // fetches nothing while no delegation relay is bound.
     // Spatial is a delegating surface even without panels — the
     // creature dispatches through the same MotebitRuntime delegation
     // path the other surfaces use. See
     // `packages/runtime/src/agent-trust.ts:258` for the hook body.
-    this.runtime.setHardwareAttestationFetcher(
-      createRelayCapabilitiesFetcher({
-        baseUrl: () => {
-          try {
-            return localStorage.getItem("motebit:sync_url") ?? undefined;
-          } catch {
-            return undefined;
-          }
-        },
-      }),
-    );
+    this.runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher());
     this.runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
     // Subscribe to state changes — feed attention level for orbital dynamics

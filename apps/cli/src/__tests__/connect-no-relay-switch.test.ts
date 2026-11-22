@@ -242,7 +242,7 @@ async function startSession(
     moteDb.close();
   });
   // Counted from here on: what startup did is not what the command does.
-  const enable = vi.spyOn(runtime, "enableInteractiveDelegation");
+  const enable = vi.spyOn(runtime, "bindRelay");
   const listing = vi.spyOn(runtime, "registerServiceListing");
   const repl: ReplContext = {
     moteDb,
@@ -315,7 +315,7 @@ const PRINTED_AS = "/red";
 
 /** Row 3, asserted: `/connect B` on a session bound to A sends nothing, changes nothing, prints R1. */
 async function expectRefusedSwitch(s: Session, a: FakeRelay, b: FakeRelay): Promise<void> {
-  expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url });
+  expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url, pinned: false });
   expect(a.log.length).toBeGreaterThan(0);
   const { printed, unchanged } = await runConnect(s, b.url, [a, b]);
   expect(b.log).toEqual([]);
@@ -352,7 +352,7 @@ describe("/connect in a session already on a relay: nothing sent, nothing change
   it("bound to A, /connect A and /connect A/: the already-on-A line, nothing sent to A, nothing changed", async () => {
     const a = await relay();
     const s = await startSession({ flag: a.url });
-    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url, pinned: false });
     for (const spelled of [a.url, `${a.url}/`]) {
       const { printed, unchanged } = await runConnect(s, spelled, [a]);
       expect(unchanged).toBe(true);
@@ -371,7 +371,7 @@ describe("/connect in a session already on a relay: nothing sent, nothing change
   it("bound to A with an operator token set and no open identity key, /connect B: the no-signing-keys error, not R1 or R2", async () => {
     const [a, b] = [await relay(), await relay()];
     const s = await startSession({ flag: a.url, argv: ["--sync-token", OPERATOR_TOKEN] });
-    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url, pinned: false });
     delete s.repl.privateKeyBytes;
     const { printed, unchanged } = await runConnect(s, b.url, [a, b]);
     expect(b.log).toEqual([]);
@@ -382,7 +382,7 @@ describe("/connect in a session already on a relay: nothing sent, nothing change
   it("bound to A, /connect with A's scheme in upper case: a different spelling is a different relay, refused with R1, nothing sent", async () => {
     const a = await relay();
     const s = await startSession({ flag: a.url });
-    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url, pinned: false });
     const spelled = a.url.replace(/^http:/, "HTTP:");
     expect(spelled).not.toBe(a.url);
     const { printed, unchanged } = await runConnect(s, spelled, [a]);
@@ -393,7 +393,7 @@ describe("/connect in a session already on a relay: nothing sent, nothing change
   it("bound to A, /connect A/x: an extra path segment is a different relay, refused with R1, nothing sent", async () => {
     const a = await relay();
     const s = await startSession({ flag: a.url });
-    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url, pinned: false });
     const { printed, unchanged } = await runConnect(s, `${a.url}/x`, [a]);
     expect(unchanged).toBe(true);
     expect(printed).toEqual(R1(a.url, `${a.url}/x`));
@@ -403,7 +403,7 @@ describe("/connect in a session already on a relay: nothing sent, nothing change
     for (const suffix of UNPRINTABLE) {
       const a = await relay();
       const s = await startSession({ flag: `${a.url}${suffix}` });
-      expect(s.runtime.getDelegationRelay()).toEqual({ url: `${a.url}${suffix}` });
+      expect(s.runtime.getDelegationRelay()).toEqual({ url: `${a.url}${suffix}`, pinned: false });
       const { printed, unchanged } = await runConnect(s, `${a.url}${suffix}`, [a]);
       expect(unchanged).toBe(true);
       expect(printed).toEqual(ALREADY(`${a.url}${PRINTED_AS}`));
@@ -414,7 +414,7 @@ describe("/connect in a session already on a relay: nothing sent, nothing change
     for (const suffix of UNPRINTABLE) {
       const [a, b] = [await relay(), await relay()];
       const s = await startSession({ flag: `${a.url}${suffix}` });
-      expect(s.runtime.getDelegationRelay()).toEqual({ url: `${a.url}${suffix}` });
+      expect(s.runtime.getDelegationRelay()).toEqual({ url: `${a.url}${suffix}`, pinned: false });
       const { printed, unchanged } = await runConnect(s, `${b.url}${suffix}`, [a, b]);
       expect(b.log).toEqual([]);
       expect(unchanged).toBe(true);
@@ -472,7 +472,7 @@ describe("/connect never sends an operator token", () => {
   async function expectConnectsWithoutToken(s: Session, x: FakeRelay): Promise<void> {
     const { printed } = await runConnect(s, x.url, [x]);
     expect(printed.join("\n")).toContain(`Connected to ${x.url}`);
-    expect(s.runtime.getDelegationRelay()).toEqual({ url: x.url });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: x.url, pinned: false });
     expect(x.log.map((r) => r.path)).toEqual([
       "/api/v1/agents/bootstrap",
       "/api/v1/agents/discover",
@@ -560,7 +560,7 @@ describe("/connect in a session with no relay and no operator token", () => {
 
     const first = await runConnect(s, a.url, [a]);
     expect(first.printed.join("\n")).toContain(`Connected to ${a.url}`);
-    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url, pinned: false });
     expect(s.sessionRelay.urls).toEqual([a.url]);
     expect(loadFullConfig().sync_url).toBe(a.url);
     expect(s.listingCalls()).toBe(1);
@@ -598,7 +598,7 @@ describe("/connect in a session with no relay and no operator token", () => {
 
     const second = await runConnect(s, b.url, [b]);
     expect(second.printed.join("\n")).toContain(`Connected to ${b.url}`);
-    expect(s.runtime.getDelegationRelay()).toEqual({ url: b.url });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: b.url, pinned: false });
     expect(loadFullConfig().sync_url).toBe(b.url);
   });
 
@@ -614,7 +614,7 @@ describe("/connect in a session with no relay and no operator token", () => {
       "/api/v1/agents/bootstrap",
       "/api/v1/agents/discover",
     ]);
-    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url });
+    expect(s.runtime.getDelegationRelay()).toEqual({ url: a.url, pinned: false });
 
     const second = await runConnect(s, b.url, [a, b]);
     expect(b.log).toEqual([]);

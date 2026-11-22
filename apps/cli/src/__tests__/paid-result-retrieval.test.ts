@@ -21,7 +21,12 @@ import {
   selectAndRunDelegation,
 } from "@motebit/runtime";
 import { createMotebitDatabase } from "@motebit/persistence";
-import type { ExecutionReceipt, P2pPaymentProof, ToolResult } from "@motebit/sdk";
+import type {
+  ExecutionReceipt,
+  P2pPaymentProof,
+  SovereignWalletRail,
+  ToolResult,
+} from "@motebit/sdk";
 import type { CliConfig } from "../args.js";
 import { faultingFetch } from "../fault-injection.js";
 import { buildStorageAdapters } from "../runtime-factory.js";
@@ -156,8 +161,14 @@ describe("paid result lost, restart, /result (#874 on the CLI's SQLite)", () => 
     // ── Session 2: a new runtime over the same file ──────────────────────
     globalThis.fetch = relay.fetch; // no fault: the relay still holds the result
     const db2 = createMotebitDatabase(dbPath);
+    // The payment builder reaches the runtime through its sovereign rail (a
+    // relay binding carries no builder).
     const runtime = new MotebitRuntime(
-      { motebitId: ME, tickRateHz: 0 },
+      {
+        motebitId: ME,
+        tickRateHz: 0,
+        solanaWallet: { buildP2pPayment } as unknown as SovereignWalletRail,
+      },
       { storage: buildStorageAdapters(db2), renderer: new NullRenderer() },
     );
     // delegate_to_agent is R4_MONEY on the payment rail: the registry refuses
@@ -173,12 +184,13 @@ describe("paid result lost, restart, /result (#874 on the CLI's SQLite)", () => 
         original(def, handler);
       };
     }
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "token",
       relayPublicKey: RELAY_KEY,
-      buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     // The startup notice (index.ts prints exactly this line, dimmed).

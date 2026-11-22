@@ -187,7 +187,8 @@ function makeRuntime(overrides: Record<string, unknown> = {}): any {
   return {
     connectSync: vi.fn(),
     startSync: vi.fn(),
-    enableInteractiveDelegation: vi.fn(),
+    bindRelay: vi.fn(),
+    unbindRelay: vi.fn(),
     resetConversation: vi.fn(),
     sync: {
       onStatusChange: vi.fn(() => () => {}),
@@ -363,7 +364,7 @@ describe("SyncController.startSync", () => {
     await ctrl.startSync(vi.fn() as any, "https://relay.test");
     expect(runtime.connectSync).toHaveBeenCalled();
     expect(runtime.startSync).toHaveBeenCalled();
-    expect(runtime.enableInteractiveDelegation).toHaveBeenCalled();
+    expect(runtime.bindRelay).toHaveBeenCalled();
     expect(mockCtrl.wsInstances.length).toBeGreaterThan(0);
     ctrl.stopSync();
   });

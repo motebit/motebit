@@ -890,7 +890,10 @@ export async function createRuntime(
     // See `packages/runtime/src/agent-trust.ts:258` for the hook body and
     // `services/relay/src/__tests__/hardware-peer-flow-e2e.test.ts` for the
     // protocol-loop assertion.
-    runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
+    // The fetcher holds no relay: the runtime names one per fetch (the
+    // relay of the delegation call that produced the receipt, else the bound
+    // relay) and fetches nothing while none is bound.
+    runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher());
   } else {
     console.log(dim("Sync: off (opt in with --sync-url)"));
   }

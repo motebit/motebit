@@ -52,6 +52,8 @@ import { goalRunFakes } from "./goal-run-fakes.js";
 
 const MOTE = "mote-890";
 const GOAL = "goal-890";
+/** The relay the harness's paid records are owed from (the ledger requires one). */
+const HARNESS_RELAY = "https://relay-890.invalid";
 const TICKS = 4;
 
 type TurnOutcome = "success" | "failure" | "undetermined" | "crash";
@@ -272,15 +274,15 @@ async function runTurnCase(
     };
     const kind: TurnOutcome = n === 0 ? first : "success";
     if (kind === "success") {
-      ledger.recordInFlight(entry);
+      ledger.recordInFlight(entry, HARNESS_RELAY);
       ledger.resolve(id);
       hire.known = true;
     } else if (kind === "failure") {
       hire.known = true; // refused before payment, or a signed failed receipt came back
     } else if (kind === "undetermined") {
-      ledger.recordSettledUnretrieved(entry);
+      ledger.recordSettledUnretrieved(entry, HARNESS_RELAY);
     } else {
-      ledger.recordInFlight(entry);
+      ledger.recordInFlight(entry, HARNESS_RELAY);
       w.signalCrash();
       await new Promise<void>(() => {});
     }

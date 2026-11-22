@@ -1031,16 +1031,21 @@ export async function handleSlashCommand(
         break;
       }
 
-      // 2. Enable interactive delegation
+      // 2. Bind the delegation relay (the chat tools, as before — /connect
+      // never bound the tap path)
       const pk = repl.privateKeyBytes;
       const did = repl.deviceId;
       const mid = repl.motebitId;
-      runtime.enableInteractiveDelegation({
+      runtime.bindRelay({
         syncUrl: connectUrl,
         authToken: async (audience = "task:submit") => {
           return (await mintAudienceToken({ mid, did, aud: audience }, pk)).token;
         },
-        routingStrategy: config.routingStrategy,
+        ...(config.routingStrategy !== undefined
+          ? { routingStrategy: config.routingStrategy }
+          : {}),
+        tools: true,
+        invokeCapability: false,
       });
       // The session is now on this relay: a standing grant's revocation
       // status is checked against it from the next turn on. Added to the
