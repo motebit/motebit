@@ -39,6 +39,7 @@ const BINDING = "packages/runtime/src/relay-binding.ts";
 const LEDGER = "packages/runtime/src/paid-intent-ledger.ts";
 const T_SINGLE = "src/__tests__/relay-single-binding.test.ts";
 const T_APPROVAL = "src/__tests__/relay-binding-approval.test.ts";
+const T_BIND = "src/__tests__/relay-binding.test.ts";
 
 const RED_T1 = "bind A then bind B every path sends every tokened request to B and nothing to A";
 const RED_T2 =
@@ -391,6 +392,110 @@ const TAMPERS: TamperEntry[] = [
     red: "paid_intent_ledger.relay_url (migration #53) records and reads the relay a paid result is owed from",
   },
 
+  // ── cold-review follow-ups: paths no earlier test caught ──
+  rt(
+    "MONEY PATH: a key pinned on the same relay keeps the generation",
+    [{ file: BINDING, from: "    prev.relayPublicKey !== next.relayPublicKey ||\n", to: "" }],
+    T_APPROVAL,
+    "approved delegate_to_agent: the other generation changes (f) the same relay rebound WITH a key (a pin landed): relay_changed, nothing sent",
+  ),
+  rt(
+    "unbindRelay does not advance the generation",
+    [
+      {
+        file: RUNTIME,
+        from: "      this._relayBinding = null;\n      this._relayGeneration++;\n",
+        to: "      this._relayBinding = null;\n",
+      },
+    ],
+    T_APPROVAL,
+    "approved write_note across an unbind with no rebind (g) unbind, then approve: relay_changed, handler not invoked",
+  ),
+  rt(
+    "a tap runs on a binding with invokeCapability: false",
+    [
+      {
+        file: IC,
+        from: "    if (binding == null || !binding.invokeCapability) {\n",
+        to: "    if (binding == null) {\n",
+      },
+    ],
+    T_SINGLE,
+    "a binding that leaves a path out invokeCapability: false — a tap returns sync_not_enabled and sends nothing",
+  ),
+  rt(
+    "a credential is posted on a tap-only binding (tools: false)",
+    [
+      {
+        file: ID,
+        from: "      if (binding == null || !binding.tools) return;\n",
+        to: "      if (binding == null) return;\n",
+      },
+    ],
+    T_SINGLE,
+    "a binding that leaves a path out tools: false (a tap-only binding) — an issued credential is not posted",
+  ),
+  rt(
+    "a relay tool handler runs on a binding with tools: false",
+    [
+      {
+        file: ID,
+        from: "      if (binding == null || !binding.tools) return { ...NOT_BOUND_RESULT };\n",
+        to: "      if (binding == null) return { ...NOT_BOUND_RESULT };\n",
+      },
+    ],
+    T_SINGLE,
+    "a binding that leaves a path out tools: false after tools: true — a handler still reachable refuses and sends nothing",
+  ),
+  rt(
+    "sameRelay compares raw strings even when both pin keys exist",
+    [
+      {
+        file: BINDING,
+        from: "  if (ka != null && kb != null) return ka === kb;\n",
+        to: "  if (ka != null && kb != null) return a === b;\n",
+      },
+    ],
+    T_BIND,
+    "sameRelay different spellings with the same non-null pin key are the same relay",
+  ),
+  rt(
+    "sameRelay calls any two pinnable URLs the same relay",
+    [
+      {
+        file: BINDING,
+        from: "  if (ka != null && kb != null) return ka === kb;\n",
+        to: "  if (ka != null && kb != null) return true;\n",
+      },
+    ],
+    T_BIND,
+    "sameRelay different non-null pin keys are different relays",
+  ),
+  rt(
+    "sameRelay calls any two unpinnable URLs the same relay",
+    [
+      {
+        file: BINDING,
+        from: "  if (ka == null && kb == null) return a === b;\n",
+        to: "  if (ka == null && kb == null) return true;\n",
+      },
+    ],
+    T_BIND,
+    "sameRelay null pin keys compare the raw strings",
+  ),
+  rt(
+    "sameRelay calls a pinnable and an unpinnable URL the same relay",
+    [
+      {
+        file: BINDING,
+        from: "  return false;\n}\n\n/**\n * Whether binding",
+        to: "  return true;\n}\n\n/**\n * Whether binding",
+      },
+    ],
+    T_BIND,
+    "sameRelay a null pin key and a non-null one are different relays",
+  ),
+
   // ── surfaces ──
   {
     name: "web: Disconnect no longer unbinds",
@@ -443,6 +548,32 @@ const TAMPERS: TamperEntry[] = [
     pkg: "@motebit/web",
     test: T_WEB,
     red: WEB_RED_PAIRING,
+  },
+  {
+    name: "web: a tap's explicit acknowledgeNoHistoryRisk: false is dropped",
+    edits: [
+      {
+        file: WEB,
+        from: "        acknowledgeNoHistoryRisk,\n      });\n",
+        to: "        ...(acknowledgeNoHistoryRisk ? { acknowledgeNoHistoryRisk: true } : {}),\n      });\n",
+      },
+    ],
+    pkg: "@motebit/web",
+    test: T_WEB,
+    red: "web tap: an explicit acknowledgement overrides the stored opt-in opted in, the tap passes acknowledgeNoHistoryRisk: false → the runtime gets false",
+  },
+  {
+    name: "desktop: a Connect to another relay no longer unbinds at entry (pairing without Disconnect)",
+    edits: [
+      {
+        file: DESKTOP,
+        from: "    if (bound != null && !sameRelay(bound.url, syncUrl)) runtime.unbindRelay();\n",
+        to: "",
+      },
+    ],
+    pkg: "@motebit/desktop",
+    test: T_DESKTOP,
+    red: "desktop relay switch through SyncController Connect B without Disconnect (pairing) that stops before binding: nothing stays bound to A",
   },
   {
     name: "desktop: Disconnect no longer unbinds",

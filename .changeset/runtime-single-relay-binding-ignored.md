@@ -16,7 +16,7 @@ The relay a runtime delegates to used to live in five places that rebound differ
 - `@motebit/persistence`: `paid_intent_ledger.relay_url` (nullable, migration #53).
 - `@motebit/web`, `@motebit/desktop`: Connect binds and Disconnect unbinds; a Connect whose relay-key fetch is overtaken by a Disconnect or another Connect binds nothing (a session number). Web also drops the old binding at once when Connect names a different relay (pairing calls Connect without Disconnect).
 - `@motebit/mobile`: binds once per sync attempt (the first cycle whose key fetch returns) and unbinds when the attempt is disposed.
-- `@motebit/spatial`, `@motebit/desktop`, `@motebit/mobile`: the capabilities fetcher no longer holds a relay URL.
+- `@motebit/spatial`, `@motebit/desktop`, `@motebit/mobile`: the capabilities fetcher no longer holds a relay URL. Spatial binds no delegation relay, so it no longer makes the hardware-attestation capabilities read after a receipt. That read only adds hardware-attestation scoring to a worker's trust record — it gates nothing — and part 4b (plan-step delegation under the binding) restores it.
 - `@motebit/molecule-runner`: binds its relay with the same values it enabled.
 
 ## Migration

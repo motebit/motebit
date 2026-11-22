@@ -261,3 +261,25 @@ describe("web relay switch (Connect A, Disconnect, Connect B)", () => {
     app.stop();
   });
 });
+
+describe("web tap: an explicit acknowledgement overrides the stored opt-in", () => {
+  it("opted in, the tap passes acknowledgeNoHistoryRisk: false → the runtime gets false", async () => {
+    const app = await booted();
+    localStorage.setItem("motebit-p2p-cold-start-optin", "true");
+    const runtime = app.getRuntime()!;
+    const seen: Array<{ acknowledgeNoHistoryRisk?: boolean } | undefined> = [];
+    vi.spyOn(runtime, "invokeCapability").mockImplementation(async function* (_c, _p, o) {
+      seen.push(o);
+    });
+    for await (const _c of app.invokeCapability("web_search", "search", {
+      acknowledgeNoHistoryRisk: false,
+    })) {
+      // drain
+    }
+    for await (const _c of app.invokeCapability("web_search", "search")) {
+      // drain: no explicit option → the stored opt-in
+    }
+    expect(seen.map((o) => o?.acknowledgeNoHistoryRisk)).toEqual([false, true]);
+    app.stop();
+  });
+});

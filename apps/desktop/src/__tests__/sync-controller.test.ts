@@ -189,6 +189,7 @@ function makeRuntime(overrides: Record<string, unknown> = {}): any {
     startSync: vi.fn(),
     bindRelay: vi.fn(),
     unbindRelay: vi.fn(),
+    getDelegationRelay: vi.fn(() => null),
     resetConversation: vi.fn(),
     sync: {
       onStatusChange: vi.fn(() => () => {}),

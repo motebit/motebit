@@ -207,7 +207,10 @@ function makeRuntime(): MotebitRuntime {
   return runtime;
 }
 
-function controllerFor(runtime: MotebitRuntime): SyncController {
+function controllerFor(
+  runtime: MotebitRuntime,
+  keys: { present: boolean } = { present: true },
+): SyncController {
   const deps: SyncControllerDeps = {
     getRuntime: () => runtime,
     getMotebitId: () => "motebit-1",
@@ -215,7 +218,8 @@ function controllerFor(runtime: MotebitRuntime): SyncController {
     getConversationStore: () => null,
     getPlanStore: () => null,
     getLocalEventStore: () => null,
-    getDeviceKeypair: async () => ({ publicKey: "a".repeat(64), privateKey: "b".repeat(64) }),
+    getDeviceKeypair: async () =>
+      keys.present ? { publicKey: "a".repeat(64), privateKey: "b".repeat(64) } : null,
     createSyncToken: async (_pk: string, aud?: string) => `tok:${aud ?? "sync"}`,
   };
   return new SyncController(deps);
@@ -333,6 +337,24 @@ describe("desktop relay switch through SyncController", () => {
     expect(sent.length).toBeGreaterThan(0);
     expect(sent.filter((r) => r.relay === "A")).toEqual([]);
     expect(runtime.getDelegationRelay()?.url).toBe(RELAY_B);
+    ctrl.stopSync();
+  });
+
+  it("Connect B without Disconnect (pairing) that stops before binding: nothing stays bound to A", async () => {
+    const runtime = makeRuntime();
+    const keys = { present: true };
+    const ctrl = controllerFor(runtime, keys);
+    await ctrl.startSync(invoke, RELAY_A);
+    expect(runtime.getDelegationRelay()?.url).toBe(RELAY_A);
+    // ui/pairing.ts calls startSync(url) with no stopSync; this one returns
+    // before it reaches its bind (no device keypair).
+    keys.present = false;
+    await ctrl.startSync(invoke, RELAY_B);
+
+    expect(runtime.getDelegationRelay()).toBeNull();
+    const mark = requests.length;
+    await chatDelegation(runtime);
+    expect(delegationRequests(mark).filter((r) => r.relay === "A")).toEqual([]);
     ctrl.stopSync();
   });
 });

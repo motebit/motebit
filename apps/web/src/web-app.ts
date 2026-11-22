@@ -1956,10 +1956,12 @@ export class UnbootedWebApp {
       // toggle takes effect live. Default off → an ineligible cold-start pair
       // safely degrades to relay-mode (the pre-flight blocks the broadcast, so
       // no funds move). An explicit option overrides the stored preference.
-      const acknowledgeNoHistoryRisk = options?.acknowledgeNoHistoryRisk ?? loadColdStartOptIn();
+      // Forwarded explicitly either way, so an explicit `false` is never lost.
+      const { acknowledgeNoHistoryRisk: explicitAck, ...rest } = options ?? {};
+      const acknowledgeNoHistoryRisk = explicitAck ?? loadColdStartOptIn();
       yield* this.runtime.invokeCapability(capability, prompt, {
-        ...options,
-        ...(acknowledgeNoHistoryRisk ? { acknowledgeNoHistoryRisk: true } : {}),
+        ...rest,
+        acknowledgeNoHistoryRisk,
       });
     } finally {
       this._isProcessing = false;

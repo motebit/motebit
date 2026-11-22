@@ -31,6 +31,7 @@ import {
   executeRemoteCommand,
   cmdSelfTest,
   getOrPinRelayKey,
+  sameRelay,
   verifyAgentCommandEnvelope,
   servedToolNames,
   TaskClaimCoordinator,
@@ -306,6 +307,12 @@ export class SyncController {
     const runtime = this.deps.getRuntime();
     if (!runtime) return;
     const session = ++this._syncSession;
+    // Pairing (ui/pairing.ts) calls startSync without stopSync, and startSync
+    // can return before it binds (no device keypair): a Connect to ANOTHER
+    // relay drops the old relay's delegation binding now, synchronously, so
+    // no new call reaches it.
+    const bound = runtime.getDelegationRelay();
+    if (bound != null && !sameRelay(bound.url, syncUrl)) runtime.unbindRelay();
     const motebitId = this.deps.getMotebitId();
 
     this.emitSyncStatus({ status: "connecting", error: null });

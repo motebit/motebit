@@ -306,6 +306,49 @@ describe("bind A with a key, then bind B without", () => {
 // Test 3 — unbind leaves no path that contacts anything
 // ---------------------------------------------------------------------------
 
+describe("a binding that leaves a path out", () => {
+  it("invokeCapability: false — a tap returns sync_not_enabled and sends nothing", async () => {
+    const { runtime } = makeRuntime();
+    bind(runtime, { relay: "A", key: true, tools: true, invokeCapability: false });
+    const chunks = await tap(runtime);
+    expect(relays.requests).toEqual([]);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({ type: "invoke_error", code: "sync_not_enabled" });
+  });
+
+  it("tools: false (a tap-only binding) — an issued credential is not posted", async () => {
+    const { runtime } = makeRuntime();
+    bind(runtime, { relay: "A", tools: false, invokeCapability: true });
+    // A credential issued outside any call (signing keys + a quality receipt).
+    await runtime.bumpTrustFromReceipt(
+      (await import("./helpers/two-relays.js")).workerReceipt("cred-tap-only"),
+      true,
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(relays.requests.filter(isCredentialPost)).toEqual([]);
+    expect(relays.requests).toEqual([]);
+  });
+
+  it("tools: false after tools: true — a handler still reachable refuses and sends nothing", async () => {
+    // A call dispatched before the rebind can still reach a handler the
+    // rebind unregistered; the handler reads its snapshot and refuses.
+    const { runtime } = makeRuntime();
+    bind(runtime, { relay: "A", tools: true });
+    bind(runtime, { relay: "A", tools: false, invokeCapability: true });
+    expect(runtime.getToolRegistry().has("discover_agents")).toBe(false);
+    for (const [name, args] of [
+      ["delegate_to_agent", TASK_ARGS],
+      ["discover_agents", {}],
+      ["retrieve_task_result", { task_id: "task-x" }],
+    ] as const) {
+      const r = await runToolHandler(runtime.getToolRegistry(), name, args);
+      expect(r.ok, name).toBe(false);
+      expect(r.error, name).toContain("not_connected");
+    }
+    expect(relays.requests).toEqual([]);
+  });
+});
+
 describe("unbind", () => {
   it("every path started after it contacts nothing", async () => {
     const { runtime } = makeRuntime();

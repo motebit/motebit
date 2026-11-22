@@ -243,6 +243,20 @@ describe("approved delegate_to_agent: the other generation changes", () => {
     expect(relays.requests.slice(sent)).toEqual([]);
   });
 
+  it("(f) the same relay rebound WITH a key (a pin landed): relay_changed, nothing sent", async () => {
+    // The money path: approved as relay-mode (no pinned key), it must not run
+    // as a paid P2P hire because a key was pinned meanwhile.
+    const { runtime } = setup(tool);
+    await paused(runtime);
+    bind(runtime, "A", { key: true });
+    const sent = relays.requests.length;
+
+    const chunks = await drain(runtime.resumeAfterApproval(true));
+    expect(doneResult(chunks, tool)).toContain("relay_changed");
+    expect(invoked.get(tool) ?? 0).toBe(0);
+    expect(relays.requests.slice(sent)).toEqual([]);
+  });
+
   it("(d) the same values rebound: the approved call runs", async () => {
     const { runtime } = setup(tool);
     await paused(runtime);
@@ -254,6 +268,18 @@ describe("approved delegate_to_agent: the other generation changes", () => {
     expect(relays.to("A").some((r) => r.method === "POST")).toBe(true);
     expect(relays.to("B")).toEqual([]);
   }, 20_000);
+});
+
+describe("approved write_note across an unbind with no rebind", () => {
+  it("(g) unbind, then approve: relay_changed, handler not invoked", async () => {
+    const { runtime } = setup("write_note");
+    await paused(runtime);
+    runtime.unbindRelay();
+
+    const chunks = await drain(runtime.resumeAfterApproval(true));
+    expect(doneResult(chunks, "write_note")).toContain("relay_changed");
+    expect(invoked.get("write_note") ?? 0).toBe(0);
+  });
 });
 
 describe("each delegation handler checks the approved generation itself", () => {
