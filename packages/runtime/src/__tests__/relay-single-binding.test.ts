@@ -429,6 +429,17 @@ describe("the capabilities fetch", () => {
     );
     const afterRebind = relays.requests.slice(mark).filter(isCapabilitiesGet);
     expect(afterRebind.map((r) => r.relay)).toEqual(["B"]);
+    // The credential that hire issued goes to B as well — the submitter is
+    // not pinned to the relay of the first credential it posted.
+    await vi.waitFor(() =>
+      expect(relays.requests.slice(mark).filter(isCredentialPost).length).toBeGreaterThan(0),
+    );
+    expect(
+      relays.requests
+        .slice(mark)
+        .filter(isCredentialPost)
+        .map((r) => r.relay),
+    ).not.toContain("A");
 
     // Unbound: a receipt bumped outside any call (a plan step's) fetches nothing.
     unbind(runtime);

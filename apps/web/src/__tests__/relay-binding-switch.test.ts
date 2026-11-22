@@ -241,4 +241,23 @@ describe("web relay switch (Connect A, Disconnect, Connect B)", () => {
     app.stopSync();
     app.stop();
   });
+
+  it("Connect B without Disconnect (pairing) that fails before binding: nothing stays bound to A", async () => {
+    const app = await booted();
+    await app.startSync(RELAY_A);
+    expect(app.getRuntime()!.getDelegationRelay()?.url).toBe(RELAY_A);
+    // Pairing calls startSync(url) with no stopSync; this one throws before
+    // it reaches its bind (no device key).
+    const keyStore = (app as unknown as { keyStore: { loadPrivateKey(): Promise<string | null> } })
+      .keyStore;
+    vi.spyOn(keyStore, "loadPrivateKey").mockResolvedValue(null);
+    await expect(app.startSync(RELAY_B)).rejects.toThrow();
+
+    expect(app.getRuntime()!.getDelegationRelay()).toBeNull();
+    const mark = requests.length;
+    await delegateAndTap(app);
+    expect(delegationRequests(mark).filter((r) => r.relay === "A")).toEqual([]);
+    app.stopSync();
+    app.stop();
+  });
 });

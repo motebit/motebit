@@ -8,9 +8,10 @@
  *
  *   - the refusal for a session already on ANOTHER relay removed (the command
  *     runs the full connect again: registers with B, saves B);
- *   - startup no longer binding the runtime to its relay (both enable calls in
- *     the key-open branch of `startReplRelay` removed: either one alone still
- *     binds), so the runtime reports no relay and `/connect B` runs;
+ *   - startup no longer binding the runtime to its relay (the `bindRelay`
+ *     call in the key-open branch of `startReplRelay` removed — before part
+ *     4a it was two enable calls, removed together), so the runtime reports
+ *     no relay and `/connect B` runs;
  *   - `/connect <the session's own relay>` falling through to the full connect;
  *   - the operator-token refusal removed;
  *   - the identity-key check moved below the relay and token checks;
@@ -98,23 +99,23 @@ const ROW_4: TamperEdit[] = [
     to: "      if (operatorToken !== undefined && (false as boolean)) {\n",
   },
 ];
-// The bare enable calls occur twice in repl-relay.ts; the preceding line
-// anchors this edit to the key-open branch.
+// The key-open branch's one bind (re-anchored for part 4a: the two enable
+// calls this removed became one `bindRelay`; the mutation is the same —
+// startup binds nothing). The operator-token branch's bind is a different,
+// multi-line call, so this line is unique.
 const STARTUP_BINDS_NOTHING: TamperEdit[] = [
   {
     file: REPL_RELAY,
-    from:
-      "    const delegationCfg = { ...shared, syncUrl, authToken };\n" +
-      "    runtime.enableInteractiveDelegation(delegationCfg);\n" +
-      "    runtime.enableInvokeCapability(delegationCfg);\n",
-    to: "    const delegationCfg = { ...shared, syncUrl, authToken };\n",
+    from: "    runtime.bindRelay({ ...shared, syncUrl, authToken, tools: true, invokeCapability: true });\n",
+    to: "",
   },
 ];
+// Re-anchored for part 4a: the getter now reads the one binding.
 const GETTER_NULL: TamperEdit[] = [
   {
     file: RUNTIME,
-    from: "    return coords === null ? null : { url: coords.syncUrl };\n",
-    to: "    return coords === null ? null : null;\n",
+    from: "      : { url: binding.syncUrl, pinned: binding.relayPublicKey != null };\n",
+    to: "      : null;\n",
   },
 ];
 // Row 1 (the key check) moved from before the relay and token checks to after
