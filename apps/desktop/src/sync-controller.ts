@@ -31,6 +31,7 @@ import {
   executeRemoteCommand,
   cmdSelfTest,
   getOrPinRelayKey,
+  sameRelay,
   verifyAgentCommandEnvelope,
   servedToolNames,
   TaskClaimCoordinator,
@@ -125,6 +126,12 @@ export class SyncController {
     send: (frame) => this._wsAdapter?.sendRaw(frame),
   });
 
+  /**
+   * The sync session number: taken by every `startSync`, advanced by every
+   * `stopSync` and later `startSync`. The delegation relay is bound only
+   * while the number is still current after the relay-key fetch.
+   */
+  private _syncSession = 0;
   /** Work bound to this sync session (a registration retry), ended by `stopSync`. */
   private _onStop = new Set<() => void>();
 
@@ -299,6 +306,13 @@ export class SyncController {
   async startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
     const runtime = this.deps.getRuntime();
     if (!runtime) return;
+    const session = ++this._syncSession;
+    // Pairing (ui/pairing.ts) calls startSync without stopSync, and startSync
+    // can return before it binds (no device keypair): a Connect to ANOTHER
+    // relay drops the old relay's delegation binding now, synchronously, so
+    // no new call reaches it.
+    const bound = runtime.getDelegationRelay();
+    if (bound != null && !sameRelay(bound.url, syncUrl)) runtime.unbindRelay();
     const motebitId = this.deps.getMotebitId();
 
     this.emitSyncStatus({ status: "connecting", error: null });
@@ -445,22 +459,29 @@ export class SyncController {
     } catch {
       pinnedRelayKey = undefined;
     }
-    runtime.enableInteractiveDelegation({
-      syncUrl,
-      // Honor the audience the runtime asks for — `task:submit` to submit,
-      // `task:query` to poll, `market:listing` for the P2P pre-flight. A
-      // closure that ignored it sent `task:submit` to all three, and the poll
-      // and pre-flight were refused (#827).
-      authToken: async (audience?: TokenAudience) =>
-        this.deps.createSyncToken(privKeyHex, audience ?? "task:submit"),
-      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
-      // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
-      // directly" Governance toggle governs chat-driven (delegate_to_agent) P2P
-      // delegation, not just the relay-mode fallback. Without this the toggle is
-      // a no-op for the AI-loop path (the bug closed on web by d6cab601, now at
-      // parity here). Read per call → no re-enable needed when the user flips it.
-      acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
-    });
+    // Bind the runtime's ONE delegation relay — only if this is still the
+    // current sync session: a stopSync or another startSync while the key
+    // fetch above was in flight must leave nothing bound to this relay.
+    if (session === this._syncSession) {
+      runtime.bindRelay({
+        syncUrl,
+        // Honor the audience the runtime asks for — `task:submit` to submit,
+        // `task:query` to poll, `market:listing` for the P2P pre-flight. A
+        // closure that ignored it sent `task:submit` to all three, and the poll
+        // and pre-flight were refused (#827).
+        authToken: async (audience?: TokenAudience) =>
+          this.deps.createSyncToken(privKeyHex, audience ?? "task:submit"),
+        ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+        // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
+        // directly" Governance toggle governs chat-driven (delegate_to_agent) P2P
+        // delegation, not just the relay-mode fallback. Without this the toggle is
+        // a no-op for the AI-loop path (the bug closed on web by d6cab601, now at
+        // parity here). Read per call → no rebind needed when the user flips it.
+        acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
+        tools: true,
+        invokeCapability: false,
+      });
+    }
 
     // Store serving state for task handler
     const servingPrivKey = new Uint8Array(privKeyHex.length / 2);
@@ -827,6 +848,10 @@ export class SyncController {
 
   /** Stop background event sync. */
   stopSync(): void {
+    // Ends the sync session: a startSync still fetching its relay key binds
+    // nothing, and no new delegation call reaches the relay just left.
+    this._syncSession++;
+    this.deps.getRuntime()?.unbindRelay();
     this._taskClaims.dispose();
     const hooks = [...this._onStop];
     this._onStop.clear();

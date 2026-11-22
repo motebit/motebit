@@ -8,6 +8,7 @@ import {
   bindSlabControllerToRenderer,
   createRelayBackedSandboxTokenSource,
   getOrPinRelayKey,
+  sameRelay,
   verifyAgentCommandEnvelope,
   servedToolNames,
   TurnPrincipal,
@@ -463,6 +464,14 @@ export class UnbootedWebApp {
   } | null = null;
   private _serving = false;
   private _servingSyncUrl: string | null = null;
+  /**
+   * The sync session number: taken by every `startSync` when it starts and
+   * advanced by every `stopSync` and every later `startSync`. A `startSync`
+   * binds the runtime's delegation relay only while its number is still
+   * current after the relay-key fetch — so a Disconnect (or another Connect)
+   * landing while that fetch is held leaves nothing bound to the stale relay.
+   */
+  private _syncSession = 0;
   private _activeTaskCount = 0;
   /**
    * One task, one body: the relay hands a task to every serving body of
@@ -1947,10 +1956,12 @@ export class UnbootedWebApp {
       // toggle takes effect live. Default off → an ineligible cold-start pair
       // safely degrades to relay-mode (the pre-flight blocks the broadcast, so
       // no funds move). An explicit option overrides the stored preference.
-      const acknowledgeNoHistoryRisk = options?.acknowledgeNoHistoryRisk ?? loadColdStartOptIn();
+      // Forwarded explicitly either way, so an explicit `false` is never lost.
+      const { acknowledgeNoHistoryRisk: explicitAck, ...rest } = options ?? {};
+      const acknowledgeNoHistoryRisk = explicitAck ?? loadColdStartOptIn();
       yield* this.runtime.invokeCapability(capability, prompt, {
-        ...options,
-        ...(acknowledgeNoHistoryRisk ? { acknowledgeNoHistoryRisk: true } : {}),
+        ...rest,
+        acknowledgeNoHistoryRisk,
       });
     } finally {
       this._isProcessing = false;
@@ -3751,6 +3762,12 @@ export class UnbootedWebApp {
 
   async startSync(relayUrl: string): Promise<void> {
     if (!this.runtime) throw new Error("Runtime not initialized");
+    const session = ++this._syncSession;
+    // Pairing calls startSync without stopSync, and startSync can throw
+    // before it binds: a Connect to ANOTHER relay drops the old relay's
+    // delegation binding now, synchronously, so no new call reaches it.
+    const bound = this.runtime.getDelegationRelay();
+    if (bound != null && !sameRelay(bound.url, relayUrl)) this.runtime.unbindRelay();
     // #962: the relay this page syncs with is saved BEFORE anything is
     // pushed, whoever started sync (pairing did not save it). Compaction's
     // `syncConfigured` reads the saved URL, so a reload never forgets a relay
@@ -3929,26 +3946,25 @@ export class UnbootedWebApp {
     // every task. Shared by both delegation entry points below.
     const pinnedRelayKey = await getOrPinRelayKey(relayUrl, { storage: localStorage });
 
-    this.runtime.enableInteractiveDelegation({
-      syncUrl: relayUrl,
-      authToken: delegationAuthToken,
-      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
-      // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
-      // directly" toggle governs chat-driven (delegate_to_agent) delegation,
-      // not just the deterministic invokeCapability path. Read per call → no
-      // re-enable needed when the user flips it.
-      acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
-    });
-
-    // Enable the deterministic surface-determinism path — chip taps, slash
-    // commands, scene clicks. Shares the relay coordinates with interactive
-    // delegation; differs only in the invocation_origin each path stamps.
-    // See docs/doctrine/surface-determinism.md.
-    this.runtime.enableInvokeCapability({
-      syncUrl: relayUrl,
-      authToken: delegationAuthToken,
-      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
-    });
+    // Bind the runtime's ONE delegation relay — chat delegation
+    // (delegate_to_agent & co.) and the deterministic surface-determinism
+    // path (chip taps, slash commands, scene clicks; see
+    // docs/doctrine/surface-determinism.md) together — only if this is still
+    // the current sync session: a Disconnect or another Connect while the key
+    // fetch above was in flight must leave nothing bound to this relay.
+    if (session === this._syncSession) {
+      this.runtime.bindRelay({
+        syncUrl: relayUrl,
+        authToken: delegationAuthToken,
+        ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+        // The cold-start opt-in as a LIVE getter so the "Pay new agents
+        // directly" toggle governs both paths. Read per call → no rebind
+        // needed when the user flips it.
+        acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
+        tools: true,
+        invokeCapability: true,
+      });
+    }
 
     this._servingSyncUrl = relayUrl;
 
@@ -4364,6 +4380,10 @@ export class UnbootedWebApp {
   }
 
   stopSync(): void {
+    // Ends the sync session: a startSync still fetching its relay key binds
+    // nothing, and no new delegation call reaches the relay just left.
+    this._syncSession++;
+    this.runtime?.unbindRelay();
     this._taskClaims.dispose();
     this._serving = false;
     this.stopRegistrationRetry();

@@ -348,8 +348,8 @@ describe("MobileSyncController onboarding self-test", () => {
       getLoopDeps: vi.fn(() => null),
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
-      enableInteractiveDelegation: vi.fn(),
-      disableInteractiveDelegation: vi.fn(),
+      bindRelay: vi.fn(),
+      unbindRelay: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
@@ -373,8 +373,8 @@ describe("MobileSyncController onboarding self-test", () => {
       getLoopDeps: vi.fn(() => null),
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
-      enableInteractiveDelegation: vi.fn(),
-      disableInteractiveDelegation: vi.fn(),
+      bindRelay: vi.fn(),
+      unbindRelay: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
@@ -396,8 +396,8 @@ describe("MobileSyncController onboarding self-test", () => {
       getLoopDeps: vi.fn(() => null),
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
-      enableInteractiveDelegation: vi.fn(),
-      disableInteractiveDelegation: vi.fn(),
+      bindRelay: vi.fn(),
+      unbindRelay: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },
@@ -422,8 +422,8 @@ describe("MobileSyncController.startServing happy path", () => {
       getLoopDeps: vi.fn(() => null),
       getPrecision: vi.fn(() => ({ explorationDrive: 0.5 })),
       setDelegationAdapter: vi.fn(),
-      enableInteractiveDelegation: vi.fn(),
-      disableInteractiveDelegation: vi.fn(),
+      bindRelay: vi.fn(),
+      unbindRelay: vi.fn(),
       recoverDelegatedSteps: async function* () {
         /* empty */
       },

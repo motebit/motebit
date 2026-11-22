@@ -114,10 +114,12 @@ function enabledRuntime(
     { motebitId: "alice-001", tickRateHz: 0 },
     createAdapters(createMockProvider()),
   );
-  rt.enableInvokeCapability({
+  rt.bindRelay({
     syncUrl: "https://mock-relay.test",
     authToken: overrides.authToken ?? (async () => "test-token"),
     timeoutMs: overrides.timeoutMs ?? 3000,
+    tools: false,
+    invokeCapability: true,
   });
   return rt;
 }
@@ -139,7 +141,7 @@ describe("invokeCapability — surface determinism", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("yields invoke_error{sync_not_enabled} when enableInvokeCapability was not called", async () => {
+  it("yields invoke_error{sync_not_enabled} when no relay is bound for taps", async () => {
     const rt = new MotebitRuntime(
       { motebitId: "alice-001", tickRateHz: 0 },
       createAdapters(createMockProvider()),
@@ -148,7 +150,8 @@ describe("invokeCapability — surface determinism", () => {
     // Must NOT throw — the UI layer maps the chunk to user-facing copy.
     // Throwing would leak developer-wiring language into the chat handler's
     // catch block (historically: "invokeCapability is not enabled — call
-    // runtime.enableInvokeCapability(config) first").
+    // runtime.enableInvokeCapability(config) first" — the API since replaced
+    // by bindRelay).
     expect(chunks).toHaveLength(1);
     const err = chunks[0];
     expect(err).toBeDefined();
@@ -534,12 +537,15 @@ describe("invokeCapability — P2P path selection", () => {
         stashReceipt: vi.fn(),
         ...(buildP2pPayment ? { buildP2pPayment } : {}),
       },
-      {
+      () => ({
         syncUrl: "https://mock-relay.test",
         authToken: async (aud?: string) => `tok-${aud}`,
         timeoutMs: 3000,
         relayPublicKey: PINNED_HEX,
-      },
+        tools: false,
+        invokeCapability: true,
+        generation: 1,
+      }),
     );
   }
 

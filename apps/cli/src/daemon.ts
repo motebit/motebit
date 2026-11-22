@@ -846,7 +846,9 @@ export async function handleRun(config: CliConfig): Promise<void> {
     // AgentTrustCredential carrying the verified claim — making the
     // `HW_ATTESTATION_HARDWARE` (1.0) score visible to routing. See
     // `packages/runtime/src/agent-trust.ts:258` for the hook body.
-    runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
+    // The fetcher holds no relay: the runtime names one per fetch, and
+    // fetches nothing while no delegation relay is bound.
+    runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher());
     runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
     // Plan sync: push/pull plans every 30s for cross-device visibility

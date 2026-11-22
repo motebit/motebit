@@ -836,11 +836,13 @@ export function defaultCreateMoneyRuntime(
     },
     { storage, renderer: new NullRenderer(), tools },
   );
-  runtime.enableInteractiveDelegation({
+  runtime.bindRelay({
     syncUrl: config.syncUrl ?? "",
     authToken: makeAuthTokenMinter(identity),
     relayPublicKey: money.relayPublicKeyHex,
     acknowledgeNoHistoryRisk: true,
+    tools: true,
+    invokeCapability: false,
   });
   return runtime as unknown as RunnerRuntime;
 }

@@ -551,6 +551,13 @@ export interface PaidIntentRecord {
    */
   resolution: "retrieved" | "dismissed" | null;
   resolved_at: number | null;
+  /**
+   * The relay the result is owed from: the relay the paying call was bound
+   * to. A retrieval while another relay is bound reads nothing and says
+   * which relay owes it. Absent on records written before this field
+   * existed; those are retrieved from whichever relay is bound.
+   */
+  relay_url?: string;
 }
 
 /**

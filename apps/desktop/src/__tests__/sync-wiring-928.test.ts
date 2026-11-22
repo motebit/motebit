@@ -156,7 +156,9 @@ function makeRuntime(): any {
   return {
     connectSync: vi.fn(),
     startSync: vi.fn(),
-    enableInteractiveDelegation: vi.fn(),
+    bindRelay: vi.fn(),
+    unbindRelay: vi.fn(),
+    getDelegationRelay: vi.fn(() => null),
     sync: { onStatusChange: vi.fn(() => () => {}), getConflicts: vi.fn(() => []), stop: vi.fn() },
   };
 }

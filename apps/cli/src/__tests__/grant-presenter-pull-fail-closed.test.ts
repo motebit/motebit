@@ -856,8 +856,7 @@ describe("revocation pull: the relay delegation submits to is always pulled (/co
     const sessionRelay = new grantMod.SessionRelays();
     sessionRelay.add(syncUrl);
     if (syncUrl != null) {
-      runtime.enableInteractiveDelegation({ syncUrl, authToken });
-      runtime.enableInvokeCapability({ syncUrl, authToken });
+      runtime.bindRelay({ syncUrl, authToken, tools: true, invokeCapability: true });
     }
     const { grantId, revocation } = await storeGrant();
     const presenter = await grantMod.createGrantPresenter(grantId, {

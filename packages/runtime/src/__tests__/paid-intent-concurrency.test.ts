@@ -30,6 +30,7 @@ import {
 // delegate_to_agent is R4_MONEY: the registry refuses it without the runtime's
 // money capability, so these handler tests drive the handler directly.
 import { runToolHandler } from "./helpers/money-tool-handler.js";
+import { walletWith } from "./helpers/wallet.js";
 
 const RELAY = "https://mock-relay.test";
 const ME = "alice-001";
@@ -211,15 +212,18 @@ describe("in flight is not unretrieved (#874 round 2)", () => {
   it("an in-flight entry from a DEAD session locks: refused and listed by a new session", () => {
     const store = new InMemoryPaidIntentStore();
     const dead = new PaidIntentLedger(store, ME, "dead-session");
-    dead.recordInFlight({
-      workerMotebitId: WORKER,
-      capability: "web_search",
-      taskId: "task-9",
-      txHash: "tx-9",
-      paidMicro: 250_000,
-      feeMicro: 13_158,
-      recordedAt: 1,
-    });
+    dead.recordInFlight(
+      {
+        workerMotebitId: WORKER,
+        capability: "web_search",
+        taskId: "task-9",
+        txHash: "tx-9",
+        paidMicro: 250_000,
+        feeMicro: 13_158,
+        recordedAt: 1,
+      },
+      RELAY,
+    );
     // The session that recorded it is still live: nothing locks there.
     expect(dead.check(WORKER, "web_search")).toEqual({ locked: false });
     // A new session (the restart) reads it as unretrieved.
@@ -311,7 +315,12 @@ describe("a ledger write never aborts a paid flow (#874 round 2)", () => {
         renderer: new NullRenderer(),
       },
     );
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
     const got = await runtime.retrieveDelegationResult("task-1");
     expect(got.status).toBe("delivered");
   });
@@ -322,30 +331,35 @@ describe("a ledger write never aborts a paid flow (#874 round 2)", () => {
 describe("inside another principal's task, the owner's prior payment is not disclosed (#874 round 2)", () => {
   it("delegate_to_agent's intent_already_paid refusal carries no owner task id, tx or /result", async () => {
     const store = new InMemoryPaidIntentStore();
-    new PaidIntentLedger(store, ME, "earlier").recordSettledUnretrieved({
-      workerMotebitId: WORKER,
-      capability: "web_search",
-      taskId: "owner-task-7",
-      txHash: "OWNER_TX_HASH",
-      paidMicro: 250_000,
-      feeMicro: 13_158,
-      recordedAt: 1,
-    });
+    new PaidIntentLedger(store, ME, "earlier").recordSettledUnretrieved(
+      {
+        workerMotebitId: WORKER,
+        capability: "web_search",
+        taskId: "owner-task-7",
+        txHash: "OWNER_TX_HASH",
+        paidMicro: 250_000,
+        feeMicro: 13_158,
+        recordedAt: 1,
+      },
+      RELAY,
+    );
     stub(new Set());
+    const pay = vi.fn(async () => mkProof());
+    // The payment builder reaches the runtime through its sovereign rail.
     const runtime = new MotebitRuntime(
-      { motebitId: ME, tickRateHz: 0 },
+      { motebitId: ME, tickRateHz: 0, solanaWallet: walletWith(pay) },
       {
         storage: { ...createInMemoryStorage(), paidIntentStore: store },
         renderer: new NullRenderer(),
       },
     );
-    const pay = vi.fn(async () => mkProof());
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "t",
       relayPublicKey: SIGNING_PINNED_HEX,
-      buildP2pPayment: pay,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
     const args = { prompt: "research X", required_capabilities: ["web_search"] };
 

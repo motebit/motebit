@@ -102,8 +102,8 @@ export interface CliConfig {
    * delegation to a worker with NO trust history may settle directly
    * peer-to-peer from the sovereign wallet (the Arc-3 acknowledgment);
    * default off → such a delegation degrades to relay-mode. Forwarded as
-   * `acknowledgeNoHistoryRisk` into enableInteractiveDelegation /
-   * enableInvokeCapability — the CLI-native equivalent of the web/desktop/
+   * `acknowledgeNoHistoryRisk` into the runtime's relay binding (`bindRelay`,
+   * both the chat tools and taps) — the CLI-native equivalent of the web/desktop/
    * mobile "Pay new agents directly" toggle. See
    * docs/doctrine/off-ramp-as-user-action.md § Arc 3.
    */

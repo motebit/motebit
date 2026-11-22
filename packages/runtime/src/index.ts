@@ -15,6 +15,9 @@ export {
 } from "./attached-surface.js";
 export type { AttachedReadKind, AttachedActKind } from "./attached-surface.js";
 export { getOrPinRelayKey, relayPinKey, verifyRelayMetadataForUrl } from "./relay-key-pin.js";
+// The runtime's ONE delegation relay binding (`MotebitRuntime.bindRelay`).
+export { sameRelay } from "./relay-binding.js";
+export type { RelayBinding, RelayBindingSnapshot } from "./relay-binding.js";
 export type {
   RelayKeyPinStorage,
   RelayKeyPinDeps,
@@ -404,12 +407,11 @@ export {
 // The deterministic surface-affordance entry point (chip tap / button →
 // invokeCapability). Exported so an integration test can drive the REAL entry
 // point against a live relay — the layer above selectAndRunDelegation, where
-// the surface→runtime config assembly (relayPublicKey + buildP2pPayment) lives
-// and was "activated across all surfaces" but never run end-to-end.
+// the binding (relay, token source, pinned key) meets the rail's
+// buildP2pPayment. Its relay comes from a binding accessor, never a config.
 export { InvokeCapabilityManager } from "./invoke-capability.js";
 export type {
   InvokeCapabilityDeps,
-  InvokeCapabilityConfig,
   InvokeCapabilityOptions,
   InvokeErrorChunk,
 } from "./invoke-capability.js";

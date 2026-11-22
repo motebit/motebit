@@ -204,11 +204,13 @@ type MoneyRuntime = {
     args: Record<string, unknown>,
     options: { caller: { principal: "owner" }; delegation?: { token: unknown; grant: unknown } },
   ) => Promise<{ ok: boolean; error?: string }>;
-  enableInvokeCapability: (config: {
+  bindRelay: (binding: {
     syncUrl: string;
     authToken: () => Promise<string>;
     relayPublicKey: string;
     acknowledgeNoHistoryRisk: boolean;
+    tools: boolean;
+    invokeCapability: boolean;
   }) => void;
   invokeCapability: (
     capability: string,
@@ -517,11 +519,15 @@ for (const { shape, hooks } of HOOK_SHAPES)
 
     it("invokeCapability: rail_spend_refused, nothing recorded as unconfirmed", async () => {
       const h = await bootWithFakeRail(USDC_MINT_MAINNET, hooks);
-      h.runtime.enableInvokeCapability({
+      // The molecule booted with the delegation tools bound; the tap path is
+      // added to the same relay's binding (main: a second enable for taps).
+      h.runtime.bindRelay({
         syncUrl: RELAY_URL,
         authToken: async () => "test-token",
         relayPublicKey: SIGNING_PINNED_HEX,
         acknowledgeNoHistoryRisk: true,
+        tools: true,
+        invokeCapability: true,
       });
       const chunks: Array<{ type: string; code?: string }> = [];
       for await (const chunk of h.runtime.invokeCapability("research", "tap")) chunks.push(chunk);
@@ -660,11 +666,15 @@ describe("the runner's own rails (no override): env and config cannot widen them
 
   it("production branch — invokeCapability: rail_spend_refused, nothing recorded as unconfirmed", async () => {
     const h = await bootProduction();
-    h.runtime.enableInvokeCapability({
+    // The molecule booted with the delegation tools bound; the tap path is
+    // added to the same relay's binding (main: a second enable for taps).
+    h.runtime.bindRelay({
       syncUrl: RELAY_URL,
       authToken: async () => "test-token",
       relayPublicKey: SIGNING_PINNED_HEX,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: true,
     });
     const chunks: Array<{ type: string; code?: string }> = [];
     for await (const chunk of h.runtime.invokeCapability("research", "tap")) chunks.push(chunk);

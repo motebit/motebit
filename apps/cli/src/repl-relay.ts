@@ -68,12 +68,12 @@ export async function startReplRelay(opts: ReplRelayOptions): Promise<CliEventPu
     ...(opts.pushIntervalMs !== undefined ? { pushIntervalMs: opts.pushIntervalMs } : {}),
   });
 
-  // Enable delegation with audience-scoped device tokens (submit vs query).
-  // Falls back to the operator token — only one bound to this relay — when
-  // device keys are unavailable.
-  // `enableInvokeCapability` is wired to the same relay coordinates so
-  // the deterministic `/invoke <cap> <prompt>` path shares transport with
-  // the AI-loop delegation path (surface-determinism doctrine).
+  // Bind the runtime's ONE delegation relay with audience-scoped device
+  // tokens (submit vs query). Falls back to the operator token — only one
+  // bound to this relay — when device keys are unavailable. The binding
+  // covers both the AI-loop delegation tools and the deterministic
+  // `/invoke <cap> <prompt>` path, so they share transport
+  // (surface-determinism doctrine).
   const shared = {
     ...(config.routingStrategy !== undefined ? { routingStrategy: config.routingStrategy } : {}),
     // Cold-start opt-in (`--pay-new-agents`) — admit paid P2P delegation
@@ -92,19 +92,17 @@ export async function startReplRelay(opts: ReplRelayOptions): Promise<CliEventPu
     const authToken = async (audience = "task:submit"): Promise<string> => {
       return (await mintAudienceToken({ mid: motebitId, did, aud: audience }, pk)).token;
     };
-    const delegationCfg = { ...shared, syncUrl, authToken };
-    runtime.enableInteractiveDelegation(delegationCfg);
-    runtime.enableInvokeCapability(delegationCfg);
+    runtime.bindRelay({ ...shared, syncUrl, authToken, tools: true, invokeCapability: true });
   } else {
     const operator = operatorTokenFor(syncUrl, REPL_RELAY_TOKEN_SOURCES, config);
     if (operator !== undefined) {
-      const delegationCfg = {
+      runtime.bindRelay({
         ...shared,
         syncUrl: operator.relayUrl,
         authToken: () => Promise.resolve(operator.token),
-      };
-      runtime.enableInteractiveDelegation(delegationCfg);
-      runtime.enableInvokeCapability(delegationCfg);
+        tools: true,
+        invokeCapability: true,
+      });
     }
   }
 

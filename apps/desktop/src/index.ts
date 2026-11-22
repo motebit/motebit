@@ -1432,14 +1432,13 @@ export class DesktopApp {
 
     // Hardware-attestation peer flow — production wiring. Without these
     // setters the runtime hook in `bumpTrustFromReceipt` is dormant.
-    // The fetcher reads the sync URL lazily from `_proxySyncUrlCache`,
-    // which is populated at bootstrap from Tauri config and refreshed
-    // when the user changes relay settings — so reconfiguring the relay
-    // takes effect on the next delegation without runtime reconstruction.
-    // See `packages/runtime/src/agent-trust.ts:258` for the hook body.
-    this.runtime.setHardwareAttestationFetcher(
-      createRelayCapabilitiesFetcher({ baseUrl: () => this._proxySyncUrlCache ?? undefined }),
-    );
+    // The fetcher holds no relay: the runtime names one per fetch — the relay
+    // of the delegation call that produced the receipt, or the bound relay —
+    // and fetches nothing while none is bound. (It used to read
+    // `_proxySyncUrlCache`, written only at proxy bootstrap, so after a relay
+    // switch it told the previous relay which worker this device hired.)
+    // See `packages/runtime/src/agent-trust.ts` for the hook body.
+    this.runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher());
     this.runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
     // Slab ("Motebit Computer") bridge — wire the runtime's slab

@@ -44,6 +44,7 @@ import {
 // delegate_to_agent is R4_MONEY: the registry refuses it without the runtime's
 // money capability, so these handler tests drive the handler directly.
 import { runToolHandler } from "./helpers/money-tool-handler.js";
+import { walletWith } from "./helpers/wallet.js";
 
 const RELAY = "https://mock-relay.test";
 const ME = "alice-001";
@@ -275,24 +276,39 @@ describe("retrieveDelegationResult — one free, read-only task:query read", () 
 // Runtime helpers
 // ---------------------------------------------------------------------------
 
-function makeRuntime(store: InMemoryPaidIntentStore, motebitId = ME): MotebitRuntime {
+function makeRuntime(
+  store: InMemoryPaidIntentStore,
+  motebitId = ME,
+  /** The payment builder, reached through the runtime's sovereign rail. */
+  buildP2pPayment?: (...args: never[]) => Promise<unknown>,
+): MotebitRuntime {
   const adapters: PlatformAdapters = {
     storage: { ...createInMemoryStorage(), paidIntentStore: store },
     renderer: new NullRenderer(),
   };
-  return new MotebitRuntime({ motebitId, tickRateHz: 0 }, adapters);
+  return new MotebitRuntime(
+    {
+      motebitId,
+      tickRateHz: 0,
+      ...(buildP2pPayment != null ? { solanaWallet: walletWith(buildP2pPayment) } : {}),
+    },
+    adapters,
+  );
 }
 
 function seedPaid(store: InMemoryPaidIntentStore, motebitId = ME): void {
-  new PaidIntentLedger(store, motebitId).recordSettledUnretrieved({
-    workerMotebitId: WORKER,
-    capability: "web_search",
-    taskId: TASK,
-    txHash: "XaMuKuMCtx",
-    paidMicro: 250_000,
-    feeMicro: 13_158,
-    recordedAt: 1000,
-  });
+  new PaidIntentLedger(store, motebitId).recordSettledUnretrieved(
+    {
+      workerMotebitId: WORKER,
+      capability: "web_search",
+      taskId: TASK,
+      txHash: "XaMuKuMCtx",
+      paidMicro: 250_000,
+      feeMicro: 13_158,
+      recordedAt: 1000,
+    },
+    RELAY,
+  );
 }
 
 const proof: P2pPaymentProof = {
@@ -366,7 +382,12 @@ describe("runtime.retrieveDelegationResult", () => {
     const store = new InMemoryPaidIntentStore();
     seedPaid(store);
     const runtime = makeRuntime(store);
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
 
     stubTaskRead(() => json(200, { task: { status: "running" }, receipt: null }));
     expect((await runtime.retrieveDelegationResult(TASK)).status).toBe("pending");
@@ -391,14 +412,15 @@ describe("runtime.retrieveDelegationResult", () => {
   it("MONEY INVARIANT: retrieval by every door never submits and never builds a payment", async () => {
     const store = new InMemoryPaidIntentStore();
     seedPaid(store);
-    const runtime = makeRuntime(store);
     const buildP2pPayment = vi.fn(async () => proof);
+    const runtime = makeRuntime(store, ME, buildP2pPayment);
     const relay = stubRelay(delivered);
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "t",
       relayPublicKey: SIGNING_PINNED_HEX,
-      buildP2pPayment,
+      tools: true,
+      invokeCapability: false,
     });
 
     await runtime.retrieveDelegationResult(TASK, { acknowledge: false });
@@ -422,7 +444,12 @@ describe("runtime.retrieveDelegationResult", () => {
 describe("retrieve_task_result — the model's free route to a paid result", () => {
   it("is registered beside delegate_to_agent as an api-tier, read-class tool", () => {
     const runtime = makeRuntime(new InMemoryPaidIntentStore());
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
     const def = runtime
       .getToolRegistry()
       .list()
@@ -443,7 +470,12 @@ describe("retrieve_task_result — the model's free route to a paid result", () 
 
   it("is never offered to another principal — by any serve path the runtime owns", async () => {
     const runtime = makeRuntime(new InMemoryPaidIntentStore());
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
     const owned = ["retrieve_task_result", "delegate_to_agent", "discover_agents"];
     const defs = runtime.getToolRegistry().list();
     for (const name of owned) {
@@ -477,7 +509,12 @@ describe("retrieve_task_result — the model's free route to a paid result", () 
     const store = new InMemoryPaidIntentStore();
     seedPaid(store);
     const runtime = makeRuntime(store);
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
     const calls = stubTaskRead(delivered);
     const r = await executeWithCall(runtime, "retrieve_task_result", {}, FOREIGN_CALL);
     expect(r.ok).toBe(false);
@@ -491,7 +528,12 @@ describe("retrieve_task_result — the model's free route to a paid result", () 
     const store = new InMemoryPaidIntentStore();
     seedPaid(store);
     const runtime = makeRuntime(store);
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
     stubTaskRead(delivered);
 
     const r = await runtime
@@ -512,7 +554,12 @@ describe("retrieve_task_result — the model's free route to a paid result", () 
     const store = new InMemoryPaidIntentStore();
     seedPaid(store);
     const runtime = makeRuntime(store);
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
     const r = await runtime.getToolRegistry().execute("retrieve_task_result", {});
     const out = JSON.parse(r.data as string) as {
       outstanding_paid_results: Array<{ task_id: string }>;
@@ -524,7 +571,12 @@ describe("retrieve_task_result — the model's free route to a paid result", () 
     const store = new InMemoryPaidIntentStore();
     seedPaid(store);
     const runtime = makeRuntime(store);
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
     stubTaskRead(reaped);
     const r = await runtime.getToolRegistry().execute("retrieve_task_result", { task_id: TASK });
     const out = JSON.parse(r.data as string) as Record<string, unknown>;
@@ -555,7 +607,12 @@ describe("result command + paidResultsNotice", () => {
     const store = new InMemoryPaidIntentStore();
     seedPaid(store);
     const runtime = makeRuntime(store);
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
 
     const list = await executeCommand(runtime, "result", "");
     expect(list?.summary).toContain("1 paid result not retrieved");
@@ -582,7 +639,12 @@ describe("result command + paidResultsNotice", () => {
     const store = new InMemoryPaidIntentStore();
     seedPaid(store);
     const runtime = makeRuntime(store);
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
     stubTaskRead(delivered);
 
     const remoteRead = await executeCommand(runtime, "result", TASK, undefined, {
@@ -610,26 +672,37 @@ describe("result command — a payment with no confirmed relay task (#885)", () 
     const store = new InMemoryPaidIntentStore();
     const ledger = new PaidIntentLedger(store, ME);
     for (const tx of ["TxAAAAAAAA111", "TxBBBBBBBB222"]) {
-      ledger.recordBroadcast({
-        workerMotebitId: WORKER,
-        capability: "web_search",
-        txHash: tx,
-        paidMicro: 250_000,
-        feeMicro: 13_158,
-        recordedAt: 1,
-      });
-      ledger.recordSettledUnretrieved({
-        workerMotebitId: WORKER,
-        capability: "web_search",
-        taskId: `p2p-payment:${tx}`,
-        txHash: tx,
-        paidMicro: 250_000,
-        feeMicro: 13_158,
-        recordedAt: 1,
-      });
+      ledger.recordBroadcast(
+        {
+          workerMotebitId: WORKER,
+          capability: "web_search",
+          txHash: tx,
+          paidMicro: 250_000,
+          feeMicro: 13_158,
+          recordedAt: 1,
+        },
+        RELAY,
+      );
+      ledger.recordSettledUnretrieved(
+        {
+          workerMotebitId: WORKER,
+          capability: "web_search",
+          taskId: `p2p-payment:${tx}`,
+          txHash: tx,
+          paidMicro: 250_000,
+          feeMicro: 13_158,
+          recordedAt: 1,
+        },
+        RELAY,
+      );
     }
     const runtime = makeRuntime(store);
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
     const reads = vi.fn();
     globalThis.fetch = reads as unknown as typeof fetch;
 
@@ -662,7 +735,6 @@ describe("paid, undelivered, restarted (#874 end to end)", () => {
       syncUrl: RELAY,
       authToken: async () => "t",
       relayPublicKey: SIGNING_PINNED_HEX,
-      buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
       timeoutMs: 1,
     };
@@ -671,8 +743,8 @@ describe("paid, undelivered, restarted (#874 end to end)", () => {
     let answer = reaped;
     const relay = stubRelay(() => answer());
     vi.useFakeTimers();
-    const session1 = makeRuntime(store);
-    session1.enableInteractiveDelegation(cfg);
+    const session1 = makeRuntime(store, ME, buildP2pPayment);
+    session1.bindRelay({ ...cfg, tools: true, invokeCapability: false });
     const hire = runToolHandler(session1.getToolRegistry(), "delegate_to_agent", {
       prompt: "research X",
       required_capabilities: ["web_search"],
@@ -687,8 +759,8 @@ describe("paid, undelivered, restarted (#874 end to end)", () => {
     expect(relay.submits()).toBe(1);
 
     // Session 2: a NEW runtime (the restart) over the same store.
-    const session2 = makeRuntime(store);
-    session2.enableInteractiveDelegation(cfg);
+    const session2 = makeRuntime(store, ME, buildP2pPayment);
+    session2.bindRelay({ ...cfg, tools: true, invokeCapability: false });
     expect(paidResultsNotice(session2.outstandingPaidResults())).toBe(
       "1 paid result not retrieved — /result ed665235",
     );
@@ -758,13 +830,14 @@ describe("paid, then killed mid-poll (#874 review: record at settle time)", () =
     await inFlight;
 
     // A NEW runtime over the same store: the payment is on record…
-    const next = makeRuntime(store);
-    next.enableInteractiveDelegation({
+    const next = makeRuntime(store, ME, buildP2pPayment);
+    next.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "t",
       relayPublicKey: SIGNING_PINNED_HEX,
-      buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
     expect(next.outstandingPaidResults().map((e) => e.txHash)).toEqual(["XaMuKuMCtx"]);
     // …the re-hire is refused before broadcast…
@@ -830,7 +903,14 @@ describe("invokeCapability — the deterministic paid door consults the ledger (
         buildP2pPayment,
         paidIntentLedger: new PaidIntentLedger(store, ME),
       },
-      { syncUrl: RELAY, authToken: async () => "t", relayPublicKey: SIGNING_PINNED_HEX },
+      () => ({
+        syncUrl: RELAY,
+        authToken: async () => "t",
+        relayPublicKey: SIGNING_PINNED_HEX,
+        tools: false,
+        invokeCapability: true,
+        generation: 1,
+      }),
     );
     const chunks = await drain(
       manager.invokeCapability("web_search", "research X", { acknowledgeNoHistoryRisk: true }),
@@ -843,7 +923,12 @@ describe("invokeCapability — the deterministic paid door consults the ledger (
 
   it("the runtime hands its ledger to the invokeCapability door", () => {
     const runtime = makeRuntime(new InMemoryPaidIntentStore());
-    runtime.enableInvokeCapability({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: false,
+      invokeCapability: true,
+    });
     const manager = (runtime as unknown as { invokeCapabilityManager: { deps: object } })
       .invokeCapabilityManager;
     expect((manager.deps as { paidIntentLedger?: unknown }).paidIntentLedger).toBeInstanceOf(
@@ -908,14 +993,19 @@ describe("one task, one body — undetermined and expired are their own outcomes
     const store = new InMemoryPaidIntentStore();
     const relay = stubRelay(undeterminedPoll);
     vi.useFakeTimers();
-    const runtime = makeRuntime(store);
-    runtime.enableInteractiveDelegation({
+    const runtime = makeRuntime(
+      store,
+      ME,
+      vi.fn(async () => proof),
+    );
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "t",
       relayPublicKey: SIGNING_PINNED_HEX,
-      buildP2pPayment: vi.fn(async () => proof),
       acknowledgeNoHistoryRisk: true,
       timeoutMs: 10_000,
+      tools: true,
+      invokeCapability: false,
     });
     const hire = runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
       prompt: "research X",
@@ -937,7 +1027,12 @@ describe("one task, one body — undetermined and expired are their own outcomes
   it("the retrieve_task_result tool reads undetermined as 'may have run — do not re-delegate'", async () => {
     stubTaskRead(undeterminedPoll);
     const runtime = makeRuntime(new InMemoryPaidIntentStore());
-    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    runtime.bindRelay({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      tools: true,
+      invokeCapability: false,
+    });
     const r = await runtime.getToolRegistry().execute("retrieve_task_result", { task_id: TASK });
     const out = JSON.parse(String(r.data)) as { status: string; guidance: string; reason?: string };
     expect(out.status).toBe("undetermined");

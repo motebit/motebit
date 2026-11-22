@@ -816,7 +816,7 @@ export async function createRuntime(
         // decrypted identity seed. Its presence is what makes
         // delegate_to_agent a REAL money tool: R4 risk hint, late-bound
         // metering, and the wrapped P2P payment builder all key on it
-        // (enableInteractiveDelegation). Absent ⇒ delegation degrades to
+        // (the tools `bindRelay` registers). Absent ⇒ delegation degrades to
         // relay-mode honestly.
         ...(solanaWallet ? { solanaWallet } : {}),
         // #501 — sovereign override for capability-tiered tool admission.
@@ -890,7 +890,10 @@ export async function createRuntime(
     // See `packages/runtime/src/agent-trust.ts:258` for the hook body and
     // `services/relay/src/__tests__/hardware-peer-flow-e2e.test.ts` for the
     // protocol-loop assertion.
-    runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: syncUrl }));
+    // The fetcher holds no relay: the runtime names one per fetch (the
+    // relay of the delegation call that produced the receipt, else the bound
+    // relay) and fetches nothing while none is bound.
+    runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher());
   } else {
     console.log(dim("Sync: off (opt in with --sync-url)"));
   }

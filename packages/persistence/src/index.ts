@@ -2001,8 +2001,8 @@ export class SqlitePaidIntentStore implements PaidIntentStoreAdapter {
     // owned it ended without the result. Nothing else is ever overwritten.
     this.stmtRecord = db.prepare(
       `INSERT INTO paid_intent_ledger
-       (motebit_id, task_id, worker_motebit_id, capability, tx_hash, paid_micro, fee_micro, recorded_at, state, session_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (motebit_id, task_id, worker_motebit_id, capability, tx_hash, paid_micro, fee_micro, recorded_at, state, session_id, relay_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (motebit_id, task_id) DO UPDATE SET state = 'unretrieved'
        WHERE excluded.state = 'unretrieved' AND paid_intent_ledger.resolution IS NULL`,
     );
@@ -2028,6 +2028,7 @@ export class SqlitePaidIntentStore implements PaidIntentStoreAdapter {
       entry.recorded_at,
       entry.state,
       entry.session_id,
+      entry.relay_url ?? null,
     );
   }
 
@@ -2045,6 +2046,7 @@ export class SqlitePaidIntentStore implements PaidIntentStoreAdapter {
       session_id: string;
       resolution: string | null;
       resolved_at: number | null;
+      relay_url: string | null;
     }>;
     return rows.map((r) => ({
       motebit_id: r.motebit_id,
@@ -2062,6 +2064,8 @@ export class SqlitePaidIntentStore implements PaidIntentStoreAdapter {
       resolution:
         r.resolution === "retrieved" || r.resolution === "dismissed" ? r.resolution : null,
       resolved_at: r.resolved_at,
+      // Migration #53. NULL (a row written before it) reads as absent.
+      ...(r.relay_url != null && r.relay_url !== "" ? { relay_url: r.relay_url } : {}),
     }));
   }
 

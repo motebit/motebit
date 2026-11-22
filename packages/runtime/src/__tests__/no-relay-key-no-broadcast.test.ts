@@ -9,8 +9,8 @@
  * is never asked to build a payment, the P2P pre-flight is never read, and
  * the submission carries no payment proof.
  *
- * Driven through the real runtime wiring (`enableInteractiveDelegation`,
- * `enableInvokeCapability` → `selectAndRunDelegation`) with a wallet rail
+ * Driven through the real runtime wiring (`bindRelay` — the tools and taps
+ * → `selectAndRunDelegation`) with a wallet rail
  * that records every call and a stubbed relay. The relay stub serves
  * EVERYTHING the P2P path needs (signed metadata, a priced p2p worker,
  * eligibility, listing), and a control case with the key present proves the
@@ -219,11 +219,13 @@ describe("no relay key: a priced cross-agent task signs and broadcasts nothing",
   it("control: WITH the relay key, the same wallet and relay DO build the payment (the fixture can pay)", async () => {
     const { wallet, calls } = recordingWallet();
     const runtime = runtimeWith(wallet);
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "test-token",
       relayPublicKey: SIGNING_PINNED_HEX,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", PRICED_TASK);
@@ -251,10 +253,12 @@ describe("no relay key: a priced cross-agent task signs and broadcasts nothing",
     const runtime = runtimeWith(wallet);
     // The session has a wallet and opts into paying new agents — everything
     // the P2P path needs EXCEPT a key for this relay.
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "test-token",
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     const result = await runToolHandler(
@@ -279,11 +283,13 @@ describe("no relay key: a priced cross-agent task signs and broadcasts nothing",
   it("invokeCapability (the deterministic door): relay-mode, zero wallet calls, no payment proof", async () => {
     const { wallet, calls } = recordingWallet();
     const runtime = runtimeWith(wallet);
-    runtime.enableInvokeCapability({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "test-token",
       acknowledgeNoHistoryRisk: true,
       timeoutMs: 3_000,
+      tools: false,
+      invokeCapability: true,
     });
 
     await collect(runtime.invokeCapability("web_search", "search the web"));
@@ -298,11 +304,13 @@ describe("no relay key: a priced cross-agent task signs and broadcasts nothing",
   it("a pinned hire (a named worker) with no relay key fails closed: nothing submitted, nothing built", async () => {
     const { wallet, calls } = recordingWallet();
     const runtime = runtimeWith(wallet);
-    runtime.enableInvokeCapability({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "test-token",
       acknowledgeNoHistoryRisk: true,
       timeoutMs: 3_000,
+      tools: false,
+      invokeCapability: true,
     });
 
     await collect(

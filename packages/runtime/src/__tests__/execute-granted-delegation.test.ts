@@ -214,12 +214,13 @@ function clerkRuntime(wallet?: SovereignWalletRail, opts?: { ack?: boolean }) {
     },
     createAdapters(),
   );
-  runtime.enableInteractiveDelegation({
+  runtime.bindRelay({
     syncUrl: "https://mock-relay.test",
     authToken: async () => "test-token",
     relayPublicKey: PINNED_HEX,
-    ...(wallet ? { buildP2pPayment: wallet.buildP2pPayment } : {}),
     ...(ack ? { acknowledgeNoHistoryRisk: true } : {}),
+    tools: true,
+    invokeCapability: false,
   });
   return runtime;
 }
@@ -499,12 +500,13 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       },
       { ...createAdapters(), storage },
     );
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
       relayPublicKey: PINNED_HEX,
-      buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     vi.stubGlobal(
@@ -584,7 +586,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       failed_tasks: 0,
     });
 
-    const { wallet, buildP2pPayment } = mockWallet(async (r) => ({
+    const { wallet } = mockWallet(async (r) => ({
       tx_hash: "tx",
       chain: "solana",
       network: "solana:x",
@@ -604,12 +606,13 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       },
       { ...createAdapters(), storage },
     );
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
       relayPublicKey: PINNED_HEX,
-      buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     vi.stubGlobal(
@@ -716,7 +719,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       failed_tasks: 0,
     });
 
-    const { wallet, buildP2pPayment } = mockWallet(async (r) => ({
+    const { wallet } = mockWallet(async (r) => ({
       tx_hash: "tx",
       chain: "solana",
       network: "solana:x",
@@ -740,12 +743,13 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       { ...createAdapters(), storage },
     );
     (runtime as unknown as { _signingKeys: unknown })._signingKeys = null;
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
       relayPublicKey: PINNED_HEX,
-      buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     vi.stubGlobal(
@@ -830,7 +834,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       failed_tasks: 0,
     });
 
-    const { wallet, buildP2pPayment } = mockWallet(async (r) => ({
+    const { wallet } = mockWallet(async (r) => ({
       tx_hash: "tx",
       chain: "solana",
       network: "solana:x",
@@ -851,12 +855,13 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       },
       { ...createAdapters(), storage },
     );
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
       relayPublicKey: PINNED_HEX,
-      buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     vi.stubGlobal(
@@ -1162,7 +1167,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
-    // enableInteractiveDelegation NOT called → no coords stashed.
+    // bindRelay NOT called → no binding, so no relay coordinates.
     const runtime = new MotebitRuntime({ motebitId: "clerk-x", tickRateHz: 0 }, createAdapters());
 
     const result = await runtime.executeGrantedDelegation({
@@ -1210,10 +1215,12 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       createAdapters(),
     );
     // Wired to the relay — with NO relayPublicKey.
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     for (const dryRun of [false, true]) {
@@ -1400,11 +1407,13 @@ describe("executeGrantedDelegation — failure carries the money facts (#885)", 
         storage: { ...createInMemoryStorage(), paidIntentStore: new OwedWriteFails() },
       },
     );
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
       relayPublicKey: PINNED_HEX,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     const result = await runtime.executeGrantedDelegation({

@@ -84,7 +84,7 @@ const CHECK_ARGUMENT = {
 const STRUCTURAL_MATCH =
   '  return e.name === "RailSpendRefusedError" && e.code === "rail_spend_refused";';
 
-/** The wrapper's rail reader at the loop-path call site (enableInteractiveDelegation). */
+/** The wrapper's rail reader at the loop-path call site (delegationToolConfig, which bindRelay registers the tools with; enableInteractiveDelegation before part 4a). */
 const LOOP_READER: TamperEntry["edits"] = [
   {
     file: MOTEBIT_RUNTIME,
@@ -383,7 +383,7 @@ const TAMPERS: TamperEntry[] = [
     red: `${MAINNET_HOOKS} delegate_to_agent through executeToolGated: refused before the meter is charged`,
   },
   {
-    name: "wrapper's rail reader dropped at the loop-path call site (enableInteractiveDelegation)",
+    name: "wrapper's rail reader dropped at the loop-path call site (delegationToolConfig; was enableInteractiveDelegation)",
     edits: LOOP_READER,
     pkg: RUNNER,
     test: RUNNER_TEST,

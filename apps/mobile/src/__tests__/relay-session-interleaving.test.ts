@@ -481,11 +481,11 @@ function makeRuntime(): FakeRuntime & Record<string, unknown> {
       rt.adapter = a;
       if (a?.config) h.record({ kind: "act", what: "setDelegationAdapter", url: a.config.syncUrl });
     },
-    enableInteractiveDelegation(c: { syncUrl: string }) {
+    bindRelay(c: { syncUrl: string }) {
       rt.interactive = c;
-      h.record({ kind: "act", what: "enableInteractiveDelegation", url: c.syncUrl });
+      h.record({ kind: "act", what: "bindRelay", url: c.syncUrl });
     },
-    disableInteractiveDelegation() {
+    unbindRelay() {
       rt.interactive = null;
     },
     /** Polls with the adapter captured at its start, as a recovery does. */

@@ -268,8 +268,16 @@ import { createMoneyMeter, wrapP2pPaymentWithMeter, type MoneyMeter } from "./mo
 import {
   InMemoryPaidIntentStore,
   PaidIntentLedger,
+  isPaymentWithoutTaskId,
   type UnretrievedPayment,
 } from "./paid-intent-ledger.js";
+import {
+  acknowledgementOf,
+  sameRelay,
+  startsNewGeneration,
+  type RelayBinding,
+  type RelayBindingSnapshot,
+} from "./relay-binding.js";
 import { verifyGrantForTurn, grantDelegateIs, isProducedGrant } from "./grant-verifier.js";
 import { createMoneyCapabilityAuthority, MoneyDecisionLedger } from "./money-capability.js";
 import type { MoneyCapability } from "./money-capability.js";
@@ -324,11 +332,7 @@ import { resolveAttachedRead, resolveAttachedAct } from "./attached-surface.js";
 import { ConversationManager } from "./conversation.js";
 import { GradientManager } from "./gradient-manager.js";
 import { InteractiveDelegationManager } from "./interactive-delegation.js";
-import {
-  InvokeCapabilityManager,
-  type InvokeCapabilityConfig,
-  type InvokeCapabilityOptions,
-} from "./invoke-capability.js";
+import { InvokeCapabilityManager, type InvokeCapabilityOptions } from "./invoke-capability.js";
 import { StreamingManager } from "./streaming.js";
 import type { InteractiveDelegationConfig } from "./interactive-delegation.js";
 
@@ -587,15 +591,21 @@ export class MotebitRuntime {
    */
   private readonly _paidIntentLedger: PaidIntentLedger;
   /**
-   * Relay coordinates for the free, read-only `task:query` retrieval
-   * (`retrieveDelegationResult`). Set by `enableInteractiveDelegation` /
-   * `enableInvokeCapability` — any surface that can delegate can also
-   * fetch a result it already paid for. Null until then.
+   * The ONE delegation relay binding (`relay-binding.ts`; design
+   * runtime-relay-binding rev 6). Every delegation call — a relay tool
+   * execution, a tap, a granted spend, a result retrieval, a credential
+   * submission — reads one snapshot of it when it starts and sends every
+   * tokened request to that snapshot's relay. Nothing else in the runtime
+   * holds a relay URL, token source or relay key for delegation
+   * (`check-runtime-single-relay-binding`). Null while unbound.
    */
-  private _taskQueryCoords: {
-    syncUrl: string;
-    authToken: (audience?: import("@motebit/protocol").TokenAudience) => Promise<string>;
-  } | null = null;
+  private _relayBinding: RelayBindingSnapshot | null = null;
+  /**
+   * Bumped when the binding changes what an approval was decided under (the
+   * relay, its key, a bound path) and on every unbind. A paused call records
+   * it; the approved call runs only under the same generation.
+   */
+  private _relayGeneration = 0;
   /**
    * The current turn's verified standing authority (null between turns
    * and on grantless turns). Set only from `verifyGrantForTurn`'s output
@@ -729,12 +739,12 @@ export class MotebitRuntime {
   private interactiveDelegation!: InteractiveDelegationManager;
   /**
    * Deterministic `invokeCapability` primitive — the surface-determinism
-   * path. Null until `enableInvokeCapability(config)` is called. Surfaces
-   * (chip tap, slash command, scene click, voice opt-in) consume this via
-   * `MotebitRuntime.invokeCapability`. See
-   * `docs/doctrine/surface-determinism.md`.
+   * path. Constructed once; a tap runs only while the binding has
+   * `invokeCapability: true`. Surfaces (chip tap, slash command, scene
+   * click, voice opt-in) consume this via `MotebitRuntime.invokeCapability`.
+   * See `docs/doctrine/surface-determinism.md`.
    */
-  private invokeCapabilityManager: InvokeCapabilityManager | null = null;
+  private invokeCapabilityManager!: InvokeCapabilityManager;
   private keyring: KeyringAdapter | null;
   private toolAuditSink?: AuditLogSink;
   private externalToolSources = new Map<string, string[]>();
@@ -764,27 +774,6 @@ export class MotebitRuntime {
    * `getSolanaAddress`, `getSolanaBalance`, and `sendUsdc`.
    */
   private _solanaWallet: SovereignWalletRail | null = null;
-  /**
-   * Relay coordinates for the deterministic granted-spend path
-   * (`executeGrantedDelegation`), stashed when `enableInteractiveDelegation`
-   * is called with a pinned relay key. Null until then — a granted spend with
-   * no coordinates fails closed (`sync_not_enabled`). The pinned hex key is the
-   * treasury trust root; the auth-token minter is the same audience-scoped
-   * minter the AI-loop delegation path uses.
-   */
-  private _grantedSpendCoords: {
-    syncUrl: string;
-    authToken: (audience?: import("@motebit/protocol").TokenAudience) => Promise<string>;
-    relayPublicKeyHex: string;
-    /**
-     * Cold-start opt-in for a new delegator↔worker pair — resolved fresh per
-     * spend (a function reflects a live toggle). Without threading this to the
-     * granted-spend path, a fresh molecule's FIRST paid delegation to a
-     * no-history worker fail-closes `p2p_ineligible` at the pre-flight — the
-     * archetype's own happy path (Clerk↔Researcher) would never settle.
-     */
-    acknowledgeNoHistoryRisk?: boolean | (() => boolean);
-  } | null = null;
   /**
    * Sovereign receipt exchange transport. Null when no transport is
    * configured — in that state, the runtime can still send USDC via
@@ -1312,10 +1301,40 @@ export class MotebitRuntime {
       setCredentialSubmitter: (submitter) => {
         this.credentialManager.credentialSubmitter = submitter;
       },
-      bumpTrustFromReceipt: (receipt) => this.bumpTrustFromReceipt(receipt, true),
+      bumpTrustFromReceipt: (receipt, relayUrl) =>
+        this.bumpTrustFromReceiptOn(relayUrl, receipt, true),
+      getBinding: () => this._relayBinding,
       wireLoopDeps: () => this.wireLoopDeps(),
       turnReceipts: this.turnReceipts,
     });
+
+    // The tap path — constructed once over the same binding. The sovereign
+    // rail's atomic-payment builder is bound when a wallet is configured:
+    // with it (and the binding's pinned key) a paid cross-agent capability
+    // settles peer-to-peer; without it every tap is relay-mediated.
+    const tapBuildP2pPayment = this._solanaWallet?.buildP2pPayment?.bind(this._solanaWallet);
+    const tapConfirmP2pPayment = p2pPaymentConfirmerOf(this._solanaWallet);
+    this.invokeCapabilityManager = new InvokeCapabilityManager(
+      {
+        motebitId: this.motebitId,
+        logger: this._logger,
+        bumpTrustFromReceipt: (receipt, relayUrl) =>
+          this.bumpTrustFromReceiptOn(relayUrl, receipt, true),
+        // A tap is the owner acting, never part of any turn: its receipt goes
+        // to the owner's record only — never into a concurrent turn's
+        // collector, which may be another principal's task (#943).
+        stashReceipt: (receipt) => this.interactiveDelegation.pushReceipt(receipt),
+        ...(tapBuildP2pPayment ? { buildP2pPayment: tapBuildP2pPayment } : {}),
+        // #885: the rail's read-only "did it land anyway?" lookup.
+        ...(tapBuildP2pPayment && tapConfirmP2pPayment != null
+          ? { confirmP2pPayment: tapConfirmP2pPayment }
+          : {}),
+        // The user-tap path is a paid path too: without the ledger, a tap
+        // could re-buy work whose result is still outstanding (#874 sibling).
+        paidIntentLedger: this._paidIntentLedger,
+      },
+      () => this._relayBinding,
+    );
 
     // Streaming & Approval — stream processing, tool approval lifecycle, timeouts
     this.streaming = new StreamingManager(this.buildStreamingDeps(config));
@@ -1510,6 +1529,9 @@ export class MotebitRuntime {
     config: RuntimeConfig,
   ): ConstructorParameters<typeof StreamingManager>[0] {
     return {
+      // A paused call records the binding generation; the approved call runs
+      // only while it is unchanged (`relay_changed` otherwise).
+      getRelayGeneration: () => this._relayGeneration,
       pushStateUpdate: (u) => this.state.pushUpdate(u),
       setSpeaking: (a) => this.behavior.setSpeaking(a),
       setDelegating: (a) => this.behavior.setDelegating(a),
@@ -2314,7 +2336,17 @@ export class MotebitRuntime {
       // (#884): each pay-forward payment is recorded before the task is
       // presented, and a worker holding a paid, unretrieved result is
       // refused before any money moves.
-      paidLedger: this._paidIntentLedger,
+      // Its records name the relay this adapter discovers and pays through
+      // (the ledger's writers require one).
+      paidLedger: {
+        check: (worker: string, capability: string) =>
+          this._paidIntentLedger.check(worker, capability),
+        recordInFlight: (entry: UnretrievedPayment) =>
+          this._paidIntentLedger.recordInFlight(entry, discoveryUrl),
+        recordSettledUnretrieved: (entry: UnretrievedPayment) =>
+          this._paidIntentLedger.recordSettledUnretrieved(entry, discoveryUrl),
+        resolve: (taskId: string) => this._paidIntentLedger.resolve(taskId),
+      },
       logger: this._logger,
       authToken: opts?.authToken,
       routingStrategy: opts?.routingStrategy,
@@ -6184,7 +6216,16 @@ export class MotebitRuntime {
   }
 
   private get trustDeps(): AgentTrustDeps {
+    return this.trustDepsOn(this._relayBinding?.syncUrl ?? null);
+  }
+
+  /**
+   * Trust deps whose capabilities fetch goes to `relayUrl` — the relay of
+   * the call that produced the receipt — or nowhere when null.
+   */
+  private trustDepsOn(relayUrl: string | null): AgentTrustDeps {
     return {
+      capabilitiesRelayUrl: relayUrl,
       motebitId: this.motebitId,
       agentTrustStore: this.agentTrustStore,
       events: this.events,
@@ -6210,7 +6251,31 @@ export class MotebitRuntime {
     /** USD the caller paid for this work (settled); weighs a failure per `paidFailureWeight`. */
     paidUsd?: number,
   ): Promise<void> {
+    // Outside any delegation call (a plan step's receipt, a served task's
+    // nested receipts, a sovereign exchange): the capabilities fetch goes to
+    // the relay bound NOW, and is skipped while none is bound.
     return _bumpTrustFromReceipt(this.trustDeps, receipt, verified, capability, paidUsd);
+  }
+
+  /**
+   * `bumpTrustFromReceipt` for a receipt produced by a delegation call: the
+   * capabilities fetch goes to THAT call's relay (its binding snapshot),
+   * never to a relay bound since or one a surface cached.
+   */
+  private bumpTrustFromReceiptOn(
+    relayUrl: string,
+    receipt: ExecutionReceipt,
+    verified: boolean,
+    capability?: string,
+    paidUsd?: number,
+  ): Promise<void> {
+    return _bumpTrustFromReceipt(
+      this.trustDepsOn(relayUrl),
+      receipt,
+      verified,
+      capability,
+      paidUsd,
+    );
   }
 
   async recordAgentInteraction(
@@ -6559,17 +6624,67 @@ export class MotebitRuntime {
   }
 
   /**
-   * Enable interactive delegation: registers a `delegate_to_agent` tool so the
-   * AI can transparently delegate tasks to remote agents during normal conversation.
+   * Bind the runtime's ONE delegation relay (`relay-binding.ts`; design
+   * runtime-relay-binding rev 6 §3.1). Replaces the whole binding — every
+   * field — and is never refused.
    *
-   * The tool submits tasks to the relay via REST, polls for results, bumps trust
-   * on verified receipts, and returns the result as normal tool output.
+   * `tools: true` registers `delegate_to_agent`, `discover_agents` and
+   * `retrieve_task_result` (and lets credentials be submitted);
+   * `invokeCapability: true` binds the tap path; a pinned `relayPublicKey`
+   * enables paid P2P and the granted-spend path. Every call takes one
+   * snapshot of the binding when it starts: a call already running finishes
+   * on its snapshot's relay, and every later call uses this one.
+   *
+   * The generation advances when the relay (by `sameRelay`), the key or a
+   * bound path changes — a pending approval decided under the old binding
+   * is then refused `relay_changed`. Rebinding the same values keeps the
+   * generation (and the registered tools); the token source,
+   * acknowledgement, routing and timeout still take the new values.
    */
-  enableInteractiveDelegation(config: InteractiveDelegationConfig): void {
+  bindRelay(binding: RelayBinding): void {
+    if (startsNewGeneration(this._relayBinding, binding)) this._relayGeneration++;
+    this._relayBinding = Object.freeze({ ...binding, generation: this._relayGeneration });
+    if (binding.tools) {
+      this.interactiveDelegation.registerDelegationTools(this.delegationToolConfig());
+    } else {
+      this.interactiveDelegation.unregister();
+    }
+  }
+
+  /**
+   * Remove the binding: the relay tools are unregistered, no new call of any
+   * delegation kind contacts any relay, and the generation advances (so a
+   * pending approval is refused). A call already running finishes on its
+   * snapshot. Idempotent.
+   */
+  unbindRelay(): void {
+    if (this._relayBinding != null) {
+      this._relayBinding = null;
+      this._relayGeneration++;
+    }
+    this.interactiveDelegation.unregister();
+  }
+
+  /**
+   * The bound delegation relay and whether a key is pinned for it, or null
+   * while unbound. Read-only.
+   */
+  getDelegationRelay(): { url: string; pinned: boolean } | null {
+    const binding = this._relayBinding;
+    return binding == null
+      ? null
+      : { url: binding.syncUrl, pinned: binding.relayPublicKey != null };
+  }
+
+  /**
+   * What the relay tools are registered with — nothing relay-shaped (that is
+   * read per call from the binding).
+   */
+  private delegationToolConfig(): InteractiveDelegationConfig {
     // Bind the sovereign rail's atomic-payment builder (when a wallet is
     // configured) so a paid cross-agent `delegate_to_agent` call can settle
-    // peer-to-peer — mirrors enableInvokeCapability. The surface supplies the
-    // pinned `relayPublicKey` in `config`; both together enable the P2P path.
+    // peer-to-peer — the binding's pinned `relayPublicKey` and this together
+    // enable the P2P path.
     //
     // The raw wallet method NEVER passes through: it is bound only via the
     // metering wrapper, which enforces the standing grant's signed ceiling
@@ -6592,61 +6707,13 @@ export class MotebitRuntime {
     const confirmP2pPayment = buildP2pPayment
       ? p2pPaymentConfirmerOf(this._solanaWallet)
       : undefined;
-    this.interactiveDelegation.enable({
-      ...config,
+    return {
       ...(buildP2pPayment ? { buildP2pPayment } : {}),
       ...(confirmP2pPayment ? { confirmP2pPayment } : {}),
       getActiveGrantId: () => this._activeTurnGrant?.grant_id ?? null,
       paidIntentLedger: this._paidIntentLedger,
-      retrieveTaskResult: (taskId) => this.retrieveDelegationResult(taskId),
-    });
-    this._taskQueryCoords ??= { syncUrl: config.syncUrl, authToken: config.authToken };
-    // Stash the relay coordinates the deterministic granted-spend path needs
-    // (executeGrantedDelegation) — only when a pinned relay key is present, as
-    // the P2P treasury derives from it. One source of relay coords for both the
-    // loop path (above) and the granted-spend path.
-    if (config.relayPublicKey != null) {
-      this._grantedSpendCoords = {
-        syncUrl: config.syncUrl,
-        authToken: config.authToken,
-        relayPublicKeyHex: config.relayPublicKey,
-        ...(config.acknowledgeNoHistoryRisk != null
-          ? { acknowledgeNoHistoryRisk: config.acknowledgeNoHistoryRisk }
-          : {}),
-      };
-    }
-  }
-
-  /**
-   * Undo `enableInteractiveDelegation`: unregister the relay tools
-   * (`delegate_to_agent`, `discover_agents`, `retrieve_task_result`) and the
-   * credential submitter, and drop the stored relay coordinates (task-query
-   * retrieval, granted spend). A surface calls it when the user disconnects
-   * the relay, so nothing the runtime holds can contact that relay any more.
-   * Idempotent; a later enable binds the new relay.
-   */
-  disableInteractiveDelegation(): void {
-    this.interactiveDelegation.disable();
-    this._taskQueryCoords = null;
-    this._grantedSpendCoords = null;
-  }
-
-  /**
-   * The relay of the runtime's task-query coordinates, or null. Read-only.
-   *
-   * Those coordinates are set, only while empty, by any
-   * `enableInteractiveDelegation` call and by the first-ever
-   * `enableInvokeCapability` call (a later one returns before reaching them),
-   * and are cleared by `disableInteractiveDelegation`. So after
-   * enable-invoke(A), disable, enable-invoke(B) this reports null.
-   *
-   * That is the whole contract. The runtime holds other relay bindings (the
-   * delegation tool's closure, the tap manager, the granted-spend
-   * coordinates) that can differ from this one; it does not report them.
-   */
-  getDelegationRelay(): { url: string } | null {
-    const coords = this._taskQueryCoords;
-    return coords === null ? null : { url: coords.syncUrl };
+      retrieveTaskResult: (taskId, binding) => this.retrieveFrom(binding, taskId),
+    };
   }
 
   /**
@@ -6911,8 +6978,18 @@ export class MotebitRuntime {
     if (maxTotalMicro != null && !(Number.isSafeInteger(maxTotalMicro) && maxTotalMicro >= 0)) {
       return { ok: false, code: "budget_exceeded" };
     }
-    const coords = this._grantedSpendCoords;
-    if (coords == null) return { ok: false, code: "sync_not_enabled" };
+    // The spend's ONE snapshot of the binding. A granted spend needs a pinned
+    // key — the P2P treasury derives from it — so a binding without one (or
+    // no binding) fails closed, and never falls back to an earlier relay's.
+    const binding = this._relayBinding;
+    if (binding == null || binding.relayPublicKey == null) {
+      return { ok: false, code: "sync_not_enabled" };
+    }
+    const coords = {
+      syncUrl: binding.syncUrl,
+      authToken: binding.authToken,
+      relayPublicKeyHex: binding.relayPublicKey,
+    };
     const delegateToolDef = this.toolRegistry.get("delegate_to_agent");
     if (delegateToolDef == null) return { ok: false, code: "sync_not_enabled" };
 
@@ -6953,10 +7030,7 @@ export class MotebitRuntime {
       // Cold-start opt-in — resolved fresh (a function reflects a live toggle).
       // Threaded to BOTH the dry-run pre-flight and the live broadcast, else a
       // no-history worker fail-closes p2p_ineligible before anything settles.
-      const ack =
-        typeof coords.acknowledgeNoHistoryRisk === "function"
-          ? coords.acknowledgeNoHistoryRisk()
-          : coords.acknowledgeNoHistoryRisk;
+      const ack = acknowledgementOf(binding);
 
       // First-person worker ranking (docs/doctrine/first-person-worker-routing.md
       // + exploration-as-market-vitality.md). For an UNPINNED delegation, rank the
@@ -7150,7 +7224,13 @@ export class MotebitRuntime {
           const paidUsd =
             typeof paidMicro === "number" && paidMicro > 0 ? paidMicro / 1_000_000 : undefined;
           if (valid) {
-            await this.bumpTrustFromReceipt(workerReceipt, true, params.capability, paidUsd);
+            await this.bumpTrustFromReceiptOn(
+              coords.syncUrl,
+              workerReceipt,
+              true,
+              params.capability,
+              paidUsd,
+            );
           }
         }
       } catch (err) {
@@ -7183,42 +7263,6 @@ export class MotebitRuntime {
   }
 
   /**
-   * Enable the `invokeCapability` primitive — the deterministic
-   * surface-affordance → delegation path. Idempotent. Shares the same relay
-   * coordinates as `enableInteractiveDelegation`; typical usage is to call
-   * both with the same config so AI-loop and user-tap paths route through
-   * the same relay.
-   */
-  enableInvokeCapability(config: InvokeCapabilityConfig): void {
-    if (this.invokeCapabilityManager != null) return;
-    this._taskQueryCoords ??= { syncUrl: config.syncUrl, authToken: config.authToken };
-    // Bind the sovereign rail's atomic-payment builder when a wallet is
-    // configured. With it (and a pinned `config.relayPublicKey`), a paid
-    // cross-agent capability settles peer-to-peer instead of relay-custody;
-    // without it, every delegation uses the relay-mediated path (unchanged).
-    const buildP2pPayment = this._solanaWallet?.buildP2pPayment?.bind(this._solanaWallet);
-    const confirmP2pPayment = p2pPaymentConfirmerOf(this._solanaWallet);
-    this.invokeCapabilityManager = new InvokeCapabilityManager(
-      {
-        motebitId: this.motebitId,
-        logger: this._logger,
-        bumpTrustFromReceipt: (receipt) => this.bumpTrustFromReceipt(receipt, true),
-        // A tap is the owner acting, never part of any turn: its receipt goes
-        // to the owner's record only — never into a concurrent turn's
-        // collector, which may be another principal's task (#943).
-        stashReceipt: (receipt) => this.interactiveDelegation.pushReceipt(receipt),
-        ...(buildP2pPayment ? { buildP2pPayment } : {}),
-        // #885: the rail's read-only "did it land anyway?" lookup.
-        ...(buildP2pPayment && confirmP2pPayment != null ? { confirmP2pPayment } : {}),
-        // The user-tap path is a paid path too: without the ledger, a tap
-        // could re-buy work whose result is still outstanding (#874 sibling).
-        paidIntentLedger: this._paidIntentLedger,
-      },
-      config,
-    );
-  }
-
-  /**
    * Retrieve a delegated task's result by id (#874) — ONE authenticated
    * `task:query` read. Free and read-only: never submits, never pays,
    * never retries. The recovery path for a paid delegation whose result
@@ -7236,12 +7280,35 @@ export class MotebitRuntime {
     taskId: string,
     options?: { taskOwnerId?: string; acknowledge?: boolean; signal?: AbortSignal },
   ): Promise<TaskRetrieval> {
-    const coords = this._taskQueryCoords;
-    if (coords == null) return { status: "not_connected", taskId };
+    // The retrieval's ONE snapshot of the binding.
+    const binding = this._relayBinding;
+    if (binding == null) return { status: "not_connected", taskId };
+    return this.retrieveFrom(binding, taskId, options);
+  }
+
+  /**
+   * One retrieval on `binding` (the caller's snapshot). Today's local
+   * answers come first (a payment with no relay task is `not_admitted`).
+   * Then a record this device holds that names ANOTHER relay is answered
+   * `bound_elsewhere` with that relay — nothing is sent, since the bound
+   * relay never held that task. A record with no relay (written before
+   * records named one) and an id with no record are read from `binding`.
+   */
+  private async retrieveFrom(
+    binding: RelayBindingSnapshot,
+    taskId: string,
+    options?: { taskOwnerId?: string; acknowledge?: boolean; signal?: AbortSignal },
+  ): Promise<TaskRetrieval> {
+    const id = taskId.trim();
+    if (isPaymentWithoutTaskId(id)) return { status: "not_admitted", taskId: id };
+    const owedBy = this._paidIntentLedger.find(id)?.relayUrl;
+    if (owedBy != null && !sameRelay(owedBy, binding.syncUrl)) {
+      return { status: "bound_elsewhere", taskId: id, relayUrl: owedBy };
+    }
     const result = await retrieveDelegationResult({
       motebitId: this.motebitId,
-      syncUrl: coords.syncUrl,
-      authToken: coords.authToken,
+      syncUrl: binding.syncUrl,
+      authToken: binding.authToken,
       taskId,
       ...(options?.taskOwnerId != null ? { taskOwnerId: options.taskOwnerId } : {}),
       ...(options?.signal ? { signal: options.signal } : {}),
@@ -7295,27 +7362,14 @@ export class MotebitRuntime {
    * click MUST use this (never `sendMessageStreaming` with a constructed
    * prompt). See `docs/doctrine/surface-determinism.md`.
    *
-   * Throws if `enableInvokeCapability` has not been called — the relay
-   * coordinates must be configured before any affordance can fire.
+   * With no binding for taps (`bindRelay` with `invokeCapability: true`), it
+   * yields an `invoke_error` `sync_not_enabled` chunk and sends nothing.
    */
   async *invokeCapability(
     capability: string,
     prompt: string,
     options?: InvokeCapabilityOptions,
   ): AsyncGenerator<StreamChunk> {
-    if (this.invokeCapabilityManager == null) {
-      // Wiring-not-done is a user-visible condition in practice (first-run
-      // state, signed-out device, cleared storage). Surface through the same
-      // `invoke_error` taxonomy every other failure uses so the chat layer's
-      // `failureCopy` renders a Motebit-native remediation instead of the
-      // chat handler's catch block leaking the raw developer message.
-      yield {
-        type: "invoke_error",
-        code: "sync_not_enabled",
-        message: "invokeCapability has not been enabled on this runtime",
-      };
-      return;
-    }
     yield* this.invokeCapabilityManager.invokeCapability(capability, prompt, options);
   }
 }

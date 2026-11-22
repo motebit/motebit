@@ -27,7 +27,11 @@ export class CredentialManager {
   private _issuedCredentials: import("@motebit/encryption").VerifiableCredential<AnyCredentialSubject>[] =
     [];
   private changeListeners = new Set<() => void>();
-  /** Callback to submit credentials to relay for indexing. Set externally (e.g. by enableInteractiveDelegation). */
+  /**
+   * Callback to submit credentials to relay for indexing. Set once by the
+   * interactive-delegation manager; it posts to the relay bound when the
+   * credential is issued, and nothing while unbound.
+   */
   credentialSubmitter:
     | ((
         vc: import("@motebit/encryption").VerifiableCredential<unknown>,

@@ -54,6 +54,12 @@ export interface UnretrievedPayment {
   paidMicro: number;
   feeMicro: number;
   recordedAt: number;
+  /**
+   * The relay the result is owed from — the relay the paying call was bound
+   * to. Absent only on a record written before records named their relay;
+   * such a record is retrieved from whichever relay is bound.
+   */
+  relayUrl?: string;
 }
 
 export type PaidIntentVerdict =
@@ -164,6 +170,7 @@ function fromRecord(r: PaidIntentRecord): UnretrievedPayment {
     paidMicro: r.paid_micro,
     feeMicro: r.fee_micro,
     recordedAt: r.recorded_at,
+    ...(r.relay_url != null && r.relay_url !== "" ? { relayUrl: r.relay_url } : {}),
   };
 }
 
@@ -198,7 +205,17 @@ export class PaidIntentLedger {
     this.sessionId = sessionId ?? newSessionId();
   }
 
-  private write(entry: UnretrievedPayment, state: PaidIntentRecord["state"]): void {
+  /**
+   * The one writer. `relayUrl` — the relay the paying call was bound to — is
+   * REQUIRED, and so is it on every public writer below, so a payment
+   * recorded without the relay that owes its result does not compile. Only
+   * reads tolerate its absence (records written before it existed).
+   */
+  private write(
+    entry: UnretrievedPayment,
+    state: PaidIntentRecord["state"],
+    relayUrl: string,
+  ): void {
     this.store.record({
       motebit_id: this.motebitId,
       task_id: entry.taskId,
@@ -210,6 +227,7 @@ export class PaidIntentLedger {
       recorded_at: entry.recordedAt,
       state,
       session_id: this.sessionId,
+      relay_url: relayUrl,
     });
   }
 
@@ -221,13 +239,13 @@ export class PaidIntentLedger {
    * every later session reads it as unretrieved: the re-hire is refused
    * and `/result` lists it.
    */
-  recordInFlight(entry: UnretrievedPayment): void {
-    this.write(entry, "in_flight");
+  recordInFlight(entry: UnretrievedPayment, relayUrl: string): void {
+    this.write(entry, "in_flight", relayUrl);
   }
 
   /** Record a settled-but-unretrieved payment (from a `settledPayment` fact). */
-  recordSettledUnretrieved(entry: UnretrievedPayment): void {
-    this.write(entry, "unretrieved");
+  recordSettledUnretrieved(entry: UnretrievedPayment, relayUrl: string): void {
+    this.write(entry, "unretrieved", relayUrl);
   }
 
   /**
@@ -243,8 +261,8 @@ export class PaidIntentLedger {
    * (`recordSettledUnretrieved` with the same id). A caller that cannot
    * write this record must not send the transaction.
    */
-  recordBroadcast(entry: Omit<UnretrievedPayment, "taskId">): void {
-    this.write({ ...entry, taskId: paymentEntryId(entry.txHash) }, "in_flight");
+  recordBroadcast(entry: Omit<UnretrievedPayment, "taskId">, relayUrl: string): void {
+    this.write({ ...entry, taskId: paymentEntryId(entry.txHash) }, "in_flight", relayUrl);
   }
 
   /**
@@ -258,8 +276,8 @@ export class PaidIntentLedger {
    * resolution vocabulary (`@motebit/sdk` `PaidIntentRecord`) has only
    * retrieved / dismissed; what it means here is "carried by the task entry".
    */
-  admitted(txHash: string, task: UnretrievedPayment): void {
-    this.recordInFlight(task);
+  admitted(txHash: string, task: UnretrievedPayment, relayUrl: string): void {
+    this.recordInFlight(task, relayUrl);
     this.store.resolve(this.motebitId, paymentEntryId(txHash), "retrieved", Date.now());
   }
 
@@ -270,7 +288,10 @@ export class PaidIntentLedger {
    * the pair in this session too — until the owner reconciles the wallet
    * and dismisses it. Returns the entry's ledger id.
    */
-  recordUnconfirmed(entry: Omit<UnretrievedPayment, "taskId" | "txHash">): {
+  recordUnconfirmed(
+    entry: Omit<UnretrievedPayment, "taskId" | "txHash">,
+    relayUrl: string,
+  ): {
     taskId: string;
     durable: boolean;
   } {
@@ -279,7 +300,7 @@ export class PaidIntentLedger {
       newSessionId()
         .replace(/[^A-Za-z0-9]/g, "")
         .slice(0, 12);
-    const durable = this.recordOwed({ ...entry, taskId, txHash: UNKNOWN_TX_HASH });
+    const durable = this.recordOwed({ ...entry, taskId, txHash: UNKNOWN_TX_HASH }, relayUrl);
     return { taskId, durable };
   }
 
@@ -298,12 +319,12 @@ export class PaidIntentLedger {
    * runs, and `outstanding()` lists it. Returns whether the write was
    * durable; a caller must tell the owner when it was not.
    */
-  recordOwed(entry: UnretrievedPayment): boolean {
+  recordOwed(entry: UnretrievedPayment, relayUrl: string): boolean {
     try {
-      this.recordSettledUnretrieved(entry);
+      this.recordSettledUnretrieved(entry, relayUrl);
       return true;
     } catch {
-      this.held.set(entry.taskId, entry);
+      this.held.set(entry.taskId, { ...entry, relayUrl });
       return false;
     }
   }

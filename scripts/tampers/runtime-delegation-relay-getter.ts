@@ -1,14 +1,20 @@
 /**
  * Tamper checks for `MotebitRuntime.getDelegationRelay()`
- * (packages/runtime/src/motebit-runtime.ts): the relay of the runtime's
- * task-query coordinates, which the CLI's `/connect` reads to decide whether
- * a session is already on a relay. Each entry breaks one clause of its
- * contract and must turn the getter's test red:
+ * (packages/runtime/src/motebit-runtime.ts), which the CLI's `/connect`
+ * reads to decide whether a session is already on a relay. Each entry breaks
+ * one clause of its contract and must turn the getter's test red.
+ *
+ * Re-anchored for part 4a (design runtime-relay-binding rev 6): the getter
+ * no longer reads task-query coordinates set by `enableInteractiveDelegation`
+ * and cleared by `disableInteractiveDelegation` (both removed); it reports
+ * the ONE binding (`bindRelay` / `unbindRelay`), with `pinned`. The three
+ * mutations are kept, each on the code that now carries its clause:
  *
  *   - it always reports null;
- *   - it reports the latest `enableInteractiveDelegation` instead of the
- *     first (the coordinates are overwritten instead of set while empty);
- *   - it survives `disableInteractiveDelegation`.
+ *   - a later bind does not move it (main's mutation flipped which enable
+ *     won; under the binding the LAST bind must win, so the mutation keeps
+ *     the FIRST);
+ *   - it survives `unbindRelay` (main: survived `disableInteractiveDelegation`).
  *
  *   node_modules/.bin/tsx scripts/tampers/runtime-delegation-relay-getter.ts
  *   (plain `node` cannot resolve the runner's `.js` import specifier)
@@ -23,7 +29,7 @@ const SRC = "packages/runtime/src/motebit-runtime.ts";
 const PKG = "@motebit/runtime";
 const TEST = "src/__tests__/delegation-relay-getter.test.ts";
 const RED =
-  "getDelegationRelay: the relay of the task-query coordinates null before any enable; the first enable wins; a disable clears it; a first-ever enable-invoke sets it and a later one does not";
+  "getDelegationRelay: the one relay binding null unbound; every bind reports its relay and pin; unbind clears it";
 
 function entry(name: string, from: string, to: string): TamperEntry {
   return { name, edits: [{ file: SRC, from, to }], pkg: PKG, test: TEST, red: RED };
@@ -32,22 +38,18 @@ function entry(name: string, from: string, to: string): TamperEntry {
 const TAMPERS: TamperEntry[] = [
   entry(
     "getDelegationRelay always reports null",
-    "    return coords === null ? null : { url: coords.syncUrl };\n",
-    "    return coords === null ? null : null;\n",
-  ),
-  // The same `??=` line occurs in `enableInvokeCapability`; the preceding
-  // line anchors this edit to `enableInteractiveDelegation`.
-  entry(
-    "the coordinates follow the latest enableInteractiveDelegation, not the first",
-    "      retrieveTaskResult: (taskId) => this.retrieveDelegationResult(taskId),\n    });\n" +
-      "    this._taskQueryCoords ??= { syncUrl: config.syncUrl, authToken: config.authToken };\n",
-    "      retrieveTaskResult: (taskId) => this.retrieveDelegationResult(taskId),\n    });\n" +
-      "    this._taskQueryCoords = { syncUrl: config.syncUrl, authToken: config.authToken };\n",
+    "      : { url: binding.syncUrl, pinned: binding.relayPublicKey != null };\n",
+    "      : null;\n",
   ),
   entry(
-    "the coordinates survive disableInteractiveDelegation",
-    "    this.interactiveDelegation.disable();\n    this._taskQueryCoords = null;\n",
-    "    this.interactiveDelegation.disable();\n",
+    "a later bind does not move the binding (the first bind wins)",
+    "    this._relayBinding = Object.freeze({ ...binding, generation: this._relayGeneration });\n",
+    "    this._relayBinding ??= Object.freeze({ ...binding, generation: this._relayGeneration });\n",
+  ),
+  entry(
+    "the binding survives unbindRelay",
+    "    if (this._relayBinding != null) {\n      this._relayBinding = null;\n",
+    "    if (this._relayBinding != null) {\n",
   ),
 ];
 

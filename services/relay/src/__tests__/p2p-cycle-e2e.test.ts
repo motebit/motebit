@@ -188,12 +188,17 @@ describe("P2P Settlement Cycle E2E", () => {
         stashReceipt: () => {},
         buildP2pPayment: (req) => rail.buildP2pPayment!(req),
       },
-      {
+      // The binding accessor (runtime-relay-binding part 4a): the manager
+      // holds no relay config; each tap reads this snapshot.
+      () => ({
         syncUrl: SYNC_URL,
         authToken: async () => API_TOKEN,
         relayPublicKey: relay.relayIdentity.publicKeyHex,
         timeoutMs: 100,
-      },
+        tools: false,
+        invokeCapability: true,
+        generation: 1,
+      }),
     );
 
     const chunks: Array<{ type: string; code?: string }> = [];
@@ -300,7 +305,7 @@ describe("P2P Settlement Cycle E2E", () => {
           stashReceipt: () => {},
           buildP2pPayment: (req) => rail.buildP2pPayment!(req),
         },
-        {
+        () => ({
           syncUrl: SYNC_URL,
           // Signed token (not the master token) so the relay sets callerMotebitId
           // and the listing pre-flight eligibility — caller-bound — actually runs.
@@ -313,7 +318,10 @@ describe("P2P Settlement Cycle E2E", () => {
             ),
           relayPublicKey: relay.relayIdentity.publicKeyHex,
           timeoutMs: 100,
-        },
+          tools: false,
+          invokeCapability: true,
+          generation: 1,
+        }),
       );
       const chunks: Array<{ type: string; code?: string }> = [];
       // Per-invocation options ack — the exact path the web surface uses

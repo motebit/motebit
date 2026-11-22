@@ -134,6 +134,14 @@ function renderRetrieval(
       };
     case "not_connected":
       return { summary: "Not connected to a relay — nothing could be read.", data };
+    case "bound_elsewhere":
+      // The record names the relay that owes the result; the bound relay
+      // never held this task, so nothing was sent to it.
+      return {
+        summary: `Task ${id} is owed by ${r.relayUrl}, not the relay connected now — nothing was sent.`,
+        detail: `${paidNote}Hiring again would pay a second time. Connect to ${r.relayUrl} and run /result ${id} again.`,
+        data: { ...data, owed_by_relay: r.relayUrl },
+      };
     case "not_admitted":
       // #885: a payment with no confirmed relay task. The relay offers no
       // read by payment, so nothing more can be learned from here; the one

@@ -29,6 +29,7 @@ import type { StreamChunk } from "./runtime-config.js";
 import { TurnPrincipal } from "./turn-principal.js";
 import { OWNER_ACT } from "./turn-delegation-receipts.js";
 import type { ToolCall } from "./turn-principal.js";
+import { RELAY_CHANGED_RESULT } from "./relay-binding.js";
 import type { TurnConversation } from "./conversation.js";
 
 // Re-import the helper — it's file-local in index.ts, so we duplicate it here.
@@ -91,6 +92,13 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
 
 /** Dependencies injected by the runtime. */
 export interface StreamingDeps {
+  /**
+   * The runtime's current relay-binding generation (`relay-binding.ts`). A
+   * paused call records it; the approved call runs only if it is unchanged
+   * at the moment the handler would be invoked, else its result is
+   * `relay_changed` and the handler is never called.
+   */
+  getRelayGeneration?: () => number;
   /** Push partial state updates into the state vector. */
   pushStateUpdate(update: Partial<MotebitState>): void;
   /** Set creature speaking activity. */
@@ -374,6 +382,12 @@ interface PendingApproval {
    * content, so the resume sends at no lower tier.
    */
   sensitivity: SensitivityLevel;
+  /**
+   * The relay-binding generation when the gate paused (`getRelayGeneration`).
+   * The approval was decided under that binding; under any other the call
+   * is refused `relay_changed` and nothing is sent.
+   */
+  relayGeneration?: number;
 }
 
 export class StreamingManager {
@@ -909,6 +923,9 @@ export class StreamingManager {
           turnId: chunk.turn_id,
           ...(principal.foreign ? { foreignPrincipal: true } : {}),
           sensitivity: derivedSensitivity(this.deps.getEffectiveSensitivity()),
+          ...(this.deps.getRelayGeneration != null
+            ? { relayGeneration: this.deps.getRelayGeneration() }
+            : {}),
         };
 
         // Persist quorum metadata to the approval store (source of truth)
@@ -1095,20 +1112,37 @@ export class StreamingManager {
         const dispatchedAt = Date.now();
         let result: ToolResult;
         try {
-          const moneyCapability = this.deps.approvedCallCapability?.(
-            pending.toolName,
-            pending.args,
-          );
-          const call: ToolCall = {
-            destination: this.deps.turnReceiptDestination?.() ?? OWNER_ACT,
-            principal,
-            ...(moneyCapability != null ? { moneyCapability } : {}),
-          };
-          result = await (
-            toolRegistry as ToolRegistry & {
-              execute(n: string, a: Record<string, unknown>, c?: ToolCall): Promise<ToolResult>;
-            }
-          ).execute(pending.toolName, pending.args, call);
+          // The approval was decided under one relay binding. Compared HERE,
+          // synchronously immediately before the handler is invoked — after
+          // every await and yield above — so a switch or Disconnect landing
+          // anywhere in the resume (the decision sink, a consumer holding the
+          // `calling` chunk) is seen. The handler is never invoked.
+          const relayGeneration = pending.relayGeneration;
+          if (
+            relayGeneration != null &&
+            this.deps.getRelayGeneration != null &&
+            relayGeneration !== this.deps.getRelayGeneration()
+          ) {
+            result = { ...RELAY_CHANGED_RESULT };
+            // Nothing will ever be minted for the paused money call.
+            this.deps.discardPausedMoneyCalls?.();
+          } else {
+            const moneyCapability = this.deps.approvedCallCapability?.(
+              pending.toolName,
+              pending.args,
+            );
+            const call: ToolCall = {
+              destination: this.deps.turnReceiptDestination?.() ?? OWNER_ACT,
+              principal,
+              ...(moneyCapability != null ? { moneyCapability } : {}),
+              ...(relayGeneration != null ? { approvedRelayGeneration: relayGeneration } : {}),
+            };
+            result = await (
+              toolRegistry as ToolRegistry & {
+                execute(n: string, a: Record<string, unknown>, c?: ToolCall): Promise<ToolResult>;
+              }
+            ).execute(pending.toolName, pending.args, call);
+          }
         } catch (err) {
           // Close the ledger row before re-throwing: the handler threw, so
           // the tool reports failure — an open row would read as unknown.

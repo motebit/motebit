@@ -729,4 +729,16 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE goal_outcomes ADD COLUMN sensitivity TEXT DEFAULT NULL",
     ],
   },
+  {
+    version: 53,
+    description: "paid_intent_ledger.relay_url — the relay a paid result is owed from",
+    statements: [
+      // The relay the paying call was bound to (runtime relay-binding.ts).
+      // A retrieval while another relay is bound reads nothing and names this
+      // one (`bound_elsewhere`). NULL is a row written before the column
+      // existed: read from whichever relay is bound, as before. Local
+      // private state, never on a wire.
+      "ALTER TABLE paid_intent_ledger ADD COLUMN relay_url TEXT DEFAULT NULL",
+    ],
+  },
 ];
