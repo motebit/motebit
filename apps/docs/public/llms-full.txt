@@ -5287,7 +5287,7 @@ Motebit registers ten tools by default (`apps/cli/src/runtime-factory.ts`). Risk
 | `list_events`          | Browse the agent's event log                                  |
 | `self_reflect`         | Structured reflection over recent interior state              |
 
-`delegate_to_agent` is registered only when interactive delegation is enabled (`enableInteractiveDelegation` in `@motebit/runtime`), not by default.
+`delegate_to_agent` (with `discover_agents` and `retrieve_task_result`) is registered only while a delegation relay is bound with its tools (`runtime.bindRelay({ syncUrl, authToken, tools: true, … })` in `@motebit/runtime`), not by default, and is removed by `runtime.unbindRelay()`. The runtime holds one such binding: every delegation call reads it once when it starts and sends its requests to that relay.
 
 Additional tools (`write_file`, `undo_write`, `shell_exec`) exist in `@motebit/tools` but are not registered by default. They require operator mode and explicit per-call approval — see [Daemon Mode & Approvals](/docs/operator/daemon-approvals) for the three-band governance thresholds that gate them.
 

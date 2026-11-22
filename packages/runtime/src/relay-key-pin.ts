@@ -4,8 +4,8 @@
  * The fee leg of a paid P2P delegation is an IRREVERSIBLE onchain payment to a
  * treasury derived from the relay's Ed25519 public key. If that key came from a
  * fresh `/.well-known` fetch on every delegation, a MITM on relay reads could
- * redirect the fee to an attacker. So `InvokeCapabilityConfig.relayPublicKey` /
- * `InteractiveDelegationConfig.relayPublicKey` take a PINNED relay key
+ * redirect the fee to an attacker. So the runtime's relay binding
+ * (`RelayBinding.relayPublicKey`, `MotebitRuntime.bindRelay`) takes a PINNED relay key
  * (`docs/doctrine/off-ramp-as-user-action.md` § Arc 3.5); this helper produces it.
  *
  * Surface-agnostic: `fetchImpl` and `storage` are injected, so the same logic
