@@ -6645,7 +6645,7 @@ export class MotebitRuntime {
     if (startsNewGeneration(this._relayBinding, binding)) this._relayGeneration++;
     this._relayBinding = Object.freeze({ ...binding, generation: this._relayGeneration });
     if (binding.tools) {
-      this.interactiveDelegation.register(this.delegationToolConfig());
+      this.interactiveDelegation.registerDelegationTools(this.delegationToolConfig());
     } else {
       this.interactiveDelegation.unregister();
     }

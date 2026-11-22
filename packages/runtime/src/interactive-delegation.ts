@@ -239,7 +239,7 @@ export function renderTaskRetrieval(
 
 // === Manager ===
 
-/** Every relay-bound tool `register` registers (and `unregister` removes). */
+/** Every relay-bound tool `registerDelegationTools` registers (and `unregister` removes). */
 const INTERACTIVE_DELEGATION_TOOLS = [
   "delegate_to_agent",
   "discover_agents",
@@ -343,7 +343,7 @@ export class InteractiveDelegationManager {
    * relay with that snapshot's token source; an approved call whose
    * approval generation is not the snapshot's is refused `relay_changed`.
    */
-  register(config: InteractiveDelegationConfig): void {
+  registerDelegationTools(config: InteractiveDelegationConfig): void {
     const TOOL_NAME = "delegate_to_agent";
 
     // Avoid double-registration
