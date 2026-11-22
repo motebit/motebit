@@ -177,7 +177,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("registers delegate_to_agent tool when enableInteractiveDelegation is called", () => {
+  it("registers delegate_to_agent tool when bindRelay binds the tools", () => {
     const runtime = new MotebitRuntime(
       { motebitId: "alice-001", tickRateHz: 0 },
       createAdapters(createMockProvider()),

@@ -55,6 +55,7 @@ import {
   RELAY_A,
   RELAY_B,
   WORKER,
+  heldTokenSource,
   installTwoRelays,
   tokenSource,
   type RelayName,
@@ -77,6 +78,8 @@ interface TestBinding {
   tools?: boolean;
   invokeCapability?: boolean;
   timeoutMs?: number;
+  /** A token source other than `tokenSource(relay)` (a held one). */
+  source?: (aud?: string) => Promise<string>;
 }
 
 const urlOf = (r: RelayName): string => (r === "A" ? RELAY_A : RELAY_B);
@@ -84,7 +87,7 @@ const urlOf = (r: RelayName): string => (r === "A" ? RELAY_A : RELAY_B);
 function bind(runtime: MotebitRuntime, b: TestBinding): void {
   runtime.bindRelay({
     syncUrl: urlOf(b.relay),
-    authToken: tokenSource(b.relay),
+    authToken: b.source ?? tokenSource(b.relay),
     ...(b.key === true ? { relayPublicKey: SIGNING_PINNED_HEX } : {}),
     acknowledgeNoHistoryRisk: true,
     ...(b.timeoutMs != null ? { timeoutMs: b.timeoutMs } : {}),
@@ -539,6 +542,75 @@ describe("a paid-result record", () => {
 // ---------------------------------------------------------------------------
 // Test 7 — an in-flight paid hire keeps its relay
 // ---------------------------------------------------------------------------
+
+describe("a token mint held across a rebind", () => {
+  // Each call reads its snapshot once: a rebind that lands while the call is
+  // waiting on its snapshot's token source must not move the call's request
+  // target, nor any later mint of the same call, to the new binding.
+  function aRequestsCarryOnlyATokens(): void {
+    for (const r of relays.requests.filter((x) => x.auth != null)) {
+      expect(r.relay, `${r.method} ${r.path}`).toBe("A");
+      expect(r.auth, `${r.method} ${r.path}`).toMatch(/^Bearer A:/);
+    }
+  }
+
+  it("granted spend: every request goes to A with a token A's source minted", async () => {
+    const { runtime } = makeRuntime();
+    const a = heldTokenSource("A");
+    bind(runtime, { relay: "A", key: true, source: a.source });
+    const g = await grant();
+    a.hold();
+    const spend = runtime.executeGrantedDelegation({
+      capability: "web_search",
+      prompt: "survey",
+      delegation: g,
+      dryRun: true,
+    });
+    await vi.waitFor(() => expect(a.waiting()).toBe(1));
+    bind(runtime, { relay: "B", key: true });
+    a.release();
+    const dry = await spend;
+    expect(dry.ok).toBe(true);
+    // More than one tokened request, so a later mint is covered too.
+    expect(relays.tokened().length).toBeGreaterThan(1);
+    aRequestsCarryOnlyATokens();
+    expect(relays.to("B")).toEqual([]);
+  });
+
+  it("result retrieval: the read goes to A with A's token", async () => {
+    const { runtime } = makeRuntime();
+    const a = heldTokenSource("A");
+    bind(runtime, { relay: "A", source: a.source });
+    a.hold();
+    const read = runtime.retrieveDelegationResult("task-held");
+    await vi.waitFor(() => expect(a.waiting()).toBe(1));
+    bind(runtime, { relay: "B" });
+    a.release();
+    expect((await read).status).toBe("delivered");
+    expect(relays.requests.map((r) => `${r.relay} ${r.method} ${r.path}`)).toEqual([
+      `A GET /agent/${ME}/task/task-held`,
+    ]);
+    aRequestsCarryOnlyATokens();
+  });
+
+  it("credential submission: the credential goes to A with A's token", async () => {
+    const { runtime } = makeRuntime();
+    const a = heldTokenSource("A");
+    bind(runtime, { relay: "A", source: a.source });
+    a.hold();
+    // A credential issued outside any call (bumped from a receipt now).
+    await runtime.bumpTrustFromReceipt(
+      (await import("./helpers/two-relays.js")).workerReceipt("cred-1"),
+      true,
+    );
+    await vi.waitFor(() => expect(a.waiting()).toBe(1));
+    bind(runtime, { relay: "B" });
+    a.release();
+    await vi.waitFor(() => expect(relays.requests.filter(isCredentialPost)).toHaveLength(1));
+    aRequestsCarryOnlyATokens();
+    expect(relays.to("B")).toEqual([]);
+  });
+});
 
 describe("an in-flight paid hire across a rebind", () => {
   it("keeps polling A, and its record says A", async () => {

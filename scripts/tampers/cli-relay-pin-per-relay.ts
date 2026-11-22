@@ -363,12 +363,19 @@ const PINNED_HIRE_NO_KEY_GUARD = edit(
   "    if (params.buildP2pPayment == null || params.relayPublicKey == null) {\n",
   "    if (params.buildP2pPayment == null) {\n",
 );
+// Re-anchored for part 4a (runtime-relay-binding rev 6): granted spend now
+// reads the ONE binding snapshot instead of `_grantedSpendCoords`. Same
+// mutation — the key guard dropped, the spend proceeding with a placeholder.
 const GRANTED_NO_KEY_GUARD: TamperEdit[] = [
-  edit(RUNTIME_SRC, "    if (config.relayPublicKey != null) {\n", "    if (true as boolean) {\n"),
   edit(
     RUNTIME_SRC,
-    "        relayPublicKeyHex: config.relayPublicKey,\n",
-    `        relayPublicKeyHex: config.relayPublicKey ?? "${TEST_RELAY_KEY}",\n`,
+    "    if (binding == null || binding.relayPublicKey == null) {\n",
+    "    if (binding == null) {\n",
+  ),
+  edit(
+    RUNTIME_SRC,
+    "      relayPublicKeyHex: binding.relayPublicKey,\n",
+    `      relayPublicKeyHex: binding.relayPublicKey ?? "${TEST_RELAY_KEY}",\n`,
   ),
 ];
 

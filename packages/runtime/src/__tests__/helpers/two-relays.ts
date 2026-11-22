@@ -35,6 +35,36 @@ export function tokenSource(name: RelayName): (aud?: string) => Promise<string> 
   return async (aud?: string) => `${name}:${aud ?? "none"}`;
 }
 
+/**
+ * `tokenSource(name)` whose mints can be HELD: while held, each mint is
+ * counted and waits for `release()`, then returns a token naming `name`. A
+ * test rebinds the runtime while a call's mint is held, so the call's later
+ * reads (the request target, later mints) happen under the new binding.
+ */
+export function heldTokenSource(name: RelayName): {
+  source: (aud?: string) => Promise<string>;
+  hold(): void;
+  release(): void;
+  waiting(): number;
+} {
+  let held = false;
+  const waiters: Array<() => void> = [];
+  return {
+    source: async (aud?: string) => {
+      if (held) await new Promise<void>((resolve) => waiters.push(resolve));
+      return `${name}:${aud ?? "none"}`;
+    },
+    hold: () => {
+      held = true;
+    },
+    release: () => {
+      held = false;
+      for (const w of waiters.splice(0)) w();
+    },
+    waiting: () => waiters.length,
+  };
+}
+
 export function workerReceipt(
   taskId: string,
   overrides: Partial<ExecutionReceipt> = {},

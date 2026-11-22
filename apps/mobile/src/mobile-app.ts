@@ -219,9 +219,9 @@ export interface MobileSettings {
    * may pay a worker it has NO trust history with directly from the sovereign
    * wallet, peer-to-peer onchain; when false a first paid delegation to an
    * unknown worker safely degrades to relay-mode. Forwarded into
-   * `enableInteractiveDelegation` as a live getter (via the in-memory cache in
-   * `./cold-start-optin`) so the Governance toggle governs chat-driven
-   * delegation, not just a re-enable. Default false — sovereign fail-closed.
+   * the runtime's relay binding (`bindRelay`) as a live getter (via the
+   * in-memory cache in `./cold-start-optin`) so the Governance toggle governs
+   * chat-driven delegation, not just a rebind. Default false — sovereign fail-closed.
    * Sibling of web/desktop's localStorage opt-in. See
    * docs/doctrine/off-ramp-as-user-action.md § Arc 3.
    */

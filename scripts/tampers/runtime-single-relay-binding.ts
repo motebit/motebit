@@ -50,6 +50,12 @@ const RED_T5F =
 const RED_T6 =
   "a paid-result record names the relay it is owed from; retrieval elsewhere sends nothing";
 const RED_T7 = "an in-flight paid hire across a rebind keeps polling A, and its record says A";
+const RED_HELD_GRANTED =
+  "a token mint held across a rebind granted spend: every request goes to A with a token A's source minted";
+const RED_HELD_RETRIEVAL =
+  "a token mint held across a rebind result retrieval: the read goes to A with A's token";
+const RED_HELD_CREDENTIAL =
+  "a token mint held across a rebind credential submission: the credential goes to A with A's token";
 const RED_5A_DELEGATE =
   "approved delegate_to_agent across a rebind (a) rebind to B, then approve: relay_changed, nothing sent, handler not invoked";
 const RED_5A_NOTE =
@@ -242,6 +248,63 @@ const TAMPERS: TamperEntry[] = [
     ],
     T_SINGLE,
     RED_T4,
+  ),
+
+  // ── a mint held across a rebind (granted spend, retrieval, credentials) ──
+  // Granted spend mints several tokens in one call: a token read per request
+  // mints the later ones from the new binding. Retrieval and credential
+  // submission mint ONE token, first thing, so reading that token per request
+  // is the same as reading it from the snapshot (an equivalent mutant); what
+  // can move is the request TARGET, read after the mint's await.
+  rt(
+    "snapshot: granted spend mints each request's token from the LIVE binding",
+    [
+      {
+        file: RUNTIME,
+        from:
+          "      authToken: binding.authToken,\n" +
+          "      relayPublicKeyHex: binding.relayPublicKey,\n",
+        to:
+          '      authToken: (aud?: import("@motebit/protocol").TokenAudience) =>\n' +
+          "        (this._relayBinding ?? binding).authToken(aud),\n" +
+          "      relayPublicKeyHex: binding.relayPublicKey,\n",
+      },
+    ],
+    T_SINGLE,
+    RED_HELD_GRANTED,
+  ),
+  rt(
+    "snapshot: result retrieval reads its relay URL at request time, after the mint",
+    [
+      {
+        file: RUNTIME,
+        from:
+          "    const result = await retrieveDelegationResult({\n" +
+          "      motebitId: this.motebitId,\n" +
+          "      syncUrl: binding.syncUrl,\n",
+        to:
+          "    const live = (): RelayBindingSnapshot => this._relayBinding ?? binding;\n" +
+          "    const result = await retrieveDelegationResult({\n" +
+          "      motebitId: this.motebitId,\n" +
+          "      get syncUrl(): string {\n" +
+          "        return live().syncUrl;\n" +
+          "      },\n",
+      },
+    ],
+    T_SINGLE,
+    RED_HELD_RETRIEVAL,
+  ),
+  rt(
+    "snapshot: credential submission reads its relay URL at request time, after the mint",
+    [
+      {
+        file: ID,
+        from: "          `${binding.syncUrl}/api/v1/agents/${encodeURIComponent(targetMotebitId)}/credentials/submit`,\n",
+        to: "          `${(this.deps.getBinding() ?? binding).syncUrl}/api/v1/agents/${encodeURIComponent(targetMotebitId)}/credentials/submit`,\n",
+      },
+    ],
+    T_SINGLE,
+    RED_HELD_CREDENTIAL,
   ),
 
   // ── the generation and the two approval checks ──

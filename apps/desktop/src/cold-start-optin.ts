@@ -8,10 +8,10 @@
 //
 // Default OFF (conservative): without it a first paid delegation to an unknown
 // worker safely degrades to relay-mode rather than moving funds onchain. When
-// ON, the sync-controller forwards `acknowledgeNoHistoryRisk` into
-// enableInteractiveDelegation as a LIVE getter, so the "Pay new agents directly"
-// Governance toggle governs chat-driven (delegate_to_agent) P2P delegation —
-// not just a re-enable. The desktop renderer is a Chromium webview, so
+// ON, the sync-controller forwards `acknowledgeNoHistoryRisk` into the
+// runtime's relay binding (`bindRelay`) as a LIVE getter, so the "Pay new agents
+// directly" Governance toggle governs chat-driven (delegate_to_agent) P2P
+// delegation — not just a rebind. The desktop renderer is a Chromium webview, so
 // localStorage is available (same store the relay-key TOFU pin uses). See
 // docs/doctrine/off-ramp-as-user-action.md § Arc 3.
 

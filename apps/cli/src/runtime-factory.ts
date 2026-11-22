@@ -816,7 +816,7 @@ export async function createRuntime(
         // decrypted identity seed. Its presence is what makes
         // delegate_to_agent a REAL money tool: R4 risk hint, late-bound
         // metering, and the wrapped P2P payment builder all key on it
-        // (enableInteractiveDelegation). Absent ⇒ delegation degrades to
+        // (the tools `bindRelay` registers). Absent ⇒ delegation degrades to
         // relay-mode honestly.
         ...(solanaWallet ? { solanaWallet } : {}),
         // #501 — sovereign override for capability-tiered tool admission.

@@ -9,8 +9,8 @@
  * is never asked to build a payment, the P2P pre-flight is never read, and
  * the submission carries no payment proof.
  *
- * Driven through the real runtime wiring (`enableInteractiveDelegation`,
- * `enableInvokeCapability` → `selectAndRunDelegation`) with a wallet rail
+ * Driven through the real runtime wiring (`bindRelay` — the tools and taps
+ * → `selectAndRunDelegation`) with a wallet rail
  * that records every call and a stubbed relay. The relay stub serves
  * EVERYTHING the P2P path needs (signed metadata, a priced p2p worker,
  * eligibility, listing), and a control case with the key present proves the

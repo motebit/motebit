@@ -141,7 +141,7 @@ describe("invokeCapability — surface determinism", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("yields invoke_error{sync_not_enabled} when enableInvokeCapability was not called", async () => {
+  it("yields invoke_error{sync_not_enabled} when no relay is bound for taps", async () => {
     const rt = new MotebitRuntime(
       { motebitId: "alice-001", tickRateHz: 0 },
       createAdapters(createMockProvider()),

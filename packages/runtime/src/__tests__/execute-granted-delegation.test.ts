@@ -1167,7 +1167,7 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     const clerk = CLERK;
     const grant = await makeGrant(operator, clerk);
     const token = await mintTick(grant, operator);
-    // enableInteractiveDelegation NOT called → no coords stashed.
+    // bindRelay NOT called → no binding, so no relay coordinates.
     const runtime = new MotebitRuntime({ motebitId: "clerk-x", tickRateHz: 0 }, createAdapters());
 
     const result = await runtime.executeGrantedDelegation({
