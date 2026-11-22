@@ -156,15 +156,14 @@ export class InvokeCapabilityManager {
     // indicator; no special casing required.
     yield { type: "delegation_start", server, tool };
 
-    const result = await this.resolveDelegation(
-      binding,
+    const result = await resolveDelegation(this.deps, binding, {
       capability,
       prompt,
       invocationOrigin,
-      options.signal,
-      options.acknowledgeNoHistoryRisk,
-      options.targetWorkerId,
-    );
+      signal: options.signal,
+      acknowledgeNoHistoryRisk: options.acknowledgeNoHistoryRisk,
+      targetWorkerId: options.targetWorkerId,
+    });
 
     // #885: a money warning is the owner's, whatever the outcome.
     const notice = paymentNoticeChunk(result);
@@ -216,49 +215,54 @@ export class InvokeCapabilityManager {
     // invocation. The chat-layer chip handler emerges the receipt bubble on
     // `delegation_complete` and exits its `for await` when the generator ends.
   }
+}
 
-  /**
-   * Pick the settlement path. When a sovereign rail (`buildP2pPayment`) AND a
-   * pinned `relayPublicKey` are both configured, a PAID cross-agent capability
-   * settles peer-to-peer (`resolveAndSubmitP2pDelegation`) — the relay never
-   * custodies the worker's earnings. If no payable P2P worker advertises the
-   * capability (a free task, or cold-start before the worker is p2p-eligible),
-   * it falls back to the relay-mediated path — but ONLY on the pre-broadcast
-   * codes (`no_routing` / `worker_not_payable`). Once a payment may have moved,
-   * the P2P result is surfaced verbatim, never silently re-run as a relay-custody
-   * task (which would double-charge). Absent rail/key → relay-mode, as before.
-   */
-  private async resolveDelegation(
-    binding: RelayBindingSnapshot,
-    capability: string,
-    prompt: string,
-    invocationOrigin: IntentOrigin,
-    signal: AbortSignal | undefined,
-    acknowledgeNoHistoryRisk: boolean | undefined,
-    targetWorkerId: string | undefined,
-  ): Promise<DelegationResult> {
-    // Per-invocation opt-in overrides the binding's (read fresh so a live
-    // surface preference toggle takes effect without a rebind).
-    const ack = acknowledgeNoHistoryRisk ?? acknowledgementOf(binding);
-    return selectAndRunDelegation({
-      motebitId: this.deps.motebitId,
-      syncUrl: binding.syncUrl,
-      authToken: binding.authToken,
-      prompt,
-      requiredCapabilities: [capability],
-      ...(targetWorkerId != null ? { targetWorkerId } : {}),
-      ...(this.deps.buildP2pPayment ? { buildP2pPayment: this.deps.buildP2pPayment } : {}),
-      ...(this.deps.confirmP2pPayment ? { confirmP2pPayment: this.deps.confirmP2pPayment } : {}),
-      ...(binding.relayPublicKey != null ? { relayPublicKey: binding.relayPublicKey } : {}),
-      ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
-      ...(binding.routingStrategy ? { routingStrategy: binding.routingStrategy } : {}),
-      ...(this.deps.paidIntentLedger != null
-        ? { paidIntentLedger: this.deps.paidIntentLedger }
-        : {}),
-      invocationOrigin,
-      ...(binding.timeoutMs != null ? { timeoutMs: binding.timeoutMs } : {}),
-      logger: this.deps.logger,
-      ...(signal ? { signal } : {}),
-    });
-  }
+/**
+ * Pick the settlement path for ONE tap, on that tap's binding snapshot (a
+ * module function, not a method: the manager holds no relay, and the
+ * snapshot is passed down per call — `check-runtime-single-relay-binding`).
+ *
+ * When a sovereign rail (`buildP2pPayment`) AND a pinned `relayPublicKey`
+ * are both configured, a PAID cross-agent capability settles peer-to-peer
+ * (`resolveAndSubmitP2pDelegation`) — the relay never custodies the
+ * worker's earnings. If no payable P2P worker advertises the capability (a
+ * free task, or cold-start before the worker is p2p-eligible), it falls
+ * back to the relay-mediated path — but ONLY on the pre-broadcast codes
+ * (`no_routing` / `worker_not_payable`). Once a payment may have moved, the
+ * P2P result is surfaced verbatim, never silently re-run as a relay-custody
+ * task (which would double-charge). Absent rail/key → relay-mode, as before.
+ */
+async function resolveDelegation(
+  deps: InvokeCapabilityDeps,
+  binding: RelayBindingSnapshot,
+  call: {
+    capability: string;
+    prompt: string;
+    invocationOrigin: IntentOrigin;
+    signal: AbortSignal | undefined;
+    acknowledgeNoHistoryRisk: boolean | undefined;
+    targetWorkerId: string | undefined;
+  },
+): Promise<DelegationResult> {
+  // Per-invocation opt-in overrides the binding's (read fresh so a live
+  // surface preference toggle takes effect without a rebind).
+  const ack = call.acknowledgeNoHistoryRisk ?? acknowledgementOf(binding);
+  return selectAndRunDelegation({
+    motebitId: deps.motebitId,
+    syncUrl: binding.syncUrl,
+    authToken: binding.authToken,
+    prompt: call.prompt,
+    requiredCapabilities: [call.capability],
+    ...(call.targetWorkerId != null ? { targetWorkerId: call.targetWorkerId } : {}),
+    ...(deps.buildP2pPayment ? { buildP2pPayment: deps.buildP2pPayment } : {}),
+    ...(deps.confirmP2pPayment ? { confirmP2pPayment: deps.confirmP2pPayment } : {}),
+    ...(binding.relayPublicKey != null ? { relayPublicKey: binding.relayPublicKey } : {}),
+    ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
+    ...(binding.routingStrategy ? { routingStrategy: binding.routingStrategy } : {}),
+    ...(deps.paidIntentLedger != null ? { paidIntentLedger: deps.paidIntentLedger } : {}),
+    invocationOrigin: call.invocationOrigin,
+    ...(binding.timeoutMs != null ? { timeoutMs: binding.timeoutMs } : {}),
+    logger: deps.logger,
+    ...(call.signal ? { signal: call.signal } : {}),
+  });
 }

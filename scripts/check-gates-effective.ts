@@ -3044,6 +3044,18 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-runtime-single-relay-binding",
+    proves:
+      "flags a second relay holder in the runtime's delegation paths — the one-field edit (main's granted-spend coordinates) that would let a relay switch or Disconnect leave a call on the previous relay while every existing test stays green. Probe adds a relay-shaped property to the tap manager.",
+    perturb: () =>
+      mutateFile("packages/runtime/src/invoke-capability.ts", (src) =>
+        src.replace(
+          "export class InvokeCapabilityManager {",
+          "export class InvokeCapabilityManager {\n  private __probeRelay: { syncUrl: string } | null = null;",
+        ),
+      ),
+  },
+  {
     script: "check-goal-artifact-signing",
     proves:
       "flags a per-surface goal-runner that has stopped calling `runtime.signGoalArtifact` — the silent regression that would let goal-fire artifacts persist without a signed `ContentArtifactManifest` envelope. The drift class: a refactor that renames or removes the signing call on one surface (`apps/web/src/goal-scheduler.ts`, `apps/desktop/src/goal-scheduler.ts`, or `apps/mobile/src/goal-scheduler.ts`) passes typecheck because `signGoalArtifact` is optional from the runtime's perspective; the gate is the only catch. Probe rewrites `signGoalArtifact(` to `signGoalArtifactDisabled(` on the web surface; the gate's identifier scan must surface the missing-call violation.",
