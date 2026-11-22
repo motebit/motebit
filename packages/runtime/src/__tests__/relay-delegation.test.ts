@@ -570,24 +570,30 @@ describe("resolveAndSubmitP2pDelegation", () => {
 
   it(`suspends ALL paid delegation once ${SESSION_SUSPEND_THRESHOLD} payments are settled-unretrieved`, async () => {
     const ledger = new PaidIntentLedger();
-    ledger.recordSettledUnretrieved({
-      workerMotebitId: "worker-x",
-      capability: "translate",
-      taskId: "task-x",
-      txHash: "tx-x",
-      paidMicro: 100_000,
-      feeMicro: 5_000,
-      recordedAt: 1,
-    });
-    ledger.recordSettledUnretrieved({
-      workerMotebitId: "worker-y",
-      capability: "code_review",
-      taskId: "task-y",
-      txHash: "tx-y",
-      paidMicro: 100_000,
-      feeMicro: 5_000,
-      recordedAt: 2,
-    });
+    ledger.recordSettledUnretrieved(
+      {
+        workerMotebitId: "worker-x",
+        capability: "translate",
+        taskId: "task-x",
+        txHash: "tx-x",
+        paidMicro: 100_000,
+        feeMicro: 5_000,
+        recordedAt: 1,
+      },
+      "https://relay.test",
+    );
+    ledger.recordSettledUnretrieved(
+      {
+        workerMotebitId: "worker-y",
+        capability: "code_review",
+        taskId: "task-y",
+        txHash: "tx-y",
+        paidMicro: 100_000,
+        feeMicro: 5_000,
+        recordedAt: 2,
+      },
+      "https://relay.test",
+    );
     // A THIRD worker, never hired before — still refused: money is leaking.
     vi.stubGlobal(
       "fetch",

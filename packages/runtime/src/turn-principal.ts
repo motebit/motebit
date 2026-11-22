@@ -47,6 +47,13 @@ export interface ToolCall {
    * R4_MONEY tool; absent on every other call. See `money-capability.ts`.
    */
   readonly moneyCapability?: import("./money-capability.js").MoneyCapability;
+  /**
+   * The relay-binding generation a human approved this call under, carried
+   * by the approval resume (`streaming.ts`). A delegation handler whose own
+   * binding snapshot has another generation refuses `relay_changed` and
+   * sends nothing (`relay-binding.ts`). Absent on every unapproved call.
+   */
+  readonly approvedRelayGeneration?: number;
 }
 
 /** Every caller that names no turn is an owner door. */

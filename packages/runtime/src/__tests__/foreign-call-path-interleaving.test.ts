@@ -274,9 +274,11 @@ async function build(): Promise<Env> {
       return { ok: true, data: found.map((f) => f.content) };
     },
   );
-  runtime.enableInteractiveDelegation({
+  runtime.bindRelay({
     syncUrl: "https://relay.invalid",
     authToken: async () => "t",
+    tools: true,
+    invokeCapability: false,
   });
   // The owner already has a conversation (history + id), so a door that
   // reads or writes it during a stranger's task can see it blanked or lost.

@@ -52,9 +52,10 @@ function isDerivedSolanaSettlement(settlementAddress: string, publicKeyHex: stri
  */
 export type DelegationErrorCode =
   /**
-   * Pre-flight. The runtime was never paired with a relay in this session —
-   * `enableInvokeCapability()` has not been called, so the deterministic
-   * path has no relay coordinates or auth-token minter. Surfaced via an
+   * Pre-flight. The runtime has no relay binding for this path — no
+   * `bindRelay()` with `invokeCapability: true` (or no pinned key, on the
+   * granted-spend path), or `unbindRelay()` since — so the call has no relay
+   * coordinates or auth-token minter. Surfaced via an
    * `invoke_error` chunk (not a throw) so the UI can show a user-facing
    * remediation instead of leaking developer-wiring language.
    */
@@ -820,7 +821,10 @@ async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResul
  * - `unreachable` — network failure or a relay 5xx/other status.
  * - `malformed` — a receipt came back bound to a DIFFERENT relay task.
  * - `invalid_task_id` — the id is not a task id; nothing was sent.
- * - `not_connected` — this runtime has no relay coordinates; nothing was sent.
+ * - `not_connected` — this runtime has no relay binding; nothing was sent.
+ * - `bound_elsewhere` — this device's record says the result is owed by
+ *   `relayUrl`, and another relay is bound; nothing was sent (a relay asked
+ *   for another relay's task would only answer "not found").
  * - `not_admitted` — the id is a paid-intent ledger entry for a payment
  *   with no confirmed relay task (`p2p-payment:` / `p2p-unconfirmed:`,
  *   #885): the relay refused it, its admission is unconfirmed, or the
@@ -839,7 +843,8 @@ export type TaskRetrieval =
   | { status: "unreachable"; taskId: string; httpStatus?: number; message: string }
   | { status: "malformed"; taskId: string; message: string }
   | { status: "invalid_task_id"; taskId: string }
-  | { status: "not_connected"; taskId: string };
+  | { status: "not_connected"; taskId: string }
+  | { status: "bound_elsewhere"; taskId: string; relayUrl: string };
 
 export interface RetrieveDelegationResultParams {
   /** The caller's identity — the submitter the `task:query` token is minted for. */
@@ -2444,7 +2449,7 @@ export async function resolveAndSubmitP2pDelegation(
       }
       if (ledger != null) {
         try {
-          ledger.recordBroadcast(entry(tx.signature));
+          ledger.recordBroadcast(entry(tx.signature), params.syncUrl);
         } catch (err: unknown) {
           recordState.failure = err instanceof Error ? err.message : String(err);
           params.logger.warn("paid_intent_ledger.write_failed", {
@@ -2554,21 +2559,29 @@ export async function resolveAndSubmitP2pDelegation(
         if (open.length > 0) {
           for (const tx of open) {
             durable =
-              recordOwed(ledger, params.logger, {
-                ...entry(tx.signature),
-                taskId: paymentEntryId(tx.signature),
-              }) && durable;
+              recordOwed(
+                ledger,
+                params.logger,
+                {
+                  ...entry(tx.signature),
+                  taskId: paymentEntryId(tx.signature),
+                },
+                params.syncUrl,
+              ) && durable;
           }
           ledgerId = paymentEntryId(open[0]!.signature);
         } else {
           // No transaction known (a rail without a confirmer).
-          const rec = ledger.recordUnconfirmed({
-            workerMotebitId: resolved.workerMotebitId,
-            capability: params.capability,
-            paidMicro,
-            feeMicro,
-            recordedAt: now(),
-          });
+          const rec = ledger.recordUnconfirmed(
+            {
+              workerMotebitId: resolved.workerMotebitId,
+              capability: params.capability,
+              paidMicro,
+              feeMicro,
+              recordedAt: now(),
+            },
+            params.syncUrl,
+          );
           ledgerId = rec.taskId;
           if (!rec.durable) {
             durable = false;
@@ -2662,16 +2675,21 @@ export async function resolveAndSubmitP2pDelegation(
         });
         if (ledger != null) {
           extrasDurable =
-            recordOwed(ledger, params.logger, {
-              ...entry(tx.signature),
-              taskId: paymentEntryId(tx.signature),
-            }) && extrasDurable;
+            recordOwed(
+              ledger,
+              params.logger,
+              {
+                ...entry(tx.signature),
+                taskId: paymentEntryId(tx.signature),
+              },
+              params.syncUrl,
+            ) && extrasDurable;
         }
       }
     }
   } else if (ledger != null) {
     ledgerWrite(params.logger, "record_broadcast", paymentEntryId(paidTx), paidTx, () =>
-      ledger.recordBroadcast(entry(paidTx)),
+      ledger.recordBroadcast(entry(paidTx), params.syncUrl),
     );
   }
 
@@ -2708,15 +2726,19 @@ export async function resolveAndSubmitP2pDelegation(
       ? {
           onTaskAccepted: (taskId: string) =>
             ledgerWrite(params.logger, "record_in_flight", taskId, paidProof.tx_hash, () =>
-              ledger.admitted(paidProof.tx_hash, {
-                workerMotebitId: resolved.workerMotebitId,
-                capability: params.capability,
-                taskId,
-                txHash: paidProof.tx_hash,
-                paidMicro: paidProof.amount_micro,
-                feeMicro: paidProof.fee_amount_micro + (paidProof.b_fee_amount_micro ?? 0),
-                recordedAt: now(),
-              }),
+              ledger.admitted(
+                paidProof.tx_hash,
+                {
+                  workerMotebitId: resolved.workerMotebitId,
+                  capability: params.capability,
+                  taskId,
+                  txHash: paidProof.tx_hash,
+                  paidMicro: paidProof.amount_micro,
+                  feeMicro: paidProof.fee_amount_micro + (paidProof.b_fee_amount_micro ?? 0),
+                  recordedAt: now(),
+                },
+                params.syncUrl,
+              ),
             ),
         }
       : {}),
@@ -2738,15 +2760,20 @@ export async function resolveAndSubmitP2pDelegation(
   let owedDurable = true;
   if (ledger != null && !submitted.ok && submitted.error.settledPayment != null) {
     const sp = submitted.error.settledPayment;
-    owedDurable = recordOwed(ledger, params.logger, {
-      workerMotebitId: resolved.workerMotebitId,
-      capability: params.capability,
-      taskId: sp.taskId,
-      txHash: sp.txHash,
-      paidMicro: sp.paidMicro,
-      feeMicro: sp.feeMicro,
-      recordedAt: now(),
-    });
+    owedDurable = recordOwed(
+      ledger,
+      params.logger,
+      {
+        workerMotebitId: resolved.workerMotebitId,
+        capability: params.capability,
+        taskId: sp.taskId,
+        txHash: sp.txHash,
+        paidMicro: sp.paidMicro,
+        feeMicro: sp.feeMicro,
+        recordedAt: now(),
+      },
+      params.syncUrl,
+    );
   }
   return withExtraPayments(submitted, extraPayments, extrasDurable && owedDurable);
 }
@@ -2838,8 +2865,10 @@ function recordOwed(
     feeMicro: number;
     recordedAt: number;
   },
+  /** The relay the paying call was bound to — the relay that owes the result. */
+  relayUrl: string,
 ): boolean {
-  const durable = ledger.recordOwed(e);
+  const durable = ledger.recordOwed(e, relayUrl);
   if (!durable) {
     logger.warn("paid_intent_ledger.write_failed", {
       op: "record_unretrieved",

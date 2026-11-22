@@ -904,10 +904,12 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
   it("invokeCapability (the user-tap door)", async () => {
     const r = relay();
     const { runtime, chain } = lostSendRuntime();
-    runtime.enableInvokeCapability({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "t",
       relayPublicKey: PINNED_HEX,
+      tools: false,
+      invokeCapability: true,
     });
     vi.useFakeTimers();
     const chunks: Array<{ type: string }> = [];
@@ -928,11 +930,13 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
   it("delegate_to_agent (the AI-loop door)", async () => {
     const r = relay();
     const { runtime, chain } = lostSendRuntime();
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "t",
       relayPublicKey: PINNED_HEX,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
     vi.useFakeTimers();
     const pending = runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -949,10 +953,12 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
   it("invokeCapability: an extra landed payment reaches the owner as a payment_notice chunk", async () => {
     relay();
     const { runtime, chain } = lostSendRuntime(["resignBothLand"]);
-    runtime.enableInvokeCapability({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "t",
       relayPublicKey: PINNED_HEX,
+      tools: false,
+      invokeCapability: true,
     });
     vi.useFakeTimers();
     const chunks: Array<{ type: string; notice?: string }> = [];
@@ -972,11 +978,13 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
   it("delegate_to_agent: an extra landed payment is stashed for the stream (payment_notice)", async () => {
     relay();
     const { runtime, chain } = lostSendRuntime(["resignBothLand"]);
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: RELAY,
       authToken: async () => "t",
       relayPublicKey: PINNED_HEX,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
     vi.useFakeTimers();
     const pending = runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {

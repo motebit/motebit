@@ -117,3 +117,58 @@ describe("SqlitePaidIntentStore", () => {
     expect(db.paidIntentStore.listOutstanding("mote-1").map((r) => r.task_id)).toEqual(["task-1"]);
   });
 });
+
+describe("paid_intent_ledger.relay_url (migration #53)", () => {
+  it("records and reads the relay a paid result is owed from", () => {
+    const db = createMotebitDatabase(":memory:");
+    db.paidIntentStore.record({ ...row({ task_id: "task-1" }), relay_url: "https://relay-a.test" });
+    db.paidIntentStore.record(row({ task_id: "task-2" }));
+    const out = db.paidIntentStore.listOutstanding("mote-1");
+    expect(out.find((r) => r.task_id === "task-1")!.relay_url).toBe("https://relay-a.test");
+    // A row written without one reads with none (never an empty string).
+    expect("relay_url" in out.find((r) => r.task_id === "task-2")!).toBe(false);
+    db.close();
+  });
+
+  it("an existing database with paid records opens; its records read with no relay_url", () => {
+    const dir = mkdtempSync(join(tmpdir(), "paid-intent-53-"));
+    const path = join(dir, "motebit.db");
+    try {
+      // A database as it stood before migration #53: the column absent, the
+      // schema version 52, one paid record already on file.
+      const before = createMotebitDatabase(path);
+      before.db.exec("ALTER TABLE paid_intent_ledger DROP COLUMN relay_url");
+      before.db.pragma("user_version = 52");
+      before.db.exec(
+        `INSERT INTO paid_intent_ledger
+         (motebit_id, task_id, worker_motebit_id, capability, tx_hash, paid_micro, fee_micro, recorded_at, state, session_id)
+         VALUES ('mote-1', 'old-task', 'worker-a', 'web_search', 'tx-old', 250000, 13158, 1000, 'unretrieved', 's-0')`,
+      );
+      before.close();
+
+      const after = createMotebitDatabase(path);
+      const version = after.db.pragma("user_version") as Array<{ user_version: number }>;
+      expect(version[0]!.user_version).toBeGreaterThanOrEqual(53);
+      const out = after.paidIntentStore.listOutstanding("mote-1");
+      expect(out.map((r) => r.task_id)).toEqual(["old-task"]);
+      expect(out[0]!.relay_url).toBeUndefined();
+      expect(out[0]).toMatchObject({
+        tx_hash: "tx-old",
+        paid_micro: 250_000,
+        state: "unretrieved",
+      });
+      // A new record on the migrated database carries its relay.
+      after.paidIntentStore.record({
+        ...row({ task_id: "new-task" }),
+        relay_url: "https://relay-b.test",
+      });
+      const added = after.paidIntentStore
+        .listOutstanding("mote-1")
+        .find((r) => r.task_id === "new-task");
+      expect(added!.relay_url).toBe("https://relay-b.test");
+      after.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

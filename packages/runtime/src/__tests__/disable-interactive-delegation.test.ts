@@ -1,12 +1,15 @@
 /**
- * `disableInteractiveDelegation` — the OFF half of `enableInteractiveDelegation`.
+ * `unbindRelay` — the OFF half of `bindRelay` (formerly
+ * `disableInteractiveDelegation`, the OFF half of
+ * `enableInteractiveDelegation`; the file keeps its name, the assertions are
+ * unchanged).
  *
  * A surface whose user turns the relay off must drop every live relay
- * handle: with delegation still enabled, a chat `delegate_to_agent` /
+ * handle: with delegation still bound, a chat `delegate_to_agent` /
  * `discover_agents` call (or the result-retrieval read) would keep
- * contacting the relay the user just disconnected. Disable unregisters the
- * relay tools and clears the stored relay coordinates; a later enable (a new
- * relay URL) registers them again against the new relay.
+ * contacting the relay the user just disconnected. Unbind unregisters the
+ * relay tools and drops the binding; a later bind (a new relay URL)
+ * registers them again against the new relay.
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
@@ -40,16 +43,18 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-describe("MotebitRuntime.disableInteractiveDelegation", () => {
+describe("MotebitRuntime.unbindRelay", () => {
   it("unregisters the relay tools and clears the relay coordinates", async () => {
     const runtime = makeRuntime();
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://relay-a.test",
       authToken: async () => "tok",
+      tools: true,
+      invokeCapability: false,
     });
     for (const name of RELAY_TOOLS) expect(runtime.getToolRegistry().has(name)).toBe(true);
 
-    runtime.disableInteractiveDelegation();
+    runtime.unbindRelay();
 
     for (const name of RELAY_TOOLS) expect(runtime.getToolRegistry().has(name)).toBe(false);
     const fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
@@ -65,16 +70,20 @@ describe("MotebitRuntime.disableInteractiveDelegation", () => {
 
   it("is a no-op before enable, and a later enable binds the NEW relay", async () => {
     const runtime = makeRuntime();
-    expect(() => runtime.disableInteractiveDelegation()).not.toThrow();
+    expect(() => runtime.unbindRelay()).not.toThrow();
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://relay-a.test",
       authToken: async () => "tok",
+      tools: true,
+      invokeCapability: false,
     });
-    runtime.disableInteractiveDelegation();
-    runtime.enableInteractiveDelegation({
+    runtime.unbindRelay();
+    runtime.bindRelay({
       syncUrl: "https://relay-b.test",
       authToken: async () => "tok",
+      tools: true,
+      invokeCapability: false,
     });
 
     const urls: string[] = [];

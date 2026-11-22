@@ -1,7 +1,8 @@
 /**
  * Unit tests for the relay capabilities fetcher — the production wiring
- * that converts a relay base URL into a `HardwareAttestationFetcher` the
- * runtime's `bumpTrustFromReceipt` hook can consume.
+ * the runtime's `bumpTrustFromReceipt` hook consumes. It holds no relay URL:
+ * the runtime passes the relay per invocation (the relay of the call whose
+ * receipt is bumped; design runtime-relay-binding rev 6, F1).
  *
  * Best-effort by design: every error surface (network throw, non-2xx,
  * malformed JSON, missing fields, wrong types) returns `[]` so the
@@ -40,10 +41,9 @@ describe("createRelayCapabilitiesFetcher", () => {
       });
     });
     const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: "https://relay.test",
       fetch: fetchSpy as unknown as typeof globalThis.fetch,
     });
-    const out = await fetcher("m-123");
+    const out = await fetcher("m-123", "https://relay.test");
     expect(out).toHaveLength(2);
     expect(out[0]).toEqual({
       device_id: "d-1",
@@ -57,16 +57,15 @@ describe("createRelayCapabilitiesFetcher", () => {
     });
   });
 
-  it("strips a trailing slash from baseUrl", async () => {
+  it("strips a trailing slash from the relay URL", async () => {
     const fetchSpy = vi.fn(async (url: string) => {
       expect(url).toBe("https://relay.test/agent/m-1/capabilities");
       return jsonResponse({ hardware_attestations: [] });
     });
     const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: "https://relay.test/",
       fetch: fetchSpy as unknown as typeof globalThis.fetch,
     });
-    await fetcher("m-1");
+    await fetcher("m-1", "https://relay.test/");
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
@@ -76,22 +75,20 @@ describe("createRelayCapabilitiesFetcher", () => {
       return jsonResponse({ hardware_attestations: [] });
     });
     const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: "https://relay.test",
       fetch: fetchSpy as unknown as typeof globalThis.fetch,
     });
-    await fetcher("weird id");
+    await fetcher("weird id", "https://relay.test");
   });
 
   it("returns [] and logs warn on network error", async () => {
     const warn = vi.fn();
     const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: "https://relay.test",
       fetch: (async () => {
         throw new Error("ECONNREFUSED");
       }) as unknown as typeof globalThis.fetch,
       logger: { warn },
     });
-    const out = await fetcher("m-1");
+    const out = await fetcher("m-1", "https://relay.test");
     expect(out).toEqual([]);
     expect(warn).toHaveBeenCalledWith(
       "hardware_attestation.fetch.network_error",
@@ -102,12 +99,11 @@ describe("createRelayCapabilitiesFetcher", () => {
   it("returns [] and logs warn on non-2xx", async () => {
     const warn = vi.fn();
     const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: "https://relay.test",
       fetch: (async () =>
         new Response("nope", { status: 404 })) as unknown as typeof globalThis.fetch,
       logger: { warn },
     });
-    const out = await fetcher("m-1");
+    const out = await fetcher("m-1", "https://relay.test");
     expect(out).toEqual([]);
     expect(warn).toHaveBeenCalledWith(
       "hardware_attestation.fetch.bad_status",
@@ -118,7 +114,6 @@ describe("createRelayCapabilitiesFetcher", () => {
   it("returns [] and logs warn on malformed JSON", async () => {
     const warn = vi.fn();
     const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: "https://relay.test",
       fetch: (async () =>
         new Response("{not json", {
           status: 200,
@@ -126,64 +121,49 @@ describe("createRelayCapabilitiesFetcher", () => {
         })) as unknown as typeof globalThis.fetch,
       logger: { warn },
     });
-    const out = await fetcher("m-1");
+    const out = await fetcher("m-1", "https://relay.test");
     expect(out).toEqual([]);
     expect(warn).toHaveBeenCalledWith("hardware_attestation.fetch.bad_json", expect.any(Object));
   });
 
   it("returns [] when hardware_attestations field is missing", async () => {
     const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: "https://relay.test",
       fetch: (async () =>
         jsonResponse({ motebit_id: "m-1" })) as unknown as typeof globalThis.fetch,
     });
-    const out = await fetcher("m-1");
+    const out = await fetcher("m-1", "https://relay.test");
     expect(out).toEqual([]);
   });
 
-  it("accepts a lazy resolver and reads the URL on each fetch", async () => {
-    let url: string | undefined = "https://relay-1.test";
+  it("asks the relay it is given on each fetch", async () => {
+    let url = "https://relay-1.test";
     const fetchSpy = vi.fn(async (u: string) => {
-      expect(u.startsWith(url ?? "")).toBe(true);
+      expect(u.startsWith(url)).toBe(true);
       return jsonResponse({ hardware_attestations: [] });
     });
     const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: () => url,
       fetch: fetchSpy as unknown as typeof globalThis.fetch,
     });
-    await fetcher("m-1");
+    await fetcher("m-1", url);
     url = "https://relay-2.test";
-    await fetcher("m-1");
+    await fetcher("m-1", url);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://relay-1.test/agent/m-1/capabilities");
     expect(fetchSpy.mock.calls[1]?.[0]).toBe("https://relay-2.test/agent/m-1/capabilities");
   });
 
-  it("returns [] without calling fetch when the lazy resolver yields undefined", async () => {
+  it("returns [] without calling fetch when the relay URL is the empty string", async () => {
     const fetchSpy = vi.fn();
     const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: () => undefined,
       fetch: fetchSpy as unknown as typeof globalThis.fetch,
     });
-    const out = await fetcher("m-1");
-    expect(out).toEqual([]);
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it("returns [] without calling fetch when the lazy resolver yields the empty string", async () => {
-    const fetchSpy = vi.fn();
-    const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: () => "",
-      fetch: fetchSpy as unknown as typeof globalThis.fetch,
-    });
-    const out = await fetcher("m-1");
+    const out = await fetcher("m-1", "");
     expect(out).toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("skips entries with non-string device_id or public_key", async () => {
     const fetcher = createRelayCapabilitiesFetcher({
-      baseUrl: "https://relay.test",
       fetch: (async () =>
         jsonResponse({
           hardware_attestations: [
@@ -195,7 +175,7 @@ describe("createRelayCapabilitiesFetcher", () => {
           ],
         })) as unknown as typeof globalThis.fetch,
     });
-    const out = await fetcher("m-1");
+    const out = await fetcher("m-1", "https://relay.test");
     expect(out).toHaveLength(1);
     expect(out[0]?.device_id).toBe("d-2");
   });

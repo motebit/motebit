@@ -825,6 +825,7 @@ export interface PaidIntentRecord {
     paid_micro: number;
     // (undocumented)
     recorded_at: number;
+    relay_url?: string;
     resolution: "retrieved" | "dismissed" | null;
     // (undocumented)
     resolved_at: number | null;

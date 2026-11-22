@@ -12,7 +12,6 @@
  */
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
-import type { TokenAudience } from "@motebit/protocol";
 
 import type { StreamChunk } from "./runtime-config.js";
 import {
@@ -24,20 +23,28 @@ import {
   type DelegationErrorCode,
   type DelegationResult,
 } from "./relay-delegation.js";
+import {
+  acknowledgementOf,
+  type RelayBindingSnapshot,
+  type RelayBindingSource,
+} from "./relay-binding.js";
 
 export type { DelegationError, DelegationErrorCode };
 
 export interface InvokeCapabilityDeps {
   motebitId: string;
   logger: { warn(message: string, context?: Record<string, unknown>): void };
-  /** Bump trust from a verified receipt. Best-effort. */
-  bumpTrustFromReceipt: (receipt: ExecutionReceipt) => Promise<void>;
+  /**
+   * Bump trust from a verified receipt. Best-effort. `relayUrl` is the tap's
+   * own relay — the capabilities fetch the bump makes goes there.
+   */
+  bumpTrustFromReceipt: (receipt: ExecutionReceipt, relayUrl: string) => Promise<void>;
   /** Stash the receipt so a concurrent AI loop's handleAgentTask can drain it. */
   stashReceipt: (receipt: ExecutionReceipt) => void;
   /**
    * The sovereign rail's atomic multi-leg payment builder, bound by the runtime
    * from its `SovereignWalletRail`. Present only when a sovereign wallet is
-   * configured. When present (and a pinned `relayPublicKey` is in the config),
+   * configured. When present (and the binding carries a pinned `relayPublicKey`),
    * a paid cross-agent capability settles peer-to-peer instead of relay-custody;
    * absent → every delegation uses the relay-mediated path.
    */
@@ -56,31 +63,6 @@ export interface InvokeCapabilityDeps {
   paidIntentLedger?: import("./paid-intent-ledger.js").PaidIntentLedger;
 }
 
-export interface InvokeCapabilityConfig {
-  syncUrl: string;
-  authToken: (audience?: TokenAudience) => Promise<string>;
-  timeoutMs?: number;
-  routingStrategy?: "cost" | "quality" | "balanced";
-  /**
-   * The relay's Ed25519 public key (hex), PINNED at pairing. Required for paid
-   * P2P delegation: the treasury the fee leg pays is derived from this key
-   * (never from a fetched response), so the irreversible onchain payment trusts
-   * the pairing root. Absent → P2P is disabled and every delegation uses the
-   * relay-mediated path. The surface populates it from its pairing record.
-   */
-  relayPublicKey?: string;
-  /**
-   * The user consciously accepts cold-start risk for paying a NEW worker (no
-   * trust history) directly. Forwarded to the P2P path as
-   * `delegator_acknowledges_no_history_risk` (Arc 3). Without it, a first-time
-   * paid P2P delegation to an unknown worker is rejected by the relay's
-   * eligibility gate (403) AFTER the payment has already broadcast — so a
-   * surface offering paid delegation to new agents MUST set this from an
-   * explicit user opt-in. Established pairs ignore it.
-   */
-  acknowledgeNoHistoryRisk?: boolean;
-}
-
 export interface InvokeCapabilityOptions {
   /**
    * Invocation provenance. Default `"user-tap"` — that's the surface this
@@ -95,8 +77,8 @@ export interface InvokeCapabilityOptions {
    * The surface sets this from an explicit user opt-in so a paid delegation to
    * a NEW worker (no trust history) is admitted by the relay's P2P eligibility
    * gate rather than falling back to relay-mode. Read fresh per call so a live
-   * preference toggle takes effect without re-enabling the capability. See
-   * `InvokeCapabilityConfig.acknowledgeNoHistoryRisk`.
+   * preference toggle takes effect without a rebind. Absent ⇒ the binding's
+   * `acknowledgeNoHistoryRisk`.
    */
   acknowledgeNoHistoryRisk?: boolean;
   /**
@@ -128,9 +110,15 @@ export interface InvokeErrorChunk {
 }
 
 export class InvokeCapabilityManager {
+  /**
+   * @param deps the runtime's non-relay dependencies.
+   * @param getBinding the runtime's ONE relay binding (`relay-binding.ts`).
+   *   Each tap reads it once, when it starts; the manager holds no relay URL,
+   *   token source or key of its own.
+   */
   constructor(
     private readonly deps: InvokeCapabilityDeps,
-    private readonly config: InvokeCapabilityConfig,
+    private readonly getBinding: RelayBindingSource,
   ) {}
 
   /**
@@ -146,6 +134,19 @@ export class InvokeCapabilityManager {
     prompt: string,
     options: InvokeCapabilityOptions = {},
   ): AsyncGenerator<StreamChunk> {
+    // The tap's ONE snapshot of the binding, read before anything else.
+    const binding = this.getBinding();
+    if (binding == null || !binding.invokeCapability) {
+      // Not bound for taps (first-run state, signed-out device, a
+      // Disconnect): surfaced through the same `invoke_error` taxonomy every
+      // other failure uses, so the chat layer renders a remediation.
+      yield {
+        type: "invoke_error",
+        code: "sync_not_enabled",
+        message: "invokeCapability is not bound to a relay on this runtime",
+      };
+      return;
+    }
     const invocationOrigin = options.invocationOrigin ?? "user-tap";
     const server = "relay";
     const tool = "invoke_capability";
@@ -156,6 +157,7 @@ export class InvokeCapabilityManager {
     yield { type: "delegation_start", server, tool };
 
     const result = await this.resolveDelegation(
+      binding,
       capability,
       prompt,
       invocationOrigin,
@@ -176,7 +178,7 @@ export class InvokeCapabilityManager {
 
     // Bump trust (best-effort — trust accrual shouldn't block the UX).
     try {
-      await this.deps.bumpTrustFromReceipt(receipt);
+      await this.deps.bumpTrustFromReceipt(receipt, binding.syncUrl);
     } catch {
       // Best-effort.
     }
@@ -227,6 +229,7 @@ export class InvokeCapabilityManager {
    * task (which would double-charge). Absent rail/key → relay-mode, as before.
    */
   private async resolveDelegation(
+    binding: RelayBindingSnapshot,
     capability: string,
     prompt: string,
     invocationOrigin: IntentOrigin,
@@ -234,26 +237,26 @@ export class InvokeCapabilityManager {
     acknowledgeNoHistoryRisk: boolean | undefined,
     targetWorkerId: string | undefined,
   ): Promise<DelegationResult> {
-    // Per-invocation opt-in overrides the config default (read fresh so a live
-    // surface preference toggle takes effect without re-enabling the capability).
-    const ack = acknowledgeNoHistoryRisk ?? this.config.acknowledgeNoHistoryRisk;
+    // Per-invocation opt-in overrides the binding's (read fresh so a live
+    // surface preference toggle takes effect without a rebind).
+    const ack = acknowledgeNoHistoryRisk ?? acknowledgementOf(binding);
     return selectAndRunDelegation({
       motebitId: this.deps.motebitId,
-      syncUrl: this.config.syncUrl,
-      authToken: this.config.authToken,
+      syncUrl: binding.syncUrl,
+      authToken: binding.authToken,
       prompt,
       requiredCapabilities: [capability],
       ...(targetWorkerId != null ? { targetWorkerId } : {}),
       ...(this.deps.buildP2pPayment ? { buildP2pPayment: this.deps.buildP2pPayment } : {}),
       ...(this.deps.confirmP2pPayment ? { confirmP2pPayment: this.deps.confirmP2pPayment } : {}),
-      ...(this.config.relayPublicKey != null ? { relayPublicKey: this.config.relayPublicKey } : {}),
+      ...(binding.relayPublicKey != null ? { relayPublicKey: binding.relayPublicKey } : {}),
       ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
-      ...(this.config.routingStrategy ? { routingStrategy: this.config.routingStrategy } : {}),
+      ...(binding.routingStrategy ? { routingStrategy: binding.routingStrategy } : {}),
       ...(this.deps.paidIntentLedger != null
         ? { paidIntentLedger: this.deps.paidIntentLedger }
         : {}),
       invocationOrigin,
-      ...(this.config.timeoutMs != null ? { timeoutMs: this.config.timeoutMs } : {}),
+      ...(binding.timeoutMs != null ? { timeoutMs: binding.timeoutMs } : {}),
       logger: this.deps.logger,
       ...(signal ? { signal } : {}),
     });

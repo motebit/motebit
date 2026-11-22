@@ -20,6 +20,7 @@ import {
 // delegate_to_agent is R4_MONEY: the registry refuses it without the runtime's
 // money capability, so these handler tests drive the handler directly.
 import { runToolHandler } from "./helpers/money-tool-handler.js";
+import { walletWith } from "./helpers/wallet.js";
 
 // === Mock ai-core: intercept runTurnStreaming to simulate AI calling delegate_to_agent ===
 
@@ -182,9 +183,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       createAdapters(createMockProvider()),
     );
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     const tools = runtime.getToolRegistry();
@@ -200,13 +203,17 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       createAdapters(createMockProvider()),
     );
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     // Would throw "already registered" if double-registered
@@ -218,9 +225,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       { motebitId: "alice-001", tickRateHz: 0 },
       createAdapters(createMockProvider()),
     );
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
     const tools = runtime.getToolRegistry();
     expect(tools.has("discover_agents")).toBe(true);
@@ -237,9 +246,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       { motebitId: "alice-001", tickRateHz: 0 },
       createAdapters(createMockProvider()),
     );
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     mockFetchHandler = async (url: string, init?: RequestInit) => {
@@ -283,9 +294,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       { motebitId: "alice-001", tickRateHz: 0 },
       createAdapters(createMockProvider()),
     );
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
     mockFetchHandler = async () => new Response("nope", { status: 503 });
     const result = await runtime.getToolRegistry().execute("discover_agents", {});
@@ -331,9 +344,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       return new Response("not found", { status: 404 });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     // Execute the tool directly
@@ -354,10 +369,6 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     // above never reach it. The deferred integration test from
     // federation_phase3_funding_arc: a SUCCESSFUL paid delegation must report
     // the payment, not confabulate "settlement isn't active."
-    const runtime = new MotebitRuntime(
-      { motebitId: "alice-001", tickRateHz: 0 },
-      createAdapters(createMockProvider()),
-    );
 
     const proof: P2pPaymentProof = {
       tx_hash: "tx-p2p-test",
@@ -425,12 +436,19 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       return new Response("not found", { status: 404 });
     };
 
-    runtime.enableInteractiveDelegation({
+    // The payment builder reaches the runtime through its sovereign rail (a
+    // relay binding carries no builder).
+    const runtime = new MotebitRuntime(
+      { motebitId: "alice-001", tickRateHz: 0, solanaWallet: walletWith(buildP2pPayment) },
+      createAdapters(createMockProvider()),
+    );
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
       relayPublicKey: SIGNING_PINNED_HEX,
-      buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -454,10 +472,6 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     // wallet — onchain", the pre-flight failed closed, the delegation
     // proceeded relay-mode, and NOTHING said the route changed. The tool
     // result must state the switch so the model relays it.
-    const runtime = new MotebitRuntime(
-      { motebitId: "alice-001", tickRateHz: 0 },
-      createAdapters(createMockProvider()),
-    );
     const buildP2pPayment = vi.fn(async (): Promise<P2pPaymentProof> => {
       throw new Error("must never be called — pre-flight denied");
     });
@@ -504,12 +518,19 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       return new Response("not found", { status: 404 });
     };
 
-    runtime.enableInteractiveDelegation({
+    // The payment builder reaches the runtime through its sovereign rail (a
+    // relay binding carries no builder).
+    const runtime = new MotebitRuntime(
+      { motebitId: "alice-001", tickRateHz: 0, solanaWallet: walletWith(buildP2pPayment) },
+      createAdapters(createMockProvider()),
+    );
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
       relayPublicKey: SIGNING_PINNED_HEX,
-      buildP2pPayment,
       acknowledgeNoHistoryRisk: true,
+      tools: true,
+      invokeCapability: false,
     });
 
     const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -540,9 +561,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       return new Response("not found", { status: 404 });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -573,10 +596,12 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
       timeoutMs: 3000, // 3s timeout → ~1 poll
+      tools: true,
+      invokeCapability: false,
     });
 
     const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -593,11 +618,13 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       createAdapters(createMockProvider()),
     );
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => {
         throw new Error("keyring locked");
       },
+      tools: true,
+      invokeCapability: false,
     });
 
     const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -629,9 +656,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     // Execute the tool
@@ -671,9 +700,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     // Mock runTurnStreaming to simulate the AI calling delegate_to_agent
@@ -732,9 +763,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -769,9 +802,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -803,9 +838,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       );
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     // Execute delegate_to_agent tool (simulating what the AI would do)
@@ -866,9 +903,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -904,9 +943,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "signed-jwt-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -949,9 +990,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       return new Response("ok", { status: 200 });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async (aud) => `test-token-${aud ?? "default"}`,
+      tools: true,
+      invokeCapability: false,
     });
 
     const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -994,9 +1037,11 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       return new Response("ok", { status: 200 });
     };
 
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
 
     const result = await runToolHandler(runtime.getToolRegistry(), "delegate_to_agent", {
@@ -1080,9 +1125,11 @@ describe("Agent capabilities in context", () => {
       { motebitId: "alice-001", tickRateHz: 0 },
       createAdapters(createMockProvider()),
     );
-    runtime.enableInteractiveDelegation({
+    runtime.bindRelay({
       syncUrl: "https://mock-relay.test",
       authToken: async () => "test-token",
+      tools: true,
+      invokeCapability: false,
     });
     let during: { ok: boolean; error?: string } | null = null;
     let ownerDuring: { ok: boolean; error?: string } | null = null;

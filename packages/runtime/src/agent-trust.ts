@@ -41,7 +41,15 @@ import type { AgentGraphManager } from "./agent-graph.js";
  * resolvers. A null return ≡ no claim observed (the truthful absence
  * case, distinct from `platform: "software"`).
  */
-export type HardwareAttestationFetcher = (remoteMotebitId: string) => Promise<
+export type HardwareAttestationFetcher = (
+  remoteMotebitId: string,
+  /**
+   * The relay to ask — the relay of the call whose receipt is being bumped
+   * (or the relay bound when a receipt arrives outside any call). The
+   * fetcher holds no relay of its own.
+   */
+  relayUrl: string,
+) => Promise<
   ReadonlyArray<{
     device_id: string;
     public_key: string;
@@ -69,6 +77,12 @@ export interface AgentTrustDeps {
    * swallowed and the trust path proceeds without a hardware credential.
    */
   getRemoteHardwareAttestations?: HardwareAttestationFetcher;
+  /**
+   * The relay `getRemoteHardwareAttestations` asks for this bump: the relay
+   * of the call that produced the receipt, else the relay bound now. Null /
+   * absent ⇒ no relay is bound and the fetch is skipped (nothing is sent).
+   */
+  capabilitiesRelayUrl?: string | null;
   /**
    * Optional injected platform verifiers. When provided, peer hardware
    * claims of platform `device_check` / `tpm` / `play_integrity` /
@@ -213,6 +227,7 @@ export async function bumpTrustFromReceipt(
     signingKeys,
     onCredentialIssued,
     getRemoteHardwareAttestations,
+    capabilitiesRelayUrl,
     hardwareAttestationVerifiers,
   } = deps;
 
@@ -377,9 +392,17 @@ export async function bumpTrustFromReceipt(
         // Best-effort: any failure (network, parse, signature, hardware
         // claim verification) leaves the reputation credential standing
         // alone. The trust path doesn't break.
-        if (getRemoteHardwareAttestations && updated.public_key) {
+        if (
+          getRemoteHardwareAttestations &&
+          updated.public_key &&
+          capabilitiesRelayUrl != null &&
+          capabilitiesRelayUrl !== ""
+        ) {
           try {
-            const remoteAttestations = await getRemoteHardwareAttestations(remoteMotebitId);
+            const remoteAttestations = await getRemoteHardwareAttestations(
+              remoteMotebitId,
+              capabilitiesRelayUrl,
+            );
             // Pick the first credential whose subject identity_public_key
             // matches the worker's identity key. The cascade-mint always
             // sets identity_public_key to the device's identity Ed25519

@@ -9,10 +9,15 @@
  * the per-device list verbatim. Surfaces wire it once at runtime
  * construction:
  *
- *     runtime.setHardwareAttestationFetcher(
- *       createRelayCapabilitiesFetcher({ baseUrl: syncUrl }),
- *     );
+ *     runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher());
  *     runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
+ *
+ * The fetcher holds NO relay URL. The runtime passes it one per invocation:
+ * the relay of the call whose receipt is being bumped, or — outside a call
+ * (a plan step's receipt) — the relay bound at that moment, and it is not
+ * invoked at all while no relay is bound (`relay-binding.ts`). A surface
+ * that cached its bootstrap relay here sent a new call's worker id to the
+ * PREVIOUS relay after a switch (design runtime-relay-binding rev 6, F1).
  *
  * Without these two setters the hook is dormant — peer hardware claims
  * are never folded into routing trust. Wiring is one-pass per
@@ -29,22 +34,6 @@
 import type { HardwareAttestationFetcher } from "./agent-trust.js";
 
 export interface RelayCapabilitiesFetcherConfig {
-  /**
-   * Relay base URL — either a static string or a synchronous resolver
-   * that returns the current URL (or `undefined` / empty string if the
-   * relay isn't configured). Trailing slash tolerated. The fetcher
-   * appends `/agent/:motebitId/capabilities`.
-   *
-   * The resolver form fits surfaces whose sync URL is cached in a field
-   * that gets repopulated when config changes (desktop's
-   * `_proxySyncUrlCache`, mobile's same, spatial's
-   * `localStorage.getItem("motebit:sync_url")`). Resolvers MUST be
-   * synchronous — surfaces with async storage (e.g. AsyncStorage) cache
-   * the value in a sync field at bootstrap and have the resolver read
-   * that field. If the resolver returns `undefined` or empty, the
-   * fetcher returns `[]` (no claim observed).
-   */
-  readonly baseUrl: string | (() => string | undefined | null);
   /**
    * Optional `fetch` override. Defaults to `globalThis.fetch`. Tests
    * inject a stub; surfaces with a non-default fetch (e.g. one routed
@@ -98,17 +87,16 @@ function isValidAttestationEntry(entry: unknown): entry is ValidAttestationEntry
  *     one, so missing == "no claim observed for this device").
  */
 export function createRelayCapabilitiesFetcher(
-  config: RelayCapabilitiesFetcherConfig,
+  config: RelayCapabilitiesFetcherConfig = {},
 ): HardwareAttestationFetcher {
   const fetchImpl = config.fetch ?? globalThis.fetch;
-  const resolveBaseUrl =
-    typeof config.baseUrl === "function" ? config.baseUrl : () => config.baseUrl as string;
   const logger = config.logger;
 
-  return async (remoteMotebitId: string) => {
-    const resolvedUrl = resolveBaseUrl();
-    if (resolvedUrl == null || resolvedUrl === "") return [];
-    const baseUrl = resolvedUrl.replace(/\/+$/, "");
+  // `relayUrl` is the relay the runtime names for THIS invocation (trailing
+  // slash tolerated); empty ⇒ no claim observed, nothing sent.
+  return async (remoteMotebitId: string, relayUrl: string) => {
+    if (relayUrl === "") return [];
+    const baseUrl = relayUrl.replace(/\/+$/, "");
     const url = `${baseUrl}/agent/${encodeURIComponent(remoteMotebitId)}/capabilities`;
     let res: Response;
     try {

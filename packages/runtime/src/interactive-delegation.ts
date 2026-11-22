@@ -9,7 +9,6 @@
 import { TurnDelegationReceipts } from "./turn-delegation-receipts.js";
 import type { ReceiptCarryingResult } from "./turn-delegation-receipts.js";
 import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
-import type { TokenAudience } from "@motebit/protocol";
 
 import {
   paymentNoticeChunk,
@@ -22,6 +21,13 @@ import {
 } from "./relay-delegation.js";
 import { fromMicro, RiskLevel, SideEffect } from "@motebit/protocol";
 import type { ToolCall } from "./turn-principal.js";
+import {
+  RELAY_CHANGED_RESULT,
+  acknowledgementOf,
+  approvalOutlivedBinding,
+  type RelayBindingSnapshot,
+  type RelayBindingSource,
+} from "./relay-binding.js";
 
 /**
  * Render the settlement fact as a sentence the model can relay verbatim. The
@@ -72,8 +78,18 @@ export interface InteractiveDelegationDeps {
         ) => Promise<void>)
       | null,
   ) => void;
-  /** Bump trust for a remote agent based on a verified receipt. */
-  bumpTrustFromReceipt: (receipt: ExecutionReceipt) => Promise<void>;
+  /**
+   * Bump trust for a remote agent based on a verified receipt. `relayUrl` is
+   * the relay of the call that produced it — the capabilities fetch the bump
+   * makes goes there, never to a relay the surface cached.
+   */
+  bumpTrustFromReceipt: (receipt: ExecutionReceipt, relayUrl: string) => Promise<void>;
+  /**
+   * The runtime's ONE relay binding (`relay-binding.ts`). Each call reads it
+   * once, when it starts; the manager holds no relay URL, token source or
+   * key of its own.
+   */
+  getBinding: RelayBindingSource;
   /** Re-wire loop deps so newly registered tools are visible to the agentic loop. */
   wireLoopDeps: () => void;
   /**
@@ -85,23 +101,18 @@ export interface InteractiveDelegationDeps {
   turnReceipts?: TurnDelegationReceipts;
 }
 
+/**
+ * What the runtime hands the manager when the binding first enables the
+ * tools. Nothing relay-shaped: the relay, its token source, its pinned key,
+ * the cold-start acknowledgement, routing and timeout are read per call from
+ * the binding snapshot (`getBinding`).
+ */
 export interface InteractiveDelegationConfig {
-  syncUrl: string;
-  authToken: (audience?: TokenAudience) => Promise<string>;
-  timeoutMs?: number;
-  routingStrategy?: "cost" | "quality" | "balanced";
-  /**
-   * The relay's Ed25519 public key (hex), PINNED at pairing. With
-   * `buildP2pPayment`, a paid cross-agent `delegate_to_agent` call settles
-   * peer-to-peer (treasury derived from this key, never a fetched response);
-   * absent → relay-mediated. Surface-provided. See `relay-delegation.ts`
-   * `selectAndRunDelegation` + `docs/doctrine/off-ramp-as-user-action.md` § Arc 3.5.
-   */
-  relayPublicKey?: string;
   /**
    * The sovereign rail's atomic multi-leg payment builder, bound by the runtime
-   * from its `SovereignWalletRail` at enable time. Present only when a sovereign
-   * wallet is configured.
+   * from its `SovereignWalletRail` (metered). Present only when a sovereign
+   * wallet is configured. With the binding's pinned key, a paid cross-agent
+   * `delegate_to_agent` call settles peer-to-peer; absent → relay-mediated.
    */
   buildP2pPayment?: BuildP2pPayment;
   /**
@@ -110,17 +121,6 @@ export interface InteractiveDelegationConfig {
    * is `payment_status_unknown` (recorded, never retried).
    */
   confirmP2pPayment?: ConfirmP2pPayment;
-  /**
-   * Cold-start opt-in: whether the user has consented to pay a worker they have
-   * NO trust history with directly, peer-to-peer (the Arc-3 acknowledgment).
-   * Without it, a first paid delegation to an unknown worker is ineligible for
-   * P2P and degrades to relay-mode — so the `delegate_to_agent` tool MUST forward
-   * it or the surface's "pay new agents directly" toggle is a no-op for chat-
-   * driven delegation (the bug this closes). A function is read fresh per call so
-   * toggling the preference takes effect without re-enabling — mirrors
-   * `InvokeCapabilityConfig.acknowledgeNoHistoryRisk`.
-   */
-  acknowledgeNoHistoryRisk?: boolean | (() => boolean);
   /**
    * The current turn's verified standing-grant id (null between turns and
    * on grantless turns) — read fresh per delegation so the relay's
@@ -141,14 +141,20 @@ export interface InteractiveDelegationConfig {
    */
   paidIntentLedger?: import("./paid-intent-ledger.js").PaidIntentLedger;
   /**
-   * The runtime's `retrieveDelegationResult` — the ONE implementation of
-   * the free `task:query` read, which also resolves the paid-unretrieved
-   * entry on delivery. Bound by the runtime at enable time; absent (a
-   * manager constructed directly), the tool performs the same read and
-   * resolution itself.
+   * The runtime's retrieval — the ONE implementation of the free
+   * `task:query` read, which answers a record owed by another relay
+   * (`bound_elsewhere`) and resolves the paid-unretrieved entry on delivery.
+   * Called with the tool call's own binding snapshot. Absent (a manager
+   * constructed directly), the tool performs the read and resolution itself.
    */
-  retrieveTaskResult?: (taskId: string) => Promise<TaskRetrieval>;
+  retrieveTaskResult?: (taskId: string, binding: RelayBindingSnapshot) => Promise<TaskRetrieval>;
 }
+
+/** A relay tool reached with no binding (a call racing an unbind). Nothing was sent. */
+const NOT_BOUND_RESULT = {
+  ok: false as const,
+  error: "not_connected — no relay is bound on this device; nothing was sent.",
+};
 
 /**
  * Render a retrieval as the typed-truth JSON the model reads
@@ -187,6 +193,10 @@ export function renderTaskRetrieval(
     invalid_task_id:
       "That is not a task id. Ask the user for the id (or use /result to list them).",
     not_connected: "No relay is connected on this device, so nothing could be read.",
+    bound_elsewhere:
+      "This device's record says another relay owes this result, and that relay is not the one " +
+      "connected now, so nothing was sent. Do NOT re-delegate. Tell the user which relay holds " +
+      "it; reconnecting to that relay lets the free read fetch it.",
     not_admitted:
       "This is a payment with NO confirmed relay task: the relay refused it, or its admission " +
       "(or the payment's landing) was never confirmed. There is nothing to fetch by this id. Do " +
@@ -216,6 +226,8 @@ export function renderTaskRetrieval(
     out.result = r.receipt.result ?? "";
   } else if (r.status === "pending") {
     out.task_status = r.taskStatus;
+  } else if (r.status === "bound_elsewhere") {
+    out.owed_by_relay = r.relayUrl;
   } else if (r.status === "undetermined" || r.status === "expired") {
     out.reason = r.reason;
     out.detail = r.detail;
@@ -227,7 +239,7 @@ export function renderTaskRetrieval(
 
 // === Manager ===
 
-/** Every relay-bound tool `enable` registers (and `disable` removes). */
+/** Every relay-bound tool `register` registers (and `unregister` removes). */
 const INTERACTIVE_DELEGATION_TOOLS = [
   "delegate_to_agent",
   "discover_agents",
@@ -249,43 +261,19 @@ export class InteractiveDelegationManager {
 
   constructor(private readonly deps: InteractiveDelegationDeps) {
     this.receipts = deps.turnReceipts ?? new TurnDelegationReceipts();
-  }
-
-  /**
-   * Undo `enable`: unregister the relay tools and the credential submitter,
-   * so nothing this manager wired can contact the relay any more. Idempotent;
-   * a later `enable` registers everything again against its (new) relay.
-   */
-  disable(): void {
-    for (const name of INTERACTIVE_DELEGATION_TOOLS) {
-      this.deps.toolRegistry.unregister?.(name);
-      this.deps.motebitToolServers.delete(name);
-    }
-    this.deps.setCredentialSubmitter(null);
-    this.deps.wireLoopDeps();
-  }
-
-  /**
-   * Register the `delegate_to_agent` tool for interactive delegation.
-   *
-   * The tool submits tasks to the relay via REST, polls for results, bumps trust
-   * on verified receipts, and returns the result as normal tool output.
-   */
-  enable(config: InteractiveDelegationConfig): void {
-    const TOOL_NAME = "delegate_to_agent";
-
-    // Avoid double-registration
-    if (this.deps.toolRegistry.has(TOOL_NAME)) return;
-
-    // Wire credential submission to relay — credentials issued by bumpTrustFromReceipt
-    // are submitted to the relay for routing indexing. The subject agent (the one we
-    // delegated to) gets the credential pushed to its relay profile.
+    // Credential submission is its own call: credentials issued by
+    // bumpTrustFromReceipt are submitted for routing indexing to the relay
+    // bound WHEN the credential is issued (one snapshot, read before any
+    // await), and with no binding — or a binding without the tools — they
+    // are not posted at all. Wired once; it holds no relay of its own.
     const { logger } = this.deps;
     this.deps.setCredentialSubmitter(async (vc, targetMotebitId) => {
+      const binding = this.deps.getBinding();
+      if (binding == null || !binding.tools) return;
       try {
-        const token = await config.authToken();
+        const token = await binding.authToken();
         const resp = await fetch(
-          `${config.syncUrl}/api/v1/agents/${encodeURIComponent(targetMotebitId)}/credentials/submit`,
+          `${binding.syncUrl}/api/v1/agents/${encodeURIComponent(targetMotebitId)}/credentials/submit`,
           {
             method: "POST",
             headers: {
@@ -331,10 +319,51 @@ export class InteractiveDelegationManager {
         });
       }
     });
+  }
 
-    const timeoutMs = config.timeoutMs ?? 120_000;
+  /**
+   * Remove the relay tools, so no new tool call can reach a relay. Idempotent.
+   * The credential submitter stays wired: it reads the binding per credential
+   * and posts nothing while unbound.
+   */
+  unregister(): void {
+    let removed = false;
+    for (const name of INTERACTIVE_DELEGATION_TOOLS) {
+      if (this.deps.toolRegistry.has(name)) removed = true;
+      this.deps.toolRegistry.unregister?.(name);
+      this.deps.motebitToolServers.delete(name);
+    }
+    if (removed) this.deps.wireLoopDeps();
+  }
+
+  /**
+   * Register the relay tools (`delegate_to_agent`, `discover_agents`,
+   * `retrieve_task_result`). Idempotent. Each tool execution reads the
+   * binding ONCE when it starts and sends every request to that snapshot's
+   * relay with that snapshot's token source; an approved call whose
+   * approval generation is not the snapshot's is refused `relay_changed`.
+   */
+  register(config: InteractiveDelegationConfig): void {
+    const TOOL_NAME = "delegate_to_agent";
+
+    // Avoid double-registration
+    if (this.deps.toolRegistry.has(TOOL_NAME)) return;
+
+    const { logger } = this.deps;
     const motebitId = this.deps.motebitId;
-    const bumpTrust = (receipt: ExecutionReceipt) => this.deps.bumpTrustFromReceipt(receipt);
+    const bumpTrust = (receipt: ExecutionReceipt, relayUrl: string) =>
+      this.deps.bumpTrustFromReceipt(receipt, relayUrl);
+    /** The call's one snapshot, or the refusal it gets instead. */
+    const snapshotFor = (
+      call: ToolCall | undefined,
+    ): RelayBindingSnapshot | { ok: false; error: string } => {
+      const binding = this.deps.getBinding();
+      if (approvalOutlivedBinding(call?.approvedRelayGeneration, binding)) {
+        return { ...RELAY_CHANGED_RESULT };
+      }
+      if (binding == null || !binding.tools) return { ...NOT_BOUND_RESULT };
+      return binding;
+    };
 
     // Mark as delegation tool for processStream to emit delegation_start/complete
     this.deps.motebitToolServers.set(TOOL_NAME, "relay");
@@ -405,18 +434,19 @@ export class InteractiveDelegationManager {
       // #943 round 9: whose call this is arrives WITH the call (`call`,
       // from the runtime registry) — never from runtime-wide state.
       async (args: Record<string, unknown>, call?: ToolCall) => {
+        // The call's ONE snapshot of the binding, read before anything else.
+        const binding = snapshotFor(call);
+        if (!("generation" in binding)) return binding;
         const prompt = args.prompt as string;
         const requiredCapabilities = args.required_capabilities as string[] | undefined;
+        const timeoutMs = binding.timeoutMs ?? 120_000;
 
         // Resolve the cold-start ack fresh per call (a function reflects a live
-        // surface toggle without re-enabling). Without forwarding this, a paid
+        // surface toggle without a rebind). Without forwarding this, a paid
         // delegation to a no-history worker is denied P2P eligibility and silently
         // degrades to relay-mode — the "pay new agents directly" toggle would be a
         // no-op for the AI-loop path.
-        const ack =
-          typeof config.acknowledgeNoHistoryRisk === "function"
-            ? config.acknowledgeNoHistoryRisk()
-            : config.acknowledgeNoHistoryRisk;
+        const ack = acknowledgementOf(binding);
 
         // Read the active grant id fresh per call — the relay's
         // acceptance-time revocation fence keys on it.
@@ -433,15 +463,15 @@ export class InteractiveDelegationManager {
 
         const result = await selectAndRunDelegation({
           motebitId,
-          syncUrl: config.syncUrl,
-          authToken: config.authToken,
+          syncUrl: binding.syncUrl,
+          authToken: binding.authToken,
           prompt,
           ...(requiredCapabilities ? { requiredCapabilities } : {}),
           ...(config.buildP2pPayment ? { buildP2pPayment: config.buildP2pPayment } : {}),
           ...(config.confirmP2pPayment ? { confirmP2pPayment: config.confirmP2pPayment } : {}),
-          ...(config.relayPublicKey != null ? { relayPublicKey: config.relayPublicKey } : {}),
+          ...(binding.relayPublicKey != null ? { relayPublicKey: binding.relayPublicKey } : {}),
           ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
-          ...(config.routingStrategy ? { routingStrategy: config.routingStrategy } : {}),
+          ...(binding.routingStrategy ? { routingStrategy: binding.routingStrategy } : {}),
           ...(grantId != null ? { grantId } : {}),
           ...(config.paidIntentLedger != null ? { paidIntentLedger: config.paidIntentLedger } : {}),
           invocationOrigin: "ai-loop",
@@ -587,9 +617,10 @@ export class InteractiveDelegationManager {
           };
         }
 
-        // Bump trust (best-effort)
+        // Bump trust (best-effort) — its capabilities fetch goes to this
+        // call's relay.
         try {
-          await bumpTrust(result.receipt);
+          await bumpTrust(result.receipt, binding.syncUrl);
         } catch {
           // Best-effort
         }
@@ -672,11 +703,13 @@ export class InteractiveDelegationManager {
           localOnly: true,
           riskHint: { risk: RiskLevel.R0_READ, sideEffect: SideEffect.NONE },
         },
-        async (args: Record<string, unknown>) => {
+        async (args: Record<string, unknown>, call?: ToolCall) => {
+          const binding = snapshotFor(call);
+          if (!("generation" in binding)) return binding;
           const capability = typeof args.capability === "string" ? args.capability : undefined;
           try {
-            const token = await config.authToken();
-            const url = new URL(`${config.syncUrl}/api/v1/agents/discover`);
+            const token = await binding.authToken();
+            const url = new URL(`${binding.syncUrl}/api/v1/agents/discover`);
             if (capability != null && capability.length > 0) {
               url.searchParams.set("capability", capability);
             }
@@ -723,7 +756,7 @@ export class InteractiveDelegationManager {
               ok: true,
               data: JSON.stringify({
                 roster_source: "live_relay_read",
-                relay: config.syncUrl,
+                relay: binding.syncUrl,
                 as_of_ms: Date.now(),
                 agent_count: agents.length,
                 agents,
@@ -749,11 +782,11 @@ export class InteractiveDelegationManager {
       const ledger = config.paidIntentLedger;
       const retrieve =
         config.retrieveTaskResult ??
-        (async (taskId: string): Promise<TaskRetrieval> => {
+        (async (taskId: string, binding: RelayBindingSnapshot): Promise<TaskRetrieval> => {
           const r = await retrieveDelegationResult({
             motebitId,
-            syncUrl: config.syncUrl,
-            authToken: config.authToken,
+            syncUrl: binding.syncUrl,
+            authToken: binding.authToken,
             taskId,
           });
           if (r.status === "delivered") ledger?.resolve(r.taskId);
@@ -804,6 +837,8 @@ export class InteractiveDelegationManager {
                 "task — nothing was read.",
             };
           }
+          const binding = snapshotFor(call);
+          if (!("generation" in binding)) return binding;
           const raw = typeof args.task_id === "string" ? args.task_id.trim() : "";
           const outstanding = ledger?.outstanding() ?? [];
           if (raw === "") {
@@ -833,7 +868,7 @@ export class InteractiveDelegationManager {
           const matches = outstanding.filter((e) => e.taskId.startsWith(raw));
           const taskId = matches.length === 1 ? matches[0]!.taskId : raw;
           const paid = ledger?.find(taskId) ?? null;
-          const result = await retrieve(taskId);
+          const result = await retrieve(taskId, binding);
           return { ok: true, data: renderTaskRetrieval(result, paid) };
         },
       );

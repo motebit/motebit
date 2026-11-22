@@ -108,7 +108,15 @@ export function installTwoRelays(me: string): TwoRelays {
     to: (name) => requests.filter((r) => r.relay === name),
     tokened: () => requests.filter((r) => r.auth != null && r.auth !== ""),
     hold(relay, method, match, count = 1) {
-      const h = { relay, method, match, left: count, arrived: 0, waiters: [], released: false };
+      const h = {
+        relay,
+        method,
+        match,
+        left: count,
+        arrived: 0,
+        waiters: [] as Array<() => void>,
+        released: false,
+      };
       holds.push(h);
       return {
         arrived: () => h.arrived,

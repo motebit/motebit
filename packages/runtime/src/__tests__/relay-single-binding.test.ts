@@ -18,9 +18,10 @@
  * name the runtime's binding API. This file was first committed against
  * main's `enableInteractiveDelegation` / `enableInvokeCapability` /
  * `disableInteractiveDelegation` (bind = enable, unbind = disable) and a
- * fetcher built the way desktop and mobile build it, so its tests fail on
- * main by misbehaviour, not by a missing method; only those helpers moved
- * when the binding replaced them.
+ * fetcher built the way desktop and mobile built it (over a URL cached at
+ * bootstrap), so its tests failed on main by misbehaviour, not by a missing
+ * method; only those three helpers moved when the binding replaced them
+ * (`bindRelay` / `unbindRelay` / a fetcher that takes the relay per call).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -81,29 +82,29 @@ interface TestBinding {
 const urlOf = (r: RelayName): string => (r === "A" ? RELAY_A : RELAY_B);
 
 function bind(runtime: MotebitRuntime, b: TestBinding): void {
-  const cfg = {
+  runtime.bindRelay({
     syncUrl: urlOf(b.relay),
     authToken: tokenSource(b.relay),
     ...(b.key === true ? { relayPublicKey: SIGNING_PINNED_HEX } : {}),
     acknowledgeNoHistoryRisk: true,
     ...(b.timeoutMs != null ? { timeoutMs: b.timeoutMs } : {}),
-  };
-  if (b.tools !== false) runtime.enableInteractiveDelegation(cfg);
-  if (b.invokeCapability === true) runtime.enableInvokeCapability(cfg);
+    tools: b.tools !== false,
+    invokeCapability: b.invokeCapability === true,
+  });
 }
 
 function unbind(runtime: MotebitRuntime): void {
-  runtime.disableInteractiveDelegation();
+  runtime.unbindRelay();
 }
 
 /**
- * The capabilities fetcher as desktop and mobile wire it on main: over a URL
- * cached at proxy bootstrap (`_proxySyncUrlCache`), never rewritten by a
- * relay switch.
+ * The capabilities fetcher as desktop and mobile wire it now: it holds no
+ * relay; the runtime names one per invocation. (On main it was built over a
+ * URL cached at proxy bootstrap — `bootstrapUrl` — that a relay switch never
+ * rewrote; the argument is kept so the call sites read as they did.)
  */
-function wireCapabilitiesFetcher(runtime: MotebitRuntime, bootstrapUrl: string): void {
-  const cache = bootstrapUrl;
-  runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher({ baseUrl: () => cache }));
+function wireCapabilitiesFetcher(runtime: MotebitRuntime, _bootstrapUrl: string): void {
+  runtime.setHardwareAttestationFetcher(createRelayCapabilitiesFetcher());
 }
 
 // ---------------------------------------------------------------------------
