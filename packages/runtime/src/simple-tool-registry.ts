@@ -29,7 +29,10 @@ export type CallAwareToolHandler = (
 export class SimpleToolRegistry implements ToolRegistry {
   // ECMAScript-private: the handlers are reachable only through `execute`,
   // never by reading the map (`registry["tools"]` is undefined at runtime).
-  readonly #tools = new Map<string, { definition: ToolDefinition; handler: ToolHandler }>();
+  readonly #tools = new Map<
+    string,
+    { definition: ToolDefinition; handler: ToolHandler; relayBound?: true }
+  >();
   /**
    * The money guard (installed once, by the runtime that owns this
    * registry): an R4_MONEY tool runs only with a capability that guard's
@@ -68,6 +71,27 @@ export class SimpleToolRegistry implements ToolRegistry {
   register(tool: ToolDefinition, handler: ToolHandler): void {
     if (this.#tools.has(tool.name)) throw new Error(`Tool "${tool.name}" already registered`);
     this.#tools.set(tool.name, { definition: tool, handler });
+  }
+
+  /**
+   * Register a RELAY-BOUND tool: one whose handler reaches the runtime's
+   * delegation relay binding (`relay-binding.ts`). The flag belongs to the
+   * registry entry, never to a list of names a reader could forget: the AI
+   * loop stamps it on an `approval_request` at the pause, a recovered
+   * approval for such a tool runs only under the relay it was approved
+   * under, and `invokeLocalTool` refuses a carried approval for one that
+   * names no relay. It survives `replace` (a replaced handler may still
+   * reach the relay, so the flag fails closed) and ends with `unregister`.
+   */
+  registerRelayBound(tool: ToolDefinition, handler: ToolHandler): void {
+    this.register(tool, handler);
+    const entry = this.#tools.get(tool.name);
+    if (entry != null) entry.relayBound = true;
+  }
+
+  /** Whether the registered tool `name` is relay-bound (false when absent). */
+  isRelayBound(name: string): boolean {
+    return this.#tools.get(name)?.relayBound === true;
   }
 
   /**
@@ -152,7 +176,12 @@ export class SimpleToolRegistry implements ToolRegistry {
 
   /** Replace the handler for an existing tool, or register if new. */
   replace(tool: ToolDefinition, handler: ToolHandler): void {
-    this.#tools.set(tool.name, { definition: tool, handler });
+    const relayBound = this.#tools.get(tool.name)?.relayBound;
+    this.#tools.set(tool.name, {
+      definition: tool,
+      handler,
+      ...(relayBound === true ? { relayBound } : {}),
+    });
   }
 
   /**

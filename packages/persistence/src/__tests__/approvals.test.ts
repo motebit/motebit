@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createMotebitDatabase, type MotebitDatabase, type ApprovalItem } from "../index.js";
+import { createMotebitDatabase, type MotebitDatabase, type StoredApprovalItem } from "../index.js";
 
 describe("SqliteApprovalStore", () => {
   let moteDb: MotebitDatabase;
@@ -8,7 +8,7 @@ describe("SqliteApprovalStore", () => {
     moteDb = createMotebitDatabase(":memory:");
   });
 
-  function makeApproval(overrides: Partial<ApprovalItem> = {}): ApprovalItem {
+  function makeApproval(overrides: Partial<StoredApprovalItem> = {}): StoredApprovalItem {
     const now = Date.now();
     return {
       approval_id: "appr-001",
@@ -23,6 +23,9 @@ describe("SqliteApprovalStore", () => {
       expires_at: now + 3_600_000,
       resolved_at: null,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
       ...overrides,
     };
   }

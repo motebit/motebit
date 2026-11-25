@@ -760,6 +760,11 @@ export async function handleSkillsRunScript(config: CliConfig): Promise<void> {
     expires_at: expiresAt,
     resolved_at: null,
     denied_reason: null,
+    // A skill script runs locally and is never drained by the scheduler:
+    // no relay, and not relay-bound.
+    relay_pin_key: null,
+    relay_public_key: null,
+    relay_bound: false,
   });
 
   // Auto-approve short-circuit: --auto-approve flag OR

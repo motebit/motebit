@@ -1,0 +1,7 @@
+---
+"motebit": minor
+---
+
+An approval recovered after a restart runs a relay-bound tool only under the relay it was approved under.
+
+The daemon's approval queue now records, for every paused call, the relay it was decided under and whether its tool is relay-bound (migration #54, three nullable columns). Both writers — a goal turn's pause and a plan step's pause — copy these from the pause itself, never from the binding at write time. When an approval is decided after a restart, a relay-bound tool (`delegate_to_agent`, `discover_agents`, `retrieve_task_result`) runs only if the bound relay is the same relay with the same pinned key; otherwise the run ends "approved under another relay than the one bound now — not executed: relay_changed", and nothing is sent. Rows written before this release, and rows stamped under a relay URL that cannot be pinned, are refused for relay-bound tools. Goal tools (`create_sub_goal`, `complete_goal`, `report_progress`) recover as before. The runtime half is in `runtime-recovered-approval-relay-ignored.md`.

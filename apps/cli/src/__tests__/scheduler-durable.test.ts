@@ -371,6 +371,9 @@ describe("durable execution — interruption while awaiting approval", () => {
       expires_at: now + 1000,
       resolved_at: now,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
       args_json: "{}",
     });
     const m = mockRuntime();
@@ -400,6 +403,9 @@ describe("durable execution — interruption while awaiting approval", () => {
       expires_at: now + 1000,
       resolved_at: now,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
       args_json: JSON.stringify({ command: "rm -rf /" }),
     });
     const m = mockRuntime();
@@ -428,6 +434,9 @@ describe("durable execution — interruption while awaiting approval", () => {
       expires_at: now - 3_600_000,
       resolved_at: null,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
       args_json: "{}",
     });
     const m = mockRuntime();
@@ -691,6 +700,9 @@ describe("durable execution — review round: every running transition has a fai
       expires_at: over.expiresAt ?? now + 3_600_000,
       resolved_at: over.resolvedAt === undefined ? now : over.resolvedAt,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
       args_json: argsJson,
     });
   }

@@ -592,6 +592,47 @@ export interface MotebitLoopDependencies {
    * turn could have moved. Absent ⇒ the owner's turn.
    */
   foreignPrincipal?: boolean;
+  /**
+   * The relay the runtime is bound to for delegation, as an
+   * {@link ApprovalRelayIdentity}, or null when it is unbound or its URL
+   * cannot be pinned. Read synchronously at each `approval_request` pause
+   * and stamped on the chunk (`relay`), so an approval decided after a
+   * restart can be refused when it would run under another relay. Absent
+   * ⇒ the chunk carries `relay: null` (fail-closed: a relay-bound tool
+   * with no recorded relay is refused when it is recovered).
+   */
+  relayIdentity?: () => ApprovalRelayIdentity | null;
+  /**
+   * Whether the named tool is relay-bound, from the runtime tool
+   * registry's own flag (never a list of names). Read at the pause and
+   * stamped on the chunk (`relay_bound`). Absent ⇒ the chunk carries no
+   * `relay_bound` (unknown), which a recovering reader treats as
+   * relay-bound unless its current registry says otherwise.
+   */
+  isRelayBoundTool?: (name: string) => boolean;
+}
+
+/**
+ * The relay an approval was decided under: the relay URL's pin key
+ * (`relayPinKey`, never a raw URL) and the relay public key pinned for it,
+ * or null when none is pinned. Two identities are the same relay exactly
+ * when both fields are equal.
+ */
+export interface ApprovalRelayIdentity {
+  readonly pinKey: string;
+  readonly publicKey: string | null;
+}
+
+/** The relay stamp an `approval_request` chunk carries, read at the pause. */
+function approvalRelayStamp(
+  deps: Pick<MotebitLoopDependencies, "relayIdentity" | "isRelayBoundTool">,
+  toolName: string,
+): { relay: ApprovalRelayIdentity | null; relay_bound?: boolean } {
+  const relay = deps.relayIdentity?.() ?? null;
+  return {
+    relay: relay == null ? null : { pinKey: relay.pinKey, publicKey: relay.publicKey },
+    ...(deps.isRelayBoundTool != null ? { relay_bound: deps.isRelayBoundTool(toolName) } : {}),
+  };
 }
 
 /**
@@ -861,6 +902,21 @@ export type AgenticChunk =
        */
       audit_call_id?: string;
       turn_id?: string;
+      /**
+       * The relay the runtime was bound to at the pause
+       * (`MotebitLoopDependencies.relayIdentity`), null when unbound or
+       * unpinnable. Set on every chunk the loop emits; optional on the type
+       * for hand-built streams, where absent means null. A writer that
+       * persists the approval copies it from here and never reads the
+       * binding itself, so a rebind between the pause and the write cannot
+       * relabel the approval.
+       */
+      relay?: ApprovalRelayIdentity | null;
+      /**
+       * Whether the paused tool is relay-bound, from the tool registry's
+       * flag at the pause. Absent ⇒ unknown.
+       */
+      relay_bound?: boolean;
     }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | {
@@ -1477,6 +1533,7 @@ export async function* runTurnStreaming(
             ...(decision.quorum ? { quorum: decision.quorum } : {}),
             ...(decision.callId != null ? { audit_call_id: decision.callId } : {}),
             turn_id: turnCtx.turnId,
+            ...approvalRelayStamp(deps, toolCall.name),
           };
           conversationHistory.push({
             role: "tool",
@@ -1803,6 +1860,7 @@ export async function* runTurnStreaming(
           tool_call_id: toolCall.id,
           name: toolCall.name,
           args: toolCall.args,
+          ...approvalRelayStamp(deps, toolCall.name),
         };
         conversationHistory.push({
           role: "tool",

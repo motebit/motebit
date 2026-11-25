@@ -8,7 +8,7 @@
 
 import { TurnDelegationReceipts } from "./turn-delegation-receipts.js";
 import type { ReceiptCarryingResult } from "./turn-delegation-receipts.js";
-import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
+import type { ExecutionReceipt, ToolDefinition, ToolHandler, ToolRegistry } from "@motebit/sdk";
 
 import {
   paymentNoticeChunk,
@@ -59,6 +59,8 @@ function formatSettlementNote(settlement: DelegationSettlement | undefined): str
 /** ToolRegistry extended with `has()` — matches SimpleToolRegistry in MotebitRuntime. */
 interface ToolRegistryWithHas extends ToolRegistry {
   has(name: string): boolean;
+  /** Register a tool flagged relay-bound (`SimpleToolRegistry.registerRelayBound`). */
+  registerRelayBound(tool: ToolDefinition, handler: ToolHandler): void;
 }
 
 // === Types ===
@@ -368,7 +370,7 @@ export class InteractiveDelegationManager {
     // Mark as delegation tool for processStream to emit delegation_start/complete
     this.deps.motebitToolServers.set(TOOL_NAME, "relay");
 
-    this.deps.toolRegistry.register(
+    this.deps.toolRegistry.registerRelayBound(
       {
         name: TOOL_NAME,
         description:
@@ -672,7 +674,7 @@ export class InteractiveDelegationManager {
     // recall is design-shape, never current state.
     const DISCOVER_TOOL = "discover_agents";
     if (!this.deps.toolRegistry.has(DISCOVER_TOOL)) {
-      this.deps.toolRegistry.register(
+      this.deps.toolRegistry.registerRelayBound(
         {
           name: DISCOVER_TOOL,
           description:
@@ -792,7 +794,7 @@ export class InteractiveDelegationManager {
           if (r.status === "delivered") ledger?.resolve(r.taskId);
           return r;
         });
-      this.deps.toolRegistry.register(
+      this.deps.toolRegistry.registerRelayBound(
         {
           name: RETRIEVE_TOOL,
           description:

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { openMotebitDatabase } from "../index.js";
-import type { ApprovalItem } from "../index.js";
+import type { StoredApprovalItem as ApprovalItem } from "../index.js";
 
 describe("SqliteApprovalStore — quorum", () => {
   let approvalStore: {
@@ -29,6 +29,9 @@ describe("SqliteApprovalStore — quorum", () => {
       expires_at: Date.now() + 60_000,
       resolved_at: null,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
     };
   }
 

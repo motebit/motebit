@@ -741,4 +741,21 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE paid_intent_ledger ADD COLUMN relay_url TEXT DEFAULT NULL",
     ],
   },
+  {
+    version: 54,
+    description:
+      "approval_queue relay columns — the relay a paused approval was decided under, and whether its tool is relay-bound",
+    statements: [
+      // Stamped by ai-core at the `approval_request` pause and copied from
+      // the chunk by every writer (runtime relay-binding.ts). A recovered
+      // approval for a relay-bound tool runs only under the same relay: the
+      // same pin key, and the same public key or both NULL. NULL relay is an
+      // unbound or unpinnable relay, or a row written before these columns
+      // existed; NULL relay_bound is unknown (a pre-column row). Local
+      // private state, never on a wire.
+      "ALTER TABLE approval_queue ADD COLUMN relay_pin_key TEXT DEFAULT NULL",
+      "ALTER TABLE approval_queue ADD COLUMN relay_public_key TEXT DEFAULT NULL",
+      "ALTER TABLE approval_queue ADD COLUMN relay_bound INTEGER DEFAULT NULL",
+    ],
+  },
 ];

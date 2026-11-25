@@ -2575,6 +2575,25 @@ export class SqliteGoalRunStore {
 // here so existing importers keep working.
 export type { ApprovalItem, ApprovalStatus } from "@motebit/sdk";
 
+/**
+ * The relay a queued approval was decided under (migration #54). Local
+ * columns, never on the wire `ApprovalItem`: a writer copies them from the
+ * `approval_request` chunk ai-core stamped at the pause and never reads the
+ * binding itself. Required on every write, so a writer that forgets them
+ * does not compile.
+ */
+export interface ApprovalRelayColumns {
+  /** The relay URL's pin key (`relayPinKey`); null when unbound or unpinnable. */
+  relay_pin_key: string | null;
+  /** The relay public key pinned for it; null when none was pinned. */
+  relay_public_key: string | null;
+  /** Whether the tool is relay-bound (the registry's flag at the pause); null = unknown. */
+  relay_bound: boolean | null;
+}
+
+/** A queued approval as stored: the wire item plus its relay columns. */
+export type StoredApprovalItem = ApprovalItem & ApprovalRelayColumns;
+
 interface ApprovalRow {
   approval_id: string;
   motebit_id: string;
@@ -2589,9 +2608,12 @@ interface ApprovalRow {
   resolved_at: number | null;
   denied_reason: string | null;
   args_json: string | null;
+  relay_pin_key?: string | null;
+  relay_public_key?: string | null;
+  relay_bound?: number | null;
 }
 
-function rowToApproval(row: ApprovalRow): ApprovalItem {
+function rowToApproval(row: ApprovalRow): StoredApprovalItem {
   return {
     approval_id: row.approval_id,
     motebit_id: row.motebit_id,
@@ -2606,6 +2628,9 @@ function rowToApproval(row: ApprovalRow): ApprovalItem {
     resolved_at: row.resolved_at,
     denied_reason: row.denied_reason,
     args_json: row.args_json ?? null,
+    relay_pin_key: row.relay_pin_key ?? null,
+    relay_public_key: row.relay_public_key ?? null,
+    relay_bound: row.relay_bound == null ? null : row.relay_bound !== 0,
   };
 }
 
@@ -2622,8 +2647,8 @@ export class SqliteApprovalStore {
     this.db = db;
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO approval_queue
-       (approval_id, motebit_id, goal_id, tool_name, args_preview, args_hash, risk_level, status, created_at, expires_at, resolved_at, denied_reason, args_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (approval_id, motebit_id, goal_id, tool_name, args_preview, args_hash, risk_level, status, created_at, expires_at, resolved_at, denied_reason, args_json, relay_pin_key, relay_public_key, relay_bound)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGet = db.prepare(`SELECT * FROM approval_queue WHERE approval_id = ?`);
     this.stmtListPending = db.prepare(
@@ -2640,7 +2665,7 @@ export class SqliteApprovalStore {
     );
   }
 
-  add(item: ApprovalItem): void {
+  add(item: StoredApprovalItem): void {
     this.stmtAdd.run(
       item.approval_id,
       item.motebit_id,
@@ -2655,21 +2680,24 @@ export class SqliteApprovalStore {
       item.resolved_at,
       item.denied_reason,
       item.args_json ?? null,
+      item.relay_pin_key,
+      item.relay_public_key,
+      item.relay_bound == null ? null : item.relay_bound ? 1 : 0,
     );
   }
 
-  get(approvalId: string): ApprovalItem | null {
+  get(approvalId: string): StoredApprovalItem | null {
     const row = this.stmtGet.get(approvalId) as ApprovalRow | undefined;
     if (row === undefined) return null;
     return rowToApproval(row);
   }
 
-  listPending(motebitId: string): ApprovalItem[] {
+  listPending(motebitId: string): StoredApprovalItem[] {
     const rows = this.stmtListPending.all(motebitId) as ApprovalRow[];
     return rows.map(rowToApproval);
   }
 
-  listAll(motebitId: string, limit = 50): ApprovalItem[] {
+  listAll(motebitId: string, limit = 50): StoredApprovalItem[] {
     const rows = this.stmtListAll.all(motebitId, limit) as ApprovalRow[];
     return rows.map(rowToApproval);
   }

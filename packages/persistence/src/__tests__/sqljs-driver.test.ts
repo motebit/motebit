@@ -173,6 +173,9 @@ describe("sql.js driver (in-memory)", () => {
       expires_at: now - 1000,
       resolved_at: null,
       denied_reason: null,
+      relay_pin_key: null,
+      relay_public_key: null,
+      relay_bound: false,
     });
 
     const expired = mdb.approvalStore.expireStale(now);

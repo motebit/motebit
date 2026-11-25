@@ -23,6 +23,7 @@
  * under and is refused `relay_changed` if it no longer matches.
  */
 import type { TokenAudience } from "@motebit/protocol";
+import type { ApprovalRelayIdentity } from "@motebit/ai-core";
 import { relayPinKey } from "./relay-key-pin.js";
 
 export interface RelayBinding {
@@ -118,4 +119,31 @@ export function approvalOutlivedBinding(
 ): boolean {
   if (approved == null) return false;
   return current == null || current.generation !== approved;
+}
+
+/**
+ * The relay identity an approval is decided under (`ApprovalRelayIdentity`):
+ * the binding's pin key and its pinned public key, or null while unbound or
+ * when the URL cannot be pinned (`relayPinKey` is null). Never a raw URL, so
+ * two unpinnable URLs can never compare equal.
+ */
+export function relayIdentityOf(
+  binding: RelayBindingSnapshot | null,
+): ApprovalRelayIdentity | null {
+  if (binding == null) return null;
+  const pinKey = relayPinKey(binding.syncUrl);
+  if (pinKey == null) return null;
+  return { pinKey, publicKey: binding.relayPublicKey ?? null };
+}
+
+/**
+ * True only when both identities are present and name the same relay: the
+ * same pin key, and the same pinned public key or both null.
+ */
+export function sameRelayIdentity(
+  a: ApprovalRelayIdentity | null | undefined,
+  b: ApprovalRelayIdentity | null | undefined,
+): boolean {
+  if (a == null || b == null) return false;
+  return a.pinKey === b.pinKey && (a.publicKey ?? null) === (b.publicKey ?? null);
 }
