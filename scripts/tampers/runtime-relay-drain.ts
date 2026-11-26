@@ -19,7 +19,9 @@
  *     not passed, the check run before the goal tools are registered, and the
  *     refusal moved out of the try/finally (goal tools left registered); the
  *     refusal predicate matched by text again or accepted from a tool that was
- *     not relay-bound; and each refusal summary replaced by a false one.
+ *     not relay-bound; each refusal summary replaced by a false one (including
+ *     "another relay" for a changed key or a matching relay); and migration #54
+ *     not adding a column on an upgraded v53 database.
  *
  *   node scripts/tampers/runtime-relay-drain.ts
  */
@@ -422,11 +424,54 @@ const TAMPERS: TamperEntry[] = [
   {
     name: "a row with no recorded relay is reported as another relay",
     edits: [
-      { file: SCHED, from: '    if (approvedUnder == null) return "unrecorded_relay";\n', to: "" },
+      {
+        file: SCHED,
+        from: '    if (approvedUnder == null) return "unrecorded_relay";\n',
+        to: '    if (approvedUnder == null) return "relay_changed";\n',
+      },
     ],
     pkg: "motebit",
     test: T_DRAIN,
     red: `${DRAIN} a null-relay row for a relay-bound tool: denied`,
+  },
+  {
+    name: "the runtime's refusal under the matching relay is called another relay",
+    edits: [
+      {
+        file: SCHED,
+        from: '        relayVerdict = this.relayMismatchVerdict(approvedUnder) ?? "runtime_refused_same_relay";\n',
+        to: '        relayVerdict = this.relayMismatchVerdict(approvedUnder) ?? "relay_changed";\n',
+      },
+    ],
+    pkg: "motebit",
+    test: T_DRAIN,
+    red: "the runtime's refusal under the matching relay is not called another relay a relay-bound handler passing on a minted refusal under the approval's relay",
+  },
+  {
+    name: "a changed pinned key on the same relay is called another relay",
+    edits: [
+      {
+        file: SCHED,
+        from: '      ? "key_changed"\n      : "relay_changed";\n',
+        to: '      ? "relay_changed"\n      : "relay_changed";\n',
+      },
+    ],
+    pkg: "motebit",
+    test: T_DRAIN,
+    red: `${DRAIN} recorded under A with no pinned key, restarted bound to A with a key: denied`,
+  },
+  {
+    name: "migration #54 does not add relay_pin_key",
+    edits: [
+      {
+        file: "packages/persistence/src/migrations-registry.ts",
+        from: '      "ALTER TABLE approval_queue ADD COLUMN relay_pin_key TEXT DEFAULT NULL",\n',
+        to: '      "SELECT 1",\n',
+      },
+    ],
+    pkg: "@motebit/persistence",
+    test: T_COLUMNS,
+    red: "approval_queue relay columns (migration #54) a database at v53 upgrades: an old row reads back as no relay and relay_bound unknown",
   },
   {
     name: "the drain does not pass approvedUnderRelay",

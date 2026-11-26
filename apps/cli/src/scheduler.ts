@@ -2005,9 +2005,11 @@ export class GoalScheduler {
       // not relay-bound whose tool is relay-bound now) is the drain's verdict
       // too: nothing was sent, not a goal failure. Both conditions: the
       // result is the runtime's marked refusal (never matched by text — a
-      // handler can return any text), and the tool was relay-bound.
+      // handler can return any text), and the tool was relay-bound. When the
+      // recorded relay matches the bound one, the summary says exactly that
+      // (it never claims the relay changed).
       if (relayVerdict == null && statusAtCall === "relay_bound" && isRelayChangedResult(result)) {
-        relayVerdict = this.relayMismatchVerdict(approvedUnder) ?? "relay_changed";
+        relayVerdict = this.relayMismatchVerdict(approvedUnder) ?? "runtime_refused_same_relay";
       }
       if (relayVerdict != null) {
         this.finishRecoveredRun(run, {
@@ -2063,15 +2065,18 @@ export class GoalScheduler {
   /**
    * Whether the relay an approval was recorded under is the bound one: null
    * when it is, otherwise why not — no relay recorded with the row, no relay
-   * bound now, or another relay (another pin key or pinned key).
+   * bound now, the same relay with another pinned key (including none
+   * versus one), or another relay.
    */
   private relayMismatchVerdict(
     approvedUnder: ApprovalRelayIdentity | null,
   ): RecoveredRelayVerdict | null {
     if (approvedUnder == null) return "unrecorded_relay";
     if (this.runtime.getDelegationRelay() == null) return "no_relay_bound";
-    return sameRelayIdentity(approvedUnder, this.runtime.getRelayIdentity())
-      ? null
+    const current = this.runtime.getRelayIdentity();
+    if (sameRelayIdentity(approvedUnder, current)) return null;
+    return current != null && current.pinKey === approvedUnder.pinKey
+      ? "key_changed"
       : "relay_changed";
   }
 
@@ -2413,6 +2418,8 @@ function relayColumnsOf(chunk: {
  */
 type RecoveredRelayVerdict =
   | "relay_changed"
+  | "key_changed"
+  | "runtime_refused_same_relay"
   | "no_relay_bound"
   | "tool_unregistered"
   | "unrecorded_relay"
@@ -2421,6 +2428,10 @@ type RecoveredRelayVerdict =
 /** The run summary for each refusal, after the tool name. */
 const RECOVERED_RELAY_REFUSAL: Record<RecoveredRelayVerdict, string> = {
   relay_changed: "was approved under another relay than the one bound now",
+  key_changed:
+    "was approved under this relay, but the relay's pinned key has changed since the approval",
+  runtime_refused_same_relay:
+    "was refused by the runtime's relay check although the bound relay matches the approval",
   no_relay_bound: "was approved under a relay, but no relay is bound now",
   tool_unregistered:
     "was approved as a relay tool, but its tool is not registered under the current binding",

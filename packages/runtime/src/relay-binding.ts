@@ -111,9 +111,9 @@ export const RELAY_CHANGED_RESULT = {
 
 /**
  * The refusals the runtime's own relay checks minted. Module-private: only
- * {@link relayChangedRefusal} adds to it, so a tool handler that returns the
- * same text (an MCP server's error passed through, say) is never mistaken
- * for one.
+ * {@link relayChangedRefusal} adds to it, so a result carrying the same text
+ * (an MCP server's error passed through, say) or a copy of a minted refusal
+ * is never mistaken for one.
  */
 const MINTED_REFUSALS = new WeakSet<object>();
 
@@ -130,7 +130,14 @@ export function relayChangedRefusal(): { ok: false; error: string } {
 
 /**
  * True only for a refusal {@link relayChangedRefusal} minted — by object
- * identity, never by its text. A handler cannot forge it.
+ * identity, never by its text. The mark cannot be produced from a result's
+ * text or by copying one. Only the runtime's own refusal paths mint it
+ * (`invokeLocalTool`'s carried-approval check and the generation check of
+ * its three relay tools, which runs before any I/O), so only code running in
+ * this process under a relay-bound tool name could pass a minted refusal off
+ * as its own — e.g. a handler `replace`d under such a name that calls
+ * `invokeLocalTool` itself. No production code replaces a relay-bound
+ * handler, and `merge()` entries never carry the relay-bound flag at all.
  */
 export function isRelayChangedResult(result: object): boolean {
   return MINTED_REFUSALS.has(result);

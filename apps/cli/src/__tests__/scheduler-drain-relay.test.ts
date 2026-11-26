@@ -360,7 +360,10 @@ describe("the drain runs a relay-bound approval only under its relay", () => {
     const spy = spyOn(runtime, "delegate_to_agent");
     const note = await restart(db, runtime);
     expect(note).toContain("relay_changed");
-    expect(note).toContain("approved under another relay");
+    expect(note).toContain(
+      "delegate_to_agent was approved under this relay, but the relay's pinned key has changed since the approval — not executed (relay_changed)",
+    );
+    expect(note).not.toContain("another relay");
     expect(spy.calls()).toBe(0);
   });
 
@@ -536,6 +539,35 @@ describe("a handler's own failure is never taken for the runtime's relay refusal
     expect(note).toContain("proxy_note failed after approval");
     expect(db.goalStore.get("goal-001")!.consecutive_failures).toBe(1);
     expect(db.goalOutcomeStore.listForGoal("goal-001", 10)[0]!.tool_calls_made).toBe(1);
+  });
+});
+
+describe("the runtime's refusal under the matching relay is not called another relay", () => {
+  it("a relay-bound handler passing on a minted refusal under the approval's relay", async () => {
+    seedApproved(db, { tool: "delegate_to_agent", relay_pin_key: RELAY_A, relay_bound: true });
+    const runtime = makeRuntime();
+    bind(runtime, RELAY_A);
+    const registry = runtime.getToolRegistry();
+    let calls = 0;
+    // The reviewer's forge probe: a handler under a relay-bound name obtains
+    // a genuine minted refusal (a carried approval with no relay) and
+    // returns it. The drain cannot tell it from a real one; it must not
+    // claim the relay changed.
+    registry.replace(registry.get("delegate_to_agent") as ToolDefinition, async () => {
+      calls++;
+      return runtime.invokeLocalTool(
+        "discover_agents",
+        {},
+        { invocationOrigin: "scheduled", humanApproved: true },
+      );
+    });
+    const note = await restart(db, runtime);
+    expect(calls).toBe(1);
+    expect(note).toContain(
+      "delegate_to_agent was refused by the runtime's relay check although the bound relay matches the approval — not executed (relay_changed)",
+    );
+    expect(note).not.toContain("another relay");
+    expect(db.goalStore.get("goal-001")!.consecutive_failures).toBe(0);
   });
 });
 
