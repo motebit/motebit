@@ -16,7 +16,12 @@ export {
 export type { AttachedReadKind, AttachedActKind } from "./attached-surface.js";
 export { getOrPinRelayKey, relayPinKey, verifyRelayMetadataForUrl } from "./relay-key-pin.js";
 // The runtime's ONE delegation relay binding (`MotebitRuntime.bindRelay`).
-export { sameRelay, sameRelayIdentity, RELAY_CHANGED_RESULT } from "./relay-binding.js";
+export {
+  sameRelay,
+  sameRelayIdentity,
+  isRelayChangedResult,
+  RELAY_CHANGED_RESULT,
+} from "./relay-binding.js";
 export type { RelayBinding, RelayBindingSnapshot } from "./relay-binding.js";
 export type { ApprovalRelayIdentity } from "@motebit/ai-core";
 export type {

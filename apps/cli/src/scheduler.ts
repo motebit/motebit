@@ -9,6 +9,7 @@ import {
   goalOutcomeLines,
   sessionlessGoalSensitivity,
   sameRelayIdentity,
+  isRelayChangedResult,
   RELAY_CHANGED_RESULT,
 } from "@motebit/runtime";
 import {
@@ -1970,14 +1971,14 @@ export class GoalScheduler {
       // one of them must find it registered here too.
       this.registerGoalTools();
       let result: { ok: boolean; data?: unknown; error?: string };
-      let relayRefused = false;
+      let relayVerdict: RecoveredRelayVerdict | null = null;
       try {
         // The relay check: after the goal tools are registered (so a goal
         // tool is classified as on main), synchronously immediately before
         // the call. A refusal still unregisters them below.
         const approvedUnder = recoveredApprovalRelay(item);
-        if (this.recoveredRelayRefused(item, approvedUnder)) {
-          relayRefused = true;
+        relayVerdict = this.recoveredRelayVerdict(item, approvedUnder);
+        if (relayVerdict != null) {
           result = { ...RELAY_CHANGED_RESULT };
         } else {
           result = await this.runtime.invokeLocalTool(item.tool_name, args, {
@@ -1994,10 +1995,17 @@ export class GoalScheduler {
         this.currentRunId = null;
         this.unregisterGoalTools();
       }
-      if (relayRefused) {
+      // The runtime's own relay refusal (`invokeLocalTool` or the handler:
+      // e.g. a row recorded not relay-bound whose tool is relay-bound now)
+      // is the same verdict as the drain's: nothing ran, not a goal failure.
+      if (relayVerdict == null && isRelayChangedResult(result)) relayVerdict = "relay_changed";
+      if (relayVerdict != null) {
         this.finishRecoveredRun(run, {
           ok: false,
-          summary: `${item.tool_name} was approved under another relay than the one bound now — not executed: ${result.error ?? "relay_changed"}`,
+          summary:
+            relayVerdict === "unrecorded_unregistered"
+              ? `${item.tool_name} was approved before relay recording and its tool is not registered now, so it cannot be checked against the bound relay — not executed: ${result.error ?? "relay_changed"}`
+              : `${item.tool_name} was approved under another relay than the one bound now — not executed: ${result.error ?? "relay_changed"}`,
           countAsFailure: false,
         });
         continue;
@@ -2017,31 +2025,33 @@ export class GoalScheduler {
   }
 
   /**
-   * Whether a recovered approval must be refused `relay_changed` instead of
-   * run (design runtime-relay-binding 4b §2). A tool the row recorded as
-   * relay-bound runs only when it is registered and the relay it was
-   * approved under is the bound one (same pin key, and the same public key
-   * or both null); a row with no recorded relay never matches. A row from
-   * before the relay columns (`relay_bound` unknown) is refused when its
-   * tool is relay-bound in the current registry, or unregistered. The
-   * runtime's `invokeLocalTool` repeats the comparison for relay-bound tools.
+   * Why a recovered approval must be refused `relay_changed` instead of run
+   * (design runtime-relay-binding 4b §2), or null when it may run. A tool
+   * the row recorded as relay-bound runs only when it is registered and the
+   * relay it was approved under is the bound one (same pin key, and the same
+   * public key or both null); a row with no recorded relay never matches. A
+   * row from before the relay columns (`relay_bound` unknown) is refused
+   * when its tool is relay-bound in the current registry, and when its tool
+   * is unregistered — then whether it was relay-bound cannot be known
+   * (`unrecorded_unregistered`). The runtime's `invokeLocalTool` repeats the
+   * comparison for relay-bound tools.
    */
-  private recoveredRelayRefused(
+  private recoveredRelayVerdict(
     item: StoredApprovalItem,
     approvedUnder: ApprovalRelayIdentity | null,
-  ): boolean {
+  ): RecoveredRelayVerdict | null {
     const status = this.runtime.relayBoundToolStatus(item.tool_name);
+    const mismatch = (): boolean =>
+      !sameRelayIdentity(approvedUnder, this.runtime.getRelayIdentity());
     if (item.relay_bound === true) {
-      if (status === "unregistered") return true;
-      return !sameRelayIdentity(approvedUnder, this.runtime.getRelayIdentity());
+      if (status === "unregistered") return "relay_changed";
+      return mismatch() ? "relay_changed" : null;
     }
     if (item.relay_bound == null) {
-      if (status === "unregistered") return true;
-      if (status === "relay_bound") {
-        return !sameRelayIdentity(approvedUnder, this.runtime.getRelayIdentity());
-      }
+      if (status === "unregistered") return "unrecorded_unregistered";
+      if (status === "relay_bound") return mismatch() ? "relay_changed" : null;
     }
-    return false;
+    return null;
   }
 
   /**
@@ -2374,6 +2384,13 @@ function relayColumnsOf(chunk: {
     relay_bound: chunk.relay_bound ?? null,
   };
 }
+
+/**
+ * Why the drain refused a recovered approval: under another relay than the
+ * bound one (`relay_changed`), or from before relay recording with its tool
+ * unregistered now, so it cannot be checked (`unrecorded_unregistered`).
+ */
+type RecoveredRelayVerdict = "relay_changed" | "unrecorded_unregistered";
 
 /** The relay a stored approval was decided under, or null when none was recorded. */
 function recoveredApprovalRelay(item: StoredApprovalItem): ApprovalRelayIdentity | null {

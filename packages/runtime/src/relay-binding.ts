@@ -110,6 +110,16 @@ export const RELAY_CHANGED_RESULT = {
 };
 
 /**
+ * True when a tool result is the `relay_changed` refusal
+ * ({@link RELAY_CHANGED_RESULT}, returned by the runtime's own checks:
+ * `invokeLocalTool`, the approval resume and the delegation handlers). The
+ * one structured test for it, so no caller matches free text.
+ */
+export function isRelayChangedResult(result: { ok: boolean; error?: string }): boolean {
+  return result.ok === false && result.error === RELAY_CHANGED_RESULT.error;
+}
+
+/**
  * True when a call approved under generation `approved` must not run under
  * `current` (a different generation, or no binding at all).
  */

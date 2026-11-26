@@ -14,8 +14,10 @@
  *   - persistence: the relay columns not written / mis-read;
  *   - CLI: either writer reading the binding instead of the chunk; the
  *     drain check removed, an unregistered relay-bound tool or an old row
- *     not refused, `approvedUnderRelay` not passed, and the check run before
- *     the goal tools are registered.
+ *     not refused (or given the another-relay summary), the runtime's own
+ *     relay_changed refusal counted as a goal failure, `approvedUnderRelay`
+ *     not passed, the check run before the goal tools are registered, and the
+ *     refusal moved out of the try/finally (goal tools left registered).
  *
  *   node scripts/tampers/runtime-relay-drain.ts
  */
@@ -275,8 +277,8 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SCHED,
-        from: "        if (this.recoveredRelayRefused(item, approvedUnder)) {\n",
-        to: "        if (item.tool_name === ('' as string)) {\n",
+        from: "        relayVerdict = this.recoveredRelayVerdict(item, approvedUnder);\n",
+        to: "        relayVerdict = null as RecoveredRelayVerdict | null;\n",
       },
     ],
     pkg: "motebit",
@@ -288,8 +290,8 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SCHED,
-        from: '    if (item.relay_bound === true) {\n      if (status === "unregistered") return true;\n',
-        to: "    if (item.relay_bound === true) {\n",
+        from: '      if (status === "unregistered") return "relay_changed";\n',
+        to: "",
       },
     ],
     pkg: "motebit",
@@ -301,8 +303,21 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SCHED,
-        from: '    if (item.relay_bound == null) {\n      if (status === "unregistered") return true;\n',
-        to: "    if (item.relay_bound == null) {\n",
+        from: '      if (status === "unregistered") return "unrecorded_unregistered";\n',
+        to: "",
+      },
+    ],
+    pkg: "motebit",
+    test: T_DRAIN,
+    red: `${DRAIN} an old row (relay_bound unknown) whose tool is unregistered: denied relay_changed`,
+  },
+  {
+    name: "an old row whose tool is unregistered gets the another-relay summary",
+    edits: [
+      {
+        file: SCHED,
+        from: '      if (status === "unregistered") return "unrecorded_unregistered";\n',
+        to: '      if (status === "unregistered") return "relay_changed";\n',
       },
     ],
     pkg: "motebit",
@@ -314,13 +329,40 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SCHED,
-        from: '      if (status === "relay_bound") {\n        return !sameRelayIdentity(approvedUnder, this.runtime.getRelayIdentity());\n      }\n',
+        from: '      if (status === "relay_bound") return mismatch() ? "relay_changed" : null;\n',
         to: "",
       },
     ],
     pkg: "motebit",
     test: T_DRAIN,
     red: `${DRAIN} an old row (relay_bound unknown) for a tool relay-bound now: denied`,
+  },
+  {
+    name: "the runtime's relay_changed refusal counts as a goal failure",
+    edits: [
+      {
+        file: SCHED,
+        from: '      if (relayVerdict == null && isRelayChangedResult(result)) relayVerdict = "relay_changed";\n',
+        to: "",
+      },
+    ],
+    pkg: "motebit",
+    test: T_DRAIN,
+    red: "the runtime's relay_changed refusal counts like the drain's own a relay_bound=false row recorded under A, restarted bound to B: not a goal failure",
+  },
+  {
+    name: "isRelayChangedResult never recognises the refusal",
+    edits: [
+      {
+        file: BINDING,
+        from: "  return result.ok === false && result.error === RELAY_CHANGED_RESULT.error;\n",
+        to: "  return result.ok === false && result.error === `${RELAY_CHANGED_RESULT.error}.`;\n",
+      },
+    ],
+    pkg: "motebit",
+    rebuild: ["@motebit/runtime"],
+    test: T_DRAIN,
+    red: "the runtime's relay_changed refusal counts like the drain's own a relay_bound=false row recorded under A, restarted bound to B: not a goal failure",
   },
   {
     name: "the drain does not pass approvedUnderRelay",
@@ -340,18 +382,31 @@ const TAMPERS: TamperEntry[] = [
     edits: [
       {
         file: SCHED,
-        from: "      this.registerGoalTools();\n      let result: { ok: boolean; data?: unknown; error?: string };\n      let relayRefused = false;\n",
-        to: "      const refusedEarly = this.recoveredRelayRefused(item, recoveredApprovalRelay(item));\n      this.registerGoalTools();\n      let result: { ok: boolean; data?: unknown; error?: string };\n      let relayRefused = false;\n",
+        from: "      this.registerGoalTools();\n      let result: { ok: boolean; data?: unknown; error?: string };\n      let relayVerdict: RecoveredRelayVerdict | null = null;\n",
+        to: "      const refusedEarly = this.recoveredRelayVerdict(item, recoveredApprovalRelay(item));\n      this.registerGoalTools();\n      let result: { ok: boolean; data?: unknown; error?: string };\n      let relayVerdict: RecoveredRelayVerdict | null = null;\n",
       },
       {
         file: SCHED,
-        from: "        if (this.recoveredRelayRefused(item, approvedUnder)) {\n",
-        to: "        if (refusedEarly) {\n",
+        from: "        relayVerdict = this.recoveredRelayVerdict(item, approvedUnder);\n",
+        to: "        relayVerdict = refusedEarly;\n",
       },
     ],
     pkg: "motebit",
     test: T_DRAIN,
     red: "recovered goal-tool approvals run as on main (Cautious preset) create_sub_goal from before the relay columns: runs",
+  },
+  {
+    name: "the drain's refusal is moved out of the try/finally (goal tools leak)",
+    edits: [
+      {
+        file: SCHED,
+        from: "      let relayVerdict: RecoveredRelayVerdict | null = null;\n      try {\n",
+        to: '      let relayVerdict: RecoveredRelayVerdict | null = null;\n      if (this.recoveredRelayVerdict(item, recoveredApprovalRelay(item)) != null) {\n        this.finishRecoveredRun(run, { ok: false, summary: "relay_changed", countAsFailure: false });\n        continue;\n      }\n      try {\n',
+      },
+    ],
+    pkg: "motebit",
+    test: T_DRAIN,
+    red: "a drain refusal leaves no goal tool registered create_sub_goal, complete_goal and report_progress are unregistered after the refusal",
   },
 ];
 
